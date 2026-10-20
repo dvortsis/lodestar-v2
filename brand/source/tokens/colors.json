@@ -1,0 +1,36 @@
+{
+  "name": "Lodestar Riverstone",
+  "tagline": "Every node is a new discovery",
+  "light": {
+    "background": "#F3F6F5",
+    "surface": "#FFFFFF",
+    "text": "#243C44",
+    "primary": "#527F91",
+    "accent": "#829F8A",
+    "border": "#DCE4E1",
+    "muted": "#61787D"
+  },
+  "dark": {
+    "background": "#141F25",
+    "surface": "#22313A",
+    "text": "#E5EEED",
+    "primary": "#85AFC0",
+    "accent": "#A0C3A7",
+    "border": "#354851",
+    "muted": "#B2C3C5"
+  },
+  "illustration_accents": {
+    "sand": "#C4A765",
+    "terracotta": "#BF8173",
+    "gold": "#E0A95F",
+    "charcoal": "#212B33"
+  },
+  "categorical": [
+    "#527F91",
+    "#829F8A",
+    "#C4A765",
+    "#BF8173",
+    "#8C9BA7",
+    "#92A9A0"
+  ]
+}
