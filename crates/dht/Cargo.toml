@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 lodestar-bencode.workspace = true
 lodestar-metainfo.workspace = true
+rand = "0.10"
 
 [dev-dependencies]
 proptest = "1.11.0"
