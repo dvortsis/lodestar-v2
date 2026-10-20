@@ -129,6 +129,8 @@ The Mainline DHT crawler is **source plugin #1**. Every other discovery source, 
 - **MSE/PE (Message Stream Encryption)** handshake with plaintext fallback. Many peers run "require encryption", and without MSE those fetches simply fail. This ships in M1, not later.
 - Concurrency budget (default 400 sockets), per-IP limits, 8 s timeouts, and tries multiple peers per hash. Peers for a hash are refreshed via `get_peers` before retrying.
 - **Peer finding beyond the DHT** (accelerator plugins, §18): when `get_peers` returns nobody, ask a few public UDP trackers for peers (BEP 15 announce, rate-limited, only when the DHT is empty). During a fetch, use **PEX (BEP 11)** to learn more peers from the one we're connected to. Both raise the metadata success rate, especially for keys from scrapes, dumps and Nostr.
+  - **A tracker announce publishes our IP in that swarm's peer list.** That's what copyright monitors collect, so it changes the legal exposure the way the micro-piece prober does (§6). Tracker-announce peer finding is therefore **off by default**, behind a consent screen (class *Restricted*, §18.7), and always uses `event=stopped` semantics where trackers allow it. PEX only reads peers a connected peer sends us, so it stays on.
+  - **Private keys never use public peer finding.** Keys flagged `private_source` (§18.7) are never sent to public DHT lookups, public tracker announces or PEX. BEP 27 forbids DHT and PEX for private torrents, and a lookup would leak the hash to strangers.
 - **Hostile-input limits:** the metadata size cap is 16 MB, configurable, and anything larger is recorded as "oversize" with hash and size only. There are limits on bencode depth and list length, file count, and path length. Fuzzing (`cargo fuzz`) covers bencode, KRPC and the metainfo parser.
 - **Encodings:** use `name.utf-8`/`path.utf-8` when present; otherwise detect legacy charsets (GBK, Big5, Shift-JIS, CP1251) with `chardetng` + `encoding_rs`. The raw bytes are kept so decoding can be redone.
 - **v2/hybrid identity:** DHT announces v2 swarms under the *truncated* 32→20-byte hash. Both forms map to one torrent id, so hybrid torrents never appear twice.
@@ -1058,6 +1060,12 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - Tor onion indexes and BitTorrent over Tor: IP leaks, harm to Tor, CSAM prevalence;
   - Freenet/Hyphanet: same problems.
 - **Gemini corrections recorded:** Nostr uses secp256k1 Schnorr, not Ed25519; BEP 48 full scrapes are HTTP-only and often disabled; PreDB carries no info hashes.
+- **Review follow-ups:**
+  - Tracker-announce peer finding is consent-gated and off by default, because an announce lists our IP in the swarm.
+  - `private_source` keys never reach public DHT lookups, public trackers or PEX (BEP 27).
+  - The shared id sequence is an explicit `id_seq` allocator, and promoted items keep their ids.
+  - Budgets are per torrent at a given corpus size, with importers previewed.
+  - Scheduler v1's M1 scope is pinned down: fetch-pool DRR, hard caps and user-interest priority.
 
 **Still open (decide during M0–M2 spikes, with measurements rather than guesses):** reusing librqbit crates vs our own DHT; whether the trigram field earns its size at 10M+ names; the smart-file-index thresholds; the actual cold-start harvest and metadata success rates.
 
@@ -1168,7 +1176,7 @@ Lodestar's reach comes from **many sources, each a plugin you can switch on or o
 | 14 | **Nostr NIP-35 / DTAN relays** | discovery | 3 | 2 | 3 | **2.7** | Med |
 | 15 | **Lemmy/fediverse torrent communities** | discovery | 2 | 1 | 4 | **2.3** | Low |
 
-**Accelerators** (unranked, because they raise the yield of every key-bearing source): **tracker announce (BEP 15) for peer finding** when the DHT finds none, and **PEX (BEP 11)** during metadata fetches.
+**Accelerators** (unranked, because they raise the yield of every key-bearing source): **tracker announce (BEP 15) for peer finding** when the DHT finds none (off by default and consent-gated, because an announce lists our IP in the swarm; see §6), and **PEX (BEP 11)** during metadata fetches.
 
 **Enrichment plugins, by value:**
 1. **srrDB** (exact scene file names, sizes and CRCs, including the contents of RAR sets)
@@ -1196,7 +1204,7 @@ Lodestar's reach comes from **many sources, each a plugin you can switch on or o
 ### 18.3 Roadmap (score order, adjusted for dependencies)
 | Release | Sources added | Why here |
 |---|---|---|
-| **M1 foundation** | Plugin API, scheduler v1, provenance; **Mainline DHT** as plugin #1; **tracker-announce peer finding + PEX** | Everything else depends on the plugin API and scheduler. The accelerators raise yield for every later source. |
+| **M1 foundation** | Plugin API, scheduler v1 (see §18.4 for its scope), provenance; **Mainline DHT** as plugin #1; **PEX**; tracker-announce peer finding (consent-gated, off by default) | Everything else depends on the plugin API and scheduler. The accelerators raise yield for every later source. |
 | **v0.5** (M2) | **Importer framework**: bitmagnet DB (already planned), **Rutracker dumps**, **MagnetDB** (if access is granted), **RARBG/magnetico/bitmagnet exports**, **DMM hashlists** | The largest breadth for the least effort, and it solves the cold start. All use one streaming importer framework plus background DHT verification. |
 | **v0.6** (M4 + early M7) | **Prowlarr/Jackett** (local-only private results), **Nyaa RSS**, **BEP 48 full scrape**, **Internet Archive**, **Academic/official lists**; enrichment: **torrent cache** | The top-scoring live sources, once claims/provenance and the unverified tier exist. The full scrape ships with the M4 tracker scraper. |
 | **v0.7** (M7) | Enrichment: **srrDB, PreDB, Wikidata, TMDB/TVDB, AniDB/AniList, MusicBrainz, OpenLibrary, IGDB, Discogs, Steam, debrid status**. Outputs: **Torznab server, Stremio addon, bitmagnet export** | Turns breadth into findability: ambiguity resolution, multilingual titles, IDs. |
@@ -1235,6 +1243,10 @@ Lodestar's reach comes from **many sources, each a plugin you can switch on or o
   - **Egress** (direct / VPN interface / SOCKS) with an optional per-plugin kill-switch.
 - **Hard caps always win.** A plugin's politeness caps (manifest) and the global budget can't be exceeded by any priority or agent setting. The UI shows each source's **predicted resource use** and warns when settings exceed what the budget can give.
 - **Fair sharing:** each resource class is divided by **deficit round robin** over enabled sources, weighted by priority within their min/max shares.
+- **Scheduler v1 (M1) is deliberately small:**
+  - Per-source queues feed the shared metadata-fetch pool, scheduled by weighted DRR under the global hard caps (outstanding UDP queries, TCP sockets).
+  - User-interest fetches jump the queue.
+  - Everything else waits until there's more than one live source: the other resource classes, min/max shares, schedule windows, per-plugin egress and auto-balance arrive in v0.6+.
   - The **metadata-fetch pool is shared**: keys from every source queue there, scheduled per source, so a flood from one importer can't starve live DHT discoveries.
   - **User-interest fetches** (you opened an unverified item, or a saved search matched one) jump the queue.
   - **Importers default to Low priority and ≤ 50% of `writer_share`,** so live crawling and search are never starved.
@@ -1255,6 +1267,13 @@ Lodestar's reach comes from **many sources, each a plugin you can switch on or o
   - They're indexed with `verified:no`, **hidden from search by default**, shown with a "Show unverified" toggle and an "Unverified" badge.
   - They're queued for low-priority verification fetches, and promoted when metadata arrives.
 - **One id space across networks:** all networks allocate ids from a single monotonic sequence, so hot columns, the search index and the percolator watermark (§7/§8) work unchanged.
+  - SQLite's `AUTOINCREMENT` sequence is per table, so the shared sequence is an explicit allocator: a one-row `id_seq` table, advanced inside the writer's transaction.
+  - Every item table inserts explicit ids from it.
+  - An unverified item **keeps its id** when it's promoted to `torrents`, so index documents, hot-column slots and saved-search hits stay valid.
+- **Budgets scale with the corpus, not the source count.** Importers can multiply the corpus (MagnetDB alone is 28.6M+ torrents), so the §3 size and RSS budgets are per torrent at a given corpus size.
+  - Hot-column arrays are sized by the highest id; they're sparse files, and only pages for live ids are touched.
+  - The settings UI shows the projected size before an importer runs (§10.10).
+  - Unverified items with no claims worth keeping (bare dead hashes from a dump) are kept only as a capped verification queue, not as rows.
 - **Rollups:** the Insights rollups gain `source` and `network` dimensions (§7, §10.9).
 
 ### 18.6 Network tiers
@@ -1293,10 +1312,10 @@ Every item has a `network` field: `bt` (clearnet BitTorrent), `bt-i2p`, `ed2k`, 
 | None | Mainline DHT, Internet Archive, Academic/official lists, BEP 48, Lemmy | a toggle |
 | External | public web services (Nyaa, Nostr, torrent cache, Wikidata, …) | a toggle + the endpoint list shown |
 | Account | Prowlarr/Jackett, debrid, keyed APIs (TMDB, IGDB, Discogs) | credentials (encrypted at rest, never exported) |
-| Restricted | Anna's Archive/LibGen and other High-risk content sources | a consent screen explaining the legal exposure; VPN strongly advised |
+| Restricted | Anna's Archive/LibGen and other High-risk content sources; tracker-announce peer finding (it lists our IP in swarms) | a consent screen explaining the legal exposure; VPN strongly advised |
 | Overlay | I2P, eD2k/Kad, IPFS | a consent screen + VPN recommendation; isolated tier; one-click purge |
 
-- **Private-source isolation:** items found only through private-tracker indexers (Prowlarr) are flagged `private_source`. They're **never** announced to the DHT, served over Torznab or Stremio, or included in exports, because tracker rules typically forbid redistribution.
+- **Private-source isolation:** items found only through private-tracker indexers (Prowlarr) are flagged `private_source`. They're **never** served over Torznab or Stremio, included in exports, or sent into public peer finding (DHT `get_peers`, public tracker announces or PEX), because tracker rules typically forbid redistribution and a public lookup would leak the hash (BEP 27). Their metadata comes only from the private source itself.
 - **Politeness:** manifest caps, robots/ToS checks recorded in each plugin's docs, exponential back-off on errors, and a visible "blocked by source" state rather than retry storms.
 
 ### 18.8 UI and Insights
@@ -1323,7 +1342,7 @@ Every item has a `network` field: `bt` (clearnet BitTorrent), `bt-i2p`, `ed2k`, 
 - **Provenance and purge tests:** the bitset is correct; purge removes only a source's unique items and its claims; the rollups stay reconciled after a purge.
 - **Safety tests:**
   - a blocklisted fixture hash injected through *every* plugin kind and network is dropped before storage;
-  - `private_source` items never appear in Torznab, Stremio or export output;
+  - `private_source` items never appear in Torznab, Stremio or export output, and their hashes never reach a DHT lookup, a public tracker or PEX;
   - unverified items are hidden by default;
   - consent gating can't be bypassed through the API.
 - **Overhead benchmark:** with all v0.6 sources enabled, the §3 search and ingest budgets still hold.
