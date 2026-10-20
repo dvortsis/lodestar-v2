@@ -140,7 +140,7 @@ fn migrate_with(
     }
     if current > 0 {
         if let Some(path) = path {
-            let backup = path.with_extension(format!("pre-v{}.db", current + 1));
+            let backup = snapshot_path(path, current + 1);
             conn.execute("VACUUM INTO ?1", [backup.to_string_lossy()])?;
         }
     }
@@ -154,6 +154,20 @@ fn migrate_with(
         tx.commit()?;
     }
     Ok(())
+}
+
+/// `<db>.pre-v<N>.db`, or `<db>.pre-v<N>.<k>.db` if that exists already:
+/// `VACUUM INTO` refuses existing files, and an earlier snapshot (say, from
+/// a migration that failed and is being retried) must never be lost.
+fn snapshot_path(db: &Path, version: i64) -> std::path::PathBuf {
+    let candidate = |k: u32| match k {
+        0 => db.with_extension(format!("pre-v{version}.db")),
+        k => db.with_extension(format!("pre-v{version}.{k}.db")),
+    };
+    (0..)
+        .map(candidate)
+        .find(|p| !p.exists())
+        .expect("unbounded search")
 }
 
 #[cfg(test)]
@@ -219,5 +233,25 @@ mod tests {
             )
             .unwrap();
         assert_eq!(tables, 0);
+    }
+
+    #[test]
+    fn existing_snapshot_does_not_block_migration() {
+        // A migration that failed after its snapshot leaves the file behind;
+        // the retry must still be able to snapshot and migrate.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.db");
+        let mut conn = Connection::open(&path).unwrap();
+        migrate_with(&mut conn, Some(&path), &FAKE[..1]).unwrap();
+        std::fs::write(dir.path().join("t.pre-v2.db"), b"older snapshot").unwrap();
+        migrate_with(&mut conn, Some(&path), FAKE).unwrap();
+        assert_eq!(version(&conn), 2);
+        assert_eq!(
+            std::fs::read(dir.path().join("t.pre-v2.db")).unwrap(),
+            b"older snapshot",
+            "existing snapshots are never overwritten"
+        );
+        let backup = Connection::open(dir.path().join("t.pre-v2.1.db")).unwrap();
+        assert_eq!(version(&backup), 1);
     }
 }
