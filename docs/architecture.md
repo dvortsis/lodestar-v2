@@ -1096,6 +1096,18 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 
 **Still open after M0:** chardetng accuracy on real legacy-encoded names (measure in M1, and consider an encoding allowlist if ISO-8859-x misreads show up).
 
+**M1 implementation decisions (DHT node):**
+- **Single-owner actor.** One task owns the sockets, routing tables, transaction table, lookups and rate limiters, with no locks. Counters are shared atomics.
+- **Sending uses a non-blocking std clone of each socket.** tokio's `try_send_to` fails until the reactor has seen the socket become writable, and that silently dropped a fresh node's bootstrap packets. Sockets are created with socket2, and IPv6 sockets are IPv6-only, so an IPv4 and an IPv6 socket can share port 6881.
+- **Routing hygiene:**
+  - Nodes that only queried us wait in a replacement cache, and get a verification ping when their bucket has room.
+  - A responder that answers under a different id than the one queried is neither routed to nor trusted.
+  - Lookups skip our own ids and addresses. Other nodes list us in their replies, and querying ourselves cost one of the K lookup slots, which the in-process network test caught.
+  - The one-entry-per-IP rule skips BEP 42's exempt (private and loopback) addresses.
+- **Virtual ids.** We answer each peer with the virtual id closest to its id, so a given peer always sees us under the same id. All ids are regenerated (BEP 42) when the majority-voted external IP changes.
+- **Thin tables keep bootstrapping.** Bucket refresh only runs after 15 minutes. So while a table holds fewer than 32 nodes, the self-lookup is repeated every 30 ticks (30 s by default) until the table fills.
+- **No live DHT from the development sandbox.** The cloud sandbox has no DNS and no outbound UDP, so the node is verified against the §17 in-process network. That network checks Kademlia convergence: every node knows its 8 true closest nodes, except where a full bucket keeps older good nodes. The M1 exit criteria that need the real network (sustained ingest at "Balanced" without NAT saturation, measured harvest and metadata rates) have to be measured on a real deployment.
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.
