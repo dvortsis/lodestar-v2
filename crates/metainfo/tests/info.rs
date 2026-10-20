@@ -363,6 +363,15 @@ fn rejections() {
             ]),
             "both a file and a directory",
         ),
+        (
+            // Fits in u64 but not in a SQLite integer.
+            with(
+                base.clone(),
+                "files",
+                l(vec![v1_file(&["a"], i64::MAX), v1_file(&["b"], 1)]),
+            ),
+            "overflows",
+        ),
         (b("not a dict"), "should be a dictionary"),
     ];
     for (v, expected) in cases {
