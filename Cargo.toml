@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "bench"]
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.0.0"
@@ -13,6 +14,7 @@ repository = "https://github.com/dvortsis/lodestar-v2"
 lodestar-bencode = { path = "crates/bencode" }
 lodestar-metainfo = { path = "crates/metainfo" }
 lodestar-store = { path = "crates/store" }
+lodestar-dht = { path = "crates/dht" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

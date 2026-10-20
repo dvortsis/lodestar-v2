@@ -1,0 +1,44 @@
+[package]
+name = "lodestar-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+lodestar-bencode = { path = "../crates/bencode" }
+lodestar-dht = { path = "../crates/dht" }
+lodestar-metainfo = { path = "../crates/metainfo" }
+lodestar-store = { path = "../crates/store" }
+
+# Each target is a separate binary; see README.md for running them.
+[[bin]]
+name = "bencode"
+path = "fuzz_targets/bencode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "krpc"
+path = "fuzz_targets/krpc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "metainfo"
+path = "fuzz_targets/metainfo.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "filetree"
+path = "fuzz_targets/filetree.rs"
+test = false
+doc = false
+bench = false
