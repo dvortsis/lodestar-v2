@@ -1,0 +1,43 @@
+{
+  "name": "Lodestar",
+  "tagline": "Every node is a new discovery",
+  "stateAssets": {
+    "welcome_onboarding": {
+      "light": "visuals/welcome_onboarding_light.png",
+      "dark": "visuals/welcome_onboarding_dark.png"
+    },
+    "searching_crawling": {
+      "light": "visuals/searching_crawling_light.png",
+      "dark": "visuals/searching_crawling_dark.png"
+    },
+    "indexing": {
+      "light": "visuals/indexing_light.png",
+      "dark": "visuals/indexing_dark.png"
+    },
+    "found_nodes": {
+      "light": "visuals/searching_crawling_light.png",
+      "dark": "visuals/searching_crawling_dark.png"
+    },
+    "no_results": {
+      "light": "visuals/no_results_light.png",
+      "dark": "visuals/no_results_dark.png"
+    },
+    "connection_error": {
+      "light": "visuals/connection_error_light.png",
+      "dark": "visuals/connection_error_dark.png"
+    },
+    "offline_idle": {
+      "light": "visuals/welcome_onboarding_light.png",
+      "dark": "visuals/welcome_onboarding_dark.png"
+    },
+    "updating_repair": {
+      "light": "visuals/updating_repair_light.png",
+      "dark": "visuals/updating_repair_dark.png"
+    },
+    "empty_state_explore": {
+      "light": "visuals/empty_state_explore_light.png",
+      "dark": "visuals/empty_state_explore_dark.png"
+    }
+  },
+  "note": "States sharing identical approved illustrations point to the same asset; aliases are intentional."
+}

@@ -1,0 +1,18 @@
+:root {
+  --lodestar-background: #F3F6F5;
+  --lodestar-surface: #FFFFFF;
+  --lodestar-text: #243C44;
+  --lodestar-primary: #527F91;
+  --lodestar-accent: #829F8A;
+  --lodestar-border: #DCE4E1;
+  --lodestar-muted: #61787D;
+}
+[data-theme="dark"] {
+  --lodestar-background: #141F25;
+  --lodestar-surface: #22313A;
+  --lodestar-text: #E5EEED;
+  --lodestar-primary: #85AFC0;
+  --lodestar-accent: #A0C3A7;
+  --lodestar-border: #354851;
+  --lodestar-muted: #B2C3C5;
+}
