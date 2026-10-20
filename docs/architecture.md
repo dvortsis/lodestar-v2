@@ -53,6 +53,8 @@ The goal is to build the whole pipeline from scratch (crawler → metadata → s
 | Full-name regex (trigram prefilter + verify) | < 500 ms |
 | New torrent → searchable | < 5 s |
 | Web UI first load | LCP < 1 s (LAN) / < 2.5 s (4G phone); ≤ 100 KB gzipped total first load (JS ≤ 45 KB); INP < 100 ms (§10.1) |
+| Insights overview / stage-page queries (rollups only) | < 50 ms |
+| **Reporting overhead** with Insights open and the digest job running | search p95 +≤ 5%; ingest throughput −≤ 2%; rollup storage ≤ 50 MB/year |
 
 **Size budget** (targets to verify in M0/M2 benchmarks, at a 30-file average):
 - Canonical store + torrent index: **≤ 1.5 KB per torrent**.
@@ -182,6 +184,26 @@ Text extracted from NFOs is indexed into an `nfo_text` field (boost ~2).
 
 **Hot columns:** `data/hot/{seeders,leechers,trackers,last_seen,user_flags}.col` are mmap'd `u32` arrays indexed by torrent id, read and written as atomics so there are no locks between the scraper and searchers. Seeders/trackers use a sentinel for **"never scraped"**, so the UI shows "—" rather than a misleading 0. Swarm stats change constantly; putting them in Tantivy would force delete+reinsert of whole documents. Instead, search collectors read these arrays (a nanosecond lookup) for filtering, sorting and ranking. SQLite stays authoritative, and the arrays are rebuilt on startup if they are inconsistent.
 
+**Insights rollups (reporting without touching raw data):** every number on Insights (§10.9) comes from small pre-aggregated tables. They're maintained incrementally by the pipeline, so reports never scan `torrents` or the search index.
+- **Tables:**
+  - `rollup_hour(hour INT, metric INT, dim INT, key INT, value INT, PRIMARY KEY(hour, metric, dim, key)) WITHOUT ROWID`: event-time counters and gauges. Examples: hashes harvested by strategy and IP family; fetch outcomes; newly searchable by category, content type and resolution method; scrape results; searches, zero results and sends. Latency histograms are stored as log buckets (`key` = bucket).
+  - `cohort_hour(cohort INT, stage INT, reason INT, count INT, PRIMARY KEY(cohort, stage, reason)) WITHOUT ROWID`: the discovery-cohort funnel. `stage` ∈ harvested / peer found / metadata fetched / stored / searchable, plus terminal loss `reason`s.
+  - `rollup_day` / `cohort_day`: the same shapes at daily grain.
+  - `events(at INT, kind INT, detail TEXT)`: trend annotations (restart, upgrade, config/intensity change, import, reindex, pause).
+- **Cohort attribution:**
+  - Each in-flight hash carries its `cohort` hour (u32) and harvest strategy (u8) in the pending-queue record (§5), so later fetch outcomes are credited to the right cohort.
+  - Stored torrents derive their cohort from `discovered_at`.
+  - A hash that leaves the queue without metadata is recorded once with its terminal loss reason, including **evicted** (dropped from the capped queue) and **gave up** (retry horizon passed with no peers).
+  - **Harvested means new to us:** a hash enters a cohort only when it's neither stored (have-filter) nor already in flight. Rediscoveries of stored torrents only bump `last_seen` (§5).
+- **Write path:**
+  - Pipeline stages increment **in-memory per-hour accumulators** (lock-free counters, a few hundred keys).
+  - The writer flushes them as `INSERT … ON CONFLICT DO UPDATE SET value = value + excluded.value` **inside its existing batched transaction**, at most every 5 s. If no batch has committed for 5 s while counters are dirty (cold start, a run of failed fetches, a paused fetcher with the DHT still harvesting), the writer commits a small counters-only transaction instead, so the flush cadence and the "stale" signal never depend on ingest.
+  - There are no extra fsyncs or transactions; the per-torrent cost is a few counter increments.
+  - **Searchable time without a per-torrent column:** the index commits in id order under the shared watermark (§8), so recording the highest id made searchable each hour is enough: `index_watermark_hour(hour INT PRIMARY KEY, last_id INT)`, about 9k rows a year. A torrent's searchable hour is the first hour whose `last_id` ≥ its id. A background rebuild (§8) doesn't touch it, because the old index keeps serving.
+  - A crash loses at most ~5 s of pre-storage (Discover/Fetch) counts. Stored counts (from `torrents`) and searchable counts (from `torrents` joined to `index_watermark_hour`) can be recomputed exactly, at hourly grain, with `lodestar rollup --repair`. It also runs automatically after an unclean shutdown.
+- **Compaction:** hourly rows older than 30 days are folded into daily rows by a nightly job, in short chunked transactions (no long read transactions, so the WAL checkpoint is never starved). Expected size: **≤ 50 MB/year** (hundreds of keys per hour).
+- **Read path:** the Insights queries are indexed range scans over the rollup tables (**≤ 50 ms p95**, independent of corpus size), cached per (query, last flush). Heavy exports run as background jobs that stream in chunks with I/O throttling and report progress.
+
 **Retention policies** (settings UI, each with a size preview): drop junk ≥ X, drop torrents never seen in N days with 0 seeders, drop categories, cap file-index coverage. Run with incremental vacuum.
 
 ## 8. Search engine (Tantivy)
@@ -234,7 +256,7 @@ Units and relative dates are parsed. Unknown fields trigger a helpful error, not
 
 ## 9. API
 
-axum, JSON. `/api/v1`: `search` (GET with q + params, or POST with AST), `suggest`, `facets`, `torrents/{hash}` (detail + first 500 files), `torrents/{hash}/files?cursor=`, `torrents/{hash}/siblings`, `files/search`, `stats`, `crawler` (status/pause/intensity), `trackers`, `saved-searches`, `alerts`, `collections`, `user-items`, `settings`, `import` (.torrent upload/folder watch), `export` (CSV/JSON/magnet list). It also serves `/events` (SSE: new torrents, crawler stats, alerts), `/torznab/api` (for Prowlarr/Sonarr/Radarr), `/metrics` (Prometheus), `/healthz`, `/openapi.json` (utoipa), and RSS per saved search.
+axum, JSON. `/api/v1`: `search` (GET with q + params, or POST with AST), `suggest`, `facets`, `torrents/{hash}` (detail + first 500 files), `torrents/{hash}/files?cursor=`, `torrents/{hash}/siblings`, `files/search`, `stats`, `crawler` (status/pause/intensity), `insights/overview?range=&compare=`, `insights/{stage}?range=&reason=`, `insights/events`, `insights/export.csv?panel=`, `digest` (settings + preview), `trackers`, `saved-searches`, `alerts`, `collections`, `user-items`, `settings`, `import` (.torrent upload/folder watch), `export` (CSV/JSON/magnet list). It also serves `/events` (SSE: new torrents, crawler stats, alerts, and `insights` deltas every 30 s), `/torznab/api` (for Prowlarr/Sonarr/Radarr), `/metrics` (Prometheus), `/healthz`, `/openapi.json` (utoipa), and RSS per saved search.
 
 The tracker list ships with a curated default. It can optionally **auto-refresh** from the community lists `ngosang/trackerslist` and `XIU2/TrackersListCollection` (an opt-in external fetch, merged, then health-checked before use).
 
@@ -258,7 +280,7 @@ Magnet links can **append the best-scoring trackers** from scrape data (toggle),
 | Motion | `motion-ui` | 10.2 |
 | Navigation, forms, tables, dialogs, drawers, states | `application-interface-design` | 10.3–10.11 |
 | Chart choice and chart craft | `analytics-chart-selection` | 10.5, 10.9, 10.12 |
-| Crawler dashboard narrative and interactions | `dashboard-storytelling` | 10.9 |
+| Insights (process-story dashboard) narrative and interactions | `dashboard-storytelling` | 10.9 |
 | Chart implementation (by spirit) | `data-visualization-design` | 10.1, 10.12 |
 | Numeric correctness of facets, KPIs and charts | `analytics-validation` | 10.17 |
 | Onboarding explainer | `infographic-design` (spirit; no AntV dependency) | 10.10 |
@@ -277,7 +299,7 @@ Magnet links can **append the best-scoring trackers** from scrape data (toggle),
   - **Bits UI** (headless; imported per component) for Dialog, Popover, Tooltip, Select, Combobox, Slider, Tabs, Toggle Group and Menu.
   - `@tanstack/svelte-virtual` for the results list, file tree and tables.
   - Phosphor icons compiled at build time to inline SVG (`unplugin-icons`), so there's no icon runtime.
-  - In-house SVG chart primitives (target ≤ 6 KB), plus **uPlot** (~20 KB gzipped) lazy-loaded only on the crawler dashboard and the swarm-history panel.
+  - In-house SVG chart primitives (target ≤ 6 KB), plus **uPlot** (~20 KB gzipped) lazy-loaded only on the Insights pages and the swarm-history panel.
   - No date library (`Intl.DateTimeFormat`/`RelativeTimeFormat`), and compile-time i18n (paraglide-js, tree-shaken) for en + zh.
 - **Budgets (gzipped, CI-gated with `size-limit` and Lighthouse CI):**
 
@@ -288,7 +310,7 @@ Magnet links can **append the best-scoring trackers** from scrape data (toggle),
 | Fonts on first paint (Atkinson Hyperlegible Next variable, Latin subset) | ≤ 35 KB |
 | **Total first load** | **≤ 100 KB** |
 | Detail-drawer chunk | ≤ 15 KB |
-| Crawler-dashboard chunk (incl. uPlot) | ≤ 40 KB |
+| Insights chunk (incl. uPlot) | ≤ 45 KB |
 | LCP | < 1.0 s on a LAN; < 2.5 s on a mid-tier phone over 4G |
 | INP / CLS | < 100 ms / < 0.02 |
 | Scrolling a 10k-row virtual list | 60 fps |
@@ -316,7 +338,7 @@ Magnet links can **append the best-scoring trackers** from scrape data (toggle),
 - **Grid (`layout-grids`):**
   - The app shell is an **asymmetric column layout**: a fixed 264 px facet rail, a fluid results column (min 560 px), and a 480–640 px detail drawer (resizable, width persisted). Results get the most space because they matter most.
   - Settings, help and syntax pages use a **manuscript** column (max 720 px; prose ≤ 70 ch).
-  - The crawler dashboard uses a **modular 12-column** grid with unequal spans.
+  - Insights uses a **modular 12-column** grid with unequal spans (§10.9.6).
   - Result-row columns share edges with the table-mode header, and numeric columns are right-aligned.
 - **Typography (decided by you, overriding `typography-ui`'s font list as its precedence allows):**
   - **UI: Atkinson Hyperlegible Next** (Braille Institute, SIL OFL), variable weight. It's self-hosted as a woff2 Latin subset (≤ 35 KB, preloaded); a Latin-Extended subset loads on demand. Fallback: `system-ui, sans-serif`. CJK falls back to system fonts (`"PingFang SC", "Microsoft YaHei", "Noto Sans CJK"`).
@@ -357,14 +379,14 @@ Magnet links can **append the best-scoring trackers** from scrape data (toggle),
 - **Colour use:** status is always shown as **icon + text**, never colour alone. The category-group→slot mapping (§10.18) is identical in the composition bar, facets, legends and charts. AA contrast (4.5:1 text, 3:1 UI boundaries and data marks) is enforced per theme by the theme compiler and re-verified by axe in CI.
 
 ### 10.3 Information architecture and navigation
-- **Five stable top-level destinations:** **Search** (home), **Discover**, **Alerts**, **Crawler**, **Settings**.
-  - The top bar holds the wordmark, navigation, a global status pill ("Crawling · 1.2k/h", icon + text) and the command-palette trigger.
+- **Five stable top-level destinations:** **Search** (home), **Discover**, **Alerts**, **Insights**, **Settings**.
+  - The top bar holds the wordmark, navigation, a global status pill ("Crawling · 1.2k/h", icon + text, linking to Insights) and the command-palette trigger.
   - The current location is marked with an underline and `aria-current`.
   - An overflow menu holds Import, Backup, Syntax guide and About.
 - **The URL is the state:**
   - `/search?q=…&sort=…&density=…&group=…`
   - `/t/{hash}` opens the detail as a drawer when coming from Search, or as a full page from a direct link.
-  - `/compare?h=a,b,c`, `/discover`, `/alerts/{id}`, `/crawler?range=24h`, `/settings/{section}`
+  - `/compare?h=a,b,c`, `/discover`, `/alerts/{id}`, `/insights?range=7d&compare=1`, `/insights/{stage}`, `/settings/{section}`
 - Narrow widths: navigation collapses into a menu button. Search stays first-class, and the status pill becomes icon-only, keeping its accessible text.
 
 ### 10.4 Search screen
@@ -471,38 +493,125 @@ The primary purpose is finding the right torrent; the dominant action is grab (c
 - **Creating one:** "Save search" in the results toolbar opens a dialog with visible labels for name and notification channels.
 - Pausing is a toggle with no confirmation. **Deleting asks for a specific confirmation** ("Delete '4K nature docs' and its history?").
 
-### 10.9 Crawler dashboard (`dashboard-storytelling`)
-- **Audience and decisions:** the self-hoster. Is it healthy? Is it growing as expected? What's wrong, and what do I do about it?
-- **Global context:** a time-range parameter (1 h / 24 h / 7 d / 30 d), the timezone, and a "Last updated" timestamp, always visible.
+### 10.9 Insights: the process story (`dashboard-storytelling`)
+**Insights** replaces the earlier "Crawler" dashboard as a top-level destination. Its overview page tells the whole story of the process, from DHT discovery to a search result in your hands, and one drill-through page per stage holds the detail.
 
+- **Audience and decisions:** the self-hoster. Is it working? Is it growing? **Where are torrents being lost?** Is the index good and current? Is anything about to break, and what do I do about it?
+- **Type:** an exploratory, progressive dashboard (`dashboard-storytelling`). The first viewport orients you, and controlled vertical scrolling follows the story order.
+- **Global context bar** (always visible, sticky):
+  - time range (24 h / 7 d / 30 d / All / Custom), with the timezone shown;
+  - a **"Compare to previous period"** toggle, which is a parameter, not a filter;
+  - a "Last updated" time;
+  - crawler **Pause/Resume** and the **intensity** control (Low / Balanced / Aggressive, with its effect explained). These affect the whole process, so they sit in the global bar.
+
+#### 10.9.1 Orientation: the stage strip
+A horizontal strip across the top shows the five stages, each with one live headline number:
+
+**Discover** (unique hashes harvested) → **Fetch** (metadata retrieved) → **Understand** (stored and classified) → **Index** (searchable) → **Serve** (searches answered)
+
+- This is a process explainer in the `infographic-design` sense: it explains a workflow next to its metrics, and it isn't used for quantitative comparison.
+- It doubles as section navigation: activating a stage scrolls to its section (anchor links, keyboard accessible).
+- **Text equivalent:** an ordered list with the same numbers.
+- **Narrow screens:** it becomes a 2-row grid; the stage order is preserved.
+
+#### 10.9.2 Overview story (visual inventory)
 | Level | Question | Visual (`analytics-chart-selection`) | Role |
 |---|---|---|---|
-| 1 Status | Where are we now? | KPI row (max 5): Status (Running / Paused / Degraded + reason), Torrents indexed (Δ vs previous equal window), Ingest rate (/h + sparkline), Metadata success rate (% + comparison window named), Disk used (+ "full in ~N days" when a quota is set) | Primary |
-| 2 Movement | How is it changing? | Line: new torrents/hour. A **separate aligned** line for harvested hashes/hour (no dual axis). | Primary |
-| 3 Drivers | Why? | Sorted horizontal bars: hashes by harvest strategy. 100% stacked bar: fetch outcomes (success / timeout / refused / no peers / encryption failed). TCP vs uTP success shown as text + bars. | Supporting |
-| 4 Segments | Where does it go? | Sorted bars: new torrents by category and by content type | Supporting |
-| 5 Exceptions | What needs attention? | Issue list: unreachable port, NAT saturation, ephemeral-port pressure, FUSE path, disk, index rebuild, scrape bans. Each has icon + text + a fix action. | Primary when non-empty |
-| 6 Detail | What exactly? | Tables: queue depths, DHT nodes, per-tracker scrape budget and health, log tail | Detail |
+| 1 Status | Where are we now? | KPI row, max 5: **Searchable torrents** (Δ vs previous period); **New searchable in range**; **End-to-end yield** (harvested → searchable, completed cohorts only); **Time to searchable from first discovery** (p50 / p95; includes finding peers and fetching, so it's hours, unlike the §3 metadata → searchable target, which the Index page shows as commit lag); **Health** (Running / Paused / Degraded + reason, as icon + text) | Primary |
+| 2 Movement | How is it changing? | Line: newly searchable torrents per hour/day (by event time), with **event annotations**: restart, upgrade, intensity or config change, import, reindex, network change. A **separate, aligned** line shows unique hashes harvested; no dual axis. Shaded comparison band when "Compare" is on. | Primary |
+| 3 Drivers | Where are torrents lost? | **Stage funnel by discovery cohort:** Harvested → Peer found → Metadata fetched → Stored → Searchable, showing counts and stage-to-stage conversion %. Next to each stage, a 100% stacked bar of **loss reasons**: no peers found, timed out, refused, encryption failed, oversize, invalid, blocked, evicted (queue full), gave up (retry horizon passed). | Primary |
+| 4 Segments | What is arriving, from where? | Sorted horizontal bars: searchable by category group and by content type; yield by harvest strategy (BEP 51 / passive / active lookup); yield by IP family (v4 / v6); ambiguous names resolved by method (files / folder / structure / plugin) | Supporting |
+| 5 Exceptions | What needs attention? | Issue list, each with icon + text + a fix action: yield below the trailing 7-day baseline, NAT saturation, ephemeral-port pressure, unreachable port, scrape bans, index lag > 30 s, parser confidence falling, disk projection < 14 days, cohort completion stalled, FUSE/network path | Primary when non-empty |
+| 6 Serve | Is it useful? | KPIs + small multiples: searches per hour, zero-result rate, search latency p95 (server-measured), alerts fired, sends to download clients | Supporting |
+| 7 Detail | What exactly? | Links to each stage's detail page (§10.9.5) and to the data export | Detail |
 
-- **Interaction map:**
-  - Time range → all visuals (global parameter).
-  - Brushing the ingest chart sets the range, shown as a chip with Reset.
-  - Clicking a category bar → **drill-through** to Search with `discovered:<range> type:<x>`, with a way back.
-  - Clicking an exception → navigate to the relevant settings section.
-  - No cross-filtering between charts, which keeps the behaviour predictable.
-- **Controls:** the intensity parameter (Low / Balanced / Aggressive, with an explanation of its effect) and Pause/Resume, placed in the Status region.
+#### 10.9.3 Analytical integrity rules
+- **The funnel uses discovery cohorts.** A hash belongs to the cohort of the UTC hour it was first harvested. Later stages count progress *of that cohort*, so the stages describe the same population and the conversion rates are honest.
+  - Counting "seen today" against "fetched today" would mix different torrents, because fetching lags discovery by hours or days.
+  - A cohort is **final** once every hash in it has reached a terminal state, or once the retry horizon (default 72 h) has passed. Cohorts that aren't final yet are **hatched and labelled "incomplete"**, and they're excluded from the yield KPI.
+- **Two time bases, always labelled.** The funnel and yield use *discovery cohort*; the trend, "new searchable" and Serve use *event time*. Each chart's subtitle says which one it uses.
+- **"Unique" is approximate before storage.** Harvest uniqueness comes from the time-rotated "seen" filter (§5), so a dead hash can be counted again after filter rotation. The Discover number is labelled "unique (≈)". From "Stored" onward, counts are exact.
+- **Final cohorts never change.** Removals after storage (retention policies, a later junk re-score) are lifecycle events, not funnel losses: they're shown on the Index page and annotated on the trend.
+- **Imported torrents** (bitmagnet import) never went through discovery, so they're excluded from the funnel. They appear as "Imported" in the Status totals and as an annotation on the trend.
+- **Category filters only apply from "Understand" onward,** because hashes have no category until their metadata arrives. When the global content filter is active, the funnel greys out the earlier stages and says why.
+- **Latency percentiles** come from log-bucketed histograms and are labelled approximate (bucket resolution ≤ 10%).
+- **Missing data is a gap, not a zero** (e.g. while the crawler is paused); paused periods are annotated.
+
+#### 10.9.4 Interaction map
+| Source | Trigger | Action | Targets / scope | Clear |
+|---|---|---|---|---|
+| Context bar time range | select | global filter | every visual on Insights and its detail pages | reset to default (7 d) |
+| Compare toggle | toggle | parameter | adds comparison bands and Δs to Status, trend, Serve | toggle off |
+| Trend chart | brush | sets the global time range | page | Reset chip |
+| Stage strip | click/Enter | navigate (scroll to section) | — | — |
+| Funnel stage / loss reason | click | drill-through to that stage's detail page, pre-filtered to the reason | new page; breadcrumb back | Back |
+| Category / content-type bar | click | drill-through to Search (`discovered:<range> type:<x>`) | Search | Back |
+| Harvest-strategy bar | click | drill-through to the Discover detail page | page | Back |
+| Exception | click | navigate to the fix (settings section or detail page) | — | — |
+| Zero-result rate | click | drill-through to the Serve detail page (top zero-result queries, if logging is on) | page | Back |
+
+- There's no chart-to-chart cross-filtering anywhere, which keeps behaviour predictable.
+- Every active selection is shown as a chip in the context bar and can be reset.
+- URL state: `/insights?range=7d&compare=1`, `/insights/{stage}?range=…&reason=…`.
+
+#### 10.9.5 Stage detail pages (`/insights/{discover|fetch|understand|index|serve}`)
+Each detail page follows the same pattern: three to four KPIs, one primary trend, then drivers and the detail tables. Each has a breadcrumb back to the overview with the context preserved.
+
+- **Discover:**
+  - DHT nodes and routing-table health; reply ratio (the NAT-saturation signal);
+  - harvest by strategy and BEP 51 sample yield; IPv4/IPv6;
+  - virtual-ID keyspace coverage;
+  - the seen-filter load factor.
+- **Fetch:**
+  - queue depths and age; outcome breakdown over time;
+  - TCP vs uTP and MSE vs plaintext success;
+  - fetch latency histogram; per-IP limiter rejections;
+  - ephemeral-port pressure (Windows).
+- **Understand:**
+  - category and content-type mix; parser confidence distribution (histogram);
+  - ambiguous-name resolution rate; junk score distribution;
+  - blocklist drops (counts only; blocked content is never shown);
+  - recent "Fix parse" corrections.
+- **Index:**
+  - DB/index/file-index sizes against the §3 budget, with a growth projection;
+  - NRT commit lag; segment count and merges;
+  - file-index coverage (smart mode);
+  - swarm data: scrape coverage and freshness, trackers reporting (per-tracker table: health, rate limit, ban state);
+  - rebuild/reindex status.
+- **Serve:**
+  - searches per hour, latency percentiles, zero-result rate and cancel rate;
+  - facet sampling rate ("≈" share);
+  - alerts fired and notification delivery outcomes; sends to download clients;
+  - top queries and top zero-result queries, **only when query logging is enabled** (off by default, stored locally, retained 30 days, clearable).
+
+#### 10.9.6 Chart craft, states and layout
 - **Chart craft:**
-  - Bars start at zero, and axes carry units.
-  - Tooltips are headed by the full date and use the same formatters as the KPIs.
-  - Missing data is a gap, never a zero.
-  - Every chart has **"View as table"** and a one-sentence text summary as its accessible alternative.
-- **Narrow layout:** KPIs become a 2×2 grid; **exceptions move directly under the KPIs** because they're actionable; charts stack; tables scroll within their container.
+  - Bars start at zero; the funnel's widths are proportional to counts, and its labels show both the count and the conversion %.
+  - Axes carry units, and tooltips are headed by the full date.
+  - **One formatter per metric** (§10.12), shared by KPIs, axes, tooltips and tables.
+  - Every chart has **"View as table"**, a one-sentence text summary, and **CSV export**.
+- **States:**
+  - **Starting up:** fewer than one completed cohort. Shows the `searching_crawling` illustration with "Your first discoveries will appear here within minutes" and live counters.
+  - **Paused:** the `offline_idle` illustration plus a Resume action.
+  - **Partial cohorts:** hatched and labelled "incomplete".
+  - **Stale** (> 2 min since the last rollup flush): a banner with the reason.
+  - **Error:** a panel-level error that keeps the rest of the page usable.
+- **Layout** (`layout-grids`, modular 12-column):
+  - KPIs span 12; the trend 8 + exceptions 4; the funnel 12; segments 6 + 6; Serve 12.
+  - **Narrow screens:** stage strip, KPIs (2×2 + 1), then **exceptions**, funnel (vertical), trend, segments, Serve. Narrative order is preserved, and exceptions move up because they're actionable.
+- **Live updates:** SSE `insights` deltas every 30 s (suspended while the tab is hidden). Updates never re-animate the page (`motion-ui`); numbers change in place.
+- **Print layout:** the overview prints as a one-page report (context bar, KPIs, trend, funnel, exceptions), with the URL and generation time in the footer.
+
+#### 10.9.7 Digest
+- An optional **weekly or daily digest** (email / ntfy / Discord / RSS), generated from the rollups at a quiet hour (default 03:00 local).
+- It contains the context line, the five KPIs with Δs, the funnel conversion summary, the top 3 segment movers, and any open exceptions, with links back to Insights.
+- Plain-text plus simple HTML, with no images. It follows the copy rules (§10.14).
 
 ### 10.10 Settings and onboarding
 - **Settings:**
   - A manuscript layout (max 720 px). Section navigation sits on the left at x-large and becomes a select on narrow screens.
   - Forms have visible labels, help text next to each field, inline validation, and per-section Save with a "Saved" confirmation.
-  - Sections: General, Crawler, Network & VPN, Storage & retention (with size-projection previews), Search & ranking, Trackers, Integrations, Notifications, Plugins, Security, Appearance (theme, density, motion, shortcut settings), About.
+  - Sections: General, Crawler, Network & VPN, Storage & retention (with size-projection previews), Search & ranking, Trackers, Integrations, Notifications, **Insights & digest** (digest schedule and channels, query logging on/off and retention, clear usage data), Plugins, Security, Appearance (theme, density, motion, shortcut settings), About.
 - **First-run wizard** (stepped progress, one primary action per step):
   1. Setup token
   2. Admin password
@@ -593,9 +702,16 @@ Single-key shortcuts can be turned off or remapped (§10.13).
 - **`analytics-validation` matrix** against a fixed fixture dataset:
   - result count = sum of disjunctive-facet expectations, computed independently from SQL and Tantivy;
   - histogram bins reconcile to source counts;
-  - dashboard KPIs reconcile with `/metrics` counters and SQL counts;
-  - filter, brush and reset sequences restore the baseline;
-  - drill-through from the dashboard lands on Search with matching counts.
+  - **Insights reconciliation** (metric contracts in `docs/metrics.md`):
+    - per-hour/day "stored" and "searchable" rollups equal independent `COUNT(*)` over `torrents` (by `discovered_at` for stored; by the first `index_watermark_hour` row covering each id for searchable);
+    - "Searchable torrents" equals the Tantivy document count at the last commit;
+    - funnel stages never increase from one stage to the next within a cohort;
+    - per-cohort harvested = Σ(terminal reasons) + in-progress;
+    - event-time totals equal Σ hourly rows after daily compaction (compaction loses nothing);
+    - Discover/Fetch counters equal the Prometheus `/metrics` counters within one flush interval;
+    - `rollup --repair` restores exact stored/searchable counts after a simulated crash;
+    - each drill-through from Insights lands on a page (Search or a stage page) whose counts match the clicked mark;
+  - filter, brush and reset sequences restore the baseline.
 - **Playwright tests:**
   - visual snapshots for each breakpoint × theme × density;
   - keyboard-only end-to-end flows (search → open → send; save alert; first-run wizard);
@@ -744,7 +860,7 @@ With the plum swap, all six colours are distinguishable. Colour is still never t
 | Wordmark + tagline | Welcome and About screens | Search UI |
 | Mascot app icon | Windows installer/tray, Unraid CA, PWA install, README badge | In-app UI |
 | `welcome_onboarding` | First-run wizard step 1; `offline_idle` = crawler paused/idle full state | — |
-| `searching_crawling` / `found_nodes` | Empty-index cold start (Search "The index is still growing" full-state version, when < 1k torrents); crawler dashboard "Starting up" state | Banners and rows |
+| `searching_crawling` / `found_nodes` | Empty-index cold start (Search "The index is still growing" full-state version, when < 1k torrents); Insights "Starting up" state | Banners and rows |
 | `indexing` | Index rebuild screen, bitmagnet import progress, first index build | — |
 | `no_results` | Zero-result state, placed **after** the recovery suggestions in reading order | Partial/"≈" states |
 | `connection_error` | API unreachable / server restarting full-page state; wizard network-check failure | Inline errors (banners stay text-only) |
@@ -814,11 +930,11 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 | M | Deliverable | Exit criteria |
 |---|---|---|
 | 0 | Workspace, CI, `bencode`, `metainfo`, `store` schema + file-blob codec, synthetic data generator | Size benchmark shows ≤ budget for blobs; round-trip property tests pass |
-| 1 | DHT node (BEP 5/42/51 + passive), TCP + MSE metadata fetch, hostile-input limits + fuzzing, persistence, metrics, basic dashboard | Sustained new-torrent ingest on a home connection at "Balanced" without router/NAT saturation; no unbounded memory over 24 h; measured harvest and metadata success rates replace §3's rough cold-start estimate |
+| 1 | DHT node (BEP 5/42/51 + passive), TCP + MSE metadata fetch, hostile-input limits + fuzzing, persistence, metrics, **Insights rollup/cohort/event counters emitted from the start** (§7), a basic status page | Sustained new-torrent ingest on a home connection at "Balanced" without router/NAT saturation; no unbounded memory over 24 h; measured harvest and metadata success rates replace §3's rough cold-start estimate |
 | 2 | Tantivy torrent index, tokenizer, query language v1, REST search, minimal UI. **Add-on: `lodestar import-bitmagnet <postgres-url>`**, a read-only, resumable, batched import of `torrents`, `torrent_files`, `torrent_contents`/`content` titles, `torrents_torrent_sources` and dates. bitmagnet keeps no file rows for torrents over its `save_files_threshold` (default 100), so those are flagged `files_partial` and queued for background DHT metadata re-fetch. Imported torrents keep bitmagnet's `created_at` as `discovered_at`, with `age_confidence=imported`. | p95 targets met on the 10M synthetic set; NRT < 5 s; importer round-trips a sample bitmagnet DB with counts reconciled and no writes to the source |
 | 3 | Enrichment: extension registry, composition, release parser, effective title, content type, junk score, file index | Parser golden corpus ≥ 95% field accuracy; `file:(…)` queries work |
-| 4 | Swarm health: BEP 33, UDP/HTTP tracker scrape scheduler, hot columns, trackers count, history | Seeders/trackers filters and sorts within targets |
-| 5 | Full UI per §10: tokens/theme, primitives, Search (facets, builder, chips, states), detail drawer + file tree, Compare, Discover, Alerts, crawler dashboard, Settings + first-run wizard, keyboard, SSE live | `design-review` has no blocking findings; `analytics-validation` matrix passes on the fixture set; Playwright (breakpoints × themes × densities, keyboard-only, reduced motion) green; axe clean; `size-limit` and Lighthouse budgets met |
+| 4 | Swarm health: BEP 33, UDP/HTTP tracker scrape scheduler, hot columns, trackers count, history; scrape and Serve rollups | Seeders/trackers filters and sorts within targets |
+| 5 | Full UI per §10: tokens/theme, primitives, Search (facets, builder, chips, states), detail drawer + file tree, Compare, Discover, Alerts, **Insights** (overview story, 5 stage pages, digest, exports, print layout), Settings + first-run wizard, keyboard, SSE live | `design-review` has no blocking findings; `analytics-validation` matrix (incl. Insights reconciliation) passes on the fixture set; reporting overhead within the §3 budget; Playwright (breakpoints × themes × densities, keyboard-only, reduced motion) green; axe clean; `size-limit` and Lighthouse budgets met |
 | 6 | Packaging: Docker multi-arch, Unraid template, Windows MSI + service, first-run wizard | Clean install → crawling → search on all three targets in CI/smoke tests |
 | 7 | Torznab, download clients, notifications, grouping/"same file", regex prefilter, uTP, `.torrent` import, opt-in plugins | Feature tests; uTP raises metadata success rate (measured) |
 | 8 | Hardening: relevance suite + NDCG gate, perf/size gates, docs, 1.0 | All gates green; docs complete |
@@ -841,6 +957,8 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Tracker scrape cost & bans:** a full sweep of 10M hashes × 20 trackers is about 2.7M UDP requests per pass, enough to get banned. Scraping is **prioritized and budgeted**: new torrents once; viewed, favorited, saved-search-hit and recently searched torrents often; everything else on a slow decay schedule, all within per-tracker rate limits. A tracker that returns zeros for unknown hashes (opentracker) counts as "reporting" only when s+l+c > 0. So the trackers count is a *sampled, aging* signal, and the UI shows its age.
 - **Release-parser training data:** our crawl is unlabeled. Seed the corpus from permissively licensed test suites (check guessit/PTN licenses before copying) plus hand-labelled samples, and grow it from user corrections ("fix parse" in the detail view writes a local override and an optional exportable test case).
 - **"Discovered" ≠ release date:** handled by the backfill flag and the estimated-year field (§6), but it's the most likely source of user confusion. The copy and docs must be explicit.
+- **Reporting slowing the core system:** Insights reads only rollups. Exports and compaction run in chunked, throttled background jobs, and the overhead budget (§3) is benchmark-gated. The failure mode to watch is a long-running read transaction starving WAL checkpoints; reads are kept short and chunked by design, and a test checks the WAL size stays bounded during an export.
+- **Misleading process numbers:** funnels computed by event time would show false conversion rates. The cohort design, "incomplete" labelling and "unique (≈)" disclosure (§10.9.3) are mandatory, and reconciliation tests (§10.17) guard them.
 - **Scope/maintainability:** a large Rust codebase for one maintainer. Mitigate with strict crate boundaries, the MVP cut line, and reusing mature crates (tantivy, axum, rusqlite, tokio, encoding_rs, mimalloc, utoipa) wherever they aren't on the critical path.
 
 ## 16. Self-review log (issues found in draft 1, now folded in above)
@@ -908,6 +1026,13 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 
 **Decided (draft 6 → 7):** `minimalist-visual-style` adopted. Seafoam replaced by plum `#9381B6` (tuned from the suggested `#9C8AA5` for colour-blind separation). The brand asset pack is integrated (§10.19). From the brand tokens, adopted: `border` as the divider, dark `muted`, and `brand-star`. The brand board's older swatches (Stone/Slate/Teal/…) are superseded by `tokens/colors.json`.
 
+**Insights process-story dashboard (draft 7 → 8):** "Crawler" became **Insights**, a progressive dashboard telling the whole story **Discover → Fetch → Understand → Index → Serve** (§10.9), with five stage drill-through pages, a weekly/daily digest, CSV export and a print layout.
+- It reads only incremental **rollup and discovery-cohort tables** (§7): ≤ 50 ms queries regardless of corpus size, ≤ 50 MB/year of storage, and an overhead budget of search p95 +≤ 5% and ingest −≤ 2% (§3).
+- The funnel uses discovery cohorts rather than event-time counts, so conversion rates are honest. Unfinished cohorts are labelled "incomplete", and pre-storage uniqueness is labelled approximate.
+- Counters are emitted from M1, so history exists when the UI lands in M5.
+- The Insights chunk budget is 45 KB, up from the crawler dashboard's 40 KB, for the funnel and stage pages (§10.1).
+- Review follow-ups: counters-only flushes while ingest is idle; an hourly index watermark so searchable counts can be rebuilt exactly; post-storage removals kept out of the funnel so final cohorts never change; evicted/gave-up loss reasons and a "new to us" definition of harvested, so cohort conservation holds.
+
 **Still open (decide during M0–M2 spikes, with measurements rather than guesses):** reusing librqbit crates vs our own DHT; whether the trigram field earns its size at 10M+ names; the smart-file-index thresholds; the actual cold-start harvest and metadata success rates.
 
 **M0 implementation decisions:**
@@ -945,7 +1070,8 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - Lighthouse CI (LCP/INP/CLS);
   - axe on every screen × theme;
   - Playwright visual snapshots at 320/390/768/1024/1366/1920/2560;
-  - the `analytics-validation` fixture matrix (facet counts, histogram bins and dashboard KPIs reconciled against independent SQL/`/metrics`);
+  - the `analytics-validation` fixture matrix (facet counts, histogram bins, and Insights rollups/cohorts reconciled against independent SQL, the Tantivy doc count and `/metrics`);
+  - the **reporting-overhead benchmark**: search and ingest benchmarks rerun with Insights polling + the digest job + an export running, checked against the §3 overhead budget;
   - a `design-review` pass with no blocking findings.
 - **In-process DHT test network:** spawn about 50 nodes plus fake peers serving known info dicts, and assert harvest → fetch → store → index → `search` returns them within 5 s.
 - `cargo bench -p search` against the synthetic 10M dataset checks the p95 table and the size report against budgets. CI fails on regression.
