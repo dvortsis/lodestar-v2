@@ -1,0 +1,586 @@
+//! The canonical store: SQLite is the source of truth (architecture §7).
+//! Search indexes and hot columns are derived from it and can always be
+//! rebuilt.
+//!
+//! M0 scope: schema and migrations, connection setup, the file-tree blob
+//! codec with zstd dictionaries, and batched inserts and reads. A single
+//! [`Store`] owns the one writer connection; the read pool and the writer
+//! task arrive with the pipeline.
+
+mod compress;
+pub mod filetree;
+mod schema;
+
+use std::fmt;
+use std::io;
+use std::path::Path;
+
+use lodestar_metainfo::{
+    FileAttrs, Info, InfoHash, InfoHashV2, MetaVersion, Text, TextEncoding, info_without_pieces,
+};
+use rusqlite::{Connection, OptionalExtension, params};
+
+pub use compress::{BlobCodec, Codec, Compressed};
+pub use filetree::{CodecError, FileTree};
+pub use rusqlite;
+
+/// Bits of the `torrents.flags` column. Values are persisted: append only.
+pub mod flags {
+    pub const PRIVATE: i64 = 1 << 0;
+    /// Has a v2 info hash (pure v2 or hybrid).
+    pub const V2: i64 = 1 << 1;
+    pub const HYBRID: i64 = 1 << 2;
+    pub const PADDING: i64 = 1 << 3;
+    pub const SYMLINKS: i64 = 1 << 4;
+    /// Came from a `.torrent` import rather than the DHT.
+    pub const IMPORTED: i64 = 1 << 5;
+    /// First seen during crawler warm-up: `discovered_at` only means "when
+    /// we first saw it" (architecture §6, `age_confidence`).
+    pub const BACKFILL: i64 = 1 << 6;
+    /// The file list is incomplete (bitmagnet import above its threshold).
+    pub const FILES_PARTIAL: i64 = 1 << 7;
+    pub const SINGLE_FILE: i64 = 1 << 8;
+    /// Metainfo parsing reported warnings.
+    pub const WARNINGS: i64 = 1 << 9;
+}
+
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum Error {
+    Sqlite(rusqlite::Error),
+    Codec(CodecError),
+    Compression(io::Error),
+    SchemaTooNew { found: i64, supported: i64 },
+    Corrupt(&'static str),
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::Sqlite(e) => write!(f, "sqlite: {e}"),
+            Error::Codec(e) => e.fmt(f),
+            Error::Compression(e) => write!(f, "compression: {e}"),
+            Error::SchemaTooNew { found, supported } => write!(
+                f,
+                "database schema v{found} is newer than this build supports (v{supported})"
+            ),
+            Error::Corrupt(what) => write!(f, "corrupt store: {what}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Sqlite(e) => Some(e),
+            Error::Codec(e) => Some(e),
+            Error::Compression(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<rusqlite::Error> for Error {
+    fn from(e: rusqlite::Error) -> Self {
+        Error::Sqlite(e)
+    }
+}
+
+impl From<CodecError> for Error {
+    fn from(e: CodecError) -> Self {
+        Error::Codec(e)
+    }
+}
+
+impl From<io::Error> for Error {
+    fn from(e: io::Error) -> Self {
+        Error::Compression(e)
+    }
+}
+
+pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoreConfig {
+    /// SQLite `mmap_size`; size it to available RAM.
+    pub mmap_size: u64,
+    /// zstd level for blobs. Writes are tens per second, so a high level
+    /// costs little and buys size.
+    pub compression_level: i32,
+    /// Keep the info dictionary minus `pieces` (off by default, §3).
+    pub archive_raw: bool,
+}
+
+impl Default for StoreConfig {
+    fn default() -> Self {
+        StoreConfig {
+            mmap_size: 256 << 20,
+            compression_level: 19,
+            archive_raw: false,
+        }
+    }
+}
+
+/// A torrent to insert.
+#[derive(Debug, Clone, Copy)]
+pub struct NewTorrent<'a> {
+    pub info: &'a Info,
+    /// The raw info dictionary, needed only when `archive_raw` is on.
+    pub raw_info: Option<&'a [u8]>,
+    pub discovered_at: i64,
+    pub metadata_at: i64,
+    /// Provenance flags the metainfo can't know ([`flags::IMPORTED`],
+    /// [`flags::BACKFILL`], [`flags::FILES_PARTIAL`]).
+    pub extra_flags: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Inserted {
+    New(i64),
+    /// Already stored under one of its swarm hashes.
+    Existing(i64),
+}
+
+impl Inserted {
+    pub fn id(self) -> i64 {
+        match self {
+            Inserted::New(id) | Inserted::Existing(id) => id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TorrentRow {
+    pub id: i64,
+    pub info_hash: InfoHash,
+    pub info_hash_v2: Option<InfoHashV2>,
+    pub name: String,
+    /// Raw name bytes when they aren't plain UTF-8.
+    pub name_raw: Option<Text>,
+    pub size: u64,
+    pub piece_len: u64,
+    pub piece_count: u64,
+    /// Files excluding padding.
+    pub file_count: u64,
+    pub info_size: u64,
+    pub flags: i64,
+    pub discovered_at: i64,
+    pub metadata_at: i64,
+    pub last_seen_at: i64,
+}
+
+const FILE_DICT_SETTING: &str = "file_dict";
+
+/// The writer connection plus blob codec.
+#[derive(Debug)]
+pub struct Store {
+    conn: Connection,
+    codec: BlobCodec,
+    config: StoreConfig,
+}
+
+impl Store {
+    pub fn open(path: impl AsRef<Path>, config: StoreConfig) -> Result<Store> {
+        let path = path.as_ref();
+        let conn = Connection::open(path)?;
+        Store::init(conn, Some(path), config)
+    }
+
+    /// A private in-memory database, for tests.
+    pub fn open_in_memory(config: StoreConfig) -> Result<Store> {
+        Store::init(Connection::open_in_memory()?, None, config)
+    }
+
+    fn init(mut conn: Connection, path: Option<&Path>, config: StoreConfig) -> Result<Store> {
+        schema::configure(&conn, config.mmap_size)?;
+        schema::migrate(&mut conn, path)?;
+        let mut codec = BlobCodec::new(config.compression_level);
+        {
+            let mut stmt = conn.prepare("SELECT id, data FROM zstd_dicts")?;
+            let rows =
+                stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))?;
+            for row in rows {
+                let (id, data) = row?;
+                codec.add_dict(id, data);
+            }
+        }
+        let active: Option<i64> = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                [FILE_DICT_SETTING],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if active.is_some_and(|id| codec_has(&conn, id).ok() != Some(true)) {
+            return Err(Error::Corrupt("active file dictionary is missing"));
+        }
+        codec.set_active(active);
+        Ok(Store {
+            conn,
+            codec,
+            config,
+        })
+    }
+
+    pub fn connection(&self) -> &Connection {
+        &self.conn
+    }
+
+    pub fn active_file_dict(&self) -> Option<i64> {
+        self.codec.active()
+    }
+
+    /// Inserts a batch in one transaction. Torrents already stored under any
+    /// of their swarm hashes (v1 or truncated v2) are left untouched.
+    pub fn insert(&mut self, batch: &[NewTorrent<'_>]) -> Result<Vec<Inserted>> {
+        let Store {
+            conn,
+            codec,
+            config,
+        } = self;
+        let tx = conn.transaction()?;
+        let mut out = Vec::with_capacity(batch.len());
+        for t in batch {
+            let info = t.info;
+            if let Some(id) = find_any(&tx, info.swarm_hashes())? {
+                out.push(Inserted::Existing(id));
+                continue;
+            }
+            let blob = filetree::encode(&info.files, info.path_encoding)?;
+            let blob = codec.compress(&blob)?;
+            let name = info.name.decode();
+            let plain_name =
+                info.name.encoding == TextEncoding::UTF8 && name.as_bytes() == info.name.raw;
+            let file_count = info.files.iter().filter(|f| !f.is_padding()).count();
+            let id: i64 = tx
+                .prepare_cached(
+                    "INSERT INTO torrents (info_hash, info_hash_v2, name, name_raw, name_enc,
+                         size, piece_len, piece_count, file_count, info_size, flags,
+                         discovered_at, metadata_at, last_seen_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?12)
+                     RETURNING id",
+                )?
+                .query_row(
+                    params![
+                        &info.primary_hash().0[..],
+                        info.v2.as_ref().map(|h| &h.0[..]),
+                        name,
+                        (!plain_name).then_some(&info.name.raw[..]),
+                        (!plain_name).then_some(info.name.encoding.id()),
+                        to_i64(info.total_size)?,
+                        to_i64(info.piece_length)?,
+                        to_i64(info.piece_count)?,
+                        file_count as i64,
+                        info.info_size as i64,
+                        derive_flags(info) | t.extra_flags,
+                        t.discovered_at,
+                        t.metadata_at,
+                    ],
+                    |r| r.get(0),
+                )?;
+            tx.prepare_cached(
+                "INSERT INTO torrent_files (torrent_id, codec, dict_id, data) VALUES (?1, ?2, ?3, ?4)",
+            )?
+            .execute(params![id, blob.codec as u8, blob.dict_id, blob.data])?;
+            if let Some(extra) = &info.extra {
+                tx.prepare_cached("INSERT INTO torrent_extra (torrent_id, data) VALUES (?1, ?2)")?
+                    .execute(params![id, extra])?;
+            }
+            if config.archive_raw {
+                if let Some(raw) = t.raw_info {
+                    let stripped = info_without_pieces(raw)
+                        .map_err(|_| Error::Corrupt("raw info does not parse"))?;
+                    tx.prepare_cached(
+                        "INSERT INTO torrent_raw (torrent_id, data) VALUES (?1, ?2)",
+                    )?
+                    .execute(params![id, stripped])?;
+                }
+            }
+            out.push(Inserted::New(id));
+        }
+        tx.commit()?;
+        Ok(out)
+    }
+
+    /// Looks a torrent up by any 20-byte swarm hash.
+    pub fn find(&self, hash: &InfoHash) -> Result<Option<i64>> {
+        find_any(&self.conn, std::iter::once(*hash))
+    }
+
+    pub fn torrent(&self, id: i64) -> Result<Option<TorrentRow>> {
+        let row = self
+            .conn
+            .prepare_cached(
+                "SELECT id, info_hash, info_hash_v2, name, name_raw, name_enc, size, piece_len,
+                        piece_count, file_count, info_size, flags, discovered_at, metadata_at,
+                        last_seen_at
+                 FROM torrents WHERE id = ?1",
+            )?
+            .query_row([id], |r| {
+                Ok((
+                    TorrentRow {
+                        id: r.get(0)?,
+                        info_hash: InfoHash([0; 20]),
+                        info_hash_v2: None,
+                        name: r.get(3)?,
+                        name_raw: None,
+                        size: get_u64(r, 6)?,
+                        piece_len: get_u64(r, 7)?,
+                        piece_count: get_u64(r, 8)?,
+                        file_count: get_u64(r, 9)?,
+                        info_size: get_u64(r, 10)?,
+                        flags: r.get(11)?,
+                        discovered_at: r.get(12)?,
+                        metadata_at: r.get(13)?,
+                        last_seen_at: r.get(14)?,
+                    },
+                    r.get::<_, Vec<u8>>(1)?,
+                    r.get::<_, Option<Vec<u8>>>(2)?,
+                    r.get::<_, Option<Vec<u8>>>(4)?,
+                    r.get::<_, Option<u8>>(5)?,
+                ))
+            })
+            .optional()?;
+        let Some((mut row, hash, hash_v2, name_raw, name_enc)) = row else {
+            return Ok(None);
+        };
+        row.info_hash = InfoHash(
+            hash.try_into()
+                .map_err(|_| Error::Corrupt("info_hash length"))?,
+        );
+        row.info_hash_v2 = hash_v2
+            .map(|h| h.try_into().map(InfoHashV2))
+            .transpose()
+            .map_err(|_| Error::Corrupt("info_hash_v2 length"))?;
+        row.name_raw = match (name_raw, name_enc) {
+            (Some(raw), Some(enc)) => Some(Text {
+                raw,
+                encoding: TextEncoding::from_id(enc).ok_or(Error::Corrupt("name_enc"))?,
+            }),
+            (None, None) => None,
+            _ => return Err(Error::Corrupt("name_raw without name_enc")),
+        };
+        Ok(Some(row))
+    }
+
+    pub fn files(&mut self, id: i64) -> Result<Option<FileTree>> {
+        let row = self
+            .conn
+            .prepare_cached("SELECT codec, dict_id, data FROM torrent_files WHERE torrent_id = ?1")?
+            .query_row([id], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, Option<i64>>(1)?,
+                    r.get::<_, Vec<u8>>(2)?,
+                ))
+            })
+            .optional()?;
+        let Some((codec, dict_id, data)) = row else {
+            return Ok(None);
+        };
+        let codec = Codec::from_id(codec).ok_or(Error::Corrupt("unknown blob codec"))?;
+        let raw = self.codec.decompress(codec, dict_id, &data)?;
+        Ok(Some(filetree::decode(&raw)?))
+    }
+
+    /// Unknown info keys, as a canonical bencode dictionary.
+    pub fn extra(&self, id: i64) -> Result<Option<Vec<u8>>> {
+        self.blob("SELECT data FROM torrent_extra WHERE torrent_id = ?1", id)
+    }
+
+    /// The archived info dictionary minus `pieces`, if archiving was on.
+    pub fn raw_info(&self, id: i64) -> Result<Option<Vec<u8>>> {
+        self.blob("SELECT data FROM torrent_raw WHERE torrent_id = ?1", id)
+    }
+
+    fn blob(&self, sql: &str, id: i64) -> Result<Option<Vec<u8>>> {
+        Ok(self
+            .conn
+            .prepare_cached(sql)?
+            .query_row([id], |r| r.get(0))
+            .optional()?)
+    }
+
+    pub fn count(&self) -> Result<u64> {
+        Ok(self
+            .conn
+            .query_row("SELECT count(*) FROM torrents", [], |r| get_u64(r, 0))?)
+    }
+
+    /// Trains a file-tree dictionary from up to `max_samples` stored blobs
+    /// spread evenly over the table, and makes it the active one. Returns
+    /// `None` when there are too few torrents to train on.
+    pub fn train_file_dict(&mut self, max_samples: usize, dict_size: usize) -> Result<Option<i64>> {
+        const MIN_SAMPLES: usize = 256;
+        let total = self.count()? as usize;
+        if total < MIN_SAMPLES {
+            return Ok(None);
+        }
+        let step = (total / max_samples.max(1)).max(1) as i64;
+        let rows: Vec<(i64, Option<i64>, Vec<u8>)> = self
+            .conn
+            .prepare(
+                "SELECT codec, dict_id, data FROM torrent_files
+                 WHERE torrent_id % ?1 = 0 LIMIT ?2",
+            )?
+            .query_map(params![step, max_samples as i64], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })?
+            .collect::<Result<_, _>>()?;
+        let mut samples = Vec::with_capacity(rows.len());
+        for (codec, dict_id, data) in rows {
+            let codec = Codec::from_id(codec).ok_or(Error::Corrupt("unknown blob codec"))?;
+            samples.push(self.codec.decompress(codec, dict_id, &data)?);
+        }
+        if samples.len() < MIN_SAMPLES {
+            return Ok(None);
+        }
+        let dict = compress::train(&samples, dict_size)?;
+        let tx = self.conn.transaction()?;
+        let id: i64 = tx.query_row(
+            "INSERT INTO zstd_dicts (kind, created_at, samples, data)
+             VALUES ('file_tree', unixepoch(), ?1, ?2) RETURNING id",
+            params![samples.len() as i64, &dict],
+            |r| r.get(0),
+        )?;
+        tx.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            params![FILE_DICT_SETTING, id],
+        )?;
+        tx.commit()?;
+        self.codec.add_dict(id, dict);
+        self.codec.set_active(Some(id));
+        Ok(Some(id))
+    }
+
+    /// Rewrites blobs not yet compressed with the active dictionary, in
+    /// batches of `batch` rows per transaction. Returns how many changed.
+    pub fn recompress_files(&mut self, batch: usize) -> Result<u64> {
+        let active = self.codec.active();
+        let mut last_id = 0i64;
+        let mut changed = 0u64;
+        loop {
+            let rows: Vec<(i64, i64, Option<i64>, Vec<u8>)> = self
+                .conn
+                .prepare_cached(
+                    "SELECT torrent_id, codec, dict_id, data FROM torrent_files
+                     WHERE torrent_id > ?1 AND (codec != 1 OR dict_id IS NOT ?2)
+                     ORDER BY torrent_id LIMIT ?3",
+                )?
+                .query_map(params![last_id, active, batch as i64], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                })?
+                .collect::<Result<_, _>>()?;
+            let Some(&(last, ..)) = rows.last() else {
+                return Ok(changed);
+            };
+            last_id = last;
+            let tx = self.conn.transaction()?;
+            for (id, codec, dict_id, data) in rows {
+                let codec = Codec::from_id(codec).ok_or(Error::Corrupt("unknown blob codec"))?;
+                let raw = self.codec.decompress(codec, dict_id, &data)?;
+                let z = self.codec.compress(&raw)?;
+                if z.codec != codec || z.dict_id != dict_id {
+                    tx.prepare_cached(
+                        "UPDATE torrent_files SET codec = ?2, dict_id = ?3, data = ?4
+                         WHERE torrent_id = ?1",
+                    )?
+                    .execute(params![id, z.codec as u8, z.dict_id, z.data])?;
+                    changed += 1;
+                }
+            }
+            tx.commit()?;
+        }
+    }
+
+    /// Folds the WAL back into the main file.
+    pub fn checkpoint(&self) -> Result<()> {
+        self.conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+        Ok(())
+    }
+}
+
+fn codec_has(conn: &Connection, id: i64) -> rusqlite::Result<bool> {
+    conn.query_row("SELECT 1 FROM zstd_dicts WHERE id = ?1", [id], |_| Ok(()))
+        .optional()
+        .map(|r| r.is_some())
+}
+
+/// Two indexed lookups. Written with `OR`, SQLite scans the whole table.
+const FIND_BY_HASH: &str = "SELECT id FROM torrents WHERE info_hash = ?1
+     UNION ALL
+     SELECT id FROM torrents
+     WHERE info_hash_v2 IS NOT NULL AND substr(info_hash_v2, 1, 20) = ?1
+     LIMIT 1";
+
+fn find_any(conn: &Connection, hashes: impl Iterator<Item = InfoHash>) -> Result<Option<i64>> {
+    let mut stmt = conn.prepare_cached(FIND_BY_HASH)?;
+    for h in hashes {
+        if let Some(id) = stmt.query_row([&h.0[..]], |r| r.get(0)).optional()? {
+            return Ok(Some(id));
+        }
+    }
+    Ok(None)
+}
+
+fn derive_flags(info: &Info) -> i64 {
+    let mut f = 0;
+    let mut set = |cond: bool, bit: i64| {
+        if cond {
+            f |= bit;
+        }
+    };
+    set(info.private, flags::PRIVATE);
+    set(info.v2.is_some(), flags::V2);
+    set(info.version == MetaVersion::Hybrid, flags::HYBRID);
+    set(info.files.iter().any(|f| f.is_padding()), flags::PADDING);
+    set(
+        info.files
+            .iter()
+            .any(|f| f.attrs.contains(FileAttrs::SYMLINK)),
+        flags::SYMLINKS,
+    );
+    set(info.single_file, flags::SINGLE_FILE);
+    set(!info.warnings.is_empty(), flags::WARNINGS);
+    f
+}
+
+fn to_i64(v: u64) -> Result<i64> {
+    i64::try_from(v).map_err(|_| Error::Corrupt("integer out of SQLite range"))
+}
+
+/// Reads a column that must hold a non-negative integer.
+fn get_u64(r: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<u64> {
+    let v: i64 = r.get(idx)?;
+    u64::try_from(v).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(idx, rusqlite::types::Type::Integer, Box::new(e))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hash_lookup_uses_indexes() {
+        let store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let plan: Vec<String> = store
+            .conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {FIND_BY_HASH}"))
+            .unwrap()
+            .query_map([&[0u8; 20][..]], |r| r.get(3))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(
+            plan.iter().all(|step| !step.starts_with("SCAN")),
+            "{plan:?}"
+        );
+        assert!(
+            plan.iter().any(|step| step.contains("torrents_v2")),
+            "{plan:?}"
+        );
+    }
+}
