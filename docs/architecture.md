@@ -59,6 +59,7 @@ The goal is to build the whole pipeline from scratch (crawler → metadata → s
 - File index in "smart" mode (default; §8): **≤ 0.8 KB per torrent**. In "all files" mode it's about 40–60 B per file, which can double the total. The settings UI shows the projected size before you switch modes.
 - Raw info-dict archive: **off by default.** If enabled, it stores the info dict **minus the `pieces` field**, at roughly +0.3–1 KB per torrent. A full info dict is dominated by `pieces`: 20 incompressible bytes per piece, often 10–60 KB per torrent, which would mean hundreds of GB at 10M torrents. `pieces` carries no searchable metadata, so it's never stored; we keep only the piece count and length.
 - **Honest all-in figure: about 2.3 KB per torrent by default (≈ 23 GB per 10M torrents).** That's a target, not a promise, and the M0 benchmarks will confirm or revise it.
+- **M0 allocation:** of the 1.5 KB, the canonical store (the whole SQLite file) gets **≤ 1.0 KB** and the torrent index **≤ 0.5 KB**. Within the store, file-tree blobs get **≤ 0.6 KB** mean. CI enforces both store figures with `size-report --gate` on 50k synthetic torrents. M0 measured, on 100k synthetic torrents averaging 31.3 files: **344 B** blob mean and **565 B** SQLite file per torrent (§16).
 
 Steady-state RSS **< 1 GB** at 10M torrents with default caches. A **low-resource mode** (for N100/ARM/HDD-backed Unraid boxes) turns off the trigram field and the file index and shrinks caches and merge threads.
 
@@ -170,9 +171,9 @@ Text extracted from NFOs is indexed into an `nfo_text` field (boost ~2).
 **Pragmas:** WAL, `synchronous=NORMAL`, `page_size=16384`, `mmap_size` sized to RAM, `auto_vacuum=INCREMENTAL`, STRICT tables. Reads go through a pool of read-only connections.
 
 **Schema sketch** (integer surrogate `id` everywhere; the 20-byte hash appears only once). Ids are **monotonic and never reused** (`AUTOINCREMENT`). Hot-column slots, Tantivy docs and the percolator's "new docs = id > watermark" logic all depend on a deleted id never coming back with stale data. Plain SQLite rowids can be reused after deletes.
-- `torrents(id INTEGER PK, info_hash BLOB UNIQUE, info_hash_v2 BLOB, name TEXT, size INT, piece_len INT, piece_count INT, file_count INT, flags INT /*bitset: private,v2,hybrid,padding,symlinks,imported…*/, discovered_at INT, metadata_at INT, last_seen_at INT, content_type INT, junk_score INT, group_key INT, comp BLOB /*packed per-category count+bytes*/)`
+- `torrents(id INTEGER PK, info_hash BLOB UNIQUE, info_hash_v2 BLOB, name TEXT, name_raw BLOB, name_enc INT /*raw bytes + encoding id, only when the name isn't plain UTF-8*/, size INT, info_size INT, piece_len INT, piece_count INT, file_count INT, flags INT /*bitset: private,v2,hybrid,padding,symlinks,imported…*/, discovered_at INT, metadata_at INT, last_seen_at INT, content_type INT, junk_score INT, group_key INT, comp BLOB /*packed per-category count+bytes*/)`
 - `torrent_parsed(torrent_id PK, parser_ver INT, data BLOB /*msgpack of parsed fields*/)`. The hot fields (year, resolution, …) are also flattened into the index.
-- `torrent_files(torrent_id PK, codec INT, data BLOB)`: **one compressed blob per torrent**, never one row per file (bitmagnet's per-file rows are its biggest table). Format: an interned directory table + entries `(parent varint, name, size varint, attrs, pieces_root?)`, then **zstd with a trained dictionary** (versioned dictionaries in `zstd_dicts`).
+- `torrent_files(torrent_id PK, codec INT, dict_id INT, data BLOB)`: **one compressed blob per torrent**, never one row per file (bitmagnet's per-file rows are its biggest table). Format: an interned directory table + entries `(parent varint, name, size varint, attrs, pieces_root?)`, then **zstd with a trained dictionary** (versioned dictionaries in `zstd_dicts`).
 - `torrent_raw(torrent_id PK, data BLOB)`: the info dict minus `pieces` (opt-in, off by default).
 - `torrent_extra(torrent_id PK, data BLOB)`: unknown info keys + `.torrent`-only fields.
 - `swarm(torrent_id PK, seeders, leechers, completed, trackers_reporting, dht_seeds, dht_peers, last_scrape_at, next_scrape_at)` plus `swarm_trackers(torrent_id PK, data BLOB)` for the per-tracker detail, packed as `(tracker_id u16, s, l, c, at)` and only for torrents with non-zero results.
@@ -908,6 +909,33 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 **Decided (draft 6 → 7):** `minimalist-visual-style` adopted. Seafoam replaced by plum `#9381B6` (tuned from the suggested `#9C8AA5` for colour-blind separation). The brand asset pack is integrated (§10.19). From the brand tokens, adopted: `border` as the divider, dark `muted`, and `brand-star`. The brand board's older swatches (Stone/Slate/Teal/…) are superseded by `tokens/colors.json`.
 
 **Still open (decide during M0–M2 spikes, with measurements rather than guesses):** reusing librqbit crates vs our own DHT; whether the trigram field earns its size at 10M+ names; the smart-file-index thresholds; the actual cold-start harvest and metadata success rates.
+
+**M0 implementation decisions:**
+- **Size budget split and first measurement.** See §3: 1.0 KB for the store and 0.5 KB for the torrent index, with blobs ≤ 0.6 KB. Measured with `bench`'s deterministic generator at 100k torrents (seed 1, 31.3 files each):
+  - file-tree blob: 1,011 B raw → **344 B** stored (zstd 19 + a 112 KiB trained dictionary, 2.9×);
+  - whole SQLite file: **565 B** per torrent (blobs 412 B including page overhead, `torrents` rows 119 B, hash index 31 B).
+  
+  Synthetic names repeat more than real ones, so real data will compress somewhat worse. M1 re-measures on a real crawl. The CI gate stays either way.
+- **zstd level 19 by default.** Compared with level 12, it saves 6% of blob bytes (344 vs 366 B), but store throughput drops from 9.8k to 3.4k torrents/s. Live ingest is tens of torrents per second, so 19 wins. Bulk paths (the bitmagnet import, `reindex`) can choose a lower level through `StoreConfig`.
+- **The schema grows per milestone.** Migration v1 holds only the canonical torrent tables, `settings` and `zstd_dicts`. Each milestone adds its own tables as a new migration, written by the code that uses them, rather than shapes guessed now:
+  - `blocklist` in M1;
+  - `swarm*` and `trackers` in M4;
+  - `saved_searches`, `alerts`, `user_items` and `collections` in M5/M7.
+  
+  Migrations refuse a newer database and snapshot an existing one before changing it (§12).
+- **Columns beyond the §7 sketch:**
+  - `torrents.name_raw`/`name_enc` keep the raw name bytes, but only when they aren't plain UTF-8.
+  - `torrents.info_size` records the info-dict size (§6).
+  - `torrent_files.dict_id` names the zstd dictionary. The frame's own dictID field is switched off to save bytes.
+- **Duplicate lookup by any swarm hash** is two indexed lookups joined with `UNION ALL`. Written with `OR`, SQLite scanned the whole table, which made ingest 17× slower at 100k torrents. A test pins the query plan.
+- **Text encoding.** There's one encoding decision per torrent, in this order: `.utf-8` keys, then valid UTF-8, then the `.torrent` `encoding` hint, then chardetng over all names at once. Encoding ids come from an append-only table of `encoding_rs` encodings. On synthetic data, chardetng misreads about 1.5% of short legacy-GBK names, guessing ISO-8859-5. The raw bytes are always kept, so those names can be re-decoded later.
+- **Parsing policy:**
+  - bencode has a lenient mode (unsorted keys and leading zeros accepted) and a strict, canonical-only mode. Duplicate keys and trailing bytes are rejected in both.
+  - metainfo reports recoverable anomalies as warnings and doesn't reject the torrent for them: piece-count mismatch, an inconsistent hybrid, suspicious path segments, bad per-file hashes and malformed v2 entries.
+  - Total size is capped at `i64::MAX` so every value fits SQLite.
+- **Fuzzing ships with M1**, as §14 schedules. The M0 parsers and the blob codec are covered by property tests: round-trips, strict-implies-canonical, and no panics on arbitrary or corrupted input.
+
+**Still open after M0:** chardetng accuracy on real legacy-encoded names (measure in M1, and consider an encoding allowlist if ISO-8859-x misreads show up).
 
 ## 17. Verification (once built)
 
