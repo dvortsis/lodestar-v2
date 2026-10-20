@@ -298,6 +298,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lodestar-dht"
+version = "0.0.0"
+dependencies = [
+ "lodestar-bencode",
+ "lodestar-metainfo",
+ "proptest",
+]
+
+[[package]]
 name = "lodestar-metainfo"
 version = "0.0.0"
 dependencies = [
