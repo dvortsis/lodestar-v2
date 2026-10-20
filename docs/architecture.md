@@ -104,6 +104,8 @@ Data dir layout: `data/lodestar.db` (SQLite), `data/index/torrents/`, `data/inde
 
 ## 5. DHT crawler
 
+The Mainline DHT crawler is **source plugin #1**. Every other discovery source, importer and network tier plugs into the same plugin API and crawl scheduler (§18).
+
 - **Stack:** tokio and our own zero-copy bencode/KRPC codec. Spike reuse of `librqbit` crates (dht, peer-protocol, bencode) in M1; adopt them only if they support BEP 51 traversal and high fan-out without forking.
 - **BEPs:** 5 (DHT), 32 (IPv6), 42 (secure node IDs), 43 (read-only flag respected), **51 (`sample_infohashes`) as the primary, polite harvester**, 33 (DHT scrape bloom filters → seed/peer estimates).
 - **Harvest strategies** (each toggleable, with metrics per strategy):
@@ -126,6 +128,9 @@ Data dir layout: `data/lodestar.db` (SQLite), `data/index/torrents/`, `data/inde
 - **Peer wire:** BEP 3 handshake with the extension bit → BEP 10 extended handshake → BEP 9 `ut_metadata` piece requests → SHA-1 verify (v1) / SHA-256 (v2 `btmh`). **TCP first (M1), uTP (BEP 29) in M7.** The UI shows the success rate so the uTP gain is measurable.
 - **MSE/PE (Message Stream Encryption)** handshake with plaintext fallback. Many peers run "require encryption", and without MSE those fetches simply fail. This ships in M1, not later.
 - Concurrency budget (default 400 sockets), per-IP limits, 8 s timeouts, and tries multiple peers per hash. Peers for a hash are refreshed via `get_peers` before retrying.
+- **Peer finding beyond the DHT** (accelerator plugins, §18): when `get_peers` returns nobody, ask a few public UDP trackers for peers (BEP 15 announce, rate-limited, only when the DHT is empty). During a fetch, use **PEX (BEP 11)** to learn more peers from the one we're connected to. Both raise the metadata success rate, especially for keys from scrapes, dumps and Nostr.
+  - **A tracker announce publishes our IP in that swarm's peer list.** That's what copyright monitors collect, so it changes the legal exposure the way the micro-piece prober does (§6). Tracker-announce peer finding is therefore **off by default**, behind a consent screen (class *Restricted*, §18.7), and always uses `event=stopped` semantics where trackers allow it. PEX only reads peers a connected peer sends us, so it stays on.
+  - **Private keys never use public peer finding.** Keys flagged `private_source` (§18.7) are never sent to public DHT lookups, public tracker announces or PEX. BEP 27 forbids DHT and PEX for private torrents, and a lookup would leak the hash to strangers.
 - **Hostile-input limits:** the metadata size cap is 16 MB, configurable, and anything larger is recorded as "oversize" with hash and size only. There are limits on bencode depth and list length, file count, and path length. Fuzzing (`cargo fuzz`) covers bencode, KRPC and the metainfo parser.
 - **Encodings:** use `name.utf-8`/`path.utf-8` when present; otherwise detect legacy charsets (GBK, Big5, Shift-JIS, CP1251) with `chardetng` + `encoding_rs`. The raw bytes are kept so decoding can be redone.
 - **v2/hybrid identity:** DHT announces v2 swarms under the *truncated* 32→20-byte hash. Both forms map to one torrent id, so hybrid torrents never appear twice.
@@ -155,7 +160,7 @@ Data dir layout: `data/lodestar.db` (SQLite), `data/index/torrents/`, `data/inde
 
 **Ambiguity flag:** when the raw name is uninformative (hash-like, `New Folder (2)`, `Complete Season`, generic), the torrent gets `ambiguous=true`. The result records **how it was resolved** (dominant file / folder / structure / plugin) plus a confidence score. The UI shows the resolved title next to the raw name with a "resolved via …" tooltip, and power users can filter `ambiguous:yes`.
 
-**Opt-in enrichment plugins** (off by default, need API keys, rate-limited, cached): TMDB, MusicBrainz, OpenLibrary, IGDB. They add canonical title, poster URL, IDs and genres. A plugin trait keeps third-party calls isolated.
+**Opt-in enrichment plugins** (off by default, rate-limited, cached; full ranked list and roadmap in §18.2–18.3): srrDB, the torrent cache (real `creation date` / `announce-list` for a hash), Wikidata, TMDB/TVDB, AniDB/AniList, MusicBrainz, PreDB, OpenLibrary, IGDB, Discogs, Steam, and debrid cache status. They add name hints, canonical titles, IDs, multilingual alternative titles and genres, each with provenance and confidence. They run through the same plugin API and scheduler (§18).
 
 **Opt-in micro-piece prober (v1.x, off by default, explicit consent screen):** for torrents still ambiguous after file-tree analysis, request just the blocks covering a small text file (`.nfo`/`.diz`/`.sfv`/`.cue`, ≤ 64 KB). Scene NFOs often contain a full mediainfo dump and an IMDb ID. A second, separately consented tier fetches container headers: MKV EBML/Tracks, FLAC STREAMINFO, MP4 `moov` (only when it's at the file start). Caveats the consent screen must state plainly:
 1. This **downloads content fragments and makes the crawler a swarm participant**, which changes the legal exposure in many jurisdictions. Never on by default; strongly advised only behind a VPN.
@@ -180,13 +185,14 @@ Text extracted from NFOs is indexed into an `nfo_text` field (boost ~2).
 - `torrent_extra(torrent_id PK, data BLOB)`: unknown info keys + `.torrent`-only fields.
 - `swarm(torrent_id PK, seeders, leechers, completed, trackers_reporting, dht_seeds, dht_peers, last_scrape_at, next_scrape_at)` plus `swarm_trackers(torrent_id PK, data BLOB)` for the per-tracker detail, packed as `(tracker_id u16, s, l, c, at)` and only for torrents with non-zero results.
 - `swarm_history(torrent_id PK, data BLOB)`: a **fixed-size ring buffer** per torrent (e.g. 14 daily + 26 weekly samples of seeders and leechers as `u16` ≈ 160 B), stored **only for torrents with a non-zero swarm or a user interest** (favorited/viewed/saved-search hit). A naive daily-row table would reach billions of rows within a year.
+- **Sources and provenance (§18.5):** `torrents.sources` (u64 bitset) + `first_source` (u8); `sources` (plugin registry and state); `torrent_claims(torrent_id, source_id, data BLOB)`; `unverified_items(id, network, key, source_id, claims BLOB, first_at, last_at)` for keys with claims but no verified metadata yet. Overlay networks (§18.6) keep their own item tables but share the one monotonic id sequence.
 - `trackers`, `saved_searches`, `alerts`, `user_items` (fav/hidden/labels/notes), `collections`, `settings`, `blocklist`, `zstd_dicts`, `schema_migrations`.
 
 **Hot columns:** `data/hot/{seeders,leechers,trackers,last_seen,user_flags}.col` are mmap'd `u32` arrays indexed by torrent id, read and written as atomics so there are no locks between the scraper and searchers. Seeders/trackers use a sentinel for **"never scraped"**, so the UI shows "—" rather than a misleading 0. Swarm stats change constantly; putting them in Tantivy would force delete+reinsert of whole documents. Instead, search collectors read these arrays (a nanosecond lookup) for filtering, sorting and ranking. SQLite stays authoritative, and the arrays are rebuilt on startup if they are inconsistent.
 
 **Insights rollups (reporting without touching raw data):** every number on Insights (§10.9) comes from small pre-aggregated tables. They're maintained incrementally by the pipeline, so reports never scan `torrents` or the search index.
 - **Tables:**
-  - `rollup_hour(hour INT, metric INT, dim INT, key INT, value INT, PRIMARY KEY(hour, metric, dim, key)) WITHOUT ROWID`: event-time counters and gauges. Examples: hashes harvested by strategy and IP family; fetch outcomes; newly searchable by category, content type and resolution method; scrape results; searches, zero results and sends. Latency histograms are stored as log buckets (`key` = bucket).
+  - `rollup_hour(hour INT, metric INT, dim INT, key INT, value INT, PRIMARY KEY(hour, metric, dim, key)) WITHOUT ROWID`: event-time counters and gauges. Examples: keys harvested by source, strategy, network and IP family; unique finds per source; scheduler shares and auto-balance moves; fetch outcomes; newly searchable by category, content type and resolution method; scrape results; searches, zero results and sends. Latency histograms are stored as log buckets (`key` = bucket).
   - `cohort_hour(cohort INT, stage INT, reason INT, count INT, PRIMARY KEY(cohort, stage, reason)) WITHOUT ROWID`: the discovery-cohort funnel. `stage` ∈ harvested / peer found / metadata fetched / stored / searchable, plus terminal loss `reason`s.
   - `rollup_day` / `cohort_day`: the same shapes at daily grain.
   - `events(at INT, kind INT, detail TEXT)`: trend annotations (restart, upgrade, config/intensity change, import, reindex, pause).
@@ -256,7 +262,7 @@ Units and relative dates are parsed. Unknown fields trigger a helpful error, not
 
 ## 9. API
 
-axum, JSON. `/api/v1`: `search` (GET with q + params, or POST with AST), `suggest`, `facets`, `torrents/{hash}` (detail + first 500 files), `torrents/{hash}/files?cursor=`, `torrents/{hash}/siblings`, `files/search`, `stats`, `crawler` (status/pause/intensity), `insights/overview?range=&compare=`, `insights/{stage}?range=&reason=`, `insights/events`, `insights/export.csv?panel=`, `digest` (settings + preview), `trackers`, `saved-searches`, `alerts`, `collections`, `user-items`, `settings`, `import` (.torrent upload/folder watch), `export` (CSV/JSON/magnet list). It also serves `/events` (SSE: new torrents, crawler stats, alerts, and `insights` deltas every 30 s), `/torznab/api` (for Prowlarr/Sonarr/Radarr), `/metrics` (Prometheus), `/healthz`, `/openapi.json` (utoipa), and RSS per saved search.
+axum, JSON. `/api/v1`: `search` (GET with q + params, or POST with AST), `suggest`, `facets`, `torrents/{hash}` (detail + first 500 files), `torrents/{hash}/files?cursor=`, `torrents/{hash}/siblings`, `files/search`, `stats`, `crawler` (status/pause/intensity), `sources` (list, enable/disable, priority/agents/schedule/egress, consent, purge, health), `jobs` (importer progress, pause/resume), `insights/overview?range=&compare=`, `insights/{stage}?range=&reason=`, `insights/events`, `insights/export.csv?panel=`, `digest` (settings + preview), `trackers`, `saved-searches`, `alerts`, `collections`, `user-items`, `settings`, `import` (.torrent upload/folder watch), `export` (CSV/JSON/magnet list). It also serves `/events` (SSE: new torrents, crawler stats, alerts, and `insights` deltas every 30 s), `/torznab/api` (for Prowlarr/Sonarr/Radarr), `/metrics` (Prometheus), `/healthz`, `/openapi.json` (utoipa), and RSS per saved search.
 
 The tracker list ships with a curated default. It can optionally **auto-refresh** from the community lists `ngosang/trackerslist` and `XIU2/TrackersListCollection` (an opt-in external fetch, merged, then health-checked before use).
 
@@ -413,7 +419,7 @@ The primary purpose is finding the right torrent; the dominant action is grab (c
     - Seeders: presets ≥ 1 / ≥ 5 / ≥ 50, plus an "Include never-scraped" toggle.
     - Trackers reporting
     - Junk: "N hidden · Show".
-  - **"More filters":** Language, Release group, Codecs, HDR, Year, Season/Episode, File count, Largest file, Composition thresholds (with a count-or-bytes **parameter**), Private, v2, Has NFO / subtitles / cue, Ambiguous, Imported/backfill, In library.
+  - **"More filters":** Language, Release group, Codecs, HDR, Year, Season/Episode, File count, Largest file, Composition thresholds (with a count-or-bytes **parameter**), Private, v2, Has NFO / subtitles / cue, Ambiguous, Imported/backfill, In library, **Network** (default `bt` only), **Source**, **Verified** (unverified hidden by default), **Official** (§18).
   - A selected value is shown four ways: checked box, medium weight, value text and a chip in the strip.
 - **Results toolbar (parameters, deliberately separate from filters):** result count ("1,284 results" or "≈ 2.4M results"), sort, "Group versions" toggle, density control, select mode, Save search, Export. All of it persists in the URL.
 - **Result row (Comfortable):**
@@ -611,7 +617,7 @@ Each detail page follows the same pattern: three to four KPIs, one primary trend
 - **Settings:**
   - A manuscript layout (max 720 px). Section navigation sits on the left at x-large and becomes a select on narrow screens.
   - Forms have visible labels, help text next to each field, inline validation, and per-section Save with a "Saved" confirmation.
-  - Sections: General, Crawler, Network & VPN, Storage & retention (with size-projection previews), Search & ranking, Trackers, Integrations, Notifications, **Insights & digest** (digest schedule and channels, query logging on/off and retention, clear usage data), Plugins, Security, Appearance (theme, density, motion, shortcut settings), About.
+  - Sections: General, Crawler, Network & VPN, Storage & retention (with size-projection previews), Search & ranking, **Sources** (§18.8: every discovery, importer, enrichment, network and output plugin, with priority, agents, schedule, egress, consent and purge; Auto-balance), **Companions** (§18.10: installed and detected companions, health, versions, logs, updates, Set up / Remove), Trackers, Integrations, Notifications, **Insights & digest** (digest schedule and channels, query logging on/off and retention, clear usage data), Security, Appearance (theme, density, motion, shortcut settings), About.
 - **First-run wizard** (stepped progress, one primary action per step):
   1. Setup token
   2. Admin password
@@ -619,7 +625,8 @@ Each detail page follows the same pattern: three to four KPIs, one primary trend
   4. Intensity
   5. Storage & retention
   6. Import from bitmagnet (optional)
-  7. Done
+  7. Download client (optional; recommended: qBittorrent, installed or detected by the companion manager, §18.10)
+  8. Done
 - One **"How it works"** step uses a static SVG sequence (DHT → metadata → index → search) in the spirit of `infographic-design`, with no AntV dependency and a text equivalent.
 
 ### 10.11 Component inventory (one canonical primitive per role)
@@ -888,12 +895,14 @@ With the plum swap, all six colours are distinguishable. Colour is still never t
 - **Unraid:** a Community Applications template (`packaging/unraid/lodestar.xml`) with icon, WebUI `http://[IP]:[PORT:8090]`, `/mnt/cache/appdata/lodestar` → `/data`, and port mappings. Appdata belongs on the cache SSD/NVMe pool, not the array, because index I/O is random. The template uses the **pool path (`/mnt/cache/...` or the named pool), not `/mnt/user/...`**: `/mnt/user` goes through Unraid's FUSE `shfs` layer, which is slow for mmap-heavy workloads and risky for SQLite WAL. The app detects a FUSE/network filesystem at startup and warns. There's also an optional gluetun/VPN variant of the template. Defaults are `PUID=99`/`PGID=100` (nobody:users). Optional **split paths**: `/data/hot` (indexes + hot columns, must be on SSD/NVMe) and `/data/cold` (an attached `cold.db` holding file-tree blobs and the optional raw archive). Caveat: cold data is written continuously as torrents arrive, so putting it on the parity array keeps disks spinning and slows writes. The recommended layout is both on the cache pool, with only backups going to the array.
 - **Windows:** an `x86_64-pc-windows-msvc` build. The **MSI** (cargo-wix) installs to Program Files, puts data in `%ProgramData%\Lodestar`, and registers a **Windows Service** (windows-service crate). It also adds firewall rules for the DHT port and a Start-menu shortcut that opens the UI. A portable zip with an optional tray icon covers non-service use, and a winget manifest is planned. **Code-signing** is needed to avoid SmartScreen and Defender friction. The installer offers (opt-in, explained) a **Defender exclusion for the data directory**: real-time scanning of index segment and WAL writes can cut throughput several-fold. **Ephemeral-port exhaustion:** hundreds of short-lived outbound TCP metadata connections pile up in TIME_WAIT. The defaults (dynamic range 49152–65535, 120 s TIME_WAIT) cap sustained churn at roughly 130 new connections/s. Mitigations: a connection-rate limiter sized to the OS range, `SO_LINGER(0)` aborts for failed handshakes, and connection reuse where peers allow it. The dashboard shows a warning, with the `netsh int ipv4 set dynamicport` remedy documented. The service runs at **below-normal process priority** so desktop use stays smooth. Windows mmap semantics prevent deleting files that are still mapped, so segment garbage collection must retry deletes. CI includes a Windows soak test for merge/GC and hot-column remapping.
 - Also: Linux/macOS tarballs and a systemd unit. One `config.toml` with environment-variable overrides (`LODESTAR_*`); most settings are editable in the UI and persisted in the DB.
-- **CLI subcommands:** `serve` (default), `reindex`, `backup` (SQLite online backup; indexes are rebuildable), `import <dir|.torrent>`, `vacuum`, `healthcheck`, `stats`.
+- **CLI subcommands:** `serve` (default), `reindex`, `backup` (SQLite online backup; indexes are rebuildable), `import <dir|.torrent>`, `vacuum`, `healthcheck`, `stats`, `companion <list|install|remove|compose>` (§18.10; `compose` prints the Docker service for a companion).
+- **Companions** (§18.10): managed child processes on Windows and bare-metal Linux; on Docker/Unraid, generated compose services or pre-filled CA templates, plus auto-detection and auto-configuration. Managed-container mode via a restricted Docker socket proxy is advanced and off by default.
 
 ## 12. Security & operations
 
 - First-run setup requires a **one-time setup token printed to the logs/console** (the Jupyter/Portainer pattern), so nobody else on the LAN can claim a fresh headless instance. It then creates an admin password (argon2). Session cookies. API keys for Torznab and integrations. Optional trusted reverse-proxy header auth. CSP and security headers. Rate limiting on the API.
 - **Upgrades:** an automatic SQLite snapshot before any schema migration, with `lodestar rollback`. Docker tags: `x.y.z`, `x.y`, `latest`, `nightly`. Optional in-app "update available" check (no telemetry, ever).
+- **Companion supply chain** (§18.10): a signed catalogue pinned per release, with SHA-256 and upstream signatures verified before anything runs. Every install needs confirmation; companions run with the least privilege, bound to localhost or the internal network; credentials are random and encrypted at rest.
 - **Content safety:** the CSAM hash/keyword blocklist is **on by default** and applied before storage. Matches are dropped, never stored or indexed.
 - Observability: `tracing` structured logs, Prometheus metrics for every pipeline stage, and the built-in dashboard.
 - Graceful shutdown flushes batches, commits the index and persists the DHT state. Crash-safe: SQLite is the source of truth, and the index catches up on startup from a `last_indexed_id` watermark.
@@ -913,12 +922,17 @@ crates/
   search/           Tantivy schemas, tokenizers, query language, ranking, facets, percolator, regex prefilter
   pipeline/         crawler → fetch → enrich → store → index orchestration, backpressure
   api/              axum REST/SSE/Torznab/OpenAPI, auth
-  integrations/     download clients, notifications, opt-in enrichment plugins
+  integrations/     download clients, notifications
+  sources/          plugin API (manifest, SourceCtx, events) + crawl scheduler (budgets, DRR, auto-balance)
+  sources-*/        one crate per plugin family: importers (incl. defunct-site dumps), torznab (Prowlarr/Jackett, usenet),
+                    feeds (nyaa/animetosho/nostr/lemmy/json-apis), irc (predb, private announces), clients (your download clients),
+                    archive (IA/academic), enrich (srrdb/dat/predb/wikidata/tmdb/anidb/…), outputs (torznab/stremio/export), i2p, ed2k, ipfs
+  companions/       companion manager: signed catalogue, verify/install/supervise (native), compose/CA templates, detection, API adapters
   lodestar/         binary: config, CLI, Windows service, embeds web/build
 web/                SvelteKit 2 + Svelte 5 SPA, Tailwind v4 + daisyUI 5, Bits UI, TanStack Virtual, uPlot (lazy), Phosphor (compiled);
                     src/lib/ui (shared primitives) · src/lib/features/* · src/lib/charts (SVG primitives); vitest + Playwright + axe + size-limit
 docs/               … + metrics.md (metric contracts), ui-glossary.md, design-tokens.md
-packaging/          docker/, unraid/, windows/ (wix), systemd/  (icons generated from brand/)
+packaging/          docker/, unraid/, windows/ (wix), systemd/  (icons generated from brand/); companion compose snippets and CA template links (i2pd, qBittorrent, Prowlarr, SABnzbd, aMule, Kubo, gluetun)
 brand/source/       Lodestar_Final_Assets originals + SHA256SUMS.txt; processed by web/scripts/assets.ts
 bench/              synthetic dataset generator (10M torrents), criterion benches, size reports
 docs/               architecture.md (this plan), query-language.md, operations.md, relevance.md
@@ -930,7 +944,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 | M | Deliverable | Exit criteria |
 |---|---|---|
 | 0 | Workspace, CI, `bencode`, `metainfo`, `store` schema + file-blob codec, synthetic data generator | Size benchmark shows ≤ budget for blobs; round-trip property tests pass |
-| 1 | DHT node (BEP 5/42/51 + passive), TCP + MSE metadata fetch, hostile-input limits + fuzzing, persistence, metrics, **Insights rollup/cohort/event counters emitted from the start** (§7), a basic status page | Sustained new-torrent ingest on a home connection at "Balanced" without router/NAT saturation; no unbounded memory over 24 h; measured harvest and metadata success rates replace §3's rough cold-start estimate |
+| 1 | **Source plugin API + crawl scheduler v1 + provenance (§18)**, with the DHT node as plugin #1 (BEP 5/42/51 + passive), tracker-announce peer finding + PEX, TCP + MSE metadata fetch, hostile-input limits + fuzzing, persistence, metrics, **Insights rollup/cohort/event counters emitted from the start** (§7), a basic status page | Sustained new-torrent ingest on a home connection at "Balanced" without router/NAT saturation; no unbounded memory over 24 h; measured harvest and metadata success rates replace §3's rough cold-start estimate |
 | 2 | Tantivy torrent index, tokenizer, query language v1, REST search, minimal UI. **Add-on: `lodestar import-bitmagnet <postgres-url>`**, a read-only, resumable, batched import of `torrents`, `torrent_files`, `torrent_contents`/`content` titles, `torrents_torrent_sources` and dates. bitmagnet keeps no file rows for torrents over its `save_files_threshold` (default 100), so those are flagged `files_partial` and queued for background DHT metadata re-fetch. Imported torrents keep bitmagnet's `created_at` as `discovered_at`, with `age_confidence=imported`. | p95 targets met on the 10M synthetic set; NRT < 5 s; importer round-trips a sample bitmagnet DB with counts reconciled and no writes to the source |
 | 3 | Enrichment: extension registry, composition, release parser, effective title, content type, junk score, file index | Parser golden corpus ≥ 95% field accuracy; `file:(…)` queries work |
 | 4 | Swarm health: BEP 33, UDP/HTTP tracker scrape scheduler, hot columns, trackers count, history; scrape and Serve rollups | Seeders/trackers filters and sorts within targets |
@@ -941,7 +955,9 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 
 **MVP cut line:** this scope is large for a small team. **v0.5 = M0–M3 + the minimum of M5 + Docker**: a crawler with MSE, search with the query language, effective titles and composition, and the core UI. Swarm health (M4), Windows MSI, Unraid CA, Torznab, plugins, uTP, compare and grouping follow in v0.6–1.0. Each milestone ships something usable.
 
-**v0.5 also includes the bitmagnet importer** (M2 add-on), so an existing bitmagnet install skips the cold start.
+**v0.5 also includes the importer framework** (M2 add-on): the bitmagnet importer plus Rutracker dumps, MagnetDB (if access is granted), RARBG/magnetico/bitmagnet exports and DMM hashlists, so the cold start is skipped.
+
+**Sources roadmap:** the full ranked source roadmap, from v0.5 through the overlay networks (I2P v1.1, eD2k/Kad v1.2, IPFS v1.3), is in §18.3.
 
 **Later (v1.x):** split roles (`--role crawler|server|all`), so the crawler can run on a VPN box and push batches over HTTP to the server, which stays the single SQLite writer. Saved search → auto-send rules (opt-in). The micro-piece prober. Embedded WireGuard.
 
@@ -959,6 +975,9 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **"Discovered" ≠ release date:** handled by the backfill flag and the estimated-year field (§6), but it's the most likely source of user confusion. The copy and docs must be explicit.
 - **Reporting slowing the core system:** Insights reads only rollups. Exports and compaction run in chunked, throttled background jobs, and the overhead budget (§3) is benchmark-gated. The failure mode to watch is a long-running read transaction starving WAL checkpoints; reads are kept short and chunked by design, and a test checks the WAL size stays bounded during an export.
 - **Misleading process numbers:** funnels computed by event time would show false conversion rates. The cohort design, "incomplete" labelling and "unique (≈)" disclosure (§10.9.3) are mandatory, and reconciliation tests (§10.17) guard them.
+- **Plugin sprawl:** 30+ plugins could swamp one maintainer. Mitigations: one plugin API, contract tests with recorded fixtures, per-family crates, the roadmap order (§18.3), and a rule that a plugin which stays broken for a release gets disabled by default with its health shown, rather than blocking the release.
+- **Legal exposure from restricted and overlay sources:** off by default, with consent classes, VPN egress, isolated tiers, one-click purge and the non-negotiable CSAM blocklist (§18.7). Private-tracker results never leave the instance.
+- **Scheduler starvation or unfairness:** deficit round robin with min shares, hard caps, importer write-share limits, property tests (§18.9) and Insights visibility of shares and auto-balance moves.
 - **Scope/maintainability:** a large Rust codebase for one maintainer. Mitigate with strict crate boundaries, the MVP cut line, and reusing mature crates (tantivy, axum, rusqlite, tokio, encoding_rs, mimalloc, utoipa) wherever they aren't on the critical path.
 
 ## 16. Self-review log (issues found in draft 1, now folded in above)
@@ -1033,6 +1052,41 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - The Insights chunk budget is 45 KB, up from the crawler dashboard's 40 KB, for the funnel and stage pages (§10.1).
 - Review follow-ups: counters-only flushes while ingest is idle; an hourly index watermark so searchable counts can be rebuilt exactly; post-storage removals kept out of the funnel so final cohorts never change; evicted/gave-up loss reasons and a "new to us" definition of harvested, so cohort conservation holds.
 
+**Sources, plugins and network tiers (draft 8 → 9):** every source is now an on/off **plugin** under one API and crawl scheduler (§18).
+- **Ranking:** sources are ranked by 0.4 × rarity/breadth + 0.3 × volume + 0.3 × ease, with risk deciding default state and consent class.
+- **Roadmap:** importers in v0.5; Prowlarr, Nyaa, BEP 48, Internet Archive and official lists in v0.6; enrichment and outputs (including a Stremio addon) in v0.7; Anna's Archive, Nostr and Lemmy in v0.8; then I2P (v1.1), eD2k/Kad (v1.2) and IPFS (v1.3).
+- **Priority and agents** are shares of one global budget (deficit round robin, min/max shares, hard politeness caps, optional auto-balance by marginal utility including unique finds), not raw thread counts, because sources share the same bottlenecks.
+- **Data model:** provenance bitset, claims, an unverified tier and network tiers.
+- **Safety:** CSAM blocklist universal and non-disableable; private-tracker results local-only.
+- **Rejected:**
+  - BiglyBT DHT, Tribler/Rats gossip, LAN discovery and BEP 44/46 sniffing: low yield or no standard protocol;
+  - Soulseek and DC++: community rules ban crawlers;
+  - Telegram: ToS, account required, mostly direct files;
+  - Tor onion indexes and BitTorrent over Tor: IP leaks, harm to Tor, CSAM prevalence;
+  - Freenet/Hyphanet: same problems.
+- **Gemini corrections recorded:** Nostr uses secp256k1 Schnorr, not Ed25519; BEP 48 full scrapes are HTTP-only and often disabled; PreDB carries no info hashes.
+- **Review follow-ups:**
+  - Tracker-announce peer finding is consent-gated and off by default, because an announce lists our IP in the swarm.
+  - `private_source` keys never reach public DHT lookups, public trackers or PEX (BEP 27).
+  - The shared id sequence is an explicit `id_seq` allocator, and promoted items keep their ids.
+  - Budgets are per torrent at a given corpus size, with importers previewed.
+  - Scheduler v1's M1 scope is pinned down: fetch-pool DRR, hard caps and user-interest priority.
+- **More sources, live connections and the companion manager (draft 9 → 10):**
+  - **Catalogue grew to 22 ranked sources, each with a Mode (live / poll / import):**
+    - Usenet NZB indexers (a new `usenet` tier);
+    - Archive Team copies of defunct torrent sites;
+    - the adult tier (restricted, hidden by default);
+    - private-tracker IRC announces;
+    - AnimeTosho;
+    - direct JSON APIs (YTS, EZTV, apibay);
+    - your own download clients.
+  - **Enrichment** gained No-Intro/Redump/TOSEC DATs and a live PreDB IRC feed.
+  - **Public indexers** are reached through Prowlarr rather than scraped directly.
+  - **New rejections:** DDL warez blogs, Japanese P2P networks, Chinese closed ecosystems, Matrix rooms, WebTorrent WSS trackers, peer co-membership inference, and source directories (useful by hand only).
+  - **Live connections:** eD2k shared-file browsing (files kept, sharers discarded) and IPNI gossipsub.
+  - **New universal rule, "No profiles of people":** peer addresses are never stored with what they share.
+  - **Companion manager (§18.10):** fully managed installs on native platforms from a signed, pinned catalogue; on Docker/Unraid, guided compose/CA templates with auto-detection and auto-configuration, because a self-installing container would need the Docker socket, which is effectively root. Managed-container mode is advanced and off by default.
+
 **Still open (decide during M0–M2 spikes, with measurements rather than guesses):** reusing librqbit crates vs our own DHT; whether the trigram field earns its size at 10M+ names; the smart-file-index thresholds; the actual cold-start harvest and metadata success rates.
 
 **M0 implementation decisions:**
@@ -1083,9 +1137,303 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - axe on every screen × theme;
   - Playwright visual snapshots at 320/390/768/1024/1366/1920/2560;
   - the `analytics-validation` fixture matrix (facet counts, histogram bins, and Insights rollups/cohorts reconciled against independent SQL, the Tantivy doc count and `/metrics`);
+  - **source plugin gates (§18.9):** contract tests, scheduler property tests, politeness, provenance/purge, universal blocklist across every plugin kind, private-source isolation, consent gating;
   - the **reporting-overhead benchmark**: search and ingest benchmarks rerun with Insights polling + the digest job + an export running, checked against the §3 overhead budget;
   - a `design-review` pass with no blocking findings.
 - **In-process DHT test network:** spawn about 50 nodes plus fake peers serving known info dicts, and assert harvest → fetch → store → index → `search` returns them within 5 s.
 - `cargo bench -p search` against the synthetic 10M dataset checks the p95 table and the size report against budgets. CI fails on regression.
 - Relevance suite: `cargo run -p search --bin relevance` checks NDCG@10 against the stored baseline.
 - Smoke: `docker compose up` → open `http://localhost:8090` → the dashboard shows nodes and a growing torrent count within minutes → a query with `file:(ext:mkv size:>2GB) res:2160p seeders:>=1` returns results with matched files highlighted. A Windows CI job installs the MSI, starts the service and polls `/healthz`.
+
+## 18. Sources: plugins, scheduling, network tiers and roadmap
+
+Lodestar's reach comes from **many sources, each a plugin you can switch on or off**. The Mainline DHT crawler (§5) is just the first. This section defines the plugin model, ranks every candidate source, sets the roadmap, and specifies how sources share the machine (priority, agents, budgets).
+
+### 18.1 Plugin model
+- **Compiled in, not dynamically loaded.** Every plugin is a Rust module behind a cargo feature (`src-i2p`, `src-ed2k`, `src-ipfs`, `src-annas`, …).
+  - Official builds include all plugins, **disabled by default except the Mainline DHT**.
+  - A `minimal` build flavour leaves out the overlay-network plugins entirely.
+  - There are no third-party binaries or ABI issues. WASM-sandboxed community plugins are a post-1.0 idea.
+- **Plugin kinds:**
+
+| Kind | Emits | Examples |
+|---|---|---|
+| `discovery` | keys (info hash / ed2k hash / CID) plus optional claims | Mainline DHT, BEP 48 full scrape, Nyaa RSS, Nostr, Prowlarr |
+| `importer` | the same as `discovery`, but run as a resumable **job** with progress | bitmagnet DB, Rutracker dumps, MagnetDB, RARBG/magnetico exports, DMM hashlists |
+| `peer-finder` | peers for a key that has none yet | tracker announce (BEP 15), PEX (BEP 11), DHT `get_peers` |
+| `enrichment` | name hints, IDs, alt titles, out-of-info-dict fields | torrent cache, srrDB, PreDB, Wikidata, TMDB, AniDB, MusicBrainz, debrid status |
+| `network` | a whole network tier: its own keys, metadata fetch and link format | I2P BitTorrent, eD2k/Kad, IPFS |
+| `output` | exposes Lodestar to other tools | Torznab server, Stremio addon, bitmagnet-format export |
+
+- **Manifest (per plugin):**
+  - id, version and kind; networks; what it emits;
+  - the **external endpoints** it contacts (domains/protocols, shown before enabling);
+  - its **risk level and consent class** (§18.7);
+  - **hard politeness caps** that the user can't exceed (e.g. Nyaa: ≥ 5 min between polls; BEP 48: ≤ 1 full scrape per tracker per day);
+  - a JSON-schema config, from which the settings UI is generated;
+  - health (status, last success, last error); metrics dimensions (fed into the Insights rollups); purge support.
+- **Runtime contract** (sketch):
+  ```rust
+  trait SourcePlugin: Send + Sync {
+      fn manifest(&self) -> &Manifest;
+      async fn run(&self, ctx: SourceCtx) -> Result<()>; // until cancelled
+  }
+  // SourceCtx: budget tokens (acquire per resource class), an emitter
+  // (Discovery / Claim / NameHint / Enrichment / Peers), a KV state store
+  // (cursors, `since`, ETags), an HTTP client with per-host limiter and the
+  // plugin's egress (direct / VPN interface / SOCKS), cancellation, metrics.
+  ```
+- **A discovery event** carries: network; key; optional peer hints; optional **claims** (name, files, trackers, IDs such as `imdb:`/`tmdb:`/`anidb:`, description, publisher identity); provenance (source id, external reference, time); confidence.
+- **Lifecycle:** enable / pause / disable / purge. **Disabling keeps the data; purging removes it.** Purging deletes items found *only* by that source, plus all of that source's claims. Items other sources also found are kept, with the source's bit cleared.
+
+### 18.2 Source catalogue, ranked
+**Score** = 0.4 × rarity/breadth of content + 0.3 × user base/volume + 0.3 × ease of incorporating, each rated 1–5. **Risk** doesn't change the score; it decides the default state and the consent class (§18.7).
+
+| Rank | Source | Kind | Mode | Rarity/breadth | Volume | Ease | **Score** | Risk |
+|---:|---|---|---|:-:|:-:|:-:|:-:|:-:|
+| — | **Mainline DHT** (BEP 5/51/passive, §5) | discovery | live | 3 | 5 | 3 | core | Med |
+| 1 | **Prowlarr/Jackett** (your indexers via Torznab/Newznab; private results local-only; also covers the public indexers, see below) | discovery | poll | 5 | 4 | 5 | **4.7** | Med |
+| 2 | **Rutracker catalogue dumps** (published XML exports: titles, hashes, categories, descriptions) | importer | import | 5 | 4 | 4 | **4.4** | Med |
+| 3 | **Anna's Archive / LibGen** (torrent lists + metadata dumps mapping files → titles/ISBNs) | importer + discovery | import/poll | 5 | 5 | 3 | **4.4** | High |
+| 4 | **Usenet NZB indexers** (your accounts, via Prowlarr's Newznab support; `usenet` tier, local-only) | network | poll | 5 | 4 | 4 | **4.4** | Med |
+| 5 | **MagnetDB** research dataset (DHT 2018–2024, 28.6M+ torrents, 950M+ files, IMDb-matched; access terms TBC) | importer | import | 4 | 5 | 4 | **4.3** | Med |
+| 6 | **Internet Archive** (item torrents + metadata API) | discovery | poll | 4 | 4 | 4 | **4.0** | Low |
+| 7 | **Archive Team / Internet Archive copies of defunct torrent sites** (KickassTorrents hourly dumps, Pirate Bay archives, Demonoid, isoHunt-era datasets) | importer | import | 4 | 4 | 4 | **4.0** | Med |
+| 8 | **Nyaa RSS** (info hash, category, trusted/remake flags) | discovery | poll | 3 | 4 | 5 | **3.9** | Med |
+| 9 | **RARBG backup + magnetico/bitmagnet community exports** | importer | import | 3 | 4 | 5 | **3.9** | Med |
+| 10 | **Adult trackers / Sukebei** (via Prowlarr or the Sukebei feed; adult tier, hidden by default) | discovery | poll | 3 | 5 | 4 | **3.9** | High |
+| 11 | **eD2k/Kad** (eMule/aMule network; keyword publications + optional shared-file browsing) | network | live | 5 | 4 | 2 | **3.8** | Med |
+| 12 | **Private-tracker IRC announce channels** (autobrr-style, your accounts; local-only) | discovery | live | 5 | 3 | 3 | **3.8** | Med |
+| 13 | **AnimeTosho** (Nyaa mirror with file lists, attachments and media info; Torznab-style feed) | discovery + enrichment | poll | 3 | 3 | 5 | **3.6** | Med |
+| 14 | **DMM hashlists** (Debrid Media Manager, crowd-curated, IMDb-linked) | importer | import | 2 | 4 | 5 | **3.5** | Med |
+| 15 | **Direct JSON APIs** (YTS, EZTV, apibay): thin optional plugins for continuous polling; Prowlarr already covers them | discovery | poll | 2 | 4 | 5 | **3.5** | Med |
+| 16 | **BEP 48 full scrape** (HTTP trackers that allow it) | discovery | poll | 2 | 4 | 4 | **3.2** | Low |
+| 17 | **Your download clients** (qBittorrent / Transmission / Deluge APIs; Sonarr/Radarr webhooks): complete `.torrent`s with real trackers and creation dates | discovery + enrichment | live | 2 | 3 | 5 | **3.2** | Low |
+| 18 | **I2P BitTorrent DHT** (i2pd companion) | network | live | 5 | 1 | 2 | **2.9** | High |
+| 19 | **Academic Torrents + official distro/project lists** | discovery | poll | 2 | 2 | 5 | **2.9** | Low |
+| 20 | **IPFS** (Amino DHT harvest + IPNI gossipsub + UnixFS directory listings) | network | live | 3 | 3 | 2 | **2.7** | High |
+| 21 | **Nostr NIP-35 / DTAN relays** (WebSocket subscriptions) | discovery | live | 3 | 2 | 3 | **2.7** | Med |
+| 22 | **Lemmy/fediverse torrent communities** (ActivityPub follow, pushed to us) | discovery | live | 2 | 1 | 4 | **2.3** | Low |
+
+**Mode:** *live* sources hold a connection and receive new items as they appear; *poll* sources are fetched on a schedule within their politeness caps; *import* sources run as one-off or periodic jobs.
+
+**Public indexers come through Prowlarr.** Prowlarr ships definitions for hundreds of public indexers (The Pirate Bay via its JSON API, 1337x, TorrentGalaxy, YTS, EZTV, Knaben, Rutor, LimeTorrents, regional trackers and more), so the Prowlarr plugin reaches them without separate plugins. Direct plugins (rank 15) exist only for sources with stable JSON APIs worth polling continuously. Scraping HTML pages directly is brittle and against those sites' terms, so it isn't done.
+
+**Accelerators** (unranked, because they raise the yield of every key-bearing source): **tracker announce (BEP 15) for peer finding** when the DHT finds none (off by default and consent-gated, because an announce lists our IP in the swarm; see §6), and **PEX (BEP 11)** during metadata fetches.
+
+**Enrichment plugins, by value:**
+1. **srrDB** (exact scene file names, sizes and CRCs, including the contents of RAR sets)
+2. **No-Intro / Redump / TOSEC DAT files** (exact names, sizes and CRCs for known games, ROMs and old software; torrent file lists match them exactly, so ROM sets and abandonware are identified with confidence. The DATs are metadata only.)
+3. **Torrent cache** (fetch the `.torrent` by hash: real `creation date`, `created by`, `comment`, `announce-list`, web seeds)
+4. **Wikidata** (cross-linked IDs, multilingual alternative titles)
+5. **TMDB / TVDB**
+6. **AniDB / AniList** (plus AnimeTosho's file and media info, rank 13)
+7. **MusicBrainz**
+8. **PreDB** (HTTP dump/API, plus an optional **live IRC feed** of releases as they're packed)
+9. **OpenLibrary**
+10. **IGDB**
+11. **Discogs**
+12. **Steam app list**
+13. **Debrid cache status** (your account: an "instantly available" badge)
+
+**Outputs:** Torznab server; **Stremio addon** (browse your index from Stremio on TVs and phones); bitmagnet-format export.
+
+**Watch list:** **Indexarr**, a decentralized, gossip-synced indexer with a Torznab API. Its site didn't resolve when checked in Oct 2026; re-evaluate when it can be verified.
+
+**Rejected** (reasons in the §16 log):
+- BiglyBT/Azureus DHT, Tribler/Rats gossip, BEP 14 local discovery, BEP 44/46 sniffing (at most an experiment);
+- Soulseek and DC++ (community rules ban crawlers), Telegram (account required, ToS, mostly direct files);
+- Tor onion indexes and BitTorrent over Tor (IP leaks, harms the Tor network, high CSAM prevalence), Freenet/Hyphanet;
+- direct-download warez blogs and file-host link sites (not P2P, malware-ridden, dead links, nothing to hash);
+- Japanese P2P networks: Winny, Share, Perfect Dark (closed or encrypted protocols, prosecutions in Japan);
+- Chinese closed ecosystems: Xunlei/Thunder cloud, Baidu Pan shares (walled gardens, account required);
+- Matrix public rooms (room rules against bots, CSAM risk, low volume); WebTorrent WSS trackers (they don't broadcast other swarms' hashes, so they aren't a source);
+- inferring what a BitTorrent peer shares by seeing its IP:port across swarms (profiling people; see "No profiles of people", §18.7);
+- source directories such as FMHY and the r/Piracy wiki are lists of sources, not data. They're useful for finding candidates by hand, not for crawling.
+
+### 18.3 Roadmap (score order, adjusted for dependencies)
+| Release | Sources added | Why here |
+|---|---|---|
+| **M1 foundation** | Plugin API, scheduler v1 (see §18.4 for its scope), provenance; **Mainline DHT** as plugin #1; **PEX**; tracker-announce peer finding (consent-gated, off by default) | Everything else depends on the plugin API and scheduler. The accelerators raise yield for every later source. |
+| **v0.5** (M2–M3) | **Importer framework**: bitmagnet DB (already planned), **Rutracker dumps**, **MagnetDB** (if access is granted), **Archive Team copies of defunct sites**, **RARBG/magnetico/bitmagnet exports**, **DMM hashlists**. Enrichment (M3): **No-Intro/Redump/TOSEC DATs** | The largest breadth for the least effort, and it solves the cold start. All use one streaming importer framework plus background DHT verification. DAT matching is cheap and fits the M3 enrichment work. |
+| **v0.6** (M4 + early M7) | **Companion manager v1** (§18.10: qBittorrent, Prowlarr + FlareSolverr, gluetun). **Prowlarr/Jackett** (local-only private results; public indexers included), **your download clients**, **Nyaa RSS**, **AnimeTosho**, **BEP 48 full scrape**, **Internet Archive**, **Academic/official lists**; enrichment: **torrent cache** | The top-scoring live sources, once claims/provenance and the unverified tier exist. Prowlarr and a download client need companions, so the manager lands here. The full scrape ships with the M4 tracker scraper. |
+| **v0.7** (M7) | **`usenet` tier** (+ SABnzbd/NZBGet companion), **private-tracker IRC announces**, **direct JSON API plugins** (optional). Enrichment: **srrDB, PreDB (+ live IRC feed), Wikidata, TMDB/TVDB, AniDB/AniList, MusicBrainz, OpenLibrary, IGDB, Discogs, Steam, debrid status**. Outputs: **Torznab server, Stremio addon, bitmagnet export** | Turns breadth into findability: ambiguity resolution, multilingual titles, IDs. Usenet rides on the Prowlarr plumbing from v0.6. |
+| **v0.8** | **Anna's Archive / LibGen** and the **adult tier** (restricted consent), **Nostr NIP-35**, **Lemmy** (ActivityPub push) | Both restricted sources score high but need the consent framework and restricted tiers. Nostr and Lemmy are lower volume. |
+| **1.0** | Hardening across all plugins | Contract tests, politeness audits, purge correctness |
+| **v1.1** | **Network-tier infrastructure + I2P** (i2pd companion) | The first overlay network, at your request, for rare content |
+| **v1.2** | **eD2k/Kad** (+ shared-file browsing, aMule companion) | The deepest well of rare content; a new protocol stack |
+| **v1.3** | **IPFS** (+ IPNI gossipsub, optional Kubo companion) | Directory listings are worth having, but each harvested CID yields little |
+
+### 18.4 Crawl scheduler: priority, agents and budgets
+**Yes, sources get priorities and agent counts, expressed as shares of one global budget rather than raw thread counts.** All sources compete for the same bottlenecks, and more raw concurrency can *lower* total yield: NAT/conntrack saturation, tracker bans, writer contention.
+
+- **Resource classes** (the global budget is set by the intensity preset, §5):
+  - `udp_pps` and `udp_outstanding` (DHT, Kad, IPFS);
+  - `tcp_sockets` (metadata fetch, eD2k, Bitswap);
+  - `bw_down` / `bw_up`;
+  - `http_rps` per host;
+  - `cpu_enrich` (parsing and classification workers);
+  - `writer_share` (fraction of each writer batch);
+  - `disk_growth` per day (optional cap).
+- **Per-source settings:**
+  - **Enabled.**
+  - **Priority:** Low / Normal / High / Max, i.e. weights 1 / 3 / 6 / 10, with a numeric weight in the advanced view.
+  - **Agents:** the plugin's concurrency unit, labelled in that plugin's own terms:
+
+    | Plugin | One "agent" is |
+    |---|---|
+    | Mainline DHT, Kad, IPFS | one virtual node ID |
+    | Nostr | one relay connection |
+    | Prowlarr | one indexer queried in parallel |
+    | importers | one parse/verify worker |
+    | metadata fetch | a block of 50 sockets |
+
+  - **Min/max share** of each resource class (guarantees and ceilings).
+  - **Schedule windows** (e.g. importers and full scrapes 01:00–07:00).
+  - **Egress** (direct / VPN interface / SOCKS) with an optional per-plugin kill-switch.
+- **Hard caps always win.** A plugin's politeness caps (manifest) and the global budget can't be exceeded by any priority or agent setting. The UI shows each source's **predicted resource use** and warns when settings exceed what the budget can give.
+- **Fair sharing:** each resource class is divided by **deficit round robin** over enabled sources, weighted by priority within their min/max shares.
+- **Scheduler v1 (M1) is deliberately small:**
+  - Per-source queues feed the shared metadata-fetch pool, scheduled by weighted DRR under the global hard caps (outstanding UDP queries, TCP sockets).
+  - User-interest fetches jump the queue.
+  - Everything else waits until there's more than one live source: the other resource classes, min/max shares, schedule windows, per-plugin egress and auto-balance arrive in v0.6+.
+  - The **metadata-fetch pool is shared**: keys from every source queue there, scheduled per source, so a flood from one importer can't starve live DHT discoveries.
+  - **User-interest fetches** (you opened an unverified item, or a saved search matched one) jump the queue.
+  - **Importers default to Low priority and ≤ 50% of `writer_share`,** so live crawling and search are never starved.
+- **Auto-balance** (optional; global toggle with per-source pinning):
+  - Every 15 minutes, it measures each source's **marginal utility per resource unit**: new searchable items + 2 × **unique finds** (items no other source has) + 1 × ambiguous names resolved, divided by the resources used.
+  - It shifts weights multiplicatively toward higher-utility sources, within your min/max bounds, with 10% hysteresis so shares don't oscillate.
+  - Pinned sources keep their manual settings. Every change is logged as an Insights event ("auto-balance moved 8% of fetch budget from DHT to Nyaa").
+
+### 18.5 Provenance, claims and verification
+- **Provenance:**
+  - `torrents.sources` is a u64 bitset of contributing sources, plus `first_source` (u8), in a column that costs ~9 bytes per torrent.
+  - A `sources` table holds plugin ids, versions and state.
+  - In-flight keys carry their source id alongside cohort and strategy (§7).
+- **Claims:** `torrent_claims(torrent_id, source_id, data BLOB)` stores what a source *asserted*: name, claimed files, IDs, description, publisher. It's stored only for sources that supply claims, zstd-compressed.
+  - **Verified metadata** (BEP 9 info dict, a Kad file record, an IPFS root block) is always the truth. Claims are hints and weaker ranking signals.
+  - **A claimed file list that contradicts the verified one** adds the junk reason "claim mismatch".
+- **Unverified tier:** keys with claims but no metadata yet (dump titles, dead swarms, Nostr events) live in `unverified_items(id, network, key, source_id, claims BLOB, first_at, last_at)`, not in `torrents`, so the verified corpus stays clean.
+  - They're indexed with `verified:no`, **hidden from search by default**, shown with a "Show unverified" toggle and an "Unverified" badge.
+  - They're queued for low-priority verification fetches, and promoted when metadata arrives.
+- **One id space across networks:** all networks allocate ids from a single monotonic sequence, so hot columns, the search index and the percolator watermark (§7/§8) work unchanged.
+  - SQLite's `AUTOINCREMENT` sequence is per table, so the shared sequence is an explicit allocator: a one-row `id_seq` table, advanced inside the writer's transaction.
+  - Every item table inserts explicit ids from it.
+  - An unverified item **keeps its id** when it's promoted to `torrents`, so index documents, hot-column slots and saved-search hits stay valid.
+- **Budgets scale with the corpus, not the source count.** Importers can multiply the corpus (MagnetDB alone is 28.6M+ torrents), so the §3 size and RSS budgets are per torrent at a given corpus size.
+  - Hot-column arrays are sized by the highest id; they're sparse files, and only pages for live ids are touched.
+  - The settings UI shows the projected size before an importer runs (§10.10).
+  - Unverified items with no claims worth keeping (bare dead hashes from a dump) are kept only as a capped verification queue, not as rows.
+- **Rollups:** the Insights rollups gain `source` and `network` dimensions (§7, §10.9).
+
+### 18.6 Network tiers
+Every item has a `network` field: `bt` (clearnet BitTorrent), `bt-i2p`, `ed2k`, `ipfs`, `usenet`. **Adult** isn't a network; it's a content tier (sources flagged adult plus the classifier's adult flag), hidden by default and enabled under the Restricted consent class.
+- **Search** gets a Network facet (default: `bt` only) and `network:`, `source:`, `verified:` and `official:` query fields.
+- **Each tier** has its own link format and client rules:
+  - I2P magnets go only to I2P-capable clients (BiglyBT, I2PSnark, qBittorrent's I2P mode);
+  - `ed2k://` links go to aMule/eMule;
+  - `ipfs://` CIDs come with an optional gateway link and a warning;
+  - `usenet` results are NZB links sent to SABnzbd/NZBGet.
+- **One-click purge per tier.**
+- **I2P (v1.1):**
+  - An **i2pd companion** (§18.10: a separate container on Docker/Unraid, a managed process on Windows/Linux), reached only via SAMv3 on an internal network or localhost.
+  - Hidden mode or near-zero transit bandwidth, so we don't act as a relay.
+  - The I2PSnark-style DHT is crawled over I2P datagrams, and metadata is fetched over SAM streaming.
+  - Adult content is excluded by default on this tier.
+- **eD2k/Kad (v1.2):**
+  - A Kad DHT node harvests **keyword→file publications** (so names come for free) and source records.
+  - Results are ed2k file entries (MD4 hash, name, size, source count).
+  - **Cross-network linking:** files whose `ed2k` hash appears in a torrent's per-file hashes (§6) are linked to that torrent.
+  - **Shared-file browsing (opt-in):** eD2k clients that allow it answer a "view shared files" request with their whole shared list, often a source of rare files. **Only the files are kept; who shared them is discarded** (§18.7). Asking reveals our presence to that peer, which is covered by the Overlay consent.
+- **IPFS (v1.3):**
+  - Passive Amino DHT server nodes record `ADD_PROVIDER`/`GET_PROVIDERS`.
+  - The root block is fetched over Bitswap (client-only, never re-provided or cached) and classified as directory, file root or chunk; chunks are dropped.
+  - Directories are walked with depth/size caps into our file-tree format, so composition, `file:` queries and ambiguity resolution all work.
+  - IPNI ingestion is optional: advertisement chains over HTTP, plus **live** announcements on the `/indexer/ingest/mainnet` gossipsub topic.
+  - **A phishing/malware classifier is mandatory** (HTML with login forms, wallet-drainer patterns), and IPFS content is **never rendered in-app**.
+
+### 18.7 Safety, legal and privacy rules
+- **Universal and non-negotiable:**
+  - The **CSAM hash and pattern blocklist** runs on every source, importer and network tier before storage, and **can't be disabled**.
+  - Metadata only; content is never downloaded, except through the separately consented micro-piece prober (§6).
+  - Every external connection goes through the plugin's egress setting.
+- **Consent classes:**
+
+| Class | Applies to | Enabling requires |
+|---|---|---|
+| None | Mainline DHT, Internet Archive, Academic/official lists, BEP 48, Lemmy | a toggle |
+| External | public web services (Nyaa, Nostr, torrent cache, Wikidata, …) | a toggle + the endpoint list shown |
+| Account | Prowlarr/Jackett (incl. Usenet), private-tracker IRC announces, your download clients, debrid, keyed APIs (TMDB, IGDB, Discogs) | credentials (encrypted at rest, never exported); results local-only |
+| Restricted | Anna's Archive/LibGen, the adult tier and other High-risk content sources; tracker-announce peer finding (it lists our IP in swarms) | a consent screen explaining the legal exposure; VPN strongly advised |
+| Overlay | I2P, eD2k/Kad, IPFS | a consent screen + VPN recommendation; isolated tier; one-click purge |
+
+- **No profiles of people.** Peer IPs and IDs are used only briefly, to fetch metadata or count a swarm, and are **never stored alongside what they share**.
+  - The index holds facts about content, never "this IP has these files". Swarm statistics stay aggregate counts.
+  - That keeps Lodestar from becoming a surveillance tool, matters legally (IP addresses are personal data under GDPR and similar laws), and limits the damage if an instance's data leaks.
+  - It applies to every network, including eD2k shared-file browsing.
+- **Private-source isolation:** items found only through private-tracker indexers or Usenet accounts (Prowlarr), private-tracker IRC announces, or your own download clients are flagged `private_source`. They're **never** served over Torznab or Stremio, included in exports, or sent into public peer finding (DHT `get_peers`, public tracker announces or PEX), because tracker rules typically forbid redistribution and a public lookup would leak the hash (BEP 27). Their metadata comes only from the private source itself.
+- **Politeness:** manifest caps, robots/ToS checks recorded in each plugin's docs, exponential back-off on errors, and a visible "blocked by source" state rather than retry storms.
+
+### 18.8 UI and Insights
+- **Settings → Sources** (a new primary settings section; it absorbs the plugin and enrichment settings):
+  - Grouped by kind. Each row shows the toggle, a status pill (running / paused / scheduled / error, as icon + text), 24-hour yield and **unique finds** with a sparkline, risk/consent badges, priority, agents (with their unit and predicted resource use), schedule, egress, and **Purge**.
+  - **Global Auto-balance** toggle with per-source pinning.
+  - **Importers** open a Jobs view with progress, pause/resume and ETA.
+  - **Consent dialogs** follow §18.7.
+- **Search:** Network, Source, Verified and Official facets; provenance on the detail drawer ("Found by: DHT · Nyaa · Rutracker dump", claim-vs-verified differences).
+- **Insights:**
+  - The Discover stage gains a **per-source breakdown**: funnel, yield/hour, **unique finds** (the rarity signal), cost (requests, bandwidth, CPU), and auto-balance events.
+  - Each overlay tier gets its own segment.
+  - A new **"Sources" detail page** ranks sources by marginal utility, the same number auto-balance uses.
+
+### 18.9 Verification
+- **Plugin contract tests:** run each plugin against a fake `SourceCtx` and recorded fixtures; check that it honours cancellation, budgets and caps.
+- **Scheduler property tests:**
+  - shares stay within ε of their weights over time;
+  - hard caps and min shares hold under any setting;
+  - no enabled source is starved;
+  - user-interest fetches are prioritised;
+  - auto-balance never violates bounds or oscillates under steady load.
+- **Politeness tests:** per-host limits, back-off, schedule windows.
+- **Provenance and purge tests:** the bitset is correct; purge removes only a source's unique items and its claims; the rollups stay reconciled after a purge.
+- **Safety tests:**
+  - a blocklisted fixture hash injected through *every* plugin kind and network is dropped before storage;
+  - `private_source` items never appear in Torznab, Stremio or export output, and their hashes never reach a DHT lookup, a public tracker or PEX;
+  - unverified items are hidden by default;
+  - consent gating can't be bypassed through the API.
+- **Companion tests (§18.10):** an install whose checksum or signature doesn't match is refused; companions bind to localhost or the internal network only; companion traffic follows the configured egress and kill-switch; a missing companion puts its dependent plugins in a "Needs setup" state rather than failing; managed-container mode can only create or remove containers on the catalogue list.
+- **No-profiles test:** no table or log line stores a peer address together with content keys (schema check plus a log scan in the e2e suite); eD2k shared-file browsing stores files without the sharer.
+- **Overhead benchmark:** with all v0.6 sources enabled, the §3 search and ingest budgets still hold.
+
+### 18.10 Companion manager
+Lodestar is the **central directory for every source**. When a source or a download needs another program (an overlay router, an indexer manager, a download client), Lodestar **installs or detects it, configures it, and supervises it**. How it installs depends on the platform.
+
+| Companion | Needed for | Release |
+|---|---|---|
+| **qBittorrent (nox)** | Downloading BitTorrent results; newer versions also have experimental I2P support, so one client may cover both | v0.6 |
+| **Prowlarr** (+ optional FlareSolverr) | The Prowlarr source plugin (public and private indexers, Usenet) | v0.6 |
+| **gluetun** (containers) / embedded WireGuard (native, §5) | Routing companion traffic through your VPN | v0.6 |
+| **SABnzbd or NZBGet** | Downloading `usenet` results | v0.7 |
+| **i2pd** | The I2P tier: crawling and I2P downloads | v1.1 |
+| **aMule (daemon)** | Downloading eD2k results. The Kad crawler is built into Lodestar; aMule is only for downloads | v1.2 |
+| **Kubo** (optional) | Fetching IPFS content locally instead of through a gateway | v1.3 |
+
+- **Native (Windows, bare-metal Linux): fully managed.**
+  - Lodestar downloads the companion, verifies it, installs it (per-user or as a service), generates random credentials, configures it through its API, and **supervises** it as a child process: start/stop/restart, logs, health checks, resource limits (Windows Job Objects; cgroups where available).
+  - **Signed companion catalogue:** published with each Lodestar release. It pins versions, download URLs per platform/architecture, SHA-256 hashes and upstream signatures where they exist, plus licence and default-config templates. **Nothing runs unless its checksum matches.**
+  - **Every install needs your confirmation.** Updates are pinned and you're notified; nothing auto-updates without verification. Uninstall is clean.
+  - **Licensing:** companions are downloaded on demand, never bundled into Lodestar's binary or installer, so GPL programs (qBittorrent, aMule) stay separate.
+- **Docker / Unraid: guided, not self-installed by default.**
+  - A container that creates other containers needs the Docker socket, which is **effectively root on the host**, and Unraid has no supported API for installing apps from inside a container.
+  - **Docker:** one click generates the companion's `docker-compose` service (network, ports, `network_mode: service:gluetun` for VPN routing) for you to apply. **Unraid:** one click opens the companion's Community Applications template with every field pre-filled.
+  - **Advanced, off by default:** a "managed containers" mode through a **restricted Docker socket proxy** that can only create and remove containers on the catalogue list, with a clear warning.
+- **Auto-detection and auto-configuration on every platform.** However a companion was installed, Lodestar finds it (known ports, container names, or a URL you enter), then configures it through its API (credentials, categories, save paths, interface binding) and keeps checking its health.
+- **Rules:**
+  - **Companions run with the least privilege:** a separate low-privilege process or container, bound to localhost or the internal network. Only the P2P ports they need are exposed.
+  - **Companion traffic follows your egress settings:** interface binding on native installs, `service:gluetun` in containers. The kill-switch covers companions.
+  - **Lodestar stays a metadata index.** Downloads happen in the client you choose, at your request.
+  - **A missing companion never breaks Lodestar.** Dependent plugins show "Needs i2pd · Set up" instead of failing.
+- **UI:**
+  - **Settings → Companions:** installed and detected companions with health, version, logs, update notices, and Set up / Remove.
+  - The first-run wizard gains an optional **"Download client"** step (recommended: qBittorrent).
+  - Each source on Settings → Sources shows its dependencies and their state.
