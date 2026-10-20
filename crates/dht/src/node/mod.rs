@@ -12,6 +12,9 @@
 
 mod actor;
 mod lookup;
+mod peers;
+mod sampler;
+mod seen;
 mod tokens;
 
 use std::io;
@@ -24,6 +27,8 @@ use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
+
+use lodestar_metainfo::InfoHash;
 
 use crate::compact::NodeId;
 use crate::state::StateError;
@@ -66,6 +71,48 @@ pub const DEFAULT_BOOTSTRAP: &[&str] = &[
     "dht.libtorrent.org:25401",
 ];
 
+/// Harvest strategies (architecture §5), each toggleable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HarvestConfig {
+    /// BEP 51 traversal: walk the keyspace sampling info hashes.
+    pub sample: bool,
+    /// Report hashes from `get_peers`/`announce_peer` queries we receive.
+    pub passive: bool,
+}
+
+impl Default for HarvestConfig {
+    fn default() -> Self {
+        HarvestConfig {
+            sample: true,
+            passive: true,
+        }
+    }
+}
+
+/// Where a harvested info hash came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Source {
+    /// A BEP 51 `sample_infohashes` reply.
+    Sample,
+    /// Someone asked us for peers (passive).
+    GetPeers,
+    /// Someone announced a peer to us (passive); the fastest path to
+    /// metadata, since it comes with a live peer.
+    Announce,
+    /// The result of a get_peers lookup requested with [`Node::get_peers`].
+    Lookup,
+}
+
+/// An info hash for the pipeline. `Sample` and `GetPeers` harvests are
+/// deduplicated by the seen filter; `Announce` and `Lookup` always pass,
+/// because they carry peers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Harvest {
+    pub info_hash: InfoHash,
+    pub source: Source,
+    pub peers: Vec<SocketAddr>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     /// One UDP socket per address; at most one IPv4 and one IPv6.
@@ -83,6 +130,7 @@ pub struct Config {
     pub save_every: Duration,
     /// BEP 43: don't answer queries and ask others not to route to us.
     pub read_only: bool,
+    pub harvest: HarvestConfig,
 }
 
 impl Default for Config {
@@ -97,6 +145,7 @@ impl Default for Config {
             tick: Duration::from_secs(1),
             save_every: Duration::from_secs(600),
             read_only: false,
+            harvest: HarvestConfig::default(),
         }
     }
 }
@@ -124,6 +173,15 @@ pub struct Stats {
     pub routing_nodes: AtomicU64,
     /// Gauge: queries awaiting an answer.
     pub outstanding: AtomicU64,
+    pub harvested_sample: AtomicU64,
+    pub harvested_get_peers: AtomicU64,
+    pub harvested_announce: AtomicU64,
+    pub lookups_completed: AtomicU64,
+    /// Harvests not delivered because the pipeline's channel was full.
+    pub harvest_dropped: AtomicU64,
+    pub samples_sent: AtomicU64,
+    /// Nodes that answered sample_infohashes with an error or timed out.
+    pub sample_failures: AtomicU64,
 }
 
 impl Stats {
@@ -148,6 +206,13 @@ impl Stats {
             spoofed: g(&self.spoofed),
             routing_nodes: g(&self.routing_nodes),
             outstanding: g(&self.outstanding),
+            harvested_sample: g(&self.harvested_sample),
+            harvested_get_peers: g(&self.harvested_get_peers),
+            harvested_announce: g(&self.harvested_announce),
+            lookups_completed: g(&self.lookups_completed),
+            harvest_dropped: g(&self.harvest_dropped),
+            samples_sent: g(&self.samples_sent),
+            sample_failures: g(&self.sample_failures),
         }
     }
 }
@@ -168,6 +233,13 @@ pub struct StatsSnapshot {
     pub spoofed: u64,
     pub routing_nodes: u64,
     pub outstanding: u64,
+    pub harvested_sample: u64,
+    pub harvested_get_peers: u64,
+    pub harvested_announce: u64,
+    pub lookups_completed: u64,
+    pub harvest_dropped: u64,
+    pub samples_sent: u64,
+    pub sample_failures: u64,
 }
 
 impl StatsSnapshot {
@@ -192,10 +264,19 @@ pub struct Snapshot {
     /// Every node in the routing tables.
     pub nodes: Vec<crate::compact::NodeInfo>,
     pub lookups: usize,
+    /// Nodes queued for BEP 51 sampling.
+    pub sample_frontier: usize,
+    /// Nodes with a known "sample again at" time.
+    pub sample_known: usize,
+    /// Info hashes with announced peers in our store.
+    pub stored_peer_hashes: usize,
+    /// Memory held by the seen filter (fixed at start).
+    pub seen_filter_bytes: usize,
 }
 
 pub(crate) enum Command {
     Snapshot(oneshot::Sender<Snapshot>),
+    GetPeers(InfoHash),
 }
 
 /// Binds a non-blocking UDP socket and returns it twice: as a tokio socket
@@ -232,8 +313,9 @@ pub struct Node {
 
 impl Node {
     /// Binds the sockets (so address errors surface here) and starts the
-    /// node in the background.
-    pub async fn start(config: Config) -> io::Result<Node> {
+    /// node in the background. Harvested info hashes go to `harvest`
+    /// (dropped and counted if it's full, so the DHT never blocks).
+    pub async fn start(config: Config, harvest: Option<mpsc::Sender<Harvest>>) -> io::Result<Node> {
         if config.bind.is_empty() || config.bind.len() > 2 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -263,6 +345,7 @@ impl Node {
             stats.clone(),
             command_rx,
             shutdown_rx,
+            harvest,
         ));
         Ok(Node {
             commands,
@@ -279,6 +362,13 @@ impl Node {
 
     pub fn stats(&self) -> StatsSnapshot {
         self.stats.snapshot()
+    }
+
+    /// Asks the node to look up peers for a hash (strategy 3: hashes with
+    /// no peer yet). The result arrives as a [`Source::Lookup`] harvest.
+    /// Returns `false` if the request queue is full.
+    pub fn get_peers(&self, info_hash: InfoHash) -> bool {
+        self.commands.try_send(Command::GetPeers(info_hash)).is_ok()
     }
 
     /// `None` if the node has stopped.
