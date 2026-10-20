@@ -192,12 +192,14 @@ Text extracted from NFOs is indexed into an `nfo_text` field (boost ~2).
 - **Cohort attribution:**
   - Each in-flight hash carries its `cohort` hour (u32) and harvest strategy (u8) in the pending-queue record (§5), so later fetch outcomes are credited to the right cohort.
   - Stored torrents derive their cohort from `discovered_at`.
-  - A hash that leaves the queue without metadata is recorded once with its terminal loss reason.
+  - A hash that leaves the queue without metadata is recorded once with its terminal loss reason, including **evicted** (dropped from the capped queue) and **gave up** (retry horizon passed with no peers).
+  - **Harvested means new to us:** a hash enters a cohort only when it's neither stored (have-filter) nor already in flight. Rediscoveries of stored torrents only bump `last_seen` (§5).
 - **Write path:**
   - Pipeline stages increment **in-memory per-hour accumulators** (lock-free counters, a few hundred keys).
-  - The writer flushes them as `INSERT … ON CONFLICT DO UPDATE SET value = value + excluded.value` **inside its existing batched transaction**, at most every 5 s.
+  - The writer flushes them as `INSERT … ON CONFLICT DO UPDATE SET value = value + excluded.value` **inside its existing batched transaction**, at most every 5 s. If no batch has committed for 5 s while counters are dirty (cold start, a run of failed fetches, a paused fetcher with the DHT still harvesting), the writer commits a small counters-only transaction instead, so the flush cadence and the "stale" signal never depend on ingest.
   - There are no extra fsyncs or transactions; the per-torrent cost is a few counter increments.
-  - A crash loses at most ~5 s of pre-storage (Discover/Fetch) counts. Stored/searchable counts can be recomputed exactly from `torrents` with `lodestar rollup --repair`, which also runs automatically after an unclean shutdown.
+  - **Searchable time without a per-torrent column:** the index commits in id order under the shared watermark (§8), so recording the highest id made searchable each hour is enough: `index_watermark_hour(hour INT PRIMARY KEY, last_id INT)`, about 9k rows a year. A torrent's searchable hour is the first hour whose `last_id` ≥ its id. A background rebuild (§8) doesn't touch it, because the old index keeps serving.
+  - A crash loses at most ~5 s of pre-storage (Discover/Fetch) counts. Stored counts (from `torrents`) and searchable counts (from `torrents` joined to `index_watermark_hour`) can be recomputed exactly, at hourly grain, with `lodestar rollup --repair`. It also runs automatically after an unclean shutdown.
 - **Compaction:** hourly rows older than 30 days are folded into daily rows by a nightly job, in short chunked transactions (no long read transactions, so the WAL checkpoint is never starved). Expected size: **≤ 50 MB/year** (hundreds of keys per hour).
 - **Read path:** the Insights queries are indexed range scans over the rollup tables (**≤ 50 ms p95**, independent of corpus size), cached per (query, last flush). Heavy exports run as background jobs that stream in chunks with I/O throttling and report progress.
 
@@ -514,9 +516,9 @@ A horizontal strip across the top shows the five stages, each with one live head
 #### 10.9.2 Overview story (visual inventory)
 | Level | Question | Visual (`analytics-chart-selection`) | Role |
 |---|---|---|---|
-| 1 Status | Where are we now? | KPI row, max 5: **Searchable torrents** (Δ vs previous period); **New searchable in range**; **End-to-end yield** (harvested → searchable, completed cohorts only); **Discovery → searchable latency** (p50 / p95); **Health** (Running / Paused / Degraded + reason, as icon + text) | Primary |
+| 1 Status | Where are we now? | KPI row, max 5: **Searchable torrents** (Δ vs previous period); **New searchable in range**; **End-to-end yield** (harvested → searchable, completed cohorts only); **Time to searchable from first discovery** (p50 / p95; includes finding peers and fetching, so it's hours, unlike the §3 metadata → searchable target, which the Index page shows as commit lag); **Health** (Running / Paused / Degraded + reason, as icon + text) | Primary |
 | 2 Movement | How is it changing? | Line: newly searchable torrents per hour/day (by event time), with **event annotations**: restart, upgrade, intensity or config change, import, reindex, network change. A **separate, aligned** line shows unique hashes harvested; no dual axis. Shaded comparison band when "Compare" is on. | Primary |
-| 3 Drivers | Where are torrents lost? | **Stage funnel by discovery cohort:** Harvested → Peer found → Metadata fetched → Stored → Searchable, showing counts and stage-to-stage conversion %. Next to each stage, a 100% stacked bar of **loss reasons**: no peers found, timed out, refused, encryption failed, oversize, invalid, blocked, junk-dropped, retention-dropped. | Primary |
+| 3 Drivers | Where are torrents lost? | **Stage funnel by discovery cohort:** Harvested → Peer found → Metadata fetched → Stored → Searchable, showing counts and stage-to-stage conversion %. Next to each stage, a 100% stacked bar of **loss reasons**: no peers found, timed out, refused, encryption failed, oversize, invalid, blocked, evicted (queue full), gave up (retry horizon passed). | Primary |
 | 4 Segments | What is arriving, from where? | Sorted horizontal bars: searchable by category group and by content type; yield by harvest strategy (BEP 51 / passive / active lookup); yield by IP family (v4 / v6); ambiguous names resolved by method (files / folder / structure / plugin) | Supporting |
 | 5 Exceptions | What needs attention? | Issue list, each with icon + text + a fix action: yield below the trailing 7-day baseline, NAT saturation, ephemeral-port pressure, unreachable port, scrape bans, index lag > 30 s, parser confidence falling, disk projection < 14 days, cohort completion stalled, FUSE/network path | Primary when non-empty |
 | 6 Serve | Is it useful? | KPIs + small multiples: searches per hour, zero-result rate, search latency p95 (server-measured), alerts fired, sends to download clients | Supporting |
@@ -528,6 +530,7 @@ A horizontal strip across the top shows the five stages, each with one live head
   - A cohort is **final** once every hash in it has reached a terminal state, or once the retry horizon (default 72 h) has passed. Cohorts that aren't final yet are **hatched and labelled "incomplete"**, and they're excluded from the yield KPI.
 - **Two time bases, always labelled.** The funnel and yield use *discovery cohort*; the trend, "new searchable" and Serve use *event time*. Each chart's subtitle says which one it uses.
 - **"Unique" is approximate before storage.** Harvest uniqueness comes from the time-rotated "seen" filter (§5), so a dead hash can be counted again after filter rotation. The Discover number is labelled "unique (≈)". From "Stored" onward, counts are exact.
+- **Final cohorts never change.** Removals after storage (retention policies, a later junk re-score) are lifecycle events, not funnel losses: they're shown on the Index page and annotated on the trend.
 - **Imported torrents** (bitmagnet import) never went through discovery, so they're excluded from the funnel. They appear as "Imported" in the Status totals and as an annotation on the trend.
 - **Category filters only apply from "Understand" onward,** because hashes have no category until their metadata arrives. When the global content filter is active, the funnel greys out the earlier stages and says why.
 - **Latency percentiles** come from log-bucketed histograms and are labelled approximate (bucket resolution ≤ 10%).
@@ -699,16 +702,15 @@ Single-key shortcuts can be turned off or remapped (§10.13).
   - result count = sum of disjunctive-facet expectations, computed independently from SQL and Tantivy;
   - histogram bins reconcile to source counts;
   - **Insights reconciliation** (metric contracts in `docs/metrics.md`):
-    - per-hour/day "stored" and "searchable" rollups equal independent `COUNT(*)` over `torrents` by `discovered_at` and index commit;
+    - per-hour/day "stored" and "searchable" rollups equal independent `COUNT(*)` over `torrents` (by `discovered_at` for stored; by the first `index_watermark_hour` row covering each id for searchable);
     - "Searchable torrents" equals the Tantivy document count at the last commit;
     - funnel stages never increase from one stage to the next within a cohort;
     - per-cohort harvested = Σ(terminal reasons) + in-progress;
     - event-time totals equal Σ hourly rows after daily compaction (compaction loses nothing);
     - Discover/Fetch counters equal the Prometheus `/metrics` counters within one flush interval;
     - `rollup --repair` restores exact stored/searchable counts after a simulated crash;
-    - each drill-through from Insights lands on a page whose counts match the clicked mark;
-  - filter, brush and reset sequences restore the baseline;
-  - drill-through from the dashboard lands on Search with matching counts.
+    - each drill-through from Insights lands on a page (Search or a stage page) whose counts match the clicked mark;
+  - filter, brush and reset sequences restore the baseline.
 - **Playwright tests:**
   - visual snapshots for each breakpoint × theme × density;
   - keyboard-only end-to-end flows (search → open → send; save alert; first-run wizard);
@@ -1027,6 +1029,8 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - It reads only incremental **rollup and discovery-cohort tables** (§7): ≤ 50 ms queries regardless of corpus size, ≤ 50 MB/year of storage, and an overhead budget of search p95 +≤ 5% and ingest −≤ 2% (§3).
 - The funnel uses discovery cohorts rather than event-time counts, so conversion rates are honest. Unfinished cohorts are labelled "incomplete", and pre-storage uniqueness is labelled approximate.
 - Counters are emitted from M1, so history exists when the UI lands in M5.
+- The Insights chunk budget is 45 KB, up from the crawler dashboard's 40 KB, for the funnel and stage pages (§10.1).
+- Review follow-ups: counters-only flushes while ingest is idle; an hourly index watermark so searchable counts can be rebuilt exactly; post-storage removals kept out of the funnel so final cohorts never change; evicted/gave-up loss reasons and a "new to us" definition of harvested, so cohort conservation holds.
 
 **Still open (decide during M0–M2 spikes, with measurements rather than guesses):** reusing librqbit crates vs our own DHT; whether the trigram field earns its size at 10M+ names; the smart-file-index thresholds; the actual cold-start harvest and metadata success rates.
 
