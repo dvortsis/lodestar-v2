@@ -1,0 +1,33 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "bench"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+repository = "https://github.com/dvortsis/lodestar-v2"
+
+[workspace.dependencies]
+lodestar-bencode = { path = "crates/bencode" }
+lodestar-metainfo = { path = "crates/metainfo" }
+lodestar-store = { path = "crates/store" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[profile.release]
+debug = "line-tables-only"
+
+# Parsers and codecs are exercised heavily by property tests; keep them fast.
+[profile.test]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
