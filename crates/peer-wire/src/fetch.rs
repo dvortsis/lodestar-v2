@@ -1,0 +1,348 @@
+//! Fetching an info dictionary from one peer (BEP 9).
+
+use std::net::SocketAddr;
+use std::time::Duration;
+
+use lodestar_metainfo::InfoHash;
+use rand::rngs::StdRng;
+use rand::{RngExt, SeedableRng};
+use sha1::{Digest, Sha1};
+use sha2::Sha256;
+use tokio::io::BufReader;
+use tokio::net::TcpStream;
+use tokio::time::{Instant, timeout, timeout_at};
+
+use crate::Error;
+use crate::message::{
+    self, HANDSHAKE_LEN, METADATA_PIECE, MetadataMessage, OUR_UT_METADATA, OUR_UT_PEX,
+};
+use crate::mse::{self, Ciphers};
+use crate::wire::{Incoming, Wire};
+
+/// How to use MSE/PE.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Encryption {
+    /// Try MSE first (offering RC4 and plaintext), then plain BitTorrent if
+    /// the peer doesn't do MSE. Reaches both kinds of peers.
+    #[default]
+    Prefer,
+    /// MSE with RC4 only.
+    Require,
+    /// Plain BitTorrent only.
+    Disable,
+}
+
+#[derive(Debug, Clone)]
+pub struct FetchOptions {
+    pub connect_timeout: Duration,
+    /// Deadline for the whole fetch, including a plaintext retry.
+    pub timeout: Duration,
+    /// Larger metadata is refused (recorded upstream as "oversize").
+    pub max_metadata: usize,
+    pub encryption: Encryption,
+    pub peer_id: [u8; 20],
+}
+
+impl Default for FetchOptions {
+    fn default() -> Self {
+        // Azureus-style peer id: client "LD", version 0001, random tail.
+        let mut peer_id = *b"-LD0001-000000000000";
+        let tail: [u8; 12] = rand::rng().random();
+        for (dst, b) in peer_id[8..].iter_mut().zip(tail) {
+            *dst = b"0123456789abcdefghijklmnopqrstuvwxyz"[usize::from(b) % 36];
+        }
+        FetchOptions {
+            connect_timeout: Duration::from_secs(4),
+            timeout: Duration::from_secs(8),
+            max_metadata: 16 << 20,
+            encryption: Encryption::default(),
+            peer_id,
+        }
+    }
+}
+
+/// A verified info dictionary and what we learned on the way.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fetched {
+    /// The raw info dictionary, verified against the info hash.
+    pub info: Vec<u8>,
+    /// Verified by truncated SHA-256 (a v2 swarm key) rather than SHA-1.
+    pub v2: bool,
+    /// The payload stream was RC4-encrypted.
+    pub encrypted: bool,
+    /// Peers the peer told us about via PEX.
+    pub pex: Vec<SocketAddr>,
+    /// The peer's client name from its extended handshake.
+    pub client: Option<String>,
+}
+
+/// Extended messages larger than a metadata piece plus header are bogus.
+const MAX_EXTENDED: usize = METADATA_PIECE + 1024;
+/// Other messages (e.g. a huge bitfield) are skipped up to this size.
+const MAX_OTHER: usize = 4 << 20;
+/// Piece requests kept in flight.
+const REQUEST_WINDOW: usize = 64;
+const MAX_PEX: usize = 200;
+
+/// Fetches and verifies the info dictionary for `info_hash` from `addr`.
+pub async fn fetch(
+    addr: SocketAddr,
+    info_hash: InfoHash,
+    opts: &FetchOptions,
+) -> Result<Fetched, Error> {
+    let deadline = Instant::now() + opts.timeout;
+    let run = |encrypted: bool| async move {
+        timeout_at(deadline, attempt(addr, &info_hash, opts, encrypted))
+            .await
+            .map_err(|_| Error::Timeout)?
+    };
+    match opts.encryption {
+        Encryption::Disable => run(false).await,
+        Encryption::Require => run(true).await,
+        Encryption::Prefer => match run(true).await {
+            // A peer without MSE drops the connection on our DH key; retry
+            // plain while time remains.
+            Err(Error::Mse(_)) if Instant::now() < deadline => run(false).await,
+            other => other,
+        },
+    }
+}
+
+async fn attempt(
+    addr: SocketAddr,
+    info_hash: &InfoHash,
+    opts: &FetchOptions,
+    encrypted: bool,
+) -> Result<Fetched, Error> {
+    let tcp = timeout(opts.connect_timeout, TcpStream::connect(addr))
+        .await
+        .map_err(|_| Error::Timeout)?
+        .map_err(Error::Connect)?;
+    let _ = tcp.set_nodelay(true);
+    let mut stream = BufReader::new(tcp);
+    let hello = message::handshake(&info_hash.0, &opts.peer_id, true);
+
+    let (ciphers, rc4) = if encrypted {
+        let provide = match opts.encryption {
+            Encryption::Require => mse::RC4,
+            _ => mse::RC4 | mse::PLAINTEXT,
+        };
+        // Our handshake rides inside MSE as the initial payload.
+        // A Send RNG: the fetch future must be spawnable across threads.
+        let mut rng = StdRng::from_rng(&mut rand::rng());
+        match mse::initiate(&mut stream, &info_hash.0, provide, &hello, &mut rng).await {
+            Ok((ciphers, selected)) => (ciphers, selected == mse::RC4),
+            Err(Error::Io(_)) => return Err(Error::Mse("peer closed the encrypted handshake")),
+            Err(e) => return Err(e),
+        }
+    } else {
+        use tokio::io::AsyncWriteExt;
+        stream.write_all(&hello).await?;
+        (
+            Ciphers {
+                read: None,
+                write: None,
+            },
+            false,
+        )
+    };
+    let mut wire = Wire::new(stream, ciphers, Vec::new());
+
+    let mut theirs = [0u8; HANDSHAKE_LEN];
+    wire.read_exact(&mut theirs).await?;
+    let hs = message::parse_handshake(&theirs)?;
+    if hs.info_hash != info_hash.0 {
+        return Err(Error::Handshake("wrong info hash"));
+    }
+    if !hs.extensions {
+        return Err(Error::NoExtensions);
+    }
+    wire.send_extended(0, &message::our_extended_handshake(None))
+        .await?;
+
+    let mut their_metadata_id = None;
+    let mut client = None;
+    let mut pex = Vec::new();
+    let mut assembly: Option<Assembly> = None;
+    loop {
+        let payload = match wire.read_message(MAX_EXTENDED, MAX_OTHER).await? {
+            Incoming::Extended(p) => p,
+            Incoming::KeepAlive | Incoming::Other(_) => continue,
+        };
+        let (ext_id, body) = (payload[0], &payload[1..]);
+        match ext_id {
+            0 => {
+                if assembly.is_some() {
+                    continue; // a repeated handshake changes nothing we need
+                }
+                let ext = message::parse_extended_handshake(body)?;
+                client = ext.client;
+                let id = ext.ut_metadata.ok_or(Error::NoMetadata)?;
+                let size = ext.metadata_size.ok_or(Error::NoMetadata)?;
+                let size = usize::try_from(size)
+                    .ok()
+                    .filter(|s| *s > 0 && *s <= opts.max_metadata)
+                    .ok_or(Error::MetadataSize(size.max(0) as u64))?;
+                their_metadata_id = Some(id);
+                let mut a = Assembly::new(size);
+                while let Some(piece) = a.next_request() {
+                    wire.send_extended(id, &message::metadata_request(piece))
+                        .await?;
+                }
+                assembly = Some(a);
+            }
+            OUR_UT_METADATA => {
+                let (Some(a), Some(their_id)) = (assembly.as_mut(), their_metadata_id) else {
+                    return Err(Error::Protocol("metadata before extended handshake"));
+                };
+                match message::parse_metadata_message(body)? {
+                    MetadataMessage::Data {
+                        piece,
+                        total_size,
+                        data,
+                    } => {
+                        if total_size.is_some_and(|t| t != a.size as i64) {
+                            return Err(Error::Protocol("total_size changed"));
+                        }
+                        a.accept(piece, data)?;
+                        if a.is_complete() {
+                            let info = std::mem::take(&mut a.buf);
+                            let v2 = verify(&info, info_hash)?;
+                            return Ok(Fetched {
+                                info,
+                                v2,
+                                encrypted: rc4,
+                                pex,
+                                client,
+                            });
+                        }
+                        while let Some(piece) = a.next_request() {
+                            wire.send_extended(their_id, &message::metadata_request(piece))
+                                .await?;
+                        }
+                    }
+                    MetadataMessage::Reject { .. } => return Err(Error::Rejected),
+                    MetadataMessage::Request { piece } => {
+                        // We serve nothing; say so politely.
+                        let piece = usize::try_from(piece).unwrap_or(0);
+                        wire.send_extended(their_id, &message::metadata_reject(piece))
+                            .await?;
+                    }
+                }
+            }
+            OUR_UT_PEX => {
+                for p in message::parse_pex(body) {
+                    if pex.len() < MAX_PEX && !pex.contains(&p) {
+                        pex.push(p);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Which hash the bytes match: SHA-1 (v1/hybrid key) or truncated
+/// SHA-256 (pure v2 key). Returns whether it was the latter.
+fn verify(info: &[u8], info_hash: &InfoHash) -> Result<bool, Error> {
+    let sha1: [u8; 20] = Sha1::digest(info).into();
+    if sha1 == info_hash.0 {
+        return Ok(false);
+    }
+    let sha256 = Sha256::digest(info);
+    if sha256[..20] == info_hash.0 {
+        return Ok(true);
+    }
+    Err(Error::HashMismatch)
+}
+
+/// Collects metadata pieces, with a bounded window of outstanding requests.
+struct Assembly {
+    size: usize,
+    buf: Vec<u8>,
+    received: Vec<bool>,
+    remaining: usize,
+    next: usize,
+    in_flight: usize,
+}
+
+impl Assembly {
+    fn new(size: usize) -> Assembly {
+        let pieces = size.div_ceil(METADATA_PIECE);
+        Assembly {
+            size,
+            buf: vec![0; size],
+            received: vec![false; pieces],
+            remaining: pieces,
+            next: 0,
+            in_flight: 0,
+        }
+    }
+
+    fn piece_len(&self, piece: usize) -> usize {
+        (self.size - piece * METADATA_PIECE).min(METADATA_PIECE)
+    }
+
+    fn next_request(&mut self) -> Option<usize> {
+        if self.in_flight >= REQUEST_WINDOW || self.next >= self.received.len() {
+            return None;
+        }
+        self.in_flight += 1;
+        self.next += 1;
+        Some(self.next - 1)
+    }
+
+    fn accept(&mut self, piece: i64, data: &[u8]) -> Result<(), Error> {
+        let piece = usize::try_from(piece)
+            .ok()
+            .filter(|p| *p < self.next)
+            .ok_or(Error::Protocol("unrequested metadata piece"))?;
+        if data.len() != self.piece_len(piece) {
+            return Err(Error::Protocol("metadata piece has the wrong length"));
+        }
+        if !self.received[piece] {
+            let start = piece * METADATA_PIECE;
+            self.buf[start..start + data.len()].copy_from_slice(data);
+            self.received[piece] = true;
+            self.remaining -= 1;
+            self.in_flight -= 1;
+        }
+        Ok(())
+    }
+
+    fn is_complete(&self) -> bool {
+        self.remaining == 0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn assembly_windows_and_validates() {
+        let size = METADATA_PIECE * 100 + 10;
+        let mut a = Assembly::new(size);
+        let first: Vec<usize> = std::iter::from_fn(|| a.next_request()).collect();
+        assert_eq!(first.len(), REQUEST_WINDOW);
+        assert!(a.accept(100, &[0; 10]).is_err(), "not requested yet");
+        assert!(a.accept(0, &[0; 5]).is_err(), "wrong length");
+        a.accept(0, &[1; METADATA_PIECE]).unwrap();
+        a.accept(0, &[1; METADATA_PIECE]).unwrap(); // duplicate ignored
+        assert_eq!(a.next_request(), Some(REQUEST_WINDOW));
+        assert!(a.accept(-1, &[]).is_err());
+    }
+
+    #[test]
+    fn verification_accepts_v1_and_truncated_v2() {
+        let data = b"d4:name1:xe";
+        let v1 = InfoHash(Sha1::digest(data).into());
+        let v2 = InfoHash(Sha256::digest(data)[..20].try_into().unwrap());
+        assert!(!verify(data, &v1).unwrap());
+        assert!(verify(data, &v2).unwrap());
+        assert!(matches!(
+            verify(data, &InfoHash([0; 20])),
+            Err(Error::HashMismatch)
+        ));
+    }
+}
