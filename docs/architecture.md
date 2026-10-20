@@ -1135,6 +1135,14 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Hostile-peer limits:** metadata over 16 MiB is refused before allocating; an extended message is at most one 16 KiB piece plus 1 KiB of header; other messages are skipped up to 4 MiB; pieces must have been requested and have the exact length; at most 64 requests in flight and 200 PEX peers kept.
 - **Nothing about the peer is stored with the torrent.** The peer's client name (from its BEP 10 handshake) and its PEX list come back with the fetch, for aggregate client stats and peer finding only (§18.7).
 - **Interop:** besides the in-crate fake peer, the fetcher was checked by hand (harness not in the repo) against libtorrent 2.1 seeding v1, hybrid and v2 torrents with encryption forced, enabled and disabled. Every combination succeeded except the two that can't (a seeder that forces encryption with ours disabled, and a seeder with encryption disabled with ours required).
+**M1 implementation decisions (store v2: provenance, ids, Insights, queue):**
+- **Migration v2** adds `id_seq`, `sources`, `torrents.sources`/`first_source`, `rollup_hour`, `cohort_hour`, `events` and `fetch_queue`. Tables nothing writes yet arrive with their first writer, each as its own migration: `rollup_day`/`cohort_day` with nightly compaction, `index_watermark_hour` with search (M2), and `torrent_claims`/`unverified_items` with the first claim-bearing source.
+- **`id_seq` starts above every id `torrents` ever used,** including deleted ones (from `sqlite_sequence`). Ids are taken one at a time inside the writer's transaction, so a duplicate or a rollback costs no id. `torrents.id` stays `AUTOINCREMENT` as a second guard.
+- **Source ids are 0–63 and never reused,** even after a purge, so a stale bit can't be attributed to a different plugin. `register_source` is idempotent per plugin id and records the running version. A torrent rediscovered by another source gains that source's bit, with an update only when the bit is new.
+- **Cohorts carry the source:** `cohort_hour` is keyed by (cohort, source, stage, reason), so the §10.9 funnel can be split by source as §18.5 asks. Metric, dimension, stage and reason codes are opaque to the store. The pipeline defines them (append only).
+- **Counters are additive only.** One `Store::write` commits torrents, counters, cohort counts and events in one transaction. With no torrents it's the counters-only flush §7 calls for. Gauges such as scheduler shares go to Prometheus for now, and to rollups once the auto-balancer needs their history.
+- **The fetch queue is persisted without peers:** hash, source, cohort, strategy, priority, attempts and the `private_source` flag (so a private key stays out of public peer finding across restarts). Peer addresses are transient (§18.7) and stale after a restart anyway.
+- Cost on the 50k synthetic corpus: +4 B per torrent (594 → 598 B).
 
 ## 17. Verification (once built)
 
