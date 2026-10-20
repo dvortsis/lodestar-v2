@@ -304,6 +304,7 @@ dependencies = [
  "lodestar-bencode",
  "lodestar-metainfo",
  "proptest",
+ "rand 0.10.3",
 ]
 
 [[package]]
