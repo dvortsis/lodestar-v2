@@ -311,8 +311,10 @@ impl Info {
         let mut all_bytes: u64 = 0;
         let mut total_size: u64 = 0;
         for d in &drafts {
+            // Capped at i64::MAX so sizes fit SQLite integers downstream.
             all_bytes = all_bytes
                 .checked_add(d.size)
+                .filter(|&n| i64::try_from(n).is_ok())
                 .ok_or(invalid("length", "total size overflows"))?;
             if !d.attrs.contains(FileAttrs::PADDING) {
                 total_size += d.size;
