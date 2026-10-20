@@ -10,7 +10,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::{Error, Result};
 
 /// `(version, sql)`, applied in order, each in its own transaction.
-pub(crate) const MIGRATIONS: &[(i64, &str)] = &[(1, V1)];
+pub(crate) const MIGRATIONS: &[(i64, &str)] = &[(1, V1), (2, V2)];
 
 /// M0: the canonical torrent tables plus settings and zstd dictionaries.
 ///
@@ -84,6 +84,81 @@ CREATE TABLE torrent_parsed (
     parser_ver INTEGER NOT NULL,
     data       BLOB NOT NULL
 ) STRICT;
+";
+
+/// M1: provenance, the shared id sequence, Insights counters and the
+/// persisted fetch queue (architecture §5, §7, §18.5).
+///
+/// - `id_seq` is the one id space for every item table. Rows insert
+///   explicit ids from it inside the writer's transaction, so an item keeps
+///   its id across tables (unverified → torrents, overlay networks).
+///   `torrents.id` stays `AUTOINCREMENT` as a second guard against reuse.
+/// - `torrents.sources` is a bitset over `sources.id` (0..=63);
+///   `first_source` is the source that found it first. Pre-M1 rows have
+///   neither.
+/// - The rollup and cohort tables hold additive counters keyed by hour.
+///   Cohorts also carry the source, so the funnel can be split by it.
+/// - `fetch_queue` holds keys still waiting for metadata across restarts.
+///   No peers are stored with them: peer addresses are transient (§18.7)
+///   and stale by the time we restart anyway.
+const V2: &str = "
+CREATE TABLE id_seq (
+    one  INTEGER PRIMARY KEY CHECK (one = 1),
+    next INTEGER NOT NULL CHECK (next > 0)
+) STRICT;
+
+INSERT INTO id_seq (one, next) SELECT 1, max(
+    coalesce((SELECT seq FROM sqlite_sequence WHERE name = 'torrents'), 0),
+    coalesce((SELECT max(id) FROM torrents), 0)
+) + 1;
+
+CREATE TABLE sources (
+    id       INTEGER PRIMARY KEY CHECK (id BETWEEN 0 AND 63),
+    plugin   TEXT NOT NULL UNIQUE,
+    version  TEXT NOT NULL,
+    state    INTEGER NOT NULL,
+    added_at INTEGER NOT NULL
+) STRICT;
+
+ALTER TABLE torrents ADD COLUMN sources INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE torrents ADD COLUMN first_source INTEGER
+    CHECK (first_source IS NULL OR first_source BETWEEN 0 AND 63);
+
+CREATE TABLE rollup_hour (
+    hour   INTEGER NOT NULL,
+    metric INTEGER NOT NULL,
+    dim    INTEGER NOT NULL,
+    key    INTEGER NOT NULL,
+    value  INTEGER NOT NULL,
+    PRIMARY KEY (hour, metric, dim, key)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE cohort_hour (
+    cohort INTEGER NOT NULL,
+    source INTEGER NOT NULL,
+    stage  INTEGER NOT NULL,
+    reason INTEGER NOT NULL,
+    count  INTEGER NOT NULL,
+    PRIMARY KEY (cohort, source, stage, reason)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE events (
+    id     INTEGER PRIMARY KEY,
+    at     INTEGER NOT NULL,
+    kind   INTEGER NOT NULL,
+    detail TEXT NOT NULL
+) STRICT;
+CREATE INDEX events_at ON events (at);
+
+CREATE TABLE fetch_queue (
+    info_hash BLOB PRIMARY KEY CHECK (length(info_hash) = 20),
+    source    INTEGER NOT NULL CHECK (source BETWEEN 0 AND 63),
+    cohort    INTEGER NOT NULL,
+    strategy  INTEGER NOT NULL,
+    priority  INTEGER NOT NULL,
+    attempts  INTEGER NOT NULL,
+    flags     INTEGER NOT NULL
+) STRICT, WITHOUT ROWID;
 ";
 
 /// Pragmas that persist in the file and can only be set before the first
@@ -184,6 +259,38 @@ mod tests {
             r.get(0)
         })
         .unwrap()
+    }
+
+    /// The id sequence starts after every id torrents has ever used,
+    /// including deleted ones.
+    #[test]
+    fn v2_seeds_the_id_sequence_from_existing_ids() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate_with(&mut conn, None, &MIGRATIONS[..1]).unwrap();
+        let insert = |conn: &Connection, id: i64| {
+            conn.execute(
+                "INSERT INTO torrents (id, info_hash, name, size, piece_len, piece_count,
+                     file_count, info_size, flags, discovered_at, metadata_at, last_seen_at)
+                 VALUES (?1, ?2, 'x', 0, 0, 0, 0, 0, 0, 0, 0, 0)",
+                rusqlite::params![id, vec![id as u8; 20]],
+            )
+            .unwrap();
+        };
+        insert(&conn, 7);
+        insert(&conn, 41);
+        conn.execute("DELETE FROM torrents WHERE id = 41", [])
+            .unwrap();
+        migrate_with(&mut conn, None, MIGRATIONS).unwrap();
+        let next: i64 = conn
+            .query_row("SELECT next FROM id_seq", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(next, 42);
+        let (sources, first): (i64, Option<i64>) = conn
+            .query_row("SELECT sources, first_source FROM torrents", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!((sources, first), (0, None), "pre-provenance rows");
     }
 
     #[test]

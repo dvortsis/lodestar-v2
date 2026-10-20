@@ -2,14 +2,17 @@
 //! Search indexes and hot columns are derived from it and can always be
 //! rebuilt.
 //!
-//! M0 scope: schema and migrations, connection setup, the file-tree blob
-//! codec with zstd dictionaries, and batched inserts and reads. A single
-//! [`Store`] owns the one writer connection; the read pool and the writer
-//! task arrive with the pipeline.
+//! Scope so far: schema and migrations, connection setup, the file-tree
+//! blob codec with zstd dictionaries, batched writes and reads, source
+//! provenance and the shared id sequence (§18.5), Insights counters (§7)
+//! and the persisted fetch queue (§5). A single [`Store`] owns the one
+//! writer connection; the pipeline's writer task drives it.
 
 mod compress;
 pub mod filetree;
+mod insights;
 mod schema;
+mod sources;
 
 use std::fmt;
 use std::io;
@@ -22,7 +25,9 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 pub use compress::{BlobCodec, Codec, Compressed};
 pub use filetree::{CodecError, FileTree};
+pub use insights::{CohortCount, Counter, Event};
 pub use rusqlite;
+pub use sources::{MAX_SOURCES, QueuedKey, SourceId, SourceRow, SourceState};
 
 /// Bits of the `torrents.flags` column. Values are persisted: append only.
 pub mod flags {
@@ -50,8 +55,13 @@ pub enum Error {
     Sqlite(rusqlite::Error),
     Codec(CodecError),
     Compression(io::Error),
-    SchemaTooNew { found: i64, supported: i64 },
+    SchemaTooNew {
+        found: i64,
+        supported: i64,
+    },
     Corrupt(&'static str),
+    /// All 64 source ids are taken.
+    TooManySources,
 }
 
 impl fmt::Display for Error {
@@ -65,6 +75,7 @@ impl fmt::Display for Error {
                 "database schema v{found} is newer than this build supports (v{supported})"
             ),
             Error::Corrupt(what) => write!(f, "corrupt store: {what}"),
+            Error::TooManySources => write!(f, "all {MAX_SOURCES} source ids are in use"),
         }
     }
 }
@@ -132,6 +143,19 @@ pub struct NewTorrent<'a> {
     /// Provenance flags the metainfo can't know ([`flags::IMPORTED`],
     /// [`flags::BACKFILL`], [`flags::FILES_PARTIAL`]).
     pub extra_flags: i64,
+    /// The source that found it. An existing torrent gains this source's
+    /// bit in `sources`.
+    pub source: SourceId,
+}
+
+/// Everything one writer transaction commits (§7 write path): torrents
+/// plus the Insights counters accumulated since the last flush.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WriteBatch<'a> {
+    pub torrents: &'a [NewTorrent<'a>],
+    pub counters: &'a [Counter],
+    pub cohorts: &'a [CohortCount],
+    pub events: &'a [Event],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,6 +191,9 @@ pub struct TorrentRow {
     pub discovered_at: i64,
     pub metadata_at: i64,
     pub last_seen_at: i64,
+    /// Bitset over [`SourceId`]s; 0 for torrents stored before provenance.
+    pub sources: u64,
+    pub first_source: Option<SourceId>,
 }
 
 const FILE_DICT_SETTING: &str = "file_dict";
@@ -230,19 +257,35 @@ impl Store {
         self.codec.active()
     }
 
-    /// Inserts a batch in one transaction. Torrents already stored under any
-    /// of their swarm hashes (v1 or truncated v2) are left untouched.
+    /// Inserts torrents in one transaction; see [`Store::write`].
     pub fn insert(&mut self, batch: &[NewTorrent<'_>]) -> Result<Vec<Inserted>> {
+        self.write(&WriteBatch {
+            torrents: batch,
+            ..WriteBatch::default()
+        })
+    }
+
+    /// Commits a batch in one transaction. Torrents already stored under any
+    /// of their swarm hashes (v1 or truncated v2) keep their data and only
+    /// gain the new source's bit. New torrents take their ids from the
+    /// shared sequence. Counters are added to what's stored.
+    pub fn write(&mut self, batch: &WriteBatch<'_>) -> Result<Vec<Inserted>> {
         let Store {
             conn,
             codec,
             config,
         } = self;
         let tx = conn.transaction()?;
-        let mut out = Vec::with_capacity(batch.len());
-        for t in batch {
+        let mut out = Vec::with_capacity(batch.torrents.len());
+        for t in batch.torrents {
             let info = t.info;
+            let bit = t.source.bit();
             if let Some(id) = find_any(&tx, info.swarm_hashes())? {
+                tx.prepare_cached(
+                    "UPDATE torrents SET sources = sources | ?2
+                     WHERE id = ?1 AND sources & ?2 = 0",
+                )?
+                .execute(params![id, bit])?;
                 out.push(Inserted::Existing(id));
                 continue;
             }
@@ -252,32 +295,32 @@ impl Store {
             let plain_name =
                 info.name.encoding == TextEncoding::UTF8 && name.as_bytes() == info.name.raw;
             let file_count = info.files.iter().filter(|f| !f.is_padding()).count();
-            let id: i64 = tx
-                .prepare_cached(
-                    "INSERT INTO torrents (info_hash, info_hash_v2, name, name_raw, name_enc,
-                         size, piece_len, piece_count, file_count, info_size, flags,
-                         discovered_at, metadata_at, last_seen_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?12)
-                     RETURNING id",
-                )?
-                .query_row(
-                    params![
-                        &info.primary_hash().0[..],
-                        info.v2.as_ref().map(|h| &h.0[..]),
-                        name,
-                        (!plain_name).then_some(&info.name.raw[..]),
-                        (!plain_name).then_some(info.name.encoding.id()),
-                        to_i64(info.total_size)?,
-                        to_i64(info.piece_length)?,
-                        to_i64(info.piece_count)?,
-                        file_count as i64,
-                        info.info_size as i64,
-                        derive_flags(info) | t.extra_flags,
-                        t.discovered_at,
-                        t.metadata_at,
-                    ],
-                    |r| r.get(0),
-                )?;
+            let id = sources::next_id(&tx)?;
+            tx.prepare_cached(
+                "INSERT INTO torrents (id, info_hash, info_hash_v2, name, name_raw, name_enc,
+                     size, piece_len, piece_count, file_count, info_size, flags,
+                     discovered_at, metadata_at, last_seen_at, sources, first_source)
+                 VALUES (?14, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?12,
+                     ?15, ?16)",
+            )?
+            .execute(params![
+                &info.primary_hash().0[..],
+                info.v2.as_ref().map(|h| &h.0[..]),
+                name,
+                (!plain_name).then_some(&info.name.raw[..]),
+                (!plain_name).then_some(info.name.encoding.id()),
+                to_i64(info.total_size)?,
+                to_i64(info.piece_length)?,
+                to_i64(info.piece_count)?,
+                file_count as i64,
+                info.info_size as i64,
+                derive_flags(info) | t.extra_flags,
+                t.discovered_at,
+                t.metadata_at,
+                id,
+                bit,
+                t.source.get(),
+            ])?;
             tx.prepare_cached(
                 "INSERT INTO torrent_files (torrent_id, codec, dict_id, data) VALUES (?1, ?2, ?3, ?4)",
             )?
@@ -298,6 +341,7 @@ impl Store {
             }
             out.push(Inserted::New(id));
         }
+        insights::write(&tx, batch.counters, batch.cohorts, batch.events)?;
         tx.commit()?;
         Ok(out)
     }
@@ -313,7 +357,7 @@ impl Store {
             .prepare_cached(
                 "SELECT id, info_hash, info_hash_v2, name, name_raw, name_enc, size, piece_len,
                         piece_count, file_count, info_size, flags, discovered_at, metadata_at,
-                        last_seen_at
+                        last_seen_at, sources, first_source
                  FROM torrents WHERE id = ?1",
             )?
             .query_row([id], |r| {
@@ -333,17 +377,21 @@ impl Store {
                         discovered_at: r.get(12)?,
                         metadata_at: r.get(13)?,
                         last_seen_at: r.get(14)?,
+                        sources: r.get::<_, i64>(15)? as u64,
+                        first_source: None,
                     },
                     r.get::<_, Vec<u8>>(1)?,
                     r.get::<_, Option<Vec<u8>>>(2)?,
                     r.get::<_, Option<Vec<u8>>>(4)?,
                     r.get::<_, Option<u8>>(5)?,
+                    r.get::<_, Option<i64>>(16)?,
                 ))
             })
             .optional()?;
-        let Some((mut row, hash, hash_v2, name_raw, name_enc)) = row else {
+        let Some((mut row, hash, hash_v2, name_raw, name_enc, first_source)) = row else {
             return Ok(None);
         };
+        row.first_source = first_source.map(SourceId::from_sql).transpose()?;
         row.info_hash = InfoHash(
             hash.try_into()
                 .map_err(|_| Error::Corrupt("info_hash length"))?,
