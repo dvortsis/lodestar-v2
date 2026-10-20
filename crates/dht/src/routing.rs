@@ -11,7 +11,7 @@
 //!
 //! Sybil and hijack resistance: only nodes that have answered us enter the
 //! main buckets (nodes that merely queried us wait in a replacement
-//! cache); each IP holds at most one entry; and an existing id can't be
+//! cache); each public IP holds at most one entry; and an existing id can't be
 //! moved to a new address, because that's exactly what a spoofed packet
 //! would try.
 //!
@@ -22,6 +22,7 @@ use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
 
 use crate::compact::{NodeId, NodeInfo};
+use crate::secure_id;
 
 pub const K: usize = 8;
 /// How long a response (or a query from a verified node) keeps a node good.
@@ -165,9 +166,40 @@ impl RoutingTable {
         b.entries.iter().find(|e| e.info.id == *id)
     }
 
+    /// Which id holds this IP. Private, loopback and link-local addresses
+    /// (BEP 42's exempt set) are never limited: Sybil resistance means
+    /// nothing on a LAN, and test networks run many nodes on one address.
+    fn holder(&self, ip: &IpAddr) -> Option<NodeId> {
+        self.ips.get(ip).copied()
+    }
+
+    fn index(&mut self, ip: IpAddr, id: NodeId) {
+        if !secure_id::is_exempt(&ip) {
+            self.ips.insert(ip, id);
+        }
+    }
+
+    fn unindex(&mut self, ip: IpAddr) {
+        self.ips.remove(&ip);
+    }
+
     /// Shared prefix length with our id, capped to the last bucket.
     fn bucket_index(&self, id: &NodeId) -> usize {
         prefix_len(&self.own, id).min(self.buckets.len() - 1)
+    }
+
+    /// Whether a verified node with this id would get a slot now: its
+    /// bucket has room, can split, or holds a node that isn't good. Used to
+    /// decide whether a node that queried us is worth pinging to verify.
+    pub fn would_accept(&self, id: &NodeId, now: u64) -> bool {
+        if *id == self.own || self.get(id).is_some() {
+            return false;
+        }
+        let idx = self.bucket_index(id);
+        let bucket = &self.buckets[idx];
+        bucket.entries.len() < K
+            || (idx == self.buckets.len() - 1 && self.buckets.len() < 160)
+            || bucket.entries.iter().any(|e| e.status(now) != Status::Good)
     }
 
     /// Records contact with a node and decides whether it enters the table.
@@ -216,7 +248,7 @@ impl RoutingTable {
             }
         }
         // One entry per IP, unless the previous holder has gone bad.
-        if let Some(holder) = self.ips.get(&info.addr.ip()).copied() {
+        if let Some(holder) = self.holder(&info.addr.ip()) {
             if self
                 .get(&holder)
                 .is_some_and(|e| e.status(now) == Status::Bad)
@@ -240,7 +272,7 @@ impl RoutingTable {
             if bucket.entries.len() < K {
                 bucket.entries.push(entry);
                 bucket.last_changed = now;
-                self.ips.insert(info.addr.ip(), info.id);
+                self.index(info.addr.ip(), info.id);
                 return Inserted::Added;
             }
             if idx == count - 1 && count < 160 {
@@ -254,8 +286,8 @@ impl RoutingTable {
             {
                 let old = std::mem::replace(&mut bucket.entries[pos], entry);
                 bucket.last_changed = now;
-                self.ips.remove(&old.info.addr.ip());
-                self.ips.insert(info.addr.ip(), info.id);
+                self.unindex(old.info.addr.ip());
+                self.index(info.addr.ip(), info.id);
                 return Inserted::Replaced(old.info);
             }
             let questionable: Vec<NodeInfo> = bucket
@@ -291,9 +323,9 @@ impl RoutingTable {
         }
         bucket.replacements.push_back(entry.clone());
         for old in freed {
-            self.ips.remove(&old.info.addr.ip());
+            self.unindex(old.info.addr.ip());
         }
-        self.ips.insert(entry.info.addr.ip(), entry.info.id);
+        self.index(entry.info.addr.ip(), entry.info.id);
     }
 
     /// Records a query the node didn't answer. Once it turns bad, the
@@ -304,7 +336,7 @@ impl RoutingTable {
         let Some(pos) = bucket.entries.iter().position(|e| e.info.id == *id) else {
             if let Some(r) = bucket.replacements.iter().position(|r| r.info.id == *id) {
                 let gone = bucket.replacements.remove(r).expect("position is valid");
-                self.ips.remove(&gone.info.addr.ip());
+                self.unindex(gone.info.addr.ip());
             }
             return;
         };
@@ -320,7 +352,7 @@ impl RoutingTable {
             let replacement = bucket.replacements.remove(r).expect("position is valid");
             let old = std::mem::replace(&mut bucket.entries[pos], replacement);
             bucket.last_changed = now;
-            self.ips.remove(&old.info.addr.ip());
+            self.unindex(old.info.addr.ip());
         }
     }
 
@@ -335,7 +367,7 @@ impl RoutingTable {
             None
         };
         if let Some(e) = &removed {
-            self.ips.remove(&e.info.addr.ip());
+            self.unindex(e.info.addr.ip());
         }
         removed
     }
