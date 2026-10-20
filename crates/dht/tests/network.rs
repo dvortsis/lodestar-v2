@@ -20,6 +20,7 @@ fn config(bootstrap: Vec<String>) -> Config {
         tick: Duration::from_millis(50),
         save_every: Duration::from_secs(3600),
         read_only: false,
+        harvest: Default::default(),
     }
 }
 
@@ -36,11 +37,15 @@ async fn wait_for(mut cond: impl AsyncFnMut() -> bool, timeout: Duration) -> boo
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn nodes_find_each_other_through_one_bootstrap_node() {
-    let seed = Node::start(config(vec![])).await.unwrap();
+    let seed = Node::start(config(vec![]), None).await.unwrap();
     let seed_addr = seed.local_addrs()[0].to_string();
     let mut nodes = Vec::new();
     for _ in 0..40 {
-        nodes.push(Node::start(config(vec![seed_addr.clone()])).await.unwrap());
+        nodes.push(
+            Node::start(config(vec![seed_addr.clone()]), None)
+                .await
+                .unwrap(),
+        );
     }
     // Kademlia correctness: each node's 8 true closest nodes are all known,
     // except where BEP 5's "keep the old good nodes" rule leaves one out
@@ -98,15 +103,19 @@ async fn nodes_find_each_other_through_one_bootstrap_node() {
 async fn saved_state_rejoins_without_bootstrap_routers() {
     let dir = std::env::temp_dir().join(format!("lodestar-dht-net-{}", std::process::id()));
     let state = dir.join("state.bin");
-    let seed = Node::start(config(vec![])).await.unwrap();
+    let seed = Node::start(config(vec![]), None).await.unwrap();
     let seed_addr = seed.local_addrs()[0].to_string();
     let mut others = Vec::new();
     for _ in 0..10 {
-        others.push(Node::start(config(vec![seed_addr.clone()])).await.unwrap());
+        others.push(
+            Node::start(config(vec![seed_addr.clone()]), None)
+                .await
+                .unwrap(),
+        );
     }
     let mut cfg = config(vec![seed_addr.clone()]);
     cfg.state_path = Some(state.clone());
-    let node = Node::start(cfg.clone()).await.unwrap();
+    let node = Node::start(cfg.clone(), None).await.unwrap();
     assert!(
         wait_for(
             async || node.snapshot().await.unwrap().table_sizes[0] >= 5,
@@ -121,7 +130,7 @@ async fn saved_state_rejoins_without_bootstrap_routers() {
     // Restart with no bootstrap at all: the saved nodes are enough, and the
     // node keeps its identity.
     cfg.bootstrap.clear();
-    let node = Node::start(cfg).await.unwrap();
+    let node = Node::start(cfg, None).await.unwrap();
     assert!(
         wait_for(
             async || node.snapshot().await.unwrap().table_sizes[0] >= 5,
@@ -142,9 +151,9 @@ async fn saved_state_rejoins_without_bootstrap_routers() {
 async fn read_only_node_does_not_answer() {
     let mut cfg = config(vec![]);
     cfg.read_only = true;
-    let ro = Node::start(cfg).await.unwrap();
+    let ro = Node::start(cfg, None).await.unwrap();
     let ro_addr = ro.local_addrs()[0].to_string();
-    let asker = Node::start(config(vec![ro_addr])).await.unwrap();
+    let asker = Node::start(config(vec![ro_addr]), None).await.unwrap();
     tokio::time::sleep(Duration::from_millis(800)).await;
     assert!(ro.stats().queries_in > 0);
     assert_eq!(ro.stats().packets_out, 0);
@@ -157,10 +166,10 @@ async fn read_only_node_does_not_answer() {
 async fn rejects_bad_bind_configs() {
     let mut cfg = config(vec![]);
     cfg.bind = vec![];
-    assert!(Node::start(cfg.clone()).await.is_err());
+    assert!(Node::start(cfg.clone(), None).await.is_err());
     cfg.bind = vec![
         SocketAddr::from(([127, 0, 0, 1], 0)),
         SocketAddr::from(([127, 0, 0, 1], 0)),
     ];
-    assert!(Node::start(cfg).await.is_err());
+    assert!(Node::start(cfg, None).await.is_err());
 }
