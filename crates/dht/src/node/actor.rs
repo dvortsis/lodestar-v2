@@ -13,9 +13,14 @@ use std::net::UdpSocket as StdUdpSocket;
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, watch};
 
+use lodestar_metainfo::InfoHash;
+
 use super::lookup::Lookup;
+use super::peers::PeerStore;
+use super::sampler::{self, Sampler};
+use super::seen::SeenFilter;
 use super::tokens::Tokens;
-use super::{Command, Config, Snapshot, Stats};
+use super::{Command, Config, Harvest, Snapshot, Source, Stats};
 use crate::compact::{self, CompactNodes, NodeId, NodeInfo};
 use crate::krpc::{self, Body, ErrorBody, Message, Method, Query, Response, Want, error_code};
 use crate::routing::{Contact, Inserted, RoutingTable, Status};
@@ -34,11 +39,26 @@ const PINGS_PER_TICK: usize = 16;
 /// (every [`REBOOTSTRAP_TICKS`] ticks, i.e. 30 s by default) until it fills.
 const HEALTHY_NODES: usize = 32;
 const REBOOTSTRAP_TICKS: u32 = 30;
+/// Seen-filter generation size: ~1.2 MB per generation at 1% false positives.
+const SEEN_CAPACITY: usize = 1_000_000;
+/// Hashes we offer when sampled ourselves (BEP 51 allows about 20 per reply).
+const RECENT_SAMPLES: usize = 20;
+/// Concurrent get_peers lookups, and how many requests may wait.
+const MAX_GET_PEERS: usize = 32;
+const MAX_GET_PEERS_QUEUE: usize = 10_000;
+/// Share of the query budget spent on BEP 51 sampling; the rest stays
+/// free for routing maintenance and lookups.
+const SAMPLE_SHARE: f64 = 0.5;
+/// Below this frontier size, refill it and explore a random region.
+const LOW_FRONTIER: usize = 64;
+/// Backoff for a sample query that timed out (may be transient).
+const SAMPLE_TIMEOUT_BACKOFF: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Debug, Clone, Copy)]
 enum Purpose {
     Ping,
     Lookup(u32),
+    Sample,
 }
 
 #[derive(Debug)]
@@ -136,6 +156,14 @@ struct Actor {
     last_save: Instant,
     out: Vec<u8>,
     local_addrs: Vec<SocketAddr>,
+    harvest: Option<mpsc::Sender<Harvest>>,
+    seen: SeenFilter,
+    peer_store: PeerStore,
+    sampler: Sampler,
+    recent: VecDeque<InfoHash>,
+    get_peers_queue: VecDeque<InfoHash>,
+    active_get_peers: usize,
+    last_prune: Instant,
 }
 
 pub(crate) async fn run(
@@ -144,6 +172,7 @@ pub(crate) async fn run(
     stats: Arc<Stats>,
     mut commands: mpsc::Receiver<Command>,
     mut shutdown: watch::Receiver<bool>,
+    harvest: Option<mpsc::Sender<Harvest>>,
 ) -> Result<(), StateError> {
     let now = Instant::now();
     let mut rng = StdRng::from_rng(&mut rand::rng());
@@ -189,6 +218,14 @@ pub(crate) async fn run(
         last_save: now,
         out: Vec::with_capacity(1500),
         local_addrs,
+        harvest,
+        seen: SeenFilter::new(SEEN_CAPACITY, 0.01),
+        peer_store: PeerStore::default(),
+        sampler: Sampler::default(),
+        recent: VecDeque::with_capacity(RECENT_SAMPLES),
+        get_peers_queue: VecDeque::new(),
+        active_get_peers: 0,
+        last_prune: now,
         cfg,
     };
     actor.start_bootstrap(&sockets, saved.map(|s| s.nodes).unwrap_or_default());
@@ -300,7 +337,46 @@ impl Actor {
                         .flat_map(|f| f.table.entries().map(|e| e.info))
                         .collect(),
                     lookups: self.lookups.len(),
+                    sample_frontier: self.sampler.frontier_len(),
+                    sample_known: self.sampler.known(),
+                    stored_peer_hashes: self.peer_store.len(),
+                    seen_filter_bytes: self.seen.memory(),
                 });
+            }
+            Command::GetPeers(hash) => {
+                if self.get_peers_queue.len() < MAX_GET_PEERS_QUEUE {
+                    self.get_peers_queue.push_back(hash);
+                }
+            }
+        }
+    }
+
+    /// Hands a hash to the pipeline. Sightings without peers are
+    /// deduplicated; announces and lookup results always pass.
+    fn harvest_hash(&mut self, hash: InfoHash, source: Source, peers: Vec<SocketAddr>) {
+        let new = self.seen.insert(&hash);
+        if new {
+            if self.recent.len() == RECENT_SAMPLES {
+                self.recent.pop_front();
+            }
+            self.recent.push_back(hash);
+        }
+        let counter = match source {
+            Source::Sample if new => &self.stats.harvested_sample,
+            Source::GetPeers if new => &self.stats.harvested_get_peers,
+            Source::Announce => &self.stats.harvested_announce,
+            Source::Lookup => &self.stats.lookups_completed,
+            Source::Sample | Source::GetPeers => return,
+        };
+        Stats::inc(counter);
+        if let Some(tx) = &self.harvest {
+            let h = Harvest {
+                info_hash: hash,
+                source,
+                peers,
+            };
+            if tx.try_send(h).is_err() {
+                Stats::inc(&self.stats.harvest_dropped);
             }
         }
     }
@@ -489,6 +565,18 @@ impl Actor {
         };
         let (v4, v6) = self.nodes_for(family, &target, want);
         let token;
+        let now_i = Instant::now();
+        let values = match &q.method {
+            Method::GetPeers { info_hash, .. } => {
+                self.peer_store
+                    .peers(info_hash, self.families[family].ipv6, now_i)
+            }
+            _ => Vec::new(),
+        };
+        let samples: Vec<u8> = match &q.method {
+            Method::SampleInfohashes { .. } => self.recent.iter().flat_map(|h| h.0).collect(),
+            _ => Vec::new(),
+        };
         let body = match &q.method {
             Method::Ping => Body::Response(Response {
                 id,
@@ -507,6 +595,7 @@ impl Actor {
                     nodes: CompactNodes::v4(&v4).unwrap_or_default(),
                     nodes6: CompactNodes::v6(&v6).unwrap_or_default(),
                     token: Some(&token),
+                    values: values.clone(),
                     ..Response::default()
                 })
             }
@@ -528,7 +617,8 @@ impl Actor {
                 nodes: CompactNodes::v4(&v4).unwrap_or_default(),
                 nodes6: CompactNodes::v6(&v6).unwrap_or_default(),
                 interval: Some(SAMPLE_INTERVAL),
-                num: Some(0),
+                num: Some(self.recent.len() as u32),
+                samples: krpc::Samples::new(&samples).unwrap_or_default(),
                 ..Response::default()
             }),
             Method::Unknown(_) => Body::Error(ErrorBody {
@@ -536,6 +626,7 @@ impl Actor {
                 message: b"Method Unknown",
             }),
         };
+        let announced = matches!(body, Body::Response(_));
         let reply = Message {
             transaction_id: msg.transaction_id,
             version: Some(VERSION),
@@ -544,6 +635,29 @@ impl Actor {
             body,
         };
         self.send(sockets, family, from, &reply);
+
+        // Passive harvest, after replying so the querier isn't kept waiting.
+        match &q.method {
+            Method::GetPeers { info_hash, .. } if self.cfg.harvest.passive => {
+                self.harvest_hash(*info_hash, Source::GetPeers, Vec::new());
+            }
+            Method::AnnouncePeer {
+                info_hash,
+                port,
+                implied_port,
+                ..
+            } if announced => {
+                let port = if *implied_port { from.port() } else { *port };
+                if port != 0 {
+                    let peer = SocketAddr::new(from.ip(), port);
+                    self.peer_store.announce(*info_hash, peer, now_i);
+                    if self.cfg.harvest.passive {
+                        self.harvest_hash(*info_hash, Source::Announce, vec![peer]);
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     fn on_response(
@@ -601,6 +715,47 @@ impl Actor {
             }
         }
 
+        // Every node we hear about is a candidate for BEP 51 sampling.
+        if let (Some(r), true) = (r, consistent) {
+            let now_i = Instant::now();
+            let nodes = if self.families[family].ipv6 {
+                r.nodes6
+            } else {
+                r.nodes
+            };
+            for n in nodes.iter() {
+                if !Actor::is_self(&self.ids, &self.local_addrs, &n) {
+                    self.sampler.offer(n, now_i);
+                }
+            }
+        }
+
+        if let Purpose::Sample = pending.purpose {
+            let now_i = Instant::now();
+            match (r, consistent) {
+                (Some(r), true) => {
+                    // A reply without any BEP 51 field means "not supported".
+                    let supported =
+                        !r.samples.is_empty() || r.interval.is_some() || r.num.is_some();
+                    for h in r.samples.iter() {
+                        self.harvest_hash(h, Source::Sample, Vec::new());
+                    }
+                    let wait = if supported {
+                        Duration::from_secs(u64::from(r.interval.unwrap_or(SAMPLE_INTERVAL)))
+                    } else {
+                        sampler::UNSUPPORTED_BACKOFF
+                    };
+                    self.sampler.sampled(from, wait, now_i);
+                }
+                _ => {
+                    Stats::inc(&self.stats.sample_failures);
+                    self.sampler
+                        .sampled(from, sampler::UNSUPPORTED_BACKOFF, now_i);
+                }
+            }
+            return;
+        }
+
         let Purpose::Lookup(lid) = pending.purpose else {
             return;
         };
@@ -655,8 +810,15 @@ impl Actor {
         }
     }
 
-    /// Starts a find_node lookup seeded from the routing table, `known`
-    /// nodes, and `seeds` (addresses whose ids we don't know yet).
+    /// Starts a get_peers lookup for a hash the pipeline asked about.
+    fn start_get_peers(&mut self, sockets: &[StdUdpSocket], hash: InfoHash) {
+        self.active_get_peers += 1;
+        self.start_lookup(sockets, 0, NodeId(hash.0), &[], &[], Some(hash));
+    }
+
+    /// Starts a lookup (find_node, or get_peers when `info_hash` is set)
+    /// seeded from the routing table, `known` nodes, and `seeds`
+    /// (addresses whose ids we don't know yet).
     fn start_lookup(
         &mut self,
         sockets: &[StdUdpSocket],
@@ -664,13 +826,16 @@ impl Actor {
         target: NodeId,
         known: &[NodeInfo],
         seeds: &[SocketAddr],
+        info_hash: Option<InfoHash>,
     ) {
-        if self.lookups.len() >= MAX_LOOKUPS {
+        let maintenance = self.lookups.len() - self.active_get_peers.min(self.lookups.len());
+        if info_hash.is_none() && maintenance >= MAX_LOOKUPS {
             return;
         }
         let lid = self.next_lookup;
         self.next_lookup = self.next_lookup.wrapping_add(1);
         let mut lookup = Lookup::new(target, family);
+        lookup.info_hash = info_hash;
         for n in self.families[family]
             .table
             .closest(&target, 16, self.now_secs())
@@ -708,18 +873,27 @@ impl Actor {
         let Some(lookup) = self.lookups.get_mut(&lid) else {
             return;
         };
-        let (family, target) = (lookup.family, lookup.target);
+        let (family, target, info_hash) = (lookup.family, lookup.target, lookup.info_hash);
         let next = lookup.next();
         for n in next {
+            let method = match info_hash {
+                Some(info_hash) => Method::GetPeers {
+                    info_hash,
+                    want: Want::default(),
+                    scrape: false,
+                    noseed: false,
+                },
+                None => Method::FindNode {
+                    target,
+                    want: Want::default(),
+                },
+            };
             let sent = self.query(
                 sockets,
                 family,
                 n.addr,
                 Some(n.id),
-                Method::FindNode {
-                    target,
-                    want: Want::default(),
-                },
+                method,
                 Purpose::Lookup(lid),
             );
             if !sent {
@@ -729,7 +903,13 @@ impl Actor {
             }
         }
         if self.lookups.get(&lid).is_some_and(Lookup::is_done) {
-            self.lookups.remove(&lid);
+            let done = self.lookups.remove(&lid).expect("checked above");
+            if let Some(hash) = done.info_hash {
+                self.active_get_peers -= 1;
+                let mut peers: Vec<SocketAddr> = done.peers.into_iter().collect();
+                peers.sort_unstable();
+                self.harvest_hash(hash, Source::Lookup, peers);
+            }
         }
     }
 
@@ -750,7 +930,7 @@ impl Actor {
                 .copied()
                 .collect();
             let target = self.ids[0];
-            self.start_lookup(sockets, f, target, &known, &routers);
+            self.start_lookup(sockets, f, target, &known, &routers, None);
         }
     }
 
@@ -772,6 +952,10 @@ impl Actor {
             Stats::inc(&self.stats.timeouts);
             if let Some(id) = p.id {
                 self.families[p.family].table.failed(&id, now);
+            }
+            if let Purpose::Sample = p.purpose {
+                Stats::inc(&self.stats.sample_failures);
+                self.sampler.sampled(p.to, SAMPLE_TIMEOUT_BACKOFF, now_i);
             }
             if let Purpose::Lookup(lid) = p.purpose {
                 if let Some(l) = self.lookups.get_mut(&lid) {
@@ -796,7 +980,7 @@ impl Actor {
                 self.families[f].table.refresh_targets(now, || rng.random())
             };
             for target in targets.into_iter().take(2) {
-                self.start_lookup(sockets, f, target, &[], &[]);
+                self.start_lookup(sockets, f, target, &[], &[], None);
             }
             // Ping questionable nodes.
             let to_ping: Vec<NodeInfo> = self.families[f]
@@ -811,6 +995,21 @@ impl Actor {
                     self.query(sockets, f, n.addr, Some(n.id), Method::Ping, Purpose::Ping);
                 }
             }
+        }
+
+        self.peer_store.expire(now_i);
+        if now_i.duration_since(self.last_prune) >= Duration::from_secs(60) {
+            self.sampler.prune(now_i);
+            self.last_prune = now_i;
+        }
+        while self.active_get_peers < MAX_GET_PEERS {
+            let Some(hash) = self.get_peers_queue.pop_front() else {
+                break;
+            };
+            self.start_get_peers(sockets, hash);
+        }
+        if self.cfg.harvest.sample {
+            self.sample_tick(sockets, now_i);
         }
 
         let thin = self.families.iter().any(|f| f.table.len() < HEALTHY_NODES);
@@ -835,6 +1034,52 @@ impl Actor {
         self.stats
             .outstanding
             .store(self.pending.len() as u64, Ordering::Relaxed);
+    }
+
+    /// One tick of BEP 51 traversal: send this tick's share of
+    /// sample_infohashes queries to nodes that are due, refilling the
+    /// frontier from the routing tables and exploring a random region of
+    /// the keyspace when it runs low.
+    fn sample_tick(&mut self, sockets: &[StdUdpSocket], now_i: Instant) {
+        if self.sampler.frontier_len() < LOW_FRONTIER {
+            for f in 0..self.families.len() {
+                let entries: Vec<NodeInfo> =
+                    self.families[f].table.entries().map(|e| e.info).collect();
+                for n in entries {
+                    self.sampler.offer(n, now_i);
+                }
+                let target = NodeId(self.rng.random());
+                self.start_lookup(sockets, f, target, &[], &[], None);
+            }
+        }
+        let qps = f64::from(self.cfg.intensity.queries_per_sec());
+        let budget = ((qps * self.cfg.tick.as_secs_f64() * SAMPLE_SHARE).ceil() as usize).max(1);
+        let cap = self.cfg.intensity.max_outstanding();
+        for _ in 0..budget {
+            // Leave a fifth of the outstanding cap for maintenance.
+            if self.pending.len() * 5 >= cap * 4 {
+                break;
+            }
+            let Some(n) = self.sampler.next(now_i) else {
+                break;
+            };
+            let Some(f) = self
+                .families
+                .iter()
+                .position(|f| f.ipv6 == n.addr.is_ipv6())
+            else {
+                continue;
+            };
+            let method = Method::SampleInfohashes {
+                target: NodeId(self.rng.random()),
+                want: Want::default(),
+            };
+            if !self.query(sockets, f, n.addr, Some(n.id), method, Purpose::Sample) {
+                self.sampler.offer(n, now_i);
+                break;
+            }
+            Stats::inc(&self.stats.samples_sent);
+        }
     }
 
     fn save(&self) -> Result<(), StateError> {

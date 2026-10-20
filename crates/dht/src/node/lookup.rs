@@ -5,6 +5,8 @@
 use std::collections::HashSet;
 use std::net::SocketAddr;
 
+use lodestar_metainfo::InfoHash;
+
 use crate::compact::{NodeId, NodeInfo};
 use crate::routing::K;
 
@@ -38,6 +40,8 @@ pub(crate) struct Lookup {
     /// Queries sent outside the candidate list (e.g. to bootstrap
     /// routers, whose ids we don't know yet).
     pub extra_in_flight: usize,
+    /// `Some` for a get_peers lookup, `None` for find_node.
+    pub info_hash: Option<InfoHash>,
 }
 
 impl Lookup {
@@ -49,6 +53,7 @@ impl Lookup {
             in_flight: 0,
             peers: HashSet::new(),
             extra_in_flight: 0,
+            info_hash: None,
         }
     }
 
