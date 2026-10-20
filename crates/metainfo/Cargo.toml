@@ -1,0 +1,22 @@
+[package]
+name = "lodestar-metainfo"
+description = "BitTorrent v1/v2/hybrid info-dictionary and .torrent model with hostile-input limits"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+chardetng = "1.0.0"
+encoding_rs = "0.8.35"
+lodestar-bencode.workspace = true
+sha1 = "0.11.0"
+sha2 = "0.11.0"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+encoding_rs = "0.8.35"
+proptest = "1.11.0"
