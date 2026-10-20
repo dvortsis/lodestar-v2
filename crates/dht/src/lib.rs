@@ -7,6 +7,7 @@
 
 pub mod compact;
 pub mod krpc;
+pub mod node;
 pub mod routing;
 pub mod secure_id;
 pub mod state;
