@@ -617,7 +617,7 @@ Each detail page follows the same pattern: three to four KPIs, one primary trend
 - **Settings:**
   - A manuscript layout (max 720 px). Section navigation sits on the left at x-large and becomes a select on narrow screens.
   - Forms have visible labels, help text next to each field, inline validation, and per-section Save with a "Saved" confirmation.
-  - Sections: General, Crawler, Network & VPN, Storage & retention (with size-projection previews), Search & ranking, **Sources** (§18.8: every discovery, importer, enrichment, network and output plugin, with priority, agents, schedule, egress, consent and purge; Auto-balance), Trackers, Integrations, Notifications, **Insights & digest** (digest schedule and channels, query logging on/off and retention, clear usage data), Security, Appearance (theme, density, motion, shortcut settings), About.
+  - Sections: General, Crawler, Network & VPN, Storage & retention (with size-projection previews), Search & ranking, **Sources** (§18.8: every discovery, importer, enrichment, network and output plugin, with priority, agents, schedule, egress, consent and purge; Auto-balance), **Companions** (§18.10: installed and detected companions, health, versions, logs, updates, Set up / Remove), Trackers, Integrations, Notifications, **Insights & digest** (digest schedule and channels, query logging on/off and retention, clear usage data), Security, Appearance (theme, density, motion, shortcut settings), About.
 - **First-run wizard** (stepped progress, one primary action per step):
   1. Setup token
   2. Admin password
@@ -625,7 +625,8 @@ Each detail page follows the same pattern: three to four KPIs, one primary trend
   4. Intensity
   5. Storage & retention
   6. Import from bitmagnet (optional)
-  7. Done
+  7. Download client (optional; recommended: qBittorrent, installed or detected by the companion manager, §18.10)
+  8. Done
 - One **"How it works"** step uses a static SVG sequence (DHT → metadata → index → search) in the spirit of `infographic-design`, with no AntV dependency and a text equivalent.
 
 ### 10.11 Component inventory (one canonical primitive per role)
@@ -894,12 +895,14 @@ With the plum swap, all six colours are distinguishable. Colour is still never t
 - **Unraid:** a Community Applications template (`packaging/unraid/lodestar.xml`) with icon, WebUI `http://[IP]:[PORT:8090]`, `/mnt/cache/appdata/lodestar` → `/data`, and port mappings. Appdata belongs on the cache SSD/NVMe pool, not the array, because index I/O is random. The template uses the **pool path (`/mnt/cache/...` or the named pool), not `/mnt/user/...`**: `/mnt/user` goes through Unraid's FUSE `shfs` layer, which is slow for mmap-heavy workloads and risky for SQLite WAL. The app detects a FUSE/network filesystem at startup and warns. There's also an optional gluetun/VPN variant of the template. Defaults are `PUID=99`/`PGID=100` (nobody:users). Optional **split paths**: `/data/hot` (indexes + hot columns, must be on SSD/NVMe) and `/data/cold` (an attached `cold.db` holding file-tree blobs and the optional raw archive). Caveat: cold data is written continuously as torrents arrive, so putting it on the parity array keeps disks spinning and slows writes. The recommended layout is both on the cache pool, with only backups going to the array.
 - **Windows:** an `x86_64-pc-windows-msvc` build. The **MSI** (cargo-wix) installs to Program Files, puts data in `%ProgramData%\Lodestar`, and registers a **Windows Service** (windows-service crate). It also adds firewall rules for the DHT port and a Start-menu shortcut that opens the UI. A portable zip with an optional tray icon covers non-service use, and a winget manifest is planned. **Code-signing** is needed to avoid SmartScreen and Defender friction. The installer offers (opt-in, explained) a **Defender exclusion for the data directory**: real-time scanning of index segment and WAL writes can cut throughput several-fold. **Ephemeral-port exhaustion:** hundreds of short-lived outbound TCP metadata connections pile up in TIME_WAIT. The defaults (dynamic range 49152–65535, 120 s TIME_WAIT) cap sustained churn at roughly 130 new connections/s. Mitigations: a connection-rate limiter sized to the OS range, `SO_LINGER(0)` aborts for failed handshakes, and connection reuse where peers allow it. The dashboard shows a warning, with the `netsh int ipv4 set dynamicport` remedy documented. The service runs at **below-normal process priority** so desktop use stays smooth. Windows mmap semantics prevent deleting files that are still mapped, so segment garbage collection must retry deletes. CI includes a Windows soak test for merge/GC and hot-column remapping.
 - Also: Linux/macOS tarballs and a systemd unit. One `config.toml` with environment-variable overrides (`LODESTAR_*`); most settings are editable in the UI and persisted in the DB.
-- **CLI subcommands:** `serve` (default), `reindex`, `backup` (SQLite online backup; indexes are rebuildable), `import <dir|.torrent>`, `vacuum`, `healthcheck`, `stats`.
+- **CLI subcommands:** `serve` (default), `reindex`, `backup` (SQLite online backup; indexes are rebuildable), `import <dir|.torrent>`, `vacuum`, `healthcheck`, `stats`, `companion <list|install|remove|compose>` (§18.10; `compose` prints the Docker service for a companion).
+- **Companions** (§18.10): managed child processes on Windows and bare-metal Linux; on Docker/Unraid, generated compose services or pre-filled CA templates, plus auto-detection and auto-configuration. Managed-container mode via a restricted Docker socket proxy is advanced and off by default.
 
 ## 12. Security & operations
 
 - First-run setup requires a **one-time setup token printed to the logs/console** (the Jupyter/Portainer pattern), so nobody else on the LAN can claim a fresh headless instance. It then creates an admin password (argon2). Session cookies. API keys for Torznab and integrations. Optional trusted reverse-proxy header auth. CSP and security headers. Rate limiting on the API.
 - **Upgrades:** an automatic SQLite snapshot before any schema migration, with `lodestar rollback`. Docker tags: `x.y.z`, `x.y`, `latest`, `nightly`. Optional in-app "update available" check (no telemetry, ever).
+- **Companion supply chain** (§18.10): a signed catalogue pinned per release, with SHA-256 and upstream signatures verified before anything runs. Every install needs confirmation; companions run with the least privilege, bound to localhost or the internal network; credentials are random and encrypted at rest.
 - **Content safety:** the CSAM hash/keyword blocklist is **on by default** and applied before storage. Matches are dropped, never stored or indexed.
 - Observability: `tracing` structured logs, Prometheus metrics for every pipeline stage, and the built-in dashboard.
 - Graceful shutdown flushes batches, commits the index and persists the DHT state. Crash-safe: SQLite is the source of truth, and the index catches up on startup from a `last_indexed_id` watermark.
@@ -921,13 +924,15 @@ crates/
   api/              axum REST/SSE/Torznab/OpenAPI, auth
   integrations/     download clients, notifications
   sources/          plugin API (manifest, SourceCtx, events) + crawl scheduler (budgets, DRR, auto-balance)
-  sources-*/        one crate per plugin family: importers, torznab, feeds (nyaa/nostr/lemmy), archive (IA/academic),
-                    enrich (srrdb/predb/wikidata/tmdb/anidb/…), outputs (torznab/stremio/export), i2p, ed2k, ipfs
+  sources-*/        one crate per plugin family: importers (incl. defunct-site dumps), torznab (Prowlarr/Jackett, usenet),
+                    feeds (nyaa/animetosho/nostr/lemmy/json-apis), irc (predb, private announces), clients (your download clients),
+                    archive (IA/academic), enrich (srrdb/dat/predb/wikidata/tmdb/anidb/…), outputs (torznab/stremio/export), i2p, ed2k, ipfs
+  companions/       companion manager: signed catalogue, verify/install/supervise (native), compose/CA templates, detection, API adapters
   lodestar/         binary: config, CLI, Windows service, embeds web/build
 web/                SvelteKit 2 + Svelte 5 SPA, Tailwind v4 + daisyUI 5, Bits UI, TanStack Virtual, uPlot (lazy), Phosphor (compiled);
                     src/lib/ui (shared primitives) · src/lib/features/* · src/lib/charts (SVG primitives); vitest + Playwright + axe + size-limit
 docs/               … + metrics.md (metric contracts), ui-glossary.md, design-tokens.md
-packaging/          docker/, unraid/, windows/ (wix), systemd/  (icons generated from brand/); i2pd sidecar compose/template (v1.1)
+packaging/          docker/, unraid/, windows/ (wix), systemd/  (icons generated from brand/); companion compose snippets and CA template links (i2pd, qBittorrent, Prowlarr, SABnzbd, aMule, Kubo, gluetun)
 brand/source/       Lodestar_Final_Assets originals + SHA256SUMS.txt; processed by web/scripts/assets.ts
 bench/              synthetic dataset generator (10M torrents), criterion benches, size reports
 docs/               architecture.md (this plan), query-language.md, operations.md, relevance.md
@@ -1066,6 +1071,21 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - The shared id sequence is an explicit `id_seq` allocator, and promoted items keep their ids.
   - Budgets are per torrent at a given corpus size, with importers previewed.
   - Scheduler v1's M1 scope is pinned down: fetch-pool DRR, hard caps and user-interest priority.
+- **More sources, live connections and the companion manager (draft 9 → 10):**
+  - **Catalogue grew to 22 ranked sources, each with a Mode (live / poll / import):**
+    - Usenet NZB indexers (a new `usenet` tier);
+    - Archive Team copies of defunct torrent sites;
+    - adult trackers / Sukebei (hidden by default);
+    - private-tracker IRC announces;
+    - AnimeTosho;
+    - direct JSON APIs (YTS, EZTV, apibay);
+    - your own download clients.
+  - **Enrichment** gained No-Intro/Redump/TOSEC DATs and a live PreDB IRC feed.
+  - **Public indexers** are reached through Prowlarr rather than scraped directly.
+  - **New rejections:** DDL warez blogs, Japanese P2P networks, Chinese closed ecosystems, Matrix rooms, WebTorrent WSS trackers, peer co-membership inference, and source directories (useful by hand only).
+  - **Live connections:** eD2k shared-file browsing (files kept, sharers discarded) and IPNI gossipsub.
+  - **New universal rule, "No profiles of people":** peer addresses are never stored with what they share.
+  - **Companion manager (§18.10):** fully managed installs on native platforms from a signed, pinned catalogue; on Docker/Unraid, guided compose/CA templates with auto-detection and auto-configuration, because a self-installing container would need the Docker socket, which is effectively root. Managed-container mode is advanced and off by default.
 
 **Still open (decide during M0–M2 spikes, with measurements rather than guesses):** reusing librqbit crates vs our own DHT; whether the trigram field earns its size at 10M+ names; the smart-file-index thresholds; the actual cold-start harvest and metadata success rates.
 
@@ -1169,40 +1189,52 @@ Lodestar's reach comes from **many sources, each a plugin you can switch on or o
 ### 18.2 Source catalogue, ranked
 **Score** = 0.4 × rarity/breadth of content + 0.3 × user base/volume + 0.3 × ease of incorporating, each rated 1–5. **Risk** doesn't change the score; it decides the default state and the consent class (§18.7).
 
-| Rank | Source | Kind | Rarity/breadth | Volume | Ease | **Score** | Risk |
-|---:|---|---|:-:|:-:|:-:|:-:|:-:|
-| — | **Mainline DHT** (BEP 5/51/passive, §5) | discovery | 3 | 5 | 3 | core | Med |
-| 1 | **Prowlarr/Jackett** (your own indexers via Torznab; private results local-only) | discovery | 5 | 4 | 5 | **4.7** | Med |
-| 2 | **Rutracker catalogue dumps** (published XML exports: titles, hashes, categories, descriptions) | importer | 5 | 4 | 4 | **4.4** | Med |
-| 3 | **Anna's Archive / LibGen** (torrent lists + metadata dumps mapping files → titles/ISBNs) | importer + discovery | 5 | 5 | 3 | **4.4** | High |
-| 4 | **MagnetDB** research dataset (DHT 2018–2024, 28.6M+ torrents, 950M+ files, IMDb-matched; access terms TBC) | importer | 4 | 5 | 4 | **4.3** | Med |
-| 5 | **Internet Archive** (item torrents + metadata API) | discovery | 4 | 4 | 4 | **4.0** | Low |
-| 6 | **Nyaa RSS** (info hash, category, trusted/remake flags) | discovery | 3 | 4 | 5 | **3.9** | Med |
-| 7 | **RARBG backup + magnetico/bitmagnet community exports** | importer | 3 | 4 | 5 | **3.9** | Med |
-| 8 | **eD2k/Kad** (eMule/aMule network) | network | 5 | 4 | 2 | **3.8** | Med |
-| 9 | **DMM hashlists** (Debrid Media Manager, crowd-curated, IMDb-linked) | importer | 2 | 4 | 5 | **3.5** | Med |
-| 10 | **BEP 48 full scrape** (HTTP trackers that allow it) | discovery | 2 | 4 | 4 | **3.2** | Low |
-| 11 | **I2P BitTorrent DHT** (i2pd sidecar) | network | 5 | 1 | 2 | **2.9** | High |
-| 12 | **Academic Torrents + official distro/project lists** | discovery | 2 | 2 | 5 | **2.9** | Low |
-| 13 | **IPFS** (Amino DHT harvest + UnixFS directory listings) | network | 3 | 3 | 2 | **2.7** | High |
-| 14 | **Nostr NIP-35 / DTAN relays** | discovery | 3 | 2 | 3 | **2.7** | Med |
-| 15 | **Lemmy/fediverse torrent communities** | discovery | 2 | 1 | 4 | **2.3** | Low |
+| Rank | Source | Kind | Mode | Rarity/breadth | Volume | Ease | **Score** | Risk |
+|---:|---|---|---|:-:|:-:|:-:|:-:|:-:|
+| — | **Mainline DHT** (BEP 5/51/passive, §5) | discovery | live | 3 | 5 | 3 | core | Med |
+| 1 | **Prowlarr/Jackett** (your indexers via Torznab/Newznab; private results local-only; also covers the public indexers, see below) | discovery | poll | 5 | 4 | 5 | **4.7** | Med |
+| 2 | **Rutracker catalogue dumps** (published XML exports: titles, hashes, categories, descriptions) | importer | import | 5 | 4 | 4 | **4.4** | Med |
+| 3 | **Anna's Archive / LibGen** (torrent lists + metadata dumps mapping files → titles/ISBNs) | importer + discovery | import/poll | 5 | 5 | 3 | **4.4** | High |
+| 4 | **Usenet NZB indexers** (your accounts, via Prowlarr's Newznab support; `usenet` tier, local-only) | network | poll | 5 | 4 | 4 | **4.4** | Med |
+| 5 | **MagnetDB** research dataset (DHT 2018–2024, 28.6M+ torrents, 950M+ files, IMDb-matched; access terms TBC) | importer | import | 4 | 5 | 4 | **4.3** | Med |
+| 6 | **Internet Archive** (item torrents + metadata API) | discovery | poll | 4 | 4 | 4 | **4.0** | Low |
+| 7 | **Archive Team / Internet Archive copies of defunct torrent sites** (KickassTorrents hourly dumps, Pirate Bay archives, Demonoid, isoHunt-era datasets) | importer | import | 4 | 4 | 4 | **4.0** | Med |
+| 8 | **Nyaa RSS** (info hash, category, trusted/remake flags) | discovery | poll | 3 | 4 | 5 | **3.9** | Med |
+| 9 | **RARBG backup + magnetico/bitmagnet community exports** | importer | import | 3 | 4 | 5 | **3.9** | Med |
+| 10 | **Adult trackers / Sukebei** (via Prowlarr or the Sukebei feed; the **Adult** media category, hidden unless "Show adult content" is on, §20.9) | discovery | poll | 3 | 5 | 4 | **3.9** | Med |
+| 11 | **eD2k/Kad** (eMule/aMule network; keyword publications + optional shared-file browsing) | network | live | 5 | 4 | 2 | **3.8** | Med |
+| 12 | **Private-tracker IRC announce channels** (autobrr-style, your accounts; local-only) | discovery | live | 5 | 3 | 3 | **3.8** | Med |
+| 13 | **AnimeTosho** (Nyaa mirror with file lists, attachments and media info; Torznab-style feed) | discovery + enrichment | poll | 3 | 3 | 5 | **3.6** | Med |
+| 14 | **DMM hashlists** (Debrid Media Manager, crowd-curated, IMDb-linked) | importer | import | 2 | 4 | 5 | **3.5** | Med |
+| 15 | **Direct JSON APIs** (YTS, EZTV, apibay): thin optional plugins for continuous polling; Prowlarr already covers them | discovery | poll | 2 | 4 | 5 | **3.5** | Med |
+| 16 | **BEP 48 full scrape** (HTTP trackers that allow it) | discovery | poll | 2 | 4 | 4 | **3.2** | Low |
+| 17 | **Your download clients** (qBittorrent / Transmission / Deluge APIs; Sonarr/Radarr webhooks): complete `.torrent`s with real trackers and creation dates | discovery + enrichment | live | 2 | 3 | 5 | **3.2** | Low |
+| 18 | **I2P BitTorrent DHT** (i2pd companion) | network | live | 5 | 1 | 2 | **2.9** | High |
+| 19 | **Academic Torrents + official distro/project lists** | discovery | poll | 2 | 2 | 5 | **2.9** | Low |
+| 20 | **IPFS** (Amino DHT harvest + IPNI gossipsub + UnixFS directory listings) | network | live | 3 | 3 | 2 | **2.7** | High |
+| 21 | **Nostr NIP-35 / DTAN relays** (WebSocket subscriptions) | discovery | live | 3 | 2 | 3 | **2.7** | Med |
+| 22 | **Lemmy/fediverse torrent communities** (ActivityPub follow, pushed to us) | discovery | live | 2 | 1 | 4 | **2.3** | Low |
+
+**Mode:** *live* sources hold a connection and receive new items as they appear; *poll* sources are fetched on a schedule within their politeness caps; *import* sources run as one-off or periodic jobs.
+
+**Public indexers come through Prowlarr.** Prowlarr ships definitions for hundreds of public indexers (The Pirate Bay via its JSON API, 1337x, TorrentGalaxy, YTS, EZTV, Knaben, Rutor, LimeTorrents, regional trackers and more), so the Prowlarr plugin reaches them without separate plugins. Direct plugins (rank 15) exist only for sources with stable JSON APIs worth polling continuously. Scraping HTML pages directly is brittle and against those sites' terms, so it isn't done.
 
 **Accelerators** (unranked, because they raise the yield of every key-bearing source): **tracker announce (BEP 15) for peer finding** when the DHT finds none (off by default and consent-gated, because an announce lists our IP in the swarm; see §6), and **PEX (BEP 11)** during metadata fetches.
 
 **Enrichment plugins, by value:**
 1. **srrDB** (exact scene file names, sizes and CRCs, including the contents of RAR sets)
-2. **Torrent cache** (fetch the `.torrent` by hash: real `creation date`, `created by`, `comment`, `announce-list`, web seeds)
-3. **Wikidata** (cross-linked IDs, multilingual alternative titles)
-4. **TMDB / TVDB**
-5. **AniDB / AniList**
-6. **MusicBrainz**
-7. **PreDB**
-8. **OpenLibrary**
-9. **IGDB**
-10. **Discogs**
-11. **Steam app list**
-12. **Debrid cache status** (your account: an "instantly available" badge)
+2. **No-Intro / Redump / TOSEC DAT files** (exact names, sizes and CRCs for known games, ROMs and old software; torrent file lists match them exactly, so ROM sets and abandonware are identified with confidence. The DATs are metadata only.)
+3. **Torrent cache** (fetch the `.torrent` by hash: real `creation date`, `created by`, `comment`, `announce-list`, web seeds)
+4. **Wikidata** (cross-linked IDs, multilingual alternative titles)
+5. **TMDB / TVDB**
+6. **AniDB / AniList** (plus AnimeTosho's file and media info, rank 13)
+7. **MusicBrainz**
+8. **PreDB** (HTTP dump/API, plus an optional **live IRC feed** of releases as they're packed)
+9. **OpenLibrary**
+10. **IGDB**
+11. **Discogs**
+12. **Steam app list**
+13. **Debrid cache status** (your account: an "instantly available" badge)
 
 **Outputs:** Torznab server; **Stremio addon** (browse your index from Stremio on TVs and phones); bitmagnet-format export.
 
@@ -1211,20 +1243,26 @@ Lodestar's reach comes from **many sources, each a plugin you can switch on or o
 **Rejected** (reasons in the §16 log):
 - BiglyBT/Azureus DHT, Tribler/Rats gossip, BEP 14 local discovery, BEP 44/46 sniffing (at most an experiment);
 - Soulseek and DC++ (community rules ban crawlers), Telegram (account required, ToS, mostly direct files);
-- Tor onion indexes and BitTorrent over Tor (IP leaks, harms the Tor network, high CSAM prevalence), Freenet/Hyphanet.
+- Tor onion indexes and BitTorrent over Tor (IP leaks, harms the Tor network, high CSAM prevalence), Freenet/Hyphanet;
+- direct-download warez blogs and file-host link sites (not P2P, malware-ridden, dead links, nothing to hash);
+- Japanese P2P networks: Winny, Share, Perfect Dark (closed or encrypted protocols, prosecutions in Japan);
+- Chinese closed ecosystems: Xunlei/Thunder cloud, Baidu Pan shares (walled gardens, account required);
+- Matrix public rooms (room rules against bots, CSAM risk, low volume); WebTorrent WSS trackers (they don't broadcast other swarms' hashes, so they aren't a source);
+- inferring what a BitTorrent peer shares by seeing its IP:port across swarms (profiling people; see "No profiles of people", §18.7);
+- source directories such as FMHY and the r/Piracy wiki are lists of sources, not data. They're useful for finding candidates by hand, not for crawling.
 
 ### 18.3 Roadmap (score order, adjusted for dependencies)
 | Release | Sources added | Why here |
 |---|---|---|
 | **M1 foundation** | Plugin API, scheduler v1 (see §18.4 for its scope), provenance; **Mainline DHT** as plugin #1; **PEX**; tracker-announce peer finding (consent-gated, off by default) | Everything else depends on the plugin API and scheduler. The accelerators raise yield for every later source. |
-| **v0.5** (M2) | **Importer framework**: bitmagnet DB (already planned), **Rutracker dumps**, **MagnetDB** (if access is granted), **RARBG/magnetico/bitmagnet exports**, **DMM hashlists** | The largest breadth for the least effort, and it solves the cold start. All use one streaming importer framework plus background DHT verification. |
-| **v0.6** (M4 + early M7) | **Prowlarr/Jackett** (local-only private results), **Nyaa RSS**, **BEP 48 full scrape**, **Internet Archive**, **Academic/official lists**; enrichment: **torrent cache** | The top-scoring live sources, once claims/provenance and the unverified tier exist. The full scrape ships with the M4 tracker scraper. |
-| **v0.7** (M7) | Enrichment: **srrDB, PreDB, Wikidata, TMDB/TVDB, AniDB/AniList, MusicBrainz, OpenLibrary, IGDB, Discogs, Steam, debrid status**. Outputs: **Torznab server, Stremio addon, bitmagnet export** | Turns breadth into findability: ambiguity resolution, multilingual titles, IDs. |
-| **v0.8** | **Anna's Archive / LibGen** (restricted consent), **Nostr NIP-35**, **Lemmy** | Anna's Archive scores high but needs the consent framework and a restricted tier. Nostr and Lemmy are lower volume. |
+| **v0.5** (M2–M3) | **Importer framework**: bitmagnet DB (already planned), **Rutracker dumps**, **MagnetDB** (if access is granted), **Archive Team copies of defunct sites**, **RARBG/magnetico/bitmagnet exports**, **DMM hashlists**. Enrichment (M3): **No-Intro/Redump/TOSEC DATs** | The largest breadth for the least effort, and it solves the cold start. All use one streaming importer framework plus background DHT verification. DAT matching is cheap and fits the M3 enrichment work. |
+| **v0.6** (M4 + early M7) | **Companion manager v1** (§18.10: qBittorrent, Prowlarr + FlareSolverr, gluetun). **Prowlarr/Jackett** (local-only private results; public indexers included), **your download clients**, **Nyaa RSS**, **AnimeTosho**, **BEP 48 full scrape**, **Internet Archive**, **Academic/official lists**; enrichment: **torrent cache** | The top-scoring live sources, once claims/provenance and the unverified tier exist. Prowlarr and a download client need companions, so the manager lands here. The full scrape ships with the M4 tracker scraper. |
+| **v0.7** (M7) | **`usenet` tier** (+ SABnzbd/NZBGet companion), **private-tracker IRC announces**, **direct JSON API plugins** (optional). Enrichment: **srrDB, PreDB (+ live IRC feed), Wikidata, TMDB/TVDB, AniDB/AniList, MusicBrainz, OpenLibrary, IGDB, Discogs, Steam, debrid status**. Outputs: **Torznab server, Stremio addon, bitmagnet export** | Turns breadth into findability: ambiguity resolution, multilingual titles, IDs. Usenet rides on the Prowlarr plumbing from v0.6. |
+| **v0.8** | **Anna's Archive / LibGen** (restricted consent), **Nostr NIP-35**, **Lemmy** (ActivityPub push). Adult sources need no special tier (§20.9) and can arrive with Prowlarr in v0.6 | Anna's Archive scores high but needs the consent framework and a restricted tier. Nostr and Lemmy are lower volume. |
 | **1.0** | Hardening across all plugins | Contract tests, politeness audits, purge correctness |
-| **v1.1** | **Network-tier infrastructure + I2P** (i2pd sidecar) | The first overlay network, at your request, for rare content |
-| **v1.2** | **eD2k/Kad** | The deepest well of rare content; a new protocol stack |
-| **v1.3** | **IPFS** | Directory listings are worth having, but each harvested CID yields little |
+| **v1.1** | **Network-tier infrastructure + I2P** (i2pd companion) | The first overlay network, at your request, for rare content |
+| **v1.2** | **eD2k/Kad** (+ shared-file browsing, aMule companion) | The deepest well of rare content; a new protocol stack |
+| **v1.3** | **IPFS** (+ IPNI gossipsub, optional Kubo companion) | Directory listings are worth having, but each harvested CID yields little |
 
 ### 18.4 Crawl scheduler: priority, agents and budgets
 **Yes, sources get priorities and agent counts, expressed as shares of one global budget rather than raw thread counts.** All sources compete for the same bottlenecks, and more raw concurrency can *lower* total yield: NAT/conntrack saturation, tracker bans, writer contention.
@@ -1289,15 +1327,16 @@ Lodestar's reach comes from **many sources, each a plugin you can switch on or o
 - **Rollups:** the Insights rollups gain `source` and `network` dimensions (§7, §10.9).
 
 ### 18.6 Network tiers
-Every item has a `network` field: `bt` (clearnet BitTorrent), `bt-i2p`, `ed2k`, `ipfs`.
+Every item has a `network` field: `bt` (clearnet BitTorrent), `bt-i2p`, `ed2k`, `ipfs`, `usenet`. **Adult** isn't a network; it's a **media category** (§20.9), hidden unless "Show adult content" is on.
 - **Search** gets a Network facet (default: `bt` only) and `network:`, `source:`, `verified:` and `official:` query fields.
 - **Each tier** has its own link format and client rules:
   - I2P magnets go only to I2P-capable clients (BiglyBT, I2PSnark, qBittorrent's I2P mode);
   - `ed2k://` links go to aMule/eMule;
-  - `ipfs://` CIDs come with an optional gateway link and a warning.
+  - `ipfs://` CIDs come with an optional gateway link and a warning;
+  - `usenet` results are NZB links sent to SABnzbd/NZBGet.
 - **One-click purge per tier.**
 - **I2P (v1.1):**
-  - An **i2pd sidecar** (a separate container on Docker/Unraid, an optional component on Windows), reached only via SAMv3 on an internal network or localhost.
+  - An **i2pd companion** (§18.10: a separate container on Docker/Unraid, a managed process on Windows/Linux), reached only via SAMv3 on an internal network or localhost.
   - Hidden mode or near-zero transit bandwidth, so we don't act as a relay.
   - The I2PSnark-style DHT is crawled over I2P datagrams, and metadata is fetched over SAM streaming.
   - Adult content is excluded by default on this tier.
@@ -1305,11 +1344,12 @@ Every item has a `network` field: `bt` (clearnet BitTorrent), `bt-i2p`, `ed2k`, 
   - A Kad DHT node harvests **keyword→file publications** (so names come for free) and source records.
   - Results are ed2k file entries (MD4 hash, name, size, source count).
   - **Cross-network linking:** files whose `ed2k` hash appears in a torrent's per-file hashes (§6) are linked to that torrent.
+  - **Shared-file browsing (opt-in):** eD2k clients that allow it answer a "view shared files" request with their whole shared list, often a source of rare files. **Only the files are kept; who shared them is discarded** (§18.7). Asking reveals our presence to that peer, which is covered by the Overlay consent.
 - **IPFS (v1.3):**
   - Passive Amino DHT server nodes record `ADD_PROVIDER`/`GET_PROVIDERS`.
   - The root block is fetched over Bitswap (client-only, never re-provided or cached) and classified as directory, file root or chunk; chunks are dropped.
   - Directories are walked with depth/size caps into our file-tree format, so composition, `file:` queries and ambiguity resolution all work.
-  - IPNI ingestion is optional.
+  - IPNI ingestion is optional: advertisement chains over HTTP, plus **live** announcements on the `/indexer/ingest/mainnet` gossipsub topic.
   - **A phishing/malware classifier is mandatory** (HTML with login forms, wallet-drainer patterns), and IPFS content is **never rendered in-app**.
 
 ### 18.7 Safety, legal and privacy rules
@@ -1323,11 +1363,15 @@ Every item has a `network` field: `bt` (clearnet BitTorrent), `bt-i2p`, `ed2k`, 
 |---|---|---|
 | None | Mainline DHT, Internet Archive, Academic/official lists, BEP 48, Lemmy | a toggle |
 | External | public web services (Nyaa, Nostr, torrent cache, Wikidata, …) | a toggle + the endpoint list shown |
-| Account | Prowlarr/Jackett, debrid, keyed APIs (TMDB, IGDB, Discogs) | credentials (encrypted at rest, never exported) |
+| Account | Prowlarr/Jackett (incl. Usenet), private-tracker IRC announces, your download clients, debrid, keyed APIs (TMDB, IGDB, Discogs) | credentials (encrypted at rest, never exported); results local-only |
 | Restricted | Anna's Archive/LibGen and other High-risk content sources; tracker-announce peer finding (it lists our IP in swarms) | a consent screen explaining the legal exposure; VPN strongly advised |
 | Overlay | I2P, eD2k/Kad, IPFS | a consent screen + VPN recommendation; isolated tier; one-click purge |
 
-- **Private-source isolation:** items found only through private-tracker indexers (Prowlarr) are flagged `private_source`. They're **never** served over Torznab or Stremio, included in exports, or sent into public peer finding (DHT `get_peers`, public tracker announces or PEX), because tracker rules typically forbid redistribution and a public lookup would leak the hash (BEP 27). Their metadata comes only from the private source itself.
+- **No profiles of people.** Peer IPs and IDs are used only briefly, to fetch metadata or count a swarm, and are **never stored alongside what they share**.
+  - The index holds facts about content, never "this IP has these files". Swarm statistics stay aggregate counts.
+  - That keeps Lodestar from becoming a surveillance tool, matters legally (IP addresses are personal data under GDPR and similar laws), and limits the damage if an instance's data leaks.
+  - It applies to every network, including eD2k shared-file browsing.
+- **Private-source isolation:** items found only through private-tracker indexers or Usenet accounts (Prowlarr), private-tracker IRC announces, or your own download clients are flagged `private_source`. They're **never** served over Torznab or Stremio, included in exports, or sent into public peer finding (DHT `get_peers`, public tracker announces or PEX), because tracker rules typically forbid redistribution and a public lookup would leak the hash (BEP 27). Their metadata comes only from the private source itself.
 - **Politeness:** manifest caps, robots/ToS checks recorded in each plugin's docs, exponential back-off on errors, and a visible "blocked by source" state rather than retry storms.
 
 ### 18.8 UI and Insights
@@ -1357,4 +1401,39 @@ Every item has a `network` field: `bt` (clearnet BitTorrent), `bt-i2p`, `ed2k`, 
   - `private_source` items never appear in Torznab, Stremio or export output, and their hashes never reach a DHT lookup, a public tracker or PEX;
   - unverified items are hidden by default;
   - consent gating can't be bypassed through the API.
+- **Companion tests (§18.10):** an install whose checksum or signature doesn't match is refused; companions bind to localhost or the internal network only; companion traffic follows the configured egress and kill-switch; a missing companion puts its dependent plugins in a "Needs setup" state rather than failing; managed-container mode can only create or remove containers on the catalogue list.
+- **No-profiles test:** no table or log line stores a peer address together with content keys (schema check plus a log scan in the e2e suite); eD2k shared-file browsing stores files without the sharer.
 - **Overhead benchmark:** with all v0.6 sources enabled, the §3 search and ingest budgets still hold.
+
+### 18.10 Companion manager
+Lodestar is the **central directory for every source**. When a source or a download needs another program (an overlay router, an indexer manager, a download client), Lodestar **installs or detects it, configures it, and supervises it**. How it installs depends on the platform.
+
+| Companion | Needed for | Release |
+|---|---|---|
+| **qBittorrent (nox)** | Downloading BitTorrent results; newer versions also have experimental I2P support, so one client may cover both | v0.6 |
+| **Prowlarr** (+ optional FlareSolverr) | The Prowlarr source plugin (public and private indexers, Usenet) | v0.6 |
+| **gluetun** (containers) / embedded WireGuard (native, §5) | Routing companion traffic through your VPN | v0.6 |
+| **SABnzbd or NZBGet** | Downloading `usenet` results | v0.7 |
+| **i2pd** | The I2P tier: crawling and I2P downloads | v1.1 |
+| **aMule (daemon)** | Downloading eD2k results. The Kad crawler is built into Lodestar; aMule is only for downloads | v1.2 |
+| **Kubo** (optional) | Fetching IPFS content locally instead of through a gateway | v1.3 |
+
+- **Native (Windows, bare-metal Linux): fully managed.**
+  - Lodestar downloads the companion, verifies it, installs it (per-user or as a service), generates random credentials, configures it through its API, and **supervises** it as a child process: start/stop/restart, logs, health checks, resource limits (Windows Job Objects; cgroups where available).
+  - **Signed companion catalogue:** published with each Lodestar release. It pins versions, download URLs per platform/architecture, SHA-256 hashes and upstream signatures where they exist, plus licence and default-config templates. **Nothing runs unless its checksum matches.**
+  - **Every install needs your confirmation.** Updates are pinned and you're notified; nothing auto-updates without verification. Uninstall is clean.
+  - **Licensing:** companions are downloaded on demand, never bundled into Lodestar's binary or installer, so GPL programs (qBittorrent, aMule) stay separate.
+- **Docker / Unraid: guided, not self-installed by default.**
+  - A container that creates other containers needs the Docker socket, which is **effectively root on the host**, and Unraid has no supported API for installing apps from inside a container.
+  - **Docker:** one click generates the companion's `docker-compose` service (network, ports, `network_mode: service:gluetun` for VPN routing) for you to apply. **Unraid:** one click opens the companion's Community Applications template with every field pre-filled.
+  - **Advanced, off by default:** a "managed containers" mode through a **restricted Docker socket proxy** that can only create and remove containers on the catalogue list, with a clear warning.
+- **Auto-detection and auto-configuration on every platform.** However a companion was installed, Lodestar finds it (known ports, container names, or a URL you enter), then configures it through its API (credentials, categories, save paths, interface binding) and keeps checking its health.
+- **Rules:**
+  - **Companions run with the least privilege:** a separate low-privilege process or container, bound to localhost or the internal network. Only the P2P ports they need are exposed.
+  - **Companion traffic follows your egress settings:** interface binding on native installs, `service:gluetun` in containers. The kill-switch covers companions.
+  - **Lodestar stays a metadata index.** Downloads happen in the client you choose, at your request.
+  - **A missing companion never breaks Lodestar.** Dependent plugins show "Needs i2pd · Set up" instead of failing.
+- **UI:**
+  - **Settings → Companions:** installed and detected companions with health, version, logs, update notices, and Set up / Remove.
+  - The first-run wizard gains an optional **"Download client"** step (recommended: qBittorrent).
+  - Each source on Settings → Sources shows its dependencies and their state.
