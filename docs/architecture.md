@@ -1128,6 +1128,14 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Thin tables keep bootstrapping.** Bucket refresh only runs after 15 minutes. So while a table holds fewer than 32 nodes, the self-lookup is repeated every 30 ticks (30 s by default) until the table fills.
 - **No live DHT from the development sandbox.** The cloud sandbox has no DNS and no outbound UDP, so the node is verified against the §17 in-process network. That network checks Kademlia convergence: every node knows its 8 true closest nodes, except where a full bucket keeps older good nodes. The M1 exit criteria that need the real network (sustained ingest at "Balanced" without NAT saturation, measured harvest and metadata rates) have to be measured on a real deployment.
 
+**M1 implementation decisions (peer wire, `lodestar-peer-wire`):**
+- **One crate call is one peer.** `fetch(addr, info_hash, opts)` tries one peer under one deadline (8 s total, 4 s to connect) and returns the verified info dict or a typed error. Each error maps to a §7 loss reason: unreachable, timed out, refused, encryption failed, invalid, oversize. Choosing peers, retries and socket budgets belong to the shared metadata-fetch pool (§18.4), which calls `fetch` once per socket token.
+- **MSE by default, with plaintext fallback.** The default mode (`Prefer`) offers RC4 and plaintext inside MSE. If the peer drops our DH key, we retry plain BitTorrent while the deadline allows. `Require` (RC4 only) and `Disable` exist for egress policies and tests. MSE's 768-bit DH and RC4 only obfuscate the protocol; they aren't treated as security.
+- **Verification accepts either key type.** The info dict must hash to the key by SHA-1 (v1 or hybrid) or by truncated SHA-256 (a pure v2 swarm key, BEP 52).
+- **Hostile-peer limits:** metadata over 16 MiB is refused before allocating; an extended message is at most one 16 KiB piece plus 1 KiB of header; other messages are skipped up to 4 MiB; pieces must have been requested and have the exact length; at most 64 requests in flight and 200 PEX peers kept.
+- **Nothing about the peer is stored with the torrent.** The peer's client name (from its BEP 10 handshake) and its PEX list come back with the fetch, for aggregate client stats and peer finding only (§18.7).
+- **Interop:** besides the in-crate fake peer, the fetcher was checked by hand (harness not in the repo) against libtorrent 2.1 seeding v1, hybrid and v2 torrents with encryption forced, enabled and disabled. Every combination succeeded except the two that can't (a seeder that forces encryption with ours disabled, and a seeder with encryption disabled with ours required).
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.
