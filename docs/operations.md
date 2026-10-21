@@ -34,6 +34,10 @@ Scrape `/metrics` at the start and then every hour (`curl -s http://<host>:8090/
 | Writer health | `lodestar_writer_errors_total`, `lodestar_writer_invalid_total` | Errors stay 0 |
 | Have-filter | `lodestar_have_entries`, `lodestar_have_bytes` | Grows with the index. Compare `lodestar_writer_filter_false_positives_total`. |
 | Source liveness | `lodestar_source_up` | 1 throughout |
+| Yield by strategy | `lodestar_fetch_strategy_total{strategy,stage}` | Compare `fetched` ÷ `harvested` and `fetched` ÷ `lookup` across `sample`, `get_peers` and `announce` |
+| Yield by evidence | `lodestar_fetch_by_rank_total{rank,outcome}` | The fetched share rises with rank. If it doesn't, the evidence levels need revisiting. |
+| Lookup budget | `lodestar_fetch_lookups` against `lodestar_dht_throttled_total` | Lookups near their cap (64 at Balanced) and throttling still rare |
+| Memory | `lodestar_resident_memory_bytes` | See below |
 
 Derived figures to report:
 
@@ -43,7 +47,7 @@ Derived figures to report:
 
 ## Memory
 
-There's no process-memory metric yet. Sample the container instead:
+`lodestar_resident_memory_bytes` (Linux, so also in the Docker image) is in every hourly scrape. As a cross-check, sample the container too:
 
 ```sh
 docker stats --no-stream lodestar          # once an hour, record MemUsage

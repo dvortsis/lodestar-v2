@@ -306,6 +306,9 @@ impl Config {
         Ok(PipelineConfig {
             pool: PoolConfig {
                 max_sockets: sockets,
+                // As many lookups as the DHT runs at once, so none waits
+                // in its queue, out of the pool's evidence order.
+                max_lookups: Intensity::from(self.dht.intensity).max_get_peers(),
                 ..PoolConfig::default()
             },
             fetch,
@@ -359,6 +362,7 @@ mod tests {
         assert!(c.dht.enabled);
         let p = c.pipeline_config().unwrap();
         assert_eq!(p.pool.max_sockets, 400);
+        assert_eq!(p.pool.max_lookups, Intensity::Balanced.max_get_peers());
         assert_eq!(p.fetch.encryption, Encryption::Prefer);
         assert_eq!(
             c.dht_config().state_path,
@@ -394,6 +398,7 @@ mod tests {
         assert_eq!(c.http.bind, "127.0.0.1:9000".parse().unwrap());
         assert_eq!(c.dht.intensity, IntensityName::Aggressive);
         assert_eq!(c.pipeline_config().unwrap().pool.max_sockets, 1000);
+        assert_eq!(c.pipeline_config().unwrap().pool.max_lookups, 256);
         assert_eq!(
             c.pipeline_config().unwrap().fetch.encryption,
             Encryption::Require

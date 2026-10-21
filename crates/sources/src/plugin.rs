@@ -66,6 +66,25 @@ pub struct Found {
     pub private_source: bool,
     /// A user is waiting on it: it jumps the fetch queue.
     pub interest: bool,
+    /// How strongly this sighting suggests a live swarm (see [`evidence`]).
+    /// With the number of sightings, it orders peer lookups and eviction
+    /// in the fetch pool (§18.4).
+    pub evidence: u8,
+    /// The answer to the pool's peer request for this key. With no peers
+    /// it says the lookup came up empty, so the key doesn't hold a lookup
+    /// slot until the pool's timer runs out. It isn't a new sighting.
+    pub answers_lookup: bool,
+}
+
+/// Levels for [`Found::evidence`]. Each extra sighting while a key is
+/// queued adds one more, up to [`pool::MAX_RANK`](crate::pool::MAX_RANK).
+pub mod evidence {
+    /// Only that the key exists, e.g. a BEP 51 sample.
+    pub const NONE: u8 = 0;
+    /// Someone is looking for it now, e.g. a DHT `get_peers` query.
+    pub const WANTED: u8 = 2;
+    /// A peer says it has it, e.g. a DHT announce.
+    pub const ANNOUNCED: u8 = 3;
 }
 
 impl Found {
@@ -76,11 +95,24 @@ impl Found {
             strategy,
             private_source: false,
             interest: false,
+            evidence: evidence::NONE,
+            answers_lookup: false,
         }
     }
 
     pub fn with_peers(mut self, peers: Vec<SocketAddr>) -> Found {
         self.peers = peers;
+        self
+    }
+
+    pub fn with_evidence(mut self, evidence: u8) -> Found {
+        self.evidence = evidence;
+        self
+    }
+
+    /// Marks this as the answer to a peer request.
+    pub fn answering_lookup(mut self) -> Found {
+        self.answers_lookup = true;
         self
     }
 }

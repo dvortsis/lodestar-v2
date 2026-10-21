@@ -124,6 +124,8 @@ pub struct SourceStatus {
     pub running: bool,
     /// Keys the plugin dropped because the pipeline was full.
     pub dropped: u64,
+    /// Strategy names by code, from the manifest.
+    pub strategies: &'static [&'static str],
 }
 
 struct SourceEntry {
@@ -195,6 +197,7 @@ impl Monitor {
                 name: s.plugin.manifest().name,
                 running: s.running.load(Ordering::Relaxed),
                 dropped: s.emitter.dropped(),
+                strategies: s.plugin.manifest().strategies,
             })
             .collect()
     }

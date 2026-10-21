@@ -64,6 +64,14 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>) -> String {
         m.started_at(),
     );
     o.one("torrents", "gauge", "Torrents stored.", m.torrents());
+    if let Some(rss) = resident_bytes() {
+        o.one(
+            "resident_memory_bytes",
+            "gauge",
+            "Resident set size of the process.",
+            rss,
+        );
+    }
 
     o.family(
         "source_up",
@@ -175,6 +183,50 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>) -> String {
             "fetch_lost_total",
             &format!("reason=\"{label}\""),
             p.lost_count(loss),
+        );
+    }
+    o.family(
+        "fetch_strategy_total",
+        "counter",
+        "Keys by the source and strategy that first queued them, per stage: harvested (new), lookup (started), peer_found, attempt (one per peer tried), fetched, lost.",
+    );
+    let sources = m.sources();
+    for ((source, code), c) in p.strategies() {
+        let s = sources.iter().find(|s| s.id == source);
+        let plugin = s.map_or("unknown", |s| s.plugin);
+        let strategy = s
+            .and_then(|s| s.strategies.get(usize::from(code)))
+            .map_or_else(|| code.to_string(), |n| (*n).to_string());
+        for (stage, n) in [
+            ("harvested", c.harvested),
+            ("lookup", c.lookups),
+            ("peer_found", c.peer_found),
+            ("attempt", c.attempts),
+            ("fetched", c.fetched),
+            ("lost", c.lost),
+        ] {
+            o.value(
+                "fetch_strategy_total",
+                &format!("source=\"{plugin}\",strategy=\"{strategy}\",stage=\"{stage}\""),
+                n,
+            );
+        }
+    }
+    o.family(
+        "fetch_by_rank_total",
+        "counter",
+        "Keys leaving the pool by their swarm-evidence rank: fetched, or lost for any reason.",
+    );
+    for (rank, (fetched, lost)) in p.fetched_by_rank.iter().zip(&p.lost_by_rank).enumerate() {
+        o.value(
+            "fetch_by_rank_total",
+            &format!("rank=\"{rank}\",outcome=\"fetched\""),
+            get(fetched),
+        );
+        o.value(
+            "fetch_by_rank_total",
+            &format!("rank=\"{rank}\",outcome=\"lost\""),
+            get(lost),
         );
     }
 
@@ -355,6 +407,15 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>) -> String {
         );
     }
     o.0
+}
+
+/// The process's resident set size, where the OS tells us cheaply (Linux,
+/// which includes the Docker image).
+fn resident_bytes() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let line = status.lines().find(|l| l.starts_with("VmRSS:"))?;
+    let kib: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+    Some(kib * 1024)
 }
 
 /// The search index's counters (§8).

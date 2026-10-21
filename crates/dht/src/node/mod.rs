@@ -61,6 +61,17 @@ impl Intensity {
             Intensity::Aggressive => 4096,
         }
     }
+
+    /// Concurrent `get_peers` lookups for the fetch pool. Each keeps up to
+    /// three queries in flight; at Balanced, 64 of them use about the
+    /// query budget that sampling leaves free.
+    pub fn max_get_peers(self) -> usize {
+        match self {
+            Intensity::Low => 16,
+            Intensity::Balanced => 64,
+            Intensity::Aggressive => 256,
+        }
+    }
 }
 
 /// The public routers used when there's no saved state.
@@ -94,7 +105,9 @@ impl Default for HarvestConfig {
 pub enum Source {
     /// A BEP 51 `sample_infohashes` reply.
     Sample,
-    /// Someone asked us for peers (passive).
+    /// Someone asked us for peers (passive). Reported once per asking
+    /// address, so several nodes asking about a hash, a sign of a live
+    /// swarm, reach the pipeline as several sightings.
     GetPeers,
     /// Someone announced a peer to us (passive); the fastest path to
     /// metadata, since it comes with a live peer.
@@ -103,9 +116,10 @@ pub enum Source {
     Lookup,
 }
 
-/// An info hash for the pipeline. `Sample` and `GetPeers` harvests are
-/// deduplicated by the seen filter; `Announce` and `Lookup` always pass,
-/// because they carry peers.
+/// An info hash for the pipeline. `Sample` harvests are deduplicated by
+/// the seen filter and `GetPeers` ones per asking address; `Announce` and
+/// `Lookup` always pass, because they carry peers (a `Lookup` with no
+/// peers says the lookup came up empty).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Harvest {
     pub info_hash: InfoHash,
@@ -337,7 +351,8 @@ impl Node {
             .map(|(recv, _)| recv.local_addr())
             .collect::<io::Result<Vec<_>>>()?;
         let stats = Arc::new(Stats::default());
-        let (commands, command_rx) = mpsc::channel(64);
+        // Room for a whole round of the fetch pool's peer requests.
+        let (commands, command_rx) = mpsc::channel(1024);
         let (shutdown, shutdown_rx) = watch::channel(false);
         let task = tokio::spawn(actor::run(
             config,
@@ -365,8 +380,10 @@ impl Node {
     }
 
     /// Asks the node to look up peers for a hash (strategy 3: hashes with
-    /// no peer yet). The result arrives as a [`Source::Lookup`] harvest.
-    /// Returns `false` if the request queue is full.
+    /// no peer yet). It starts at once if fewer than
+    /// [`Intensity::max_get_peers`] are running, else it queues. The result
+    /// arrives as a [`Source::Lookup`] harvest, with no peers if none were
+    /// found. Returns `false` if the request queue is full.
     pub fn get_peers(&self, info_hash: InfoHash) -> bool {
         self.commands.try_send(Command::GetPeers(info_hash)).is_ok()
     }

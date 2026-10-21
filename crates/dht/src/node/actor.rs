@@ -43,8 +43,7 @@ const REBOOTSTRAP_TICKS: u32 = 30;
 const SEEN_CAPACITY: usize = 1_000_000;
 /// Hashes we offer when sampled ourselves (BEP 51 allows about 20 per reply).
 const RECENT_SAMPLES: usize = 20;
-/// Concurrent get_peers lookups, and how many requests may wait.
-const MAX_GET_PEERS: usize = 32;
+/// How many get_peers requests may wait for a lookup slot.
 const MAX_GET_PEERS_QUEUE: usize = 10_000;
 /// Share of the query budget spent on BEP 51 sampling; the rest stays
 /// free for routing maintenance and lookups.
@@ -241,7 +240,7 @@ pub(crate) async fn run(
                     break;
                 }
             }
-            Some(cmd) = commands.recv() => actor.on_command(cmd),
+            Some(cmd) = commands.recv() => actor.on_command(&sockets, cmd),
             r = recv[0].recv_from(&mut buf0) => {
                 if let Ok((n, from)) = r {
                     actor.on_packet(&sockets, 0, &buf0[..n], from);
@@ -256,6 +255,21 @@ pub(crate) async fn run(
         }
     }
     actor.save()
+}
+
+/// The seen-filter key for "this address asked about this hash".
+fn asked_by(hash: &InfoHash, ip: IpAddr) -> InfoHash {
+    let mut key = hash.0;
+    let octets = match ip {
+        IpAddr::V4(v4) => v4.to_ipv6_mapped().octets(),
+        IpAddr::V6(v6) => v6.octets(),
+    };
+    for (k, b) in key.iter_mut().zip(octets) {
+        *k ^= b;
+    }
+    // Keeps the pair apart from the plain hash when the address is zeros.
+    key[19] ^= 0xa5;
+    InfoHash(key)
 }
 
 async fn recv_second(
@@ -324,7 +338,7 @@ impl Actor {
             .expect("at least one id")
     }
 
-    fn on_command(&mut self, cmd: Command) {
+    fn on_command(&mut self, sockets: &[StdUdpSocket], cmd: Command) {
         match cmd {
             Command::Snapshot(reply) => {
                 let _ = reply.send(Snapshot {
@@ -347,6 +361,7 @@ impl Actor {
                 if self.get_peers_queue.len() < MAX_GET_PEERS_QUEUE {
                     self.get_peers_queue.push_back(hash);
                 }
+                self.pump_get_peers(sockets);
             }
         }
     }
@@ -362,13 +377,16 @@ impl Actor {
             self.recent.push_back(hash);
         }
         let counter = match source {
-            Source::Sample if new => &self.stats.harvested_sample,
-            Source::GetPeers if new => &self.stats.harvested_get_peers,
-            Source::Announce => &self.stats.harvested_announce,
-            Source::Lookup => &self.stats.lookups_completed,
-            Source::Sample | Source::GetPeers => return,
+            Source::Sample if new => Some(&self.stats.harvested_sample),
+            Source::Sample => return,
+            // Callers deduplicate these per asking address.
+            Source::GetPeers => new.then_some(&self.stats.harvested_get_peers),
+            Source::Announce => Some(&self.stats.harvested_announce),
+            Source::Lookup => Some(&self.stats.lookups_completed),
         };
-        Stats::inc(counter);
+        if let Some(counter) = counter {
+            Stats::inc(counter);
+        }
         if let Some(tx) = &self.harvest {
             let h = Harvest {
                 info_hash: hash,
@@ -639,7 +657,9 @@ impl Actor {
         // Passive harvest, after replying so the querier isn't kept waiting.
         match &q.method {
             Method::GetPeers { info_hash, .. } if self.cfg.harvest.passive => {
-                self.harvest_hash(*info_hash, Source::GetPeers, Vec::new());
+                if self.seen.insert(&asked_by(info_hash, from.ip())) {
+                    self.harvest_hash(*info_hash, Source::GetPeers, Vec::new());
+                }
             }
             Method::AnnouncePeer {
                 info_hash,
@@ -787,6 +807,7 @@ impl Actor {
             },
         }
         self.drive_lookup(sockets, lid);
+        self.pump_get_peers(sockets);
     }
 
     fn on_external_ip(&mut self, reporter: IpAddr, reported: IpAddr) {
@@ -807,6 +828,18 @@ impl Actor {
                     f.table.insert(e.info, Contact::Response, now);
                 }
             }
+        }
+    }
+
+    /// Starts queued get_peers lookups while there's room. A lookup that
+    /// finishes at once (an empty table) frees its slot inside the loop, so
+    /// this never recurses.
+    fn pump_get_peers(&mut self, sockets: &[StdUdpSocket]) {
+        while self.active_get_peers < self.cfg.intensity.max_get_peers() {
+            let Some(hash) = self.get_peers_queue.pop_front() else {
+                break;
+            };
+            self.start_get_peers(sockets, hash);
         }
     }
 
@@ -1002,12 +1035,7 @@ impl Actor {
             self.sampler.prune(now_i);
             self.last_prune = now_i;
         }
-        while self.active_get_peers < MAX_GET_PEERS {
-            let Some(hash) = self.get_peers_queue.pop_front() else {
-                break;
-            };
-            self.start_get_peers(sockets, hash);
-        }
+        self.pump_get_peers(sockets);
         if self.cfg.harvest.sample {
             self.sample_tick(sockets, now_i);
         }

@@ -35,8 +35,13 @@ struct Client {
 
 impl Client {
     async fn new() -> Client {
+        Client::bind([127, 0, 0, 1]).await
+    }
+
+    /// A client on another loopback address, i.e. another asking node.
+    async fn bind(ip: [u8; 4]) -> Client {
         Client {
-            socket: UdpSocket::bind("127.0.0.1:0").await.unwrap(),
+            socket: UdpSocket::bind(SocketAddr::from((ip, 0))).await.unwrap(),
             id: NodeId([0xcc; 20]),
             tid: 0,
         }
@@ -151,9 +156,23 @@ async fn passive_get_peers_and_announce() {
         )
         .await;
     assert!(matches!(krpc::parse(&ok).unwrap().body, Body::Response(_)));
+    // Harvests arrive in order, so this also shows the repeated ask above
+    // produced nothing.
     let announced = next_harvest(&mut rx).await;
     assert_eq!(announced.source, Source::Announce);
     assert_eq!(announced.peers, vec![client.addr()]);
+
+    // Another node asking about the same hash is a new sighting.
+    let mut other = Client::bind([127, 0, 0, 2]).await;
+    other.ask(addr, get_peers.clone()).await;
+    assert_eq!(
+        next_harvest(&mut rx).await,
+        Harvest {
+            info_hash: h,
+            source: Source::GetPeers,
+            peers: vec![]
+        }
+    );
 
     // The peer is now served to others.
     let reply = client.ask(addr, get_peers).await;
@@ -163,6 +182,7 @@ async fn passive_get_peers_and_announce() {
     assert_eq!(r.values, vec![client.addr()]);
 
     let s = node.stats();
+    // Counted once: it's the number of new hashes.
     assert_eq!(s.harvested_get_peers, 1);
     assert_eq!(s.harvested_announce, 1);
     assert_eq!(node.snapshot().await.unwrap().stored_peer_hashes, 1);
@@ -295,4 +315,30 @@ async fn get_peers_lookup_finds_announced_peers() {
         n.shutdown().await.unwrap();
     }
     seed.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn empty_lookups_are_answered_without_waiting_for_a_tick() {
+    let mut cfg = config(vec![]);
+    cfg.harvest.sample = false;
+    // A tick that never comes during the test: answers must not wait on it.
+    cfg.tick = Duration::from_secs(3600);
+    let (tx, mut rx) = mpsc::channel(4096);
+    let node = Node::start(cfg, Some(tx)).await.unwrap();
+    // With an empty table every lookup ends at once, so a burst far over
+    // the concurrency cap runs through the queue in a loop, not by
+    // recursion.
+    let n = 3 * Intensity::Aggressive.max_get_peers();
+    for i in 0..n {
+        let mut h = [0u8; 20];
+        h[..4].copy_from_slice(&(i as u32).to_be_bytes());
+        assert!(node.get_peers(InfoHash(h)));
+    }
+    for _ in 0..n {
+        let h = next_harvest(&mut rx).await;
+        assert_eq!(h.source, Source::Lookup);
+        assert!(h.peers.is_empty(), "nothing to find, and it says so");
+    }
+    assert_eq!(node.stats().lookups_completed, n as u64);
+    node.shutdown().await.unwrap();
 }

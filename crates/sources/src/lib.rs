@@ -15,5 +15,8 @@ pub use funnel::{Funnel, FunnelCounts, Loss, Stage};
 pub use manifest::{Consent, Endpoint, Kind, Manifest, Network, Priority, Risk};
 pub use plugin::{
     BoxFuture, Closed, Discovery, Emitter, Found, PluginError, Shutdown, SourceCtx, SourcePlugin,
+    evidence,
 };
-pub use pool::{FetchedKey, Fetcher, PeerWireFetcher, PoolConfig, PoolHandle, PoolIo, PoolStats};
+pub use pool::{
+    FetchedKey, Fetcher, PeerWireFetcher, PoolConfig, PoolHandle, PoolIo, PoolStats, StrategyCounts,
+};

@@ -132,6 +132,17 @@ fn serves_status_and_stops_cleanly() {
         "{metrics}"
     );
     assert!(metrics.contains("# TYPE lodestar_fetch_lost_total counter"));
+    assert!(metrics.contains("# TYPE lodestar_fetch_strategy_total counter"));
+    assert!(
+        metrics.contains("lodestar_fetch_by_rank_total{rank=\"7\",outcome=\"lost\"} 0"),
+        "{metrics}"
+    );
+    if cfg!(target_os = "linux") {
+        assert!(
+            metrics.contains("lodestar_resident_memory_bytes "),
+            "{metrics}"
+        );
+    }
     assert!(metrics.contains("lodestar_search_docs 0"), "{metrics}");
     assert!(status.contains("\"search\":{"), "{status}");
     let page = get(port, "/").unwrap();

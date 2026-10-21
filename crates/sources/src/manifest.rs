@@ -88,10 +88,20 @@ pub struct Manifest {
     pub default_priority: Priority,
     /// Only the Mainline DHT is on out of the box (§18.1).
     pub enabled_by_default: bool,
+    /// Names of the plugin's harvest strategy codes ([`Found::strategy`]),
+    /// indexed by code, for metric labels.
+    ///
+    /// [`Found::strategy`]: crate::Found::strategy
+    pub strategies: &'static [&'static str],
 }
 
 impl Manifest {
     pub fn is(&self, kind: Kind) -> bool {
         self.kinds.contains(&kind)
+    }
+
+    /// A strategy code's name, or `None` for a code the manifest doesn't list.
+    pub fn strategy_name(&self, code: u8) -> Option<&'static str> {
+        self.strategies.get(usize::from(code)).copied()
     }
 }

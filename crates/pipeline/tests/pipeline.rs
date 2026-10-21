@@ -54,6 +54,7 @@ fn manifest(id: &'static str, kinds: &'static [Kind]) -> Manifest {
         consent: Consent::None,
         default_priority: Priority::Normal,
         enabled_by_default: true,
+        strategies: &[],
     }
 }
 

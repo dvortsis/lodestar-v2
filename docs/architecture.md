@@ -1176,15 +1176,15 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **The plugin contract is dyn-safe.** `SourcePlugin::run` returns a boxed future, so plugins live in one `Vec<Arc<dyn SourcePlugin>>`. A plugin gets a `SourceCtx`: its `SourceId`, an `Emitter`, a shutdown signal, and (for peer finders) the pool's peer requests. Politeness caps, the JSON-schema config, the KV state store and the per-host HTTP client join the manifest and context with the first plugin that needs them (Nyaa, §18.3). The DHT needs none of them.
 - **Two ways to emit.** `try_emit` never waits and counts what it drops; live sources use it, so the DHT can't stall. `emit` waits for room; importers use it, so a dump backs up into the importer and not into memory.
 - **The pool is one task that owns everything:** per-key state, per-source ready queues, the interest queue, timers and connections per IP. Fetches are child tasks keyed by task id, so a panicking fetch is still accounted for, as a failure of kind `Invalid`, rather than lost.
-- **DRR with unit cost.** Each fetch costs 1 and a source's turn adds its weight (Low/Normal/High/Max = 1/3/6/10). Keys a user is waiting on are served before any source. The caps are max sockets (400), connections per IP (2), queued keys (200k), peers per key (32) and outstanding lookups (256).
+- **DRR with unit cost.** Each fetch costs 1 and a source's turn adds its weight (Low/Normal/High/Max = 1/3/6/10). Keys a user is waiting on are served before any source. The caps are max sockets (400), connections per IP (2), queued keys (200k), peers per key (32) and outstanding lookups (the DHT's lookup concurrency: 64 at Balanced, revised after the first run).
 - **Peer finding:**
-  - A key with no untried peers asks every peer finder (`get_peers`) and waits 30 s.
+  - A key with no untried peers asks every peer finder (`get_peers`) and waits for their answers, at most 60 s. An empty answer ends the wait at once (revised after the first run).
   - If no peers turn up, the next lookup follows after 2 min, then 8 min, then 32 min.
   - After 4 lookups the key is lost: `no peers` if none was ever found, otherwise the last fetch failure (timed out, refused, encryption failed, invalid, unreachable).
   - Oversize is terminal at once, because it's a property of the torrent.
   - `unreachable` (peers found, none accepted a TCP connection) is a loss reason the §10.9 list lacked. Its code is 10.
 - **`private_source` keys never reach a peer finder.** A public sighting of the same key makes it public. A private sighting never makes a public key private.
-- **Eviction** drops the oldest key that's still looking for peers. Keys with peers, keys being fetched and user-interest keys stay. If none qualifies, the incoming key is dropped. Either way it's counted once as `evicted`.
+- **Eviction** drops the oldest key of the lowest rank that's still looking for peers, and never one ranked above the incoming key (ranks were added after the first run). Keys with peers, keys being fetched and user-interest keys stay. If none qualifies, the incoming key is dropped. Either way it's counted once as `evicted`.
 - **Funnel accounting happens in the pool:** harvested, peer found and fetched, or lost with a reason, exactly once per key. Restored keys aren't counted as harvested again. `FunnelCounts` accumulates the counts in memory for the writer to flush.
 - **The queue survives restarts without peers** (store `fetch_queue`). Restored keys start with a fresh lookup, and the lookup that was in flight at shutdown isn't counted as used.
 
@@ -1233,6 +1233,27 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Balanced stays the default intensity.** The reply ratio held near 0.5 with 90 throttle events. This is one home network and the router wasn't monitored, so it isn't a general claim.
 - **Cold-start expectations are revised** to metadata-limited growth of thousands of torrents per day (§3).
 - **Not decided:** flat memory over 24 hours, the value of port forwarding for the fetch success rate, and how much of the timeout share uTP (M7) would recover.
+
+**M1 fetch-throughput changes (after the first run; to be measured in the 24 h follow-up):**
+- **The DHT ran far fewer lookups than the pool asked for.** The node ran 32 `get_peers` lookups at a time and started queued ones only on its 1 s tick. The pool kept 256 asks out, each with a 30 s timer.
+  - So most asks waited in the DHT's FIFO queue and ran out their pool timer before the lookup began. Each one still used up one of the key's 4 attempts. The queue could fall minutes behind, so lookups ran for keys that had already been evicted.
+  - **Fix:** lookup concurrency is part of the intensity preset (`Intensity::max_get_peers`: Low 16, Balanced 64, Aggressive 256), and the pool's lookup cap is set to match it. A queued lookup starts as soon as a slot frees, not on the next tick.
+  - At Balanced, 64 lookups with three queries each in flight come to about the share of the 200 q/s budget that sampling leaves free. The first run saw only 90 throttle events. `dht_throttled_total` shows whether this holds.
+- **Finders answer empty lookups.** `Found::answers_lookup` marks a peer finder's answer. An answer with no peers ends the lookup at once instead of holding the slot for the timer. The timer (now 60 s) is only a safety net. An empty answer for a key that has already left the pool is ignored. Before, it re-admitted the key and counted it as harvested again.
+- **Keys are ranked by swarm evidence.**
+  - A key's rank is the strongest `Found::evidence` any of its sightings carried, plus one per extra sighting (at most three), capped at 7.
+  - The DHT sends: sample 0, `get_peers` from another node 2, announce 3.
+  - Lookups go to user interest first, then by rank. Within a rank, the newest go first, and retries go behind first attempts.
+  - A full pool evicts the oldest key of the lowest rank, never one ranked above the newcomer.
+  - The rank isn't persisted, so restored keys start at 0.
+- **Repeat `get_peers` sightings now reach the pool.** The DHT used to drop any hash its seen filter already held, so a sampled hash that someone later asked for never got that evidence. It now dedups per asking IP: the pair (hash, IP) goes into the seen filter. `dht_harvested_total{strategy="get_peers"}` still counts new hashes only.
+  - Spoofed queries could raise a hash's rank by up to 3. The reply rate limit bounds them, and the worst case is that we look the hash up sooner.
+- **Measuring it:**
+  - `lodestar_fetch_strategy_total{source,strategy,stage}` counts harvested, lookup, peer_found, attempt, fetched and lost keys, by the strategy that first queued each key.
+  - `lodestar_fetch_by_rank_total{rank,outcome}` counts keys as they leave the pool, by their rank at the time. It tests whether evidence predicts yield.
+  - `lodestar_resident_memory_bytes` (Linux) is there for the 24 h memory check.
+- **The socket cap stays at 400.** The first run made about 1.2 fetch attempts per second, each taking at most 12 s, so sockets weren't the limit.
+- **Next if yield is still lookup-bound:** fetch several peers of one key at once, and feed rank-by-yield back into the evidence levels.
 
 **M2 implementation decisions (search index):**
 - **Torrent-level paths are words only, without positions.** On the 50k synthetic corpus, path positions alone took 372 B per torrent: 690 B in total against the 512 B index budget. A smaller gap (8) and indexing each directory name once only got that to 600 B.

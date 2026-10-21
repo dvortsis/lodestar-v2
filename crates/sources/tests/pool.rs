@@ -11,7 +11,7 @@ use lodestar_peer_wire::{FailureKind, Fetched};
 use lodestar_sources::pool::spawn;
 use lodestar_sources::{
     BoxFuture, Discovery, FetchedKey, Fetcher, Found, FunnelCounts, Loss, PoolConfig, PoolHandle,
-    PoolIo, Shutdown, Stage,
+    PoolIo, Shutdown, Stage, StrategyCounts, evidence,
 };
 use lodestar_store::{QueuedKey, SourceId};
 use tokio::sync::{mpsc, watch};
@@ -39,6 +39,25 @@ fn found(source: u8, n: u32, peers: Vec<SocketAddr>) -> Discovery {
     Discovery {
         source: src(source),
         found: Found::key(key(n), 0).with_peers(peers),
+        at: T0,
+    }
+}
+
+/// A sighting from source 0 with the given evidence; the strategy code is
+/// the evidence level, so per-strategy counts can be told apart.
+fn sighting(n: u32, level: u8) -> Discovery {
+    Discovery {
+        source: src(0),
+        found: Found::key(key(n), level).with_evidence(level),
+        at: T0,
+    }
+}
+
+/// A peer finder's answer to the pool's ask.
+fn answer(n: u32, peers: Vec<SocketAddr>) -> Discovery {
+    Discovery {
+        source: src(0),
+        found: Found::key(key(n), 9).with_peers(peers).answering_lookup(),
         at: T0,
     }
 }
@@ -439,4 +458,237 @@ async fn the_queue_survives_a_restart() {
     let got = h.out.recv().await.unwrap();
     assert_eq!((got.key, got.cohort), (key(1), COHORT));
     h.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_empty_answer_ends_the_lookup_without_waiting() {
+    let mut h = Harness::start(config(), &[], vec![]);
+    let start = Instant::now();
+    h.send(found(0, 7, vec![]));
+    assert_eq!(h.lookups.recv().await, Some(key(7)));
+    sleep(Duration::from_secs(1)).await;
+    h.send(answer(7, vec![]));
+    // The retry follows the back-off from the answer (1 + 60 s), not from
+    // the end of the 10 s lookup wait.
+    assert_eq!(h.lookups.recv().await, Some(key(7)));
+    assert_eq!(start.elapsed().as_secs(), 61);
+    // An answer for a key that's gone admits nothing and asks nothing.
+    h.send(answer(99, vec![]));
+    sleep(Duration::from_secs(1)).await;
+    assert_eq!(h.funnel.total(Stage::Harvested, None), 1);
+    assert!(h.drain_lookups().is_empty());
+    h.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn lookups_go_to_the_strongest_evidence_newest_first() {
+    let cfg = PoolConfig {
+        max_lookups: 1,
+        ..config()
+    };
+    let mut h = Harness::start(cfg, &[], vec![]);
+    h.send(sighting(1, evidence::NONE)); // takes the only slot
+    h.send(sighting(2, evidence::NONE));
+    h.send(sighting(3, evidence::NONE));
+    h.send(sighting(4, evidence::WANTED));
+    h.send(sighting(5, evidence::NONE));
+    h.send(sighting(5, evidence::NONE)); // seen twice: one rank up
+    assert_eq!(h.lookups.recv().await, Some(key(1)));
+    let mut order = Vec::new();
+    for n in [1, 4, 5, 3, 2] {
+        h.send(answer(n, vec![]));
+        let next = h.lookups.recv().await.unwrap();
+        order.push(u32::from_be_bytes(next.0[..4].try_into().unwrap()));
+        if n == 2 {
+            break;
+        }
+    }
+    // Wanted, then seen twice, then plain samples newest first; key 1's
+    // retry (due 60 s later) comes last.
+    assert_eq!(order, vec![4, 5, 3, 2, 1]);
+    // The other retries came due with it and wait.
+    assert_eq!(h.handle.stats().lookup_backlog.load(Ordering::Relaxed), 4);
+    h.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn first_lookups_beat_retries() {
+    let cfg = PoolConfig {
+        max_lookups: 1,
+        // Key 2 holds its slot until it's answered.
+        lookup_wait: Duration::from_secs(600),
+        ..config()
+    };
+    let mut h = Harness::start(cfg, &[], vec![]);
+    h.send(found(0, 1, vec![]));
+    assert_eq!(h.lookups.recv().await, Some(key(1)));
+    h.send(answer(1, vec![]));
+    h.send(found(0, 2, vec![])); // holds the slot from here on
+    assert_eq!(h.lookups.recv().await, Some(key(2)));
+    // Key 1's retry comes due and queues; then a fresh key arrives.
+    sleep(Duration::from_secs(61)).await;
+    h.send(found(0, 3, vec![]));
+    sleep(Duration::from_secs(1)).await;
+    assert_eq!(h.handle.stats().lookup_backlog.load(Ordering::Relaxed), 2);
+    h.send(answer(2, vec![]));
+    assert_eq!(h.lookups.recv().await, Some(key(3)));
+    h.send(answer(3, vec![]));
+    assert_eq!(h.lookups.recv().await, Some(key(1)));
+    h.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_full_pool_evicts_the_lowest_rank_and_never_a_higher_one() {
+    let cfg = PoolConfig {
+        max_pending: 3,
+        ..config()
+    };
+    let h = Harness::start(cfg, &[], vec![]);
+    h.send(sighting(1, evidence::WANTED));
+    h.send(sighting(2, evidence::NONE));
+    h.send(sighting(3, evidence::NONE));
+    h.send(sighting(4, evidence::WANTED)); // evicts 2, the oldest sample
+    h.send(sighting(3, evidence::WANTED)); // 3 rises above the samples
+    h.send(sighting(5, evidence::NONE)); // nothing ranks lower: dropped
+    sleep(Duration::from_millis(10)).await;
+    let stats = h.handle.stats();
+    assert_eq!(stats.lost_count(Loss::Evicted), 2);
+    assert_eq!(stats.lost_by_rank[0].load(Ordering::Relaxed), 2);
+    let mut left: Vec<InfoHash> = h.stop().await.iter().map(|q| q.info_hash).collect();
+    left.sort_by_key(|k| k.0);
+    assert_eq!(left, vec![key(1), key(3), key(4)]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn counts_each_strategy_through_the_stages() {
+    let mut h = Harness::start(config(), &[], vec![]);
+    h.script(peer(1, 1), 10, Err(FailureKind::TimedOut));
+    h.send(sighting(1, evidence::WANTED));
+    h.send(sighting(2, evidence::NONE));
+    sleep(Duration::from_millis(1)).await;
+    assert_eq!(h.drain_lookups().len(), 2);
+    h.send(answer(1, vec![peer(1, 1), peer(2, 1)]));
+    h.send(answer(2, vec![]));
+    assert_eq!(h.out.recv().await.unwrap().key, key(1));
+    let stats = h.handle.stats();
+    let by: HashMap<u8, StrategyCounts> = stats
+        .strategies()
+        .into_iter()
+        .map(|((s, code), c)| {
+            assert_eq!(s, src(0));
+            (code, c)
+        })
+        .collect();
+    assert_eq!(
+        by[&evidence::WANTED],
+        StrategyCounts {
+            harvested: 1,
+            lookups: 1,
+            peer_found: 1,
+            attempts: 2,
+            fetched: 1,
+            lost: 0,
+        }
+    );
+    assert_eq!(
+        by[&evidence::NONE],
+        StrategyCounts {
+            harvested: 1,
+            lookups: 1,
+            ..StrategyCounts::default()
+        }
+    );
+    assert!(
+        !by.contains_key(&9),
+        "answers are attributed to the key, not the finder"
+    );
+    assert_eq!(
+        stats.fetched_by_rank[usize::from(evidence::WANTED)].load(Ordering::Relaxed),
+        1
+    );
+    h.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn churn_keeps_every_key_accounted_for() {
+    let cfg = PoolConfig {
+        max_pending: 40,
+        max_lookups: 4,
+        max_sockets: 3,
+        ..config()
+    };
+    let mut h = Harness::start(cfg, &[], vec![]);
+    for ip in 0..8 {
+        let result = match ip % 4 {
+            0 => Ok(()),
+            1 => Err(FailureKind::TimedOut),
+            2 => Err(FailureKind::Refused),
+            _ => Err(FailureKind::Unreachable),
+        };
+        h.script(peer(ip, 1), 300 + u64::from(ip) * 100, result);
+    }
+    // A fixed pseudo-random mix of sightings, answers (empty or not) and
+    // interest, over a key space small enough to collide often.
+    let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+    let mut next = move || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        x
+    };
+    for _ in 0..3000 {
+        let r = next();
+        let n = (r % 120) as u32;
+        let d = match (r >> 8) % 6 {
+            0 | 1 => sighting(n, ((r >> 16) % 4) as u8),
+            2 => answer(n, vec![]),
+            3 => answer(n, vec![peer(((r >> 16) % 8) as u8, 1)]),
+            4 => found(0, n, vec![]),
+            _ => {
+                let mut d = found(0, n, vec![]);
+                d.found.interest = true;
+                d
+            }
+        };
+        h.send(d);
+        sleep(Duration::from_millis((r >> 24) % 400)).await;
+        h.drain_lookups();
+    }
+    let stats = h.handle.stats();
+    let fetched = stats.fetched.load(Ordering::Relaxed);
+    while h.out.try_recv().is_ok() {}
+    let lost: u64 = stats.lost.iter().map(|a| a.load(Ordering::Relaxed)).sum();
+    let by_rank: u64 = stats
+        .fetched_by_rank
+        .iter()
+        .chain(&stats.lost_by_rank)
+        .map(|a| a.load(Ordering::Relaxed))
+        .sum();
+    let harvested = h.funnel.total(Stage::Harvested, None) as u64;
+    let per_strategy: StrategyCounts =
+        stats
+            .strategies()
+            .into_iter()
+            .fold(StrategyCounts::default(), |a, (_, c)| StrategyCounts {
+                harvested: a.harvested + c.harvested,
+                fetched: a.fetched + c.fetched,
+                lost: a.lost + c.lost,
+                ..a
+            });
+    let left = h.stop().await.len() as u64;
+    assert!(fetched > 0 && lost > 0, "the mix exercises both outcomes");
+    assert_eq!(
+        harvested,
+        fetched + lost + left,
+        "each key leaves exactly once"
+    );
+    assert_eq!(by_rank, fetched + lost);
+    assert_eq!(
+        (
+            per_strategy.harvested,
+            per_strategy.fetched,
+            per_strategy.lost
+        ),
+        (harvested, fetched, lost)
+    );
 }

@@ -9,7 +9,7 @@ use lodestar_dht::node::{Config, Harvest, Node, Source, StatsSnapshot};
 use lodestar_metainfo::InfoHash;
 use lodestar_sources::{
     BoxFuture, Consent, Endpoint, Found, Kind, Manifest, Network, PluginError, Priority, Risk,
-    SourceCtx, SourcePlugin,
+    SourceCtx, SourcePlugin, evidence,
 };
 use tokio::sync::mpsc;
 
@@ -42,6 +42,7 @@ static MANIFEST: Manifest = Manifest {
     consent: Consent::None,
     default_priority: Priority::Normal,
     enabled_by_default: true,
+    strategies: &["sample", "get_peers", "announce", "lookup"],
 };
 
 pub struct DhtSource {
@@ -77,13 +78,20 @@ impl std::fmt::Debug for DhtSource {
 }
 
 fn found(h: Harvest) -> Found {
-    let strategy = match h.source {
-        Source::Sample => strategy::SAMPLE,
-        Source::GetPeers => strategy::GET_PEERS,
-        Source::Announce => strategy::ANNOUNCE,
-        Source::Lookup => strategy::LOOKUP,
+    let (strategy, level) = match h.source {
+        Source::Sample => (strategy::SAMPLE, evidence::NONE),
+        Source::GetPeers => (strategy::GET_PEERS, evidence::WANTED),
+        Source::Announce => (strategy::ANNOUNCE, evidence::ANNOUNCED),
+        Source::Lookup => (strategy::LOOKUP, evidence::NONE),
     };
-    Found::key(h.info_hash, strategy).with_peers(h.peers)
+    let f = Found::key(h.info_hash, strategy)
+        .with_peers(h.peers)
+        .with_evidence(level);
+    if h.source == Source::Lookup {
+        f.answering_lookup()
+    } else {
+        f
+    }
 }
 
 async fn next_request(rx: &mut Option<mpsc::Receiver<InfoHash>>) -> Option<InfoHash> {
@@ -115,8 +123,8 @@ impl SourcePlugin for DhtSource {
                         ctx.emitter.try_emit(found(h));
                     }
                     req = next_request(&mut ctx.peer_requests), if requests_open => match req {
-                        // A full lookup queue drops the ask; the pool asks
-                        // again after its lookup wait.
+                        // A full lookup queue drops the ask; the pool stops
+                        // waiting for it after its lookup wait.
                         Some(key) => {
                             node.get_peers(key);
                         }
@@ -150,6 +158,20 @@ mod tests {
         assert_eq!(found(h(Source::Announce)).strategy, strategy::ANNOUNCE);
         let f = found(h(Source::Lookup));
         assert_eq!((f.strategy, f.peers.len()), (strategy::LOOKUP, 1));
+        assert!(f.answers_lookup, "a lookup result answers the pool's ask");
+        assert!(!found(h(Source::GetPeers)).answers_lookup);
+        // Swarm evidence orders lookups: announced > wanted > sampled.
+        let level = |s| found(h(s)).evidence;
+        assert!(level(Source::Announce) > level(Source::GetPeers));
+        assert!(level(Source::GetPeers) > level(Source::Sample));
+        for (code, name) in [
+            (strategy::SAMPLE, "sample"),
+            (strategy::GET_PEERS, "get_peers"),
+            (strategy::ANNOUNCE, "announce"),
+            (strategy::LOOKUP, "lookup"),
+        ] {
+            assert_eq!(MANIFEST.strategy_name(code), Some(name));
+        }
         assert!(
             !f.private_source,
             "the public DHT is never a private source"
