@@ -1,0 +1,158 @@
+# Books, comics, non-Latin scripts, site prefixes and odd names.
+
+Brandon Sanderson - The Way of Kings (2010) [EPUB]
+  title: Brandon Sanderson - The Way of Kings
+  author: Brandon Sanderson
+  year: 2010
+  container: epub
+
+Stephen King - It (1986) [Retail EPUB]
+  title: Stephen King - It
+  author: Stephen King
+  year: 1986
+  flags: retail
+  container: epub
+
+George Orwell - 1984 (1949) [EPUB]
+  title: George Orwell - 1984
+  author: George Orwell
+  year: 1949
+  container: epub
+
+Frank Herbert - Dune [Audiobook] [Unabridged] [MP3 64kbps]
+  title: Frank Herbert - Dune
+  author: Frank Herbert
+  acodec: mp3
+  bitrate: 64kbps
+
+Neil Gaiman - American Gods (10th Anniversary Edition) (2011) [PDF]
+  title: Neil Gaiman - American Gods
+  author: Neil Gaiman
+  edition: anniversary
+  year: 2011
+  container: pdf
+
+Clean Code by Robert C. Martin (2008) [PDF]
+  title: Clean Code
+  author: Robert C. Martin
+  year: 2008
+  container: pdf
+
+Batman - The Long Halloween (1996-1997) (Digital) (Zone-Empire)
+  title: Batman - The Long Halloween
+  year: 1996-1997
+  group: Zone-Empire
+
+Saga 001 (2012) (Digital) (Minutemen-Faessla).cbz
+  title: Saga 001
+  year: 2012
+  group: Minutemen-Faessla
+  container: cbz
+
+Project Hail Mary by Andy Weir (2021) EPUB MOBI AZW3
+  title: Project Hail Mary
+  author: Andy Weir
+  year: 2021
+  container: epub
+
+Брат 2 (2000) BDRip 1080p
+  title: Брат 2
+  year: 2000
+  source: bluray
+  res: 1080p
+
+Мастер и Маргарита / The Master and Margarita (2024) WEB-DL 1080p
+  title: Мастер и Маргарита
+  alt: The Master and Margarita
+  year: 2024
+  source: web-dl
+  res: 1080p
+
+Игра престолов / Game of Thrones / Сезон: 8 / Серии: 1-6 из 6 [2019, США, WEB-DL 1080p] MVO
+  title: Игра престолов
+  alt: Game of Thrones
+  season: 8
+  episode: 1-6
+  year: 2019
+  source: web-dl
+  res: 1080p
+
+[电影天堂www.dytt89.com]寄生虫-2019_HD韩语中字.mp4
+  title: 寄生虫
+  year: 2019
+  container: mp4
+
+千と千尋の神隠し (2001) [BD 1080p]
+  title: 千と千尋の神隠し
+  year: 2001
+  source: bluray
+  res: 1080p
+
+www.Torrenting.com - Oppenheimer.2023.1080p.WEBRip.x264-LAMA
+  title: Oppenheimer
+  year: 2023
+  res: 1080p
+  source: webrip
+  vcodec: h264
+  group: LAMA
+
+[ www.UIndex.org ] - The.Holdovers.2023.720p.WEB.H264-SLOT
+  title: The Holdovers
+  year: 2023
+  res: 720p
+  source: web-dl
+  vcodec: h264
+  group: SLOT
+
+Severance.S02E05.2160p.WEB-DL.mkv
+  title: Severance
+  season: 2
+  episode: 5
+  res: 2160p
+  source: web-dl
+  container: mkv
+
+New Folder (2)
+  title: New Folder (2)
+
+Video
+  title: Video
+
+Some Home Movie
+  title: Some Home Movie
+
+Ubuntu-24.04-desktop-amd64.iso
+  title: Ubuntu
+  version: 24.04
+  arch: x64
+  container: iso
+
+debian-12.5.0-amd64-netinst.iso
+  title: debian
+  version: 12.5.0
+  arch: x64
+  container: iso
+
+La.Haine.1995.FRENCH.REMASTERED.1080p.BluRay.x264-PRiDEHD
+  title: La Haine
+  year: 1995
+  lang: fr
+  edition: remastered
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: PRiDEHD
+
+Lawrence.of.Arabia.1962.Restored.Version.1080p.BluRay.DTS.x264-CtrlHD
+  title: Lawrence of Arabia
+  year: 1962
+  edition: remastered
+  res: 1080p
+  source: bluray
+  acodec: dts
+  vcodec: h264
+  group: CtrlHD
+
+# Regression: a trailing weak marker (TS) with no strong one stays title.
+VIDEO_TS
+  title: VIDEO TS

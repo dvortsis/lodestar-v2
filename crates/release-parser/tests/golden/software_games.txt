@@ -1,0 +1,154 @@
+# Software and games: versions, platforms, architectures, repackers.
+
+Adobe Photoshop 2024 v25.0.0.37 (x64) Multilingual
+  title: Adobe Photoshop
+  year: 2024
+  version: 25.0.0.37
+  arch: x64
+  lang: multi
+
+VLC Media Player 3.0.20 Portable
+  title: VLC Media Player
+  version: 3.0.20
+  flags: portable
+
+WinRAR v7.01 (x64) + Keygen
+  title: WinRAR
+  version: 7.01
+  arch: x64
+  flags: cracked
+
+Blender 4.2.0 Windows x64
+  title: Blender
+  version: 4.2.0
+  platform: windows
+  arch: x64
+
+Ableton Live 12 Suite v12.0.5 MacOSX
+  title: Ableton Live 12 Suite
+  version: 12.0.5
+  platform: macos
+
+CCleaner Professional 6.20.10897 Multilingual + Crack
+  title: CCleaner Professional
+  version: 6.20.10897
+  lang: multi
+  flags: cracked
+
+Notepad++ v8.6.4 x64
+  title: Notepad++
+  version: 8.6.4
+  arch: x64
+
+GIMP 2.10.38 macOS ARM64
+  title: GIMP
+  version: 2.10.38
+  platform: macos
+  arch: arm64
+
+Total.Commander.v11.03.x86.x64.Incl.Keygen-BTCR
+  title: Total Commander
+  version: 11.03
+  arch: x64, x86
+  flags: cracked
+  group: BTCR
+
+Spotify v1.2.31 Android Premium Mod
+  title: Spotify
+  version: 1.2.31
+  platform: android
+
+Cyberpunk.2077.Phantom.Liberty-RUNE
+  title: Cyberpunk 2077 Phantom Liberty
+  group: RUNE
+
+Elden.Ring.Shadow.of.the.Erdtree.Deluxe.Edition-RUNE
+  title: Elden Ring Shadow of the Erdtree
+  edition: deluxe
+  group: RUNE
+
+Baldurs.Gate.3.Update.v4.1.1-GOG
+  title: Baldurs Gate 3 Update
+  version: 4.1.1
+  group: GOG
+
+Hogwarts Legacy - Deluxe Edition [FitGirl Repack]
+  title: Hogwarts Legacy
+  edition: deluxe
+  group: FitGirl
+  flags: repack
+
+Red Dead Redemption 2 - Ultimate Edition [v1491.50 + MULTi13] [DODI Repack]
+  title: Red Dead Redemption 2
+  edition: ultimate
+  version: 1491.50
+  lang: multi
+  group: DODI
+  flags: repack
+
+Grand.Theft.Auto.V.PS4-DUPLEX
+  title: Grand Theft Auto V
+  platform: ps4
+  group: DUPLEX
+
+The.Legend.of.Zelda.Tears.of.the.Kingdom.NSW-VENOM
+  title: The Legend of Zelda Tears of the Kingdom
+  platform: switch
+  group: VENOM
+
+Super Mario Bros. Wonder (Switch) (NSP) [USA]
+  title: Super Mario Bros. Wonder
+  platform: switch
+  container: nsp
+
+Halo.3.XBOX360-SPARE
+  title: Halo 3
+  platform: xbox360
+  group: SPARE
+
+Tekken.8.Ultimate.Edition-RUNE
+  title: Tekken 8
+  edition: ultimate
+  group: RUNE
+
+Hollow Knight v1.5.78.11833 [GOG]
+  title: Hollow Knight
+  version: 1.5.78.11833
+  group: GOG
+
+Stardew Valley v1.6.8 (Linux) [GOG]
+  title: Stardew Valley
+  version: 1.6.8
+  platform: linux
+  group: GOG
+
+Final Fantasy VII Remake Intergrade (PC) [FitGirl Repack]
+  title: Final Fantasy VII Remake Intergrade
+  platform: pc
+  group: FitGirl
+  flags: repack
+
+Doom.Eternal-CODEX
+  title: Doom Eternal
+  group: CODEX
+
+The.Witcher.3.Wild.Hunt.Game.of.the.Year.Edition-GOG
+  title: The Witcher 3 Wild Hunt
+  edition: goty
+  group: GOG
+
+Gran.Turismo.7.PS5-DUPLEX
+  title: Gran Turismo 7
+  platform: ps5
+  group: DUPLEX
+
+Mario.Kart.8.Deluxe.NSW-BigBlueBox
+  title: Mario Kart 8 Deluxe
+  platform: switch
+  group: BigBlueBox
+
+Starfield.Premium.Edition.v1.7.23.0.MULTi9-ElAmigos
+  title: Starfield Premium Edition
+  version: 1.7.23.0
+  lang: multi
+  group: ElAmigos

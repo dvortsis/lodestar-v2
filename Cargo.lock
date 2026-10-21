@@ -911,6 +911,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lodestar-classify"
+version = "0.0.0"
+dependencies = [
+ "lodestar-release-parser",
+ "proptest",
+]
+
+[[package]]
 name = "lodestar-dht"
 version = "0.0.0"
 dependencies = [
@@ -963,6 +971,13 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "lodestar-release-parser"
+version = "0.0.0"
+dependencies = [
+ "proptest",
 ]
 
 [[package]]

@@ -614,6 +614,7 @@ dependencies = [
  "lodestar-bencode",
  "lodestar-dht",
  "lodestar-metainfo",
+ "lodestar-release-parser",
  "lodestar-search",
  "lodestar-store",
 ]
@@ -628,6 +629,10 @@ dependencies = [
  "sha1",
  "sha2",
 ]
+
+[[package]]
+name = "lodestar-release-parser"
+version = "0.0.0"
 
 [[package]]
 name = "lodestar-search"

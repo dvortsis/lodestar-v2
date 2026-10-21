@@ -1,0 +1,509 @@
+# Written after the parser, before running it on these names, to measure
+# accuracy on names it wasn't tuned against (first run recorded in §16).
+
+The.Grand.Tour.S05E01.A.Scandi.Flick.2160p.AMZN.WEB-DL.DDP5.1.HDR.HEVC-NTb
+  title: The Grand Tour
+  season: 5
+  episode: 1
+  res: 2160p
+  service: amzn
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  hdr: hdr
+  vcodec: h265
+  group: NTb
+
+Oppenheimer (2023) 2160p UHD BluRay REMUX HDR10 HEVC DTS-HD MA 5.1-FraMeSToR
+  title: Oppenheimer
+  year: 2023
+  res: 2160p
+  source: remux
+  hdr: hdr10
+  vcodec: h265
+  acodec: dts-hd-ma
+  channels: 5.1
+  group: FraMeSToR
+
+Poor.Things.2023.1080p.WEB.H264-SuccessfulCrab
+  title: Poor Things
+  year: 2023
+  res: 1080p
+  source: web-dl
+  vcodec: h264
+  group: SuccessfulCrab
+
+The.Zone.of.Interest.2023.GERMAN.1080p.BluRay.x264-JustWatch
+  title: The Zone of Interest
+  year: 2023
+  lang: de
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: JustWatch
+
+Anatomy.of.a.Fall.2023.FRENCH.720p.WEBRip.x264-VXT
+  title: Anatomy of a Fall
+  year: 2023
+  lang: fr
+  res: 720p
+  source: webrip
+  vcodec: h264
+  group: VXT
+
+Perfect.Days.2023.JAPANESE.1080p.BluRay.DDP5.1.x265.10bit-GalaxyRG265
+  title: Perfect Days
+  year: 2023
+  lang: ja
+  res: 1080p
+  source: bluray
+  acodec: eac3
+  channels: 5.1
+  vcodec: h265
+  bits: 10
+  group: GalaxyRG265
+
+Past Lives (2023) [1080p] [WEBRip] [5.1] [YTS.MX]
+  title: Past Lives
+  year: 2023
+  res: 1080p
+  source: webrip
+  channels: 5.1
+  group: YTS.MX
+
+The.Holdovers.2023.REPACK.1080p.AMZN.WEB-DL.DDP5.1.H.264-FLUX
+  title: The Holdovers
+  year: 2023
+  flags: repack
+  res: 1080p
+  service: amzn
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: FLUX
+
+Killers.of.the.Flower.Moon.2023.1080p.ATVP.WEB-DL.DDP5.1.Atmos.H.264-FLUX
+  title: Killers of the Flower Moon
+  year: 2023
+  res: 1080p
+  service: atvp
+  source: web-dl
+  acodec: atmos, eac3
+  channels: 5.1
+  vcodec: h264
+  group: FLUX
+
+Mission.Impossible.Dead.Reckoning.Part.One.2023.2160p.WEB-DL.DDP5.1.Atmos.DV.HDR.H.265-FLUX
+  title: Mission Impossible Dead Reckoning Part One
+  year: 2023
+  res: 2160p
+  source: web-dl
+  acodec: atmos, eac3
+  channels: 5.1
+  hdr: dv, hdr
+  vcodec: h265
+  group: FLUX
+
+Godfather.Part.II.1974.REMASTERED.1080p.BluRay.x264.DTS-HD.MA.5.1-SWTYBLZ
+  title: Godfather Part II
+  year: 1974
+  edition: remastered
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  acodec: dts-hd-ma
+  channels: 5.1
+  group: SWTYBLZ
+
+Toy.Story.4.2019.1080p.BluRay.x264-SPARKS
+  title: Toy Story 4
+  year: 2019
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: SPARKS
+
+Fast.and.Furious.6.2013.EXTENDED.720p.BluRay.x264-SPARKS
+  title: Fast and Furious 6
+  year: 2013
+  edition: extended
+  res: 720p
+  source: bluray
+  vcodec: h264
+  group: SPARKS
+
+Ocean's.Eleven.2001.1080p.BluRay.x264-OFT
+  title: Ocean's Eleven
+  year: 2001
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: OFT
+
+Star.Wars.Episode.IV.A.New.Hope.1977.1080p.BluRay.x264-HDEX
+  title: Star Wars Episode IV A New Hope
+  year: 1977
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: HDEX
+
+The Lord of the Rings Trilogy Extended Edition (2001-2003) 1080p BluRay x265
+  title: The Lord of the Rings
+  pack: yes
+  edition: extended
+  year: 2001-2003
+  res: 1080p
+  source: bluray
+  vcodec: h265
+
+Harry.Potter.Complete.Collection.2001-2011.1080p.BluRay.x264-HDEX
+  title: Harry Potter
+  pack: yes
+  year: 2001-2011
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: HDEX
+
+Shrek.2.2004.720p.BRRip.XviD.AC3-ViSiON
+  title: Shrek 2
+  year: 2004
+  res: 720p
+  source: bluray
+  vcodec: xvid
+  acodec: ac3
+  group: ViSiON
+
+Leon.The.Professional.1994.Extended.Cut.1080p.BluRay.x264-CiNEFiLE
+  title: Leon The Professional
+  year: 1994
+  edition: extended
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: CiNEFiLE
+
+True.Detective.S04E06.Night.Country.Part.6.1080p.MAX.WEB-DL.DDP5.1.H.264-NTb
+  title: True Detective
+  season: 4
+  episode: 6
+  res: 1080p
+  service: max
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: NTb
+
+The.Crown.S06E10.Sleep.Dearie.Sleep.2160p.NF.WEB-DL.DDP5.1.Atmos.DV.HDR.H.265-FLUX
+  title: The Crown
+  season: 6
+  episode: 10
+  res: 2160p
+  service: nf
+  source: web-dl
+  acodec: atmos, eac3
+  channels: 5.1
+  hdr: dv, hdr
+  vcodec: h265
+  group: FLUX
+
+Fallout.S01.COMPLETE.2160p.AMZN.WEB-DL.DDP5.1.HDR10Plus.H.265-FLUX
+  title: Fallout
+  season: 1
+  pack: yes
+  res: 2160p
+  service: amzn
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  hdr: hdr10+
+  vcodec: h265
+  group: FLUX
+
+Slow.Horses.S04E01.Identity.Theft.1080p.ATVP.WEB-DL.DDP5.1.H.264-NTb
+  title: Slow Horses
+  season: 4
+  episode: 1
+  res: 1080p
+  service: atvp
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: NTb
+
+The.Office.UK.S01-S02.Complete.DVDRip.XviD-TVP
+  title: The Office UK
+  season: 1-2
+  pack: yes
+  source: dvd
+  vcodec: xvid
+  group: TVP
+
+Frasier.1993.S01E01.The.Good.Son.720p.AMZN.WEB-DL.DDP2.0.H.264-NTb
+  title: Frasier
+  year: 1993
+  season: 1
+  episode: 1
+  res: 720p
+  service: amzn
+  source: web-dl
+  acodec: eac3
+  channels: 2.0
+  vcodec: h264
+  group: NTb
+
+The Late Show with Stephen Colbert 2024 05 20 1080p WEB h264-EDITH
+  title: The Late Show with Stephen Colbert
+  date: 2024-05-20
+  res: 1080p
+  source: web-dl
+  vcodec: h264
+  group: EDITH
+
+WWE.Monday.Night.Raw.2024.06.03.720p.HDTV.x264-NWCHD
+  title: WWE Monday Night Raw
+  date: 2024-06-03
+  res: 720p
+  source: tv
+  vcodec: h264
+  group: NWCHD
+
+Formula1.2024.Monaco.Grand.Prix.Race.1080p.WEB.h264-VERUM
+  title: Formula1
+  year: 2024
+  res: 1080p
+  source: web-dl
+  vcodec: h264
+  group: VERUM
+
+Sherlock Holmes S01E01 A Study in Pink 1080p BluRay x265 HEVC 10bit AAC 5.1 Joy
+  title: Sherlock Holmes
+  season: 1
+  episode: 1
+  res: 1080p
+  source: bluray
+  vcodec: h265
+  bits: 10
+  acodec: aac
+  channels: 5.1
+
+Avatar.The.Last.Airbender.S01E01-E02.720p.NF.WEB-DL.DDP5.1.x264-NTb
+  title: Avatar The Last Airbender
+  season: 1
+  episode: 1-2
+  res: 720p
+  service: nf
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: NTb
+
+[SubsPlease] Solo Leveling - 12 (1080p) [9A8B7C6D].mkv
+  group: SubsPlease
+  title: Solo Leveling
+  episode: 12
+  res: 1080p
+  container: mkv
+
+[Erai-raws] Kusuriya no Hitorigoto - 24 [1080p CR WEB-DL AVC AAC][MultiSub][ABCDEF12]
+  group: Erai-raws
+  title: Kusuriya no Hitorigoto
+  episode: 24
+  res: 1080p
+  service: cr
+  source: web-dl
+  vcodec: h264
+  acodec: aac
+  subs: multi
+
+[Judas] Chainsaw Man (Season 1) [1080p][HEVC x265 10bit][Multi-Subs] (Batch)
+  group: Judas
+  title: Chainsaw Man
+  season: 1
+  pack: yes
+  res: 1080p
+  vcodec: h265
+  bits: 10
+  subs: multi
+
+[Ember] Vinland Saga S2 - 24 [1080p] [Multi-Sub]
+  group: Ember
+  title: Vinland Saga
+  season: 2
+  episode: 24
+  res: 1080p
+  subs: multi
+
+[ToonsHub] Delicious in Dungeon E12 1080p NF WEB-DL AAC2.0 H.264 (Dungeon Meshi, Multi-Subs)
+  group: ToonsHub
+  title: Delicious in Dungeon
+  episode: 12
+  res: 1080p
+  service: nf
+  source: web-dl
+  acodec: aac
+  channels: 2.0
+  vcodec: h264
+  subs: multi
+
+[Beatrice-Raws] Mononoke Hime [BDRip 1920x1080 HEVC TrueHD]
+  group: Beatrice-Raws
+  title: Mononoke Hime
+  source: bluray
+  res: 1080p
+  vcodec: h265
+  acodec: truehd
+
+Bleach - Thousand-Year Blood War - 01 [1080p][Dual Audio]
+  title: Bleach - Thousand-Year Blood War
+  episode: 1
+  res: 1080p
+  lang: multi
+
+Kendrick Lamar - DAMN. (2017) [FLAC] [24-96]
+  title: Kendrick Lamar - DAMN.
+  artist: Kendrick Lamar
+  album: DAMN.
+  year: 2017
+  acodec: flac
+  bits: 24
+  sample: 96kHz
+
+AC/DC - Back In Black (1980) [MP3 320kbps]
+  title: AC/DC - Back In Black
+  artist: AC/DC
+  album: Back In Black
+  year: 1980
+  acodec: mp3
+  bitrate: 320kbps
+
+Various Artists - Pure 80s (2023) Mp3 320kbps [PMEDIA]
+  title: Various Artists - Pure 80s
+  artist: Various Artists
+  album: Pure 80s
+  year: 2023
+  acodec: mp3
+  bitrate: 320kbps
+  group: PMEDIA
+
+Johann Sebastian Bach - Goldberg Variations (Glenn Gould 1981) [FLAC]
+  title: Johann Sebastian Bach - Goldberg Variations (Glenn Gould)
+  artist: Johann Sebastian Bach
+  album: Goldberg Variations (Glenn Gould)
+  year: 1981
+  acodec: flac
+
+Sabrina Carpenter - Short n' Sweet (2024) [24Bit-48kHz] FLAC [PMEDIA]
+  title: Sabrina Carpenter - Short n' Sweet
+  artist: Sabrina Carpenter
+  album: Short n' Sweet
+  year: 2024
+  bits: 24
+  sample: 48kHz
+  acodec: flac
+  group: PMEDIA
+
+Daft_Punk-Discovery-REISSUE-WEB-2021-ENRAGED
+  title: Daft Punk - Discovery
+  artist: Daft Punk
+  album: Discovery
+  source: web-dl
+  year: 2021
+  group: ENRAGED
+
+Microsoft Office 2021 Professional Plus v2404 x64 Multilingual
+  title: Microsoft Office
+  year: 2021
+  version: 2404
+  arch: x64
+  lang: multi
+
+Adobe.Premiere.Pro.2024.v24.4.1.Multilingual.macOS
+  title: Adobe Premiere Pro
+  year: 2024
+  version: 24.4.1
+  lang: multi
+  platform: macos
+
+7-Zip 24.07 x64
+  title: 7-Zip
+  version: 24.07
+  arch: x64
+
+DaVinci Resolve Studio 19.0.1 Linux
+  title: DaVinci Resolve Studio
+  version: 19.0.1
+  platform: linux
+
+Sid.Meiers.Civilization.VII-RUNE
+  title: Sid Meiers Civilization VII
+  group: RUNE
+
+Black.Myth.Wukong.v1.0.8.14860-TENOKE
+  title: Black Myth Wukong
+  version: 1.0.8.14860
+  group: TENOKE
+
+Persona 5 Royal (Switch) [NSP] [Update v1.0.2]
+  title: Persona 5 Royal
+  platform: switch
+  container: nsp
+  version: 1.0.2
+
+The.Last.of.Us.Part.II.PS4-DUPLEX
+  title: The Last of Us Part II
+  platform: ps4
+  group: DUPLEX
+
+Dune by Frank Herbert (1965) [EPUB]
+  title: Dune
+  author: Frank Herbert
+  year: 1965
+  container: epub
+
+Terry Pratchett - Discworld Collection [EPUB] [MOBI]
+  title: Terry Pratchett - Discworld
+  author: Terry Pratchett
+  pack: yes
+  container: epub
+
+Andy Weir - Project Hail Mary [Audiobook] [M4B]
+  title: Andy Weir - Project Hail Mary
+  author: Andy Weir
+  container: m4b
+
+Обитель (2021) WEB-DL 1080p
+  title: Обитель
+  year: 2021
+  source: web-dl
+  res: 1080p
+
+Слово пацана. Кровь на асфальте / Сезон: 1 / Серии: 1-8 из 8 (Жора Крыжовников) [2023, WEB-DL 1080p]
+  title: Слово пацана. Кровь на асфальте
+  season: 1
+  episode: 1-8
+  year: 2023
+  source: web-dl
+  res: 1080p
+
+[Ohys-Raws] 葬送のフリーレン - 01 (BS-NTV 1280x720 x264 AAC).mp4
+  group: Ohys-Raws
+  title: 葬送のフリーレン
+  episode: 1
+  res: 720p
+  vcodec: h264
+  acodec: aac
+  container: mp4
+
+Home Video 2014.mp4
+  title: Home Video
+  year: 2014
+  container: mp4
+
+IMG_2034.JPG
+  title: IMG 2034
