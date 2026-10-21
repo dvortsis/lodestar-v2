@@ -423,6 +423,12 @@ impl Pool {
 
     fn on_discovery(&mut self, d: Discovery) {
         let key = d.found.key;
+        // Peers for a key the pool has finished with (fetched, lost) are
+        // late; they don't make it new again.
+        if d.reply && !self.entries.contains_key(&key) {
+            self.stats.duplicates.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
         if self.recent.contains(&key) {
             self.stats.duplicates.fetch_add(1, Ordering::Relaxed);
             return;

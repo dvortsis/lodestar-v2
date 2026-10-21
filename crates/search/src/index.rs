@@ -154,13 +154,24 @@ impl SearchIndex {
 
     /// The highest torrent id indexed (0 for a new index).
     pub fn watermark(&self) -> Result<i64> {
-        match self.index.load_metas()?.payload {
-            None => Ok(0),
-            Some(p) => p
-                .strip_prefix(PAYLOAD_PREFIX)
-                .and_then(|n| n.parse().ok())
-                .ok_or(Error::Corrupt("unknown commit payload")),
-        }
+        Ok(self.watermarks()?.0)
+    }
+
+    /// `(highest id indexed, last reindex_log seq applied)`.
+    fn watermarks(&self) -> Result<(i64, i64)> {
+        let Some(p) = self.index.load_metas()?.payload else {
+            return Ok((0, 0));
+        };
+        let bad = || Error::Corrupt("unknown commit payload");
+        let rest = p.strip_prefix(PAYLOAD_PREFIX).ok_or_else(bad)?;
+        let (id, seq) = match rest.split_once(";reindex:") {
+            Some((id, seq)) => (id, seq),
+            None => (rest, "0"),
+        };
+        Ok((
+            id.parse().map_err(|_| bad())?,
+            seq.parse().map_err(|_| bad())?,
+        ))
     }
 
     /// Documents in the current searcher.
@@ -213,10 +224,12 @@ impl SearchIndex {
 
     pub fn writer(&self, heap_bytes: usize) -> Result<Indexer> {
         let writer = self.index.writer_with_num_threads(1, heap_bytes)?;
+        let (last_id, reindex_seq) = self.watermarks()?;
         Ok(Indexer {
             index: self.clone(),
             writer,
-            last_id: self.watermark()?,
+            last_id,
+            reindex_seq,
             pending: 0,
         })
     }
@@ -329,6 +342,8 @@ pub struct Indexer {
     index: SearchIndex,
     writer: IndexWriter,
     last_id: i64,
+    /// The last `reindex_log` entry applied.
+    reindex_seq: i64,
     pending: usize,
 }
 
@@ -361,9 +376,30 @@ impl Indexer {
         Ok(())
     }
 
-    /// Indexes up to `limit` torrents stored after the watermark. Returns
-    /// how many it added.
+    /// Indexes up to `limit` torrents stored after the watermark, then
+    /// re-indexes torrents changed since (upgraded partial imports).
+    /// Returns how many documents it added or replaced.
     pub fn catch_up(&mut self, store: &mut Store, limit: usize) -> Result<usize> {
+        let mut added = self.catch_up_new(store, limit)?;
+        for (seq, id) in store.reindex_after(self.reindex_seq, limit)? {
+            self.reindex_seq = seq;
+            // Ids past the watermark get their current data when reached.
+            if id > self.last_id {
+                continue;
+            }
+            self.writer
+                .delete_term(Term::from_field_u64(self.index.fields.id, id as u64));
+            if let (Some(row), Some(tree)) = (store.torrent(id)?, store.files(id)?) {
+                self.writer
+                    .add_document(TorrentDoc::new(&row, &tree).to_document(&self.index.fields))?;
+            }
+            self.pending += 1;
+            added += 1;
+        }
+        Ok(added)
+    }
+
+    fn catch_up_new(&mut self, store: &mut Store, limit: usize) -> Result<usize> {
         let ids = store.ids_after(self.last_id, limit)?;
         let mut added = 0;
         for id in ids {
@@ -381,7 +417,10 @@ impl Indexer {
     /// Commits what's pending with the watermark and makes it searchable.
     pub fn commit(&mut self) -> Result<()> {
         let mut prepared = self.writer.prepare_commit()?;
-        prepared.set_payload(&format!("{PAYLOAD_PREFIX}{}", self.last_id));
+        prepared.set_payload(&format!(
+            "{PAYLOAD_PREFIX}{};reindex:{}",
+            self.last_id, self.reindex_seq
+        ));
         prepared.commit()?;
         self.index.reader.reload()?;
         self.pending = 0;

@@ -234,3 +234,40 @@ fn the_live_indexer_follows_the_store_within_seconds() {
     );
     assert_eq!(index.watermark().unwrap(), 2);
 }
+
+#[test]
+fn upgraded_imports_are_reindexed() {
+    use lodestar_store::flags;
+    let raw = torrent("pack", &["Hidden.Gem.mkv", "other.txt"]);
+    let real = Info::parse(&raw).unwrap();
+    let mut partial = real.clone();
+    partial.files.clear();
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let base = NewTorrent {
+        info: &real,
+        raw_info: Some(&raw),
+        discovered_at: 1_700_000_000,
+        metadata_at: 1_700_000_001,
+        extra_flags: 0,
+        source: SourceId::new(0).unwrap(),
+    };
+    store
+        .insert(&[NewTorrent {
+            info: &partial,
+            raw_info: None,
+            extra_flags: flags::IMPORTED | flags::FILES_PARTIAL,
+            ..base
+        }])
+        .unwrap();
+    let index = SearchIndex::in_memory().unwrap();
+    let mut w = index.writer(15 << 20).unwrap();
+    w.catch_up(&mut store, 10).unwrap();
+    w.commit().unwrap();
+    assert!(names(&index, "gem").is_empty(), "no files known yet");
+    store.insert(&[base]).unwrap();
+    assert_eq!(w.catch_up(&mut store, 10).unwrap(), 1);
+    w.commit().unwrap();
+    assert_eq!(names(&index, "gem"), vec!["pack".to_string()]);
+    assert_eq!(index.num_docs(), 1, "replaced, not duplicated");
+    assert_eq!(w.catch_up(&mut store, 10).unwrap(), 0);
+}

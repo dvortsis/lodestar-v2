@@ -1286,8 +1286,20 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **`search-bench`** builds or reuses a synthetic corpus and runs seven query classes end to end (parse, compile, top 50, rows from SQLite). It reports p50, p95, p99 and max per class, and `--gate` fails on a missed §3 target.
   - CI gates at 200k torrents (under 2 minutes).
   - At 1M torrents every class passes, with p95 in ms: common word 2.9, rare word 0.6, two words 7.8, three words 8.1, phrase 8.0, word + filter 9.2, browse 19.3.
-  - The 10M measurement comes with the importer PR.
+  - The 10M measurement is recorded with the importer decisions below.
 - **The M2 "minimal UI" is the embedded status page:** setup and login, a search box, results, KPIs and the funnel. The SvelteKit app (`web/`, §10) starts with M5, where its toolchain, budgets and CI gates come in together. A throwaway intermediate UI would only be rewritten.
+
+**M2 implementation decisions (importer, finishing M2):**
+- **bitmagnet importer** (`lodestar import-bitmagnet <postgres-url>`, crate `lodestar-sources-importers`):
+  - It reads `torrents`, `torrent_files` and `torrent_pieces` (piece length and count) in `info_hash` order, in batches of 1,000. A cursor file in the data directory makes it resumable, and re-importing is idempotent.
+  - **The source can't be written:** the session is set to `TRANSACTION READ ONLY`, so PostgreSQL refuses any write.
+  - **Rows land in `torrents`, flagged `imported`, not in the unverified tier (§18.5).** bitmagnet fetched and verified this metadata from the DHT itself. Third-party dumps without info dicts will go to the unverified tier.
+  - bitmagnet's `created_at` becomes `discovered_at`.
+  - **Incomplete file lists** (`over_threshold`, `no_info`, or fewer file rows than `files_count`) are flagged `files_partial`.
+  - At startup the server queues up to 50,000 of them for re-fetch through the peer finders. A fetched info dict **upgrades the row in place** (file blob, counts and flags, with the import provenance kept), and the change goes to `reindex_log` (migration v3) so the indexer replaces the document. The index's commit payload now carries both watermarks.
+  - **Deferred to M3:** bitmagnet's parsed titles (`torrent_contents`/`content`) arrive with claims (§18.5), and the per-bitmagnet-source rows (`torrents_torrent_sources`) with source-level provenance. For now an import is credited to one `bitmagnet` source.
+  - CI runs the importer test against a PostgreSQL 16 service.
+- **Peer finders reply on their own channel.** `SourceCtx::peer_replies` goes straight to the fetch pool, bypassing the have-filter. Otherwise a lookup for a stored-but-partial key was diverted as a rediscovery. Replies are marked, and the pool ignores replies for keys it has already finished, so they're never counted as harvested.
 
 ## 17. Verification (once built)
 
