@@ -185,6 +185,30 @@ pub(crate) fn migrate(conn: &mut Connection, path: Option<&Path>) -> Result<()> 
     migrate_with(conn, path, MIGRATIONS)
 }
 
+/// For read-only connections: the schema must be exactly this build's.
+pub(crate) fn check_current(conn: &Connection) -> Result<()> {
+    let current: i64 = conn
+        .query_row("SELECT max(version) FROM schema_migrations", [], |r| {
+            r.get::<_, Option<i64>>(0)
+        })
+        .optional()?
+        .flatten()
+        .unwrap_or(0);
+    let latest = MIGRATIONS.last().map_or(0, |(v, _)| *v);
+    if current > latest {
+        return Err(Error::SchemaTooNew {
+            found: current,
+            supported: latest,
+        });
+    }
+    if current < latest {
+        return Err(Error::Corrupt(
+            "schema not migrated yet; open it for writing first",
+        ));
+    }
+    Ok(())
+}
+
 fn migrate_with(
     conn: &mut Connection,
     path: Option<&Path>,

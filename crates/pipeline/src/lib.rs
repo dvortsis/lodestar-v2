@@ -19,7 +19,7 @@ mod writer;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use lodestar_peer_wire::FetchOptions;
@@ -126,33 +126,97 @@ pub struct SourceStatus {
     pub dropped: u64,
 }
 
-struct RunningSource {
+struct SourceEntry {
     id: SourceId,
     plugin: Arc<dyn SourcePlugin>,
     emitter: Emitter,
-    task: JoinHandle<Result<(), PluginError>>,
+    running: Arc<AtomicBool>,
+}
+
+/// A cheap, cloneable view of a running pipeline's counters, for metrics
+/// and the status page.
+#[derive(Clone)]
+pub struct Monitor {
+    pool: PoolHandle,
+    intake: Arc<IntakeStats>,
+    writer: Arc<WriterStats>,
+    have: Arc<Have>,
+    sources: Arc<Vec<SourceEntry>>,
+    stored_at_start: u64,
+    started_at: i64,
+}
+
+impl std::fmt::Debug for Monitor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Monitor")
+            .field("started_at", &self.started_at)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Monitor {
+    pub fn pool(&self) -> &PoolHandle {
+        &self.pool
+    }
+
+    pub fn pool_stats(&self) -> &PoolStats {
+        self.pool.stats()
+    }
+
+    pub fn intake_stats(&self) -> &IntakeStats {
+        &self.intake
+    }
+
+    pub fn writer_stats(&self) -> &WriterStats {
+        &self.writer
+    }
+
+    pub fn have(&self) -> &Have {
+        &self.have
+    }
+
+    /// Torrents stored, without a table scan: the count at start plus
+    /// what the writer has added since.
+    pub fn torrents(&self) -> u64 {
+        self.stored_at_start + self.writer.stored.load(Ordering::Relaxed)
+    }
+
+    /// Unix seconds.
+    pub fn started_at(&self) -> i64 {
+        self.started_at
+    }
+
+    pub fn sources(&self) -> Vec<SourceStatus> {
+        self.sources
+            .iter()
+            .map(|s| SourceStatus {
+                id: s.id,
+                plugin: s.plugin.manifest().id,
+                name: s.plugin.manifest().name,
+                running: s.running.load(Ordering::Relaxed),
+                dropped: s.emitter.dropped(),
+            })
+            .collect()
+    }
 }
 
 pub struct Pipeline {
-    sources: Vec<RunningSource>,
+    monitor: Monitor,
+    tasks: Vec<JoinHandle<Result<(), PluginError>>>,
     stop_plugins: watch::Sender<bool>,
     stop_intake: watch::Sender<bool>,
     stop_pool: watch::Sender<bool>,
     intake: JoinHandle<()>,
-    pool: PoolHandle,
     pool_task: JoinHandle<Vec<QueuedKey>>,
     saver: JoinHandle<()>,
     finish: oneshot::Sender<Vec<QueuedKey>>,
     writer: JoinHandle<Store>,
-    intake_stats: Arc<IntakeStats>,
-    writer_stats: Arc<WriterStats>,
-    have: Arc<Have>,
 }
 
 impl std::fmt::Debug for Pipeline {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Pipeline")
-            .field("sources", &self.sources.len())
+            .field("sources", &self.tasks.len())
             .finish_non_exhaustive()
     }
 }
@@ -180,7 +244,7 @@ impl Pipeline {
             .map(|p| (p.manifest().id, p.manifest().version))
             .collect();
         let backfill = config.backfill.as_secs() as i64;
-        let (store, ids, queue, have, backfill_until) =
+        let (store, ids, queue, have, backfill_until, stored_at_start) =
             tokio::task::spawn_blocking(move || prepare(store, &manifests, backfill))
                 .await
                 .map_err(Error::Join)??;
@@ -208,6 +272,7 @@ impl Pipeline {
         let mut finders = Vec::new();
         let mut weights = HashMap::new();
         let mut sources = Vec::new();
+        let mut tasks = Vec::new();
         for (plugin, id) in plugins.into_iter().zip(ids) {
             let m = plugin.manifest();
             let priority = config
@@ -229,18 +294,21 @@ impl Pipeline {
                 shutdown: plugin_shutdown.clone(),
             };
             let p = plugin.clone();
-            let task = tokio::spawn(async move {
+            let running = Arc::new(AtomicBool::new(true));
+            let flag = running.clone();
+            tasks.push(tokio::spawn(async move {
                 let result = p.run(ctx).await;
+                flag.store(false, Ordering::Relaxed);
                 if let Err(e) = &result {
                     tracing::error!(plugin = p.manifest().id, "source stopped: {e}");
                 }
                 result
-            });
-            sources.push(RunningSource {
+            }));
+            sources.push(SourceEntry {
                 id,
                 plugin,
                 emitter,
-                task,
+                running,
             });
         }
         drop(emit_tx);
@@ -308,68 +376,68 @@ impl Pipeline {
         }));
 
         Ok(Pipeline {
-            sources,
+            monitor: Monitor {
+                pool,
+                intake: intake_stats,
+                writer: writer_stats,
+                have,
+                sources: Arc::new(sources),
+                stored_at_start,
+                started_at: unix_now(),
+            },
+            tasks,
             stop_plugins,
             stop_intake,
             stop_pool,
             intake,
-            pool,
             pool_task,
             saver,
             finish: finish_tx,
             writer,
-            intake_stats,
-            writer_stats,
-            have,
         })
     }
 
+    pub fn monitor(&self) -> Monitor {
+        self.monitor.clone()
+    }
+
     pub fn pool(&self) -> &PoolHandle {
-        &self.pool
+        self.monitor.pool()
     }
 
     pub fn pool_stats(&self) -> &PoolStats {
-        self.pool.stats()
+        self.monitor.pool_stats()
     }
 
     pub fn intake_stats(&self) -> &IntakeStats {
-        &self.intake_stats
+        self.monitor.intake_stats()
     }
 
     pub fn writer_stats(&self) -> &WriterStats {
-        &self.writer_stats
+        self.monitor.writer_stats()
     }
 
     pub fn have(&self) -> &Have {
-        &self.have
+        self.monitor.have()
     }
 
     pub fn sources(&self) -> Vec<SourceStatus> {
-        self.sources
-            .iter()
-            .map(|s| SourceStatus {
-                id: s.id,
-                plugin: s.plugin.manifest().id,
-                name: s.plugin.manifest().name,
-                running: !s.task.is_finished(),
-                dropped: s.emitter.dropped(),
-            })
-            .collect()
+        self.monitor.sources()
     }
 
     /// Stops the stages in order (plugins, intake, pool, writer), saving
     /// the DHT state and the fetch queue, and returns the store.
     pub async fn shutdown(self) -> Result<Store, Error> {
         let _ = self.stop_plugins.send(true);
-        for mut s in self.sources {
+        for (s, mut task) in self.monitor.sources.iter().zip(self.tasks) {
             let id = s.plugin.manifest().id;
             // A plugin that ignores shutdown mustn't hold up the rest.
-            match tokio::time::timeout(PLUGIN_STOP_TIMEOUT, &mut s.task).await {
+            match tokio::time::timeout(PLUGIN_STOP_TIMEOUT, &mut task).await {
                 Ok(Ok(Err(e))) => tracing::warn!(plugin = id, "source stopped with an error: {e}"),
                 Ok(_) => {}
                 Err(_) => {
                     tracing::warn!(plugin = id, "source didn't stop in time; aborting it");
-                    s.task.abort();
+                    task.abort();
                 }
             }
         }
@@ -390,7 +458,7 @@ fn prepare(
     mut store: Store,
     manifests: &[(&'static str, &'static str)],
     backfill: i64,
-) -> Result<(Store, Vec<SourceId>, Vec<QueuedKey>, Have, i64), Error> {
+) -> Result<(Store, Vec<SourceId>, Vec<QueuedKey>, Have, i64, u64), Error> {
     let now = unix_now();
     let ids = manifests
         .iter()
@@ -404,7 +472,8 @@ fn prepare(
         }
     };
     let queue = store.load_fetch_queue()?;
-    let have = Have::new(have::capacity_for(store.count()?));
+    let stored = store.count()?;
+    let have = Have::new(have::capacity_for(stored));
     store.for_each_swarm_hash(|h| have.insert(&h))?;
     store.write(&WriteBatch {
         events: &[Event {
@@ -414,7 +483,7 @@ fn prepare(
         }],
         ..WriteBatch::default()
     })?;
-    Ok((store, ids, queue, have, first_run + backfill))
+    Ok((store, ids, queue, have, first_run + backfill, stored))
 }
 
 /// Sends new keys to the pool and known ones to the writer.

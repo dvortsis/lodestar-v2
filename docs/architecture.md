@@ -1183,6 +1183,21 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - `events`: start and stop.
   - The DHT's strategy codes are sample 0, get_peers 1, announce 2 and lookup 3.
 
+**M1 implementation decisions (the `lodestar` binary):**
+- **Commands:** `serve` (the default) and `healthcheck`. The other §11 subcommands arrive with the features they serve. Arguments are parsed by hand, because two commands and one flag don't justify a parser crate.
+- **Config:** one `config.toml`, found at `--config`, else `$LODESTAR_DATA_DIR/config.toml`, else `data/config.toml`. Every field has a default, and unknown keys are errors, so typos surface.
+  - Environment overrides: `LODESTAR_DATA_DIR`, `LODESTAR_HTTP_BIND`, `LODESTAR_DHT_PORT`, `LODESTAR_DHT_ENABLED`, `LODESTAR_INTENSITY` and `LODESTAR_LOG`.
+  - Defaults follow §11: web on `0.0.0.0:8090`, DHT and peers on 6881, data in `lodestar.db` and `dht-state.bin`.
+  - Unless `fetch.max_sockets` is set, the intensity preset also sets the fetch pool's socket cap: Low 100, Balanced 400, Aggressive 1000.
+  - Blocklists are files of hex hashes.
+- **HTTP (axum, read-only):** `/` is the status page, plus `/api/status`, `/metrics` (Prometheus text, every stage) and `/healthz` (200 while every source plugin runs).
+  - The status page is one embedded HTML file using the §10.18 Riverstone role tokens, light and dark, with no external requests. It's served with a CSP and renders peer-supplied names with `textContent` only. The Svelte UI (M5) replaces it.
+  - **There's no authentication yet.** Nothing on these endpoints changes state, but torrent names are visible to anyone who can reach the port. The §12 setup token and auth arrive with the real API, before anything writable is exposed.
+- **The status page reads funnel and recent torrents through a read-only SQLite connection** (`Store::open_reader`) beside the writer. The torrent total is the count at start plus what the writer has stored, so polling never scans the table.
+- **`healthcheck` uses plain std networking,** because the distroless image has no curl. It exits 0 only on a 200 from `/healthz`.
+- **Shutdown on SIGTERM or Ctrl-C:** HTTP drains first, then the pipeline stops in order, saving the queue and DHT state. The test suite runs the real binary through start, health, status and SIGTERM.
+- **mimalloc** is the global allocator (§11). Release builds keep line tables for backtraces: 58 MB unstripped, 6.9 MB stripped. Packaging strips or splits them.
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.
