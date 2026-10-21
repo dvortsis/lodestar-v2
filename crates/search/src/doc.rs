@@ -104,6 +104,10 @@ impl TorrentDoc {
         }
         d.add_text(f.name, &self.name);
         d.add_pre_tokenized_text(f.path, paths_tokens(&self.path_entries));
+        let all: Vec<String> = std::iter::once(self.name.clone())
+            .chain(self.path_entries.iter().cloned())
+            .collect();
+        d.add_pre_tokenized_text(f.text, paths_tokens(&all));
         for e in &self.exts {
             d.add_text(f.ext, e);
         }

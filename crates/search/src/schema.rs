@@ -13,7 +13,7 @@ use crate::tokenizer::NAME_TOKENIZER;
 
 /// Bump on any schema change: a new version is a new index directory,
 /// built in the background while the old one serves (§8).
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 /// Bump on any tokenizer change, for the same reason.
 pub const TOKENIZER_VERSION: u32 = 1;
 
@@ -32,6 +32,11 @@ pub struct Fields {
     /// file index's job (M3), and positions here would cost more than the
     /// whole budget allows (§3, §16).
     pub path: Field,
+    /// The name and the path entries together, words only. An unfielded
+    /// word matches here, one posting list instead of a name-or-path
+    /// union per word, which halves the cost of broad multi-word queries
+    /// (§16); `name` adds its boost on top.
+    pub text: Field,
     /// Lowercased file extensions (keyword).
     pub ext: Field,
     /// Flag names (keyword): private, v2, hybrid, …
@@ -74,6 +79,7 @@ pub fn build() -> (Schema, Fields) {
         hash: b.add_bytes_field("hash", BytesOptions::default().set_indexed()),
         name: b.add_text_field("name", text(true, true)),
         path: b.add_text_field("path", text(false, false)),
+        text: b.add_text_field("text", text(false, false)),
         ext: b.add_text_field("ext", keyword.clone()),
         flag: b.add_text_field("flag", keyword),
         size: b.add_u64_field("size", num()),

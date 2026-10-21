@@ -93,7 +93,7 @@ fn compile_opt(node: &Node, f: &Fields, now: i64) -> Option<Q> {
                     }
                     n => {
                         if let Some(q) = compile_opt(n, f, now) {
-                            clauses.push((Occur::Must, q));
+                            push_must(&mut clauses, q);
                         }
                     }
                 }
@@ -119,6 +119,22 @@ fn compile_opt(node: &Node, f: &Fields, now: i64) -> Option<Q> {
             Box::new(BooleanQuery::new(vec![
                 (Occur::Must, Box::new(AllQuery) as Q),
                 (Occur::MustNot, q),
+            ]))
+        }
+        Node::Word {
+            field: TextField::Any,
+            word,
+        } => {
+            let toks = tokenizer::tokenize(word);
+            if toks.is_empty() {
+                return None;
+            }
+            Box::new(BooleanQuery::new(vec![
+                (Occur::Must, word_query(f.text, &toks, false)),
+                (
+                    Occur::Should,
+                    Box::new(BoostQuery::new(word_query(f.name, &toks, true), NAME_BOOST)),
+                ),
             ]))
         }
         Node::Word { field, word } => {
@@ -231,6 +247,30 @@ fn compile_opt(node: &Node, f: &Fields, now: i64) -> Option<Q> {
 /// Phrases and NEAR need word order, which only `name` keeps at the
 /// torrent level; file names get it with the file index (M3). An explicit
 /// `path:"…"` still matches all of its words in the paths.
+/// Adds a required clause to a conjunction, splicing in the clauses of a
+/// conjunction it holds (required terms plus optional boosts), so the
+/// required terms of every word form one flat intersection, which Tantivy
+/// runs much faster than nested ones.
+fn push_must(clauses: &mut Vec<(Occur, Q)>, q: Q) {
+    if let Some(b) = q.downcast_ref::<BooleanQuery>() {
+        let inner = b.clauses();
+        let splice = inner.iter().any(|(o, _)| *o == Occur::Must)
+            && inner
+                .iter()
+                .all(|(o, _)| matches!(o, Occur::Must | Occur::Should));
+        if splice {
+            for (occur, q) in inner {
+                match occur {
+                    Occur::Must => push_must(clauses, q.box_clone()),
+                    _ => clauses.push((*occur, q.box_clone())),
+                }
+            }
+            return;
+        }
+    }
+    clauses.push((Occur::Must, q));
+}
+
 fn phrase_field(field: TextField) -> TextField {
     match field {
         TextField::Any => TextField::Name,

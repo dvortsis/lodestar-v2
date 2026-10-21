@@ -74,13 +74,12 @@ fn build(
     seed: u64,
     n: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let have = store.count()? as usize;
-    if have >= n {
-        return Ok(());
-    }
+    let have = (store.count()? as usize).min(n);
     let mut generator = Generator::new(seed);
-    for _ in 0..have {
-        generator.next_torrent();
+    if have < n {
+        for _ in 0..have {
+            generator.next_torrent();
+        }
     }
     let started = Instant::now();
     let mut left = n - have;
@@ -113,6 +112,8 @@ fn build(
             );
         }
     }
+    // The index catches up from its watermark, so a new schema version
+    // reuses the stored corpus.
     let started = Instant::now();
     let mut indexer = index.writer(512 << 20)?;
     loop {
