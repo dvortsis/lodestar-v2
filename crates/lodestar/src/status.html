@@ -11,6 +11,7 @@
   --background: #F3F6F5; --surface: #FFFFFF; --text: #243C44;
   --muted-text: #567079; --primary-ink: #4A7789; --divider: #DCE4E1;
   --success: #5B7763; --error: #B45253;
+  --field-border: #8796A2; --primary-content: #FFFFFF;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -18,6 +19,7 @@
     --background: #141F25; --surface: #22313A; --text: #E5EEED;
     --muted-text: #B2C3C5; --primary-ink: #85AFC0; --divider: #354851;
     --success: #A0C3A7; --error: #DC8080;
+    --field-border: #8C9BA7; --primary-content: #141F25;
   }
 }
 * { box-sizing: border-box; }
@@ -42,12 +44,46 @@ td.n { text-align: right; font-variant-numeric: tabular-nums; }
 td.name { word-break: break-all; }
 .ok { color: var(--success); } .bad { color: var(--error); }
 code { font-family: "Atkinson Hyperlegible Mono", ui-monospace, monospace; }
+form.auth { max-width: 360px; display: grid; gap: 10px; margin-top: 16px; }
+input { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--field-border); border-radius: 6px; padding: 8px 10px; }
+input:focus-visible, button:focus-visible { outline: 2px solid var(--primary-ink); outline-offset: 2px; }
+button { font: inherit; border: 0; border-radius: 6px; padding: 8px 14px; background: var(--primary-ink); color: var(--primary-content); cursor: pointer; }
+button.link { background: none; color: var(--primary-ink); padding: 0; }
+.search { display: flex; gap: 8px; margin-top: 16px; }
+.search input { flex: 1; }
+.err { color: var(--error); margin: 8px 0 0; }
+[hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <main>
   <h1>Lodestar</h1>
   <p class="meta" id="meta">Loading…</p>
+
+  <form class="auth" id="setup" hidden>
+    <p>First run: enter the setup token printed in the server log, then choose the admin password.</p>
+    <input id="setup-token" autocomplete="off" placeholder="Setup token (XXXX-XXXX-XXXX-XXXX)" required>
+    <input id="setup-pw" type="password" autocomplete="new-password" placeholder="New password (10+ characters)" minlength="10" required>
+    <button>Create password</button>
+    <p class="err" id="setup-err"></p>
+  </form>
+  <form class="auth" id="login" hidden>
+    <input id="login-pw" type="password" autocomplete="current-password" placeholder="Password" required>
+    <button>Log in</button>
+    <p class="err" id="login-err"></p>
+  </form>
+
+  <div id="app" hidden>
+  <form class="search" id="search" role="search">
+    <input id="q" type="search" placeholder="Search names and files: dark knight ext:mkv size:>4GB" aria-label="Search">
+    <button>Search</button>
+  </form>
+  <p class="err" id="q-err"></p>
+  <div id="results" hidden>
+    <p class="meta" id="results-meta"></p>
+    <table><thead><tr><th>Name</th><th class="n">Size</th><th class="n">Files</th></tr></thead><tbody id="hits"></tbody></table>
+  </div>
+
   <div class="kpis">
     <div class="kpi"><b id="torrents" data-testid="kpi-torrents">—</b><span>torrents stored</span></div>
     <div class="kpi"><b id="rate">—</b><span>stored per hour (this run)</span></div>
@@ -66,7 +102,8 @@ code { font-family: "Atkinson Hyperlegible Mono", ui-monospace, monospace; }
   <h2>Latest torrents</h2>
   <table><thead><tr><th>Name</th><th class="n">Size</th><th class="n">Files</th></tr></thead><tbody id="latest"></tbody></table>
 
-  <p class="meta" style="margin-top:16px">Machine-readable: <code>/api/status</code>, <code>/metrics</code>, <code>/healthz</code></p>
+  <p class="meta" style="margin-top:16px">Machine-readable: <code>/api/status</code>, <code>/api/v1/search?q=</code>, <code>/metrics</code>, <code>/healthz</code> · <button class="link" id="logout">Log out</button></p>
+  </div>
 </main>
 <script>
 "use strict";
@@ -91,7 +128,9 @@ function row(cells) {
 function fill(id, rows) { $(id).replaceChildren(...rows.map(row)); }
 async function refresh() {
   try {
-    const s = await (await fetch("/api/status")).json();
+    const r = await fetch("/api/status");
+    if (r.status === 401) { gate(); return; }
+    const s = await r.json();
     const up = Math.max(1, s.now - s.started_at);
     $("meta").textContent = "v" + s.version + " · up " + Math.floor(up / 3600) + " h " + Math.floor(up % 3600 / 60) + " min";
     $("torrents").textContent = fmt.format(s.torrents);
@@ -112,8 +151,61 @@ async function refresh() {
     $("meta").textContent = "Can't reach the server.";
   }
 }
-refresh();
-setInterval(refresh, 5000);
+async function post(url, body) {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  let data = {};
+  try { data = await r.json(); } catch (e) { /* empty body */ }
+  return { ok: r.ok, data };
+}
+let timer = null;
+function show(id) {
+  for (const x of ["setup", "login", "app"]) $(x).hidden = x !== id;
+}
+async function gate() {
+  clearInterval(timer);
+  const a = await (await fetch("/api/v1/auth")).json();
+  if (a.logged_in) {
+    show("app");
+    refresh();
+    timer = setInterval(refresh, 5000);
+  } else {
+    show(a.setup_required ? "setup" : "login");
+    $("meta").textContent = a.setup_required ? "Not set up yet." : "Log in to continue.";
+  }
+}
+$("setup").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const r = await post("/api/v1/setup", { token: $("setup-token").value, password: $("setup-pw").value });
+  $("setup-err").textContent = r.ok ? "" : r.data.error || "Setup failed.";
+  if (r.ok) gate();
+});
+$("login").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const r = await post("/api/v1/login", { password: $("login-pw").value });
+  $("login-err").textContent = r.ok ? "" : r.data.error || "Login failed.";
+  if (r.ok) gate();
+});
+$("logout").addEventListener("click", async () => {
+  await post("/api/v1/logout", {});
+  gate();
+});
+$("search").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const q = $("q").value;
+  const r = await fetch("/api/v1/search?q=" + encodeURIComponent(q));
+  if (r.status === 401) { gate(); return; }
+  const data = await r.json();
+  if (!r.ok) {
+    $("q-err").textContent = data.error + (data.start !== undefined ? " — “" + q.slice(data.start, data.end) + "”" : "");
+    $("results").hidden = true;
+    return;
+  }
+  $("q-err").textContent = "";
+  $("results").hidden = false;
+  $("results-meta").textContent = fmt.format(data.total) + " matches · " + data.took_ms.toFixed(1) + " ms";
+  fill("hits", data.hits.map((t) => [[t.name, "name"], [bytes(t.size), "n"], [fmt.format(t.files), "n"]]));
+});
+gate();
 </script>
 </body>
 </html>

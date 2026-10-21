@@ -15,13 +15,31 @@ fn free_port() -> u16 {
         .port()
 }
 
-fn get(port: u16, path: &str) -> Option<String> {
+fn request(port: u16, head: &str, body: &str) -> Option<String> {
     let mut s = TcpStream::connect(("127.0.0.1", port)).ok()?;
     s.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
-    write!(s, "GET {path} HTTP/1.0\r\nHost: localhost\r\n\r\n").ok()?;
+    write!(
+        s,
+        "{head}\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    )
+    .ok()?;
     let mut out = String::new();
     s.read_to_string(&mut out).ok()?;
     Some(out)
+}
+
+fn get(port: u16, path: &str) -> Option<String> {
+    request(port, &format!("GET {path} HTTP/1.0"), "")
+}
+
+fn get_with(port: u16, path: &str, cookie: &str) -> String {
+    request(
+        port,
+        &format!("GET {path} HTTP/1.0\r\nCookie: {cookie}"),
+        "",
+    )
+    .unwrap()
 }
 
 #[test]
@@ -42,6 +60,24 @@ fn serves_status_and_stops_cleanly() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    // The first run prints its setup token to the log (§12).
+    let stderr = child.stderr.take().unwrap();
+    let (token_tx, token_rx) = std::sync::mpsc::channel();
+    let log = std::thread::spawn(move || {
+        use std::io::BufRead;
+        let mut all = String::new();
+        for line in std::io::BufReader::new(stderr)
+            .lines()
+            .map_while(Result::ok)
+        {
+            if let Some(rest) = line.split("setup token ").nth(1) {
+                let _ = token_tx.send(rest.split_whitespace().next().unwrap_or("").to_string());
+            }
+            all.push_str(&line);
+            all.push('\n');
+        }
+        all
+    });
 
     let start = Instant::now();
     let health = loop {
@@ -60,7 +96,34 @@ fn serves_status_and_stops_cleanly() {
     env(&mut check);
     assert!(check.arg("healthcheck").status().unwrap().success());
 
-    let status = get(port, "/api/status").unwrap();
+    // Status and the API need a session; metrics and health don't.
+    assert!(
+        get(port, "/api/status")
+            .unwrap()
+            .starts_with("HTTP/1.0 401")
+    );
+    let token = token_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("setup token logged");
+    let setup = request(
+        port,
+        "POST /api/v1/setup HTTP/1.0\r\nContent-Type: application/json",
+        &format!(r#"{{"token":"{token}","password":"correct horse battery"}}"#),
+    )
+    .unwrap();
+    assert!(setup.starts_with("HTTP/1.0 200"), "{setup}");
+    let cookie = setup
+        .lines()
+        .find_map(|l| l.strip_prefix("set-cookie: "))
+        .and_then(|c| c.split(';').next())
+        .expect("session cookie")
+        .to_string();
+    let status = get_with(port, "/api/status", &cookie);
+    let search = get_with(port, "/api/v1/search?q=anything", &cookie);
+    assert!(
+        search.starts_with("HTTP/1.0 200") && search.contains("\"total\":0"),
+        "{search}"
+    );
     assert!(status.contains("\"plugin\":\"dht\""), "{status}");
     assert!(status.contains("\"torrents\":0"), "{status}");
     let metrics = get(port, "/metrics").unwrap();
@@ -80,13 +143,7 @@ fn serves_status_and_stops_cleanly() {
         .unwrap();
     assert!(killed.success());
     let exit = child.wait().unwrap();
-    let mut stderr = String::new();
-    child
-        .stderr
-        .take()
-        .unwrap()
-        .read_to_string(&mut stderr)
-        .unwrap();
+    let stderr = log.join().unwrap();
     assert!(exit.success(), "exit {exit:?}: {stderr}");
     assert!(dir.path().join("dht-state.bin").exists());
     assert!(dir.path().join("lodestar.db").exists());

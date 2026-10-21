@@ -9,6 +9,7 @@ use axum::extract::State;
 use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
+use lodestar_api::{ApiState, require_session};
 use lodestar_dht::node::StatsSnapshot;
 use lodestar_pipeline::Monitor;
 use lodestar_search::{IndexStats, SearchIndex};
@@ -43,13 +44,24 @@ impl AppState {
     }
 }
 
-pub fn router(state: AppState) -> Router {
+/// The page and health/metrics endpoints are open (the page asks for a
+/// login itself; metrics carry no torrent names). Status and the API need
+/// a session.
+pub fn router(state: AppState, api: ApiState) -> Router {
+    let status_route = Router::new()
+        .route("/api/status", get(status))
+        .route_layer(axum::middleware::from_fn_with_state(
+            api.clone(),
+            require_session,
+        ))
+        .with_state(state.clone());
     Router::new()
         .route("/", get(page))
-        .route("/api/status", get(status))
         .route("/metrics", get(prometheus))
         .route("/healthz", get(healthz))
         .with_state(state)
+        .merge(status_route)
+        .nest("/api/v1", lodestar_api::router(api))
 }
 
 async fn page() -> Response {
