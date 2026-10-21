@@ -412,6 +412,7 @@ fn counters_add_up_inside_writes() {
     store
         .write(&WriteBatch {
             torrents: &torrents,
+            touches: &[],
             counters: &[c(5), Counter { key: 4, ..c(1) }],
             cohorts: &[cohort(7)],
             events: &events,
@@ -462,4 +463,39 @@ fn fetch_queue_round_trips_and_is_replaced() {
     );
     store.save_fetch_queue(&[key(3, 1)]).unwrap();
     assert_eq!(store.load_fetch_queue().unwrap(), vec![key(3, 1)]);
+}
+
+#[test]
+fn touches_add_sources_and_report_misses() {
+    use lodestar_metainfo::InfoHash;
+    use lodestar_store::{Touch, WriteBatch};
+    let mut store = mem();
+    let raw = hybrid();
+    let info = Info::parse(&raw).unwrap();
+    let id = store.insert(&[new(&info, &raw)]).unwrap()[0].id();
+    let v2_short = InfoHash(info.v2.unwrap().0[..20].try_into().unwrap());
+    let written = store
+        .write(&WriteBatch {
+            touches: &[
+                Touch {
+                    hash: v2_short,
+                    sources: 0b110,
+                },
+                Touch {
+                    hash: InfoHash([7; 20]),
+                    sources: 1,
+                },
+            ],
+            ..WriteBatch::default()
+        })
+        .unwrap();
+    assert_eq!(written.touched, vec![Some(id), None]);
+    assert_eq!(store.torrent(id).unwrap().unwrap().sources, 0b111);
+    let mut hashes = Vec::new();
+    store.for_each_swarm_hash(|h| hashes.push(h)).unwrap();
+    assert_eq!(hashes, vec![info.primary_hash(), v2_short]);
+    assert_eq!(store.setting_i64("first_run").unwrap(), None);
+    store.set_setting_i64("first_run", 5).unwrap();
+    store.set_setting_i64("first_run", 6).unwrap();
+    assert_eq!(store.setting_i64("first_run").unwrap(), Some(6));
 }
