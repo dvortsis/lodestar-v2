@@ -499,3 +499,44 @@ fn touches_add_sources_and_report_misses() {
     store.set_setting_i64("first_run", 6).unwrap();
     assert_eq!(store.setting_i64("first_run").unwrap(), Some(6));
 }
+
+#[test]
+fn a_reader_sees_the_writers_commits_and_cannot_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("r.db");
+    let mut writer = Store::open(&path, StoreConfig::default()).unwrap();
+    let reader = Store::open_reader(&path, StoreConfig::default()).unwrap();
+    assert!(reader.latest(5).unwrap().is_empty());
+    for name in [b"a", b"b", b"c"] {
+        let raw = single(name, vec![]);
+        let info = Info::parse(&raw).unwrap();
+        writer.insert(&[new(&info, &raw)]).unwrap();
+    }
+    let names: Vec<String> = reader
+        .latest(2)
+        .unwrap()
+        .into_iter()
+        .map(|t| t.name)
+        .collect();
+    assert_eq!(names, vec!["c", "b"]);
+    assert!(
+        reader
+            .connection()
+            .execute("DELETE FROM torrents", [])
+            .is_err()
+    );
+    assert_eq!(writer.count().unwrap(), 3);
+    // A database this build hasn't migrated can't be read.
+    let empty = dir.path().join("empty.db");
+    rusqlite_create(&empty);
+    assert!(Store::open_reader(&empty, StoreConfig::default()).is_err());
+}
+
+fn rusqlite_create(path: &std::path::Path) {
+    let conn = lodestar_store::rusqlite::Connection::open(path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+         INSERT INTO schema_migrations VALUES (1, 0);",
+    )
+    .unwrap();
+}

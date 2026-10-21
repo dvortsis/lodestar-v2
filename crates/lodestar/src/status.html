@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lodestar status</title>
+<style>
+/* Riverstone role tokens (architecture §10.18). The Svelte UI replaces
+   this page; until then it uses the same tokens and nothing else. */
+:root {
+  --background: #F3F6F5; --surface: #FFFFFF; --text: #243C44;
+  --muted-text: #567079; --primary-ink: #4A7789; --divider: #DCE4E1;
+  --success: #5B7763; --error: #B45253;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #141F25; --surface: #22313A; --text: #E5EEED;
+    --muted-text: #B2C3C5; --primary-ink: #85AFC0; --divider: #354851;
+    --success: #A0C3A7; --error: #DC8080;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 24px 16px; background: var(--background); color: var(--text);
+  font: 15px/1.5 "Atkinson Hyperlegible Next", system-ui, sans-serif;
+}
+main { max-width: 960px; margin: 0 auto; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+h2 { font-size: 15px; margin: 24px 0 8px; color: var(--muted-text); font-weight: 600; }
+.meta { color: var(--muted-text); margin: 0; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 16px; }
+.kpi, table { background: var(--surface); border: 1px solid var(--divider); border-radius: 8px; }
+.kpi { padding: 12px 14px; }
+.kpi b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
+.kpi span { color: var(--muted-text); font-size: 13px; }
+table { width: 100%; border-collapse: separate; border-spacing: 0; overflow: hidden; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--divider); }
+tr:last-child td { border-bottom: 0; }
+th { color: var(--muted-text); font-weight: 600; font-size: 13px; }
+td.n { text-align: right; font-variant-numeric: tabular-nums; }
+td.name { word-break: break-all; }
+.ok { color: var(--success); } .bad { color: var(--error); }
+code { font-family: "Atkinson Hyperlegible Mono", ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Lodestar</h1>
+  <p class="meta" id="meta">Loading…</p>
+  <div class="kpis">
+    <div class="kpi"><b id="torrents" data-testid="kpi-torrents">—</b><span>torrents stored</span></div>
+    <div class="kpi"><b id="rate">—</b><span>stored per hour (this run)</span></div>
+    <div class="kpi"><b id="pending">—</b><span>keys waiting for metadata</span></div>
+    <div class="kpi"><b id="active">—</b><span>fetches in progress</span></div>
+    <div class="kpi"><b id="nodes">—</b><span>DHT routing nodes</span></div>
+    <div class="kpi"><b id="ratio">—</b><span>DHT reply ratio</span></div>
+  </div>
+
+  <h2>Sources</h2>
+  <table><thead><tr><th>Source</th><th>State</th><th class="n">Dropped</th></tr></thead><tbody id="sources"></tbody></table>
+
+  <h2>Funnel, last 24 hours (by discovery hour)</h2>
+  <table><thead><tr><th>Stage</th><th class="n">Keys</th></tr></thead><tbody id="funnel"></tbody></table>
+
+  <h2>Latest torrents</h2>
+  <table><thead><tr><th>Name</th><th class="n">Size</th><th class="n">Files</th></tr></thead><tbody id="latest"></tbody></table>
+
+  <p class="meta" style="margin-top:16px">Machine-readable: <code>/api/status</code>, <code>/metrics</code>, <code>/healthz</code></p>
+</main>
+<script>
+"use strict";
+const fmt = new Intl.NumberFormat();
+const $ = (id) => document.getElementById(id);
+function bytes(n) {
+  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return (i ? n.toFixed(1) : n) + " " + units[i];
+}
+function row(cells) {
+  const tr = document.createElement("tr");
+  for (const [text, cls] of cells) {
+    const td = document.createElement("td");
+    td.textContent = text; // names come from strangers: never innerHTML
+    if (cls) td.className = cls;
+    tr.appendChild(td);
+  }
+  return tr;
+}
+function fill(id, rows) { $(id).replaceChildren(...rows.map(row)); }
+async function refresh() {
+  try {
+    const s = await (await fetch("/api/status")).json();
+    const up = Math.max(1, s.now - s.started_at);
+    $("meta").textContent = "v" + s.version + " · up " + Math.floor(up / 3600) + " h " + Math.floor(up % 3600 / 60) + " min";
+    $("torrents").textContent = fmt.format(s.torrents);
+    $("rate").textContent = fmt.format(Math.round(s.writer.stored * 3600 / up));
+    $("pending").textContent = fmt.format(s.fetch.pending);
+    $("active").textContent = fmt.format(s.fetch.active);
+    $("nodes").textContent = s.dht ? fmt.format(s.dht.routing_nodes) : "—";
+    $("ratio").textContent = s.dht && s.dht.queries_out ? (s.dht.reply_ratio * 100).toFixed(0) + "%" : "—";
+    fill("sources", s.sources.map((x) => [[x.name], [x.running ? "running" : "stopped", x.running ? "ok" : "bad"], [fmt.format(x.dropped), "n"]]));
+    if (s.funnel_24h) {
+      const f = s.funnel_24h;
+      const rows = [["Harvested", f.harvested], ["Peer found", f.peer_found], ["Metadata fetched", f.fetched], ["Stored", f.stored]];
+      for (const [reason, n] of Object.entries(f.lost)) if (n) rows.push(["Lost: " + reason.replace(/_/g, " "), n]);
+      fill("funnel", rows.map(([k, n]) => [[k], [fmt.format(n), "n"]]));
+    }
+    if (s.latest) fill("latest", s.latest.map((t) => [[t.name, "name"], [bytes(t.size), "n"], [fmt.format(t.files), "n"]]));
+  } catch (e) {
+    $("meta").textContent = "Can't reach the server.";
+  }
+}
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>
