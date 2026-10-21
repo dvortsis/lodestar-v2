@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use lodestar_classify::ENRICHMENT_VERSION;
 use lodestar_cluster::Lease;
 use lodestar_metainfo::InfoHash;
 use lodestar_sources::{Discovery, Funnel, FunnelCounts, Loss, Stage};
@@ -24,6 +25,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, interval_at};
 
 use crate::coordinator::Coordinator;
+use crate::enrich::enrich;
 use crate::have::{Bloom, Have, capacity_for};
 use crate::rollups::{Rollups, metric};
 use crate::worker::{Results, collect};
@@ -55,6 +57,9 @@ pub struct WriterStats {
     pub filter_rebuilds: AtomicU64,
     /// Unix seconds of the last commit.
     pub last_commit: AtomicU64,
+    /// Stored torrents enriched in the background (imports, older rows,
+    /// records from an older parser).
+    pub enriched: AtomicU64,
 }
 
 pub(crate) struct WriterIo {
@@ -70,6 +75,10 @@ pub(crate) struct WriterIo {
 
 pub(crate) struct Writer {
     pub store: Option<Store>,
+    /// The background enrichment pass: the last id it reached, and whether
+    /// it has found nothing left to do.
+    pub backfill_after: i64,
+    pub backfill_done: bool,
     pub cfg: WriterConfig,
     pub have: Arc<Have>,
     pub funnel: Arc<FunnelCounts>,
@@ -122,6 +131,9 @@ impl Writer {
                     self.commit(Vec::new(), touches, Vec::new(), &io.retry).await;
                 }
                 Some(queue) = io.queues.recv() => self.save_queue(queue).await,
+                // Always ready until done; the unbiased select gives it a
+                // fair share between ingest batches.
+                () = std::future::ready(()), if !self.backfill_done => self.backfill().await,
                 _ = flush.tick() => {
                     self.commit(Vec::new(), Vec::new(), Vec::new(), &io.retry).await;
                 }
@@ -261,6 +273,35 @@ impl Writer {
         }
     }
 
+    /// Enriches the next batch of stored torrents that lack an up-to-date
+    /// enrichment, and queues them for re-indexing. One pass per start:
+    /// torrents arriving through the pipeline are enriched in prepare.
+    async fn backfill(&mut self) {
+        let store = self.store.take().expect("store");
+        let after = self.backfill_after;
+        let (store, result) = tokio::task::spawn_blocking(move || {
+            let mut store = store;
+            let result = backfill_batch(&mut store, after);
+            (store, result)
+        })
+        .await
+        .expect("backfill task");
+        self.store = Some(store);
+        match result {
+            Ok(Some((last, n))) => {
+                self.backfill_after = last;
+                self.stats.enriched.fetch_add(n as u64, Ordering::Relaxed);
+            }
+            Ok(None) => self.backfill_done = true,
+            Err(e) => {
+                // Tried again at the next start.
+                self.backfill_done = true;
+                self.stats.errors.fetch_add(1, Ordering::Relaxed);
+                tracing::error!("background enrichment failed: {e}");
+            }
+        }
+    }
+
     /// Rebuilds the have-filter at twice the size from the store.
     async fn rebuild_have(&mut self) {
         let store = self.store.take().expect("store");
@@ -298,6 +339,29 @@ impl Writer {
             tracing::error!("saving the fetch queue failed: {e}");
         }
     }
+}
+
+/// Torrents enriched per background step.
+const BACKFILL_BATCH: usize = 256;
+
+/// Enriches the stored torrents after `after` that need it. `None` when
+/// there are none left.
+fn backfill_batch(
+    store: &mut Store,
+    after: i64,
+) -> Result<Option<(i64, usize)>, lodestar_store::Error> {
+    let ids = store.unenriched(after, ENRICHMENT_VERSION, BACKFILL_BATCH)?;
+    let Some(&last) = ids.last() else {
+        return Ok(None);
+    };
+    let mut batch = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let (Some(row), Some(tree)) = (store.torrent(id)?, store.files(id)?) {
+            batch.push((id, enrich(&row.name, &tree.files, tree.encoding)));
+        }
+    }
+    let n = store.set_enrichments(&batch)?;
+    Ok(Some((last, n)))
 }
 
 /// One store transaction (runs on the blocking pool).

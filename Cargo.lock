@@ -972,6 +972,7 @@ name = "lodestar-pipeline"
 version = "0.0.0"
 dependencies = [
  "lodestar-bencode",
+ "lodestar-classify",
  "lodestar-cluster",
  "lodestar-dht",
  "lodestar-metainfo",

@@ -175,6 +175,22 @@ pub struct Prepared {
     pub files: Compressed,
     pub extra: Option<Vec<u8>>,
     pub raw: Option<Vec<u8>>,
+    /// What enrichment derived, when the preparer ran it.
+    pub enrichment: Option<Enriched>,
+}
+
+/// What enrichment derived for a torrent (§6 "Parsed release",
+/// "Classification"): the hot columns plus an opaque record whose format
+/// belongs to the enrichment code (`torrent_parsed`). `version` says which
+/// code wrote it (`torrent_parsed.parser_ver`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Enriched {
+    pub version: i64,
+    pub content_type: u8,
+    pub junk_score: u8,
+    /// The packed composition (`torrents.comp`).
+    pub comp: Vec<u8>,
+    pub data: Vec<u8>,
 }
 
 impl Prepared {
@@ -435,6 +451,63 @@ impl Store {
             prepared,
             touched,
         })
+    }
+
+    /// A torrent's enrichment, if it has any.
+    pub fn enrichment(&self, id: i64) -> Result<Option<Enriched>> {
+        Ok(self
+            .conn
+            .prepare_cached(
+                "SELECT p.parser_ver, t.content_type, t.junk_score, t.comp, p.data
+                 FROM torrent_parsed p JOIN torrents t ON t.id = p.torrent_id
+                 WHERE p.torrent_id = ?1",
+            )?
+            .query_row([id], |r| {
+                Ok(Enriched {
+                    version: r.get(0)?,
+                    content_type: r.get::<_, Option<u8>>(1)?.unwrap_or_default(),
+                    junk_score: r.get::<_, Option<u8>>(2)?.unwrap_or_default(),
+                    comp: r.get::<_, Option<Vec<u8>>>(3)?.unwrap_or_default(),
+                    data: r.get(4)?,
+                })
+            })
+            .optional()?)
+    }
+
+    /// Up to `limit` torrents after `after` (by id) whose enrichment is
+    /// missing or wasn't written by `version`: imports, torrents stored
+    /// before enrichment existed, and ones a newer parser should redo.
+    pub fn unenriched(&self, after: i64, version: i64, limit: usize) -> Result<Vec<i64>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT t.id FROM torrents t LEFT JOIN torrent_parsed p ON p.torrent_id = t.id
+             WHERE t.id > ?1 AND (p.parser_ver IS NULL OR p.parser_ver != ?2)
+             ORDER BY t.id LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![after, version, limit as i64], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Sets the enrichment of stored torrents in one transaction and
+    /// queues them for re-indexing. Ids no longer stored are skipped.
+    pub fn set_enrichments(&mut self, batch: &[(i64, Enriched)]) -> Result<usize> {
+        let tx = self.conn.transaction()?;
+        let mut done = 0;
+        for (id, e) in batch {
+            let exists = tx
+                .prepare_cached("SELECT 1 FROM torrents WHERE id = ?1")?
+                .query_row([id], |_| Ok(()))
+                .optional()?
+                .is_some();
+            if !exists {
+                continue;
+            }
+            write_enrichment(&tx, *id, e)?;
+            tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
+                .execute([id])?;
+            done += 1;
+        }
+        tx.commit()?;
+        Ok(done)
     }
 
     /// Calls `f` with every 20-byte swarm hash stored: the primary hash of
@@ -765,6 +838,7 @@ fn prepare(
         files,
         extra: info.extra.clone(),
         raw,
+        enrichment: None,
     })
 }
 
@@ -828,7 +902,25 @@ fn commit_one(tx: &Connection, codec: &BlobCodec, t: &PreparedTorrent<'_>) -> Re
         tx.prepare_cached("INSERT INTO torrent_raw (torrent_id, data) VALUES (?1, ?2)")?
             .execute(params![id, raw])?;
     }
+    if let Some(e) = &p.enrichment {
+        write_enrichment(tx, id, e)?;
+    }
     Ok(Inserted::New(id))
+}
+
+/// Sets a torrent's enrichment columns and record.
+fn write_enrichment(conn: &Connection, id: i64, e: &Enriched) -> Result<()> {
+    conn.prepare_cached(
+        "UPDATE torrents SET content_type = ?2, junk_score = ?3, comp = ?4 WHERE id = ?1",
+    )?
+    .execute(params![id, e.content_type, e.junk_score, e.comp])?;
+    conn.prepare_cached(
+        "INSERT INTO torrent_parsed (torrent_id, parser_ver, data) VALUES (?1, ?2, ?3)
+         ON CONFLICT (torrent_id) DO UPDATE SET parser_ver = excluded.parser_ver,
+             data = excluded.data",
+    )?
+    .execute(params![id, e.version, e.data])?;
+    Ok(())
 }
 
 /// Replaces a `FILES_PARTIAL` torrent's file list and info-derived columns
@@ -876,6 +968,9 @@ fn upgrade_partial(conn: &Connection, id: i64, t: &PreparedTorrent<'_>) -> Resul
              ON CONFLICT (torrent_id) DO UPDATE SET data = excluded.data",
         )?
         .execute(params![id, extra])?;
+    }
+    if let Some(e) = &p.enrichment {
+        write_enrichment(conn, id, e)?;
     }
     conn.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
         .execute([id])?;

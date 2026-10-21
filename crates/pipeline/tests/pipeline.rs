@@ -448,3 +448,85 @@ async fn each_key_is_leased_and_counted_once() {
         .sum();
     assert_eq!(harvested, 3);
 }
+
+/// Enrichment (§6): fetched torrents are enriched in prepare; torrents
+/// stored without it (imports, older rows) are enriched in the background
+/// and queued for re-indexing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn torrents_are_enriched_in_prepare_and_in_the_background() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lodestar.db");
+    let raw = info_dict("Old.Import.2019.1080p.BluRay.x264-GRP");
+    let imported = {
+        let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        let info = lodestar_metainfo::Info::parse(&raw).unwrap();
+        store
+            .insert(&[lodestar_store::NewTorrent {
+                info: &info,
+                raw_info: None,
+                discovered_at: 1,
+                metadata_at: 1,
+                extra_flags: flags::IMPORTED,
+                source: lodestar_store::SourceId::new(0).unwrap(),
+            }])
+            .unwrap()[0]
+            .id()
+    };
+    let seed = Seed::v1(info_dict("Fresh.Show.S02E03.720p.WEB.h264-NTb"));
+    let fresh = InfoHash(seed.info_hash);
+    let peer = FakePeer::spawn(vec![seed], Accept::Both, Behavior::Honest, vec![]).await;
+    let (feed, feed_tx) = scripted("feed");
+    let store = Store::open(&db, StoreConfig::default()).unwrap();
+    let pipeline = Pipeline::start(config(), store, vec![feed]).await.unwrap();
+    until("backfilled", || {
+        pipeline.writer_stats().enriched.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    feed_tx
+        .send(Found::key(fresh, 0).with_peers(vec![peer.addr()]))
+        .await
+        .unwrap();
+    until("stored", || {
+        pipeline.writer_stats().stored.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    let store = pipeline.shutdown().await.unwrap();
+
+    use lodestar_classify::{ContentType, ENRICHMENT_VERSION, Record};
+    let old = store.enrichment(imported).unwrap().expect("backfilled");
+    assert_eq!(old.version, ENRICHMENT_VERSION);
+    assert_eq!(
+        ContentType::from_code(old.content_type),
+        Some(ContentType::Movie)
+    );
+    let r = Record::decode(&old.data).unwrap();
+    assert_eq!(
+        (r.release("title"), r.release("year")),
+        (Some("Old Import"), Some("2019"))
+    );
+    assert!(
+        store
+            .reindex_after(0, 10)
+            .unwrap()
+            .iter()
+            .any(|(_, id)| *id == imported),
+        "queued for re-indexing"
+    );
+    let id = store.find(&fresh).unwrap().unwrap();
+    let new = store.enrichment(id).unwrap().expect("enriched in prepare");
+    let r = Record::decode(&new.data).unwrap();
+    assert_eq!(
+        ContentType::from_code(new.content_type),
+        Some(ContentType::Tv)
+    );
+    assert_eq!(
+        (r.release("season"), r.release("episode")),
+        (Some("2"), Some("3"))
+    );
+    assert!(
+        store
+            .unenriched(0, ENRICHMENT_VERSION, 10)
+            .unwrap()
+            .is_empty()
+    );
+}

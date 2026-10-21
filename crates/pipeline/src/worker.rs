@@ -8,8 +8,8 @@
 //! - The fetch pool reports its losses through [`WorkerFunnel`], which
 //!   hands them to the coordinator under that token.
 //! - The prepare stage parses each fetched info dict, runs the blocklist
-//!   pre-check and builds the row and blob ([`Results`]), so the writer
-//!   only commits.
+//!   pre-check, builds the row and blob and enriches it (release parse,
+//!   classification) into [`Results`], so the writer only commits.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
@@ -171,12 +171,19 @@ fn prepare_one(
     if info.swarm_hashes().any(|h| blocklist.contains(&h.0)) {
         return Err(Loss::Blocked);
     }
-    preparer
+    let mut prepared = preparer
         .prepare(&info, Some(&fk.fetched.info))
         .map_err(|e| {
             tracing::warn!(key = %fk.key, "preparing failed: {e}");
             Loss::Invalid
-        })
+        })?;
+    // Enrichment runs here, on the worker side (§19.4).
+    prepared.enrichment = Some(crate::enrich::enrich(
+        &prepared.name,
+        &info.files,
+        info.path_encoding,
+    ));
+    Ok(prepared)
 }
 
 /// Gathers more items for the same batch, briefly.

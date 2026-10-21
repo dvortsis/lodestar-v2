@@ -1416,6 +1416,21 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Metrics:** `lodestar_leases_{granted,held,stale,expired}_total` and `lodestar_leases_outstanding`.
 - **Not in this slice:** the network protocol, joining, the replicated have-filter and the coordinator's store check for lagging replicas (all v0.6, §14), and wiring enrichment into prepare (the last M3 slice). If the built-in worker's heartbeat stalled past the TTL, an in-flight result would be dropped as stale. That needs a runtime starved for minutes, and re-assigning work belongs with remote workers.
 
+**M3 implementation decisions (enrichment storage and backfill):**
+- **Enrichment runs in the worker's prepare step (§19.4).** It decodes the file paths with the torrent's path encoding, runs `classify` and attaches the result to the `Prepared` record. The writer stores it in the same transaction as the torrent.
+- **Storage reuses the V1 schema; there's no migration.**
+  - `torrents.content_type`, `junk_score` and `comp` hold the filterable values.
+  - `torrent_parsed(torrent_id, parser_ver, data)` holds the full record, which the index and the UI read back without classifying again.
+- **The record (`classify::Record`) is line-based text:** a `lodestar-enrichment 1` header, then `key<TAB>value` lines for the type, confidences, junk score and reasons, structure, largest file, depth and the effective release under `r.` keys. Each alternative title gets its own `r.alt` line, so a comma in a title survives.
+  - Control characters in values become spaces, so a crafted name can't add a line.
+  - Decoding is strict. An unknown key or a bad value is an error, and the record is derived again. The round-trip is property-tested.
+  - Typical records are 150–300 bytes. Text was chosen over a binary codec because it's small enough, it's readable in `sqlite3`, and the release fields can grow without a format change.
+- **`ENRICHMENT_VERSION` = `PARSER_VERSION << 16 | CLASSIFY_VERSION`** is stored as `parser_ver`. Any parser or classifier change makes every stored record outdated.
+- **Background backfill in the writer:** torrents with no record or an outdated one (imports, rows stored before M3, an older parser) are enriched 256 at a time in id order, from an always-ready branch of the writer's loop. Fetch results and rediscoveries interleave with it, because the loop's select is unbiased.
+  - Each batch appends to `reindex_log`, so the live indexer picks up the new fields.
+  - After an error the backfill stops until the next start, rather than retrying in a loop.
+  - Metric: `lodestar_writer_enriched_total`.
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.

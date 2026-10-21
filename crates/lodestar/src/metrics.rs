@@ -228,6 +228,12 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>) -> String {
         get(&w.errors),
     );
     o.one(
+        "writer_enriched_total",
+        "counter",
+        "Stored torrents enriched in the background (§6).",
+        get(&w.enriched),
+    );
+    o.one(
         "writer_last_commit_seconds",
         "gauge",
         "Unix time of the last commit.",

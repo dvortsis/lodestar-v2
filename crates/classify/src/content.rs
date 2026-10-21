@@ -67,6 +67,10 @@ impl ContentType {
     pub fn from_code(code: u8) -> Option<ContentType> {
         Self::ALL.get(usize::from(code)).copied()
     }
+
+    pub fn from_name(name: &str) -> Option<ContentType> {
+        Self::ALL.iter().copied().find(|t| t.as_str() == name)
+    }
 }
 
 /// Scene and repack groups that release games, not other software.
