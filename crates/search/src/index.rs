@@ -154,9 +154,10 @@ fn relative(node: &Node) -> bool {
     }
 }
 
-/// Phase-1 candidates re-ranked for a relevance page (§8: "the top
-/// ~1,000").
-const RERANK_WINDOW: usize = 1000;
+/// Phase-1 candidates re-ranked for a relevance page: four pages of 50.
+/// §8 sketched ~1,000; at 10M torrents a window that size costs about a
+/// quarter of the keyword budget in top-k upkeep alone (§16).
+const RERANK_WINDOW: usize = 200;
 
 /// Adds each candidate's score under `boosts` and sorts best first,
 /// ties by address.
