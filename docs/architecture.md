@@ -1590,6 +1590,26 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - Scheduler property tests and the fake-tracker end-to-end test pass.
   - Memory stays flat in a soak run.
 
+**M4 implementation decisions (tracker scrape, `lodestar-tracker-scrape`):**
+- **One call is one request to one tracker.** `Tracker::scrape(hashes)` returns counts in request order, with `None` where the tracker gave no entry. Choosing hashes, rate limits, backoff and bans belong to the scheduler (slice 4).
+- **UDP (BEP 15):**
+  - Each tracker gets its own socket, connected to the tracker. The kernel then drops anyone else's datagrams, and each tracker is one NAT flow. A reply must also carry our random transaction id; anything else is skipped until the deadline.
+  - A connection id is reused for 60 s. If a scrape with a cached id is refused, the client reconnects once before believing the refusal, because trackers expire ids on their own schedule.
+  - The defaults are a 5 s wait and one retry, not BEP 15's 15 s × 2ⁿ: a scrape can always wait for the next round.
+  - At most 74 hashes go in a packet, so a reply fits in 900 bytes. Hosts are re-resolved hourly, and the socket binds the crawler's address (§5), so scrapes leave through the same VPN.
+- **HTTP (BEP 48):**
+  - The scrape URL follows the convention: the last path segment must start with `announce`. A tracker whose URL doesn't is treated as not supporting scrapes.
+  - reqwest runs on rustls with the `ring` provider. reqwest's default, aws-lc, is a C/CMake build that complicates the Windows and musl targets.
+  - The client ignores `HTTP(S)_PROXY`, because crawler traffic leaves through the bound interface like the DHT does. It follows at most 2 redirects, caps bodies at 64 KiB before reading them, sends 32 hashes per request by default (74 at most), and honours `min_request_interval` up to a day.
+  - Errors never include the URL, which may hold a passkey.
+- **Reading replies:**
+  - A missing count reads as 0, a negative one as 0, and one too large for u32 as `u32::MAX`. An entry with a non-integer count is dropped.
+  - A UDP reply with fewer entries than asked leaves gaps. One with more is a protocol error.
+  - Error text is cut to 200 printable characters.
+  - `Counts::is_reporting` is the opentracker rule: s+l+c > 0.
+- **Identity:** a tracker's canonical URL is `udp://host:port` (BEP 41 paths dropped) or the normalised announce URL without its fragment. It's the key the `trackers` table will use.
+- **Tests:** in-process fake UDP and HTTP trackers (feature `testing`) model opentracker and inject faults: lost and stray packets, refusals, expired connection ids, truncated replies, HTTP errors and oversized bodies. The parsers are property-tested and fuzzed (`fuzz/tracker_scrape`: 5.0M runs clean on first add).
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.

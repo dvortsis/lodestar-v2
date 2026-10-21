@@ -15,6 +15,7 @@ lodestar-metainfo = { path = "../crates/metainfo" }
 lodestar-release-parser = { path = "../crates/release-parser" }
 lodestar-search = { path = "../crates/search" }
 lodestar-store = { path = "../crates/store" }
+lodestar-tracker-scrape = { path = "../crates/tracker-scrape" }
 
 # Each target is a separate binary; see README.md for running them.
 [[bin]]
@@ -62,6 +63,13 @@ bench = false
 [[bin]]
 name = "release"
 path = "fuzz_targets/release.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tracker_scrape"
+path = "fuzz_targets/tracker_scrape.rs"
 test = false
 doc = false
 bench = false
