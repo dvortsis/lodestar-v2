@@ -16,6 +16,7 @@ lodestar-metainfo = { path = "crates/metainfo" }
 lodestar-store = { path = "crates/store" }
 lodestar-dht = { path = "crates/dht" }
 lodestar-peer-wire = { path = "crates/peer-wire" }
+lodestar-sources = { path = "crates/sources" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
