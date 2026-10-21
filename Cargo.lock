@@ -919,6 +919,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lodestar-cluster"
+version = "0.0.0"
+dependencies = [
+ "lodestar-metainfo",
+ "lodestar-store",
+ "proptest",
+]
+
+[[package]]
 name = "lodestar-dht"
 version = "0.0.0"
 dependencies = [
@@ -963,6 +972,7 @@ name = "lodestar-pipeline"
 version = "0.0.0"
 dependencies = [
  "lodestar-bencode",
+ "lodestar-cluster",
  "lodestar-dht",
  "lodestar-metainfo",
  "lodestar-peer-wire",

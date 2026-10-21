@@ -1,20 +1,28 @@
-//! The pipeline (architecture §5–§7, §18.4): source plugins → intake (the
-//! have-filter) → the shared fetch pool → the single writer.
+//! The pipeline (architecture §5–§7, §18.4, §19): source plugins → intake
+//! (the have-filter, then a lease from the coordinator) → the shared fetch
+//! pool → prepare → the single writer.
 //!
 //! ```text
-//!  plugins ──emit──▶ intake ──new──▶ fetch pool ──verified──▶ writer ──▶ store
-//!     ▲                │                  │                     │
-//!     └── peer asks ◀──┼──────────────────┘                     │
-//!                      └──── stored? (confirm, add source) ─────┘
+//!   worker side (WorkerId::LOCAL)                         │ coordinator
+//!  plugins ──emit──▶ intake ──claim──────────────────────▶│ leases (harvested at grant)
+//!     ▲               │  ◀──grant/held──────────────────── │
+//!     │               └──new──▶ fetch pool ──▶ prepare ──Results──▶ writer ──▶ store
+//!     └── peer asks ◀─────────────┘   └──lost──────────────▶│ leases (lost, once)
+//!                     stored? (confirm, add source) ─────────────────▶ writer
 //! ```
 //!
-//! Each stage is one task with bounded channels between them. Live sources
-//! never wait (a full pipeline drops and counts), importers do; the pool
-//! waits on the writer, which is the backpressure that keeps memory flat.
+//! The coordinator–worker boundary (§19.4) runs in-process with one
+//! built-in worker, through the same leases and records remote workers
+//! will use. Each stage is one task with bounded channels between them.
+//! Live sources never wait (a full pipeline drops and counts), importers
+//! do; the pool waits on prepare and prepare on the writer, which is the
+//! backpressure that keeps memory flat.
 
+mod coordinator;
 mod dht;
 mod have;
 mod rollups;
+mod worker;
 mod writer;
 
 use std::collections::{HashMap, HashSet};
@@ -22,6 +30,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use lodestar_cluster::{Claim, Claimed, RestoredLease, WorkerId};
 use lodestar_peer_wire::FetchOptions;
 use lodestar_sources::pool::{self, PeerWireFetcher};
 use lodestar_sources::{
@@ -32,6 +41,10 @@ use lodestar_store::{Event, QueuedKey, SourceId, Store, WriteBatch};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
+use crate::coordinator::Coordinator;
+use crate::worker::{PrepareStage, WorkerFunnel, WorkerLeases};
+
+pub use coordinator::LeaseStats;
 pub use dht::{DhtSource, strategy};
 pub use have::Have;
 pub use rollups::{Rollups, metric};
@@ -45,6 +58,9 @@ pub mod event {
 
 const FIRST_RUN_SETTING: &str = "first_run_at";
 const PLUGIN_STOP_TIMEOUT: Duration = Duration::from_secs(15);
+/// A worker silent this long loses its leases (§19.3).
+const LEASE_TTL_SECS: i64 = 600;
+const HEARTBEAT_EVERY: Duration = Duration::from_secs(5);
 /// Incomplete imports queued for re-fetching per start; the rest follow
 /// on later starts.
 const PARTIAL_REFETCH: usize = 50_000;
@@ -113,6 +129,7 @@ pub struct IntakeStats {
     pub received: AtomicU64,
     /// Already stored according to the have-filter (confirmed by the writer).
     pub known: AtomicU64,
+    /// New keys leased to this worker and sent to the pool.
     pub to_pool: AtomicU64,
     /// Rediscoveries dropped because the writer was behind.
     pub dropped: AtomicU64,
@@ -143,6 +160,7 @@ pub struct Monitor {
     pool: PoolHandle,
     intake: Arc<IntakeStats>,
     writer: Arc<WriterStats>,
+    leases: Arc<LeaseStats>,
     have: Arc<Have>,
     sources: Arc<Vec<SourceEntry>>,
     stored_at_start: u64,
@@ -172,6 +190,11 @@ impl Monitor {
 
     pub fn writer_stats(&self) -> &WriterStats {
         &self.writer
+    }
+
+    /// The coordinator's in-flight leases.
+    pub fn lease_stats(&self) -> &LeaseStats {
+        &self.leases
     }
 
     pub fn have(&self) -> &Have {
@@ -211,6 +234,8 @@ pub struct Pipeline {
     stop_pool: watch::Sender<bool>,
     intake: JoinHandle<()>,
     pool_task: JoinHandle<Vec<QueuedKey>>,
+    prepare: JoinHandle<()>,
+    heartbeat: JoinHandle<()>,
     saver: JoinHandle<()>,
     finish: oneshot::Sender<Vec<QueuedKey>>,
     writer: JoinHandle<Store>,
@@ -262,6 +287,33 @@ impl Pipeline {
         let have = Arc::new(have);
         let funnel = Arc::new(FunnelCounts::default());
         let rollups = Arc::new(Rollups::default());
+        let started_at = unix_now();
+
+        // The coordinator's lease table. Keys saved in the queue were
+        // leased in the last run; they're leased again here, without
+        // counting a new harvest.
+        let coordinator = Arc::new(Coordinator::new(
+            started_at as u32,
+            LEASE_TTL_SECS,
+            funnel.clone(),
+        ));
+        let leases = Arc::new(WorkerLeases::default());
+        for q in &queue {
+            let token = coordinator.restore(
+                WorkerId::LOCAL,
+                q.info_hash,
+                RestoredLease {
+                    cohort: q.cohort,
+                    source: q.source,
+                    sources: 1u64 << q.source.get(),
+                    strategy: q.strategy,
+                    discovered_at: q.cohort * 3600,
+                },
+                started_at,
+            );
+            leases.insert(q.info_hash, token);
+        }
+        let preparer = store.preparer();
 
         let (stop_plugins, plugin_shutdown) = Shutdown::new();
         let (stop_intake, intake_shutdown) = Shutdown::new();
@@ -269,8 +321,10 @@ impl Pipeline {
         let (emit_tx, emit_rx) = mpsc::channel(config.intake_capacity);
         let (pool_tx, pool_rx) = mpsc::channel(config.intake_capacity);
         let (touch_tx, touch_rx) = mpsc::channel(config.intake_capacity);
-        // Small: each entry holds a whole info dictionary.
+        let (retry_tx, retry_rx) = mpsc::channel(config.intake_capacity);
+        // Small: each entry holds a whole info dictionary or prepared row.
         let (out_tx, out_rx) = mpsc::channel(64);
+        let (results_tx, results_rx) = mpsc::channel(64);
         let (queue_tx, queue_rx) = mpsc::channel(1);
         let (finish_tx, finish_rx) = oneshot::channel();
 
@@ -330,7 +384,11 @@ impl Pipeline {
                 discoveries: pool_rx,
                 peer_finders: finders,
                 out: out_tx,
-                funnel: funnel.clone(),
+                funnel: Arc::new(WorkerFunnel {
+                    counts: funnel.clone(),
+                    coordinator: coordinator.clone(),
+                    leases: leases.clone(),
+                }),
                 shutdown: pool_shutdown,
             },
             weights,
@@ -339,14 +397,50 @@ impl Pipeline {
 
         let intake_stats = Arc::new(IntakeStats::default());
         let intake = tokio::spawn(intake(
-            emit_rx,
-            have.clone(),
-            pool_tx.clone(),
-            touch_tx,
-            rollups.clone(),
-            intake_stats.clone(),
+            Intake {
+                emitted: emit_rx,
+                retry: retry_rx,
+                have: have.clone(),
+                coordinator: coordinator.clone(),
+                leases: leases.clone(),
+                to_pool: pool_tx.clone(),
+                touches: touch_tx,
+                rollups: rollups.clone(),
+                stats: intake_stats.clone(),
+            },
             intake_shutdown,
         ));
+
+        let writer_stats = Arc::new(WriterStats::default());
+        let prepare = tokio::spawn(
+            PrepareStage {
+                preparer,
+                blocklist: Arc::new(config.blocklist.clone()),
+                coordinator: coordinator.clone(),
+                leases: leases.clone(),
+                stats: writer_stats.clone(),
+                batch_max: 64,
+                batch_wait: Duration::from_millis(20),
+            }
+            .run(out_rx, results_tx),
+        );
+
+        // The built-in worker's heartbeat. It can't really go silent, but
+        // if its leases ever expired they'd come straight back to it.
+        let heartbeat = {
+            let coordinator = coordinator.clone();
+            let leases = leases.clone();
+            tokio::spawn(async move {
+                loop {
+                    let now = unix_now();
+                    coordinator.heartbeat(WorkerId::LOCAL, now);
+                    for (key, token) in coordinator.expire_to(WorkerId::LOCAL, now) {
+                        leases.insert(key, token);
+                    }
+                    tokio::time::sleep(HEARTBEAT_EVERY).await;
+                }
+            })
+        };
 
         let saver = {
             let pool = pool.clone();
@@ -362,7 +456,7 @@ impl Pipeline {
             })
         };
 
-        let writer_stats = Arc::new(WriterStats::default());
+        let lease_stats = coordinator.stats.clone();
         let writer = writer::Writer {
             store: Some(store),
             cfg: writer::WriterConfig {
@@ -375,13 +469,15 @@ impl Pipeline {
             funnel,
             rollups,
             blocklist: Arc::new(config.blocklist.clone()),
+            coordinator,
             stats: writer_stats.clone(),
         };
+        drop(pool_tx);
         let writer = tokio::spawn(writer.run(writer::WriterIo {
-            fetched: out_rx,
+            results: results_rx,
             touches: touch_rx,
             queues: queue_rx,
-            to_pool: pool_tx,
+            retry: retry_tx,
             finish: finish_rx,
         }));
 
@@ -390,10 +486,11 @@ impl Pipeline {
                 pool,
                 intake: intake_stats,
                 writer: writer_stats,
+                leases: lease_stats,
                 have,
                 sources: Arc::new(sources),
                 stored_at_start,
-                started_at: unix_now(),
+                started_at,
             },
             tasks,
             stop_plugins,
@@ -401,6 +498,8 @@ impl Pipeline {
             stop_pool,
             intake,
             pool_task,
+            prepare,
+            heartbeat,
             saver,
             finish: finish_tx,
             writer,
@@ -435,7 +534,7 @@ impl Pipeline {
         self.monitor.sources()
     }
 
-    /// Stops the stages in order (plugins, intake, pool, writer), saving
+    /// Stops the stages in order (plugins, intake, pool, prepare, writer), saving
     /// the DHT state and the fetch queue, and returns the store.
     pub async fn shutdown(self) -> Result<Store, Error> {
         let _ = self.stop_plugins.send(true);
@@ -455,6 +554,10 @@ impl Pipeline {
         self.intake.await.map_err(Error::Join)?;
         let _ = self.stop_pool.send(true);
         let queue = self.pool_task.await.map_err(Error::Join)?;
+        // Prepare finishes what the pool fetched, then closes the writer's
+        // input.
+        self.prepare.await.map_err(Error::Join)?;
+        self.heartbeat.abort();
         self.saver.abort();
         let _ = self.finish.send(queue);
         self.writer.await.map_err(Error::Join)
@@ -519,48 +622,77 @@ fn prepare(
     Ok((store, ids, queue, have, first_run + backfill, stored))
 }
 
-/// Sends new keys to the pool and known ones to the writer.
-async fn intake(
-    mut rx: mpsc::Receiver<Discovery>,
+struct Intake {
+    emitted: mpsc::Receiver<Discovery>,
+    /// Have-filter false positives from the writer, to claim.
+    retry: mpsc::Receiver<Discovery>,
     have: Arc<Have>,
+    coordinator: Arc<Coordinator>,
+    leases: Arc<WorkerLeases>,
     to_pool: mpsc::Sender<Discovery>,
     touches: mpsc::Sender<Discovery>,
     rollups: Arc<Rollups>,
     stats: Arc<IntakeStats>,
-    mut shutdown: Shutdown,
-) {
+}
+
+/// The worker's intake: known keys go to the writer as rediscoveries; new
+/// ones are claimed from the coordinator (§19.3) and go to the pool.
+///
+/// The built-in worker claims key by key: the lease table is a function
+/// call away, so batching (≤ 512 or 250 ms) is a concern of the wire
+/// protocol, not of this boundary.
+async fn intake(mut io: Intake, mut shutdown: Shutdown) {
     loop {
-        let d = tokio::select! {
+        let (mut d, retried) = tokio::select! {
             biased;
             _ = shutdown.requested() => break,
-            d = rx.recv() => match d {
-                Some(d) => d,
+            d = io.emitted.recv() => match d {
+                Some(d) => (d, false),
                 None => break,
             },
+            Some(d) = io.retry.recv() => (d, true),
         };
-        stats.received.fetch_add(1, Ordering::Relaxed);
-        rollups.add(
-            d.at,
-            metric::HARVESTED,
-            d.source,
-            i64::from(d.found.strategy),
-            1,
-        );
-        if have.contains(&d.found.key) {
-            stats.known.fetch_add(1, Ordering::Relaxed);
-            if touches.try_send(d.clone()).is_err() {
-                stats.dropped.fetch_add(1, Ordering::Relaxed);
-                rollups.add(d.at, metric::DROPPED, d.source, 0, 1);
+        if !retried {
+            io.stats.received.fetch_add(1, Ordering::Relaxed);
+            io.rollups.add(
+                d.at,
+                metric::HARVESTED,
+                d.source,
+                i64::from(d.found.strategy),
+                1,
+            );
+            if io.have.contains(&d.found.key) {
+                io.stats.known.fetch_add(1, Ordering::Relaxed);
+                if io.touches.try_send(d.clone()).is_err() {
+                    io.stats.dropped.fetch_add(1, Ordering::Relaxed);
+                    io.rollups.add(d.at, metric::DROPPED, d.source, 0, 1);
+                }
+                continue;
             }
-            continue;
         }
-        stats.to_pool.fetch_add(1, Ordering::Relaxed);
+        let claim = Claim {
+            key: d.found.key,
+            source: d.source,
+            strategy: d.found.strategy,
+            at: d.at,
+        };
+        match io.coordinator.claim(WorkerId::LOCAL, claim, unix_now()) {
+            Claimed::Granted(token) => {
+                io.leases.insert(d.found.key, token);
+                io.stats.to_pool.fetch_add(1, Ordering::Relaxed);
+            }
+            // Leased already (in M3 always to this worker): its source is
+            // on the lease, and its peers go to the holder's pool as a
+            // reply, so the pool merges them but never admits the key
+            // again once it has left.
+            Claimed::Held { .. } => d.reply = true,
+        }
         // Waiting here backs up into the emitters: live sources drop and
         // count, importers wait.
         tokio::select! {
             biased;
             _ = shutdown.requested() => break,
-            sent = to_pool.send(d) => if sent.is_err() { break },
+            sent = io.to_pool.send(d) => if sent.is_err() { break },
         }
     }
 }

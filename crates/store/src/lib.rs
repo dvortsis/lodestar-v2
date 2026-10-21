@@ -132,7 +132,9 @@ impl Default for StoreConfig {
     }
 }
 
-/// A torrent to insert.
+/// A torrent to insert from its parsed info dict. [`Store::write`]
+/// prepares it in the transaction; the pipeline prepares ahead with a
+/// [`Preparer`] and commits a [`PreparedTorrent`] instead.
 #[derive(Debug, Clone, Copy)]
 pub struct NewTorrent<'a> {
     pub info: &'a Info,
@@ -148,12 +150,83 @@ pub struct NewTorrent<'a> {
     pub source: SourceId,
 }
 
+/// Everything a torrent's rows hold that comes from its info dict: the
+/// derived columns, the compressed file-tree blob, the unknown keys and
+/// (when archiving) the dict minus `pieces`. Built off the writer by a
+/// [`Preparer`] ("prepare", §19.4) and owned, so it can cross a thread or
+/// a network; `pieces` is never in it (§3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Prepared {
+    /// The v1 hash, or the truncated v2 hash for a pure v2 torrent.
+    pub info_hash: InfoHash,
+    pub info_hash_v2: Option<InfoHashV2>,
+    pub name: String,
+    /// Raw name bytes and their encoding id, when the name isn't plain
+    /// UTF-8.
+    pub name_raw: Option<(Vec<u8>, u8)>,
+    pub size: u64,
+    pub piece_len: u64,
+    pub piece_count: u64,
+    /// Files excluding padding.
+    pub file_count: u64,
+    pub info_size: u64,
+    /// Flags derived from the info dict alone.
+    pub flags: i64,
+    pub files: Compressed,
+    pub extra: Option<Vec<u8>>,
+    pub raw: Option<Vec<u8>>,
+}
+
+impl Prepared {
+    /// Every 20-byte hash the swarm announces under: the primary hash,
+    /// plus the truncated v2 hash of a hybrid.
+    pub fn swarm_hashes(&self) -> impl Iterator<Item = InfoHash> + '_ {
+        let v2 = self
+            .info_hash_v2
+            .map(|h| h.truncated())
+            .filter(|t| *t != self.info_hash);
+        std::iter::once(self.info_hash).chain(v2)
+    }
+}
+
+/// Builds [`Prepared`] records with the store's blob dictionaries, away
+/// from the writer connection.
+#[derive(Debug)]
+pub struct Preparer {
+    codec: BlobCodec,
+    archive_raw: bool,
+}
+
+impl Preparer {
+    /// `raw_info` is the info dict as fetched; it's kept (minus `pieces`)
+    /// only when archiving is on.
+    pub fn prepare(&mut self, info: &Info, raw_info: Option<&[u8]>) -> Result<Prepared> {
+        prepare(&mut self.codec, self.archive_raw, info, raw_info)
+    }
+}
+
+/// A prepared torrent to commit, with its provenance.
+#[derive(Debug, Clone, Copy)]
+pub struct PreparedTorrent<'a> {
+    pub torrent: &'a Prepared,
+    pub discovered_at: i64,
+    pub metadata_at: i64,
+    /// Provenance flags; see [`NewTorrent::extra_flags`].
+    pub extra_flags: i64,
+    pub source: SourceId,
+    /// The info dict was fetched and verified, so it can replace the file
+    /// list of a `FILES_PARTIAL` import.
+    pub verified: bool,
+}
+
 /// Everything one writer transaction commits (§7 write path): torrents
 /// plus the Insights counters accumulated since the last flush.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WriteBatch<'a> {
     pub torrents: &'a [NewTorrent<'a>],
-    /// Rediscoveries of stored torrents, applied after `torrents`.
+    /// Torrents prepared ahead, inserted after `torrents`.
+    pub prepared: &'a [PreparedTorrent<'a>],
+    /// Rediscoveries of stored torrents, applied after the inserts.
     pub touches: &'a [Touch],
     pub counters: &'a [Counter],
     pub cohorts: &'a [CohortCount],
@@ -173,6 +246,8 @@ pub struct Touch {
 pub struct Written {
     /// One per torrent, in order.
     pub torrents: Vec<Inserted>,
+    /// One per prepared torrent, in order.
+    pub prepared: Vec<Inserted>,
     /// One per touch: the torrent's id, or `None` if it isn't stored.
     pub touched: Vec<Option<i64>>,
 }
@@ -304,6 +379,14 @@ impl Store {
             .torrents)
     }
 
+    /// A [`Preparer`] using this store's blob dictionaries.
+    pub fn preparer(&self) -> Preparer {
+        Preparer {
+            codec: self.codec.fork(),
+            archive_raw: self.config.archive_raw,
+        }
+    }
+
     /// Commits a batch in one transaction. Torrents already stored under any
     /// of their swarm hashes (v1 or truncated v2) keep their data and only
     /// gain the new source's bit. New torrents take their ids from the
@@ -315,72 +398,27 @@ impl Store {
             codec,
             config,
         } = self;
+        let own: Vec<Prepared> = batch
+            .torrents
+            .iter()
+            .map(|t| prepare(codec, config.archive_raw, t.info, t.raw_info))
+            .collect::<Result<_>>()?;
         let tx = conn.transaction()?;
         let mut out = Vec::with_capacity(batch.torrents.len());
-        for t in batch.torrents {
-            let info = t.info;
-            let bit = t.source.bit();
-            if let Some(id) = find_any(&tx, info.swarm_hashes())? {
-                add_sources(&tx, id, bit as u64)?;
-                // An import with an incomplete file list gets the real one
-                // when the info dict is fetched.
-                if t.extra_flags & flags::FILES_PARTIAL == 0 && t.raw_info.is_some() {
-                    upgrade_partial(&tx, codec, id, info, t)?;
-                }
-                out.push(Inserted::Existing(id));
-                continue;
-            }
-            let blob = filetree::encode(&info.files, info.path_encoding)?;
-            let blob = codec.compress(&blob)?;
-            let name = info.name.decode();
-            let plain_name =
-                info.name.encoding == TextEncoding::UTF8 && name.as_bytes() == info.name.raw;
-            let file_count = info.files.iter().filter(|f| !f.is_padding()).count();
-            let id = sources::next_id(&tx)?;
-            tx.prepare_cached(
-                "INSERT INTO torrents (id, info_hash, info_hash_v2, name, name_raw, name_enc,
-                     size, piece_len, piece_count, file_count, info_size, flags,
-                     discovered_at, metadata_at, last_seen_at, sources, first_source)
-                 VALUES (?14, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?12,
-                     ?15, ?16)",
-            )?
-            .execute(params![
-                &info.primary_hash().0[..],
-                info.v2.as_ref().map(|h| &h.0[..]),
-                name,
-                (!plain_name).then_some(&info.name.raw[..]),
-                (!plain_name).then_some(info.name.encoding.id()),
-                to_i64(info.total_size)?,
-                to_i64(info.piece_length)?,
-                to_i64(info.piece_count)?,
-                file_count as i64,
-                info.info_size as i64,
-                derive_flags(info) | t.extra_flags,
-                t.discovered_at,
-                t.metadata_at,
-                id,
-                bit,
-                t.source.get(),
-            ])?;
-            tx.prepare_cached(
-                "INSERT INTO torrent_files (torrent_id, codec, dict_id, data) VALUES (?1, ?2, ?3, ?4)",
-            )?
-            .execute(params![id, blob.codec as u8, blob.dict_id, blob.data])?;
-            if let Some(extra) = &info.extra {
-                tx.prepare_cached("INSERT INTO torrent_extra (torrent_id, data) VALUES (?1, ?2)")?
-                    .execute(params![id, extra])?;
-            }
-            if config.archive_raw {
-                if let Some(raw) = t.raw_info {
-                    let stripped = info_without_pieces(raw)
-                        .map_err(|_| Error::Corrupt("raw info does not parse"))?;
-                    tx.prepare_cached(
-                        "INSERT INTO torrent_raw (torrent_id, data) VALUES (?1, ?2)",
-                    )?
-                    .execute(params![id, stripped])?;
-                }
-            }
-            out.push(Inserted::New(id));
+        for (t, p) in batch.torrents.iter().zip(&own) {
+            let pt = PreparedTorrent {
+                torrent: p,
+                discovered_at: t.discovered_at,
+                metadata_at: t.metadata_at,
+                extra_flags: t.extra_flags,
+                source: t.source,
+                verified: t.raw_info.is_some(),
+            };
+            out.push(commit_one(&tx, codec, &pt)?);
+        }
+        let mut prepared = Vec::with_capacity(batch.prepared.len());
+        for pt in batch.prepared {
+            prepared.push(commit_one(&tx, codec, pt)?);
         }
         let mut touched = Vec::with_capacity(batch.touches.len());
         for t in batch.touches {
@@ -394,6 +432,7 @@ impl Store {
         tx.commit()?;
         Ok(Written {
             torrents: out,
+            prepared,
             touched,
         })
     }
@@ -696,23 +735,112 @@ impl Store {
     }
 }
 
+/// Derives a torrent's rows from its info dict (the prepare step).
+fn prepare(
+    codec: &mut BlobCodec,
+    archive_raw: bool,
+    info: &Info,
+    raw_info: Option<&[u8]>,
+) -> Result<Prepared> {
+    let files = codec.compress(&filetree::encode(&info.files, info.path_encoding)?)?;
+    let name = info.name.decode();
+    let plain_name = info.name.encoding == TextEncoding::UTF8 && name.as_bytes() == info.name.raw;
+    let raw = match raw_info.filter(|_| archive_raw) {
+        Some(raw) => {
+            Some(info_without_pieces(raw).map_err(|_| Error::Corrupt("raw info does not parse"))?)
+        }
+        None => None,
+    };
+    Ok(Prepared {
+        info_hash: info.primary_hash(),
+        info_hash_v2: info.v2,
+        name_raw: (!plain_name).then(|| (info.name.raw.clone(), info.name.encoding.id())),
+        name: name.into_owned(),
+        size: info.total_size,
+        piece_len: info.piece_length,
+        piece_count: info.piece_count,
+        file_count: info.files.iter().filter(|f| !f.is_padding()).count() as u64,
+        info_size: info.info_size as u64,
+        flags: derive_flags(info),
+        files,
+        extra: info.extra.clone(),
+        raw,
+    })
+}
+
+/// Inserts one prepared torrent, or adds its source to the stored one.
+fn commit_one(tx: &Connection, codec: &BlobCodec, t: &PreparedTorrent<'_>) -> Result<Inserted> {
+    let p = t.torrent;
+    // A blob compressed elsewhere must name a dictionary we can read back.
+    if p.files.dict_id.is_some_and(|id| !codec.has_dict(id)) {
+        return Err(Error::Corrupt("prepared blob names an unknown dictionary"));
+    }
+    let bit = t.source.bit();
+    if let Some(id) = find_any(tx, p.swarm_hashes())? {
+        add_sources(tx, id, bit as u64)?;
+        // An import with an incomplete file list gets the real one when
+        // the info dict is fetched.
+        if t.extra_flags & flags::FILES_PARTIAL == 0 && t.verified {
+            upgrade_partial(tx, id, t)?;
+        }
+        return Ok(Inserted::Existing(id));
+    }
+    let id = sources::next_id(tx)?;
+    tx.prepare_cached(
+        "INSERT INTO torrents (id, info_hash, info_hash_v2, name, name_raw, name_enc,
+             size, piece_len, piece_count, file_count, info_size, flags,
+             discovered_at, metadata_at, last_seen_at, sources, first_source)
+         VALUES (?14, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?12,
+             ?15, ?16)",
+    )?
+    .execute(params![
+        &p.info_hash.0[..],
+        p.info_hash_v2.as_ref().map(|h| &h.0[..]),
+        p.name,
+        p.name_raw.as_ref().map(|(raw, _)| &raw[..]),
+        p.name_raw.as_ref().map(|(_, enc)| *enc),
+        to_i64(p.size)?,
+        to_i64(p.piece_len)?,
+        to_i64(p.piece_count)?,
+        to_i64(p.file_count)?,
+        to_i64(p.info_size)?,
+        p.flags | t.extra_flags,
+        t.discovered_at,
+        t.metadata_at,
+        id,
+        bit,
+        t.source.get(),
+    ])?;
+    tx.prepare_cached(
+        "INSERT INTO torrent_files (torrent_id, codec, dict_id, data) VALUES (?1, ?2, ?3, ?4)",
+    )?
+    .execute(params![
+        id,
+        p.files.codec as u8,
+        p.files.dict_id,
+        p.files.data
+    ])?;
+    if let Some(extra) = &p.extra {
+        tx.prepare_cached("INSERT INTO torrent_extra (torrent_id, data) VALUES (?1, ?2)")?
+            .execute(params![id, extra])?;
+    }
+    if let Some(raw) = &p.raw {
+        tx.prepare_cached("INSERT INTO torrent_raw (torrent_id, data) VALUES (?1, ?2)")?
+            .execute(params![id, raw])?;
+    }
+    Ok(Inserted::New(id))
+}
+
 /// Replaces a `FILES_PARTIAL` torrent's file list and info-derived columns
 /// with those of a verified info dict. Does nothing to complete torrents.
-fn upgrade_partial(
-    conn: &Connection,
-    codec: &mut BlobCodec,
-    id: i64,
-    info: &Info,
-    t: &NewTorrent<'_>,
-) -> Result<()> {
+fn upgrade_partial(conn: &Connection, id: i64, t: &PreparedTorrent<'_>) -> Result<()> {
+    let p = t.torrent;
     let flags_now: i64 = conn
         .prepare_cached("SELECT flags FROM torrents WHERE id = ?1")?
         .query_row([id], |r| r.get(0))?;
     if flags_now & flags::FILES_PARTIAL == 0 {
         return Ok(());
     }
-    let blob = codec.compress(&filetree::encode(&info.files, info.path_encoding)?)?;
-    let file_count = info.files.iter().filter(|f| !f.is_padding()).count();
     let keep = flags::IMPORTED | flags::BACKFILL;
     conn.prepare_cached(
         "UPDATE torrents SET size = ?2, piece_len = ?3, piece_count = ?4, file_count = ?5,
@@ -722,22 +850,27 @@ fn upgrade_partial(
     )?
     .execute(params![
         id,
-        to_i64(info.total_size)?,
-        to_i64(info.piece_length)?,
-        to_i64(info.piece_count)?,
-        file_count as i64,
-        info.info_size as i64,
-        derive_flags(info) | t.extra_flags | (flags_now & keep),
+        to_i64(p.size)?,
+        to_i64(p.piece_len)?,
+        to_i64(p.piece_count)?,
+        to_i64(p.file_count)?,
+        to_i64(p.info_size)?,
+        p.flags | t.extra_flags | (flags_now & keep),
         t.metadata_at,
-        info.v2.as_ref().map(|h| &h.0[..]),
+        p.info_hash_v2.as_ref().map(|h| &h.0[..]),
     ])?;
     conn.prepare_cached(
         "INSERT INTO torrent_files (torrent_id, codec, dict_id, data) VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT (torrent_id) DO UPDATE SET codec = excluded.codec, dict_id = excluded.dict_id,
              data = excluded.data",
     )?
-    .execute(params![id, blob.codec as u8, blob.dict_id, blob.data])?;
-    if let Some(extra) = &info.extra {
+    .execute(params![
+        id,
+        p.files.codec as u8,
+        p.files.dict_id,
+        p.files.data
+    ])?;
+    if let Some(extra) = &p.extra {
         conn.prepare_cached(
             "INSERT INTO torrent_extra (torrent_id, data) VALUES (?1, ?2)
              ON CONFLICT (torrent_id) DO UPDATE SET data = excluded.data",

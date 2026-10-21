@@ -92,6 +92,23 @@ impl BlobCodec {
         self.active
     }
 
+    pub fn has_dict(&self, id: i64) -> bool {
+        self.dicts.contains_key(&id)
+    }
+
+    /// A codec with the same dictionaries and level but its own contexts,
+    /// for compressing on another thread or machine (the prepare step,
+    /// §19.4).
+    pub fn fork(&self) -> BlobCodec {
+        BlobCodec {
+            level: self.level,
+            dicts: self.dicts.clone(),
+            active: self.active,
+            compressor: None,
+            decompressors: HashMap::new(),
+        }
+    }
+
     pub fn compress(&mut self, raw: &[u8]) -> io::Result<Compressed> {
         let active = self.active;
         if self.compressor.as_ref().is_none_or(|(id, _)| *id != active) {

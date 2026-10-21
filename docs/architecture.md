@@ -1394,6 +1394,28 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - Property tests cover composition counts, shares, the largest file, junk arithmetic, determinism and the blob round-trip.
   - A 200k-file torrent classifies in about 46 ms.
 
+**M3 implementation decisions (worker boundary, `lodestar-cluster` + pipeline):**
+- **The boundary runs in-process with one built-in worker** (`WorkerId::LOCAL`), through the same leases and records remote workers will use (§19.2). Single-machine behaviour is unchanged: the M1/M2 pipeline tests pass as they were, funnel counts included.
+- **Prepare and commit are split (§19.4).**
+  - `Store::write` now commits `Prepared` records: the derived row, the compressed file-tree blob, the extra keys and (when archiving) the dict minus `pieces`.
+  - A `Preparer` builds them off the writer with a fork of the store's blob dictionaries.
+  - Prepared and in-transaction inserts are tested to give identical rows, blobs and extras. A blob naming an unknown dictionary rolls the transaction back.
+  - `NewTorrent` stays as the convenience path (importer, tests).
+  - The worker's prepare stage parses each fetched dict, runs the blocklist pre-check and prepares in batches on the blocking pool. The writer only fences, runs the authoritative blocklist check and commits.
+- **Leases (§19.3)** live in a `LeaseTable` in the new `lodestar-cluster` crate.
+  - One lease per key. The first claim wins and later claims add their source bit.
+  - Fencing tokens carry the coordinator's start time as an epoch, so tokens from before a restart never match.
+  - Leases expire when their worker is silent for 10 minutes, and expired keys are re-granted with their cohort and sources.
+  - A property test drives random claims, commits, losses, stale reports, silences and expiries over three workers. It checks that harvested equals ended plus in flight and that a spent token never releases anything.
+- **Exactly-once accounting:**
+  - The coordinator counts "harvested" at grant.
+  - The pool reports losses through two new `Funnel` hooks (`admitted`, and `lost` with the key). Their defaults keep the pool's standalone behaviour; the worker's funnel hands losses to the coordinator under the lease's token.
+  - The writer ends a lease only after the have-filter knows the key. A rediscovery in between is held and relayed to the pool as a reply, which the pool drops once the key has left, so it's never fetched again.
+- **The built-in worker claims key by key:** the table is a function call away, so batching claims (≤ 512 or 250 ms) belongs to the wire protocol. Its heartbeat runs every 5 s.
+- **Restarts:** keys saved in the fetch queue are leased again at start, without a new harvest. Leases aren't persisted separately, because with one worker the saved queue is exactly the set of open leases. Remote workers will persist them with the queue (§19.3).
+- **Metrics:** `lodestar_leases_{granted,held,stale,expired}_total` and `lodestar_leases_outstanding`.
+- **Not in this slice:** the network protocol, joining, the replicated have-filter and the coordinator's store check for lagging replicas (all v0.6, §14), and wiring enrichment into prepare (the last M3 slice). If the built-in worker's heartbeat stalled past the TTL, an in-flight result would be dropped as stale. That needs a runtime starved for minutes, and re-assigning work belongs with remote workers.
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.
