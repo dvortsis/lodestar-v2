@@ -133,7 +133,10 @@ fn main() -> ExitCode {
 fn init_logging(filter: &str) {
     let filter = tracing_subscriber::EnvFilter::try_new(filter)
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .init();
 }
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
@@ -176,11 +179,31 @@ async fn serve(config: Config) -> Result<(), BoxError> {
         dht_stats = Some(dht.stats_handle());
         plugins.push(dht);
     }
+    let auth = Arc::new(
+        lodestar_api::Auth::load(
+            &config.data_dir.join("auth.json"),
+            config.http.secure_cookies,
+        )
+        .map_err(|e| format!("loading auth: {e}"))?,
+    );
+    if let Some(token) = auth.setup_token() {
+        // §12: whoever can read the logs claims the instance.
+        tracing::warn!(
+            "first run: open http://{}/ and enter setup token {token} to create the admin password",
+            config.http.bind
+        );
+    }
     let pipeline = Pipeline::start(pipeline_config, store, plugins).await?;
+    let reader = Arc::new(Mutex::new(reader));
+    let api = lodestar_api::ApiState {
+        auth,
+        index: live.as_ref().map(|(index, _)| index.clone()),
+        reader: reader.clone(),
+    };
     let state = http::AppState {
         monitor: pipeline.monitor(),
         dht: dht_stats,
-        reader: Arc::new(Mutex::new(reader)),
+        reader,
         search: live.as_ref().map(|(index, l)| http::SearchState {
             index: index.clone(),
             stats: l.stats(),
@@ -194,7 +217,9 @@ async fn serve(config: Config) -> Result<(), BoxError> {
         config.http.bind,
         config.data_dir.display()
     );
-    axum::serve(listener, http::router(state))
+    let app =
+        http::router(state, api).into_make_service_with_connect_info::<std::net::SocketAddr>();
+    axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     tracing::info!("shutting down: saving the queue and DHT state");

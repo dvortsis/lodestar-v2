@@ -1,0 +1,31 @@
+[package]
+name = "lodestar-api"
+description = "HTTP API: auth (setup token, password, sessions), search, parse and torrent detail"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+argon2 = { version = "0.6.0", default-features = false, features = ["alloc"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query"] }
+hmac = "0.13.0"
+lodestar-metainfo.workspace = true
+lodestar-search.workspace = true
+lodestar-store.workspace = true
+rand = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+tokio = { version = "1.54.0", features = ["rt", "sync", "time"] }
+tracing = "0.1.44"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+lodestar-bencode.workspace = true
+tempfile = "3.27.0"
+tokio = { version = "1.54.0", features = ["rt", "macros", "sync", "time"] }
+tower = { version = "0.5", features = ["util"] }

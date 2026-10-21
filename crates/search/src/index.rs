@@ -14,7 +14,9 @@ use tantivy::collector::{Count, TopDocs};
 use tantivy::directory::MmapDirectory;
 use tantivy::query::{Query, TermQuery};
 use tantivy::schema::{IndexRecordOption, Value};
-use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term};
+use tantivy::{
+    DocAddress, Index, IndexReader, IndexWriter, Order, ReloadPolicy, TantivyDocument, Term,
+};
 
 use crate::compile;
 use crate::doc::TorrentDoc;
@@ -91,6 +93,23 @@ pub struct Hit {
     pub id: u64,
     pub name: String,
     pub score: f32,
+}
+
+/// Result order. Relevance is phase-1 BM25 for now; the re-ranker with
+/// swarm and freshness priors arrives with swarm health (§8, M4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Sort {
+    #[default]
+    Relevance,
+    Discovered {
+        desc: bool,
+    },
+    Size {
+        desc: bool,
+    },
+    Files {
+        desc: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -219,13 +238,47 @@ impl SearchIndex {
     }
 
     pub fn search(&self, query: &dyn Query, limit: usize) -> Result<Results> {
+        self.search_page(query, Sort::Relevance, limit, 0)
+    }
+
+    /// One page of results in `sort` order, with the exact total.
+    pub fn search_page(
+        &self,
+        query: &dyn Query,
+        sort: Sort,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Results> {
         let searcher = self.reader.searcher();
-        let (top, total) = searcher.search(
-            query,
-            &(TopDocs::with_limit(limit.max(1)).order_by_score(), Count),
-        )?;
-        let mut hits = Vec::with_capacity(top.len());
-        for (score, addr) in top {
+        let top = TopDocs::with_limit(limit.max(1)).and_offset(offset);
+        let order = |desc: bool| if desc { Order::Desc } else { Order::Asc };
+        let (scored, total): (Vec<(f32, DocAddress)>, usize) = match sort {
+            Sort::Relevance => searcher.search(query, &(top.order_by_score(), Count))?,
+            Sort::Discovered { desc } => {
+                let (t, n) = searcher.search(
+                    query,
+                    &(
+                        top.order_by_fast_field::<i64>("discovered", order(desc)),
+                        Count,
+                    ),
+                )?;
+                (t.into_iter().map(|(_, a)| (0.0, a)).collect(), n)
+            }
+            Sort::Size { desc } | Sort::Files { desc } => {
+                let field = if matches!(sort, Sort::Size { .. }) {
+                    "size"
+                } else {
+                    "files"
+                };
+                let (t, n) = searcher.search(
+                    query,
+                    &(top.order_by_fast_field::<u64>(field, order(desc)), Count),
+                )?;
+                (t.into_iter().map(|(_, a)| (0.0, a)).collect(), n)
+            }
+        };
+        let mut hits = Vec::with_capacity(scored.len());
+        for (score, addr) in scored {
             let doc: TantivyDocument = searcher.doc(addr)?;
             let id = doc
                 .get_first(self.fields.id)

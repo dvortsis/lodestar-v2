@@ -1258,6 +1258,25 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - Fuzzing found three round-trip bugs before merge: syntax-like phrase words in NEAR, a lone `!` before `)`, and over-long NEAR chains. All are fixed and kept as regression cases.
 - **Limits on untrusted input:** 2,048 bytes, 64 clauses (each word of a phrase inside NEAR counts), nesting depth 16, 16 words per NEAR chain.
 
+**M2 implementation decisions (API and auth):**
+- **New crate `lodestar-api`** holds the `/api/v1` router: `auth`, `setup`, `login`, `logout`, `password`, `parse`, `search` (GET with `q`, POST with `q` or an AST), `torrents/{hash}` (detail plus the first 500 files and a magnet link) and `torrents/{hash}/files` (paged). It runs with `ConnectInfo` for per-IP limits.
+- **Auth follows §12:**
+  - **First run:** with no password set, a one-time setup token (`XXXX-XXXX-XXXX-XXXX`) is logged at startup. Entering it with a new password (10+ characters) claims the instance, and the token is then spent.
+  - **Passwords:** Argon2id at OWASP's baseline (19 MiB, 2 passes), with a random salt. They're stored in `data/auth.json` (mode 0600, written atomically) rather than in SQLite, so the API never needs the writer's connection.
+  - **Sessions** are stateless signed cookies: an expiry plus a nonce, HMAC-SHA256'd with a random 256-bit key. They last 30 days, are `HttpOnly` and `SameSite=Strict`, and get `Secure` with `http.secure_cookies`. Changing the password rotates the key, which ends every session.
+  - **Rate limit:** login, setup and password changes share a per-IP token bucket (a burst of 5, then one every 12 s). Argon2 itself runs on the blocking pool.
+  - **CSRF:** writes must be `application/json`, and a present `Origin` must match `Host`.
+  - **Not yet:** trusted reverse-proxy headers (so behind a proxy the limit is per proxy), API keys (with Torznab, M7) and API rate limiting beyond login.
+- **What's open:** the page, `/healthz` and `/metrics` (no torrent names) stay open. `/api/status` and `/api/v1/*` need a session. The page asks for setup or login itself.
+- **Search API:**
+  - Up to 200 results per page.
+  - Offset paging stops at a 10,000-result window; stable cursors arrive with searcher leases (§8).
+  - Sorts: relevance (phase-1 BM25 until the M4 re-ranker), discovered, size and files, ascending or descending.
+  - Totals are exact for now. The "≈ above 100k" estimate comes with the p95 work.
+  - Hits are enriched from SQLite by id, and a torrent deleted since indexing drops out of the page.
+  - **A client-supplied AST must re-render and re-parse to itself,** so the API only accepts trees the parser could produce.
+- **Logs go to stderr,** keeping stdout free for command output.
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.
