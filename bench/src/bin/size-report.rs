@@ -1,9 +1,9 @@
-//! M0 size report (architecture §3, §14).
+//! Size report (architecture §3, §14).
 //!
 //! Generates synthetic torrents, stores them the way the pipeline will
 //! (a first slice without a dictionary, then a trained zstd dictionary,
-//! recompression, and the rest with the dictionary), and reports bytes per
-//! torrent against the budget. With `--gate` it exits non-zero when a budget
+//! recompression, and the rest with the dictionary), builds the torrent
+//! index from the store, and reports bytes per torrent against the budgets. With `--gate` it exits non-zero when a budget
 //! is exceeded, which is how CI enforces it.
 
 use std::path::PathBuf;
@@ -20,6 +20,7 @@ use lodestar_store::{NewTorrent, Store, StoreConfig, filetree};
 /// which file-tree blobs may use 0.6 KB.
 const STORE_BUDGET: f64 = 1024.0;
 const BLOB_BUDGET: f64 = 600.0;
+const INDEX_BUDGET: f64 = 512.0;
 
 const USAGE: &str = "usage: size-report [--torrents N] [--seed S] [--train N] \
 [--dict-size BYTES] [--level L] [--db PATH] [--gate]
@@ -161,6 +162,19 @@ fn run(args: &Args) -> Result<bool, Box<dyn std::error::Error>> {
     )?;
     store.checkpoint()?;
 
+    // The torrent index (§8), built by the same catch-up path the server
+    // uses, then merged as it would be at rest.
+    let index_path = lodestar_search::index_dir(&tmp.path().join("index"));
+    let t2 = Instant::now();
+    let index = lodestar_search::SearchIndex::open(&index_path)?;
+    let mut indexer = index.writer(256 << 20)?;
+    while indexer.catch_up(&mut store, 5000)? > 0 {
+        indexer.commit()?;
+    }
+    indexer.finish()?;
+    let index_time = t2.elapsed();
+    let index_bytes = dir_size(&index_path)? as f64;
+
     let n = args.torrents as f64;
     let conn = store.connection();
     let file_bytes = std::fs::metadata(&path)?.len() as f64;
@@ -169,7 +183,7 @@ fn run(args: &Args) -> Result<bool, Box<dyn std::error::Error>> {
             r.get(0)
         })?;
 
-    println!("Lodestar M0 size report");
+    println!("Lodestar size report");
     println!(
         "  torrents            {} (seed {})",
         group(args.torrents as u64),
@@ -202,6 +216,21 @@ fn run(args: &Args) -> Result<bool, Box<dyn std::error::Error>> {
         file_bytes / 1e6,
         file_bytes / n
     );
+
+    println!(
+        "  torrent index       {:.1} MB = {:.0} B per torrent ({} docs, {} segments)",
+        index_bytes / 1e6,
+        index_bytes / n,
+        group(index.num_docs()),
+        index.segments()
+    );
+
+    println!("\n  torrent index by part (bytes per torrent)");
+    for (part, bytes) in index.space_by_field()? {
+        if bytes as f64 / n >= 0.5 {
+            println!("    {part:<28} {:>7.1}", bytes as f64 / n);
+        }
+    }
 
     println!("\n  by table/index (bytes per torrent, incl. page overhead)");
     let mut stmt =
@@ -243,16 +272,18 @@ fn run(args: &Args) -> Result<bool, Box<dyn std::error::Error>> {
 
     println!(
         "\n  throughput          generate+parse {:.0}/s, store {:.0}/s; \
-         training + recompressing {} blobs took {:.1} s",
+         training + recompressing {} blobs took {:.1} s; indexing {:.0}/s",
         n / totals.generate_parse.as_secs_f64(),
         n / totals.store.as_secs_f64(),
         group(recompressed),
-        train_time.as_secs_f64()
+        train_time.as_secs_f64(),
+        n / index_time.as_secs_f64()
     );
 
     let checks = [
         ("file-tree blob mean", blob_bytes / n, BLOB_BUDGET),
         ("canonical store", file_bytes / n, STORE_BUDGET),
+        ("torrent index", index_bytes / n, INDEX_BUDGET),
     ];
     println!("\n  budgets (bytes per torrent)");
     let mut ok = true;
@@ -265,6 +296,17 @@ fn run(args: &Args) -> Result<bool, Box<dyn std::error::Error>> {
         );
     }
     Ok(ok)
+}
+
+fn dir_size(dir: &std::path::Path) -> std::io::Result<u64> {
+    let mut total = 0;
+    for entry in std::fs::read_dir(dir)? {
+        let meta = entry?.metadata()?;
+        if meta.is_file() {
+            total += meta.len();
+        }
+    }
+    Ok(total)
 }
 
 fn group(n: u64) -> String {

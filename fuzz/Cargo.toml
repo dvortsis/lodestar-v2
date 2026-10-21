@@ -12,6 +12,7 @@ libfuzzer-sys = "0.4"
 lodestar-bencode = { path = "../crates/bencode" }
 lodestar-dht = { path = "../crates/dht" }
 lodestar-metainfo = { path = "../crates/metainfo" }
+lodestar-search = { path = "../crates/search" }
 lodestar-store = { path = "../crates/store" }
 
 # Each target is a separate binary; see README.md for running them.
@@ -39,6 +40,13 @@ bench = false
 [[bin]]
 name = "filetree"
 path = "fuzz_targets/filetree.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tokenizer"
+path = "fuzz_targets/tokenizer.rs"
 test = false
 doc = false
 bench = false

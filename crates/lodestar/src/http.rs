@@ -11,6 +11,7 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use lodestar_dht::node::StatsSnapshot;
 use lodestar_pipeline::Monitor;
+use lodestar_search::{IndexStats, SearchIndex};
 use lodestar_sources::Stage;
 use lodestar_store::Store;
 use serde_json::{Value, json};
@@ -25,6 +26,13 @@ pub struct AppState {
     pub dht: Option<Arc<Mutex<Option<StatsSnapshot>>>>,
     /// A read-only store connection for the funnel and recent torrents.
     pub reader: Arc<Mutex<Store>>,
+    pub search: Option<SearchState>,
+}
+
+#[derive(Clone)]
+pub struct SearchState {
+    pub index: SearchIndex,
+    pub stats: Arc<IndexStats>,
 }
 
 impl AppState {
@@ -59,7 +67,10 @@ async fn page() -> Response {
 }
 
 async fn prometheus(State(s): State<AppState>) -> Response {
-    let body = metrics::render(&s.monitor, s.dht().as_ref());
+    let mut body = metrics::render(&s.monitor, s.dht().as_ref());
+    if let Some(search) = &s.search {
+        metrics::render_search(&mut body, search.index.num_docs(), &search.stats);
+    }
     ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], body).into_response()
 }
 
@@ -198,6 +209,12 @@ async fn status(State(s): State<AppState>) -> Response {
             "last_commit": get(&w.last_commit),
         },
         "dht": dht,
+        "search": s.search.as_ref().map(|x| json!({
+            "docs": x.index.num_docs(),
+            "watermark": x.stats.watermark.load(Ordering::Relaxed),
+            "last_commit": x.stats.last_commit.load(Ordering::Relaxed),
+            "errors": x.stats.errors.load(Ordering::Relaxed),
+        })),
         "funnel_24h": funnel,
         "latest": latest,
     });
