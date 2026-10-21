@@ -344,6 +344,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lodestar-sources"
+version = "0.0.0"
+dependencies = [
+ "lodestar-metainfo",
+ "lodestar-peer-wire",
+ "lodestar-store",
+ "tokio",
+]
+
+[[package]]
 name = "lodestar-store"
 version = "0.0.0"
 dependencies = [

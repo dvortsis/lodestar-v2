@@ -1144,6 +1144,22 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **The fetch queue is persisted without peers:** hash, source, cohort, strategy, priority, attempts and the `private_source` flag (so a private key stays out of public peer finding across restarts). Peer addresses are transient (§18.7) and stale after a restart anyway.
 - Cost on the 50k synthetic corpus: +4 B per torrent (594 → 598 B).
 
+**M1 implementation decisions (sources crate, scheduler v1):**
+- **The plugin contract is dyn-safe.** `SourcePlugin::run` returns a boxed future, so plugins live in one `Vec<Arc<dyn SourcePlugin>>`. A plugin gets a `SourceCtx`: its `SourceId`, an `Emitter`, a shutdown signal, and (for peer finders) the pool's peer requests. Politeness caps, the JSON-schema config, the KV state store and the per-host HTTP client join the manifest and context with the first plugin that needs them (Nyaa, §18.3). The DHT needs none of them.
+- **Two ways to emit.** `try_emit` never waits and counts what it drops; live sources use it, so the DHT can't stall. `emit` waits for room; importers use it, so a dump backs up into the importer and not into memory.
+- **The pool is one task that owns everything:** per-key state, per-source ready queues, the interest queue, timers and connections per IP. Fetches are child tasks keyed by task id, so a panicking fetch is still accounted for, as a failure of kind `Invalid`, rather than lost.
+- **DRR with unit cost.** Each fetch costs 1 and a source's turn adds its weight (Low/Normal/High/Max = 1/3/6/10). Keys a user is waiting on are served before any source. The caps are max sockets (400), connections per IP (2), queued keys (200k), peers per key (32) and outstanding lookups (256).
+- **Peer finding:**
+  - A key with no untried peers asks every peer finder (`get_peers`) and waits 30 s.
+  - If no peers turn up, the next lookup follows after 2 min, then 8 min, then 32 min.
+  - After 4 lookups the key is lost: `no peers` if none was ever found, otherwise the last fetch failure (timed out, refused, encryption failed, invalid, unreachable).
+  - Oversize is terminal at once, because it's a property of the torrent.
+  - `unreachable` (peers found, none accepted a TCP connection) is a loss reason the §10.9 list lacked. Its code is 10.
+- **`private_source` keys never reach a peer finder.** A public sighting of the same key makes it public. A private sighting never makes a public key private.
+- **Eviction** drops the oldest key that's still looking for peers. Keys with peers, keys being fetched and user-interest keys stay. If none qualifies, the incoming key is dropped. Either way it's counted once as `evicted`.
+- **Funnel accounting happens in the pool:** harvested, peer found and fetched, or lost with a reason, exactly once per key. Restored keys aren't counted as harvested again. `FunnelCounts` accumulates the counts in memory for the writer to flush.
+- **The queue survives restarts without peers** (store `fetch_queue`). Restored keys start with a fresh lookup, and the lookup that was in flight at shutdown isn't counted as used.
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.
