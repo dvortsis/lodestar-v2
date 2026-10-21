@@ -20,6 +20,8 @@ pub mod strategy {
     pub const GET_PEERS: u8 = 1;
     pub const ANNOUNCE: u8 = 2;
     pub const LOOKUP: u8 = 3;
+    /// Not a DHT strategy: an incomplete import queued for its info dict.
+    pub const REFETCH: u8 = 200;
 }
 
 static MANIFEST: Manifest = Manifest {
@@ -112,7 +114,12 @@ impl SourcePlugin for DhtSource {
                     biased;
                     _ = ctx.shutdown.requested() => break,
                     Some(h) = harvests.recv() => {
-                        ctx.emitter.try_emit(found(h));
+                        // Lookups answer the pool's requests; the rest is
+                        // discovery.
+                        match (&ctx.peer_replies, h.source) {
+                            (Some(replies), Source::Lookup) => replies.try_emit(found(h)),
+                            _ => ctx.emitter.try_emit(found(h)),
+                        };
                     }
                     req = next_request(&mut ctx.peer_requests), if requests_open => match req {
                         // A full lookup queue drops the ask; the pool asks

@@ -9,15 +9,140 @@ use tantivy::query::{
 };
 use tantivy::schema::{Field, IndexRecordOption};
 
+use crate::filter::FastRange;
 use crate::query::{Node, NumField, TextField, When};
 use crate::schema::{Fields, NAME_BOOST, PATH_BOOST};
 use crate::tokenizer::{self, Tok, TokKind};
 
 type Q = Box<dyn Query>;
 
+/// A compiled query in its parts.
+pub(crate) struct Parts {
+    /// Selects the matches and gives the phase-1 score.
+    pub query: Q,
+    /// Top-level ranges, checked in the collector (`filter`).
+    pub filters: Vec<FastRange>,
+    /// Name boosts of top-level words, added to the phase-1 candidates
+    /// only (phase 2, §8).
+    pub boosts: Option<Q>,
+}
+
 /// Compiles `node`; `now` (unix seconds) resolves relative dates.
-pub fn compile(node: &Node, f: &Fields, now: i64) -> Q {
-    compile_opt(node, f, now).unwrap_or_else(|| Box::new(AllQuery))
+///
+/// The top-level conjunction gets two treatments:
+/// - Ranges come back separately, to be checked in the collector,
+///   whenever another clause can drive the query; otherwise the first
+///   one stays in the query to drive it.
+/// - An unfielded word matches on `text` alone; its name boost comes
+///   back separately for the re-ranker. A conjunction of plain terms is
+///   a flat intersection, about twice as fast as one carrying optional
+///   boost clauses.
+pub(crate) fn compile(node: &Node, f: &Fields, now: i64) -> Parts {
+    let of: Vec<&Node> = match node {
+        Node::And { of } => of.iter().collect(),
+        n => vec![n],
+    };
+    let (ranges, mut rest): (Vec<&Node>, Vec<&Node>) = of
+        .into_iter()
+        .partition(|n| matches!(n, Node::Range { .. } | Node::Date { .. }));
+    // A clause drives when it narrows the matches by itself; a negation
+    // (`-x`, `private:no`) only removes a few from everything.
+    let drives = |n: &&Node| {
+        !matches!(n, Node::Not { .. } | Node::Flag { value: false, .. })
+            && compile_opt(n, f, now).is_some()
+    };
+    let keep = usize::from(!rest.iter().any(drives)).min(ranges.len());
+    rest.extend(&ranges[..keep]);
+    let filters = ranges[keep..].iter().map(|n| fast_range(n, now)).collect();
+    let mut clauses = Vec::new();
+    let mut boosts = Vec::new();
+    for n in rest {
+        match n {
+            Node::Not { of } => {
+                if let Some(q) = compile_opt(of, f, now) {
+                    clauses.push((Occur::MustNot, q));
+                }
+            }
+            Node::Word {
+                field: TextField::Any,
+                word,
+            } => {
+                if let Some((m, boost)) = any_word(word, f) {
+                    push_must(&mut clauses, m);
+                    boosts.push((Occur::Should, boost));
+                }
+            }
+            n => {
+                if let Some(q) = compile_opt(n, f, now) {
+                    push_must(&mut clauses, q);
+                }
+            }
+        }
+    }
+    let boosts = match boosts.len() {
+        0 => None,
+        1 => boosts.pop().map(|(_, q)| q),
+        _ => Some(Box::new(BooleanQuery::new(boosts)) as Q),
+    };
+    Parts {
+        query: conjunction(clauses),
+        filters,
+        boosts,
+    }
+}
+
+/// The clauses as one query; everything when none constrain.
+fn conjunction(mut clauses: Vec<(Occur, Q)>) -> Q {
+    if clauses.iter().all(|(o, _)| *o == Occur::MustNot) {
+        clauses.push((Occur::Must, Box::new(AllQuery)));
+    }
+    if let [(Occur::Must, _)] = clauses.as_slice() {
+        return clauses.pop().expect("one").1;
+    }
+    Box::new(BooleanQuery::new(clauses))
+}
+
+/// An unfielded word: required on `text`, plus its boost on `name`.
+fn any_word(word: &str, f: &Fields) -> Option<(Q, Q)> {
+    let toks = tokenizer::tokenize(word);
+    if toks.is_empty() {
+        return None;
+    }
+    let boost = BoostQuery::new(word_query(f.name, &toks, true), NAME_BOOST);
+    Some((word_query(f.text, &toks, false), Box::new(boost)))
+}
+
+fn resolve(w: &When, now: i64) -> i64 {
+    match w {
+        When::Ago(s) => now.saturating_sub(*s),
+        When::At(t) => *t,
+    }
+}
+
+fn num_field(field: &NumField) -> &'static str {
+    match field {
+        NumField::Size => "size",
+        NumField::Files => "files",
+        NumField::Largest => "largest",
+        NumField::Piece => "piece_len",
+    }
+}
+
+/// A `Range` or `Date` node as a fast-field check.
+fn fast_range(node: &Node, now: i64) -> FastRange {
+    match node {
+        Node::Range { field, lo, hi } => FastRange::U64 {
+            field: num_field(field),
+            lo: lo.unwrap_or(0),
+            hi: hi.unwrap_or(u64::MAX),
+        },
+        Node::Date { from, to, .. } => FastRange::I64 {
+            field: "discovered",
+            lo: from.as_ref().map_or(i64::MIN, |w| resolve(w, now)),
+            hi: to.as_ref().map_or(i64::MAX, |w| resolve(w, now)),
+        },
+        _ => unreachable!("only ranges are lifted"),
+    }
 }
 
 /// `None` for a clause that constrains nothing (a word with no tokens,
@@ -36,15 +161,12 @@ fn compile_opt(node: &Node, f: &Fields, now: i64) -> Option<Q> {
                     }
                     n => {
                         if let Some(q) = compile_opt(n, f, now) {
-                            clauses.push((Occur::Must, q));
+                            push_must(&mut clauses, q);
                         }
                     }
                 }
             }
-            if clauses.iter().all(|(o, _)| *o == Occur::MustNot) {
-                clauses.push((Occur::Must, Box::new(AllQuery)));
-            }
-            Box::new(BooleanQuery::new(clauses))
+            conjunction(clauses)
         }
         Node::Or { of } => {
             let clauses: Vec<(Occur, Q)> = of
@@ -62,6 +184,17 @@ fn compile_opt(node: &Node, f: &Fields, now: i64) -> Option<Q> {
             Box::new(BooleanQuery::new(vec![
                 (Occur::Must, Box::new(AllQuery) as Q),
                 (Occur::MustNot, q),
+            ]))
+        }
+        // Nested (under `|` or `-`): the boost stays inline.
+        Node::Word {
+            field: TextField::Any,
+            word,
+        } => {
+            let (m, boost) = any_word(word, f)?;
+            Box::new(BooleanQuery::new(vec![
+                (Occur::Must, m),
+                (Occur::Should, boost),
             ]))
         }
         Node::Word { field, word } => {
@@ -137,12 +270,8 @@ fn compile_opt(node: &Node, f: &Fields, now: i64) -> Option<Q> {
             Box::new(RangeQuery::new(bound(lo), bound(hi)))
         }
         Node::Date { from, to, .. } => {
-            let at = |w: &When| match w {
-                When::Ago(s) => now.saturating_sub(*s),
-                When::At(t) => *t,
-            };
             let bound = |w: &Option<When>| match w {
-                Some(w) => Bound::Included(Term::from_field_i64(f.discovered, at(w))),
+                Some(w) => Bound::Included(Term::from_field_i64(f.discovered, resolve(w, now))),
                 None => Bound::Unbounded,
             };
             Box::new(RangeQuery::new(bound(from), bound(to)))
@@ -178,6 +307,30 @@ fn compile_opt(node: &Node, f: &Fields, now: i64) -> Option<Q> {
 /// Phrases and NEAR need word order, which only `name` keeps at the
 /// torrent level; file names get it with the file index (M3). An explicit
 /// `path:"…"` still matches all of its words in the paths.
+/// Adds a required clause to a conjunction, splicing in the clauses of a
+/// conjunction it holds (required terms plus optional boosts), so the
+/// required terms of every word form one flat intersection, which Tantivy
+/// runs much faster than nested ones.
+fn push_must(clauses: &mut Vec<(Occur, Q)>, q: Q) {
+    if let Some(b) = q.downcast_ref::<BooleanQuery>() {
+        let inner = b.clauses();
+        let splice = inner.iter().any(|(o, _)| *o == Occur::Must)
+            && inner
+                .iter()
+                .all(|(o, _)| matches!(o, Occur::Must | Occur::Should));
+        if splice {
+            for (occur, q) in inner {
+                match occur {
+                    Occur::Must => push_must(clauses, q.box_clone()),
+                    _ => clauses.push((*occur, q.box_clone())),
+                }
+            }
+            return;
+        }
+    }
+    clauses.push((Occur::Must, q));
+}
+
 fn phrase_field(field: TextField) -> TextField {
     match field {
         TextField::Any => TextField::Name,

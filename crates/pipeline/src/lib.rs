@@ -45,6 +45,9 @@ pub mod event {
 
 const FIRST_RUN_SETTING: &str = "first_run_at";
 const PLUGIN_STOP_TIMEOUT: Duration = Duration::from_secs(15);
+/// Incomplete imports queued for re-fetching per start; the rest follow
+/// on later starts.
+const PARTIAL_REFETCH: usize = 50_000;
 
 #[derive(Debug, Clone)]
 pub struct PipelineConfig {
@@ -239,9 +242,12 @@ impl Pipeline {
         plugins: Vec<Arc<dyn SourcePlugin>>,
         fetcher: Arc<dyn Fetcher>,
     ) -> Result<Pipeline, Error> {
-        let manifests: Vec<(&'static str, &'static str)> = plugins
+        let manifests: Vec<(&'static str, &'static str, bool)> = plugins
             .iter()
-            .map(|p| (p.manifest().id, p.manifest().version))
+            .map(|p| {
+                let m = p.manifest();
+                (m.id, m.version, m.is(Kind::PeerFinder))
+            })
             .collect();
         let backfill = config.backfill.as_secs() as i64;
         let (store, ids, queue, have, backfill_until, stored_at_start) =
@@ -286,11 +292,15 @@ impl Pipeline {
                 finders.push(tx);
                 rx
             });
+            let peer_replies = m
+                .is(Kind::PeerFinder)
+                .then(|| Emitter::replies(id, pool_tx.clone()));
             let emitter = Emitter::new(id, emit_tx.clone());
             let ctx = SourceCtx {
                 source: id,
                 emitter: emitter.clone(),
                 peer_requests,
+                peer_replies,
                 shutdown: plugin_shutdown.clone(),
             };
             let p = plugin.clone();
@@ -456,13 +466,13 @@ impl Pipeline {
 #[allow(clippy::type_complexity)]
 fn prepare(
     mut store: Store,
-    manifests: &[(&'static str, &'static str)],
+    manifests: &[(&'static str, &'static str, bool)],
     backfill: i64,
 ) -> Result<(Store, Vec<SourceId>, Vec<QueuedKey>, Have, i64, u64), Error> {
     let now = unix_now();
     let ids = manifests
         .iter()
-        .map(|(id, version)| store.register_source(id, version, now))
+        .map(|(id, version, _)| store.register_source(id, version, now))
         .collect::<Result<Vec<_>, _>>()?;
     let first_run = match store.setting_i64(FIRST_RUN_SETTING)? {
         Some(t) => t,
@@ -471,7 +481,30 @@ fn prepare(
             now
         }
     };
-    let queue = store.load_fetch_queue()?;
+    let mut queue = store.load_fetch_queue()?;
+    // Imports with incomplete file lists get their info dicts fetched, if
+    // there's a peer finder to find them peers.
+    if let Some(finder) = manifests
+        .iter()
+        .zip(&ids)
+        .find(|((_, _, pf), _)| *pf)
+        .map(|(_, id)| *id)
+    {
+        let queued: std::collections::HashSet<_> = queue.iter().map(|q| q.info_hash).collect();
+        for hash in store.partial_hashes(PARTIAL_REFETCH)? {
+            if !queued.contains(&hash) {
+                queue.push(QueuedKey {
+                    info_hash: hash,
+                    source: finder,
+                    cohort: now.div_euclid(3600),
+                    strategy: strategy::REFETCH,
+                    priority: 0,
+                    attempts: 0,
+                    private_source: false,
+                });
+            }
+        }
+    }
     let stored = store.count()?;
     let have = Have::new(have::capacity_for(stored));
     store.for_each_swarm_hash(|h| have.insert(&h))?;

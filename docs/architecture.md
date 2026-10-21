@@ -247,7 +247,7 @@ hash:abc123…  (or a bare 40-hex / magnet link pasted into the box)
 ```
 Units and relative dates are parsed. Unknown fields trigger a helpful error, not a silent ignore. Regex compiles to a trigram prefilter (the Google Code Search / zoekt technique) and then verifies against the name, with a hard time budget.
 
-**Ranking** is two-phase. Phase 1 is per-field BM25 (summed with boosts; Tantivy has no true BM25F) under block-max WAND, giving the top ~1,000 candidates. Phase 2 re-ranks those candidates with the full feature set, which avoids scoring every match just to apply seeder and freshness priors. Paging past the window fetches the next phase-1 window and re-ranks it, so order is exact within each window and approximate only at window boundaries. The features: a phrase/proximity bonus, an exact-name bonus, and a parsed-title match bonus (title hits always outrank file-only hits via a capped file contribution, as Lodestar intended). It's then multiplied by quality priors: `log(1+seeders)`, a freshness decay, a junk penalty and a trackers-reporting nudge. A **swarm-consistency check** also feeds the junk score: one tracker reporting tens of thousands of seeders while the DHT estimate and every other tracker show ~0 is a classic fake-seeding signature, so it's penalized and labelled. All weights live in config, and `?explain=1` returns a per-result score breakdown. A **relevance judgment suite** (query → expected top-k) with an NDCG gate in CI keeps tuning honest.
+**Ranking** is two-phase. Phase 1 is BM25 on the combined name-and-paths field, giving the top candidates (a window of 200; §16 explains why it isn't block-max WAND over ~1,000). Phase 2 re-ranks those candidates with the full feature set, which avoids scoring every match just to apply seeder and freshness priors. Paging past the window fetches the next phase-1 window and re-ranks it, so order is exact within each window and approximate only at window boundaries. The features: a phrase/proximity bonus, an exact-name bonus, and a parsed-title match bonus (title hits always outrank file-only hits via a capped file contribution, as Lodestar intended). It's then multiplied by quality priors: `log(1+seeders)`, a freshness decay, a junk penalty and a trackers-reporting nudge. A **swarm-consistency check** also feeds the junk score: one tracker reporting tens of thousands of seeders while the DHT estimate and every other tracker show ~0 is a classic fake-seeding signature, so it's penalized and labelled. All weights live in config, and `?explain=1` returns a per-result score breakdown. A **relevance judgment suite** (query → expected top-k) with an NDCG gate in CI keeps tuning honest.
 
 **Results, facets and features:**
 - **Counts:** exact up to 100k matches, then "≈ 2.4M" via segment-level estimation, and exact on demand.
@@ -1286,12 +1286,65 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **`search-bench`** builds or reuses a synthetic corpus and runs seven query classes end to end (parse, compile, top 50, rows from SQLite). It reports p50, p95, p99 and max per class, and `--gate` fails on a missed §3 target.
   - CI gates at 200k torrents (under 2 minutes).
   - At 1M torrents every class passes, with p95 in ms: common word 2.9, rare word 0.6, two words 7.8, three words 8.1, phrase 8.0, word + filter 9.2, browse 19.3.
-  - The 10M measurement comes with the importer PR.
+  - The 10M measurement, and what it took, is recorded under "latency at 10M" below.
 - **The M2 "minimal UI" is the embedded status page:** setup and login, a search box, results, KPIs and the funnel. The SvelteKit app (`web/`, §10) starts with M5, where its toolchain, budgets and CI gates come in together. A throwaway intermediate UI would only be rewritten.
+
+**M2 implementation decisions (importer, finishing M2):**
+- **bitmagnet importer** (`lodestar import-bitmagnet <postgres-url>`, crate `lodestar-sources-importers`):
+  - It reads `torrents`, `torrent_files` and `torrent_pieces` (piece length and count) in `info_hash` order, in batches of 1,000. A cursor file in the data directory makes it resumable, and re-importing is idempotent.
+  - **The source can't be written:** the session is set to `TRANSACTION READ ONLY`, so PostgreSQL refuses any write.
+  - **Rows land in `torrents`, flagged `imported`, not in the unverified tier (§18.5).** bitmagnet fetched and verified this metadata from the DHT itself. Third-party dumps without info dicts will go to the unverified tier.
+  - bitmagnet's `created_at` becomes `discovered_at`.
+  - **Incomplete file lists** (`over_threshold`, `no_info`, or fewer file rows than `files_count`) are flagged `files_partial`.
+  - At startup the server queues up to 50,000 of them for re-fetch through the peer finders. A fetched info dict **upgrades the row in place** (file blob, counts and flags, with the import provenance kept), and the change goes to `reindex_log` (migration v3) so the indexer replaces the document. The index's commit payload now carries both watermarks.
+  - **Deferred to M3:** bitmagnet's parsed titles (`torrent_contents`/`content`) arrive with claims (§18.5), and the per-bitmagnet-source rows (`torrents_torrent_sources`) with source-level provenance. For now an import is credited to one `bitmagnet` source.
+  - CI runs the importer test against a PostgreSQL 16 service.
+- **Peer finders reply on their own channel.** `SourceCtx::peer_replies` goes straight to the fetch pool, bypassing the have-filter. Otherwise a lookup for a stored-but-partial key was diverted as a rediscovery. Replies are marked, and the pool ignores replies for keys it has already finished, so they're never counted as harvested.
+
+**M2 implementation decisions (latency at 10M):**
+- **The first 10M run missed most targets.** p95 in ms: two words 77, three words 89, phrase 79, word + filter 74, browse 185. Only the one-word classes passed. Broad queries visit every match, and five changes brought them inside budget.
+- **Block-max WAND doesn't carry the load.**
+  - Tantivy prunes only flat term unions and flat term intersections.
+  - On very common terms, whose scores are nearly uniform, pruning measured slower than visiting every match: `1080p` took 68 ms pruned against 38 ms unpruned.
+  - Counts therefore stay exact; they come free in the full pass. The "≈ above 100k" estimate waits for a ranker that doesn't visit every match.
+- **1. Segments are searched in parallel,** up to the 4 cores §3 assumes. This was worth about 3×.
+- **2. Top-level ranges are checked in the collector,** straight from the fast-field columns, whenever another clause can drive the query.
+  - A range docset inside an intersection seeks or scans the column for every candidate. Reading the candidate's value directly is cheaper.
+  - Negations (`-x`, `private:no`) don't count as drivers, because they match nearly everything.
+  - Ranges under `|` or `-` stay in the query. A test checks that both forms select the same torrents.
+- **3. A `text` field holds the name and the path entries together** (schema v2).
+  - An unfielded word matches there: one posting list per word instead of a name-or-path union, whose intersections cost two to three times as much.
+  - The torrent index grows from 256 to 377 B per torrent, against a budget of 512.
+- **4. Ranking is two-phase, as §8 planned.**
+  - Phase 1 scores the flat `text` intersection.
+  - The best 200 candidates are then re-ranked with the name boosts, at one seek each.
+  - Optional boost clauses inside the matching pass had made it about twice as slow.
+  - The window is 200, four pages of 50, rather than ~1,000. At 1,000, top-k upkeep alone cost 7–9 ms p95 on two- and three-word queries.
+  - Order is exact within the window. Deeper pages widen the window to cover them.
+  - Words under `|` or `-` keep the boost inline.
+- **5. Browse is cached per segment.**
+  - Fast-field sorts use a small top-k pass. Each segment's top-k and count are cached until that segment's deletions change, keyed by the query's AST, plus the time when it has relative dates.
+  - A near-real-time commit therefore costs only a search of its new segment, instead of emptying a cache per index generation.
+  - `search-bench` reports cached browse (gated by §3) and cold browse (not gated).
+- **Result at 10M** (4 cores, 500 queries per class, top 50 with rows loaded from SQLite). p95 in ms:
+
+  | Class | p95 ms | Target |
+  |---|---|---|
+  | One common word | 8.4 | 30 |
+  | One rare word | 2.6 | 30 |
+  | Two words | 16.4 | 30 |
+  | Three words | 17.5 | 30 |
+  | Phrase | 29.5 | 30 |
+  | Word + filter | 19.3 | 30 |
+  | Browse, cached | 1.9 | 50 |
+  | Browse, cold (not gated) | 67.8 | — |
+
+  - **Phrase is at the edge.** Its tail is name-only phrases over very common adjacent pairs, each needing a position check. If it regresses, the fallback is a name-bigram field, which makes a two-word phrase a single term.
+  - CI gates the same classes at 200k on every PR.
 
 **M3 order (overlapping M1 and M2):** M3 starts before M1's real-network measurements and M2's importer are finished. Those measurements only need a running deployment, and the importer barely touches enrichment.
 - **First, pure crates:** the release parser, then `classify` (extension registry, composition, content type, junk score). They don't touch the store, pipeline or search code.
-- **After the importer and the 10M search measurement merge:** the worker boundary, then the file index and title fields.
+- **Next, now that the importer and the 10M search measurement have merged (#21):** the worker boundary, then the file index and title fields.
   - The importer writes through the writer that the boundary splits, so it lands first.
   - M3's index changes are then measured against M2's 10M baseline, not mixed into it.
 - **Last:** enrichment wired into the prepare step.

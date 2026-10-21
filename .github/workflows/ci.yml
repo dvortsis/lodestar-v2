@@ -61,6 +61,25 @@ jobs:
       # A regression gate at 200k; the 10M measurement is in §16.
       - run: cargo run --release -p lodestar-bench --bin search-bench -- --torrents 200000 --gate
 
+  importer:
+    name: bitmagnet importer (PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 2s --health-timeout 5s --health-retries 15
+    env:
+      LODESTAR_TEST_POSTGRES: host=localhost port=5432 user=postgres dbname=postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p lodestar-sources-importers
+
   fuzz:
     name: fuzz (${{ matrix.target }})
     strategy:

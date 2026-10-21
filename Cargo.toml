@@ -22,6 +22,7 @@ lodestar-search = { path = "crates/search" }
 lodestar-release-parser = { path = "crates/release-parser" }
 lodestar-classify = { path = "crates/classify" }
 lodestar-api = { path = "crates/api" }
+lodestar-sources-importers = { path = "crates/sources-importers" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

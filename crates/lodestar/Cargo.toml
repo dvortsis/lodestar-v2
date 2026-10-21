@@ -14,6 +14,7 @@ lodestar-dht.workspace = true
 lodestar-peer-wire.workspace = true
 lodestar-pipeline.workspace = true
 lodestar-search.workspace = true
+lodestar-sources-importers.workspace = true
 lodestar-sources.workspace = true
 lodestar-store.workspace = true
 mimalloc = { version = "0.1", default-features = false }

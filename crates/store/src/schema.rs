@@ -10,7 +10,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::{Error, Result};
 
 /// `(version, sql)`, applied in order, each in its own transaction.
-pub(crate) const MIGRATIONS: &[(i64, &str)] = &[(1, V1), (2, V2)];
+pub(crate) const MIGRATIONS: &[(i64, &str)] = &[(1, V1), (2, V2), (3, V3)];
 
 /// M0: the canonical torrent tables plus settings and zstd dictionaries.
 ///
@@ -159,6 +159,17 @@ CREATE TABLE fetch_queue (
     attempts  INTEGER NOT NULL,
     flags     INTEGER NOT NULL
 ) STRICT, WITHOUT ROWID;
+";
+
+/// M2: torrents changed after they were stored (a partial import upgraded
+/// by a fetched info dict), for the search indexer to re-index. The
+/// indexer follows `seq` with its own watermark; rows are few (one per
+/// upgrade), so they're kept.
+const V3: &str = "
+CREATE TABLE reindex_log (
+    seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+    torrent_id INTEGER NOT NULL
+) STRICT;
 ";
 
 /// Pragmas that persist in the file and can only be set before the first
