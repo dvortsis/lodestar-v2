@@ -215,7 +215,7 @@ Text extracted from NFOs is indexed into an `nfo_text` field (boost ~2).
 ## 8. Search engine (Tantivy)
 
 **Torrent index** (one doc per torrent; only `id` and `name` are stored, and all other display data comes from SQLite by id):
-- Text: `name` (positions, boost 3, also **stored** in the compressed docstore for regex verification and snippets without SQLite round-trips), `title` (effective/parsed title, positions, boost 4), `alt_titles` (boost 2), `path_tokens` (file paths with a **position gap of 100 between files**, so phrase/NEAR match within one file name but never across two; boost 1), `name_trigram` (for substring/infix and the regex prefilter; turned off in low-resource mode).
+- Text: `name` (positions, boost 3, also **stored** in the compressed docstore for regex verification and snippets without SQLite round-trips), `title` (effective/parsed title, positions, boost 4), `alt_titles` (boost 2), `path_tokens` (each distinct directory name once, then every file name; **words only, without positions**, boost 1. Phrase/NEAR within one file name runs on the file index, whose `name` keeps positions. Positions here measured 372 B per torrent, over the whole index budget; see §16), `name_trigram` (for substring/infix and the regex prefilter; turned off in low-resource mode).
 - Keyword/fast fields: `ext[]`, `category[]`, `content_type`, `resolution`, `source`, `vcodec`, `acodec`, `hdr`, `lang[]`, `group`, `year`, `season`, `episode`, `flags`.
 - Numeric fast fields: `size`, `file_count`, `largest_file`, `piece_len`, `depth`, `cat_{count,bytes,pct}_{video,audio,image,document,ebook,archive,disc,software,subtitle,other}`, `junk`, `group_key`.
 - Dates: `discovered_at`, `metadata_at`.
@@ -1197,6 +1197,29 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **`healthcheck` uses plain std networking,** because the distroless image has no curl. It exits 0 only on a 200 from `/healthz`.
 - **Shutdown on SIGTERM or Ctrl-C:** HTTP drains first, then the pipeline stops in order, saving the queue and DHT state. The test suite runs the real binary through start, health, status and SIGTERM.
 - **mimalloc** is the global allocator (§11). Release builds keep line tables for backtraces: 58 MB unstripped, 6.9 MB stripped. Packaging strips or splits them.
+
+**M2 implementation decisions (search index):**
+- **Torrent-level paths are words only, without positions.** On the 50k synthetic corpus, path positions alone took 372 B per torrent: 690 B in total against the 512 B index budget. A smaller gap (8) and indexing each directory name once only got that to 600 B.
+  - Dropping positions brings the whole index to **256 B per torrent**, leaving room for M3's title fields and the trigram field.
+  - Phrase and NEAR within one file name move to the file index (M3), which keeps positions on each file's `name`, so nothing in the query language is lost.
+  - Directory names are indexed once each, not once per file.
+- **Numeric fields are fast-only, with no inverted index.** Tantivy runs range queries on fast fields, and the term dictionaries cost about 45 B per torrent for nothing.
+- **The tokenizer is one pure function, shared by indexing and queries:**
+  - It splits on punctuation and on camelCase and letter/digit boundaries.
+  - Compounds sit at the position of their first part: `s01e02`, `x265`, `webdl` from `WEB-DL`, `51` from `5.1`, `h264` from `H.264`, `dd+`.
+  - Folding: NFKD (so full-width forms fold too), marks stripped, a few letters expanded (ß, æ, ø, ł…), lowercase. CJK and Hangul skip NFKD, which would split syllables into jamo.
+  - CJK runs become overlapping bigrams until the optional dictionary segmenter (§11).
+  - Words over 24 chars aren't split (hashes and junk), and tokens over 64 bytes are dropped.
+  - Each value is capped at 512 tokens, and path text at 20k tokens per torrent.
+  - It's fuzzed (`fuzz/tokenizer`) and property-tested. Offsets always fall on char boundaries of the original text.
+- **A query word matches** its parts as a phrase on `name` (or all its parts, on `path`), or any compound it forms. So `web-dl`, `webdl` and `WEB DL` all find `WEB-DL`.
+- **The watermark lives in the Tantivy commit payload,** atomically with the documents it covers, rather than in SQLite. With one index, that's strictly safer: a crash can lose work but never skip or duplicate a torrent.
+  - When the file index arrives (M3), the cross-index watermark goes to SQLite as §8 describes.
+  - Indexing follows `Store::ids_after` in id order. That works because the single writer commits ids in order.
+- **Near-real-time indexing:** a `LiveIndexer` thread reads through its own read-only SQLite connection. It polls every 500 ms and commits every 2 s or 5k documents. The test asserts a new torrent is searchable within the 5 s budget.
+  - The index directory is `data/index/v{schema}-t{tokenizer}`, so a schema or tokenizer bump builds a fresh index.
+  - `index_watermark_hour` (searchable time per hour, §7) comes with the API slice, where the writer can record it.
+- **Measured** on 50k synthetic torrents: indexing runs at about 6,200 torrents per second.
 
 ## 17. Verification (once built)
 

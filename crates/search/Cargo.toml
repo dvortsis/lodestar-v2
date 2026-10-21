@@ -1,0 +1,23 @@
+[package]
+name = "lodestar-search"
+description = "Tantivy torrent index: tokenizer, schema, near-real-time indexing and queries"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+lodestar-metainfo.workspace = true
+lodestar-store.workspace = true
+tantivy = { version = "0.27.0", default-features = false, features = ["mmap", "lz4-compression", "stemmer"] }
+tracing = "0.1.44"
+unicode-normalization = "0.1.24"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+lodestar-bencode.workspace = true
+proptest = "1.11.0"
+tempfile = "3.27.0"
