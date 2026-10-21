@@ -31,7 +31,14 @@ const MAX_SPLIT_CHARS: usize = 24;
 pub enum TokKind {
     /// A word or a piece of one.
     Part,
-    /// Several parts run together, at the position of the first.
+    /// A whole word that also split into parts at case or digit
+    /// boundaries (`x265`, `s01e02`, `showname`), at its first part's
+    /// position. Indexing always emits it with its parts, so a query can
+    /// match it instead of phrasing the parts (which may be very common:
+    /// the `p` of `1080p`).
+    Whole,
+    /// Words joined across punctuation (`webdl`, `51`) or with a trailing
+    /// `+` (`dd+`), at the first word's position.
     Compound,
 }
 
@@ -282,7 +289,7 @@ pub fn tokenize_into(text: &str, position: usize, out: &mut Vec<Tok>, max: usize
             parts(word)
         };
         if split.len() > 1 {
-            emit(out, lower(word), from, to, first, TokKind::Compound);
+            emit(out, lower(word), from, to, first, TokKind::Whole);
         }
         for (s, e) in &split {
             let p = &word[*s..*e];

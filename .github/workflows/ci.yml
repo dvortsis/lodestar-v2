@@ -51,6 +51,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo run --release -p lodestar-bench --bin size-report -- --torrents 50000 --gate
 
+  search-latency:
+    name: search latency (§3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # A regression gate at 200k; the 10M measurement is in §16.
+      - run: cargo run --release -p lodestar-bench --bin search-bench -- --torrents 200000 --gate
+
   fuzz:
     name: fuzz (${{ matrix.target }})
     strategy:
