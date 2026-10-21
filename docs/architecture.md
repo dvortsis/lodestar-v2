@@ -102,7 +102,7 @@ One process, one binary (`lodestar`), with one data directory. Internally it's a
  └──────────────────────────────┘
 ```
 
-Data dir layout: `data/lodestar.db` (SQLite), `data/index/torrents/`, `data/index/files/`, `data/hot/*.col` (mmap'd stats columns), `data/dht/state.bin` (routing table + node IDs), `config.toml`.
+Data dir layout: `data/lodestar.db` (SQLite), `data/index/torrents/`, `data/index/files/`, `data/hot/*.col` (hot-column snapshots), `data/dht/state.bin` (routing table + node IDs), `config.toml`.
 
 ## 5. DHT crawler
 
@@ -191,7 +191,7 @@ Text extracted from NFOs is indexed into an `nfo_text` field (boost ~2).
 - **Content filtering (§20.7):** `filter_rules`, `filter_overrides`, `filter_fixtures`, `filter_hits`, `tombstones`, `quarantine` (sealed names). There's no audit log of filtering changes (§20.11). These replace the M1 `blocklist` config files.
 - `trackers`, `saved_searches`, `alerts`, `user_items` (fav/hidden/labels/notes), `collections`, `settings`, `zstd_dicts`, `schema_migrations`.
 
-**Hot columns:** `data/hot/{seeders,leechers,trackers,last_seen,user_flags}.col` are mmap'd `u32` arrays indexed by torrent id, read and written as atomics so there are no locks between the scraper and searchers. Seeders/trackers use a sentinel for **"never scraped"**, so the UI shows "—" rather than a misleading 0. Swarm stats change constantly; putting them in Tantivy would force delete+reinsert of whole documents. Instead, search collectors read these arrays (a nanosecond lookup) for filtering, sorting and ranking. SQLite stays authoritative, and the arrays are rebuilt on startup if they are inconsistent.
+**Hot columns:** seeders, leechers, trackers, DHT estimate, last seen and (from M5) user flags are in-memory atomic arrays indexed by torrent id, so there are no locks between the scraper and searchers. They're snapshotted to `data/hot/*.col` on a clean shutdown (§16, M4 plan: not mmap'd, because the workspace forbids `unsafe`). Seeders/trackers use a sentinel for **"never scraped"**, so the UI shows "—" rather than a misleading 0. Swarm stats change constantly; putting them in Tantivy would force delete+reinsert of whole documents. Instead, search collectors read these arrays (a nanosecond lookup) for filtering, sorting and ranking. SQLite stays authoritative, and the arrays are rebuilt on startup if they are inconsistent.
 
 **Insights rollups (reporting without touching raw data):** every number on Insights (§10.9) comes from small pre-aggregated tables. They're maintained incrementally by the pipeline, so reports never scan `torrents` or the search index.
 - **Tables:**
@@ -1518,6 +1518,77 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - Only titles are stemmed: names keep exact matching (§8).
 - **Size:** `title_stem` costs about 3 B per torrent (words only, no norms). The torrent index is 408 B per torrent at 100k (budget 512). Schema v4.
 - **Name patterns** belong to the §20 rule engine (an M4 add-on), so M3 doesn't build them.
+
+**M4 plan (swarm health; approved by the owner):**
+- **Owner decisions:**
+  - **Hot columns are safe in-memory atomic arrays, not mmap'd files.** The workspace forbids `unsafe`, and mapping a file needs it.
+    - They're snapshotted to `data/hot/*.col` with a stamp on a clean shutdown. A start without a matching stamp rebuilds them from SQLite.
+    - The cost is about 20 B per torrent of RAM (about 200 MB at 10M) counted against the 1 GB RSS budget. Narrower trackers and DHT columns (u8, u16) can win back about 50 MB later.
+  - **reqwest with rustls** is the HTTP client. It serves BEP 48 scrapes now and becomes the shared per-host client for the §18 HTTP plugins.
+- **What exists:**
+  - KRPC already encodes and parses BEP 33 (`scrape`, `BFsd`, `BFpe`), but lookups never ask for it.
+  - The query parser already recognises `seeders:`, `trackers:`, `dht:`, `seen:` and `time:`.
+  - Rediscoveries don't update `last_seen_at` yet. M4 fixes that.
+- **Slices (one PR each):**
+  1. **`tracker-scrape`:** a pure protocol crate.
+     - BEP 15 UDP scrape: up to 74 hashes a packet, connection ids cached for 60 s, and replies checked for transaction id and exact length.
+     - BEP 48 HTTP scrape, multi-hash.
+     - Fuzz targets and property tests on both parsers, plus in-process fake trackers for tests.
+  2. **DHT BEP 33:**
+     - `Node::scrape(hash)` runs a get_peers lookup with `scrape=1`. It ORs the K closest responders' filters and estimates with `ln(c/m) / (k·ln(1−1/m))`, where m = 2048 and k = 2.
+     - Only the counts are kept, never the filters (§18.7).
+     - Scrape lookups get a capped share of the query budget (about 10%), so they serve new, viewed and rediscovered torrents, not decay sweeps.
+     - The node also answers `scrape=1` queries from its own peer store.
+  3. **Store v4 and hot columns:**
+     - `trackers`, `swarm` (indexed on `next_scrape_at`), `swarm_trackers` and `swarm_history`.
+     - The history ring holds 14 daily and 26 weekly samples, as u16 seeders and leechers with `0xFFFF` for gaps.
+     - Hot columns use a "never scraped" sentinel.
+     - `last_seen_at` is written through to SQLite at most hourly per torrent.
+     - The size report counts the swarm rows.
+  4. **Health service** (the scrape scheduler, in `pipeline`):
+     - **Lanes, served by DRR:** interest (detail views, top search hits), new (ids past a scrape watermark, so ingest writes no swarm row), rediscovered (a bounded set) and due.
+     - **Decay:**
+       - alive torrents every 6 h, doubling up to 3 d while nothing changes;
+       - dead torrents every 2 d, doubling up to 30 d;
+       - a viewed torrent is refreshed when its data is older than 30 min.
+     - **Per tracker:**
+       - a token bucket (UDP: one request every 2 s at Balanced, 5 s at Low, 1 s at Aggressive; HTTP slower);
+       - a backoff, down and banned state machine;
+       - the opentracker rule: a tracker counts as reporting only when s+l+c > 0 (§15).
+     - **Never scraped:** `private` and `private_source` torrents, because a public scrape would leak the hash.
+     - **The swarm-consistency check** (§8) sets a suspect flag in `swarm`. It's a ranking penalty and a displayed reason, not part of the stored junk score, because swarms change.
+     - **Write path:** results go through the single writer as part of `WriteBatch`, and hot columns change after the commit.
+     - **Scrape rollups:** requests by tracker and outcome, and hashes by tracker, split into reporting and zero.
+  5. **Search on hot columns:**
+     - **Filters:** `seeders:`, `trackers:`, `dht:`, `seen:` and `time:`.
+       - At the top level they're checked in the collector.
+       - Under `|` or `-`, a small custom query handles them.
+       - Never-scraped torrents match no range.
+     - **Sorts:** seeders, leechers, trackers and seen. The browse cache key adds a 60 s "hot epoch".
+     - **The M4 re-ranker** multiplies the 200-candidate window by:
+       - `log(1+seeders)`;
+       - freshness;
+       - a trackers nudge;
+       - the suspect penalty;
+       - the junk penalty, once stored.
+       
+       Never-scraped torrents get a neutral prior. Weights live in config, with `?explain=1`.
+     - **`search-bench`** gains swarm-filter and swarm-sort classes.
+  6. **API, binary and Serve rollups:**
+     - `[scrape]` config with a default public tracker list.
+     - A swarm section in the detail view: seeders, leechers and completed, "n of m trackers", scrape age, the DHT estimate, per tracker, and history with trend.
+     - Hits carry swarm data, and views and top hits feed the interest lane.
+     - Serve rollups: searches, latency log buckets and zero results.
+     - Metrics, the status page and `operations.md`.
+- **Order against M3:**
+  - Slices 1–3 don't touch M3 code.
+  - Slice 4 changes the writer, so it follows M3's worker boundary.
+  - Slice 5 is measured after M3's index changes, so the 10M gate reflects the final schema.
+- **Deferred:** the BEP 48 full-scrape discovery source (§18.3, v0.6) gets its own PR after M4, reusing slice 1's HTTP client.
+- **Exit:**
+  - Seeders and trackers filters and sorts meet §3 at 10M: keyword p95 < 30 ms, browse < 50 ms.
+  - Scheduler property tests and the fake-tracker end-to-end test pass.
+  - Memory stays flat in a soak run.
 
 ## 17. Verification (once built)
 
