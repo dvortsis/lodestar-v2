@@ -9,10 +9,13 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates crates
 COPY bench bench
 RUN cargo build --release --locked -p lodestar \
-    && strip target/release/lodestar
+    && strip target/release/lodestar \
+    && mkdir /data-skel
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /src/target/release/lodestar /usr/local/bin/lodestar
+# Ship /data owned by nonroot (65532) so a fresh named volume is writable.
+COPY --from=build --chown=65532:65532 /data-skel /data
 ENV LODESTAR_DATA_DIR=/data
 VOLUME /data
 EXPOSE 8090/tcp 6881/udp 6881/tcp
