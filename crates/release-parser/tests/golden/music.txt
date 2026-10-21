@@ -1,0 +1,201 @@
+# Music: "Artist - Album (Year) [format]", scene underscores, hi-res tags.
+
+Pink Floyd - The Dark Side of the Moon (1973) [FLAC]
+  title: Pink Floyd - The Dark Side of the Moon
+  artist: Pink Floyd
+  album: The Dark Side of the Moon
+  year: 1973
+  acodec: flac
+
+Radiohead - OK Computer (1997) [24bit-96kHz FLAC]
+  title: Radiohead - OK Computer
+  artist: Radiohead
+  album: OK Computer
+  year: 1997
+  bits: 24
+  sample: 96kHz
+  acodec: flac
+
+Daft Punk - Random Access Memories (2013) [MP3 320kbps]
+  title: Daft Punk - Random Access Memories
+  artist: Daft Punk
+  album: Random Access Memories
+  year: 2013
+  acodec: mp3
+  bitrate: 320kbps
+
+# A year-like album title: hard, kept as an honest miss if it fails.
+Taylor Swift - 1989 (Taylor's Version) (2023) [24-48]
+  title: Taylor Swift - 1989 (Taylor's Version)
+  artist: Taylor Swift
+  album: 1989 (Taylor's Version)
+  year: 2023
+  bits: 24
+  sample: 48kHz
+
+Miles Davis - Kind of Blue (1959) [FLAC 24-192]
+  title: Miles Davis - Kind of Blue
+  artist: Miles Davis
+  album: Kind of Blue
+  year: 1959
+  acodec: flac
+  bits: 24
+  sample: 192kHz
+
+The Beatles - Abbey Road (2019 Remaster) [FLAC]
+  title: The Beatles - Abbey Road
+  artist: The Beatles
+  album: Abbey Road
+  year: 2019
+  edition: remastered
+  acodec: flac
+
+Metallica - Discography (1983-2016) [MP3 320]
+  title: Metallica
+  artist: Metallica
+  pack: yes
+  year: 1983-2016
+  acodec: mp3
+  bitrate: 320kbps
+
+Adele - 30 (2021) [Mp3 320kbps] [PMEDIA]
+  title: Adele - 30
+  artist: Adele
+  album: 30
+  year: 2021
+  acodec: mp3
+  bitrate: 320kbps
+  group: PMEDIA
+
+VA - Now That's What I Call Music! 100 (2018) MP3
+  title: VA - Now That's What I Call Music! 100
+  artist: VA
+  album: Now That's What I Call Music! 100
+  year: 2018
+  acodec: mp3
+
+Kendrick_Lamar-GNX-WEB-2024-ENRAGED
+  title: Kendrick Lamar - GNX
+  artist: Kendrick Lamar
+  album: GNX
+  source: web-dl
+  year: 2024
+  group: ENRAGED
+
+Beyonce - Cowboy Carter (2024) [24Bit-44.1kHz] FLAC [PMEDIA]
+  title: Beyonce - Cowboy Carter
+  artist: Beyonce
+  album: Cowboy Carter
+  year: 2024
+  bits: 24
+  sample: 44.1kHz
+  acodec: flac
+  group: PMEDIA
+
+Bob Dylan - Highway 61 Revisited (1965) [Vinyl Rip 24-96]
+  title: Bob Dylan - Highway 61 Revisited
+  artist: Bob Dylan
+  album: Highway 61 Revisited
+  year: 1965
+  bits: 24
+  sample: 96kHz
+
+Mozart - Requiem (Karajan, 1976) [FLAC]
+  title: Mozart - Requiem (Karajan)
+  artist: Mozart
+  album: Requiem (Karajan)
+  year: 1976
+  acodec: flac
+
+Eminem - The Marshall Mathers LP (2000) [FLAC] {Deluxe Edition}
+  title: Eminem - The Marshall Mathers LP
+  artist: Eminem
+  album: The Marshall Mathers LP
+  year: 2000
+  acodec: flac
+  edition: deluxe
+
+Hans Zimmer - Dune Part Two (Original Motion Picture Soundtrack) (2024) [FLAC 24bit 48kHz]
+  title: Hans Zimmer - Dune Part Two (Original Motion Picture Soundtrack)
+  artist: Hans Zimmer
+  album: Dune Part Two (Original Motion Picture Soundtrack)
+  year: 2024
+  acodec: flac
+  bits: 24
+  sample: 48kHz
+
+Queen - Greatest Hits I II & III (1994) [MP3 V0]
+  title: Queen - Greatest Hits I II & III
+  artist: Queen
+  album: Greatest Hits I II & III
+  year: 1994
+  acodec: mp3
+  bitrate: v0
+
+Coldplay - Moon Music (2024) [WEB FLAC]
+  title: Coldplay - Moon Music
+  artist: Coldplay
+  album: Moon Music
+  year: 2024
+  source: web-dl
+  acodec: flac
+
+Led Zeppelin - IV (1971) [Remastered 2014] [FLAC 24-96]
+  title: Led Zeppelin - IV
+  artist: Led Zeppelin
+  album: IV
+  year: 1971
+  edition: remastered
+  acodec: flac
+  bits: 24
+  sample: 96kHz
+
+Fleetwood Mac - Rumours (1977) [ALAC]
+  title: Fleetwood Mac - Rumours
+  artist: Fleetwood Mac
+  album: Rumours
+  year: 1977
+  acodec: alac
+
+Billie Eilish - Hit Me Hard and Soft (2024) [Hi-Res 24-48] FLAC
+  title: Billie Eilish - Hit Me Hard and Soft
+  artist: Billie Eilish
+  album: Hit Me Hard and Soft
+  year: 2024
+  bits: 24
+  sample: 48kHz
+  acodec: flac
+
+Linkin Park - Meteora 20th Anniversary Edition (2023) [MP3 320kbps]
+  title: Linkin Park - Meteora
+  artist: Linkin Park
+  album: Meteora
+  edition: anniversary
+  year: 2023
+  acodec: mp3
+  bitrate: 320kbps
+
+Nirvana - Nevermind (1991) [FLAC 16-44]
+  title: Nirvana - Nevermind
+  artist: Nirvana
+  album: Nevermind
+  year: 1991
+  acodec: flac
+  bits: 16
+  sample: 44.1kHz
+
+Massive_Attack-Mezzanine-(Remastered)-2CD-2019-FLAC-NBFLAC
+  title: Massive Attack - Mezzanine
+  artist: Massive Attack
+  album: Mezzanine
+  edition: remastered
+  year: 2019
+  acodec: flac
+  group: NBFLAC
+
+Arctic Monkeys - AM (2013) [OGG]
+  title: Arctic Monkeys - AM
+  artist: Arctic Monkeys
+  album: AM
+  year: 2013
+  acodec: vorbis

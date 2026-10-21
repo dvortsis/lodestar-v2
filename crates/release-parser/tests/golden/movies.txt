@@ -1,0 +1,832 @@
+# Movies: scene and P2P naming, editions, services, languages.
+
+The.Matrix.1999.1080p.BluRay.x264-AMIABLE
+  title: The Matrix
+  year: 1999
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: AMIABLE
+
+Inception.2010.2160p.UHD.BluRay.REMUX.HDR.HEVC.TrueHD.Atmos.7.1-FGT
+  title: Inception
+  year: 2010
+  res: 2160p
+  source: remux
+  hdr: hdr
+  vcodec: h265
+  acodec: atmos, truehd
+  channels: 7.1
+  group: FGT
+
+Blade.Runner.2049.2017.1080p.WEB-DL.DD5.1.H264-FGT
+  title: Blade Runner 2049
+  year: 2017
+  res: 1080p
+  source: web-dl
+  acodec: ac3
+  channels: 5.1
+  vcodec: h264
+  group: FGT
+
+2001.A.Space.Odyssey.1968.REMASTERED.1080p.BluRay.x265.10bit.AAC.5.1-Tigole
+  title: 2001 A Space Odyssey
+  year: 1968
+  edition: remastered
+  res: 1080p
+  source: bluray
+  vcodec: h265
+  bits: 10
+  acodec: aac
+  channels: 5.1
+  group: Tigole
+
+1917.2019.1080p.BluRay.x264-SPARKS
+  title: 1917
+  year: 2019
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: SPARKS
+
+Parasite (2019) [1080p] [BluRay] [5.1] [YTS.MX]
+  title: Parasite
+  year: 2019
+  res: 1080p
+  source: bluray
+  channels: 5.1
+  group: YTS.MX
+
+Joker.2019.720p.HDRip.x264.AAC-EVO
+  title: Joker
+  year: 2019
+  res: 720p
+  source: hdrip
+  vcodec: h264
+  acodec: aac
+  group: EVO
+
+Avengers.Endgame.2019.HDCAM.x264-ETRG
+  title: Avengers Endgame
+  year: 2019
+  source: cam
+  vcodec: h264
+  group: ETRG
+
+The.Lion.King.2019.HDTS.x264-ETRG
+  title: The Lion King
+  year: 2019
+  source: telesync
+  vcodec: h264
+  group: ETRG
+
+Spider-Man.No.Way.Home.2021.1080p.WEBRip.x265-RARBG
+  title: Spider-Man No Way Home
+  year: 2021
+  res: 1080p
+  source: webrip
+  vcodec: h265
+  group: RARBG
+
+Dune.Part.Two.2024.2160p.AMZN.WEB-DL.DDP5.1.Atmos.DV.HDR10.H.265-FLUX
+  title: Dune Part Two
+  year: 2024
+  res: 2160p
+  service: amzn
+  source: web-dl
+  acodec: atmos, eac3
+  channels: 5.1
+  hdr: dv, hdr10
+  vcodec: h265
+  group: FLUX
+
+Oppenheimer.2023.IMAX.1080p.BluRay.DDP5.1.x264-ZQ
+  title: Oppenheimer
+  year: 2023
+  edition: imax
+  res: 1080p
+  source: bluray
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: ZQ
+
+The.Lord.of.the.Rings.The.Return.of.the.King.2003.EXTENDED.1080p.BluRay.x264-SiNNERS
+  title: The Lord of the Rings The Return of the King
+  year: 2003
+  edition: extended
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: SiNNERS
+
+Apocalypse.Now.1979.Final.Cut.2160p.UHD.BluRay.x265-B0MBARDiERS
+  title: Apocalypse Now
+  year: 1979
+  edition: final-cut
+  res: 2160p
+  source: bluray
+  vcodec: h265
+  group: B0MBARDiERS
+
+Amelie.2001.FRENCH.1080p.BluRay.x264-LOST
+  title: Amelie
+  year: 2001
+  lang: fr
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: LOST
+
+Le.Fabuleux.Destin.d'Amelie.Poulain.2001.MULTi.1080p.BluRay.x264-FHD
+  title: Le Fabuleux Destin d'Amelie Poulain
+  year: 2001
+  lang: multi
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: FHD
+
+Intouchables.2011.TRUEFRENCH.DVDRip.XviD-AYMO
+  title: Intouchables
+  year: 2011
+  lang: fr
+  source: dvd
+  vcodec: xvid
+  group: AYMO
+
+Das.Boot.1981.Directors.Cut.German.1080p.BluRay.x264-DETAiLS
+  title: Das Boot
+  year: 1981
+  edition: directors-cut
+  lang: de
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: DETAiLS
+
+Il.Traditore.2019.iTALiAN.1080p.BluRay.x264-iDN_CreW
+  title: Il Traditore
+  year: 2019
+  lang: it
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: iDN_CreW
+
+Roma.2018.SPANISH.1080p.NF.WEB-DL.DDP5.1.x264-NTG
+  title: Roma
+  year: 2018
+  lang: es
+  res: 1080p
+  service: nf
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: NTG
+
+The.Irishman.2019.1080p.NF.WEBRip.DDP5.1.Atmos.x264-NTG
+  title: The Irishman
+  year: 2019
+  res: 1080p
+  service: nf
+  source: webrip
+  acodec: atmos, eac3
+  channels: 5.1
+  vcodec: h264
+  group: NTG
+
+Tenet.2020.IMAX.2160p.UHD.BluRay.x265.10bit.HDR.DTS-HD.MA.5.1-SWTYBLZ
+  title: Tenet
+  year: 2020
+  edition: imax
+  res: 2160p
+  source: bluray
+  vcodec: h265
+  bits: 10
+  hdr: hdr
+  acodec: dts-hd-ma
+  channels: 5.1
+  group: SWTYBLZ
+
+Mad.Max.Fury.Road.2015.Black.and.Chrome.Edition.1080p.BluRay.x264-SADPANDA
+  title: Mad Max Fury Road
+  year: 2015
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: SADPANDA
+
+Alien.1979.Directors.Cut.1080p.BluRay.DTS.x264-CtrlHD
+  title: Alien
+  year: 1979
+  edition: directors-cut
+  res: 1080p
+  source: bluray
+  acodec: dts
+  vcodec: h264
+  group: CtrlHD
+
+Blade.Runner.1982.The.Final.Cut.1080p.BluRay.x264-HDMaNiAcS
+  title: Blade Runner
+  year: 1982
+  edition: final-cut
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: HDMaNiAcS
+
+Pulp Fiction (1994) 1080p BrRip x264 - YIFY
+  title: Pulp Fiction
+  year: 1994
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: YIFY
+
+The.Shawshank.Redemption.1994.REMASTERED.720p.BluRay.999MB.HQ.x265.10bit-GalaxyRG
+  title: The Shawshank Redemption
+  year: 1994
+  edition: remastered
+  res: 720p
+  source: bluray
+  vcodec: h265
+  bits: 10
+  group: GalaxyRG
+
+Interstellar.2014.PROPER.1080p.BluRay.x264-DEPTH
+  title: Interstellar
+  year: 2014
+  flags: proper
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: DEPTH
+
+Godzilla.Minus.One.2023.JAPANESE.1080p.WEBRip.x264-LAMA
+  title: Godzilla Minus One
+  year: 2023
+  lang: ja
+  res: 1080p
+  source: webrip
+  vcodec: h264
+  group: LAMA
+
+Shoplifters.2018.JAPANESE.1080p.BluRay.x264.DTS-WiKi
+  title: Shoplifters
+  year: 2018
+  lang: ja
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  acodec: dts
+  group: WiKi
+
+Train.to.Busan.2016.KOREAN.1080p.BluRay.x264.DTS-FGT
+  title: Train to Busan
+  year: 2016
+  lang: ko
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  acodec: dts
+  group: FGT
+
+Crouching.Tiger.Hidden.Dragon.2000.CHINESE.1080p.BluRay.x264-AMIABLE
+  title: Crouching Tiger Hidden Dragon
+  year: 2000
+  lang: zh
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: AMIABLE
+
+RRR.2022.Hindi.1080p.NF.WEB-DL.DDP5.1.Atmos.H.264-XEBEC
+  title: RRR
+  year: 2022
+  lang: hi
+  res: 1080p
+  service: nf
+  source: web-dl
+  acodec: atmos, eac3
+  channels: 5.1
+  vcodec: h264
+  group: XEBEC
+
+Avatar.2009.EXTENDED.3D.1080p.BluRay.Half-SBS.x264.DTS-HD.MA.5.1-RARBG
+  title: Avatar
+  year: 2009
+  edition: extended
+  flags: 3d
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  acodec: dts-hd-ma
+  channels: 5.1
+  group: RARBG
+
+Gravity.2013.3D.HSBS.1080p.BluRay.x264-YIFY
+  title: Gravity
+  year: 2013
+  flags: 3d
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: YIFY
+
+Toy.Story.1995.1080p.BluRay.x264.DTS-HD.MA.7.1-FGT
+  title: Toy Story
+  year: 1995
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  acodec: dts-hd-ma
+  channels: 7.1
+  group: FGT
+
+Jurassic.Park.1993.REPACK.2160p.UHD.BluRay.x265.10bit.HDR.DTS-X.7.1-SWTYBLZ
+  title: Jurassic Park
+  year: 1993
+  flags: repack
+  res: 2160p
+  source: bluray
+  vcodec: h265
+  bits: 10
+  hdr: hdr
+  acodec: dts-x
+  channels: 7.1
+  group: SWTYBLZ
+
+The.Dark.Knight.2008.IMAX.Hybrid.1080p.BluRay.REMUX.AVC.DTS-HD.MA.5.1-FGT
+  title: The Dark Knight
+  year: 2008
+  edition: imax
+  flags: hybrid
+  res: 1080p
+  source: remux
+  vcodec: h264
+  acodec: dts-hd-ma
+  channels: 5.1
+  group: FGT
+
+Casablanca.1942.1080p.BluRay.FLAC.1.0.x264-DON
+  title: Casablanca
+  year: 1942
+  res: 1080p
+  source: bluray
+  acodec: flac
+  channels: 1.0
+  vcodec: h264
+  group: DON
+
+Seven.Samurai.1954.Criterion.1080p.BluRay.x264-CiNEFiLE
+  title: Seven Samurai
+  year: 1954
+  edition: criterion
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: CiNEFiLE
+
+Metropolis.1927.RESTORED.720p.BluRay.x264-SiNNERS
+  title: Metropolis
+  year: 1927
+  edition: remastered
+  res: 720p
+  source: bluray
+  vcodec: h264
+  group: SiNNERS
+
+Nosferatu.1922.DVDRip.XviD-FRAGMENT
+  title: Nosferatu
+  year: 1922
+  source: dvd
+  vcodec: xvid
+  group: FRAGMENT
+
+Scarface.1983.UNCUT.1080p.BluRay.x264-HD4U
+  title: Scarface
+  year: 1983
+  edition: uncut
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: HD4U
+
+Elf.2003.1080p.HMAX.WEB-DL.DD5.1.H.264-SiGMA
+  title: Elf
+  year: 2003
+  res: 1080p
+  service: hmax
+  source: web-dl
+  acodec: ac3
+  channels: 5.1
+  vcodec: h264
+  group: SiGMA
+
+Soul.2020.1080p.DSNP.WEB-DL.DDP5.1.Atmos.H.264-CMRG
+  title: Soul
+  year: 2020
+  res: 1080p
+  service: dsnp
+  source: web-dl
+  acodec: atmos, eac3
+  channels: 5.1
+  vcodec: h264
+  group: CMRG
+
+CODA.2021.1080p.ATVP.WEB-DL.DDP5.1.Atmos.H.264-TEPES
+  title: CODA
+  year: 2021
+  res: 1080p
+  service: atvp
+  source: web-dl
+  acodec: atmos, eac3
+  channels: 5.1
+  vcodec: h264
+  group: TEPES
+
+Prey.2022.2160p.HULU.WEB-DL.DDP5.1.Atmos.DV.H.265-CMRG
+  title: Prey
+  year: 2022
+  res: 2160p
+  service: hulu
+  source: web-dl
+  acodec: atmos, eac3
+  channels: 5.1
+  hdr: dv
+  vcodec: h265
+  group: CMRG
+
+The.Northman.2022.1080p.PCOK.WEB-DL.DDP5.1.H.264-EVO
+  title: The Northman
+  year: 2022
+  res: 1080p
+  service: pcok
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: EVO
+
+Old.School.UNRATED.DVDRip.XviD-DoNE
+  title: Old School
+  edition: unrated
+  source: dvd
+  vcodec: xvid
+  group: DoNE
+
+Ghostbusters.Afterlife.2021.TELESYNC.x264-COLLECTiVE
+  title: Ghostbusters Afterlife
+  year: 2021
+  source: telesync
+  vcodec: h264
+  group: COLLECTiVE
+
+Halloween.Kills.2021.HDTC.x264-SUNSCREEN
+  title: Halloween Kills
+  year: 2021
+  source: telecine
+  vcodec: h264
+  group: SUNSCREEN
+
+Wonka.2023.DVDSCR.XviD-EVO
+  title: Wonka
+  year: 2023
+  source: screener
+  vcodec: xvid
+  group: EVO
+
+The Grand Budapest Hotel (2014) (1080p BluRay x265 10bit Tigole)
+  title: The Grand Budapest Hotel
+  year: 2014
+  res: 1080p
+  source: bluray
+  vcodec: h265
+  bits: 10
+  group: Tigole
+
+Arrival (2016) (2160p BluRay x265 HEVC 10bit HDR AAC 7.1 Tigole) [QxR]
+  title: Arrival
+  year: 2016
+  res: 2160p
+  source: bluray
+  vcodec: h265
+  bits: 10
+  hdr: hdr
+  acodec: aac
+  channels: 7.1
+  group: QxR
+
+Fight.Club.1999.1080p.BluRay.x264.DTS-ES.6.1-BLiTZKRiEG
+  title: Fight Club
+  year: 1999
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  acodec: dts
+  channels: 6.1
+  group: BLiTZKRiEG
+
+Up.2009.720p.BluRay.x264-SiNNERS
+  title: Up
+  year: 2009
+  res: 720p
+  source: bluray
+  vcodec: h264
+  group: SiNNERS
+
+It.2017.1080p.BluRay.x264-SPARKS
+  title: It
+  year: 2017
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: SPARKS
+
+Sinners.2025.1080p.WEB.h264-ETHEL
+  title: Sinners
+  year: 2025
+  res: 1080p
+  source: web-dl
+  vcodec: h264
+  group: ETHEL
+
+Nope.2022.2160p.WEB.H265-NAISU
+  title: Nope
+  year: 2022
+  res: 2160p
+  source: web-dl
+  vcodec: h265
+  group: NAISU
+
+Barbie.2023.HC.1080p.WEB-DL.x264-ETHEL
+  title: Barbie
+  year: 2023
+  flags: hardsub
+  res: 1080p
+  source: web-dl
+  vcodec: h264
+  group: ETHEL
+
+Akira.1988.JAPANESE.REMASTERED.2160p.UHD.BluRay.x265.10bit.HDR.TrueHD.7.1-SWTYBLZ
+  title: Akira
+  year: 1988
+  lang: ja
+  edition: remastered
+  res: 2160p
+  source: bluray
+  vcodec: h265
+  bits: 10
+  hdr: hdr
+  acodec: truehd
+  channels: 7.1
+  group: SWTYBLZ
+
+Back to the Future (1985) 1080p BluRay x264 Dual Audio [Hindi + English] 5.1 - ESub
+  title: Back to the Future
+  year: 1985
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  lang: en, hi, multi
+  channels: 5.1
+  subs: en
+
+Kantara.2022.Hindi.1080p.AMZN.WEB-DL.DD+5.1.H.264-Telly
+  title: Kantara
+  year: 2022
+  lang: hi
+  res: 1080p
+  service: amzn
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: Telly
+
+Les.Miserables.2019.MULTi.VFF.1080p.BluRay.x264-UTT
+  title: Les Miserables
+  year: 2019
+  lang: fr, multi
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: UTT
+
+Elle.2016.VOSTFR.720p.BluRay.x264-NOTAG
+  title: Elle
+  year: 2016
+  subs: fr
+  res: 720p
+  source: bluray
+  vcodec: h264
+  group: NOTAG
+
+The.Matrix.Resurrections.2021.1080p.HMAX.WEB-DL.DDP5.1.Atmos.x264-EVO
+  title: The Matrix Resurrections
+  year: 2021
+  res: 1080p
+  service: hmax
+  source: web-dl
+  acodec: atmos, eac3
+  channels: 5.1
+  vcodec: h264
+  group: EVO
+
+Knives.Out.2019.1080p.BluRay.x264-SPARKS.mkv
+  title: Knives Out
+  year: 2019
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: SPARKS
+  container: mkv
+
+THE.MATRIX.1999.1080P.BLURAY.X264-AMIABLE
+  title: THE MATRIX
+  year: 1999
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: AMIABLE
+
+the.matrix.1999.1080p.bluray.x264-amiable
+  title: the matrix
+  year: 1999
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: amiable
+
+Charlottes.Web.2006.1080p.BluRay.x264-HANDJOB
+  title: Charlottes Web
+  year: 2006
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: HANDJOB
+
+The.Italian.Job.2003.1080p.BluRay.x264-CiNEFiLE
+  title: The Italian Job
+  year: 2003
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: CiNEFiLE
+
+Tron.Legacy.2010.1080p.BluRay.x264.DTS-HD.MA.7.1-HDChina
+  title: Tron Legacy
+  year: 2010
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  acodec: dts-hd-ma
+  channels: 7.1
+  group: HDChina
+
+Everything Everywhere All at Once 2022 1080p WEB-DL DDP5 1 H 264-EVO
+  title: Everything Everywhere All at Once
+  year: 2022
+  res: 1080p
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: EVO
+
+Top.Gun.Maverick.2022.IMAX.2160p.WEB-DL.DDP5.1.Atmos.DV.HDR10Plus.HEVC-CMRG
+  title: Top Gun Maverick
+  year: 2022
+  edition: imax
+  res: 2160p
+  source: web-dl
+  acodec: atmos, eac3
+  channels: 5.1
+  hdr: dv, hdr10+
+  vcodec: h265
+  group: CMRG
+
+The.Batman.2022.1080p.WEBRip.x264.AAC5.1-YTS
+  title: The Batman
+  year: 2022
+  res: 1080p
+  source: webrip
+  vcodec: h264
+  acodec: aac
+  channels: 5.1
+  group: YTS
+
+Aliens.1986.Special.Edition.1080p.BluRay.x264-SiNNERS
+  title: Aliens
+  year: 1986
+  edition: special
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: SiNNERS
+
+The.Wizard.of.Oz.1939.75th.Anniversary.Edition.1080p.BluRay.x264-HDEX
+  title: The Wizard of Oz
+  year: 1939
+  edition: anniversary
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: HDEX
+
+Snatch.2000.Open.Matte.720p.WEB-DL.AAC2.0.H.264
+  title: Snatch
+  year: 2000
+  edition: open-matte
+  res: 720p
+  source: web-dl
+  acodec: aac
+  channels: 2.0
+  vcodec: h264
+
+Pi.1998.LIMITED.DVDRip.XviD-SAPHiRE
+  title: Pi
+  year: 1998
+  flags: limited
+  source: dvd
+  vcodec: xvid
+  group: SAPHiRE
+
+The.Thing.1982.INTERNAL.1080p.BluRay.x264-MOOVEE
+  title: The Thing
+  year: 1982
+  flags: internal
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: MOOVEE
+
+Heat.1995.1080p.BluRay.VC-1.DTS-HD.MA.5.1-FGT
+  title: Heat
+  year: 1995
+  res: 1080p
+  source: bluray
+  vcodec: vc1
+  acodec: dts-hd-ma
+  channels: 5.1
+  group: FGT
+
+Gladiator.2000.Extended.Remastered.1080p.BluRay.x265.10bit-Joy
+  title: Gladiator
+  year: 2000
+  edition: extended, remastered
+  res: 1080p
+  source: bluray
+  vcodec: h265
+  bits: 10
+  group: Joy
+
+Amelie 2001 720p BluRay AV1 Opus 5.1-dAV1nci
+  title: Amelie
+  year: 2001
+  res: 720p
+  source: bluray
+  vcodec: av1
+  acodec: opus
+  channels: 5.1
+  group: dAV1nci
+
+Brazil.1985.Criterion.Collection.576p.DVD9.MPEG-2-NoGrp
+  title: Brazil
+  year: 1985
+  edition: criterion
+  res: 576p
+  source: dvd
+  vcodec: mpeg2
+  group: NoGrp
+
+The.Room.2003.VHSRip.x264-RETRO
+  title: The Room
+  year: 2003
+  source: vhs
+  vcodec: h264
+  group: RETRO
+
+Napoleon.2023.1080p.ATVP.WEB-DL.DDP5.1.H.264-FLUX
+  title: Napoleon
+  year: 2023
+  res: 1080p
+  service: atvp
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: FLUX
+
+Rebel.Moon.Part.One.A.Child.of.Fire.2023.1080p.NF.WEB-DL.DDP5.1.Atmos.H.264-FLUX
+  title: Rebel Moon Part One A Child of Fire
+  year: 2023
+  res: 1080p
+  service: nf
+  source: web-dl
+  acodec: atmos, eac3
+  channels: 5.1
+  vcodec: h264
+  group: FLUX

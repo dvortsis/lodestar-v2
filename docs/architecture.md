@@ -1289,6 +1289,33 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - The 10M measurement comes with the importer PR.
 - **The M2 "minimal UI" is the embedded status page:** setup and login, a search box, results, KPIs and the funnel. The SvelteKit app (`web/`, §10) starts with M5, where its toolchain, budgets and CI gates come in together. A throwaway intermediate UI would only be rewritten.
 
+**M3 order (overlapping M1 and M2):** M3 starts before M1's real-network measurements and M2's importer are finished. Those measurements only need a running deployment, and the importer barely touches enrichment.
+- **First, pure crates:** the release parser, then `classify` (extension registry, composition, content type, junk score). They don't touch the store, pipeline or search code.
+- **After the importer and the 10M search measurement merge:** the worker boundary, then the file index and title fields.
+  - The importer writes through the writer that the boundary splits, so it lands first.
+  - M3's index changes are then measured against M2's 10M baseline, not mixed into it.
+- **Last:** enrichment wired into the prepare step.
+- Real crawled names from the M1 run feed the golden corpus as they arrive.
+
+**M3 implementation decisions (release parser, `lodestar-release-parser`):**
+- **One pure function, hand-written, no regex crate:** `parse(name) -> Release`. It runs on torrent names, folders and files alike.
+  - Words keep their separators and brackets. A lexicon marks *strong* markers (`1080p`, `x264`, `BluRay`) and *weak* ones (`Web`, `French`, `Extended`, `Complete`).
+  - The title ends at the first strong marker. Weak markers count after the title, in brackets, in ALL CAPS, or directly before a strong marker (`Movie.FRENCH.DVDRip`). Weak markers aren't pulled back over a year (`Charlotte's.Web.2006`).
+  - Years: a year that starts the title belongs to it (`1917`, `2001 A Space Odyssey`). Of two years in a row, the first is the title's (`Blade Runner 2049 2017`). A bare year before a bracketed one is the title's (`Taylor Swift - 1989 (Taylor's Version) (2023)`).
+  - Plausible years are 1890–2039 with no clock, so parsing never depends on when it ran and `Cyberpunk 2077` stays a title.
+  - Groups: a leading `[Group]`, then `-GROUP` after a marker, then a trailing bracket that isn't metadata. A bare `-GROUP` with no marker counts only in dotted scene names (`Doom.Eternal-CODEX`, not `Spider-Man`).
+  - Anime ` - 05` numbering needs anime evidence (a leading group, zero padding or a range), so `Adele - 30 (2021)` stays an album.
+  - Music, book and scene-music names (`Artist_Name-Album-WEB-2024-GROUP`) get artist, album and author fields from the title. This only happens when there's no video or episode marker.
+- **Bounded on untrusted input:** at most 512 bytes and 96 words, never panics. It's property-tested (determinism, and title and group text always taken from the name) and fuzzed (`fuzz/release`; 660k runs clean on first add). A parse costs about 7 µs.
+- **`PARSER_VERSION`** goes into the index directory name (§8), so a parser change rebuilds the index in the background.
+- **`is_uninformative`** flags hashes, random short words and generic names (`New Folder (2)`, `Season 1`) for the ambiguity flag. Picking the effective title from files and folders belongs to `classify`, which has the file tree.
+- **Golden corpus:** 316 hand-labelled names across movies, TV, anime, music, software, games, books, Cyrillic and CJK. No third-party suites were copied (guessit's data is LGPL-3.0).
+  - The gate is 95% field accuracy, scored over expected and parsed fields together, so invented fields count as misses.
+  - It's 99.9% on the whole corpus, but the same hand wrote the labels and the parser. The fairer number is a 59-name holdout batch, written after the parser and scored before any fix: **97.2%** (382 of 393 fields).
+  - That run found real bugs (`Saga` as a pack word, noise words moving the title end, a free bracket mistaken for a group), which are fixed. It also found two label errors, which are corrected.
+  - Two known misses stay in the corpus: `debian-…-amd64-netinst.iso` reads `netinst` as a group, and `IMG_2034` reads 2034 as a year.
+  - Real crawled names from M1 are the next corpus source. A 95% pass on them is the gate that matters.
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.

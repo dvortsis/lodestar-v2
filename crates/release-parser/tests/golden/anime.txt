@@ -1,0 +1,230 @@
+# Anime: leading [Group], " - NN" absolute numbering, CRCs, batches.
+
+[SubsPlease] Frieren - 01 (1080p) [A1B2C3D4].mkv
+  group: SubsPlease
+  title: Frieren
+  episode: 1
+  res: 1080p
+  container: mkv
+
+[Erai-raws] Jujutsu Kaisen 2nd Season - 23 [1080p][Multiple Subtitle][ABCDEF12].mkv
+  group: Erai-raws
+  title: Jujutsu Kaisen
+  season: 2
+  episode: 23
+  res: 1080p
+  subs: multi
+  container: mkv
+
+[HorribleSubs] One Piece - 900 [720p].mkv
+  group: HorribleSubs
+  title: One Piece
+  episode: 900
+  res: 720p
+  container: mkv
+
+[Judas] Shingeki no Kyojin (Attack on Titan) - S04E28 [1080p][HEVC x265 10bit][Eng-Subs]
+  group: Judas
+  title: Shingeki no Kyojin (Attack on Titan)
+  season: 4
+  episode: 28
+  res: 1080p
+  vcodec: h265
+  bits: 10
+  subs: en
+
+[Coalgirls] Clannad (1920x1080 Blu-Ray FLAC) [ABCD1234]
+  group: Coalgirls
+  title: Clannad
+  res: 1080p
+  source: bluray
+  acodec: flac
+
+[Commie] Steins;Gate - 01-24 [BD 720p AAC]
+  group: Commie
+  title: Steins;Gate
+  episode: 1-24
+  source: bluray
+  res: 720p
+  acodec: aac
+
+[Ohys-Raws] Spy x Family - 05 (TX 1280x720 x264 AAC).mp4
+  group: Ohys-Raws
+  title: Spy x Family
+  episode: 5
+  res: 720p
+  vcodec: h264
+  acodec: aac
+  container: mp4
+
+[ASW] Kimetsu no Yaiba - 26 [1080p HEVC x265 10Bit][AAC]
+  group: ASW
+  title: Kimetsu no Yaiba
+  episode: 26
+  res: 1080p
+  vcodec: h265
+  bits: 10
+  acodec: aac
+
+[SubsPlease] Bocchi the Rock! - 12 (1080p) [E5F6A7B8].mkv
+  group: SubsPlease
+  title: Bocchi the Rock!
+  episode: 12
+  res: 1080p
+  container: mkv
+
+[Golumpa] Fullmetal Alchemist Brotherhood - 01 [English Dub] [FuniDub 1080p x264 AAC] [MKV]
+  group: Golumpa
+  title: Fullmetal Alchemist Brotherhood
+  episode: 1
+  lang: en
+  flags: dubbed
+  res: 1080p
+  vcodec: h264
+  acodec: aac
+  container: mkv
+
+Cowboy Bebop (1998) - S01E05 - Ballad of Fallen Angels [BD 1080p x265 10bit FLAC]
+  title: Cowboy Bebop
+  year: 1998
+  season: 1
+  episode: 5
+  source: bluray
+  res: 1080p
+  vcodec: h265
+  bits: 10
+  acodec: flac
+
+[DB]Haikyuu!!_-_01_(Dual Audio_10bit_BD1080p_x265).mkv
+  group: DB
+  title: Haikyuu!!
+  episode: 1
+  lang: multi
+  bits: 10
+  source: bluray
+  res: 1080p
+  vcodec: h265
+  container: mkv
+
+Naruto Shippuden - 001-500 [Dual Audio][1080p]
+  title: Naruto Shippuden
+  episode: 1-500
+  lang: multi
+  res: 1080p
+
+[Anime Time] Demon Slayer (Season 01) [1080p][HEVC 10bit x265][AAC][Multi Sub] [Batch]
+  group: Anime Time
+  title: Demon Slayer
+  season: 1
+  pack: yes
+  res: 1080p
+  vcodec: h265
+  bits: 10
+  acodec: aac
+  subs: multi
+
+[EMBER] Oshi no Ko S2 - 05 [1080p] [Multi-Sub]
+  group: EMBER
+  title: Oshi no Ko
+  season: 2
+  episode: 5
+  res: 1080p
+  subs: multi
+
+[Tsundere-Raws] Sousou no Frieren - 28 [WEB 1080p x265 E-AC-3]
+  group: Tsundere-Raws
+  title: Sousou no Frieren
+  episode: 28
+  source: web-dl
+  res: 1080p
+  vcodec: h265
+  acodec: eac3
+
+Neon Genesis Evangelion 01-26 [BD 1080p]
+  title: Neon Genesis Evangelion
+  episode: 1-26
+  source: bluray
+  res: 1080p
+
+[Nep_Blanc] Mob Psycho 100 III - 01 [1080p] [VOSTFR]
+  group: Nep_Blanc
+  title: Mob Psycho 100 III
+  episode: 1
+  res: 1080p
+  subs: fr
+
+One.Piece.E1088.1080p.WEB.H264-SKYANiME
+  title: One Piece
+  episode: 1088
+  res: 1080p
+  source: web-dl
+  vcodec: h264
+  group: SKYANiME
+
+Attack.on.Titan.S04E30.1080p.CR.WEB-DL.AAC2.0.H.264-VARYG
+  title: Attack on Titan
+  season: 4
+  episode: 30
+  res: 1080p
+  service: cr
+  source: web-dl
+  acodec: aac
+  channels: 2.0
+  vcodec: h264
+  group: VARYG
+
+[SubsPlease] Dandadan - 01v2 (1080p) [DEADBEEF].mkv
+  group: SubsPlease
+  title: Dandadan
+  episode: 1
+  res: 1080p
+  container: mkv
+
+[Yameii] The Apothecary Diaries - S02E05 [English Dub] [CR WEB-DL 1080p] [ABCD1234]
+  group: Yameii
+  title: The Apothecary Diaries
+  season: 2
+  episode: 5
+  lang: en
+  flags: dubbed
+  service: cr
+  source: web-dl
+  res: 1080p
+
+[SubsPlease] Kaiju No. 8 - 12 (720p) [1234ABCD].mkv
+  group: SubsPlease
+  title: Kaiju No. 8
+  episode: 12
+  res: 720p
+  container: mkv
+
+[Erai-raws] Sousou no Frieren - 01 ~ 28 [1080p][Multiple Subtitle]
+  group: Erai-raws
+  title: Sousou no Frieren
+  episode: 1-28
+  res: 1080p
+  subs: multi
+
+[Kametsu] Made in Abyss (BD 1080p Hi10 FLAC)
+  group: Kametsu
+  title: Made in Abyss
+  source: bluray
+  res: 1080p
+  bits: 10
+  acodec: flac
+
+[SubsPlease] Mushoku Tensei S2 - 13 (1080p) [0F1E2D3C].mkv
+  group: SubsPlease
+  title: Mushoku Tensei
+  season: 2
+  episode: 13
+  res: 1080p
+  container: mkv
+
+[Some-Stuffs] Pocket Monsters (2023) - 050 (1080p) [CRC32FF].mkv
+  group: Some-Stuffs
+  title: Pocket Monsters
+  year: 2023
+  episode: 50
+  res: 1080p
+  container: mkv

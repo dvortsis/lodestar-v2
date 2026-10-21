@@ -918,6 +918,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lodestar-release-parser"
+version = "0.0.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
 name = "lodestar-search"
 version = "0.0.0"
 dependencies = [

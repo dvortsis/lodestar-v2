@@ -12,6 +12,7 @@ libfuzzer-sys = "0.4"
 lodestar-bencode = { path = "../crates/bencode" }
 lodestar-dht = { path = "../crates/dht" }
 lodestar-metainfo = { path = "../crates/metainfo" }
+lodestar-release-parser = { path = "../crates/release-parser" }
 lodestar-search = { path = "../crates/search" }
 lodestar-store = { path = "../crates/store" }
 
@@ -54,6 +55,13 @@ bench = false
 [[bin]]
 name = "query"
 path = "fuzz_targets/query.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "release"
+path = "fuzz_targets/release.rs"
 test = false
 doc = false
 bench = false
