@@ -105,7 +105,8 @@ impl SourcePlugin for PeerTable {
                     _ = ctx.shutdown.requested() => return Ok(()),
                     Some(key) = requests.recv() => {
                         if let Some(peers) = self.peers.get(&key) {
-                            ctx.emitter.try_emit(Found::key(key, strategy::LOOKUP).with_peers(peers.clone()));
+                            let replies = ctx.peer_replies.as_ref().expect("a peer finder gets replies");
+                            replies.try_emit(Found::key(key, strategy::LOOKUP).with_peers(peers.clone()));
                         }
                     }
                 }
@@ -299,4 +300,52 @@ async fn the_dht_plugin_runs_inside_the_pipeline() {
     assert_eq!(pipeline.sources()[0].plugin, "dht");
     pipeline.shutdown().await.unwrap();
     assert!(state.exists(), "routing state saved");
+}
+
+/// An import with an incomplete file list is re-fetched at startup and
+/// upgraded in place.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn partial_imports_are_refetched() {
+    use lodestar_store::{NewTorrent, flags};
+    let raw = info_dict("Imported.Pack");
+    let seed = Seed::v1(raw.clone());
+    let key = InfoHash(seed.info_hash);
+    let peer = FakePeer::spawn(vec![seed], Accept::Both, Behavior::Honest, vec![]).await;
+    let real = lodestar_metainfo::Info::parse(&raw).unwrap();
+    let mut partial = real.clone();
+    partial.files.clear();
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let bm = store.register_source("bitmagnet", "1", 0).unwrap();
+    store
+        .insert(&[NewTorrent {
+            info: &partial,
+            raw_info: None,
+            discovered_at: 1_600_000_000,
+            metadata_at: 1_600_000_000,
+            extra_flags: flags::IMPORTED | flags::FILES_PARTIAL,
+            source: bm,
+        }])
+        .unwrap();
+    let finder = Arc::new(PeerTable {
+        manifest: manifest("finder", &[Kind::PeerFinder]),
+        peers: HashMap::from([(key, vec![peer.addr()])]),
+    });
+    let pipeline = Pipeline::start(config(), store, vec![finder])
+        .await
+        .unwrap();
+    until("refetched", || {
+        pipeline.pool_stats().fetched.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    until("written", || {
+        pipeline.writer_stats().existing.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    let mut store = pipeline.shutdown().await.unwrap();
+    let id = store.find(&key).unwrap().unwrap();
+    let row = store.torrent(id).unwrap().unwrap();
+    assert_eq!(row.flags & flags::FILES_PARTIAL, 0);
+    assert_ne!(row.flags & flags::IMPORTED, 0);
+    assert_eq!(store.files(id).unwrap().unwrap().files.len(), 1);
+    assert!(store.partial_hashes(10).unwrap().is_empty());
 }

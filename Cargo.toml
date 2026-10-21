@@ -20,6 +20,7 @@ lodestar-sources = { path = "crates/sources" }
 lodestar-pipeline = { path = "crates/pipeline" }
 lodestar-search = { path = "crates/search" }
 lodestar-api = { path = "crates/api" }
+lodestar-sources-importers = { path = "crates/sources-importers" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

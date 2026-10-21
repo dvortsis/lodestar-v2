@@ -40,6 +40,7 @@ fn found(source: u8, n: u32, peers: Vec<SocketAddr>) -> Discovery {
         source: src(source),
         found: Found::key(key(n), 0).with_peers(peers),
         at: T0,
+        reply: false,
     }
 }
 
@@ -438,5 +439,24 @@ async fn the_queue_survives_a_restart() {
     h.send(found(1, 1, vec![peer(1, 1)]));
     let got = h.out.recv().await.unwrap();
     assert_eq!((got.key, got.cohort), (key(1), COHORT));
+    h.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn late_peer_replies_are_ignored() {
+    let mut h = Harness::start(config(), &[], vec![]);
+    let mut reply = found(0, 9, vec![peer(1, 1)]);
+    reply.reply = true;
+    // A reply for a key the pool never held (or already finished).
+    h.send(reply.clone());
+    sleep(Duration::from_secs(2)).await;
+    assert!(h.fake.started.lock().unwrap().is_empty());
+    assert_eq!(h.funnel.total(Stage::Harvested, None), 0);
+    // While the pool holds the key, the reply's peers are used.
+    h.send(found(0, 9, vec![]));
+    assert_eq!(h.lookups.recv().await, Some(key(9)));
+    h.send(reply);
+    assert_eq!(h.out.recv().await.unwrap().key, key(9));
+    assert_eq!(h.funnel.total(Stage::Harvested, None), 1);
     h.stop().await;
 }

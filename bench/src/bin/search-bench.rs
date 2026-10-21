@@ -74,13 +74,12 @@ fn build(
     seed: u64,
     n: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let have = store.count()? as usize;
-    if have >= n {
-        return Ok(());
-    }
+    let have = (store.count()? as usize).min(n);
     let mut generator = Generator::new(seed);
-    for _ in 0..have {
-        generator.next_torrent();
+    if have < n {
+        for _ in 0..have {
+            generator.next_torrent();
+        }
     }
     let started = Instant::now();
     let mut left = n - have;
@@ -113,6 +112,8 @@ fn build(
             );
         }
     }
+    // The index catches up from its watermark, so a new schema version
+    // reuses the stored corpus.
     let started = Instant::now();
     let mut indexer = index.writer(512 << 20)?;
     loop {
@@ -165,7 +166,10 @@ fn vocabulary(seed: u64, sample: usize) -> (Vec<String>, Vec<Vec<String>>) {
 
 struct Class {
     name: &'static str,
-    target: Duration,
+    /// `None`: reported, not gated.
+    target: Option<Duration>,
+    /// Empty the browse cache before each query.
+    cold: bool,
     sort: Sort,
     queries: Vec<String>,
 }
@@ -195,37 +199,43 @@ fn classes(seed: u64, per_class: usize) -> Vec<Class> {
     vec![
         Class {
             name: "1 common word",
-            target: KEYWORD_P95,
+            target: Some(KEYWORD_P95),
+            cold: false,
             sort: Sort::Relevance,
             queries: make(&mut |r| pick(r, common)),
         },
         Class {
             name: "1 rare word",
-            target: KEYWORD_P95,
+            target: Some(KEYWORD_P95),
+            cold: false,
             sort: Sort::Relevance,
             queries: make(&mut |r| pick(r, rare)),
         },
         Class {
             name: "2 words",
-            target: KEYWORD_P95,
+            target: Some(KEYWORD_P95),
+            cold: false,
             sort: Sort::Relevance,
             queries: make(&mut |r| adjacent(r, 2)),
         },
         Class {
             name: "3 words",
-            target: KEYWORD_P95,
+            target: Some(KEYWORD_P95),
+            cold: false,
             sort: Sort::Relevance,
             queries: make(&mut |r| adjacent(r, 3)),
         },
         Class {
             name: "phrase",
-            target: KEYWORD_P95,
+            target: Some(KEYWORD_P95),
+            cold: false,
             sort: Sort::Relevance,
             queries: make(&mut |r| format!("\"{}\"", adjacent(r, 2))),
         },
         Class {
             name: "word + filter",
-            target: KEYWORD_P95,
+            target: Some(KEYWORD_P95),
+            cold: false,
             sort: Sort::Relevance,
             queries: make(&mut |r| {
                 format!(
@@ -235,9 +245,19 @@ fn classes(seed: u64, per_class: usize) -> Vec<Class> {
                 )
             }),
         },
+        // §3's browse target is for results cached per index generation;
+        // the cold figure shows what a cache miss costs.
         Class {
-            name: "browse (filters only)",
-            target: BROWSE_P95,
+            name: "browse (cached)",
+            target: Some(BROWSE_P95),
+            cold: false,
+            sort: Sort::Discovered { desc: true },
+            queries: make(&mut |r| browse[r.random_range(0..browse.len())].to_string()),
+        },
+        Class {
+            name: "browse (cold)",
+            target: None,
+            cold: true,
             sort: Sort::Discovered { desc: true },
             queries: make(&mut |r| browse[r.random_range(0..browse.len())].to_string()),
         },
@@ -281,14 +301,17 @@ fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
         // Warm caches the way a running server would be.
         for q in class.queries.iter().take(20) {
             let ast = parse(q)?;
-            index.search_page(index.query(&ast, now).as_ref(), class.sort, 50, 0)?;
+            index.search_page(&index.query(&ast, now), class.sort, 50, 0)?;
         }
         let mut times = Vec::with_capacity(class.queries.len());
         let mut total_hits = 0usize;
         for q in &class.queries {
+            if class.cold {
+                index.clear_cache();
+            }
             let started = Instant::now();
             let ast = parse(q)?;
-            let results = index.search_page(index.query(&ast, now).as_ref(), class.sort, 50, 0)?;
+            let results = index.search_page(&index.query(&ast, now), class.sort, 50, 0)?;
             for h in &results.hits {
                 reader.torrent(h.id as i64)?;
             }
@@ -297,19 +320,25 @@ fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
         }
         times.sort();
         let p95 = pct(&times, 0.95);
-        let pass = p95 <= class.target;
+        let pass = class.target.is_none_or(|t| p95 <= t);
         ok &= pass;
         let ms = |d: Duration| format!("{:.2}", d.as_secs_f64() * 1000.0);
         println!(
-            "  {:<24} {:>8} {:>8} {:>8} {:>8} {:>10}  p95 < {} ms {}",
+            "  {:<24} {:>8} {:>8} {:>8} {:>8} {:>10}  {}",
             class.name,
             ms(pct(&times, 0.5)),
             ms(p95),
             ms(pct(&times, 0.99)),
             ms(*times.last().expect("queries")),
             total_hits / class.queries.len(),
-            class.target.as_millis(),
-            if pass { "PASS" } else { "FAIL" }
+            match class.target {
+                Some(t) => format!(
+                    "p95 < {} ms {}",
+                    t.as_millis(),
+                    if pass { "PASS" } else { "FAIL" }
+                ),
+                None => "(not gated)".to_string(),
+            }
         );
     }
     Ok(ok)

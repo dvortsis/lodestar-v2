@@ -322,6 +322,11 @@ impl Store {
             let bit = t.source.bit();
             if let Some(id) = find_any(&tx, info.swarm_hashes())? {
                 add_sources(&tx, id, bit as u64)?;
+                // An import with an incomplete file list gets the real one
+                // when the info dict is fetched.
+                if t.extra_flags & flags::FILES_PARTIAL == 0 && t.raw_info.is_some() {
+                    upgrade_partial(&tx, codec, id, info, t)?;
+                }
                 out.push(Inserted::Existing(id));
                 continue;
             }
@@ -536,6 +541,37 @@ impl Store {
             .optional()?)
     }
 
+    /// Swarm hashes of torrents whose file list is incomplete (imports past
+    /// bitmagnet's file threshold), oldest first, for re-fetching.
+    pub fn partial_hashes(&self, limit: usize) -> Result<Vec<InfoHash>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT info_hash FROM torrents WHERE flags & ?1 != 0 ORDER BY id LIMIT ?2")?;
+        let rows = stmt.query_map(params![flags::FILES_PARTIAL, limit as i64], |r| {
+            r.get::<_, Vec<u8>>(0)
+        })?;
+        rows.map(|r| {
+            let h = r?;
+            Ok(InfoHash(
+                h.try_into()
+                    .map_err(|_| Error::Corrupt("info_hash length"))?,
+            ))
+        })
+        .collect()
+    }
+
+    /// Torrents changed since `after` (a `reindex_log` sequence number):
+    /// `(seq, torrent id)`, ascending.
+    pub fn reindex_after(&self, after: i64, limit: usize) -> Result<Vec<(i64, i64)>> {
+        Ok(self
+            .conn
+            .prepare_cached(
+                "SELECT seq, torrent_id FROM reindex_log WHERE seq > ?1 ORDER BY seq LIMIT ?2",
+            )?
+            .query_map(params![after, limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Up to `limit` torrent ids greater than `after`, ascending: the
     /// search indexer follows the store this way (§8).
     pub fn ids_after(&self, after: i64, limit: usize) -> Result<Vec<i64>> {
@@ -658,6 +694,59 @@ impl Store {
             .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
         Ok(())
     }
+}
+
+/// Replaces a `FILES_PARTIAL` torrent's file list and info-derived columns
+/// with those of a verified info dict. Does nothing to complete torrents.
+fn upgrade_partial(
+    conn: &Connection,
+    codec: &mut BlobCodec,
+    id: i64,
+    info: &Info,
+    t: &NewTorrent<'_>,
+) -> Result<()> {
+    let flags_now: i64 = conn
+        .prepare_cached("SELECT flags FROM torrents WHERE id = ?1")?
+        .query_row([id], |r| r.get(0))?;
+    if flags_now & flags::FILES_PARTIAL == 0 {
+        return Ok(());
+    }
+    let blob = codec.compress(&filetree::encode(&info.files, info.path_encoding)?)?;
+    let file_count = info.files.iter().filter(|f| !f.is_padding()).count();
+    let keep = flags::IMPORTED | flags::BACKFILL;
+    conn.prepare_cached(
+        "UPDATE torrents SET size = ?2, piece_len = ?3, piece_count = ?4, file_count = ?5,
+             info_size = ?6, flags = ?7, metadata_at = ?8,
+             info_hash_v2 = coalesce(info_hash_v2, ?9)
+         WHERE id = ?1",
+    )?
+    .execute(params![
+        id,
+        to_i64(info.total_size)?,
+        to_i64(info.piece_length)?,
+        to_i64(info.piece_count)?,
+        file_count as i64,
+        info.info_size as i64,
+        derive_flags(info) | t.extra_flags | (flags_now & keep),
+        t.metadata_at,
+        info.v2.as_ref().map(|h| &h.0[..]),
+    ])?;
+    conn.prepare_cached(
+        "INSERT INTO torrent_files (torrent_id, codec, dict_id, data) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT (torrent_id) DO UPDATE SET codec = excluded.codec, dict_id = excluded.dict_id,
+             data = excluded.data",
+    )?
+    .execute(params![id, blob.codec as u8, blob.dict_id, blob.data])?;
+    if let Some(extra) = &info.extra {
+        conn.prepare_cached(
+            "INSERT INTO torrent_extra (torrent_id, data) VALUES (?1, ?2)
+             ON CONFLICT (torrent_id) DO UPDATE SET data = excluded.data",
+        )?
+        .execute(params![id, extra])?;
+    }
+    conn.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
+        .execute([id])?;
+    Ok(())
 }
 
 /// Sets source bits, writing only when one is new.

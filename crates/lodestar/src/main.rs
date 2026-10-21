@@ -26,10 +26,13 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 const USAGE: &str = "\
 Usage: lodestar [serve|healthcheck] [--config <path>]
+       lodestar import-bitmagnet <postgres-url> [--limit N] [--config <path>]
 
 Commands:
-  serve        Run the crawler, status page and metrics (default)
-  healthcheck  Exit 0 if the local instance answers /healthz, 1 otherwise
+  serve             Run the crawler, search, status page and metrics (default)
+  healthcheck       Exit 0 if the local instance answers /healthz, 1 otherwise
+  import-bitmagnet  Import a bitmagnet database (read-only, resumable); run
+                    it while the server is stopped
 
 Options:
   --config <path>  config.toml (default: $LODESTAR_DATA_DIR/config.toml or
@@ -44,6 +47,11 @@ LODESTAR_DHT_ENABLED, LODESTAR_INTENSITY, LODESTAR_LOG";
 enum Command {
     Serve(Option<PathBuf>),
     Healthcheck(Option<PathBuf>),
+    ImportBitmagnet {
+        config: Option<PathBuf>,
+        url: String,
+        limit: Option<u64>,
+    },
     Version,
     Help,
 }
@@ -51,6 +59,8 @@ enum Command {
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String> {
     let mut command = None;
     let mut config = None;
+    let mut positional = Vec::new();
+    let mut limit = None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -59,12 +69,29 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
             "--config" => {
                 config = Some(PathBuf::from(args.next().ok_or("--config needs a path")?));
             }
-            "serve" | "healthcheck" if command.is_none() => command = Some(arg),
+            "--limit" => {
+                let n = args.next().ok_or("--limit needs a number")?;
+                limit = Some(n.parse().map_err(|_| format!("bad --limit {n:?}"))?);
+            }
+            "serve" | "healthcheck" | "import-bitmagnet" if command.is_none() => {
+                command = Some(arg)
+            }
+            other if command.as_deref() == Some("import-bitmagnet") && !other.starts_with('-') => {
+                positional.push(other.to_string());
+            }
             other => return Err(format!("unexpected argument {other:?}")),
         }
     }
     Ok(match command.as_deref() {
         Some("healthcheck") => Command::Healthcheck(config),
+        Some("import-bitmagnet") => match positional.as_slice() {
+            [url] => Command::ImportBitmagnet {
+                config,
+                url: url.clone(),
+                limit,
+            },
+            _ => return Err("import-bitmagnet needs one postgres URL".into()),
+        },
         _ => Command::Serve(config),
     })
 }
@@ -100,6 +127,33 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Command::ImportBitmagnet { config, url, limit } => {
+            let config = match load(config) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("config: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            init_logging(&config.log);
+            let runtime = match tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("starting the runtime: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            match runtime.block_on(import_bitmagnet(config, &url, limit)) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    tracing::error!("{e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Command::Serve(path) => {
             let config = match load(path) {
                 Ok(c) => c,
@@ -232,6 +286,47 @@ async fn serve(config: Config) -> Result<(), BoxError> {
     Ok(())
 }
 
+/// `lodestar import-bitmagnet`: everything from a bitmagnet database into
+/// the store; the server indexes it and re-fetches incomplete file lists
+/// on its next start.
+async fn import_bitmagnet(config: Config, url: &str, limit: Option<u64>) -> Result<(), BoxError> {
+    use lodestar_sources_importers::bitmagnet;
+    std::fs::create_dir_all(&config.data_dir)?;
+    let mut store = Store::open(config.db_path(), config.store_config())?;
+    let source =
+        store.register_source(bitmagnet::PLUGIN_ID, env!("CARGO_PKG_VERSION"), unix_now())?;
+    let opts = bitmagnet::Options {
+        cursor: Some(config.data_dir.join("import-bitmagnet.cursor")),
+        limit,
+        ..bitmagnet::Options::default()
+    };
+    let started = std::time::Instant::now();
+    let report = bitmagnet::import(url, &mut store, source, &opts, |r| {
+        if r.read % 100_000 < opts.batch as u64 {
+            tracing::info!(
+                read = r.read,
+                new = r.new,
+                "importing ({:.0}/s)",
+                r.read as f64 / started.elapsed().as_secs_f64()
+            );
+        }
+    })
+    .await?;
+    store.checkpoint()?;
+    println!(
+        "Imported from bitmagnet: {} read, {} new, {} already stored, {} skipped. \
+         {} have incomplete file lists and will be re-fetched by the server.",
+        report.read, report.new, report.existing, report.skipped, report.partial
+    );
+    Ok(())
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
 async fn shutdown_signal() {
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;
@@ -311,6 +406,16 @@ mod tests {
         assert!(args("serve serve").is_err());
         assert!(args("--config").is_err());
         assert!(args("reindex").is_err());
+        assert_eq!(
+            args("import-bitmagnet postgres://x/bm --limit 10"),
+            Ok(Command::ImportBitmagnet {
+                config: None,
+                url: "postgres://x/bm".into(),
+                limit: Some(10)
+            })
+        );
+        assert!(args("import-bitmagnet").is_err());
+        assert!(args("serve extra").is_err());
     }
 
     #[test]
