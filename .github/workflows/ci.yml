@@ -56,7 +56,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [bencode, krpc, metainfo, filetree, tokenizer]
+        target: [bencode, krpc, metainfo, filetree, tokenizer, query]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
