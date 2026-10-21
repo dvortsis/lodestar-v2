@@ -122,6 +122,7 @@ fn load(
                 discovered_at: t.discovered_at,
                 metadata_at: t.discovered_at + 5,
                 extra_flags: 0,
+                source: lodestar_store::SourceId::new(0).expect("valid id"),
             })
             .collect();
         let t1 = Instant::now();

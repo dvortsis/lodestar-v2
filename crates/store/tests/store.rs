@@ -1,7 +1,9 @@
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::{Info, TextEncoding};
 use lodestar_store::rusqlite::types::Value;
-use lodestar_store::{Inserted, NewTorrent, Store, StoreConfig, flags};
+use lodestar_store::{Inserted, NewTorrent, SourceId, Store, StoreConfig, flags};
+
+const DHT: SourceId = SourceId::new(0).unwrap();
 
 fn d(entries: Vec<(&str, OwnedValue)>) -> OwnedValue {
     OwnedValue::Dict(
@@ -78,6 +80,7 @@ fn new<'a>(info: &'a Info, raw: &'a [u8]) -> NewTorrent<'a> {
         discovered_at: 1_700_000_000,
         metadata_at: 1_700_000_005,
         extra_flags: 0,
+        source: DHT,
     }
 }
 
@@ -299,4 +302,164 @@ fn too_few_samples_skip_training() {
     let info = Info::parse(&raw).unwrap();
     store.insert(&[new(&info, &raw)]).unwrap();
     assert_eq!(store.train_file_dict(100, 16 << 10).unwrap(), None);
+}
+
+#[test]
+fn provenance_accumulates_source_bits() {
+    let mut store = mem();
+    let nyaa = store.register_source("nyaa", "1.0", 1).unwrap();
+    let dht = store.register_source("dht", "1.0", 1).unwrap();
+    assert_eq!((nyaa.get(), dht.get()), (0, 1));
+    let raw = season("Show", 2);
+    let info = Info::parse(&raw).unwrap();
+    let id = store
+        .insert(&[NewTorrent {
+            source: nyaa,
+            ..new(&info, &raw)
+        }])
+        .unwrap()[0]
+        .id();
+    let again = store
+        .insert(&[NewTorrent {
+            source: dht,
+            ..new(&info, &raw)
+        }])
+        .unwrap();
+    assert_eq!(again, vec![Inserted::Existing(id)]);
+    let row = store.torrent(id).unwrap().unwrap();
+    assert_eq!(row.sources, 0b11);
+    assert_eq!(row.first_source, Some(nyaa));
+}
+
+#[test]
+fn sources_register_once_and_cap_at_64() {
+    let mut store = mem();
+    let a = store.register_source("dht", "0.1", 10).unwrap();
+    assert_eq!(store.register_source("dht", "0.2", 20).unwrap(), a);
+    let rows = store.sources().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!((rows[0].version.as_str(), rows[0].added_at), ("0.2", 10));
+    store
+        .set_source_state(a, lodestar_store::SourceState::Paused)
+        .unwrap();
+    assert_eq!(
+        store.sources().unwrap()[0].state,
+        lodestar_store::SourceState::Paused
+    );
+    for i in 1..64 {
+        store.register_source(&format!("p{i}"), "1", 0).unwrap();
+    }
+    assert!(matches!(
+        store.register_source("one-too-many", "1", 0),
+        Err(lodestar_store::Error::TooManySources)
+    ));
+    // Ids above 63 can't even be constructed.
+    assert!(SourceId::new(64).is_none());
+}
+
+#[test]
+fn ids_come_from_the_shared_sequence() {
+    let mut store = mem();
+    let seq = |s: &Store| -> i64 {
+        s.connection()
+            .query_row("SELECT next FROM id_seq", [], |r| r.get(0))
+            .unwrap()
+    };
+    assert_eq!(seq(&store), 1);
+    let a = single(b"a", vec![]);
+    let info = Info::parse(&a).unwrap();
+    let id = store.insert(&[new(&info, &a)]).unwrap()[0].id();
+    assert_eq!((id, seq(&store)), (1, 2));
+    // Another item table taking id 2 from the sequence pushes torrents on.
+    store
+        .connection()
+        .execute("UPDATE id_seq SET next = next + 1", [])
+        .unwrap();
+    let b_ = single(b"b", vec![]);
+    let info = Info::parse(&b_).unwrap();
+    assert_eq!(store.insert(&[new(&info, &b_)]).unwrap()[0].id(), 3);
+    // A duplicate takes no id.
+    store.insert(&[new(&info, &b_)]).unwrap();
+    assert_eq!(seq(&store), 4);
+}
+
+#[test]
+fn counters_add_up_inside_writes() {
+    use lodestar_store::{CohortCount, Counter, Event, WriteBatch};
+    let mut store = mem();
+    let c = |value| Counter {
+        hour: 470_000,
+        metric: 1,
+        dim: 2,
+        key: 3,
+        value,
+    };
+    let cohort = |count| CohortCount {
+        cohort: 470_000,
+        source: DHT,
+        stage: 1,
+        reason: 0,
+        count,
+    };
+    let raw = single(b"a", vec![]);
+    let info = Info::parse(&raw).unwrap();
+    let torrents = [new(&info, &raw)];
+    let events = [Event {
+        at: 1_692_000_000,
+        kind: 1,
+        detail: "start".into(),
+    }];
+    store
+        .write(&WriteBatch {
+            torrents: &torrents,
+            counters: &[c(5), Counter { key: 4, ..c(1) }],
+            cohorts: &[cohort(7)],
+            events: &events,
+        })
+        .unwrap();
+    // A counters-only transaction (nothing to ingest).
+    store
+        .write(&WriteBatch {
+            counters: &[c(2)],
+            cohorts: &[cohort(1)],
+            ..WriteBatch::default()
+        })
+        .unwrap();
+    let got = store.rollup(1, 470_000, 470_001).unwrap();
+    assert_eq!(got, vec![c(7), Counter { key: 4, ..c(1) }]);
+    assert!(store.rollup(2, 0, i64::MAX).unwrap().is_empty());
+    assert_eq!(store.cohorts(0, i64::MAX).unwrap(), vec![cohort(8)]);
+    assert_eq!(store.events(0, i64::MAX).unwrap(), events);
+    assert_eq!(store.count().unwrap(), 1);
+}
+
+#[test]
+fn fetch_queue_round_trips_and_is_replaced() {
+    use lodestar_metainfo::InfoHash;
+    use lodestar_store::QueuedKey;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("q.db");
+    let key = |b: u8, priority| QueuedKey {
+        info_hash: InfoHash([b; 20]),
+        source: DHT,
+        cohort: 470_000 + i64::from(b),
+        strategy: 2,
+        priority,
+        attempts: 3,
+        private_source: b % 2 == 1,
+    };
+    {
+        let mut store = Store::open(&path, StoreConfig::default()).unwrap();
+        store
+            .save_fetch_queue(&[key(1, 0), key(2, 9), key(1, 5)])
+            .unwrap();
+    }
+    let mut store = Store::open(&path, StoreConfig::default()).unwrap();
+    // Highest priority first; a repeated hash keeps its first entry.
+    assert_eq!(
+        store.load_fetch_queue().unwrap(),
+        vec![key(2, 9), key(1, 0)]
+    );
+    store.save_fetch_queue(&[key(3, 1)]).unwrap();
+    assert_eq!(store.load_fetch_queue().unwrap(), vec![key(3, 1)]);
 }
