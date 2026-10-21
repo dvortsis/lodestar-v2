@@ -1,0 +1,27 @@
+[package]
+name = "lodestar-pipeline"
+description = "Crawler to fetch to store orchestration: plugins, the fetch pool, the have-filter and the single writer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+lodestar-dht.workspace = true
+lodestar-metainfo.workspace = true
+lodestar-peer-wire.workspace = true
+lodestar-sources.workspace = true
+lodestar-store.workspace = true
+tokio = { version = "1.54.0", features = ["sync", "time", "rt", "macros"] }
+tracing = "0.1.44"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+lodestar-bencode.workspace = true
+lodestar-dht.workspace = true
+lodestar-peer-wire = { workspace = true, features = ["testing"] }
+tempfile = "3.27.0"
+tokio = { version = "1.54.0", features = ["sync", "time", "rt", "rt-multi-thread", "macros", "net"] }
