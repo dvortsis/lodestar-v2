@@ -152,3 +152,7 @@ Lawrence.of.Arabia.1962.Restored.Version.1080p.BluRay.DTS.x264-CtrlHD
   acodec: dts
   vcodec: h264
   group: CtrlHD
+
+# Regression: a trailing weak marker (TS) with no strong one stays title.
+VIDEO_TS
+  title: VIDEO TS

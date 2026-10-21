@@ -1316,6 +1316,31 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - Two known misses stay in the corpus: `debian-…-amd64-netinst.iso` reads `netinst` as a group, and `IMG_2034` reads 2034 as a year.
   - Real crawled names from M1 are the next corpus source. A 95% pass on them is the gate that matters.
 
+**M3 implementation decisions (classification, `lodestar-classify`):**
+- **One pure function:** `classify(name, files) -> Classification`. Files arrive with decoded paths, so the crate needs neither metainfo nor the store. Wiring it into the prepare step (§19.4) is the last M3 slice.
+- **Ten categories** (§8) come from an extension registry. Split-archive parts (`.r00`, `.001`, `.part2.rar`) are archives. Extensions are read into a stack buffer, so 200k files don't allocate per file.
+- **Composition:**
+  - Per-category counts and bytes, with padding kept apart.
+  - Percentages are whole numbers. Any non-zero share is at least 1 and only a complete one is 100, so `cat:software=0` and `cat:video=100` mean exactly that.
+  - `torrents.comp` format 1: a version byte, a varint mask of the non-empty entries, then a varint count and bytes for each. Decoding is strict (anything the encoder wouldn't write is an error) and property-tested on arbitrary bytes.
+- **Structural fingerprints** are a bitset with stable names: `bluray`, `dvd`, `cue`, `sfv`, `par2`, `multipart`, `steam`, `repack`, `sample`, `subs`, `proof`, `nfo`, `comics`, `photos`. They back `has:` and feed the content type and the junk score.
+- **Effective title:**
+  - An informative name keeps its own identity (title, year, episodes, group). It only borrows missing quality fields (resolution, codecs, container) from the largest dominant file.
+  - An uninformative name takes the most informative parse among the 3 largest dominant files (skipping samples and disc stream files), the shared top folder, and the folder above `BDMV/`/`VIDEO_TS/`. It records which one as `resolved` (`files`/`folder`/`structure`), with a confidence.
+  - Several episode files resolve to the pack, not the first episode.
+- **Content type** (`movie`, `tv`, `music`, `audiobook`, `ebook`, `comic`, `software`, `game`, `images`, `video`, `other`) comes with a confidence.
+  - The rules run in order: disc structures, then the dominant category refined by the release (episodic, year, artist, version, platform), then game evidence (console platforms, known game and repack groups, `.nsp`, repack and Steam layouts).
+  - A scene release still in its RAR set counts as the movie or show it contains.
+  - `torrents.content_type` codes are fixed and never reused.
+- **Junk score:** 0–100, the sum of reason weights, capped.
+  - Reasons: padding only, empty, double extension (`movie.mp4.exe`), an executable in a media torrent, a `.url` shortcut, lure files (`password.txt`, "visit www…"), a name that doesn't match the files, an archive where media was promised, and HD video under 40 MiB.
+  - Executables only count in media torrents, never in software or games.
+  - Each reason has a stable key and a plain sentence for the "why" tooltip.
+- **Not in M3:** grouping keys and MinHash (M7, with "same file"), the adult flag (it needs its own reviewed word lists), and the swarm-consistency and claim-mismatch junk reasons (with M4 scrapes and §18.5 claims).
+- **Verified:** 28 whole-torrent fixtures, written before the first run (27 passed). The miss was disc stream files offered as titles, now fixed. Fixing it also exposed a parser bug, where trailing weak words were stripped with no strong marker. That's fixed too and kept as a golden case.
+  - Property tests cover composition counts, shares, the largest file, junk arithmetic, determinism and the blob round-trip.
+  - A 200k-file torrent classifies in about 46 ms.
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.

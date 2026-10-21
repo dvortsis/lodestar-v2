@@ -871,7 +871,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             ended_by_year = m.kind == Kind::Year;
             break;
         }
-        if !ended_by_year {
+        if end < n && !ended_by_year {
             // Noise (`Update`, sizes) doesn't pull the title back.
             while let Some(prev) = self
                 .marks
@@ -1247,10 +1247,10 @@ fn tidy_title(mut s: String) -> (String, bool) {
         })
         .len();
     s.drain(..lead);
+    // Close the one bracket a cut at a marker left open; more than one
+    // unclosed means the name itself is unbalanced, and stays as written.
     for (open, close) in [('(', ')'), ('[', ']')] {
-        let opens = s.matches(open).count();
-        let closes = s.matches(close).count();
-        for _ in closes..opens {
+        if s.matches(open).count() == s.matches(close).count() + 1 {
             s.push(close);
         }
     }

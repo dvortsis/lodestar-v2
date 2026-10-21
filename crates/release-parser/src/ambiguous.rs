@@ -93,8 +93,10 @@ pub fn is_uninformative(name: &str) -> bool {
     }
     let words = words.trim_end();
     if words.is_empty() {
-        // Only numbers: `1` or `03` says nothing, `1917` is a title.
-        return alnum < 4;
+        // Only numbers: `1917`, `300` and `21` are titles; `1`, `03` and
+        // `00001` (a disc's stream file) say nothing.
+        let digits = name.trim_start_matches(|c: char| !c.is_ascii_digit());
+        return alnum == 1 || alnum > 4 || digits.starts_with('0');
     }
     GENERIC.contains(&words)
 }
@@ -154,6 +156,8 @@ mod tests {
             "1",
             "--",
             "Untitled (3).mkv",
+            "00001.m2ts",
+            "03",
         ] {
             assert!(is_uninformative(name), "{name}");
         }
@@ -165,6 +169,8 @@ mod tests {
             "Show.Name.S02E05.2160p.WEB-DL.mkv",
             "The Matrix",
             "1917",
+            "300",
+            "21",
             "Video Games Live",
             "Seinfeld Season 1-9 Complete",
             "Up",

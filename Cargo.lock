@@ -863,6 +863,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lodestar-classify"
+version = "0.0.0"
+dependencies = [
+ "lodestar-release-parser",
+ "proptest",
+]
+
+[[package]]
 name = "lodestar-dht"
 version = "0.0.0"
 dependencies = [
