@@ -67,6 +67,13 @@ Steady-state RSS **< 1 GB** at 10M torrents with default caches. A **low-resourc
 
 **Cold-start reality (fresh crawler):** a rough expectation, to be measured in M1, is hundreds of thousands to a few million hashes harvested per day, of which only a minority yield metadata (many hashes are dead swarms). The index grows over weeks, not hours. The dashboard projects growth, and the first-run wizard sets this expectation and offers the **bitmagnet import** (M2) as a shortcut.
 
+**Measured in M1 (first real-network run, Docker on Windows, bridge networking, Balanced, 11.5 h, first run on an empty index):**
+- **Harvest:** 12.0M keys received, about 1M per hour, 99.9% from DHT sampling. Writer errors, dropped keys and false positives were all 0.
+- **Metadata:** 1,726 torrents stored, about 150 per hour. Of 47.6k fetch attempts, 3.6% succeeded. The failures were 73% timeouts, 10% unreachable and 8% refused. That is 0.015% of keys received.
+- **Fetch is the bottleneck.** The pool sat at its 200k cap with a lookup backlog of about 200k, and 11.8M keys were evicted unfetched. Harvest outruns fetch by about 1,000×, so raising the fetch rate (socket cap, lookup concurrency, prioritising keys by swarm evidence) is the lever, not harvest.
+- **DHT health:** reply ratio 0.54 at the start and 0.49 at the end, with 56% of queries timing out and 90 throttle events. No router distress was observed in these counters, but the router itself wasn't monitored.
+- **Memory:** 218 MiB at hour 11.5, a single sample. Flatness over 24 hours is measured in the follow-up run (below).
+
 ## 4. Topology
 
 One process, one binary (`lodestar`), with one data directory. Internally it's a set of async services connected by bounded channels, so backpressure is natural and nothing polls.
