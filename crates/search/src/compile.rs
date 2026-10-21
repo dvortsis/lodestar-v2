@@ -9,6 +9,7 @@ use tantivy::query::{
 };
 use tantivy::schema::{Field, IndexRecordOption};
 
+use crate::filter::FastRange;
 use crate::query::{Node, NumField, TextField, When};
 use crate::schema::{Fields, NAME_BOOST, PATH_BOOST};
 use crate::tokenizer::{self, Tok, TokKind};
@@ -16,8 +17,64 @@ use crate::tokenizer::{self, Tok, TokKind};
 type Q = Box<dyn Query>;
 
 /// Compiles `node`; `now` (unix seconds) resolves relative dates.
-pub fn compile(node: &Node, f: &Fields, now: i64) -> Q {
-    compile_opt(node, f, now).unwrap_or_else(|| Box::new(AllQuery))
+///
+/// Ranges at the top level come back separately, to be checked in the
+/// collector, whenever another clause can drive the query; otherwise the
+/// first one stays in the query to drive it.
+pub fn compile(node: &Node, f: &Fields, now: i64) -> (Q, Vec<FastRange>) {
+    let all = || Box::new(AllQuery) as Q;
+    let Node::And { of } = node else {
+        return (compile_opt(node, f, now).unwrap_or_else(all), Vec::new());
+    };
+    let (ranges, mut rest): (Vec<&Node>, Vec<&Node>) = of
+        .iter()
+        .partition(|n| matches!(n, Node::Range { .. } | Node::Date { .. }));
+    // A clause drives when it narrows the matches by itself; a negation
+    // (`-x`, `private:no`) only removes a few from everything.
+    let drives = |n: &&Node| {
+        !matches!(n, Node::Not { .. } | Node::Flag { value: false, .. })
+            && compile_opt(n, f, now).is_some()
+    };
+    let keep = usize::from(!rest.iter().any(drives)).min(ranges.len());
+    rest.extend(&ranges[..keep]);
+    let filters = ranges[keep..].iter().map(|n| fast_range(n, now)).collect();
+    let rest = Node::And {
+        of: rest.into_iter().cloned().collect(),
+    };
+    (compile_opt(&rest, f, now).unwrap_or_else(all), filters)
+}
+
+fn resolve(w: &When, now: i64) -> i64 {
+    match w {
+        When::Ago(s) => now.saturating_sub(*s),
+        When::At(t) => *t,
+    }
+}
+
+fn num_field(field: &NumField) -> &'static str {
+    match field {
+        NumField::Size => "size",
+        NumField::Files => "files",
+        NumField::Largest => "largest",
+        NumField::Piece => "piece_len",
+    }
+}
+
+/// A `Range` or `Date` node as a fast-field check.
+fn fast_range(node: &Node, now: i64) -> FastRange {
+    match node {
+        Node::Range { field, lo, hi } => FastRange::U64 {
+            field: num_field(field),
+            lo: lo.unwrap_or(0),
+            hi: hi.unwrap_or(u64::MAX),
+        },
+        Node::Date { from, to, .. } => FastRange::I64 {
+            field: "discovered",
+            lo: from.as_ref().map_or(i64::MIN, |w| resolve(w, now)),
+            hi: to.as_ref().map_or(i64::MAX, |w| resolve(w, now)),
+        },
+        _ => unreachable!("only ranges are lifted"),
+    }
 }
 
 /// `None` for a clause that constrains nothing (a word with no tokens,
@@ -137,12 +194,8 @@ fn compile_opt(node: &Node, f: &Fields, now: i64) -> Option<Q> {
             Box::new(RangeQuery::new(bound(lo), bound(hi)))
         }
         Node::Date { from, to, .. } => {
-            let at = |w: &When| match w {
-                When::Ago(s) => now.saturating_sub(*s),
-                When::At(t) => *t,
-            };
             let bound = |w: &Option<When>| match w {
-                Some(w) => Bound::Included(Term::from_field_i64(f.discovered, at(w))),
+                Some(w) => Bound::Included(Term::from_field_i64(f.discovered, resolve(w, now))),
                 None => Bound::Unbounded,
             };
             Box::new(RangeQuery::new(bound(from), bound(to)))

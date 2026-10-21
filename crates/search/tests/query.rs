@@ -123,10 +123,7 @@ fn hex(b: &[u8]) -> String {
 
 fn find(index: &SearchIndex, q: &str) -> Vec<String> {
     let ast = parse(q).unwrap_or_else(|e| panic!("{q}: {e}"));
-    let hits = index
-        .search(index.query(&ast, NOW).as_ref(), 50)
-        .unwrap()
-        .hits;
+    let hits = index.search(&index.query(&ast, NOW), 50).unwrap().hits;
     let mut names: Vec<String> = index
         .names(&hits)
         .unwrap()
@@ -198,10 +195,7 @@ fn sorting_and_paging() {
     let (ix, _) = corpus();
     let all = ix.query(&parse("").unwrap(), NOW);
     let names = |sort, limit, offset| -> Vec<String> {
-        let hits = ix
-            .search_page(all.as_ref(), sort, limit, offset)
-            .unwrap()
-            .hits;
+        let hits = ix.search_page(&all, sort, limit, offset).unwrap().hits;
         ix.names(&hits)
             .unwrap()
             .into_iter()
@@ -218,6 +212,40 @@ fn sorting_and_paging() {
     );
     assert_eq!(names(Sort::Size { desc: false }, 1, 0), ["Computer"]);
     assert_eq!(names(Sort::Files { desc: true }, 1, 0), ["Knight"]);
-    let page = ix.search_page(all.as_ref(), Sort::Relevance, 2, 4).unwrap();
+    let page = ix.search_page(&all, Sort::Relevance, 2, 4).unwrap();
     assert_eq!((page.hits.len(), page.total), (1, 5));
+}
+
+#[test]
+fn lifted_ranges_match_ranges_in_the_query() {
+    // Top-level ranges are checked in the collector; inside `|` they stay
+    // in the Tantivy query. Both must select the same torrents.
+    let (ix, _) = corpus();
+    for q in [
+        "knight size:<1GB",
+        "batman discovered:<60d",
+        "files:>=2 size:<1GB",
+        "private:no size:1GB..8GB",
+        "-joker size:>1MB",
+    ] {
+        let wrapped = format!("({q}) | zzznomatch");
+        assert_eq!(find(&ix, q), find(&ix, &wrapped), "{q}");
+    }
+}
+
+#[test]
+fn browse_sorts_with_filters() {
+    use lodestar_search::Sort;
+    let (ix, _) = corpus();
+    let q = ix.query(&parse("size:<1GB").unwrap(), NOW);
+    let page = ix
+        .search_page(&q, Sort::Discovered { desc: true }, 50, 0)
+        .unwrap();
+    assert_eq!(page.total, find(&ix, "size:<1GB").len());
+    // Cached the second time; same answer.
+    assert_eq!(
+        ix.search_page(&q, Sort::Discovered { desc: true }, 50, 0)
+            .unwrap(),
+        page
+    );
 }

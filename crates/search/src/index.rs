@@ -7,6 +7,7 @@
 //! covers: a crash can only lose work, never skip or duplicate a torrent.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use lodestar_metainfo::InfoHash;
 use lodestar_store::Store;
@@ -14,14 +15,14 @@ use tantivy::collector::{Count, TopDocs};
 use tantivy::directory::MmapDirectory;
 use tantivy::query::{Query, TermQuery};
 use tantivy::schema::{IndexRecordOption, Value};
-use tantivy::{
-    DocAddress, Index, IndexReader, IndexWriter, Order, ReloadPolicy, TantivyDocument, Term,
-};
+use tantivy::{DocAddress, Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term};
 
 use crate::compile;
 use crate::doc::TorrentDoc;
-use crate::query::Node;
+use crate::filter::{FastRange, PostFilter};
+use crate::query::{Node, When};
 use crate::schema::{self, Fields, SCHEMA_VERSION, TOKENIZER_VERSION};
+use crate::sorted::{self, SegmentCache};
 use crate::tokenizer::{NAME_TOKENIZER, NameTokenizer};
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -79,6 +80,7 @@ pub struct SearchIndex {
     index: Index,
     reader: IndexReader,
     fields: Fields,
+    cache: Arc<SegmentCache>,
 }
 
 impl std::fmt::Debug for SearchIndex {
@@ -111,12 +113,43 @@ pub enum Sort {
     },
 }
 
+/// A query ready to run: the Tantivy query, plus top-level ranges that
+/// the collector checks against fast fields (see `filter`).
+pub struct Compiled {
+    pub(crate) query: Box<dyn Query>,
+    pub(crate) filters: Vec<FastRange>,
+    /// Identifies the query for the segment cache.
+    pub(crate) key: String,
+}
+
+impl std::fmt::Debug for Compiled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Compiled")
+            .field("query", &self.query)
+            .field("filters", &self.filters)
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Results {
     pub hits: Vec<Hit>,
     /// Exact number of matches.
     pub total: usize,
 }
+
+/// Whether `node` has a date relative to now.
+fn relative(node: &Node) -> bool {
+    match node {
+        Node::And { of } | Node::Or { of } => of.iter().any(relative),
+        Node::Not { of } => relative(of),
+        Node::Date { from, to, .. } => [from, to].iter().any(|w| matches!(w, Some(When::Ago(_)))),
+        _ => false,
+    }
+}
+
+/// Segments searched at once, at most: the §3 targets assume 4 cores.
+const SEARCH_THREADS: usize = 4;
 
 impl SearchIndex {
     /// Opens the index in `dir`, creating it if absent.
@@ -133,7 +166,14 @@ impl SearchIndex {
         SearchIndex::wrap(Index::create_in_ram(schema), fields)
     }
 
-    fn wrap(index: Index, fields: Fields) -> Result<SearchIndex> {
+    fn wrap(mut index: Index, fields: Fields) -> Result<SearchIndex> {
+        // Segments are searched in parallel: broad queries visit every
+        // match, so this is most of the latency budget at 10M (§16).
+        let threads =
+            std::thread::available_parallelism().map_or(1, |n| n.get().min(SEARCH_THREADS));
+        if threads > 1 {
+            index.set_multithread_executor(threads)?;
+        }
         index
             .tokenizers()
             .register(NAME_TOKENIZER, NameTokenizer::default());
@@ -145,6 +185,7 @@ impl SearchIndex {
             index,
             reader,
             fields,
+            cache: Arc::default(),
         })
     }
 
@@ -236,8 +277,24 @@ impl SearchIndex {
 
     /// Compiles a parsed query; `now` (unix seconds) resolves relative
     /// dates.
-    pub fn query(&self, node: &Node, now: i64) -> Box<dyn Query> {
-        compile::compile(node, &self.fields, now)
+    pub fn query(&self, node: &Node, now: i64) -> Compiled {
+        let (query, filters) = compile::compile(node, &self.fields, now);
+        // Relative dates resolve against `now`, so they're part of the key.
+        let key = if relative(node) {
+            format!("{node:?}@{now}")
+        } else {
+            format!("{node:?}")
+        };
+        Compiled {
+            query,
+            filters,
+            key,
+        }
+    }
+
+    /// Empties the browse cache (for benchmarks).
+    pub fn clear_cache(&self) {
+        self.cache.clear();
     }
 
     /// The torrent with this swarm hash, if indexed.
@@ -246,47 +303,49 @@ impl SearchIndex {
             Term::from_field_bytes(self.fields.hash, &hash.0),
             IndexRecordOption::Basic,
         );
+        let q = Compiled {
+            query: Box::new(q),
+            filters: Vec::new(),
+            key: String::new(),
+        };
         Ok(self.search(&q, 1)?.hits.first().map(|h| h.id))
     }
 
-    pub fn search(&self, query: &dyn Query, limit: usize) -> Result<Results> {
+    pub fn search(&self, query: &Compiled, limit: usize) -> Result<Results> {
         self.search_page(query, Sort::Relevance, limit, 0)
     }
 
     /// One page of results in `sort` order, with the exact total.
     pub fn search_page(
         &self,
-        query: &dyn Query,
+        compiled: &Compiled,
         sort: Sort,
         limit: usize,
         offset: usize,
     ) -> Result<Results> {
         let searcher = self.reader.searcher();
+        let query = compiled.query.as_ref();
+        let ranges = &compiled.filters;
         let top = TopDocs::with_limit(limit.max(1)).and_offset(offset);
-        let order = |desc: bool| if desc { Order::Desc } else { Order::Asc };
         let (scored, total): (Vec<(f32, DocAddress)>, usize) = match sort {
-            Sort::Relevance => searcher.search(query, &(top.order_by_score(), Count))?,
-            Sort::Discovered { desc } => {
-                let (t, n) = searcher.search(
-                    query,
-                    &(
-                        top.order_by_fast_field::<i64>("discovered", order(desc)),
-                        Count,
-                    ),
-                )?;
-                (t.into_iter().map(|(_, a)| (0.0, a)).collect(), n)
+            Sort::Relevance => {
+                let inner = (top.order_by_score(), Count);
+                searcher.search(query, &PostFilter { ranges, inner })?
             }
-            Sort::Size { desc } | Sort::Files { desc } => {
-                let field = if matches!(sort, Sort::Size { .. }) {
-                    "size"
-                } else {
-                    "files"
+            Sort::Discovered { desc } | Sort::Size { desc } | Sort::Files { desc } => {
+                let (field, signed) = match sort {
+                    Sort::Discovered { .. } => ("discovered", true),
+                    Sort::Size { .. } => ("size", false),
+                    _ => ("files", false),
                 };
-                let (t, n) = searcher.search(
-                    query,
-                    &(top.order_by_fast_field::<u64>(field, order(desc)), Count),
-                )?;
-                (t.into_iter().map(|(_, a)| (0.0, a)).collect(), n)
+                let order = sorted::Order {
+                    field,
+                    signed,
+                    desc,
+                };
+                let (page, n) =
+                    sorted::search(&searcher, &self.cache, compiled, order, limit, offset)?;
+                (page.into_iter().map(|a| (0.0, a)).collect(), n)
             }
         };
         // Ids come from the fast field: the docstore is only for names.
