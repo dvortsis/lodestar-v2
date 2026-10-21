@@ -123,14 +123,16 @@ fn hex(b: &[u8]) -> String {
 
 fn find(index: &SearchIndex, q: &str) -> Vec<String> {
     let ast = parse(q).unwrap_or_else(|e| panic!("{q}: {e}"));
-    let mut names: Vec<String> = index
+    let hits = index
         .search(index.query(&ast, NOW).as_ref(), 50)
         .unwrap()
-        .hits
+        .hits;
+    let mut names: Vec<String> = index
+        .names(&hits)
+        .unwrap()
         .into_iter()
-        .map(|h| {
-            h.name
-                .split(&[' ', '.'][..])
+        .map(|name| {
+            name.split(&[' ', '.'][..])
                 .take(2)
                 .collect::<Vec<_>>()
                 .join(" ")
@@ -196,11 +198,14 @@ fn sorting_and_paging() {
     let (ix, _) = corpus();
     let all = ix.query(&parse("").unwrap(), NOW);
     let names = |sort, limit, offset| -> Vec<String> {
-        ix.search_page(all.as_ref(), sort, limit, offset)
+        let hits = ix
+            .search_page(all.as_ref(), sort, limit, offset)
             .unwrap()
-            .hits
+            .hits;
+        ix.names(&hits)
+            .unwrap()
             .into_iter()
-            .map(|h| h.name.split(&[' ', '.'][..]).next().unwrap().to_string())
+            .map(|n| n.split(&[' ', '.'][..]).next().unwrap().to_string())
             .collect()
     };
     assert_eq!(
