@@ -1,0 +1,692 @@
+# TV: episodes, ranges, season packs, date-based shows.
+
+Breaking.Bad.S05E14.Ozymandias.1080p.WEB-DL.DD5.1.H.264-BS
+  title: Breaking Bad
+  season: 5
+  episode: 14
+  res: 1080p
+  source: web-dl
+  acodec: ac3
+  channels: 5.1
+  vcodec: h264
+  group: BS
+
+Game.of.Thrones.S08E06.720p.WEB.H264-MEMENTO
+  title: Game of Thrones
+  season: 8
+  episode: 6
+  res: 720p
+  source: web-dl
+  vcodec: h264
+  group: MEMENTO
+
+The.Office.US.S02E01.720p.BluRay.x264-DEMAND
+  title: The Office US
+  season: 2
+  episode: 1
+  res: 720p
+  source: bluray
+  vcodec: h264
+  group: DEMAND
+
+Friends.S01-S10.COMPLETE.1080p.BluRay.x265-PHOENiX
+  title: Friends
+  season: 1-10
+  pack: yes
+  res: 1080p
+  source: bluray
+  vcodec: h265
+  group: PHOENiX
+
+The.Mandalorian.S02.2160p.DSNP.WEB-DL.DDP5.1.Atmos.HDR.HEVC-MZABI
+  title: The Mandalorian
+  season: 2
+  pack: yes
+  res: 2160p
+  service: dsnp
+  source: web-dl
+  acodec: atmos, eac3
+  channels: 5.1
+  hdr: hdr
+  vcodec: h265
+  group: MZABI
+
+Stranger.Things.S04E01E02.1080p.NF.WEB-DL.DDP5.1.x264-NTb
+  title: Stranger Things
+  season: 4
+  episode: 1-2
+  res: 1080p
+  service: nf
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: NTb
+
+Doctor.Who.2005.S13E01.1080p.iP.WEB-DL.AAC2.0.H.264-NTb
+  title: Doctor Who
+  year: 2005
+  season: 13
+  episode: 1
+  res: 1080p
+  service: ip
+  source: web-dl
+  acodec: aac
+  channels: 2.0
+  vcodec: h264
+  group: NTb
+
+The.Daily.Show.2024.03.15.Guest.Name.720p.WEB.h264-EDITH
+  title: The Daily Show
+  date: 2024-03-15
+  res: 720p
+  source: web-dl
+  vcodec: h264
+  group: EDITH
+
+Last.Week.Tonight.with.John.Oliver.2024.04.07.1080p.WEB.h264-EDITH
+  title: Last Week Tonight with John Oliver
+  date: 2024-04-07
+  res: 1080p
+  source: web-dl
+  vcodec: h264
+  group: EDITH
+
+Saturday.Night.Live.S49E15.1080p.WEB.h264-BAE
+  title: Saturday Night Live
+  season: 49
+  episode: 15
+  res: 1080p
+  source: web-dl
+  vcodec: h264
+  group: BAE
+
+Show Name - S01E01 - Pilot.mkv
+  title: Show Name
+  season: 1
+  episode: 1
+  container: mkv
+
+The Expanse S03E05 1080p AMZN WEB-DL DD+5.1 H.264-NTG
+  title: The Expanse
+  season: 3
+  episode: 5
+  res: 1080p
+  service: amzn
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: NTG
+
+Lost 1x01 Pilot Part 1.avi
+  title: Lost
+  season: 1
+  episode: 1
+  container: avi
+
+Sherlock.3x02.The.Sign.of.Three.720p.HDTV.x264-FoV
+  title: Sherlock
+  season: 3
+  episode: 2
+  res: 720p
+  source: tv
+  vcodec: h264
+  group: FoV
+
+The.Simpsons.S35E10.720p.HDTV.x264-SYNCOPY
+  title: The Simpsons
+  season: 35
+  episode: 10
+  res: 720p
+  source: tv
+  vcodec: h264
+  group: SYNCOPY
+
+Chernobyl.S01E05.Vichnaya.Pamyat.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb
+  title: Chernobyl
+  season: 1
+  episode: 5
+  res: 1080p
+  service: amzn
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: NTb
+
+Planet.Earth.II.S01.2160p.UHD.BluRay.x265-SCOTLUHD
+  title: Planet Earth II
+  season: 1
+  pack: yes
+  res: 2160p
+  source: bluray
+  vcodec: h265
+  group: SCOTLUHD
+
+Seinfeld Season 1-9 Complete 720p WEB-DL
+  title: Seinfeld
+  season: 1-9
+  pack: yes
+  res: 720p
+  source: web-dl
+
+The Sopranos Season 3 Complete 1080p BluRay x264
+  title: The Sopranos
+  season: 3
+  pack: yes
+  res: 1080p
+  source: bluray
+  vcodec: h264
+
+Band.of.Brothers.2001.Complete.1080p.BluRay.x264-HiDt
+  title: Band of Brothers
+  year: 2001
+  pack: yes
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: HiDt
+
+Fargo.S05E01.1080p.HULU.WEB-DL.DDP5.1.H.264-NTb
+  title: Fargo
+  season: 5
+  episode: 1
+  res: 1080p
+  service: hulu
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: NTb
+
+Severance.S02E10.2160p.ATVP.WEB-DL.DDP5.1.Atmos.DV.H.265-FLUX
+  title: Severance
+  season: 2
+  episode: 10
+  res: 2160p
+  service: atvp
+  source: web-dl
+  acodec: atmos, eac3
+  channels: 5.1
+  hdr: dv
+  vcodec: h265
+  group: FLUX
+
+Shogun.2024.S01E01.Anjin.1080p.DSNP.WEB-DL.DDP5.1.H.264-NTb
+  title: Shogun
+  year: 2024
+  season: 1
+  episode: 1
+  res: 1080p
+  service: dsnp
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: NTb
+
+The.Bear.S03.COMPLETE.720p.HULU.WEB-DL.x264-GalaxyTV
+  title: The Bear
+  season: 3
+  pack: yes
+  res: 720p
+  service: hulu
+  source: web-dl
+  vcodec: h264
+  group: GalaxyTV
+
+Better.Call.Saul.S06E13.Saul.Gone.REPACK.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb
+  title: Better Call Saul
+  season: 6
+  episode: 13
+  flags: repack
+  res: 1080p
+  service: amzn
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: NTb
+
+Top.Gear.S22E01.PROPER.HDTV.x264-FTP
+  title: Top Gear
+  season: 22
+  episode: 1
+  flags: proper
+  source: tv
+  vcodec: h264
+  group: FTP
+
+MythBusters.S2003E01.720p.WEB-DL.AAC2.0.H.264
+  title: MythBusters
+  season: 2003
+  episode: 1
+  res: 720p
+  source: web-dl
+  acodec: aac
+  channels: 2.0
+  vcodec: h264
+
+Dark.S01E01.GERMAN.DL.1080p.NF.WEBRip.x264-TVARCHiV
+  title: Dark
+  season: 1
+  episode: 1
+  lang: de, multi
+  res: 1080p
+  service: nf
+  source: webrip
+  vcodec: h264
+  group: TVARCHiV
+
+La.Casa.de.Papel.S01E01.SPANISH.1080p.NF.WEB-DL.DDP5.1.x264-HHWEB
+  title: La Casa de Papel
+  season: 1
+  episode: 1
+  lang: es
+  res: 1080p
+  service: nf
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: HHWEB
+
+Babylon.Berlin.S01E01.German.720p.BluRay.x264-WvF
+  title: Babylon Berlin
+  season: 1
+  episode: 1
+  lang: de
+  res: 720p
+  source: bluray
+  vcodec: h264
+  group: WvF
+
+Arcane.S01E01.MULTi.1080p.NF.WEB-DL.DDP5.1.x264-FRATERNiTY
+  title: Arcane
+  season: 1
+  episode: 1
+  lang: multi
+  res: 1080p
+  service: nf
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: FRATERNiTY
+
+Squid.Game.S01E01.KOREAN.1080p.NF.WEBRip.DDP5.1.x264-ViSiON
+  title: Squid Game
+  season: 1
+  episode: 1
+  lang: ko
+  res: 1080p
+  service: nf
+  source: webrip
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: ViSiON
+
+Money.Heist.S05E01.1080p.NF.WEBRip.x265.10bit.HDR.DDP5.1-WEM
+  title: Money Heist
+  season: 5
+  episode: 1
+  res: 1080p
+  service: nf
+  source: webrip
+  vcodec: h265
+  bits: 10
+  hdr: hdr
+  acodec: eac3
+  channels: 5.1
+  group: WEM
+
+Twin.Peaks.S03E01-E02.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb
+  title: Twin Peaks
+  season: 3
+  episode: 1-2
+  res: 1080p
+  service: amzn
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: NTb
+
+House.of.the.Dragon.S02E08.2160p.MAX.WEB-DL.DDP5.1.Atmos.DV.HDR.H.265-FLUX
+  title: House of the Dragon
+  season: 2
+  episode: 8
+  res: 2160p
+  service: max
+  source: web-dl
+  acodec: atmos, eac3
+  channels: 5.1
+  hdr: dv, hdr
+  vcodec: h265
+  group: FLUX
+
+The.Boys.S04E01.1080p.AMZN.WEB-DL.DDP5.1.H.264-FLUX
+  title: The Boys
+  season: 4
+  episode: 1
+  res: 1080p
+  service: amzn
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: FLUX
+
+Show.Name.E05.720p.HDTV.x264
+  title: Show Name
+  episode: 5
+  res: 720p
+  source: tv
+  vcodec: h264
+
+Planet.Earth.Episode.3.Fresh.Water.720p.BluRay.x264
+  title: Planet Earth
+  episode: 3
+  res: 720p
+  source: bluray
+  vcodec: h264
+
+Grey's.Anatomy.S20E01.720p.HDTV.x264-SYNCOPY
+  title: Grey's Anatomy
+  season: 20
+  episode: 1
+  res: 720p
+  source: tv
+  vcodec: h264
+  group: SYNCOPY
+
+Marvel's.Agents.of.S.H.I.E.L.D.S07E01.720p.HDTV.x264-AVS
+  title: Marvel's Agents of S.H.I.E.L.D.
+  season: 7
+  episode: 1
+  res: 720p
+  source: tv
+  vcodec: h264
+  group: AVS
+
+9-1-1.S07E01.720p.HDTV.x264-SYNCOPY
+  title: 9-1-1
+  season: 7
+  episode: 1
+  res: 720p
+  source: tv
+  vcodec: h264
+  group: SYNCOPY
+
+24.S09E01.720p.HDTV.x264-IMMERSE
+  title: 24
+  season: 9
+  episode: 1
+  res: 720p
+  source: tv
+  vcodec: h264
+  group: IMMERSE
+
+FBI.S06E01.1080p.WEB.h264-ETHEL
+  title: FBI
+  season: 6
+  episode: 1
+  res: 1080p
+  source: web-dl
+  vcodec: h264
+  group: ETHEL
+
+Doctor Who (2023) - S01E01 - Space Babies (1080p DSNP WEB-DL x265 HEVC 10bit EAC3 5.1 Silence)
+  title: Doctor Who
+  year: 2023
+  season: 1
+  episode: 1
+  res: 1080p
+  service: dsnp
+  source: web-dl
+  vcodec: h265
+  bits: 10
+  acodec: eac3
+  channels: 5.1
+  group: Silence
+
+Bluey.2018.S03E01.1080p.DSNP.WEB-DL.AAC2.0.H.264-LAZY
+  title: Bluey
+  year: 2018
+  season: 3
+  episode: 1
+  res: 1080p
+  service: dsnp
+  source: web-dl
+  acodec: aac
+  channels: 2.0
+  vcodec: h264
+  group: LAZY
+
+Ted.Lasso.S01E01.720p.ATVP.WEB-DL.DDP5.1.H.264-TOMMY[rarbg]
+  title: Ted Lasso
+  season: 1
+  episode: 1
+  res: 720p
+  service: atvp
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: TOMMY
+
+Taskmaster.S16E01.1080p.HDTV.H264-DARKFLiX[TGx]
+  title: Taskmaster
+  season: 16
+  episode: 1
+  res: 1080p
+  source: tv
+  vcodec: h264
+  group: DARKFLiX
+
+Lupin.Saison.1.FRENCH.1080p.NF.WEB-DL.x264-SEiGHT
+  title: Lupin
+  season: 1
+  pack: yes
+  lang: fr
+  res: 1080p
+  service: nf
+  source: web-dl
+  vcodec: h264
+  group: SEiGHT
+
+The.Wire.S01-S05.Complete.720p.BluRay.x264-iNK
+  title: The Wire
+  season: 1-5
+  pack: yes
+  res: 720p
+  source: bluray
+  vcodec: h264
+  group: iNK
+
+The.Wire.Season.1.720p.BluRay.x264-iNK
+  title: The Wire
+  season: 1
+  pack: yes
+  res: 720p
+  source: bluray
+  vcodec: h264
+  group: iNK
+
+Mr.Robot.S01E01-03.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb
+  title: Mr Robot
+  season: 1
+  episode: 1-3
+  res: 1080p
+  service: amzn
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: NTb
+
+Jeopardy.2024.01.15.720p.HDTV.x264-NTb
+  title: Jeopardy
+  date: 2024-01-15
+  res: 720p
+  source: tv
+  vcodec: h264
+  group: NTb
+
+The.Tonight.Show.Starring.Jimmy.Fallon.2024.03.14.Ryan.Gosling.1080p.WEB.h264-EDITH
+  title: The Tonight Show Starring Jimmy Fallon
+  date: 2024-03-14
+  res: 1080p
+  source: web-dl
+  vcodec: h264
+  group: EDITH
+
+Westworld.S04E08.Que.Será.Será.1080p.HMAX.WEB-DL.DDP5.1.H.264-NTb
+  title: Westworld
+  season: 4
+  episode: 8
+  res: 1080p
+  service: hmax
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: NTb
+
+Peaky.Blinders.S06E01.1080p.BluRay.x265.10bit.AAC.5.1-Pahe
+  title: Peaky Blinders
+  season: 6
+  episode: 1
+  res: 1080p
+  source: bluray
+  vcodec: h265
+  bits: 10
+  acodec: aac
+  channels: 5.1
+  group: Pahe
+
+Succession.S04E10.With.Open.Eyes.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb
+  title: Succession
+  season: 4
+  episode: 10
+  res: 1080p
+  service: amzn
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: NTb
+
+The.Last.of.Us.S01E03.Long.Long.Time.2160p.HMAX.WEB-DL.DDP5.1.Atmos.DV.HDR10.H.265-FLUX
+  title: The Last of Us
+  season: 1
+  episode: 3
+  res: 2160p
+  service: hmax
+  source: web-dl
+  acodec: atmos, eac3
+  channels: 5.1
+  hdr: dv, hdr10
+  vcodec: h265
+  group: FLUX
+
+Only.Murders.in.the.Building.S03E01.720p.HULU.WEBRip.x264-GalaxyTV
+  title: Only Murders in the Building
+  season: 3
+  episode: 1
+  res: 720p
+  service: hulu
+  source: webrip
+  vcodec: h264
+  group: GalaxyTV
+
+Yellowstone.2018.S05E09.1080p.PCOK.WEB-DL.DDP5.1.H.264-NTb
+  title: Yellowstone
+  year: 2018
+  season: 5
+  episode: 9
+  res: 1080p
+  service: pcok
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: NTb
+
+Star.Trek.Strange.New.Worlds.S02E01.1080p.PMTP.WEB-DL.DDP5.1.H.264-NTb
+  title: Star Trek Strange New Worlds
+  season: 2
+  episode: 1
+  res: 1080p
+  service: pmtp
+  source: web-dl
+  acodec: eac3
+  channels: 5.1
+  vcodec: h264
+  group: NTb
+
+Blue.Planet.II.S01E01.1080p.BluRay.x264-SHORTBREHD
+  title: Blue Planet II
+  season: 1
+  episode: 1
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: SHORTBREHD
+
+Sons.of.Anarchy.S01.COMPLETE.720p.BRRip.x264-PSA
+  title: Sons of Anarchy
+  season: 1
+  pack: yes
+  res: 720p
+  source: bluray
+  vcodec: h264
+  group: PSA
+
+Columbo.S01E01.Murder.by.the.Book.1080p.BluRay.x264-OFT
+  title: Columbo
+  season: 1
+  episode: 1
+  res: 1080p
+  source: bluray
+  vcodec: h264
+  group: OFT
+
+Twin.Peaks.S02E01.DVDRip.XviD-SAiNTS
+  title: Twin Peaks
+  season: 2
+  episode: 1
+  source: dvd
+  vcodec: xvid
+  group: SAiNTS
+
+The.X-Files.S01E01.Pilot.1080p.BluRay.x265-RARBG
+  title: The X-Files
+  season: 1
+  episode: 1
+  res: 1080p
+  source: bluray
+  vcodec: h265
+  group: RARBG
+
+Show.Name.S01E01.1080i.HDTV.MPEG2.DD5.1-CtrlHD
+  title: Show Name
+  season: 1
+  episode: 1
+  res: 1080i
+  source: tv
+  vcodec: mpeg2
+  acodec: ac3
+  channels: 5.1
+  group: CtrlHD
+
+Survivor.S46E01.720p.WEB.x265-MiNX
+  title: Survivor
+  season: 46
+  episode: 1
+  res: 720p
+  source: web-dl
+  vcodec: h265
+  group: MiNX

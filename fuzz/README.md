@@ -14,5 +14,6 @@ cargo +nightly fuzz run metainfo -- -max_total_time=300
 | `krpc` | No panics. Parsed messages are stable under encode → parse. |
 | `metainfo` | No panics in `Info` or `TorrentFile` parsing. Parsed file lists keep the model's invariants and round-trip through the store's blob codec. |
 | `filetree` | No panics on corrupt blobs. Accepted blobs round-trip. |
+| `release` | No panics in the release-name parser. Parses are deterministic, and reported groups and versions are text from the name. |
 
 CI runs each target for a short time on every pull request (`fuzz` job). Crashes land in `fuzz/artifacts/<target>/`. Minimise one with `cargo +nightly fuzz tmin <target> <file>`, then add it as a regression test in the owning crate.

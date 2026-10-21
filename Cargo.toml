@@ -19,6 +19,8 @@ lodestar-peer-wire = { path = "crates/peer-wire" }
 lodestar-sources = { path = "crates/sources" }
 lodestar-pipeline = { path = "crates/pipeline" }
 lodestar-search = { path = "crates/search" }
+lodestar-release-parser = { path = "crates/release-parser" }
+lodestar-classify = { path = "crates/classify" }
 lodestar-api = { path = "crates/api" }
 lodestar-sources-importers = { path = "crates/sources-importers" }
 

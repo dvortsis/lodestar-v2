@@ -1342,6 +1342,58 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - **Phrase is at the edge.** Its tail is name-only phrases over very common adjacent pairs, each needing a position check. If it regresses, the fallback is a name-bigram field, which makes a two-word phrase a single term.
   - CI gates the same classes at 200k on every PR.
 
+**M3 order (overlapping M1 and M2):** M3 starts before M1's real-network measurements and M2's importer are finished. Those measurements only need a running deployment, and the importer barely touches enrichment.
+- **First, pure crates:** the release parser, then `classify` (extension registry, composition, content type, junk score). They don't touch the store, pipeline or search code.
+- **Next, now that the importer and the 10M search measurement have merged (#21):** the worker boundary, then the file index and title fields.
+  - The importer writes through the writer that the boundary splits, so it lands first.
+  - M3's index changes are then measured against M2's 10M baseline, not mixed into it.
+- **Last:** enrichment wired into the prepare step.
+- Real crawled names from the M1 run feed the golden corpus as they arrive.
+
+**M3 implementation decisions (release parser, `lodestar-release-parser`):**
+- **One pure function, hand-written, no regex crate:** `parse(name) -> Release`. It runs on torrent names, folders and files alike.
+  - Words keep their separators and brackets. A lexicon marks *strong* markers (`1080p`, `x264`, `BluRay`) and *weak* ones (`Web`, `French`, `Extended`, `Complete`).
+  - The title ends at the first strong marker. Weak markers count after the title, in brackets, in ALL CAPS, or directly before a strong marker (`Movie.FRENCH.DVDRip`). Weak markers aren't pulled back over a year (`Charlotte's.Web.2006`).
+  - Years: a year that starts the title belongs to it (`1917`, `2001 A Space Odyssey`). Of two years in a row, the first is the title's (`Blade Runner 2049 2017`). A bare year before a bracketed one is the title's (`Taylor Swift - 1989 (Taylor's Version) (2023)`).
+  - Plausible years are 1890–2039 with no clock, so parsing never depends on when it ran and `Cyberpunk 2077` stays a title.
+  - Groups: a leading `[Group]`, then `-GROUP` after a marker, then a trailing bracket that isn't metadata. A bare `-GROUP` with no marker counts only in dotted scene names (`Doom.Eternal-CODEX`, not `Spider-Man`).
+  - Anime ` - 05` numbering needs anime evidence (a leading group, zero padding or a range), so `Adele - 30 (2021)` stays an album.
+  - Music, book and scene-music names (`Artist_Name-Album-WEB-2024-GROUP`) get artist, album and author fields from the title. This only happens when there's no video or episode marker.
+- **Bounded on untrusted input:** at most 512 bytes and 96 words, never panics. It's property-tested (determinism, and title and group text always taken from the name) and fuzzed (`fuzz/release`; 660k runs clean on first add). A parse costs about 7 µs.
+- **`PARSER_VERSION`** goes into the index directory name (§8), so a parser change rebuilds the index in the background.
+- **`is_uninformative`** flags hashes, random short words and generic names (`New Folder (2)`, `Season 1`) for the ambiguity flag. Picking the effective title from files and folders belongs to `classify`, which has the file tree.
+- **Golden corpus:** 316 hand-labelled names across movies, TV, anime, music, software, games, books, Cyrillic and CJK. No third-party suites were copied (guessit's data is LGPL-3.0).
+  - The gate is 95% field accuracy, scored over expected and parsed fields together, so invented fields count as misses.
+  - It's 99.9% on the whole corpus, but the same hand wrote the labels and the parser. The fairer number is a 59-name holdout batch, written after the parser and scored before any fix: **97.2%** (382 of 393 fields).
+  - That run found real bugs (`Saga` as a pack word, noise words moving the title end, a free bracket mistaken for a group), which are fixed. It also found two label errors, which are corrected.
+  - Two known misses stay in the corpus: `debian-…-amd64-netinst.iso` reads `netinst` as a group, and `IMG_2034` reads 2034 as a year.
+  - Real crawled names from M1 are the next corpus source. A 95% pass on them is the gate that matters.
+
+**M3 implementation decisions (classification, `lodestar-classify`):**
+- **One pure function:** `classify(name, files) -> Classification`. Files arrive with decoded paths, so the crate needs neither metainfo nor the store. Wiring it into the prepare step (§19.4) is the last M3 slice.
+- **Ten categories** (§8) come from an extension registry. Split-archive parts (`.r00`, `.001`, `.part2.rar`) are archives. Extensions are read into a stack buffer, so 200k files don't allocate per file.
+- **Composition:**
+  - Per-category counts and bytes, with padding kept apart.
+  - Percentages are whole numbers. Any non-zero share is at least 1 and only a complete one is 100, so `cat:software=0` and `cat:video=100` mean exactly that.
+  - `torrents.comp` format 1: a version byte, a varint mask of the non-empty entries, then a varint count and bytes for each. Decoding is strict (anything the encoder wouldn't write is an error) and property-tested on arbitrary bytes.
+- **Structural fingerprints** are a bitset with stable names: `bluray`, `dvd`, `cue`, `sfv`, `par2`, `multipart`, `steam`, `repack`, `sample`, `subs`, `proof`, `nfo`, `comics`, `photos`. They back `has:` and feed the content type and the junk score.
+- **Effective title:**
+  - An informative name keeps its own identity (title, year, episodes, group). It only borrows missing quality fields (resolution, codecs, container) from the largest dominant file.
+  - An uninformative name takes the most informative parse among the 3 largest dominant files (skipping samples and disc stream files), the shared top folder, and the folder above `BDMV/`/`VIDEO_TS/`. It records which one as `resolved` (`files`/`folder`/`structure`), with a confidence.
+  - Several episode files resolve to the pack, not the first episode.
+- **Content type** (`movie`, `tv`, `music`, `audiobook`, `ebook`, `comic`, `software`, `game`, `images`, `video`, `other`) comes with a confidence.
+  - The rules run in order: disc structures, then the dominant category refined by the release (episodic, year, artist, version, platform), then game evidence (console platforms, known game and repack groups, `.nsp`, repack and Steam layouts).
+  - A scene release still in its RAR set counts as the movie or show it contains.
+  - `torrents.content_type` codes are fixed and never reused.
+- **Junk score:** 0–100, the sum of reason weights, capped.
+  - Reasons: padding only, empty, double extension (`movie.mp4.exe`), an executable in a media torrent, a `.url` shortcut, lure files (`password.txt`, "visit www…"), a name that doesn't match the files, an archive where media was promised, and HD video under 40 MiB.
+  - Executables only count in media torrents, never in software or games.
+  - Each reason has a stable key and a plain sentence for the "why" tooltip.
+- **Not in M3:** grouping keys and MinHash (M7, with "same file"), the adult flag (it needs its own reviewed word lists), and the swarm-consistency and claim-mismatch junk reasons (with M4 scrapes and §18.5 claims).
+- **Verified:** 28 whole-torrent fixtures, written before the first run (27 passed). The miss was disc stream files offered as titles, now fixed. Fixing it also exposed a parser bug, where trailing weak words were stripped with no strong marker. That's fixed too and kept as a golden case.
+  - Property tests cover composition counts, shares, the largest file, junk arithmetic, determinism and the blob round-trip.
+  - A 200k-file torrent classifies in about 46 ms.
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.

@@ -1,0 +1,17 @@
+[package]
+name = "lodestar-classify"
+description = "Extension registry, composition, structural fingerprints, effective title, content type and junk score"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+lodestar-release-parser.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+proptest = "1.11.0"
