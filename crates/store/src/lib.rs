@@ -237,9 +237,27 @@ impl Store {
         Store::init(Connection::open_in_memory()?, None, config)
     }
 
+    /// A read-only connection beside the writer, for status and query
+    /// handlers (WAL lets readers run alongside it). It can't migrate, so
+    /// the schema must already be this build's.
+    pub fn open_reader(path: impl AsRef<Path>, config: StoreConfig) -> Result<Store> {
+        let conn = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        conn.pragma_update(None, "mmap_size", config.mmap_size as i64)?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        schema::check_current(&conn)?;
+        Store::load(conn, config)
+    }
+
     fn init(mut conn: Connection, path: Option<&Path>, config: StoreConfig) -> Result<Store> {
         schema::configure(&conn, config.mmap_size)?;
         schema::migrate(&mut conn, path)?;
+        Store::load(conn, config)
+    }
+
+    fn load(conn: Connection, config: StoreConfig) -> Result<Store> {
         let mut codec = BlobCodec::new(config.compression_level);
         {
             let mut stmt = conn.prepare("SELECT id, data FROM zstd_dicts")?;
@@ -518,6 +536,19 @@ impl Store {
             .optional()?)
     }
 
+    /// The most recently stored torrents, newest first.
+    pub fn latest(&self, limit: usize) -> Result<Vec<TorrentRow>> {
+        let ids: Vec<i64> = self
+            .conn
+            .prepare_cached("SELECT id FROM torrents ORDER BY id DESC LIMIT ?1")?
+            .query_map([limit as i64], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        ids.into_iter()
+            .filter_map(|id| self.torrent(id).transpose())
+            .collect()
+    }
+
+    /// Counts every row: a full scan, so not for hot paths.
     pub fn count(&self) -> Result<u64> {
         Ok(self
             .conn
