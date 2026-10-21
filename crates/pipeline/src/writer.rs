@@ -1,7 +1,8 @@
-//! The single writer (architecture §7): the one task that changes the
-//! store. It batches verified info dictionaries into transactions, applies
-//! rediscoveries, and flushes the Insights counters with them, or on their
-//! own every few seconds when nothing else is committing.
+//! The single writer (architecture §7), the coordinator's commit step
+//! (§19.4): the one task that changes the store. It commits prepared
+//! torrents under current leases, applies rediscoveries, and flushes the
+//! Insights counters with them, or on their own every few seconds when
+//! nothing else is committing.
 //!
 //! SQLite calls block, so each transaction runs on the blocking pool with
 //! the store moved in and back out; the async side never waits on anything
@@ -12,17 +13,20 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use lodestar_metainfo::{Info, InfoHash};
-use lodestar_sources::{Discovery, FetchedKey, Funnel, FunnelCounts, Loss, Stage};
+use lodestar_cluster::Lease;
+use lodestar_metainfo::InfoHash;
+use lodestar_sources::{Discovery, Funnel, FunnelCounts, Loss, Stage};
 use lodestar_store::{
-    CohortCount, Counter, Event, Inserted, NewTorrent, QueuedKey, SourceId, Store, Touch,
+    CohortCount, Counter, Event, Inserted, PreparedTorrent, QueuedKey, SourceId, Store, Touch,
     WriteBatch, flags,
 };
 use tokio::sync::{mpsc, oneshot};
-use tokio::time::{Instant, interval_at, timeout_at};
+use tokio::time::{Instant, interval_at};
 
+use crate::coordinator::Coordinator;
 use crate::have::{Bloom, Have, capacity_for};
 use crate::rollups::{Rollups, metric};
+use crate::worker::{Results, collect};
 use crate::{event, unix_now};
 
 #[derive(Debug, Clone)]
@@ -54,12 +58,12 @@ pub struct WriterStats {
 }
 
 pub(crate) struct WriterIo {
-    pub fetched: mpsc::Receiver<FetchedKey>,
+    pub results: mpsc::Receiver<Results>,
     pub touches: mpsc::Receiver<Discovery>,
     /// Periodic snapshots of the fetch queue, to persist.
     pub queues: mpsc::Receiver<Vec<QueuedKey>>,
-    /// Have-filter false positives go to the fetch pool.
-    pub to_pool: mpsc::Sender<Discovery>,
+    /// Have-filter false positives go back to intake, to be claimed.
+    pub retry: mpsc::Sender<Discovery>,
     /// The pool's queue at shutdown.
     pub finish: oneshot::Receiver<Vec<QueuedKey>>,
 }
@@ -71,14 +75,22 @@ pub(crate) struct Writer {
     pub funnel: Arc<FunnelCounts>,
     pub rollups: Arc<Rollups>,
     pub blocklist: Arc<HashSet<[u8; 20]>>,
+    pub coordinator: Arc<Coordinator>,
     pub stats: Arc<WriterStats>,
+}
+
+/// A result under a current lease, ready to commit.
+struct Committing {
+    results: Results,
+    lease: Lease,
 }
 
 /// What a transaction did, for the async side to account.
 struct Outcome {
-    /// Per stored or already-stored fetched key: (index, new?, swarm hashes).
+    /// Per stored or already-stored result: (index, new?, swarm hashes).
     stored: Vec<(usize, bool, Vec<InfoHash>)>,
-    rejected: Vec<(usize, Loss)>,
+    /// Results the authoritative blocklist rejected.
+    blocked: Vec<usize>,
     /// Per touch: whether the store had it.
     touched: Vec<bool>,
 }
@@ -93,11 +105,11 @@ impl Writer {
             // Unbiased, so a steady stream of fetches can't starve the
             // rediscoveries or the flush.
             tokio::select! {
-                first = io.fetched.recv() => {
+                first = io.results.recv() => {
                     let Some(first) = first else { break };
                     let batch =
-                        collect(first, &mut io.fetched, self.cfg.batch_max, self.cfg.batch_wait).await;
-                    self.commit(batch, Vec::new(), Vec::new(), &io.to_pool).await;
+                        collect(first, &mut io.results, self.cfg.batch_max, self.cfg.batch_wait).await;
+                    self.commit(batch, Vec::new(), Vec::new(), &io.retry).await;
                 }
                 Some(first) = io.touches.recv() => {
                     let mut touches = vec![first];
@@ -107,11 +119,11 @@ impl Writer {
                             Err(_) => break,
                         }
                     }
-                    self.commit(Vec::new(), touches, Vec::new(), &io.to_pool).await;
+                    self.commit(Vec::new(), touches, Vec::new(), &io.retry).await;
                 }
                 Some(queue) = io.queues.recv() => self.save_queue(queue).await,
                 _ = flush.tick() => {
-                    self.commit(Vec::new(), Vec::new(), Vec::new(), &io.to_pool).await;
+                    self.commit(Vec::new(), Vec::new(), Vec::new(), &io.retry).await;
                 }
             }
         }
@@ -121,7 +133,7 @@ impl Writer {
             kind: event::STOP,
             detail: format!("{} keys queued", queue.len()),
         };
-        self.commit(Vec::new(), Vec::new(), vec![stop], &io.to_pool)
+        self.commit(Vec::new(), Vec::new(), vec![stop], &io.retry)
             .await;
         self.save_queue(queue).await;
         let store = self.store.take().expect("store");
@@ -137,14 +149,27 @@ impl Writer {
 
     async fn commit(
         &mut self,
-        fetched: Vec<FetchedKey>,
+        results: Vec<Results>,
         touches: Vec<Discovery>,
         events: Vec<Event>,
-        to_pool: &mpsc::Sender<Discovery>,
+        retry: &mpsc::Sender<Discovery>,
     ) {
+        // Fencing (§19.3): only results under a current lease count. A
+        // stale one comes from a holder whose lease expired; the key's new
+        // holder will deliver it.
+        let committing: Vec<Committing> = results
+            .into_iter()
+            .filter_map(|r| {
+                let lease = self
+                    .coordinator
+                    .current(&r.key, r.token)
+                    .filter(|l| l.holder == r.worker)?;
+                Some(Committing { results: r, lease })
+            })
+            .collect();
         let cohorts = self.funnel.drain();
         let counters = self.rollups.drain();
-        if fetched.is_empty()
+        if committing.is_empty()
             && touches.is_empty()
             && events.is_empty()
             && cohorts.is_empty()
@@ -155,10 +180,10 @@ impl Writer {
         let mut store = self.store.take().expect("store");
         let blocklist = self.blocklist.clone();
         let backfill_until = self.cfg.backfill_until;
-        let (store, fetched, touches, result) = tokio::task::spawn_blocking(move || {
+        let (store, committing, touches, result) = tokio::task::spawn_blocking(move || {
             let result = transaction(
                 &mut store,
-                &fetched,
+                &committing,
                 &touches,
                 &cohorts,
                 &counters,
@@ -166,7 +191,7 @@ impl Writer {
                 &blocklist,
                 backfill_until,
             );
-            (store, fetched, touches, result)
+            (store, committing, touches, result)
         })
         .await
         .expect("writer transaction task");
@@ -174,7 +199,9 @@ impl Writer {
         let outcome = match result {
             Ok(o) => o,
             Err(e) => {
-                // The batch and its counters are lost; keep going.
+                // The batch and its counters are lost; keep going. Its
+                // leases stay held, so the keys aren't fetched again in
+                // this run.
                 self.stats.errors.fetch_add(1, Ordering::Relaxed);
                 tracing::error!("store write failed: {e}");
                 return;
@@ -185,29 +212,32 @@ impl Writer {
             .last_commit
             .store(unix_now() as u64, Ordering::Relaxed);
         let now = unix_now();
-        for (i, new, hashes) in outcome.stored {
-            let fk = &fetched[i];
-            for h in &hashes {
+        // The have-filter learns the keys before their leases end, so a
+        // rediscovery in between is held, never claimed and fetched again.
+        for (_, _, hashes) in &outcome.stored {
+            for h in hashes {
                 self.have.insert(h);
             }
+        }
+        for (i, new, _) in outcome.stored {
+            let c = &committing[i];
+            let Some(lease) = self.coordinator.complete(&c.results.key, c.results.token) else {
+                continue;
+            };
             self.funnel
-                .record(fk.cohort, fk.source, Stage::Stored, None);
+                .record(lease.cohort, lease.source, Stage::Stored, None);
             if new {
                 self.stats.stored.fetch_add(1, Ordering::Relaxed);
-                self.rollups.add(now, metric::STORED, fk.source, 0, 1);
+                self.rollups.add(now, metric::STORED, lease.source, 0, 1);
             } else {
                 self.stats.existing.fetch_add(1, Ordering::Relaxed);
             }
         }
-        for (i, loss) in outcome.rejected {
-            let fk = &fetched[i];
-            let counter = match loss {
-                Loss::Blocked => &self.stats.blocked,
-                _ => &self.stats.invalid,
-            };
-            counter.fetch_add(1, Ordering::Relaxed);
-            self.funnel
-                .record(fk.cohort, fk.source, Stage::Lost, Some(loss));
+        for i in outcome.blocked {
+            let c = &committing[i];
+            self.stats.blocked.fetch_add(1, Ordering::Relaxed);
+            self.coordinator
+                .lost(&c.results.key, c.results.token, Loss::Blocked);
         }
         for (d, had) in touches.into_iter().zip(outcome.touched) {
             if had {
@@ -221,7 +251,7 @@ impl Writer {
                 );
             } else {
                 self.stats.false_positives.fetch_add(1, Ordering::Relaxed);
-                if to_pool.try_send(d.clone()).is_err() {
+                if retry.try_send(d.clone()).is_err() {
                     self.rollups.add(d.at, metric::DROPPED, d.source, 0, 1);
                 }
             }
@@ -270,35 +300,11 @@ impl Writer {
     }
 }
 
-/// Gathers more fetched keys for the same transaction, briefly. (A free
-/// function: a `&Writer` held across an await would make the task !Send,
-/// since the store isn't `Sync`.)
-async fn collect(
-    first: FetchedKey,
-    rx: &mut mpsc::Receiver<FetchedKey>,
-    max: usize,
-    wait: Duration,
-) -> Vec<FetchedKey> {
-    let mut batch = vec![first];
-    let deadline = Instant::now() + wait;
-    while batch.len() < max {
-        match rx.try_recv() {
-            Ok(fk) => batch.push(fk),
-            Err(mpsc::error::TryRecvError::Disconnected) => break,
-            Err(mpsc::error::TryRecvError::Empty) => match timeout_at(deadline, rx.recv()).await {
-                Ok(Some(fk)) => batch.push(fk),
-                Ok(None) | Err(_) => break,
-            },
-        }
-    }
-    batch
-}
-
 /// One store transaction (runs on the blocking pool).
 #[allow(clippy::too_many_arguments)]
 fn transaction(
     store: &mut Store,
-    fetched: &[FetchedKey],
+    committing: &[Committing],
     touches: &[Discovery],
     cohorts: &[CohortCount],
     counters: &[Counter],
@@ -306,52 +312,44 @@ fn transaction(
     blocklist: &HashSet<[u8; 20]>,
     backfill_until: i64,
 ) -> Result<Outcome, lodestar_store::Error> {
-    let now = unix_now();
-    let mut parsed: Vec<(usize, Info)> = Vec::with_capacity(fetched.len());
-    let mut rejected = Vec::new();
-    for (i, fk) in fetched.iter().enumerate() {
-        // The universal blocklist runs before anything is stored (§18.7).
-        if blocklist.contains(&fk.key.0) {
-            rejected.push((i, Loss::Blocked));
-            continue;
-        }
-        match Info::parse(&fk.fetched.info) {
-            Ok(info) if info.swarm_hashes().any(|h| blocklist.contains(&h.0)) => {
-                rejected.push((i, Loss::Blocked));
-            }
-            Ok(info) => parsed.push((i, info)),
-            // Hashes to the key but isn't usable metainfo.
-            Err(_) => rejected.push((i, Loss::Invalid)),
-        }
-    }
-    let torrents: Vec<NewTorrent<'_>> = parsed
+    // The authoritative blocklist check, on the key and every swarm hash,
+    // before anything is stored (§18.7, §19.4).
+    let (accepted, blocked): (Vec<usize>, Vec<usize>) = (0..committing.len()).partition(|&i| {
+        let r = &committing[i].results;
+        !blocklist.contains(&r.key.0) && !r.torrent.swarm_hashes().any(|h| blocklist.contains(&h.0))
+    });
+    let prepared: Vec<PreparedTorrent<'_>> = accepted
         .iter()
-        .map(|(i, info)| {
-            let fk = &fetched[*i];
-            NewTorrent {
-                info,
-                raw_info: Some(&fk.fetched.info),
-                discovered_at: fk.discovered_at,
-                metadata_at: now,
-                extra_flags: if fk.discovered_at < backfill_until {
+        .map(|&i| {
+            let Committing { results, lease } = &committing[i];
+            PreparedTorrent {
+                torrent: &results.torrent,
+                discovered_at: lease.discovered_at,
+                metadata_at: results.metadata_at,
+                extra_flags: if lease.discovered_at < backfill_until {
                     flags::BACKFILL
                 } else {
                     0
                 },
-                source: fk.source,
+                source: lease.source,
+                verified: true,
             }
         })
         .collect();
-    // Other sources that reported a key while it was queued, then the
+    // Other sources that reported a key while it was leased, then the
     // rediscoveries.
-    let mut all_touches: Vec<Touch> = parsed
+    let mut all_touches: Vec<Touch> = accepted
         .iter()
-        .map(|(i, _)| &fetched[*i])
-        .filter(|fk| fk.sources != bit(fk.source))
-        .map(|fk| Touch {
-            hash: fk.key,
-            sources: fk.sources,
+        .map(|&i| &committing[i])
+        .map(|c| {
+            (
+                c.results.key,
+                c.lease.sources | c.results.sources,
+                c.lease.source,
+            )
         })
+        .filter(|&(_, sources, first)| sources != bit(first))
+        .map(|(hash, sources, _)| Touch { hash, sources })
         .collect();
     let extra = all_touches.len();
     all_touches.extend(touches.iter().map(|d| Touch {
@@ -359,26 +357,27 @@ fn transaction(
         sources: bit(d.source),
     }));
     let written = store.write(&WriteBatch {
-        torrents: &torrents,
+        prepared: &prepared,
         touches: &all_touches,
         counters,
         cohorts,
         events,
+        ..WriteBatch::default()
     })?;
-    let stored = parsed
+    let stored = accepted
         .iter()
-        .zip(&written.torrents)
-        .map(|((i, info), ins)| {
+        .zip(&written.prepared)
+        .map(|(&i, ins)| {
             (
-                *i,
+                i,
                 matches!(ins, Inserted::New(_)),
-                info.swarm_hashes().collect(),
+                committing[i].results.torrent.swarm_hashes().collect(),
             )
         })
         .collect();
     Ok(Outcome {
         stored,
-        rejected,
+        blocked,
         touched: written.touched[extra..]
             .iter()
             .map(Option::is_some)

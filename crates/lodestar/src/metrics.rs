@@ -234,6 +234,38 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>) -> String {
         get(&w.last_commit),
     );
 
+    let l = m.lease_stats();
+    o.one(
+        "leases_granted_total",
+        "counter",
+        "New keys leased to a worker (each counted as harvested once).",
+        get(&l.granted),
+    );
+    o.one(
+        "leases_held_total",
+        "counter",
+        "Claims for keys already leased; their source joined the lease.",
+        get(&l.held),
+    );
+    o.one(
+        "leases_stale_total",
+        "counter",
+        "Reports and results under a token that was no longer current.",
+        get(&l.stale),
+    );
+    o.one(
+        "leases_expired_total",
+        "counter",
+        "Leases taken back from silent workers.",
+        get(&l.expired),
+    );
+    o.one(
+        "leases_outstanding",
+        "gauge",
+        "Keys leased and in flight.",
+        get(&l.outstanding),
+    );
+
     let h = m.have();
     o.one(
         "have_entries",
