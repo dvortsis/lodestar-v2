@@ -189,3 +189,30 @@ fn filters() {
     );
     assert_eq!(find(&ix, "knight size:<1GB ext:avi"), ["Knight Rider"]);
 }
+
+#[test]
+fn sorting_and_paging() {
+    use lodestar_search::Sort;
+    let (ix, _) = corpus();
+    let all = ix.query(&parse("").unwrap(), NOW);
+    let names = |sort, limit, offset| -> Vec<String> {
+        ix.search_page(all.as_ref(), sort, limit, offset)
+            .unwrap()
+            .hits
+            .into_iter()
+            .map(|h| h.name.split(&[' ', '.'][..]).next().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(
+        names(Sort::Discovered { desc: true }, 2, 0),
+        ["The", "Joker"]
+    );
+    assert_eq!(
+        names(Sort::Discovered { desc: true }, 2, 2),
+        ["Batman", "Computer"]
+    );
+    assert_eq!(names(Sort::Size { desc: false }, 1, 0), ["Computer"]);
+    assert_eq!(names(Sort::Files { desc: true }, 1, 0), ["Knight"]);
+    let page = ix.search_page(all.as_ref(), Sort::Relevance, 2, 4).unwrap();
+    assert_eq!((page.hits.len(), page.total), (1, 5));
+}

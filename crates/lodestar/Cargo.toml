@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json"] }
+lodestar-api.workspace = true
 lodestar-dht.workspace = true
 lodestar-peer-wire.workspace = true
 lodestar-pipeline.workspace = true

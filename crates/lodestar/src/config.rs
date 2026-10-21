@@ -47,12 +47,16 @@ impl Default for Config {
 #[serde(default, deny_unknown_fields)]
 pub struct Http {
     pub bind: SocketAddr,
+    /// Mark the session cookie `Secure` (set when serving over HTTPS,
+    /// e.g. behind a TLS reverse proxy).
+    pub secure_cookies: bool,
 }
 
 impl Default for Http {
     fn default() -> Self {
         Http {
             bind: SocketAddr::from(([0, 0, 0, 0], 8090)),
+            secure_cookies: false,
         }
     }
 }
