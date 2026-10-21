@@ -12,13 +12,15 @@ use lodestar_metainfo::InfoHash;
 use lodestar_store::Store;
 use tantivy::collector::{Count, TopDocs};
 use tantivy::directory::MmapDirectory;
-use tantivy::query::{BooleanQuery, BoostQuery, Occur, PhraseQuery, Query, TermQuery};
+use tantivy::query::{Query, TermQuery};
 use tantivy::schema::{IndexRecordOption, Value};
 use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term};
 
+use crate::compile;
 use crate::doc::TorrentDoc;
-use crate::schema::{self, Fields, NAME_BOOST, PATH_BOOST, SCHEMA_VERSION, TOKENIZER_VERSION};
-use crate::tokenizer::{self, NAME_TOKENIZER, NameTokenizer, TokKind};
+use crate::query::Node;
+use crate::schema::{self, Fields, SCHEMA_VERSION, TOKENIZER_VERSION};
+use crate::tokenizer::{NAME_TOKENIZER, NameTokenizer};
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -201,35 +203,10 @@ impl SearchIndex {
         })
     }
 
-    /// A query matching every word of `text` in the name or the paths:
-    /// the M2 stand-in until the query language lands. A word matches its
-    /// parts as a phrase, or any compound it forms (`web-dl` ↔ `webdl`).
-    pub fn text_query(&self, text: &str) -> Box<dyn Query> {
-        let f = self.fields;
-        let words: Vec<Box<dyn Query>> = text
-            .split_whitespace()
-            .filter_map(|w| {
-                let toks = tokenizer::tokenize(w);
-                if toks.is_empty() {
-                    return None;
-                }
-                let per_field: Vec<(Occur, Box<dyn Query>)> =
-                    [(f.name, NAME_BOOST, true), (f.path, PATH_BOOST, false)]
-                        .into_iter()
-                        .map(|(field, boost, positions)| {
-                            let q: Box<dyn Query> = Box::new(BoostQuery::new(
-                                word_query(field, &toks, positions),
-                                boost,
-                            ));
-                            (Occur::Should, q)
-                        })
-                        .collect();
-                Some(Box::new(BooleanQuery::new(per_field)) as Box<dyn Query>)
-            })
-            .collect();
-        Box::new(BooleanQuery::new(
-            words.into_iter().map(|q| (Occur::Must, q)).collect(),
-        ))
+    /// Compiles a parsed query; `now` (unix seconds) resolves relative
+    /// dates.
+    pub fn query(&self, node: &Node, now: i64) -> Box<dyn Query> {
+        compile::compile(node, &self.fields, now)
     }
 
     /// The torrent with this swarm hash, if indexed.
@@ -263,55 +240,6 @@ impl SearchIndex {
         }
         Ok(Results { hits, total })
     }
-}
-
-/// One query word in one field: its parts as a phrase (or all of them,
-/// in a field without positions), or any compound it forms.
-fn word_query(
-    field: tantivy::schema::Field,
-    toks: &[tokenizer::Tok],
-    positions: bool,
-) -> Box<dyn Query> {
-    let term = |t: &str| Term::from_field_text(field, t);
-    let parts: Vec<&tokenizer::Tok> = toks.iter().filter(|t| t.kind == TokKind::Part).collect();
-    let mut alternatives: Vec<(Occur, Box<dyn Query>)> = Vec::new();
-    match parts.as_slice() {
-        [] => {}
-        [one] => alternatives.push((
-            Occur::Should,
-            Box::new(TermQuery::new(
-                term(&one.text),
-                IndexRecordOption::WithFreqs,
-            )),
-        )),
-        many if positions => alternatives.push((
-            Occur::Should,
-            Box::new(PhraseQuery::new_with_offset(
-                many.iter()
-                    .map(|t| (t.position - many[0].position, term(&t.text)))
-                    .collect(),
-            )),
-        )),
-        many => alternatives.push((
-            Occur::Should,
-            Box::new(BooleanQuery::new(
-                many.iter()
-                    .map(|t| {
-                        let q: Box<dyn Query> =
-                            Box::new(TermQuery::new(term(&t.text), IndexRecordOption::WithFreqs));
-                        (Occur::Must, q)
-                    })
-                    .collect(),
-            )),
-        )),
-    }
-    for c in toks.iter().filter(|t| t.kind == TokKind::Compound) {
-        alternatives.push((
-            Occur::Should,
-            Box::new(TermQuery::new(term(&c.text), IndexRecordOption::WithFreqs)),
-        ));
-    }
-    Box::new(BooleanQuery::new(alternatives))
 }
 
 /// Adds torrents to the index in id order and commits with the watermark.
