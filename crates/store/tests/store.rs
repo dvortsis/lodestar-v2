@@ -1,7 +1,9 @@
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::{Info, TextEncoding};
 use lodestar_store::rusqlite::types::Value;
-use lodestar_store::{Inserted, NewTorrent, SourceId, Store, StoreConfig, flags};
+use lodestar_store::{
+    Inserted, NewTorrent, PreparedTorrent, SourceId, Store, StoreConfig, WriteBatch, flags,
+};
 
 const DHT: SourceId = SourceId::new(0).unwrap();
 
@@ -412,6 +414,7 @@ fn counters_add_up_inside_writes() {
     store
         .write(&WriteBatch {
             torrents: &torrents,
+            prepared: &[],
             touches: &[],
             counters: &[c(5), Counter { key: 4, ..c(1) }],
             cohorts: &[cohort(7)],
@@ -588,4 +591,104 @@ fn partial_imports_are_upgraded_by_a_fetched_info_dict() {
         vec![(1, id)],
         "queued for re-indexing"
     );
+}
+
+fn prepared<'a>(p: &'a lodestar_store::Prepared) -> PreparedTorrent<'a> {
+    PreparedTorrent {
+        torrent: p,
+        discovered_at: 1_700_000_000,
+        metadata_at: 1_700_000_005,
+        extra_flags: 0,
+        source: DHT,
+        verified: true,
+    }
+}
+
+fn commit(store: &mut Store, p: &lodestar_store::Prepared) -> Inserted {
+    store
+        .write(&WriteBatch {
+            prepared: &[prepared(p)],
+            ..WriteBatch::default()
+        })
+        .unwrap()
+        .prepared[0]
+}
+
+/// Preparing ahead (§19.4) stores exactly what an in-transaction insert
+/// stores: the same row, file blob and extra keys.
+#[test]
+fn prepared_inserts_match_direct_inserts() {
+    for raw in [
+        season("Some.Show.S01", 4),
+        single(b"Caf\xe9.mkv", vec![("x_cross_seed", b("abc"))]),
+        hybrid(),
+    ] {
+        let info = Info::parse(&raw).unwrap();
+        let mut direct = mem();
+        let a = direct.insert(&[new(&info, &raw)]).unwrap()[0].id();
+        let mut ahead = mem();
+        let p = ahead.preparer().prepare(&info, Some(&raw)).unwrap();
+        let swarm: Vec<_> = p.swarm_hashes().collect();
+        assert_eq!(swarm, info.swarm_hashes().collect::<Vec<_>>());
+        let Inserted::New(b) = commit(&mut ahead, &p) else {
+            panic!("new torrent")
+        };
+        assert_eq!(direct.torrent(a).unwrap(), ahead.torrent(b).unwrap());
+        assert_eq!(direct.files(a).unwrap(), ahead.files(b).unwrap());
+        assert_eq!(direct.extra(a).unwrap(), ahead.extra(b).unwrap());
+        // Committing it again only adds the source.
+        assert_eq!(commit(&mut ahead, &p), Inserted::Existing(b));
+    }
+}
+
+#[test]
+fn prepared_blobs_must_name_a_known_dictionary() {
+    let mut store = mem();
+    let raw = season("Pack", 2);
+    let info = Info::parse(&raw).unwrap();
+    let mut p = store.preparer().prepare(&info, Some(&raw)).unwrap();
+    p.files.dict_id = Some(99);
+    let err = store
+        .write(&WriteBatch {
+            prepared: &[prepared(&p)],
+            ..WriteBatch::default()
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("unknown dictionary"), "{err}");
+    assert_eq!(store.count().unwrap(), 0, "the transaction rolled back");
+}
+
+#[test]
+fn a_prepared_fetch_upgrades_a_partial_import() {
+    let mut store = mem();
+    let raw = season("Big.Pack", 3);
+    let real = Info::parse(&raw).unwrap();
+    let mut partial = real.clone();
+    partial.files.clear();
+    let id = store
+        .insert(&[NewTorrent {
+            info: &partial,
+            raw_info: None,
+            extra_flags: flags::IMPORTED | flags::FILES_PARTIAL,
+            ..new(&real, &raw)
+        }])
+        .unwrap()[0]
+        .id();
+    let p = store.preparer().prepare(&real, Some(&raw)).unwrap();
+    // Unverified (an import of the same dict) changes nothing.
+    store
+        .write(&WriteBatch {
+            prepared: &[PreparedTorrent {
+                verified: false,
+                ..prepared(&p)
+            }],
+            ..WriteBatch::default()
+        })
+        .unwrap();
+    assert_eq!(store.files(id).unwrap().unwrap().files.len(), 0);
+    assert_eq!(commit(&mut store, &p), Inserted::Existing(id));
+    assert_eq!(store.files(id).unwrap().unwrap().files.len(), 3);
+    let row = store.torrent(id).unwrap().unwrap();
+    assert_eq!(row.flags & flags::FILES_PARTIAL, 0);
+    assert_ne!(row.flags & flags::IMPORTED, 0);
 }

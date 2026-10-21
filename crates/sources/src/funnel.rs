@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use lodestar_metainfo::InfoHash;
 use lodestar_peer_wire::FailureKind;
 use lodestar_store::{CohortCount, SourceId};
 
@@ -59,6 +60,19 @@ impl From<FailureKind> for Loss {
 /// `cohort_hour` inside the writer's transaction.
 pub trait Funnel: Send + Sync {
     fn record(&self, cohort: i64, source: SourceId, stage: Stage, loss: Option<Loss>);
+
+    /// A new key entered the fetch pool: harvested. A worker whose
+    /// coordinator counts harvests when it grants the lease (§19.3)
+    /// overrides this to count nothing.
+    fn admitted(&self, _key: &InfoHash, cohort: i64, source: SourceId) {
+        self.record(cohort, source, Stage::Harvested, None);
+    }
+
+    /// A key left the pool without being fetched. A worker overrides this
+    /// to report the outcome to the lease's holder of record.
+    fn lost(&self, _key: &InfoHash, cohort: i64, source: SourceId, loss: Loss) {
+        self.record(cohort, source, Stage::Lost, Some(loss));
+    }
 }
 
 /// In-memory per-key accumulators, drained at each flush. A few hundred

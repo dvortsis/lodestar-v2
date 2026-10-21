@@ -448,12 +448,12 @@ impl Pool {
         }
         if self.entries.len() >= self.cfg.max_pending && !self.evict_one() {
             let cohort = d.at.div_euclid(3600);
-            self.funnel.record(cohort, d.source, Stage::Harvested, None);
-            self.lose_untracked(cohort, d.source, Loss::Evicted);
+            self.funnel.admitted(&key, cohort, d.source);
+            self.lose_untracked(&key, cohort, d.source, Loss::Evicted);
             return;
         }
         let cohort = d.at.div_euclid(3600);
-        self.funnel.record(cohort, d.source, Stage::Harvested, None);
+        self.funnel.admitted(&key, cohort, d.source);
         self.entries.insert(
             key,
             Entry {
@@ -857,12 +857,12 @@ impl Pool {
         if e.state == State::Lookup {
             self.lookups -= 1;
         }
-        self.lose_untracked(e.cohort, e.source, loss);
+        self.lose_untracked(&key, e.cohort, e.source, loss);
     }
 
-    fn lose_untracked(&mut self, cohort: i64, source: SourceId, loss: Loss) {
+    fn lose_untracked(&mut self, key: &InfoHash, cohort: i64, source: SourceId, loss: Loss) {
         self.stats.lost[loss as usize].fetch_add(1, Ordering::Relaxed);
-        self.funnel.record(cohort, source, Stage::Lost, Some(loss));
+        self.funnel.lost(key, cohort, source, loss);
     }
 
     fn snapshot(&self) -> Vec<QueuedKey> {

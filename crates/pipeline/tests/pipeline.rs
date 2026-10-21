@@ -349,3 +349,102 @@ async fn partial_imports_are_refetched() {
     assert_eq!(store.files(id).unwrap().unwrap().files.len(), 1);
     assert!(store.partial_hashes(10).unwrap().is_empty());
 }
+
+/// The worker boundary (§19.3): a key found by two sources while it's in
+/// flight is leased once, harvested once and fetched once, and the second
+/// source joins the lease. Keys saved at shutdown are leased again on
+/// restart without a new harvest, and every lease ends.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn each_key_is_leased_and_counted_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lodestar.db");
+    let seed = Seed::v1(info_dict("Gamma"));
+    let gamma = InfoHash(seed.info_hash);
+    let peer = FakePeer::spawn(vec![seed], Accept::Both, Behavior::Honest, vec![]).await;
+    let nowhere = InfoHash([0xcc; 20]);
+    let parked = InfoHash([0xbb; 20]);
+
+    let (feed, feed_tx) = scripted("feed");
+    let (other, other_tx) = scripted("other");
+    let finder = Arc::new(PeerTable {
+        manifest: manifest("finder", &[Kind::PeerFinder]),
+        peers: HashMap::new(),
+    });
+    let store = Store::open(&db, StoreConfig::default()).unwrap();
+    let pipeline = Pipeline::start(config(), store, vec![feed, other, finder])
+        .await
+        .unwrap();
+    let ids: Vec<_> = pipeline.sources().iter().map(|s| s.id).collect();
+    let (feed_id, other_id) = (ids[0], ids[1]);
+
+    let leases = pipeline.monitor();
+    let stat = |f: fn(&lodestar_pipeline::LeaseStats) -> &std::sync::atomic::AtomicU64| {
+        f(leases.lease_stats()).load(Ordering::Relaxed)
+    };
+    // Gamma first arrives without peers; once it's leased, the second
+    // source brings them. A key nobody can serve is found twice too.
+    feed_tx.send(Found::key(gamma, 0)).await.unwrap();
+    feed_tx.send(Found::key(nowhere, 0)).await.unwrap();
+    until("leased", || stat(|s| &s.granted) == 2).await;
+    other_tx
+        .send(Found::key(gamma, 0).with_peers(vec![peer.addr()]))
+        .await
+        .unwrap();
+    other_tx.send(Found::key(nowhere, 0)).await.unwrap();
+    until("stored", || {
+        pipeline.writer_stats().stored.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    until("no-peers loss", || {
+        pipeline.pool_stats().lost_count(Loss::NoPeers) == 1
+    })
+    .await;
+    assert_eq!(stat(|s| &s.granted), 2);
+    assert_eq!(stat(|s| &s.held), 2);
+    assert_eq!(stat(|s| &s.outstanding), 0, "every lease ended");
+    assert_eq!(stat(|s| &s.stale), 0);
+    assert_eq!(pipeline.pool_stats().fetched.load(Ordering::Relaxed), 1);
+
+    // One key waits at shutdown.
+    feed_tx.send(Found::key(parked, 4)).await.unwrap();
+    until("parked", || stat(|s| &s.outstanding) == 1).await;
+    let store = pipeline.shutdown().await.unwrap();
+
+    let id = store.find(&gamma).unwrap().unwrap();
+    let row = store.torrent(id).unwrap().unwrap();
+    assert_eq!(row.first_source, Some(feed_id));
+    assert_eq!(
+        row.sources & ((1 << feed_id.get()) | (1 << other_id.get())),
+        (1 << feed_id.get()) | (1 << other_id.get()),
+        "the second source joined the lease"
+    );
+    let cohorts = store.cohorts(0, i64::MAX).unwrap();
+    let total = |stage: Stage, reason: u8| -> i64 {
+        cohorts
+            .iter()
+            .filter(|c| c.stage == stage as u8 && c.reason == reason)
+            .map(|c| c.count)
+            .sum()
+    };
+    // Harvested = stored + lost + still leased (the parked key).
+    assert_eq!(total(Stage::Harvested, 0), 3);
+    assert_eq!(total(Stage::Stored, 0), 1);
+    assert_eq!(total(Stage::Lost, Loss::NoPeers as u8), 1);
+    drop(store);
+
+    // Restart: the parked key is leased again, not harvested again.
+    let store = Store::open(&db, StoreConfig::default()).unwrap();
+    let pipeline = Pipeline::start(config(), store, vec![]).await.unwrap();
+    let monitor = pipeline.monitor();
+    assert_eq!(monitor.lease_stats().outstanding.load(Ordering::Relaxed), 1);
+    assert_eq!(monitor.lease_stats().granted.load(Ordering::Relaxed), 0);
+    let store = pipeline.shutdown().await.unwrap();
+    let harvested: i64 = store
+        .cohorts(0, i64::MAX)
+        .unwrap()
+        .iter()
+        .filter(|c| c.stage == Stage::Harvested as u8)
+        .map(|c| c.count)
+        .sum();
+    assert_eq!(harvested, 3);
+}

@@ -132,6 +132,10 @@ fn serves_status_and_stops_cleanly() {
         "{metrics}"
     );
     assert!(metrics.contains("# TYPE lodestar_fetch_lost_total counter"));
+    assert!(
+        metrics.contains("lodestar_leases_outstanding 0"),
+        "{metrics}"
+    );
     assert!(metrics.contains("lodestar_search_docs 0"), "{metrics}");
     assert!(status.contains("\"search\":{"), "{status}");
     let page = get(port, "/").unwrap();
