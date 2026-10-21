@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lodestar_pipeline::{DhtSource, Pipeline};
+use lodestar_search::{LiveConfig, LiveIndexer, SearchIndex};
 use lodestar_sources::SourcePlugin;
 use lodestar_store::Store;
 
@@ -143,10 +144,28 @@ async fn serve(config: Config) -> Result<(), BoxError> {
     let pipeline_config = config.pipeline_config()?;
     let db = config.db_path();
     let store_config = config.store_config();
-    let (store, reader) = tokio::task::spawn_blocking(move || {
+    let search = config.search.enabled;
+    let index_path = config.index_path();
+    let heap = config.search.heap_mib.max(16) << 20;
+    let (store, reader, live) = tokio::task::spawn_blocking(move || {
         let store = Store::open(&db, store_config.clone())?;
-        let reader = Store::open_reader(&db, store_config)?;
-        Ok::<_, lodestar_store::Error>((store, reader))
+        let reader = Store::open_reader(&db, store_config.clone())?;
+        // The indexer follows the store through its own connection.
+        let live = if search {
+            let index = SearchIndex::open(&index_path)?;
+            let live_reader = Store::open_reader(&db, store_config)?;
+            let config = LiveConfig {
+                heap_bytes: heap,
+                ..LiveConfig::default()
+            };
+            Some((
+                index.clone(),
+                LiveIndexer::spawn(index, live_reader, config)?,
+            ))
+        } else {
+            None
+        };
+        Ok::<_, BoxError>((store, reader, live))
     })
     .await??;
 
@@ -162,6 +181,10 @@ async fn serve(config: Config) -> Result<(), BoxError> {
         monitor: pipeline.monitor(),
         dht: dht_stats,
         reader: Arc::new(Mutex::new(reader)),
+        search: live.as_ref().map(|(index, l)| http::SearchState {
+            index: index.clone(),
+            stats: l.stats(),
+        }),
     };
     let listener = tokio::net::TcpListener::bind(config.http.bind)
         .await
@@ -176,6 +199,10 @@ async fn serve(config: Config) -> Result<(), BoxError> {
         .await?;
     tracing::info!("shutting down: saving the queue and DHT state");
     pipeline.shutdown().await?;
+    if let Some((_, live)) = live {
+        // After the writer, so the last batch gets indexed too.
+        tokio::task::spawn_blocking(move || live.stop()).await??;
+    }
     tracing::info!("stopped cleanly");
     Ok(())
 }

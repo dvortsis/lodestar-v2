@@ -69,6 +69,8 @@ fn serves_status_and_stops_cleanly() {
         "{metrics}"
     );
     assert!(metrics.contains("# TYPE lodestar_fetch_lost_total counter"));
+    assert!(metrics.contains("lodestar_search_docs 0"), "{metrics}");
+    assert!(status.contains("\"search\":{"), "{status}");
     let page = get(port, "/").unwrap();
     assert!(page.contains("Content-Security-Policy") || page.contains("content-security-policy"));
 
@@ -88,6 +90,7 @@ fn serves_status_and_stops_cleanly() {
     assert!(exit.success(), "exit {exit:?}: {stderr}");
     assert!(dir.path().join("dht-state.bin").exists());
     assert!(dir.path().join("lodestar.db").exists());
+    assert!(dir.path().join("index").is_dir(), "search index created");
 
     // Nothing listening any more: the health check fails.
     let mut check = Command::new(env!("CARGO_BIN_EXE_lodestar"));

@@ -536,6 +536,16 @@ impl Store {
             .optional()?)
     }
 
+    /// Up to `limit` torrent ids greater than `after`, ascending: the
+    /// search indexer follows the store this way (§8).
+    pub fn ids_after(&self, after: i64, limit: usize) -> Result<Vec<i64>> {
+        Ok(self
+            .conn
+            .prepare_cached("SELECT id FROM torrents WHERE id > ?1 ORDER BY id LIMIT ?2")?
+            .query_map(params![after, limit as i64], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?)
+    }
+
     /// The most recently stored torrents, newest first.
     pub fn latest(&self, limit: usize) -> Result<Vec<TorrentRow>> {
         let ids: Vec<i64> = self

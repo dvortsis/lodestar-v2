@@ -24,6 +24,7 @@ pub struct Config {
     pub dht: Dht,
     pub fetch: Fetch,
     pub store: Store,
+    pub search: Search,
     pub blocklist: Blocklist,
 }
 
@@ -36,6 +37,7 @@ impl Default for Config {
             dht: Dht::default(),
             fetch: Fetch::default(),
             store: Store::default(),
+            search: Search::default(),
             blocklist: Blocklist::default(),
         }
     }
@@ -152,6 +154,24 @@ impl Default for Store {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Search {
+    /// Keep the torrent index up to date (§8).
+    pub enabled: bool,
+    /// Index writer heap.
+    pub heap_mib: usize,
+}
+
+impl Default for Search {
+    fn default() -> Self {
+        Search {
+            enabled: true,
+            heap_mib: 256,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Blocklist {
@@ -224,6 +244,10 @@ impl Config {
 
     pub fn db_path(&self) -> PathBuf {
         self.data_dir.join("lodestar.db")
+    }
+
+    pub fn index_path(&self) -> PathBuf {
+        lodestar_search::index_dir(&self.data_dir.join("index"))
     }
 
     pub fn store_config(&self) -> StoreConfig {
