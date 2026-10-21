@@ -1221,6 +1221,22 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - `index_watermark_hour` (searchable time per hour, §7) comes with the API slice, where the writer can record it.
 - **Measured** on 50k synthetic torrents: indexing runs at about 6,200 torrents per second.
 
+**M2 implementation decisions (query language v1):**
+- **Grammar:** OR (`|` or `OR`) binds loosest, then implicit or explicit AND, then `NEAR/n` chains (1–50, default 5), then `-` or `!`, then terms. `-` and `!` only negate when a term follows. On their own, or before `)`, they're words.
+- **Fields M2 can serve:** `name:`, `path:`, `size:`, `files:`, `largest:`, `piece:`, `discovered:`/`age:`, `ext:`, flags (`private:`, `v2:`, `hybrid:`, `imported:`, `backfill:`, `partial:`), `hash:`, `magnet:`, plus a bare hash or magnet link.
+  - Every later field in §8 (`title:`, `res:`, `seeders:`, …) is recognised and answers "arrives with release parsing (M3)" or "swarm health (M4)". Regex answers "arrives with the trigram index".
+  - An unknown name one edit from a known field (3+ letters) gets "did you mean". Any other `x:y` is an ordinary word, so `Re:Zero` searches as text.
+- **Values:**
+  - KB/MB/GB/TB are binary, matching the IEC units the UI shows (§10.12).
+  - `>`/`<` are strict, `..` is inclusive at both ends, open ranges are allowed.
+  - Dates are UTC days. `discovered:<7d` stays **relative in the AST** (`Ago`), so saved searches keep sliding, and is resolved against "now" at compile time.
+- **Phrases and NEAR match on `name` only** (the field with positions) until the file index brings positional file names (M3). An explicit `path:"…"` matches all its words anywhere in the paths. Prefixes need 2+ letters, and fuzzy terms 3+ (1 edit under 6 letters, else 2).
+- **The AST is the API's and the builder's currency:** it's serde JSON, tagged by `op`.
+  - `Node::to_query` renders canonical text, and `parse(render(ast)) == ast`. That's property-tested, and fuzzed whenever the rendering is within the length limit.
+  - Rendering quotes NEAR words that would otherwise read as syntax.
+  - Fuzzing found three round-trip bugs before merge: syntax-like phrase words in NEAR, a lone `!` before `)`, and over-long NEAR chains. All are fixed and kept as regression cases.
+- **Limits on untrusted input:** 2,048 bytes, 64 clauses (each word of a phrase inside NEAR counts), nesting depth 16, 16 words per NEAR chain.
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.
