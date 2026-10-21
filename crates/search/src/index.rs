@@ -13,9 +13,12 @@ use lodestar_metainfo::InfoHash;
 use lodestar_store::Store;
 use tantivy::collector::{Count, TopDocs};
 use tantivy::directory::MmapDirectory;
-use tantivy::query::{Query, TermQuery};
+use tantivy::query::{EnableScoring, Query, TermQuery};
 use tantivy::schema::{IndexRecordOption, Value};
-use tantivy::{DocAddress, Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term};
+use tantivy::{
+    DocAddress, DocSet, Index, IndexReader, IndexWriter, ReloadPolicy, Searcher, TantivyDocument,
+    Term,
+};
 
 use crate::compile;
 use crate::doc::TorrentDoc;
@@ -118,6 +121,8 @@ pub enum Sort {
 pub struct Compiled {
     pub(crate) query: Box<dyn Query>,
     pub(crate) filters: Vec<FastRange>,
+    /// Scores added to the phase-1 candidates (name boosts).
+    pub(crate) boosts: Option<Box<dyn Query>>,
     /// Identifies the query for the segment cache.
     pub(crate) key: String,
 }
@@ -127,6 +132,7 @@ impl std::fmt::Debug for Compiled {
         f.debug_struct("Compiled")
             .field("query", &self.query)
             .field("filters", &self.filters)
+            .field("boosts", &self.boosts)
             .finish()
     }
 }
@@ -146,6 +152,37 @@ fn relative(node: &Node) -> bool {
         Node::Date { from, to, .. } => [from, to].iter().any(|w| matches!(w, Some(When::Ago(_)))),
         _ => false,
     }
+}
+
+/// Phase-1 candidates re-ranked for a relevance page (§8: "the top
+/// ~1,000").
+const RERANK_WINDOW: usize = 1000;
+
+/// Adds each candidate's score under `boosts` and sorts best first,
+/// ties by address.
+fn rerank(
+    searcher: &Searcher,
+    boosts: &dyn Query,
+    mut hits: Vec<(f32, DocAddress)>,
+) -> Result<Vec<(f32, DocAddress)>> {
+    let weight = boosts.weight(EnableScoring::enabled_from_searcher(searcher))?;
+    hits.sort_unstable_by_key(|(_, a)| *a);
+    let mut i = 0;
+    while i < hits.len() {
+        let seg = hits[i].1.segment_ord;
+        let mut scorer = weight.scorer(searcher.segment_reader(seg), 1.0)?;
+        while let Some((score, addr)) = hits.get_mut(i).filter(|(_, a)| a.segment_ord == seg) {
+            if scorer.doc() < addr.doc_id {
+                scorer.seek(addr.doc_id);
+            }
+            if scorer.doc() == addr.doc_id {
+                *score += scorer.score();
+            }
+            i += 1;
+        }
+    }
+    hits.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+    Ok(hits)
 }
 
 /// Segments searched at once, at most: the §3 targets assume 4 cores.
@@ -278,7 +315,11 @@ impl SearchIndex {
     /// Compiles a parsed query; `now` (unix seconds) resolves relative
     /// dates.
     pub fn query(&self, node: &Node, now: i64) -> Compiled {
-        let (query, filters) = compile::compile(node, &self.fields, now);
+        let compile::Parts {
+            query,
+            filters,
+            boosts,
+        } = compile::compile(node, &self.fields, now);
         // Relative dates resolve against `now`, so they're part of the key.
         let key = if relative(node) {
             format!("{node:?}@{now}")
@@ -288,6 +329,7 @@ impl SearchIndex {
         Compiled {
             query,
             filters,
+            boosts,
             key,
         }
     }
@@ -306,6 +348,7 @@ impl SearchIndex {
         let q = Compiled {
             query: Box::new(q),
             filters: Vec::new(),
+            boosts: None,
             key: String::new(),
         };
         Ok(self.search(&q, 1)?.hits.first().map(|h| h.id))
@@ -328,10 +371,22 @@ impl SearchIndex {
         let ranges = &compiled.filters;
         let top = TopDocs::with_limit(limit.max(1)).and_offset(offset);
         let (scored, total): (Vec<(f32, DocAddress)>, usize) = match sort {
-            Sort::Relevance => {
-                let inner = (top.order_by_score(), Count);
-                searcher.search(query, &PostFilter { ranges, inner })?
-            }
+            Sort::Relevance => match &compiled.boosts {
+                None => {
+                    let inner = (top.order_by_score(), Count);
+                    searcher.search(query, &PostFilter { ranges, inner })?
+                }
+                Some(boosts) => {
+                    // Two-phase (§8): the best candidates by phase-1
+                    // score, re-ranked with the name boosts. Order is
+                    // exact within the window.
+                    let window = (offset + limit).max(RERANK_WINDOW);
+                    let inner = (TopDocs::with_limit(window).order_by_score(), Count);
+                    let (candidates, n) = searcher.search(query, &PostFilter { ranges, inner })?;
+                    let ranked = rerank(&searcher, boosts.as_ref(), candidates)?;
+                    (ranked.into_iter().skip(offset).take(limit).collect(), n)
+                }
+            },
             Sort::Discovered { desc } | Sort::Size { desc } | Sort::Files { desc } => {
                 let (field, signed) = match sort {
                     Sort::Discovered { .. } => ("discovered", true),

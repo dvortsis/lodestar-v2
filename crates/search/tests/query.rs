@@ -249,3 +249,22 @@ fn browse_sorts_with_filters() {
         page
     );
 }
+
+#[test]
+fn reranked_pages_follow_the_full_order() {
+    use lodestar_search::Sort;
+    let (ix, _) = corpus();
+    for q in ["knight", "mkv", "2008 mkv", "s01 avi"] {
+        let compiled = ix.query(&parse(q).unwrap(), NOW);
+        let full = ix.search_page(&compiled, Sort::Relevance, 50, 0).unwrap();
+        let paged: Vec<_> = (0..full.total)
+            .flat_map(|i| {
+                ix.search_page(&compiled, Sort::Relevance, 1, i)
+                    .unwrap()
+                    .hits
+            })
+            .collect();
+        assert!(full.total > 0, "{q}");
+        assert_eq!(paged, full.hits, "{q}");
+    }
+}

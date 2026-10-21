@@ -16,18 +16,34 @@ use crate::tokenizer::{self, Tok, TokKind};
 
 type Q = Box<dyn Query>;
 
+/// A compiled query in its parts.
+pub(crate) struct Parts {
+    /// Selects the matches and gives the phase-1 score.
+    pub query: Q,
+    /// Top-level ranges, checked in the collector (`filter`).
+    pub filters: Vec<FastRange>,
+    /// Name boosts of top-level words, added to the phase-1 candidates
+    /// only (phase 2, §8).
+    pub boosts: Option<Q>,
+}
+
 /// Compiles `node`; `now` (unix seconds) resolves relative dates.
 ///
-/// Ranges at the top level come back separately, to be checked in the
-/// collector, whenever another clause can drive the query; otherwise the
-/// first one stays in the query to drive it.
-pub fn compile(node: &Node, f: &Fields, now: i64) -> (Q, Vec<FastRange>) {
-    let all = || Box::new(AllQuery) as Q;
-    let Node::And { of } = node else {
-        return (compile_opt(node, f, now).unwrap_or_else(all), Vec::new());
+/// The top-level conjunction gets two treatments:
+/// - Ranges come back separately, to be checked in the collector,
+///   whenever another clause can drive the query; otherwise the first
+///   one stays in the query to drive it.
+/// - An unfielded word matches on `text` alone; its name boost comes
+///   back separately for the re-ranker. A conjunction of plain terms is
+///   a flat intersection, about twice as fast as one carrying optional
+///   boost clauses.
+pub(crate) fn compile(node: &Node, f: &Fields, now: i64) -> Parts {
+    let of: Vec<&Node> = match node {
+        Node::And { of } => of.iter().collect(),
+        n => vec![n],
     };
     let (ranges, mut rest): (Vec<&Node>, Vec<&Node>) = of
-        .iter()
+        .into_iter()
         .partition(|n| matches!(n, Node::Range { .. } | Node::Date { .. }));
     // A clause drives when it narrows the matches by itself; a negation
     // (`-x`, `private:no`) only removes a few from everything.
@@ -38,10 +54,62 @@ pub fn compile(node: &Node, f: &Fields, now: i64) -> (Q, Vec<FastRange>) {
     let keep = usize::from(!rest.iter().any(drives)).min(ranges.len());
     rest.extend(&ranges[..keep]);
     let filters = ranges[keep..].iter().map(|n| fast_range(n, now)).collect();
-    let rest = Node::And {
-        of: rest.into_iter().cloned().collect(),
+    let mut clauses = Vec::new();
+    let mut boosts = Vec::new();
+    for n in rest {
+        match n {
+            Node::Not { of } => {
+                if let Some(q) = compile_opt(of, f, now) {
+                    clauses.push((Occur::MustNot, q));
+                }
+            }
+            Node::Word {
+                field: TextField::Any,
+                word,
+            } => {
+                if let Some((m, boost)) = any_word(word, f) {
+                    push_must(&mut clauses, m);
+                    boosts.push((Occur::Should, boost));
+                }
+            }
+            n => {
+                if let Some(q) = compile_opt(n, f, now) {
+                    push_must(&mut clauses, q);
+                }
+            }
+        }
+    }
+    let boosts = match boosts.len() {
+        0 => None,
+        1 => boosts.pop().map(|(_, q)| q),
+        _ => Some(Box::new(BooleanQuery::new(boosts)) as Q),
     };
-    (compile_opt(&rest, f, now).unwrap_or_else(all), filters)
+    Parts {
+        query: conjunction(clauses),
+        filters,
+        boosts,
+    }
+}
+
+/// The clauses as one query; everything when none constrain.
+fn conjunction(mut clauses: Vec<(Occur, Q)>) -> Q {
+    if clauses.iter().all(|(o, _)| *o == Occur::MustNot) {
+        clauses.push((Occur::Must, Box::new(AllQuery)));
+    }
+    if let [(Occur::Must, _)] = clauses.as_slice() {
+        return clauses.pop().expect("one").1;
+    }
+    Box::new(BooleanQuery::new(clauses))
+}
+
+/// An unfielded word: required on `text`, plus its boost on `name`.
+fn any_word(word: &str, f: &Fields) -> Option<(Q, Q)> {
+    let toks = tokenizer::tokenize(word);
+    if toks.is_empty() {
+        return None;
+    }
+    let boost = BoostQuery::new(word_query(f.name, &toks, true), NAME_BOOST);
+    Some((word_query(f.text, &toks, false), Box::new(boost)))
 }
 
 fn resolve(w: &When, now: i64) -> i64 {
@@ -98,10 +166,7 @@ fn compile_opt(node: &Node, f: &Fields, now: i64) -> Option<Q> {
                     }
                 }
             }
-            if clauses.iter().all(|(o, _)| *o == Occur::MustNot) {
-                clauses.push((Occur::Must, Box::new(AllQuery)));
-            }
-            Box::new(BooleanQuery::new(clauses))
+            conjunction(clauses)
         }
         Node::Or { of } => {
             let clauses: Vec<(Occur, Q)> = of
@@ -121,20 +186,15 @@ fn compile_opt(node: &Node, f: &Fields, now: i64) -> Option<Q> {
                 (Occur::MustNot, q),
             ]))
         }
+        // Nested (under `|` or `-`): the boost stays inline.
         Node::Word {
             field: TextField::Any,
             word,
         } => {
-            let toks = tokenizer::tokenize(word);
-            if toks.is_empty() {
-                return None;
-            }
+            let (m, boost) = any_word(word, f)?;
             Box::new(BooleanQuery::new(vec![
-                (Occur::Must, word_query(f.text, &toks, false)),
-                (
-                    Occur::Should,
-                    Box::new(BoostQuery::new(word_query(f.name, &toks, true), NAME_BOOST)),
-                ),
+                (Occur::Must, m),
+                (Occur::Should, boost),
             ]))
         }
         Node::Word { field, word } => {
