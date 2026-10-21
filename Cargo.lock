@@ -840,6 +840,8 @@ dependencies = [
  "lodestar-metainfo",
  "lodestar-store",
  "proptest",
+ "serde",
+ "serde_json",
  "tantivy",
  "tempfile",
  "tracing",

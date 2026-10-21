@@ -61,9 +61,16 @@ fn add(store: &mut Store, torrents: &[Vec<u8>]) {
     store.insert(&batch).unwrap();
 }
 
+const NOW: i64 = 1_700_000_100;
+
 fn names(index: &SearchIndex, q: &str) -> Vec<String> {
     let mut n: Vec<String> = index
-        .search(index.text_query(q).as_ref(), 50)
+        .search(
+            index
+                .query(&lodestar_search::parse(q).unwrap(), NOW)
+                .as_ref(),
+            50,
+        )
         .unwrap()
         .hits
         .into_iter()
@@ -116,7 +123,12 @@ fn indexes_the_store_and_finds_names_and_paths() {
     assert_eq!(names(&index, "mkv").len(), 3);
     // The name field outranks a path-only match.
     let hits = index
-        .search(index.text_query("sample").as_ref(), 10)
+        .search(
+            index
+                .query(&lodestar_search::parse("sample").unwrap(), NOW)
+                .as_ref(),
+            10,
+        )
         .unwrap();
     assert_eq!(hits.total, 1);
 }
