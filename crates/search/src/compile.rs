@@ -74,10 +74,7 @@ fn compile_opt(node: &Node, f: &Fields, now: i64) -> Option<Q> {
             })
         }
         Node::Phrase { field, text } => {
-            let parts: Vec<Tok> = tokenizer::tokenize(text)
-                .into_iter()
-                .filter(|t| t.kind == TokKind::Part)
-                .collect();
+            let parts = units(&tokenizer::tokenize(text));
             if parts.is_empty() {
                 return None;
             }
@@ -86,11 +83,14 @@ fn compile_opt(node: &Node, f: &Fields, now: i64) -> Option<Q> {
             })
         }
         Node::Near { field, words, slop } => {
+            // Units per word (offsets restart in each word), positions
+            // running on across words.
             let mut parts = Vec::new();
+            let mut next = 0;
             for w in words {
-                let next = parts.last().map_or(0, |t: &Tok| t.position + 1);
-                tokenizer::tokenize_into(w, next, &mut parts, 512);
-                parts.retain(|t| t.kind == TokKind::Part);
+                let mut toks = Vec::new();
+                next = tokenizer::tokenize_into(w, next, &mut toks, 512);
+                parts.extend(units(&toks));
             }
             if parts.is_empty() {
                 return None;
@@ -213,14 +213,34 @@ fn per_field(field: TextField, f: &Fields, build: impl Fn(Field, bool) -> Q) -> 
     ))
 }
 
-/// One word: its parts as a phrase (or all of them, in a field without
+/// The matching units of one tokenized string, in order: each atom's
+/// whole-word token where it has one (instead of its parts, which sit
+/// inside its byte range), else its single part. Joined compounds are
+/// left out.
+fn units(toks: &[Tok]) -> Vec<Tok> {
+    let mut out = Vec::new();
+    let mut whole: Option<(usize, usize)> = None;
+    for t in toks {
+        match t.kind {
+            TokKind::Whole => {
+                whole = Some((t.from, t.to));
+                out.push(t.clone());
+            }
+            TokKind::Part if whole.is_some_and(|(f, e)| t.from >= f && t.to <= e) => {}
+            TokKind::Part => {
+                whole = None;
+                out.push(t.clone());
+            }
+            TokKind::Compound => {}
+        }
+    }
+    out
+}
+
+/// One word: its units as a phrase (or all of them, in a field without
 /// positions), or any compound it forms (`web-dl` ↔ `webdl`).
 pub(crate) fn word_query(field: Field, toks: &[Tok], positions: bool) -> Q {
-    let parts: Vec<Tok> = toks
-        .iter()
-        .filter(|t| t.kind == TokKind::Part)
-        .cloned()
-        .collect();
+    let parts = units(toks);
     let mut alternatives: Vec<(Occur, Q)> = Vec::new();
     if !parts.is_empty() {
         alternatives.push((Occur::Should, parts_query(field, &parts, positions, 0)));
@@ -269,7 +289,8 @@ fn parts_query(field: Field, parts: &[Tok], positions: bool, slop: u32) -> Q {
 fn folded_word(word: &str) -> Option<String> {
     let toks = tokenizer::tokenize(word);
     toks.iter()
-        .find(|t| t.kind == TokKind::Compound)
+        .find(|t| t.kind == TokKind::Whole)
+        .or_else(|| toks.iter().find(|t| t.kind == TokKind::Compound))
         .or_else(|| toks.first())
         .map(|t| t.text.clone())
 }

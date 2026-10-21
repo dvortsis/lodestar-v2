@@ -1277,6 +1277,18 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - **A client-supplied AST must re-render and re-parse to itself,** so the API only accepts trees the parser could produce.
 - **Logs go to stderr,** keeping stdout free for command output.
 
+**M2 implementation decisions (latency):**
+- **Query words match "units":** each word's whole-word token where it has one (`1080p`, `x265`, `s01e02`), otherwise its single part. The parts of a whole word are no longer phrased.
+  - The index always stores the whole-word token next to the parts, so nothing typed the same way is lost.
+  - The win: the `p` of `1080p` occurs in most names, and phrasing it made two- and three-word queries about 60 ms p95 at 1M torrents. Matching units brings them to about 8 ms.
+  - Words joined by punctuation (`5.1`, `WEB-DL`) still also match their parts as a phrase, so `DD5.1` is found by `5.1`.
+  - Hits read ids from the `id` fast field. The docstore is only for names, which tools and tests read.
+- **`search-bench`** builds or reuses a synthetic corpus and runs seven query classes end to end (parse, compile, top 50, rows from SQLite). It reports p50, p95, p99 and max per class, and `--gate` fails on a missed §3 target.
+  - CI gates at 200k torrents (under 2 minutes).
+  - At 1M torrents every class passes, with p95 in ms: common word 2.9, rare word 0.6, two words 7.8, three words 8.1, phrase 8.0, word + filter 9.2, browse 19.3.
+  - The 10M measurement comes with the importer PR.
+- **The M2 "minimal UI" is the embedded status page:** setup and login, a search box, results, KPIs and the funnel. The SvelteKit app (`web/`, §10) starts with M5, where its toolchain, budgets and CI gates come in together. A throwaway intermediate UI would only be rewritten.
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.

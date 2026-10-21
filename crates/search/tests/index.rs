@@ -64,7 +64,7 @@ fn add(store: &mut Store, torrents: &[Vec<u8>]) {
 const NOW: i64 = 1_700_000_100;
 
 fn names(index: &SearchIndex, q: &str) -> Vec<String> {
-    let mut n: Vec<String> = index
+    let n = index
         .search(
             index
                 .query(&lodestar_search::parse(q).unwrap(), NOW)
@@ -72,10 +72,8 @@ fn names(index: &SearchIndex, q: &str) -> Vec<String> {
             50,
         )
         .unwrap()
-        .hits
-        .into_iter()
-        .map(|h| h.name)
-        .collect();
+        .hits;
+    let mut n = index.names(&n).unwrap();
     n.sort();
     n
 }

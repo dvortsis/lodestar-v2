@@ -91,7 +91,6 @@ impl std::fmt::Debug for SearchIndex {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Hit {
     pub id: u64,
-    pub name: String,
     pub score: f32,
 }
 
@@ -277,21 +276,51 @@ impl SearchIndex {
                 (t.into_iter().map(|(_, a)| (0.0, a)).collect(), n)
             }
         };
+        // Ids come from the fast field: the docstore is only for names.
+        let mut columns = std::collections::HashMap::new();
         let mut hits = Vec::with_capacity(scored.len());
         for (score, addr) in scored {
-            let doc: TantivyDocument = searcher.doc(addr)?;
-            let id = doc
-                .get_first(self.fields.id)
-                .and_then(|v| v.as_u64())
+            let col = match columns.entry(addr.segment_ord) {
+                std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+                std::collections::hash_map::Entry::Vacant(e) => e.insert(
+                    searcher
+                        .segment_reader(addr.segment_ord)
+                        .fast_fields()
+                        .u64("id")?,
+                ),
+            };
+            let id = col
+                .first(addr.doc_id)
                 .ok_or(Error::Corrupt("document without an id"))?;
-            let name = doc
-                .get_first(self.fields.name)
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
-            hits.push(Hit { id, name, score });
+            hits.push(Hit { id, score });
         }
         Ok(Results { hits, total })
+    }
+
+    /// The stored names of some hits (for tests and tools; the API reads
+    /// names from SQLite).
+    pub fn names(&self, hits: &[Hit]) -> Result<Vec<String>> {
+        let searcher = self.reader.searcher();
+        let mut out = Vec::with_capacity(hits.len());
+        for h in hits {
+            let q = TermQuery::new(
+                Term::from_field_u64(self.fields.id, h.id),
+                IndexRecordOption::Basic,
+            );
+            let top = searcher.search(&q, &TopDocs::with_limit(1).order_by_score())?;
+            let name = match top.first() {
+                Some((_, addr)) => {
+                    let doc: TantivyDocument = searcher.doc(*addr)?;
+                    doc.get_first(self.fields.name)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string()
+                }
+                None => String::new(),
+            };
+            out.push(name);
+        }
+        Ok(out)
     }
 }
 
