@@ -55,6 +55,8 @@ The goal is to build the whole pipeline from scratch (crawler → metadata → s
 | Web UI first load | LCP < 1 s (LAN) / < 2.5 s (4G phone); ≤ 100 KB gzipped total first load (JS ≤ 45 KB); INP < 100 ms (§10.1) |
 | Insights overview / stage-page queries (rollups only) | < 50 ms |
 | **Reporting overhead** with Insights open and the digest job running | search p95 +≤ 5%; ingest throughput −≤ 2%; rollup storage ≤ 50 MB/year |
+| **Coordinator ingest** with remote workers (commit + index, §19) | ≥ 1,000 new verified torrents/s sustained; grant latency p95 < 50 ms (LAN) |
+| **Worker** (§19) | RSS ≤ 256 MB at defaults; ≤ 3 KB per torrent on the wire (median) |
 
 **Size budget** (targets to verify in M0/M2 benchmarks, at a 30-file average):
 - Canonical store + torrent index: **≤ 1.5 KB per torrent**.
@@ -69,7 +71,7 @@ Steady-state RSS **< 1 GB** at 10M torrents with default caches. A **low-resourc
 
 ## 4. Topology
 
-One process, one binary (`lodestar`), with one data directory. Internally it's a set of async services connected by bounded channels, so backpressure is natural and nothing polls.
+One process, one binary (`lodestar`), with one data directory. Internally it's a set of async services connected by bounded channels, so backpressure is natural and nothing polls. **Optional remote workers** (§19) run the same binary in worker mode on other machines and add crawling, fetching and processing capacity. This single process becomes the **coordinator** and keeps the database, index and UI.
 
 ```
              UDP :6881 (DHT, v4+v6)              TCP/uTP :6881 (peer wire)
@@ -112,7 +114,7 @@ The Mainline DHT crawler is **source plugin #1**. Every other discovery source, 
   1. BEP 51 traversal: walk the keyspace, sample infohashes and honour each node's `interval`.
   2. Passive: answer `get_peers`/`announce_peer` and record hashes. `announce_peer` comes with a live peer, so it's the fastest path to metadata.
   3. Active `get_peers` lookups to find peers for hashes that have no peer yet.
-- **Virtual node IDs:** 1–16 BEP 42-compliant IDs on one socket to widen keyspace coverage (default 4). Use "Low / Balanced / Aggressive" presets that cap packets/sec, bandwidth and concurrent fetches. Be a good DHT citizen by default.
+- **Virtual node IDs:** 1–16 BEP 42-compliant IDs on one socket to widen keyspace coverage (default 4). BEP 42 allows only **8 id prefixes per external IP**, so beyond that, coverage grows with **more public IPs**, i.e. remote workers on other networks or VPN exits (§19.1). Use "Low / Balanced / Aggressive" presets that cap packets/sec, bandwidth and concurrent fetches. Be a good DHT citizen by default.
 - **Dedup:** a persistent "have" cuckoo filter (~1.5–2 bytes per stored hash), a time-rotated "seen" filter (see *Bounded memory* below), an in-flight set, and a failure LRU with exponential backoff (retry later when new peers appear).
 - **Routing table** persisted on shutdown for a warm restart. Bootstrap from the standard routers plus the last-known good nodes.
 - **Optional UPnP / NAT-PMP** port mapping (off in Docker by default, on for Windows). The dashboard shows whether the node is reachable.
@@ -617,7 +619,7 @@ Each detail page follows the same pattern: three to four KPIs, one primary trend
 - **Settings:**
   - A manuscript layout (max 720 px). Section navigation sits on the left at x-large and becomes a select on narrow screens.
   - Forms have visible labels, help text next to each field, inline validation, and per-section Save with a "Saved" confirmation.
-  - Sections: General, Crawler, Network & VPN, Storage & retention (with size-projection previews), Search & ranking, **Sources** (§18.8: every discovery, importer, enrichment, network and output plugin, with priority, agents, schedule, egress, consent and purge; Auto-balance), **Companions** (§18.10: installed and detected companions, health, versions, logs, updates, Set up / Remove), Trackers, Integrations, Notifications, **Insights & digest** (digest schedule and channels, query logging on/off and retention, clear usage data), Security, Appearance (theme, density, motion, shortcut settings), About.
+  - Sections: General, Crawler, Network & VPN, Storage & retention (with size-projection previews), Search & ranking, **Sources** (§18.8: every discovery, importer, enrichment, network and output plugin, with priority, agents, schedule, egress, consent and purge; Auto-balance), **Companions** (§18.10: installed and detected companions, health, versions, logs, updates, Set up / Remove), **Workers** (§19.7: add/join, status, placement, budgets, drain, revoke, purge-by-worker), Trackers, Integrations, Notifications, **Insights & digest** (digest schedule and channels, query logging on/off and retention, clear usage data), Security, Appearance (theme, density, motion, shortcut settings), About.
 - **First-run wizard** (stepped progress, one primary action per step):
   1. Setup token
   2. Admin password
@@ -895,13 +897,15 @@ With the plum swap, all six colours are distinguishable. Colour is still never t
 - **Unraid:** a Community Applications template (`packaging/unraid/lodestar.xml`) with icon, WebUI `http://[IP]:[PORT:8090]`, `/mnt/cache/appdata/lodestar` → `/data`, and port mappings. Appdata belongs on the cache SSD/NVMe pool, not the array, because index I/O is random. The template uses the **pool path (`/mnt/cache/...` or the named pool), not `/mnt/user/...`**: `/mnt/user` goes through Unraid's FUSE `shfs` layer, which is slow for mmap-heavy workloads and risky for SQLite WAL. The app detects a FUSE/network filesystem at startup and warns. There's also an optional gluetun/VPN variant of the template. Defaults are `PUID=99`/`PGID=100` (nobody:users). Optional **split paths**: `/data/hot` (indexes + hot columns, must be on SSD/NVMe) and `/data/cold` (an attached `cold.db` holding file-tree blobs and the optional raw archive). Caveat: cold data is written continuously as torrents arrive, so putting it on the parity array keeps disks spinning and slows writes. The recommended layout is both on the cache pool, with only backups going to the array.
 - **Windows:** an `x86_64-pc-windows-msvc` build. The **MSI** (cargo-wix) installs to Program Files, puts data in `%ProgramData%\Lodestar`, and registers a **Windows Service** (windows-service crate). It also adds firewall rules for the DHT port and a Start-menu shortcut that opens the UI. A portable zip with an optional tray icon covers non-service use, and a winget manifest is planned. **Code-signing** is needed to avoid SmartScreen and Defender friction. The installer offers (opt-in, explained) a **Defender exclusion for the data directory**: real-time scanning of index segment and WAL writes can cut throughput several-fold. **Ephemeral-port exhaustion:** hundreds of short-lived outbound TCP metadata connections pile up in TIME_WAIT. The defaults (dynamic range 49152–65535, 120 s TIME_WAIT) cap sustained churn at roughly 130 new connections/s. Mitigations: a connection-rate limiter sized to the OS range, `SO_LINGER(0)` aborts for failed handshakes, and connection reuse where peers allow it. The dashboard shows a warning, with the `netsh int ipv4 set dynamicport` remedy documented. The service runs at **below-normal process priority** so desktop use stays smooth. Windows mmap semantics prevent deleting files that are still mapped, so segment garbage collection must retry deletes. CI includes a Windows soak test for merge/GC and hot-column remapping.
 - Also: Linux/macOS tarballs and a systemd unit. One `config.toml` with environment-variable overrides (`LODESTAR_*`); most settings are editable in the UI and persisted in the DB.
-- **CLI subcommands:** `serve` (default), `reindex`, `backup` (SQLite online backup; indexes are rebuildable), `import <dir|.torrent>`, `vacuum`, `healthcheck`, `stats`, `companion <list|install|remove|compose>` (§18.10; `compose` prints the Docker service for a companion).
+- **CLI subcommands:** `serve` (default), `reindex`, `backup` (SQLite online backup; indexes are rebuildable), `import <dir|.torrent>`, `vacuum`, `healthcheck`, `stats`, `companion <list|install|remove|compose>` (§18.10; `compose` prints the Docker service for a companion), `worker --join <url> --token <t>` (§19: run as a remote worker).
+- **Worker mode** (§19): the same image and binary. Docker: `lodestar worker` with `LODESTAR_JOIN`/`LODESTAR_TOKEN`; Unraid: a "Lodestar Worker" template variant; Windows: the installer's "Join an existing Lodestar" option, installed as a service. The coordinator's cluster port (default `8091/tcp`, mTLS only) is the only thing workers need to reach; the UI/API port stays private.
 - **Companions** (§18.10): managed child processes on Windows and bare-metal Linux; on Docker/Unraid, generated compose services or pre-filled CA templates, plus auto-detection and auto-configuration. Managed-container mode via a restricted Docker socket proxy is advanced and off by default.
 
 ## 12. Security & operations
 
 - First-run setup requires a **one-time setup token printed to the logs/console** (the Jupyter/Portainer pattern), so nobody else on the LAN can claim a fresh headless instance. It then creates an admin password (argon2). Session cookies. API keys for Torznab and integrations. Optional trusted reverse-proxy header auth. CSP and security headers. Rate limiting on the API.
 - **Upgrades:** an automatic SQLite snapshot before any schema migration, with `lodestar rollback`. Docker tags: `x.y.z`, `x.y`, `latest`, `nightly`. Optional in-app "update available" check (no telemetry, ever).
+- **Cluster security** (§19.6): mutual TLS with a cluster CA created on first use; one-time join tokens (15-minute expiry); per-worker certificates with immediate revocation; workers receive only the have-filter, assignments, sealed credentials and leases; 0.5% re-verification sampling with quarantine and purge-by-worker.
 - **Companion supply chain** (§18.10): a signed catalogue pinned per release, with SHA-256 and upstream signatures verified before anything runs. Every install needs confirmation; companions run with the least privilege, bound to localhost or the internal network; credentials are random and encrypted at rest.
 - **Content safety:** the CSAM hash/keyword blocklist is **on by default** and applied before storage. Matches are dropped, never stored or indexed.
 - Observability: `tracing` structured logs, Prometheus metrics for every pipeline stage, and the built-in dashboard.
@@ -927,6 +931,8 @@ crates/
   sources-*/        one crate per plugin family: importers (incl. defunct-site dumps), torznab (Prowlarr/Jackett, usenet),
                     feeds (nyaa/animetosho/nostr/lemmy/json-apis), irc (predb, private announces), clients (your download clients),
                     archive (IA/academic), enrich (srrdb/dat/predb/wikidata/tmdb/anidb/…), outputs (torznab/stremio/export), i2p, ed2k, ipfs
+  cluster/          coordinator ↔ worker protocol (postcard over mTLS WebSocket), leases + fencing, have-filter replication,
+                    placement, politeness token leases, spool; the built-in local worker uses the same interfaces
   companions/       companion manager: signed catalogue, verify/install/supervise (native), compose/CA templates, detection, API adapters
   lodestar/         binary: config, CLI, Windows service, embeds web/build
 web/                SvelteKit 2 + Svelte 5 SPA, Tailwind v4 + daisyUI 5, Bits UI, TanStack Virtual, uPlot (lazy), Phosphor (compiled);
@@ -957,9 +963,14 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 
 **v0.5 also includes the importer framework** (M2 add-on): the bitmagnet importer plus Rutracker dumps, MagnetDB (if access is granted), RARBG/magnetico/bitmagnet exports and DMM hashlists, so the cold start is skipped.
 
+**Remote workers (§19):**
+- **M3:** the **worker boundary**: prepare/commit split, claim/grant leases, and the coordinator's built-in local worker. It lands before enrichment so all processing runs on the worker side from the start, and single-machine behaviour is unchanged.
+- **v0.6:** **remote workers v1**: join/mTLS, have-filter replication, DHT (`sharded(keyspace)`), fetch and processing on workers, Settings → Workers, per-worker Insights. It shares the signed-update machinery with the companion manager.
+- **v0.8:** placement for singleton, account and overlay plugins on workers, and companions hosted on workers.
+
 **Sources roadmap:** the full ranked source roadmap, from v0.5 through the overlay networks (I2P v1.1, eD2k/Kad v1.2, IPFS v1.3), is in §18.3.
 
-**Later (v1.x):** split roles (`--role crawler|server|all`), so the crawler can run on a VPN box and push batches over HTTP to the server, which stays the single SQLite writer. Saved search → auto-send rules (opt-in). The micro-piece prober. Embedded WireGuard.
+**Later (v1.x):** Saved search → auto-send rules (opt-in). The micro-piece prober. Embedded WireGuard.
 
 ## 15. Risks & mitigations
 
@@ -978,6 +989,8 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Plugin sprawl:** 30+ plugins could swamp one maintainer. Mitigations: one plugin API, contract tests with recorded fixtures, per-family crates, the roadmap order (§18.3), and a rule that a plugin which stays broken for a release gets disabled by default with its health shown, rather than blocking the release.
 - **Legal exposure from restricted and overlay sources:** off by default, with consent classes, VPN egress, isolated tiers, one-click purge and the non-negotiable CSAM blocklist (§18.7). Private-tracker results never leave the instance.
 - **Scheduler starvation or unfairness:** deficit round robin with min shares, hard caps, importer write-share limits, property tests (§18.9) and Insights visibility of shares and auto-balance moves.
+- **Distributed-systems bugs** (double counting, lost keys, split brain): the coordinator is the single source of truth (no consensus protocol), leases carry fencing tokens, results are idempotent by batch id, the local worker shares the remote code path, and the multi-worker chaos tests (§19.8) gate releases.
+- **A rogue or compromised worker:** mTLS, least data, re-verification sampling, quarantine, purge-by-worker, and an authoritative blocklist check at commit.
 - **Scope/maintainability:** a large Rust codebase for one maintainer. Mitigate with strict crate boundaries, the MVP cut line, and reusing mature crates (tantivy, axum, rusqlite, tokio, encoding_rs, mimalloc, utoipa) wherever they aren't on the critical path.
 
 ## 16. Self-review log (issues found in draft 1, now folded in above)
@@ -1086,6 +1099,14 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - **Live connections:** eD2k shared-file browsing (files kept, sharers discarded) and IPNI gossipsub.
   - **New universal rule, "No profiles of people":** peer addresses are never stored with what they share.
   - **Companion manager (§18.10):** fully managed installs on native platforms from a signed, pinned catalogue; on Docker/Unraid, guided compose/CA templates with auto-detection and auto-configuration, because a self-installing container would need the Docker socket, which is effectively root. Managed-container mode is advanced and off by default.
+
+**Remote workers (draft 10 → 11, §19):** "split roles" (v1.x) is replaced by a coordinator plus any number of remote workers running the same binary.
+- **What runs where:** workers run crawling (sharded DHT keyspace), metadata fetch and CPU processing (prepare); the coordinator keeps the writer (commit), index, rollups and UI.
+- **Why more machines help:** BEP 42 limits each IP to 8 node-id prefixes, so more public IPs (workers on other networks or VPN exits) widen DHT coverage. Workers behind one home router don't.
+- **Exactly-once accounting** comes from fleet-wide leases with fencing tokens, with "harvested" counted at grant on the coordinator.
+- **Global politeness caps** are enforced through token leases; the have-filter is replicated to workers.
+- **Security:** mTLS join tokens, revocation and re-verification sampling.
+- **Timing:** the boundary lands in M3, so enrichment is born on the worker side; remote workers ship in v0.6.
 
 **Still open (decide during M0–M2 spikes, with measurements rather than guesses):** reusing librqbit crates vs our own DHT; whether the trigram field earns its size at 10M+ names; the smart-file-index thresholds; the actual cold-start harvest and metadata success rates.
 
@@ -1247,6 +1268,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - Playwright visual snapshots at 320/390/768/1024/1366/1920/2560;
   - the `analytics-validation` fixture matrix (facet counts, histogram bins, and Insights rollups/cohorts reconciled against independent SQL, the Tantivy doc count and `/metrics`);
   - **source plugin gates (§18.9):** contract tests, scheduler property tests, politeness, provenance/purge, universal blocklist across every plugin kind, private-source isolation, consent gating;
+  - **cluster gates (§19.8):** a multi-worker chaos test (worker kills, partitions, coordinator restarts) with exactly-once funnel reconciliation, fencing, fleet-wide politeness caps, placement failover, revocation, re-verification sampling, spool replay, version skew, and single-machine parity;
   - the **reporting-overhead benchmark**: search and ingest benchmarks rerun with Insights polling + the digest job + an export running, checked against the §3 overhead budget;
   - a `design-review` pass with no blocking findings.
 - **In-process DHT test network:** spawn about 50 nodes plus fake peers serving known info dicts, and assert harvest → fetch → store → index → `search` returns them within 5 s.
@@ -1293,6 +1315,7 @@ Lodestar's reach comes from **many sources, each a plugin you can switch on or o
   // plugin's egress (direct / VPN interface / SOCKS), cancellation, metrics.
   ```
 - **A discovery event** carries: network; key; optional peer hints; optional **claims** (name, files, trackers, IDs such as `imdb:`/`tmdb:`/`anidb:`, description, publisher identity); provenance (source id, external reference, time); confidence.
+- **Distribution:** every manifest declares where the plugin may run with remote workers: `everywhere`, `sharded(keyspace)`, `sharded(unit)`, `singleton` or `coordinator` (§19.5).
 - **Lifecycle:** enable / pause / disable / purge. **Disabling keeps the data; purging removes it.** Purging deletes items found *only* by that source, plus all of that source's claims. Items other sources also found are kept, with the source's bit cleared.
 
 ### 18.2 Source catalogue, ranked
@@ -1433,7 +1456,8 @@ Lodestar's reach comes from **many sources, each a plugin you can switch on or o
   - Hot-column arrays are sized by the highest id; they're sparse files, and only pages for live ids are touched.
   - The settings UI shows the projected size before an importer runs (§10.10).
   - Unverified items with no claims worth keeping (bare dead hashes from a dump) are kept only as a capped verification queue, not as rows.
-- **Rollups:** the Insights rollups gain `source` and `network` dimensions (§7, §10.9).
+- **Rollups:** the Insights rollups gain `source`, `network` and (with remote workers, §19) `worker` dimensions (§7, §10.9).
+- **Worker provenance:** `torrents.worker` (u16, the worker that processed it; 0 = the coordinator's local worker) enables purge-by-worker and quarantine (§19.4).
 
 ### 18.6 Network tiers
 Every item has a `network` field: `bt` (clearnet BitTorrent), `bt-i2p`, `ed2k`, `ipfs`, `usenet`. **Adult** isn't a network; it's a **media category** (§20.9), hidden unless "Show adult content" is on.
@@ -1546,3 +1570,127 @@ Lodestar is the **central directory for every source**. When a source or a downl
   - **Settings → Companions:** installed and detected companions with health, version, logs, update notices, and Set up / Remove.
   - The first-run wizard gains an optional **"Download client"** step (recommended: qBittorrent).
   - Each source on Settings → Sources shows its dependencies and their state.
+
+## 19. Distributed workers (remote clients)
+
+One Lodestar instance is the **coordinator**: it owns the database, the search index, the UI and the API. Any number of **workers** on other machines add crawling, fetching and processing capacity. A worker is the same `lodestar` binary started in worker mode. It has no database, no index and no UI, and it **dials out** to the coordinator, so workers behind NAT need no inbound ports apart from their own P2P ports. This replaces the earlier "split roles" idea (§14, v1.x).
+
+### 19.1 What scales out, and what doesn't
+| Work | Where it runs | Why more machines help |
+|---|---|---|
+| **DHT harvesting** | workers (+ coordinator) | **BEP 42 ties node ids to the external IP: only 8 id prefixes per address** (`dht::secure_id`). Passive harvesting sees only the traffic routed to our ids, so **every extra public IP widens keyspace coverage**. Each IP also gets its own per-IP limits. |
+| **Metadata fetch** (peer wire, MSE) | workers | More sockets, more source IPs (fewer per-IP refusals), and each machine's own router/conntrack budget |
+| **Processing:** parse the info dict, derive fields, build the compressed file-tree blob, classify, release-name parse, junk score, DAT/srrDB matching | workers | CPU-bound and independent per torrent; it scales linearly |
+| **Shardable plugins** (importer chunks, BEP 48 per tracker, Prowlarr per indexer) | workers | Parallel parsing and polling |
+| **Overlay crawlers** (I2P, Kad, IPFS) and their companions | the worker that hosts the companion | Can sit on a VPN box or a different network |
+| **Writer, search index, Insights rollups, UI/API** | coordinator only | One source of truth. The ingest ceiling is a budget (§3), not a scaling target |
+| **Politeness-capped sources** (trackers, HTTP feeds) | anywhere, but caps are **global** | More workers never multiply a source's request rate |
+
+**Honest limits:**
+- Workers behind the **same home router share its NAT/conntrack table and its public IP**. Several workers on one LAN add CPU and sockets, but not DHT coverage or router headroom. Put workers on **different networks or VPN exits** for crawl gains.
+- DHT yield is bounded by real network activity, so returns diminish after a handful of IPs. Insights (§19.7) shows the marginal gain per worker so you can tell when another one stops helping.
+
+### 19.2 Topology and protocol
+- **Connection:**
+  - Each worker holds one long-lived connection to the coordinator's **cluster port** (default `8091/tcp`): WebSocket over TLS with **mutual TLS**, frames in `postcard`, batches zstd-compressed.
+  - The UI and API port stays LAN-private. Only the cluster port may be exposed, ideally over a private overlay (Tailscale/WireGuard).
+- **Messages:**
+
+| From → to | Message | Purpose |
+|---|---|---|
+| W → C | `Hello` | protocol version, capabilities (cores, RAM, external IPs, companions present, egress), worker id |
+| C → W | `Assign` | plugins to run with their config, budgets/intensity, keyspace shard, sealed credentials for assigned account plugins |
+| C → W | `HaveSnapshot` / `HaveDelta` | the replicated have-filter (§19.3), the shared zstd dictionary version, the blocklist version |
+| W → C | `Claim` | batched new keys (≤ 512 or every 250 ms) with source, strategy, peer hints and discovery time |
+| C → W | `Grant` / `Deny` | leases with a **fencing token** and TTL; denials say "stored" or "held elsewhere" |
+| W → C | `Results` | processed torrents (§19.4), idempotent per batch id |
+| W → C | `Outcome` | the terminal funnel outcome per leased key (peer found / fetched / lost + reason) |
+| W → C | `Counters` | rollup deltas (harvest by strategy, failures, latency buckets) tagged with the worker id |
+| C ↔ W | `Heartbeat` | every 5 s: stats, clock offset, lease renewals, politeness tokens |
+| C → W | `Drain` / `Stop` / `Update` | graceful drain, revoke, a signed update offer |
+
+- **The coordinator runs a built-in local worker through the same interfaces,** over in-process channels instead of the network. A single machine behaves exactly as before, and there's **one code path** for local and remote work.
+
+### 19.3 De-duplication and leases (exactly-once accounting)
+- **Two-level de-duplication:**
+  1. **Have-filter, replicated.** Each worker keeps a copy of the coordinator's have Bloom filter (§7 pipeline: 10 bits per hash, about 12.5 MB per 10M torrents). It gets a snapshot on join, then streamed inserts. A rebuild sends a fresh snapshot. Stored keys are dropped locally, with no round trip; a false positive just goes the rediscovery path as it does today.
+  2. **Fleet-wide in-flight leases.** New keys are **claimed** in batches. The coordinator checks its authoritative in-flight table and the store, then grants each key to exactly one worker.
+     - A key already held elsewhere is denied. The coordinator merges the second source's bit into the lease and **relays the peer hints in memory** to the holder (never stored, §18.7).
+- **Accounting:**
+  - **"Harvested" is counted by the coordinator at grant time,** once per key across the whole fleet, so "new to us" stays globally true and cohort conservation (§10.9.3) holds.
+  - The **holder reports the terminal outcome exactly once.**
+  - **Leases** carry a TTL (default 10 min, renewed in heartbeats) and a fencing token. If a worker vanishes, its leases expire and the keys are re-granted, with their cohort, source bits and strategy kept by the coordinator. A late report from the old holder carries a stale token and is ignored, so nothing is counted twice.
+  - Outstanding leases are persisted with the coordinator's fetch queue, so they survive restarts.
+- **Clock skew:** discovery times are stamped by workers. The coordinator measures each worker's offset from heartbeats and corrects timestamps. A worker more than 60 s off is flagged and asked to fix NTP.
+
+### 19.4 Processing on workers ("prepare, then commit")
+- The current writer path splits in two:
+  - **Prepare (worker):** verify the info-dict hash (already done during the fetch), parse, run the blocklist pre-check, build the file-tree blob with the shared zstd dictionary, derive fields (composition, payload signature, structural fingerprints), and, from M3, release-name parsing, classification, junk score and DAT/srrDB matching.
+  - **Commit (coordinator):** the authoritative blocklist check on the key and every swarm hash plus name patterns, id allocation (`id_seq`), insert, rollups and indexing.
+- **What a `Results` record carries:** key and swarm hashes (v1 + truncated v2), the derived row, the compressed file-tree blob, `torrent_extra`, parsed/classified fields, provenance (sources bitset, first source, worker id) and the fencing token. **`pieces` is never sent** (§3), which keeps records to roughly 1–3 KB per torrent instead of 10–60 KB.
+- **Trust but verify:**
+  - Workers are your machines, authenticated with mTLS.
+  - The coordinator still **samples 0.5% of each worker's results for re-verification** by another worker (or the coordinator), which re-fetches the info dict and compares derived fields.
+  - A worker whose sample fails is **quarantined**: paused, flagged in the UI, and offered purge-by-worker.
+- **Optional later optimization:** building pre-tokenized index documents on workers (Tantivy `PreTokenizedString`) to offload tokenization from the coordinator. Measure before adding it.
+
+### 19.5 Placement and budgets
+- **Each plugin manifest gains `distribution`:**
+
+| Value | Examples | Placement |
+|---|---|---|
+| `everywhere` | metadata fetch, processing, PEX | every worker, within its budget |
+| `sharded(keyspace)` | Mainline DHT, Kad, IPFS | each worker gets its own node-id prefixes/regions and BEP 51 traversal ranges, so walks don't overlap |
+| `sharded(unit)` | importers (file chunks), BEP 48 (per tracker), Prowlarr (per indexer), Internet Archive (per collection) | units spread across workers |
+| `singleton` | Nyaa, Nostr, IRC feeds, Lemmy, your download clients | exactly one active instance, chosen by the coordinator; it fails over if that worker drops |
+| `coordinator` | outputs (Torznab, Stremio, export), enrichment caches that need the database | coordinator only |
+
+- **Auto placement by default:** shardable work spreads by capacity, singletons go to the healthiest eligible worker, and overlay plugins go only to workers that have their companion. You can **pin** any plugin to specific workers.
+- **Account and private sources** (`private_source`, §18.7) default to the coordinator. You can allow them on chosen workers, and their credentials are sealed per worker. **Restricted and overlay consent applies per worker**, because each machine has its own IP and legal exposure.
+- **Budgets:**
+  - Each worker has **its own resource budget and intensity preset**, because it has its own NIC, router and CPU. The §18.4 scheduler runs per worker for local resources.
+  - **Global resources stay global:** per-host politeness caps (trackers, HTTP sources) come from the coordinator as **token leases** in heartbeats, so the fleet as a whole never exceeds a source's cap.
+  - **Writer share** is managed on the coordinator.
+- **Backpressure:** if the coordinator's writer falls behind, grants slow down, so workers harvest less and nothing piles up unboundedly anywhere.
+
+### 19.6 Joining, security and lifecycle
+- **Joining a worker:**
+  1. **Settings → Workers → Add worker** shows a **one-time join token** (15-minute expiry) and ready-to-copy commands:
+     - `lodestar worker --join https://coord:8091 --token …`
+     - a `docker run` line or compose service
+     - an Unraid "Lodestar Worker" template
+     - the Windows installer's **"Join an existing Lodestar"** option
+  2. The worker creates a key pair and the coordinator signs its certificate (a cluster CA created on first use). Both sides pin each other.
+- **Least data:** a worker receives only the have-filter (hash membership), its assignments, sealed credentials for assigned plugins, and leases. It can't query the database, search or UI.
+- **Revocation:** **Revoke** invalidates the certificate immediately and returns its leases. **Drain** finishes in-flight leases, then stops.
+- **Spool:** while disconnected, a worker keeps harvesting and processing into a **bounded on-disk spool** (default 1 GB or 24 h), then pauses fetching. On reconnect it replays the spool idempotently, by batch id and fencing token.
+- **Versions:** the protocol major version must match. The coordinator offers a signed update (§18.10 catalogue mechanism), and workers update after draining.
+- **"No profiles of people" (§18.7) applies on workers too:** peer addresses never leave the worker except as transient peer hints relayed in memory.
+
+### 19.7 UI and Insights
+- **Settings → Workers:**
+  - Each worker shows its status (online / draining / offline / quarantined, as icon + text), external IP and egress, version, uptime, CPU/RAM, assigned plugins and shards, throughput (claimed / fetched / processed per minute), spool size, clock offset and lease count.
+  - Actions: Add worker, Drain, Pause, Update, Revoke, Purge data from this worker, edit budget/intensity, and placement pins.
+- **Top bar:** the status pill shows the fleet ("Crawling · 3 workers · 4.2k/h").
+- **Insights:**
+  - The rollups gain a `worker` dimension. The Discover and Fetch stage pages break down by worker.
+  - A **"Marginal gain"** view shows how much each worker adds (new keys per hour that no other worker would have seen), to guide where to add the next one.
+- **Settings → Sources** shows each plugin's placement (Auto / pinned) and which workers are running it.
+
+### 19.8 Budgets and verification
+- **Budgets** (added to §3):
+  - **Coordinator ingest** of at least **1,000 new verified torrents/s sustained** (commit + index), benchmark-gated.
+  - Worker steady-state **RSS ≤ 256 MB** at defaults.
+  - Results ≤ 3 KB per torrent on the wire (median).
+  - Grant latency p95 < 50 ms on a LAN.
+- **Tests:**
+  - **Multi-worker integration test** on the in-process DHT test network: a coordinator plus N workers.
+  - **Exactly-once:** no key is fetched by two workers outside a lease expiry, and the funnel reconciles (harvested = Σ terminal outcomes + in flight) after worker kills, network partitions and coordinator restarts.
+  - **Fencing:** stale-token outcomes and results are ignored.
+  - **Global politeness:** fleet-wide request rates per host stay under each manifest cap.
+  - **Placement:** singleton failover happens within one heartbeat timeout; overlay plugins never land on workers without their companion.
+  - **Security:** revocation stops a worker within one heartbeat; a worker can't reach anything but the cluster protocol; join tokens are single-use and expire.
+  - **Re-verification sampling** catches a deliberately corrupted worker.
+  - **Spool replay** is idempotent.
+  - **Version skew** is rejected cleanly.
+  - **Single-machine parity:** with only the built-in local worker, behaviour and benchmarks match the pre-cluster pipeline.
