@@ -67,7 +67,14 @@ The goal is to build the whole pipeline from scratch (crawler → metadata → s
 
 Steady-state RSS **< 1 GB** at 10M torrents with default caches. A **low-resource mode** (for N100/ARM/HDD-backed Unraid boxes) turns off the trigram field and the file index and shrinks caches and merge threads.
 
-**Cold-start reality (fresh crawler):** a rough expectation, to be measured in M1, is hundreds of thousands to a few million hashes harvested per day, of which only a minority yield metadata (many hashes are dead swarms). The index grows over weeks, not hours. The dashboard projects growth, and the first-run wizard sets this expectation and offers the **bitmagnet import** (M2) as a shortcut.
+**Cold-start reality (fresh crawler):** M1 measured about 24M hashes harvested per day at Balanced (see below), of which very few yield metadata (many hashes are dead swarms). Growth is limited by metadata fetching, at about 3,600 torrents per day in the first run. The index grows over weeks, not hours. The dashboard projects growth, and the first-run wizard sets this expectation and offers the **bitmagnet import** (M2) as a shortcut.
+
+**Measured in M1 (first real-network run, Docker on Windows, bridge networking, Balanced, 11.5 h, first run on an empty index):**
+- **Harvest:** 12.0M keys received, about 1M per hour, 99.9% from DHT sampling. Writer errors, dropped keys and false positives were all 0.
+- **Metadata:** 1,726 torrents stored, about 150 per hour. Of 47.6k fetch attempts, 3.6% succeeded. The failures were 73% timeouts, 10% unreachable and 8% refused. That is 0.015% of keys received.
+- **Fetch is the bottleneck.** The pool sat at its 200k cap with a lookup backlog of about 200k, and 11.8M keys were evicted unfetched. Harvest outruns fetch by about 1,000×, so raising the fetch rate (socket cap, lookup concurrency, prioritising keys by swarm evidence) is the lever, not harvest.
+- **DHT health:** reply ratio 0.54 at the start and 0.49 at the end, with 56% of queries timing out and 90 throttle events. No router distress was observed in these counters, but the router itself wasn't monitored.
+- **Memory:** 218 MiB at hour 11.5, a single sample. Flatness over 24 hours is measured in the follow-up run (below).
 
 ## 4. Topology
 
@@ -1218,6 +1225,14 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **`healthcheck` uses plain std networking,** because the distroless image has no curl. It exits 0 only on a 200 from `/healthz`.
 - **Shutdown on SIGTERM or Ctrl-C:** HTTP drains first, then the pipeline stops in order, saving the queue and DHT state. The test suite runs the real binary through start, health, status and SIGTERM.
 - **mimalloc** is the global allocator (§11). Release builds keep line tables for backtraces: 58 MB unstripped, 6.9 MB stripped. Packaging strips or splits them.
+
+**M1 decisions from the first real-network run (§3 has the numbers; the 24 h memory result is still pending):**
+- **Fetch throughput is the next M1 lever, not harvest.** Harvest outruns fetch by about 1,000×, and 11.8M keys were evicted unfetched.
+  - Work to do, in order: per-strategy fetch counters so changes can be measured; prioritising keys with swarm evidence (`announce`, `get_peers`, seen from several nodes) over random samples; evicting the lowest-priority key instead of blindly; then raising lookup and socket concurrency.
+  - This is scheduler and fetch-pool work, so it stays in the main session on Opus per the delegation policy.
+- **Balanced stays the default intensity.** The reply ratio held near 0.5 with 90 throttle events. This is one home network and the router wasn't monitored, so it isn't a general claim.
+- **Cold-start expectations are revised** to metadata-limited growth of thousands of torrents per day (§3).
+- **Not decided:** flat memory over 24 hours, the value of port forwarding for the fetch success rate, and how much of the timeout share uTP (M7) would recover.
 
 **M2 implementation decisions (search index):**
 - **Torrent-level paths are words only, without positions.** On the 50k synthetic corpus, path positions alone took 372 B per torrent: 690 B in total against the 512 B index budget. A smaller gap (8) and indexing each directory name once only got that to 600 B.

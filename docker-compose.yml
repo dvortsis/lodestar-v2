@@ -1,0 +1,20 @@
+# Example deployment. See docs/operations.md for the 24-hour M1 run.
+services:
+  lodestar:
+    build: .
+    # image: ghcr.io/dvortsis/lodestar-v2:latest   # once images are published
+    restart: unless-stopped
+    ports:
+      - "8090:8090/tcp"   # web status page, /metrics, /healthz
+      - "6881:6881/udp"   # DHT
+      - "6881:6881/tcp"   # peer wire
+    volumes:
+      - lodestar-data:/data   # on Unraid use a path under /mnt/cache, not /mnt/user
+    environment:
+      LODESTAR_INTENSITY: balanced
+      LODESTAR_LOG: info
+    # For better DHT reachability, drop `ports:` and use host networking:
+    # network_mode: host
+
+volumes:
+  lodestar-data:
