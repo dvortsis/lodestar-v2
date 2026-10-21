@@ -356,3 +356,46 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>) -> String {
     }
     o.0
 }
+
+/// The search index's counters (§8).
+pub fn render_search(out: &mut String, docs: u64, stats: &lodestar_search::IndexStats) {
+    let mut o = Out(std::mem::take(out));
+    let get = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
+    o.one(
+        "search_docs",
+        "gauge",
+        "Torrents in the search index.",
+        docs,
+    );
+    o.one(
+        "search_watermark",
+        "gauge",
+        "Highest torrent id searchable.",
+        stats.watermark.load(Ordering::Relaxed),
+    );
+    o.one(
+        "search_indexed_total",
+        "counter",
+        "Torrents indexed since start.",
+        get(&stats.indexed),
+    );
+    o.one(
+        "search_commits_total",
+        "counter",
+        "Index commits.",
+        get(&stats.commits),
+    );
+    o.one(
+        "search_errors_total",
+        "counter",
+        "Indexer read errors.",
+        get(&stats.errors),
+    );
+    o.one(
+        "search_last_commit_seconds",
+        "gauge",
+        "Unix time of the last index commit.",
+        get(&stats.last_commit),
+    );
+    *out = o.0;
+}
