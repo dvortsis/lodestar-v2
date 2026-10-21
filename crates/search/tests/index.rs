@@ -65,12 +65,7 @@ const NOW: i64 = 1_700_000_100;
 
 fn names(index: &SearchIndex, q: &str) -> Vec<String> {
     let n = index
-        .search(
-            index
-                .query(&lodestar_search::parse(q).unwrap(), NOW)
-                .as_ref(),
-            50,
-        )
+        .search(&index.query(&lodestar_search::parse(q).unwrap(), NOW), 50)
         .unwrap()
         .hits;
     let mut n = index.names(&n).unwrap();
@@ -122,9 +117,7 @@ fn indexes_the_store_and_finds_names_and_paths() {
     // The name field outranks a path-only match.
     let hits = index
         .search(
-            index
-                .query(&lodestar_search::parse("sample").unwrap(), NOW)
-                .as_ref(),
+            &index.query(&lodestar_search::parse("sample").unwrap(), NOW),
             10,
         )
         .unwrap();
@@ -233,4 +226,104 @@ fn the_live_indexer_follows_the_store_within_seconds() {
         2
     );
     assert_eq!(index.watermark().unwrap(), 2);
+}
+
+#[test]
+fn upgraded_imports_are_reindexed() {
+    use lodestar_store::flags;
+    let raw = torrent("pack", &["Hidden.Gem.mkv", "other.txt"]);
+    let real = Info::parse(&raw).unwrap();
+    let mut partial = real.clone();
+    partial.files.clear();
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let base = NewTorrent {
+        info: &real,
+        raw_info: Some(&raw),
+        discovered_at: 1_700_000_000,
+        metadata_at: 1_700_000_001,
+        extra_flags: 0,
+        source: SourceId::new(0).unwrap(),
+    };
+    store
+        .insert(&[NewTorrent {
+            info: &partial,
+            raw_info: None,
+            extra_flags: flags::IMPORTED | flags::FILES_PARTIAL,
+            ..base
+        }])
+        .unwrap();
+    let index = SearchIndex::in_memory().unwrap();
+    let mut w = index.writer(15 << 20).unwrap();
+    w.catch_up(&mut store, 10).unwrap();
+    w.commit().unwrap();
+    assert!(names(&index, "gem").is_empty(), "no files known yet");
+    store.insert(&[base]).unwrap();
+    assert_eq!(w.catch_up(&mut store, 10).unwrap(), 1);
+    w.commit().unwrap();
+    assert_eq!(names(&index, "gem"), vec!["pack".to_string()]);
+    assert_eq!(index.num_docs(), 1, "replaced, not duplicated");
+    assert_eq!(w.catch_up(&mut store, 10).unwrap(), 0);
+}
+
+#[test]
+fn browse_follows_new_segments_and_deletions() {
+    use lodestar_search::{Sort, parse};
+    use lodestar_store::flags;
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    add(
+        &mut store,
+        &[torrent("one", &["a"]), torrent("two", &["a", "b"])],
+    );
+    let index = SearchIndex::in_memory().unwrap();
+    let mut w = index.writer(15 << 20).unwrap();
+    w.catch_up(&mut store, 10).unwrap();
+    w.commit().unwrap();
+    let browse = || {
+        let q = index.query(&parse("").unwrap(), NOW);
+        let r = index
+            .search_page(&q, Sort::Files { desc: true }, 10, 0)
+            .unwrap();
+        (index.names(&r.hits).unwrap(), r.total)
+    };
+    assert_eq!(browse(), (vec!["two".into(), "one".into()], 2));
+
+    add(&mut store, &[torrent("three", &["a", "b", "c"])]);
+    w.catch_up(&mut store, 10).unwrap();
+    w.commit().unwrap();
+    assert_eq!(
+        browse(),
+        (vec!["three".into(), "two".into(), "one".into()], 3)
+    );
+
+    // An upgraded import is deleted and re-added in an older segment's
+    // place; the cached top of that segment must not survive.
+    let raw = torrent("pack", &["a", "b", "c", "d"]);
+    let real = Info::parse(&raw).unwrap();
+    let mut partial = real.clone();
+    partial.files.clear();
+    let base = NewTorrent {
+        info: &real,
+        raw_info: Some(&raw),
+        discovered_at: 1_700_000_000,
+        metadata_at: 1_700_000_001,
+        extra_flags: 0,
+        source: SourceId::new(0).unwrap(),
+    };
+    store
+        .insert(&[NewTorrent {
+            info: &partial,
+            raw_info: None,
+            extra_flags: flags::IMPORTED | flags::FILES_PARTIAL,
+            ..base
+        }])
+        .unwrap();
+    w.catch_up(&mut store, 10).unwrap();
+    w.commit().unwrap();
+    assert_eq!(browse().1, 4);
+    store.insert(&[base]).unwrap();
+    w.catch_up(&mut store, 10).unwrap();
+    w.commit().unwrap();
+    let (names, total) = browse();
+    assert_eq!(total, 4, "replaced, not duplicated");
+    assert_eq!(names[0], "pack", "the upgrade's four files sort first");
 }

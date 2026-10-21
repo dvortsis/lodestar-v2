@@ -7,21 +7,25 @@
 //! covers: a crash can only lose work, never skip or duplicate a torrent.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use lodestar_metainfo::InfoHash;
 use lodestar_store::Store;
 use tantivy::collector::{Count, TopDocs};
 use tantivy::directory::MmapDirectory;
-use tantivy::query::{Query, TermQuery};
+use tantivy::query::{EnableScoring, Query, TermQuery};
 use tantivy::schema::{IndexRecordOption, Value};
 use tantivy::{
-    DocAddress, Index, IndexReader, IndexWriter, Order, ReloadPolicy, TantivyDocument, Term,
+    DocAddress, DocSet, Index, IndexReader, IndexWriter, ReloadPolicy, Searcher, TantivyDocument,
+    Term,
 };
 
 use crate::compile;
 use crate::doc::TorrentDoc;
-use crate::query::Node;
+use crate::filter::{FastRange, PostFilter};
+use crate::query::{Node, When};
 use crate::schema::{self, Fields, SCHEMA_VERSION, TOKENIZER_VERSION};
+use crate::sorted::{self, SegmentCache};
 use crate::tokenizer::{NAME_TOKENIZER, NameTokenizer};
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -79,6 +83,7 @@ pub struct SearchIndex {
     index: Index,
     reader: IndexReader,
     fields: Fields,
+    cache: Arc<SegmentCache>,
 }
 
 impl std::fmt::Debug for SearchIndex {
@@ -111,12 +116,78 @@ pub enum Sort {
     },
 }
 
+/// A query ready to run: the Tantivy query, plus top-level ranges that
+/// the collector checks against fast fields (see `filter`).
+pub struct Compiled {
+    pub(crate) query: Box<dyn Query>,
+    pub(crate) filters: Vec<FastRange>,
+    /// Scores added to the phase-1 candidates (name boosts).
+    pub(crate) boosts: Option<Box<dyn Query>>,
+    /// Identifies the query for the segment cache.
+    pub(crate) key: String,
+}
+
+impl std::fmt::Debug for Compiled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Compiled")
+            .field("query", &self.query)
+            .field("filters", &self.filters)
+            .field("boosts", &self.boosts)
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Results {
     pub hits: Vec<Hit>,
     /// Exact number of matches.
     pub total: usize,
 }
+
+/// Whether `node` has a date relative to now.
+fn relative(node: &Node) -> bool {
+    match node {
+        Node::And { of } | Node::Or { of } => of.iter().any(relative),
+        Node::Not { of } => relative(of),
+        Node::Date { from, to, .. } => [from, to].iter().any(|w| matches!(w, Some(When::Ago(_)))),
+        _ => false,
+    }
+}
+
+/// Phase-1 candidates re-ranked for a relevance page: four pages of 50.
+/// §8 sketched ~1,000; at 10M torrents a window that size costs about a
+/// quarter of the keyword budget in top-k upkeep alone (§16).
+const RERANK_WINDOW: usize = 200;
+
+/// Adds each candidate's score under `boosts` and sorts best first,
+/// ties by address.
+fn rerank(
+    searcher: &Searcher,
+    boosts: &dyn Query,
+    mut hits: Vec<(f32, DocAddress)>,
+) -> Result<Vec<(f32, DocAddress)>> {
+    let weight = boosts.weight(EnableScoring::enabled_from_searcher(searcher))?;
+    hits.sort_unstable_by_key(|(_, a)| *a);
+    let mut i = 0;
+    while i < hits.len() {
+        let seg = hits[i].1.segment_ord;
+        let mut scorer = weight.scorer(searcher.segment_reader(seg), 1.0)?;
+        while let Some((score, addr)) = hits.get_mut(i).filter(|(_, a)| a.segment_ord == seg) {
+            if scorer.doc() < addr.doc_id {
+                scorer.seek(addr.doc_id);
+            }
+            if scorer.doc() == addr.doc_id {
+                *score += scorer.score();
+            }
+            i += 1;
+        }
+    }
+    hits.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+    Ok(hits)
+}
+
+/// Segments searched at once, at most: the §3 targets assume 4 cores.
+const SEARCH_THREADS: usize = 4;
 
 impl SearchIndex {
     /// Opens the index in `dir`, creating it if absent.
@@ -133,7 +204,14 @@ impl SearchIndex {
         SearchIndex::wrap(Index::create_in_ram(schema), fields)
     }
 
-    fn wrap(index: Index, fields: Fields) -> Result<SearchIndex> {
+    fn wrap(mut index: Index, fields: Fields) -> Result<SearchIndex> {
+        // Segments are searched in parallel: broad queries visit every
+        // match, so this is most of the latency budget at 10M (§16).
+        let threads =
+            std::thread::available_parallelism().map_or(1, |n| n.get().min(SEARCH_THREADS));
+        if threads > 1 {
+            index.set_multithread_executor(threads)?;
+        }
         index
             .tokenizers()
             .register(NAME_TOKENIZER, NameTokenizer::default());
@@ -145,6 +223,7 @@ impl SearchIndex {
             index,
             reader,
             fields,
+            cache: Arc::default(),
         })
     }
 
@@ -154,13 +233,24 @@ impl SearchIndex {
 
     /// The highest torrent id indexed (0 for a new index).
     pub fn watermark(&self) -> Result<i64> {
-        match self.index.load_metas()?.payload {
-            None => Ok(0),
-            Some(p) => p
-                .strip_prefix(PAYLOAD_PREFIX)
-                .and_then(|n| n.parse().ok())
-                .ok_or(Error::Corrupt("unknown commit payload")),
-        }
+        Ok(self.watermarks()?.0)
+    }
+
+    /// `(highest id indexed, last reindex_log seq applied)`.
+    fn watermarks(&self) -> Result<(i64, i64)> {
+        let Some(p) = self.index.load_metas()?.payload else {
+            return Ok((0, 0));
+        };
+        let bad = || Error::Corrupt("unknown commit payload");
+        let rest = p.strip_prefix(PAYLOAD_PREFIX).ok_or_else(bad)?;
+        let (id, seq) = match rest.split_once(";reindex:") {
+            Some((id, seq)) => (id, seq),
+            None => (rest, "0"),
+        };
+        Ok((
+            id.parse().map_err(|_| bad())?,
+            seq.parse().map_err(|_| bad())?,
+        ))
     }
 
     /// Documents in the current searcher.
@@ -213,18 +303,41 @@ impl SearchIndex {
 
     pub fn writer(&self, heap_bytes: usize) -> Result<Indexer> {
         let writer = self.index.writer_with_num_threads(1, heap_bytes)?;
+        let (last_id, reindex_seq) = self.watermarks()?;
         Ok(Indexer {
             index: self.clone(),
             writer,
-            last_id: self.watermark()?,
+            last_id,
+            reindex_seq,
             pending: 0,
         })
     }
 
     /// Compiles a parsed query; `now` (unix seconds) resolves relative
     /// dates.
-    pub fn query(&self, node: &Node, now: i64) -> Box<dyn Query> {
-        compile::compile(node, &self.fields, now)
+    pub fn query(&self, node: &Node, now: i64) -> Compiled {
+        let compile::Parts {
+            query,
+            filters,
+            boosts,
+        } = compile::compile(node, &self.fields, now);
+        // Relative dates resolve against `now`, so they're part of the key.
+        let key = if relative(node) {
+            format!("{node:?}@{now}")
+        } else {
+            format!("{node:?}")
+        };
+        Compiled {
+            query,
+            filters,
+            boosts,
+            key,
+        }
+    }
+
+    /// Empties the browse cache (for benchmarks).
+    pub fn clear_cache(&self) {
+        self.cache.clear();
     }
 
     /// The torrent with this swarm hash, if indexed.
@@ -233,47 +346,62 @@ impl SearchIndex {
             Term::from_field_bytes(self.fields.hash, &hash.0),
             IndexRecordOption::Basic,
         );
+        let q = Compiled {
+            query: Box::new(q),
+            filters: Vec::new(),
+            boosts: None,
+            key: String::new(),
+        };
         Ok(self.search(&q, 1)?.hits.first().map(|h| h.id))
     }
 
-    pub fn search(&self, query: &dyn Query, limit: usize) -> Result<Results> {
+    pub fn search(&self, query: &Compiled, limit: usize) -> Result<Results> {
         self.search_page(query, Sort::Relevance, limit, 0)
     }
 
     /// One page of results in `sort` order, with the exact total.
     pub fn search_page(
         &self,
-        query: &dyn Query,
+        compiled: &Compiled,
         sort: Sort,
         limit: usize,
         offset: usize,
     ) -> Result<Results> {
         let searcher = self.reader.searcher();
+        let query = compiled.query.as_ref();
+        let ranges = &compiled.filters;
         let top = TopDocs::with_limit(limit.max(1)).and_offset(offset);
-        let order = |desc: bool| if desc { Order::Desc } else { Order::Asc };
         let (scored, total): (Vec<(f32, DocAddress)>, usize) = match sort {
-            Sort::Relevance => searcher.search(query, &(top.order_by_score(), Count))?,
-            Sort::Discovered { desc } => {
-                let (t, n) = searcher.search(
-                    query,
-                    &(
-                        top.order_by_fast_field::<i64>("discovered", order(desc)),
-                        Count,
-                    ),
-                )?;
-                (t.into_iter().map(|(_, a)| (0.0, a)).collect(), n)
-            }
-            Sort::Size { desc } | Sort::Files { desc } => {
-                let field = if matches!(sort, Sort::Size { .. }) {
-                    "size"
-                } else {
-                    "files"
+            Sort::Relevance => match &compiled.boosts {
+                None => {
+                    let inner = (top.order_by_score(), Count);
+                    searcher.search(query, &PostFilter { ranges, inner })?
+                }
+                Some(boosts) => {
+                    // Two-phase (§8): the best candidates by phase-1
+                    // score, re-ranked with the name boosts. Order is
+                    // exact within the window.
+                    let window = (offset + limit).max(RERANK_WINDOW);
+                    let inner = (TopDocs::with_limit(window).order_by_score(), Count);
+                    let (candidates, n) = searcher.search(query, &PostFilter { ranges, inner })?;
+                    let ranked = rerank(&searcher, boosts.as_ref(), candidates)?;
+                    (ranked.into_iter().skip(offset).take(limit).collect(), n)
+                }
+            },
+            Sort::Discovered { desc } | Sort::Size { desc } | Sort::Files { desc } => {
+                let (field, signed) = match sort {
+                    Sort::Discovered { .. } => ("discovered", true),
+                    Sort::Size { .. } => ("size", false),
+                    _ => ("files", false),
                 };
-                let (t, n) = searcher.search(
-                    query,
-                    &(top.order_by_fast_field::<u64>(field, order(desc)), Count),
-                )?;
-                (t.into_iter().map(|(_, a)| (0.0, a)).collect(), n)
+                let order = sorted::Order {
+                    field,
+                    signed,
+                    desc,
+                };
+                let (page, n) =
+                    sorted::search(&searcher, &self.cache, compiled, order, limit, offset)?;
+                (page.into_iter().map(|a| (0.0, a)).collect(), n)
             }
         };
         // Ids come from the fast field: the docstore is only for names.
@@ -329,6 +457,8 @@ pub struct Indexer {
     index: SearchIndex,
     writer: IndexWriter,
     last_id: i64,
+    /// The last `reindex_log` entry applied.
+    reindex_seq: i64,
     pending: usize,
 }
 
@@ -361,9 +491,30 @@ impl Indexer {
         Ok(())
     }
 
-    /// Indexes up to `limit` torrents stored after the watermark. Returns
-    /// how many it added.
+    /// Indexes up to `limit` torrents stored after the watermark, then
+    /// re-indexes torrents changed since (upgraded partial imports).
+    /// Returns how many documents it added or replaced.
     pub fn catch_up(&mut self, store: &mut Store, limit: usize) -> Result<usize> {
+        let mut added = self.catch_up_new(store, limit)?;
+        for (seq, id) in store.reindex_after(self.reindex_seq, limit)? {
+            self.reindex_seq = seq;
+            // Ids past the watermark get their current data when reached.
+            if id > self.last_id {
+                continue;
+            }
+            self.writer
+                .delete_term(Term::from_field_u64(self.index.fields.id, id as u64));
+            if let (Some(row), Some(tree)) = (store.torrent(id)?, store.files(id)?) {
+                self.writer
+                    .add_document(TorrentDoc::new(&row, &tree).to_document(&self.index.fields))?;
+            }
+            self.pending += 1;
+            added += 1;
+        }
+        Ok(added)
+    }
+
+    fn catch_up_new(&mut self, store: &mut Store, limit: usize) -> Result<usize> {
         let ids = store.ids_after(self.last_id, limit)?;
         let mut added = 0;
         for id in ids {
@@ -381,7 +532,10 @@ impl Indexer {
     /// Commits what's pending with the watermark and makes it searchable.
     pub fn commit(&mut self) -> Result<()> {
         let mut prepared = self.writer.prepare_commit()?;
-        prepared.set_payload(&format!("{PAYLOAD_PREFIX}{}", self.last_id));
+        prepared.set_payload(&format!(
+            "{PAYLOAD_PREFIX}{};reindex:{}",
+            self.last_id, self.reindex_seq
+        ));
         prepared.commit()?;
         self.index.reader.reload()?;
         self.pending = 0;

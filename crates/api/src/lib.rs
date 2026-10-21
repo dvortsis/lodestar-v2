@@ -367,7 +367,7 @@ async fn run_search(s: ApiState, p: SearchParams) -> ApiResult<Json<Value>> {
         let started = Instant::now();
         let query = index.query(&ast, unix_now());
         let results = index
-            .search_page(query.as_ref(), sort, limit, offset)
+            .search_page(&query, sort, limit, offset)
             .map_err(internal)?;
         let store = reader.lock().expect("reader lock");
         let mut hits = Vec::with_capacity(results.hits.len());

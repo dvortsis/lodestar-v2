@@ -540,3 +540,52 @@ fn rusqlite_create(path: &std::path::Path) {
     )
     .unwrap();
 }
+
+#[test]
+fn partial_imports_are_upgraded_by_a_fetched_info_dict() {
+    let mut store = mem();
+    let raw = season("Big.Pack", 3);
+    let real = Info::parse(&raw).unwrap();
+    // An import that only knows the name and size.
+    let mut partial = real.clone();
+    partial.files.clear();
+    let id = store
+        .insert(&[NewTorrent {
+            info: &partial,
+            raw_info: None,
+            extra_flags: flags::IMPORTED | flags::FILES_PARTIAL,
+            ..new(&real, &raw)
+        }])
+        .unwrap()[0]
+        .id();
+    assert_eq!(store.partial_hashes(10).unwrap(), vec![real.primary_hash()]);
+    assert_eq!(store.files(id).unwrap().unwrap().files.len(), 0);
+    // Re-inserting the import changes nothing.
+    store
+        .insert(&[NewTorrent {
+            info: &partial,
+            raw_info: None,
+            extra_flags: flags::IMPORTED | flags::FILES_PARTIAL,
+            ..new(&real, &raw)
+        }])
+        .unwrap();
+    assert_eq!(store.files(id).unwrap().unwrap().files.len(), 0);
+    // The fetched info dict fills it in.
+    let again = store.insert(&[new(&real, &raw)]).unwrap();
+    assert_eq!(again, vec![Inserted::Existing(id)]);
+    let row = store.torrent(id).unwrap().unwrap();
+    assert_eq!(store.files(id).unwrap().unwrap().files.len(), 3);
+    assert_eq!(row.file_count, 3);
+    assert_eq!(row.flags & flags::FILES_PARTIAL, 0);
+    assert_ne!(
+        row.flags & flags::IMPORTED,
+        0,
+        "keeps its import provenance"
+    );
+    assert!(store.partial_hashes(10).unwrap().is_empty());
+    assert_eq!(
+        store.reindex_after(0, 10).unwrap(),
+        vec![(1, id)],
+        "queued for re-indexing"
+    );
+}

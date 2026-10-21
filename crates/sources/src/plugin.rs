@@ -48,6 +48,11 @@ pub struct SourceCtx {
     /// [`PeerFinder`](crate::Kind::PeerFinder); never carries a
     /// `private_source` key.
     pub peer_requests: Option<mpsc::Receiver<InfoHash>>,
+    /// Where peer finders send what they found for those requests: straight
+    /// to the fetch pool, skipping the have-filter (the pool asked because
+    /// it wants the key, even one that's stored with an incomplete file
+    /// list).
+    pub peer_replies: Option<Emitter>,
     pub shutdown: Shutdown,
 }
 
@@ -92,6 +97,9 @@ pub struct Discovery {
     pub found: Found,
     /// Unix seconds.
     pub at: i64,
+    /// Peers answering the pool's request (through
+    /// [`SourceCtx::peer_replies`]), not a discovery.
+    pub reply: bool,
 }
 
 /// Sends discoveries to the pipeline.
@@ -100,6 +108,7 @@ pub struct Emitter {
     source: SourceId,
     tx: mpsc::Sender<Discovery>,
     dropped: Arc<AtomicU64>,
+    replies: bool,
 }
 
 /// The pipeline has shut down.
@@ -112,6 +121,15 @@ impl Emitter {
             source,
             tx,
             dropped: Arc::default(),
+            replies: false,
+        }
+    }
+
+    /// An emitter for peer replies (see [`SourceCtx::peer_replies`]).
+    pub fn replies(source: SourceId, tx: mpsc::Sender<Discovery>) -> Emitter {
+        Emitter {
+            replies: true,
+            ..Emitter::new(source, tx)
         }
     }
 
@@ -147,6 +165,7 @@ impl Emitter {
             source: self.source,
             found,
             at: unix_now(),
+            reply: self.replies,
         }
     }
 }
