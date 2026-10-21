@@ -257,6 +257,8 @@ fn verify(info: &[u8], info_hash: &InfoHash) -> Result<bool, Error> {
 }
 
 /// Collects metadata pieces, with a bounded window of outstanding requests.
+/// The buffer grows as pieces arrive rather than up front, so a peer that
+/// merely claims a large size costs nothing until it sends the bytes.
 struct Assembly {
     size: usize,
     buf: Vec<u8>,
@@ -271,7 +273,7 @@ impl Assembly {
         let pieces = size.div_ceil(METADATA_PIECE);
         Assembly {
             size,
-            buf: vec![0; size],
+            buf: Vec::new(),
             received: vec![false; pieces],
             remaining: pieces,
             next: 0,
@@ -302,7 +304,11 @@ impl Assembly {
         }
         if !self.received[piece] {
             let start = piece * METADATA_PIECE;
-            self.buf[start..start + data.len()].copy_from_slice(data);
+            let end = start + data.len();
+            if self.buf.len() < end {
+                self.buf.resize(end, 0);
+            }
+            self.buf[start..end].copy_from_slice(data);
             self.received[piece] = true;
             self.remaining -= 1;
             self.in_flight -= 1;
@@ -323,6 +329,7 @@ mod tests {
     fn assembly_windows_and_validates() {
         let size = METADATA_PIECE * 100 + 10;
         let mut a = Assembly::new(size);
+        assert_eq!(a.buf.capacity(), 0, "nothing allocated for a claimed size");
         let first: Vec<usize> = std::iter::from_fn(|| a.next_request()).collect();
         assert_eq!(first.len(), REQUEST_WINDOW);
         assert!(a.accept(100, &[0; 10]).is_err(), "not requested yet");
@@ -331,6 +338,12 @@ mod tests {
         a.accept(0, &[1; METADATA_PIECE]).unwrap(); // duplicate ignored
         assert_eq!(a.next_request(), Some(REQUEST_WINDOW));
         assert!(a.accept(-1, &[]).is_err());
+        // Out of order: the gap is zero-filled until its piece arrives.
+        a.accept(2, &[2; METADATA_PIECE]).unwrap();
+        assert_eq!(a.buf.len(), 3 * METADATA_PIECE);
+        a.accept(1, &[3; METADATA_PIECE]).unwrap();
+        assert_eq!(a.buf[METADATA_PIECE], 3);
+        assert_eq!(a.buf.len(), 3 * METADATA_PIECE);
     }
 
     #[test]

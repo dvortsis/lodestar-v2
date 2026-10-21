@@ -153,9 +153,28 @@ pub struct NewTorrent<'a> {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WriteBatch<'a> {
     pub torrents: &'a [NewTorrent<'a>],
+    /// Rediscoveries of stored torrents, applied after `torrents`.
+    pub touches: &'a [Touch],
     pub counters: &'a [Counter],
     pub cohorts: &'a [CohortCount],
     pub events: &'a [Event],
+}
+
+/// A stored torrent seen again: its swarm hash and the sources (a bitset)
+/// that saw it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Touch {
+    pub hash: InfoHash,
+    pub sources: u64,
+}
+
+/// What [`Store::write`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Written {
+    /// One per torrent, in order.
+    pub torrents: Vec<Inserted>,
+    /// One per touch: the torrent's id, or `None` if it isn't stored.
+    pub touched: Vec<Option<i64>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -259,17 +278,20 @@ impl Store {
 
     /// Inserts torrents in one transaction; see [`Store::write`].
     pub fn insert(&mut self, batch: &[NewTorrent<'_>]) -> Result<Vec<Inserted>> {
-        self.write(&WriteBatch {
-            torrents: batch,
-            ..WriteBatch::default()
-        })
+        Ok(self
+            .write(&WriteBatch {
+                torrents: batch,
+                ..WriteBatch::default()
+            })?
+            .torrents)
     }
 
     /// Commits a batch in one transaction. Torrents already stored under any
     /// of their swarm hashes (v1 or truncated v2) keep their data and only
     /// gain the new source's bit. New torrents take their ids from the
-    /// shared sequence. Counters are added to what's stored.
-    pub fn write(&mut self, batch: &WriteBatch<'_>) -> Result<Vec<Inserted>> {
+    /// shared sequence. Touches add source bits to stored torrents. Counters
+    /// are added to what's stored.
+    pub fn write(&mut self, batch: &WriteBatch<'_>) -> Result<Written> {
         let Store {
             conn,
             codec,
@@ -281,11 +303,7 @@ impl Store {
             let info = t.info;
             let bit = t.source.bit();
             if let Some(id) = find_any(&tx, info.swarm_hashes())? {
-                tx.prepare_cached(
-                    "UPDATE torrents SET sources = sources | ?2
-                     WHERE id = ?1 AND sources & ?2 = 0",
-                )?
-                .execute(params![id, bit])?;
+                add_sources(&tx, id, bit as u64)?;
                 out.push(Inserted::Existing(id));
                 continue;
             }
@@ -341,9 +359,60 @@ impl Store {
             }
             out.push(Inserted::New(id));
         }
+        let mut touched = Vec::with_capacity(batch.touches.len());
+        for t in batch.touches {
+            let id = find_any(&tx, std::iter::once(t.hash))?;
+            if let Some(id) = id {
+                add_sources(&tx, id, t.sources)?;
+            }
+            touched.push(id);
+        }
         insights::write(&tx, batch.counters, batch.cohorts, batch.events)?;
         tx.commit()?;
-        Ok(out)
+        Ok(Written {
+            torrents: out,
+            touched,
+        })
+    }
+
+    /// Calls `f` with every 20-byte swarm hash stored: the primary hash of
+    /// each torrent, plus the truncated v2 hash of hybrids.
+    pub fn for_each_swarm_hash(&self, mut f: impl FnMut(InfoHash)) -> Result<()> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT info_hash, substr(info_hash_v2, 1, 20) FROM torrents")?;
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            for col in 0..2 {
+                let h = r
+                    .get_ref(col)?
+                    .as_blob_or_null()
+                    .map_err(|_| Error::Corrupt("hash type"))?;
+                if let Some(h) = h {
+                    let h: [u8; 20] = h.try_into().map_err(|_| Error::Corrupt("hash length"))?;
+                    f(InfoHash(h));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn setting_i64(&self, key: &str) -> Result<Option<i64>> {
+        Ok(self
+            .conn
+            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
+                r.get(0)
+            })
+            .optional()?)
+    }
+
+    pub fn set_setting_i64(&mut self, key: &str, value: i64) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
     }
 
     /// Looks a torrent up by any 20-byte swarm hash.
@@ -548,6 +617,15 @@ impl Store {
             .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
         Ok(())
     }
+}
+
+/// Sets source bits, writing only when one is new.
+fn add_sources(conn: &Connection, id: i64, bits: u64) -> Result<()> {
+    conn.prepare_cached(
+        "UPDATE torrents SET sources = sources | ?2 WHERE id = ?1 AND sources & ?2 != ?2",
+    )?
+    .execute(params![id, bits as i64])?;
+    Ok(())
 }
 
 fn codec_has(conn: &Connection, id: i64) -> rusqlite::Result<bool> {

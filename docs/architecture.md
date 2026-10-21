@@ -1160,6 +1160,29 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Funnel accounting happens in the pool:** harvested, peer found and fetched, or lost with a reason, exactly once per key. Restored keys aren't counted as harvested again. `FunnelCounts` accumulates the counts in memory for the writer to flush.
 - **The queue survives restarts without peers** (store `fetch_queue`). Restored keys start with a fresh lookup, and the lookup that was in flight at shutdown isn't counted as used.
 
+**M1 implementation decisions (pipeline crate):**
+- **Four stages, one task each, with bounded channels between them:** plugins, then intake, then the fetch pool, then the writer.
+  - Intake checks the have-filter: a "no" goes to the pool, a "yes" goes to the writer as a rediscovery.
+  - The pool waits on the writer. That's the backpressure, so memory stays flat when the disk is slow.
+  - The pool-to-writer channel holds 64 entries, because each one carries a whole info dict.
+- **The have-filter is a keyed Bloom filter:** 10 bits per hash, 7 hashes, about 1% false positives, over every stored swarm hash (v1 and truncated v2).
+  - It never answers "no" for a stored hash.
+  - The writer confirms every "yes" in the same transaction that adds the source's bit. A false positive goes on to the pool, so nothing new is lost to the filter.
+  - Past capacity, the writer rebuilds it at twice the size from the store.
+  - This replaces the cuckoo filter §5 sketched. Deletion isn't needed until retention policies exist, and a rebuild covers it then.
+- **The writer owns the store.** Each transaction runs on the blocking pool with the store moved in and back out. Batches are up to 256 dicts or 250 ms.
+  - Funnel and rollup counters are drained into every transaction, or into a counters-only one every 5 s when they're dirty (§7).
+  - The fetch queue is saved every 5 minutes by a helper task that asks the pool. The writer never waits on the pool, so they can't deadlock.
+- **The blocklist runs in the writer, before storage,** on the key and on every swarm hash of the parsed dict, so a v2 alias can't slip past (§18.7). M1 has hash entries only. Name patterns come with classification (M3).
+- **A dict that hashes to its key but doesn't parse as metainfo** is lost as `invalid`.
+- **The peer wire grows the metadata buffer as pieces arrive, never up front.** A peer that claims 16 MiB costs nothing until it sends the bytes. Pre-allocating would have let hostile peers pin 400 × 16 MiB.
+- **Shutdown order:** plugins (15 s each, then aborted; the DHT saves `state.bin`), then intake, then the pool (returns its queue), then the writer. The writer drains, records a `stop` event, saves the queue and checkpoints the WAL.
+- **Plugin state:** registration and source ids come from the store. Which plugins run comes from the binary's config until the settings UI exists. Stored states (paused, disabled) aren't enforced yet.
+- **Metric codes:**
+  - `rollup_hour` metrics: harvested (by source and strategy), rediscovered, dropped, stored.
+  - `events`: start and stop.
+  - The DHT's strategy codes are sample 0, get_peers 1, announce 2 and lookup 3.
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.
