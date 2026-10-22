@@ -752,7 +752,7 @@
    "pr": 66,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "round 1 FIX: REFERENCE_NS guessed (derive ~53ms), docs \u00a720.8/\u00a716, interleave calibration; NEEDS OWNER SIGN-OFF before merge (changes enforcement of owner 50us)"
+   "notes": "round 1 fixes pushed: REFERENCE_NS=60ms (stricter, derived from 3 runner measurements), per-pass calibration, docs \u00a720.8/\u00a716; awaiting OWNER sign-off before merge"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
