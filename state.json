@@ -116,13 +116,13 @@
    "notes": "merged 09:40 as 2352de1 (#41)"
   },
   "W6": {
-   "status": "in_review",
+   "status": "blocked",
    "model": "sonnet",
    "session": "session_01QpHMCsgJt8gZPg3S2SnCGv",
    "pr": 61,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "round 1 FIX: e2e red (86 fail): rotating sample baselines, CI-generated baselines (pinned playwright container), mock example test; important: matrix trim, e2e typecheck, per-route mocks"
+   "notes": "round-1 fixes pushed ac85d7c, CI green but e2e in update mode (.update-snapshots marker). Baselines in artifact snapshot-baselines id 12421952170 (run 39769166066); blob host productionresultssa*.blob.core.windows.net denied by network policy; CI commit job denied by classifier. Needs owner: allow host or commit artifact."
   },
   "W2": {
    "status": "merged",
@@ -855,7 +855,8 @@
  },
  "blocked_on_owner": [
   "M4 continuation: waiting on ExitPlanMode approval (plan mode) \u2014 can't act on #48 review",
-  "Modern DHT crawler architecture: waiting on an AskUserQuestion"
+  "Modern DHT crawler architecture: waiting on an AskUserQuestion",
+  "W6 baselines: allow *.blob.core.windows.net (GitHub Actions artifact storage) in environment network, or owner commits artifact 12421952170 into web/e2e/ and removes web/e2e/.update-snapshots on slice/W6"
  ],
  "launches_today": 6,
  "last_heartbeat": "2026-10-22T10:38Z",
