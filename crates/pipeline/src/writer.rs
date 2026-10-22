@@ -13,7 +13,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use lodestar_classify::ENRICHMENT_VERSION;
 use lodestar_cluster::Lease;
 use lodestar_metainfo::InfoHash;
 use lodestar_sources::{Discovery, Funnel, FunnelCounts, Loss, Stage};
@@ -25,7 +24,6 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, interval_at};
 
 use crate::coordinator::Coordinator;
-use crate::enrich::enrich;
 use crate::have::{Bloom, Have, capacity_for};
 use crate::rollups::{Rollups, metric};
 use crate::worker::{Results, collect};
@@ -281,7 +279,7 @@ impl Writer {
         let after = self.backfill_after;
         let (store, result) = tokio::task::spawn_blocking(move || {
             let mut store = store;
-            let result = backfill_batch(&mut store, after);
+            let result = crate::enrich::enrich_stored(&mut store, after, BACKFILL_BATCH);
             (store, result)
         })
         .await
@@ -343,26 +341,6 @@ impl Writer {
 
 /// Torrents enriched per background step.
 const BACKFILL_BATCH: usize = 256;
-
-/// Enriches the stored torrents after `after` that need it. `None` when
-/// there are none left.
-fn backfill_batch(
-    store: &mut Store,
-    after: i64,
-) -> Result<Option<(i64, usize)>, lodestar_store::Error> {
-    let ids = store.unenriched(after, ENRICHMENT_VERSION, BACKFILL_BATCH)?;
-    let Some(&last) = ids.last() else {
-        return Ok(None);
-    };
-    let mut batch = Vec::with_capacity(ids.len());
-    for id in ids {
-        if let (Some(row), Some(tree)) = (store.torrent(id)?, store.files(id)?) {
-            batch.push((id, enrich(&row.name, &tree.files, tree.encoding)));
-        }
-    }
-    let n = store.set_enrichments(&batch)?;
-    Ok(Some((last, n)))
-}
 
 /// One store transaction (runs on the blocking pool).
 #[allow(clippy::too_many_arguments)]

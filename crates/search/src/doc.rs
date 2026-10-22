@@ -1,11 +1,13 @@
-//! A torrent as the index sees it, built from the store's row and file
-//! tree.
+//! A torrent as the index sees it, built from the store's row, file tree
+//! and enrichment record.
 
+use lodestar_classify::{Category, Composition, Record};
 use lodestar_metainfo::{InfoHash, Text};
 use lodestar_store::{FileTree, TorrentRow, flags};
 use tantivy::TantivyDocument;
 use tantivy::tokenizer::PreTokenizedString;
 
+use crate::query::TagKey;
 use crate::schema::Fields;
 use crate::tokenizer::{self, MAX_NAME_TOKENS};
 
@@ -13,6 +15,11 @@ use crate::tokenizer::{self, MAX_NAME_TOKENS};
 /// file index (M3) covers the rest.
 pub const MAX_PATH_TOKENS: usize = 20_000;
 const MAX_EXT_BYTES: usize = 10;
+/// Numbers indexed per span: a `1-1000` episode batch keeps its first
+/// 500, a `1900-2020` collection its first 50 years.
+const MAX_YEARS: u16 = 50;
+const MAX_SEASONS: u16 = 100;
+const MAX_EPISODES: u16 = 500;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TorrentDoc {
@@ -32,6 +39,102 @@ pub struct TorrentDoc {
     pub piece_len: u64,
     pub discovered_at: i64,
     pub metadata_at: i64,
+    /// What enrichment adds; empty until the torrent is enriched.
+    pub enriched: DocEnrichment,
+}
+
+/// The enrichment fields of a document (§6, §8).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DocEnrichment {
+    /// The effective title, then the alternative titles.
+    pub titles: Vec<String>,
+    /// `key:value` terms (see [`TagKey`]).
+    pub tags: Vec<String>,
+    pub years: Vec<u64>,
+    pub seasons: Vec<u64>,
+    pub episodes: Vec<u64>,
+    pub junk: u64,
+    pub ambiguous: bool,
+    /// Non-zero shares as (category, % of files, % of bytes).
+    pub shares: Vec<(Category, u8, u8)>,
+}
+
+impl DocEnrichment {
+    pub fn new(record: &Record, comp: Option<&Composition>) -> DocEnrichment {
+        let mut e = DocEnrichment {
+            junk: u64::from(record.junk.score),
+            ambiguous: record.ambiguous,
+            ..DocEnrichment::default()
+        };
+        e.titles.extend(record.release("title").map(str::to_owned));
+        e.titles
+            .extend(record.release_all("alt").map(str::to_owned));
+        let mut tag = |key: TagKey, value: &str| {
+            let t = format!("{}:{}", key.as_str(), value.to_lowercase());
+            if !e.tags.contains(&t) {
+                e.tags.push(t);
+            }
+        };
+        tag(TagKey::Type, record.content_type.as_str());
+        for (key, field) in [
+            (TagKey::Res, "res"),
+            (TagKey::Hdr, "hdr"),
+            (TagKey::Codec, "vcodec"),
+            (TagKey::Audio, "acodec"),
+            (TagKey::Lang, "lang"),
+        ] {
+            // Lists are comma-joined in the record.
+            for v in record.release_all(field).flat_map(|v| v.split(", ")) {
+                tag(key, v);
+            }
+        }
+        if let Some(g) = record.release("group") {
+            tag(TagKey::Group, g);
+        }
+        for name in record.structure.names() {
+            tag(TagKey::Has, name);
+        }
+        if let Some(r) = record.resolved {
+            tag(TagKey::Resolved, r.as_str());
+        }
+        e.years = numbers(record.release_all("year"), MAX_YEARS);
+        e.seasons = numbers(record.release_all("season"), MAX_SEASONS);
+        e.episodes = numbers(
+            record
+                .release_all("episode")
+                .chain(record.release_all("absolute")),
+            MAX_EPISODES,
+        );
+        if let Some(c) = comp {
+            for cat in Category::ALL {
+                let (count, bytes) = (c.pct_count(cat), c.pct_bytes(cat));
+                if count > 0 || bytes > 0 {
+                    e.shares.push((cat, count, bytes));
+                }
+            }
+        }
+        e
+    }
+}
+
+/// The numbers in rendered spans (`2`, `1-10`), each span capped at
+/// `max` numbers, sorted and without repeats.
+fn numbers<'a>(spans: impl Iterator<Item = &'a str>, max: u16) -> Vec<u64> {
+    let mut out = Vec::new();
+    for s in spans {
+        let (a, b) = s.split_once('-').unwrap_or((s, s));
+        let (Ok(first), Ok(last)) = (a.parse::<u16>(), b.parse::<u16>()) else {
+            continue;
+        };
+        if first > last {
+            continue;
+        }
+        let last = last.min(first.saturating_add(max - 1));
+        out.extend((first..=last).map(u64::from));
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
 impl TorrentDoc {
@@ -93,6 +196,7 @@ impl TorrentDoc {
             piece_len: row.piece_len,
             discovered_at: row.discovered_at,
             metadata_at: row.metadata_at,
+            enriched: DocEnrichment::default(),
         }
     }
 
@@ -113,6 +217,34 @@ impl TorrentDoc {
         }
         for name in flag_names(self.flags) {
             d.add_text(f.flag, name);
+        }
+        let e = &self.enriched;
+        if e.ambiguous {
+            d.add_text(f.flag, "ambiguous");
+        }
+        for t in &e.titles {
+            d.add_text(f.title, t);
+        }
+        for t in &e.tags {
+            d.add_text(f.tag, t);
+        }
+        for (field, values) in [
+            (f.year, &e.years),
+            (f.season, &e.seasons),
+            (f.episode, &e.episodes),
+        ] {
+            for v in values {
+                d.add_u64(field, *v);
+            }
+        }
+        d.add_u64(f.junk, e.junk);
+        for (cat, count, bytes) in &e.shares {
+            if *count > 0 {
+                d.add_u64(f.cat_count[cat.index()], u64::from(*count));
+            }
+            if *bytes > 0 {
+                d.add_u64(f.cat_bytes[cat.index()], u64::from(*bytes));
+            }
         }
         d.add_u64(f.size, self.size);
         d.add_u64(f.files, self.files);
