@@ -586,3 +586,65 @@ fn an_index_left_behind_catches_up_alone() {
     assert_eq!(index.num_files(), 9);
     assert_eq!(ids(&index, "file:(ext:flac)"), [1]);
 }
+
+#[test]
+fn plurals_match_through_the_title_stem() {
+    let mut store = store_with(&[
+        sized(
+            "The.Dark.Knight.2008.1080p.BluRay.x264-GRP",
+            &[("tdk.mkv", 10 * GB)],
+        ),
+        sized(
+            "Knights.of.the.Zodiac.2023.1080p.WEB-DL.x264-GRP",
+            &[("kotz.mkv", 3 * GB)],
+        ),
+        sized(
+            "Toy.Story.1995.1080p.BluRay.x264-GRP",
+            &[("ts.mkv", 4 * GB)],
+        ),
+        sized(
+            "Ghost.Stories.2017.720p.BluRay.x264-GRP",
+            &[("gs.mkv", 2 * GB)],
+        ),
+        // The word only in a file name: the stem tier reads titles only.
+        sized("Misc Stuff", &[("knight notes.txt", 10_000)]),
+    ]);
+    lodestar_pipeline::enrich::enrich_stored(&mut store, 0, 100)
+        .unwrap()
+        .unwrap();
+    let index = SearchIndex::in_memory().unwrap();
+    let mut w = index.writer(15 << 20).unwrap();
+    w.catch_up(&mut store, 100).unwrap();
+    w.commit().unwrap();
+    let ranked = |q: &str| {
+        let hits = index
+            .search(&index.query(&lodestar_search::parse(q).unwrap(), NOW), 50)
+            .unwrap()
+            .hits;
+        index.names(&hits).unwrap()
+    };
+    let tdk = "The.Dark.Knight.2008.1080p.BluRay.x264-GRP";
+    let kotz = "Knights.of.the.Zodiac.2023.1080p.WEB-DL.x264-GRP";
+
+    // Plural ↔ singular, both ways; exact matches rank first.
+    assert_eq!(ranked("knights"), [kotz, tdk]);
+    assert_eq!(ranked("knight"), [tdk, "Misc Stuff", kotz]);
+    let stories = ranked("stories");
+    assert_eq!(stories.len(), 2);
+    assert!(stories[0].starts_with("Ghost.Stories"));
+    // Every word must still match: by its exact form anywhere, or by
+    // its stem in the title.
+    assert_eq!(ranked("knights 2008"), [tdk]);
+    assert_eq!(ranked("dark knights"), [tdk]);
+    assert!(ranked("knights 1995").is_empty());
+    // title: takes stems too; phrases, prefixes and other fields don't.
+    assert_eq!(names(&index, "title:knights").len(), 2);
+    assert!(names(&index, "\"dark knights\"").is_empty());
+    assert_eq!(names(&index, "name:knights"), [kotz]);
+    // Nested and negated words mean the same set.
+    assert_eq!(names(&index, "zzzz | knights").len(), 2);
+    assert_eq!(
+        names(&index, "1080p -knights"),
+        ["Toy.Story.1995.1080p.BluRay.x264-GRP"]
+    );
+}

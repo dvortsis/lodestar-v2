@@ -6,15 +6,15 @@ use std::sync::Arc;
 use lodestar_classify::Category;
 use tantivy::Term;
 use tantivy::query::{
-    AllQuery, BooleanQuery, BoostQuery, EmptyQuery, FuzzyTermQuery, Occur, PhraseQuery, Query,
-    RangeQuery, RegexQuery, TermQuery,
+    AllQuery, BooleanQuery, BoostQuery, ConstScoreQuery, EmptyQuery, FuzzyTermQuery, Occur,
+    PhraseQuery, Query, RangeQuery, RegexQuery, TermQuery,
 };
 use tantivy::schema::{Field, IndexRecordOption};
 
 use crate::files::{IdSet, IdsQuery};
 use crate::filter::FastRange;
 use crate::query::{Node, NumField, ShareBy, TagKey, TextField, When};
-use crate::schema::{Fields, NAME_BOOST, PATH_BOOST, TITLE_BOOST, share_field};
+use crate::schema::{Fields, NAME_BOOST, PATH_BOOST, STEM_SCORE, TITLE_BOOST, share_field};
 use crate::tokenizer::{self, Tok, TokKind};
 
 type Q = Box<dyn Query>;
@@ -149,8 +149,8 @@ fn conjunction(mut clauses: Vec<(Occur, Q)>) -> Q {
     Box::new(BooleanQuery::new(clauses))
 }
 
-/// An unfielded word: required on `text`, plus its boosts on `name` and
-/// `title`.
+/// An unfielded word: required on `text` (or by its stem in the title),
+/// plus its boosts on `name` and `title`.
 fn any_word(word: &str, f: &Fields) -> Option<(Q, Q)> {
     let toks = tokenizer::tokenize(word);
     if toks.is_empty() {
@@ -169,7 +169,31 @@ fn any_word(word: &str, f: &Fields) -> Option<(Q, Q)> {
             )),
         ),
     ]);
-    Some((word_query(f.text, &toks, false), Box::new(boost)))
+    Some((
+        with_stem(word_query(f.text, &toks, false), &toks, f),
+        Box::new(boost),
+    ))
+}
+
+/// `exact`, or the word's light stem in `title_stem` when it's a single
+/// stemmable word: the "plurals and suffixes" tier (§8), scored as a
+/// constant below exact matches.
+fn with_stem(exact: Q, toks: &[Tok], f: &Fields) -> Q {
+    let units = units(toks);
+    let [one] = units.as_slice() else {
+        return exact;
+    };
+    let Some(stem) = crate::stem::light_stem(&one.text) else {
+        return exact;
+    };
+    let by_stem = ConstScoreQuery::new(
+        term(f.title_stem, &stem, IndexRecordOption::Basic),
+        STEM_SCORE,
+    );
+    Box::new(BooleanQuery::new(vec![
+        (Occur::Should, exact),
+        (Occur::Should, Box::new(by_stem)),
+    ]))
 }
 
 fn resolve(w: &When, now: i64) -> i64 {
@@ -305,9 +329,14 @@ fn compile_opt(node: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
             if toks.is_empty() {
                 return None;
             }
-            per_field(*field, f, |fld, positions| {
+            let q = per_field(*field, f, |fld, positions| {
                 word_query(fld, &toks, positions)
-            })
+            });
+            if *field == TextField::Title {
+                with_stem(q, &toks, f)
+            } else {
+                q
+            }
         }
         Node::Phrase { field, text } => {
             let parts = units(&tokenizer::tokenize(text));

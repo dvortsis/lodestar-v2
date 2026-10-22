@@ -11,6 +11,7 @@ mod live;
 pub mod query;
 pub mod schema;
 mod sorted;
+mod stem;
 pub mod tokenizer;
 
 pub use doc::{DocEnrichment, TorrentDoc, extension, flag_names};
