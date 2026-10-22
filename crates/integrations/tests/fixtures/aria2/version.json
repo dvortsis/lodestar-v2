@@ -1,0 +1,31 @@
+{
+  "recorded_from": "aria2 1.37.0, aria2c --enable-rpc on Ubuntu 24.04",
+  "note": "aria2.getVersion: ",
+  "request": {
+    "method": "POST",
+    "path": "/jsonrpc",
+    "query": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "content-length",
+        "179"
+      ],
+      [
+        "expires",
+        "Thu, 22 Oct 2026 09:28:25 GMT"
+      ],
+      [
+        "cache-control",
+        "no-cache"
+      ],
+      [
+        "content-type",
+        "application/json-rpc"
+      ]
+    ],
+    "body": "{\"id\":\"2\",\"jsonrpc\":\"2.0\",\"result\":{\"enabledFeatures\":[\"Async DNS\",\"BitTorrent\",\"Firefox3 Cookie\",\"GZip\",\"HTTPS\",\"Message Digest\",\"Metalink\",\"XML-RPC\",\"SFTP\"],\"version\":\"1.37.0\"}}"
+  }
+}
