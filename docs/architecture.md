@@ -1756,6 +1756,14 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - One bar for every slice and review: `runner/standards.md`.
   - Merges happen only with green CI and no blocking findings from a fresh Opus reviewer.
 
+**M5 decisions (filtering, owner 2026-10-22):** PRs #33, #42 and #47 merged before §2.7–2.9 were applied. F1 brought `main` into line:
+- **Rule packs are off until chosen (§2.8, §20.6).** With nothing stored, `pack_switches` starts from no pack on. Packs turn on only through a stored choice: the wizard (pre-checked there) or Settings through the filters API. The guards and pack logic are unchanged.
+- **The 50 µs budget is the owner's (§1.6.6, §20.8).** `LODESTAR_BUDGET_US` is gone. The budget test now measures what §20.8 says (the whole engine at 10,000 rules) and runs in the `filter budget` CI job.
+  - Before the work it took about 0.7 s per torrent at 10,000 rules, and the core alone 50–70 µs.
+  - Three changes made the budget: the rule index with its token-text prefilter, word plans in the core's tokenizer, and a per-position flag table in the core's signals. On the build VM it now takes about 29 µs.
+- **The floor from config files only adds (§2.7).** `blocklist.files` add through the store. A floor-marked list's upstream removals stay blocked. Both kinds of drop wait in *pending floor removals*, reported once per start with a counter metric, and leave the floor only through `resolve_floor_removal` with the effect warning and the password.
+- **Subscriptions are off by default (§2.9).** The strictness assessment grades on the share of **public** IPv4, because FireHOL level 1's 14% of IPv4 is almost all reserved space. BT_BlockLists comes out severe.
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.
@@ -2286,7 +2294,7 @@ Term lists (`@cs/…`) ship only as **hashed, normalized tokens**, so no indicat
 **As built (first slice, `crates/filter`):**
 - **Implemented:** CS-1a/1b, CS-8a, CS-2a, CS-3a/3b, CS-4a and CS-5a/5b, plus CSX-2 (name evidence only, outside Adult), CSX-3 and CSX-4.
 - **Matching:** normalized tokens are hashed with a stable 64-bit hash (FNV-1a with a domain prefix, MurmurHash3 finisher). All term lists compile into one map, so each token costs one lookup.
-- **Speed:** about 45 µs for a 30-file torrent on the core alone, measured by an ignored test that's run in release.
+- **Speed:** about 20 µs for a 30-file torrent on the core alone (§20.8 has the budget gate). Each word's tokens are planned once and replayed when the word repeats, as words do across file names. The plans are cached per thread, keyed by the exact word, and a property test holds the tokenizer to the earlier one token for token, since stored fixtures and shipped lists are hashes of its tokens.
 - **Shipped lists:** `@cs/sexual` and `@cs/child_roles` ship as hash lists. `@cs/codes` ships **empty**: code terms come only from lists you import.
 - **Fixtures:** the core's must-match fixtures are hashed token streams built from the shipped sets, so no indicative text exists anywhere.
 - **Payload signatures:** CS-8a counts a payload as specific at ≥ 50 MB, or with ≥ 2 files whose sizes are ≥ 64 KiB and not multiples of 64 KiB.
@@ -2422,7 +2430,7 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
   - entries are exact torrents, keywords (normalized the same way the core normalizes, so evasion doesn't help) or queries, with an optional scope, an expiry and a shadow period;
   - *Neutralize term* takes one word. It removes that word's evidence from the core and from query rules.
 - **Exceptions** are per rule, by exact torrents, payload or query. The floor takes none. *Always allow* skips your rules and the packs.
-- **Packs:** MW-1–5, LU-1–4, FK-1/2/4/5, SP-1/2 and SC-1 are built, reading the junk reasons and structure fingerprints. Every pack is on by default, standing in for the wizard's pre-checked boxes. Not yet built:
+- **Packs:** MW-1–5, LU-1–4, FK-1/2/4/5, SP-1/2 and SC-1 are built, reading the junk reasons and structure fingerprints. **Packs are off until chosen** (owner's decision, §16 "M5 decisions"): with nothing stored, no pack is on. A pack turns on only through a stored choice, from the first-run wizard (where all five are pre-checked) or from Settings through the filters API, so an install that skips the wizard has none. Not yet built:
   - FK-3, which needs TMDB release dates;
   - SP-3, which needs per-publisher rates;
   - SP-4, which needs a signature index of hidden items.
@@ -2431,7 +2439,7 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
   - The API leaves hidden torrents out of search unless `hidden=true`.
   - Demotion's ranking penalty arrives with the M4 phase-2 re-rank.
   - Shadow decisions are logged as filter hits with action bit `0x80`, and nothing is applied.
-- **Speed** (an ignored test; set `LODESTAR_BUDGET_US` to raise the bound on slower machines): the full engine with every pack on costs the core plus about 10%. The core measured 45 µs for a 30-file torrent on the reference VM, and 60–75 µs on a slower one, where `main` measured the same.
+- **Speed:** the budget is the owner's, under 50 µs per torrent at 10,000 rules (§1.6.6), and the `filter budget` CI job measures it in release on the CI runner (§20.8).
 
 **Your rules (layer 3)** start empty. The wizard offers presets, all **off**: *Hide CAM/TS/TC*, *Hide sample-only*, *Hide password-protected archives*, *Prefer my languages* (demote others).
 
@@ -2461,11 +2469,20 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
     - **The writer** trusts a built-in worker's verdict at the current version and judges everything else again. It writes tombstones, quarantine rows and filter hits in the same transaction as the batch.
   - **Sealed names:** XChaCha20-Poly1305, keyed by `seal.key` in the data directory. The key isn't stored in the database, so a database copy alone reveals no names.
   - **Purge:** expired quarantine and filter hits past retention are purged hourly, and expired keys become fetchable again.
-  - **Old config blocklists:** the M1 `blocklist.files` load as imported CS-1b entries.
+  - **Config blocklists only add (owner's decision §2.7):**
+    - The M1 `blocklist.files` add their hashes to `cs_hashes` at start as imported CS-1b entries.
+    - An entry a file no longer lists, or one added by a file that left the config, stays in the floor. It waits in that file's *pending floor removals*, is reported once per start ("N floor entries were removed from <file>; remove them in the app to unblock") and counted in `lodestar_floor_removals_kept_total`.
+    - Each file's entries and its pending removals are kept in `settings` as packed hashes (`floor.file:<path>`, `floor.pending:file:<path>`), so no migration was needed.
+    - Your own confirmations and reports are never a file's to drop.
 - **API:** `filters` (rules CRUD, preview, warning, test, shadow, packs, review queue, release; password-gated for weakening changes) and `classify` corrections (Not adult / Is adult, Not junk).
 - **As built (`lodestar_api::filters`, behind the session):**
   - **Routes:** `GET /filters` (core switches, packs, your rules, CSX-5 entries, exceptions, Always allow, list subscriptions, counts), `GET /filters/queue` (quarantine by hash and rule, never with names, plus the 30-day decisions per rule), `POST /filters/preview` and `POST /filters/apply`.
-  - **One change per request,** tagged by `op`: core and pack switches, your rules (add / update / remove), CSX-5 entries, exceptions, Always allow, report abuse, remove CS-1 entries, release, confirm, reveal a sealed name, list subscriptions (subscribe / unsubscribe / pause / resolve a held version) and Undo.
+  - **One change per request,** tagged by `op`: core and pack switches, your rules (add / update / remove), CSX-5 entries, exceptions, Always allow, report abuse, remove CS-1 entries, release, confirm, reveal a sealed name, list subscriptions (subscribe / unsubscribe / pause / resolve a held version), pending floor removals (`resolve_floor_removal`) and Undo.
+  - **Pending floor removals (§2.7):**
+    - `GET /filters` lists them by source (`file:<path>` or `list:<id>`), with up to 1,000 hashes each.
+    - `resolve_floor_removal {source, hashes?, remove}` with `remove: true` takes them out of the floor. That's weakening, so it gets the effect warning and the password.
+    - Without `remove`, they stay in the floor as ordinary imported CS-1b entries and the notice stops. That's strengthening, so it needs no password.
+  - **Strictness (§2.9):** `POST /filters/strictness {subscriptions?: [id], catalog?: [key]}` assesses any candidate set of lists without storing or connecting anything (§20.13).
   - **Protocol (§20.11):** `preview` returns `{weakening, confirm, warning, preview, neutralize}` and never applies or asks for the password. `apply` runs the same assessment on the server; a change that needs confirming is refused with **428** and the assessment until the request carries the admin password, checked like a login (rate-limited per IP) and never remembered. Marking a list as part of the floor needs the password too.
   - **Guardrails hold server-side:** the floor can't be switched off (409), floor rules take no exceptions, overrides and exceptions are validated by the engine, and list actions must be protective.
   - **Preview numbers:** whole-rule changes count from the review queue, tombstones and `filter_hits` rollups. Entry-level changes (CSX-5, exceptions, Always allow) re-judge quarantined items from their sealed names and tombstones by hash, and are marked as estimates because file lists aren't kept. The 30-day figures are the upper bound for the rules the change can bypass. Previews also run as background jobs with progress (§20.10).
@@ -2499,6 +2516,8 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
 - **Precision corpus:** a labelled set of legitimate titles prone to false positives (the *Lolita* novel and films, *Sex Education*, medical and educational material, 18+ "teen"-labelled legal adult releases, games with age ratings in the name) must stay unblocked by the core. A sample of known-bad structures, in hashed fixture form, must stay blocked.
 - **Reversibility:** removing a rule restores hidden items and re-queues tombstones. Releasing a quarantined item re-fetches and indexes it.
 - **Performance:** under 50 µs per torrent at 10,000 rules; re-evaluation jobs stay within the §3 overhead budget.
+  - **As built:** `filter budget` in CI runs the ignored `budget` test in release on the runner. It judges a 30-file season pack with the core, every pack and 10,000 of your rules (keywords, phrases, release groups, narrowed keywords, alternatives and a few structural rules). It warms up, then takes the median of seven batches. On the build VM: core about 20 µs, whole engine about 29 µs.
+  - **How the rules stay cheap:** each rule is indexed by what it can't match without (a token text or a tag). Each torrent's token texts are computed as hashes, by a byte scan for ASCII text (property-tested to equal the search tokenizer's texts) or by the tokenizer itself for other text. Only rules whose key is present are evaluated, in their original order. Queries no text narrows (sizes, extensions, prefixes, negations) are always evaluated. The same check gates every query match (*Always allow*, `unless` clauses, CSX-5 queries), so a torrent is tokenized for a full match only when some query could match it.
 - **Placement:** prepare and commit agree on the rule-set version; a mismatch is re-evaluated at commit (§19.4).
 - **Floor and switches:**
   - every core rule is on in a fresh install;
@@ -2636,7 +2655,7 @@ Exceptions are how you correct false positives without switching rules off. Like
 - **Precedence and edits:** subscribed entries sit in the pack layer, so CSX-5, your exceptions and *Always allow* apply to them. False positives are fixed with exceptions, never by editing the list. A refresh can't undo your exceptions.
 - **The core and the floor:** subscriptions **never feed the locked floor by default** (owner's decision). A remote list that wrote into CS-1 could block things you can't unblock if its publisher errs or is compromised.
   - If you have access to a vetted child-abuse hash list (§20.5.2), you can mark that one subscription as **CS-1b** explicitly. That needs the effect warning and your password, because it locks its entries.
-  - Its entries then follow upstream additions **and removals**, so a publisher's correction takes effect.
+  - Its entries follow upstream additions. **Upstream removals don't unblock anything by themselves** (owner's decision §2.7, which supersedes following removals automatically): they stay blocked in the list's pending floor removals until you remove or keep them in the app. Removing needs the effect warning and the password.
 - **Weakening changes:** unsubscribing, pausing or narrowing a list releases what it blocked. As with disabling a pack (§20.11), that shows the impact preview and effect warning and needs your password. Subscribing and refreshing need neither.
 - **Storage:** a `subscriptions` table (URL, kind, format, action, scope, schedule, ETag, last fetch, entry count, status) and `subscription_entries` (hashes and signatures; IP ranges are kept as a compact blob per list). Like everything in §20, no history of who changed what is kept.
 - **Verification:** golden parsers for every format, plus fuzz targets (they parse untrusted input); a fake list server in tests for conditional GETs, the size caps and the sanity gates; and a check that an IP-listed peer or node is never contacted by the DHT, the fetch pool or the scraper.
@@ -2652,4 +2671,13 @@ Exceptions are how you correct false positives without switching rules off. Like
     - FireHOL level 1: about 19k ranges.
     - BT_BlockLists: 689k ranges, 394k after merging, 3.5 MB stored. It parses in about 0.5 s and costs about 110 ns per lookup.
     - **BT_BlockLists covered about 49% of IPv4,** because it blocks whole provider allocations. The catalog says so. Lodestar warns whenever the combined lists cover more than 10%, because the crawler loses that share of the DHT.
-  - **Configuration for now:** subscriptions come from `[subscriptions]` in `config.toml`, as catalog keys and `[[subscriptions.lists]]`. They're added to the store at start, never removed from it. The filters API (next) adds connecting, removing and *Accept anyway* / *Keep previous* for held versions.
+    - **Measured again 2026-10-22**, as shares of all IPv4 and of public IPv4 (all IPv4 minus the IANA special-purpose ranges, which hold no DHT nodes):
+      - BT_BlockLists: 49% and 41%, 393,709 merged ranges;
+      - FireHOL level 1: 14% and 0.5%, 3,919 ranges (mostly reserved space);
+      - FireHOL level 2: under 0.1% of either, 18,677 ranges.
+  - **Off by default, chosen by you (owner's decision §2.9):** `[subscriptions] catalog` and `lists` default to empty, so nothing is fetched until you choose.
+  - **Strictness assessment** (`lodestar_filter::strictness`, `POST /filters/strictness`): for any candidate set it reports the IPv4 share blocked (all and public), IPv6 ranges and their share of global unicast, the torrents dropped by hash (pack layer and floor), the kinds of list and a warning level with plain-language text (§10.14).
+    - Subscribed lists are measured from their stored data. Catalog lists not fetched yet use the catalog's measurement, and the result is then marked as an estimate (a lower bound when lists may overlap).
+    - Levels come from the **public** IPv4 share, because reserved ranges cost the crawler nothing: **notice** from 1%, **strong** from 10% (where §20.13 already warns) and **severe** from 25%. BT_BlockLists comes out severe.
+    - Other inputs: any IPv6 share counts the same way, any content list is at least a notice, a floor-marked list is strong, and a list never fetched is a notice.
+  - **Configuration for now:** subscriptions come from `[subscriptions]` in `config.toml`, as catalog keys and `[[subscriptions.lists]]`. They're added to the store at start, never removed from it. The filters API adds connecting, removing and *Accept anyway* / *Keep previous* for held versions. The catalog now lives in `lodestar_filter::strictness`, so the API can assess it.
