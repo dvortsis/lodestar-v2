@@ -120,7 +120,9 @@ fn file_entry(tree: &FileTree, f: &lodestar_metainfo::File) -> FileEntry {
     }
 }
 
-/// Reads a torrent and its files by any swarm hash.
+/// Reads a torrent and its files by any swarm hash. An Adult torrent
+/// while "Show adult content" is off is a 404 `adult_hidden`, so a
+/// pasted hash doesn't get round the preference (§20.9).
 fn load(s: &ApiState, hash: &str) -> ApiResult<(TorrentRow, FileTree)> {
     let hash = parse_hash(hash)?;
     let mut store = s.reader.lock().expect("reader lock");
@@ -132,6 +134,18 @@ fn load(s: &ApiState, hash: &str) -> ApiResult<(TorrentRow, FileTree)> {
         )
     };
     let id = store.find(&hash).map_err(internal)?.ok_or_else(not_found)?;
+    if !s.adult.shown()
+        && store
+            .enrichment(id)
+            .map_err(internal)?
+            .is_some_and(|e| crate::search::is_adult(&e))
+    {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "adult_hidden",
+            "This torrent is Adult, which is hidden: turn on Show adult content in Settings to see it.",
+        ));
+    }
     let row = store.torrent(id).map_err(internal)?.ok_or_else(not_found)?;
     let tree = store.files(id).map_err(internal)?.ok_or_else(not_found)?;
     Ok((row, tree))

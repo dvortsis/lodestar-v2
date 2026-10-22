@@ -66,6 +66,14 @@ pub enum SettingsError {
         field: String,
         message: String,
     },
+    /// The patch needs a confirmation it didn't carry (turning on "Show
+    /// adult content" needs `confirm_adult: true`, §20.9); `code` names
+    /// which, so the UI can ask for it.
+    NeedsConfirmation {
+        field: String,
+        code: &'static str,
+        message: String,
+    },
     /// Saving failed (logged, never shown).
     Store(String),
 }
@@ -98,6 +106,11 @@ impl From<SettingsError> for ApiError {
                 ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "invalid_setting", message)
                     .field(field)
             }
+            SettingsError::NeedsConfirmation {
+                field,
+                code,
+                message,
+            } => ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, code, message).field(field),
             SettingsError::Store(e) => internal(format!("settings: {e}")),
         }
     }
