@@ -181,6 +181,32 @@ describe('Toaster', () => {
 		expect(document.activeElement!.getAttribute('aria-label')).toBe('Close');
 	});
 
+	it("a new toast doesn't take focus after the user clicked away", async () => {
+		const outside = document.createElement('button');
+		document.body.append(outside);
+		render(Toaster, { dismissLabel: 'Close' });
+		toast.push({ text: 'First', timeout: 0 });
+		flushSync();
+		const close = screen.getByRole('button', { name: 'Close' });
+		close.focus();
+		await fireEvent.focusIn(close);
+		// Click on a non-focusable part of the page: focus is lost with no relatedTarget.
+		await fireEvent.pointerDown(document.body);
+		close.blur();
+		await fireEvent.focusOut(close, { relatedTarget: null });
+		toast.push({ text: 'Second', timeout: 0 });
+		flushSync();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(screen.getAllByTestId('toast')).toHaveLength(2);
+		expect(document.activeElement).toBe(document.body);
+		// ...and the first toast later leaving (e.g. dismissed) doesn't pull focus in either.
+		toast.dismiss(toasts.items[0]!.id);
+		flushSync();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(document.activeElement).toBe(document.body);
+		outside.remove();
+	});
+
 	it('caps the queue, dropping the oldest non-error first', () => {
 		toast.push({ text: 'err', kind: 'error' });
 		for (let i = 0; i < 5; i++) toast.push({ text: `t${i}` });
