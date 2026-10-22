@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use lodestar_cluster::{Lease, WorkerId};
-use lodestar_filter::{Action, Decision, Facts, Handle, Item, Sealer};
+use lodestar_filter::{Action, Decision, Facts, Handle, HeldSet, Item, Sealer};
 use lodestar_metainfo::InfoHash;
 use lodestar_sources::{Discovery, Funnel, FunnelCounts, Loss, Stage};
 use lodestar_store::{
@@ -27,7 +27,7 @@ use crate::coordinator::Coordinator;
 use crate::have::{Bloom, Have, capacity_for};
 use crate::rollups::{Rollups, metric};
 use crate::worker::{Results, collect};
-use crate::{HeldSet, event, unix_now};
+use crate::{event, unix_now};
 
 #[derive(Debug, Clone)]
 pub(crate) struct WriterConfig {

@@ -241,6 +241,74 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Replaces every rule-layer table with `set` (one-step Undo).
+    pub fn replace_rule_set(&mut self, set: &RuleSet) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        for table in [
+            "filter_rules",
+            "pack_switches",
+            "override_list",
+            "filter_exceptions",
+            "filter_allow",
+        ] {
+            tx.execute(&format!("DELETE FROM {table}"), [])?;
+        }
+        for (i, r) in set.rules.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO filter_rules
+                     (id, position, query, action, enabled, shadow_until, unless_query)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    r.id,
+                    i as i64 + 1,
+                    r.query,
+                    r.action,
+                    r.enabled,
+                    r.shadow_until,
+                    r.unless_query
+                ],
+            )?;
+        }
+        for (id, on) in &set.pack_switches {
+            tx.execute(
+                "INSERT INTO pack_switches (id, enabled) VALUES (?1, ?2)",
+                params![id, on],
+            )?;
+        }
+        for o in &set.overrides {
+            tx.execute(
+                "INSERT INTO override_list (id, kind, value, strength, scope, created_at,
+                     expires_at, shadow_until, hits)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    o.id,
+                    o.kind,
+                    o.value,
+                    o.strength,
+                    o.scope,
+                    o.created_at,
+                    o.expires_at,
+                    o.shadow_until,
+                    o.hits
+                ],
+            )?;
+        }
+        for e in &set.exceptions {
+            tx.execute(
+                "INSERT INTO filter_exceptions (id, rule, kind, value) VALUES (?1, ?2, ?3, ?4)",
+                params![e.id, e.rule, e.kind, e.value],
+            )?;
+        }
+        for (id, q) in &set.allow {
+            tx.execute(
+                "INSERT INTO filter_allow (id, query) VALUES (?1, ?2)",
+                params![id, q],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Keeps a snapshot of the rule set for one-step Undo, replacing the
     /// last one.
     pub fn save_previous(&mut self, data: &[u8]) -> Result<()> {

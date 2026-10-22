@@ -249,6 +249,32 @@ impl Store {
         Ok((expired, hits))
     }
 
+    /// Filter decisions since `since`, per rule and action code.
+    pub fn hit_counts(&self, since: i64) -> Result<Vec<(String, u8, i64)>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT rule, action, count(*) FROM filter_hits WHERE at >= ?1
+             GROUP BY rule, action ORDER BY rule, action",
+        )?;
+        let rows = stmt.query_map([since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Tombstones, newest first: `(hash, rule, at)`.
+    pub fn tombstones(&self, limit: usize) -> Result<Vec<([u8; 20], String, i64)>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT hash, rule, at FROM tombstones ORDER BY at DESC, hash LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit as i64], |r| {
+            Ok((r.get::<_, Vec<u8>>(0)?, r.get(1)?, r.get(2)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (h, rule, at) = row?;
+            out.push((hash20(h)?, rule, at));
+        }
+        Ok(out)
+    }
+
     /// Filter hits since `since`, oldest first.
     pub fn filter_hits(&self, since: i64) -> Result<Vec<FilterHit>> {
         let mut stmt = self.conn.prepare_cached(

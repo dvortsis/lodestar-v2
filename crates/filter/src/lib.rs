@@ -17,6 +17,7 @@
 mod core;
 mod engine;
 mod hash;
+mod held;
 pub mod lists;
 pub mod load;
 mod matcher;
@@ -32,6 +33,7 @@ pub use crate::core::{
 };
 pub use engine::{Decision, Engine, Handle, ListLayer, RuleRef, Verdict};
 pub use hash::{TermSet, TermSetError, term_hash};
+pub use held::HeldSet;
 pub use matcher::{Doc, Facts};
 pub use packs::{Pack, PackRule, PackSwitches};
 pub use payload::{PayloadSig, SPECIFIC_BYTES, SPECIFIC_FILES, payload_sig};
