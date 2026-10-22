@@ -481,6 +481,45 @@
         ]
       }
     },
+    "/filters/strictness": {
+      "post": {
+        "tags": [
+          "filters"
+        ],
+        "summary": "How strict a candidate set of lists is (§2.9, §20.13): what it\nwould block and a warning matched to it. Nothing is stored or\nconnected.",
+        "operationId": "assessListStrictness",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StrictnessBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Strictness"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/filters/test": {
       "post": {
         "tags": [
@@ -1041,6 +1080,11 @@
             "description": "`remove_cs1`: hashes removed.",
             "minimum": 0
           },
+          "settled": {
+            "type": "integer",
+            "description": "`resolve_floor_removal`: pending floor entries settled.",
+            "minimum": 0
+          },
           "version": {
             "type": "integer",
             "format": "int64",
@@ -1063,6 +1107,13 @@
           "confirm": {
             "type": "boolean",
             "description": "The password is needed (every weakening change, and marking a list\nas part of the locked floor)."
+          },
+          "floor_entries": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "For a floor removal: the entries the warning counts, 40 hex digits\neach (up to 1,000 shown). Applying settles exactly these, even if\nmore are pending by then; send them back as `hashes` to confirm\nthe same set in a later request."
           },
           "neutralize": {
             "oneOf": [
@@ -2166,6 +2217,38 @@
           },
           {
             "type": "object",
+            "description": "Settles floor entries a config file or a floor-marked list dropped\n(owner's decision §2.7). They stay blocked until this: `remove`\ntakes them out of the floor, which weakens it; otherwise they stay\nin it as ordinary CS-1b entries. `source` is a pending source's key\n(`file:<path>`, `list:<id>`); without `hashes`, all of its entries\nthe assessment counted ([`Assessment::floor_entries`]).",
+            "required": [
+              "source",
+              "op"
+            ],
+            "properties": {
+              "hashes": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "string"
+                },
+                "description": "40 hex digits each."
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "resolve_floor_removal"
+                ]
+              },
+              "remove": {
+                "type": "boolean"
+              },
+              "source": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
             "required": [
               "op"
             ],
@@ -2864,6 +2947,7 @@
           "ip_ranges",
           "overrides",
           "packs",
+          "pending_floor_removals",
           "quarantine",
           "rules",
           "subscriptions",
@@ -2909,6 +2993,13 @@
             "items": {
               "$ref": "#/components/schemas/PackState"
             }
+          },
+          "pending_floor_removals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PendingFloorEntry"
+            },
+            "description": "Entries a config file or a floor-marked list dropped, still blocked\nuntil you settle them (§2.7)."
           },
           "quarantine": {
             "type": "integer",
@@ -3010,6 +3101,42 @@
           }
         }
       },
+      "PendingFloorEntry": {
+        "type": "object",
+        "description": "Floor entries one source dropped, waiting for a decision (§2.7).",
+        "required": [
+          "entries",
+          "hashes",
+          "kind",
+          "name",
+          "source"
+        ],
+        "properties": {
+          "entries": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "hashes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Up to 1,000 of them, 40 hex digits each."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`file` or `list`."
+          },
+          "name": {
+            "type": "string",
+            "description": "The file's path, or the list's name."
+          },
+          "source": {
+            "type": "string",
+            "description": "`file:<path>` or `list:<id>`, for `resolve_floor_removal`."
+          }
+        }
+      },
       "Preview": {
         "type": "object",
         "description": "What a change would do (§20.10). Counts come from the review queue,\nthe tombstones, the filter hits of the replay window and the index.\n\nFields are in the order `POST /filters/preview` has always sent them;\nwhere an assessment is nested in another body, its keys are sorted.",
@@ -3020,7 +3147,8 @@
           "caught_30d",
           "core_caught_30d",
           "per_day",
-          "estimate"
+          "estimate",
+          "removed_from_floor"
         ],
         "properties": {
           "caught_30d": {
@@ -3044,6 +3172,11 @@
           "quarantine": {
             "type": "integer",
             "description": "Quarantined items it would release now.",
+            "minimum": 0
+          },
+          "removed_from_floor": {
+            "type": "integer",
+            "description": "Entries that would leave the locked floor.",
             "minimum": 0
           },
           "stored": {
@@ -3470,6 +3603,174 @@
           "token": {
             "type": "string",
             "description": "The one-time token printed to the logs (`XXXX-XXXX-XXXX-XXXX`, any\ncase)."
+          }
+        }
+      },
+      "Strictness": {
+        "type": "object",
+        "description": "`POST /filters/strictness`: what the lists would block, and a warning\nmatched to it (§2.9, §20.13).",
+        "required": [
+          "categories",
+          "estimate",
+          "floor_hashes",
+          "hashes",
+          "ipv4_public_share",
+          "ipv4_share",
+          "ipv6_ranges",
+          "ipv6_share",
+          "level",
+          "lists",
+          "text",
+          "unknown"
+        ],
+        "properties": {
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`anti_p2p`, `peers`, `content`, `child_abuse`, …"
+          },
+          "estimate": {
+            "type": "boolean",
+            "description": "Some figures are the catalog's measurements of lists not fetched\nyet, and lists may overlap: a lower bound."
+          },
+          "floor_hashes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Torrents a floor-marked list blocks by hash.",
+            "minimum": 0
+          },
+          "hashes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Torrents blocked by hash.",
+            "minimum": 0
+          },
+          "ipv4_public_share": {
+            "type": "number",
+            "format": "double",
+            "description": "The share of public IPv4 blocked (0–1); the level reads this."
+          },
+          "ipv4_share": {
+            "type": "number",
+            "format": "double",
+            "description": "The share of all IPv4 blocked (0–1)."
+          },
+          "ipv6_ranges": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "ipv6_share": {
+            "type": "number",
+            "format": "double",
+            "description": "The share of IPv6 global unicast blocked (0–1)."
+          },
+          "level": {
+            "type": "string",
+            "description": "`none`, `notice`, `strong` or `severe`."
+          },
+          "lists": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StrictnessList"
+            }
+          },
+          "text": {
+            "type": "string",
+            "description": "The plain-language warning."
+          },
+          "unknown": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Lists never fetched, so what they block isn't known."
+          }
+        }
+      },
+      "StrictnessBody": {
+        "type": "object",
+        "description": "`POST /filters/strictness`: a candidate set of lists to assess,\nsubscriptions by id and catalog lists by key (`lodestar lists`), in\nany mix.",
+        "properties": {
+          "catalog": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "subscriptions": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        }
+      },
+      "StrictnessList": {
+        "type": "object",
+        "description": "One list's figures in a [`Strictness`]; null where unknown.",
+        "required": [
+          "categories",
+          "floor",
+          "hashes",
+          "ipv4_public_share",
+          "ipv4_share",
+          "ipv6_ranges",
+          "kind",
+          "measured",
+          "name"
+        ],
+        "properties": {
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "floor": {
+            "type": "boolean"
+          },
+          "hashes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "ipv4_public_share": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "ipv4_share": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "ipv6_ranges": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "kind": {
+            "type": "string",
+            "description": "`content` or `ip`."
+          },
+          "measured": {
+            "type": "boolean",
+            "description": "The figures are a catalog measurement, not this list's data."
+          },
+          "name": {
+            "type": "string"
           }
         }
       },
