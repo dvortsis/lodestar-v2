@@ -3,3 +3,7 @@ build
 package-lock.json
 src/lib/api/openapi.json
 src/lib/api/schema.d.ts
+messages
+src/lib/paraglide
+project.inlang/*
+!project.inlang/settings.json
