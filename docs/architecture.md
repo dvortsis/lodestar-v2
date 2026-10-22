@@ -1705,6 +1705,21 @@ docs/               architecture.md (this plan), query-language.md, operations.m
     - per-tracker 14 B.
   - The whole store is **926 B** against the 1,024 B gate, so it still passes, with 98 B left. A history row costs about 180 B with page overhead, so the share of live swarms drives the total.
 
+**Theme compiler (W1):** decisions that clarify §10.18.
+- **Derivation constants are fitted once.** Each rule is a lightness shift (or a mix toward `primary`/`accent` for dividers and tints). The constants are tuned so Riverstone lands within ΔE_ok ≤ 0.5 of the §10.18 table, and every theme inherits them. Light and dark have separate constants. **Riverstone's published values (`docs/design-tokens.md` §1–4) are a contract, so the compiler pins them byte for byte** (`PINS` in `themes.ts`); a test checks the rules alone stay within ΔE_ok 0.5 of each pin.
+- **`neutral-content` is derived to reach 4.5:1** on the neutral fill: the better of text/surface, shifted in lightness only if neither passes (Riverstone light: `#193038`, 4.55:1).
+- **File layout:** one file per family, `web/themes/<family-id>.json`, with `id`, `name`, `group` (`official`/`accessibility`/`community`/`original`), optional `license`/`source`, and `light`/`dark` palettes (the `docs/themes.md` layout). The compiler expands it into `<id>-light` and `<id>-dark`.
+- **Gates beyond the §10.18 list**, so the contract in `docs/design-tokens.md` holds in every theme:
+  - `muted-text`, `warning` and `error` ≥ 4.5:1 on both grounds;
+  - each `*-content` ≥ 4.5:1 on its fill (the accent fill only warns, since design-tokens allows large/bold labels there);
+  - text on the hover and selected tints ≥ 4.5:1.
+- **Riverstone is grandfathered on categorical ΔE_ok only**, never on text contrast. The accent-fill label (4.03:1, large/bold allowed) stays a reported warning.
+- **ΔE_ok and the CVD report run on the data marks** (the colours actually drawn), not the raw categorical inputs, and both Machado 2009 (severity 1.0) and Viénot 1999 are reported side by side.
+- **Pre-paint storage contract:** `localStorage["lodestar.theme"]` holds `{ mode: "system"|"light"|"dark", light: { id, vars? }, dark: { id, vars? } }`. `vars` is the cached custom-property map of a non-Riverstone theme. The script sets `data-theme`, `color-scheme` and `vars` on `<html>` and falls back to Riverstone for the resolved mode.
+- **`themes.json`** is `{ v: 1, keys: [...], themes: [{ id, name, family, group, mode, contrast: "AA"|"AAA", license?, source?, values: [...] }] }`, with `values` in `keys` order.
+- **Dark `info` uses `primary-ink`**, which equals `primary` for Riverstone but may differ for other themes (a dark `primary` that is too dim is lightened).
+
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.
