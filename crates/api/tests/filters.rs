@@ -370,6 +370,7 @@ async fn quarantine_review_never_shows_names_unasked() {
                 evidence: &[],
                 at: lodestar_api_now(),
                 expires_at: lodestar_api_now() + 86_400,
+                adult_hold: false,
             }],
             ..WriteBatch::default()
         })
@@ -526,6 +527,7 @@ async fn false_positives_become_exceptions_and_hashed_fixtures() {
                 evidence: &[],
                 at: lodestar_api_now(),
                 expires_at: lodestar_api_now() + 86_400,
+                adult_hold: false,
             }],
             ..WriteBatch::default()
         })
@@ -987,6 +989,7 @@ fn quarantine(f: &Fixture, n: u8) {
             evidence: &[],
             at: lodestar_api_now(),
             expires_at: lodestar_api_now() + 86_400,
+            adult_hold: false,
         })
         .collect();
     f.api
@@ -1676,16 +1679,508 @@ async fn a_correction_relabelling_a_torrent_adult_meets_the_adult_only_core() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["type"], json!("adult"));
     assert_eq!(body["held_by"], json!("CS-5a"));
-    let store = f.api.store.lock().unwrap();
-    assert!(store.torrent(id).unwrap().is_none(), "no longer stored");
-    let q = store.quarantined(10).unwrap();
-    assert_eq!(q.len(), 1);
-    assert_eq!(q[0].rule, "CS-5a");
-    assert!(q[0].sealed.is_some());
-    drop(store);
+    {
+        let store = f.api.store.lock().unwrap();
+        assert!(store.torrent(id).unwrap().is_none(), "no longer stored");
+        let q = store.quarantined(10).unwrap();
+        assert_eq!(q.len(), 1);
+        assert_eq!(q[0].rule, "CS-5a");
+        assert!(q[0].sealed.is_some());
+    }
     let mut raw = [0u8; 20];
     for (i, b) in raw.iter_mut().enumerate() {
         *b = u8::from_str_radix(&hash[2 * i..2 * i + 2], 16).unwrap();
     }
     assert!(f.api.held.contains(&raw), "refused at intake");
+
+    // An adult hold: held by the Adult-only core only because you said
+    // it's adult.
+    let (_, _, q) = call(&f.app, get("/api/v1/filters/queue", &c)).await;
+    assert_eq!(q["quarantine"][0]["adult_hold"], json!(true), "{q}");
+
+    // The 30-day purge deletes its name and leaves a tombstone, so the
+    // hash stays refused and is never fetched again (owner, 2026-10-22).
+    let released = {
+        let mut store = f.api.store.lock().unwrap();
+        let (released, _) = store.purge_filter(4_000_000_000, 0).unwrap();
+        assert!(store.quarantined(10).unwrap().is_empty(), "no name kept");
+        let t = store.tombstones(10).unwrap();
+        assert_eq!(t.len(), 1);
+        assert_eq!((t[0].hash, t[0].rule.as_str()), (raw, "CS-5a"));
+        assert!(t[0].adult_hold);
+        let state = store.filter_state().unwrap();
+        assert!(state.held.contains(&(raw, Held::Tombstone)));
+        released
+    };
+    assert!(released.is_empty());
+    assert!(f.api.held.contains(&raw), "still refused at intake");
+
+    // Releasing it says plainly that the Adult-only checks won't see it
+    // again, and needs the password.
+    let release = json!({ "op": "release", "hash": hash });
+    let (_, _, a) = call(
+        &f.app,
+        post(
+            "/api/v1/filters/preview",
+            Some(&c),
+            json!({ "change": release.clone() }),
+        ),
+    )
+    .await;
+    let warning = a["warning"].as_str().unwrap();
+    for part in [
+        "your correction or an Is adult classification rule made it adult",
+        "A correction is deleted with the torrent",
+        "if no Is adult rule matches it when it's next seen",
+        "the Adult-only child-safety checks won't look at it",
+    ] {
+        assert!(warning.contains(part), "{part}: {warning}");
+    }
+    assert_eq!(a["preview"]["tombstones"], json!(1));
+    let (status, _) = apply(&f, &c, release.clone(), None).await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED);
+    let (status, body) = apply(&f, &c, release, Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!f.api.held.contains(&raw));
+    assert!(
+        f.api
+            .store
+            .lock()
+            .unwrap()
+            .tombstones(10)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// Holds `hash` under `rule`, as a quarantine or a tombstone.
+fn hold(f: &Fixture, hash: [u8; 20], rule: &str, held: Held, at: i64) {
+    hold_as(f, hash, rule, held, at, false);
+}
+
+/// [`hold`], as an adult hold when `adult_hold`.
+fn hold_as(f: &Fixture, hash: [u8; 20], rule: &str, held: Held, at: i64, adult_hold: bool) {
+    f.api
+        .store
+        .lock()
+        .unwrap()
+        .write(&WriteBatch {
+            filtered: &[Filtered {
+                hashes: &[hash],
+                rule,
+                action: if held == Held::Quarantine {
+                    Action::Quarantine.code()
+                } else {
+                    Action::Drop.code()
+                },
+                held: Some(held),
+                sealed: None,
+                evidence: &[],
+                at,
+                expires_at: at + 86_400,
+                adult_hold,
+            }],
+            ..WriteBatch::default()
+        })
+        .unwrap();
+    f.api.held.insert(hash);
+}
+
+#[tokio::test]
+async fn the_review_queue_pages() {
+    let f = fixture();
+    let c = logged_in(&f).await;
+    let now = lodestar_api_now();
+    // Two share a time: the hash orders them.
+    for (i, at) in [now, now, now - 10, now - 20, now - 30]
+        .into_iter()
+        .enumerate()
+    {
+        hold(&f, [i as u8 + 1; 20], "CS-3a", Held::Quarantine, at);
+    }
+    let mut seen = Vec::new();
+    let mut uri = "/api/v1/filters/queue?limit=2".to_owned();
+    let mut pages = 0;
+    loop {
+        let (status, _, q) = call(&f.app, get(&uri, &c)).await;
+        assert_eq!(status, StatusCode::OK, "{q}");
+        pages += 1;
+        for e in q["quarantine"].as_array().unwrap() {
+            seen.push(e["hash"].as_str().unwrap().to_owned());
+        }
+        match q["next_cursor"].as_str() {
+            Some(next) => uri = format!("/api/v1/filters/queue?limit=2&cursor={next}"),
+            None => break,
+        }
+    }
+    assert_eq!(pages, 3);
+    let want: Vec<String> = [1u8, 2, 3, 4, 5]
+        .iter()
+        .map(|b| format!("{b:02x}").repeat(20))
+        .collect();
+    assert_eq!(seen, want, "newest first, each once");
+
+    for bad in ["?limit=0", "?limit=1001", "?cursor=nope", "?cursor=5.zz"] {
+        let (status, _, body) = call(&f.app, get(&format!("/api/v1/filters/queue{bad}"), &c)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn removing_a_rule_or_a_pack_releases_what_it_holds() {
+    let f = fixture();
+    let c = logged_in(&f).await;
+    let now = lodestar_api_now();
+    let (status, body) = apply(
+        &f,
+        &c,
+        json!({ "op": "add_rule", "query": "ext:scr", "action": "quarantine" }),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let id = body["id"].as_i64().unwrap();
+    hold(&f, [0x11; 20], &format!("U-{id}"), Held::Quarantine, now);
+    hold(&f, [0x12; 20], &format!("U-{id}"), Held::Tombstone, now);
+    hold(&f, [0x13; 20], "FK-4", Held::Tombstone, now);
+    hold(&f, [0x14; 20], "CS-3a", Held::Quarantine, now);
+    // Held by the rule and, as a tombstone, by the pack.
+    hold(&f, [0x15; 20], &format!("U-{id}"), Held::Quarantine, now);
+    hold(&f, [0x15; 20], "FK-4", Held::Tombstone, now);
+
+    let (status, body) = apply(
+        &f,
+        &c,
+        json!({ "op": "remove_rule", "id": id }),
+        Some(PASSWORD),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["released"], json!(2));
+    for h in [[0x11; 20], [0x12; 20]] {
+        assert!(!f.api.held.contains(&h));
+    }
+    assert!(f.api.held.contains(&[0x15; 20]), "the pack still holds it");
+
+    let pack = |on: bool| json!({ "op": "pack_switch", "id": "fakes", "on": on });
+    let (status, body) = apply(&f, &c, pack(true), Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = apply(&f, &c, pack(false), Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["released"], json!(2));
+    assert!(!f.api.held.contains(&[0x13; 20]));
+    assert!(!f.api.held.contains(&[0x15; 20]));
+    // Another rule's hold stays.
+    assert!(f.api.held.contains(&[0x14; 20]));
+    assert_eq!(
+        f.api.store.lock().unwrap().quarantined(10).unwrap().len(),
+        1
+    );
+}
+
+/// End to end (§20.9): an Is adult rule is added, the torrents it matches
+/// are re-queued, the writer's background pass relabels one adult and the
+/// Adult-only core holds it, and search no longer finds it.
+#[tokio::test]
+async fn an_is_adult_rule_takes_a_held_torrent_out_of_search() {
+    use lodestar_filter::TermSet;
+    use lodestar_pipeline::enrich::{Backfill, enrich_stored_with};
+    use std::sync::atomic::Ordering;
+    let f = fixture_with(Some(SearchIndex::in_memory().unwrap()));
+    let c = logged_in(&f).await;
+    f.api.engine.update_engine(|e| {
+        *e = Engine::new(Core::new(
+            Lists {
+                sexual: TermSet::of(&["lexa"]),
+                child_roles: TermSet::of(&["rolea"]),
+                codes: TermSet::of(&["codex"]),
+            },
+            CsList::default(),
+            Switches::default(),
+        ))
+    });
+    // Ten words apart: only the Adult-only CS-5a can catch them.
+    let name = "Holiday Rolea one two three four five six seven eight nine Lexa.mp4";
+    store_torrent(&f, name, 900 << 20);
+    store_torrent(&f, "Holiday Postcards.mp4", 900 << 20);
+    let index = f.api.index.as_ref().unwrap().index();
+    let catch_up = |store: &mut Store| {
+        let mut w = index.writer(15 << 20).unwrap();
+        w.catch_up(store, 100).unwrap();
+        w.commit().unwrap();
+        index.refresh().unwrap();
+    };
+    {
+        let mut store = f.api.store.lock().unwrap();
+        enrich_all(&mut store);
+        catch_up(&mut store);
+    }
+    let found = |q: &str| {
+        let node = lodestar_search::parse(q).unwrap();
+        let hits = index.search(&index.query(&node, 0), 50).unwrap().hits;
+        let mut names = index.names(&hits).unwrap();
+        names.sort();
+        names
+    };
+    assert_eq!(found("rolea").len(), 1, "stored and searchable");
+
+    let (status, _, body) = call(
+        &f.app,
+        post(
+            "/api/v1/classify/rules",
+            Some(&c),
+            json!({ "query": "rolea", "adult": true }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["queued"], json!(1));
+    assert!(
+        f.api.reenrich.swap(false, Ordering::AcqRel),
+        "pipeline told"
+    );
+
+    // The writer's background pass, as it runs it.
+    {
+        let mut store = f.api.store.lock().unwrap();
+        let ctx = Backfill {
+            filter: Some(&f.api.engine),
+            sealer: f.api.sealer.as_deref(),
+            quarantine_secs: f.api.quarantine_secs,
+        };
+        let b = enrich_stored_with(&mut store, 0, 100, &ctx)
+            .unwrap()
+            .unwrap();
+        assert!(!b.rejected);
+        assert_eq!(b.held.len(), 1);
+        let q = store.quarantined(10).unwrap();
+        assert_eq!(q.len(), 1);
+        assert_eq!(q[0].rule, "CS-5a");
+        catch_up(&mut store);
+    }
+    assert!(found("rolea").is_empty(), "held, so not found");
+    assert_eq!(found("holiday"), vec!["Holiday Postcards.mp4".to_string()]);
+}
+
+#[tokio::test]
+async fn switching_a_core_rule_off_releases_what_it_holds() {
+    let f = fixture();
+    let c = logged_in(&f).await;
+    let now = lodestar_api_now();
+    hold_as(&f, [0x21; 20], "CS-5a", Held::Tombstone, now, true);
+    hold_as(&f, [0x22; 20], "CS-5a", Held::Quarantine, now, true);
+    hold(&f, [0x23; 20], "CS-5a", Held::Quarantine, now);
+    hold(&f, [0x24; 20], "CS-1a", Held::Tombstone, now);
+    hold(&f, [0x25; 20], "CS-3a", Held::Quarantine, now);
+    let off = json!({ "op": "core_switch", "rule": "CS-5a", "on": false });
+
+    // The preview counts every hold of the rule, adult or not.
+    let (_, _, a) = call(
+        &f.app,
+        post(
+            "/api/v1/filters/preview",
+            Some(&c),
+            json!({ "change": off.clone() }),
+        ),
+    )
+    .await;
+    assert_eq!(a["preview"]["quarantine"], json!(2), "{a}");
+    assert_eq!(a["preview"]["tombstones"], json!(1), "{a}");
+
+    let (status, _) = apply(&f, &c, off.clone(), None).await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED);
+    let (status, body) = apply(&f, &c, off.clone(), Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["released"], json!(3));
+    for h in [[0x21; 20], [0x22; 20], [0x23; 20]] {
+        assert!(!f.api.held.contains(&h));
+    }
+    // The floor and other rules keep theirs.
+    for h in [[0x24; 20], [0x25; 20]] {
+        assert!(f.api.held.contains(&h));
+    }
+    {
+        let store = f.api.store.lock().unwrap();
+        assert_eq!(store.tombstones(10).unwrap().len(), 1);
+        assert_eq!(store.quarantined(10).unwrap().len(), 1);
+    }
+
+    // Already off: nothing more is released.
+    hold(&f, [0x26; 20], "CS-5a", Held::Quarantine, now);
+    let (status, body) = apply(&f, &c, off, Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["released"], Value::Null);
+    assert!(f.api.held.contains(&[0x26; 20]));
+}
+
+#[tokio::test]
+async fn adult_tombstones_can_be_listed_and_released() {
+    let f = fixture();
+    let c = logged_in(&f).await;
+    let now = lodestar_api_now();
+    for i in 0..3u8 {
+        hold_as(
+            &f,
+            [0x31 + i; 20],
+            "CS-5a",
+            Held::Tombstone,
+            now - i64::from(i),
+            true,
+        );
+    }
+    hold(&f, [0x3f; 20], "CS-3a", Held::Tombstone, now);
+    hold_as(&f, [0x40; 20], "CS-5b", Held::Quarantine, now, true);
+
+    let (status, _, all) = call(&f.app, get("/api/v1/filters/tombstones", &c)).await;
+    assert_eq!(status, StatusCode::OK, "{all}");
+    assert_eq!(all["tombstones"].as_array().unwrap().len(), 4);
+    let mut seen = Vec::new();
+    let mut uri = "/api/v1/filters/tombstones?adult=true&limit=2".to_owned();
+    loop {
+        let (status, _, page) = call(&f.app, get(&uri, &c)).await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        for t in page["tombstones"].as_array().unwrap() {
+            assert_eq!(t["adult_hold"], json!(true));
+            assert_eq!(t["rule"], json!("CS-5a"));
+            seen.push(t["hash"].as_str().unwrap().to_owned());
+        }
+        match page["next_cursor"].as_str() {
+            Some(n) => uri = format!("/api/v1/filters/tombstones?adult=true&limit=2&cursor={n}"),
+            None => break,
+        }
+    }
+    assert_eq!(seen, ["31", "32", "33"].map(|b| b.repeat(20)));
+
+    // Reporting a false positive on an adult hold carries the same note.
+    let fp = json!({ "op": "false_positive", "hash": "40".repeat(20) });
+    let (_, _, a) = call(
+        &f.app,
+        post("/api/v1/filters/preview", Some(&c), json!({ "change": fp })),
+    )
+    .await;
+    let warning = a["warning"].as_str().unwrap();
+    assert!(
+        warning.contains("A correction is deleted with the torrent"),
+        "{warning}"
+    );
+
+    // Released through the usual flow.
+    let release = json!({ "op": "release", "hash": seen[0] });
+    let (status, body) = apply(&f, &c, release, Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!f.api.held.contains(&[0x31; 20]));
+}
+
+/// A change previewed while it didn't weaken filtering, which weakens it
+/// by the time it applies, is refused rather than applied without the
+/// password (runner's probe, #70).
+#[tokio::test]
+async fn a_change_that_became_weakening_since_its_preview_is_refused() {
+    use lodestar_api::filters::Change;
+    let f = fixture();
+    let c = logged_in(&f).await;
+    let now = lodestar_api_now();
+    let off = json!({ "op": "core_switch", "rule": "CS-3a", "on": false });
+    let (status, body) = apply(&f, &c, off.clone(), Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    hold(&f, [0x51; 20], "CS-3a", Held::Quarantine, now);
+
+    // Previewed while CS-3a is off: no password asked.
+    let change: Change = serde_json::from_value(off).unwrap();
+    let stale = f.api.assess(&change, now).unwrap();
+    assert!(!stale.confirm);
+    // Switched back on meanwhile (strengthening, no password).
+    let on = json!({ "op": "core_switch", "rule": "CS-3a", "on": true });
+    let (status, body) = apply(&f, &c, on, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let err = f.api.apply(&change, stale, now).unwrap_err();
+    assert_eq!(err.status(), StatusCode::CONFLICT);
+    assert_eq!(err.code(), "changed_since_preview");
+    assert!(f.api.held.contains(&[0x51; 20]), "nothing released");
+    assert_eq!(core_on(&overview(&f, &c).await, "CS-3a"), json!(true));
+
+    // Accepting a held list version: previewed before one shrank.
+    let id = f
+        .api
+        .store
+        .lock()
+        .unwrap()
+        .add_subscription(&lodestar_store::NewSubscription {
+            url: "https://lists.example/a.txt",
+            name: "a",
+            kind: 0,
+            format: Some("hashes"),
+            action: Action::Drop.code(),
+            floor: false,
+            interval_secs: 3600,
+        })
+        .unwrap();
+    let accept: Change =
+        serde_json::from_value(json!({ "op": "resolve_held", "id": id, "accept": true })).unwrap();
+    let stale = f.api.assess(&accept, now).unwrap();
+    assert!(!stale.confirm);
+    {
+        let mut store = f.api.store.lock().unwrap();
+        let data = [[1u8; 20], [2; 20], [3; 20]].concat();
+        fn refresh(data: &[u8], held: bool) -> lodestar_store::Refresh<'_> {
+            if held {
+                lodestar_store::Refresh::Held {
+                    data,
+                    entries: (data.len() / 20) as i64,
+                    etag: None,
+                    last_modified: None,
+                    why: "shrank",
+                }
+            } else {
+                lodestar_store::Refresh::Updated {
+                    data,
+                    entries: (data.len() / 20) as i64,
+                    etag: None,
+                    last_modified: None,
+                }
+            }
+        }
+        store.record_refresh(id, 1, &refresh(&data, false)).unwrap();
+        store
+            .record_refresh(id, 2, &refresh(&data[..20], true))
+            .unwrap();
+    }
+    let err = f.api.apply(&accept, stale, now).unwrap_err();
+    assert_eq!(err.code(), "changed_since_preview");
+    let fresh = f.api.assess(&accept, now).unwrap();
+    assert!(fresh.confirm, "a fresh preview asks for the password");
+}
+
+/// Whether a core switch-off weakens filtering is read from the store,
+/// not the engine, which can lag it after an apply that failed part-way.
+#[tokio::test]
+async fn a_core_switch_off_is_judged_by_the_stored_switch() {
+    use lodestar_api::filters::Change;
+    let f = fixture();
+    let c = logged_in(&f).await;
+    let now = lodestar_api_now();
+    hold(&f, [0x61; 20], "CS-3a", Held::Quarantine, now);
+    // The engine says off, the store says on: the divergence a failed
+    // apply can leave.
+    f.api.engine.update_engine(|e| {
+        e.core
+            .switches
+            .set(lodestar_filter::CoreRule::Cs3a, false)
+            .unwrap();
+    });
+    assert!(f.api.store.lock().unwrap().core_switch("CS-3a").unwrap());
+    let off = json!({ "op": "core_switch", "rule": "CS-3a", "on": false });
+    let change: Change = serde_json::from_value(off.clone()).unwrap();
+    let a = f.api.assess(&change, now).unwrap();
+    assert!(a.confirm, "weakening, by the store");
+    let (status, _) = apply(&f, &c, off, None).await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED);
+    // An assessment that asked for nothing doesn't get past apply either.
+    let mut unconfirmed = a;
+    unconfirmed.confirm = false;
+    unconfirmed.weakening = false;
+    let err = f.api.apply(&change, unconfirmed, now).unwrap_err();
+    assert_eq!(err.code(), "changed_since_preview");
+    assert!(f.api.held.contains(&[0x61; 20]));
+    assert!(f.api.store.lock().unwrap().core_switch("CS-3a").unwrap());
 }

@@ -359,6 +359,9 @@ impl Store {
                     params![id, c.adult, c.not_junk],
                 )?;
             }
+            // Enrichment classified under the old correction is no longer
+            // written over it (§20.9).
+            bump_class_gen(&tx)?;
         }
         tx.commit()?;
         Ok(exists)
@@ -483,12 +486,7 @@ impl Store {
     /// made under the old rules is no longer written. Returns it.
     pub fn bump_class_gen(&mut self) -> Result<i64> {
         let tx = self.conn.transaction()?;
-        let next = class_gen(&tx)? + 1;
-        tx.execute(
-            "INSERT INTO settings (key, value) VALUES (?1, ?2)
-             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-            params![CLASS_GEN, next],
-        )?;
+        let next = bump_class_gen(&tx)?;
         tx.commit()?;
         Ok(next)
     }
@@ -520,6 +518,16 @@ impl Store {
 pub const MARK_CHUNK: usize = 10_000;
 
 const CLASS_GEN: &str = "class_rules_gen";
+
+fn bump_class_gen(conn: &rusqlite::Connection) -> Result<i64> {
+    let next = class_gen(conn)? + 1;
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        params![CLASS_GEN, next],
+    )?;
+    Ok(next)
+}
 
 pub(crate) fn class_gen(conn: &rusqlite::Connection) -> Result<i64> {
     Ok(conn
