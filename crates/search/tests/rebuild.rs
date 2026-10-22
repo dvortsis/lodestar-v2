@@ -178,7 +178,15 @@ fn searches_keep_working_through_a_rebuild_and_the_swap() {
     wait("searches run during the rebuild", || all(|c| &c.0));
     assert!(serving.rebuilding());
     hold.store(false, Ordering::Relaxed);
-    wait("the rebuild finishes", || !serving.rebuilding());
+    // Fails at once, saying why, if the rebuild stopped on an error
+    // rather than running out the wait.
+    wait("the rebuild finishes", || match serving.progress() {
+        None => true,
+        Some(p) => {
+            assert_ne!(p.phase, RebuildPhase::Failed, "the rebuild failed: {p:?}");
+            false
+        }
+    });
     wait("searches run after the swap", || all(|c| &c.1));
     stop.store(true, Ordering::Relaxed);
     for s in searchers {
