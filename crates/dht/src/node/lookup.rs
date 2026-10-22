@@ -5,8 +5,11 @@
 use std::collections::HashSet;
 use std::net::SocketAddr;
 
+use std::time::Instant;
+
 use lodestar_metainfo::InfoHash;
 
+use crate::bep33::Bloom;
 use crate::compact::{NodeId, NodeInfo};
 use crate::routing::K;
 
@@ -27,6 +30,8 @@ struct Candidate {
     info: NodeInfo,
     distance: [u8; 20],
     state: State,
+    /// BEP 33 `(BFsd, BFpe)` from a scrape answer.
+    blooms: Option<Box<(Bloom, Bloom)>>,
 }
 
 #[derive(Debug)]
@@ -42,6 +47,9 @@ pub(crate) struct Lookup {
     pub extra_in_flight: usize,
     /// `Some` for a get_peers lookup, `None` for find_node.
     pub info_hash: Option<InfoHash>,
+    /// A BEP 33 scrape: get_peers with `scrape=1`, answered with counts.
+    pub scrape: bool,
+    pub started: Instant,
 }
 
 impl Lookup {
@@ -54,6 +62,8 @@ impl Lookup {
             peers: HashSet::new(),
             extra_in_flight: 0,
             info_hash: None,
+            scrape: false,
+            started: Instant::now(),
         }
     }
 
@@ -73,6 +83,7 @@ impl Lookup {
                 info,
                 distance,
                 state: State::Fresh,
+                blooms: None,
             },
         );
         // Drop the farthest candidates that aren't in flight.
@@ -90,15 +101,34 @@ impl Lookup {
         }
     }
 
+    /// Whether a candidate takes one of the K slots. In a scrape, the
+    /// first K responders that sent no filters (they don't store the hash,
+    /// or don't speak BEP 33) give their slot up, so the lookup reaches the
+    /// nodes that do; that bounds a scrape at 2K answers.
+    fn slot_filter(scrape: bool) -> impl FnMut(&Candidate) -> bool {
+        let mut skipped = 0;
+        move |c: &Candidate| {
+            if c.state == State::Failed {
+                return false;
+            }
+            if scrape && c.state == State::Responded && c.blooms.is_none() && skipped < K {
+                skipped += 1;
+                return false;
+            }
+            true
+        }
+    }
+
     /// Candidates to query now, marked in flight.
     pub fn next(&mut self) -> Vec<NodeInfo> {
         let mut out = Vec::new();
         let mut live = 0;
+        let mut counts = Lookup::slot_filter(self.scrape);
         for c in &mut self.candidates {
             if self.in_flight >= ALPHA || live >= K {
                 break;
             }
-            if c.state == State::Failed {
+            if !counts(c) {
                 continue;
             }
             live += 1;
@@ -145,16 +175,64 @@ impl Lookup {
         self.settle(id, State::Failed);
     }
 
+    /// A query to `id` couldn't be sent for lack of budget: it goes back
+    /// to fresh, to be asked on a later drive, rather than counting as a
+    /// node that failed to answer.
+    pub fn retry_later(&mut self, id: &NodeId) {
+        self.settle(id, State::Fresh);
+    }
+
+    /// Keeps the BEP 33 filters an in-flight node answered with. Call
+    /// before [`Lookup::on_response`] settles it.
+    pub fn record_blooms(
+        &mut self,
+        id: &NodeId,
+        seeds: Option<&[u8; 256]>,
+        peers: Option<&[u8; 256]>,
+    ) {
+        if seeds.is_none() && peers.is_none() {
+            return;
+        }
+        if let Some(c) = self
+            .candidates
+            .iter_mut()
+            .find(|c| c.info.id == *id && c.state == State::InFlight)
+        {
+            let copy = |b: Option<&[u8; 256]>| b.map_or_else(Bloom::default, |b| Bloom(*b));
+            c.blooms = Some(Box::new((copy(seeds), copy(peers))));
+        }
+    }
+
+    /// The union of the filters from the [`K`] closest responders that
+    /// sent any, and how many that was. Nodes that don't store the hash
+    /// (or don't speak BEP 33) send none and so don't take a slot.
+    pub fn scrape_blooms(&self) -> (Bloom, Bloom, u8) {
+        let (mut seeds, mut peers, mut n) = (Bloom::default(), Bloom::default(), 0u8);
+        for (sd, pe) in self
+            .candidates
+            .iter()
+            .filter(|c| c.state == State::Responded)
+            .filter_map(|c| c.blooms.as_deref())
+            .take(K)
+        {
+            seeds.union(sd);
+            peers.union(pe);
+            n += 1;
+        }
+        (seeds, peers, n)
+    }
+
     /// Done when nothing is in flight and the K closest live candidates
     /// have all answered.
     pub fn is_done(&self) -> bool {
         if self.in_flight > 0 || self.extra_in_flight > 0 {
             return false;
         }
+        let mut counts = Lookup::slot_filter(self.scrape);
         !self
             .candidates
             .iter()
-            .filter(|c| c.state != State::Failed)
+            .filter(|c| counts(c))
             .take(K)
             .any(|c| c.state == State::Fresh)
     }
@@ -247,6 +325,55 @@ mod tests {
         let peer = SocketAddr::from(([1, 2, 3, 4], 5));
         l.on_response(&NodeId([1; 20]), std::iter::empty(), &[peer, peer]);
         assert_eq!(l.peers.len(), 1);
+        assert!(l.is_done());
+    }
+
+    /// One filter per IP in `ips`, as a node storing those peers sends.
+    fn bloom(ips: &[u8]) -> [u8; 256] {
+        let mut b = Bloom::default();
+        for i in ips {
+            b.insert(std::net::IpAddr::from([10, 9, 0, *i]));
+        }
+        b.0
+    }
+
+    #[test]
+    fn merges_filters_of_the_k_closest_responders_that_sent_one() {
+        let mut l = Lookup::new(NodeId([0; 20]), 0);
+        l.scrape = true;
+        for b in 1..=12 {
+            l.add(n(b));
+        }
+        while !l.is_done() {
+            for q in l.next() {
+                let b = q.id.0[0];
+                match b {
+                    // No BEP 33 support: doesn't take one of the K slots.
+                    1 | 2 => {}
+                    // Nodes 3..=10 are the K closest with filters; each
+                    // knows seed `b` and the shared leecher 200.
+                    3..=10 => l.record_blooms(&q.id, Some(&bloom(&[b])), Some(&bloom(&[200]))),
+                    // Farther than the K: its peers must not count.
+                    _ => l.record_blooms(&q.id, Some(&bloom(&[100, 101])), None),
+                }
+                l.on_response(&q.id, std::iter::empty(), &[]);
+            }
+        }
+        let (seeds, peers, n) = l.scrape_blooms();
+        assert_eq!(n, K as u8);
+        assert_eq!(seeds.count(), 8);
+        assert_eq!(peers.count(), 1, "the same leecher counts once");
+    }
+
+    #[test]
+    fn throttled_candidates_wait_instead_of_failing() {
+        let mut l = Lookup::new(NodeId([0; 20]), 0);
+        l.add(n(1));
+        let q = l.next();
+        l.retry_later(&q[0].id);
+        assert!(!l.is_done(), "still has a fresh close node");
+        assert_eq!(l.next(), q, "asked again on the next drive");
+        l.on_response(&q[0].id, std::iter::empty(), &[]);
         assert!(l.is_done());
     }
 }
