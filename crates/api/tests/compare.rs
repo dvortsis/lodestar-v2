@@ -218,7 +218,11 @@ async fn golden(f: &Fixture, name: &str, req: Request<Body>) -> Value {
     } else {
         let want = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("{}: {e} (bless with LODESTAR_BLESS=1)", path.display()));
-        assert_eq!(got, want.replace("\r\n", "\n"), "{name}: the response changed");
+        assert_eq!(
+            got,
+            want.replace("\r\n", "\n"),
+            "{name}: the response changed"
+        );
     }
     serde_json::from_str(&body).unwrap_or(Value::Null)
 }
@@ -324,7 +328,10 @@ async fn other_versions_match_the_title_identity() {
     assert_eq!(got, want);
     assert_eq!(group["truncated"], false);
     assert_eq!(body["identity"]["years"], json!(["2008"]));
-    assert_eq!(body["identity"]["title_words"], json!(["the", "dark", "knight"]));
+    assert_eq!(
+        body["identity"]["title_words"],
+        json!(["the", "dark", "knight"])
+    );
     // Each hit is a search row, classification included.
     assert_eq!(group["hits"][0]["content_type"], "movie");
 
@@ -333,13 +340,19 @@ async fn other_versions_match_the_title_identity() {
         let (status, body) = json_of(&f.app, get(&siblings(i), c)).await;
         assert_eq!(status, StatusCode::OK);
         let got = names(&body["other_versions"]);
-        assert!(got.contains(&all[KNIGHT_1080].name.to_string()), "{i}: {got:?}");
+        assert!(
+            got.contains(&all[KNIGHT_1080].name.to_string()),
+            "{i}: {got:?}"
+        );
         assert!(!got.contains(&all[i].name.to_string()), "{i}: self listed");
     }
 
     // Seasons and episodes are kept apart.
     let body = golden(&f, "siblings_episode", get(&siblings(SHOW_S1E2), c)).await;
-    assert_eq!(names(&body["other_versions"]), vec![all[SHOW_S1E2_WEB].name]);
+    assert_eq!(
+        names(&body["other_versions"]),
+        vec![all[SHOW_S1E2_WEB].name]
+    );
     let (_, body) = json_of(&f.app, get(&siblings(SHOW_S2E2), c)).await;
     assert_eq!(names(&body["other_versions"]), Vec::<String>::new());
     assert_eq!(body["other_versions"]["status"], "available");
@@ -387,10 +400,7 @@ async fn siblings_respect_hidden_and_adult() {
     golden(
         &f,
         "siblings_unknown",
-        get(
-            &format!("/api/v1/torrents/{}/siblings", "ab".repeat(20)),
-            c,
-        ),
+        get(&format!("/api/v1/torrents/{}/siblings", "ab".repeat(20)), c),
     )
     .await;
     golden(
@@ -447,7 +457,12 @@ async fn compare_two_and_five() {
     let c = session(&f).await;
     let c = Some(c.as_str());
 
-    let body = golden(&f, "compare_two", compare(&f, &[KNIGHT_1080, KNIGHT_720], c)).await;
+    let body = golden(
+        &f,
+        "compare_two",
+        compare(&f, &[KNIGHT_1080, KNIGHT_720], c),
+    )
+    .await;
     let cols = body["torrents"].as_array().unwrap();
     assert_eq!(cols.len(), 2);
     assert_eq!(cols[0]["name"], all[KNIGHT_1080].name);
@@ -478,8 +493,14 @@ async fn compare_two_and_five() {
         diff["common"],
         json!({ "count": 1, "files": [{ "path": "Subs/English.srt", "size": 90_000 }], "truncated": false })
     );
-    assert_eq!(diff["only"][0]["files"][0]["path"], "The.Dark.Knight.2008.1080p.mkv");
-    assert_eq!(diff["only"][1]["files"][0]["path"], "The Dark Knight (2008).mkv");
+    assert_eq!(
+        diff["only"][0]["files"][0]["path"],
+        "The.Dark.Knight.2008.1080p.mkv"
+    );
+    assert_eq!(
+        diff["only"][1]["files"][0]["path"],
+        "The Dark Knight (2008).mkv"
+    );
 
     let five = [KNIGHT_1080, KNIGHT_720, KNIGHT_LOWER, RISES, BEGINS];
     let body = golden(&f, "compare_five", compare(&f, &five, c)).await;
@@ -512,7 +533,11 @@ async fn compare_refuses_bad_sets() {
     golden(
         &f,
         "compare_bad_hash",
-        post("/api/v1/compare", c, json!({ "hashes": ["xyz", f.hashes[0]] })),
+        post(
+            "/api/v1/compare",
+            c,
+            json!({ "hashes": ["xyz", f.hashes[0]] }),
+        ),
     )
     .await;
     // Hidden, or Adult while hidden: as unknown, naming nothing.
@@ -544,7 +569,9 @@ async fn compare_refuses_bad_sets() {
 
 #[tokio::test]
 async fn the_file_diff_is_bounded() {
-    let big: Vec<(String, i64)> = (0..2100).map(|i| (format!("d/f{i:05}.bin"), 1000)).collect();
+    let big: Vec<(String, i64)> = (0..2100)
+        .map(|i| (format!("d/f{i:05}.bin"), 1000))
+        .collect();
     let small: Vec<(String, i64)> = (0..50)
         .map(|i| (format!("d/f{i:05}.bin"), 1000))
         .chain([("extra.txt".to_string(), 5)])
@@ -596,13 +623,22 @@ async fn the_file_diff_is_bounded() {
     assert_eq!(diff["only"][0]["truncated"], true);
     // In the torrent's order.
     assert_eq!(diff["only"][0]["files"][0]["path"], "d/f00050.bin");
-    assert_eq!(diff["only"][1]["files"], json!([{ "path": "extra.txt", "size": 5 }]));
+    assert_eq!(
+        diff["only"][1]["files"],
+        json!([{ "path": "extra.txt", "size": 5 }])
+    );
 
     let (_, body) = json_of(&f.app, compare(&f, &[1, 2], c)).await;
     let diff = &body["file_diff"];
     assert_eq!(diff["common"]["count"], 50);
-    assert_eq!(diff["only"][0]["files"], json!([{ "path": "d/f00000.bin", "size": 1000 }]));
-    assert_eq!(diff["only"][1]["files"], json!([{ "path": "d/f00000.bin", "size": 999 }]));
+    assert_eq!(
+        diff["only"][0]["files"],
+        json!([{ "path": "d/f00000.bin", "size": 1000 }])
+    );
+    assert_eq!(
+        diff["only"][1]["files"],
+        json!([{ "path": "d/f00000.bin", "size": 999 }])
+    );
 
     // A 60,000-file tree against itself-sized others: every list stays
     // within its cap, and the response stays small.
