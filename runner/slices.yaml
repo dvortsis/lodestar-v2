@@ -5,8 +5,8 @@
 # two running slices never own overlapping paths.
 
 limits:
-  max_core: 2              # Opus code slices at once (disjoint `owns` only)
-  max_helpers: 6           # Sonnet/Haiku slices at once
+  max_core: 4              # Opus code slices at once (disjoint crates only; raised 2026-10-22)
+  max_helpers: 8           # Sonnet/Haiku slices at once
   max_launches_per_day: 40 # backstop against runaway loops, not a budget
   review_rounds_before_escalation: 2
 
@@ -284,6 +284,13 @@ slices:
   - {id: S-e2e, title: "Playwright matrix (breakpoints × themes × densities), reduced motion, Lighthouse", kind: helper, model: sonnet, deps: [S-search-3, S-detail, W1b], owns: ["web/tests/e2e/**"], spec: ["§10.17"]}
   - {id: H-zh, title: "zh message catalogue fill", kind: helper, model: haiku, deps: [S-search-6, S-insights-3, S-settings-1], owns: ["web/src/lib/features/*/messages/zh.json"], spec: ["§10.14"]}
   - {id: G-m5, title: "M5 exit gate: analytics-validation, overhead bench, design-review", kind: gate, model: opus, deps: [S-search-4, S-search-5, S-search-6, S-compare, S-discover, S-alerts, S-insights-3, S-wizard, S-appearance, S-filters, S-keys, S-e2e, H-zh, B5c], checks: ["§14 M5 exit criteria"]}
+
+  # ── Pulled forward (independent of M5 and the M4 sessions' files; owner let the runner decide, 2026-10-22) ──
+  - {id: X-utp, title: "uTP (BEP 29) transport behind a flag, shared UDP port demux", kind: core, model: opus, deps: [], owns: ["crates/utp/**", "crates/peer-wire/**", "crates/dht/src/socket.rs"], spec: ["§6", "§15", "§13"], notes: "config wiring waits for B2"}
+  - {id: X-integrations, title: "integrations crate: DownloadClient and Notifier traits, secret storage, SSRF guard, qBittorrent + webhook as the pattern", kind: core, model: opus, deps: [], owns: ["crates/integrations/**"], spec: ["§9", "§12", "§18.10"]}
+  - {id: X-clients, title: "Transmission, Deluge, rTorrent, Aria2 adapters", kind: helper, model: sonnet, deps: [X-integrations], owns: ["crates/integrations/src/clients/**"], spec: ["§9"]}
+  - {id: X-notify, title: "ntfy, Discord, email, RSS senders", kind: helper, model: sonnet, deps: [X-integrations], owns: ["crates/integrations/src/notify/**"], spec: ["§8", "§10.9.7"]}
+  - {id: X-pack-static, title: "Unraid templates (main, worker, gluetun), systemd unit, operations docs draft", kind: helper, model: sonnet, deps: [], owns: ["packaging/unraid/**", "packaging/systemd/**", "docs/operations.md"], spec: ["§11", "§12", "§19.6"]}
 
   # ── Later phases: expanded into slices by the runner when their deps clear ──
   - {id: E-M6, title: "M6 packaging (build-plan P3)", kind: epic, model: opus, deps: [G-v05, B2]}
