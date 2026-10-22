@@ -1,0 +1,39 @@
+{
+  "recorded_from": "Transmission 4.0.5 (rpc-version 17), transmission-daemon on Ubuntu 24.04",
+  "note": "the same magnet again: torrent-duplicate",
+  "request": {
+    "method": "POST",
+    "path": "/transmission/rpc",
+    "query": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "server",
+        "Transmission"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "content-security-policy",
+        "frame-ancestors 'self'"
+      ],
+      [
+        "access-control-allow-origin",
+        "*"
+      ],
+      [
+        "content-type",
+        "application/json; charset=UTF-8"
+      ],
+      [
+        "content-length",
+        "152"
+      ]
+    ],
+    "body": "{\"arguments\":{\"torrent-duplicate\":{\"hashString\":\"c9e15763f722f23e98a29decdfae341b98d53056\",\"id\":1,\"name\":\"Lodestar+Magnet+Fixture\"}},\"result\":\"success\"}"
+  }
+}

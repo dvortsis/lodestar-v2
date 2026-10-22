@@ -1,0 +1,39 @@
+{
+  "recorded_from": "Transmission 4.0.5 (rpc-version 17), transmission-daemon on Ubuntu 24.04",
+  "note": "rpc-host-whitelist (checked only when no password is set) does not include the Host header name",
+  "request": {
+    "method": "POST",
+    "path": "/transmission/rpc",
+    "query": null
+  },
+  "response": {
+    "status": 421,
+    "headers": [
+      [
+        "server",
+        "Transmission"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "content-security-policy",
+        "frame-ancestors 'self'"
+      ],
+      [
+        "access-control-allow-origin",
+        "*"
+      ],
+      [
+        "content-length",
+        "561"
+      ],
+      [
+        "content-type",
+        "text/html; charset=ISO-8859-1"
+      ]
+    ],
+    "body": "<h1>421: Misdirected Request</h1><p>Transmission received your request, but the hostname was unrecognized.</p><p>To fix this, choose one of the following options:<ul><li>Enable password authentication, then any hostname is allowed.</li><li>Add the hostname you want to use to the whitelist in settings.</li></ul></p><p>If you're editing settings.json, see the 'rpc-host-whitelist' and 'rpc-host-whitelist-enabled' entries.</p><p>This requirement has been added to help prevent <a href=\"https://en.wikipedia.org/wiki/DNS_rebinding\">DNS Rebinding</a> attacks.</p>"
+  }
+}

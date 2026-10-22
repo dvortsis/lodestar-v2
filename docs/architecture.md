@@ -1826,6 +1826,46 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **qBittorrent "Send selected files":** the torrent is added paused, unselected files get priority 0 once the client has the metadata, and then the torrent starts. If a magnet's metadata doesn't arrive within 30 s, the torrent stays paused and the UI says the selection is pending, so nothing unwanted downloads.
 - **Webhook payload:** `lodestar.notification`, `schema_version` 1, with an `id` that stays the same across retries for deduplication. Private-source items are left out, and only their count is sent (§18.7).
 
+**Download-client adapters: Transmission, Deluge, rTorrent, Aria2 (X-clients):**
+- **All four:**
+  - **Bulk send:** none of the four has a batch add that reports per torrent, so each adapter adds the torrents one at a time.
+  - **Duplicates:** a single torrent that's already in the client is `Rejected` ("already in the client"). In a bulk send a duplicate counts as sent, because it's already where the user wants it; the send is refused only when every torrent was a duplicate.
+  - **A bulk send that fails part-way** returns `ClientError::Partial { sent, cause }`, so the caller can still count the torrents that went in (`sends`, `docs/metrics.md` §6.7) and doesn't retry them. qBittorrent sends a bulk add as one request, so it never returns `Partial`.
+  - **"Send selected files" works for a `.torrent` file in all four, but for a magnet only in Aria2.** Transmission, Deluge and rTorrent fetch a paused (or stopped) magnet's metadata only once it's started, so nothing could be selected before files start downloading. Checked live: every magnet selection was still pending after 30 s.
+    - `Capabilities::magnet_file_selection` says whether a client can do it. Where it can't, `check_magnets` refuses a magnet with a selection as `Unsupported(MagnetFileSelection)` before any request, and the UI offers "send all files" or the `.torrent` instead.
+    - A metadata-only start, without downloading payload, couldn't be verified here, because the session had no outbound peer network. It's left unsupported rather than guessed.
+    - For a `.torrent`, the adapter still waits up to 30 s (polling every 500 ms) for the client to register it, as qBittorrent does.
+  - **Hostile answers:** a file count above `MAX_FILES` (1,000,000) is a `Protocol` error before anything is sized from it. The check is in each adapter and in the shared `skipped_files`. JSON answers parse into typed structs; file lists are counted and never stored.
+  - **`ClientConfig`'s `Debug`** shows only the URL's scheme, host and port, so a token in the configured URL's query is never printed. The adapters drop the query anyway.
+  - **New auth failure:** Transmission answers an `rpc-whitelist` refusal and a brute-force ban with the same bare 403, so `AuthFailure::AddressRefused` says "check the client's IP allow-list, or whether it banned this address". rTorrent's web server uses it for 403 too.
+- **rTorrent: XML-RPC at the web server's `/RPC2`, not ruTorrent's `httprpc` plugin.**
+  - **Why:** every rTorrent install can expose `/RPC2`, and ruTorrent itself needs it (or SCGI). `httprpc` exists only where ruTorrent and PHP are installed, and its action set differs between ruTorrent versions. XML-RPC is typed and documented, with real fault answers.
+  - **Parsing:** answers are parsed with `quick-xml` 0.42.0, used as a reader only (no default features, no serde, no encodings). The parser:
+    - accepts only `i4`/`int`/`i8`, `string`, `boolean`, `double`, `nil`, `array` and `struct`;
+    - limits nesting to 16 levels, and `read_limited` bounds the size;
+    - refuses any `<!DOCTYPE`, and resolves only the five predefined entities and character references.
+
+    Property tests check that arbitrary bytes never panic and that deeper nesting is refused.
+  - **The save path and label go along as commands of the load** (`d.directory.set=…`, `d.custom1.set=…`). rTorrent keeps a magnet's load commands and applies them again when its metadata arrives; values set afterwards wouldn't survive that.
+    - rTorrent parses these commands, and evaluates a leading `$` even inside quotes (checked on 0.9.8: `d.custom1.set="$cat=x,y"` stored `xy`). So values are quoted with `\` and `"` escaped, and a value starting with `$` is refused.
+    - The label is percent-encoded, as ruTorrent stores it in `d.custom1`, so a label can't inject anything.
+  - **Checking the add:** `load.*` answers 0 even when rTorrent drops the torrent (a corrupt file, or a magnet with no trackers while DHT is off). So the adapter asks `d.hash` before the load (to catch a duplicate) and polls it for up to 5 s after (to confirm the torrent appeared).
+- **Transmission:**
+  - **Labels:** sent in `torrent-add` from RPC 17 (4.0), and with `torrent-set` after the add on RPC 16 (3.00). Older daemons have no labels, so the torrent is added without one, as the brief specifies.
+  - **Categories** are the labels already in use on the daemon's torrents, since Transmission keeps no label list of its own. Before RPC 16 they're `Unsupported`.
+  - **The 409 body** repeats the session id, so it's never read into an error.
+- **Deluge:**
+  - **Labels need the Label plugin.** Without it, an add with a label is refused as `Unsupported` before anything is added.
+  - The plugin only accepts lowercase labels, so the label is lowercased, and created with `label.add` before the add if it doesn't exist.
+  - **File priorities:** a selection keeps each selected file's existing priority and sets the skipped files to 0.
+  - **Errors:** only the exception text of a code 3/4 error is shown, without the traceback. A code 5 error ("couldn't read the request") is never shown, because its message quotes the request, password included.
+- **Aria2:**
+  - **Selection is passed at add time** (`select-file`, 1-based), and aria2 applies it itself, so it needs no paused flow.
+    - **A `.torrent`'s indices are checked with `aria2.getFiles`:** it's added paused, then started. An index past the last file leaves it paused and the add is refused as `InvalidRequest`, as in qBittorrent.
+    - **A magnet's indices can't be checked** before its metadata arrives; the outcome still says `Applied`.
+  - **Duplicates** only fail when the download starts (`errorCode` 12), so a started add is followed by one `aria2.tellStatus`. A paused duplicate fails later, inside aria2.
+  - **No categories.**
+
 **X-utp implementation decisions (uTP, `lodestar-utp`, behind a flag):**
 - **Our own crate, not a dependency.** The maintained candidates were measured against the §15 criteria (MIT/Apache, tokio-native, LEDBAT, bounded memory, no `unsafe` on our side, fuzzable parsing, active):
   - `librqbit-utp` 0.7 (Apache-2.0, tokio, active) has no LEDBAT: Cubic only, with LEDBAT a TODO. It also pulls in `libc`, `socket2`, `parking_lot` and `lazy_static`.
@@ -1857,7 +1897,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 
 **M5 decisions (index rebuild):**
 - **The directory name is the proof of completeness.** Under `data/index`, `v{schema}-t{tokenizer}` is complete, `….building` is in progress and `….trash` is being deleted. A build becomes complete only by an atomic rename, after its final commit and a `COMPLETE` marker. A crash between the marker and the rename just needs the rename at the next start. Directories from before this change already have the complete form, so upgrading doesn't rebuild.
-- **`Serving::open_or_rebuild(root, store_path, config)`** is the binary's entry point (wired in by B5a). It holds an exclusive lock on `root/.lock`. A second instance fails with `Error::Locked`; a filesystem that can't lock (some SMB or NAS shares) fails with `Error::LockFailed`, which says so. It serves through an `RwLock<Arc<SearchIndex>>`: readers take the index once per query, which moves them to the new one between queries.
+- **`Serving::open_or_rebuild(root, store_path, config)`** is the binary's entry point (wired in by B5a). It holds an exclusive lock on `root/.lock`. A second instance fails with `Error::Locked`; a filesystem that can't lock (some SMB or NAS shares) fails with `Error::LockFailed`, which says so. It serves through a `Mutex<Arc<SearchIndex>>` held only to clone or replace the `Arc` (an `RwLock` before the B5a swap fix): readers take the index once per query, which moves them to the new one between queries.
   - When this build's index exists, it opens that index and starts the live indexer, as before.
   - Otherwise, the newest complete older index keeps serving. Meanwhile, `Rebuild` follows the store into `….building` with the ordinary `Indexer::catch_up`, covering both indexes, per-index watermarks and `reindex_log`. It commits every 50k torrents, so an interrupted or stopped build resumes from its own watermarks. It builds up to a snapshot taken at the start (the highest torrent id and the `reindex_log` head) rather than chasing new torrents; those are added at the swap.
   - Then it commits, waits for merges, writes the marker and renames. **The swap order keeps every visible torrent visible:** the old live indexer stops (committing), the new index catches up once more and commits, a live indexer starts on it, and only then do readers move. Each index follows `reindex_log` from its own sequence, so entries logged at any point are applied before the swap or after it.
@@ -1868,7 +1908,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - An older index that fails to open is retried with backoff, then fails the start. It's never discarded over an error that may be transient (an antivirus scan, a share hiccup).
 - **Known limitation, tokenizer bumps:** the binary has only the current tokenizer, so an older index is queried with it until the swap. A word whose tokens changed may not match there meanwhile. Keeping old tokenizers around isn't worth it for a rebuild window of an hour or so at 10M.
 - **Old directories are renamed to trash and then deleted after the swap, with backoff retries** (Windows can't delete mapped files, §11). Whatever is left is retried at the next start. A newer version's directory is never deleted, so a downgrade and upgrade don't rebuild twice.
-- **`RebuildProgress { phase, done, total, replayed, errors, started_at, from, to, unavailable }`** comes from `Serving::progress()` for the "Index rebuilding" banner (§10.4) and Insights.
+- **`RebuildProgress { phase, done, total, replayed, errors, started_at, from, to, unavailable, error }`** comes from `Serving::progress()` for the "Index rebuilding" banner (§10.4) and Insights.
   - `done` counts torrents added; replayed `reindex_log` entries and failed steps are counted apart. Rebuild errors stay out of the live indexer's `IndexStats`.
   - The phases are `Building`, `Finishing`, `Swapping` and `Failed`. A failure is logged, the old index keeps serving and following the store, and the next start resumes the build.
   - The live counters (`IndexStats`) are kept across the swap.
@@ -1908,7 +1948,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 
 **B5a swap fix (Windows):**
 - **Renames of index directories retry with backoff, about 10 s in all, before they count as failures.** Windows refuses to rename a directory while any file in it is open, and an antivirus or search indexer opens freshly written segments for a moment. Before this, one such moment failed the whole rebuild at the finishing rename.
-  - A failed rebuild stays in `Failed` with the old index serving, so `rebuilding()` never cleared. That's how B5b's swap test hung on Windows CI.
+  - A failed rebuild stays in `Failed` with the old index serving, so `rebuilding()` never cleared. That's the likely cause of B5b's swap test hanging on Windows CI (inferred from the code and the symptom, not reproduced on Windows).
 - **`RebuildProgress` gains `error`**, the failure's message, so the banner, Insights and tests can say why.
 - **The serving pointer is a `Mutex<Arc<SearchIndex>>`, held only to clone or replace the `Arc`,** in place of an `RwLock`. A swap then waits behind at most one clone, whatever the platform's reader/writer policy (Windows SRW locks promise none).
 
