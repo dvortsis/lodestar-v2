@@ -103,7 +103,7 @@ fn the_payload_withholds_private_items_and_allows_no_mentions() {
 }
 
 #[test]
-fn a_hostile_name_cant_ping_or_link() {
+fn a_hostile_name_cant_ping_or_hide_a_link() {
     let mut n = alert();
     n.items[0].name = "@everyone @here <@&99> [free](https://evil.example)".into();
     let p = Discord::payload(&n);
@@ -132,7 +132,13 @@ fn embeds_stay_within_discords_limits() {
     let t = e["title"].as_str().unwrap().encode_utf16().count();
     let d = e["description"].as_str().unwrap().encode_utf16().count();
     assert!(t <= MAX_TITLE && d <= MAX_DESCRIPTION && t + d <= MAX_EMBED_TOTAL);
-    assert!(e["description"].as_str().unwrap().ends_with('…'));
+    // The description is cut, but the closing note about the rest is whole.
+    assert!(
+        e["description"]
+            .as_str()
+            .unwrap()
+            .ends_with("\n\n…and 40 more")
+    );
 }
 
 #[test]
@@ -214,4 +220,24 @@ async fn no_token_in_logs_debug_or_errors() {
         assert!(!logged.contains(secret), "{secret} in the logs: {logged}");
     }
     assert!(text.contains("https://discord.com/…"));
+}
+
+#[test]
+fn the_withheld_count_survives_an_overflowing_description() {
+    let mut n = Notification::new(NotificationKind::Digest, "d", "b".repeat(300));
+    n.items = (0..22)
+        .map(|i| NotificationItem {
+            name: "n".repeat(280),
+            info_hash: format!("{i:040x}"),
+            size_bytes: None,
+            private_source: i >= 20,
+        })
+        .collect();
+    let p = Discord::payload(&n);
+    let d = p["embeds"][0]["description"].as_str().unwrap();
+    assert!(d.encode_utf16().count() <= MAX_DESCRIPTION);
+    assert!(
+        d.ends_with("2 results from private sources aren't included."),
+        "{d}"
+    );
 }

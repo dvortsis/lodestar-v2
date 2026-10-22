@@ -11,12 +11,17 @@
 //!   can't occur in a Rust string. Nothing else is changed;
 //! - no CDATA sections, and no attribute takes input (`isPermaLink` is
 //!   always `false`);
+//! - an item's `description` is plain text, but RSS readers decode it as
+//!   HTML after the XML is parsed, so `&lt;img onerror=…&gt;` would become a
+//!   live tag. It is HTML-escaped first and XML-escaped second, so a reader
+//!   shows the markup characters literally;
 //! - links must be absolute `http(s)` URLs: a feed reader opens them, so
 //!   `javascript:` and the like are left out.
 //!
-//! **Private results stay local (§18.7):** [`items_from_notification`] builds
+//! **Private results stay local (§18.7):** [`render`] drops every item whose
+//! [`RssItem::private_source`] is set, and [`items_from_notification`] builds
 //! items from [`Notification::shareable_items`] only, so a private-source
-//! item never reaches a feed.
+//! item never reaches a feed whichever way the caller built its items.
 
 use std::fmt::Write;
 
@@ -65,7 +70,12 @@ pub struct RssItem {
     pub guid: String,
     /// Unix seconds.
     pub published: u64,
+    /// Plain text. [`render`] escapes it for readers that treat a feed's
+    /// description as HTML.
     pub description: String,
+    /// Found only through a private source (§18.7): [`render`] leaves the
+    /// item out.
+    pub private_source: bool,
 }
 
 /// The items of `n` a feed may carry: shareable ones only, each with its
@@ -77,6 +87,7 @@ pub fn items_from_notification(n: &Notification) -> Vec<RssItem> {
             link: n.link.clone(),
             guid: item.info_hash.clone(),
             published: n.created_at,
+            private_source: false,
             description: match item.size_bytes {
                 Some(size) => format!("{} ({})", clean_line(&n.title), format_bytes(size)),
                 None => clean_line(&n.title),
@@ -93,9 +104,14 @@ pub fn render(channel: &RssChannel, items: &[RssItem]) -> Result<String, RssErro
     out.push_str("<rss version=\"2.0\">\n<channel>\n");
     element(&mut out, 1, "title", &channel.title);
     element(&mut out, 1, "link", &link);
-    element(&mut out, 1, "description", &channel.description);
+    element(
+        &mut out,
+        1,
+        "description",
+        &html_escape(&channel.description),
+    );
     element(&mut out, 1, "lastBuildDate", &rfc2822(channel.built_at));
-    for item in items {
+    for item in items.iter().filter(|i| !i.private_source) {
         out.push_str("  <item>\n");
         element(&mut out, 2, "title", &item.title);
         if let Some(link) = item.link.as_deref().and_then(web_link) {
@@ -105,11 +121,27 @@ pub fn render(channel: &RssChannel, items: &[RssItem]) -> Result<String, RssErro
         escape_into(&mut out, &item.guid);
         out.push_str("</guid>\n");
         element(&mut out, 2, "pubDate", &rfc2822(item.published));
-        element(&mut out, 2, "description", &item.description);
+        element(&mut out, 2, "description", &html_escape(&item.description));
         out.push_str("  </item>\n");
     }
     out.push_str("</channel>\n</rss>\n");
     Ok(out)
+}
+
+/// `s` with the characters HTML treats as markup written as entities.
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 fn element(out: &mut String, depth: usize, name: &str, text: &str) {
@@ -201,6 +233,7 @@ mod tests {
             guid: "a".repeat(40),
             published: 1_761_134_400 + i,
             description: "Two new results (4.37\u{a0}GiB)".into(),
+            private_source: false,
         }
     }
 
@@ -215,7 +248,7 @@ mod tests {
 <channel>
   <title>Lodestar: 4K nature docs</title>
   <link>http://lodestar.lan/searches/7</link>
-  <description>New results for the saved search &quot;4K nature docs&quot;.</description>
+  <description>New results for the saved search &amp;quot;4K nature docs&amp;quot;.</description>
   <lastBuildDate>Wed, 22 Oct 2025 12:00:00 GMT</lastBuildDate>
   <item>
     <title>Planet.Earth.III.0.2160p</title>
@@ -302,6 +335,44 @@ mod tests {
         let xml = render(&channel(), &items).unwrap();
         assert!(!xml.contains("Private.Tracker") && !xml.contains(&"b".repeat(40)));
         assert!(xml.contains("Public.One"));
+    }
+
+    #[test]
+    fn markup_in_a_description_stays_text_for_html_readers() {
+        let mut i = item(0);
+        i.description = "<img src=x onerror=alert(1)> & <script>".into();
+        let xml = render(&channel(), &[i]).unwrap();
+        check_well_formed(&xml).unwrap();
+        // XML-decoded once (what a feed parser hands the reader), the
+        // description holds entities, not tags.
+        let start = xml.rfind("<description>").unwrap() + "<description>".len();
+        let end = xml.rfind("</description>").unwrap();
+        let decoded = unescape(&xml[start..end]);
+        assert_eq!(
+            decoded,
+            "&lt;img src=x onerror=alert(1)&gt; &amp; &lt;script&gt;"
+        );
+        assert!(!decoded.contains('<'));
+    }
+
+    #[test]
+    fn private_items_are_dropped_by_the_renderer() {
+        let mut private = item(1);
+        private.title = "Private.Tracker.Exclusive".into();
+        private.guid = "b".repeat(40);
+        private.private_source = true;
+        let xml = render(&channel(), &[item(0), private]).unwrap();
+        assert_eq!(xml.matches("<item>").count(), 1);
+        assert!(!xml.contains("Private.Tracker") && !xml.contains(&"b".repeat(40)));
+        let only_private = RssItem {
+            private_source: true,
+            ..item(2)
+        };
+        assert!(
+            !render(&channel(), &[only_private])
+                .unwrap()
+                .contains("<item>")
+        );
     }
 
     #[test]
@@ -395,6 +466,15 @@ mod tests {
             .replace("&amp;", "&")
     }
 
+    /// What an HTML reader makes of the description after the XML layer.
+    fn html_unescape(s: &str) -> String {
+        s.replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&amp;", "&")
+    }
+
     /// What `escape_into` is documented to keep.
     fn expected(s: &str) -> String {
         s.chars().filter(|&c| is_xml_char(c)).collect()
@@ -433,6 +513,7 @@ mod tests {
                 guid: guid.clone(),
                 published: 0,
                 description: description.clone(),
+                private_source: false,
             };
             let xml = render(&c, &[i]).unwrap();
             prop_assert_eq!(check_well_formed(&xml), Ok(()));
@@ -448,7 +529,11 @@ mod tests {
             prop_assert_eq!(text_of("title", 0), expected(&channel_title));
             prop_assert_eq!(text_of("title", 1), expected(&title));
             prop_assert_eq!(text_of("guid", 0), expected(&guid));
-            prop_assert_eq!(text_of("description", 1), expected(&description));
+            // A reader decodes the XML, then the HTML: both layers undone
+            // give back the input.
+            let shown = text_of("description", 1);
+            prop_assert_eq!(&shown, &html_escape(&expected(&description)));
+            prop_assert_eq!(html_unescape(&shown), expected(&description));
         }
 
         #[test]

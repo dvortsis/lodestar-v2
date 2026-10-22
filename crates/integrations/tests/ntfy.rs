@@ -108,7 +108,7 @@ fn the_message_never_exceeds_ntfys_limit() {
         .collect();
     let m = Ntfy::message(&n);
     assert!(m.len() <= MAX_MESSAGE_BYTES);
-    assert!(m.ends_with('…'));
+    assert!(m.contains('…') && m.ends_with("…and 80 more"), "{m}");
     // Valid UTF-8 by construction; the cut is at a character boundary.
     assert!(std::str::from_utf8(m.as_bytes()).is_ok());
 }
@@ -190,4 +190,23 @@ async fn no_secret_in_logs_debug_or_errors() {
         assert!(!logged.contains(secret), "{secret} in the logs: {logged}");
     }
     assert!(text.contains("https://ntfy.example/…"));
+}
+
+#[test]
+fn the_withheld_count_survives_an_overflowing_message() {
+    let mut n = Notification::new(NotificationKind::Digest, "d", "b".repeat(300));
+    n.items = (0..22)
+        .map(|i| NotificationItem {
+            name: "n".repeat(280),
+            info_hash: format!("{i:040x}"),
+            size_bytes: None,
+            private_source: i >= 20,
+        })
+        .collect();
+    let m = Ntfy::message(&n);
+    assert!(m.len() <= MAX_MESSAGE_BYTES);
+    assert!(
+        m.ends_with("2 results from private sources aren't included."),
+        "{m}"
+    );
 }

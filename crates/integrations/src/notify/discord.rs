@@ -23,8 +23,9 @@
 //!   `allow_private`. Redirects aren't followed.
 //! - **Nothing can ping.** `allowed_mentions.parse` is always empty, so a
 //!   torrent named `@everyone` or `<@&role>` is only text; markdown and
-//!   mention syntax in names is escaped so it can't become a link or a
-//!   mention anyway.
+//!   mention syntax in names is escaped too, so a name can't become a masked
+//!   link (`[text](url)`), a mention or formatting. A bare `https://…` in a
+//!   name may still be shown as a plain link: its target is what it reads.
 //! - **Private items stay local (§18.7):** only shareable items are listed,
 //!   and the description says how many were withheld.
 //! - **Rate limits:** a 429 carries `retry_after` (seconds, often
@@ -45,7 +46,7 @@ use reqwest::header::{CONTENT_TYPE, HeaderMap, RETRY_AFTER};
 use reqwest::{Method, StatusCode, Url};
 use serde_json::{Value, json};
 
-use super::ntfy::{clean_line, clean_text, format_bytes, web_link};
+use super::ntfy::{clean_line, compose, web_link};
 use super::{AttemptError, Channel, DeliveryError, Notification, Notifier, check_status};
 use crate::BoxFuture;
 use crate::net::{GuardedClient, NetPolicy, parse_url, read_limited, redact};
@@ -59,9 +60,6 @@ pub const MAX_TITLE: usize = 256;
 pub const MAX_DESCRIPTION: usize = 4096;
 /// Title and description together, for one embed (all embeds share 6,000).
 pub const MAX_EMBED_TOTAL: usize = 6000;
-
-/// Items listed before "and N more".
-const MAX_LISTED_ITEMS: usize = 20;
 
 /// How much of an answer is read. Discord's message objects are a few KB.
 const MAX_ANSWER_BYTES: usize = 64 * 1024;
@@ -116,7 +114,7 @@ impl Discord {
     ) -> Result<Discord, DeliveryError> {
         let url = parse_url(config.webhook_url.expose(), http.policy())
             .map_err(|e| AttemptError::from(e).error)?;
-        check_webhook_url(&url)?;
+        let url = canonical_webhook_url(&url)?;
         Ok(Discord::from_url(url, http))
     }
 
@@ -131,7 +129,7 @@ impl Discord {
         let title = clean_line(&n.title);
         let title = truncate_units(&escape_markdown(&title), MAX_TITLE);
         let budget = MAX_DESCRIPTION.min(MAX_EMBED_TOTAL - units(&title));
-        let mut description = truncate_units(&description(n), budget);
+        let mut description = description(n, budget);
         let mut embed = serde_json::Map::new();
         if title.is_empty() && description.is_empty() {
             // An embed needs a title or a description.
@@ -153,49 +151,13 @@ impl Discord {
     }
 }
 
-fn description(n: &Notification) -> String {
-    let mut text = escape_markdown(&clean_text(&n.body));
-    let mut listed = 0;
-    let mut more = 0;
-    for item in n.shareable_items() {
-        if listed == MAX_LISTED_ITEMS {
-            more += 1;
-            continue;
-        }
-        if listed == 0 && !text.is_empty() {
-            text.push_str("\n\n");
-        } else if listed > 0 {
-            text.push('\n');
-        }
-        text.push_str("• ");
-        text.push_str(&escape_markdown(&clean_line(&item.name)));
-        if let Some(size) = item.size_bytes {
-            text.push_str(" (");
-            text.push_str(&format_bytes(size));
-            text.push(')');
-        }
-        listed += 1;
-    }
-    let mut notes = Vec::new();
-    if more > 0 {
-        notes.push(format!("…and {more} more"));
-    }
-    match n.withheld() {
-        0 => {}
-        1 => notes.push("1 result from a private source isn't included.".to_owned()),
-        w => notes.push(format!("{w} results from private sources aren't included.")),
-    }
-    for note in notes {
-        if !text.is_empty() {
-            text.push_str("\n\n");
-        }
-        text.push_str(&note);
-    }
-    text
+fn description(n: &Notification, budget: usize) -> String {
+    compose(n, escape_markdown, budget, units, truncate_units)
 }
 
-/// Accepts only `https://<discord host>/api[/v<N>]/webhooks/<id>/<token>`.
-fn check_webhook_url(url: &Url) -> Result<(), DeliveryError> {
+/// Accepts only `https://<discord host>/api[/v<N>]/webhooks/<id>/<token>`
+/// (a trailing slash is allowed) and returns it without the slash.
+fn canonical_webhook_url(url: &Url) -> Result<Url, DeliveryError> {
     let bad = |why| Err(DeliveryError::InvalidEndpoint(why));
     if url.scheme() != "https" {
         return bad("a Discord webhook URL starts with https://");
@@ -231,7 +193,9 @@ fn check_webhook_url(url: &Url) -> Result<(), DeliveryError> {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b));
     if id_ok && token_ok {
-        Ok(())
+        let mut canonical = url.clone();
+        canonical.set_path(&format!("/{}", segments.join("/")));
+        Ok(canonical)
     } else {
         bad("that isn't a Discord webhook URL")
     }
@@ -540,7 +504,7 @@ mod tests {
     }
 
     #[test]
-    fn nothing_in_a_name_can_mention_or_link() {
+    fn nothing_in_a_name_can_mention_or_hide_a_link() {
         let mut n = Notification::new(NotificationKind::Alert, "@everyone <@&1234>", "@here");
         n.items = vec![NotificationItem {
             name: "[click](http://evil.example) <@12345> @everyone `x` **b** > q".into(),
@@ -607,6 +571,27 @@ mod tests {
     }
 
     #[test]
+    fn the_private_count_survives_an_overflowing_description() {
+        let mut n = Notification::new(NotificationKind::Alert, "t", "b".repeat(500));
+        n.items = (0..23)
+            .map(|i| NotificationItem {
+                name: format!("{i:02} {}", "ñ".repeat(250)),
+                info_hash: format!("{i:040x}"),
+                size_bytes: Some(1 << 30),
+                private_source: i >= 21,
+            })
+            .collect();
+        let p = Discord::payload(&n);
+        let d = p["embeds"][0]["description"].as_str().unwrap();
+        assert!(units(d) <= MAX_DESCRIPTION, "{}", units(d));
+        assert!(d.contains('…'), "the list part was cut");
+        assert!(
+            d.ends_with("\n\n2 results from private sources aren't included."),
+            "{d}"
+        );
+    }
+
+    #[test]
     fn truncation_is_clean() {
         assert_eq!(truncate_units("abc", 3), "abc");
         assert_eq!(truncate_units("abcd", 3), "ab…");
@@ -643,7 +628,9 @@ mod tests {
             );
         }
         assert!(ok(format!("https://discord.com/api/v10/webhooks/{id}/{TOKEN}")).is_ok());
-        assert!(ok(format!("https://discord.com/api/webhooks/{id}/{TOKEN}/")).is_ok());
+        let slashed = ok(format!("https://discord.com/api/webhooks/{id}/{TOKEN}/")).unwrap();
+        assert_eq!(slashed.url.path(), PATH, "no trailing slash is sent");
+        assert_eq!(slashed.url.query(), Some("wait=true"));
         for bad in [
             format!("http://discord.com/api/webhooks/{id}/{TOKEN}"),
             format!("https://evil.example/api/webhooks/{id}/{TOKEN}"),

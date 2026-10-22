@@ -60,12 +60,20 @@ fn markup_in_every_field_is_escaped() {
         guid: hostile.into(),
         published: 0,
         description: hostile.into(),
+        private_source: false,
     };
     let xml = render(&c, &[item]).unwrap();
     assert!(!xml.contains("<script"), "{xml}");
     assert!(!xml.contains("javascript:"));
     assert!(!xml.contains("<!--"));
-    assert_eq!(xml.matches("&lt;/title&gt;&lt;script&gt;").count(), 5);
+    // Title (channel and item), guid and channel link-free fields escape once;
+    // descriptions twice, for readers that decode them as HTML.
+    assert_eq!(xml.matches("&lt;/title&gt;&lt;script&gt;").count(), 3);
+    assert_eq!(
+        xml.matches("&amp;lt;/title&amp;gt;&amp;lt;script&amp;gt;")
+            .count(),
+        2
+    );
 }
 
 #[test]
@@ -73,4 +81,22 @@ fn a_feed_needs_an_http_link() {
     let mut c = channel();
     c.link = "javascript:alert(1)".into();
     assert_eq!(render(&c, &[]), Err(RssError::InvalidLink));
+}
+
+#[test]
+fn a_caller_cant_leak_a_private_item_through_the_renderer() {
+    let item = |name: &str, private| RssItem {
+        title: name.into(),
+        link: None,
+        guid: name.into(),
+        published: 0,
+        description: String::new(),
+        private_source: private,
+    };
+    let xml = render(
+        &channel(),
+        &[item("Public", false), item("Secret.Tracker", true)],
+    )
+    .unwrap();
+    assert!(xml.contains("Public") && !xml.contains("Secret.Tracker"));
 }
