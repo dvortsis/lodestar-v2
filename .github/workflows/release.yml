@@ -5,6 +5,14 @@ name: Release
 #   daily/manual run -> ghcr.io/dvortsis/lodestar-v2:nightly   (main only)
 #   pull request     -> build and smoke test only; nothing is pushed
 # Every trigger runs the smoke job before anything can be pushed.
+#
+# Packages (architecture §11, §12.2; the package-* jobs below):
+#   tag vX.Y.Z       -> Linux tarballs (x86_64, aarch64), Windows MSI and portable
+#                       zip, and checksums, attached to a DRAFT GitHub release
+#   daily/manual run -> the same files as workflow artifacts only
+#   pull request     -> only when packaging, this workflow, the Cargo manifests or
+#                       lockfile or the toolchain change, or the PR has `full-ci`
+# Code signing is skipped until the owner adds the WINDOWS_CERT_* secrets.
 
 on:
   push:
@@ -13,8 +21,10 @@ on:
     - cron: "17 3 * * *"
   workflow_dispatch:
   pull_request:
+    # `labeled` so adding `full-ci` runs the package jobs.
+    types: [opened, synchronize, reopened, labeled]
     paths:
-      - "packaging/docker/**"
+      - "packaging/**"
       - "docker-compose.yml"
       - ".dockerignore"
       - "crates/**"
@@ -231,3 +241,318 @@ jobs:
           cache-from: |
             type=gha,scope=amd64
             type=gha,scope=arm64
+
+  # ===========================================================================
+  # Packages: Linux tarballs, Windows MSI and portable zip (architecture §11).
+  # ===========================================================================
+
+  # Decides whether the package jobs run. Tags, the nightly and manual runs:
+  # always. Pull requests: only for packaging-related changes or `full-ci`.
+  package-gate:
+    name: packages needed?
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+      version: ${{ steps.meta.outputs.version }}
+      msi_version: ${{ steps.meta.outputs.msi_version }}
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Gate
+        id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          run=true
+          if [ "$EVENT" = pull_request ]; then
+            run=false
+            case ",$LABELS," in *,full-ci,*) run=true ;; esac
+            if [ "$run" = false ]; then
+              git fetch --no-tags origin "$BASE_REF"
+              changed=$(git diff --name-only "origin/$BASE_REF...HEAD")
+              if printf '%s\n' "$changed" | grep -Eq '^(packaging/|\.github/workflows/release\.yml$|Cargo\.toml$|Cargo\.lock$|crates/[^/]+/Cargo\.toml$|rust-toolchain\.toml$)'; then
+                run=true
+              fi
+            fi
+          fi
+          echo "run=$run" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Version
+        id: meta
+        run: |
+          base=$(awk -F'"' '/^version *=/ { print $2; exit }' Cargo.toml)
+          case "$GITHUB_REF" in
+            refs/tags/v*)
+              version=${GITHUB_REF_NAME#v}
+              tag=$GITHUB_REF_NAME
+              if ! echo "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'; then
+                echo "::error::$tag is not vMAJOR.MINOR.PATCH[-prerelease]"
+                exit 1
+              fi ;;
+            *)
+              tag=
+              if [ "$GITHUB_EVENT_NAME" = schedule ]; then
+                version="$base-nightly.$(date -u +%Y%m%d)"
+              else
+                version="$base-dev.${GITHUB_SHA::7}"
+              fi ;;
+          esac
+          # The MSI wants plain MAJOR.MINOR.PATCH.
+          msi_version=${version%%-*}
+          printf 'version=%s\nmsi_version=%s\ntag=%s\n' "$version" "$msi_version" "$tag" | tee -a "$GITHUB_OUTPUT"
+
+  # The UI is embedded in every binary, so it is built once and shared.
+  package-web:
+    name: packages (web UI)
+    needs: package-gate
+    if: needs.package-gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build the web UI
+        working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: package-web-build
+          path: web/build
+          if-no-files-found: error
+          retention-days: 1
+
+  package-linux:
+    name: tarball (${{ matrix.arch }})
+    needs: [package-gate, package-web]
+    if: needs.package-gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            target: x86_64-unknown-linux-musl
+            smoke: true
+          # Cross-compiled, so it can't run on this runner: build-only, like the
+          # Docker arm64 job.
+          - arch: aarch64
+            target: aarch64-unknown-linux-musl
+            smoke: false
+    env:
+      VERSION: ${{ needs.package-gate.outputs.version }}
+      # Same build settings as packaging/docker/Dockerfile.
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_RELEASE_DEBUG: "false"
+      CARGO_PROFILE_RELEASE_STRIP: symbols
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: package-web-build
+          path: web/build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: package-${{ matrix.target }}
+
+      # zig is the C compiler and linker for the musl targets (ring needs one).
+      # Same pinned wheel as the Dockerfile's amd64 build stage.
+      - name: Install zig
+        env:
+          ZIG_WHEEL: https://files.pythonhosted.org/packages/fe/6f/e1c380fe61db36cb464d5d4d18c557338812500986885373e2550d4ebf6b/ziglang-0.17.0-py3-none-manylinux_2_12_x86_64.manylinux2010_x86_64.musllinux_1_1_x86_64.whl
+          ZIG_SHA256: 97079827064a7492cce5541ceb438ae8003ce1e54e399676da2d62fb7a5dc08b
+        run: |
+          curl --fail --silent --show-error --location --retry 3 --output "$RUNNER_TEMP/ziglang.whl" "$ZIG_WHEEL"
+          echo "$ZIG_SHA256  $RUNNER_TEMP/ziglang.whl" | sha256sum --check -
+          sudo unzip -q "$RUNNER_TEMP/ziglang.whl" 'ziglang/*' -d /opt
+          sudo chmod +x /opt/ziglang/zig
+          sudo ln -s /opt/ziglang/zig /usr/local/bin/zig
+          zig version
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild@0.24.0
+
+      - name: Build
+        run: cargo zigbuild --locked --release -p lodestar --bin lodestar --target ${{ matrix.target }}
+
+      - name: Tarball
+        run: |
+          packaging/linux/build-tarball.sh ${{ matrix.target }} "$VERSION" \
+            target/${{ matrix.target }}/release/lodestar dist
+
+      - name: Smoke (unpack, serve, /healthz, stop)
+        if: matrix.smoke
+        run: packaging/linux/smoke.sh dist/lodestar-$VERSION-${{ matrix.arch }}-linux-musl.tar.gz
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: package-linux-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  package-windows:
+    name: MSI and portable zip (windows x86_64)
+    needs: [package-gate, package-web]
+    if: needs.package-gate.outputs.run == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 75
+    env:
+      VERSION: ${{ needs.package-gate.outputs.version }}
+      MSI_VERSION: ${{ needs.package-gate.outputs.msi_version }}
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_RELEASE_DEBUG: "false"
+      # CODE SIGNING: skipped while these are unset (owner action; see
+      # packaging/windows/README.md). packaging/windows/sign.ps1 does the work.
+      WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+      WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: package-web-build
+          path: web/build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: package-windows
+
+      - name: Build
+        run: cargo build --locked --release -p lodestar --bin lodestar --target x86_64-pc-windows-msvc
+
+      - name: Sign lodestar.exe (skipped without a certificate)
+        shell: pwsh
+        run: packaging/windows/sign.ps1 target/x86_64-pc-windows-msvc/release/lodestar.exe
+
+      - name: Portable zip
+        shell: pwsh
+        run: packaging/windows/build-portable.ps1 -Version $env:VERSION -OutDir dist
+
+      # WiX Toolset 3 comes with the runner image; install it if a newer image drops it.
+      - name: WiX Toolset 3
+        shell: pwsh
+        run: |
+          if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) {
+            $wix = Get-ChildItem 'C:\Program Files (x86)\WiX Toolset v3*\bin' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $wix) {
+              choco install wixtoolset --version 3.14.1 -y --no-progress
+              $wix = Get-ChildItem 'C:\Program Files (x86)\WiX Toolset v3*\bin' | Select-Object -First 1
+            }
+            $wix.FullName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          }
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-wix@0.3.9
+
+      - name: MSI
+        shell: pwsh
+        run: packaging/windows/build-msi.ps1 -Version $env:MSI_VERSION -OutDir dist
+
+      - name: Sign the MSI (skipped without a certificate)
+        shell: pwsh
+        run: packaging/windows/sign.ps1 "dist/lodestar-$($env:MSI_VERSION)-x86_64.msi"
+
+      - name: Checksums
+        shell: pwsh
+        run: |
+          $msi = Get-Item "dist/lodestar-$($env:MSI_VERSION)-x86_64.msi"
+          $hash = (Get-FileHash $msi -Algorithm SHA256).Hash.ToLower()
+          "$hash  $($msi.Name)" | Set-Content -Path "$($msi.FullName).sha256" -Encoding ascii
+
+      # Install the MSI silently, check files, service, firewall and shortcut, run the
+      # installed binary and check /healthz, uninstall. The service is installed but not
+      # started: its entrypoint is slice M6-win's, so the binary is run directly until then.
+      - name: Smoke (MSI install, run, uninstall; portable zip)
+        shell: pwsh
+        run: |
+          packaging/windows/smoke.ps1 `
+            -Msi "$PWD/dist/lodestar-$($env:MSI_VERSION)-x86_64.msi" `
+            -Zip "$PWD/dist/lodestar-$($env:VERSION)-x86_64-windows-portable.zip"
+
+      - name: MSI logs
+        if: failure()
+        shell: pwsh
+        run: Get-ChildItem $env:RUNNER_TEMP -Filter 'msi-*.log' | ForEach-Object { "::group::$($_.Name)"; Get-Content $_.FullName -Tail 200; "::endgroup::" }
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: package-windows
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  # Tags only: attach everything to a DRAFT release. The owner publishes it.
+  package-release:
+    name: draft GitHub release
+    needs: [package-gate, package-linux, package-windows]
+    if: >-
+      github.event_name != 'pull_request' &&
+      startsWith(github.ref, 'refs/tags/v') &&
+      needs.package-gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: package-{linux-*,windows}
+          merge-multiple: true
+          path: dist
+
+      - name: One checksum file for the release
+        working-directory: dist
+        run: |
+          sha256sum --check --quiet -- *.sha256
+          cat -- *.sha256 | sort -k2 >SHA256SUMS
+          ls -l
+          cat SHA256SUMS
+
+      - name: Create or update the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.package-gate.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          prerelease=
+          case "$TAG" in *-*) prerelease=--prerelease ;; esac
+          files=$(ls dist/*.tar.gz dist/*.msi dist/*.zip dist/SHA256SUMS)
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            # shellcheck disable=SC2086
+            gh release upload "$TAG" --repo "$REPO" --clobber $files
+          else
+            # shellcheck disable=SC2086
+            gh release create "$TAG" --repo "$REPO" --draft $prerelease \
+              --title "Lodestar ${TAG#v}" \
+              --notes "Draft. Files are not code-signed yet; check them against SHA256SUMS." \
+              $files
+          fi
