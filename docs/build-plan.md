@@ -242,9 +242,13 @@ Each item is one PR of about 1,500 changed lines or fewer. **[M]** = main sessio
 - **Discover.**
 - **Alerts:** list, detail with the "New since" divider, and create/pause/delete dialogs.
 - **Insights, in three PRs:** the overview story, the five stage pages, then print and digest settings.
-- **Settings and the wizard:**
-  - forms generated from B2's schema, one file per section;
-  - the first-run wizard;
+- **Settings and the wizard** (architecture §10.10):
+  - **[M] B2b, B2c:** API additions (schema hints, revisions, batch patch, preview, test, preferences, SSE, export/import; then `/system`, restart, the HTTP-address keep-or-revert timer).
+  - **[M] M-settings-form:** the form engine every screen and the wizard use (draft store, validation and server-error mapping, atomic save, conflict merge, leave guard, drafts, Undo, the `SettingField` and widget registry).
+  - **[S] S-settings-1:** the shell (grouped navigation, Overview, list → detail, settings search and palette entries, restart banner, Show changed only, View as config.toml) and the generated screens: General, Crawler, Network & VPN, Storage & retention, Search & ranking.
+  - **[S] S-settings-2:** Integrations, Notifications, Trackers, Insights & digest, Language & region, About.
+  - **[M] M-security-settings:** the Security screen (password, sessions, API keys, proxy auth).
+  - the first-run wizard, reusing the same fields;
   - Appearance: theme picker and custom-theme editor with a live contrast report.
 - **Filters & Safety:** rules, editor, preview, review queue, the CSX-5 override list, "Block this…", Not junk / Not adult, Show adult (18+) and Adult facets. Helpers do layout only. The main session writes the dialog state machines, all guardrails stay on the server, and `/security-review` runs on it.
 - **Keyboard map:** remapping and the shortcut sheet (§10.16).

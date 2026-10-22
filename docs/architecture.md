@@ -622,20 +622,245 @@ Each detail page follows the same pattern: three to four KPIs, one primary trend
 - Plain-text plus simple HTML, with no images. It follows the copy rules (§10.14).
 
 ### 10.10 Settings and onboarding
-- **Settings:**
-  - A manuscript layout (max 720 px). Section navigation sits on the left at x-large and becomes a select on narrow screens.
-  - Forms have visible labels, help text next to each field, inline validation, and per-section Save with a "Saved" confirmation.
-  - Sections: General, Crawler, Network & VPN, Storage & retention (with size-projection previews), Search & ranking, **Sources** (§18.8: every discovery, importer, enrichment, network and output plugin, with priority, agents, schedule, egress, consent and purge; Auto-balance), **Companions** (§18.10: installed and detected companions, health, versions, logs, updates, Set up / Remove), **Workers** (§19.7: add/join, status, placement, budgets, drain, revoke, purge-by-worker), **Filters & Safety** (§20.7: rules, editor with preview and fixtures, review queue, packs, override list), Trackers, Integrations, Notifications, **Insights & digest** (digest schedule and channels, query logging on/off and retention, clear usage data), Security, Appearance (theme, density, motion, shortcut settings, **Show adult content** with 18+ confirmation), About.
-- **First-run wizard** (stepped progress, one primary action per step):
-  1. Setup token
-  2. Admin password
-  3. Network check (live port-reachability test)
-  4. Intensity
-  5. Storage & retention
-  6. Import from bitmagnet (optional)
-  7. Download client (optional; recommended: qBittorrent, installed or detected by the companion manager, §18.10)
-  8. Done
+Settings is where an owner fixes things at 2 a.m. without reading docs. It needs to be **hard to break, easy to recover, and quick to search**. The first-run wizard (§10.10.10) uses the same field components, so a setting behaves the same everywhere.
+
+#### 10.10.1 Principles
+- **Two save models, never mixed on one screen:**
+  - **Preferences** (Appearance, Keyboard, Language & region) change only how the UI looks and behaves. They **apply instantly with Undo** (§10.18), are saved per account and follow you across devices.
+  - **Everything else changes how the server runs.** Edits are **staged** and saved together with **Save changes**. Nothing reaches the server until you save.
+- **Always say where a value comes from and when it takes effect.** Every field shows its source (default, `config.toml`, saved in the app, or the environment) and whether it applies now or after a restart. These are B2's `source` and `restart_required`.
+- **Every change can be undone, and every saved value can be reset.** Undo right after saving, Reset to default per field (B2's `null` patch), and a recovery path that works even when the UI can't be reached (§10.10.6).
+- **Show the consequence before the change.** Size projections, predicted resource use, the new address after a port change, and how many items a purge removes are all shown before you commit (§10.10.7).
+- **Essentials first.** Each screen shows the settings most people need, with an **Advanced** disclosure below them. Search always finds advanced settings.
+- **The schema is the single source.** Generated screens render from B2's runtime JSON Schema, and search, the command palette, `config.toml` snippets and the wizard all read from it. A new server setting shows up everywhere with no UI change, as long as it has its two message keys.
+
+#### 10.10.2 Navigation and layout
+- **Screens, grouped in the navigation** (the §10.10.8 table lists what's on each):
+  - **Preferences:** Appearance, Keyboard, Language & region
+  - **Crawling:** Crawler, Network & VPN, Sources, Workers, Companions
+  - **Library:** Storage & retention, Search & ranking, Trackers, Filters & Safety
+  - **Connections:** Integrations, Notifications, Insights & digest
+  - **System:** General, Security, About
+
+  Screens whose features haven't shipped yet (Workers, Companions, and Sources before v0.6) don't appear in the navigation. They are never shown as empty placeholders.
+- **`/settings` is the Overview** (§10.10.3). `/settings/{screen}` opens a screen, and `#field` deep-links to one setting. Copy link appears in every field's menu.
+- **x-large and wider (≥ 1024 px):** two panes. On the left is a sticky navigation (search box, then the groups). On the right is the manuscript column (max 720 px).
+- **Below 1024 px:** list, then detail. `/settings` shows the search box and the grouped list, with status badges. A screen opens full width with a Back link to the list. This **replaces "becomes a select on narrow screens"**, because a select can't show status badges, and 19 screens are too many to scan in one.
+- **Navigation items** have an icon and a label. An item that needs attention gets an icon + text badge ("1 problem", "Restart needed"), and its accessible name says so ("Network & VPN, 1 problem"). The current screen is marked with `aria-current`. Navigation entries are links, not tabs.
+- **Inside a screen:**
+  - The heading and a one-sentence purpose come first.
+  - Groups follow, each with a heading. Group order and field order come from the schema.
+  - **Advanced** is a closed disclosure with a count ("Advanced (5)"). Its open/closed state is remembered per screen in `localStorage`.
+  - A **Danger zone** sits last (§10.10.7).
+  - **Show changed only** filters the screen to non-default values.
+  - **View as config.toml** shows the screen's saved values as a `config.toml` snippet, next to their `LODESTAR_*` names, ready to copy into a compose file or Unraid template.
+
+#### 10.10.3 Overview and finding a setting
+- **The Overview (`/settings`) answers "is anything wrong, and what did I change?":**
+  - **Needs attention:** one row per problem, each with one action that goes to the fix, highest severity first. Examples:
+    - "Port 6881 isn't reachable from the internet" (network check, B14)
+    - "3 changes wait for a restart · Restart now"
+    - "A saved value hides your `config.toml` value for `crawler.intensity`" (B2 logs this; the Overview shows it with Reset)
+    - an integration failing its last test
+    - a source in error, a worker offline
+    - no backup in 14 days
+    - an update available (only when update checks are on)
+  - **Changed from default:** a count per screen, linking to that screen with Show changed only turned on.
+  - When nothing needs attention, it says so in one line and shows the changed-settings summary. There's no illustration here; this is a working surface.
+- **Settings search** (the box at the top of the navigation; `/` focuses it while on a Settings page):
+  - It matches each setting's label, help text, group, `config.toml` key, `LODESTAR_*` name and synonyms (`x-keywords`, e.g. "port" finds HTTP address and DHT port). Matching is case- and accent-insensitive and works on prefixes and words, in the current locale.
+  - **Results show a breadcrumb** ("Crawling › Crawler › Advanced"), the current value and its source badge.
+  - Choosing a result opens the screen, expands Advanced if needed, scrolls to the field, focuses it and highlights it briefly (an opacity change, or a static outline under reduced motion).
+  - The index covers generated fields from the schema, plus a static registry for the hand-built screens (Appearance, Keyboard, Sources, Filters & Safety and others), so everything is findable. A CI test checks that every schema field and every registry entry can be reached by search.
+  - Search is in-house (no dependency). Its index is built the first time the box is focused.
+  - With no match, it says "No setting matches '…'" and offers to search the help pages for it.
+- **Command palette:** the same index gives `⌘K` "Settings: …" entries that jump to the field. Toggle and enum preferences can also be changed directly from the palette ("Change theme", "Turn off single-key shortcuts").
+
+#### 10.10.4 The field
+One `SettingField` composition wraps every primitive (§10.11), so every setting looks and behaves the same:
+- **Label** (always visible), with the **unit** as a suffix inside the control ("MiB", "seconds", "per hour"), never only in the help.
+- **Help text** under the control: one or two sentences saying what changes for you, not how it works internally. A "Learn more" link goes to the docs when the topic needs more.
+- **Status line**, icon + text, only when it applies:
+  - **Applies after restart.**
+  - **Set by `LODESTAR_X`:** the field is locked. The text says to change it in the container template or environment, and the variable name can be copied.
+  - **Read-only:** the value can be copied (for example the data directory).
+  - **From config.toml.**
+- **A modified marker** (a small dot with an accessible name of "Changed from default") appears on any value that isn't the default.
+- **Field menu (⋯):**
+  - Reset to default, showing the default value.
+  - Copy link to this setting.
+  - Show `config.toml` key and environment variable.
+- **Automatic values:** fields with an `x-auto` sentinel (such as `crawler.max_sockets` = 0) show an **Automatic** switch plus the effective value ("Automatic · 400 at Balanced"). Turning it off reveals the number field, pre-filled with the effective value.
+- **Inline preview** for fields with `x-preview`: a one-line consequence under the field, refreshed 300 ms after the last change. Examples: "≈ +18 GiB over a year", "≈ 3 Mbit/s up, 400 sockets".
+- **Secrets** (`writeOnly`) are never sent back by the server. The field shows **Set · Replace · Remove**. Replace opens an empty input. Remove asks for confirmation (§10.10.7).
+- **Widgets are chosen from the schema by a single registry:**
+
+  | Schema | Widget |
+  |---|---|
+  | boolean | Toggle |
+  | enum, ≤ 4 values | SegmentedControl (or a Radio group when each value needs a description) |
+  | enum, > 4 values | Select |
+  | integer/number with bounds | RangeInput with units, or a Slider + input when `x-widget: slider` |
+  | `format: socket-addr`, `host`, `url`, `duration`, `log-filter` | Input with format validation; log filters and addresses in mono |
+  | array of strings | a chip list with Add |
+  | `writeOnly` | the secret field above |
+
+  A schema shape the registry doesn't know falls back to a plain JSON input, and a dev-mode warning names the field, so a new server setting is never invisible.
+
+#### 10.10.5 Saving, validation and conflicts
+- **A save bar** is pinned to the bottom of the manuscript column and appears only when something is unsaved: "2 unsaved changes · Discard · **Save changes**". `⌘/Ctrl+S` saves. The bar never covers the focused field; the column gets bottom padding while the bar is shown.
+- **One save is atomic across the screen.** A screen can show fields from several API sections (Crawler shows `crawler` and `transport`). Save sends one multi-section `PATCH /settings` (§10.10.9). Either everything is saved or nothing is, and "partly saved" never happens.
+- **Validation:**
+  - **On the client** from the schema (type, bounds, enum, format) when a field loses focus, and for the whole screen on Save.
+  - **On the server**, which has the final say. B2's `422 invalid_setting` and `field` map to the field, with the server's message.
+  - **Errors go inline under the field** ("Must be between 1 and 120 seconds"). On a failed Save, an **error summary** at the top of the column lists every error as a link and takes focus. Then focus moves to the first field with an error.
+  - **Save is never disabled.** Clicking it with errors shows the summary.
+  - Each error says what's wrong and what to do (§10.14).
+- **After saving:**
+  - The bar shows "Saved" with **Undo** for 10 s, announced politely. Undo sends the previous values back in one patch, restoring a field to default where it wasn't saved before.
+  - Fields that apply after a restart show "Saved · applies after restart", and the restart banner appears (§10.10.6).
+- **Unsaved work is never lost silently:**
+  - **Leaving a screen** with unsaved changes (another screen, another destination, Back) opens a dialog: **Save**, **Discard** or **Keep editing**. Closing or reloading the tab triggers the browser's `beforeunload` prompt.
+  - **Drafts are kept in `sessionStorage`** per screen, never secrets. After a reload or crash: "You have unsaved changes from earlier · Restore · Discard".
+  - **If the network fails,** the draft stays. A banner says "Couldn't reach Lodestar. Your changes are kept." with Retry.
+- **Concurrent edits** (another tab, another device, or an API client):
+  - Every section has a **revision**. Save sends the revisions it started from.
+  - If a section changed in the meantime, the server answers `409 stale_revision` with the current values, and the client merges:
+    - fields you didn't touch take the new values silently;
+    - fields only you changed keep your edit;
+    - fields both changed show a per-field conflict, "Changed elsewhere to Aggressive · Keep mine · Use theirs", and Save waits until each one is resolved.
+  - A `settings` SSE event (§10.10.9) refreshes screens without unsaved edits in place, and shows a quiet "Updated elsewhere" note.
+- **Save only sends changed fields.** A field set back to its saved value no longer counts as a change, and "2 unsaved changes" is always accurate.
+
+#### 10.10.6 Restart, recovery and portability
+- **Restart banner:** when any saved value waits for a restart (B2's `restart_required`), every Settings screen and the Overview show "3 changes apply after a restart · Review · **Restart now**".
+  - The status pill (§10.3) gets a "Restart needed" state.
+  - Review lists each field with its running and saved values.
+- **Restart now** appears only when the server says it can restart itself (`GET /system`):
+  - on Linux and macOS it re-execs in place after a graceful shutdown, so the container's PID 1 survives;
+  - as a Windows service it exits for the Service Control Manager's recovery action, which the MSI configures (M6);
+  - portable on Windows it starts a new copy, then exits.
+
+  When the server can't restart itself, the banner says how ("Restart the container") and the button isn't shown.
+- **The restart flow:** a confirmation dialog warns that crawling pauses for about N seconds. Then a full-page "Restarting…" state polls `/healthz` with backoff, reloads, and checks that `restart_required` is empty. If it isn't back within 2 minutes, it says what to check (container logs, `lodestar healthcheck`).
+- **Lockout protection for the HTTP address** (`network.http_bind`, and trusted-proxy auth when B12 adds it):
+  - Before saving, the dialog shows the exact new URL.
+  - After the restart, the UI redirects there and asks **"Keep this address?"**. If nobody confirms from the new address within 5 minutes, Lodestar goes back to the previous value by itself, the way display-resolution changes work.
+  - The confirmation is per change and needs a signed-in session on the new address.
+- **Recovery without the UI:**
+  - `LODESTAR_*` variables always win over saved values (B2).
+  - `lodestar settings get|set|reset <section.field>` works on the stopped store (with M6's clap CLI). `lodestar settings reset --all` clears every saved value and leaves `config.toml` and the environment untouched.
+  - Both are in `docs/operations.md` under "I can't reach the UI".
+- **Export and import** (General → Backup & portability):
+  - **Export** downloads saved settings as TOML in `config.toml` layout, with preferences included as an option. It **never includes secrets** or filter, floor, pack or subscription state; those belong to §20's own tools.
+  - **Import** takes such a file, shows a **diff** ("7 changes · 2 unknown keys skipped · 1 set by the environment, ignored"), then applies it as one atomic patch, with Undo.
+- **No settings history.** The owner chose no audit log for filtering (§1.8.8). Settings follow the same instinct: Undo, Reset, export and the Overview's "Changed from default" cover recovery without keeping a record.
+
+#### 10.10.7 Risky and destructive changes
+Graded by consequence, so a confirmation always means something:
+
+| Kind | Examples | What the UI does |
+|---|---|---|
+| Safe | log level, intensity, timeouts | Staged, saved, Undo |
+| Disruptive | HTTP address, DHT port, disabling the DHT or search | Save opens a dialog that names the effect ("Lodestar will be at http://192.168.1.5:8191 after a restart"; "Search stops until you turn it back on") |
+| Destructive, not undoable | Purge a source's data, clear usage data, revoke a worker, reset all settings, Remove a secret | A **Danger zone** action, run on its own (not part of Save). A confirmation dialog shows the exact count and size, and the button names the action ("Delete 1,204,331 torrents found only by Nyaa"). Focus starts on Cancel. |
+| Weakens content protection | §20.11's list | §20.11's effect warning and **password, every time**, unchanged (M-filters-dialogs) |
+| Security | change password, auth mode, trusted-proxy header, reveal or regenerate an API key, sign out other sessions | **Re-enter your password** in the dialog (B12's confirmation). Changing the password needs the current one. |
+
+There are no typed confirmations ("type DELETE"). The owner replaced them with plain-language warnings and the password (§1.8.8), and the same applies here.
+
+#### 10.10.8 Screens
+Generated screens render from the schema with no screen-specific code beyond grouping and order. Hand-built screens embed generated groups where they can.
+
+| Screen | Contents | API sections | Built by |
+|---|---|---|---|
+| Overview | Needs attention; changed from default | `/system`, `/stats`, network check | S-settings-1 |
+| Appearance | theme, mode, density, motion, illustrations, Show adult content (18+, B17) | `preferences` | S-appearance |
+| Keyboard | single-key shortcuts on/off, remapping with conflict detection, reset | `preferences` | S-keys |
+| Language & region | language, time zone (§10.12; the digest uses it too), first day of week | `preferences` | S-settings-2 |
+| Crawler | intensity with a predicted-resource preview, encryption, fetch limits, transport (uTP) | `crawler`, `transport` | S-settings-1 |
+| Network & VPN | HTTP address, DHT port and on/off with a **live reachability check**, egress interface or proxy, kill switch, current external IP | `network` (+ egress, §5) | S-settings-1 |
+| Sources | §18.8 | `/sources` | v0.6 (E-v06-sources) |
+| Workers | §19.7 | cluster API | v0.6 (E-v06-workers) |
+| Companions | §18.10 | companion API | v0.6 (E-v06-companions) |
+| Storage & retention | data directory (read-only), hot/cold paths, mmap, raw archive, retention policies with **size projection** (§7) | `storage` | S-settings-1 |
+| Search & ranking | search on/off, index heap, file-index mode with projected size (§8), ranking priors | `search` | S-settings-1 |
+| Trackers | tracker list, scrape on/off and cadence, health per tracker | `trackers` | S-settings-2 |
+| Filters & Safety | §20.7 | filters API | S-filters, S-blocklists |
+| Integrations | download clients, Torznab/*arr, each with **Test connection** run on the unsaved values | integrations API | S-settings-2 |
+| Notifications | channels (ntfy, Discord, email, webhook), each with **Send test**, and which events go where | integrations API | S-settings-2 |
+| Insights & digest | digest schedule and channels with a preview (§10.9.7), query logging and retention, clear usage data | `insights`, digest API | S-settings-2 (digest preview: S-insights-3) |
+| General | log level, update check (off by default), backup schedule, Backup & portability (§10.10.6), Reset all | `general`, `/system` | S-settings-1 |
+| Security | password, sessions, API keys and feed tokens, trusted-proxy auth, secure cookies (read-only) | auth API (B12) | M-security-settings |
+| About | version, build, licences, data directory and sizes, a copyable diagnostics block (versions, OS, settings sources; no secrets, no torrent names), links | `/system` | S-settings-2 |
+
+**Test connection** and **Send test** run on the server with the values on screen (`POST /settings/test`), through the SSRF guard. They save nothing, and the result appears inline ("Connected to qBittorrent 5.0.2" or "Refused: wrong password").
+
+#### 10.10.9 API additions (B2b and B2c, on top of B2)
+- **Schema hints** on each field: `x-group`, `x-order`, `x-advanced`, `x-unit`, `x-widget`, `x-auto`, `x-preview`, `x-keywords` (a message key), `x-danger`; the `config.toml` key and `LODESTAR_*` name; `writeOnly` for secrets. These are hints only, and the server still validates everything.
+- **`revision` per section** in `GET`. `PATCH` accepts `if_revision` and answers `409 stale_revision` with the current values. It's stored as a `settings.` key, so no migration is needed.
+- **Multi-section `PATCH /settings`** (`{section: {field: value}}`): one transaction, one lock, then each section's `watch` channel publishes. Errors carry `section` and `field`.
+- **`POST /settings/preview`** takes the same body. It runs exactly the same validation as `PATCH` without saving, and returns per field: live or restart, warnings, and estimates (size, resource use, the new URL). A property test holds that preview accepts exactly what `PATCH` accepts.
+- **`POST /settings/test`** runs connection tests for integration drafts.
+- **`preferences` section** per account: theme, mode, density, motion, illustrations, shortcuts, language, time zone. It's validated like any other section.
+- **A `settings` SSE event** (`{section, revision}`) after every save. It carries no values; clients fetch them.
+- **`GET /settings/export`** and **`POST /settings/import`** (`dry_run=true` returns the diff).
+- **`GET /system`** reports the version, restart capability and pending restart fields. **`POST /system/restart`** restarts. The HTTP-address keep-or-revert timer lives here as well.
+- **Server-side tests:**
+  - secrets never appear in `GET`, export or diagnostics;
+  - export never includes §20 state;
+  - import of an exported file round-trips;
+  - a multi-section patch with one bad field saves nothing;
+  - a stale revision is refused;
+  - the HTTP-address timer reverts when nobody confirms.
+
+#### 10.10.10 First-run wizard
+Stepped progress, with one primary action per step:
+1. Setup token
+2. Admin password
+3. Network check (live port-reachability test)
+4. Intensity
+5. Storage & retention
+6. Import from bitmagnet (optional)
+7. Download client (optional; recommended: qBittorrent, installed or detected by the companion manager, §18.10)
+8. Done
+
+- The **Intensity**, **Storage & retention** and **Download client** steps render the same `SettingField`s, previews and **Test connection** as Settings, from the same schema. Each step saves through the multi-section patch, so validation can't drift.
 - One **"How it works"** step uses a static SVG sequence (DHT → metadata → index → search) in the spirit of `infographic-design`, with no AntV dependency and a text equivalent.
+- **Done** links to Settings for everything the wizard skipped.
+
+#### 10.10.11 Accessibility, performance and tests
+- **Accessibility:**
+  - Every control has a visible `<label>`. Help and errors are linked with `aria-describedby`, and errors also set `aria-invalid`.
+  - The error summary takes focus. Save results and conflicts are announced in a polite live region.
+  - Opening a screen moves focus to its heading.
+  - Status is icon + text throughout. Targets are ≥ 44 px under coarse pointers. Layouts hold at 200% zoom.
+  - `/` and `⌘/Ctrl+S` follow §10.13's rule: single-key shortcuts never fire inside inputs, and can be turned off.
+- **Performance:**
+  - The Settings route chunk (shell, form engine, generated screens) is **≤ 20 KB gzipped**, gated by `size-limit`.
+  - Hand-built heavy screens (Filters & Safety editor, theme editor, Workers, Sources) load lazily, each with its own budget.
+  - `themes.json` loads only when Appearance opens (§10.18). The search index builds on first use.
+  - A Save round trip shows its result within 100 ms on a LAN (INP < 100 ms).
+- **Tests:**
+  - **Unit (vitest):**
+    - the form store: dirty tracking, diffing, reset, Undo, the three-way merge on conflict, draft restore;
+    - the widget registry for every schema shape, including the fallback;
+    - the search matcher;
+    - the Overview's attention ordering.
+  - **Contract (CI):**
+    - every schema field has en and zh message keys, a widget and a search entry;
+    - the UI's fixtures match B2's golden responses.
+  - **Playwright:**
+    - edit, save and Undo;
+    - client and server validation with the error summary;
+    - the leave guard and draft restore;
+    - an environment-locked field;
+    - the restart banner and a mocked restart;
+    - a two-context conflict;
+    - search jumping to an Advanced field;
+    - narrow list → detail;
+    - keyboard-only flows;
+    - axe on every screen in Riverstone light/dark plus the rotating theme sample (§10.17).
 
 ### 10.11 Component inventory (one canonical primitive per role)
 - **Controls and fields:** Button (primary / secondary / quiet / danger × dense / default, with a loading state), IconButton, Field (Input, Select, Combobox, Textarea, Checkbox, Radio, Toggle, Slider, RangeInput with units), SegmentedControl.
@@ -1920,6 +2145,29 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - A failed rebuild stays in `Failed` with the old index serving, so `rebuilding()` never cleared. That's the likely cause of B5b's swap test hanging on Windows CI (inferred from the code and the symptom, not reproduced on Windows).
 - **`RebuildProgress` gains `error`**, the failure's message, so the banner, Insights and tests can say why.
 - **The serving pointer is a `Mutex<Arc<SearchIndex>>`, held only to clone or replace the `Arc`,** in place of an `RwLock`. A swap then waits behind at most one clone, whatever the platform's reader/writer policy (Windows SRW locks promise none).
+
+**Settings screen plan (2026-10-22, §10.10):** the owner asked for a very robust and user-friendly settings screen. §10.10 previously gave only the section list, the manuscript layout and per-section Save. It is now a full specification. Changes to the approved plan:
+- **Narrow screens use list → detail instead of a select.** With 19 screens and status badges, a select can't show which screen needs attention.
+- **Two save models.** Preferences apply instantly with Undo, as §10.18 already did for themes. Server settings are staged and saved atomically per screen, even across API sections, through a new multi-section `PATCH /settings`. This sharpens "per-section Save" rather than replacing it.
+- **New screens:**
+  - **Overview** (`/settings`), with Needs attention and Changed from default;
+  - **Keyboard**, split out of Appearance because remapping (S-keys) is a screen of its own;
+  - **Language & region** (language, time zone).
+
+  Screens for features that haven't shipped are hidden.
+- **Robustness additions:**
+  - per-section revisions with a three-way merge on conflict;
+  - drafts kept in `sessionStorage`;
+  - a leave guard;
+  - Undo after save;
+  - Reset to default per field;
+  - a restart banner with Restart now where the server can restart itself;
+  - a keep-or-revert timer for the HTTP address;
+  - `lodestar settings get|set|reset` for recovery without the UI;
+  - TOML export and import with a diff.
+- **No settings history**, following the owner's no-audit-log instinct (§1.8.8). Recovery comes from Undo, Reset and export.
+- **Risk grading (§10.10.7).** Destructive actions get an exact-count confirmation and no typed confirmation. Security changes reuse B12's password confirmation. Weakening filter changes keep §20.11 unchanged.
+- **Delegation.** The form engine (draft store, validation mapping, atomic save, conflicts, leave guard) is an **Opus** slice, `M-settings-form`: every screen and the wizard depend on it, and its failure modes lose user data. The Security screen is Opus as well (`M-security-settings`). Screens and the shell stay with Sonnet helpers, per policy. The API additions are B2b (schema hints, revisions, batch patch, preview, test, preferences, SSE, export/import) and B2c (`/system`, restart, the address timer).
 
 ## 17. Verification (once built)
 
