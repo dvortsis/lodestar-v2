@@ -29,7 +29,7 @@ document disagree, the architecture document wins and this file is fixed.
 | **Null** | Unknown: never measured (never scraped, not classified yet, no data for the period) | `—` (U+2014 em dash), with an accessible name from the metric ("Never scraped", "Not measured") | `null` |
 | **Zero** | Measured and really 0 | `0` (formatted like any other value) | `0` |
 | **Estimated** | The value itself is an estimate (DHT estimate, harvest uniqueness, histogram percentiles, `≈` totals) | `≈` + U+00A0 + value, e.g. `≈ 2.4M` | `{ value, approx: true }` |
-| **Sampled** | Computed on a uniform sample (facets above 1M matches) | `≈` + value, plus a note once per panel: "Counts are estimated from a sample" (glossary) | `{ value, approx: true }`; the panel reads `sampled` from the response |
+| **Sampled** | Computed on a uniform sample (facets above 1M matches, or above 300k when the index has a segment of more than 300k torrents) | `≈` + value, plus a note once per panel: "Counts are estimated from a sample" (glossary) | `{ value, approx: true }`; the panel reads `sampled` from the response |
 | **Gap** | A time bucket with no data (crawler paused, history ring gap) | A **gap** in lines; an empty bin in bars; `—` in tables. **Never drawn as 0.** | `null` in the series |
 | **Incomplete** | A discovery cohort that isn't final (§10.9.3) | Hatched mark + the word "incomplete"; excluded from the yield KPI | `final: false` on the cohort |
 
@@ -311,12 +311,21 @@ and no DHT estimate (PR #32). The six nullable swarm fields (`seeders`,
 
 ### 7.4 Facets response (B6)
 
+`GET /facets` (the search's `q`, `sort`, `hidden`, optional `lease` = a
+search's `next_cursor`, `limit.<facet>=` 1–100) or `POST` with the AST.
+Counts are over exactly what `/search` returns for the same parameters.
+
 | Field | Type | Nullable | Notes |
 |---|---|---|---|
-| `sampled` | boolean | no | True above 1M matches |
-| `sample_rate` | number 0–1 | yes: null when not sampled | For the "≈" note |
-| `facets.<name>` | `{value: string, count: integer}[]` | no | Term facets; disjunctive |
-| `histograms.<name>` | `{lo: number, hi: number, count: integer}[]` | no | Explicit bins; empty bins present with `count: 0` |
+| `total`, `total_approx` | integer, boolean | no | The search's result count, as `/search` reports it |
+| `sampled` | boolean | no | True when any group was computed on a sample (a pass above 1M matches) |
+| `sample_rate` | number 0–1 | yes: null when not sampled | Share of the documents a sampled pass visited, for the "≈" note (`sampled_note`) |
+| `facets.<name>` | `{approx: boolean, distinct: integer, other: integer, values: {value: string, count: integer, selected: boolean, excluded: boolean}[]}` | no | Term facets; **disjunctive** (each ignores the query's own clauses on it, architecture §16 "B6"). `values`: the top 8 (or `limit.<name>`) by count, ties by value, then any selected or excluded value outside them (count may be 0). `other`: the unlisted values' counts summed. `approx`: sampled, show "≈". Flags (`private`, `v2`, `ambiguous`, `imported`, `backfill`) list `yes` and `no`. Names: `type`, `ext`, `res`, `category`, `lang`, `group`, `codec`, `audio`, `hdr`, `private`, `v2`, `has`, `ambiguous`, `imported`, `backfill`, and `adult` only when it has values |
+| `histograms.<name>` | `{approx: boolean, unit: string, missing: integer, bins: {lo: integer, hi: integer\|null, count: integer, backfill: boolean}[]}` | no | Explicit bins, `lo` inclusive, `hi` exclusive (null: open top bin); empty bins present with `count: 0`. Not disjunctive: bins + `missing` sum to the result count. `size`: bytes, `[0, 1 MiB)`, then powers of two to `[512 GiB, 1 TiB)`, then `[1 TiB, ∞)`. `discovered`: UTC seconds; `unit` is `hour`, `day`, `week` (Unix epoch weeks, from Thursday 00:00 UTC, as §7.2), `month` (UTC calendar months) or `year` (UTC calendar years), chosen from the matches' range (< 48 h, < 90 days, < 104 weeks, < 10 years, else years). When that range is more than four times as wide as its 1st to 99th percentile (stray dates: a source's `created_at` of 0, a year 9999), the bins cover the percentile range widened by half on each side and the matches outside that are counted in one edge bin each, `[earliest, start)` and `[end, null)`, so edge bins can be irregular. At most 130 bins (the earliest years go in the lower edge bin past that). `year`: the release's first year, `[y, y + 1)`; `missing` = no year parsed |
+| `backfill_before` | integer (Unix seconds) | yes: null = unknown | The crawler's first run; a `discovered` bin with `backfill: true` ends by then (§10.4 "Backfill" marker). Labels use the user's timezone; edges stay UTC (§2) |
+| `buckets.seeders`, `buckets.trackers` | term facet (as `facets.<name>`), values `≥1`, `≥5`, `≥50`, `never_scraped` | yes: **null until M4's swarm fields are indexed** | Never zeros while unavailable: show "—" |
+| `unavailable` | string[] | no | Groups this index can't serve: fields an older index lacks during a rebuild ("index rebuilding; … not yet available"), and `seeders`/`trackers` until M4 |
+| `canonical`, `took_ms` | as `/search` | no | — |
 
 ### 7.5 Insights (planned; names fixed here)
 
