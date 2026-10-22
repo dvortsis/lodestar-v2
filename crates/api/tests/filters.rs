@@ -52,6 +52,7 @@ fn fixture_with(index: Option<SearchIndex>) -> Fixture {
         index: index.map(Into::into),
         reenrich: Arc::new(AtomicBool::new(false)),
         jobs: Default::default(),
+        quarantine_secs: 30 * 86_400,
     });
     let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
     let app = Router::new().nest(
@@ -1564,4 +1565,126 @@ async fn strictness_of_candidate_lists() {
     );
     let (status, _, _) = assess(json!({ "subscriptions": [999] })).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn class_rules_are_capped_and_unindexed_torrents_are_requeued() {
+    let f = fixture_with(Some(SearchIndex::in_memory().unwrap()));
+    let c = logged_in(&f).await;
+    let (indexed, _) = store_torrent(&f, "Indexed.Clip.mp4", 900 << 20);
+    {
+        let mut store = f.api.store.lock().unwrap();
+        enrich_all(&mut store);
+        let index = f.api.index.as_ref().unwrap().index();
+        let mut w = index.writer(15 << 20).unwrap();
+        w.catch_up(&mut store, 10).unwrap();
+        w.commit().unwrap();
+    }
+    // Stored after the index's last commit: not searchable yet.
+    let (late, _) = store_torrent(&f, "Late.Clip.mp4", 900 << 20);
+    enrich_all(&mut f.api.store.lock().unwrap());
+    let rules = |body: Value| post("/api/v1/classify/rules", Some(&c), body);
+    let (status, _, body) = call(&f.app, rules(json!({ "query": "nomatch", "adult": true }))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["queued"], json!(1), "only the unindexed one");
+    assert_eq!(body["truncated"], json!(false));
+    let unenriched = f
+        .api
+        .store
+        .lock()
+        .unwrap()
+        .unenriched(0, lodestar_classify::ENRICHMENT_VERSION, 10)
+        .unwrap();
+    assert_eq!(unenriched, vec![late]);
+    assert!(!unenriched.contains(&indexed));
+    let generation = f.api.store.lock().unwrap().class_gen().unwrap();
+    assert_eq!(generation, 1, "a rule change moves the generation");
+
+    // At most 1,000 rules.
+    {
+        let mut store = f.api.store.lock().unwrap();
+        for i in 1..lodestar_filter::MAX_CLASS_RULES {
+            store.add_class_rule(&format!("word{i}"), true).unwrap();
+        }
+    }
+    let (status, _, body) = call(&f.app, rules(json!({ "query": "more", "adult": true }))).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["error"]["code"], json!("too_many_class_rules"));
+}
+
+#[tokio::test]
+async fn the_corrections_report_reads_in_chunks() {
+    let f = fixture();
+    let c = logged_in(&f).await;
+    // More than one chunk (500) of corrections, all Is adult on a movie.
+    {
+        for i in 0..520 {
+            let (id, _) = store_torrent(&f, &format!("Some.Film.{i}.1999.1080p.mkv"), 2 << 30);
+            f.api
+                .store
+                .lock()
+                .unwrap()
+                .set_correction(
+                    id,
+                    lodestar_store::ClassCorrection {
+                        adult: Some(true),
+                        not_junk: false,
+                    },
+                )
+                .unwrap();
+        }
+    }
+    let (status, _, body) = call(&f.app, get("/api/v1/classify", &c)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["corrections"], json!(520));
+    assert_eq!(body["detection"]["checked"], json!(520));
+    assert_eq!(body["detection"]["disagree"], json!(520));
+    assert_eq!(body["detection"]["examples"].as_array().unwrap().len(), 50);
+}
+
+#[tokio::test]
+async fn a_correction_relabelling_a_torrent_adult_meets_the_adult_only_core() {
+    use lodestar_filter::TermSet;
+    let f = fixture();
+    let c = logged_in(&f).await;
+    // Stand-in terms (`lexa` sexual, `rolea` child role), ten words apart:
+    // only the Adult-only CS-5a can catch them.
+    f.api.engine.update_engine(|e| {
+        *e = Engine::new(Core::new(
+            Lists {
+                sexual: TermSet::of(&["lexa"]),
+                child_roles: TermSet::of(&["rolea"]),
+                codes: TermSet::of(&["codex"]),
+            },
+            CsList::default(),
+            Switches::default(),
+        ))
+    });
+    let name = "Holiday Rolea one two three four five six seven eight nine Lexa.mp4";
+    let (id, hash) = store_torrent(&f, name, 900 << 20);
+    enrich_all(&mut f.api.store.lock().unwrap());
+    let (status, _, body) = call(
+        &f.app,
+        post(
+            "/api/v1/classify/correct",
+            Some(&c),
+            json!({ "hash": hash, "adult": true }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["type"], json!("adult"));
+    assert_eq!(body["held_by"], json!("CS-5a"));
+    let store = f.api.store.lock().unwrap();
+    assert!(store.torrent(id).unwrap().is_none(), "no longer stored");
+    let q = store.quarantined(10).unwrap();
+    assert_eq!(q.len(), 1);
+    assert_eq!(q[0].rule, "CS-5a");
+    assert!(q[0].sealed.is_some());
+    drop(store);
+    let mut raw = [0u8; 20];
+    for (i, b) in raw.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&hash[2 * i..2 * i + 2], 16).unwrap();
+    }
+    assert!(f.api.held.contains(&raw), "refused at intake");
 }
