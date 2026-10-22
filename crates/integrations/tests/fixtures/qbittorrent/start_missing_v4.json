@@ -1,0 +1,51 @@
+{
+  "recorded_from": "qBittorrent v4.6.3 (WebUI API 2.9.3)",
+  "note": "v5 endpoint name; absent on v4",
+  "request": {
+    "method": "POST",
+    "path": "/api/v2/torrents/start",
+    "query": null
+  },
+  "response": {
+    "status": 404,
+    "headers": [
+      [
+        "connection",
+        "keep-alive"
+      ],
+      [
+        "content-length",
+        "9"
+      ],
+      [
+        "content-security-policy",
+        "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self' 'unsafe-inline'; object-src 'none'; form-action 'self'; frame-ancestors 'self';"
+      ],
+      [
+        "content-type",
+        "text/plain; charset=UTF-8"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "referrer-policy",
+        "same-origin"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "x-xss-protection",
+        "1; mode=block"
+      ]
+    ],
+    "body": "Not Found"
+  }
+}

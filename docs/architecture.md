@@ -1519,6 +1519,22 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Size:** `title_stem` costs about 3 B per torrent (words only, no norms). The torrent index is 408 B per torrent at 100k (budget 512). Schema v4.
 - **Name patterns** belong to the §20 rule engine (an M4 add-on), so M3 doesn't build them.
 
+**Integrations crate decisions (download clients, notifications, secrets, SSRF guard):**
+- **HTTP stack:** reqwest 0.12 with rustls on `ring`. reqwest 0.13's rustls default pulls in `aws-lc-rs`, a C build that's heavier on Windows. System proxies are off for integrations: a proxy resolves names itself, which would bypass the guard.
+- **SSRF policy (§12):**
+  - Link-local, metadata (`169.254.169.254`, `fd00:ec2::254`, `100.100.100.200`) and reserved addresses are never reachable.
+  - Notification endpoints never reach loopback, even with the per-channel private-range opt-in. Download clients may reach loopback, because companions bind to localhost (§18.10).
+  - Carrier-grade NAT (`100.64.0.0/10`, Tailscale) counts as private.
+  - IPv4 embedded in IPv6 (mapped, compatible, NAT64, 6to4) is classified by its IPv4 address.
+  - A name with any disallowed answer is refused whole. Every new connection re-resolves and re-checks, which catches rebinding.
+  - Only 307/308 redirects are followed, each hop checked; credentials headers are dropped across origins, and `https` → `http` is refused. Other 3xx responses would turn a POST into a GET and report a lost payload as delivered.
+- **Secrets at rest (§18.10):**
+  - The per-install key lives in `secrets.key` in the data directory, outside the database.
+  - Each secret is sealed with XChaCha20-Poly1305 under a random nonce, with the record's name as associated data, so a sealed value can't be moved between records.
+  - On Windows the key file's ACL is replaced through `icacls`, because the workspace forbids `unsafe` Win32 calls.
+- **qBittorrent "Send selected files":** the torrent is added paused, unselected files get priority 0 once the client has the metadata, and then the torrent starts. If a magnet's metadata doesn't arrive within 30 s, the torrent stays paused and the UI says the selection is pending, so nothing unwanted downloads.
+- **Webhook payload:** `lodestar.notification`, `schema_version` 1, with an `id` that stays the same across retries for deduplication. Private-source items are left out, and only their count is sent (§18.7).
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.
