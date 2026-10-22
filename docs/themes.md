@@ -26,7 +26,7 @@ dark:
 - `accent` is green wherever the source palette has a usable green, because the compiler derives `success` from `accent-ink`.
 - Categorical colours are per mode. Values under 3:1 on the surface are allowed: the compiler derives a data variant by shifting OKLCH lightness only (§10.18), as it does for Riverstone light.
 
-> **Family count.** §10.18 says "24 families", but its table names 23. The 23 named families come first. The 24th, **Rosewood**, is in its own *Proposed* section at the end, pending owner approval; W1b can generate the 23 now and add Rosewood once it's approved.
+> **Family count.** The §10.18 table names 23 families; **Rosewood** (Originals) is the 24th, approved by the owner, giving 24 families × light/dark = 48 themes.
 
 ## Gate report
 
@@ -744,8 +744,6 @@ Text contrast: **light** 17.17:1 on background, 18.73:1 on surface; **dark** 17.
 
 Dark = **Midnight OLED**: true-black page `#000000` with a near-black panel, so OLED pixels stay off. Light = **Daylight**: a bright, crisp counterpart with white panels. Both use vivid, clearly separated data hues.
 
-## Proposed (pending owner approval)
-
 ### Rosewood
 
 ```yaml
@@ -770,7 +768,7 @@ dark:
 
 Text contrast: **light** 12.15:1 on background, 13.46:1 on surface; **dark** 14.71:1 on background, 12.91:1 on surface.
 
-**Proposed, pending owner approval.** §10.18 says 24 families but its table names 23 (1 official + 3 accessibility + 11 community + 8 originals). Rosewood fills the one hue gap in the Originals, dusty rose: blush-grey neutrals, a rosewood `primary` and a sage `accent`. If the owner prefers a different 24th family (or 23 is the real count), delete this block; nothing else depends on it.
+Dusty rose, filling the one hue gap in the Originals: blush-grey neutrals, a rosewood `primary` and a sage `accent`. Added as the 24th family with the owner's approval, since the §10.18 table names only 23.
 
 ## Sources and licences
 
@@ -790,6 +788,6 @@ Text contrast: **light** 12.15:1 on background, 13.46:1 on surface; **dark** 14.
 | Dracula / Alucard | <https://github.com/dracula/dracula-theme>, <https://draculatheme.com/spec> | MIT | Dracula Theme (Zeno Rocha and contributors) |
 | One | <https://github.com/atom/atom> (`packages/one-*-syntax`, `packages/one-*-ui`) | MIT | GitHub Inc. |
 | Ayu | <https://github.com/ayu-theme/ayu-colors> (npm `ayu` 9.1.0) | MIT | Konstantin Pschera |
-| High Contrast, Paper & Ink, Tidewater, Sandstone, Moss, Ember, Lavender Field, Graphite, Sepia, Midnight OLED / Daylight, Rosewood (proposed) | designed for Lodestar to §10.18 | project | Lodestar |
+| High Contrast, Paper & Ink, Tidewater, Sandstone, Moss, Ember, Lavender Field, Graphite, Sepia, Midnight OLED / Daylight, Rosewood | designed for Lodestar to §10.18 | project | Lodestar |
 
 Values were read from the sources listed above in October 2026. Colour values themselves are generally not copyrightable, but each community family keeps its project's licence and credit in the generated theme JSON and in the app's licence screen. Tokyo Night Day comes from an Apache-2.0 project, so its notice must ship alongside the MIT ones.
