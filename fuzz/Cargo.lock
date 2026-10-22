@@ -624,6 +624,7 @@ dependencies = [
  "lodestar-release-parser",
  "lodestar-search",
  "lodestar-store",
+ "lodestar-utp",
 ]
 
 [[package]]
@@ -662,6 +663,14 @@ dependencies = [
  "lodestar-metainfo",
  "rusqlite",
  "zstd",
+]
+
+[[package]]
+name = "lodestar-utp"
+version = "0.0.0"
+dependencies = [
+ "rand 0.10.3",
+ "tokio",
 ]
 
 [[package]]

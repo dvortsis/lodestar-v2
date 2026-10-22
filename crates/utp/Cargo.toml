@@ -1,0 +1,19 @@
+[package]
+name = "lodestar-utp"
+description = "uTP (BEP 29) with LEDBAT, selective ACK and bounded buffers, over an owned or shared UDP socket"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+rand = "0.10"
+tokio = { version = "1.54.0", features = ["net", "time", "rt", "sync", "macros"] }
+
+[dev-dependencies]
+proptest = "1.11.0"
+tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
+
+[lints]
+workspace = true

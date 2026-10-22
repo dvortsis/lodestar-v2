@@ -1,14 +1,18 @@
-//! Fetching an info dictionary from one peer (BEP 9).
+//! Fetching an info dictionary from one peer (BEP 9), over TCP or uTP.
 
+use std::io;
 use std::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use lodestar_metainfo::InfoHash;
+use lodestar_utp::UtpSocket;
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
-use tokio::io::BufReader;
+use tokio::io::{AsyncRead, AsyncWrite, BufReader};
 use tokio::net::TcpStream;
 use tokio::time::{Instant, timeout, timeout_at};
 
@@ -17,6 +21,7 @@ use crate::message::{
     self, HANDSHAKE_LEN, METADATA_PIECE, MetadataMessage, OUR_UT_METADATA, OUR_UT_PEX,
 };
 use crate::mse::{self, Ciphers};
+use crate::stats::{FetchStats, Transport};
 use crate::wire::{Incoming, Wire};
 
 /// How to use MSE/PE.
@@ -41,6 +46,18 @@ pub struct FetchOptions {
     pub max_metadata: usize,
     pub encryption: Encryption,
     pub peer_id: [u8; 20],
+    /// The transport to try first. TCP by default; uTP needs `utp`.
+    pub transport: Transport,
+    /// With `transport: Utp`: when the peer doesn't answer over uTP
+    /// within `utp_fallback_after` (or `utp` is unset), fetch over TCP
+    /// instead, inside the same deadline. A peer that answered over uTP
+    /// isn't retried over TCP.
+    pub fallback_to_tcp: bool,
+    pub utp_fallback_after: Duration,
+    /// The uTP socket, normally the one sharing the DHT's port (§5).
+    pub utp: Option<UtpSocket>,
+    /// Attempts and successes per transport; clones share it.
+    pub stats: Arc<FetchStats>,
 }
 
 impl Default for FetchOptions {
@@ -57,6 +74,11 @@ impl Default for FetchOptions {
             max_metadata: 16 << 20,
             encryption: Encryption::default(),
             peer_id,
+            transport: Transport::Tcp,
+            fallback_to_tcp: true,
+            utp_fallback_after: Duration::from_secs(2),
+            utp: None,
+            stats: Arc::new(FetchStats::default()),
         }
     }
 }
@@ -85,18 +107,56 @@ const REQUEST_WINDOW: usize = 64;
 const MAX_PEX: usize = 200;
 
 /// Fetches and verifies the info dictionary for `info_hash` from `addr`.
+///
+/// The deadline, the size cap and every other limit are the same over
+/// either transport; only how the connection is opened differs.
 pub async fn fetch(
     addr: SocketAddr,
     info_hash: InfoHash,
     opts: &FetchOptions,
 ) -> Result<Fetched, Error> {
     let deadline = Instant::now() + opts.timeout;
-    let run = |encrypted: bool| async move {
-        timeout_at(deadline, attempt(addr, &info_hash, opts, encrypted))
+    if opts.transport == Transport::Tcp {
+        return fetch_via(Transport::Tcp, addr, info_hash, opts, deadline)
             .await
-            .map_err(|_| Error::Timeout)?
+            .0;
+    }
+    if opts.utp.is_none() && opts.fallback_to_tcp {
+        return fetch_via(Transport::Tcp, addr, info_hash, opts, deadline)
+            .await
+            .0;
+    }
+    match fetch_via(Transport::Utp, addr, info_hash, opts, deadline).await {
+        (Err(_), false) if opts.fallback_to_tcp && Instant::now() < deadline => {
+            fetch_via(Transport::Tcp, addr, info_hash, opts, deadline)
+                .await
+                .0
+        }
+        (r, _) => r,
+    }
+}
+
+/// One transport, with the MSE → plaintext retry. Also says whether a
+/// connection ever opened (which rules out falling back).
+async fn fetch_via(
+    transport: Transport,
+    addr: SocketAddr,
+    info_hash: InfoHash,
+    opts: &FetchOptions,
+    deadline: Instant,
+) -> (Result<Fetched, Error>, bool) {
+    opts.stats.attempted(transport);
+    let connected = AtomicBool::new(false);
+    let connected = &connected;
+    let run = |encrypted: bool| async move {
+        timeout_at(
+            deadline,
+            attempt(transport, addr, &info_hash, opts, encrypted, connected),
+        )
+        .await
+        .map_err(|_| Error::Timeout)?
     };
-    match opts.encryption {
+    let r = match opts.encryption {
         Encryption::Disable => run(false).await,
         Encryption::Require => run(true).await,
         Encryption::Prefer => match run(true).await {
@@ -105,21 +165,70 @@ pub async fn fetch(
             Err(Error::Mse(_)) if Instant::now() < deadline => run(false).await,
             other => other,
         },
+    };
+    if r.is_ok() {
+        opts.stats.succeeded(transport);
     }
+    (r, connected.load(Ordering::Relaxed))
 }
 
 async fn attempt(
+    transport: Transport,
     addr: SocketAddr,
     info_hash: &InfoHash,
     opts: &FetchOptions,
     encrypted: bool,
+    connected: &AtomicBool,
 ) -> Result<Fetched, Error> {
-    let tcp = timeout(opts.connect_timeout, TcpStream::connect(addr))
-        .await
-        .map_err(|_| Error::Timeout)?
-        .map_err(Error::Connect)?;
-    let _ = tcp.set_nodelay(true);
-    let mut stream = BufReader::new(tcp);
+    let timed_out = || {
+        opts.stats.connect_timed_out(transport);
+        Error::Timeout
+    };
+    match transport {
+        Transport::Tcp => {
+            let tcp = timeout(opts.connect_timeout, TcpStream::connect(addr))
+                .await
+                .map_err(|_| timed_out())?
+                .map_err(Error::Connect)?;
+            let _ = tcp.set_nodelay(true);
+            connected.store(true, Ordering::Relaxed);
+            fetch_on_stream(BufReader::new(tcp), info_hash, opts, encrypted).await
+        }
+        Transport::Utp => {
+            let Some(utp) = opts.utp.as_ref() else {
+                return Err(Error::Connect(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "no uTP socket configured",
+                )));
+            };
+            // Give TCP time to run when it's the fallback.
+            let wait = if opts.fallback_to_tcp {
+                opts.connect_timeout.min(opts.utp_fallback_after)
+            } else {
+                opts.connect_timeout
+            };
+            let stream = timeout(wait, utp.connect(addr))
+                .await
+                .map_err(|_| timed_out())?
+                .map_err(Error::Connect)?;
+            connected.store(true, Ordering::Relaxed);
+            fetch_on_stream(BufReader::new(stream), info_hash, opts, encrypted).await
+        }
+    }
+}
+
+/// The BEP 3/10/9 exchange (and MSE when `encrypted`) over an already
+/// open stream of any transport. One attempt: no plaintext retry and no
+/// deadline of its own (bound it with `opts.timeout` as [`fetch`] does).
+pub async fn fetch_on_stream<S>(
+    mut stream: S,
+    info_hash: &InfoHash,
+    opts: &FetchOptions,
+    encrypted: bool,
+) -> Result<Fetched, Error>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let hello = message::handshake(&info_hash.0, &opts.peer_id, true);
 
     let (ciphers, rc4) = if encrypted {
