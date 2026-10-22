@@ -641,4 +641,25 @@ describe('round 2', () => {
 		await tick(5000);
 		expect(headersOf(2)['Last-Event-ID']).toBeUndefined();
 	});
+
+	it('keeps Last-Event-ID after a visibility resync', async () => {
+		const ev = make();
+		const a = stream();
+		fetchMock
+			.mockResolvedValueOnce(a.response())
+			.mockImplementation(async () => stream().response());
+		const resyncs: number[] = [];
+		ev.on('torrents', () => {}, { onResync: () => resyncs.push(1) });
+		await tick();
+		a.push(
+			frame('torrents', { added: 1, max_id: null }, 'v-1') +
+				frame('resync', { reason: 'visibility' })
+		);
+		await tick();
+		flushFrame();
+		expect(resyncs).toHaveLength(1);
+		a.end();
+		await tick(5000);
+		expect(headersOf(1)['Last-Event-ID']).toBe('v-1');
+	});
 });
