@@ -1,0 +1,19 @@
+{
+  "recorded_from": "Built by hand from the ntfy publishing API documentation (docs.ntfy.sh/publish, server v2.x), not recorded: no ntfy server was available in the build session",
+  "note": "Something that isn't ntfy answering 200 with a web page (a captive portal or a wrong URL): not a delivery",
+  "request": {
+    "method": "POST",
+    "path": "/lodestar-alerts",
+    "query": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "content-type",
+        "text/html"
+      ]
+    ],
+    "body": "<!doctype html><html><body><h1>Sign in to the network</h1></body></html>"
+  }
+}
