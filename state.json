@@ -1,9 +1,9 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-22T07:45:00Z",
+ "updated_at": "2026-10-22T07:44:00Z",
  "launches": {
   "date": "2026-10-22",
-  "count": 14
+  "count": 16
  },
  "tags": {},
  "slices": {
@@ -53,11 +53,11 @@
    "notes": "merged after round 2"
   },
   "B1": {
-   "status": "pending",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01UxCJe2QQNeBEaCZrmcDRJi",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
    "notes": ""
   },
@@ -68,14 +68,14 @@
    "pr": null,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": ""
+   "notes": "waits for B1 (both edit crates/api)"
   },
   "B3": {
-   "status": "pending",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01R8S4Q4PGSjv2tZYtdKuZu3",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
    "notes": ""
   },
@@ -763,7 +763,7 @@
  ],
  "runner_prs": {
   "34": "merged",
-  "39": "open (standards)"
+  "39": "merged 07:43"
  },
  "m4_plan": "M4 swarm: #32 now; PR2 after #32 (scrape scheduler, search on hot columns, API/binary wiring) touching crates/api/**, crates/lodestar/src/{main,http,metrics,config}.rs, crates/search/src/{index,lib,compile,filter,sorted,query}.rs \u2014 overlaps B0/B5b/B5a/B6; M4 session merges main over them. It will message the runner when M4 is complete.",
  "audit_2026_10_22": {
