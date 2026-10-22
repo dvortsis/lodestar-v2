@@ -22,7 +22,7 @@ pub struct ApiError {
     status: StatusCode,
     code: &'static str,
     message: Cow<'static, str>,
-    field: Option<&'static str>,
+    field: Option<Cow<'static, str>>,
     span: Option<(usize, usize)>,
     /// Top-level keys beside `error` (the 401's `setup_required`).
     extra: Map<String, Value>,
@@ -58,8 +58,8 @@ impl ApiError {
     }
 
     /// The request parameter or body field at fault.
-    pub fn field(mut self, name: &'static str) -> ApiError {
-        self.field = Some(name);
+    pub fn field(mut self, name: impl Into<Cow<'static, str>>) -> ApiError {
+        self.field = Some(name.into());
         self
     }
 
@@ -88,8 +88,8 @@ impl ApiError {
         let mut error = Map::new();
         error.insert("code".into(), self.code.into());
         error.insert("message".into(), json!(self.message));
-        if let Some(field) = self.field {
-            error.insert("field".into(), field.into());
+        if let Some(field) = &self.field {
+            error.insert("field".into(), json!(field));
         }
         if let Some((start, end)) = self.span {
             error.insert("start".into(), start.into());
@@ -137,6 +137,15 @@ pub async fn no_route() -> ApiError {
         StatusCode::NOT_FOUND,
         "no_route",
         "There's no such endpoint.",
+    )
+}
+
+/// The `/api/v1` fallback for a known path with the wrong method.
+pub async fn wrong_method() -> ApiError {
+    ApiError::new(
+        StatusCode::METHOD_NOT_ALLOWED,
+        "method_not_allowed",
+        "That endpoint doesn't take this method.",
     )
 }
 

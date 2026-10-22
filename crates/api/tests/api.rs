@@ -359,6 +359,38 @@ async fn errors_share_one_envelope() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"]["code"], json!("no_route"));
 
+    // 405: a known path with the wrong method.
+    for req in [
+        post("/api/v1/parse", c, json!({})),
+        get("/api/v1/login", None),
+    ] {
+        let (status, _, body) = call(&f.app, req).await;
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(body["error"]["code"], json!("method_not_allowed"));
+    }
+
+    // A huge offset is refused, not overflowed.
+    let (status, _, body) = call(
+        &f.app,
+        get("/api/v1/search?q=x&offset=18446744073709551615", c),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        (&body["error"]["code"], &body["error"]["field"]),
+        (&json!("window_too_deep"), &json!("offset"))
+    );
+    let (status, _, body) = call(&f.app, get("/api/v1/search?q=x&limit=lots", c)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body["error"],
+        json!({
+            "code": "bad_parameter",
+            "message": "A query parameter has the wrong type or value.",
+            "field": "limit",
+        })
+    );
+
     // Rejected bodies and wrong passwords use it too, with their field.
     let form = Request::post("/api/v1/login")
         .header(header::CONTENT_TYPE, "text/plain")
@@ -369,7 +401,27 @@ async fn errors_share_one_envelope() {
     assert_eq!(body["error"]["code"], json!("unsupported_media_type"));
     let (status, _, body) = call(&f.app, post("/api/v1/login", None, json!({}))).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(body["error"]["code"], json!("bad_body"));
+    assert_eq!(
+        body["error"],
+        json!({
+            "code": "bad_body",
+            "message": "The request body isn't valid JSON for this endpoint.",
+            "field": "password",
+        })
+    );
+    let (_, _, body) = call(
+        &f.app,
+        post("/api/v1/search", c, json!({ "q": "x", "limit": "ten" })),
+    )
+    .await;
+    assert_eq!(body["error"]["field"], json!("limit"));
+    let broken = Request::post("/api/v1/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from("{\"password\": "))
+        .unwrap();
+    let (status, _, body) = call(&f.app, broken).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], json!("bad_json"));
     let (status, _, body) = call(
         &f.app,
         post(
