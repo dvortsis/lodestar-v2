@@ -1704,6 +1704,15 @@ docs/               architecture.md (this plan), query-language.md, operations.m
     - its due index 14 B;
     - per-tracker 14 B.
   - The whole store is **926 B** against the 1,024 B gate, so it still passes, with 98 B left. A history row costs about 180 B with page overhead, so the share of live swarms drives the total.
+- **W8 formatters (`web/src/lib/format/`), choices that clarify `docs/metrics.md` §3:**
+  - Estimated and sampled values share one input, `{ value, approx: true }`, and print `≈` + U+00A0 + value. The panel reads `sampled` from the response and shows the `sampled_note` message once; the formatter has no `sampled` flag.
+  - `formatRate` wraps `{n}/h` and `{n}/d` itself, and `formatRelative` takes the translated `just_now` string in `opts.justNow` (small en/zh fallback). W4 replaces both with messages.
+  - Rounding that would reach the next unit steps up (`1023.9 KiB` → `1.00 MiB`, `59.6 s` → `1 min`, `47.96 hr` → `2 days`, `999.6 ms` → `1 sec`). Bytes pick their digit count from the rounded value, so `9.996 GiB` prints `10.0 GiB` and `99.96 MiB` prints `100 MiB`, which keeps the fixed-digit alignment.
+  - Bytes, percent, share, rate, latency and span treat negative input as invalid (`—`). Count, compact and score keep plain `Intl` output; only `formatDelta` uses U+2212.
+  - `formatDelta` takes `kind` (`count`, `compact`, `percent`) plus percent digits; `formatDateFull` takes a `bucket` (`hour`, `day`, `week`); `formatRelative` uses month = 30 d and year = 365 d.
+  - An unknown or empty `timeZone` falls back to the browser's zone instead of throwing. Percent `<`/`>` edges are detected from the `Intl` output itself, so they match the displayed digits.
+  - Size histograms: `sizeBinEdges(fromExp, toExp)` labels power-of-2 edges with `formatBytes`; `sizeBinLabel` joins two edges with a no-break space and an en dash. Labelling only; the server owns the bins.
+
 
 **Theme compiler (W1):** decisions that clarify §10.18.
 - **Derivation constants are fitted once.** Each rule is a lightness shift (or a mix toward `primary`/`accent` for dividers and tints). The constants are tuned so Riverstone lands within ΔE_ok ≤ 0.5 of the §10.18 table, and every theme inherits them. Light and dark have separate constants. **Riverstone's published values (`docs/design-tokens.md` §1–4) are a contract, so the compiler pins them byte for byte** (`PINS` in `themes.ts`); a test checks the rules alone stay within ΔE_ok 0.5 of each pin.
