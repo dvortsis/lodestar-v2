@@ -171,7 +171,7 @@ The Mainline DHT crawler is **source plugin #1**. Every other discovery source, 
 
 Text extracted from NFOs is indexed into an `nfo_text` field (boost ~2).
 
-**Safety:** content filtering is a rule engine (§20): the always-on, editable **child-safety core**, opt-in rule packs, and your own rules and exceptions, with graduated actions (flag / demote / hide / quarantine / drop), live preview, review and audit. Hash lists are one kind of rule, and everything runs **before** storage.
+**Safety:** content filtering is a rule engine (§20): the always-on, editable **child-safety core**, opt-in rule packs, and your own rules and exceptions, with graduated actions (flag / demote / hide / quarantine / drop), live preview, review, and effect warnings with password confirmation for risky changes (no audit log). Hash lists are one kind of rule, and everything runs **before** storage.
 
 ## 7. Storage (SQLite = source of truth)
 
@@ -188,7 +188,7 @@ Text extracted from NFOs is indexed into an `nfo_text` field (boost ~2).
 - `swarm(torrent_id PK, seeders, leechers, completed, trackers_reporting, dht_seeds, dht_peers, last_scrape_at, next_scrape_at)` plus `swarm_trackers(torrent_id PK, data BLOB)` for the per-tracker detail, packed as `(tracker_id u16, s, l, c, at)` and only for torrents with non-zero results.
 - `swarm_history(torrent_id PK, data BLOB)`: a **fixed-size ring buffer** per torrent (e.g. 14 daily + 26 weekly samples of seeders and leechers as `u16` ≈ 160 B), stored **only for torrents with a non-zero swarm or a user interest** (favorited/viewed/saved-search hit). A naive daily-row table would reach billions of rows within a year.
 - **Sources and provenance (§18.5):** `torrents.sources` (u64 bitset) + `first_source` (u8); `sources` (plugin registry and state); `torrent_claims(torrent_id, source_id, data BLOB)`; `unverified_items(id, network, key, source_id, claims BLOB, first_at, last_at)` for keys with claims but no verified metadata yet. Overlay networks (§18.6) keep their own item tables but share the one monotonic id sequence.
-- **Content filtering (§20.7):** `filter_rules`, `filter_overrides`, `filter_fixtures`, `filter_hits`, `tombstones`, `quarantine` (sealed names), `filter_audit` (append-only). These replace the M1 `blocklist` config files.
+- **Content filtering (§20.7):** `filter_rules`, `filter_overrides`, `filter_fixtures`, `filter_hits`, `tombstones`, `quarantine` (sealed names). There's no audit log of filtering changes (§20.11). These replace the M1 `blocklist` config files.
 - `trackers`, `saved_searches`, `alerts`, `user_items` (fav/hidden/labels/notes), `collections`, `settings`, `zstd_dicts`, `schema_migrations`.
 
 **Hot columns:** `data/hot/{seeders,leechers,trackers,last_seen,user_flags}.col` are mmap'd `u32` arrays indexed by torrent id, read and written as atomics so there are no locks between the scraper and searchers. Seeders/trackers use a sentinel for **"never scraped"**, so the UI shows "—" rather than a misleading 0. Swarm stats change constantly; putting them in Tantivy would force delete+reinsert of whole documents. Instead, search collectors read these arrays (a nanosecond lookup) for filtering, sorting and ranking. SQLite stays authoritative, and the arrays are rebuilt on startup if they are inconsistent.
@@ -266,7 +266,7 @@ Units and relative dates are parsed. Unknown fields trigger a helpful error, not
 
 ## 9. API
 
-axum, JSON. `/api/v1`: `search` (GET with q + params, or POST with AST), `suggest`, `facets`, `torrents/{hash}` (detail + first 500 files), `torrents/{hash}/files?cursor=`, `torrents/{hash}/siblings`, `files/search`, `stats`, `crawler` (status/pause/intensity), `sources` (list, enable/disable, priority/agents/schedule/egress, consent, purge, health), `jobs` (importer progress, pause/resume), `insights/overview?range=&compare=`, `insights/{stage}?range=&reason=`, `insights/events`, `insights/export.csv?panel=`, `digest` (settings + preview), `filters` (rules CRUD, preview, test, shadow, packs, review queue, release, audit; §20.7), `classify` (corrections: Not adult / Is adult, Not junk), `trackers`, `saved-searches`, `alerts`, `collections`, `user-items`, `settings`, `import` (.torrent upload/folder watch), `export` (CSV/JSON/magnet list). It also serves `/events` (SSE: new torrents, crawler stats, alerts, and `insights` deltas every 30 s), `/torznab/api` (for Prowlarr/Sonarr/Radarr), `/metrics` (Prometheus), `/healthz`, `/openapi.json` (utoipa), and RSS per saved search.
+axum, JSON. `/api/v1`: `search` (GET with q + params, or POST with AST), `suggest`, `facets`, `torrents/{hash}` (detail + first 500 files), `torrents/{hash}/files?cursor=`, `torrents/{hash}/siblings`, `files/search`, `stats`, `crawler` (status/pause/intensity), `sources` (list, enable/disable, priority/agents/schedule/egress, consent, purge, health), `jobs` (importer progress, pause/resume), `insights/overview?range=&compare=`, `insights/{stage}?range=&reason=`, `insights/events`, `insights/export.csv?panel=`, `digest` (settings + preview), `filters` (rules CRUD, preview, warning, test, shadow, packs, review queue, release; §20.7), `classify` (corrections: Not adult / Is adult, Not junk), `trackers`, `saved-searches`, `alerts`, `collections`, `user-items`, `settings`, `import` (.torrent upload/folder watch), `export` (CSV/JSON/magnet list). It also serves `/events` (SSE: new torrents, crawler stats, alerts, and `insights` deltas every 30 s), `/torznab/api` (for Prowlarr/Sonarr/Radarr), `/metrics` (Prometheus), `/healthz`, `/openapi.json` (utoipa), and RSS per saved search.
 
 The tracker list ships with a curated default. It can optionally **auto-refresh** from the community lists `ngosang/trackerslist` and `XIU2/TrackersListCollection` (an opt-in external fetch, merged, then health-checked before use).
 
@@ -621,7 +621,7 @@ Each detail page follows the same pattern: three to four KPIs, one primary trend
 - **Settings:**
   - A manuscript layout (max 720 px). Section navigation sits on the left at x-large and becomes a select on narrow screens.
   - Forms have visible labels, help text next to each field, inline validation, and per-section Save with a "Saved" confirmation.
-  - Sections: General, Crawler, Network & VPN, Storage & retention (with size-projection previews), Search & ranking, **Sources** (§18.8: every discovery, importer, enrichment, network and output plugin, with priority, agents, schedule, egress, consent and purge; Auto-balance), **Companions** (§18.10: installed and detected companions, health, versions, logs, updates, Set up / Remove), **Workers** (§19.7: add/join, status, placement, budgets, drain, revoke, purge-by-worker), **Filters & Safety** (§20.7: rules, editor with preview and fixtures, review queue, packs, audit log), Trackers, Integrations, Notifications, **Insights & digest** (digest schedule and channels, query logging on/off and retention, clear usage data), Security, Appearance (theme, density, motion, shortcut settings, **Show adult content** with 18+ confirmation), About.
+  - Sections: General, Crawler, Network & VPN, Storage & retention (with size-projection previews), Search & ranking, **Sources** (§18.8: every discovery, importer, enrichment, network and output plugin, with priority, agents, schedule, egress, consent and purge; Auto-balance), **Companions** (§18.10: installed and detected companions, health, versions, logs, updates, Set up / Remove), **Workers** (§19.7: add/join, status, placement, budgets, drain, revoke, purge-by-worker), **Filters & Safety** (§20.7: rules, editor with preview and fixtures, review queue, packs, override list), Trackers, Integrations, Notifications, **Insights & digest** (digest schedule and channels, query logging on/off and retention, clear usage data), Security, Appearance (theme, density, motion, shortcut settings, **Show adult content** with 18+ confirmation), About.
 - **First-run wizard** (stepped progress, one primary action per step):
   1. Setup token
   2. Admin password
@@ -909,7 +909,7 @@ With the plum swap, all six colours are distinguishable. Colour is still never t
 - **Upgrades:** an automatic SQLite snapshot before any schema migration, with `lodestar rollback`. Docker tags: `x.y.z`, `x.y`, `latest`, `nightly`. Optional in-app "update available" check (no telemetry, ever).
 - **Cluster security** (§19.6): mutual TLS with a cluster CA created on first use; one-time join tokens (15-minute expiry); per-worker certificates with immediate revocation; workers receive only the have-filter, assignments, sealed credentials and leases; 0.5% re-verification sampling with quarantine and purge-by-worker.
 - **Companion supply chain** (§18.10): a signed catalogue pinned per release, with SHA-256 and upstream signatures verified before anything runs. Every install needs confirmation; companions run with the least privilege, bound to localhost or the internal network; credentials are random and encrypted at rest.
-- **Content safety (§20):** the child-safety core is **always on**, on every source, network and worker. Its **locked floor** (CS-1a/1b, CS-8a: torrents you confirmed or imported, plus their exact reposts) can't be removed. Every other core rule is **editable and movable** behind guardrails: intent fixtures, protective-only actions, breadth checks with re-authentication, overrides over signed base rules, and an append-only audit log. Your **CSX-5 override list** can override everything except the floor, always after a mandatory **impact preview**. Hash-list matches are dropped; pattern matches are quarantined (hash + sealed name) for review. Nothing else is stored or indexed.
+- **Content safety (§20):** the child-safety core is **always on**, on every source, network and worker. Its **locked floor** (CS-1a/1b, CS-8a: torrents you confirmed or imported, plus their exact reposts) can't be removed. Every other core rule is **editable and can be switched off** behind guardrails: intent fixtures, protective-only actions, overrides over signed base rules, and, for any change that weakens protection, a plain-language effect warning (§20.11) and your password. No audit log is kept. Your **CSX-5 override list** can override everything except the floor, always after a mandatory **impact preview**. Hash-list matches are dropped; pattern matches are quarantined (hash + sealed name) for review. Nothing else is stored or indexed.
 - Observability: `tracing` structured logs, Prometheus metrics for every pipeline stage, and the built-in dashboard.
 - Graceful shutdown flushes batches, commits the index and persists the DHT state. Crash-safe: SQLite is the source of truth, and the index catches up on startup from a `last_indexed_id` watermark.
 
@@ -969,7 +969,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 
 **Content filtering and the Adult category (§20):**
 - **Next (M4 add-on):** the rule engine, the child-safety core with guardrails, quarantine and tombstones, and `ContentType::Adult` (code 11) with `adult_kind` and detection. It replaces the hash-only blocklist in prepare and commit.
-- **M5:** Settings → Filters & Safety (editor, preview, review queue, audit), "Block this…", the Show adult preference, Adult facets.
+- **M5:** Settings → Filters & Safety (editor, preview, effect warnings, review queue, override list), "Block this…", the Show adult preference, Adult facets.
 - **v0.6:** curated rule packs; adult enrichment plugins (ThePornDB, StashDB).
 
 **Remote workers (§19):**
@@ -999,7 +999,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Legal exposure from restricted and overlay sources:** off by default, with consent classes, VPN egress, isolated tiers, one-click purge and the non-negotiable CSAM blocklist (§18.7). Private-tracker results never leave the instance.
 - **Scheduler starvation or unfairness:** deficit round robin with min shares, hard caps, importer write-share limits, property tests (§18.9) and Insights visibility of shares and auto-balance moves.
 - **False positives in filtering:** graduated actions with quarantine as the default for pattern rules, live preview, shadow mode, per-rule fixtures, a precision corpus in CI, a review queue whose corrections become fixtures, and reversible tombstones (§20).
-- **Weakening the child-safety core:** the owner chose a minimal locked floor, **switchable non-floor core rules**, and a CSX-5 override list whose patterns and keywords can override every non-floor filter. A keyword override also bypasses other evidence in the same torrent, which is why the **Neutralize term** strength and side-by-side preview exist. Mitigations: a **mandatory impact preview** with a 30-day replay and an exposure summary, optional shadow mode, re-authentication + typed confirmation + reason for anything releasing core catches, the floor (your confirmed abuse hashes) never overridable, intent fixtures on core edits, Undo, and an append-only audit log (§20.5, §20.10).
+- **Weakening the child-safety core:** the owner chose a minimal locked floor, **switchable non-floor core rules**, and a CSX-5 override list whose patterns and keywords can override every non-floor filter. A keyword override also bypasses other evidence in the same torrent, which is why the **Neutralize term** strength and side-by-side preview exist. Mitigations: a **mandatory impact preview** with a 30-day replay and an exposure summary, a **plain-language effect warning** that spells out what will get through (§20.11), your **password** for every such change, optional shadow mode, the floor (your confirmed abuse hashes) never overridable, intent fixtures on core edits, and Undo. **No audit log is kept** (owner's decision).
 - **Distributed-systems bugs** (double counting, lost keys, split brain): the coordinator is the single source of truth (no consensus protocol), leases carry fencing tokens, results are idempotent by batch id, the local worker shares the remote code path, and the multi-worker chaos tests (§19.8) gate releases.
 - **A rogue or compromised worker:** mTLS, least data, re-verification sampling, quarantine, purge-by-worker, and an authoritative blocklist check at commit.
 - **Scope/maintainability:** a large Rust codebase for one maintainer. Mitigate with strict crate boundaries, the MVP cut line, and reusing mature crates (tantivy, axum, rusqlite, tokio, encoding_rs, mimalloc, utoipa) wherever they aren't on the critical path.
@@ -1112,15 +1112,16 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - **Companion manager (§18.10):** fully managed installs on native platforms from a signed, pinned catalogue; on Docker/Unraid, guided compose/CA templates with auto-detection and auto-configuration, because a self-installing container would need the Docker socket, which is effectively root. Managed-container mode is advanced and off by default.
 
 **Content filtering and the Adult category (draft 11 → 12, §20):**
-- **Filtering becomes a rule engine:** rules are saved queries plus graduated actions, with live preview, shadow mode, tombstones, fixtures and an audit log. The child-safety core is **always on and non-removable, but every rule in it is editable** (owner's decision) behind guardrails: intent fixtures, protective-only actions, breadth checks with re-authentication, overrides over signed base rules, and an append-only audit.
+- **Filtering becomes a rule engine:** rules are saved queries plus graduated actions, with live preview, shadow mode, tombstones and fixtures. The child-safety core is **always on and non-removable, but every rule in it is editable** (owner's decision) behind guardrails: intent fixtures, protective-only actions, overrides over signed base rules, and effect warnings with password confirmation.
 - **Core control (owner's decisions):**
   - The core is split into sub-rules (CS-1a to CS-9a).
   - **Minimal locked floor:** CS-1a/1b, CS-8a, i.e. torrents you confirmed or imported, plus their exact reposts.
-  - Other core rules can be promoted or moved out (re-authentication, typed confirmation, reason).
+  - Other core rules can be promoted, or switched off (see below).
   - CS-1 is populated only by your confirmations, reports and imports; no third-party list ships, and nothing is crowdsourced. A manual hotline link is offered.
   - Built-in exceptions CSX-1 to CSX-4 **cancel specific evidence** rather than skipping rules.
   - **CSX-5, an editable override list, overrides every filter except the floor,** including by keyword or pattern, behind a **mandatory impact preview** (§20.10). Keyword entries choose between **Override** (default) and **Neutralize term**.
-  - **Every core rule is on by default; every non-floor rule can be switched off** (impact preview, re-authentication, typed confirmation, reason, audit). This replaces "move out".
+  - **Every core rule is on by default; every non-floor rule can be switched off** (impact preview, effect warning, password). This replaces "move out".
+  - **No audit log of filtering changes** (owner's decision): risky changes show a plain-language effect warning and require the password instead (§20.11).
 - **Adult becomes a media category:** `ContentType` code 11 with `adult_kind`, detection scored for precision, and a visibility preference (off by default, 18+ confirmation). It replaces the earlier Restricted "adult tier"; adult sources now use the normal consent classes.
 
 **Remote workers (draft 10 → 11, §19):** "split roles" (v1.x) is replaced by a coordinator plus any number of remote workers running the same binary.
@@ -2002,7 +2003,7 @@ Filtering must **block exactly what it's meant to block** and **avoid false posi
   - Rules run in **prepare** (worker side, §19.4), and **commit** re-checks authoritatively. Results carry the rule-set version, and a version mismatch is re-evaluated at commit.
 
 ### 20.5 The child-safety core: always on, editable, with a locked floor
-The core is **on by default**. Its **locked floor** (CS-1a/1b, CS-8a) is always on and can't be removed. **Every other core rule is editable and can be switched off** (owner's decision), and the owner's **CSX-5 override list** (including keywords) overrides any non-floor core rule. Every change is impact-previewed (§20.10) and audited.
+The core is **on by default**. Its **locked floor** (CS-1a/1b, CS-8a) is always on and can't be removed. **Every other core rule is editable and can be switched off** (owner's decision), and the owner's **CSX-5 override list** (including keywords) overrides any non-floor core rule. Every change is impact-previewed (§20.10); every change that weakens protection shows an effect warning and needs your password (§20.11).
 
 #### 20.5.1 Core sub-rules
 Term lists (`@cs/…`) ship only as **hashed, normalized tokens**, so no indicative text exists in the repo or binary. They're sourced from published child-protection and safeguarding guidance. The well-known keyword lists (e.g. the IWF's) are member-only, so the first lists are small and deliberately conservative.
@@ -2037,14 +2038,14 @@ CS-1 is an **exact-match block on specific torrents, and every entry comes from 
 3. **Import a hash list** you deliberately chose.
 - **There's no public CSAM list keyed by torrent info hashes.** The vetted lists (NCMEC, IWF, INHOPE members) cover image/video file hashes (PhotoDNA, MD5/SHA-1) and URLs, and are available only to accredited organisations. They can only match the rare torrents that embed per-file `md5sum`/`sha1` keys, and BitTorrent v2's per-file hashes are computed differently.
 - **Confirmed hashes are never crowdsourced** between Lodestar users. The review screen offers a manual **"Report to a hotline"** link that opens your country's INHOPE/NCMEC/IWF reporting page. Nothing is reported automatically.
-- **Undoing:** removing an entry from CS-1 needs re-authentication and is audited. The torrent can then be fetched again.
+- **Undoing:** removing an entry from CS-1 shows an effect warning and needs your password. The torrent can then be fetched again.
 - **Scope:** CS-1 is only for child-abuse material. Anything else you want blocked goes through *Block this…* into your own rules (layer 3).
 
 #### 20.5.3 Switches and membership: which core rules are active
 - **Every core rule is on by default.**
 - **Locked floor (CS-1a/1b, CS-8a): always on.** Shown with a lock and an explanation. It can be edited (e.g. removing a mistaken CS-1 entry) but never switched off.
 - **Every other core rule has an on/off switch** (CS-2a to CS-7a, CS-9a, and any rule you promoted).
-  - **Switching one off** shows the impact preview (§20.10): what that rule alone caught in the last 30 days, what's in its quarantine now (which would be released and processed normally), and the projected daily rate. It then needs re-authentication, a typed confirmation and a reason, and is recorded in the audit log.
+  - **Switching one off** shows the impact preview (§20.10): what that rule alone caught in the last 30 days, what's in its quarantine now (which would be released and processed normally), and the projected daily rate. It then shows a plain-language effect warning (§20.11) and your password.
   - A switched-off rule **stays in the core list**: signed updates still apply to it, and you can switch it back on any time. Switching it back on re-evaluates recent ingest and the index (§20.3).
   - **Optional reminder:** "Review this switched-off rule in N days".
 - **Promote** any pack rule or your own rule into the core. It needs a must-match fixture and a protective action (`quarantine`/`drop`), and it's on by default with the same switch.
@@ -2084,23 +2085,23 @@ Plain-text must-not-match fixtures ship with them: *Sex Education S02E03 – The
   - **tombstones** (dropped items it would re-fetch);
   - a **30-day replay** of every filter decision, as items per day it would have let through;
   - a sample of the last 24 hours of ingest.
-- **Core-caught items** in the preview are listed by rule with **sealed names**. Each one can be revealed individually (each reveal is logged).
-- **Extra confirmation when core catches are affected:** an entry that would release anything the core caught needs **re-authentication, a typed confirmation and a reason**.
+- **Core-caught items** in the preview are listed by rule with **sealed names**. Each one can be revealed individually, with your password.
+- **Warning and password:** every CSX-5 entry shows a **plain-language effect warning** (§20.11) and needs **your password**. When it would release anything the core caught, the warning spells out which protections it bypasses and what else would get through.
 - **Shadow first, optionally:** an override can run in **shadow mode** for N days, logging what it *would* have released without releasing anything, so you can watch its real effect before committing.
-- **The locked floor isn't overridden:** CSX-5 doesn't release items in CS-1/CS-8 (torrents you confirmed as abuse material). The preview flags those as a **contradiction** with a one-click "Remove from CS-1" (re-authentication, audited). This keeps your own confirmations from being undone by accident through a broad pattern.
-- **Every entry** records who added it, when, why, its preview snapshot and its hit count. It can carry an expiry or a periodic review reminder, and it's in the append-only audit log.
+- **The locked floor isn't overridden:** CSX-5 doesn't release items in CS-1/CS-8 (torrents you confirmed as abuse material). The preview flags those as a **contradiction** with a one-click "Remove from CS-1" (effect warning + password). This keeps your own confirmations from being undone by accident through a broad pattern.
+- **Every entry** stores only what it needs to work: the match, its strength (Override / Neutralize term), its scope, when it was added, an optional expiry or review reminder, and a hit count. No author, reason or history is recorded.
 - **Exact-torrent entries** match only that torrent's own hashes, never its payload signature, so renamed reposts don't inherit the override.
 
 #### 20.5.6 Guardrails on editing core rules
 1. **No delete.** A core rule can be edited, reset to its signed default, or switched off (non-floor rules only, §20.5.3).
 2. **Protective actions only** (`quarantine` / `drop`) while a rule is in the core.
 3. **Intent fixtures:** an edit that makes any must-match fixture (hashed tokens) stop matching is rejected, with an explanation. Your false-positive examples become must-not-match fixtures.
-4. **Breadth check:** an edit releasing more than 25% of a rule's 30-day catches is a **broad edit** (re-authentication + typed confirmation, marked in the audit log).
-5. **Re-authentication** for every core edit.
+4. **Breadth check:** an edit releasing more than 25% of a rule's 30-day catches is a **broad edit**. The effect warning says so in plain words ("this edit stops CS-4a from catching about 3 in 4 of what it caught last month") before you enter your password.
+5. **Effect warning + password** for every core edit that weakens it (§20.11). Strengthening edits (adding terms, rules or hashes) need neither.
 6. **Overrides over signed base rules,** with a diff against the base and rebasing on update. Conflicts are flagged, never dropped.
-7. **Append-only audit log**, included in backups.
+7. **No audit log** (owner's decision). Undo keeps only the previous rule set, one step back, not a history.
 
-**Default actions:** hash rules drop; pattern rules quarantine (hash + rule id + a **sealed** name revealed only by an explicit, logged action; no file lists; auto-purged after 30 days unless released or confirmed). **Upstream improvement (opt-in):** "Report false positive" sends the rule id, your override diff and hashed tokens, never names.
+**Default actions:** hash rules drop; pattern rules quarantine (hash + rule id + a **sealed** name, revealed only on an explicit action with your password; no file lists; auto-purged after 30 days unless released or confirmed). **Upstream improvement (opt-in):** "Report false positive" sends the rule id, your override diff and hashed tokens, never names.
 
 **Precision in the curated base:** single ambiguous words never trigger on their own (e.g. "teen", common in legal adult marketing for 18–19-year-olds). Rules need multiple independent indicators, with stricter thresholds inside Adult (§20.9).
 
@@ -2165,27 +2166,27 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
 | `filter_hits` | rule, item/hash, time, action, evidence; detail kept 30 days, plus counts in rollups |
 | `tombstones` | hash, rule, time |
 | `quarantine` | hash, rule, sealed name, time, expiry |
-| `filter_audit` | append-only edit history |
-| `core_membership` | which rules are in the core, the floor flag, move history |
-| `override_list` | CSX-5 entries: kind (hash / pattern), query, reason, author, created, expiry/review date, shadow_until, preview snapshot, hit count |
+| `core_membership` | which rules are in the core, the floor flag, on/off state |
+| `override_list` | CSX-5 entries: kind (hash / keyword / pattern), query, strength, scope, created, expiry/review date, shadow_until, hit count |
+| `rule_set_prev` | the previous rule set only, for one-step Undo |
 | `cs_hashes` | CS-1 entries (all hash forms) + CS-8 payload signatures, with origin (confirmed / reported / imported) |
 
-- **API:** `filters` (rules CRUD, preview, test, shadow, packs, review queue, release, audit) and `classify` corrections (Not adult / Is adult, Not junk).
+- **API:** `filters` (rules CRUD, preview, warning, test, shadow, packs, review queue, release; password-gated for weakening changes) and `classify` corrections (Not adult / Is adult, Not junk).
 - **UI: Settings → Filters & Safety:**
   - **Rules:** layer, action, status (active / shadow / modified), hits over 7 days, false-positive reports.
   - **Editor:** builder or text, live preview, fixtures, shadow toggle, diff against base for core and pack rules.
   - **Review queue:** flagged, hidden and quarantined items. **Confirm** or **False positive**, which proposes the narrowest exception and shows what else it would release.
   - **Packs.**
-  - **Audit log.**
+  - **Override list (CSX-5).**
 - **In Search:** "N hidden by filters · Show" with a "why" per item. The detail drawer and result menus offer **Block this…**, **Not junk**, **Not adult / Is adult**.
 
 ### 20.8 Verification
 - **Fixture suites:** every core rule, pack rule and user rule runs its fixtures on edit and in CI. **Core edits that break a must-match fixture are rejected** (tested through the API, not just the UI).
 - **Guardrail tests:**
   - core rules can't be deleted or disabled, or their action changed outside {quarantine, drop}, through any API path;
-  - broad edits require re-authentication and a typed confirmation;
+  - weakening changes are refused through every API path without a fresh password confirmation, and their warning text is generated and shown first;
   - overrides survive a signed update rebase, or are flagged;
-  - the audit log is append-only.
+  - no table or log records who changed a filter, when, or why (only the current rule set and one previous set for Undo).
 - **Precision corpus:** a labelled set of legitimate titles prone to false positives (the *Lolita* novel and films, *Sex Education*, medical and educational material, 18+ "teen"-labelled legal adult releases, games with age ratings in the name) must stay unblocked by the core. A sample of known-bad structures, in hashed fixture form, must stay blocked.
 - **Reversibility:** removing a rule restores hidden items and re-queues tombstones. Releasing a quarantined item re-fetches and indexes it.
 - **Performance:** under 50 µs per torrent at 10,000 rules; re-evaluation jobs stay within the §3 overhead budget.
@@ -2193,18 +2194,18 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
 - **Floor and switches:**
   - every core rule is on in a fresh install;
   - floor rules (CS-1a/1b, CS-8a) can't be switched off, removed or overridden through any API path;
-  - switching off a non-floor rule requires a completed impact preview, re-authentication, a typed confirmation and a reason, and its quarantine is released and processed;
+  - switching off a non-floor rule requires a completed impact preview, its effect warning and your password, and its quarantine is released and processed;
   - switched-off rules stay off across signed updates, while new core rules arrive on;
   - promotion requires a must-match fixture and a protective action.
 - **CSX-5:**
   - saving without a completed impact preview is rejected;
-  - entries releasing core catches require re-authentication, a typed confirmation and a reason;
+  - every entry requires its effect warning and your password;
   - floor items are never released and show as contradictions;
   - shadow overrides release nothing;
   - exact entries don't extend to payload signatures;
   - **Override** keyword entries bypass every non-floor core rule;
   - **Neutralize-term** entries remove only that term's evidence, so a fixture with the neutralized keyword plus an explicit minor age is still quarantined;
-  - every entry is in the audit log.
+  - entries store no author, reason or history.
 - **Exceptions:** CSX-1/2 cancel only their declared evidence. A fixture with a mainstream title but a code term or explicit minor age in a file name must still be quarantined.
 - **Impact preview accuracy (§20.10):** on the fixture set, the counts it predicts equal the changes that actually happen after applying (`analytics-validation` style reconciliation).
 
@@ -2243,9 +2244,28 @@ Every change to filtering shows its impact **before** it takes effect. That cove
 | **30-day replay** | every filter decision in `filter_hits` re-run against the new rule set, as items per day that would change and a projected daily rate |
 | Live sample | the last 24 hours of ingest |
 
-- **Breakdowns** by layer, rule, media category, source and network, each with a list of affected items. Core-caught items appear with **sealed names**, revealed only individually (each reveal is logged).
+- **Breakdowns** by layer, rule, media category, source and network, each with a list of affected items. Core-caught items appear with **sealed names**, revealed only individually with your password.
 - **Exposure summary at the top:** "This change would release 37 items (2 caught by the core), and about 4 per day going forward."
-- **Then choose:** **Apply**, **Shadow for N days** (log what it would do, change nothing, and compare later in the same view), or **Cancel**. Changes that release core catches add re-authentication, a typed confirmation and a reason.
+- **Then choose:** **Apply**, **Shadow for N days** (log what it would do, change nothing, and compare later in the same view), or **Cancel**. Changes that weaken protection show their effect warning (§20.11) and need your password before Apply or Shadow.
 - **After applying:** a "What changed" report matches the preview against what actually happened (they're reconciled in tests, §20.8). An **Undo** restores the previous rule set (hidden items return; re-fetched items are re-evaluated).
 - **Performance:** the preview runs as a background job over rollups, `filter_hits` and index queries. The target is under 5 seconds for a typical rule at 10M torrents, with progress shown. It never blocks crawling or search (§3 overhead budget).
+
+### 20.11 Effect warnings and password confirmation (instead of an audit log)
+**Owner's decision: filtering changes aren't recorded in an audit log.** Lodestar deals with torrents, and a record of what was unblocked, when and why is itself sensitive. Instead, every change that **weakens** protection shows a **plain-language warning about its effect** and needs **your password** to go ahead. Changes that strengthen protection (adding terms, rules, hashes or packs) need neither.
+- **Which changes get a warning:** switching off a core rule; editing a core rule so it catches less; a CSX-5 entry (exact, keyword or pattern; Override or Neutralize term); releasing an item from quarantine; removing a CS-1 entry; revealing a sealed name; disabling a pack or pack rule; deleting or narrowing your own drop/quarantine rules.
+- **What a warning says** (generated from the change and its impact preview, §20.10):
+  1. **What the change does, concretely,** in one or two sentences, naming the protections it bypasses.
+  2. **What else it lets through:** the non-obvious side effect, stated honestly.
+  3. **The numbers:** items released now (how many were caught by the core), and the projected rate per day from the 30-day replay.
+  4. **A safer alternative,** when one exists (Neutralize term, a narrower scope, an exact torrent, shadow first).
+- **Example (a CSX-5 keyword entry with Override):**
+  > **Overriding "jailbait" lets more through than the series.** Any torrent with "jailbait" in its name or files will skip every core rule that isn't locked, including the ones that detect explicit under-18 ages and code terms in file names. Abuse uploads also use this word, so the override would let those through too. In the last 30 days this would have released 214 items (9 caught by the core), about 7 per day. **Safer:** "Neutralize term" stops the word from counting on its own while other signals still count, and would have released 205 items (0 caught by the core).
+  >
+  > Enter your password to apply. [Shadow for 7 days] [Cancel]
+- **More templates:**
+  - **Switching off a core rule:** "Turning off CS-4a stops checking for child-role words next to sexual terms. Over the last 30 days it alone caught 12 items; the 3 now in quarantine will be released and indexed."
+  - **Releasing a quarantined item:** "This torrent was held by CS-2a because a file name has an under-18 age next to a sexual term. Releasing it fetches and indexes it normally."
+  - **Removing a CS-1 entry:** "You confirmed this torrent as abuse material. Removing it lets it, and exact reposts of its files, be fetched and indexed again."
+- **Password:** the admin password is entered in the warning dialog itself, for every weakening change (there's no "remember for 15 minutes"). Strengthening changes and previews never ask.
+- **What *is* stored:** only what filtering needs to work. That's the current rule set and switches, CSX-5 entries (match, strength, scope, dates, hit count), and the previous rule set for one-step Undo. It also includes `filter_hits` (hash, rule, time and evidence codes; no names), which the review queue and the 30-day replay need. Its retention is configurable from 0 to 30 days (default 30), and a shorter window shortens the replay.
 
