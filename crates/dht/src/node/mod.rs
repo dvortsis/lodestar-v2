@@ -202,6 +202,13 @@ pub struct Stats {
     pub samples_sent: AtomicU64,
     /// Nodes that answered sample_infohashes with an error or timed out.
     pub sample_failures: AtomicU64,
+    /// BEP 33 scrapes asked for, answered, and refused because the queue
+    /// was full.
+    pub scrapes_requested: AtomicU64,
+    pub scrapes_completed: AtomicU64,
+    pub scrapes_dropped: AtomicU64,
+    /// Scrapes that found at least one node storing the hash.
+    pub scrapes_with_responders: AtomicU64,
     /// Packets to or from a blocklisted address, not sent or ignored.
     pub denied: AtomicU64,
 }
@@ -235,6 +242,10 @@ impl Stats {
             harvest_dropped: g(&self.harvest_dropped),
             samples_sent: g(&self.samples_sent),
             sample_failures: g(&self.sample_failures),
+            scrapes_requested: g(&self.scrapes_requested),
+            scrapes_completed: g(&self.scrapes_completed),
+            scrapes_dropped: g(&self.scrapes_dropped),
+            scrapes_with_responders: g(&self.scrapes_with_responders),
             denied: g(&self.denied),
         }
     }
@@ -263,6 +274,10 @@ pub struct StatsSnapshot {
     pub harvest_dropped: u64,
     pub samples_sent: u64,
     pub sample_failures: u64,
+    pub scrapes_requested: u64,
+    pub scrapes_completed: u64,
+    pub scrapes_dropped: u64,
+    pub scrapes_with_responders: u64,
     pub denied: u64,
 }
 
@@ -301,6 +316,36 @@ pub struct Snapshot {
 pub(crate) enum Command {
     Snapshot(oneshot::Sender<Snapshot>),
     GetPeers(InfoHash),
+    Scrape(InfoHash, oneshot::Sender<Option<DhtEstimate>>),
+}
+
+/// A DHT swarm estimate (BEP 33) from the nodes closest to a hash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DhtEstimate {
+    pub seeds: u32,
+    /// Peers that aren't seeds.
+    pub peers: u32,
+    /// Nodes whose filters went into the estimate: 0 means no node near
+    /// the hash stores it, which is "unknown" rather than "dead".
+    pub responders: u8,
+}
+
+/// A cloneable handle for asking a running node to scrape.
+#[derive(Debug, Clone)]
+pub struct NodeHandle {
+    commands: mpsc::Sender<Command>,
+}
+
+impl NodeHandle {
+    /// Estimates a swarm's seeds and peers from the BEP 33 filters of the
+    /// nodes closest to `hash`. `None` when the scrape queue is full or
+    /// the node has stopped. Only counts come back: no filters and no
+    /// addresses leave the node (§18.7).
+    pub async fn scrape(&self, hash: InfoHash) -> Option<DhtEstimate> {
+        let (tx, rx) = oneshot::channel();
+        self.commands.send(Command::Scrape(hash, tx)).await.ok()?;
+        rx.await.ok().flatten()
+    }
 }
 
 /// Binds a non-blocking UDP socket and returns it twice: as a tokio socket
@@ -386,6 +431,13 @@ impl Node {
 
     pub fn stats(&self) -> StatsSnapshot {
         self.stats.snapshot()
+    }
+
+    /// A handle that can outlive borrows of the node, for scrapes.
+    pub fn handle(&self) -> NodeHandle {
+        NodeHandle {
+            commands: self.commands.clone(),
+        }
     }
 
     /// Asks the node to look up peers for a hash (strategy 3: hashes with
