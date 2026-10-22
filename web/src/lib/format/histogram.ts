@@ -8,8 +8,8 @@ export interface SizeBinEdges {
 	labels: string[];
 }
 
-/** U+2013 between two edge labels, with ordinary spaces: "1.00 GiB – 4.00 GiB". */
-export const RANGE_SEPARATOR = ' – ';
+/** U+2013 between two edge labels; a no-break space keeps it on the first edge's line. */
+export const RANGE_SEPARATOR = '\u00a0\u2013 ';
 
 /**
  * Labelled edges for a log-2 size histogram (metrics.md §5a): powers of 2 in bytes from 2^fromExp to

@@ -14,14 +14,11 @@ export const DEFAULT_LOCALE = 'en';
 
 /**
  * A value as the server sends it. `null`/`undefined` is unknown (rendered "—", never 0).
- * `{ value, approx: true }` is an estimate ("≈ 2.4M"); `{ value, sampled: true }` is computed on a
- * sample ("≈2.4M", with the panel showing the `sampled_note` message once).
+ * `{ value, approx: true }` is an estimate or a sampled value ("≈ 2.4M"); the panel reads `sampled`
+ * from the response and shows the `sampled_note` message once.
  */
 export type MetricValue =
-	| number
-	| null
-	| undefined
-	| { value: number | null | undefined; approx?: boolean; sampled?: boolean };
+	number | null | undefined | { value: number | null | undefined; approx?: boolean };
 
 export function isNum(n: unknown): n is number {
 	return typeof n === 'number' && Number.isFinite(n);
@@ -31,16 +28,13 @@ export function isNum(n: unknown): n is number {
 export function present(input: MetricValue, render: (n: number) => string): string {
 	let n: unknown = input;
 	let approx = false;
-	let sampled = false;
 	if (typeof input === 'object' && input !== null) {
 		n = input.value;
 		approx = input.approx === true;
-		sampled = input.sampled === true;
 	}
 	if (!isNum(n)) return DASH;
 	const out = render(n);
 	if (out === DASH) return DASH;
-	if (sampled) return `≈${out}`;
 	return approx ? `≈${NBSP}${out}` : out;
 }
 
@@ -70,10 +64,16 @@ export function dateFormat(
 	timeZone: string | undefined,
 	options: Intl.DateTimeFormatOptions
 ): Intl.DateTimeFormat {
-	const id = `${locale}|${timeZone ?? ''}|${key}`;
+	// '' or a zone this browser doesn't know (a setting saved elsewhere) must not break rendering.
+	const zone = timeZone || undefined;
+	const id = `${locale}|${zone ?? ''}|${key}`;
 	let f = dateFormats.get(id);
 	if (!f) {
-		f = new Intl.DateTimeFormat(locale, { ...options, timeZone });
+		try {
+			f = new Intl.DateTimeFormat(locale, { ...options, timeZone: zone });
+		} catch {
+			f = new Intl.DateTimeFormat(locale, options);
+		}
 		dateFormats.set(id, f);
 	}
 	return f;
