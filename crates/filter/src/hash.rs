@@ -16,6 +16,16 @@ const DOMAIN: &[u8] = b"lodestar/term/v1\0";
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
+/// FNV-1a one byte at a time, from [`fnv_start`]; [`fmix64`] finishes
+/// it. The result equals [`term_hash`] of the same bytes.
+pub(crate) fn fnv_byte(h: u64, b: u8) -> u64 {
+    (h ^ b as u64).wrapping_mul(FNV_PRIME)
+}
+
+pub(crate) fn fnv_start() -> u64 {
+    PREFIXED
+}
+
 const fn fnv(mut h: u64, bytes: &[u8]) -> u64 {
     let mut i = 0;
     while i < bytes.len() {
@@ -63,7 +73,7 @@ impl Hasher for IdHasher {
 }
 
 pub(crate) type IdMap<V> = HashMap<u64, V, BuildHasherDefault<IdHasher>>;
-type IdSet = HashSet<u64, BuildHasherDefault<IdHasher>>;
+pub(crate) type IdSet = HashSet<u64, BuildHasherDefault<IdHasher>>;
 
 /// A set of hashed terms.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

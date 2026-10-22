@@ -75,12 +75,42 @@ proptest! {
     }
 }
 
-/// §20.4: under 50 µs per torrent on the reference machine (§3). Run with
-/// `cargo test --release -p lodestar-filter --test props -- --ignored`;
-/// `LODESTAR_BUDGET_US` raises the bound on slower machines.
+/// 10,000 rules of the kinds people write: keywords, phrases, release
+/// groups, keywords narrowed by type or another word, alternatives, and
+/// a few structural rules no word narrows. None matches the sample, so
+/// every rule is considered.
+fn ten_thousand_rules() -> Vec<lodestar_filter::UserRule> {
+    let word = |i: usize, salt: &str| format!("{salt}{}q{i}", ["zor", "vel", "mik", "tas"][i % 4]);
+    (0..10_000)
+        .map(|i| {
+            let q = match i % 100 {
+                0..=53 => word(i, "k"),
+                54..=73 => format!("\"{} {}\"", word(i, "a"), word(i, "b")),
+                74..=83 => format!("group:{}", word(i, "g")),
+                84..=93 => format!("{} type:movie -{}", word(i, "c"), word(i, "d")),
+                94..=98 => format!("{} | {}", word(i, "e"), word(i, "f")),
+                _ => format!("size:>{}TB files:>{}", i % 7 + 2, 50_000 + i),
+            };
+            lodestar_filter::UserRule {
+                id: i as u32 + 1,
+                query: lodestar_search::parse(&q).unwrap(),
+                action: lodestar_filter::Action::Hide,
+                enabled: true,
+                shadow_until: None,
+                unless: None,
+            }
+        })
+        .collect()
+}
+
+/// §20.8 and the owner's budget (§1.6.6): under 50 µs per torrent at
+/// 10,000 rules. Ignored in debug test runs; CI runs it in release (the
+/// `filter budget` job): `cargo test --release -p lodestar-filter --test
+/// props -- --ignored budget`.
 #[test]
 #[ignore]
 fn budget() {
+    const BUDGET_US: u128 = 50;
     let core = shipped();
     let files: Vec<FileInfo> = (0..30)
         .map(|i| {
@@ -101,22 +131,37 @@ fn budget() {
         files: &files,
         content_type: ContentType::Tv,
     };
-    let budget: u128 = std::env::var("LODESTAR_BUDGET_US")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(50);
-    let rounds = 2_000;
-    let start = Instant::now();
-    for _ in 0..rounds {
+    // Warm up (the first judgment also builds the rule index), then the
+    // median of seven batches, so one noisy batch on a shared runner
+    // doesn't decide. Each batch's mean is printed for the CI log.
+    let time = |what: &str, f: &dyn Fn()| {
+        for _ in 0..200 {
+            f();
+        }
+        let mut batches: Vec<_> = (0..7)
+            .map(|_| {
+                let start = Instant::now();
+                for _ in 0..300 {
+                    f();
+                }
+                start.elapsed() / 300
+            })
+            .collect();
+        println!("{what}: batches {batches:?}");
+        batches.sort();
+        batches[3]
+    };
+    let per = time("core", &|| {
         assert!(core.verdict(std::hint::black_box(&item)).is_none());
-    }
-    let per = start.elapsed() / rounds;
+    });
     println!("{per:?} per 30-file torrent (core)");
-    assert!(per.as_micros() < budget, "{per:?}");
+    assert!(per.as_micros() < BUDGET_US, "core: {per:?}");
 
-    // The whole engine with every pack on, reading the classification.
+    // The whole engine: the core, every pack, and 10,000 of your rules,
+    // reading the classification as ingest does.
     let mut engine = lodestar_filter::Engine::new(core);
     engine.packs = lodestar_filter::PackSwitches::all();
+    engine.rules = ten_thousand_rules().into();
     let class = lodestar_classify::classify(item.name, item.files);
     let facts = lodestar_filter::Facts {
         class: &class,
@@ -126,12 +171,10 @@ fn budget() {
         discovered_at: 0,
         now: 0,
     };
-    let start = Instant::now();
-    for _ in 0..rounds {
+    let per = time("engine", &|| {
         let v = engine.judge(std::hint::black_box(&item), Some(&facts), 0);
         assert!(v.decision.is_none());
-    }
-    let per = start.elapsed() / rounds;
-    println!("{per:?} per 30-file torrent (engine, packs on)");
-    assert!(per.as_micros() < budget, "{per:?}");
+    });
+    println!("{per:?} per 30-file torrent (engine, packs on, 10,000 rules)");
+    assert!(per.as_micros() < BUDGET_US, "engine: {per:?}");
 }

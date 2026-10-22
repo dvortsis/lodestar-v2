@@ -412,6 +412,8 @@ pub struct Item<'a> {
 
 /// Pairs closer than this many words are evidence.
 const WINDOW: u32 = 8;
+/// Texts whose positions fit this many get a flag table in `signals`.
+const DENSE_POSITIONS: usize = 4096;
 /// Inside Adult (CS-5a/5b).
 const ADULT_WINDOW: u32 = 12;
 /// File paths read per torrent; the rest add nothing a pack this large
@@ -496,7 +498,7 @@ fn lexicon(lists: &Lists) -> IdMap<u16> {
 }
 
 /// What one text (the name or a file path) contains.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 struct Signals {
     ages: Vec<u32>,
     sexual: Vec<u32>,
@@ -713,14 +715,45 @@ impl Core {
             .map(|_| self.hit(CoreRule::Cs8a, vec![Evidence::Payload]))
     }
 
-    fn signals(&self, tokens: &[Token], neutral: &TermSet) -> Signals {
+    /// Each token's lexicon flags, appended to `out`.
+    fn flags_of(&self, tokens: &[Token], out: &mut Vec<u16>) {
+        out.extend(tokens.iter().map(|t| self.flags(t)));
+    }
+
+    /// The signals in one text, from its tokens and their flags. `table`
+    /// is scratch space: per position, the flags of every token there. A
+    /// stored fixture can carry any positions, so sparse ones are scanned.
+    fn signals(
+        &self,
+        tokens: &[Token],
+        flags: &[u16],
+        neutral: &TermSet,
+        table: &mut Vec<u16>,
+    ) -> Signals {
         let mut s = Signals::default();
+        if flags.iter().all(|f| *f == 0) {
+            return s;
+        }
+        let end = tokens.iter().map(|t| t.pos as usize + 3).max().unwrap_or(0);
+        let dense = end <= DENSE_POSITIONS;
+        table.clear();
+        if dense {
+            table.resize(end, 0);
+            for (t, f) in tokens.iter().zip(flags) {
+                table[t.pos as usize] |= f;
+            }
+        }
         let at = |pos: u32, bit: u16| {
-            tokens
-                .iter()
-                .any(|t| t.pos == pos && self.flags(t) & bit != 0)
+            if dense {
+                table.get(pos as usize).is_some_and(|f| f & bit != 0)
+            } else {
+                tokens
+                    .iter()
+                    .zip(flags)
+                    .any(|(t, f)| t.pos == pos && f & bit != 0)
+            }
         };
-        for t in tokens {
+        for (t, &f) in tokens.iter().zip(flags) {
             if let Some(n) = t.num {
                 // CSX-4: only 1 to 17 can be a minor age.
                 if !MINOR_AGES.contains(&n) || s.ages.contains(&t.pos) {
@@ -736,7 +769,6 @@ impl Core {
                 }
                 continue;
             }
-            let f = self.flags(t);
             if f == 0 || (!neutral.is_empty() && neutral.contains(t.hash)) {
                 continue;
             }
@@ -755,13 +787,27 @@ impl Core {
     }
 
     fn patterns(&self, item: &Item, neutral: &TermSet) -> Vec<Hit> {
-        let mut tok = Tokenizer::default();
+        thread_local! {
+            // Kept per thread: its word plans carry over between torrents.
+            static TOKENIZER: std::cell::RefCell<Tokenizer> = Default::default();
+        }
+        TOKENIZER.with(|t| match t.try_borrow_mut() {
+            Ok(mut tok) => self.patterns_with(&mut tok, item, neutral),
+            Err(_) => self.patterns_with(&mut Tokenizer::default(), item, neutral),
+        })
+    }
+
+    fn patterns_with(&self, tok: &mut Tokenizer, item: &Item, neutral: &TermSet) -> Vec<Hit> {
         let mut tokens = Vec::new();
+        let mut flags = Vec::new();
+        let mut at = Vec::new();
         tok.text(item.name, &mut tokens);
-        let mut texts = vec![(Field::Name, self.signals(&tokens, neutral))];
+        self.flags_of(&tokens, &mut flags);
+        let mut texts = vec![(Field::Name, self.signals(&tokens, &flags, neutral, &mut at))];
         // Files in one folder share its tokens.
         let mut folder: &[String] = &[];
         let mut folder_tokens: Vec<Token> = Vec::new();
+        let mut folder_flags: Vec<u16> = Vec::new();
         let mut folder_end = 0;
         for (i, f) in item.files.iter().take(MAX_FILES).enumerate() {
             let Some((name, dirs)) = f.path.split_last() else {
@@ -775,11 +821,16 @@ impl Core {
                 folder_tokens.clear();
                 tok.path(dirs, &mut folder_tokens);
                 folder_end = tok.pos();
+                folder_flags.clear();
+                self.flags_of(&folder_tokens, &mut folder_flags);
             }
             tokens.clear();
             tokens.extend_from_slice(&folder_tokens);
             tok.continue_path(&[name], &mut tokens, 0, folder_end);
-            let s = self.signals(&tokens, neutral);
+            flags.clear();
+            flags.extend_from_slice(&folder_flags);
+            self.flags_of(&tokens[folder_tokens.len()..], &mut flags);
+            let s = self.signals(&tokens, &flags, neutral, &mut at);
             if s.paired() {
                 texts.push((Field::File(i as u32), s));
             }
@@ -791,9 +842,15 @@ impl Core {
     /// stands in for the torrent's text.
     pub fn fixture_hits(&self, f: &Fixture) -> Vec<Hit> {
         let none = TermSet::default();
-        let mut texts = vec![(Field::Name, self.signals(&f.name, &none))];
+        let (mut at, mut flags) = (Vec::new(), Vec::new());
+        let mut signals = |tokens: &[Token]| {
+            flags.clear();
+            self.flags_of(tokens, &mut flags);
+            self.signals(tokens, &flags, &none, &mut at)
+        };
+        let mut texts = vec![(Field::Name, signals(&f.name))];
         for (i, tokens) in f.files.iter().enumerate().take(MAX_FILES) {
-            texts.push((Field::File(i as u32), self.signals(tokens, &none)));
+            texts.push((Field::File(i as u32), signals(tokens)));
         }
         self.judge(&texts, f.content_type)
     }
@@ -857,5 +914,50 @@ impl Core {
                 let pos = *s.codes.first()?;
                 Some(self.hit(rule, vec![Evidence::Code { field: *field, pos }]))
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn core() -> Core {
+        let lists = Lists {
+            sexual: TermSet::of(&["lexa"]),
+            child_roles: TermSet::of(&["rolea"]),
+            codes: TermSet::of(&["codex"]),
+        };
+        Core::new(lists, CsList::default(), Switches::default())
+    }
+
+    proptest! {
+        /// The flag table finds what scanning every token finds: positions
+        /// pushed past the table's reach take the scan, and give the same
+        /// signals once shifted back.
+        #[test]
+        fn the_flag_table_agrees_with_the_scan(
+            words in prop::collection::vec(prop::sample::select(vec![
+                "lexa", "rolea", "codex", "yo", "y", "o", "years", "old", "age", "pegi",
+                "rated", "15", "12", "3", "17", "18", "docu", "x", "16yo", "h3ll0",
+            ]), 0..40),
+        ) {
+            let c = core();
+            let mut tokens = Vec::new();
+            normalize::tokens(&words.join(" "), &mut tokens);
+            let mut flags = Vec::new();
+            c.flags_of(&tokens, &mut flags);
+            let mut table = Vec::new();
+            let dense = c.signals(&tokens, &flags, &TermSet::default(), &mut table);
+            let shift = DENSE_POSITIONS as u32;
+            let far: Vec<Token> = tokens.iter().map(|t| Token { pos: t.pos + shift, ..*t }).collect();
+            let mut sparse = c.signals(&far, &flags, &TermSet::default(), &mut table);
+            for v in [&mut sparse.ages, &mut sparse.sexual, &mut sparse.roles, &mut sparse.codes] {
+                for p in v.iter_mut() {
+                    *p -= shift;
+                }
+            }
+            prop_assert_eq!(dense, sparse);
+        }
     }
 }

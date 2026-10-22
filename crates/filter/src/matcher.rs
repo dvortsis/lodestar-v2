@@ -21,6 +21,9 @@ use lodestar_search::tokenizer::{Tok, TokKind, tokenize};
 use lodestar_search::{Node, flag_names};
 
 use crate::core::Item;
+use crate::hash::IdSet;
+use crate::prefilter::{self, DocKeys, Need, RuleList};
+use crate::rules::UserRule;
 
 /// What the rules can read beyond the core's [`Item`].
 #[derive(Debug, Clone, Copy)]
@@ -44,6 +47,16 @@ pub struct Doc<'a> {
     files: OnceCell<Vec<Vec<Tok>>>,
     titles: OnceCell<Vec<Vec<Tok>>>,
     enrichment: OnceCell<Option<DocEnrichment>>,
+    keys: OnceCell<DocKeys>,
+    content: OnceCell<Content>,
+}
+
+/// The content files' count, total size and largest size.
+#[derive(Debug, Default)]
+struct Content {
+    count: u64,
+    bytes: u64,
+    largest: Option<u64>,
 }
 
 impl std::fmt::Debug for Doc<'_> {
@@ -63,7 +76,29 @@ impl<'a> Doc<'a> {
             files: OnceCell::new(),
             titles: OnceCell::new(),
             enrichment: OnceCell::new(),
+            keys: OnceCell::new(),
+            content: OnceCell::new(),
         }
+    }
+
+    fn keys(&self) -> &DocKeys {
+        self.keys
+            .get_or_init(|| DocKeys::new(self.item.name, self.item.files))
+    }
+
+    fn tag_keys(&self) -> IdSet {
+        prefilter::tag_keys(self.enrichment())
+    }
+
+    /// Whether a query with this need could match: the cheap check that
+    /// comes before tokenizing anything (§20.8).
+    pub(crate) fn admits(&self, need: &Need) -> bool {
+        self.keys().admits(need, &|| self.tag_keys())
+    }
+
+    /// The rules that could match, in order.
+    pub(crate) fn candidates<'r>(&self, rules: &'r RuleList) -> Vec<&'r UserRule> {
+        rules.candidates(self.keys(), &|| self.tag_keys())
     }
 
     fn name(&self) -> &[Tok] {
@@ -101,59 +136,63 @@ impl<'a> Doc<'a> {
         })
     }
 
-    /// The token lists a text field covers.
-    fn texts(&self, field: TextField) -> Vec<&[Tok]> {
-        match field {
-            TextField::Name => vec![self.name()],
-            TextField::Path => self.files().iter().map(Vec::as_slice).collect(),
-            TextField::Title => self.titles().iter().map(Vec::as_slice).collect(),
-            TextField::Any => std::iter::once(self.name())
-                .chain(self.files().iter().map(Vec::as_slice))
-                .collect(),
-        }
-    }
-
     /// Whether the query matches the torrent. `neutral` words never count
     /// (CSX-5 *Neutralize term*, §20.5.5).
     pub fn matches(&self, node: &Node, neutral: &[String]) -> bool {
+        self.admits(&prefilter::need(node)) && self.eval(node, None, neutral)
+    }
+
+    /// [`Doc::matches`] for a rule [`Doc::candidates`] returned, which
+    /// has passed the cheap check already.
+    pub(crate) fn matches_candidate(&self, node: &Node, neutral: &[String]) -> bool {
         self.eval(node, None, neutral)
+    }
+
+    /// The full match, without narrowing first.
+    #[cfg(test)]
+    pub(crate) fn eval_full(&self, node: &Node) -> bool {
+        self.eval(node, None, &[])
+    }
+
+    /// Whether `f` holds for any text of `field`: inside `file:(…)`, that
+    /// file's name or path.
+    fn any_text(&self, field: TextField, file: Option<usize>, f: impl Fn(&[Tok]) -> bool) -> bool {
+        match file {
+            Some(i) => {
+                let file = &self.item.files[i];
+                let toks = match field {
+                    TextField::Name => tokenize(file.name()),
+                    _ => tokenize(&file.path.join("/")),
+                };
+                f(&toks)
+            }
+            None => match field {
+                TextField::Name => f(self.name()),
+                TextField::Path => self.files().iter().any(|t| f(t)),
+                TextField::Title => self.titles().iter().any(|t| f(t)),
+                TextField::Any => f(self.name()) || self.files().iter().any(|t| f(t)),
+            },
+        }
     }
 
     fn eval(&self, node: &Node, file: Option<usize>, neutral: &[String]) -> bool {
         // Inside `file:(…)`, text and size clauses read that one file.
-        let file_texts = |field: TextField| -> Vec<Vec<Tok>> {
-            let f = &self.item.files[file.expect("in a file clause")];
-            match field {
-                TextField::Name => vec![tokenize(f.name())],
-                _ => vec![tokenize(&f.path.join("/"))],
-            }
-        };
-        let texts = |field: TextField| -> Vec<Vec<Tok>> {
-            match file {
-                Some(_) => file_texts(field),
-                None => self.texts(field).into_iter().map(<[Tok]>::to_vec).collect(),
-            }
-        };
+        let texts = |field: TextField, f: &dyn Fn(&[Tok]) -> bool| self.any_text(field, file, f);
         match node {
             Node::All => true,
             Node::And { of } => of.iter().all(|n| self.eval(n, file, neutral)),
             Node::Or { of } => of.iter().any(|n| self.eval(n, file, neutral)),
             Node::Not { of } => !self.eval(of, file, neutral),
             Node::Word { field, word } => {
-                !is_neutral(word, neutral) && texts(*field).iter().any(|t| has_word(t, word))
+                !is_neutral(word, neutral) && texts(*field, &|t| has_word(t, word))
             }
             Node::Phrase { field, text } => {
-                !is_neutral(text, neutral) && texts(*field).iter().any(|t| has_phrase(t, text))
+                !is_neutral(text, neutral) && texts(*field, &|t| has_phrase(t, text))
             }
-            Node::Near { field, words, slop } => {
-                texts(*field).iter().any(|t| has_near(t, words, *slop))
-            }
+            Node::Near { field, words, slop } => texts(*field, &|t| has_near(t, words, *slop)),
             Node::Prefix { field, prefix } => {
                 let p = folded(prefix);
-                !p.is_empty()
-                    && texts(*field)
-                        .iter()
-                        .any(|t| t.iter().any(|x| x.text.starts_with(&p)))
+                !p.is_empty() && texts(*field, &|t| t.iter().any(|x| x.text.starts_with(&p)))
             }
             Node::Fuzzy {
                 field,
@@ -161,14 +200,14 @@ impl<'a> Doc<'a> {
                 distance,
             } => {
                 let w = folded(word);
-                texts(*field).iter().any(|t| {
+                texts(*field, &|t| {
                     t.iter()
                         .any(|x| edit_distance(&x.text, &w) <= usize::from(*distance))
                 })
             }
             Node::Range { field, lo, hi } => {
                 let inside = |v: u64| lo.is_none_or(|l| v >= l) && hi.is_none_or(|h| v <= h);
-                self.numbers(*field, file).into_iter().any(inside)
+                self.any_number(*field, file, inside)
             }
             Node::Date { field, from, to } => {
                 let Some(f) = self.facts else { return false };
@@ -217,24 +256,34 @@ impl<'a> Doc<'a> {
         }
     }
 
-    fn numbers(&self, field: NumField, file: Option<usize>) -> Vec<u64> {
+    /// Whether any value of a numeric field satisfies `f`. Enrichment is
+    /// only built for the fields that need it.
+    fn any_number(&self, field: NumField, file: Option<usize>, f: impl Fn(u64) -> bool) -> bool {
         if let (Some(i), NumField::Size) = (file, field) {
-            return vec![self.item.files[i].size];
+            return f(self.item.files[i].size);
         }
-        let content = || self.item.files.iter().filter(|f| !f.padding);
-        let e = self.enrichment();
+        let content = self.content.get_or_init(|| {
+            let mut c = Content::default();
+            for file in self.item.files.iter().filter(|f| !f.padding) {
+                c.count += 1;
+                c.bytes += file.size;
+                c.largest = Some(c.largest.map_or(file.size, |l: u64| l.max(file.size)));
+            }
+            c
+        });
+        let list = |pick: fn(&DocEnrichment) -> &[u64]| {
+            self.enrichment()
+                .is_some_and(|e| pick(e).iter().any(|v| f(*v)))
+        };
         match field {
-            NumField::Size => vec![
-                self.facts
-                    .map_or_else(|| content().map(|f| f.size).sum(), |f| f.size),
-            ],
-            NumField::Files => vec![content().count() as u64],
-            NumField::Largest => content().map(|f| f.size).max().into_iter().collect(),
-            NumField::Piece => self.facts.map(|f| f.piece_len).into_iter().collect(),
-            NumField::Year => e.map(|e| e.years.clone()).unwrap_or_default(),
-            NumField::Season => e.map(|e| e.seasons.clone()).unwrap_or_default(),
-            NumField::Episode => e.map(|e| e.episodes.clone()).unwrap_or_default(),
-            NumField::Junk => e.map(|e| e.junk).into_iter().collect(),
+            NumField::Size => f(self.facts.map_or(content.bytes, |x| x.size)),
+            NumField::Files => f(content.count),
+            NumField::Largest => content.largest.is_some_and(&f),
+            NumField::Piece => self.facts.is_some_and(|x| f(x.piece_len)),
+            NumField::Year => list(|e| &e.years),
+            NumField::Season => list(|e| &e.seasons),
+            NumField::Episode => list(|e| &e.episodes),
+            NumField::Junk => self.enrichment().is_some_and(|e| f(e.junk)),
         }
     }
 
