@@ -1,0 +1,31 @@
+# Keep the build context small: everything the image build doesn't read.
+.git/
+.github/
+.claude/
+
+# Build output (the Dockerfile builds web/ and the binary itself)
+target/
+fuzz/target/
+fuzz/corpus/
+fuzz/artifacts/
+web/node_modules/
+web/build/
+web/.svelte-kit/
+web/test-results/
+web/playwright-report/
+web/coverage/
+
+# Scratch and test output
+*.db
+*.db-wal
+*.db-shm
+*.log
+tmp/
+scratch/
+**/.DS_Store
+
+# Not needed in the image
+docs/
+brand/
+runner/
+packaging/
