@@ -667,3 +667,58 @@ async fn switched_off_rules_and_the_store_state_load_at_start() {
     assert!(store.find(&key).unwrap().is_some());
     assert!(store.quarantined(10).unwrap().is_empty());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn your_rules_mark_stored_torrents_and_shadow_rules_only_log() {
+    use lodestar_store::{SHADOW, flags};
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lodestar.db");
+    let seeds = vec![
+        Seed::v1(info_dict("Movie 2023 CAM")),
+        Seed::v1(info_dict("Movie 2023 TELESYNC")),
+        Seed::v1(info_dict("Movie 2023 WEB")),
+    ];
+    let keys: Vec<InfoHash> = seeds.iter().map(|s| InfoHash(s.info_hash)).collect();
+    let peer = FakePeer::spawn(seeds, Accept::Both, Behavior::Honest, vec![]).await;
+    let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+    let hide = lodestar_filter::Action::Hide.code();
+    store.add_rule("cam", hide, None, None).unwrap();
+    store
+        .add_rule("telesync", hide, Some(i64::MAX), None)
+        .unwrap();
+    store.set_pack_switch("fakes", false).unwrap();
+    let (feed, feed_tx) = scripted("feed");
+    let pipeline = Pipeline::start(config(), store, vec![feed]).await.unwrap();
+    for k in &keys {
+        feed_tx
+            .send(Found::key(*k, 0).with_peers(vec![peer.addr()]))
+            .await
+            .unwrap();
+    }
+    until("stored", || {
+        pipeline.writer_stats().stored.load(Ordering::Relaxed) == 3
+    })
+    .await;
+    let store = pipeline.shutdown().await.unwrap();
+    let row = |k: &InfoHash| {
+        store
+            .torrent(store.find(k).unwrap().unwrap())
+            .unwrap()
+            .unwrap()
+    };
+    assert_ne!(row(&keys[0]).flags & flags::HIDDEN, 0, "hidden by U-1");
+    assert_eq!(
+        row(&keys[1]).flags & flags::HIDDEN,
+        0,
+        "U-2 is in shadow mode"
+    );
+    assert_eq!(row(&keys[2]).flags & (flags::HIDDEN | flags::FLAGGED), 0);
+    let hits = store.filter_hits(0).unwrap();
+    let find = |rule: &str| hits.iter().find(|h| h.rule == rule).unwrap();
+    assert_eq!(find("U-1").action, hide);
+    assert_eq!(find("U-2").action, hide | SHADOW);
+    assert!(
+        hits.iter().all(|h| !h.rule.starts_with("FK")),
+        "fakes switched off"
+    );
+}

@@ -2176,6 +2176,24 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
 | SC-1 | "Free premium / crack / activator" for **online services** (streaming and music premium APKs, "free Robux/V-Bucks", crypto "wallet recovery", "Bitcoin generator") | hide | offline software cracks aren't covered (a preference, not a scam) |
 | SC-2 | "Generator / hack" for online-game currencies or accounts | hide | single-player trainers and mods excluded |
 
+**As built (store migration V6, `lodestar_filter` rules, packs and engine):**
+- **Engine layers:** precedence follows §20.1. Within the pack layer (packs and subscribed lists) the strongest action wins.
+- **Your rules:** a query, an action, an optional `unless`, and shadow mode. They're evaluated in memory with the search tokenizer, so a rule matches what the same search finds.
+- **CSX-5:**
+  - entries are exact torrents, keywords (normalized the same way the core normalizes, so evasion doesn't help) or queries, with an optional scope, an expiry and a shadow period;
+  - *Neutralize term* takes one word. It removes that word's evidence from the core and from query rules.
+- **Exceptions** are per rule, by exact torrents, payload or query. The floor takes none. *Always allow* skips your rules and the packs.
+- **Packs:** MW-1–5, LU-1–4, FK-1/2/4/5, SP-1/2 and SC-1 are built, reading the junk reasons and structure fingerprints. Every pack is on by default, standing in for the wizard's pre-checked boxes. Not yet built:
+  - FK-3, which needs TMDB release dates;
+  - SP-3, which needs per-publisher rates;
+  - SP-4, which needs a signature index of hidden items.
+- **Actions on stored torrents:**
+  - *Hide*, *demote* and *flag* set flag bits 11–13. They're queryable as `hidden:`, `demoted:` and `flagged:`.
+  - The API leaves hidden torrents out of search unless `hidden=true`.
+  - Demotion's ranking penalty arrives with the M4 phase-2 re-rank.
+  - Shadow decisions are logged as filter hits with action bit `0x80`, and nothing is applied.
+- **Speed** (an ignored test; set `LODESTAR_BUDGET_US` to raise the bound on slower machines): the full engine with every pack on costs the core plus about 10%. The core measured 45 µs for a 30-file torrent on the reference VM, and 60–75 µs on a slower one, where `main` measured the same.
+
 **Your rules (layer 3)** start empty. The wizard offers presets, all **off**: *Hide CAM/TS/TC*, *Hide sample-only*, *Hide password-protected archives*, *Prefer my languages* (demote others).
 
 ### 20.7 Storage, API and UI

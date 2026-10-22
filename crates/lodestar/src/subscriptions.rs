@@ -619,7 +619,7 @@ mod tests {
             files: &[],
             content_type: lodestar_classify::ContentType::Other,
         };
-        let da = e.judge(&item(&[[0xaa; 20]])).unwrap();
+        let da = e.judge(&item(&[[0xaa; 20]]), None, 0).decision.unwrap();
         assert!(matches!(da.rule, RuleRef::List(_)));
         assert_eq!(da.action, Action::Drop);
         let db = e.blocked_hash(&[[0xbb; 20]]).unwrap();
@@ -633,7 +633,7 @@ mod tests {
             apply(&s, &filter, &ips).unwrap();
         }
         let e = filter.current();
-        assert!(e.judge(&item(&[[0xaa; 20]])).is_none());
+        assert!(e.judge(&item(&[[0xaa; 20]]), None, 0).decision.is_none());
         assert!(e.blocked_hash(&[[0xbb; 20]]).is_none());
     }
 
