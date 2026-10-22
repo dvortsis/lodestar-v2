@@ -1056,6 +1056,10 @@ It needs a signed-in session, like the rest of Settings. Version details aren't 
 - **Release notes:** each available release with its level badges (Fix, Feature, Major, Security, Manual steps), its date and its notes. "Read on GitHub" opens in a new tab.
 - **History:** the last updates as a table (version, level, date, result: installed / rolled back / skipped, with the reason).
 - **Roll back to 0.5.2** sits in the Danger zone (§10.10.7), with what it restores and how many torrents would be lost.
+- **Notices** at the top of the screen, also shown in the Overview's Needs attention:
+  - **"Installed under a revoked signing key"**, with Install now;
+  - **"Your system clock looks wrong"**, saying in which direction, because update checks depend on it;
+  - **"Update trust data is damaged"**, which blocks new installs until it's fixed (§12.2).
 - **Pause automatic updates** for 1, 7 or 30 days. While paused, a status line shows with Resume.
 - **When this installation can't update itself** (a `noexec` volume, a read-only install, or a package manager), the automatic options are disabled. The reason is shown in text next to them ("Your data volume is mounted noexec"), with the fix.
 - **Elsewhere:**
@@ -1488,14 +1492,23 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
     - A manifest whose timestamp is more than **1 day ahead** of the local clock is refused.
     - A manifest's expiry may be at most **30 days** after its timestamp. Expired manifests are refused for new installs.
     - The **high-water mark** (the newest manifest timestamp accepted) belongs to the current key generation, and older manifests are refused. Accepting a key statement resets the mark to the statement's date. A leaked key that signs a manifest dated 2099 is therefore refused as being in the future; and anything it got accepted before the rotation stops counting once the rotation lands.
-    - If the local clock looks wrong (genuine manifests keep arriving from the future), the Updates screen says so instead of failing silently.
+    - **If the local clock looks wrong in either direction,** the Updates screen says so instead of failing silently. That's when genuine manifests keep arriving from more than a day in the future, or when the clock is past the newest manifest's expiry while checks still succeed.
   - **Trust state lives outside the store.** `<data>/bin/trust.json` holds:
     - the accepted key statements (in full, with their signatures);
     - the current sequence number;
     - the revoked keys;
     - the high-water mark.
 
-    It's written by temporary file, fsync and rename, only ever moves forward, and is in no store snapshot or backup. **No rollback can undo a revocation.**
+    It's written by temporary file, fsync, rename, and an fsync of the directory. It's in no store snapshot or backup, so **no rollback can undo a revocation.**
+    - **"Forward only"** means the pair (sequence number, high-water mark) never decreases. A new state replaces the old only if its sequence number is higher, or equal with a later high-water mark.
+  - **The trust floor: what deleting `trust.json` can't undo.**
+    - **Each build embeds the key statements known when it was built.** The floor is the newest of:
+      - those embedded statements;
+      - `trust.json`;
+      - the statements inside any verified overlay.
+    - **A missing `trust.json`** is rebuilt from that floor. Its high-water mark is the timestamp of the newest verified overlay manifest.
+    - **A corrupt `trust.json`** blocks new installs. The running version keeps running, and a notice says so.
+  - **Key statements get the same time check:** a statement dated more than 1 day ahead of the local clock is refused.
   - **Re-signing:** the release workflow re-signs every channel's current manifest weekly, with a fresh timestamp and an expiry within 30 days. An installation that checks always finds a valid one without a new release. A lapsed manifest only blocks new installs; it never stops an installed version from starting (below).
   - **Release engineering** (M6 `release.yml`) signs with `RELEASE_SIGNING_KEY`. That's a secret of the GitHub Actions environment `release`, which only `v*` tags and `main` may use, so a workflow edited on a feature branch can't read it. The private keys never enter the repository. The owner created both key pairs on 2026-10-22. Further hardening is recommended to the owner in `packaging/keys/README.md`: a required reviewer on the environment, and a separate nightly key.
 - **Before installing:**
@@ -1505,13 +1518,16 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
   - **The upgrade path:** if the installed version is older than the release's oldest supported version, Lodestar installs the intermediate releases in order.
 - **How it installs, per deployment:**
   - **Docker, Unraid, and the Linux tarball or systemd unit (an overlay with a supervisor):**
-    - **Each overlay is self-contained.** The binary goes to `<data>/bin/<version>/lodestar`, beside the **full signed manifest** and the **key statements** that chain its key to the recovery key. `<data>/bin/active` names the version to run, and is written by temporary file, fsync and rename.
+    - **Each overlay is self-contained.** The binary goes to `<data>/bin/<version>/lodestar`, beside the **full signed manifest** and the **key statements** that chain its key to the recovery key. `<data>/bin/active` names the version to run. It's written by temporary file, fsync, rename, and an fsync of the directory.
+    - **At install time,** the downloaded artifact is verified again against the current trust state, just before it's moved into place.
     - **`lodestar serve` (the image's binary, or the unit's `ExecStart`) is the supervisor.** It starts as PID 1 in a container, or as the unit's process, and acts as a minimal init: it forwards signals and reaps processes. It reads `active` and runs that version as its **child**.
       - With no `active`, or one older than itself, it runs its own code, so a newer image wins, and it removes the older overlays.
       - An overlay never replaces the supervisor. The supervisor changes only with the image or package, and costs a few MB of memory.
     - **Before starting an overlay,** the supervisor verifies it **from the built-in recovery key alone**: the key statements, then the manifest's signature, then the binary's SHA-256 and size. It never reads the store for this, so an older supervisor can start an overlay signed by a newer key.
       - **It doesn't check the manifest's expiry.** An installed version must keep starting offline, above all after it has migrated the store, which the image's older binary may not be able to open.
-      - **An overlay installed under a key revoked later keeps starting**, because refusing it could strand a migrated store. It starts with a notice in the Overview and on the Updates screen: "Installed under a revoked signing key. Install the current release." Its **Install now** skips the level and wait rules.
+      - **An overlay signed by a key that the supervisor's own embedded statements revoke is refused,** and the supervisor runs its own code instead.
+      - **An overlay installed under a key revoked later, as learnt from `trust.json`,** keeps starting, because refusing it could strand a migrated store. It starts with a notice in the Overview and on the Updates screen: "Installed under a revoked signing key. Install the current release." Its **Install now** skips the level and wait rules.
+      - **Residual risk, accepted like the recovery key's:** with an image built before a rotation, someone who can write to `<data>` and holds the leaked, rotated key can plant an overlay that runs. Writing to `<data>` already means full control of the installation's data, and a current image closes the gap.
     - **Outside probation,** when the child exits, the supervisor exits with the child's status. Docker's or systemd's restart policy then decides what happens, as it would without the supervisor.
     - About shows "Image 0.5.2 · running 0.5.3 (updated in place)".
     - **If you'd rather update the image yourself** (Unraid's auto-update plugin, Watchtower, a pinned tag), choose **Container image updates**. Lodestar then only notifies, so two updaters don't fight, and **Always install security fixes** doesn't apply. `LODESTAR_UPDATES=image` in the template locks this mode. It's distinct from `notify` (Check and notify), where the security-fix option still exists.
@@ -1534,22 +1550,23 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
     - **Restarts aren't failures.** A child that exits after a stop signal the supervisor forwarded (`docker restart`, an Unraid backup stopping containers, a reboot) uses no attempt. Probation resumes from `pending` at the next start, with the same attempt count.
   - **Failure:** if the child exits on its own, or hasn't cleared `pending` in time, the supervisor restarts it, up to **3 attempts**. Then it rolls back, **at most one level, and once per failed version**.
   - **The rollback is journaled and crash-safe.** Each step is idempotent. At every start, the supervisor first completes any rollback journal it finds, before it runs anything.
+    - **No process opens the store mid-rollback.** Every process that would (`serve`, every CLI subcommand) refuses while `<data>/bin/rollback.json` exists, and exits with a message saying a rollback is in progress.
+    - **On Windows,** the helper sets the service's start type to manual for the rollback, and restores it as its last step. A reboot mid-rollback then can't start the failed version against the restored store.
     1. **Stop the child:** SIGTERM, a 30-second grace period, then SIGKILL, then wait for it to exit.
     2. **Write the journal** `<data>/bin/rollback.json`: the failed and previous versions, the snapshot, and the steps done so far. It's fsynced, and updated after each step.
     3. **Record the outcome outside the store**, in `<data>/bin/history.json` (below): the reason, and how many torrents the restore will lose (stored since the snapshot, counted before restoring). A snapshot restore erases `settings`, so nothing here may live in the store.
-    4. **Restore the store** if the failed version ran a migration:
-       - copy the pre-update snapshot to `lodestar.db.restore` and fsync it;
-       - delete `-wal` and `-shm`;
-       - rename the restored file over `lodestar.db`;
-       - fsync the directory.
-
-       The WAL goes first, so a stale WAL is never applied to the restored file.
+    4. **Restore the store** if the failed version ran a migration, **by renaming, not copying**, so a restore needs no free space:
+       - The pre-update snapshot is written in the store's own directory, so the rename is atomic. The journal records its SHA-256 before the step starts.
+       - Delete `-wal` and `-shm`, rename the snapshot over `lodestar.db`, then fsync the directory.
+       - Deleting the WAL first is safe because no process holds the store during a rollback (above). It ensures a stale WAL is never applied to the restored file.
+       - **On a repeat,** a snapshot that's already gone is checked against the recorded SHA-256. If the store matches it, the step counts as done.
+       - **If the restore fails,** the partial state is cleaned up and the journal stays. Neither version starts, and a console error says what failed and where the snapshot is.
     5. **Remove the failed version's newer-format search index directories** (§8: `index/v{schema}-t{tokenizer}`). The new version keeps the previous version's index directory until probation passes, so the previous version finds its own index intact. If that index is ever missing, the previous version rebuilds it in the background while serving from the store.
     6. **Repoint `active`** at the previous version, and add the failed version to `<data>/bin/skipped`, which the supervisor and the updater both read.
     7. **Delete the failed overlay**, then the journal.
     8. **Start the previous version.** It shows the rollback notice from `history.json`.
 
-    If the previous version then also fails to start, the supervisor **stops** with a clear console error naming both versions and the recovery steps (`lodestar rollback`, `docs/operations.md`). It doesn't roll back further.
+    If the previous version then also fails to start, the supervisor **stops** with a clear console error naming both versions and pointing to the recovery steps in `docs/operations.md`. It doesn't roll back further.
   - **A withdrawn release** (the manifest says so) is never installed. If it's already running, Lodestar offers **Roll back to 0.5.2**. It doesn't roll back silently, because the data may have moved on.
   - **Manual rollback** is always there: **Roll back** in Settings → Updates (the previous version, while its snapshot is kept), and `lodestar rollback` (§12). Both go through the same journal.
 - **Update history:** the last 20 updates (version, level, when, result, and any rollback with its reason and loss count).
@@ -1564,6 +1581,23 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
   - `POST /updates/rollback`.
 
   An `updates` SSE topic carries progress (downloading, verifying, waiting for the window, installing, restarting, checking health, done or rolled back).
+- **B-update must resolve** (design questions left to the slice and its `/security-review`, one line each):
+  - a control channel between child and supervisor (an inherited fd or a reserved exit code) for switch, rollback and restart;
+  - which process writes `active`, and when;
+  - an exclusive lock on `<data>/bin` held by the supervisor or helper, and by the updater while it installs;
+  - `serve --child` as a distinct run mode, so a child never supervises;
+  - the lost-torrent count recorded by the child before the restore, or "unknown" when it can't be;
+  - the snapshot integrity sequence:
+    - write to a temporary file, fsync, rename;
+    - set a "migrating" marker;
+    - then migrate;
+    - restore only when the marker exists and the snapshot verifies;
+  - attempt accounting:
+    - charge an attempt before each start, and refund it only for a recorded forwarded stop;
+    - a cumulative probation deadline;
+    - an overall cap on migration time;
+  - a stop signal during a rollback leaves the journal in place and never starts the previous version. Note that Docker's default stop timeout is 10 s, against the 30 s grace;
+  - overlay retention: keep the active and previous overlays, and say what happens when the active one fails verification at start.
 - **Tests:**
   - a fake release server with signed fixture manifests: good, bad signature, wrong hash, downgrade, replay, expired, withdrawn, needs-manual, a skipped-version chain;
   - per-deployment installs in CI: the Docker overlay, Linux, and the Windows MSI on the Windows runner;
@@ -1580,6 +1614,8 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
   - crash-safety: a kill at every rollback step, followed by a restart, must finish the rollback with the store intact and the WAL never applied to the wrong file;
   - a restart during probation (a forwarded stop) doesn't use an attempt, and a migration longer than 5 minutes that keeps progressing passes;
   - a full disk prevents `pending`, so the new version doesn't start;
+  - with `trust.json` deleted, the floor (embedded statements, then verified overlays) still refuses a revoked key; and a corrupt `trust.json` blocks installs;
+  - while `rollback.json` exists, `serve` and every CLI subcommand refuse to open the store;
   - the previous version also failing stops with the console error instead of looping;
   - a `noexec` volume that must fall back to notify;
   - an install window that holds while a rebuild runs.
@@ -2816,6 +2852,18 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **`LODESTAR_UPDATES=image`** locks Container image updates.
 - **Show adult content** is B17's server-wide `content.show_adult`, not a preference.
 - **The live log's caps and queue are its own:** 2 streams per session, 8 in all, a 256-record queue with a resync marker.
+
+**Review fixes, round 3 (runner, PR #86):**
+- **No process opens the store while a rollback journal exists.** On Windows, the service's start type is manual during a rollback.
+- **The store is restored by renaming the snapshot** from the same directory, so a restore needs no free space. A failed restore keeps the journal and starts neither version.
+- **A trust floor:** each build embeds the key statements it knew of, so deleting `trust.json` can't erase a revocation. The supervisor refuses overlays signed by keys that its own statements revoke.
+- **Residual risk, stated:** a pre-rotation image, plus write access to `<data>`, plus the leaked key.
+- **Clock and durability:**
+  - clock notices in both directions;
+  - the 1-day-ahead check also applies to statements;
+  - "forward only" means the (sequence, high-water) pair;
+  - directory fsyncs, and re-verification at install time.
+- **A "B-update must resolve" checklist** in §12.2 hands the remaining edge cases to the slice and its security review.
 
 ## 17. Verification (once built)
 

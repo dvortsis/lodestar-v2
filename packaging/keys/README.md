@@ -20,7 +20,7 @@ A key change is a signed statement. It names the new release public key and carr
 - **The recovery key must sign it.** The current release key may co-sign, but its signature alone is never accepted. A leaked release key therefore can't rotate to an attacker's key.
 - **Accepting it revokes the previous release key** for new installs.
 - **A statement whose sequence number isn't higher than the last one accepted is refused,** so an old statement can't be replayed.
-- **Installed copies keep this trust state** (the accepted statements, the sequence number, the revoked keys, and the newest manifest time seen) in `<data>/bin/trust.json`. It sits outside the database and every snapshot, so rolling back a failed update never undoes a revocation.
+- **Installed copies keep this trust state** (the accepted statements, the sequence number, the revoked keys, and the newest manifest time seen) in `<data>/bin/trust.json`. It sits outside the database and every snapshot, so rolling back a failed update never undoes a revocation. Each Lodestar build also embeds the key statements published before it was built, so deleting `trust.json` can't undo a revocation that build knows about.
 
 To rotate:
 1. Generate a new key pair (`minisign -G -W`).
@@ -36,6 +36,8 @@ The recovery key is offline and password-protected, and **there's no protocol to
 - the remedy is a new Lodestar build with a new embedded recovery key, which every user installs **by hand** once.
 
 Whether to add a recovery-key rotation statement (signed by the current recovery key, sequenced, revoking the old one) is the owner's decision. It isn't designed yet.
+
+A second accepted risk: with an image built **before** a rotation, someone who can write to the data folder and holds the leaked, rotated release key can plant an update that runs. Writing to the data folder already means full control of the installation's data. Updating to a current image closes the gap.
 
 ## Recommended hardening (owner actions, not yet decided)
 

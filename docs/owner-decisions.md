@@ -326,4 +326,5 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
 - **Name-pattern blocklists.** The owner said "build those" *(M4, 10-22 03:27:05)*; they were then moved into the §20 rule engine by the approved design PR #27. Assumed satisfied by the rule engine unless the owner says otherwise.
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.
+- **Recovery-key rotation.** The update design (architecture §12.2) treats the offline recovery key as an accepted risk: if it's lost or compromised, the remedy is a new build installed by hand. Whether to add a recovery-key rotation statement (signed by the current recovery key, sequenced, revoking the old one) is the owner's decision; the build runner raised it.
 - **Repository visibility.** The repo is public. The owner created it that way and hasn't commented since.
