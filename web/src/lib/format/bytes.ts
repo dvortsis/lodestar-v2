@@ -8,6 +8,12 @@ const fixed = (d: number): Intl.NumberFormatOptions => ({
 
 const digitsFor = (unit: number, v: number) => (unit === 0 ? 0 : v < 10 ? 2 : v < 100 ? 1 : 0);
 
+/** Digits for `v`, taken from its rounded value so 9.996 prints `10.0`, not `10.00`. */
+function settle(unit: number, v: number): number {
+	const d = digitsFor(unit, v);
+	return Math.min(d, digitsFor(unit, Number(v.toFixed(d))));
+}
+
 /** Scale bytes to the largest IEC unit whose value is >= 1, stepping up when rounding reaches 1024. */
 function scale(bytes: number): { v: number; unit: number; d: number } {
 	let v = bytes;
@@ -16,11 +22,11 @@ function scale(bytes: number): { v: number; unit: number; d: number } {
 		v /= 1024;
 		unit++;
 	}
-	let d = digitsFor(unit, v);
+	let d = settle(unit, v);
 	if (unit < UNITS.length - 1 && Number(v.toFixed(d)) >= 1024) {
 		v /= 1024;
 		unit++;
-		d = digitsFor(unit, v);
+		d = settle(unit, v);
 	}
 	return { v, unit, d };
 }

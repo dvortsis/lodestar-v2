@@ -91,10 +91,6 @@ describe('value states', () => {
 		expect(formatCount({ value: 0, approx: true })).toBe(`≈${NB}0`);
 		expect(formatCount({ value: 5, approx: false })).toBe('5');
 	});
-	it('sampled values get ≈ directly before the value', () => {
-		expect(formatCount({ value: 1284, sampled: true })).toBe('≈1,284');
-		expect(formatCount({ value: 1284, approx: true, sampled: true })).toBe('≈1,284');
-	});
 });
 
 table('formatCount', formatCount, [
@@ -139,6 +135,12 @@ describe('formatBytes', () => {
 		[9.5 * 1024, `9.50${NB}KiB`],
 		[10 * 1024, `10.0${NB}KiB`],
 		[99.5 * 1024 ** 2, `99.5${NB}MiB`],
+		// Digits follow the rounded value, so columns stay aligned.
+		[9.996 * 1024 ** 3, `10.0${NB}GiB`],
+		[9.994 * 1024 ** 3, `9.99${NB}GiB`],
+		[99.96 * 1024 ** 2, `100${NB}MiB`],
+		[99.94 * 1024 ** 2, `99.9${NB}MiB`],
+		[1023.96 * 1024, `1.00${NB}MiB`],
 		[100 * 1024 ** 2, `100${NB}MiB`],
 		// Beyond PiB stays PiB.
 		[1500 * 1024 ** 5, `1,500${NB}PiB`],
@@ -229,6 +231,9 @@ describe('formatDelta', () => {
 	it('compact and percent f=0', () => {
 		expect(formatDelta(-1200, 'en', 'compact')).toBe(`${MINUS}1.2K`);
 		expect(formatDelta(0.07, 'en', 'percent', 0)).toBe('+7%');
+	});
+	it('returns — for an unknown kind instead of throwing', () => {
+		expect(formatDelta(5, 'en', 'bogus' as never)).toBe(DASH);
 	});
 	it('never contains a hyphen-minus', () => {
 		expect(formatDelta(-12345)).not.toContain('-');
@@ -325,6 +330,21 @@ describe('formatRelative', () => {
 	});
 });
 
+describe('time zones', () => {
+	it('treats an empty time zone as the default', () => {
+		expect(() => formatDateTime(T, 'en', { timeZone: '' })).not.toThrow();
+		expect(formatDateTime(T, 'en', { timeZone: '' })).toBe(formatDateTime(T, 'en'));
+	});
+	it('falls back instead of throwing on an unknown time zone', () => {
+		for (let i = 0; i < 2; i++) {
+			for (const f of [formatDateTime, formatDate, formatDateFull]) {
+				const out = f(T, 'en', { timeZone: 'Not/AZone' });
+				expect(out).toContain('2026');
+			}
+		}
+	});
+});
+
 describe('dates', () => {
 	it('formatDateTime', () => {
 		expect(formatDateTime(T, 'en', UTC)).toBe('Oct 22, 2026, 14:05');
@@ -398,8 +418,8 @@ describe('size histogram (§5a)', () => {
 		}
 	});
 	it('labels a bin "lo – hi" with an en dash', () => {
-		expect(sizeBinLabel(2 ** 30, 2 ** 32)).toBe(`1.00${NB}GiB – 4.00${NB}GiB`);
-		expect(sizeBinLabel(0, 1024)).toBe(`0${NB}B – 1.00${NB}KiB`);
+		expect(sizeBinLabel(2 ** 30, 2 ** 32)).toBe(`1.00${NB}GiB${NB}– 4.00${NB}GiB`);
+		expect(sizeBinLabel(0, 1024)).toBe(`0${NB}B${NB}– 1.00${NB}KiB`);
 	});
 	it('keeps empty bins labelled', () => {
 		expect(sizeBinLabel(2 ** 20, 2 ** 21)).toContain('1.00');

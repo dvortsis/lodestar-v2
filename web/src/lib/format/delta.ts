@@ -1,22 +1,17 @@
-import { DEFAULT_LOCALE, MINUS, numberFormat, present, type MetricValue } from './shared';
+import { DASH, DEFAULT_LOCALE, MINUS, numberFormat, present, type MetricValue } from './shared';
 
 export type DeltaKind = 'count' | 'compact' | 'percent';
 
-const OPTS: Record<string, Intl.NumberFormatOptions> = {
-	count: { maximumFractionDigits: 0, signDisplay: 'exceptZero' },
+const EXCEPT_ZERO = 'exceptZero';
+const OPTS: Record<DeltaKind, Intl.NumberFormatOptions> = {
+	count: { maximumFractionDigits: 0, signDisplay: EXCEPT_ZERO },
 	compact: {
 		notation: 'compact',
 		compactDisplay: 'short',
 		maximumFractionDigits: 1,
-		signDisplay: 'exceptZero'
+		signDisplay: EXCEPT_ZERO
 	},
-	percent0: { style: 'percent', maximumFractionDigits: 0, signDisplay: 'exceptZero' },
-	percent1: {
-		style: 'percent',
-		minimumFractionDigits: 1,
-		maximumFractionDigits: 1,
-		signDisplay: 'exceptZero'
-	}
+	percent: { style: 'percent', signDisplay: EXCEPT_ZERO }
 };
 
 /**
@@ -30,10 +25,14 @@ export function formatDelta(
 	kind: DeltaKind = 'count',
 	fractionDigits: 0 | 1 = 1
 ): string {
+	const base = OPTS[kind];
+	if (!base) return DASH; // an unknown kind from untyped callers: never throw
+	const opts =
+		kind === 'percent'
+			? { ...base, minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits }
+			: base;
 	const key = kind === 'percent' ? `percent${fractionDigits}` : kind;
 	return present(value, (n) =>
-		numberFormat(locale, `delta-${key}`, OPTS[key] ?? {})
-			.format(n)
-			.replaceAll('-', MINUS)
+		numberFormat(locale, `delta-${key}`, opts).format(n).replaceAll('-', MINUS)
 	);
 }
