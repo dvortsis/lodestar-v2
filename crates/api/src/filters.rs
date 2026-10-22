@@ -83,7 +83,7 @@ pub struct FiltersApi {
     pub sealer: Option<Arc<Sealer>>,
     pub ips: Arc<SharedIps>,
     /// For finding the stored torrents a classification rule matches.
-    pub index: Option<lodestar_search::SearchIndex>,
+    pub index: Option<lodestar_search::SearchHandle>,
     /// Starts another background-enrichment pass in the pipeline.
     pub reenrich: Arc<AtomicBool>,
     pub jobs: PreviewJobs,
@@ -1835,7 +1835,7 @@ impl FiltersApi {
     /// Without a search index, only torrents arriving or re-enriched later
     /// are affected (`null`).
     fn requeue(&self, store: &mut Store, node: &Node, now: i64) -> ApiResult<Option<usize>> {
-        let Some(index) = &self.index else {
+        let Some(index) = self.index.as_ref().map(|h| h.index()) else {
             return Ok(None);
         };
         let compiled = index.query(node, now);

@@ -1863,6 +1863,37 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Memory:** while a rebuild runs, two writers are active (live and build), each with the configured heap.
 - **Tests** use a version override in `ServingConfig`, and a hold point before finishing instead of timing, so they don't bump `SCHEMA_VERSION` or depend on speed.
 
+**B5a decisions (searcher leases, cursors, cancellation, counts):**
+- **Wiring:** `lodestar serve` opens `Serving::open_or_rebuild(data/index, store, …)`. The API, the filters API and the status page hold a `SearchHandle`, which takes the serving index once per request and owns the leases. `Config::index_path` became `index_root`. Rebuild progress isn't on the status surface yet (a TODO for B14 in `http.rs`).
+  - **A failed swap keeps the old index following the store.** The old live indexer stops before the swap, and a failed start of the new one used up the store connection. The rebuild thread now gets the store path and `StoreConfig`, opens a new connection and restarts the old indexer.
+- **A lease** pins one Tantivy `Searcher` with its index (an `Arc`), the compiled query, the effective sort, the stem-tier decision and the count. Nothing is kept per hit.
+  - **Memory:** about 1–2 KB per lease (the query tree and its cache key, which grow with the query; an estimate, not a measurement). `file:(…)` id sets are shared with the file-set cache. Leases taken between the same two commits share one searcher. Each searcher pinned past a commit adds its segment readers' bookkeeping, tens of KB at a few dozen segments; the files are mapped, not copied. At live indexing's commit every 2 s, the 10-minute expiry holds at most about 300 such searchers, so a full table stays in the low tens of MB.
+  - **Disk:** a lease keeps the segments of its snapshot. Segments merged away meanwhile stay on disk until the lease goes.
+  - **Limits:** a lease expires 10 minutes after its last use and 1 hour after it was taken. At most 1,024 are kept in all and 64 per session; past either cap, the least recently used goes.
+  - **Ids:** 128 bits from SipHash with a key from the OS's randomness, over a counter (`std`'s `RandomState`, no new dependency). Nothing relies on ids being unguessable: cursors are authenticated.
+  - A cursor names the session's own lease. Another session's lease, or an expired or unknown one, is a `410 cursor_expired`.
+  - **A swap never invalidates a lease.** Every clone of a `SearchIndex` holds a liveness token. After a swap, the old directory is deleted only once no lease or query in flight holds the old index, or at most an hour plus a minute after the swap; expired leases are swept while it waits.
+- **Cursor format:** lowercase hex of `epoch (4) ‖ payload (≤ 61) ‖ HMAC-SHA-256 truncated to 16`, so at most 162 characters.
+  - The payload holds a version, the lease id, an 8-byte query fingerprint, the sort, the hits served so far (the next page's `offset`) and the position.
+  - The fingerprint is SHA-256 of the AST as run (with the hidden-torrent clause or without it) and the sort. A cursor sent with another `q`, `sort` or `hidden` is a `400 bad_cursor`.
+  - The key and the epoch are random per process. Leases live in memory, so a cursor from before a restart reads as `410 cursor_expired`, not as forged; any other bad byte is a `400 bad_cursor`.
+  - `cursor` with `offset` is a `400 cursor_and_offset`. `offset + limit` stays capped at 10,000; cursors page past it.
+- **Positions are exact within the snapshot:** the last hit's sort key plus its doc address as the tie-break.
+  - **Relevance with re-ranking (§8):** windows of 200 phase-1 candidates, each the best 200 by phase-1 score after the previous window's last candidate, re-ranked inside the window. Offset pages use the same windows, from one phase-1 pass over `ceil((offset + limit) / 200)` windows. Before B5a, an offset past 200 re-ranked the whole top `offset + limit`, so pages could shift between requests; now order is exact within a window and fixed at window boundaries.
+  - Field sorts keep `sorted.rs`'s order: documents with a value first, then the value, then the address. Offset pages still use its per-segment cache. Cursor pages scan with an "after" bound, so each costs about one uncached browse.
+- **Cancellation:** a `CancelToken` is checked before each segment and every 4,096 documents in every scan: phase-1 top-k, the field-sort scans and the counts. `sorted.rs` now walks blocks with `fill_buffer` in place of `for_each_no_score` so it can stop between blocks. `/search` runs in `spawn_blocking` behind a guard that cancels the token when axum drops the handler (the client went away). A token with a budget stops as `OutOfTime`.
+- **Counts (`count.rs`) are apart from ranking**, so they cost a bounded amount whatever ranking does:
+  - A segment of more than 65,536 documents is sampled: 64 evenly spaced slices, each a sixteenth of its stratum. Spreading the slices over the doc-id space (discovery order) keeps time-correlated queries honest. Smaller segments are counted whole.
+  - If nothing was sampled, the sum is exact. If the estimate is at most 200,000, the count is redone exactly. Otherwise `total_approx: true`.
+  - So a count above 100,000 is approximate only when it was actually estimated; an index of small segments reports it exactly.
+  - **Tolerance:** about `1/sqrt(matches/16)` relative error for spread-out matches (under 1% above 200k). A narrow doc-id range is off by up to one slice per edge. `search-bench` gates the worst estimate at 5%.
+  - `exact` (`?exact=1`, or `"exact": true` in the POST body) counts every match under the request's token and a 5 s budget. The result is kept on the lease; out of time, the estimate stands.
+- **Hit fields from the stored enrichment** (one `Store::enrichment` lookup per hit, beside the row): `title`, `resolved_via`, `content_type`, `adult_kind`, `junk_score`, `junk_reasons` and `composition`, nullable or empty when unclassified or unreadable.
+  - `composition` groups the ten categories into the §10.18 colour groups in the bar's fixed order, with `Composition::pct_bytes`'s rounding, and leaves out groups with no files.
+  - The detail view (`torrents::detail_of`, `dto/torrents.rs`) doesn't serve them yet.
+  - **`hidden_junk` isn't served:** nothing hides junk by default yet, so there's no count to report. It arrives with the slice that adds the default junk threshold of §10.4's "N hidden · Show".
+- **Error codes:** `410 cursor_expired` ("These results changed or expired; reload the search."), `400 bad_cursor`, `400 cursor_and_offset`, and `503 search_cancelled` (seen only by a client that's gone).
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.

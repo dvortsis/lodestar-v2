@@ -19,14 +19,15 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, PoisonError, RwLock, Weak};
 use std::thread::JoinHandle;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lodestar_store::{Store, StoreConfig};
 use tantivy::directory::{Directory, DirectoryLock, Lock, MmapDirectory};
 
 use crate::index::{Compat, Error, Indexer, Result, SearchIndex};
+use crate::lease::{LeaseConfig, Leases};
 use crate::live::{IndexStats, LiveConfig, LiveIndexer};
 use crate::schema::{SCHEMA_VERSION, TOKENIZER_VERSION};
 
@@ -326,10 +327,16 @@ pub struct ServingConfig {
     /// The version to serve: [`IndexVersion::CURRENT`]. Only tests set
     /// another, to rebuild without bumping the real constants.
     pub version: IndexVersion,
+    /// The searcher leases cursors read through ([`Serving::leases`]).
+    pub leases: LeaseConfig,
     /// Tests only: while set, a rebuild that has caught up waits before
     /// finishing, so a test can act at that point.
     #[doc(hidden)]
     pub hold_before_finish: Option<Arc<AtomicBool>>,
+    /// Tests only: the new index's live indexer fails to start at the
+    /// swap.
+    #[cfg(test)]
+    pub(crate) fail_live_at_swap: bool,
 }
 
 impl Default for ServingConfig {
@@ -339,7 +346,10 @@ impl Default for ServingConfig {
             store: StoreConfig::default(),
             rebuild_commit_docs: 50_000,
             version: IndexVersion::CURRENT,
+            leases: LeaseConfig::default(),
             hold_before_finish: None,
+            #[cfg(test)]
+            fail_live_at_swap: false,
         }
     }
 }
@@ -350,6 +360,7 @@ struct Shared {
     progress: Mutex<Option<RebuildProgress>>,
     live: Mutex<Option<LiveIndexer>>,
     stats: Arc<IndexStats>,
+    leases: Arc<Leases>,
     stop: AtomicBool,
 }
 
@@ -389,10 +400,12 @@ impl Shared {
 /// The index that serves searches, with the live indexer that follows
 /// the store into it, and the background rebuild when this build's index
 /// doesn't exist yet. Readers take [`Serving::index`] once per query, so
-/// they move to the new index between queries.
+/// they move to the new index between queries; a searcher lease keeps
+/// the index it was taken from, whose directory is deleted only once the
+/// last lease on it is gone.
 pub struct Serving {
     shared: Arc<Shared>,
-    background: Option<JoinHandle<()>>,
+    background: Mutex<Option<JoinHandle<()>>>,
     root: PathBuf,
     /// Released last, after the threads have stopped.
     _lock: DirectoryLock,
@@ -510,20 +523,27 @@ impl Serving {
             progress: Mutex::new(None),
             live: Mutex::new(live),
             stats,
+            leases: Arc::new(Leases::new(config.leases.clone())),
             stop: AtomicBool::new(false),
         });
 
         let thread = std::thread::Builder::new().name("index-rebuild".into());
         let (sh, root_buf) = (shared.clone(), root.to_path_buf());
+        let store_path = store_path.to_path_buf();
         let background = match build {
             Some((store, builder, snapshot, progress)) => {
                 tracing::info!("index: rebuilding {want} while {} serves", progress.from);
                 *lock(&shared.progress) = Some(progress);
                 thread.spawn(move || {
-                    let done = rebuild_and_swap(&sh, builder, store, snapshot, &config);
+                    let done =
+                        rebuild_and_swap(&sh, builder, store, snapshot, &store_path, &config);
                     match done {
-                        Ok(true) => clean(&sh, &root_buf, want),
-                        Ok(false) => {}
+                        Ok(Some(retired)) => {
+                            if wait_released(&sh, &retired) {
+                                clean(&sh, &root_buf, want);
+                            }
+                        }
+                        Ok(None) => {}
                         Err(e) => {
                             tracing::error!("index: rebuilding {want} failed: {e}");
                             sh.set_phase(RebuildPhase::Failed);
@@ -536,7 +556,7 @@ impl Serving {
         .map_err(Error::Io)?;
         Ok(Serving {
             shared,
-            background: Some(background),
+            background: Mutex::new(Some(background)),
             root: root.to_path_buf(),
             _lock: dir_lock,
         })
@@ -566,15 +586,26 @@ impl Serving {
         self.shared.stats.clone()
     }
 
+    /// The searcher leases taken on the indexes this handle serves.
+    pub fn leases(&self) -> &Arc<Leases> {
+        &self.shared.leases
+    }
+
     /// Stops the rebuild (which commits what it has, to resume next
     /// time) and the live indexer (which commits what's pending).
-    pub fn shutdown(mut self) -> Result<()> {
+    pub fn shutdown(self) -> Result<()> {
         self.halt()
     }
 
-    fn halt(&mut self) -> Result<()> {
+    /// [`Serving::shutdown`] through a shared handle; later calls do
+    /// nothing.
+    pub fn stop(&self) -> Result<()> {
+        self.halt()
+    }
+
+    fn halt(&self) -> Result<()> {
         self.shared.stop.store(true, Ordering::Relaxed);
-        if let Some(t) = self.background.take() {
+        if let Some(t) = lock(&self.background).take() {
             // The thread logs its own errors.
             let _ = t.join();
         }
@@ -642,20 +673,22 @@ fn newest_servable(
     Ok(None)
 }
 
-/// Builds to the snapshot, finishes, and swaps the new index in.
-/// `false` when stopped first: what's committed is resumed next time.
+/// Builds to the snapshot, finishes, and swaps the new index in. On a
+/// swap, it returns the retired index's [`SearchIndex::holders`]; `None`
+/// when stopped first, and what's committed is resumed next time.
 fn rebuild_and_swap(
     shared: &Shared,
     mut builder: Rebuild,
     mut store: Store,
     (max_id, reindex_head): (i64, i64),
+    store_path: &Path,
     config: &ServingConfig,
-) -> Result<bool> {
+) -> Result<Option<Weak<()>>> {
     let mut wait = config.live.poll;
     while !builder.reached(max_id, reindex_head) {
         if shared.stopping() {
             builder.commit()?;
-            return Ok(false);
+            return Ok(None);
         }
         match builder.step(&mut store, config.live.batch) {
             // Torrents at the end deleted since the snapshot.
@@ -687,13 +720,13 @@ fn rebuild_and_swap(
     }
     if shared.stopping() {
         builder.commit()?;
-        return Ok(false);
+        return Ok(None);
     }
     shared.set_phase(RebuildPhase::Finishing);
     let final_dir = builder.finish()?;
     if shared.stopping() {
         // Complete on disk: the next start serves it.
-        return Ok(false);
+        return Ok(None);
     }
     shared.set_phase(RebuildPhase::Swapping);
     let new = SearchIndex::open(&final_dir)?;
@@ -707,47 +740,96 @@ fn rebuild_and_swap(
     {
         tracing::warn!("index: stopping the old indexer: {e}");
     }
-    let caught_up = (|| {
+    let started = (|| {
         let mut w = new.writer(config.live.heap_bytes)?;
         while w.catch_up(&mut store, config.live.batch)? > 0 {}
         w.commit()?;
-        w.finish()
-    })();
-    if let Err(e) = caught_up {
-        // The old index keeps serving, so it keeps following the store.
-        if old_followed {
-            let old = (*shared
-                .current
-                .read()
-                .unwrap_or_else(PoisonError::into_inner))
-            .as_ref()
-            .clone();
-            match LiveIndexer::spawn_with_stats(
-                old,
-                store,
-                config.live.clone(),
-                shared.stats.clone(),
-            ) {
-                Ok(live) => *lock(&shared.live) = Some(live),
-                Err(e) => tracing::error!("index: restarting the old indexer: {e}"),
-            }
+        w.finish()?;
+        #[cfg(test)]
+        if config.fail_live_at_swap {
+            return Err(Error::Corrupt("test: the new live indexer didn't start"));
         }
-        return Err(e);
-    }
-    let live = LiveIndexer::spawn_with_stats(
-        new.clone(),
-        store,
-        config.live.clone(),
-        shared.stats.clone(),
-    )?;
+        LiveIndexer::spawn_with_stats(
+            new.clone(),
+            store,
+            config.live.clone(),
+            shared.stats.clone(),
+        )
+    })();
+    let live = match started {
+        Ok(live) => live,
+        Err(e) => {
+            // The old index keeps serving, so it must keep following the
+            // store. Its indexer was stopped above, and the store
+            // connection went with the failed start: open another.
+            if old_followed {
+                restart_old(shared, store_path, config);
+            }
+            return Err(e);
+        }
+    };
     *lock(&shared.live) = Some(live);
-    *shared
-        .current
-        .write()
-        .unwrap_or_else(PoisonError::into_inner) = Arc::new(new);
+    let old = std::mem::replace(
+        &mut *shared
+            .current
+            .write()
+            .unwrap_or_else(PoisonError::into_inner),
+        Arc::new(new),
+    );
     *lock(&shared.progress) = None;
     tracing::info!("index: swapped to the rebuilt index");
-    Ok(true)
+    Ok(Some(old.holders()))
+}
+
+/// Starts a live indexer on the index serving now, through a new store
+/// connection: after a failed swap, so the old index doesn't stop taking
+/// new torrents until a restart.
+fn restart_old(shared: &Shared, store_path: &Path, config: &ServingConfig) {
+    let old = (*shared
+        .current
+        .read()
+        .unwrap_or_else(PoisonError::into_inner))
+    .as_ref()
+    .clone();
+    let started = Store::open_reader(store_path, config.store.clone())
+        .map_err(Error::from)
+        .and_then(|store| {
+            LiveIndexer::spawn_with_stats(old, store, config.live.clone(), shared.stats.clone())
+        });
+    match started {
+        Ok(live) => *lock(&shared.live) = Some(live),
+        Err(e) => tracing::error!("index: restarting the old indexer: {e}"),
+    }
+}
+
+/// Queries in flight when a lease's limit runs out.
+const RELEASE_SLACK: Duration = Duration::from_secs(60);
+
+/// Waits until nothing holds the retired index (no lease, no query in
+/// flight), so its files aren't deleted from under a reader (Windows
+/// can't delete a mapped file at all). Expired leases are dropped while
+/// waiting. A lease lives at most [`LeaseConfig::max_age`]; past that
+/// (plus [`RELEASE_SLACK`]) whatever still holds it isn't a lease, and the
+/// deletion goes ahead, retried as usual. `false` when stopping: the
+/// next start deletes it.
+fn wait_released(shared: &Shared, retired: &Weak<()>) -> bool {
+    let limit = shared.leases.config().max_age + RELEASE_SLACK;
+    let start = Instant::now();
+    let mut wait = Duration::from_millis(10);
+    loop {
+        shared.leases.sweep();
+        if retired.strong_count() == 0 {
+            return true;
+        }
+        if start.elapsed() >= limit {
+            tracing::warn!("index: the retired index is still open; deleting it anyway");
+            return true;
+        }
+        if !shared.pause(wait) {
+            return false;
+        }
+        wait = (wait * 2).min(Duration::from_secs(1));
+    }
 }
 
 /// Deletes what `want` makes obsolete: older complete indexes, other
@@ -1049,4 +1131,159 @@ mod tests {
     }
 
     const HEAP: usize = 15 << 20;
+
+    /// An index of this build's schema under `root`, filled from `store`,
+    /// that a build with a newer tokenizer serves (and keeps following)
+    /// while it rebuilds.
+    fn exact_old(root: &Path, store: &mut Store) -> (IndexVersion, IndexVersion) {
+        let old = IndexVersion::CURRENT;
+        let index = SearchIndex::open(&root.join(old.dir_name())).unwrap();
+        let mut w = index.writer(HEAP).unwrap();
+        w.catch_up(store, 100_000).unwrap();
+        w.commit().unwrap();
+        w.finish().unwrap();
+        let new = IndexVersion {
+            tokenizer: old.tokenizer + 1,
+            ..old
+        };
+        (old, new)
+    }
+
+    fn quick(version: IndexVersion) -> ServingConfig {
+        ServingConfig {
+            live: LiveConfig {
+                heap_bytes: HEAP,
+                poll: Duration::from_millis(20),
+                commit_every: Duration::from_millis(50),
+                batch: 50,
+                ..LiveConfig::default()
+            },
+            rebuild_commit_docs: 100,
+            version,
+            ..ServingConfig::default()
+        }
+    }
+
+    fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
+        let start = std::time::Instant::now();
+        while !done() {
+            assert!(
+                start.elapsed() < Duration::from_secs(60),
+                "waiting for {what}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn a_lease_reads_its_snapshot_across_a_swap_and_the_old_index_waits_for_it() {
+        use crate::{CancelToken, Lease, LeaseConfig, SearchHandle, Start};
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("index");
+        let db = tmp.path().join("s.db");
+        let mut writer = Store::open(&db, StoreConfig::default()).unwrap();
+        for i in 0..300 {
+            add(&mut writer, &format!("Old.Show.{i}.1080p.mkv"));
+        }
+        let (old, new) = exact_old(&root, &mut writer);
+        let hold = Arc::new(AtomicBool::new(true));
+        let config = ServingConfig {
+            hold_before_finish: Some(hold.clone()),
+            leases: LeaseConfig {
+                ttl: Duration::from_millis(1500),
+                ..LeaseConfig::default()
+            },
+            ..quick(new)
+        };
+        let serving = Arc::new(Serving::open_or_rebuild(&root, &db, config).unwrap());
+        let handle = SearchHandle::serving(serving.clone());
+        assert_eq!(serving.progress().unwrap().from, old);
+
+        // The first page, from the old index; the rest through the lease.
+        let cancel = CancelToken::new();
+        let node = crate::parse("show").unwrap();
+        let lease =
+            Lease::new(handle.index(), &node, NOW, crate::Sort::Relevance, &cancel).unwrap();
+        let want: Vec<u64> = lease
+            .page(Start::Offset(0), 1_000, &cancel)
+            .unwrap()
+            .hits
+            .iter()
+            .map(|h| h.id)
+            .collect();
+        assert_eq!(want.len(), 300);
+        let first = lease.page(Start::Offset(0), 37, &cancel).unwrap();
+        let mut got: Vec<u64> = first.hits.iter().map(|h| h.id).collect();
+        let mut next = first.next;
+        let id = handle.leases().insert(Arc::new(lease), 1);
+        let page = |next: &mut Option<crate::Position>, got: &mut Vec<u64>| {
+            let lease = handle.leases().get(&id, 1).unwrap();
+            let p = lease
+                .page(Start::After(next.unwrap()), 37, &cancel)
+                .unwrap();
+            got.extend(p.hits.iter().map(|h| h.id));
+            *next = p.next;
+        };
+        page(&mut next, &mut got);
+
+        // Commits land on the old index, then the swap happens, mid-scroll.
+        for i in 0..20 {
+            add(&mut writer, &format!("New.Show.{i}.mkv"));
+        }
+        wait_for("the old index to take the new torrents", || {
+            found(&serving.index(), "new show") == 20
+        });
+        page(&mut next, &mut got);
+        hold.store(false, Ordering::Relaxed);
+        wait_for("the swap", || !serving.rebuilding());
+        let old_dir = root.join(old.dir_name());
+        assert!(old_dir.exists(), "a lease still reads the old index");
+        while next.is_some() {
+            page(&mut next, &mut got);
+            assert!(old_dir.exists());
+        }
+        let unique: std::collections::HashSet<u64> = got.iter().copied().collect();
+        assert_eq!(unique.len(), got.len(), "a duplicate across the swap");
+        assert_eq!(got, want, "the snapshot's hits, in its order");
+        // New searches read the new index, with everything.
+        assert_eq!(found(&serving.index(), "show"), 320);
+
+        // Once the lease expires, the old directory goes.
+        wait_for("the old index to be deleted", || !old_dir.exists());
+        assert!(handle.leases().is_empty());
+        drop(handle);
+        Arc::try_unwrap(serving).unwrap().shutdown().unwrap();
+    }
+
+    #[test]
+    fn a_failed_swap_leaves_the_old_index_serving_and_following_the_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("index");
+        let db = tmp.path().join("s.db");
+        let mut writer = Store::open(&db, StoreConfig::default()).unwrap();
+        for i in 0..40 {
+            add(&mut writer, &format!("Old.Show.{i}.mkv"));
+        }
+        let (old, new) = exact_old(&root, &mut writer);
+        let config = ServingConfig {
+            fail_live_at_swap: true,
+            ..quick(new)
+        };
+        let serving = Serving::open_or_rebuild(&root, &db, config).unwrap();
+        wait_for("the swap to fail", || {
+            serving.progress().unwrap().phase == RebuildPhase::Failed
+        });
+        let index = serving.index();
+        assert!(index.missing_fields().is_empty());
+        assert_eq!(found(&index, "old show"), 40);
+        drop(index);
+        assert!(root.join(old.dir_name()).exists());
+        // The old index's indexer was stopped for the swap; it's running
+        // again, so new torrents still become searchable.
+        add(&mut writer, "Fresh.Thing.mkv");
+        wait_for("the restarted indexer", || {
+            found(&serving.index(), "fresh thing") == 1
+        });
+        serving.shutdown().unwrap();
+    }
 }

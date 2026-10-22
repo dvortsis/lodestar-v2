@@ -14,8 +14,9 @@ use std::sync::{Arc, Mutex};
 
 use tantivy::index::SegmentId;
 use tantivy::query::EnableScoring;
-use tantivy::{DocAddress, DocId, Searcher, SegmentReader};
+use tantivy::{COLLECT_BLOCK_BUFFER_LEN, DocAddress, DocId, DocSet, Searcher, SegmentReader};
 
+use crate::cancel::{self, CHECK_EVERY, CancelToken};
 use crate::filter;
 use crate::index::{Compiled, Result};
 
@@ -59,7 +60,7 @@ impl SegmentCache {
 }
 
 /// Maps a fast value to a `u64` that sorts the same way.
-fn sortable(v: u64, signed: bool) -> u64 {
+pub(crate) fn sortable(v: u64, signed: bool) -> u64 {
     if signed { v ^ (1 << 63) } else { v }
 }
 
@@ -73,6 +74,28 @@ pub(crate) fn search(
     limit: usize,
     offset: usize,
 ) -> Result<(Vec<DocAddress>, usize)> {
+    search_cancellable(
+        searcher,
+        cache,
+        query,
+        order,
+        limit,
+        offset,
+        &CancelToken::new(),
+    )
+}
+
+/// [`search`], stopping between segments and every few thousand
+/// documents once `cancel` is.
+pub(crate) fn search_cancellable(
+    searcher: &Searcher,
+    cache: &SegmentCache,
+    query: &Compiled,
+    order: Order,
+    limit: usize,
+    offset: usize,
+    cancel: &CancelToken,
+) -> Result<(Vec<DocAddress>, usize)> {
     let k = offset + limit;
     let weight = query
         .query
@@ -80,6 +103,9 @@ pub(crate) fn search(
     let segments = searcher.segment_readers().iter().enumerate();
     let tops = searcher.index().search_executor().map(
         |(ord, reader): (usize, &SegmentReader)| {
+            if cancel.is_stopped() {
+                return Err(cancel::interrupted());
+            }
             let key = (
                 query.key.clone(),
                 order,
@@ -91,7 +117,14 @@ pub(crate) fn search(
             let top = match cached {
                 Some(top) => top,
                 None => {
-                    let top = Arc::new(segment_top(weight.as_ref(), reader, query, order, k)?);
+                    let top = Arc::new(segment_top(
+                        weight.as_ref(),
+                        reader,
+                        query,
+                        order,
+                        k,
+                        cancel,
+                    )?);
                     if k <= CACHE_MAX_K {
                         let mut map = cache.map.lock().expect("cache lock");
                         if map.len() >= CACHE_ENTRIES {
@@ -105,7 +138,8 @@ pub(crate) fn search(
             Ok((ord as u32, top))
         },
         segments,
-    )?;
+    );
+    let tops = tops.map_err(|e| cancel::stopped_or(cancel, e))?;
     let mut total = 0;
     let mut all = Vec::new();
     for (seg, top) in tops {
@@ -132,6 +166,7 @@ fn segment_top(
     query: &Compiled,
     order: Order,
     k: usize,
+    cancel: &CancelToken,
 ) -> tantivy::Result<SegmentTop> {
     let fast = reader.fast_fields();
     let value: Box<dyn Fn(DocId) -> Option<u64>> = if order.signed {
@@ -145,8 +180,21 @@ fn segment_top(
     let alive = reader.alive_bitset();
     let mut heap: BinaryHeap<Reverse<Rank>> = BinaryHeap::with_capacity(k + 1);
     let mut count = 0;
-    weight.for_each_no_score(reader, &mut |docs| {
-        for &doc in docs {
+    // `Weight::for_each_no_score`, with a check of the token between
+    // blocks.
+    let mut docs = weight.scorer(reader, 1.0)?;
+    let mut buf = [0; COLLECT_BLOCK_BUFFER_LEN];
+    let mut seen = 0u32;
+    loop {
+        let n = docs.fill_buffer(&mut buf);
+        seen += n as u32;
+        if seen >= CHECK_EVERY {
+            seen = 0;
+            if cancel.is_stopped() {
+                return Err(cancel::interrupted());
+            }
+        }
+        for &doc in &buf[..n] {
             if alive.is_some_and(|a| !a.is_alive(doc)) || !checks.iter().all(|c| c.passes(doc)) {
                 continue;
             }
@@ -171,7 +219,10 @@ fn segment_top(
                 heap.push(Reverse(rank));
             }
         }
-    })?;
+        if n < buf.len() {
+            break;
+        }
+    }
     let top = heap
         .into_iter()
         .map(|Reverse(r)| (r.present, r.value, r.addr.0.1))
