@@ -1,0 +1,2 @@
+400
+{"error":{"code":"bad_limit","field":"limit.ext","message":"A facet lists 1 to 100 values."}}
