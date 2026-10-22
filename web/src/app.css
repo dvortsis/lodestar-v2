@@ -1,2 +1,10 @@
 @import 'tailwindcss';
-@plugin 'daisyui';
+/* Docs are prose, not class sources: a word like "select" must not pull in daisyUI's .select. */
+@source not "../**/*.md";
+/* themes: false = no built-in daisyUI theme CSS; the compiler's variables (critical.css) drive
+   all colour, and tokens.css sets the shape variables. */
+@plugin 'daisyui' {
+	themes: false;
+}
+@import './lib/theme/tokens.css';
+@import './lib/theme/critical.css';

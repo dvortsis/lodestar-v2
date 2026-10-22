@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { discover, merge, mergeMessages, placeholders } from './messages';
+import { discover, merge, mergeMessages, placeholders, topLevelKeys } from './messages.ts';
 
 let root: string;
 beforeEach(() => {
@@ -97,6 +97,28 @@ describe('merge', () => {
 		const r = run();
 		expect(r.errors.some((e) => e.includes('must be a string'))).toBe(true);
 		expect(r.errors.some((e) => e.includes('en.json'))).toBe(true);
+	});
+});
+
+describe('topLevelKeys', () => {
+	it('lists keys in order with repeats, ignoring nested keys and string values', () => {
+		expect(topLevelKeys('{"a":"x: \\"b\\":","b":{"a":1},"a":"y"}')).toEqual(['a', 'b', 'a']);
+	});
+});
+
+describe('same-file duplicates and coverage', () => {
+	it('fails on a key repeated within one file', () => {
+		put(feature('a'), 'en', {});
+		writeFileSync(join(root, feature('a'), 'messages', 'en.json'), '{"a_x":"1","a_x":"2"}');
+		const r = run();
+		expect(r.errors).toHaveLength(1);
+		expect(r.errors[0]).toMatch(/a_x.*duplicate key in the same file/);
+	});
+	it('reports the share of en keys that zh covers', () => {
+		put(feature('a'), 'en', { a_1: '1', a_2: '2', a_3: '3', a_4: '4' });
+		put(feature('a'), 'zh', { a_1: '一', a_2: '二' });
+		expect(run().coverage).toEqual({ en: 1, zh: 0.5 });
+		expect(merge([]).coverage.zh).toBe(1);
 	});
 });
 

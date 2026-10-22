@@ -39,7 +39,7 @@ Compile-time i18n with Paraglide 2 (`en` base, `zh`), tree-shaken: a component b
 **Add a message to your feature:**
 
 1. Put it in `src/lib/features/<feature>/messages/en.json` (and `zh.json` when translated; zh is filled later, and a missing zh key only warns and falls back to en). Keys are snake_case and start with the feature name: `search_results_count`, never `count`. For `kebab-case` feature folders use underscores (`saved-searches` → `saved_searches_`).
-2. Use `{name}` placeholders for values (`"{count} results"`). No ICU `plural`/`select` syntax; keep one message per form. zh must use the same placeholders as en.
+2. Use `{name}` placeholders for values (`"{count} results"`). No ICU plural or choice syntax; keep one message per form. zh must use the same placeholders as en.
 3. Import and call it: `import { m } from '$lib/paraglide/messages.js'`, then `{m.search_results_count({ count })}`. Numbers and dates go through `src/lib/format` first; pass the formatted string.
 4. Run `npm run messages` (also part of `npm run check` and `prebuild`). It writes the merged `messages/{en,zh}.json` and compiles `src/lib/paraglide/`; both are generated and gitignored. Dev, build and vitest also merge on start.
 

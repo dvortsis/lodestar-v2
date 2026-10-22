@@ -1,5 +1,6 @@
 // The UI locale: settings first, then navigator.language, then en. The same value drives
 // Paraglide messages, <html lang> and the number/date formatters (src/lib/format).
+import { AUTO_LOCALE_COVERAGE, coverage } from './coverage.generated';
 import { baseLocale, isLocale, locales, setLocale } from '$lib/paraglide/runtime.js';
 
 export type AppLocale = (typeof locales)[number];
@@ -7,23 +8,31 @@ export type AppLocale = (typeof locales)[number];
 let current = $state<AppLocale>(baseLocale);
 
 /** First supported locale in `preferences`: exact tag, then primary subtag ("zh-CN" → zh). */
-export function matchLocale(preferences: readonly (string | null | undefined)[]): AppLocale | null {
+export function matchLocale(
+	preferences: readonly (string | null | undefined)[],
+	covered: (locale: AppLocale) => boolean = () => true
+): AppLocale | null {
 	for (const tag of preferences) {
 		if (!tag) continue;
 		const lower = tag.toLowerCase();
-		if (isLocale(lower)) return lower;
 		const primary = lower.split('-')[0];
-		if (primary && isLocale(primary)) return primary;
+		for (const candidate of [lower, primary]) {
+			if (candidate && isLocale(candidate) && covered(candidate)) return candidate;
+		}
 	}
 	return null;
 }
 
-/** Settings value if it is a supported locale, else the browser's languages, else en. */
+/** A locale the browser may pick for the user: its catalogue must cover the UI (WCAG 3.1.1). */
+const wellCovered = (locale: AppLocale) => (coverage[locale] ?? 0) >= AUTO_LOCALE_COVERAGE;
+
+/** Settings value if supported, else the first well-covered browser language, else en. */
 export function resolveLocale(
 	setting: string | null | undefined,
 	languages: readonly string[] = typeof navigator === 'undefined' ? [] : navigator.languages
 ): AppLocale {
-	return matchLocale([setting]) ?? matchLocale(languages) ?? baseLocale;
+	// An explicit setting always applies; the browser's language only when its catalogue is complete.
+	return matchLocale([setting]) ?? matchLocale(languages, wellCovered) ?? baseLocale;
 }
 
 /** Applies a locale to Paraglide, `<html lang>` and `currentLocale()`. */
