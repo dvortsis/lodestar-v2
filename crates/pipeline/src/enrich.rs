@@ -5,7 +5,7 @@
 //! torrents stored before M3, records from an older parser).
 
 use lodestar_classify::{Classification, Correction, ENRICHMENT_VERSION, FileInfo};
-use lodestar_filter::Engine;
+use lodestar_filter::Handle;
 use lodestar_metainfo::{File, TextEncoding};
 use lodestar_store::{Enriched, Store};
 
@@ -36,14 +36,20 @@ pub fn enrich_stored(
     enrich_stored_with(store, after, limit, None)
 }
 
-/// [`enrich_stored`], applying your classification rules from `engine`
-/// too. A torrent's own correction wins over a rule.
+/// [`enrich_stored`], applying your classification rules from `filter`
+/// too. A torrent's own correction wins over a rule. Nothing is written
+/// if the rules changed during the batch (§20.9): their change marks the
+/// torrents again, and the next pass picks them up.
 pub fn enrich_stored_with(
     store: &mut Store,
     after: i64,
     limit: usize,
-    engine: Option<&Engine>,
+    filter: Option<&Handle>,
 ) -> Result<Option<(i64, usize)>, lodestar_store::Error> {
+    // The generation first, then the rules: rules read after a change
+    // are never older than the generation they're written under.
+    let generation = store.class_gen()?;
+    let engine = filter.map(Handle::current);
     let ids = store.unenriched(after, ENRICHMENT_VERSION, limit)?;
     let Some(&last) = ids.last() else {
         return Ok(None);
@@ -56,11 +62,29 @@ pub fn enrich_stored_with(
         if let (Some(row), Some(tree)) = (store.torrent(id)?, store.files(id)?) {
             let own = store.correction(id)?.map(correction).unwrap_or_default();
             let files = file_infos(&tree.files, tree.encoding);
-            batch.push((id, enrich_row(&row, &files, own, engine, now).0));
+            batch.push((id, enrich_row(&row, &files, own, engine.as_deref(), now).0));
         }
     }
-    let n = store.set_enrichments(&batch)?;
+    let n = store
+        .set_enrichments_at(generation, &batch)?
+        .unwrap_or_default();
     Ok(Some((last, n)))
+}
+
+/// What a classification rule's say changes: Is adult (`true`) or Not
+/// adult (`false`) where it differs from detection, else nothing.
+pub fn rule_fix(says: Option<bool>, class: &Classification) -> Option<bool> {
+    says.filter(|adult| *adult != (class.content_type == lodestar_classify::ContentType::Adult))
+}
+
+/// The stored enrichment with a classification rule's fix (or detection's
+/// own when `None`).
+pub fn enrich_with_rule(name: &str, files: &[FileInfo], fix: Option<bool>) -> Enriched {
+    let c = Correction {
+        adult: fix,
+        not_junk: false,
+    };
+    enrich_corrected(name, files, c).0
 }
 
 /// A stored correction as the classifier takes it.

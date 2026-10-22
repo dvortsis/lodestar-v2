@@ -295,6 +295,8 @@ pub enum JobState {
     Running,
     Done,
     Failed,
+    /// Stopped by `POST /filters/preview/jobs/{id}/cancel`.
+    Cancelled,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -697,6 +699,9 @@ pub struct ClassRuleAdded {
     /// search index (only torrents arriving later are affected).
     #[schema(required = true)]
     pub queued: Option<usize>,
+    /// More stored torrents matched than are queued at once (1,000,000):
+    /// the rest are classified again when next re-enriched.
+    pub truncated: bool,
 }
 
 /// `POST /classify/rules/remove`.
@@ -711,6 +716,8 @@ pub struct ClassRuleRemoved {
     /// As [`ClassRuleAdded::queued`].
     #[schema(required = true)]
     pub queued: Option<usize>,
+    /// As [`ClassRuleAdded::truncated`].
+    pub truncated: bool,
 }
 
 #[cfg(test)]
