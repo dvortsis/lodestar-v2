@@ -319,6 +319,20 @@ async fn search_parse_and_detail() {
 #[tokio::test]
 async fn errors_share_one_envelope() {
     let f = fixture();
+    // Without a session, a protected path's wrong method is still a 401.
+    for req in [
+        post("/api/v1/parse", None, json!({})),
+        Request::delete("/api/v1/search")
+            .body(Body::empty())
+            .unwrap(),
+        Request::delete("/api/v1/password")
+            .body(Body::empty())
+            .unwrap(),
+    ] {
+        let (status, _, body) = call(&f.app, req).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body["error"]["code"], json!("login_required"));
+    }
     // 401 before login, with the hint the login screen needs.
     let (status, _, body) = call(&f.app, get("/api/v1/search?q=x", None)).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -326,8 +340,8 @@ async fn errors_share_one_envelope() {
     assert!(body["error"]["message"].is_string());
     assert_eq!(body["setup_required"], json!(true));
 
-    let c = logged_in(&f).await;
-    let c = Some(c.as_str());
+    let cookie = logged_in(&f).await;
+    let c = Some(cookie.as_str());
     // 400: a parse error keeps its span.
     let (status, _, body) = call(&f.app, get("/api/v1/parse?q=sise:1", c)).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -359,9 +373,14 @@ async fn errors_share_one_envelope() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"]["code"], json!("no_route"));
 
-    // 405: a known path with the wrong method.
+    // 405: a known path with the wrong method (with a session, for a
+    // protected one).
     for req in [
         post("/api/v1/parse", c, json!({})),
+        Request::delete(format!("/api/v1/torrents/{}", f.hashes[0]))
+            .header(header::COOKIE, &cookie)
+            .body(Body::empty())
+            .unwrap(),
         get("/api/v1/login", None),
     ] {
         let (status, _, body) = call(&f.app, req).await;

@@ -53,6 +53,8 @@ pub fn router(state: ApiState) -> Router {
         .merge(torrents::routes())
         // What `auth::protected` checks sessions against.
         .layer(Extension(auth::SessionAuth(state.auth.clone())))
+        // For open routes; `auth::protected` sets its own behind the
+        // session guard, and this doesn't replace it.
         .method_not_allowed_fallback(error::wrong_method)
         .fallback(error::no_route)
         .with_state(state)

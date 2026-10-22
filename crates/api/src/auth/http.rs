@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 
 use super::{Auth, AuthError, MIN_PASSWORD_CHARS};
 use crate::ApiState;
-use crate::error::{ApiError, ApiResult, internal};
+use crate::error::{ApiError, ApiResult, internal, wrong_method};
 use crate::extract::{ClientIp, Json, same_origin_json};
 
 pub fn routes() -> Router<ApiState> {
@@ -36,8 +36,14 @@ pub(crate) struct SessionAuth(pub Arc<Auth>);
 /// Puts every route in `routes` behind a session: a module's protected
 /// half goes through this. Without [`SessionAuth`] in the request (a
 /// router not built by [`crate::router`]) it fails closed.
+///
+/// The wrong method on a protected path is a 405 only with a session:
+/// the guard wraps the 405 fallback too, so a caller without one gets a
+/// 401 and learns nothing about which methods the route takes.
 pub fn protected(routes: Router<ApiState>) -> Router<ApiState> {
-    routes.route_layer(middleware::from_fn(guard))
+    routes
+        .method_not_allowed_fallback(wrong_method)
+        .route_layer(middleware::from_fn(guard))
 }
 
 async fn guard(req: Request, next: Next) -> Response {
