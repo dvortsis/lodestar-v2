@@ -26,7 +26,7 @@ The owner asked the runner to keep an eye on the M4 sessions ("M4 continuation" 
 - checks their status;
 - tells the owner about any pending permission prompt, which it can't answer;
 - nudges an idle session that still has work left;
-- flags conflicts with slice ownership or migration order (V4 filter, V5 swarm, V6 filter rules; M5 comes after).
+- flags conflicts with slice ownership or migration order. The current agreed order is in `state.json` under `migration_order`; M5's migration comes after all of M4's.
 
 The list lives in `state.json` under `watched_sessions`.
 
@@ -43,7 +43,7 @@ The list lives in `state.json` under `watched_sessions`.
    - **Failed session or turn:** send the session one message to resume. If it fails a second time, mark the slice `attempt+1` and relaunch it as below.
    - **PR open and the session idle:** move the slice to `in_review`.
 3. **Review every `in_review` slice whose CI is green on its head:**
-   - Spawn a **fresh Opus reviewer**: an `Agent` subagent, Opus, in the background. It gets only the diff, the brief, the spec sections and `runner/standards.md` §4, never the runner's own opinion.
+   - Spawn a **fresh Opus reviewer**: an `Agent` subagent, Opus, in the background. It gets only the diff, the brief, the spec sections and the whole of `runner/standards.md` (§1–§5), never the runner's own opinion.
    - It reports blocking, important and polish findings.
    - **Anything touching auth, credentials, filters, the cluster or companions** also gets `/security-review`.
    - **Blocking findings:** send them to the slice session, with the exact items, to fix and push. Then review again.

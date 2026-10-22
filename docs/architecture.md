@@ -1526,7 +1526,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - `docs/design-tokens.md` §5 holds the table.
 - **Themes (owner, 2026-10-22):**
   - Riverstone is the default and official palette, with plum `#9381B6` in categorical slot 6. Seafoam `#92A9A0` stays retired: it was too close to sage.
-  - The collection is **24 families × light and dark = 48 themes**. §10.18 names 23 families; the 24th is **Rosewood**, proposed in the palette work (`docs/themes.md`) and approved.
+  - The collection is **24 families × light and dark = 48 themes**. §10.18 names 23 families; the 24th is **Rosewood**, proposed in the palette work (PR #37) and approved.
 - **The build runs as parallel slices** (`docs/build-plan.md`, `runner/`).
   - One bar for every slice and review: `runner/standards.md`.
   - Merges happen only with green CI and no blocking findings from a fresh Opus reviewer.
