@@ -465,15 +465,21 @@ fn enrichment_written_under_old_classification_rules_is_refused_or_marked() {
     let g = s.class_gen().unwrap();
     assert_eq!(g, 0);
     // At the current generation: written.
-    assert_eq!(s.set_enrichments_at(g, &[(a, e.clone())]).unwrap(), Some(1));
+    assert_eq!(
+        s.set_enrichments_at(g, &[(a, e.clone())], &[]).unwrap(),
+        Some(1)
+    );
     assert!(s.unenriched(0, 99, 10).unwrap().is_empty());
     // A rule change moves the generation: a batch from before is refused.
     let next = s.bump_class_gen().unwrap();
     assert_eq!(next, g + 1);
     s.mark_unenriched(&[a]).unwrap();
-    assert_eq!(s.set_enrichments_at(g, &[(a, e.clone())]).unwrap(), None);
+    assert_eq!(
+        s.set_enrichments_at(g, &[(a, e.clone())], &[]).unwrap(),
+        None
+    );
     assert_eq!(s.unenriched(0, 99, 10).unwrap(), vec![a], "still marked");
-    assert_eq!(s.set_enrichments_at(next, &[(a, e)]).unwrap(), Some(1));
+    assert_eq!(s.set_enrichments_at(next, &[(a, e)], &[]).unwrap(), Some(1));
 
     // A batch write under an old generation stores but marks.
     let raw = dict("b", false);
@@ -530,4 +536,27 @@ fn corrections_page_by_torrent_id() {
     assert_eq!(page.iter().map(|p| p.0).collect::<Vec<_>>(), ids[..2]);
     let rest = s.corrections_after(ids[1], 10).unwrap();
     assert_eq!(rest.len(), 3);
+}
+
+#[test]
+fn marking_past_the_index_covers_every_later_torrent() {
+    use lodestar_store::Enriched;
+    let mut s = mem();
+    let ids: Vec<i64> = (0..6)
+        .map(|i| add(&mut s, &format!("m{i}"), false, 0).0)
+        .collect();
+    let e = Enriched {
+        version: 99,
+        content_type: 3,
+        junk_score: 0,
+        comp: Vec::new(),
+        data: Vec::new(),
+    };
+    let batch: Vec<_> = ids.iter().map(|id| (*id, e.clone())).collect();
+    s.set_enrichments(&batch).unwrap();
+    // The index reached the third: the rest are marked, the rest only.
+    assert_eq!(s.mark_unenriched_after(ids[2]).unwrap(), 3);
+    assert_eq!(s.unenriched(0, 99, 10).unwrap(), ids[3..].to_vec());
+    // Past the last, nothing.
+    assert_eq!(s.mark_unenriched_after(ids[5]).unwrap(), 0);
 }

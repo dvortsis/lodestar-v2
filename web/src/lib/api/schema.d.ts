@@ -877,6 +877,11 @@ export interface components {
             /** @description Non-null only when `type` is `adult`. */
             adult_kind: string | null;
             /**
+             * @description When relabelling it adult made filtering hold it back (§20.9): the
+             *     rule that did. It's then dropped or quarantined, no longer stored.
+             */
+            held_by: string | null;
+            /**
              * Format: int32
              * @description Junk score, 0–100.
              */

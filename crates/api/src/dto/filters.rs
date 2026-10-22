@@ -644,6 +644,10 @@ pub struct CorrectResponse {
     /// Non-null only when `type` is `adult`.
     #[schema(required = true)]
     pub adult_kind: Option<String>,
+    /// When relabelling it adult made filtering hold it back (§20.9): the
+    /// rule that did. It's then dropped or quarantined, no longer stored.
+    #[schema(required = true)]
+    pub held_by: Option<String>,
     /// Junk score, 0–100.
     pub junk: u8,
     #[serde(rename = "type")]

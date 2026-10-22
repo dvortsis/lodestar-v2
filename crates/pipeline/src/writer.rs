@@ -386,19 +386,32 @@ impl Writer {
         let store = self.store.take().expect("store");
         let after = self.backfill_after;
         let filter = self.filter.clone();
+        let sealer = self.sealer.clone();
+        let quarantine_secs = self.cfg.quarantine_secs;
         let (store, result) = tokio::task::spawn_blocking(move || {
             let mut store = store;
-            let result =
-                crate::enrich::enrich_stored_with(&mut store, after, BACKFILL_BATCH, Some(&filter));
+            let ctx = crate::enrich::Backfill {
+                filter: Some(&filter),
+                sealer: sealer.as_deref(),
+                quarantine_secs,
+            };
+            let result = crate::enrich::enrich_stored_with(&mut store, after, BACKFILL_BATCH, &ctx);
             (store, result)
         })
         .await
         .expect("backfill task");
         self.store = Some(store);
         match result {
-            Ok(Some((last, n))) => {
-                self.backfill_after = last;
-                self.stats.enriched.fetch_add(n as u64, Ordering::Relaxed);
+            // The rules changed under the batch: the same batch again.
+            Ok(Some(b)) if b.rejected => {}
+            Ok(Some(b)) => {
+                self.backfill_after = b.last;
+                self.stats
+                    .enriched
+                    .fetch_add(b.enriched as u64, Ordering::Relaxed);
+                for h in b.held {
+                    self.held.insert(h);
+                }
             }
             Ok(None) => self.backfill_done = true,
             Err(e) => {
@@ -449,7 +462,6 @@ impl Writer {
     }
 }
 
-/// Torrents enriched per background step.
 /// Judges a torrent again at commit (a remote worker's, or one prepared
 /// under an older rule set), and stores what the classification rules say
 /// now if they changed since prepare (§20.9).
@@ -482,6 +494,7 @@ pub(crate) fn rejudge(engine: &Engine, r: &mut Results, discovered_at: i64, now:
     verdict
 }
 
+/// Torrents enriched per background step.
 const BACKFILL_BATCH: usize = 256;
 
 /// One store transaction (runs on the blocking pool).
