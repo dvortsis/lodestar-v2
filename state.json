@@ -938,7 +938,7 @@
    "pr": 95,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 22:53 head bd40bcb (main+D-puid merged, drop scopes per subcommand)"
+   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 22:53 head bd40bcb (main+D-puid merged, drop scopes per subcommand) | 23:30 review FIX: Windows sync_file needs write access; -journal delete sharing violation; restore docs (reindex, auth.json); run maintenance_runs_as_puid under sudo in CI (allowed ci.yml edit); polish."
   },
   "M6-win": {
    "status": "running",
@@ -1106,8 +1106,7 @@
  "heartbeats": 4,
  "reviews_in_flight": [
   "88",
-  94,
-  95
+  94
  ],
  "carry_forward": {
   "next-bans-touch": [
@@ -1182,7 +1181,6 @@
   "tailwind_scans_dev_routes": "Tailwind scans src/dev-routes, so showcase-only classes (grid-cols-2, self-start) land in production CSS. Project-wide follow-up: exclude src/dev-routes from the production Tailwind source set (@source not).",
   "classify_adult_other": "R-relevance: XXX name with no year not classified Adult (detect returns None for base Other?) - reviewer of #94 checking on main",
   "cli_missing_apis": "M6-cli: reindex refuses (exit 3) while server runs; needs API rebuild endpoint + search 'rebuild this version while old serves' call",
-  "privdrop_doc": "privdrop.rs Scope::DataDir doc comment lists only serve/import-bitmagnet; M6-cli adds backup/rollback/vacuum/reindex (next slice touching privdrop.rs)",
   "V6-cluster2": "From #96 design review: before-auth handshake timeout + concurrent/per-IP connection caps (Acceptor reads ClientHello pre-auth); rate-limit renew (each adds 72h cluster.cert.* row); no .await under coordinator mutex (redeem/renew sync SQLite); maintain hourly (coordinator leaf expires 72h otherwise); re-seal cluster keys on SecretStore rotation; close open connections on revocation within one heartbeat (\u00a719.8); token via stdin/file not --token/LODESTAR_TOKEN; zero-overlap compromise CA rotation + CA expiry check in maintain; store compare_and_set helper (store-owned); consider small secrets crate (integrations pulls reqwest/lettre/tokio). Also from #96 security re-review: revocation, issued list and name-in-use live per-process in Coordinator memory, so a CLI revoke isn't seen by a running serve and two coordinators can redeem different tokens for one name; single PKI owner (CLI via server) or reload from DB.",
   "events_filter_hidden": "B4 'N new' counts filter-hidden torrents (flags::HIDDEN); design question: count visible-by-default only? (from #87 review)"
  },
