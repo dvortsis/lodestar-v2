@@ -24,6 +24,7 @@ mod matcher;
 pub mod normalize;
 mod packs;
 mod payload;
+pub mod reclassify;
 mod rules;
 mod seal;
 
@@ -37,5 +38,5 @@ pub use held::HeldSet;
 pub use matcher::{Doc, Facts};
 pub use packs::{Pack, PackRule, PackSwitches};
 pub use payload::{PayloadSig, SPECIFIC_BYTES, SPECIFIC_FILES, payload_sig};
-pub use rules::{Allow, Exception, Invalid, Match, Override, Strength, UserRule};
+pub use rules::{Allow, ClassRule, Exception, Invalid, Match, Override, Strength, UserRule};
 pub use seal::{SealError, Sealer};

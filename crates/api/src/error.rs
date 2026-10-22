@@ -84,7 +84,8 @@ impl ApiError {
         self.code
     }
 
-    fn body(&self) -> Value {
+    /// The response body: the envelope plus any top-level keys.
+    pub fn body(&self) -> Value {
         let mut error = Map::new();
         error.insert("code".into(), self.code.into());
         error.insert("message".into(), json!(self.message));

@@ -9,7 +9,7 @@ use lodestar_store::RuleSet;
 use crate::core::Action;
 use crate::engine::{Engine, RuleRef};
 use crate::packs::{Pack, PackRule, PackSwitches};
-use crate::rules::{Allow, Exception, Match, Override, Strength, UserRule};
+use crate::rules::{Allow, ClassRule, Exception, Match, Override, Strength, UserRule};
 
 /// `override_list.kind` / `filter_exceptions.kind`.
 pub const KIND_HASHES: u8 = 0;
@@ -67,6 +67,28 @@ pub fn pack_switches(stored: &[(String, bool)]) -> PackSwitches {
 impl Engine {
     /// Replaces the rule layers with the stored set. Returns notes about
     /// rows that were skipped.
+    /// Loads the classification rules (`(id, query, adult)` rows).
+    pub fn load_class_rules(&mut self, rows: &[(i64, String, bool)]) -> Vec<String> {
+        let mut notes = Vec::new();
+        self.class_rules = rows
+            .iter()
+            .filter_map(|(id, q, adult)| match parse(q) {
+                Ok(query) => Some(ClassRule {
+                    id: *id as u32,
+                    query,
+                    adult: *adult,
+                }),
+                Err(_) => {
+                    notes.push(format!(
+                        "classification rule {id} skipped: it no longer parses"
+                    ));
+                    None
+                }
+            })
+            .collect();
+        notes
+    }
+
     pub fn load_rules(&mut self, set: &RuleSet) -> Vec<String> {
         let mut notes = Vec::new();
         self.packs = pack_switches(&set.pack_switches);
