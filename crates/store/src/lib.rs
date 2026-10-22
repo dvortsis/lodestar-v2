@@ -18,6 +18,7 @@ pub mod hot;
 mod insights;
 mod schema;
 mod sources;
+mod subscriptions;
 mod swarm;
 
 use std::fmt;
@@ -37,6 +38,7 @@ pub use hot::{Col, HotColumns, NEVER, SwarmHot};
 pub use insights::{CohortCount, Counter, Event};
 pub use rusqlite;
 pub use sources::{MAX_SOURCES, QueuedKey, SourceId, SourceRow, SourceState};
+pub use subscriptions::{NewSubscription, Refresh, Subscription};
 pub use swarm::{
     SwarmRow, SwarmUpdate, TrackerCounts, TrackerRow, TrackerSample, swarm_flags, tracker_state,
 };
