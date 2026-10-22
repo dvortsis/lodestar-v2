@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-22T05:00:00Z",
+ "updated_at": "2026-10-22T05:03:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 5
@@ -31,8 +31,8 @@
    "session": "session_01F4G5nVWxS91JsSEEC2mka5",
    "pr": 36,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": ""
+   "review_rounds": 1,
+   "notes": "round 1: changes requested (trackers_checked meaning; Intl examples; stale/segments/exceptions fields; keep Tailwind default spacing, restrict to ramp steps)"
   },
   "C1": {
    "status": "running",
@@ -649,5 +649,8 @@
   }
  },
  "watch_policy": "Owner asked the runner to keep an eye on and manage these sessions: each heartbeat check status; report a pending permission prompt to the owner (runner cannot approve); nudge an idle session with remaining work; flag conflicts with slice ownership and migration order.",
- "migration_order": "V4 filter (merged), V5 M4 swarm, V6 filter rules; M5 (B8) takes the next number after M4 settles"
+ "migration_order": "V4 filter (merged), V5 M4 swarm, V6 filter rules; M5 (B8) takes the next number after M4 settles",
+ "decisions": [
+  "2026-10-22 spacing: keep Tailwind v4 default --spacing (p-4=16px); only utility steps matching the \u00a710.2 ramp are allowed; W2 extends the ban check to off-ramp steps"
+ ]
 }
