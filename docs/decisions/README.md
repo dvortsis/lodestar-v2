@@ -1,6 +1,6 @@
 # Decisions
 
-Every decision that changes or clarifies the architecture is recorded here, one file per slice or PR. This replaces appending to `docs/architecture.md` §16 (owner, 2026-10-22: one shared section made almost every PR conflict with every other). §16 keeps everything recorded before then. Read it together with this folder.
+Every decision that changes or clarifies the architecture is recorded here, one file per slice or PR. This replaces appending to `docs/architecture.md` §16: one shared section made almost every PR conflict with every other (runner, 2026-10-22, when the owner asked for less CI queueing). §16 keeps everything recorded before then. Read it together with this folder.
 
 ## Adding an entry
 - **One new file per PR:** `docs/decisions/<YYYY-MM-DD>-<slice-id>.md`, for example `2026-10-23-B5c.md`. A second PR for the same slice adds a suffix (`-r2`, or a short topic).

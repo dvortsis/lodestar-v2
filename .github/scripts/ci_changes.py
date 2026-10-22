@@ -29,14 +29,17 @@ ROOT = Path(__file__).resolve().parents[2]
 FUZZ = sorted(p.stem for p in (ROOT / "fuzz/fuzz_targets").glob("*.rs"))
 
 # Paths that change how every Rust job builds: run all of them.
+# Outside the crates but checked by a Rust job: the drift job regenerates this.
+RUST_ALSO = re.compile(r"^web/src/lib/api/openapi\.json$")
+
 EVERYTHING = re.compile(
     r"^(Cargo\.(toml|lock)|rust-toolchain(\.toml)?|\.cargo/|\.github/workflows/ci\.yml"
     r"|\.github/scripts/ci_changes\.py)"
 )
 
 
-def packages() -> dict[str, tuple[Path, set[str]]]:
-    """Workspace packages: name -> (directory, names of its path dependencies)."""
+def packages() -> dict[str, tuple[Path, set[str], set[str]]]:
+    """Workspace packages: name -> (directory, path dependencies, path dev-dependencies)."""
     root = tomllib.loads((ROOT / "Cargo.toml").read_text())
     inherited = root.get("workspace", {}).get("dependencies", {})
     dirs = [d for d in (ROOT / "crates").iterdir() if (d / "Cargo.toml").is_file()]
@@ -55,23 +58,32 @@ def packages() -> dict[str, tuple[Path, set[str]]]:
                 deps.add(spec.get("package", dep))
         return deps
 
-    found: dict[str, tuple[Path, set[str]]] = {}
+    found: dict[str, tuple[Path, set[str], set[str]]] = {}
     for d in dirs:
         manifest = tomllib.loads((d / "Cargo.toml").read_text())
         name = manifest["package"]["name"]
+        tables = [manifest, *manifest.get("target", {}).values()]
         deps: set[str] = set()
-        for table in ("dependencies", "dev-dependencies", "build-dependencies"):
-            deps |= path_deps(manifest.get(table, {}))
-        for target in manifest.get("target", {}).values():
-            for table in ("dependencies", "dev-dependencies", "build-dependencies"):
-                deps |= path_deps(target.get(table, {}))
-        found[name] = (d, deps)
+        dev: set[str] = set()
+        for t in tables:
+            deps |= path_deps(t.get("dependencies", {})) | path_deps(t.get("build-dependencies", {}))
+            dev |= path_deps(t.get("dev-dependencies", {}))
+        found[name] = (d, deps, dev)
     return found
 
 
-def closure(pkgs: dict[str, tuple[Path, set[str]]], roots: set[str]) -> set[str]:
-    """`roots` and every workspace package they depend on, transitively."""
-    seen, todo = set(), list(roots)
+def closure(
+    pkgs: dict[str, tuple[Path, set[str], set[str]]], roots: set[str], tested: bool = False
+) -> set[str]:
+    """`roots` and every workspace package they build, transitively. With
+    `tested`, the roots' own dev-dependencies too (`cargo test -p` builds
+    those, but never a dependency's dev-dependencies)."""
+    start = set(roots)
+    if tested:
+        for r in roots:
+            if r in pkgs:
+                start |= pkgs[r][2]
+    seen, todo = set(), list(start)
     while todo:
         name = todo.pop()
         if name in seen or name not in pkgs:
@@ -88,7 +100,10 @@ def fuzz_roots(target: str) -> set[str]:
 
 def main() -> None:
     event, base, head = sys.argv[1], sys.argv[2], sys.argv[3]
-    labels = set(json.loads(sys.argv[4])) if len(sys.argv) > 4 and sys.argv[4] else set()
+    try:
+        labels = set(json.loads(sys.argv[4]) or []) if len(sys.argv) > 4 else set()
+    except ValueError:
+        labels = set()
     out: dict[str, str] = {}
 
     if event != "pull_request" or "full-ci" in labels:
@@ -111,19 +126,19 @@ def main() -> None:
     touched: set[str] = set()
     for f in changed:
         path = ROOT / f
-        for name, (d, _) in pkgs.items():
+        for name, (d, _, _) in pkgs.items():
             if path == d or d in path.parents:
                 touched.add(name)
 
-    def needs(roots: set[str]) -> bool:
-        return everything or bool(closure(pkgs, roots) & touched)
+    def needs(roots: set[str], tested: bool = False) -> bool:
+        return everything or bool(closure(pkgs, roots, tested) & touched)
 
-    rust = everything or bool(touched)
+    rust = everything or bool(touched) or any(RUST_ALSO.match(f) for f in changed)
     out["rust"] = str(rust).lower()
     out["test_os"] = json.dumps(["ubuntu-latest", "windows-latest"] if rust else [])
     out["bench"] = str(needs({"lodestar-bench"})).lower()
-    out["filter"] = str(needs({"lodestar-filter"})).lower()
-    out["importer"] = str(needs({"lodestar-sources-importers"})).lower()
+    out["filter"] = str(needs({"lodestar-filter"}, tested=True)).lower()
+    out["importer"] = str(needs({"lodestar-sources-importers"}, tested=True)).lower()
     # A change under fuzz/ (a target, the harness, its lockfile) runs them all.
     fuzz_all = "lodestar-fuzz" in touched
     out["fuzz"] = json.dumps([t for t in FUZZ if fuzz_all or needs(fuzz_roots(t))])

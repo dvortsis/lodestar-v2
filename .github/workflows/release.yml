@@ -31,8 +31,10 @@ permissions:
 
 # One run per ref. A newer pull-request push supersedes the older one; a
 # release or nightly run in progress is never cancelled halfway through a push.
+# A label other than `full-ci` gets its own group (and does nothing), so adding
+# one never cancels the run in progress.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.ref }}${{ github.event.action == 'labeled' && github.event.label.name != 'full-ci' && '-label' || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -41,6 +43,7 @@ env:
 jobs:
   smoke:
     name: smoke (linux/amd64)
+    if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -155,7 +158,7 @@ jobs:
   # Rust code (the smoke job already builds the same code for amd64).
   arm64-needed:
     name: arm64 needed
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && (github.event.action != 'labeled' || github.event.label.name == 'full-ci')
     runs-on: ubuntu-latest
     outputs:
       build: ${{ steps.c.outputs.build }}
