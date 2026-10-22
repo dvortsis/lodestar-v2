@@ -2399,6 +2399,7 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
 | `override_list` | CSX-5 entries: kind (hash / keyword / pattern), query, strength, scope, created, expiry/review date, shadow_until, hit count |
 | `rule_set_prev` | the previous rule set only, for one-step Undo |
 | `cs_hashes` | CS-1 entries (all hash forms) + CS-8 payload signatures, with origin (confirmed / reported / imported) |
+| `class_corrections` | Is adult / Not adult and Not junk, per torrent (V8) |
 
 - **As built (store migration V4, pipeline):**
   - V4 adds `cs_hashes`, `cs_sigs`, `core_membership` (switches), `tombstones`, `quarantine` and `filter_hits`.
@@ -2418,7 +2419,12 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
   - **Preview numbers:** whole-rule changes count from the review queue, tombstones and `filter_hits` rollups. Entry-level changes (CSX-5, exceptions, Always allow) re-judge quarantined items from their sealed names and tombstones by hash, and are marked as estimates because file lists aren't kept. The 30-day figures are the upper bound for the rules the change can bypass. Running this as a background job with progress (§20.10) arrives with the UI.
   - **Undo:** the rule layers and switches are snapshotted into `rule_set_prev` only after a change to them succeeds, so a refused change never replaces the Undo step. Undo swaps the two sets, so a second Undo redoes. It can weaken, so it asks for the password.
   - **Releases** clear the store row and the in-memory held set together, so intake fetches the torrent the next time it's seen.
-  - **Shadow:** rules and CSX-5 entries take `shadow_days`. Rule tests against fixtures and the `classify` corrections are still to come.
+  - **Shadow:** rules and CSX-5 entries take `shadow_days`.
+  - **False positive** (`op: false_positive`, from the review queue): an exception for that torrent and the rule that held it, a release, and for a core rule a **must-not-match fixture** made from its sealed name as hashed tokens only (`Fixture::encode`: version, content type, then per text the token positions, hashes and small numbers; no text). It's a weakening change, so it warns and asks for the password.
+  - **Fixtures:** `GET /filters/fixtures` runs every core rule's stored fixtures against the rules as they are and reports how many each has and how many disagree.
+  - **Rule tests:** `POST /filters/test` tries a draft rule (`query`, `unless`) and the current rule set on up to 50 example torrents (name, files with optional sizes, optional type), classified as ingest would. Nothing about the examples is stored or logged.
+  - **Report abuse and Confirm** also delete any stored torrent with those hashes (store and, through `reindex_log`, the index).
+- **As built (store migration V8, `classify` corrections):** `POST /classify/correct {hash, adult: true|false|null, not_junk}` keeps one correction per torrent in `class_corrections` and classifies the torrent again with it at once (`classify_corrected`). **Is adult** gives the nearest adult kind at confidence 100, including Ebook (as Comics) and Other (as Scene), which detection leaves alone; **Not adult** skips adult detection; **Not junk** clears the score and its reasons. Background enrichment applies the correction whenever it classifies the torrent again (a newer parser), and an upgraded partial import with a correction is queued for that. Corrections are classification, not filtering, so they don't ask for the password. Feeding corrections back into detection as rules and fixtures (§20.9) is still to come.
 - **UI: Settings → Filters & Safety:**
   - **Rules:** layer, action, status (active / shadow / modified), hits over 7 days, false-positive reports.
   - **Editor:** builder or text, live preview, fixtures, shadow toggle, diff against base for core and pack rules.

@@ -328,3 +328,52 @@ impl Store {
             .optional()?)
     }
 }
+
+/// Your correction to one torrent's classification (§20.9).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ClassCorrection {
+    /// `Some(true)`: Is adult. `Some(false)`: Not adult.
+    pub adult: Option<bool>,
+    pub not_junk: bool,
+}
+
+impl Store {
+    /// Sets or clears (`ClassCorrection::default()`) a torrent's
+    /// correction. Returns false when the torrent isn't stored. The caller
+    /// re-enriches the torrent, which logs it for re-indexing.
+    pub fn set_correction(&mut self, id: i64, c: ClassCorrection) -> Result<bool> {
+        let tx = self.conn.transaction()?;
+        let exists = tx
+            .query_row("SELECT 1 FROM torrents WHERE id = ?1", [id], |_| Ok(()))
+            .optional()?
+            .is_some();
+        if exists {
+            if c == ClassCorrection::default() {
+                tx.execute("DELETE FROM class_corrections WHERE torrent_id = ?1", [id])?;
+            } else {
+                tx.execute(
+                    "INSERT INTO class_corrections (torrent_id, adult, not_junk)
+                     VALUES (?1, ?2, ?3)
+                     ON CONFLICT (torrent_id) DO UPDATE
+                     SET adult = excluded.adult, not_junk = excluded.not_junk",
+                    params![id, c.adult, c.not_junk],
+                )?;
+            }
+        }
+        tx.commit()?;
+        Ok(exists)
+    }
+
+    pub fn correction(&self, id: i64) -> Result<Option<ClassCorrection>> {
+        Ok(self
+            .conn
+            .prepare_cached("SELECT adult, not_junk FROM class_corrections WHERE torrent_id = ?1")?
+            .query_row([id], |r| {
+                Ok(ClassCorrection {
+                    adult: r.get(0)?,
+                    not_junk: r.get(1)?,
+                })
+            })
+            .optional()?)
+    }
+}

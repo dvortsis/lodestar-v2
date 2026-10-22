@@ -88,6 +88,9 @@ pub fn router(state: ApiState) -> Router {
         .route("/password", post(change_password))
         .route("/filters", get(filters::overview))
         .route("/filters/queue", get(filters::queue))
+        .route("/filters/fixtures", get(filters::fixtures))
+        .route("/filters/test", post(filters::test))
+        .route("/classify/correct", post(filters::correct))
         .route("/filters/preview", post(filters::preview))
         .route("/filters/apply", post(filters::apply))
         .route_layer(middleware::from_fn_with_state(

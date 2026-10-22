@@ -25,8 +25,8 @@ use lodestar_classify::ContentType;
 use lodestar_filter::lists::SharedIps;
 use lodestar_filter::load::{KIND_HASHES, KIND_KEYWORD, KIND_PAYLOAD, KIND_QUERY, encode_match};
 use lodestar_filter::{
-    Action, CoreRule, Engine, Exception, Handle, HeldSet, Item, Match, Origin, Override, Pack,
-    PackRule, RuleRef, Sealer, Strength,
+    Action, CoreRule, Doc, Engine, Exception, Facts, Fixture, Handle, HeldSet, Item, Match, Origin,
+    Override, Pack, PackRule, RuleRef, Sealer, Strength,
 };
 use lodestar_search::{Node, parse};
 use lodestar_store::{ExceptionRow, OverrideRow, RuleRow, RuleSet, Store};
@@ -199,6 +199,12 @@ pub enum Change {
     },
     RemoveCs1 {
         hashes: Vec<String>,
+    },
+    /// A quarantined torrent a rule caught wrongly (§20.12): an exception
+    /// for that torrent and that rule only, a hashed must-not-match
+    /// fixture for a core rule, and a release.
+    FalsePositive {
+        hash: String,
     },
     /// Releases a quarantined or dropped torrent: fetched and processed
     /// normally next time it's seen.
@@ -528,6 +534,11 @@ fn warning(change: &Change, p: &Preview, neutral: Option<&Preview>) -> String {
             "You confirmed these torrents as abuse material. Removing them lets them, and exact \
              reposts of their files, be fetched and indexed again. {n}"
         ),
+        Change::FalsePositive { .. } => format!(
+            "This releases one torrent from the rule that held it, and from that rule only. \
+             Other rules still check it, and future torrents with similar names are still \
+             checked. It will be fetched and indexed. {n}"
+        ),
         Change::Release { .. } => {
             "Releasing this torrent fetches and indexes it normally the next time it's seen. \
              Every rule checks it again then."
@@ -720,6 +731,27 @@ impl FiltersApi {
                 a.weakening = true;
                 a.preview.tombstones = snap.tombstones.iter().filter(|t| hs.contains(&t.0)).count();
             }
+            Change::FalsePositive { hash } => {
+                let h = hex20(hash)?;
+                let q = snap
+                    .quarantine
+                    .iter()
+                    .find(|q| q.hash == h)
+                    .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not in quarantine"))?;
+                exception_entry(
+                    &q.rule,
+                    &MatchInput {
+                        hashes: Some(vec![hash.clone()]),
+                        ..MatchInput::default()
+                    },
+                )?;
+                a.weakening = true;
+                let bound = rules(vec![q.rule.clone()]);
+                a.preview = Preview {
+                    quarantine: 1,
+                    ..bound
+                };
+            }
             Change::Release { hash } => {
                 let h = hex20(hash)?;
                 a.weakening = true;
@@ -910,6 +942,7 @@ impl FiltersApi {
                 | Change::RemoveException { .. }
                 | Change::AddAllow { .. }
                 | Change::RemoveAllow { .. }
+                | Change::FalsePositive { .. }
         );
         // Read before the change, saved only once it succeeds, so a
         // refused change never replaces what Undo goes back to.
@@ -1075,13 +1108,14 @@ impl FiltersApi {
                 store
                     .add_cs_hashes(&hs, Origin::Reported.code(), now)
                     .map_err(internal)?;
-                // Removed from the index and store by the ingest writer's
-                // purge in a later slice; refused from now on.
+                // Refused from now on, and gone from the store; the
+                // indexer drops the documents on its next catch-up.
                 self.engine.update(|c| {
                     for h in &hs {
                         c.cs.add_hash(*h, Origin::Reported);
                     }
                 });
+                out["deleted"] = json!(store.delete_torrents(&hs).map_err(internal)?.len());
             }
             Change::RemoveCs1 { hashes } => {
                 let hs: Vec<[u8; 20]> =
@@ -1096,6 +1130,41 @@ impl FiltersApi {
                     self.release(store, *h)?;
                 }
                 out["removed"] = json!(n);
+            }
+            Change::FalsePositive { hash } => {
+                let h = hex20(hash)?;
+                let q = store
+                    .quarantined(PREVIEW_ROWS)
+                    .map_err(internal)?
+                    .into_iter()
+                    .find(|q| q.hash == h)
+                    .ok_or_else(gone)?;
+                let e = exception_entry(
+                    &q.rule,
+                    &MatchInput {
+                        hashes: Some(vec![hash.clone()]),
+                        ..MatchInput::default()
+                    },
+                )?;
+                let (kind, value) = encode_match(&e.what);
+                out["exception"] = json!(
+                    store
+                        .add_exception(&e.rule.id(), kind, &value)
+                        .map_err(internal)?
+                );
+                // The core's examples are kept as hashed tokens only.
+                let name = self
+                    .sealer
+                    .as_deref()
+                    .zip(q.sealed.as_deref())
+                    .and_then(|(s, sealed)| s.open(sealed).ok());
+                if let (RuleRef::Core(_), Some(name)) = (e.rule, name) {
+                    let f = Fixture::of(&name, &[], ContentType::Other);
+                    store
+                        .add_fixture(&q.rule, false, &f.encode())
+                        .map_err(internal)?;
+                }
+                self.release(store, h)?;
             }
             Change::Release { hash } => {
                 if !self.release(store, hex20(hash)?)? {
@@ -1118,6 +1187,9 @@ impl FiltersApi {
                 // Deletes the sealed name with the quarantine row.
                 store.release(&h).map_err(internal)?;
                 self.engine.update(|c| c.cs.add_hash(h, Origin::Confirmed));
+                // A quarantined torrent isn't stored, but another of its
+                // swarm hashes may have been.
+                out["deleted"] = json!(store.delete_torrents(&[h]).map_err(internal)?.len());
             }
             Change::RevealName { hash } => {
                 let h = hex20(hash)?;
@@ -1338,6 +1410,185 @@ impl FiltersApi {
     }
 }
 
+/// One example torrent for `POST /filters/test`, never stored or logged.
+#[derive(Debug, Deserialize)]
+pub struct Sample {
+    pub name: String,
+    #[serde(default)]
+    pub files: Vec<SampleFile>,
+    /// A content type (`movie`, `adult`, …), replacing the classifier's.
+    #[serde(rename = "type")]
+    pub content_type: Option<String>,
+}
+
+/// A sample's file: a path, or a path and its size.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum SampleFile {
+    Path(String),
+    Sized { path: String, size: u64 },
+}
+
+/// A draft rule and examples to try it on.
+#[derive(Debug, Deserialize)]
+pub struct TestBody {
+    pub query: Option<String>,
+    pub unless: Option<String>,
+    pub samples: Vec<Sample>,
+}
+
+/// Samples per test request.
+const MAX_SAMPLES: usize = 50;
+
+/// `POST /classify/correct`: your correction to one stored torrent,
+/// replacing any earlier one. `adult: null` and `not_junk: false` clear it.
+#[derive(Debug, Deserialize)]
+pub struct CorrectBody {
+    pub hash: String,
+    pub adult: Option<bool>,
+    #[serde(default)]
+    pub not_junk: bool,
+}
+
+impl FiltersApi {
+    /// The core rules' hashed examples, run against the rules as they are
+    /// (§20.8): how many each has and how many it still catches.
+    pub fn fixtures(&self) -> ApiResult<Value> {
+        let engine = self.engine.current();
+        let store = self.store();
+        let mut out = Vec::new();
+        for r in CoreRule::ALL {
+            let mut v = json!({ "rule": r.id() });
+            let (mut must, mut must_not, mut failing) = (0, 0, 0);
+            for (_, must_match, tokens) in store.fixtures(r.id()).map_err(internal)? {
+                let Some(f) = Fixture::decode(&tokens) else {
+                    tracing::warn!(rule = r.id(), "unreadable fixture skipped");
+                    continue;
+                };
+                let caught = engine.core.fixture_hits(&f).iter().any(|h| h.rule == r);
+                if must_match {
+                    must += 1;
+                } else {
+                    must_not += 1;
+                }
+                if caught != must_match {
+                    failing += 1;
+                }
+            }
+            v["must_match"] = json!(must);
+            v["must_not_match"] = json!(must_not);
+            v["failing"] = json!(failing);
+            out.push(v);
+        }
+        Ok(json!({ "core": out }))
+    }
+
+    /// Applies a classification correction (§20.9) and classifies the
+    /// torrent again with it, so search sees it at the next index commit.
+    pub fn correct(&self, body: &CorrectBody) -> ApiResult<Value> {
+        let hash = hex20(&body.hash)?;
+        let mut store = self.store();
+        let id = store
+            .find(&lodestar_metainfo::InfoHash(hash))
+            .map_err(internal)?
+            .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "no such torrent"))?;
+        let fix = lodestar_classify::Correction {
+            adult: body.adult,
+            not_junk: body.not_junk,
+        };
+        let stored = lodestar_store::ClassCorrection {
+            adult: fix.adult,
+            not_junk: fix.not_junk,
+        };
+        if !store.set_correction(id, stored).map_err(internal)? {
+            return Err(ApiError::new(StatusCode::NOT_FOUND, "no such torrent"));
+        }
+        let (Some(row), Some(tree)) = (
+            store.torrent(id).map_err(internal)?,
+            store.files(id).map_err(internal)?,
+        ) else {
+            return Err(ApiError::new(StatusCode::NOT_FOUND, "no such torrent"));
+        };
+        let files = lodestar_classify::file_infos(&tree.files, tree.encoding);
+        let c = lodestar_classify::classify_corrected(&row.name, &files, fix);
+        let enriched = lodestar_store::Enriched {
+            version: lodestar_classify::ENRICHMENT_VERSION,
+            content_type: c.content_type.code(),
+            junk_score: c.junk.score,
+            comp: c.composition.encode(),
+            data: lodestar_classify::Record::new(&c).encode(),
+        };
+        store.set_enrichments(&[(id, enriched)]).map_err(internal)?;
+        Ok(json!({
+            "type": c.content_type.as_str(),
+            "adult_kind": c.adult_kind.map(|k| k.as_str()),
+            "junk": c.junk.score,
+        }))
+    }
+
+    /// Tries a draft rule and the current rules on examples (the editor's
+    /// live preview). Nothing is stored or logged.
+    pub fn test(&self, body: &TestBody, now: i64) -> ApiResult<Value> {
+        if body.samples.len() > MAX_SAMPLES {
+            return Err(bad(format!("at most {MAX_SAMPLES} samples")));
+        }
+        let draft = body.query.as_deref().map(query).transpose()?;
+        let unless = body.unless.as_deref().map(query).transpose()?;
+        let engine = self.engine.current();
+        let mut results = Vec::with_capacity(body.samples.len());
+        for s in &body.samples {
+            let files: Vec<lodestar_classify::FileInfo> = s
+                .files
+                .iter()
+                .take(lodestar_filter::MAX_FILES)
+                .map(|f| {
+                    let (path, size) = match f {
+                        SampleFile::Path(p) => (p, 0),
+                        SampleFile::Sized { path, size } => (path, *size),
+                    };
+                    lodestar_classify::FileInfo::new(
+                        path.split('/').map(str::to_owned).collect(),
+                        size,
+                    )
+                })
+                .collect();
+            let mut class = lodestar_classify::classify(&s.name, &files);
+            if let Some(t) = s.content_type.as_deref() {
+                class.content_type =
+                    ContentType::from_name(t).ok_or_else(|| bad(format!("type {t:?}")))?;
+            }
+            let facts = Facts {
+                class: &class,
+                size: files.iter().map(|f| f.size).sum(),
+                piece_len: 0,
+                flags: 0,
+                discovered_at: now,
+                now,
+            };
+            let item = Item {
+                hashes: &[],
+                name: &s.name,
+                files: &files,
+                content_type: class.content_type,
+            };
+            let doc = Doc::new(&item, Some(&facts));
+            let matched = draft.as_ref().map(|q| {
+                doc.matches(q, &[]) && !unless.as_ref().is_some_and(|u| doc.matches(u, &[]))
+            });
+            let v = engine.judge(&item, Some(&facts), now);
+            results.push(json!({
+                "draft": matched,
+                "decision": v.decision.as_ref().map(|d| json!({
+                    "rule": d.rule.id(),
+                    "action": d.action.as_str(),
+                })),
+                "shadow": v.shadow.iter().map(|d| d.rule.id()).collect::<Vec<_>>(),
+            }));
+        }
+        Ok(json!({ "results": results }))
+    }
+}
+
 fn filters(s: &ApiState) -> ApiResult<Arc<FiltersApi>> {
     s.filters
         .clone()
@@ -1360,6 +1611,37 @@ pub(crate) async fn overview(State(s): State<ApiState>) -> ApiResult<Json<Value>
 pub(crate) async fn queue(State(s): State<ApiState>) -> ApiResult<Json<Value>> {
     let f = filters(&s)?;
     tokio::task::spawn_blocking(move || f.queue(crate::unix_now()).map(Json))
+        .await
+        .map_err(internal)?
+}
+
+pub(crate) async fn fixtures(State(s): State<ApiState>) -> ApiResult<Json<Value>> {
+    let f = filters(&s)?;
+    tokio::task::spawn_blocking(move || f.fixtures().map(Json))
+        .await
+        .map_err(internal)?
+}
+
+pub(crate) async fn test(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<TestBody>,
+) -> ApiResult<Json<Value>> {
+    same_origin_json(&headers)?;
+    let f = filters(&s)?;
+    tokio::task::spawn_blocking(move || f.test(&body, crate::unix_now()).map(Json))
+        .await
+        .map_err(internal)?
+}
+
+pub(crate) async fn correct(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<CorrectBody>,
+) -> ApiResult<Json<Value>> {
+    same_origin_json(&headers)?;
+    let f = filters(&s)?;
+    tokio::task::spawn_blocking(move || f.correct(&body).map(Json))
         .await
         .map_err(internal)?
 }
