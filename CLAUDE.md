@@ -4,12 +4,12 @@ A from-scratch DHT crawler and torrent-metadata search engine: one Rust binary w
 
 ## Order of authority
 1. **`docs/owner-decisions.md`: the owner's own instructions and decisions.** These are the primary rules.
-2. **`docs/architecture.md`:** the approved plan built from them. It covers architecture, scope, milestones (§14), budgets (§3, §10.1) and every decision so far (logged in §16).
+2. **`docs/architecture.md`:** the approved plan built from them. It covers architecture, scope, milestones (§14), budgets (§3, §10.1) and every decision recorded before 2026-10-22 (§16). Later decisions are in `docs/decisions/`, one file per PR.
 3. **The contract docs:** `docs/design-tokens.md`, `docs/metrics.md`, `docs/ui-glossary.md`.
 4. **`ui-design-skills`:** only for what 1–3 leave open (see UI rules).
 5. **The task's brief.**
 
-Read the relevant sections before starting any task. If work changes a decision, update `docs/architecture.md` (§16) in the same PR. If it touches one of the owner's decisions, stop and ask the owner. Builds run through `docs/build-plan.md` and `runner/`; **`runner/standards.md` is the bar for every slice and review.**
+Read the relevant sections before starting any task. If work changes a decision, add a file under `docs/decisions/` in the same PR (see its README); don't append to §16 any more. If it reverses or loosens one of the owner's decisions, weakens a security or content-safety decision, or changes a number the owner set, stop and ask the owner. Any other refinement of an owner decision is the runner's call: record it in the PR's decisions file and name it in the PR description, and the runner flags it to the owner (`docs/owner-decisions.md` §2.19). Builds run through `docs/build-plan.md` and `runner/`; **`runner/standards.md` is the bar for every slice and review.**
 
 ## Working conventions
 - **Branches:** one feature branch per milestone or coherent slice (`m0-foundations`, `m2-search-core`, …), merged into `main` by pull request. Nothing goes directly to `main` except trivial docs fixes. Keep PRs reviewable (≲ 1,500 changed lines where practical); split large milestones into several PRs. A larger PR needs a stated reason in its description.
@@ -17,7 +17,7 @@ Read the relevant sections before starting any task. If work changes a decision,
   - Rust: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`.
   - In `web/`: `npm run check` (svelte-check, eslint, prettier, the hex and arbitrary-value bans), `npx vitest run`, `npm run build`, `npx size-limit`, and `npx playwright test` for anything with an e2e spec. Chromium is at `/opt/pw-browsers`; never run `playwright install`.
   - Merge `origin/main` (don't rebase shared branches). Don't push red.
-- **Merging:** PRs merge with green CI and no blocking findings from a fresh Opus reviewer. The build runner may merge them, falling back to GitHub auto-merge (owner, 2026-10-22).
+- **Merging:** PRs merge with green CI and no blocking findings from a fresh Opus reviewer. The build runner may merge them, falling back to GitHub auto-merge (owner, 2026-10-22). A check that's also red on `main`, or a known flake with a fix PR open, in code the PR doesn't touch, doesn't block; say so on the PR (`docs/owner-decisions.md` §2.18).
 - **Commits:** imperative subject ≤ 72 chars, a body that explains why, and the Co-Authored-By / Claude-Session trailers the harness supplies. Never put model identifiers in commits, PRs or code.
 - **Tests:** every crate ships unit tests. Parsers (bencode, KRPC, metainfo, query language, release-name parser) also get property tests or `cargo fuzz` targets, plus golden-corpus tests where the plan calls for them. Benchmarks gate budgets once `bench/` exists.
 
