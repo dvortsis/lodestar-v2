@@ -3,6 +3,7 @@ name = "lodestar-peer-wire"
 description = "BitTorrent peer wire for metadata fetching: BEP 3/10/9 with MSE/PE"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true

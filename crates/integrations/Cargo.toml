@@ -3,6 +3,7 @@ name = "lodestar-integrations"
 description = "Download-client adapters, notification channels, secret storage and the SSRF guard for user-configured URLs"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true

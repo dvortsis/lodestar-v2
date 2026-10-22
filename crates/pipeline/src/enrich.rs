@@ -4,13 +4,14 @@
 //! coordinator runs it for torrents that arrive without it (imports,
 //! torrents stored before M3, records from an older parser).
 
+use lodestar_classify::ContentType;
 use lodestar_classify::{Classification, Correction, ENRICHMENT_VERSION, FileInfo};
-use lodestar_filter::reclassify::{Refiling, reclassify_row};
+use lodestar_filter::reclassify::reclassify_row;
 use lodestar_filter::{Handle, Sealer};
 use lodestar_metainfo::{File, TextEncoding};
 use lodestar_store::{Enriched, Store};
 
-pub use lodestar_filter::reclassify::{enrich_corrected, enrich_row};
+pub use lodestar_filter::reclassify::enrich_corrected;
 
 pub use lodestar_classify::file_infos;
 
@@ -71,10 +72,11 @@ pub struct Backfilled {
 }
 
 /// [`enrich_stored`] with your classification rules and corrections. A
-/// torrent's own correction wins over a rule. A torrent they relabel
-/// adult is judged as adult too, and its decision applied as at ingest,
-/// in the same transaction (§20.9). Nothing is written if the rules
-/// changed during the batch.
+/// torrent's own correction wins over a rule. A torrent that becomes
+/// adult (by them or a newer parser) is judged as adult too, and its
+/// decision applied as at ingest, in the same transaction (§20.9).
+/// Without a filter, Is adult corrections and rules don't apply. Nothing
+/// is written if the rules changed during the batch.
 pub fn enrich_stored_with(
     store: &mut Store,
     after: i64,
@@ -97,11 +99,10 @@ pub fn enrich_stored_with(
     for id in ids {
         if let (Some(row), Some(tree)) = (store.torrent(id)?, store.files(id)?) {
             let own = store.correction(id)?.map(correction).unwrap_or_default();
+            let was_adult = store.content_type(id)? == Some(ContentType::Adult.code());
             let files = file_infos(&tree.files, tree.encoding);
-            let r = reclassify_row(&row, &files, own, engine.as_deref(), now);
-            if let Some(d) = &r.as_adult {
-                refilings.push(Refiling::new(&row, d, ctx.sealer));
-            }
+            let r = reclassify_row(&row, &files, own, was_adult, engine.as_deref(), now);
+            refilings.extend(r.refilings(&row, ctx.sealer));
             batch.push((id, r.enriched));
         }
     }
