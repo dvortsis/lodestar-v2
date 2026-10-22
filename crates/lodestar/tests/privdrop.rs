@@ -2,9 +2,9 @@
 //! the container; run as anyone else they skip and say so.
 #![cfg(target_os = "linux")]
 
-use std::os::unix::fs::{MetadataExt, symlink};
+use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 fn root() -> bool {
@@ -50,11 +50,33 @@ fn field<'a>(status: &'a str, key: &str) -> &'a str {
         .trim()
 }
 
-/// Runs a command that should fail before serving.
+/// Runs a command that should fail before serving; one that starts
+/// serving instead is killed, so the test fails rather than hangs.
 fn refused(mut c: Command) -> String {
-    let Output { status, stderr, .. } = c.stdout(Stdio::null()).output().unwrap();
+    let mut child = c
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let log = std::thread::spawn(move || std::io::read_to_string(stderr).unwrap_or_default());
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if start.elapsed() > Duration::from_secs(20) {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "expected a refusal, but it kept running: {}",
+                log.join().unwrap()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
     assert!(!status.success());
-    String::from_utf8_lossy(&stderr).into_owned()
+    log.join().unwrap()
 }
 
 #[test]
@@ -70,11 +92,7 @@ fn drops_to_puid_and_pgid_before_anything_runs() {
     std::fs::write(&outside, b"").unwrap();
     symlink(&outside, data.join("link")).unwrap();
     // The data directory sits under the tempdir, which must be traversable.
-    std::fs::set_permissions(
-        tmp.path(),
-        std::os::unix::fs::PermissionsExt::from_mode(0o755),
-    )
-    .unwrap();
+    std::fs::set_permissions(tmp.path(), PermissionsExt::from_mode(0o755)).unwrap();
 
     let port = free_port();
     let mut child = lodestar(&data, port)
@@ -110,6 +128,7 @@ fn drops_to_puid_and_pgid_before_anything_runs() {
         assert_eq!(field(&status, "Uid"), "4242\t4242\t4242\t4242", "{task:?}");
         assert_eq!(field(&status, "Gid"), "4343\t4343\t4343\t4343", "{task:?}");
         assert_eq!(field(&status, "Groups"), "", "{task:?}");
+        assert_eq!(field(&status, "NoNewPrivs"), "1", "{task:?}");
         for cap in ["CapPrm", "CapEff", "CapAmb"] {
             assert!(
                 field(&status, cap).bytes().all(|b| b == b'0'),
@@ -171,10 +190,52 @@ fn bad_ids_and_symlinked_data_dirs_stop_start_up() {
         assert!(!data.exists());
     }
 
+    // A folder of someone else's that isn't Lodestar's is left alone.
+    let foreign = tmp.path().join("foreign");
+    std::fs::create_dir(&foreign).unwrap();
+    std::fs::write(foreign.join("keep"), b"").unwrap();
+    let e = refused(lodestar(&foreign, port));
+    assert!(e.contains("doesn't look like Lodestar's"), "{e}");
+    assert_eq!(owner(&foreign.join("keep")), (0, 0));
+
+    // The new account can't get through a 0700 root-owned parent.
+    let locked = tmp.path().join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::set_permissions(&locked, PermissionsExt::from_mode(0o700)).unwrap();
+    let e = refused(lodestar(&locked.join("data"), port));
+    assert!(e.contains("a parent folder doesn't let it in"), "{e}");
+
     let real = tmp.path().join("real");
     std::fs::create_dir(&real).unwrap();
     symlink(&real, &data).unwrap();
     let e = refused(lodestar(&data, port));
     assert!(e.contains("symlink"), "{e}");
     assert_eq!(owner(&real), (0, 0));
+}
+
+/// Root without CAP_SETUID/CAP_SETGID (compose `cap_drop: ALL`): refused
+/// before anything is changed, with what to do instead.
+#[test]
+fn root_without_setuid_stops_before_any_change() {
+    if !root() {
+        return;
+    }
+    if Command::new("setpriv").arg("--version").output().is_err() {
+        eprintln!("skipping: needs setpriv (util-linux) to drop capabilities");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("data");
+    std::fs::create_dir(&data).unwrap();
+    let mut c = Command::new("setpriv");
+    c.args(["--bounding-set", "-setuid,-setgid", "--inh-caps", "-all"])
+        .arg(env!("CARGO_BIN_EXE_lodestar"))
+        .env_clear()
+        .env("LODESTAR_DATA_DIR", &data)
+        .env("LODESTAR_HTTP_BIND", format!("127.0.0.1:{}", free_port()))
+        .env("LODESTAR_DHT_PORT", "0");
+    let e = refused(c);
+    assert!(e.contains("without the SETUID/SETGID capabilities"), "{e}");
+    assert!(e.contains("--user"), "{e}");
+    assert_eq!(owner(&data), (0, 0));
 }

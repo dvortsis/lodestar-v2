@@ -115,6 +115,17 @@ nothing is changed. The log says what it did.
 > with it unless you also set `LODESTAR_ALLOW_ROOT=1`. Running as root means a
 > bug could change anything on the server. Use any other ID instead.
 
+If the log says Lodestar **started as root without the SETUID/SETGID
+capabilities**, the container was started with those permissions removed (for
+example `cap_drop: ALL` in compose). Lodestar needs them for a moment to switch
+users. Either keep them (`cap_add: [SETUID, SETGID, CHOWN]` after
+`cap_drop: ALL`), or use `--user` as below.
+
+If the log says the data folder **doesn't look like Lodestar's**, the folder
+already holds other files and belongs to someone else. Lodestar won't take
+over a folder it didn't create. Point `/data` at an empty folder, or change
+the folder's owner yourself.
+
 <details><summary>What exactly happens at start-up</summary>
 
 The container starts as root only so Lodestar can switch users; the image has
@@ -122,11 +133,14 @@ no shell for a start-up script. Before it reads `config.toml`, opens a port or
 starts any work, Lodestar:
 
 1. checks `PUID` and `PGID` are plain numbers, and stops if they aren't;
-2. hands `/data` to `PUID:PGID`, if it belongs to someone else. It never
-   follows links out of the folder. It refuses a `/data` that is itself a
-   link, and it leaves hard-linked files and device files alone;
-3. drops root, then checks it can't get root back. If any step fails, it
-   stops instead of running.
+2. checks it has the permissions it needs to switch users;
+3. hands `/data` to `PUID:PGID`, if it belongs to someone else. It does this
+   only if `/data` is empty or holds Lodestar's files (`lodestar.db`,
+   `config.toml` or `index/`). It never follows links out of the folder. It
+   refuses a `/data` that is itself a link, and it leaves hard-linked files
+   and device files alone;
+4. drops root, blocks any later way back (`no_new_privs`), and checks it
+   can't get root back. If any step fails, it stops instead of running.
 
 The ownership check uses `LODESTAR_DATA_DIR` (`/data` in the image), not a
 data folder set in `config.toml`.

@@ -53,6 +53,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
+      # The PUID/PGID drop only happens as root (tests/privdrop.rs skips
+      # otherwise). Built as the runner user, so target/ stays theirs.
+      - name: privilege drop as root
+        if: runner.os == 'Linux'
+        run: |
+          bin=$(cargo test -p lodestar --test privdrop --no-run --message-format=json \
+            | jq -r 'select(.profile.test == true and .target.name == "privdrop") | .executable')
+          sudo "$bin" --test-threads=1 --nocapture 2>&1 | tee privdrop.log
+          if grep -q skipping privdrop.log; then
+            echo "::error::the root-only tests skipped"; exit 1
+          fi
 
   size-budget:
     name: size budget (§3)
