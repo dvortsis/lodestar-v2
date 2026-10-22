@@ -138,7 +138,8 @@ fn every_section_reports_every_field() {
             "crawler",
             "transport",
             "storage",
-            "search"
+            "search",
+            "content"
         ]
     );
     for s in &index.sections {
