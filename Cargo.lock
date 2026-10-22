@@ -1385,9 +1385,14 @@ dependencies = [
 name = "lodestar-cluster"
 version = "0.0.0"
 dependencies = [
+ "lodestar-integrations",
  "lodestar-metainfo",
  "lodestar-store",
  "proptest",
+ "ring",
+ "rustls",
+ "subtle",
+ "zeroize",
 ]
 
 [[package]]
