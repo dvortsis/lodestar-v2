@@ -76,6 +76,11 @@ pub struct FilterHit {
 /// Marks a filter hit as shadow mode: logged, not applied (§20.3).
 pub const SHADOW: u8 = 0x80;
 
+/// The locked floor's rule ids (the filter's `CoreRule::floor`; a filter
+/// test keeps them equal). An adult hold's purge never replaces their
+/// tombstones.
+pub const FLOOR_RULES: [&str; 3] = ["CS-1a", "CS-1b", "CS-8a"];
+
 /// Appended to the stored rule id of an adult hold
 /// ([`Filtered::adult_hold`]) in `quarantine` and `tombstones`. Reads
 /// strip it, so callers see plain rule ids.
@@ -237,6 +242,20 @@ impl Store {
             > 0)
     }
 
+    /// Whether core rule `rule` is switched on, as stored: on unless it
+    /// was switched off.
+    pub fn core_switch(&self, rule: &str) -> Result<bool> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT enabled FROM core_membership WHERE rule = ?1",
+                [rule],
+                |r| r.get(0),
+            )
+            .optional()?
+            .unwrap_or(true))
+    }
+
     pub fn set_core_switch(&mut self, rule: &str, enabled: bool) -> Result<()> {
         self.conn.execute(
             "INSERT OR REPLACE INTO core_membership (rule, enabled) VALUES (?1, ?2)",
@@ -338,12 +357,16 @@ impl Store {
             for row in stmt.query_map(params![now, adult], |r| r.get::<_, Vec<u8>>(0))? {
                 expired.push(hash20(row?)?);
             }
-            // A tombstone another rule left stays as it is.
+            // The adult mark is the one hold filtering can't rebuild (the
+            // correction went with the torrent), so it replaces another
+            // rule's tombstone, except the floor's, which stays.
             tx.execute(
-                "INSERT OR IGNORE INTO tombstones (hash, rule, at)
+                "INSERT INTO tombstones (hash, rule, at)
                  SELECT hash, rule, at FROM quarantine
-                 WHERE expires_at <= ?1 AND substr(rule, -length(?2)) = ?2",
-                params![now, adult],
+                 WHERE expires_at <= ?1 AND substr(rule, -length(?2)) = ?2
+                 ON CONFLICT (hash) DO UPDATE SET rule = excluded.rule, at = excluded.at
+                 WHERE tombstones.rule NOT IN (?3, ?4, ?5)",
+                params![now, adult, FLOOR_RULES[0], FLOOR_RULES[1], FLOOR_RULES[2]],
             )?;
         }
         tx.execute("DELETE FROM quarantine WHERE expires_at <= ?1", [now])?;
@@ -577,10 +600,10 @@ mod tests {
         assert!(adult[0].adult_hold);
     }
 
-    /// An adult hold's purge never replaces a tombstone another rule left:
+    /// An adult hold's purge never replaces the floor's tombstone:
     /// switching that adult rule off later mustn't release a floor hold.
     #[test]
-    fn the_purge_keeps_another_rules_tombstone() {
+    fn the_purge_keeps_the_floors_tombstone() {
         let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
         let h = [[7u8; 20]];
         let row = |rule, held, adult_hold| Filtered {
@@ -611,6 +634,56 @@ mod tests {
         assert_eq!((t[0].rule.as_str(), t[0].adult_hold), ("CS-1a", false));
         assert_eq!(s.release_rules(&["CS-5a".into()], |_| {}).unwrap(), 0);
         assert_eq!(s.tombstones(10).unwrap().len(), 1, "the floor's stays");
+    }
+
+    /// Any other rule's tombstone gives way to the adult mark, which
+    /// filtering couldn't rebuild: removing that rule later doesn't free
+    /// the hash, switching the Adult-only rule off does.
+    #[test]
+    fn the_purge_marks_another_rules_tombstone_adult() {
+        for other in ["U-3", "L-2", "FK-4"] {
+            let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+            let h = [[8u8; 20]];
+            let row = |rule, held, adult_hold| Filtered {
+                hashes: &h,
+                rule,
+                action: 4,
+                held: Some(held),
+                sealed: None,
+                evidence: &[],
+                at: 10,
+                expires_at: 20,
+                adult_hold,
+            };
+            let tx = s.conn.transaction().unwrap();
+            write(
+                &tx,
+                &[
+                    row(other, Held::Tombstone, false),
+                    row("CS-5a", Held::Quarantine, true),
+                ],
+            )
+            .unwrap();
+            tx.commit().unwrap();
+            assert!(s.purge_filter(100, 0).unwrap().0.is_empty());
+            let t = s.tombstones(10).unwrap();
+            assert_eq!(t.len(), 1, "{other}");
+            assert_eq!(
+                (t[0].rule.as_str(), t[0].adult_hold),
+                ("CS-5a", true),
+                "{other}"
+            );
+            assert_eq!(
+                s.release_rules(&[other.into()], |_| {}).unwrap(),
+                0,
+                "{other}"
+            );
+            assert_eq!(
+                s.release_rules(&["CS-5a".into()], |_| {}).unwrap(),
+                1,
+                "{other}"
+            );
+        }
     }
 
     /// Releasing a rule's holds runs in chunks and reports each, and a

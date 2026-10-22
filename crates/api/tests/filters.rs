@@ -2149,3 +2149,37 @@ async fn a_change_that_became_weakening_since_its_preview_is_refused() {
     let fresh = f.api.assess(&accept, now).unwrap();
     assert!(fresh.confirm, "a fresh preview asks for the password");
 }
+
+/// Whether a core switch-off weakens filtering is read from the store,
+/// not the engine, which can lag it after an apply that failed part-way.
+#[tokio::test]
+async fn a_core_switch_off_is_judged_by_the_stored_switch() {
+    use lodestar_api::filters::Change;
+    let f = fixture();
+    let c = logged_in(&f).await;
+    let now = lodestar_api_now();
+    hold(&f, [0x61; 20], "CS-3a", Held::Quarantine, now);
+    // The engine says off, the store says on: the divergence a failed
+    // apply can leave.
+    f.api.engine.update_engine(|e| {
+        e.core
+            .switches
+            .set(lodestar_filter::CoreRule::Cs3a, false)
+            .unwrap();
+    });
+    assert!(f.api.store.lock().unwrap().core_switch("CS-3a").unwrap());
+    let off = json!({ "op": "core_switch", "rule": "CS-3a", "on": false });
+    let change: Change = serde_json::from_value(off.clone()).unwrap();
+    let a = f.api.assess(&change, now).unwrap();
+    assert!(a.confirm, "weakening, by the store");
+    let (status, _) = apply(&f, &c, off, None).await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED);
+    // An assessment that asked for nothing doesn't get past apply either.
+    let mut unconfirmed = a;
+    unconfirmed.confirm = false;
+    unconfirmed.weakening = false;
+    let err = f.api.apply(&change, unconfirmed, now).unwrap_err();
+    assert_eq!(err.code(), "changed_since_preview");
+    assert!(f.api.held.contains(&[0x61; 20]));
+    assert!(f.api.store.lock().unwrap().core_switch("CS-3a").unwrap());
+}
