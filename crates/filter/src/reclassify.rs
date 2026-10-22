@@ -1,16 +1,16 @@
 //! Classification as it's stored (§20.9): detection, your per-torrent
 //! correction and your classification rules, in the form the store keeps
 //! (`Enriched`). Filtering judges detection's own classification, and
-//! also judges as adult what a correction or rule relabels adult.
+//! also judges as adult a stored torrent that becomes adult.
 
 use lodestar_classify::{
     Classification, ContentType, Correction, ENRICHMENT_VERSION, FileInfo, Record,
     classify_corrected,
 };
-use lodestar_store::{Enriched, Filtered, Held, Refiled, TorrentRow, flags};
+use lodestar_store::{Enriched, Filtered, Held, Refiled, SHADOW, TorrentRow, flags};
 
 use crate::core::{Action, Item};
-use crate::engine::{Decision, Engine};
+use crate::engine::{Decision, Engine, RuleRef, Verdict};
 use crate::matcher::Facts;
 use crate::seal::Sealer;
 
@@ -32,59 +32,84 @@ pub fn enrich_corrected(
     (enriched, c)
 }
 
-/// The enrichment of a stored torrent: its own correction `own`, then the
-/// newest matching classification rule, then detection.
-pub fn enrich_row(
-    row: &TorrentRow,
-    files: &[FileInfo],
-    own: Correction,
-    engine: Option<&Engine>,
-    now: i64,
-) -> (Enriched, Classification) {
-    let r = reclassify_row(row, files, own, engine, now);
-    (r.enriched, r.class)
-}
-
 /// A stored torrent classified again (§20.9).
 #[derive(Debug)]
 pub struct Reclassified {
     pub enriched: Enriched,
     pub class: Classification,
-    /// When it was relabelled adult (detection didn't call it adult), the
-    /// decision filtering makes of it as adult, which ingest would have
-    /// applied: the Adult-only core checks and your `type:adult` rules.
-    pub as_adult: Option<Decision>,
+    /// When it becomes adult (it wasn't stored as adult), what filtering
+    /// makes of it as adult, which ingest would have applied: the
+    /// Adult-only core checks and your `type:adult` rules.
+    pub as_adult: Option<Verdict>,
+    /// Your correction or a classification rule made it adult, not
+    /// detection.
+    pub relabelled: bool,
 }
 
-/// [`enrich_row`], judging a torrent relabelled adult as adult too, so
-/// nothing stored as adult has skipped the Adult-only core (§20.9).
+impl Reclassified {
+    /// How the store records its judgement as adult (§20.3): the decision,
+    /// then what rules in shadow mode would have done. A hold by the
+    /// Adult-only core of a torrent you relabelled adult is an adult hold:
+    /// at the end of its quarantine it becomes a tombstone, since a refetch
+    /// wouldn't know your correction (§20.9).
+    pub fn refilings(&self, row: &TorrentRow, sealer: Option<&Sealer>) -> Vec<Refiling> {
+        let Some(v) = &self.as_adult else {
+            return Vec::new();
+        };
+        let mut out: Vec<Refiling> = v
+            .decision
+            .iter()
+            .map(|d| Refiling {
+                adult_hold: self.relabelled && adult_hold(d),
+                ..Refiling::new(row, d, sealer)
+            })
+            .collect();
+        out.extend(v.shadow.iter().map(|d| Refiling::shadow(row, d)));
+        out
+    }
+}
+
+/// A stored torrent classified again: its own correction `own`, then the
+/// newest matching classification rule, then detection. `was_adult` is
+/// whether it's stored as adult now.
+///
+/// A torrent that becomes adult, whatever the cause (a newer parser's
+/// detection, a correction or a rule), is judged as adult too, so nothing
+/// stored as adult has skipped the Adult-only core (§20.9). A torrent
+/// with no stored classification (stored before enrichment) counts as not
+/// adult. Without an `engine` to judge it, an Is adult correction is
+/// ignored.
 pub fn reclassify_row(
     row: &TorrentRow,
     files: &[FileInfo],
     own: Correction,
+    was_adult: bool,
     engine: Option<&Engine>,
     now: i64,
 ) -> Reclassified {
+    let own = Correction {
+        adult: own.adult.filter(|adult| !adult || engine.is_some()),
+        ..own
+    };
     let plain = Correction { adult: None, ..own };
     let (enriched, class) = enrich_corrected(&row.name, files, plain);
     let detected_adult = class.content_type == ContentType::Adult;
     let says = own
         .adult
         .or_else(|| engine.and_then(|e| rule_says(e, row, files, &class, now)));
-    let Some(adult) = says.filter(|a| *a != detected_adult) else {
-        return Reclassified {
-            enriched,
-            class,
-            as_adult: None,
-        };
+    let fix = says.filter(|a| *a != detected_adult);
+    let (enriched, class) = match fix {
+        Some(adult) => {
+            let fix = Correction {
+                adult: Some(adult),
+                ..own
+            };
+            enrich_corrected(&row.name, files, fix)
+        }
+        None => (enriched, class),
     };
-    let fix = Correction {
-        adult: Some(adult),
-        ..own
-    };
-    let (enriched, class) = enrich_corrected(&row.name, files, fix);
     let as_adult = match engine {
-        Some(e) if adult => {
+        Some(e) if class.content_type == ContentType::Adult && !was_adult => {
             let hashes = row_hashes(row);
             let facts = facts(row, &class, now);
             let item = Item {
@@ -93,7 +118,7 @@ pub fn reclassify_row(
                 files,
                 content_type: ContentType::Adult,
             };
-            e.judge(&item, Some(&facts), now).decision
+            Some(e.judge(&item, Some(&facts), now))
         }
         _ => None,
     };
@@ -101,7 +126,16 @@ pub fn reclassify_row(
         enriched,
         class,
         as_adult,
+        relabelled: fix == Some(true),
     }
+}
+
+/// Whether holding a torrent relabelled adult on decision `d` is an adult
+/// hold: one by the Adult-only core, which only checks it because it's
+/// adult. Any other rule would hold it as not adult too.
+pub fn adult_hold(d: &Decision) -> bool {
+    matches!(d.rule, RuleRef::Core(r) if r.adult_only())
+        && matches!(d.action, Action::Quarantine | Action::Drop)
 }
 
 /// What your classification rules say about a stored torrent.
@@ -161,6 +195,8 @@ pub struct Refiling {
     pub sealed: Option<Vec<u8>>,
     pub evidence: Vec<u8>,
     pub flags: i64,
+    /// An adult hold ([`Filtered::adult_hold`]).
+    pub adult_hold: bool,
 }
 
 impl Refiling {
@@ -187,6 +223,22 @@ impl Refiling {
                 .flatten(),
             evidence: d.evidence_codes(),
             flags,
+            adult_hold: false,
+        }
+    }
+
+    /// What a rule in shadow mode would have done: logged, not applied.
+    pub fn shadow(row: &TorrentRow, d: &Decision) -> Refiling {
+        Refiling {
+            id: row.id,
+            hashes: row_hashes(row),
+            rule: d.rule.id(),
+            action: d.action.code() | SHADOW,
+            held: None,
+            sealed: None,
+            evidence: d.evidence_codes(),
+            flags: 0,
+            adult_hold: false,
         }
     }
 
@@ -204,6 +256,7 @@ impl Refiling {
                 evidence: &self.evidence,
                 at,
                 expires_at,
+                adult_hold: self.adult_hold,
             },
             flags: self.flags,
         }
