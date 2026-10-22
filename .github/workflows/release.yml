@@ -18,8 +18,11 @@ on:
       - "docker-compose.yml"
       - ".dockerignore"
       - "crates/**"
+      - "bench/**"
       - "web/**"
+      - "brand/source/**"
       - "Cargo.*"
+      - "rust-toolchain.toml"
       - ".github/workflows/release.yml"
 
 permissions:
@@ -64,30 +67,47 @@ jobs:
           bytes=$(docker image inspect lodestar:smoke --format '{{.Size}}')
           echo "Image size: $((bytes / 1024 / 1024)) MiB ($bytes bytes)" | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Start the container
+      - name: Image runs as a non-root user
+        run: |
+          user=$(docker image inspect lodestar:smoke --format '{{.Config.User}}')
+          echo "Config.User=$user"
+          case "$user" in ""|0|root|0:*|root:*) echo "::error::image runs as root"; exit 1 ;; esac
+
+      - name: Start the containers
         run: |
           data=$(mktemp -d)
           # The image runs as distroless "nonroot" (65532).
           sudo chown 65532:65532 "$data"
           docker run -d --name lodestar-smoke \
             --health-interval 2s --health-timeout 5s \
-            --health-start-period 5s --health-retries 5 \
+            --health-start-period 30s --health-retries 5 \
             -p 8090:8090 -v "$data:/data" \
             lodestar:smoke
+          # A named volume starts out owned by the image's /data (65532).
+          docker run -d --name lodestar-volume \
+            --health-interval 2s --health-timeout 5s \
+            --health-start-period 30s --health-retries 5 \
+            -v lodestar-smoke-data:/data \
+            lodestar:smoke
 
-      - name: Wait for the container to be healthy
+      - name: Wait for the containers to be healthy
         run: |
-          for i in $(seq 1 60); do
-            state=$(docker inspect --format '{{.State.Status}}' lodestar-smoke)
-            health=$(docker inspect --format '{{.State.Health.Status}}' lodestar-smoke)
-            echo "[$i] state=$state health=$health"
-            if [ "$health" = healthy ]; then exit 0; fi
-            if [ "$state" != running ] || [ "$health" = unhealthy ]; then break; fi
-            sleep 2
+          for name in lodestar-smoke lodestar-volume; do
+            ok=false
+            for i in $(seq 1 60); do
+              state=$(docker inspect --format '{{.State.Status}}' "$name")
+              health=$(docker inspect --format '{{.State.Health.Status}}' "$name")
+              echo "$name [$i] state=$state health=$health"
+              if [ "$health" = healthy ]; then ok=true; break; fi
+              if [ "$state" != running ] || [ "$health" = unhealthy ]; then break; fi
+              sleep 2
+            done
+            if [ "$ok" != true ]; then
+              echo "::error::$name did not become healthy"
+              docker logs "$name" || true
+              exit 1
+            fi
           done
-          echo "::error::the container did not become healthy"
-          docker logs lodestar-smoke || true
-          exit 1
 
       - name: /healthz and the embedded UI
         run: |
@@ -111,9 +131,24 @@ jobs:
       - name: Compose file is valid
         run: docker compose -f docker-compose.yml config --quiet
 
-      - name: Container log
+      - name: Stop cleanly (SIGTERM, exit code 0)
+        run: |
+          for name in lodestar-smoke lodestar-volume; do
+            docker stop --time 60 "$name"
+            code=$(docker inspect --format '{{.State.ExitCode}}' "$name")
+            echo "$name exit code: $code"
+            if [ "$code" != 0 ]; then
+              echo "::error::$name exited with $code after docker stop"
+              docker logs "$name" || true
+              exit 1
+            fi
+          done
+
+      - name: Container logs
         if: always()
-        run: docker logs lodestar-smoke || true
+        run: |
+          docker logs lodestar-smoke || true
+          docker logs lodestar-volume || true
 
   # Cross-compiled (no emulation); checks that the arm64 build works on every
   # trigger. The binary can't run on the amd64 runner, so this is build-only.
@@ -153,6 +188,14 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Tag is a semantic version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          if ! echo "$GITHUB_REF_NAME" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::$GITHUB_REF_NAME is not vMAJOR.MINOR.PATCH[-prerelease]; nothing to publish"
+            exit 1
+          fi
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 

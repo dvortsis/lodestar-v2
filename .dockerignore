@@ -26,6 +26,8 @@ scratch/
 
 # Not needed in the image
 docs/
-brand/
+# only brand/source feeds the web build (web/scripts/assets.ts)
+brand/*
+!brand/source
 runner/
 packaging/
