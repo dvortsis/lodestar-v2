@@ -70,9 +70,9 @@ compose project a network with `enable_ipv6: true` and an IPv6 subnet. With
 | `LODESTAR_DHT_ENABLED` | `true`            | `false` turns the DHT off.                 |
 | `LODESTAR_INTENSITY`   | `balanced`        | `low`, `balanced` or `aggressive`.         |
 | `LODESTAR_LOG`         | `info`            | Log filter (`error`, `warn`, `info`, `debug`). |
-| `PUID`                 | `65532`           | User id the server runs as (see below).    |
-| `PGID`                 | `65532`           | Group id the server runs as.               |
-| `LODESTAR_ALLOW_ROOT`  |                   | `1` permits `PUID=0`/`PGID=0`. Don't.      |
+| `PUID`                 | `65532`           | User ID Lodestar runs as. See below.       |
+| `PGID`                 | `65532`           | Group ID Lodestar runs as. See below.      |
+| `LODESTAR_ALLOW_ROOT`  |                   | Leave unset. `1` allows running as root, which is unsafe. |
 | `TZ`                   |                   | Accepted, but log timestamps are UTC today. |
 
 Settings can also go in `/data/config.toml`; environment variables override
@@ -82,46 +82,74 @@ not in the file.
 
 ## Volume, user and permissions
 
-`/data` is the only volume. The container starts as root only long enough for
-the binary to apply **`PUID`/`PGID`** (there's no shell for an entrypoint
-script to do it). Before it reads `config.toml`, binds a port or starts a
-thread, it:
+`/data` is the only folder Lodestar keeps. Everything in it survives updates;
+everything else in the container is thrown away when it's rebuilt.
 
-1. checks `PUID`/`PGID`: plain numbers, default `65532` (distroless
-   `nonroot`). `0` is refused unless `LODESTAR_ALLOW_ROOT=1`;
-2. makes `/data` theirs. If `/data` itself already belongs to `PUID:PGID`,
-   nothing is touched. Otherwise the whole tree is handed over, without
-   following symlinks; hard-linked files and device, fifo or socket entries
-   are left alone. A symlinked `/data` is refused. The log says what changed;
-3. clears the supplementary groups, then sets the group and user ids, and
-   checks that root can't be regained (`setuid(0)` fails and no capabilities
-   remain). If any step fails, it doesn't start.
+Lodestar runs as an ordinary user, not as root (the all-powerful admin
+account). That limits the damage if something ever goes wrong. Two settings
+choose that user:
 
-So a new **named volume** works out of the box, and so does a **bind mount**
-owned by anyone: it's handed to `PUID:PGID` on the first start.
+- **`PUID`**: the user ID. Leave the default, `65532`, unless you need the
+  files in `/data` to belong to a particular account on your server.
+- **`PGID`**: the group ID. Default `65532`.
 
-```sh
-docker run -e PUID=1000 -e PGID=1000 -v "$PWD/data:/data" ...
-```
+On Unraid, the template sets `PUID=99` and `PGID=100` (Unraid's `nobody` and
+`users`). Leave those as they are.
 
-Unraid's template sets `PUID=99`/`PGID=100` (`nobody:users`).
-
-**`--user` still works** (compose `user:`). The container then starts
-unprivileged, `PUID`/`PGID` are ignored (the log says so if they differ), and
-nothing is chowned, so the data directory must already be writable by that
-account:
+To use your own account, find its IDs by running `id` on the server, then set
+them:
 
 ```sh
-mkdir data && sudo chown 1000:1000 data
-docker run --user 1000:1000 -v "$PWD/data:/data" ...
+docker run -e PUID=<your-uid> -e PGID=<your-gid> -v "$PWD/data:/data" ghcr.io/dvortsis/lodestar-v2:latest
 ```
 
-If the container exits with a permission error creating files in `/data`, the
-mounted directory isn't writable by the account the process runs as.
+- `<your-uid>`, `<your-gid>`: the `uid=` and `gid=` numbers `id` prints, for
+  example `1000`.
 
-`config.toml` can't move the data directory for `PUID`/`PGID`: ownership is
-checked on `LODESTAR_DATA_DIR` (`/data` in the image), which overrides the
-file anyway.
+On every start, Lodestar makes the data folder belong to that user, then gives
+up its admin rights for good. If the data folder already belongs to that user,
+nothing is changed. The log says what it did.
+
+> [!CAUTION]
+> Don't set `PUID` or `PGID` to `0`. That's root, and Lodestar refuses to start
+> with it unless you also set `LODESTAR_ALLOW_ROOT=1`. Running as root means a
+> bug could change anything on the server. Use any other ID instead.
+
+<details><summary>What exactly happens at start-up</summary>
+
+The container starts as root only so Lodestar can switch users; the image has
+no shell for a start-up script. Before it reads `config.toml`, opens a port or
+starts any work, Lodestar:
+
+1. checks `PUID` and `PGID` are plain numbers, and stops if they aren't;
+2. hands `/data` to `PUID:PGID`, if it belongs to someone else. It never
+   follows links out of the folder. It refuses a `/data` that is itself a
+   link, and it leaves hard-linked files and device files alone;
+3. drops root, then checks it can't get root back. If any step fails, it
+   stops instead of running.
+
+The ownership check uses `LODESTAR_DATA_DIR` (`/data` in the image), not a
+data folder set in `config.toml`.
+
+</details>
+
+### Running with `--user` (advanced)
+
+You can also choose the user with Docker's `--user` option (compose: `user:`).
+Lodestar then never has root, ignores `PUID` and `PGID`, and doesn't change any
+file owners. So you must make the data folder writable by that user first:
+
+```sh
+sudo chown <your-uid>:<your-gid> data
+```
+
+```sh
+docker run --user <your-uid>:<your-gid> -v "$PWD/data:/data" ghcr.io/dvortsis/lodestar-v2:latest
+```
+
+If the container stops with a permission error about `/data`, the folder isn't
+writable by the user Lodestar runs as. Remove `--user` and set `PUID`/`PGID`
+instead, or fix the folder's owner as above.
 
 Keep `/data` on local SSD/NVMe storage; the index does random I/O and the
 database is SQLite. Avoid network shares and FUSE filesystems.
@@ -149,8 +177,8 @@ database, which can take longer than Docker's default 10 s. Keep that (or
 ## Health check
 
 `HEALTHCHECK` runs `/lodestar healthcheck` (exec form, no shell) every 30 s.
-It needs no privilege: started as root, it drops to `PUID`/`PGID` first, like
-the server (without touching `/data`). It requests `/healthz` on `127.0.0.1` at the port of `LODESTAR_HTTP_BIND`, and
+It doesn't need root: like the server, it switches to `PUID`/`PGID` first
+(without touching `/data`). It requests `/healthz` on `127.0.0.1` at the port of `LODESTAR_HTTP_BIND`, and
 exits 0 on a `200`. Check it with
 `docker inspect --format '{{.State.Health.Status}}' lodestar`.
 
