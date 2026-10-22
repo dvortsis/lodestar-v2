@@ -1217,12 +1217,17 @@ export interface components {
             tombstones: number;
         };
         QuarantineEntry: {
+            /**
+             * @description Held only because you relabelled it adult (a correction or a
+             *     classification rule) and the Adult-only core caught it: at
+             *     `expires_at` it becomes a tombstone rather than being released.
+             */
+            adult_hold: boolean;
             /** Format: int64 */
             at: number;
             /**
              * Format: int64
-             * @description When it's released for refetching; 2^53 − 1 when it's held until you
-             *     release it (held because of your own Is adult correction).
+             * @description When its sealed name is deleted and its quarantine ends.
              */
             expires_at: number;
             hash: string;
@@ -1236,6 +1241,8 @@ export interface components {
          */
         Queue: {
             decisions_30d: components["schemas"]["DecisionCount"][];
+            /** @description The next page of quarantine, if there is one: pass as `cursor`. */
+            next_cursor: string | null;
             quarantine: components["schemas"]["QuarantineEntry"][];
         };
         /** @description One of your rules. */
@@ -2105,7 +2112,12 @@ export interface operations {
     };
     getFilterQueue: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description The previous page's `next_cursor`. */
+                cursor?: string;
+                /** @description Quarantine rows per page: 1–1000, 1000 by default. */
+                limit?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;

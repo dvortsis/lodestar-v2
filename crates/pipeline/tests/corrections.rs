@@ -4,9 +4,7 @@ use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_classify::{AdultKind, ContentType, Record};
 use lodestar_metainfo::Info;
 use lodestar_pipeline::enrich::enrich_stored;
-use lodestar_store::{
-    ClassCorrection, HELD_UNTIL_RELEASED, NewTorrent, SourceId, Store, StoreConfig,
-};
+use lodestar_store::{ClassCorrection, Held, NewTorrent, SourceId, Store, StoreConfig};
 
 fn add(store: &mut Store, name: &str, size: i64) -> i64 {
     let raw = to_vec(&OwnedValue::Dict(
@@ -237,12 +235,25 @@ fn stored_torrents_relabelled_adult_meet_the_adult_only_core() {
         assert_eq!(row.rule, "CS-5a");
         assert!(row.sealed.is_some());
     }
-    // The rule's hold expires: a refetch meets the rule again at ingest.
-    // The correction's doesn't: a refetch wouldn't know it.
-    assert!(quarantined(h_rule).unwrap().expires_at < HELD_UNTIL_RELEASED);
-    assert_eq!(quarantined(h_own).unwrap().expires_at, HELD_UNTIL_RELEASED);
-    let (expired, _) = store.purge_filter(4_000_000_000, 0).unwrap();
-    assert_eq!(expired, vec![h_rule.0]);
+    // Held by the Adult-only core because you relabelled them: adult
+    // holds. At the end of the quarantine they become tombstones (no
+    // name), so a refetch, which wouldn't know the relabel, never comes.
+    for h in [h_rule, h_own] {
+        assert!(quarantined(h).unwrap().adult_hold);
+    }
+    let (released, _) = store.purge_filter(4_000_000_000, 0).unwrap();
+    assert!(released.is_empty(), "{released:?}");
+    assert!(store.quarantined(10).unwrap().is_empty(), "names gone");
+    let tombs = store.tombstones(10).unwrap();
+    for h in [h_rule, h_own] {
+        let t = tombs.iter().find(|t| t.hash == h.0).expect("tombstone");
+        assert_eq!(t.rule, "CS-5a");
+        assert!(t.adult_hold);
+        assert!(store.adult_hold(&h.0).unwrap());
+    }
+    let refused = store.filter_state().unwrap().held;
+    assert!(refused.contains(&(h_rule.0, Held::Tombstone)));
+    assert!(refused.contains(&(h_own.0, Held::Tombstone)));
     let logged = store.reindex_after(head, 100).unwrap();
     assert!(logged.iter().any(|(_, id)| *id == by_rule));
     assert!(logged.iter().any(|(_, id)| *id == by_own));
@@ -322,8 +333,16 @@ fn a_newer_parser_detecting_adult_meets_the_adult_only_core() {
         assert!(b.held.contains(&h.0));
         let row = q.iter().find(|q| q.hash == h.0).expect("quarantined");
         assert_eq!(row.rule, "CS-5a");
-        assert!(row.expires_at < HELD_UNTIL_RELEASED, "detection's own");
+        // Detection's own: a refetch is detected adult again.
+        assert!(!row.adult_hold);
     }
+    // Not adult holds: released at the end of the quarantine.
+    let (mut released, _) = store.purge_filter(4_000_000_000, 0).unwrap();
+    released.sort();
+    let mut want = vec![h_video.0, h_unenriched.0];
+    want.sort();
+    assert_eq!(released, want);
+    assert!(store.tombstones(10).unwrap().is_empty());
     // Already stored as adult, it was judged as adult when it came in.
     let kind = store.enrichment(was_adult).unwrap().unwrap().content_type;
     assert_eq!(ContentType::from_code(kind), Some(ContentType::Adult));
@@ -395,4 +414,33 @@ fn a_relabel_logs_shadow_decisions() {
     let hits = store.filter_hits(0).unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].action, Action::Hide.code() | SHADOW);
+}
+
+/// Relabelled adult but held by a rule that holds it whatever its type
+/// (CS-4a, a child role next to a sexual term): not an adult hold, so the
+/// quarantine ends normally and a refetch is judged again.
+#[test]
+fn a_hold_any_type_would_meet_is_released_normally() {
+    use lodestar_pipeline::enrich::{Backfill, enrich_stored_with};
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let id = add(&mut store, "Studiox Rolea Lexa.mp4", 900 << 20);
+    enrich_stored(&mut store, 0, 10).unwrap();
+    let h = store.torrent(id).unwrap().unwrap().info_hash;
+    let filter = stand_in();
+    filter.update_engine(|e| e.load_class_rules(&[(1, "studiox".into(), true)]));
+    store.mark_unenriched(&[id]).unwrap();
+    let sealer = lodestar_filter::Sealer::new(&[9; 32]);
+    let ctx = Backfill {
+        filter: Some(&filter),
+        sealer: Some(&sealer),
+        quarantine_secs: 86_400,
+    };
+    enrich_stored_with(&mut store, 0, 10, &ctx).unwrap();
+    let q = store.quarantined(10).unwrap();
+    assert_eq!(q.len(), 1);
+    assert_eq!(q[0].rule, "CS-4a");
+    assert!(!q[0].adult_hold);
+    let (released, _) = store.purge_filter(4_000_000_000, 0).unwrap();
+    assert_eq!(released, vec![h.0]);
+    assert!(store.tombstones(10).unwrap().is_empty());
 }

@@ -35,9 +35,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 pub use compress::{BlobCodec, Codec, Compressed};
 pub use filetree::{CodecError, FileTree};
-pub use filter::{
-    FilterHit, FilterState, Filtered, HELD_UNTIL_RELEASED, Held, Quarantined, Refiled, SHADOW,
-};
+pub use filter::{FilterHit, FilterState, Filtered, Held, Quarantined, Refiled, SHADOW, Tombstone};
 pub use floor::{FloorSource, PendingFloor, Settled};
 pub use history::{History, trend};
 pub use hot::{Col, HotColumns, NEVER, SwarmHot};
@@ -533,6 +531,17 @@ impl Store {
     }
 
     /// A torrent's enrichment, if it has any.
+    /// The content type a torrent is stored with: `None` when it isn't
+    /// stored or was never classified.
+    pub fn content_type(&self, id: i64) -> Result<Option<u8>> {
+        Ok(self
+            .conn
+            .prepare_cached("SELECT content_type FROM torrents WHERE id = ?1")?
+            .query_row([id], |r| r.get::<_, Option<u8>>(0))
+            .optional()?
+            .flatten())
+    }
+
     pub fn enrichment(&self, id: i64) -> Result<Option<Enriched>> {
         Ok(self
             .conn

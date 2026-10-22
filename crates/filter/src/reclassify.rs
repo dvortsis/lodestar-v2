@@ -7,12 +7,10 @@ use lodestar_classify::{
     Classification, ContentType, Correction, ENRICHMENT_VERSION, FileInfo, Record,
     classify_corrected,
 };
-use lodestar_store::{
-    Enriched, Filtered, HELD_UNTIL_RELEASED, Held, Refiled, SHADOW, TorrentRow, flags,
-};
+use lodestar_store::{Enriched, Filtered, Held, Refiled, SHADOW, TorrentRow, flags};
 
 use crate::core::{Action, Item};
-use crate::engine::{Decision, Engine, Verdict};
+use crate::engine::{Decision, Engine, RuleRef, Verdict};
 use crate::matcher::Facts;
 use crate::seal::Sealer;
 
@@ -43,16 +41,17 @@ pub struct Reclassified {
     /// makes of it as adult, which ingest would have applied: the
     /// Adult-only core checks and your `type:adult` rules.
     pub as_adult: Option<Verdict>,
-    /// It's adult only because of its own Is adult correction, which a
-    /// refetch of the torrent wouldn't know.
-    pub by_correction: bool,
+    /// Your correction or a classification rule made it adult, not
+    /// detection.
+    pub relabelled: bool,
 }
 
 impl Reclassified {
     /// How the store records its judgement as adult (§20.3): the decision,
-    /// then what rules in shadow mode would have done. A quarantine because
-    /// of your own correction doesn't expire, so the correction isn't lost
-    /// with the torrent (§20.9).
+    /// then what rules in shadow mode would have done. A hold by the
+    /// Adult-only core of a torrent you relabelled adult is an adult hold:
+    /// at the end of its quarantine it becomes a tombstone, since a refetch
+    /// wouldn't know your correction (§20.9).
     pub fn refilings(&self, row: &TorrentRow, sealer: Option<&Sealer>) -> Vec<Refiling> {
         let Some(v) = &self.as_adult else {
             return Vec::new();
@@ -61,7 +60,7 @@ impl Reclassified {
             .decision
             .iter()
             .map(|d| Refiling {
-                lasting: self.by_correction,
+                adult_hold: self.relabelled && adult_hold(d),
                 ..Refiling::new(row, d, sealer)
             })
             .collect();
@@ -127,8 +126,16 @@ pub fn reclassify_row(
         enriched,
         class,
         as_adult,
-        by_correction: fix == Some(true) && own.adult == Some(true),
+        relabelled: fix == Some(true),
     }
+}
+
+/// Whether holding a torrent relabelled adult on decision `d` is an adult
+/// hold: one by the Adult-only core, which only checks it because it's
+/// adult. Any other rule would hold it as not adult too.
+pub fn adult_hold(d: &Decision) -> bool {
+    matches!(d.rule, RuleRef::Core(r) if r.adult_only())
+        && matches!(d.action, Action::Quarantine | Action::Drop)
 }
 
 /// What your classification rules say about a stored torrent.
@@ -188,8 +195,8 @@ pub struct Refiling {
     pub sealed: Option<Vec<u8>>,
     pub evidence: Vec<u8>,
     pub flags: i64,
-    /// A quarantine that doesn't expire ([`HELD_UNTIL_RELEASED`]).
-    pub lasting: bool,
+    /// An adult hold ([`Filtered::adult_hold`]).
+    pub adult_hold: bool,
 }
 
 impl Refiling {
@@ -216,7 +223,7 @@ impl Refiling {
                 .flatten(),
             evidence: d.evidence_codes(),
             flags,
-            lasting: false,
+            adult_hold: false,
         }
     }
 
@@ -231,12 +238,12 @@ impl Refiling {
             sealed: None,
             evidence: d.evidence_codes(),
             flags: 0,
-            lasting: false,
+            adult_hold: false,
         }
     }
 
     /// The store's view, decided at `at`; a quarantine lasts until
-    /// `expires_at`, or for good when it's [`lasting`](Self::lasting).
+    /// `expires_at`.
     pub fn refiled(&self, at: i64, expires_at: i64) -> Refiled<'_> {
         Refiled {
             id: self.id,
@@ -248,11 +255,8 @@ impl Refiling {
                 sealed: self.sealed.as_deref(),
                 evidence: &self.evidence,
                 at,
-                expires_at: if self.lasting {
-                    HELD_UNTIL_RELEASED
-                } else {
-                    expires_at
-                },
+                expires_at,
+                adult_hold: self.adult_hold,
             },
             flags: self.flags,
         }
