@@ -62,13 +62,13 @@
    "notes": "merged 09:27 as a569b51 (#57)"
   },
   "B2": {
-   "status": "pending",
+   "status": "ready",
    "model": "opus",
    "session": null,
    "pr": null,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": "waits for B1 (both edit crates/api)"
+   "notes": "ready; held until F1 #55 merges (F1 edits crates/lodestar/src/config.rs, services.rs, store/lib.rs)"
   },
   "B3": {
    "status": "merged",
@@ -116,13 +116,13 @@
    "notes": "round 2: only blocking = merge main (\u00a716 conflict); sent 08:52"
   },
   "W6": {
-   "status": "pending",
+   "status": "running",
    "model": "sonnet",
-   "session": null,
+   "session": "session_01QpHMCsgJt8gZPg3S2SnCGv",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
-   "notes": ""
+   "notes": "launched 09:28 (briefs/W6.md); owns web/e2e/** (yaml says web/tests/**)"
   },
   "W2": {
    "status": "merged",
@@ -152,13 +152,13 @@
    "notes": ""
   },
   "B4": {
-   "status": "pending",
+   "status": "ready",
    "model": "opus",
    "session": null,
    "pr": null,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": ""
+   "notes": "held until B5b #46 merges (both own crates/search/src/live.rs)"
   },
   "B8": {
    "status": "pending",
@@ -167,7 +167,7 @@
    "pr": null,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": ""
+   "notes": "waits ext:m4-schema-settled (M4 PR2 #48)"
   },
   "B6": {
    "status": "pending",
@@ -805,13 +805,6 @@
   "contract-docs": [
    "design-tokens.md CJK fallback: use installed family names (\"Noto Sans CJK SC\" etc.) \u2014 \u00a710.2 wording to align"
   ],
-  "W6": [
-   "size-limit assertion: no brand raster in first-load chunk set",
-   "Playwright webServer timeout: cold `npm run assets` ~73 s; raise timeout or prebuild assets"
-  ],
-  "web.yml": [
-   "add brand/source/** to path filters"
-  ],
   "binary-puid": [
    "PUID/PGID privilege drop in the binary (security, Opus): \u00a711 promises it, the Unraid template sets PUID=99/PGID=100; until then the image runs as nonroot and the template needs --user 99:100. Fold into the next Opus slice owning crates/lodestar/src/main.rs (B2 or M6 CLI)"
   ],
@@ -819,7 +812,8 @@
    "slices.yaml W1b title says 47 JSONs: is 23 families/46 themes; widen W1b owns",
    "docs/themes.md derived-token gates table still says 9 pending (W1c): all 48 pass now",
    "slices.yaml: add X-email (opus, deps X-notify); narrow X-notify owns to notify/{ntfy,discord,rss}.rs + tests",
-   "slices.yaml: X-clients/X-notify owns include their tests/ and fixtures/"
+   "slices.yaml: X-clients/X-notify owns include their tests/ and fixtures/",
+   "slices.yaml W6 owns: web/e2e/** not web/tests/**"
   ],
   "B1-polish": [
    "golden: add stemmed:true and non-null hash_v2 fixtures",
@@ -845,5 +839,5 @@
   "M4 continuation: waiting on ExitPlanMode approval (plan mode) \u2014 can't act on #48 review",
   "Modern DHT crawler architecture: waiting on an AskUserQuestion"
  ],
- "launches_today": 3
+ "launches_today": 4
 }
