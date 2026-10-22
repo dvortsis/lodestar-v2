@@ -1897,7 +1897,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 
 **M5 decisions (index rebuild):**
 - **The directory name is the proof of completeness.** Under `data/index`, `v{schema}-t{tokenizer}` is complete, `….building` is in progress and `….trash` is being deleted. A build becomes complete only by an atomic rename, after its final commit and a `COMPLETE` marker. A crash between the marker and the rename just needs the rename at the next start. Directories from before this change already have the complete form, so upgrading doesn't rebuild.
-- **`Serving::open_or_rebuild(root, store_path, config)`** is the binary's entry point (wired in by B5a). It holds an exclusive lock on `root/.lock`. A second instance fails with `Error::Locked`; a filesystem that can't lock (some SMB or NAS shares) fails with `Error::LockFailed`, which says so. It serves through an `RwLock<Arc<SearchIndex>>`: readers take the index once per query, which moves them to the new one between queries.
+- **`Serving::open_or_rebuild(root, store_path, config)`** is the binary's entry point (wired in by B5a). It holds an exclusive lock on `root/.lock`. A second instance fails with `Error::Locked`; a filesystem that can't lock (some SMB or NAS shares) fails with `Error::LockFailed`, which says so. It serves through a `Mutex<Arc<SearchIndex>>` held only to clone or replace the `Arc` (an `RwLock` before the B5a swap fix): readers take the index once per query, which moves them to the new one between queries.
   - When this build's index exists, it opens that index and starts the live indexer, as before.
   - Otherwise, the newest complete older index keeps serving. Meanwhile, `Rebuild` follows the store into `….building` with the ordinary `Indexer::catch_up`, covering both indexes, per-index watermarks and `reindex_log`. It commits every 50k torrents, so an interrupted or stopped build resumes from its own watermarks. It builds up to a snapshot taken at the start (the highest torrent id and the `reindex_log` head) rather than chasing new torrents; those are added at the swap.
   - Then it commits, waits for merges, writes the marker and renames. **The swap order keeps every visible torrent visible:** the old live indexer stops (committing), the new index catches up once more and commits, a live indexer starts on it, and only then do readers move. Each index follows `reindex_log` from its own sequence, so entries logged at any point are applied before the swap or after it.
@@ -1908,7 +1908,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - An older index that fails to open is retried with backoff, then fails the start. It's never discarded over an error that may be transient (an antivirus scan, a share hiccup).
 - **Known limitation, tokenizer bumps:** the binary has only the current tokenizer, so an older index is queried with it until the swap. A word whose tokens changed may not match there meanwhile. Keeping old tokenizers around isn't worth it for a rebuild window of an hour or so at 10M.
 - **Old directories are renamed to trash and then deleted after the swap, with backoff retries** (Windows can't delete mapped files, §11). Whatever is left is retried at the next start. A newer version's directory is never deleted, so a downgrade and upgrade don't rebuild twice.
-- **`RebuildProgress { phase, done, total, replayed, errors, started_at, from, to, unavailable }`** comes from `Serving::progress()` for the "Index rebuilding" banner (§10.4) and Insights.
+- **`RebuildProgress { phase, done, total, replayed, errors, started_at, from, to, unavailable, error }`** comes from `Serving::progress()` for the "Index rebuilding" banner (§10.4) and Insights.
   - `done` counts torrents added; replayed `reindex_log` entries and failed steps are counted apart. Rebuild errors stay out of the live indexer's `IndexStats`.
   - The phases are `Building`, `Finishing`, `Swapping` and `Failed`. A failure is logged, the old index keeps serving and following the store, and the next start resumes the build.
   - The live counters (`IndexStats`) are kept across the swap.
@@ -1927,6 +1927,12 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Live changes:** the log filter is installed through a `tracing_subscriber::reload` layer, and the saved value is applied at start. A new intensity goes to the running DHT node through `NodeHandle::set_intensity` (new: it resets the query, reply and scrape rates and the outstanding cap). The fetch pool's socket count, which follows the intensity when `max_sockets` is unset, is fixed at start, so it follows at the next restart.
 - **Out of reach:** no section exposes filter, floor, pack or subscription state (§20.7, owner's decisions §2.7–2.9), secrets or anything that moves files. The registry reads and writes only keys under `settings.`, and a test holds that.
 - **Connections:** the registry saves through its own connection, opened before the other services so the saved store options apply to them. That connection itself uses the file's store options.
+
+**B5a swap fix (Windows):**
+- **Renames of index directories retry with backoff, about 10 s in all, before they count as failures.** Windows refuses to rename a directory while any file in it is open, and an antivirus or search indexer opens freshly written segments for a moment. Before this, one such moment failed the whole rebuild at the finishing rename.
+  - A failed rebuild stays in `Failed` with the old index serving, so `rebuilding()` never cleared. That's the likely cause of B5b's swap test hanging on Windows CI (inferred from the code and the symptom, not reproduced on Windows).
+- **`RebuildProgress` gains `error`**, the failure's message, so the banner, Insights and tests can say why.
+- **The serving pointer is a `Mutex<Arc<SearchIndex>>`, held only to clone or replace the `Arc`,** in place of an `RwLock`. A swap then waits behind at most one clone, whatever the platform's reader/writer policy (Windows SRW locks promise none).
 
 ## 17. Verification (once built)
 
