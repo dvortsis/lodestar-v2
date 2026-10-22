@@ -318,6 +318,9 @@ pub fn flag_names(bits: i64) -> impl Iterator<Item = &'static str> {
         (flags::FILES_PARTIAL, "files_partial"),
         (flags::SINGLE_FILE, "single_file"),
         (flags::WARNINGS, "warnings"),
+        (flags::HIDDEN, "hidden"),
+        (flags::DEMOTED, "demoted"),
+        (flags::FLAGGED, "flagged"),
     ];
     NAMES
         .iter()
