@@ -2029,6 +2029,14 @@ Term lists (`@cs/…`) ship only as **hashed, normalized tokens**, so no indicat
 | **CS-8a** | Same payload signature as an item in your CS-1 list (catches renamed reposts). It applies only when the payload is specific: ≥ 50 MB, or ≥ 2 files of distinctive sizes | drop | ~none | 🔒 |
 | **CS-9a** | New items from a publisher or source behind a CS-1 item → quarantined for review | quarantine | low | |
 
+**As built (first slice, `crates/filter`):**
+- **Implemented:** CS-1a/1b, CS-8a, CS-2a, CS-3a/3b, CS-4a and CS-5a/5b, plus CSX-2 (name evidence only, outside Adult), CSX-3 and CSX-4.
+- **Matching:** normalized tokens are hashed with a stable 64-bit hash (FNV-1a with a domain prefix, MurmurHash3 finisher). All term lists compile into one map, so each token costs one lookup.
+- **Speed:** about 45 µs for a 30-file torrent on the core alone, measured by an ignored test that's run in release.
+- **Shipped lists:** `@cs/sexual` and `@cs/child_roles` ship as hash lists. `@cs/codes` ships **empty**: code terms come only from lists you import.
+- **Fixtures:** the core's must-match fixtures are hashed token streams built from the shipped sets, so no indicative text exists anywhere.
+- **Payload signatures:** CS-8a counts a payload as specific at ≥ 50 MB, or with ≥ 2 files whose sizes are ≥ 64 KiB and not multiples of 64 KiB.
+
 **Floor (owner's decision): the minimal floor**, i.e. CS-1a, CS-1b and CS-8a. These contain only torrents **you** confirmed or deliberately imported, plus their exact reposts, so locking them costs nothing in false positives. Every pattern sub-rule (CS-2 to CS-7, CS-9) is **on by default and can be switched off** (§20.5.3).
 
 #### 20.5.2 Where CS-1 hashes come from
@@ -2310,3 +2318,23 @@ Exceptions are how you correct false positives without switching rules off. Like
   - fixtures created from false positives are hashed;
   - removing or narrowing an exception needs no password and re-applies filtering.
 
+
+### 20.13 List subscriptions: popular blocklists, kept up to date
+**Owner's request:** connecting to popular blocklists should be easy, and Lodestar keeps them updated. A subscription is a list Lodestar fetches on a schedule and applies as a **pack-layer source** (§20.1).
+- **Two kinds of list:**
+  - **Content lists** (info hashes, magnets, payload signatures, name patterns): applied like a rule pack, with a per-list action (default `hide` for patterns, `drop` for hashes) and the usual exceptions.
+  - **Peer and node IP lists** (P2P blocklists in `.p2p`, `.dat` (eMule `ipfilter.dat`) and CIDR/netset formats): a new enforcement point. The DHT ignores those nodes, and the fetch pool and tracker scraper never connect to those addresses. This protects the crawler from monitoring and anti-P2P peers and known-abusive networks. The lookup structure is a sorted, merged interval table with binary search, so a 300k-range IPv4 list costs a few MB and a lookup is about 20 comparisons.
+- **One-click catalog:** Settings → Filters & Safety → **Subscriptions** lists curated, popular lists with what each blocks, its size, its licence and its update cadence. **Connect** is one click and needs no password, because it strengthens filtering. **Add by URL** takes any list in a supported format; Lodestar detects the format and previews it before saving. Catalog entries are checked for availability and licence before each release, and lists that need an account take your key. Lists you connect are never shared or reported anywhere.
+- **Updates:**
+  - **Schedule:** each list refreshes on its own schedule (default every 24 h, ±10% jitter), using conditional requests (`ETag`/`If-Modified-Since`) and the proxy/VPN egress settings (§5). Fetching a list reveals your IP to its host, as any download does, and the catalog says so.
+  - **Hostile-input limits:** downloads are capped (default 64 MB compressed, 256 MB expanded; gzip and zip only). Parsing is strict and bounded, and invalid lines are counted and skipped.
+  - **Atomic swap:** a new version replaces the old one in a single swap, without ever being half-applied.
+  - **Sanity gates:** if a new version fails to parse, or shrinks by more than 50% or grows more than tenfold, the previous version is kept and the dashboard shows an exception (§10.9) with *Accept anyway* or *Keep previous*. One bad upstream update can't silently unblock or over-block everything.
+  - **Status:** each subscription shows its last refresh, entry count, change since last time, and any error.
+- **Precedence and edits:** subscribed entries sit in the pack layer, so CSX-5, your exceptions and *Always allow* apply to them. False positives are fixed with exceptions, never by editing the list. A refresh can't undo your exceptions.
+- **The core and the floor:** subscriptions **never feed the locked floor by default**. A remote list that wrote into CS-1 could block things you can't unblock if its publisher errs or is compromised.
+  - If you have access to a vetted child-abuse hash list (§20.5.2), you can mark that one subscription as **CS-1b** explicitly. That needs the effect warning and your password, because it locks its entries.
+  - Its entries then follow upstream additions **and removals**, so a publisher's correction takes effect.
+- **Weakening changes:** unsubscribing, pausing or narrowing a list releases what it blocked. As with disabling a pack (§20.11), that shows the impact preview and effect warning and needs your password. Subscribing and refreshing need neither.
+- **Storage:** a `subscriptions` table (URL, kind, format, action, scope, schedule, ETag, last fetch, entry count, status) and `subscription_entries` (hashes and signatures; IP ranges are kept as a compact blob per list). Like everything in §20, no history of who changed what is kept.
+- **Verification:** golden parsers for every format, plus fuzz targets (they parse untrusted input); a fake list server in tests for conditional GETs, the size caps and the sanity gates; and a check that an IP-listed peer or node is never contacted by the DHT, the fetch pool or the scraper.
