@@ -825,7 +825,7 @@
    "title": "Modern DHT crawler architecture",
    "work": "content filter rule persistence and writer judging, migration V6"
   },
-  "session_01NpcZEgW1eEWwKES8bNP3Cd": "Owner's 'In-application settings screen' session \u2014 owner 18:59: runner now manages it. Branch claude/brave-newton-53jgly (planning \u00a710.10 Settings, \u00a712.1 logging, \u00a712.2 auto-update, About, AGPL LICENSE, packaging/keys, user-docs skill + documentation-skills, brand/brand.json, slices B2b/B2c/M-settings-form/S-settings-1/2/M-security-settings/B-log1/2/S-logs/S-about/B-update/S-updates/S-doc-shots). Asked it (19:00) for status of owner requests/open questions, merge main, open PR. Runner reviews + merges. 19:15 status: all owner requests done, none open; runner opened PR #86 (review in flight). Owner says GitHub `release` env + RELEASE_SIGNING_KEY secret set up (unverified)."
+  "session_01NpcZEgW1eEWwKES8bNP3Cd": "Owner's 'In-application settings screen' session \u2014 owner 18:59: runner now manages it. Branch claude/brave-newton-53jgly (planning \u00a710.10 Settings, \u00a712.1 logging, \u00a712.2 auto-update, About, AGPL LICENSE, packaging/keys, user-docs skill + documentation-skills, brand/brand.json, slices B2b/B2c/M-settings-form/S-settings-1/2/M-security-settings/B-log1/2/S-logs/S-about/B-update/S-updates/S-doc-shots). Asked it (19:00) for status of owner requests/open questions, merge main, open PR. Runner reviews + merges. 19:15 status: all owner requests done, none open; runner opened PR #86 (review in flight). Owner says GitHub `release` env + RELEASE_SIGNING_KEY secret set up (unverified). 19:33 #86 R1 FIX sent (key rotation hijack, logs vs B4 hub, security-fix default, rollback supervisor, docs gate cmd)."
  },
  "watch_policy": "Owner asked the runner to keep an eye on and manage these sessions: each heartbeat check status; report a pending permission prompt to the owner (runner cannot approve); nudge an idle session with remaining work; flag conflicts with slice ownership and migration order.",
  "migration_order": "V4 filter, V5 swarm, V6 subscriptions, V7 filter rules, V8 class_corrections (all merged), V9 class_rules (#52 open), V10 reserved M4 PR2, V11 next free (F1 if needed, then M5 B8). Runner assigns.",
@@ -886,7 +886,6 @@
  },
  "heartbeats": 4,
  "reviews_in_flight": {
-  "86": "settings-plan PR R1",
   "79": "B14 R2 (3378ef5)"
  },
  "carry_forward": {
@@ -957,7 +956,9 @@
   "pr70_r3": "#70 R3 FIX 18:58: core switch off w/o password via race (assess unlocked vs apply) -> 409 changed_since_preview; ResolveHeld same; reload before release; purge INSERT OR IGNORE; merge main.",
   "slices_from_86": "After #86 merges: add B2b, B2c, M-settings-form, S-settings-2, M-security-settings, B-log1, B-log2, S-logs, S-about, B-update, S-updates, S-doc-shots to state.slices (pending). B2b + B-log1(after B2b) ready first.",
   "search_timing_flakes": "Windows CI: crates/search/tests/index.rs:214 NRT budget (the_live_indexer_follows_the_store_within_seconds) failed on B6 ee81535; plus rebuild.rs flake. Fix slice after B6 merges (crates/search owner).",
-  "near_followups": "F-near follow-ups: prefix/fuzzy words share the folded-join bug; NEAR ignores CSX-5 'Neutralize term'; plain word over-matches vs NEAR word; single-token NEAR quadratic window."
+  "near_followups": "F-near follow-ups: prefix/fuzzy words share the folded-join bug; NEAR ignores CSX-5 'Neutralize term'; plain word over-matches vs NEAR word; single-token NEAR quadratic window.",
+  "skills_repo_for_docs": "Docs slices + their reviewers need dvortsis/skills (documentation-skills scripts): attach via create_session sources or add_repo.",
+  "utp_windows_flake": "Windows CI: peer-wire/tests/utp.rs fetches_plaintext_and_encrypted_over_utp WSAENOBUFS(10055) on bind \u2014 flaky."
  },
  "blocked_on_owner": [
   "Modern DHT crawler architecture: waiting on an AskUserQuestion",
@@ -969,7 +970,8 @@
   "F1 budget scope: gate covers cheaply-rejectable rule shapes (10% = 40.8 us on runner). Shapes the cheap check cannot decide cost more at 10% of rules (VM: NEAR/1 ~450-500, negation ~140, fuzzy ~125, prefix ~110 us; runner ~1.4x faster). Should those shapes be gated at 50 us too?",
   "Filter budget hardware: 50 us has no reference machine; gate now calibrated to the runner F1 measured on (10%=40.8 us), slower runners scale up to 1.6x. Confirm or set a reference machine.",
   "Migration snapshots (<db>.pre-vN.db, VACUUM INTO before each migration, kept forever) retain quarantine names purged later, defeating 'deleted data is overwritten'. Recommend: run the same expiry purge on snapshots and delete them after 90 days (rollback window).",
-  "F-near: multi-token NEAR words now match where they never did; stored CSX-5 overrides/exceptions/Always-allow using such words would release more without a new impact preview (\u00a71.8.6). Pre-release, no installs. Recommend: note only, no re-preview machinery."
+  "F-near: multi-token NEAR words now match where they never did; stored CSX-5 overrides/exceptions/Always-allow using such words would release more without a new impact preview (\u00a71.8.6). Pre-release, no installs. Recommend: note only, no re-preview machinery.",
+  "Release signing hygiene (owner actions): restrict the GitHub `release` environment to tags with a required reviewer (nightlies signed from main expose the key to any merged workflow change), and consider a separate nightly key trusted only on Nightly."
  ],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)"
 }
