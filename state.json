@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-22T07:02:00Z",
+ "updated_at": "2026-10-22T07:45:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 14
@@ -8,13 +8,13 @@
  "tags": {},
  "slices": {
   "B0": {
-   "status": "in_review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01A5BEzkYtiRur7VEKtby9FH",
    "pr": 38,
    "attempt": 1,
    "review_rounds": 4,
-   "notes": "APPROVED round 4; merge blocked by #52 conflicts; author merging main"
+   "notes": "merged 07:40 after round 4 + #52 port"
   },
   "B5b": {
    "status": "in_review",
@@ -103,8 +103,8 @@
    "session": "session_01PtZR2UWvbfVrwEjd3TsbrG",
    "pr": 44,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": "audit notes sent; full review after fixes"
+   "review_rounds": 1,
+   "notes": "round 1: merge main, compass fallbacks from tokens, metadata dims, description"
   },
   "W4": {
    "status": "in_review",
@@ -112,8 +112,8 @@
    "session": "session_01Xz6N6pccu7mmGoppsJH6w1",
    "pr": 41,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": "audit notes sent; full review after fixes"
+   "review_rounds": 1,
+   "notes": "round 1: merge main, README select CSS, zh lang gating"
   },
   "W6": {
    "status": "pending",
@@ -634,8 +634,8 @@
    "session": "session_0141epGbZVUkFGWnyYhDra42",
    "pr": 51,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": "DHT receive-loop demux lines to be applied by the runner after #32 merges"
+   "review_rounds": 1,
+   "notes": "round 1: merge main, half-open/idle timeouts, per-IP cap, CI fuzz"
   },
   "X-integrations": {
    "status": "in_review",
@@ -724,8 +724,8 @@
    "session": "session_013n3VVF4K4QtH4YeGKjACBY",
    "pr": 53,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": "gate-satisfying derivation for all 48 themes; reuses the W1 session"
+   "review_rounds": 1,
+   "notes": "approved; small hover/selected \u0394E fix requested before merge"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -782,19 +782,11 @@
   "33": "merged 05:51 by filter session (owner decisions follow-up requested)",
   "42": "MERGED 06:07 by the filter session despite the runner's request; packs on by default (contradicts owner \u00a72.8) and LODESTAR_BUDGET_US kept. Follow-up fix PR requested 06:14; owner told.",
   "47": "merged 06:19 by the filter session (V8 class_corrections)",
-  "48": "open: M4 PR2, in review",
+  "48": "review round 1: merge main (B0 layout), 10M exit evidence, scheduler fixes",
   "52": "MERGED by the filter session (self-merge again), conflicts with B0"
  },
  "heartbeats": 2,
- "reviews_in_flight": [
-  "#38 B0 r4",
-  "#44 W3",
-  "#41 W4",
-  "#51 X-utp",
-  "#49 X-integrations",
-  "#48 M4 PR2",
-  "#53 W1c"
- ],
+ "reviews_in_flight": [],
  "carry_forward": {
   "D-docker": [
    "Image must set LODESTAR_DATA_DIR=/data (templates rely on it)",
@@ -808,6 +800,17 @@
   ],
   "contract-docs": [
    "design-tokens.md CJK fallback: use installed family names (\"Noto Sans CJK SC\" etc.) \u2014 \u00a710.2 wording to align"
+  ],
+  "B3": [
+   "/brand/* filenames are not content-hashed: serve them with short cache, not immutable",
+   "CSP needs the prepaint hash sha256-8sGxyFFW7xk/8Me2rukbUx/2+xX3j3SVt7SC1hk3xU8= (recompute from app.html at build time)"
+  ],
+  "W6": [
+   "size-limit assertion: no brand raster in first-load chunk set",
+   "Playwright webServer timeout: cold `npm run assets` ~73 s; raise timeout or prebuild assets"
+  ],
+  "web.yml": [
+   "add brand/source/** to path filters"
   ]
  }
 }
