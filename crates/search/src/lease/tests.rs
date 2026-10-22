@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use proptest::prelude::*;
 
 use super::*;
-use crate::testing::{append, delete, index_with, slow};
+use crate::testing::{append, delete, index_with, slow, tripwire};
 
 const NOW: i64 = 1_700_000_100;
 
@@ -209,10 +209,10 @@ fn cancelled_after_30ms<T>(f: impl FnOnce(&CancelToken) -> T) -> (T, Duration) {
 
 #[test]
 fn a_cancelled_search_stops_early() {
-    // 50,000 documents at 20 µs each: a full scan takes a second.
+    // Cancelled on the 1,000th of 50,000 documents, a page stops within
+    // one check interval per segment scanned, whatever the clock does.
     let (index, _) = index_with(50_000, 2);
     let index = Arc::new(index);
-    let delay = Duration::from_micros(20);
     let after_field = Position::Field {
         present: true,
         key: u64::MAX,
@@ -224,15 +224,23 @@ fn a_cancelled_search_stops_early() {
         (Sort::Size { desc: true }, Start::After(after_field)),
     ];
     for (sort, start) in cases {
-        let l = slow_lease(&index, sort, delay);
-        let (r, took) = cancelled_after_30ms(|c| l.page(start, 50, c));
+        let cancel = CancelToken::new();
+        let (compiled, visits) = tripwire(1_000, &cancel);
+        let l = Lease {
+            compiled,
+            ..slow_lease(&index, sort, Duration::ZERO)
+        };
+        let r = l.page(start, 50, &cancel);
         assert!(
             matches!(r, Err(Error::Cancelled)),
             "{sort:?} {start:?}: {r:?}"
         );
+        let went = visits.load(std::sync::atomic::Ordering::Relaxed);
+        let bound = 1_000 + l.searcher.segment_readers().len() * CHECK_EVERY as usize;
+        assert!(bound < 50_000, "the bound means something: {bound}");
         assert!(
-            took < Duration::from_millis(400),
-            "{sort:?} {start:?}: took {took:?}"
+            went <= bound,
+            "{sort:?} {start:?}: visited {went} of 50,000, bound {bound}"
         );
         // Cancelled before it starts, it does nothing.
         let done = CancelToken::new();

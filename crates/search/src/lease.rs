@@ -854,8 +854,11 @@ impl Leases {
 
     /// [`Leases::insert`] at `now` (tests pass their own clock).
     pub(crate) fn insert_at(&self, lease: Arc<Lease>, client: u64, now: Instant) -> LeaseId {
+        // Dropped after the lock: the last lease on a retired index
+        // unmaps its files, and no search should wait behind that.
+        let mut gone = Vec::new();
         let mut map = lock(&self.map);
-        map.retain(|_, s| !self.expired(s, now));
+        gone.extend(self.take_expired(&mut map, now));
         let lru = |map: &HashMap<LeaseId, Slot>, of: Option<u64>| {
             map.iter()
                 .filter(|(_, s)| of.is_none_or(|c| s.client == c))
@@ -865,12 +868,12 @@ impl Leases {
         if map.values().filter(|s| s.client == client).count() >= self.config.per_client.max(1)
             && let Some(id) = lru(&map, Some(client))
         {
-            map.remove(&id);
+            gone.extend(map.remove(&id));
         }
         if map.len() >= self.config.max_leases.max(1)
             && let Some(id) = lru(&map, None)
         {
-            map.remove(&id);
+            gone.extend(map.remove(&id));
         }
         let id = loop {
             let id = self.new_id();
@@ -887,6 +890,8 @@ impl Leases {
                 used: now,
             },
         );
+        drop(map);
+        drop(gone);
         id
     }
 
@@ -902,7 +907,9 @@ impl Leases {
             return Err(Error::LeaseExpired);
         };
         if self.expired(slot, now) {
-            map.remove(id);
+            let gone = map.remove(id);
+            drop(map);
+            drop(gone);
             return Err(Error::LeaseExpired);
         }
         if slot.client != client {
@@ -912,6 +919,17 @@ impl Leases {
         Ok(slot.lease.clone())
     }
 
+    /// Removes the expired leases, for the caller to drop once it has
+    /// let go of the lock.
+    fn take_expired(&self, map: &mut HashMap<LeaseId, Slot>, now: Instant) -> Vec<Slot> {
+        let ids: Vec<LeaseId> = map
+            .iter()
+            .filter(|(_, s)| self.expired(s, now))
+            .map(|(id, _)| *id)
+            .collect();
+        ids.iter().filter_map(|id| map.remove(id)).collect()
+    }
+
     /// Drops expired leases; returns how many are left.
     pub fn sweep(&self) -> usize {
         self.sweep_at(Instant::now())
@@ -919,8 +937,11 @@ impl Leases {
 
     pub(crate) fn sweep_at(&self, now: Instant) -> usize {
         let mut map = lock(&self.map);
-        map.retain(|_, s| !self.expired(s, now));
-        map.len()
+        let gone = self.take_expired(&mut map, now);
+        let left = map.len();
+        drop(map);
+        drop(gone);
+        left
     }
 
     pub fn len(&self) -> usize {

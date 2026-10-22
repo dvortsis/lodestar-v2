@@ -435,6 +435,7 @@ impl Shared {
 pub struct Serving {
     shared: Arc<Shared>,
     background: Mutex<Option<JoinHandle<()>>>,
+    sweeper: Mutex<Option<JoinHandle<()>>>,
     root: PathBuf,
     /// Released last, after the threads have stopped.
     _lock: DirectoryLock,
@@ -557,6 +558,7 @@ impl Serving {
             stop: AtomicBool::new(false),
         });
 
+        let every = sweep_every(&config.leases);
         let thread = std::thread::Builder::new().name("index-rebuild".into());
         let (sh, root_buf) = (shared.clone(), root.to_path_buf());
         let store_path = store_path.to_path_buf();
@@ -587,9 +589,14 @@ impl Serving {
             None => thread.spawn(move || clean(&sh, &root_buf, want)),
         }
         .map_err(Error::Io)?;
+        let sweeper = spawn_sweeper(&shared, every).inspect_err(|_| {
+            // No `Serving` to stop the rebuild thread: it stops itself.
+            shared.stop.store(true, Ordering::Relaxed);
+        })?;
         Ok(Serving {
             shared,
             background: Mutex::new(Some(background)),
+            sweeper: Mutex::new(Some(sweeper)),
             root: root.to_path_buf(),
             _lock: dir_lock,
         })
@@ -634,6 +641,10 @@ impl Serving {
 
     fn halt(&self) -> Result<()> {
         self.shared.stop.store(true, Ordering::Relaxed);
+        if let Some(t) = lock(&self.sweeper).take() {
+            t.thread().unpark();
+            let _ = t.join();
+        }
         if let Some(t) = lock(&self.background).take() {
             // The thread logs its own errors.
             let _ = t.join();
@@ -651,6 +662,34 @@ impl Drop for Serving {
             tracing::warn!("index: stopping: {e}");
         }
     }
+}
+
+/// Expired leases are dropped at least this often, so they don't pin
+/// their searchers and merged-away segment files until the next lease
+/// is taken.
+const SWEEP_AT_MOST_EVERY: Duration = Duration::from_secs(30);
+
+/// How often the sweeper runs: a quarter of the lease ttl, at most
+/// [`SWEEP_AT_MOST_EVERY`], so an idle lease goes within 1.25 ttl.
+fn sweep_every(config: &LeaseConfig) -> Duration {
+    (config.ttl / 4).clamp(Duration::from_millis(1), SWEEP_AT_MOST_EVERY)
+}
+
+/// Sweeps the leases every `every` until stopping. It parks between
+/// sweeps; [`Serving::stop`] unparks it.
+fn spawn_sweeper(shared: &Arc<Shared>, every: Duration) -> Result<JoinHandle<()>> {
+    let sh = shared.clone();
+    std::thread::Builder::new()
+        .name("lease-sweep".into())
+        .spawn(move || {
+            while !sh.stopping() {
+                std::thread::park_timeout(every);
+                if !sh.stopping() {
+                    sh.leases.sweep();
+                }
+            }
+        })
+        .map_err(Error::Io)
 }
 
 /// Tries to open an older index this many times before failing the
@@ -1205,6 +1244,69 @@ mod tests {
             version,
             ..ServingConfig::default()
         }
+    }
+
+    #[test]
+    fn expired_leases_are_swept_without_another_search() {
+        use crate::{CancelToken, Lease, LeaseConfig, SearchHandle};
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("index");
+        let db = tmp.path().join("s.db");
+        let mut writer = Store::open(&db, StoreConfig::default()).unwrap();
+        add(&mut writer, "Old.Show.mkv");
+        // This build's index exists: nothing to rebuild.
+        let (current, _) = exact_old(&root, &mut writer);
+        let config = ServingConfig {
+            leases: LeaseConfig {
+                ttl: Duration::from_millis(100),
+                ..LeaseConfig::default()
+            },
+            ..quick(current)
+        };
+        let serving = Arc::new(Serving::open_or_rebuild(&root, &db, config).unwrap());
+        assert!(!serving.rebuilding());
+        let handle = SearchHandle::serving(serving.clone());
+        let cancel = CancelToken::new();
+        let node = crate::parse("show").unwrap();
+        let lease = Arc::new(
+            Lease::new(handle.index(), &node, NOW, crate::Sort::Relevance, &cancel).unwrap(),
+        );
+        let held = Arc::downgrade(&lease);
+        handle.leases().insert(lease, 1);
+        // Nothing takes or reads a lease again; the sweeper drops it, and
+        // with it the searcher it pinned.
+        wait_for("the sweep", || handle.leases().is_empty());
+        assert!(held.upgrade().is_none());
+        drop(handle);
+        Arc::try_unwrap(serving).unwrap().shutdown().unwrap();
+    }
+
+    #[test]
+    fn the_sweeper_runs_at_a_quarter_ttl_and_stops_at_once() {
+        use crate::LeaseConfig;
+        let every = |ttl| {
+            sweep_every(&LeaseConfig {
+                ttl,
+                ..LeaseConfig::default()
+            })
+        };
+        assert_eq!(every(Duration::from_secs(600)), SWEEP_AT_MOST_EVERY);
+        assert_eq!(every(Duration::from_secs(60)), Duration::from_secs(15));
+        assert_eq!(every(Duration::ZERO), Duration::from_millis(1));
+        // Stopping unparks it rather than waiting out its 30 s.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("index");
+        let db = tmp.path().join("s.db");
+        let mut writer = Store::open(&db, StoreConfig::default()).unwrap();
+        let (current, _) = exact_old(&root, &mut writer);
+        let serving = Serving::open_or_rebuild(&root, &db, quick(current)).unwrap();
+        let start = std::time::Instant::now();
+        serving.shutdown().unwrap();
+        assert!(
+            start.elapsed() < Duration::from_secs(15),
+            "{:?}",
+            start.elapsed()
+        );
     }
 
     fn wait_for(what: &str, mut done: impl FnMut() -> bool) {

@@ -23,8 +23,12 @@
 //! error has a standard deviation of about `1 / sqrt(matches / 16)`: 0.9%
 //! at 200,000 matches, the least ever reported as estimated. Matches
 //! packed into a narrow doc-id range (a recent date range on an old
-//! segment) can be off by up to one slice per edge of the range, about
-//! 250 documents on a 1M-document segment. The search bench checks every
+//! segment) can be off by up to one stratum per edge of the range: the
+//! edge's stratum counts its slice ×16, whether the slice falls inside the
+//! range or not. That's about 3,900 documents per edge on a 1M-document
+//! segment (a simulated worst case came to about 6,500 for both), small
+//! against the 200,000 matches below which a count is never estimated.
+//! The search bench checks every
 //! query of at least 20,000 matches against four standard deviations
 //! (`bench/src/bin/search-bench.rs`).
 
@@ -284,8 +288,9 @@ impl<'a> Matcher<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{delete, index_with, slow};
-    use std::time::{Duration, Instant};
+    use crate::testing::{delete, index_with, slow, tripwire};
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
 
     const NOW: i64 = 1_700_000_100;
 
@@ -381,28 +386,22 @@ mod tests {
 
     #[test]
     fn a_cancelled_count_stops_early() {
-        // Every document takes 20 µs to visit: a full count of 50,000
-        // takes a second.
+        // Cancelled on the 1,000th of 50,000 documents, it stops within
+        // one check interval per segment, whatever the clock does.
         let (index, _) = index_with(50_000, 1);
         let s = index.searcher();
-        let c = slow(&index, Duration::from_micros(20));
         let cancel = CancelToken::new();
-        let stopper = {
-            let cancel = cancel.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_millis(30));
-                cancel.cancel();
-            })
-        };
-        let start = Instant::now();
+        let (c, visits) = tripwire(1_000, &cancel);
         let r = exact(&s, &c, &cancel);
-        let took = start.elapsed();
-        stopper.join().unwrap();
         assert!(matches!(r, Err(crate::Error::Cancelled)), "{r:?}");
-        // At most one check interval (4,096 × 20 µs ≈ 82 ms) past the
-        // cancel, far short of the full second.
-        assert!(took < Duration::from_millis(400), "took {took:?}");
-        // A budget stops it the same way, as out of time.
+        // Segments run in parallel, each checking on its own.
+        let went = visits.load(Ordering::Relaxed);
+        let bound = 1_000 + s.segment_readers().len() * CHECK_EVERY as usize;
+        assert!(bound < 50_000, "the bound means something: {bound}");
+        assert!(went <= bound, "visited {went} of 50,000, bound {bound}");
+        // A budget stops it the same way, as out of time: 50,000
+        // documents at 20 µs each take a second.
+        let c = slow(&index, Duration::from_micros(20));
         let budget = CancelToken::new().with_budget(Duration::from_millis(20));
         assert!(matches!(
             exact(&s, &c, &budget),
