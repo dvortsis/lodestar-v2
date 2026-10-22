@@ -56,7 +56,8 @@ fn flags(row: &TorrentRow) -> Vec<String> {
     flag_names(row.flags).map(str::to_string).collect()
 }
 
-/// A search result row.
+/// A search result row. The classification fields are filled from the
+/// stored enrichment by `search::enrich`.
 pub(crate) fn hit(
     row: &TorrentRow,
     score: f32,
@@ -65,7 +66,10 @@ pub(crate) fn hit(
     explain: Option<ScoreParts>,
 ) -> SearchHit {
     SearchHit {
+        adult_kind: None,
         completed: swarm.completed,
+        composition: Vec::new(),
+        content_type: None,
         discovered_at: row.discovered_at,
         explain,
         files: row.file_count,
@@ -73,6 +77,8 @@ pub(crate) fn hit(
         hash: hex(&row.info_hash.0),
         hash_v2: row.info_hash_v2.map(|h| hex(&h.0)),
         id: row.id,
+        junk_reasons: Vec::new(),
+        junk_score: None,
         last_scrape_at: swarm.last_scrape_at,
         last_seen_at: swarm.last_seen_at,
         leechers: swarm.leechers,
@@ -80,12 +86,14 @@ pub(crate) fn hit(
         metadata_at: row.metadata_at,
         name: row.name.clone(),
         piece_len: row.piece_len,
+        resolved_via: None,
         // As `json!` widened it.
         score: f64::from(score),
         seeders: swarm.seeders,
         seeders_approx: swarm.seeders_approx,
         size: row.size,
         swarm_suspect: swarm.swarm_suspect,
+        title: None,
         trackers_checked: swarm.trackers_checked,
         trackers_reporting: swarm.trackers_reporting,
     }

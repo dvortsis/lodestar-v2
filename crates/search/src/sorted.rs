@@ -23,6 +23,7 @@ use tantivy::index::SegmentId;
 use tantivy::query::EnableScoring;
 use tantivy::{COLLECT_BLOCK_BUFFER_LEN, DocAddress, DocId, DocSet, Searcher, SegmentReader};
 
+use crate::cancel::{self, CHECK_EVERY, CancelToken};
 use crate::filter;
 use crate::index::{Compiled, Result};
 
@@ -80,23 +81,57 @@ impl SegmentCache {
 }
 
 /// Maps a fast value to a `u64` that sorts the same way.
-fn sortable(v: u64, signed: bool) -> u64 {
+pub(crate) fn sortable(v: u64, signed: bool) -> u64 {
     if signed { v ^ (1 << 63) } else { v }
 }
 
 /// The `page` (result positions) of `query` ordered by `order`, and the
-/// number of matches. `key` identifies the query for the cache, including
-/// anything outside the segment it depends on.
+/// number of matches. Cold segments are searched in pieces of
+/// `piece_docs` documents.
 pub(crate) fn search(
     searcher: &Searcher,
     cache: &SegmentCache,
-    key: &str,
     query: &Compiled,
     order: Order,
-    hot: Option<&Arc<HotColumns>>,
     page: std::ops::Range<usize>,
     piece_docs: u32,
 ) -> Result<(Vec<DocAddress>, usize)> {
+    search_cancellable(
+        searcher,
+        cache,
+        query,
+        order,
+        page,
+        piece_docs,
+        &CancelToken::new(),
+    )
+}
+
+/// The cache key of `query` in `order`: hot values change under an
+/// unchanged segment, so a query or order that reads them carries the
+/// hot columns' epoch, which keeps cached tops honest.
+fn cache_key(query: &Compiled, order: Order) -> String {
+    match &query.hot {
+        Some(h) if query.reads_hot || matches!(order.by, By::Hot(_)) => {
+            format!("{}@hot{}", query.key, h.epoch())
+        }
+        _ => query.key.clone(),
+    }
+}
+
+/// [`search`], stopping between pieces and every few thousand documents
+/// once `cancel` is.
+pub(crate) fn search_cancellable(
+    searcher: &Searcher,
+    cache: &SegmentCache,
+    query: &Compiled,
+    order: Order,
+    page: std::ops::Range<usize>,
+    piece_docs: u32,
+    cancel: &CancelToken,
+) -> Result<(Vec<DocAddress>, usize)> {
+    let piece_docs = piece_docs.max(1);
+    let key = cache_key(query, order);
     let (offset, k) = (page.start, page.end);
     let limit = k.saturating_sub(offset);
     let weight = query
@@ -130,13 +165,28 @@ pub(crate) fn search(
                 .map(move |i| (ord, i * piece_docs..((i + 1) * piece_docs).min(max)))
         })
         .collect();
-    let found = searcher.index().search_executor().map(
-        |(ord, range): (usize, std::ops::Range<DocId>)| {
-            let top = segment_top(weight.as_ref(), &readers[ord], query, order, hot, k, range)?;
-            Ok((ord, top))
-        },
-        pieces.into_iter(),
-    )?;
+    let found = searcher
+        .index()
+        .search_executor()
+        .map(
+            |(ord, range): (usize, std::ops::Range<DocId>)| {
+                if cancel.is_stopped() {
+                    return Err(cancel::interrupted());
+                }
+                let top = segment_top(
+                    weight.as_ref(),
+                    &readers[ord],
+                    query,
+                    order,
+                    k,
+                    range,
+                    cancel,
+                )?;
+                Ok((ord, top))
+            },
+            pieces.into_iter(),
+        )
+        .map_err(|e| cancel::stopped_or(cancel, e))?;
     let mut merged: HashMap<usize, SegmentTop> = HashMap::new();
     for (ord, (part, count)) in found {
         let e = merged.entry(ord).or_default();
@@ -145,7 +195,7 @@ pub(crate) fn search(
     }
     for (ord, (mut part, count)) in merged {
         // Best first, as `Rank` orders them, then the segment's top k.
-        part.sort_unstable_by(|a, b| (b.0, b.1, Reverse(b.2)).cmp(&(a.0, a.1, Reverse(a.2))));
+        part.sort_unstable_by_key(|a| Reverse((a.0, a.1, Reverse(a.2))));
         part.truncate(k);
         let top = Arc::new((part, count));
         if k <= CACHE_MAX_K {
@@ -225,10 +275,11 @@ fn segment_top(
     reader: &SegmentReader,
     query: &Compiled,
     order: Order,
-    hot: Option<&Arc<HotColumns>>,
     k: usize,
     range: std::ops::Range<DocId>,
+    cancel: &CancelToken,
 ) -> tantivy::Result<SegmentTop> {
+    let hot = query.hot.as_ref();
     let fast = reader.fast_fields();
     let values = match order.by {
         By::Fast {
@@ -254,8 +305,16 @@ fn segment_top(
     let mut buf = [0; COLLECT_BLOCK_BUFFER_LEN];
     let mut kept = [0; COLLECT_BLOCK_BUFFER_LEN];
     let mut vals = [None; COLLECT_BLOCK_BUFFER_LEN];
+    let mut seen = 0u32;
     loop {
         let n = scorer.fill_buffer(&mut buf);
+        seen += n as u32;
+        if seen >= CHECK_EVERY {
+            seen = 0;
+            if cancel.is_stopped() {
+                return Err(cancel::interrupted());
+            }
+        }
         let inside = buf[..n].partition_point(|d| *d < range.end);
         let mut m = 0;
         for &doc in &buf[..inside] {

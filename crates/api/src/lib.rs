@@ -29,13 +29,14 @@ pub mod extract;
 pub mod filters;
 pub mod openapi;
 mod search;
+pub mod settings;
 mod swarm;
 mod torrents;
 
 use std::sync::{Arc, Mutex};
 
 use axum::{Extension, Router};
-use lodestar_search::SearchIndex;
+use lodestar_search::SearchHandle;
 use lodestar_store::{HotColumns, Store};
 
 pub use auth::{Auth, require_session};
@@ -48,8 +49,9 @@ pub use swarm::{ApiEvents, INTEREST_TOP};
 #[derive(Clone, Debug)]
 pub struct ApiState {
     pub auth: Arc<Auth>,
-    /// `None` when search is turned off.
-    pub index: Option<SearchIndex>,
+    /// `None` when search is turned off. Searches take its index once per
+    /// request, so they follow an index swap (§8).
+    pub index: Option<SearchHandle>,
     /// A read-only connection for detail and enrichment.
     pub reader: Arc<Mutex<Store>>,
     /// `None` when the filters API isn't served (tests, tools).
@@ -58,6 +60,8 @@ pub struct ApiState {
     pub hot: Option<Arc<HotColumns>>,
     /// Interest hints and Serve rollups; `None` in tests and tools.
     pub events: Option<Arc<dyn ApiEvents>>,
+    /// `None` when the settings registry isn't served (tests, tools).
+    pub settings: Option<Arc<dyn settings::SettingsApi>>,
 }
 
 /// The `/api/v1` routes. The server must be run with
@@ -69,6 +73,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(search::routes())
         .merge(torrents::routes())
         .merge(filters::routes())
+        .merge(settings::routes())
         .merge(openapi::routes())
         // What `auth::protected` checks sessions against.
         .layer(Extension(auth::SessionAuth(state.auth.clone())))
