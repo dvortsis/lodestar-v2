@@ -974,7 +974,7 @@
    "status": "running",
    "session": "session_01MRKeGCGmpz4LUQE5LbEXsz",
    "owner_started": true,
-   "notes": "owner session 'Make the filter budget gate runner-robust'; may supersede F1b #66; needs owner sign-off on held gate"
+   "notes": "owner 22:20: 'You can modify the filter budget/ gate if there is something more efficient to our tech stack' -> no further sign-off needed. Recommended: cachegrind instruction-count PR gate (Ir(2N)-Ir(N))/N vs committed baseline +10%; wall-clock 50us reported, held on main/nightly. Supersedes #66."
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -991,7 +991,8 @@
    "max_helpers": 16,
    "source": "owner 2026-10-22: 8 (16:03), doubled to 16/16 (17:20). In slices.yaml via runner PR #75."
   },
-  "owner_questions": "Owner 2026-10-22 17:15: never stop monitoring/driving sessions to wait for an owner answer. Ask in the chat reply (and a push notification if the owner may be away), not with a blocking prompt; keep working on everything else meanwhile."
+  "owner_questions": "Owner 2026-10-22 17:15: never stop monitoring/driving sessions to wait for an owner answer. Ask in the chat reply (and a push notification if the owner may be away), not with a blocking prompt; keep working on everything else meanwhile.",
+  "filter_budget_owner_auth": "2026-10-22 22:20 owner authorised changing the filter budget gate"
  },
  "watched_sessions": {
   "session_015F9H2aHowz7TJLffFYxUvf": {
