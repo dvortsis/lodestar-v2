@@ -345,6 +345,12 @@ fn a_failed_rebuild_keeps_the_old_index_serving() {
             .progress()
             .is_some_and(|p| p.phase == RebuildPhase::Failed)
     });
+    // The failure says why, for the banner and for tests.
+    let failed = serving.progress().expect("still rebuilding");
+    assert!(
+        failed.error.as_deref().is_some_and(|e| !e.is_empty()),
+        "a failed rebuild carries its error: {failed:?}"
+    );
     let old = serving.index();
     assert_eq!(total(&old, "common movie"), n);
     // The old index still follows the store.
