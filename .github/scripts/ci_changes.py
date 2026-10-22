@@ -6,7 +6,8 @@ request gets:
 
 - the Rust jobs (fmt, clippy, openapi drift, Linux and Windows tests) only if
   it touches Rust: a crate, bench/, fuzz/, a Cargo manifest or lockfile, the
-  toolchain file, or this workflow;
+  toolchain file, this workflow, or web/src/lib/api/openapi.json (the drift
+  job checks it);
 - macOS tests only with the `full-ci` label (they run on every push to main
   and nightly);
 - a benchmark gate, the importer test or a fuzz target only if it touches a
@@ -102,7 +103,7 @@ def main() -> None:
     event, base, head = sys.argv[1], sys.argv[2], sys.argv[3]
     try:
         labels = set(json.loads(sys.argv[4]) or []) if len(sys.argv) > 4 else set()
-    except ValueError:
+    except (ValueError, TypeError):
         labels = set()
     out: dict[str, str] = {}
 

@@ -13,7 +13,7 @@ on:
     - cron: "17 3 * * *"
   workflow_dispatch:
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened]
     paths:
       - "packaging/docker/**"
       - "docker-compose.yml"
@@ -31,10 +31,9 @@ permissions:
 
 # One run per ref. A newer pull-request push supersedes the older one; a
 # release or nightly run in progress is never cancelled halfway through a push.
-# A label other than `full-ci` gets its own group (and does nothing), so adding
-# one never cancels the run in progress.
+# Labels are read on the next push (see ci.yml for why `labeled` isn't a trigger).
 concurrency:
-  group: release-${{ github.ref }}${{ github.event.action == 'labeled' && github.event.label.name != 'full-ci' && '-label' || '' }}
+  group: release-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -43,7 +42,6 @@ env:
 jobs:
   smoke:
     name: smoke (linux/amd64)
-    if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -158,7 +156,7 @@ jobs:
   # Rust code (the smoke job already builds the same code for amd64).
   arm64-needed:
     name: arm64 needed
-    if: github.event_name == 'pull_request' && (github.event.action != 'labeled' || github.event.label.name == 'full-ci')
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     outputs:
       build: ${{ steps.c.outputs.build }}
