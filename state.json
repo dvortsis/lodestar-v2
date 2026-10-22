@@ -170,13 +170,13 @@
       "notes": "waits ext:m4-schema-settled (M4 PR2 #48)"
     },
     "B6": {
-      "status": "in_review",
+      "status": "changes_requested",
       "model": "opus",
       "session": "session_0113YcyKf7mgWsV9sNN3mNaW",
       "pr": 71,
       "attempt": 1,
-      "review_rounds": 0,
-      "notes": "launched 14:40; not live.rs/compile.rs (B4/B17) | PR #71; reviewer started 16:45"
+      "review_rounds": 1,
+      "notes": "launched 14:40; not live.rs/compile.rs (B4/B17) | PR #71; reviewer started 16:45 | 17:15 r1 FIX: visibility via base(without_facet(user_ast)), merge main, category ranges, near-1M perf."
     },
     "B16": {
       "status": "pending",
@@ -197,13 +197,13 @@
       "notes": ""
     },
     "W7ab": {
-      "status": "in_review",
+      "status": "changes_requested",
       "model": "sonnet",
       "session": "session_01PZaAbtPHeB2SiUMG9VFpth",
       "pr": 76,
       "attempt": 1,
-      "review_rounds": 0,
-      "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #76; reviewer started 16:45"
+      "review_rounds": 1,
+      "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #76; reviewer started 16:45 | 17:10 r1 FIX: exclude dev routes from prod build (scope exception), toast timer, ticker 60s, + a11y items."
     },
     "W7cd": {
       "status": "changes_requested",
@@ -215,13 +215,13 @@
       "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #78; reviewer started 16:45 | 16:58 round 1 FIX: load-more stuck, shift anchor by index, touch targets, .ls-focus dup; + measure opt-in, tokens, tree index prop, 100k expand perf, dup names, roving on click, Esc in drawer, tests, PR size."
     },
     "W7e": {
-      "status": "in_review",
+      "status": "changes_requested",
       "model": "sonnet",
       "session": "session_01KbNDuqr2bBED88auAfEkNp",
       "pr": 74,
       "attempt": 1,
-      "review_rounds": 0,
-      "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #74; reviewer started 16:45"
+      "review_rounds": 1,
+      "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #74; reviewer started 16:45 | 17:10 r1 FIX: token classes (runner shared fix), dup groups, brush, null delta, dates, int axes."
     },
     "W9": {
       "status": "pending",
@@ -341,13 +341,13 @@
       "notes": "deps met; held (crates/search busy with B6)"
     },
     "B13": {
-      "status": "in_review",
+      "status": "changes_requested",
       "model": "opus",
       "session": "session_012gnQYQihLxoGDKXk5pckME",
       "pr": 77,
       "attempt": 1,
-      "review_rounds": 0,
-      "notes": "launched 15:59 (owner asked to start more work); no crates/search edits | PR #77; reviewer started 16:45"
+      "review_rounds": 1,
+      "notes": "launched 15:59 (owner asked to start more work); no crates/search edits | PR #77; reviewer started 16:45 | 17:10 r1 MERGE-ish: fix compare lock scope + conditional test, then merge."
     },
     "B14": {
       "status": "running",
@@ -674,13 +674,13 @@
       "notes": "merged 10:19 as e8e6c6a (#60)"
     },
     "B17": {
-      "status": "in_review",
+      "status": "changes_requested",
       "model": "opus",
       "session": "session_01PZdBjxYQXsnEVmfRxJCCXw",
       "pr": 72,
       "attempt": 1,
-      "review_rounds": 0,
-      "notes": "launched 14:40; owns compile.rs clause + settings content section | PR #72; reviewer started 16:45"
+      "review_rounds": 1,
+      "notes": "launched 14:40; owns compile.rs clause + settings content section | PR #72; reviewer started 16:45 | 17:10 r1 FIX: BaseQuery returns visibility conjuncts separately; merge main; \u00a716 qualifiers; utoipa responses."
     },
     "S-blocklists": {
       "status": "pending",
@@ -799,7 +799,9 @@
     "2026-10-22 runner: community palette values stay as published; the theme compiler must derive content/tint tokens that satisfy the gates for every theme (W1c). W1b now waits for W1c and C1.",
     "2026-10-22 W1b: ownership extended to web/scripts/themes.test.ts, theme-files.test.ts, web/static/themes.json (generated output and W1 placeholder assertions); record in slices.yaml at next runner PR",
     "15:59 owner asked to start more work: launched B13, B14 (core, above max_core 4 while B4 is in review) and R-docs (helper).",
-    "16:25 OWNER: correction-driven Adult holds keep the 30-day name purge and become tombstones (hash+rule, no name) at purge; deliberate release with warning+password. (Option b for #70.) Record in owner-decisions.md \u00a72 via R-docs or #70."
+    "16:25 OWNER: correction-driven Adult holds keep the 30-day name purge and become tombstones (hash+rule, no name) at purge; deliberate release with warning+password. (Option b for #70.) Record in owner-decisions.md \u00a72 via R-docs or #70.",
+    "17:05 OWNER: SQLite secure_delete ON (overwrite deleted rows). Runner implements in crates/store; record in owner-decisions \u00a72 item 13 via #75.",
+    "17:10 runner: dev showcase routes must not ship in production builds (W7ab changes shared build config). Accent fill deviation in W7ab accepted (accent-content 4.03:1 at 13px) -> \u00a716."
   ],
   "open_issues": [
     "Filter session self-merged #42 against owner decision (packs on by default) + budget env; follow-up fix requested. Suggest owner consider branch protection.",
@@ -877,7 +879,8 @@
     "settings_form_patch_changed_only": "S-settings-1 brief: settings forms must PATCH only changed fields (re-saving dht_port moves every DHT bind to it).",
     "b5a_polish": "B5a polish: replace cancelled_after_30ms in exact-count test with tripwire; wait_for in expired_leases_are_swept test; join rebuild thread if sweeper spawn fails. Fold into B5c (B6 brief did not include it) (crates/search owners).",
     "w5_brief": "W5 brief: EventSource dies on non-200; handle 429 Retry-After; per-session cap 4 streams.",
-    "w7cd_s16": "Runner to add \u00a716 entries suggested in PR #78 (W7cd) after merge."
+    "w7cd_s16": "Runner to add \u00a716 entries suggested in PR #78 (W7cd) after merge.",
+    "reviewer_shared_target": "Do not share CARGO_TARGET_DIR across reviewer worktrees: test fixture paths (CARGO_MANIFEST_DIR) and workspace artifacts collide. One target per reviewer; clean up after."
   },
   "blocked_on_owner": [
     "M4 continuation: waiting on ExitPlanMode approval (plan mode) \u2014 can't act on #48 review",
