@@ -1189,11 +1189,13 @@ const FIND_BY_HASH: &str = "SELECT id FROM torrents WHERE info_hash = ?1
      WHERE info_hash_v2 IS NOT NULL AND substr(info_hash_v2, 1, 20) = ?1
      LIMIT 1";
 
-/// Begins a write transaction that reads before it writes, taking the
-/// write lock up front (`BEGIN IMMEDIATE`) and waiting for it up to the
-/// busy timeout. A deferred one would get SQLITE_BUSY at once when its
-/// first write finds another connection holding the lock (a WAL scrub's
-/// checkpoint, say): SQLite doesn't wait to upgrade a read to a write.
+/// Begins a write transaction, taking the write lock up front (`BEGIN
+/// IMMEDIATE`) and waiting for it up to the busy timeout. A deferred one
+/// that reads first would get SQLITE_BUSY at once when its first write
+/// finds another connection holding the lock (a WAL scrub's checkpoint,
+/// say): SQLite doesn't wait to upgrade a read to a write. New write
+/// transactions should use this whether or not they read first; it costs
+/// nothing measurable and removes the trap.
 pub(crate) fn begin_write(conn: &mut Connection) -> rusqlite::Result<rusqlite::Transaction<'_>> {
     conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
 }

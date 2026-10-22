@@ -824,6 +824,8 @@ mod tests {
             .execute_batch("BEGIN; SELECT count(*) FROM torrents;")
             .unwrap();
         let scrubs = std::thread::spawn(move || {
+            // 10 busy scrubs wait about 10 × SCRUB_WAIT (≈ 1 s) in all, well
+            // under BUSY_TIMEOUT (5 s), so an insert that waits never times out.
             for _ in 0..10 {
                 api.scrub_wal();
                 assert!(api.scrub_pending, "the reader kept the scrub busy");
