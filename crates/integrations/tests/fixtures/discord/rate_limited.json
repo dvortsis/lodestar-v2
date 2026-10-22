@@ -1,0 +1,27 @@
+{
+  "recorded_from": "Built by hand from the Discord webhook documentation (discord.com/developers/docs/resources/webhook) and its documented error bodies, not recorded: there is no live webhook to record from",
+  "note": "A per-webhook rate limit: 429, fractional retry_after in the body, whole seconds in Retry-After",
+  "request": {
+    "method": "POST",
+    "path": "/api/webhooks/123456789012345678/Tk3n-SECRET_value",
+    "query": "wait=true"
+  },
+  "response": {
+    "status": 429,
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "retry-after",
+        "1"
+      ],
+      [
+        "x-ratelimit-scope",
+        "user"
+      ]
+    ],
+    "body": "{\"message\":\"You are being rate limited.\",\"retry_after\":0.002,\"global\":false}"
+  }
+}
