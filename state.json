@@ -148,8 +148,8 @@
    "session": "session_01Uk4thMoRJwF3Rzg9SUrxUQ",
    "pr": 64,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": "PR #64 (no swapfix yet; separate PR requested); reviewer started 11:41"
+   "review_rounds": 1,
+   "notes": "round 1: no blocking in code; asked: de-flake cancellation timing tests, revert index_root rename (B2 owns config.rs), tolerance wording, periodic lease sweep, PR description; optional seal-key HMAC. Scope exceptions accepted."
   },
   "B4": {
    "status": "ready",
