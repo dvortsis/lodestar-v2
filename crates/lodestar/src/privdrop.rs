@@ -171,6 +171,11 @@ mod imp {
         let allow_root = env("LODESTAR_ALLOW_ROOT").as_deref() == Some("1");
         let ids = parse_ids(puid.as_deref(), pgid.as_deref(), allow_root)?;
         single_thread()?;
+        if ids.uid != 0 {
+            // Before anything is changed: a drop that can't happen mustn't
+            // leave the data directory handed over.
+            can_drop(&proc_status()?)?;
+        }
         let mut report = Report::default();
         if scope == Scope::DataDir {
             let dir = env_data_dir(env);
@@ -186,13 +191,50 @@ mod imp {
             return Ok(report);
         }
         drop_to(ids)?;
-        if scope == Scope::DataDir {
+        if let Some(dir) = &report.data_dir {
+            reachable(dir, ids)?;
             report.info.push(format!(
                 "dropped root: running as {}:{} with no supplementary groups",
                 ids.uid, ids.gid
             ));
         }
         Ok(report)
+    }
+
+    /// CAP_SETGID (6) and CAP_SETUID (7): what setgroups and setres*id need.
+    /// Root can lack them (compose `cap_drop: ALL`).
+    pub(super) fn can_drop(status: &str) -> Result<(), String> {
+        const NEEDED: u64 = 1 << 6 | 1 << 7;
+        let eff = status_field(status, "CapEff")
+            .and_then(|v| u64::from_str_radix(v, 16).ok())
+            .ok_or("/proc/self/status has no readable CapEff")?;
+        if eff & NEEDED == NEEDED {
+            Ok(())
+        } else {
+            Err(
+                "started as root without the SETUID/SETGID capabilities, so it can't \
+                 switch to PUID/PGID: keep those capabilities, or run with \
+                 --user <uid>:<gid> instead"
+                    .into(),
+            )
+        }
+    }
+
+    /// After the drop, the new account must reach the directory it now
+    /// owns; a parent it can't enter is the usual reason it can't.
+    fn reachable(dir: &Path, ids: Ids) -> Result<(), String> {
+        use rustix::fs::Access;
+        rustix::fs::access(dir, Access::READ_OK | Access::WRITE_OK | Access::EXEC_OK).map_err(|e| {
+            format!(
+                "the data directory {} belongs to {}:{} but that user can't open it \
+                     ({e}): a parent folder doesn't let it in. Give the parent folders \
+                     execute permission for others (chmod o+x <folder>), or move the data \
+                     directory somewhere that user can reach",
+                dir.display(),
+                ids.uid,
+                ids.gid
+            )
+        })
     }
 
     fn proc_status() -> Result<String, String> {
@@ -220,7 +262,10 @@ mod imp {
         set_thread_groups(&[]).map_err(|e| format!("setgroups([]): {e}"))?;
         set_thread_res_gid(gid, gid, gid).map_err(|e| format!("setgid({}): {e}", ids.gid))?;
         set_thread_res_uid(uid, uid, uid).map_err(|e| format!("setuid({}): {e}", ids.uid))?;
-        verify(ids, &proc_status()?)
+        verify(ids, &proc_status()?)?;
+        // Nothing exec'd later can gain privileges through set-id bits or
+        // file capabilities. Threads spawned from here inherit it.
+        rustix::thread::set_no_new_privs(true).map_err(|e| format!("no_new_privs: {e}"))
     }
 
     /// The drop happened and can't be undone.
@@ -314,6 +359,7 @@ mod imp {
                 "the data directory {shown} is the filesystem root; refusing to chown it"
             ));
         }
+        looks_like_data(fd.as_fd(), dir)?;
         // The directory itself last: a walk that fails part-way is retried
         // on the next start, which only walks while its owner differs.
         let mut walk = Walk::default();
@@ -339,6 +385,36 @@ mod imp {
             }
         }
         Ok(line)
+    }
+
+    /// What Lodestar leaves in a data directory; one is enough.
+    const MARKERS: [&CStr; 3] = [c"lodestar.db", c"config.toml", c"index"];
+
+    /// A directory is only handed over whole if it is empty or plainly
+    /// Lodestar's, so a mistyped LODESTAR_DATA_DIR (`/srv`, `/var/lib`)
+    /// can't give a whole tree away.
+    pub(super) fn looks_like_data(
+        dir: rustix::fd::BorrowedFd<'_>,
+        path: &Path,
+    ) -> Result<(), String> {
+        let found = |name: &CStr| rustix::fs::statat(dir, name, AtFlags::SYMLINK_NOFOLLOW).is_ok();
+        if MARKERS.iter().any(|m| found(m)) {
+            return Ok(());
+        }
+        let mut entries = Dir::read_from(dir).map_err(|e| format!("{}: {e}", path.display()))?;
+        while let Some(entry) = entries.read() {
+            let entry = entry.map_err(|e| format!("{}: {e}", path.display()))?;
+            if entry.file_name() != c"." && entry.file_name() != c".." {
+                return Err(format!(
+                    "the data directory {} belongs to someone else and doesn't look like \
+                     Lodestar's (no lodestar.db, config.toml or index), so its contents \
+                     weren't handed to PUID/PGID. Point LODESTAR_DATA_DIR at an empty \
+                     folder, or change the folder's owner yourself",
+                    path.display()
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Every entry is opened without following symlinks, then checked and
@@ -568,7 +644,7 @@ mod tests {
     mod linux {
         use std::os::unix::fs::{MetadataExt, symlink};
 
-        use super::super::imp::{check_no_caps, chown_data_dir};
+        use super::super::imp::{can_drop, check_no_caps, chown_data_dir};
         use super::super::*;
 
         #[test]
@@ -584,6 +660,18 @@ mod tests {
             assert!(check_no_caps(amb).unwrap_err().contains("CapAmb"));
             assert!(check_no_caps("CapEff:\t0\n").is_err());
             assert!(check_no_caps("CapPrm:\t\nCapEff:\t0\n").is_err());
+        }
+
+        #[test]
+        fn the_drop_needs_setuid_and_setgid() {
+            assert_eq!(can_drop("CapEff:\t000001ffffffffff\n"), Ok(()));
+            assert_eq!(can_drop("CapEff:\t00000000000000c0\n"), Ok(()));
+            for missing in ["0000000000000000", "0000000000000040", "0000000000000080"] {
+                let e = can_drop(&format!("CapEff:\t{missing}\n")).unwrap_err();
+                assert!(e.contains("SETUID/SETGID") && e.contains("--user"), "{e}");
+            }
+            assert!(can_drop("CapPrm:\t0\n").is_err());
+            assert!(can_drop("CapEff:\tzz\n").is_err());
         }
 
         #[test]
@@ -665,6 +753,24 @@ mod tests {
             assert!(line.contains("is owned by 4242:4343"), "{line}");
             assert_eq!(owner(&data.join("stray")), (0, 0));
 
+            // A folder that isn't Lodestar's is left alone, contents and
+            // all, until it has a marker.
+            let other = tmp.path().join("srv");
+            std::fs::create_dir_all(other.join("www")).unwrap();
+            std::fs::write(other.join("www/site"), b"").unwrap();
+            let e = chown_data_dir(&other, ids).unwrap_err();
+            assert!(e.contains("doesn't look like Lodestar's"), "{e}");
+            assert_eq!(owner(&other), (0, 0));
+            assert_eq!(owner(&other.join("www/site")), (0, 0));
+            std::fs::write(other.join("config.toml"), b"").unwrap();
+            chown_data_dir(&other, ids).unwrap();
+            assert_eq!(owner(&other.join("www/site")), (4242, 4343));
+            // An empty one is fine.
+            let empty = tmp.path().join("empty");
+            std::fs::create_dir(&empty).unwrap();
+            chown_data_dir(&empty, ids).unwrap();
+            assert_eq!(owner(&empty), (4242, 4343));
+
             // Never the whole filesystem.
             assert!(
                 chown_data_dir(Path::new("/"), ids)
@@ -695,6 +801,7 @@ mod tests {
                 deep.push("d");
             }
             std::fs::create_dir_all(&deep).unwrap();
+            std::fs::write(data.join("lodestar.db"), b"").unwrap();
             let line = chown_data_dir(&data, Ids { uid: 7, gid: 7 }).unwrap();
             assert!(
                 line.contains("left 1 directories nested too deep"),
