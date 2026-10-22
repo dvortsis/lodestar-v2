@@ -102,7 +102,7 @@ One process, one binary (`lodestar`), with one data directory. Internally it's a
  └──────────────────────────────┘
 ```
 
-Data dir layout: `data/lodestar.db` (SQLite), `data/index/torrents/`, `data/index/files/`, `data/hot/*.col` (mmap'd stats columns), `data/dht/state.bin` (routing table + node IDs), `config.toml`.
+Data dir layout: `data/lodestar.db` (SQLite), `data/index/torrents/`, `data/index/files/`, `data/hot/*.col` (hot-column snapshots), `data/dht/state.bin` (routing table + node IDs), `config.toml`.
 
 ## 5. DHT crawler
 
@@ -191,7 +191,7 @@ Text extracted from NFOs is indexed into an `nfo_text` field (boost ~2).
 - **Content filtering (§20.7):** `filter_rules`, `filter_overrides`, `filter_fixtures`, `filter_hits`, `tombstones`, `quarantine` (sealed names). There's no audit log of filtering changes (§20.11). These replace the M1 `blocklist` config files.
 - `trackers`, `saved_searches`, `alerts`, `user_items` (fav/hidden/labels/notes), `collections`, `settings`, `zstd_dicts`, `schema_migrations`.
 
-**Hot columns:** `data/hot/{seeders,leechers,trackers,last_seen,user_flags}.col` are mmap'd `u32` arrays indexed by torrent id, read and written as atomics so there are no locks between the scraper and searchers. Seeders/trackers use a sentinel for **"never scraped"**, so the UI shows "—" rather than a misleading 0. Swarm stats change constantly; putting them in Tantivy would force delete+reinsert of whole documents. Instead, search collectors read these arrays (a nanosecond lookup) for filtering, sorting and ranking. SQLite stays authoritative, and the arrays are rebuilt on startup if they are inconsistent.
+**Hot columns:** seeders, leechers, trackers, DHT estimate, last seen and (from M5) user flags are in-memory atomic arrays indexed by torrent id, so there are no locks between the scraper and searchers. They're snapshotted to `data/hot/*.col` on a clean shutdown (§16, M4 plan: not mmap'd, because the workspace forbids `unsafe`). Seeders/trackers use a sentinel for **"never scraped"**, so the UI shows "—" rather than a misleading 0. Swarm stats change constantly; putting them in Tantivy would force delete+reinsert of whole documents. Instead, search collectors read these arrays (a nanosecond lookup) for filtering, sorting and ranking. SQLite stays authoritative, and the arrays are rebuilt on startup if they are inconsistent.
 
 **Insights rollups (reporting without touching raw data):** every number on Insights (§10.9) comes from small pre-aggregated tables. They're maintained incrementally by the pipeline, so reports never scan `torrents` or the search index.
 - **Tables:**
@@ -1518,6 +1518,192 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - Only titles are stemmed: names keep exact matching (§8).
 - **Size:** `title_stem` costs about 3 B per torrent (words only, no norms). The torrent index is 408 B per torrent at 100k (budget 512). Schema v4.
 - **Name patterns** belong to the §20 rule engine (an M4 add-on), so M3 doesn't build them.
+
+**M4 plan (swarm health; approved by the owner):**
+- **Owner decisions:**
+  - **Hot columns are safe in-memory atomic arrays, not mmap'd files.** The workspace forbids `unsafe`, and mapping a file needs it.
+    - They're snapshotted to `data/hot/*.col` with a stamp on a clean shutdown. A start without a matching stamp rebuilds them from SQLite.
+    - The cost is about 20 B per torrent of RAM (about 200 MB at 10M) counted against the 1 GB RSS budget. Narrower trackers and DHT columns (u8, u16) can win back about 50 MB later.
+  - **reqwest with rustls** is the HTTP client. It serves BEP 48 scrapes now and becomes the shared per-host client for the §18 HTTP plugins.
+- **What exists:**
+  - KRPC already encodes and parses BEP 33 (`scrape`, `BFsd`, `BFpe`), but lookups never ask for it.
+  - The query parser already recognises `seeders:`, `trackers:`, `dht:`, `seen:` and `time:`.
+  - Rediscoveries don't update `last_seen_at` yet. M4 fixes that.
+- **Slices (one PR each):**
+  1. **`tracker-scrape`:** a pure protocol crate.
+     - BEP 15 UDP scrape: up to 74 hashes a packet, connection ids cached for 60 s, and replies checked for transaction id and exact length.
+     - BEP 48 HTTP scrape, multi-hash.
+     - Fuzz targets and property tests on both parsers, plus in-process fake trackers for tests.
+  2. **DHT BEP 33:**
+     - `Node::scrape(hash)` runs a get_peers lookup with `scrape=1`. It ORs the K closest responders' filters and estimates with `ln(c/m) / (k·ln(1−1/m))`, where m = 2048 and k = 2.
+     - Only the counts are kept, never the filters (§18.7).
+     - Scrape lookups get a capped share of the query budget (about 10%), so they serve new, viewed and rediscovered torrents, not decay sweeps.
+     - The node also answers `scrape=1` queries from its own peer store.
+  3. **Store migration v5 and hot columns** (the content filter took v4 first):
+     - `trackers`, `swarm` (indexed on `next_scrape_at`), `swarm_trackers` and `swarm_history`.
+     - The history ring holds 14 daily and 26 weekly samples, as u16 seeders and leechers with `0xFFFF` for gaps.
+     - Hot columns use a "never scraped" sentinel.
+     - `last_seen_at` is written through to SQLite at most hourly per torrent.
+     - The size report counts the swarm rows.
+  4. **Health service** (the scrape scheduler, in `pipeline`):
+     - **Lanes, served by DRR:** interest (detail views, top search hits), new (ids past a scrape watermark, so ingest writes no swarm row), rediscovered (a bounded set) and due.
+     - **Decay:**
+       - alive torrents every 6 h, doubling up to 3 d while nothing changes;
+       - dead torrents every 2 d, doubling up to 30 d;
+       - a viewed torrent is refreshed when its data is older than 30 min.
+     - **Per tracker:**
+       - a token bucket (UDP: one request every 2 s at Balanced, 5 s at Low, 1 s at Aggressive; HTTP slower);
+       - a backoff, down and banned state machine;
+       - the opentracker rule: a tracker counts as reporting only when s+l+c > 0 (§15).
+     - **Never scraped:** `private` and `private_source` torrents, because a public scrape would leak the hash.
+     - **The swarm-consistency check** (§8) sets a suspect flag in `swarm`. It's a ranking penalty and a displayed reason, not part of the stored junk score, because swarms change.
+     - **Write path:** results go through the single writer as part of `WriteBatch`, and hot columns change after the commit.
+     - **Scrape rollups:** requests by tracker and outcome, and hashes by tracker, split into reporting and zero.
+  5. **Search on hot columns:**
+     - **Filters:** `seeders:`, `trackers:`, `dht:`, `seen:` and `time:`.
+       - At the top level they're checked in the collector.
+       - Under `|` or `-`, a small custom query handles them.
+       - Never-scraped torrents match no range.
+     - **Sorts:** seeders, leechers, trackers and seen. The browse cache key adds a 60 s "hot epoch".
+     - **The M4 re-ranker** multiplies the 200-candidate window by:
+       - `log(1+seeders)`;
+       - freshness;
+       - a trackers nudge;
+       - the suspect penalty;
+       - the junk penalty, once stored.
+       
+       Never-scraped torrents get a neutral prior. Weights live in config, with `?explain=1`.
+     - **`search-bench`** gains swarm-filter and swarm-sort classes.
+  6. **API, binary and Serve rollups:**
+     - `[scrape]` config with a default public tracker list.
+     - A swarm section in the detail view: seeders, leechers and completed, "n of m trackers", scrape age, the DHT estimate, per tracker, and history with trend.
+     - Hits carry swarm data, and views and top hits feed the interest lane.
+     - Serve rollups: searches, latency log buckets and zero results.
+     - Metrics, the status page and `operations.md`.
+- **Order against M3:**
+  - Slices 1–3 don't touch M3 code.
+  - Slice 4 changes the writer, so it follows M3's worker boundary.
+  - Slice 5 is measured after M3's index changes, so the 10M gate reflects the final schema.
+- **Deferred:** the BEP 48 full-scrape discovery source (§18.3, v0.6) gets its own PR after M4, reusing slice 1's HTTP client.
+- **Exit:**
+  - Seeders and trackers filters and sorts meet §3 at 10M: keyword p95 < 30 ms, browse < 50 ms.
+  - Scheduler property tests and the fake-tracker end-to-end test pass.
+  - Memory stays flat in a soak run.
+
+**M4 implementation decisions (tracker scrape, `lodestar-tracker-scrape`):**
+- **One call is one request to one tracker.** `Tracker::scrape(hashes)` returns counts in request order, with `None` where the tracker gave no entry. Choosing hashes, rate limits, backoff and bans belong to the scheduler (slice 4).
+- **UDP (BEP 15):**
+  - Each tracker gets its own socket, connected to the tracker. The kernel then drops anyone else's datagrams, and each tracker is one NAT flow. A reply must also carry our random transaction id; anything else is skipped until the deadline.
+  - A connection id is reused for 60 s. If a scrape with a cached id is refused, the client reconnects once before believing the refusal, because trackers expire ids on their own schedule.
+  - The defaults are a 5 s wait and one retry, not BEP 15's 15 s × 2ⁿ: a scrape can always wait for the next round.
+  - At most 74 hashes go in a packet, so a reply fits in 900 bytes. Hosts are re-resolved hourly, and the socket binds the crawler's address (§5), so scrapes leave through the same VPN.
+- **HTTP (BEP 48):**
+  - The scrape URL follows the convention: the last path segment must start with `announce`. A tracker whose URL doesn't is treated as not supporting scrapes.
+  - reqwest runs on rustls with the `ring` provider. reqwest's default, aws-lc, is a C/CMake build that complicates the Windows and musl targets.
+  - The client ignores `HTTP(S)_PROXY`, because crawler traffic leaves through the bound interface like the DHT does. It follows at most 2 redirects, caps bodies at 64 KiB before reading them, sends 32 hashes per request by default (74 at most), and honours `min_request_interval` up to a day.
+  - Errors never include the URL, which may hold a passkey.
+- **Reading replies:**
+  - A missing count reads as 0, a negative one as 0, and one too large for u32 as `u32::MAX`. An entry with a non-integer count is dropped.
+  - A UDP reply with fewer entries than asked leaves gaps. One with more is a protocol error.
+  - Error text is cut to 200 printable characters.
+  - `Counts::is_reporting` is the opentracker rule: s+l+c > 0.
+- **Identity:** a tracker's canonical URL is `udp://host:port` (BEP 41 paths dropped) or the normalised announce URL without its fragment. It's the key the `trackers` table will use.
+- **Tests:** in-process fake UDP and HTTP trackers (feature `testing`) model opentracker and inject faults: lost and stray packets, refusals, expired connection ids, truncated replies, HTTP errors and oversized bodies. The parsers are property-tested and fuzzed (`fuzz/tracker_scrape`: 5.0M runs clean on first add).
+
+**M4 implementation decisions (hot columns, process):**
+- **Hot columns** (`store::hot`):
+  - Five u32 columns: seeders, leechers, trackers reporting, DHT estimate (seeds + peers) and last seen.
+  - Relaxed atomics in chunks of 64k ids, allocated on first write and never freed. Readers never wait, and memory follows the highest id written: 20 B per id, about 200 MB at 10M. Ids from 2³⁰ on have no slot.
+  - `u32::MAX` is "never scraped" (or "unknown" for last seen), and real counts are capped below it. Last seen only moves forward.
+  - One torrent's columns are written one after another, so a racing reader may briefly mix old and new values of one torrent. That's harmless for display and ranking.
+  - **Epoch:** it advances at most once a minute while values change, and never otherwise. Search caches that read hot columns key on it.
+  - **Snapshots:** one file per column (`data/hot/*.col`), with magic, format, column, stamp, length and an FNV-1a checksum. They're written beside the final name and renamed. Anything missing, from another stamp, truncated or corrupt loads as `None`, and the caller rebuilds from SQLite.
+- **How M4 was built (owner decision):** the core slices (DHT scrape, the swarm store, search on hot columns) were built in parallel by sub-agents on the same model and effort as the main session, each in its own worktree, against interfaces fixed first (`HotColumns`, `SwarmUpdate`, `NodeHandle`). This is an explicit exception to CLAUDE.md's "never delegate" list. Every result was reviewed, fixed where needed and tested in the main session before merge. Docs and the status page went to a smaller helper.
+
+**M4 implementation decisions (DHT scrape, BEP 33):**
+- **The filters follow the BEP exactly:**
+  - 256 bytes, m = 2048 and k = 2.
+  - Each IP is hashed with SHA-1 over its raw 4 or 16 bytes. Bytes 0–1 and 2–3, read little-endian, give two indexes mod 2048, and bit `i % 8` of byte `i / 8` is set.
+  - The estimate is `ln(c/m) / (k·ln(1−1/m))`. An empty filter is 0, and a full one saturates at about 7,800.
+  - The BEP's test vector (192.0.2.0–255 plus 2001:db8::–::3e7, estimate 1224.93) is a unit test, within ±0.01, so a wrong bit or byte order can't slip through.
+- **Answering scrapes:**
+  - The peer store keeps each announce's `seed` flag.
+  - A `get_peers` with `scrape=1` gets `BFsd` (seeds) and `BFpe` (other peers) over the live peers of both address families, but only for a hash we store. A node without the hash sends no filters, as libtorrent does.
+  - `noseed` leaves seeds out of `values`.
+  - Read-only nodes still answer nothing (BEP 43).
+- **Scrape lookups are their own kind:** a get_peers lookup with `scrape=1`. It has its own queue (1,024 requests, then refused), at most 16 at once, and its own completion: it never emits a `Lookup` harvest, so scrapes don't feed the fetch pool.
+- **Budget:**
+  - Scrapes get 10% of the query rate, paid when a lookup starts, at 20 queries a lookup. That's 1 lookup a second at Balanced, 0.25 at Low and 5 at Aggressive. The bucket always holds at least one token, so Low still scrapes.
+  - A scrape query refused by the global limiter puts its node back to "fresh" and resumes the lookup next tick. Failing it would end scrapes early with few filters, because throttled sends count as failures for other lookups.
+  - A scrape still running after 30 s answers with what it has.
+- **Merging:**
+  - The estimate ORs the filters of the K = 8 closest responders that sent any, and `responders` says how many that was.
+  - Responders without filters give up their slot to the next node, for the first K of them. A scrape therefore asks at most about 2K nodes, and nodes that don't store the hash can't crowd out the ones that do.
+  - `responders = 0` means no node near the hash stores it: "unknown", not "dead".
+- **Only counts leave the actor (§18.7):** `NodeHandle::scrape(hash) -> Option<DhtEstimate { seeds, peers, responders }>`. Peers learned by a scrape lookup are dropped with it.
+  - `None` means the queue was full or the node stopped.
+  - `Node::handle()` gives a cloneable handle. `DhtSource::node_handle()` publishes it while the node runs, for the scrape scheduler.
+- **Lookup bookkeeping:**
+  - Maintenance lookups are counted as all lookups minus get_peers and scrapes.
+  - The thin-table re-bootstrap waits only on non-scrape lookups, so steady scraping can't starve it.
+- **Metrics:** `scrapes_requested`, `scrapes_completed`, `scrapes_dropped` and `scrapes_with_responders` (in `Stats`; exported with slice 6).
+- **Tests:**
+  - unit tests for the filters (test vector, union, accuracy from 10 to 2,000 addresses);
+  - the peer store's seed handling;
+  - the lookup's merge and slot rules;
+  - the low-rate budget;
+  - a raw-client test of the answers (`scrape` off: no filters; on: correct filters; `noseed`; an unknown hash);
+  - an in-process network test. Four seeds and seven leechers on distinct loopback IPs announce to six nodes, and a crawler's `scrape` returns exactly 4 and 7. An unknown hash returns zero responders. It was stable over 8 repeated runs.
+
+**M4 implementation decisions (store: swarm tables, history, last seen):**
+- **Migration v5** adds four tables (the content filter's tables took v4):
+  - `trackers`: the scrape list.
+    - Ids are `AUTOINCREMENT` within u16 and never reused, because `swarm_trackers` packs them. A reused id would credit old counts to a new tracker.
+    - The canonical URL is unique.
+    - `state` records health: ok, backoff, down or banned.
+  - `swarm`: one row per scraped torrent. A torrent without a row has never been scraped.
+    - The DHT estimate columns are NULL when there's no estimate.
+    - `next_scrape_at` is indexed for the scheduler's due lane. A test pins that the due query walks the index without a sort.
+  - `swarm_trackers`: per-tracker counts, only for trackers that report the hash (s+l+c > 0).
+  - `swarm_history`: the ring buffer.
+  
+  All four cascade when a torrent is deleted.
+- **One scrape round is one `SwarmUpdate`,** applied in the writer's transaction (`WriteBatch.swarm`):
+  - The store keeps what it's given. Which number counts as "seeders" is the scheduler's rule.
+  - An update for a deleted torrent is skipped and reported as `false` in `Written.swarm`, rather than failing the batch.
+  - Per-tracker detail is replaced each round and deleted when nothing reports.
+  - **An unanswered round** (no tracker answered, no DHT estimate) changes only `next_scrape_at`. A tracker outage isn't a dead swarm: the counts, history and per-tracker rows stay, `last_scrape_at` stays the time of the last answer, and `SwarmUpdate::hot()` is `None`, so the hot columns keep their values. A torrent's first scrape still gets a row, so it leaves the new lane. With nothing checked and no DHT estimate, it reads as never scraped.
+- **Per-tracker blob, format 1:**
+  - Layout: a version byte, the scrape time as a varint, then per tracker its id (u16), seeders, leechers and completed as varints.
+  - Every entry comes from the same round, so the time is stored once.
+  - Decoding is strict: only canonical varints, and anything the encoder wouldn't write is an error.
+- **History ring, format 1:**
+  - Layout: 169 bytes. A version byte, the newest day and week numbers, then 14 daily and 26 weekly (seeders, leechers) u16 samples, newest first.
+  - `0xFFFF` is a gap and counts saturate below it. A day or week keeps its latest sample, and samples older than the ring are dropped.
+  - It's kept only for swarms that were ever live, or that someone looked at (`interest`). Once kept, it follows the swarm down to zero, because "this died" is the point of a history.
+  - A corrupt ring is replaced rather than failing the batch: it's derived data.
+  - `trend` is the least-squares slope of the last 7 daily seeders samples, in seeders per day. It needs 3 or more samples.
+  - Property-tested: round trips, arbitrary bytes, and gaps staying gaps.
+- **Last seen:**
+  - Rediscoveries now carry their time.
+  - `torrents.last_seen_at` is written through only when it moves forward by an hour or more (`LAST_SEEN_WRITE_EVERY`). The hot column holds the exact value.
+  - So SQLite is at most an hour behind after a crash, and busy torrents cost one write per hour, not one per sighting.
+- **Rebuilding hot columns:** `Store::load_hot` reads `swarm` and then `torrents.last_seen_at` in id-ordered chunks of 10,000, one short statement each. A rebuild therefore never pins the WAL. A torrent without a DHT estimate keeps "never" in that column.
+- **`flags::PRIVATE_SOURCE` (bit 10):**
+  - It's set when only private sources reported a key. It's carried from the fetch pool (`FetchedKey.private_source`) through the worker's `Results` to the commit.
+  - The scheduler's lanes (`due_for_scrape`, `unscraped_after`) skip it and `flags::PRIVATE`, so neither ever reaches a public scrape.
+  - **A public sighting makes it public.** The store clears the bit on a public rediscovery (`Touch.public`), and on a public commit of a stored torrent.
+  - Nothing sets it on a stored public torrent. A partial-import upgrade keeps it only when both the stored row and the new commit are private-source.
+- **Scheduler lanes:**
+  - `unscraped_after(id)` is the new lane: torrents with no `swarm` row, past a watermark, so ingest writes no swarm row. When it finds none, the scheduler moves the watermark to `max_id()` (one index probe), so it doesn't walk the same scraped ids again.
+  - `due_for_scrape(now)` is the decay lane, most overdue first.
+- **Size** (the 50k synthetic size report, with every torrent scraped once and 40% of swarms live):
+  - Swarm health costs **132 B per torrent**:
+    - history 73 B;
+    - `swarm` 30 B;
+    - its due index 14 B;
+    - per-tracker 14 B.
+  - The whole store is **926 B** against the 1,024 B gate, so it still passes, with 98 B left. A history row costs about 180 B with page overhead, so the share of live swarms drives the total.
 
 ## 17. Verification (once built)
 

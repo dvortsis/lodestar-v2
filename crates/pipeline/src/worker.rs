@@ -92,6 +92,8 @@ pub(crate) struct Results {
     /// The worker's filter verdict, and the rule-set version it used.
     pub verdict: Option<Hit>,
     pub version: u64,
+    /// Only private sources reported the key.
+    pub private_source: bool,
 }
 
 pub(crate) struct PrepareStage {
@@ -148,6 +150,7 @@ impl PrepareStage {
                             content_type: done.content_type,
                             verdict: done.verdict,
                             version: done.version,
+                            private_source: fk.private_source,
                         };
                         if out.send(r).await.is_err() {
                             return;
