@@ -479,7 +479,20 @@ fn enrichment_written_under_old_classification_rules_is_refused_or_marked() {
         None
     );
     assert_eq!(s.unenriched(0, 99, 10).unwrap(), vec![a], "still marked");
-    assert_eq!(s.set_enrichments_at(next, &[(a, e)], &[]).unwrap(), Some(1));
+    assert_eq!(
+        s.set_enrichments_at(next, &[(a, e.clone())], &[]).unwrap(),
+        Some(1)
+    );
+    assert_eq!(s.content_type(a).unwrap(), Some(3));
+
+    // So does a correction: a batch classified before it can't overwrite it.
+    let fix = lodestar_store::ClassCorrection {
+        adult: Some(true),
+        not_junk: false,
+    };
+    assert!(s.set_correction(a, fix).unwrap());
+    assert_eq!(s.class_gen().unwrap(), next + 1);
+    assert_eq!(s.set_enrichments_at(next, &[(a, e)], &[]).unwrap(), None);
 
     // A batch write under an old generation stores but marks.
     let raw = dict("b", false);
