@@ -76,7 +76,8 @@ Every torrent that can be scraped is in one of a few lanes. The scheduler serves
 - **Rediscovered torrents** get priority. When a known hash shows up in the DHT again, that's a free liveness signal (architecture §5), so its scrape moves up, unless it was scraped in the last 6 hours. Popular torrents are rediscovered constantly.
 - **Alive swarms** (some seeder or leecher) are rescraped every 6 hours. While the counts stay steady, the gap doubles, up to 3 days. It resets to 6 hours when a count moves by a fifth, or by 2 peers or more.
 - **Dead swarms** (nothing reported) are rescraped every 2 days, doubling to 30 days.
-- **Unreachable rounds**, where no tracker and no DHT answer arrived, retry after 1 hour, doubling to 1 day.
+- **Unreachable rounds**, where no tracker and no DHT answer arrived, retry after 1 hour, doubling with each unanswered round in a row, up to 1 day. The last known counts stay as they were, since a tracker outage isn't a dead swarm. The first answer resets the retry.
+- If every tracker is backing off or banned, no rounds run at all. Nothing is marked unreachable for a wait of Lodestar's own making.
 - Every interval has ±10% jitter, so a batch of torrents stored together doesn't come due together.
 
 ### Throughput at Balanced

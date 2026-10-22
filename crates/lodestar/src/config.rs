@@ -444,9 +444,18 @@ impl Config {
             return Ok(None);
         }
         let mut trackers: Vec<TrackerUrl> = Vec::new();
-        for raw in &self.scrape.trackers {
+        // Errors name the entry by position: an HTTP tracker URL may carry
+        // a passkey, and errors end up in logs.
+        for (i, raw) in self.scrape.trackers.iter().enumerate() {
+            let entry = i + 1;
             let url = TrackerUrl::parse(raw)
-                .map_err(|e| ConfigError(format!("scrape.trackers {raw:?}: {e}")))?;
+                .map_err(|e| ConfigError(format!("scrape.trackers entry {entry}: {e}")))?;
+            if url.scheme() != lodestar_tracker_scrape::Scheme::Udp && url.scrape_url().is_none() {
+                return Err(ConfigError(format!(
+                    "scrape.trackers entry {entry}: an HTTP tracker URL must end in /announce \
+                     (BEP 48) to be scraped"
+                )));
+            }
             if !trackers.iter().any(|t| t.as_str() == url.as_str()) {
                 trackers.push(url);
             }
@@ -600,6 +609,14 @@ mod tests {
         std::fs::write(&path, "[scrape]\ntrackers = [\"wss://x.example\"]\n").unwrap();
         let c = Config::load(Some(&path), no_env).unwrap();
         assert!(c.health_config().is_err());
+        std::fs::write(
+            &path,
+            "[scrape]\ntrackers = [\"udp://a.example:1\", \"https://t.example/secret123/x\"]\n",
+        )
+        .unwrap();
+        let c = Config::load(Some(&path), no_env).unwrap();
+        let e = c.health_config().unwrap_err().to_string();
+        assert!(e.contains("entry 2") && !e.contains("secret123"), "{e}");
 
         let off = |k: &str| (k == "LODESTAR_SCRAPE_ENABLED").then(|| "false".to_string());
         let c = Config::load(None, off).unwrap();

@@ -97,6 +97,12 @@ impl Pacer {
         }
     }
 
+    /// Time between requests (a tracker's `min_request_interval` may have
+    /// raised it).
+    pub fn interval(&self) -> Duration {
+        self.interval
+    }
+
     pub fn health(&self) -> Health {
         self.health
     }

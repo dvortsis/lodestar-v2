@@ -9,8 +9,10 @@
 //! - a swarm that just died starts at the dead minimum and doubles from
 //!   there, up to the dead maximum;
 //! - a scrape nobody answered (every tracker failed, no DHT estimate)
-//!   retries after an hour, doubling to a day, without touching the
-//!   swarm's own interval logic.
+//!   retries after an hour, doubling to a day with each unanswered round
+//!   in a row. The first answer after such a streak starts its class
+//!   over at the minimum: the interval before the outage is unknown, and
+//!   `next − last answer` would count the outage as steadiness.
 //!
 //! Every interval is spread by a per-torrent jitter of ±10%, so torrents
 //! scraped together don't stay in lockstep forever.
@@ -70,6 +72,8 @@ pub struct Before {
     pub seen: Seen,
     /// The interval that led to this scrape, in seconds.
     pub interval: i64,
+    /// Unanswered rounds in a row just before this one.
+    pub unreached: u8,
 }
 
 /// What this scrape found: `None` when no tracker answered and the DHT
@@ -81,13 +85,20 @@ impl Schedule {
     /// first scrape; `id` seeds the jitter.
     pub fn next_interval(&self, id: i64, before: Option<Before>, found: Found) -> i64 {
         let secs = |d: Duration| d.as_secs() as i64;
-        let prev = before.map(|b| b.interval);
+        if found.is_none() {
+            let streak = before.map_or(0, |b| b.unreached).min(16);
+            let base = secs(self.unreached_min).saturating_mul(1 << streak);
+            return jitter(id, base.min(secs(self.unreached_max)));
+        }
+        // After an outage the last interval is unknown: start the class
+        // over at its minimum.
+        let prev = before.filter(|b| b.unreached == 0).map(|b| b.interval);
         let grow = |min: Duration, max: Duration| {
             let base = prev.map_or(secs(min), |p| p.saturating_mul(2));
             base.clamp(secs(min), secs(max))
         };
         let base = match (found, before) {
-            (None, _) => grow(self.unreached_min, self.unreached_max),
+            (None, _) => unreachable!("handled above"),
             (Some(now), Some(b)) if now.is_alive() && now.moved_from(&b.seen) => {
                 secs(self.alive_min)
             }
@@ -147,6 +158,7 @@ mod tests {
             Some(Before {
                 seen: seen(seeders, 0),
                 interval,
+                unreached: 0,
             })
         };
         assert!(within(
@@ -180,6 +192,7 @@ mod tests {
             Some(Before {
                 seen: seen(0, 0),
                 interval,
+                unreached: 0,
             })
         };
         assert!(within(
@@ -187,7 +200,8 @@ mod tests {
                 1,
                 Some(Before {
                     seen: seen(4, 0),
-                    interval: 6 * H
+                    interval: 6 * H,
+                    unreached: 0,
                 }),
                 Some(seen(0, 0))
             ),
@@ -211,16 +225,27 @@ mod tests {
     #[test]
     fn unreached_scrapes_retry_soon() {
         let s = Schedule::default();
-        let b = Some(Before {
-            seen: seen(5, 0),
-            interval: 2 * H,
-        });
-        assert!(within(s.next_interval(1, b, None), 4 * H));
-        let long = Some(Before {
-            seen: seen(5, 0),
-            interval: 300 * H,
-        });
-        assert!(within(s.next_interval(1, long, None), 24 * H));
+        let b = |interval, unreached| {
+            Some(Before {
+                seen: seen(5, 0),
+                interval,
+                unreached,
+            })
+        };
+        // An outage starts at an hour whatever the swarm's own interval,
+        // and doubles with each unanswered round in a row.
+        assert!(within(s.next_interval(1, b(72 * H, 0), None), H));
+        assert!(within(s.next_interval(1, b(H, 1), None), 2 * H));
+        assert!(within(s.next_interval(1, b(H, 9), None), 24 * H));
+        // The first answer after it starts the swarm's class over.
+        assert!(within(
+            s.next_interval(1, b(30 * H, 3), Some(seen(5, 0))),
+            6 * H
+        ));
+        assert!(within(
+            s.next_interval(1, b(30 * H, 3), Some(seen(0, 0))),
+            48 * H
+        ));
     }
 
     #[test]
@@ -244,7 +269,7 @@ mod tests {
             found in proptest::option::of((any::<u32>(), any::<u32>())),
         ) {
             let s = Schedule::default();
-            let before = prev.map(|(a, b, interval)| Before { seen: seen(a, b), interval });
+            let before = prev.map(|(a, b, interval)| Before { seen: seen(a, b), interval, unreached: (interval % 20) as u8 });
             let v = s.next_interval(id, before, found.map(|(a, b)| seen(a, b)));
             let lo = s.unreached_min.as_secs() as i64 * 9 / 10;
             let hi = s.dead_max.as_secs() as i64 * 11 / 10;

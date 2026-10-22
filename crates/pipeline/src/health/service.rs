@@ -30,7 +30,7 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 use super::aggregate::{DhtSeen, aggregate};
-use super::client::{ClientTask, Clock, Done, Job, Outcome, TrackerStatus};
+use super::client::{ClientTask, Clock, Done, Gate, Job, Outcome, TrackerStatus};
 use super::lanes::{Lane, Lanes, Weights};
 use super::schedule::{Before, Schedule, Seen};
 use super::trackers::{Health, Pacer};
@@ -212,19 +212,32 @@ pub(crate) fn spawn(s: Setup) -> (HealthHandle, JoinHandle<Store>) {
         } else {
             s.cfg.http_interval
         };
-        // A job may wait for one more slot than the round cadence, so a
-        // healthy tracker never skips but a backed-off one does.
+        // A job may wait for one slot more than a full round takes (one
+        // request over UDP, three over HTTP at 32 hashes), so a healthy
+        // tracker never skips but a backed-off one does: backoff starts at
+        // a minute, well past four default HTTP slots.
+        let gate = Arc::new(Gate::default());
+        let per_request = tracker.max_hashes().max(1);
+        let requests = s.cfg.round_size.max(1).div_ceil(per_request);
+        let max_wait = interval * (u32::try_from(requests).unwrap_or(u32::MAX - 1) + 1);
         let task = ClientTask {
             id: *id,
             tracker,
             pacer: Pacer::new(interval, clock.now()),
             clock,
-            max_wait: interval * 2,
+            max_wait,
             status: status.clone(),
+            gate: gate.clone(),
         };
         let (job_tx, job_rx) = mpsc::channel(1);
         tokio::spawn(task.run(job_rx, done_tx.clone()));
-        jobs.push((*id, job_tx));
+        jobs.push(Slot {
+            id: *id,
+            jobs: job_tx,
+            gate,
+            per_request,
+            max_wait_ms: max_wait.as_millis() as u64,
+        });
         statuses.push(status);
     }
     drop(done_tx);
@@ -242,6 +255,7 @@ pub(crate) fn spawn(s: Setup) -> (HealthHandle, JoinHandle<Store>) {
         rounds: HashMap::new(),
         next_round: 0,
         jobs,
+        clock,
         dht: s.dht,
         dht_tx,
         out: s.out,
@@ -273,10 +287,33 @@ struct Inputs {
     dht: mpsc::Receiver<(u64, usize, Option<DhtEstimate>)>,
 }
 
+/// One tracker task as the scheduler sees it.
+struct Slot {
+    id: u16,
+    jobs: mpsc::Sender<Job>,
+    gate: Arc<Gate>,
+    /// Hashes the tracker takes per request.
+    per_request: usize,
+    max_wait_ms: u64,
+}
+
+impl Slot {
+    /// Free, and allowed to send all of `hashes` within its wait: a job
+    /// sent now would be worked on, not queued or skipped.
+    fn ready(&self, now_ms: u64, hashes: usize) -> bool {
+        !self.gate.busy.load(std::sync::atomic::Ordering::Relaxed)
+            && self
+                .gate
+                .fits(now_ms, hashes, self.per_request, self.max_wait_ms)
+    }
+}
+
 struct Item {
     id: i64,
     lane: Lane,
     before: Option<Before>,
+    /// The stored DHT estimate, kept when this round doesn't ask the DHT.
+    prev_dht: Option<(u32, u32)>,
 }
 
 struct Round {
@@ -284,8 +321,12 @@ struct Round {
     /// Per item: (tracker, its entry) for every tracker that answered.
     answers: Vec<Vec<(u16, Option<Counts>)>>,
     dht: Vec<Option<DhtSeen>>,
+    /// Per item: whether the DHT was asked.
+    dht_asked: Vec<bool>,
     waiting_trackers: usize,
     waiting_dht: usize,
+    /// Trackers that sent a request for this round.
+    asked: usize,
     deadline: Instant,
 }
 
@@ -295,7 +336,8 @@ struct Scheduler {
     lanes: Lanes,
     rounds: HashMap<u64, Round>,
     next_round: u64,
-    jobs: Vec<(u16, mpsc::Sender<Job>)>,
+    jobs: Vec<Slot>,
+    clock: Clock,
     dht: Arc<Mutex<Option<NodeHandle>>>,
     dht_tx: mpsc::Sender<(u64, usize, Option<DhtEstimate>)>,
     dht_permits: Arc<Semaphore>,
@@ -316,6 +358,11 @@ struct Loaded {
     before: Option<Before>,
     /// When a tracker or the DHT last answered for it.
     scraped_at: Option<i64>,
+    /// Its swarm row's next scrape, if it has a row.
+    next_scrape_at: Option<i64>,
+    dht: Option<(u32, u32)>,
+    /// Alive by the DHT alone: no tracker reported it last time.
+    dht_only_alive: bool,
 }
 
 /// Hints don't rescrape fresh data: a torrent someone looks at is
@@ -375,11 +422,26 @@ impl Scheduler {
         let paced = self
             .last_launch
             .is_none_or(|t| t.elapsed() >= self.cfg.interval);
-        if paced && self.rounds.len() < self.cfg.max_rounds && !self.lanes.is_empty() {
+        if paced
+            && self.rounds.len() < self.cfg.max_rounds
+            && !self.lanes.is_empty()
+            && self.can_ask()
+        {
             self.last_launch = Some(now);
             self.launch().await;
         }
         true
+    }
+
+    /// Whether a round started now could ask anyone: some tracker ready,
+    /// or (with no trackers configured) the DHT. Otherwise rounds would
+    /// only record outages for torrents nobody was asked about.
+    fn can_ask(&self) -> bool {
+        let now = self.clock.now();
+        if self.jobs.is_empty() {
+            return self.cfg.dht && self.dht.lock().expect("dht handle lock").is_some();
+        }
+        self.jobs.iter().any(|j| j.ready(now, self.cfg.round_size))
     }
 
     /// Runs `f` on the blocking pool with the store.
@@ -448,49 +510,67 @@ impl Scheduler {
     }
 
     async fn launch(&mut self) {
-        let taken = self.lanes.take(self.cfg.round_size);
-        if taken.is_empty() {
-            return;
-        }
-        let ids: Vec<i64> = taken.iter().map(|(_, id)| *id).collect();
-        let loaded = self
-            .with_store(move |s| ids.iter().map(|id| load(s, *id)).collect::<Vec<_>>())
-            .await;
-        let mut items = Vec::with_capacity(taken.len());
-        let mut hashes = Vec::with_capacity(taken.len());
-        let mut dropped = Vec::new();
         let now = unix_now();
-        let fresh = |lane: Lane, at: Option<i64>| {
-            let age = match lane {
-                Lane::Interest => INTEREST_FRESH,
-                Lane::Rediscovered => rediscovered_fresh(&self.cfg.schedule),
-                Lane::New | Lane::Due => return false,
-            };
-            at.is_some_and(|t| now - t < age)
-        };
-        for ((lane, id), l) in taken.into_iter().zip(loaded) {
-            match l {
-                Some(l) if !l.private && fresh(lane, l.scraped_at) => {
-                    inc(&self.stats.fresh_skipped);
+        let mut items = Vec::with_capacity(self.cfg.round_size);
+        let mut hashes = Vec::with_capacity(self.cfg.round_size);
+        let mut dht_wanted = Vec::with_capacity(self.cfg.round_size);
+        // Torrents dropped below don't scrape, so top the round up from
+        // the lanes, a few passes at most.
+        for _ in 0..4 {
+            let want = self.cfg.round_size - items.len();
+            let taken = self.lanes.take(want);
+            if taken.is_empty() {
+                break;
+            }
+            let ids: Vec<i64> = taken.iter().map(|(_, id)| *id).collect();
+            let loaded = self
+                .with_store(move |s| ids.iter().map(|id| load(s, *id)).collect::<Vec<_>>())
+                .await;
+            let mut dropped = Vec::new();
+            for ((lane, id), l) in taken.into_iter().zip(loaded) {
+                // Deleted since it was queued.
+                let Some(l) = l else {
                     dropped.push(id);
-                }
-                Some(l) if !l.private => {
-                    items.push(Item {
-                        id,
-                        lane,
-                        before: l.before,
-                    });
-                    hashes.push(l.hash);
-                }
-                Some(_) => {
+                    continue;
+                };
+                if l.private {
                     inc(&self.stats.private_skipped);
                     dropped.push(id);
+                    continue;
                 }
-                // Deleted since it was queued.
-                None => dropped.push(id),
+                let skip = match lane {
+                    // Hints don't rescrape fresh numbers.
+                    Lane::Interest => l.scraped_at.is_some_and(|t| now - t < INTEREST_FRESH),
+                    Lane::Rediscovered => l
+                        .scraped_at
+                        .is_some_and(|t| now - t < rediscovered_fresh(&self.cfg.schedule)),
+                    // Already scraped (through a hint, or an earlier
+                    // queueing of the same torrent) since it was queued.
+                    Lane::New => l.next_scrape_at.is_some(),
+                    Lane::Due => l.next_scrape_at.is_none_or(|t| t > now),
+                };
+                if skip {
+                    inc(&self.stats.fresh_skipped);
+                    dropped.push(id);
+                    continue;
+                }
+                // The DHT is asked for hinted and new torrents, and on due
+                // rounds for swarms only the DHT showed alive: the trackers
+                // alone would call those dead.
+                dht_wanted.push(lane != Lane::Due || l.dht_only_alive);
+                items.push(Item {
+                    id,
+                    lane,
+                    before: l.before,
+                    prev_dht: l.dht,
+                });
+                hashes.push(l.hash);
+            }
+            self.lanes.finish(dropped);
+            if items.len() >= self.cfg.round_size {
+                break;
             }
         }
-        self.lanes.finish(dropped);
         if items.is_empty() {
             return;
         }
@@ -502,25 +582,28 @@ impl Scheduler {
         let mut r = Round {
             answers: vec![Vec::new(); n],
             dht: vec![None; n],
+            dht_asked: vec![false; n],
             items,
             waiting_trackers: 0,
             waiting_dht: 0,
+            asked: 0,
             deadline: Instant::now() + self.cfg.round_deadline,
         };
-        let now = unix_now();
-        for (tracker, tx) in &self.jobs {
+        let now_ms = self.clock.now();
+        for slot in &self.jobs {
             let job = Job {
                 round,
                 hashes: hashes.clone(),
             };
-            if tx.try_send(job).is_ok() {
+            // Busy with an earlier round, or backing off: it sits this one
+            // out instead of holding it up.
+            if slot.ready(now_ms, hashes.len()) && slot.jobs.try_send(job).is_ok() {
                 r.waiting_trackers += 1;
             } else {
-                // Still busy with an earlier round: it sits this one out.
                 self.rollups.add_dim(
                     now,
                     metric::SCRAPE_REQUESTS,
-                    u32::from(*tracker),
+                    u32::from(slot.id),
                     Outcome::Skipped as i64,
                     1,
                 );
@@ -528,8 +611,8 @@ impl Scheduler {
         }
         let node = self.dht.lock().expect("dht handle lock").clone();
         if let (true, Some(node)) = (self.cfg.dht, node) {
-            for (i, item) in r.items.iter().enumerate() {
-                if item.lane == Lane::Due {
+            for (i, wanted) in dht_wanted.into_iter().enumerate() {
+                if !wanted {
                     continue;
                 }
                 // The node scrapes about one swarm a second (10% of its
@@ -541,6 +624,7 @@ impl Scheduler {
                     continue;
                 };
                 r.waiting_dht += 1;
+                r.dht_asked[i] = true;
                 inc(&self.stats.dht_requested);
                 let (node, tx, hash) = (node.clone(), self.dht_tx.clone(), hashes[i]);
                 tokio::spawn(async move {
@@ -569,6 +653,9 @@ impl Scheduler {
             return;
         };
         r.waiting_trackers = r.waiting_trackers.saturating_sub(1);
+        if d.asked {
+            r.asked += 1;
+        }
         if let Some(answers) = d.answers {
             for (slot, a) in r.answers.iter_mut().zip(answers) {
                 slot.push((d.tracker, a));
@@ -613,9 +700,33 @@ impl Scheduler {
             return true;
         };
         let now = unix_now();
+        // Nobody was asked (every tracker skipped, no DHT): nothing was
+        // learned, not even an outage. The torrents go back to their lanes.
+        if r.asked == 0 && !r.dht_asked.iter().any(|a| *a) {
+            self.lanes.finish(r.items.iter().map(|i| i.id));
+            for item in &r.items {
+                self.lanes.push(item.lane, item.id);
+            }
+            return true;
+        }
         let mut updates = Vec::with_capacity(r.items.len());
-        for ((item, answers), dht) in r.items.iter().zip(&r.answers).zip(&r.dht) {
-            let agg = aggregate(answers, *dht);
+        for (i, item) in r.items.iter().enumerate() {
+            let answers = &r.answers[i];
+            // A DHT estimate not asked for this round carries over, as
+            // long as some tracker answered: alone it would make an outage
+            // look like an answer.
+            let dht = match (r.dht_asked[i], item.prev_dht) {
+                (true, _) => r.dht[i],
+                (false, Some((seeds, peers))) if !answers.is_empty() => Some(DhtSeen {
+                    seeds,
+                    peers,
+                    // Counts for the swarm, not as evidence of fake
+                    // seeding (that takes 2).
+                    responders: 1,
+                }),
+                (false, _) => None,
+            };
+            let agg = aggregate(answers, dht);
             let result = match agg.found {
                 Some(seen) if seen.is_alive() => {
                     inc(&self.stats.alive);
@@ -679,7 +790,13 @@ fn load(s: &mut Store, id: i64) -> Option<Loaded> {
             leechers: w.leechers,
         },
         interval: (w.next_scrape_at - w.last_scrape_at).max(0),
+        unreached: swarm_flags::unreached(w.flags),
     });
+    let next_scrape_at = swarm.as_ref().map(|w| w.next_scrape_at);
+    let dht = swarm.as_ref().and_then(|w| w.dht);
+    let dht_only_alive = swarm
+        .as_ref()
+        .is_some_and(|w| w.trackers_reporting == 0 && w.dht.is_some_and(|(s, p)| s + p > 0));
     // A row nobody answered for (`trackers_checked` 0, no DHT estimate)
     // has no data to be fresh.
     let scraped_at = swarm
@@ -690,5 +807,8 @@ fn load(s: &mut Store, id: i64) -> Option<Loaded> {
         private,
         before,
         scraped_at,
+        next_scrape_at,
+        dht,
+        dht_only_alive,
     })
 }

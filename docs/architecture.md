@@ -1708,12 +1708,16 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 **M4 implementation decisions (scrape scheduler, `pipeline::health`):**
 - **One round is up to 74 torrents** (one UDP packet).
   - Every tracker gets the round's hashes as one job. A task per tracker owns its client and pacer, and splits the job into requests that tracker accepts.
-  - Interest, new and rediscovered torrents also get a DHT scrape (BEP 33). The due lane doesn't: decay sweeps would swamp the DHT budget.
+  - Interest, new and rediscovered torrents also get a DHT scrape (BEP 33). The due lane doesn't, because decay sweeps would swamp the DHT budget. The exception is a swarm only the DHT showed alive: the trackers alone would call it dead.
+    - When a round doesn't ask the DHT but some tracker answers, the stored DHT estimate carries over (as one responder, so it doesn't count as fake-seeding evidence). Otherwise every due rescrape would erase it. With no tracker answering, it isn't carried, so an outage can't pass for an answer.
     - At most 8 DHT scrapes wait on the node at once. With all 8 permits taken, a torrent goes without a DHT estimate that round rather than joining a backlog, because the node serves about one scrape a second.
   - A round closes when every answer is in, or after 60 s with what arrived. Its torrents go to the writer as one batch.
 - **Pacing:**
   - Rounds start once per tracker interval, with at most 2 in flight. The interval is 2 s at Balanced, 5 s at Low and 1 s at Aggressive; HTTP trackers default to three times that.
-  - A tracker still busy with the previous round sits the new one out (`skipped`). One that can't start within two intervals (backing off, down, banned) skips at once. A bad tracker never holds a round up; it just isn't counted as checked.
+  - A tracker still busy with the previous round sits the new one out (`skipped`). So does one whose last request of the job couldn't start within one slot more than a full round takes (one request over UDP, three over HTTP at 32 hashes), because it's backing off, down or banned. A bad tracker never holds a round up; it just isn't counted as checked.
+    - The check is all or nothing: an HTTP job never starts unless every request fits, because a job abandoned halfway would throw the answers it already had away.
+    - Each tracker task publishes when it's free and when its pacer allows the next request (`Gate`). The scheduler applies the same fit check before sending, and a round starts only when some tracker can take it (or, with no trackers, when the DHT is on).
+    - A round in which nobody was asked (every tracker skipped, no DHT scrape) writes nothing. Its torrents go back to their lanes, so an outage of our own making doesn't look like a dead swarm or use up an unreached retry.
   - That's about 37 torrents/s at Balanced, roughly 3.2M torrent-scrapes a day across every tracker.
 - **Tracker health:**
   - **Backoff:** a failure waits 1 min, doubling (1, 2, 4, 8 min).
@@ -1730,12 +1734,13 @@ docs/               architecture.md (this plan), query-language.md, operations.m
     - Without this, a busy search page or a popular swarm would spend the tracker budget re-asking the same questions.
   - **New** (weight 4), **rediscovered** (2) and **due** (3) share the rest. An empty lane forfeits its deficit, so idle lanes can't save up a burst.
   - A torrent is in at most one round at a time. The interest and rediscovered lanes hold 50,000 entries each and drop their oldest.
+  - **Rounds re-check what they load.** A new-lane torrent that already has a swarm row (a hint got there first) and a due-lane torrent that's no longer due are dropped, so the same torrent isn't scraped twice in a row. Dropped torrents don't take a round slot: launch tops the round up from the lanes.
   - The new and due lanes refill from the store, 1,000 at a time, when they fall below four rounds' worth.
   - The new lane follows a watermark. When nothing above it is unscraped, it moves to `max_id()`, so scraped ids aren't walked again.
 - **The decay schedule (§15):**
   - **Alive swarms:** 6 h, doubling to 3 days while the counts hold. It resets when seeders or leechers move by a fifth (and at least 2).
   - **Dead swarms:** 2 days, doubling to 30 days.
-  - **A round nobody answered:** retried after 1 h, doubling to a day.
+  - **A round nobody answered:** retried after 1 h, doubling with each unanswered round in a row, to a day. The count lives in `swarm.flags` bits 8–11 (capped at 15). An answered round's flags replace it, and the next interval restarts at that class's minimum. The stored counts are kept: a tracker outage isn't a dead swarm.
   - Every interval has a deterministic ±10% jitter per torrent, so torrents scraped together drift apart.
   - The previous interval is `next_scrape_at − last_scrape_at`.
 - **Aggregation:**
@@ -1757,12 +1762,15 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Tests:**
   - property tests for the schedule bounds and for lane fairness and completeness;
   - unit tests for the pacer states, ban detection and aggregation (including fake seeding);
-  - end to end with the fake UDP tracker: counts reach the store and hot columns, private torrents are never scraped, a rediscovery moves last-seen, an unreachable tracker leaves counts unknown, and snapshots survive a clean restart but not a crash. Stable over repeated runs.
+  - end to end with the fake UDP tracker: counts reach the store and hot columns, private torrents are never scraped, a rediscovery moves last-seen, a fresh hint doesn't rescrape, an unreachable tracker leaves counts unknown, a due rescrape keeps the DHT estimate it didn't ask for, and snapshots survive a clean restart but not a crash;
+  - end to end with the fake HTTP tracker: back-to-back rounds of four requests each are all answered, none skipped;
+  - store tests for the unreached count: it climbs, caps at 15, keeps other flags and resets on an answer.
+  - All stable over repeated runs.
 
 **M4 implementation decisions (API, binary and Serve rollups):**
 - **Config:**
   - `[scrape]` holds `enabled`, `trackers` (ten long-lived public UDP trackers by default), `dht`, `interval_secs` and `http_interval_secs`. `LODESTAR_SCRAPE_ENABLED` overrides `enabled`.
-  - Tracker URLs are canonicalised. The same tracker listed twice counts once, and one that can't be scraped (`wss://`, an HTTP URL without `announce`) is a startup error.
+  - Tracker URLs are canonicalised. The same tracker listed twice counts once, and one that can't be scraped (`wss://`, an HTTP URL without a BEP 48 scrape URL) is a startup error. Errors name the list entry by position, never the URL, which can carry a passkey.
   - Scrapes bind the DHT's IPv4 address when it's specific, so they leave through the same interface or VPN (§5).
   - `[ranking]` sets every `RankWeights` field plus the suspect multiplier.
 - **Search API:**
@@ -1815,6 +1823,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - **a penalty hook:** `SearchIndex::with_penalty(Fn(id) -> 0..=1)`, for the scraper's swarm-consistency check (slice 4). The default is none.
 - **Neutral priors for unknowns.** A never-scraped torrent counts as 1 seeder and 1 tracker: above a dead swarm and below a live one, so new torrents aren't buried before their first scrape. An unknown last-seen counts as one half-life old.
 - **`RankWeights`** holds every weight, with the defaults above. `with_weights` sets it from the `[ranking]` config section, which also sets the suspect multiplier (default 0.2).
+- **Only the window is re-ranked.** Hits past the 200 candidates keep phase-1 order. When a page reaches past the window, its tail is scored for its parts, then put back in phase-1 order. Re-ranking the tail as well would let a hit move between pages as the window shifted, so it could be shown twice or not at all.
 - **Explain:** `search_page_explained` returns `ScoreParts` per relevance hit: text, each multiplier and the final score. That's what `?explain=1` will expose. Sorted pages have no parts.
 - **The window path costs little.** Text-only relevance without boosts (phrases, fielded words) now also takes the 200-candidate window when hot columns are attached. That's one id read, one junk read and five atomic loads per candidate.
   - A filter-only relevance query ranks an arbitrary 200 of its matches by the priors. Browsing by swarm health uses the seeders sort, not relevance.

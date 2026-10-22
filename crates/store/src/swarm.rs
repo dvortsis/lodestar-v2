@@ -13,6 +13,17 @@ pub mod swarm_flags {
     /// One tracker reports a swarm that the DHT and every other tracker
     /// don't see: the fake-seeding signature (§8).
     pub const SUSPECT: u32 = 1;
+    /// Unanswered rounds in a row (0–15), in bits 8–11. The store counts
+    /// them; an answered round's flags replace them, so the count resets.
+    pub const UNREACHED_SHIFT: u32 = 8;
+    pub const UNREACHED_MASK: u32 = 0xf << UNREACHED_SHIFT;
+
+    // `apply` spells the mask as 3840 and the shift as 8 in SQL.
+    const _: () = assert!(UNREACHED_MASK == 3840 && UNREACHED_SHIFT == 8);
+
+    pub fn unreached(flags: u32) -> u8 {
+        ((flags & UNREACHED_MASK) >> UNREACHED_SHIFT) as u8
+    }
 }
 
 /// One tracker's answer for a torrent.
@@ -224,8 +235,9 @@ pub(crate) fn apply(tx: &Connection, u: &SwarmUpdate) -> Result<bool> {
         tx.prepare_cached(
             "INSERT INTO swarm (torrent_id, seeders, leechers, completed, trackers_reporting,
                  trackers_checked, dht_seeds, dht_peers, last_scrape_at, next_scrape_at, flags)
-             VALUES (?1, 0, 0, 0, 0, 0, NULL, NULL, ?2, ?3, 0)
-             ON CONFLICT (torrent_id) DO UPDATE SET next_scrape_at = excluded.next_scrape_at",
+             VALUES (?1, 0, 0, 0, 0, 0, NULL, NULL, ?2, ?3, 256)
+             ON CONFLICT (torrent_id) DO UPDATE SET next_scrape_at = excluded.next_scrape_at,
+                 flags = (flags & ~3840) | (min(((flags >> 8) & 15) + 1, 15) << 8)",
         )?
         .execute(params![u.torrent_id, u.at, u.next_scrape_at])?;
         return Ok(true);
@@ -543,12 +555,9 @@ impl Store {
                         seeders,
                         leechers,
                         trackers,
-                        dht: dht.unwrap_or(0),
+                        dht: dht.unwrap_or(NEVER),
                     },
                 );
-                if dht.is_none() {
-                    hot.set(Col::Dht, id, NEVER);
-                }
                 loaded += 1;
             }
         }

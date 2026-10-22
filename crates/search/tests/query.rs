@@ -495,3 +495,75 @@ fn ranking_without_hot_columns_is_text_only() {
         assert_eq!(p.score, p.text);
     }
 }
+
+/// Relevance pages past the re-rank window: the priors reorder only the
+/// first window, so paging never repeats or loses a hit.
+#[test]
+fn relevance_pages_past_the_window_stay_consistent() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let n = 260usize;
+    let names: Vec<String> = (0..n)
+        .map(|i| {
+            // Varying lengths give varying phase-1 scores.
+            format!("common {}", "filler ".repeat(i % 7) + &format!("t{i}"))
+        })
+        .collect();
+    let raws: Vec<Vec<u8>> = names
+        .iter()
+        .map(|name| {
+            to_vec(&d(vec![
+                ("length", OwnedValue::Int(MB)),
+                ("name", b(name)),
+                ("piece length", OwnedValue::Int(1 << 20)),
+                ("pieces", OwnedValue::Bytes(vec![0; 20])),
+            ]))
+        })
+        .collect();
+    let infos: Vec<Info> = raws.iter().map(|r| Info::parse(r).unwrap()).collect();
+    let batch: Vec<NewTorrent<'_>> = infos
+        .iter()
+        .zip(&raws)
+        .map(|(info, raw)| NewTorrent {
+            info,
+            raw_info: Some(raw),
+            discovered_at: NOW - DAY,
+            metadata_at: NOW,
+            extra_flags: 0,
+            source: SourceId::new(0).unwrap(),
+        })
+        .collect();
+    let ids: Vec<i64> = store
+        .insert(&batch)
+        .unwrap()
+        .iter()
+        .map(|i| i.id())
+        .collect();
+    let cols = hot(Duration::ZERO);
+    // Big swarms on the weakest text matches: the priors pull deep
+    // candidates up as far as they can.
+    for (i, id) in ids.iter().enumerate() {
+        cols.set_swarm(
+            *id as u64,
+            SwarmHot {
+                seeders: if i % 7 == 6 { 100_000 } else { 0 },
+                leechers: 0,
+                trackers: 1,
+                dht: 0,
+            },
+        );
+    }
+    let ix = SearchIndex::in_memory().unwrap().with_hot(cols);
+    let mut w = ix.writer(15 << 20).unwrap();
+    w.catch_up(&mut store, 1000).unwrap();
+    w.commit().unwrap();
+    let q = ix.query(&parse("common").unwrap(), NOW);
+    let mut seen = std::collections::HashSet::new();
+    for page in 0..6 {
+        let r = ix.search_page(&q, Sort::Relevance, 50, page * 50).unwrap();
+        assert_eq!(r.total, n);
+        for h in r.hits {
+            assert!(seen.insert(h.id), "{} shown twice (page {page})", h.id);
+        }
+    }
+    assert_eq!(seen.len(), n, "every hit on some page");
+}

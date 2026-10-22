@@ -184,14 +184,16 @@ impl HotColumns {
         }
     }
 
-    /// Writes a torrent's swarm columns. Values are capped one below
-    /// [`NEVER`], so a real count is never mistaken for "never scraped".
+    /// Writes a torrent's swarm columns. Counts are capped one below
+    /// [`NEVER`], so a real count is never mistaken for "never scraped";
+    /// a `dht` of [`NEVER`] means "no estimate" and stays unknown.
     pub fn set_swarm(&self, id: u64, s: SwarmHot) {
         let cap = |v: u32| v.min(NEVER - 1);
         self.set(Col::Seeders, id, cap(s.seeders));
         self.set(Col::Leechers, id, cap(s.leechers));
         self.set(Col::Trackers, id, cap(s.trackers));
-        self.set(Col::Dht, id, cap(s.dht));
+        let dht = if s.dht == NEVER { NEVER } else { cap(s.dht) };
+        self.set(Col::Dht, id, dht);
         self.changed();
     }
 
@@ -447,6 +449,16 @@ mod tests {
         let hot = HotColumns::new();
         hot.set_swarm(1, swarm(NEVER));
         assert_eq!(hot.get(Col::Seeders, 1), NEVER - 1);
+        // But "no DHT estimate" stays unknown.
+        hot.set_swarm(
+            2,
+            SwarmHot {
+                dht: NEVER,
+                ..swarm(3)
+            },
+        );
+        assert_eq!(hot.get(Col::Dht, 2), NEVER);
+        assert_eq!(hot.get(Col::Seeders, 2), 3);
     }
 
     #[test]

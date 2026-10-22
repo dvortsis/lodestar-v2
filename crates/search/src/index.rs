@@ -796,12 +796,26 @@ impl SearchIndex {
                     let inner = (TopDocs::with_limit(window).order_by_score(), Count);
                     let (candidates, n) =
                         searcher.search(query, &PostFilter { ranges, hot, inner })?;
-                    let ranked = rerank(
+                    // Only the first window is re-ranked, whatever page is
+                    // asked: re-ranking a deeper window would reorder hits
+                    // other pages already showed. Past it, phase-1 order
+                    // holds (with the parts still computed for explain).
+                    let mut candidates = candidates;
+                    let tail = candidates.split_off(candidates.len().min(RERANK_WINDOW));
+                    let mut ranked = rerank(
                         &searcher,
                         compiled.boosts.as_deref(),
                         priors.as_ref(),
                         candidates,
                     )?;
+                    if !tail.is_empty() {
+                        let order: std::collections::HashMap<DocAddress, usize> =
+                            tail.iter().enumerate().map(|(i, (_, a))| (*a, i)).collect();
+                        let mut rest =
+                            rerank(&searcher, compiled.boosts.as_deref(), priors.as_ref(), tail)?;
+                        rest.sort_by_key(|(a, _)| order[a]);
+                        ranked.extend(rest);
+                    }
                     let page: Vec<_> = ranked.into_iter().skip(offset).take(limit).collect();
                     if explain {
                         parts = page.iter().map(|(_, p)| *p).collect();
