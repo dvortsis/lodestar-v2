@@ -14,7 +14,7 @@
 
 mod http;
 
-pub(crate) use http::{SessionAuth, auth_error};
+pub(crate) use http::{ApiDoc, SessionAuth, auth_error};
 pub use http::{protected, require_session, routes};
 
 use std::collections::HashMap;

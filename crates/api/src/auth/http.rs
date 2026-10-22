@@ -10,13 +10,18 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use serde::Deserialize;
-use serde_json::{Value, json};
+use utoipa::OpenApi;
 
 use super::{Auth, AuthError, MIN_PASSWORD_CHARS};
 use crate::ApiState;
+use crate::dto::auth::{AuthStatus, LoginRequest, OkResponse, PasswordRequest, SetupRequest};
 use crate::error::{ApiError, ApiResult, internal, wrong_method};
 use crate::extract::{ClientIp, Json, same_origin_json};
+
+/// This module's half of `/openapi.json`.
+#[derive(OpenApi)]
+#[openapi(paths(auth_status, setup, login, logout, change_password))]
+pub(crate) struct ApiDoc;
 
 pub fn routes() -> Router<ApiState> {
     let open = Router::new()
@@ -72,7 +77,7 @@ fn check_session(auth: &Auth, headers: &HeaderMap) -> ApiResult<()> {
     } else {
         Err(
             ApiError::new(StatusCode::UNAUTHORIZED, "login_required", "Log in first.")
-                .with("setup_required", auth.needs_setup()),
+                .setup_required(auth.needs_setup()),
         )
     }
 }
@@ -123,28 +128,49 @@ pub(crate) fn auth_error(e: AuthError, password: &'static str) -> ApiError {
     }
 }
 
-fn with_cookie(cookie: String, body: Value) -> Response {
-    ([(header::SET_COOKIE, cookie)], axum::Json(body)).into_response()
+/// `{ "ok": true }` with a `Set-Cookie`.
+fn with_cookie(cookie: String) -> Response {
+    ([(header::SET_COOKIE, cookie)], axum::Json(OkResponse::OK)).into_response()
 }
 
-async fn auth_status(State(s): State<ApiState>, headers: HeaderMap) -> axum::Json<Value> {
-    axum::Json(json!({
-        "setup_required": s.auth.needs_setup(),
-        "logged_in": logged_in(&s.auth, &headers),
-    }))
+/// Whether the instance is set up and the caller logged in.
+#[utoipa::path(
+    operation_id = "getAuthStatus",
+    get,
+    path = "/auth",
+    tag = "auth",
+    responses((status = 200, body = AuthStatus))
+)]
+pub(crate) async fn auth_status(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+) -> axum::Json<AuthStatus> {
+    axum::Json(AuthStatus {
+        logged_in: logged_in(&s.auth, &headers),
+        setup_required: s.auth.needs_setup(),
+    })
 }
 
-#[derive(Deserialize)]
-struct SetupBody {
-    token: String,
-    password: String,
-}
-
-async fn setup(
+/// Claims a fresh instance with the setup token from the logs and a new
+/// password; logs in.
+#[utoipa::path(
+    operation_id = "setup",
+    post,
+    path = "/setup",
+    tag = "auth",
+    request_body = SetupRequest,
+    responses((
+        status = 200,
+        body = OkResponse,
+        description = "Set up; the session cookie is set.",
+        headers(("Set-Cookie" = String, description = "The session cookie."))
+    ))
+)]
+pub(crate) async fn setup(
     State(s): State<ApiState>,
     ClientIp(ip): ClientIp,
     headers: HeaderMap,
-    Json(body): Json<SetupBody>,
+    Json(body): Json<SetupRequest>,
 ) -> ApiResult<Response> {
     same_origin_json(&headers)?;
     let auth = s.auth.clone();
@@ -154,19 +180,28 @@ async fn setup(
         .map_err(internal)?
         .map_err(|e| auth_error(e, "password"))?;
     tracing::info!("setup complete; the setup token is spent");
-    Ok(with_cookie(cookie, json!({ "ok": true })))
+    Ok(with_cookie(cookie))
 }
 
-#[derive(Deserialize)]
-struct LoginBody {
-    password: String,
-}
-
-async fn login(
+/// Logs in; rate-limited per address.
+#[utoipa::path(
+    operation_id = "login",
+    post,
+    path = "/login",
+    tag = "auth",
+    request_body = LoginRequest,
+    responses((
+        status = 200,
+        body = OkResponse,
+        description = "Logged in; the session cookie is set.",
+        headers(("Set-Cookie" = String, description = "The session cookie."))
+    ))
+)]
+pub(crate) async fn login(
     State(s): State<ApiState>,
     ClientIp(ip): ClientIp,
     headers: HeaderMap,
-    Json(body): Json<LoginBody>,
+    Json(body): Json<LoginRequest>,
 ) -> ApiResult<Response> {
     same_origin_json(&headers)?;
     let auth = s.auth.clone();
@@ -174,25 +209,46 @@ async fn login(
         .await
         .map_err(internal)?
         .map_err(|e| auth_error(e, "password"))?;
-    Ok(with_cookie(cookie, json!({ "ok": true })))
+    Ok(with_cookie(cookie))
 }
 
-async fn logout(State(s): State<ApiState>, headers: HeaderMap) -> ApiResult<Response> {
+/// Clears the session cookie. The body is ignored but must be JSON.
+#[utoipa::path(
+    operation_id = "logout",
+    post,
+    path = "/logout",
+    tag = "auth",
+    request_body(content = Object, description = "Any JSON, such as `{}`."),
+    responses((
+        status = 200,
+        body = OkResponse,
+        headers(("Set-Cookie" = String, description = "Clears the session cookie."))
+    ))
+)]
+pub(crate) async fn logout(State(s): State<ApiState>, headers: HeaderMap) -> ApiResult<Response> {
     same_origin_json(&headers)?;
-    Ok(with_cookie(s.auth.logout_cookie(), json!({ "ok": true })))
+    Ok(with_cookie(s.auth.logout_cookie()))
 }
 
-#[derive(Deserialize)]
-struct PasswordBody {
-    old: String,
-    new: String,
-}
-
-async fn change_password(
+/// Changes the password and ends every other session.
+#[utoipa::path(
+    operation_id = "changePassword",
+    post,
+    path = "/password",
+    tag = "auth",
+    request_body = PasswordRequest,
+    responses((
+        status = 200,
+        body = OkResponse,
+        description = "Changed; a new session cookie is set.",
+        headers(("Set-Cookie" = String, description = "The new session cookie."))
+    ))
+)]
+pub(crate) async fn change_password(
     State(s): State<ApiState>,
     ClientIp(ip): ClientIp,
     headers: HeaderMap,
-    Json(body): Json<PasswordBody>,
+    Json(body): Json<PasswordRequest>,
 ) -> ApiResult<Response> {
     same_origin_json(&headers)?;
     let auth = s.auth.clone();
@@ -206,5 +262,5 @@ async fn change_password(
                 AuthError::BadPassword => auth_error(e, "old"),
                 e => auth_error(e, "new"),
             })?;
-    Ok(with_cookie(cookie, json!({ "ok": true })))
+    Ok(with_cookie(cookie))
 }

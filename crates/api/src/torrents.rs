@@ -8,12 +8,18 @@ use axum::{Json, Router};
 use lodestar_metainfo::{FileAttrs, InfoHash, Text};
 use lodestar_search::flag_names;
 use lodestar_store::{FileTree, TorrentRow};
-use serde::Deserialize;
-use serde_json::{Value, json};
+use utoipa::OpenApi;
 
+use crate::dto::search::SearchHit;
+use crate::dto::torrents::{FileEntry, FilesPage, FilesQuery, TorrentDetail};
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{Path, Query};
 use crate::{ApiState, auth};
+
+/// This module's half of `/openapi.json`.
+#[derive(OpenApi)]
+#[openapi(paths(detail, files))]
+pub(crate) struct ApiDoc;
 
 /// Files in the detail response; more via `/files` (§9).
 pub const DETAIL_FILES: usize = 500;
@@ -45,23 +51,37 @@ fn parse_hash(s: &str) -> ApiResult<InfoHash> {
     Ok(InfoHash(out))
 }
 
-/// The fields a result row shows.
-pub fn summary(row: &TorrentRow) -> Value {
-    json!({
-        "id": row.id,
-        "hash": hex(&row.info_hash.0),
-        "hash_v2": row.info_hash_v2.map(|h| hex(&h.0)),
-        "name": row.name,
-        "size": row.size,
-        "files": row.file_count,
-        "piece_len": row.piece_len,
-        "discovered_at": row.discovered_at,
-        "metadata_at": row.metadata_at,
-        "flags": flag_names(row.flags).collect::<Vec<_>>(),
-    })
+fn flags(row: &TorrentRow) -> Vec<String> {
+    flag_names(row.flags).map(str::to_string).collect()
 }
 
-fn file_json(tree: &FileTree, f: &lodestar_metainfo::File) -> Value {
+/// A search result row. The swarm fields stay null (never scraped) until
+/// swarm health is served (M4).
+pub(crate) fn hit(row: &TorrentRow, score: f32, matched_files: Option<Vec<u64>>) -> SearchHit {
+    SearchHit {
+        completed: None,
+        discovered_at: row.discovered_at,
+        files: row.file_count,
+        flags: flags(row),
+        hash: hex(&row.info_hash.0),
+        hash_v2: row.info_hash_v2.map(|h| hex(&h.0)),
+        id: row.id,
+        last_scrape_at: None,
+        leechers: None,
+        matched_files,
+        metadata_at: row.metadata_at,
+        name: row.name.clone(),
+        piece_len: row.piece_len,
+        // As `json!` widened it.
+        score: f64::from(score),
+        seeders: None,
+        size: row.size,
+        trackers_checked: None,
+        trackers_reporting: None,
+    }
+}
+
+fn file_entry(tree: &FileTree, f: &lodestar_metainfo::File) -> FileEntry {
     let path: Vec<String> = f
         .path
         .iter()
@@ -82,10 +102,14 @@ fn file_json(tree: &FileTree, f: &lodestar_metainfo::File) -> Value {
         (FileAttrs::SYMLINK, "symlink"),
     ] {
         if f.attrs.contains(bit) {
-            attrs.push(name);
+            attrs.push(name.to_string());
         }
     }
-    json!({ "path": path.join("/"), "size": f.size, "attrs": attrs })
+    FileEntry {
+        attrs,
+        path: path.join("/"),
+        size: f.size,
+    }
 }
 
 /// Reads a torrent and its files by any swarm hash.
@@ -105,54 +129,98 @@ fn load(s: &ApiState, hash: &str) -> ApiResult<(TorrentRow, FileTree)> {
     Ok((row, tree))
 }
 
-async fn detail(State(s): State<ApiState>, Path(hash): Path<String>) -> ApiResult<Json<Value>> {
-    tokio::task::spawn_blocking(move || {
-        let (row, tree) = load(&s, &hash)?;
-        let mut v = summary(&row);
-        let shown: Vec<Value> = tree
+/// The detail view: the summary, the swarm section (null until swarm
+/// health is served) and the first files.
+fn detail_of(row: &TorrentRow, tree: &FileTree) -> TorrentDetail {
+    TorrentDetail {
+        completed: None,
+        dht_peers: None,
+        dht_seeds: None,
+        discovered_at: row.discovered_at,
+        file_list: tree
             .files
             .iter()
             .take(DETAIL_FILES)
-            .map(|f| file_json(&tree, f))
-            .collect();
-        v["file_list"] = json!(shown);
-        v["file_list_total"] = json!(tree.files.len());
-        v["magnet"] = json!(format!(
+            .map(|f| file_entry(tree, f))
+            .collect(),
+        file_list_total: tree.files.len(),
+        files: row.file_count,
+        flags: flags(row),
+        hash: hex(&row.info_hash.0),
+        hash_v2: row.info_hash_v2.map(|h| hex(&h.0)),
+        id: row.id,
+        last_scrape_at: None,
+        leechers: None,
+        magnet: format!(
             "magnet:?xt=urn:btih:{}&dn={}",
             hex(&row.info_hash.0),
             percent_encode(&row.name)
-        ));
-        Ok(Json(v))
+        ),
+        metadata_at: row.metadata_at,
+        name: row.name.clone(),
+        piece_len: row.piece_len,
+        seeders: None,
+        size: row.size,
+        swarm_history: None,
+        swarm_trend: None,
+        trackers_checked: None,
+        trackers_reporting: None,
+    }
+}
+
+/// One torrent by any of its swarm hashes.
+#[utoipa::path(
+    operation_id = "getTorrent",
+    get,
+    path = "/torrents/{hash}",
+    tag = "torrents",
+    params(("hash" = String, Path, description = "A 40-character hex info hash.")),
+    responses((status = 200, body = TorrentDetail))
+)]
+pub(crate) async fn detail(
+    State(s): State<ApiState>,
+    Path(hash): Path<String>,
+) -> ApiResult<Json<TorrentDetail>> {
+    tokio::task::spawn_blocking(move || {
+        let (row, tree) = load(&s, &hash)?;
+        Ok(Json(detail_of(&row, &tree)))
     })
     .await
     .map_err(internal)?
 }
 
-#[derive(Deserialize, Default)]
-#[serde(default)]
-struct FilesParams {
-    offset: usize,
-    limit: Option<usize>,
-}
-
-async fn files(
+/// A page of a torrent's file list.
+#[utoipa::path(
+    operation_id = "listTorrentFiles",
+    get,
+    path = "/torrents/{hash}/files",
+    tag = "torrents",
+    params(
+        ("hash" = String, Path, description = "A 40-character hex info hash."),
+        FilesQuery,
+    ),
+    responses((status = 200, body = FilesPage))
+)]
+pub(crate) async fn files(
     State(s): State<ApiState>,
     Path(hash): Path<String>,
-    Query(p): Query<FilesParams>,
-) -> ApiResult<Json<Value>> {
+    Query(p): Query<FilesQuery>,
+) -> ApiResult<Json<FilesPage>> {
     tokio::task::spawn_blocking(move || {
         let (_, tree) = load(&s, &hash)?;
         let limit = p.limit.unwrap_or(MAX_FILES_PAGE).clamp(1, MAX_FILES_PAGE);
-        let page: Vec<Value> = tree
+        let files = tree
             .files
             .iter()
             .skip(p.offset)
             .take(limit)
-            .map(|f| file_json(&tree, f))
+            .map(|f| file_entry(&tree, f))
             .collect();
-        Ok(Json(
-            json!({ "total": tree.files.len(), "offset": p.offset, "files": page }),
-        ))
+        Ok(Json(FilesPage {
+            files,
+            offset: p.offset,
+            total: tree.files.len(),
+        }))
     })
     .await
     .map_err(internal)?

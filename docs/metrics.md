@@ -251,7 +251,7 @@ M4 slice 6, still pending; **planned** = named here and in the build plan
 | `hash` | string (40 hex) | no | — | main |
 | `hash_v2` | string (64 hex) | yes | — | main |
 | `name` | string | no | Raw name (decoded) | main |
-| `title` | string | yes | Resolved title; null = not resolved | planned (M3 data, B1) |
+| `title` | string | yes | Resolved title; null = not resolved | planned (M3 data; not served by B1, see architecture §16) |
 | `resolved_via` | string | yes: null = the name was informative (no resolution) | "resolved via …": `files`, `folder`, `structure` (`classify::ResolvedVia::as_str`); `plugin` arrives with §18 | planned (values: main) |
 | `size` | integer (bytes) | no | Size | main |
 | `files` | integer | no | Files | main |
