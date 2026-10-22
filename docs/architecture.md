@@ -272,10 +272,14 @@ The tracker list ships with a curated default. It can optionally **auto-refresh*
 
 Magnet links can **append the best-scoring trackers** from scrape data (toggle), which noticeably improves magnet start-up time. Download-client integrations: qBittorrent, Transmission, Deluge, rTorrent/ruTorrent, Aria2 (one-click send and bulk send).
 
-## 10. UI plan (Svelte 5), governed by `ui-design-skills`
+## 10. UI plan (Svelte 5): the owner's decisions first, `ui-design-skills` for the gaps
 
 ### 10.0 Authority and decisions
-- **Source of truth:** `dvortsis/skills/ui-design-skills` (15 skills). Its precedence applies: explicit user requirements → accessibility/correctness → coherent existing product language (Lodestar) where no skill owns the decision → skill defaults → `minimalist-visual-style`.
+- **Order of authority** (owner, 2026-10-22; `docs/owner-decisions.md`):
+  1. the owner's decisions and this UI plan, which applies `dvortsis/skills/ui-design-skills` (15 skills) as the owner asked when it was written;
+  2. the skills, only for what the plan leaves open, in their own precedence: explicit user requirements → accessibility/correctness → coherent existing product language (Lodestar) where no skill owns the decision → skill defaults → `minimalist-visual-style`.
+
+  A skill default never overrides a decision made here.
 - **Explicit user decisions:** **Svelte 5**, and the **smallest, fastest UI** is the top UI priority. Skills written for React/Tremor are applied **by concept and spirit**. In particular, `data-visualization-design` keeps its data contracts, single formatter per metric, state handling, accessible alternatives, performance rules and validation hooks, but Tremor components are replaced by tiny in-house Svelte SVG chart primitives plus uPlot (lazy-loaded) for time series. `application-interface-design`'s Tailwind + daisyUI guidance applies literally, because daisyUI is CSS-only and framework-agnostic.
 - **Who owns which decision:**
 
@@ -748,7 +752,7 @@ Single-key shortcuts can be turned off or remapped (§10.13).
 | primary | `#527F91` | `#85AFC0` |
 | accent | `#829F8A` | `#A0C3A7` |
 
-Categorical (official, as amended): `#527F91` `#829F8A` `#C4A765` `#BF8173` `#8C9BA7` **`#9381B6`**. Seafoam `#92A9A0` was replaced by a muted plum. You suggested `#9C8AA5`; it fixes normal vision but nearly matches slate under deuteranopia (ΔE_ok 0.9). `#9381B6` (OKLCH 0.64 / 0.08 / 300°) keeps every pair at ΔE_ok ≥ 5.5 for normal, deuteranopic and protanopic vision in both modes, and is ≥ 3:1 on both surfaces (no light-mode data variant needed). The brand files `tokens/colors.json`/`theme.css` get the same update.
+Categorical (official, as amended): `#527F91` `#829F8A` `#C4A765` `#BF8173` `#8C9BA7` **`#9381B6`**. Seafoam `#92A9A0` was replaced by a muted plum. You suggested `#9C8AA5`; it fixes normal vision but nearly matches slate under deuteranopia (ΔE_ok 0.9). `#9381B6` (OKLCH 0.64 / 0.08 / 300°) keeps every pair at ΔE_ok ≥ 5 under normal vision (weakest: sage vs slate, 5.1) and is ≥ 3:1 on both surfaces (no light-mode data variant needed). **Correction (2026-10-22):** the earlier claim of ≥ 5.5 under deuteranopia and protanopia was wrong. Measured in the palette work (PR #37), the weakest pair falls to about 3.3–3.6 under deuteranopia. The owner kept the palette as chosen; the non-colour cues below carry the difference. The brand files `tokens/colors.json`/`theme.css` get the same update.
 
 **Contrast audit of the supplied values (WCAG 2.x):**
 - **Dark mode passes everywhere it's used.** Text 14.2:1 on background; primary 7.1:1; accent 8.7:1; every categorical colour ≥ 3.06:1 on surface.
@@ -756,7 +760,7 @@ Categorical (official, as amended): `#527F91` `#829F8A` `#C4A765` `#BF8173` `#8C
 - **Light-mode `primary` (`#527F91`) is just short for normal-size text:** 4.02:1 on background and 4.37:1 on surface. White text on a primary button is 4.37:1. All of these need 4.5:1.
 - **Light-mode `accent` (`#829F8A`) is 2.65–2.89:1.** That fails text (4.5:1) and UI boundaries (3:1). It's fine as a fill behind `text` (4.03:1, which passes for large or bold labels) or as decoration.
 - **4 of the 6 categorical colours are under 3:1 on the light surface:** `#829F8A` 2.89, `#C4A765` 2.32, `#8C9BA7` 2.85, `#92A9A0` 2.50.
-- **Originally, two categorical colours were near-duplicates:** sage `#829F8A` vs seafoam `#92A9A0` (ΔE_ok ≈ 1.9; ≈ 1.5 under colour-vision deficiency). This is now **resolved** by the plum replacement above. The remaining weakest pair is sage vs slate (ΔE_ok ≈ 5.1 normal, ≈ 4.1 deutan), which is acceptable.
+- **Originally, two categorical colours were near-duplicates:** sage `#829F8A` vs seafoam `#92A9A0` (ΔE_ok ≈ 1.9; ≈ 1.5 under colour-vision deficiency). This is now **resolved** by the plum replacement above. The remaining weakest pair under normal vision is sage vs slate (ΔE_ok ≈ 5.1). Under deuteranopia the weakest pair is sage vs terracotta at about 3.3–3.6 (PR #37's measurements). The owner kept the palette (2026-10-22), and the non-colour cues below carry the difference.
 
 **Resolution: keep the official values as the brand values; derive role tokens for anything that must pass.** Text, buttons and data marks use **ink/data variants** that keep each hue and only shift its lightness in OKLCH.
 
@@ -791,7 +795,7 @@ Categorical (official, as amended): `#527F91` `#829F8A` `#C4A765` `#BF8173` `#8C
 | 6 | `#9381B6` plum | Archives & disc images |
 | — | `muted-text` grey | Other |
 
-With the plum swap, all six colours are distinguishable. Colour is still never the only cue:
+With the plum swap, all six colours are distinct under normal vision. Under colour-vision deficiency some pairs come closer (see above), so colour is never the only cue:
 - a **2 px surface-coloured gap** between segments;
 - **fixed segment order** (Video, Audio, Images, Documents, Archives, Software, Other);
 - visible dominant-share text ("82% video");
@@ -806,7 +810,7 @@ With the plum swap, all six colours are distinguishable. Colour is still never t
 | Official | **Riverstone** (default) |
 | Accessibility | High Contrast (AAA 7:1 text), Okabe-Ito (colour-vision-safe categorical set), Paper & Ink (near-monochrome) |
 | Community-inspired | Nord, Solarized, Gruvbox, Catppuccin (Latte/Mocha), Rosé Pine (Dawn/Main), Tokyo Night (Day/Night), Everforest, Kanagawa (Lotus/Wave), Dracula (Alucard/Dracula), One (Light/Dark), Ayu |
-| Originals (muted, Riverstone-adjacent) | Tidewater (cool blues), Sandstone (warm neutrals), Moss (greens), Ember (rust/clay), Lavender Field (dusty purples), Graphite (cool greys, minimal accent), Sepia (low-blue reading), Midnight OLED (true-black dark / "Daylight" light) |
+| Originals (muted, Riverstone-adjacent) | Tidewater (cool blues), Sandstone (warm neutrals), Moss (greens), Ember (rust/clay), Lavender Field (dusty purples), Graphite (cool greys, minimal accent), Sepia (low-blue reading), Midnight OLED (true-black dark / "Daylight" light), Rosewood (dusty rose; the 24th family, owner-approved 2026-10-22) |
 
 **Theme compiler** (`web/scripts/themes.ts`, runs at build time):
 - **Input:** `themes/*.json` in the exact Riverstone schema.
@@ -1727,11 +1731,30 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Pre-paint storage contract:** `localStorage["lodestar.theme"]` holds `{ mode: "system"|"light"|"dark", light: { id, vars? }, dark: { id, vars? } }`. `vars` is the cached custom-property map of a non-Riverstone theme. The script sets `data-theme`, `color-scheme` and `vars` on `<html>` and falls back to Riverstone for the resolved mode.
 - **`themes.json`** is `{ v: 1, keys: [...], themes: [{ id, name, family, group, mode, contrast: "AA"|"AAA", license?, source?, values: [...] }] }`, with `values` in `keys` order.
 - **Dark `info` uses `primary-ink`**, which equals `primary` for Riverstone but may differ for other themes (a dark `primary` that is too dim is lightened).
+- **Labels and tints pass by construction (W1c).** A `*-content` label is the best of its preferred colours (primary/status fills: surface or background; neutral: text or surface) when that reaches 4.5:1. Otherwise it is the theme's own text colour moved in lightness only (hue and chroma kept, gamut permitting: a theme such as Tokyo Night Light loses a little chroma to the sRGB gamut), in whichever direction reaches the target with the smaller change, and finally pure black or white. High Contrast aims for 7:1 where the fill allows. The hover and selected tints start from the surface/primary mix and move toward the background's lightness until text on them reaches 4.5:1. If that leaves them within ΔE_ok 2 of each other (Solarized Dark), the selected tint mixes in more primary and is re-shifted until they differ by at least 2, so a hovered row never looks selected (a warn-level gate backs this up). The accent label stays the one warning (large/bold allowed). Riverstone's values are unchanged. All 24 families of `docs/themes.md` compile with zero gate failures (tested against a JSON copy in `web/scripts/fixtures/`).
 
 **B0 decisions (API router split, error envelope):**
 - **One module per API domain** in `crates/api` (`auth`, `search`, `torrents`), each with `routes() -> Router<ApiState>`; `api::router` only merges them, one line per module. Session-protected routes are wrapped in `auth::protected`, whose guard reads its `Auth` from a request extension that only `api::router` installs, so a protected route mounted any other way fails closed (500), never open.
 - **One error envelope** for every `/api/v1` failure: `{ "error": { "code", "message", "field"?, "start"?, "end"? } }`. `code` is stable snake_case for clients to branch on, `message` a sentence for people, `field` the parameter at fault, `start`/`end` the byte span of a query syntax error. Extractor rejections (bad JSON, query or path; `field` is the serde path to the bad value) and unknown `/api/v1` paths (404) or methods (405) use it too, with house-style messages rather than serde's text. Status codes didn't change. The 401 keeps `setup_required` beside `error`, so the login screen needs no second request.
 - **`crates/lodestar/src/services.rs`** builds and wires every service of `serve` and owns the ordered shutdown (the blocklist refresher, then the pipeline, then the live indexer); `main.rs` keeps only the CLI.
+
+**M5 decisions (build process and UI conventions):**
+- **Spacing uses Tailwind's default scale** (`p-4` = 16 px), restricted to the steps that match the §10.2 ramp: 0, 0.5, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14 (= 0–56 px).
+  - Redefining the scale so that `p-4` = 4 px was considered and rejected. Standard Tailwind written against it would be silently wrong, and no lint can catch that.
+  - The ban check rejects off-ramp steps (W2).
+  - `docs/design-tokens.md` §5 holds the table.
+- **Order of authority (owner, 2026-10-22):** the owner's decisions are the primary rules, recorded in `docs/owner-decisions.md` and extracted from the design session. Then come this plan and the contract docs. `ui-design-skills` fills only the gaps. §10.0 is amended to match. In practice little changes, because §10 was written by applying the skills as the owner then asked; but a skill default can no longer override anything decided here.
+- **Themes (owner, 2026-10-22):**
+  - Riverstone is the default and official palette, with plum `#9381B6` in categorical slot 6. Seafoam `#92A9A0` stays retired: it was too close to sage.
+  - The collection is **24 families × light and dark = 48 themes**. §10.18 names 23 families; the 24th is **Rosewood**, proposed in the palette work (PR #37) and approved.
+- **Filtering decisions (owner, 2026-10-22; `docs/owner-decisions.md` §2.7–2.9):**
+  - Config files may only **add** to the locked floor. Removals or weakenings (deleting a hash from `blocklist.files`, a floor-marked list's upstream removals) are refused at start-up and go through the app with the effect warning and password.
+  - Rule packs are off until chosen and pre-checked in the first-run wizard (§20.6), never on by default.
+  - Blocklist subscriptions are off by default and chosen in the wizard or Settings, with a warning matched to how strict the chosen lists are. The §20.13 refresh mechanics stay as designed.
+- **Riverstone colour-blind figures corrected** in §10.18. The palette is unchanged by owner decision.
+- **The build runs as parallel slices** (`docs/build-plan.md`, `runner/`).
+  - One bar for every slice and review: `runner/standards.md`.
+  - Merges happen only with green CI and no blocking findings from a fresh Opus reviewer.
 
 **X-utp implementation decisions (uTP, `lodestar-utp`, behind a flag):**
 - **Our own crate, not a dependency.** The maintained candidates were measured against the §15 criteria (MIT/Apache, tokio-native, LEDBAT, bounded memory, no `unsafe` on our side, fuzzable parsing, active):
