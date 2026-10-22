@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
+use std::sync::Mutex;
 
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -295,11 +296,12 @@ pub(crate) async fn compare(
         .field("hashes"));
     }
     tokio::task::spawn_blocking(move || {
-        let mut store = s.reader.lock().expect("reader lock");
+        // The reader is shared by every API read: it's locked for each
+        // lookup and each blob, never across the comparison.
         let mut rows = Vec::with_capacity(n);
         for h in &hashes {
-            let (row, e) = visible(&store, h, false)?;
-            rows.push((row, e));
+            let found = visible(&s.reader.lock().expect("reader lock"), h, false)?;
+            rows.push(found);
         }
         let records: Vec<Option<Record>> = rows.iter().map(|(_, e)| record(e.as_ref())).collect();
         let keys: BTreeSet<&str> = records
@@ -328,7 +330,7 @@ pub(crate) async fn compare(
                 ((*k).to_string(), values.iter().any(|v| v[*k] != *first))
             })
             .collect();
-        let file_diff = file_diff(&mut store, rows.iter().map(|(r, _)| r.id))?;
+        let file_diff = file_diff(&s.reader, rows.iter().map(|(r, _)| r.id))?;
         let scale_bytes = rows.iter().map(|(r, _)| r.size).max().unwrap_or(0);
         let torrents = rows
             .into_iter()
@@ -412,11 +414,11 @@ fn tree_files(tree: &FileTree) -> impl Iterator<Item = (Key, String, u64)> + '_ 
         })
 }
 
-fn tree(store: &mut Store, id: i64) -> ApiResult<FileTree> {
-    store
-        .files(id)
-        .map_err(internal)?
-        .ok_or_else(|| internal("a stored torrent without its file list"))
+/// One torrent's file tree, the reader locked only to read it. Gone
+/// meanwhile (deleted since the lookup) is a 404, as in detail.
+fn tree(reader: &Mutex<Store>, id: i64) -> ApiResult<FileTree> {
+    let files = reader.lock().expect("reader lock").files(id);
+    files.map_err(internal)?.ok_or_else(not_found)
 }
 
 /// The file lists compared by path and size.
@@ -426,11 +428,11 @@ fn tree(store: &mut Store, id: i64) -> ApiResult<FileTree> {
 /// passes only each torrent's sorted keys (16 bytes a file), so five
 /// maximal trees cost about 16 MB. The listed entries are capped at
 /// [`DIFF_FILES`] per list.
-fn file_diff(store: &mut Store, ids: impl Iterator<Item = i64>) -> ApiResult<FileDiff> {
+fn file_diff(reader: &Mutex<Store>, ids: impl Iterator<Item = i64>) -> ApiResult<FileDiff> {
     let ids: Vec<i64> = ids.collect();
     let mut sets: Vec<Vec<Key>> = Vec::with_capacity(ids.len());
     for &id in &ids {
-        let tree = tree(store, id)?;
+        let tree = tree(reader, id)?;
         let mut keys: Vec<Key> = tree_files(&tree).map(|(k, _, _)| k).collect();
         keys.sort_unstable();
         keys.dedup();
@@ -455,7 +457,7 @@ fn file_diff(store: &mut Store, ids: impl Iterator<Item = i64>) -> ApiResult<Fil
         if !wants_common && only_counts[i] == 0 {
             continue;
         }
-        let tree = tree(store, id)?;
+        let tree = tree(reader, id)?;
         let mut seen: BTreeSet<Key> = BTreeSet::new();
         for (k, path, size) in tree_files(&tree) {
             if !seen.insert(k) {
