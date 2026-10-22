@@ -18,7 +18,8 @@
 use lodestar_release_parser::PARSER_VERSION;
 
 use crate::{
-    CLASSIFY_VERSION, Classification, ContentType, Junk, JunkReason, ResolvedVia, Structure,
+    AdultKind, CLASSIFY_VERSION, Classification, ContentType, Junk, JunkReason, ResolvedVia,
+    Structure,
 };
 
 const HEADER: &str = "e1";
@@ -44,6 +45,8 @@ pub struct Record {
     pub title_confidence: u8,
     pub content_type: ContentType,
     pub type_confidence: u8,
+    /// Set exactly when the type is adult.
+    pub adult_kind: Option<AdultKind>,
     pub junk: Junk,
     pub structure: Structure,
     pub depth: u16,
@@ -79,6 +82,7 @@ impl Record {
             title_confidence: c.title.confidence,
             content_type: c.content_type,
             type_confidence: c.confidence,
+            adult_kind: c.adult_kind,
             junk: c.junk.clone(),
             structure: c.structure,
             depth: c.depth,
@@ -112,6 +116,9 @@ impl Record {
         };
         line("type", self.content_type.as_str());
         line("type_conf", &self.type_confidence.to_string());
+        if let Some(k) = self.adult_kind {
+            line("adult", k.as_str());
+        }
         if self.ambiguous {
             line("ambiguous", "yes");
         }
@@ -158,6 +165,7 @@ impl Record {
             title_confidence: TITLE_CONFIDENCE,
             content_type: ContentType::Other,
             type_confidence: 0,
+            adult_kind: None,
             junk: Junk::default(),
             structure: Structure::empty(),
             depth: DEPTH,
@@ -177,6 +185,9 @@ impl Record {
                 "type_conf" => {
                     r.type_confidence =
                         percent(num("type_conf")?).ok_or_else(|| bad("type_conf"))?
+                }
+                "adult" => {
+                    r.adult_kind = Some(AdultKind::from_name(v).ok_or_else(|| bad("adult"))?)
                 }
                 // Only written when set.
                 "ambiguous" if v == "yes" => r.ambiguous = true,
@@ -216,6 +227,9 @@ impl Record {
         if !seen_type {
             return Err(bad("no type"));
         }
+        if (r.content_type == ContentType::Adult) != r.adult_kind.is_some() {
+            return Err(bad("adult kind"));
+        }
         Ok(r)
     }
 }
@@ -249,6 +263,17 @@ mod tests {
         let back = Record::decode(&r.encode()).unwrap();
         assert_eq!(back, r);
         assert!(!r.junk.reasons.is_empty());
+    }
+
+    #[test]
+    fn adult_round_trip() {
+        let f = files(&[("Site.24.01.15.Jane.Doe.XXX.1080p.mp4", 1_500_000_000)]);
+        let r = Record::new(&classify("Site.24.01.15.Jane.Doe.XXX.1080p.MP4-GRP", &f));
+        assert_eq!(r.content_type, ContentType::Adult);
+        assert_eq!(r.adult_kind, Some(AdultKind::Scene));
+        let text = String::from_utf8(r.encode()).unwrap();
+        assert!(text.contains("\nadult\tscene"), "{text:?}");
+        assert_eq!(Record::decode(text.as_bytes()).unwrap(), r);
     }
 
     #[test]
@@ -290,6 +315,9 @@ mod tests {
             b"e1\ntype\tmovie\nreasons\tnope",
             b"e1\ntype\tmovie\nambiguous\tno",
             b"e1\ntype\tmovie\nno tab",
+            b"e1\ntype\tadult",
+            b"e1\ntype\tmovie\nadult\tscene",
+            b"e1\ntype\tadult\nadult\tnope",
             b"\xff",
         ] {
             assert!(
