@@ -19,6 +19,7 @@ import {
 	injectPrepaint,
 	renderOutputs,
 	PINS,
+	TINT_GAP,
 	expandFamily,
 	validateFamily,
 	type Family,
@@ -601,6 +602,17 @@ describe('every theme family passes the gates (docs/themes.md, 24 families)', ()
 				).toBeGreaterThanOrEqual(4.5);
 			}
 		}
+	});
+
+	it('a hovered row never looks selected: the tints differ by ΔE_ok ≥ 2', () => {
+		for (const { theme, tokens } of compiled) {
+			const gap = deltaE(tokens['--color-hover'], tokens['--color-selected']);
+			expect(gap, `${theme.id}`).toBeGreaterThanOrEqual(TINT_GAP);
+		}
+		const solarized = compiled.find((c) => c.theme.id === 'solarized-dark')!.tokens;
+		expect(
+			contrast(solarized['--color-base-content'], solarized['--color-selected'])
+		).toBeGreaterThanOrEqual(4.5);
 	});
 
 	it('only the documented warnings remain', () => {

@@ -300,6 +300,31 @@ function tint(mixed: string, bg: string, text: string): string {
 	return shiftUntil(mixed, away, (c) => contrast(text, c) >= 4.5);
 }
 
+/** A hovered row must not look selected: the two tints differ by at least this ΔE_ok. */
+export const TINT_GAP = 2;
+
+/**
+ * The selected tint. When the usual mix lands within `TINT_GAP` of the hover tint (the text
+ * contrast shift squeezes both toward the background), mix more primary in and re-apply the
+ * 4.5:1 shift until the gap opens. Falls back to the usual tint if no mix manages it.
+ */
+function selectedTint(
+	surface: string,
+	primary: string,
+	bg: string,
+	text: string,
+	selectedMix: number,
+	hover: string
+): string {
+	const usual = tint(mix(surface, primary, selectedMix), bg, text);
+	if (deltaE(usual, hover) >= TINT_GAP) return usual;
+	for (let m = selectedMix + 0.025; m <= 1 + 1e-9; m += 0.025) {
+		const candidate = tint(mix(surface, primary, m), bg, text);
+		if (deltaE(candidate, hover) >= TINT_GAP) return candidate;
+	}
+	return usual;
+}
+
 /** Derive every role token for a theme. Values are upper-case #RRGGBB. */
 export function derive(theme: Theme): Tokens {
 	const { background: bg, surface, text, primary, accent, categorical: cat } = theme.colors;
@@ -333,6 +358,8 @@ export function derive(theme: Theme): Tokens {
 		r.errorRatio
 	);
 
+	const hover = tint(mix(surface, primary, r.hoverMix), bg, text);
+	const selected = selectedTint(surface, primary, bg, text, r.selectedMix, hover);
 	const withDivider = r.dividerWith === 'accent' ? accent : primary;
 	const tokens: Record<string, string> = {
 		'--color-base-100': surface,
@@ -350,8 +377,8 @@ export function derive(theme: Theme): Tokens {
 		'--color-accent-ink': accentInk,
 		'--color-muted-text': mutedText,
 		'--color-field-border': slate,
-		'--color-hover': tint(mix(surface, primary, r.hoverMix), bg, text),
-		'--color-selected': tint(mix(surface, primary, r.selectedMix), bg, text),
+		'--color-hover': hover,
+		'--color-selected': selected,
 		'--data-other': mutedText,
 		'--brand-surface': surface,
 		'--brand-primary': primary,
@@ -447,6 +474,14 @@ export function evaluate(theme: Theme, t: Tokens): Report {
 
 	add('text on hover tint', t['--color-base-content'], t['--color-hover'], 4.5);
 	add('text on selected tint', t['--color-base-content'], t['--color-selected'], 4.5);
+	const gap = deltaE(t['--color-hover'], t['--color-selected']);
+	checks.push({
+		label: 'hover vs selected tint ΔE_ok',
+		value: gap,
+		min: TINT_GAP,
+		severity: 'warn',
+		pass: gap >= TINT_GAP
+	});
 
 	const dataMarks = [1, 2, 3, 4, 5, 6].map((n) => t[`--data-${n}` as keyof Tokens]);
 	const normal = minPairwise(dataMarks);
