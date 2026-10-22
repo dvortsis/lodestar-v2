@@ -14,6 +14,8 @@ for (const route of ROUTES) {
 		kbd
 	}) => {
 		await go(route.path);
+		// The app mounts after load; the skip link is the first thing it renders.
+		await page.getByRole('link', { name: 'Skip to main content' }).waitFor();
 		await kbd.press('Tab');
 		const focus = await page.evaluate(() => {
 			const el = document.activeElement;

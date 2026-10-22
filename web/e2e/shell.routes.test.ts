@@ -96,7 +96,7 @@ test.describe('responsive navigation', () => {
 		await expect(pill).toBeVisible();
 		await expect(pill).toContainText('Crawler status. Open Insights.');
 		// Visually hidden: clipped to a pixel, still in the accessibility tree.
-		const box = await pill.locator('[data-testid="status-pill-text"]').boundingBox();
+		const box = await pill.locator('span.sr-only').first().boundingBox();
 		expect(box!.width).toBeLessThanOrEqual(1);
 	});
 });
