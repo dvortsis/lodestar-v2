@@ -11,6 +11,7 @@
 mod compress;
 pub mod filetree;
 mod filter;
+pub mod hot;
 mod insights;
 mod schema;
 mod sources;
@@ -27,6 +28,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 pub use compress::{BlobCodec, Codec, Compressed};
 pub use filetree::{CodecError, FileTree};
 pub use filter::{FilterHit, FilterState, Filtered, Held, Quarantined};
+pub use hot::{Col, HotColumns, NEVER, SwarmHot};
 pub use insights::{CohortCount, Counter, Event};
 pub use rusqlite;
 pub use sources::{MAX_SOURCES, QueuedKey, SourceId, SourceRow, SourceState};
