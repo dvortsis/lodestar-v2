@@ -271,6 +271,9 @@ impl Store {
         let n = tx.execute("DELETE FROM tombstones WHERE hash = ?1", [&hash[..]])?
             + tx.execute("DELETE FROM quarantine WHERE hash = ?1", [&hash[..]])?;
         tx.commit()?;
+        if n > 0 {
+            self.scrub_wal()?;
+        }
         Ok(n > 0)
     }
 
@@ -294,6 +297,9 @@ impl Store {
             tx.execute("INSERT INTO reindex_log (torrent_id) VALUES (?1)", [id])?;
         }
         tx.commit()?;
+        if !ids.is_empty() {
+            self.scrub_wal()?;
+        }
         Ok(ids)
     }
 
@@ -369,9 +375,12 @@ impl Store {
                 params![now, adult, FLOOR_RULES[0], FLOOR_RULES[1], FLOOR_RULES[2]],
             )?;
         }
-        tx.execute("DELETE FROM quarantine WHERE expires_at <= ?1", [now])?;
+        let purged = tx.execute("DELETE FROM quarantine WHERE expires_at <= ?1", [now])?;
         let hits = tx.execute("DELETE FROM filter_hits WHERE at < ?1", [hits_before])?;
         tx.commit()?;
+        if purged > 0 {
+            self.scrub_wal()?;
+        }
         Ok((expired, hits))
     }
 
@@ -387,6 +396,7 @@ impl Store {
         mut released: impl FnMut(&[[u8; 20]]),
     ) -> Result<usize> {
         let mut total = 0;
+        let mut deleted_any = false;
         for rule in rules {
             for table in ["quarantine", "tombstones"] {
                 loop {
@@ -419,6 +429,7 @@ impl Store {
                         }
                     }
                     tx.commit()?;
+                    deleted_any |= !deleted.is_empty();
                     released(&free);
                     total += free.len();
                     if deleted.len() < crate::MARK_CHUNK {
@@ -427,7 +438,21 @@ impl Store {
                 }
             }
         }
+        if deleted_any {
+            self.scrub_wal()?;
+        }
         Ok(total)
+    }
+
+    /// After deleting sealed names or torrents: secure_delete zeroes the
+    /// freed pages in the main file, but the WAL still holds the frames
+    /// written when the rows went in, until it's checkpointed and
+    /// truncated (owner decision: deleted data is overwritten). Best
+    /// effort: a reader holding an old snapshot can keep the WAL from
+    /// being truncated, and then the next checkpoint or the shutdown one
+    /// does it. A no-op for an in-memory store.
+    fn scrub_wal(&self) -> Result<()> {
+        self.checkpoint()
     }
 
     /// How many hashes each rule holds: `(rule, quarantined, tombstoned)`.
@@ -598,6 +623,64 @@ mod tests {
         let adult = s.tombstones_before(None, true, 10).unwrap();
         assert_eq!(adult.len(), 1);
         assert!(adult[0].adult_hold);
+    }
+
+    /// Deleting a held hash through any of the store's paths leaves its
+    /// sealed name neither in the database file nor in the WAL. The name
+    /// is large enough to sit on overflow pages, which secure_delete's
+    /// FAST mode would leave behind in the freelist.
+    #[test]
+    fn deleted_holds_leave_no_trace_on_disk() {
+        let marker = b"sealed-name-marker-5c1e7b";
+        let mut sealed: Vec<u8> = (0..20_000u32)
+            .map(|i| (i.wrapping_mul(2_654_435_761) >> 24) as u8)
+            .collect();
+        sealed.extend_from_slice(marker);
+        let contains = |hay: &[u8]| hay.windows(marker.len()).any(|w| w == marker);
+        type Delete = fn(&mut Store, [u8; 20]);
+        let paths: [(&str, Delete); 3] = [
+            ("purge", |s, _| {
+                s.purge_filter(100, 0).unwrap();
+            }),
+            ("release", |s, h| {
+                assert!(s.release(&h).unwrap());
+            }),
+            ("release_rules", |s, _| {
+                assert_eq!(s.release_rules(&["U-1".into()], |_| {}).unwrap(), 1);
+            }),
+        ];
+        for (name, delete) in paths {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("t.db");
+            let mut s = Store::open(&path, StoreConfig::default()).unwrap();
+            let h = [9u8; 20];
+            let tx = s.conn.transaction().unwrap();
+            write(
+                &tx,
+                &[Filtered {
+                    hashes: &[h],
+                    rule: "U-1",
+                    action: 4,
+                    held: Some(Held::Quarantine),
+                    sealed: Some(&sealed),
+                    evidence: &[],
+                    at: 10,
+                    expires_at: 20,
+                    adult_hold: false,
+                }],
+            )
+            .unwrap();
+            tx.commit().unwrap();
+            let wal = dir.path().join("t.db-wal");
+            let on_disk = || {
+                let mut all = std::fs::read(&path).unwrap();
+                all.extend(std::fs::read(&wal).unwrap_or_default());
+                all
+            };
+            assert!(contains(&on_disk()), "{name}: the name was written");
+            delete(&mut s, h);
+            assert!(!contains(&on_disk()), "{name}: the deleted name survived");
+        }
     }
 
     /// An adult hold's purge never replaces the floor's tombstone:
