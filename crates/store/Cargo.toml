@@ -3,6 +3,7 @@ name = "lodestar-store"
 description = "SQLite schema and migrations, file-tree blob codec and zstd dictionaries"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true
