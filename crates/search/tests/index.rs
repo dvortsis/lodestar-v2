@@ -457,3 +457,132 @@ fn enrichment_fields_are_searchable_once_enriched() {
     check("cat:software", &[lure]);
     check("type:movie,tv -cat:subtitle", &[movie, doc]);
 }
+
+fn ids(index: &SearchIndex, q: &str) -> Vec<u64> {
+    let node = lodestar_search::parse(q).unwrap();
+    let mut ids: Vec<u64> = index
+        .search(&index.query(&node, NOW), 50)
+        .unwrap()
+        .hits
+        .into_iter()
+        .map(|h| h.id)
+        .collect();
+    ids.sort();
+    ids
+}
+
+const MB: i64 = 1 << 20;
+
+fn file_corpus() -> Vec<Vec<u8>> {
+    vec![
+        // 1: a lossless album with a big and a small track.
+        sized(
+            "Artist - Album (2019) [FLAC]",
+            &[
+                ("01 Opening.flac", 60 * MB),
+                ("02 Interlude.flac", 20 * MB),
+                ("cover.jpg", MB / 2),
+            ],
+        ),
+        // 2: an MP3 album with one big file.
+        sized(
+            "Artist - Album (2019) [MP3]",
+            &[("01 Opening.mp3", 80 * MB), ("02 Interlude.mp3", 8 * MB)],
+        ),
+        // 3: "dark" and "knight" in different files, not in one name.
+        sized(
+            "Misc Collection",
+            &[
+                ("dark matters.mkv", 700 * MB),
+                ("knight rider.mkv", 700 * MB),
+            ],
+        ),
+        // 4: both words in one file name.
+        sized(
+            "Batman Trilogy",
+            &[
+                ("The Dark Knight (2008).mkv", 30 * GB),
+                ("Sample/sample.mkv", 20 * MB),
+            ],
+        ),
+    ]
+}
+
+#[test]
+fn file_clauses_match_within_one_file() {
+    let mut store = store_with(&file_corpus());
+    let index = SearchIndex::in_memory().unwrap();
+    let mut w = index.writer(30 << 20).unwrap();
+    assert_eq!(w.catch_up(&mut store, 100).unwrap(), 4);
+    w.commit().unwrap();
+    assert_eq!(index.num_files(), 9);
+    assert_eq!(index.files_watermark().unwrap(), 4);
+
+    // Every inner clause must hold for the same file.
+    assert_eq!(ids(&index, "file:(ext:flac size:>50MB)"), [1]);
+    assert_eq!(ids(&index, "file:(ext:flac,mp3 size:>50MB)"), [1, 2]);
+    assert!(ids(&index, "file:(ext:jpg size:>50MB)").is_empty());
+    // Phrases and NEAR within one file name, which the torrent index's
+    // paths (no positions) can't tell apart.
+    assert_eq!(ids(&index, "file:\"dark knight\""), [4]);
+    assert_eq!(ids(&index, "file:(dark NEAR/1 knight)"), [4]);
+    assert_eq!(ids(&index, "file:(dark knight)"), [4]);
+    assert_eq!(ids(&index, "path:dark path:knight"), [3, 4]);
+    // Words match directories too; path: only directories.
+    assert_eq!(ids(&index, "file:sample"), [4]);
+    assert_eq!(ids(&index, "file:(path:sample ext:mkv)"), [4]);
+    // Beside other clauses (checked in the collector), negated, nested
+    // and alone (driving the query).
+    assert_eq!(ids(&index, "album file:(opening size:>70MB)"), [2]);
+    assert_eq!(ids(&index, "album -file:(ext:flac)"), [2]);
+    assert_eq!(ids(&index, "batman | file:(ext:mp3)"), [2, 4]);
+    assert_eq!(ids(&index, "file:(ext:mkv) -file:(path:sample)"), [3]);
+    // Browse order with a file clause.
+    let node = lodestar_search::parse("file:(ext:mkv)").unwrap();
+    let page = index
+        .search_page(
+            &index.query(&node, NOW),
+            lodestar_search::Sort::Size { desc: true },
+            10,
+            0,
+        )
+        .unwrap();
+    assert_eq!(page.total, 2);
+    assert_eq!(page.hits[0].id, 4);
+
+    // Matched files are positions in the torrent's file list.
+    let node = lodestar_search::parse("album file:(opening | interlude) -x").unwrap();
+    assert_eq!(index.matched_files(&node, 1, 10).unwrap(), [0, 1]);
+    let node = lodestar_search::parse("file:(ext:flac size:>50MB)").unwrap();
+    assert_eq!(index.matched_files(&node, 1, 10).unwrap(), [0]);
+    assert!(index.matched_files(&node, 2, 10).unwrap().is_empty());
+}
+
+#[test]
+fn an_index_left_behind_catches_up_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = index_dir(dir.path());
+    let mut store = store_with(&file_corpus());
+    {
+        let index = SearchIndex::open(&path).unwrap();
+        let mut w = index.writer(30 << 20).unwrap();
+        w.catch_up(&mut store, 100).unwrap();
+        w.commit().unwrap();
+    }
+    // As if a crash came between the two commits and the file index lost
+    // everything: the torrent index keeps its documents, and the next
+    // catch-up fills in the files without adding torrents twice.
+    std::fs::remove_dir_all(path.join("files")).unwrap();
+    let index = SearchIndex::open(&path).unwrap();
+    assert_eq!(
+        (index.watermark().unwrap(), index.files_watermark().unwrap()),
+        (4, 0)
+    );
+    assert!(ids(&index, "file:(ext:flac)").is_empty());
+    let mut w = index.writer(30 << 20).unwrap();
+    w.catch_up(&mut store, 100).unwrap();
+    w.commit().unwrap();
+    assert_eq!(index.num_docs(), 4);
+    assert_eq!(index.num_files(), 9);
+    assert_eq!(ids(&index, "file:(ext:flac)"), [1]);
+}

@@ -4,6 +4,7 @@
 
 mod compile;
 mod doc;
+pub mod files;
 mod filter;
 mod index;
 mod live;

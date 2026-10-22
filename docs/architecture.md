@@ -224,7 +224,7 @@ Text extracted from NFOs is indexed into an `nfo_text` field (boost ~2).
 - Dates: `discovered_at`, `metadata_at`.
 - From hot columns (not indexed): `seeders`, `leechers`, `trackers`, `last_seen`, user flags.
 
-**File index** (one doc per file; modes: *off* / **smart (default)** / *all*. Smart indexes every file in torrents with ≤ 1,000 files, plus files ≥ 5 MB or in a non-"other" category in larger packs. Padding, `.nfo`/`.txt`/thumbs junk in big packs, and BEP 47 hidden files are skipped. Torrent-level `path_tokens` still covers everything that's skipped.) `torrent_id` (fast), `name` (positions), `dir_tokens`, `ext`, `category`, `size` (fast), `pieces_root` (bytes). A file-level clause (`file:(…)`) runs here and produces a roaring bitmap of torrent ids, which filters the torrent query. Each hit returns **"matched files"** for the UI.
+**File index** (one doc per file; modes: *off* / **smart (default)** / *all*. Smart indexes every file in torrents with ≤ 1,000 files, plus files ≥ 5 MB or in a non-"other" category in larger packs. Padding, `.nfo`/`.txt`/thumbs junk in big packs, and BEP 47 hidden files are skipped. Torrent-level `path_tokens` still covers everything that's skipped.) `torrent_id` (indexed, fast), `index` (the file's position, fast), `name` (positions), `dir_tokens`, `ext`, `size` (fast); `category` and `pieces_root` arrive with "same file" (M7). A file-level clause (`file:(…)`) runs here and produces the set of torrent ids with a matching file, cached per segment, which filters the torrent query. Each hit returns **"matched files"** for the UI. The off and all modes arrive with the settings UI; M3 builds smart (§16).
 
 **Tokenizer chain** (the most important quality lever): split on whitespace, `. _ - [ ] ( ) { } + ,` and camelCase/digit boundaries while **also emitting compound tokens** (`S01E02`, `x265`, `5.1`, `DD+`, `WEB-DL`, `24-96`). Then lowercase → ASCII/diacritic folding → CJK segmentation (Lindera/jieba, matching Lodestar's zh support). There's no stemming on names; a light English stemmer runs on a parallel `title_stem` field for "plurals and suffixes" matching (Lodestar's tier 2).
 
@@ -1453,6 +1453,31 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - The canonical store is 764 B per torrent, of which `torrent_parsed` is 160 B.
   - At 200k, a new "word + facets" latency class has p95 1.0 ms, and every gated class still passes with wide margins.
   - Enrichment runs at about 20k torrents/s on one core.
+
+**M3 implementation decisions (file index, `file:(…)`):**
+- **A second Tantivy index, in `files/` inside the torrent index's directory,** one document per file. It records the torrent id, the file's position in the list, the name (with positions), the directory names, the extension and the size. Smart coverage indexes every file of a torrent with ≤ 1,000 files. In larger packs it indexes files of ≥ 5 MiB, plus smaller ones of a media, disc, archive, ebook, subtitle or software category; documents and images there (covers, thumbnails, `.nfo`) are left to the torrent's paths. Padding and hidden files are never indexed.
+- **Each index keeps its own watermark in its own commit payload,** instead of the shared SQLite watermark planned in the M2 log.
+  - Each watermark is atomic with its own documents, which a SQLite row can't be with a Tantivy commit.
+  - The indexer follows the store from the lower of the two, adds to whichever index is behind, and commits the file index first. A crash between the two commits leaves one index behind, and the next catch-up fills only that one. This is tested by deleting the file index and watching it rebuild while the torrent index keeps its documents.
+  - `reindex_log` is followed per index too.
+  - When the file index is ahead, a `file:(…)` set can name a torrent the torrent index doesn't have yet. That torrent just isn't found until it's indexed.
+- **The language:** `file:(…)` takes words, phrases, NEAR, prefixes, fuzzy words, `name:`, `path:`, `ext:` and `size:`, combined freely. Every clause must hold for the same file.
+  - A plain word matches the file name or a directory, and `path:` only directories. Phrases and NEAR use the file name's positions, so `file:"dark knight"` finds one file named that, which `path:` (no positions) can't tell apart from two files.
+  - `file:word` and `file:"phrase"` are shorthands. Anything else inside is a parse error that lists what's allowed.
+- **Evaluation:**
+  - A clause runs on the file index first and gives one sorted list of torrent ids per file-index segment. The lists are cached per segment, keyed by deletions, the browse cache's scheme. A near-real-time commit only costs a search of its new segment, and paging or retyping the words around a clause costs nothing.
+  - At the top level, beside a clause that drives the query, the set is checked in the collector with a binary search per list for each candidate.
+  - Alone, or under `|` or `-`, it selects documents by reading each segment's `id` column against a bitset of the ids, which is about 9× faster than a term set over the ids (3 ms against 27 ms for 100k torrents at 200k).
+  - The browse cache key includes the file index's generation.
+- **Matched files:** `SearchIndex::matched_files` gives the positions of a hit's files that match any `file:(…)` clause of the query. The search API returns them as `matched_files` (at most 20) on each hit of a query with a file clause.
+- **Size, 100k synthetic torrents (30 indexed files per torrent):** 722 B per torrent, 24 B per file. That's within the §3 smart budget of 800 B.
+  - It got there in two steps. First, no field norms: file clauses are never scored, so norms only cost 3 bytes per file.
+  - Second, a zstd (level 19) docstore with 1 MiB blocks. Nothing is stored, but Tantivy keeps a 4-byte offset per document, which lz4 barely shrinks: 119 → 26 B per torrent.
+  - The size report gates it.
+- **Latency at 200k:** the gated "word + file clause" class has p95 2.2 ms (8.7 ms before the cache). Its four clauses repeat, so most of its queries hit the cache.
+  - A broad clause's first evaluation is linear in its matching files, about 20 ns each (13–25 ms for `ext:mkv size:>1GB` at 200k). After that it comes from the cache in about 0.01 ms. A broad clause alone then searches in about 3 ms.
+  - At 10M, a first broad evaluation would take on the order of a second. The fix, when the 10M measurement asks for it, is to evaluate the clause only against the torrent query's candidates when they're fewer than its matching files.
+- **Indexing throughput** falls from about 4k to 2.8k torrents/s with the file index. That's far above any crawl rate, and it only matters for rebuilds.
 
 ## 17. Verification (once built)
 
