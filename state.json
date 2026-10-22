@@ -956,7 +956,7 @@
    "pr": 94,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 23:06 review FIX: gate relevance job on bench, tol 0.001, ratchet warn, forbidden marks, shown()->with_filters."
+   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 23:06 review FIX: gate relevance job on bench, tol 0.001, ratchet warn, forbidden marks, shown()->with_filters. | 23:26 160ff67 all review items done (verified gating); merge on green."
   },
   "V6-cluster1": {
    "status": "review",
@@ -1105,8 +1105,7 @@
  },
  "heartbeats": 4,
  "reviews_in_flight": [
-  "88",
-  94
+  "88"
  ],
  "carry_forward": {
   "next-bans-touch": [
