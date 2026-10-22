@@ -1,0 +1,55 @@
+{
+  "recorded_from": "qBittorrent v4.6.3 (WebUI API 2.9.3)",
+  "note": "correct password",
+  "request": {
+    "method": "POST",
+    "path": "/api/v2/auth/login",
+    "query": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "connection",
+        "keep-alive"
+      ],
+      [
+        "content-length",
+        "3"
+      ],
+      [
+        "content-security-policy",
+        "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self' 'unsafe-inline'; object-src 'none'; form-action 'self'; frame-ancestors 'self';"
+      ],
+      [
+        "content-type",
+        "text/plain; charset=UTF-8"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "referrer-policy",
+        "same-origin"
+      ],
+      [
+        "set-cookie",
+        "SID=I2qCXYtOVgSWxVHIylT1bZt5a/Hf5Bvr; HttpOnly; path=/; SameSite=Strict"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "x-xss-protection",
+        "1; mode=block"
+      ]
+    ],
+    "body": "Ok."
+  }
+}

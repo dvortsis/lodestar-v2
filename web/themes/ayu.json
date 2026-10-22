@@ -1,0 +1,23 @@
+{
+	"id": "ayu",
+	"name": "Ayu",
+	"group": "community",
+	"license": "MIT (© Konstantin Pschera)",
+	"source": "https://github.com/ayu-theme/ayu-colors",
+	"light": {
+		"background": "#F8F9FA",
+		"surface": "#FCFCFC",
+		"text": "#5C6166",
+		"primary": "#F29718",
+		"accent": "#86B300",
+		"categorical": ["#22A4E6", "#86B300", "#EBA400", "#F07171", "#4CBF99", "#A37ACC"]
+	},
+	"dark": {
+		"background": "#0D1017",
+		"surface": "#141821",
+		"text": "#BFBDB6",
+		"primary": "#E6B450",
+		"accent": "#AAD94C",
+		"categorical": ["#59C2FF", "#AAD94C", "#FFB454", "#F07178", "#95E6CB", "#D2A6FF"]
+	}
+}

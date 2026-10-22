@@ -1,0 +1,2 @@
+200
+{"core":[{"failing":0,"must_match":0,"must_not_match":0,"rule":"CS-1a"},{"failing":0,"must_match":0,"must_not_match":0,"rule":"CS-1b"},{"failing":0,"must_match":0,"must_not_match":0,"rule":"CS-8a"},{"failing":0,"must_match":0,"must_not_match":0,"rule":"CS-2a"},{"failing":0,"must_match":0,"must_not_match":0,"rule":"CS-3a"},{"failing":0,"must_match":0,"must_not_match":0,"rule":"CS-3b"},{"failing":0,"must_match":0,"must_not_match":0,"rule":"CS-4a"},{"failing":0,"must_match":0,"must_not_match":0,"rule":"CS-5a"},{"failing":0,"must_match":0,"must_not_match":0,"rule":"CS-5b"}]}

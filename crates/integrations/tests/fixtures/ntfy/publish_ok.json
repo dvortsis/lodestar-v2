@@ -1,0 +1,23 @@
+{
+  "recorded_from": "Built by hand from the ntfy publishing API documentation (docs.ntfy.sh/publish, server v2.x), not recorded: no ntfy server was available in the build session",
+  "note": "A published message: 200 with the stored message as JSON",
+  "request": {
+    "method": "POST",
+    "path": "/lodestar-alerts",
+    "query": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "access-control-allow-origin",
+        "*"
+      ]
+    ],
+    "body": "{\"id\":\"xE73Iyuabi\",\"time\":1761134400,\"expires\":1761177600,\"event\":\"message\",\"topic\":\"lodestar-alerts\",\"title\":\"4K nature docs: 2 new\",\"message\":\"Two new results.\"}"
+  }
+}

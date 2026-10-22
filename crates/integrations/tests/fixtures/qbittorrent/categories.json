@@ -1,0 +1,51 @@
+{
+  "recorded_from": "qBittorrent v4.6.3 (WebUI API 2.9.3)",
+  "note": "",
+  "request": {
+    "method": "GET",
+    "path": "/api/v2/torrents/categories",
+    "query": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "connection",
+        "keep-alive"
+      ],
+      [
+        "content-length",
+        "93"
+      ],
+      [
+        "content-security-policy",
+        "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self' 'unsafe-inline'; object-src 'none'; form-action 'self'; frame-ancestors 'self';"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "referrer-policy",
+        "same-origin"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "x-xss-protection",
+        "1; mode=block"
+      ]
+    ],
+    "body": "{\"Movies\":{\"name\":\"Movies\",\"savePath\":\"/data/movies\"},\"Music\":{\"name\":\"Music\",\"savePath\":\"\"}}"
+  }
+}

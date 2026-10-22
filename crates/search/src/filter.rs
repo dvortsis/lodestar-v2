@@ -75,7 +75,7 @@ pub(crate) enum Check {
 }
 
 /// Whether `minute` falls in `from..=to`, wrapping past midnight.
-pub(crate) fn in_time(minute: u16, from: u16, to: u16) -> bool {
+pub fn in_time(minute: u16, from: u16, to: u16) -> bool {
     if from <= to {
         from <= minute && minute <= to
     } else {
@@ -85,7 +85,7 @@ pub(crate) fn in_time(minute: u16, from: u16, to: u16) -> bool {
 
 /// The minute of the day of unix time `t`, in the zone `offset` seconds
 /// east of UTC.
-pub(crate) fn minute_of_day(t: i64, offset: i32) -> u16 {
+pub fn minute_of_day(t: i64, offset: i32) -> u16 {
     (t.saturating_add(i64::from(offset)).rem_euclid(86_400) / 60) as u16
 }
 

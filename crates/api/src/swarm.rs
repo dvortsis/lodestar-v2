@@ -9,7 +9,8 @@
 use std::time::Duration;
 
 use lodestar_store::{Col, HotColumns, NEVER, Store, SwarmRow, TorrentRow, swarm_flags, trend};
-use serde_json::{Value, json};
+
+use crate::dto::torrents::{SwarmHistory, SwarmSample, SwarmTracker};
 
 /// What the API tells the rest of the process: interest in torrents (to
 /// scrape them sooner) and the searches it served (Serve rollups,
@@ -29,87 +30,110 @@ pub const INTEREST_TOP: usize = 10;
 const DAY: i64 = 86_400;
 
 /// The swarm fields of a torrent summary (`docs/metrics.md` §7.1), on
-/// search hits and the detail view alike (blocking).
+/// search hits and the detail view alike.
 ///
 /// They come from the stored swarm row, which is never behind the hot
 /// columns, so the six nullable counts are null together.
-pub fn summary(
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Summary {
+    pub seeders: Option<u32>,
+    pub leechers: Option<u32>,
+    pub completed: Option<u32>,
+    pub seeders_approx: bool,
+    pub trackers_reporting: Option<u32>,
+    pub trackers_checked: Option<u32>,
+    pub last_scrape_at: Option<i64>,
+    pub swarm_suspect: bool,
+    pub last_seen_at: i64,
+    /// The answered row, for [`detail`].
+    pub row: Option<SwarmRow>,
+}
+
+/// Reads a torrent's [`Summary`] (blocking).
+pub(crate) fn summary(
     store: &Store,
     hot: Option<&HotColumns>,
     row: &TorrentRow,
-    v: &mut Value,
-) -> lodestar_store::Result<Option<SwarmRow>> {
-    let swarm = store.swarm(row.id)?;
+) -> lodestar_store::Result<Summary> {
     // A row with nothing checked and no DHT estimate is a first scrape
     // nobody answered: still "never scraped".
-    let answered = swarm
-        .as_ref()
+    let answered = store
+        .swarm(row.id)?
         .filter(|r| r.trackers_checked > 0 || r.dht.is_some());
-    v["seeders"] = json!(answered.map(|r| r.seeders));
-    v["leechers"] = json!(answered.map(|r| r.leechers));
-    v["completed"] = json!(answered.map(|r| r.completed));
-    // With no tracker reporting, the DHT estimate stood in for the counts.
-    v["seeders_approx"] =
-        json!(answered.is_some_and(|r| r.trackers_reporting == 0 && r.dht.is_some()));
-    v["trackers_reporting"] = json!(answered.map(|r| r.trackers_reporting));
-    v["trackers_checked"] = json!(answered.map(|r| r.trackers_checked));
-    v["last_scrape_at"] = json!(answered.map(|r| r.last_scrape_at));
-    v["swarm_suspect"] = json!(answered.is_some_and(|r| r.flags & swarm_flags::SUSPECT != 0));
     // The hot column moves on every sighting; the row at most hourly.
     let seen = hot.map_or(NEVER, |h| h.get(Col::LastSeen, row.id as u64));
-    v["last_seen_at"] = json!(if seen == NEVER {
-        row.last_seen_at
-    } else {
-        i64::from(seen).max(row.last_seen_at)
-    });
-    Ok(answered.cloned())
+    let a = answered.as_ref();
+    Ok(Summary {
+        seeders: a.map(|r| r.seeders),
+        leechers: a.map(|r| r.leechers),
+        completed: a.map(|r| r.completed),
+        // With no tracker reporting, the DHT estimate stood in.
+        seeders_approx: a.is_some_and(|r| r.trackers_reporting == 0 && r.dht.is_some()),
+        trackers_reporting: a.map(|r| u32::from(r.trackers_reporting)),
+        trackers_checked: a.map(|r| u32::from(r.trackers_checked)),
+        last_scrape_at: a.map(|r| r.last_scrape_at),
+        swarm_suspect: a.is_some_and(|r| r.flags & swarm_flags::SUSPECT != 0),
+        last_seen_at: if seen == NEVER {
+            row.last_seen_at
+        } else {
+            i64::from(seen).max(row.last_seen_at)
+        },
+        row: answered,
+    })
 }
 
-/// The detail view's swarm section (`docs/metrics.md` §7.2), after
-/// [`summary`] (blocking).
-pub fn detail(
-    store: &Store,
-    swarm: Option<&SwarmRow>,
-    id: i64,
-    v: &mut Value,
-) -> lodestar_store::Result<()> {
-    v["dht_seeds"] = json!(swarm.and_then(|r| r.dht).map(|d| d.0));
-    v["dht_peers"] = json!(swarm.and_then(|r| r.dht).map(|d| d.1));
+/// The detail view's swarm section (`docs/metrics.md` §7.2).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Detail {
+    pub dht_seeds: Option<u32>,
+    pub dht_peers: Option<u32>,
+    pub swarm_trackers: Vec<SwarmTracker>,
+    pub swarm_history: Option<SwarmHistory>,
+    pub swarm_trend: Option<f64>,
+}
+
+/// Reads torrent `id`'s [`Detail`], given its [`Summary`] (blocking).
+pub(crate) fn detail(store: &Store, summary: &Summary, id: i64) -> lodestar_store::Result<Detail> {
+    let dht = summary.row.as_ref().and_then(|r| r.dht);
     let urls: std::collections::HashMap<u16, String> = store
         .trackers()?
         .into_iter()
         .map(|t| (t.id, t.url))
         .collect();
-    v["swarm_trackers"] = store
+    let swarm_trackers = store
         .swarm_trackers(id)?
         .into_iter()
-        .map(|s| {
-            json!({
-                "url": urls.get(&s.counts.tracker),
-                "seeders": s.counts.seeders,
-                "leechers": s.counts.leechers,
-                "completed": s.counts.completed,
-                "at": s.at,
+        // Tracker rows are never deleted; one missing is skipped rather
+        // than shown without a name.
+        .filter_map(|s| {
+            Some(SwarmTracker {
+                at: s.at,
+                completed: s.counts.completed,
+                leechers: s.counts.leechers,
+                seeders: s.counts.seeders,
+                url: urls.get(&s.counts.tracker)?.clone(),
             })
         })
         .collect();
     let history = store.history(id)?;
     // `at` is the start of the UTC day or week (epoch day / 7).
     let samples = |it: &mut dyn Iterator<Item = (u32, Option<(u16, u16)>)>, len: i64| {
-        it.map(|(n, s)| {
-            json!({
-                "at": i64::from(n) * len,
-                // Missing samples are gaps, not zeros (§10.5).
-                "seeders": s.map(|s| s.0),
-                "leechers": s.map(|s| s.1),
-            })
+        it.map(|(n, s)| SwarmSample {
+            at: i64::from(n) * len,
+            // Missing samples are gaps, not zeros (§10.5).
+            seeders: s.map(|s| u32::from(s.0)),
+            leechers: s.map(|s| u32::from(s.1)),
         })
-        .collect::<Vec<_>>()
+        .collect()
     };
-    v["swarm_history"] = json!(history.as_ref().map(|h| json!({
-        "daily": samples(&mut h.daily(), DAY),
-        "weekly": samples(&mut h.weekly(), 7 * DAY),
-    })));
-    v["swarm_trend"] = json!(history.as_ref().and_then(trend));
-    Ok(())
+    Ok(Detail {
+        dht_seeds: dht.map(|d| d.0),
+        dht_peers: dht.map(|d| d.1),
+        swarm_trackers,
+        swarm_history: history.as_ref().map(|h| SwarmHistory {
+            daily: samples(&mut h.daily(), DAY),
+            weekly: samples(&mut h.weekly(), 7 * DAY),
+        }),
+        swarm_trend: history.as_ref().and_then(trend),
+    })
 }

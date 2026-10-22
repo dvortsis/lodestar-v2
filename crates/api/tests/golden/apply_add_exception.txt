@@ -1,0 +1,2 @@
+200
+{"applied":true,"assessment":{"confirm":true,"neutralize":null,"preview":{"caught_30d":0,"core_caught_30d":0,"estimate":true,"per_day":0.0,"quarantine":0,"removed_from_floor":0,"stored":0,"tombstones":0},"warning":"This exception releases what it matches from U-1 only. Other rules still check it. In the last 30 days the rules it affects decided 0 items, about 0.0 per day. Counts come from names only, so treat them as estimates. Safer: the narrowest match, an exact torrent.","weakening":true},"id":1,"version":10}

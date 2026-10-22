@@ -272,10 +272,14 @@ The tracker list ships with a curated default. It can optionally **auto-refresh*
 
 Magnet links can **append the best-scoring trackers** from scrape data (toggle), which noticeably improves magnet start-up time. Download-client integrations: qBittorrent, Transmission, Deluge, rTorrent/ruTorrent, Aria2 (one-click send and bulk send).
 
-## 10. UI plan (Svelte 5), governed by `ui-design-skills`
+## 10. UI plan (Svelte 5): the owner's decisions first, `ui-design-skills` for the gaps
 
 ### 10.0 Authority and decisions
-- **Source of truth:** `dvortsis/skills/ui-design-skills` (15 skills). Its precedence applies: explicit user requirements → accessibility/correctness → coherent existing product language (Lodestar) where no skill owns the decision → skill defaults → `minimalist-visual-style`.
+- **Order of authority** (owner, 2026-10-22; `docs/owner-decisions.md`):
+  1. the owner's decisions and this UI plan, which applies `dvortsis/skills/ui-design-skills` (15 skills) as the owner asked when it was written;
+  2. the skills, only for what the plan leaves open, in their own precedence: explicit user requirements → accessibility/correctness → coherent existing product language (Lodestar) where no skill owns the decision → skill defaults → `minimalist-visual-style`.
+
+  A skill default never overrides a decision made here.
 - **Explicit user decisions:** **Svelte 5**, and the **smallest, fastest UI** is the top UI priority. Skills written for React/Tremor are applied **by concept and spirit**. In particular, `data-visualization-design` keeps its data contracts, single formatter per metric, state handling, accessible alternatives, performance rules and validation hooks, but Tremor components are replaced by tiny in-house Svelte SVG chart primitives plus uPlot (lazy-loaded) for time series. `application-interface-design`'s Tailwind + daisyUI guidance applies literally, because daisyUI is CSS-only and framework-agnostic.
 - **Who owns which decision:**
 
@@ -748,7 +752,7 @@ Single-key shortcuts can be turned off or remapped (§10.13).
 | primary | `#527F91` | `#85AFC0` |
 | accent | `#829F8A` | `#A0C3A7` |
 
-Categorical (official, as amended): `#527F91` `#829F8A` `#C4A765` `#BF8173` `#8C9BA7` **`#9381B6`**. Seafoam `#92A9A0` was replaced by a muted plum. You suggested `#9C8AA5`; it fixes normal vision but nearly matches slate under deuteranopia (ΔE_ok 0.9). `#9381B6` (OKLCH 0.64 / 0.08 / 300°) keeps every pair at ΔE_ok ≥ 5.5 for normal, deuteranopic and protanopic vision in both modes, and is ≥ 3:1 on both surfaces (no light-mode data variant needed). The brand files `tokens/colors.json`/`theme.css` get the same update.
+Categorical (official, as amended): `#527F91` `#829F8A` `#C4A765` `#BF8173` `#8C9BA7` **`#9381B6`**. Seafoam `#92A9A0` was replaced by a muted plum. You suggested `#9C8AA5`; it fixes normal vision but nearly matches slate under deuteranopia (ΔE_ok 0.9). `#9381B6` (OKLCH 0.64 / 0.08 / 300°) keeps every pair at ΔE_ok ≥ 5 under normal vision (weakest: sage vs slate, 5.1) and is ≥ 3:1 on both surfaces (no light-mode data variant needed). **Correction (2026-10-22):** the earlier claim of ≥ 5.5 under deuteranopia and protanopia was wrong. Measured in the palette work (PR #37), the weakest pair falls to about 3.3–3.6 under deuteranopia. The owner kept the palette as chosen; the non-colour cues below carry the difference. The brand files `tokens/colors.json`/`theme.css` get the same update.
 
 **Contrast audit of the supplied values (WCAG 2.x):**
 - **Dark mode passes everywhere it's used.** Text 14.2:1 on background; primary 7.1:1; accent 8.7:1; every categorical colour ≥ 3.06:1 on surface.
@@ -756,7 +760,7 @@ Categorical (official, as amended): `#527F91` `#829F8A` `#C4A765` `#BF8173` `#8C
 - **Light-mode `primary` (`#527F91`) is just short for normal-size text:** 4.02:1 on background and 4.37:1 on surface. White text on a primary button is 4.37:1. All of these need 4.5:1.
 - **Light-mode `accent` (`#829F8A`) is 2.65–2.89:1.** That fails text (4.5:1) and UI boundaries (3:1). It's fine as a fill behind `text` (4.03:1, which passes for large or bold labels) or as decoration.
 - **4 of the 6 categorical colours are under 3:1 on the light surface:** `#829F8A` 2.89, `#C4A765` 2.32, `#8C9BA7` 2.85, `#92A9A0` 2.50.
-- **Originally, two categorical colours were near-duplicates:** sage `#829F8A` vs seafoam `#92A9A0` (ΔE_ok ≈ 1.9; ≈ 1.5 under colour-vision deficiency). This is now **resolved** by the plum replacement above. The remaining weakest pair is sage vs slate (ΔE_ok ≈ 5.1 normal, ≈ 4.1 deutan), which is acceptable.
+- **Originally, two categorical colours were near-duplicates:** sage `#829F8A` vs seafoam `#92A9A0` (ΔE_ok ≈ 1.9; ≈ 1.5 under colour-vision deficiency). This is now **resolved** by the plum replacement above. The remaining weakest pair under normal vision is sage vs slate (ΔE_ok ≈ 5.1). Under deuteranopia the weakest pair is sage vs terracotta at about 3.3–3.6 (PR #37's measurements). The owner kept the palette (2026-10-22), and the non-colour cues below carry the difference.
 
 **Resolution: keep the official values as the brand values; derive role tokens for anything that must pass.** Text, buttons and data marks use **ink/data variants** that keep each hue and only shift its lightness in OKLCH.
 
@@ -791,7 +795,7 @@ Categorical (official, as amended): `#527F91` `#829F8A` `#C4A765` `#BF8173` `#8C
 | 6 | `#9381B6` plum | Archives & disc images |
 | — | `muted-text` grey | Other |
 
-With the plum swap, all six colours are distinguishable. Colour is still never the only cue:
+With the plum swap, all six colours are distinct under normal vision. Under colour-vision deficiency some pairs come closer (see above), so colour is never the only cue:
 - a **2 px surface-coloured gap** between segments;
 - **fixed segment order** (Video, Audio, Images, Documents, Archives, Software, Other);
 - visible dominant-share text ("82% video");
@@ -806,7 +810,7 @@ With the plum swap, all six colours are distinguishable. Colour is still never t
 | Official | **Riverstone** (default) |
 | Accessibility | High Contrast (AAA 7:1 text), Okabe-Ito (colour-vision-safe categorical set), Paper & Ink (near-monochrome) |
 | Community-inspired | Nord, Solarized, Gruvbox, Catppuccin (Latte/Mocha), Rosé Pine (Dawn/Main), Tokyo Night (Day/Night), Everforest, Kanagawa (Lotus/Wave), Dracula (Alucard/Dracula), One (Light/Dark), Ayu |
-| Originals (muted, Riverstone-adjacent) | Tidewater (cool blues), Sandstone (warm neutrals), Moss (greens), Ember (rust/clay), Lavender Field (dusty purples), Graphite (cool greys, minimal accent), Sepia (low-blue reading), Midnight OLED (true-black dark / "Daylight" light) |
+| Originals (muted, Riverstone-adjacent) | Tidewater (cool blues), Sandstone (warm neutrals), Moss (greens), Ember (rust/clay), Lavender Field (dusty purples), Graphite (cool greys, minimal accent), Sepia (low-blue reading), Midnight OLED (true-black dark / "Daylight" light), Rosewood (dusty rose; the 24th family, owner-approved 2026-10-22) |
 
 **Theme compiler** (`web/scripts/themes.ts`, runs at build time):
 - **Input:** `themes/*.json` in the exact Riverstone schema.
@@ -1704,6 +1708,218 @@ docs/               architecture.md (this plan), query-language.md, operations.m
     - its due index 14 B;
     - per-tracker 14 B.
   - The whole store is **926 B** against the 1,024 B gate, so it still passes, with 98 B left. A history row costs about 180 B with page overhead, so the share of live swarms drives the total.
+- **W8 formatters (`web/src/lib/format/`), choices that clarify `docs/metrics.md` §3:**
+  - Estimated and sampled values share one input, `{ value, approx: true }`, and print `≈` + U+00A0 + value. The panel reads `sampled` from the response and shows the `sampled_note` message once; the formatter has no `sampled` flag.
+  - `formatRate` wraps `{n}/h` and `{n}/d` itself, and `formatRelative` takes the translated `just_now` string in `opts.justNow` (small en/zh fallback). W4 replaces both with messages.
+  - Rounding that would reach the next unit steps up (`1023.9 KiB` → `1.00 MiB`, `59.6 s` → `1 min`, `47.96 hr` → `2 days`, `999.6 ms` → `1 sec`). Bytes pick their digit count from the rounded value, so `9.996 GiB` prints `10.0 GiB` and `99.96 MiB` prints `100 MiB`, which keeps the fixed-digit alignment.
+  - Bytes, percent, share, rate, latency and span treat negative input as invalid (`—`). Count, compact and score keep plain `Intl` output; only `formatDelta` uses U+2212.
+  - `formatDelta` takes `kind` (`count`, `compact`, `percent`) plus percent digits; `formatDateFull` takes a `bucket` (`hour`, `day`, `week`); `formatRelative` uses month = 30 d and year = 365 d.
+  - An unknown or empty `timeZone` falls back to the browser's zone instead of throwing. Percent `<`/`>` edges are detected from the `Intl` output itself, so they match the displayed digits.
+  - Size histograms: `sizeBinEdges(fromExp, toExp)` labels power-of-2 edges with `formatBytes`; `sizeBinLabel` joins two edges with a no-break space and an en dash. Labelling only; the server owns the bins.
+
+
+**Theme compiler (W1):** decisions that clarify §10.18.
+- **Derivation constants are fitted once.** Each rule is a lightness shift (or a mix toward `primary`/`accent` for dividers and tints). The constants are tuned so Riverstone lands within ΔE_ok ≤ 0.5 of the §10.18 table, and every theme inherits them. Light and dark have separate constants. **Riverstone's published values (`docs/design-tokens.md` §1–4) are a contract, so the compiler pins them byte for byte** (`PINS` in `themes.ts`); a test checks the rules alone stay within ΔE_ok 0.5 of each pin.
+- **`neutral-content` is derived to reach 4.5:1** on the neutral fill: the better of text/surface, shifted in lightness only if neither passes (Riverstone light: `#193038`, 4.55:1).
+- **File layout:** one file per family, `web/themes/<family-id>.json`, with `id`, `name`, `group` (`official`/`accessibility`/`community`/`original`), optional `license`/`source`, and `light`/`dark` palettes (the `docs/themes.md` layout). The compiler expands it into `<id>-light` and `<id>-dark`.
+- **Gates beyond the §10.18 list**, so the contract in `docs/design-tokens.md` holds in every theme:
+  - `muted-text`, `warning` and `error` ≥ 4.5:1 on both grounds;
+  - each `*-content` ≥ 4.5:1 on its fill (the accent fill only warns, since design-tokens allows large/bold labels there);
+  - text on the hover and selected tints ≥ 4.5:1.
+- **Riverstone is grandfathered on categorical ΔE_ok only**, never on text contrast. The accent-fill label (4.03:1, large/bold allowed) stays a reported warning.
+- **ΔE_ok and the CVD report run on the data marks** (the colours actually drawn), not the raw categorical inputs, and both Machado 2009 (severity 1.0) and Viénot 1999 are reported side by side.
+- **Pre-paint storage contract:** `localStorage["lodestar.theme"]` holds `{ mode: "system"|"light"|"dark", light: { id, vars? }, dark: { id, vars? } }`. `vars` is the cached custom-property map of a non-Riverstone theme. The script sets `data-theme`, `color-scheme` and `vars` on `<html>` and falls back to Riverstone for the resolved mode.
+- **`themes.json`** is `{ v: 1, keys: [...], themes: [{ id, name, family, group, mode, contrast: "AA"|"AAA", license?, source?, values: [...] }] }`, with `values` in `keys` order.
+- **Dark `info` uses `primary-ink`**, which equals `primary` for Riverstone but may differ for other themes (a dark `primary` that is too dim is lightened).
+- **Labels and tints pass by construction (W1c).** A `*-content` label is the best of its preferred colours (primary/status fills: surface or background; neutral: text or surface) when that reaches 4.5:1. Otherwise it is the theme's own text colour moved in lightness only (hue and chroma kept, gamut permitting: a theme such as Tokyo Night Light loses a little chroma to the sRGB gamut), in whichever direction reaches the target with the smaller change, and finally pure black or white. High Contrast aims for 7:1 where the fill allows. The hover and selected tints start from the surface/primary mix and move toward the background's lightness until text on them reaches 4.5:1. If that leaves them within ΔE_ok 2 of each other (Solarized Dark), the selected tint mixes in more primary and is re-shifted until they differ by at least 2, so a hovered row never looks selected (a warn-level gate backs this up). The accent label stays the one warning (large/bold allowed). Riverstone's values are unchanged. All 24 families of `docs/themes.md` compile with zero gate failures (tested against a JSON copy in `web/scripts/fixtures/`).
+
+**B0 decisions (API router split, error envelope):**
+- **One module per API domain** in `crates/api` (`auth`, `search`, `torrents`), each with `routes() -> Router<ApiState>`; `api::router` only merges them, one line per module. Session-protected routes are wrapped in `auth::protected`, whose guard reads its `Auth` from a request extension that only `api::router` installs, so a protected route mounted any other way fails closed (500), never open.
+- **One error envelope** for every `/api/v1` failure: `{ "error": { "code", "message", "field"?, "start"?, "end"? } }`. `code` is stable snake_case for clients to branch on, `message` a sentence for people, `field` the parameter at fault, `start`/`end` the byte span of a query syntax error. Extractor rejections (bad JSON, query or path; `field` is the serde path to the bad value) and unknown `/api/v1` paths (404) or methods (405) use it too, with house-style messages rather than serde's text. Status codes didn't change. The 401 keeps `setup_required` beside `error`, so the login screen needs no second request.
+- **`crates/lodestar/src/services.rs`** builds and wires every service of `serve` and owns the ordered shutdown (the blocklist refresher, then the pipeline, then the live indexer); `main.rs` keeps only the CLI.
+**W3 brand pipeline decisions (§10.19):**
+- **AVIF is the format; WebP is only the fallback.** Scenes get AVIF at 360/540/724 (quality 32, effort 4) and WebP at 540w only (quality 28, effort 6, smart subsample). Logos get AVIF (quality 40) and WebP (quality 50) at 1x and 2x.
+- **The gate is 45,000 B for AVIF 540w.** The largest is about 22 KB, so quality has headroom. The 45 KB ceiling guards the pack, not the encoder setting.
+- **Logo display widths:** wordmark 240, horizontal 320, stacked 200 px (§10.19 fixes only the wordmark).
+- **Size:** `web/static/brand/` is about 1.5 MiB (scenes 1.1 MB, logos 0.3 MB, favicons 0.13 MB). An earlier setting with three WebP widths came to 3.05 MiB.
+
+**B1 decisions (typed API contract):**
+- **Every `/api/v1` body is a typed DTO** in `crates/api/src/dto/` (one file per domain), with utoipa `ToSchema`. Each module lists its handlers in an `ApiDoc`, and `openapi::document` merges them one line per module, as the router does. `GET /api/v1/openapi.json` is open and holds no data.
+  - The document has OpenAPI 3.1 paths relative to the server `/api/v1`, a `session` cookie security scheme on every path except `/auth`, `/setup`, `/login`, `/logout` and `/openapi.json`, and the error envelope as every operation's `default` response.
+  - `lodestar`'s `openapi` binary writes `web/src/lib/api/openapi.json` (pretty-printed, sorted keys), and `npm run api:types` turns that into `schema.d.ts`. CI fails if either committed file is stale.
+- **The JSON stayed byte-compatible** with the old `json!` handlers, held there by per-endpoint golden files recorded before the change (`crates/api/tests/golden/`). That's why response fields are declared in alphabetical order (a `Value` serializes its keys sorted). `POST /filters/preview` keeps the declaration order it always had.
+- **The `docs/metrics.md` §7 swarm fields are served now as `null`** ("never scraped") until M4 fills them: `seeders`, `leechers`, `completed`, `trackers_reporting`, `trackers_checked` and `last_scrape_at` on hits and detail, plus `dht_seeds`, `dht_peers`, `swarm_trend` and `swarm_history` on detail. The non-nullable M4 fields (`seeders_approx`, `swarm_suspect`, `swarm_trackers`, `last_seen_at`) arrive with M4's values, not as placeholders.
+- **B1 doesn't serve the other `docs/metrics.md` §7.1/§7.3 fields yet.** Adding one later is a DTO field plus a golden update, not a new endpoint. The fields are `title`, `resolved_via`, `content_type`, `adult_kind`, `composition`, `junk_score`, `junk_reasons`, `hidden_by_filter`, `why`, `total_approx`, `hidden_junk` and `hidden_count`.
+  - `total_approx` comes with B5a (exact count on demand).
+  - `hidden_by_filter`, `why` and `hidden_count` come with B15 (the filter decisions on search results).
+  - The M3 enrichment fields (`title`, `resolved_via`, `content_type`, `adult_kind`, `composition`, `junk_score`, `junk_reasons`) and `hidden_junk` have no slice in `docs/build-plan.md` yet; the runner assigns one. They read the stored enrichment in `torrents::hit` and `torrents::detail_of`.
+- **New endpoints land as a typed DTO plus a 501 stub** (`error::not_implemented`, code `not_implemented`) with an example, then the handler (`crates/api/README.md`).
+
+**M5 decisions (build process and UI conventions):**
+- **Spacing uses Tailwind's default scale** (`p-4` = 16 px), restricted to the steps that match the §10.2 ramp: 0, 0.5, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14 (= 0–56 px).
+  - Redefining the scale so that `p-4` = 4 px was considered and rejected. Standard Tailwind written against it would be silently wrong, and no lint can catch that.
+  - The ban check rejects off-ramp steps (W2).
+  - `docs/design-tokens.md` §5 holds the table.
+- **Order of authority (owner, 2026-10-22):** the owner's decisions are the primary rules, recorded in `docs/owner-decisions.md` and extracted from the design session. Then come this plan and the contract docs. `ui-design-skills` fills only the gaps. §10.0 is amended to match. In practice little changes, because §10 was written by applying the skills as the owner then asked; but a skill default can no longer override anything decided here.
+- **Themes (owner, 2026-10-22):**
+  - Riverstone is the default and official palette, with plum `#9381B6` in categorical slot 6. Seafoam `#92A9A0` stays retired: it was too close to sage.
+  - The collection is **24 families × light and dark = 48 themes**. §10.18 names 23 families; the 24th is **Rosewood**, proposed in the palette work (PR #37) and approved.
+- **Filtering decisions (owner, 2026-10-22; `docs/owner-decisions.md` §2.7–2.9):**
+  - Config files may only **add** to the locked floor. Removals or weakenings (deleting a hash from `blocklist.files`, a floor-marked list's upstream removals) are refused at start-up and go through the app with the effect warning and password.
+  - Rule packs are off until chosen and pre-checked in the first-run wizard (§20.6), never on by default.
+  - Blocklist subscriptions are off by default and chosen in the wizard or Settings, with a warning matched to how strict the chosen lists are. The §20.13 refresh mechanics stay as designed.
+- **Riverstone colour-blind figures corrected** in §10.18. The palette is unchanged by owner decision.
+- **The build runs as parallel slices** (`docs/build-plan.md`, `runner/`).
+  - One bar for every slice and review: `runner/standards.md`.
+  - Merges happen only with green CI and no blocking findings from a fresh Opus reviewer.
+
+**M5 decisions (filtering, owner 2026-10-22):** PRs #33, #42 and #47 merged before §2.7–2.9 were applied. F1 brought `main` into line:
+- **Rule packs are off until chosen (§2.8, §20.6).** With nothing stored, `pack_switches` starts from no pack on. Packs turn on only through a stored choice: the wizard (pre-checked there) or Settings through the filters API. The guards and pack logic are unchanged.
+- **The 50 µs budget is the owner's (§1.6.6, §20.8).** `LODESTAR_BUDGET_US` is gone. The `filter budget` CI job runs the gate in release.
+  - **The first gate wasn't honest.** It judged one torrent, over and over, against rules none of whose words it had, so the narrowing skipped 99% of them. The review made 10% of the rules candidates that matched nothing and measured 16.8–17.0 ms per torrent.
+  - **The gate now** judges a varied set of 512 torrents with 1%, 10% and 25% of the rules built on words they have, and about 40 rules per torrent that get the full match (§20.8). It holds the core, 1% and 10%; 25% is reported.
+  - **What made it:** compiled queries with a three-valued cheap check (token texts, a Bloom filter of neighbouring tokens, token starts, extensions, sizes, tags); an index keyed on each rule's rarest-looking word; an exact ASCII fast path of the search tokenizer for the full match; a per-torrent vocabulary for prefixes and fuzzy words; and word plans and a flag table in the core's tokenizer and signals. On this set the engine went from 30 ms per torrent at 10% to 40.8 µs on the runner (core 8.9, 1% 32.9, 25% 48.1 reported). The build VM runs about 1.4× slower.
+  - **Scope:** the gate covers rule shapes the cheap check can reject. Shapes it can't decide (negations, NEAR, prefixes, fuzzy words, `title:`) get the full match on every torrent that has their words, and cost more (§20.8). Whether to hold those is the owner's call.
+  - **Correctness:** a differential property test checks the compiled match against the previous matcher on random queries and torrents, and the cheap check against the full match. Its *no* answers rest on property tests that the scan's keys, pairs, starts and vocabulary cover the tokenizer's tokens exactly or as supersets. Injected bugs were caught.
+- **The floor from config files only adds (§2.7).** `blocklist.files` add through the store. A floor-marked list's upstream removals stay blocked. Both kinds of drop wait in *pending floor removals*, reported once per start with a counter metric, and leave the floor only through `resolve_floor_removal` with the effect warning and the password.
+- **Floor removals, as reviewed:** a confirmed removal settles the entries its warning counted (`floor_entries`), never more. An entry two config files list stays while either lists it. Accepting a held version of a floor-marked list is no longer weakening, since what it drops stays blocked in the list's pending removals (§20.7).
+- **Subscriptions are off by default (§2.9).** The strictness assessment grades on the share of **public** IPv4, because FireHOL level 1's 14% of IPv4 is almost all reserved space. BT_BlockLists comes out severe.
+
+**B3 decisions (embedded UI serving, CSP):**
+- **Embedding:** `crates/lodestar/build.rs` bundles `web/build/` (or `$LODESTAR_WEB_BUILD`) when the default-on `web` feature is set. Every text file is precompressed at build time with brotli (q11) and gzip (level 9), each kept only if smaller; fonts and raster images are stored once. With no build (or `--no-default-features`), a stub page says "UI not built: run `npm run build` in web/", so `cargo test` needs no Node. No embed crate: `include_bytes!` from `OUT_DIR`. New direct dependencies of `crates/lodestar`: `brotli` 9.0.0 (build and dev; the only crate new to the tree), and `flate2`, `sha2` and `base64` (build and dev), `tower` and `proptest` (dev), all already in `Cargo.lock`. The bundle adds about 285 KiB to the stripped binary (raw 184 KiB + br 40 KiB + gz 46 KiB).
+- **Serving** is the router's fallback, so declared routes (`/api/**`, `/metrics`, `/healthz`, `/status`) always win. Unknown `/api/**` paths, including percent-encoded ones, get the API's `no_route` envelope. Other unknown GET paths get `index.html`, except under `/_app/`, `/fonts/`, `/brand/` and `/themes.json`, which 404 so a stale chunk fails loudly. Lookups go to a compile-time table, never the filesystem; dot segments, empty segments, backslashes and control characters, raw or percent-encoded, are 404s.
+- **Caching classes:**
+
+  | Paths | `Cache-Control` |
+  |---|---|
+  | `/_app/immutable/**` (content-hashed) | `public, max-age=31536000, immutable` |
+  | HTML (`/`, the SPA fallback) and `/_app/version.json` (SvelteKit's update probe) | `no-cache` |
+  | everything else: `/brand/**`, `/fonts/**`, `/themes.json` (stable names) | `public, max-age=3600` |
+
+  Every file has a strong ETag (SHA-256 prefix, with `-br`/`-gzip` per encoding) and answers `If-None-Match` with 304. The encoding is the client's highest-q of brotli and gzip (brotli on a tie), with `Vary: Accept-Encoding`.
+- **CSP on every HTML response**, computed at build time from the built page:
+  `default-src 'self'; script-src 'self' 'sha256-…'; style-src 'self'; style-src-attr 'unsafe-hashes' 'sha256-…'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`.
+  - `script-src` hashes each inline script: the theme pre-paint script and SvelteKit's bootstrap, whose text changes every build.
+  - `style-src` stays `'self'`: Tailwind and daisyUI are one stylesheet, the fonts are files, and Svelte sets dynamic styles through the CSSOM, which CSP doesn't govern. Static `style="…"` attributes are another matter: SvelteKit emits two (`<div style="display: contents">` in the page, and its visually hidden route announcer in a component template), so `style-src-attr` allows exactly the static values in the build, by hash. Interpolated values aren't hashed; they go through the CSSOM.
+  - Browsers without CSP3 `style-src-attr` (Chrome < 75, Firefox < 108, Safari < 15.4) fall back to `style-src 'self'` and block the two attributes, which only affects the route announcer's hiding and the wrapper's `display: contents`.
+  - `img-src data:` is for daisyUI's data-URI SVG icons. A page with an inline event handler fails the build instead of being allowed.
+  - Also on HTML: `X-Content-Type-Options: nosniff` (on every file), `Referrer-Policy: no-referrer`, and a `Permissions-Policy` that denies accelerometer, camera, display capture, geolocation, gyroscope, magnetometer, microphone, MIDI, payment and USB.
+- **The M1 status page moved from `/` to `/status`.** It stays open (it asks for a login itself, and `/api/status` needs a session) and keeps its own `'unsafe-inline'` policy, now with `object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`, plus `no-referrer`, the same `Permissions-Policy` and `no-cache`.
+
+**Integrations crate decisions (download clients, notifications, secrets, SSRF guard):**
+- **HTTP stack:** the workspace's: reqwest 0.13 with `rustls-no-provider` and the `ring` provider, the same build and trust store as the tracker scraper and the subscriptions fetcher. System proxies are off for integrations: a proxy resolves names itself, which would bypass the guard.
+  - The raw client doesn't leave `GuardedClient`.
+  - `crates/integrations/clippy.toml` forbids `RequestBuilder::send` and `Client::execute`, so every request in the crate passes the literal-IP check.
+- **SSRF policy (§12):**
+  - Link-local, metadata (`169.254.169.254`, `fd00:ec2::254`, `100.100.100.200`) and reserved addresses are never reachable.
+  - Notification endpoints never reach loopback, even with the per-channel private-range opt-in. Download clients may reach loopback, because companions bind to localhost (§18.10).
+  - Carrier-grade NAT (`100.64.0.0/10`, Tailscale) counts as private.
+  - IPv4 embedded in IPv6 (mapped, compatible, NAT64, 6to4) is classified by its IPv4 address. Local-use NAT64 (`64:ff9b:1::/48`) counts only in the /96 layout; any other layout is reserved.
+  - The IPv6 special-purpose blocks `2001:2::/48`, `2001:10::/28`, `3fff::/20` and `5f00::/16` are reserved.
+  - A name with any disallowed answer is refused whole. Every new connection re-resolves and re-checks, which catches rebinding.
+  - Only 307/308 redirects are followed, each hop checked; credentials headers are dropped across origins, and `https` → `http` is refused. Other 3xx responses would turn a POST into a GET and report a lost payload as delivered.
+- **Secrets at rest (§18.10):**
+  - The per-install key lives in `secrets.key` in the data directory, outside the database.
+  - Each secret is sealed with XChaCha20-Poly1305 under a random nonce, with the record's name as associated data, so a sealed value can't be moved between records.
+  - On Windows the key file's ACL is replaced through `icacls` (by its absolute path), because the workspace forbids `unsafe` Win32 calls. It's applied before the key is written and re-applied on every read.
+  - **Rotation:** the key file holds several keys, each identified by an id, and every sealed value records its key's id. `rotate` adds a primary key, callers re-seal their records in their own transaction, and `retire_old_keys` drops the rest. The file always holds every key a stored record may use, so a crash mid-rotation loses nothing.
+- **qBittorrent "Send selected files":** the torrent is added paused, unselected files get priority 0 once the client has the metadata, and then the torrent starts. If a magnet's metadata doesn't arrive within 30 s, the torrent stays paused and the UI says the selection is pending, so nothing unwanted downloads.
+- **Webhook payload:** `lodestar.notification`, `schema_version` 1, with an `id` that stays the same across retries for deduplication. Private-source items are left out, and only their count is sent (§18.7).
+
+**Download-client adapters: Transmission, Deluge, rTorrent, Aria2 (X-clients):**
+- **All four:**
+  - **Bulk send:** none of the four has a batch add that reports per torrent, so each adapter adds the torrents one at a time.
+  - **Duplicates:** a single torrent that's already in the client is `Rejected` ("already in the client"). In a bulk send a duplicate counts as sent, because it's already where the user wants it; the send is refused only when every torrent was a duplicate.
+  - **A bulk send that fails part-way** returns `ClientError::Partial { sent, cause }`, so the caller can still count the torrents that went in (`sends`, `docs/metrics.md` §6.7) and doesn't retry them. qBittorrent sends a bulk add as one request, so it never returns `Partial`.
+  - **"Send selected files" works for a `.torrent` file in all four, but for a magnet only in Aria2.** Transmission, Deluge and rTorrent fetch a paused (or stopped) magnet's metadata only once it's started, so nothing could be selected before files start downloading. Checked live: every magnet selection was still pending after 30 s.
+    - `Capabilities::magnet_file_selection` says whether a client can do it. Where it can't, `check_magnets` refuses a magnet with a selection as `Unsupported(MagnetFileSelection)` before any request, and the UI offers "send all files" or the `.torrent` instead.
+    - A metadata-only start, without downloading payload, couldn't be verified here, because the session had no outbound peer network. It's left unsupported rather than guessed.
+    - For a `.torrent`, the adapter still waits up to 30 s (polling every 500 ms) for the client to register it, as qBittorrent does.
+  - **Hostile answers:** a file count above `MAX_FILES` (1,000,000) is a `Protocol` error before anything is sized from it. The check is in each adapter and in the shared `skipped_files`. JSON answers parse into typed structs; file lists are counted and never stored.
+  - **`ClientConfig`'s `Debug`** shows only the URL's scheme, host and port, so a token in the configured URL's query is never printed. The adapters drop the query anyway.
+  - **New auth failure:** Transmission answers an `rpc-whitelist` refusal and a brute-force ban with the same bare 403, so `AuthFailure::AddressRefused` says "check the client's IP allow-list, or whether it banned this address". rTorrent's web server uses it for 403 too.
+- **rTorrent: XML-RPC at the web server's `/RPC2`, not ruTorrent's `httprpc` plugin.**
+  - **Why:** every rTorrent install can expose `/RPC2`, and ruTorrent itself needs it (or SCGI). `httprpc` exists only where ruTorrent and PHP are installed, and its action set differs between ruTorrent versions. XML-RPC is typed and documented, with real fault answers.
+  - **Parsing:** answers are parsed with `quick-xml` 0.42.0, used as a reader only (no default features, no serde, no encodings). The parser:
+    - accepts only `i4`/`int`/`i8`, `string`, `boolean`, `double`, `nil`, `array` and `struct`;
+    - limits nesting to 16 levels, and `read_limited` bounds the size;
+    - refuses any `<!DOCTYPE`, and resolves only the five predefined entities and character references.
+
+    Property tests check that arbitrary bytes never panic and that deeper nesting is refused.
+  - **The save path and label go along as commands of the load** (`d.directory.set=…`, `d.custom1.set=…`). rTorrent keeps a magnet's load commands and applies them again when its metadata arrives; values set afterwards wouldn't survive that.
+    - rTorrent parses these commands, and evaluates a leading `$` even inside quotes (checked on 0.9.8: `d.custom1.set="$cat=x,y"` stored `xy`). So values are quoted with `\` and `"` escaped, and a value starting with `$` is refused.
+    - The label is percent-encoded, as ruTorrent stores it in `d.custom1`, so a label can't inject anything.
+  - **Checking the add:** `load.*` answers 0 even when rTorrent drops the torrent (a corrupt file, or a magnet with no trackers while DHT is off). So the adapter asks `d.hash` before the load (to catch a duplicate) and polls it for up to 5 s after (to confirm the torrent appeared).
+- **Transmission:**
+  - **Labels:** sent in `torrent-add` from RPC 17 (4.0), and with `torrent-set` after the add on RPC 16 (3.00). Older daemons have no labels, so the torrent is added without one, as the brief specifies.
+  - **Categories** are the labels already in use on the daemon's torrents, since Transmission keeps no label list of its own. Before RPC 16 they're `Unsupported`.
+  - **The 409 body** repeats the session id, so it's never read into an error.
+- **Deluge:**
+  - **Labels need the Label plugin.** Without it, an add with a label is refused as `Unsupported` before anything is added.
+  - The plugin only accepts lowercase labels, so the label is lowercased, and created with `label.add` before the add if it doesn't exist.
+  - **File priorities:** a selection keeps each selected file's existing priority and sets the skipped files to 0.
+  - **Errors:** only the exception text of a code 3/4 error is shown, without the traceback. A code 5 error ("couldn't read the request") is never shown, because its message quotes the request, password included.
+- **Aria2:**
+  - **Selection is passed at add time** (`select-file`, 1-based), and aria2 applies it itself, so it needs no paused flow.
+    - **A `.torrent`'s indices are checked with `aria2.getFiles`:** it's added paused, then started. An index past the last file leaves it paused and the add is refused as `InvalidRequest`, as in qBittorrent.
+    - **A magnet's indices can't be checked** before its metadata arrives; the outcome still says `Applied`.
+  - **Duplicates** only fail when the download starts (`errorCode` 12), so a started add is followed by one `aria2.tellStatus`. A paused duplicate fails later, inside aria2.
+  - **No categories.**
+
+**X-utp implementation decisions (uTP, `lodestar-utp`, behind a flag):**
+- **Our own crate, not a dependency.** The maintained candidates were measured against the §15 criteria (MIT/Apache, tokio-native, LEDBAT, bounded memory, no `unsafe` on our side, fuzzable parsing, active):
+  - `librqbit-utp` 0.7 (Apache-2.0, tokio, active) has no LEDBAT: Cubic only, with LEDBAT a TODO. It also pulls in `libc`, `socket2`, `parking_lot` and `lazy_static`.
+  - `utp-rs` 0.1.0-alpha.17 (MIT, tokio, LEDBAT) is an alpha with no release since March 2025, and uses unbounded channels per connection, so a peer can grow our memory.
+  - `utp` and `tokio-utp` haven't had a release since 2017; `libutp` bindings need `unsafe` FFI.
+  - `crates/utp` adds no new third-party crates: tokio and rand, plus socket2, which the DHT already uses.
+- **Design:** a sans-IO connection state machine (packet codec, selective ACK, fast retransmit on three duplicate or selectively acknowledged packets, RFC 6298 timeouts with exponential backoff, LEDBAT with a 100 ms target and slow start, sequence-number wraparound), driven by a thin tokio layer: one mutex per connection, a timer task per connection, non-blocking sends.
+  - The state machine is tested over a simulated network with a virtual clock: loss, duplication, reordering and starting sequence numbers near 65535. A fuzz target (`utp`) drives the parser and the state machine with hostile packets.
+  - **Hostile-input limits:** buffered bytes per connection stay under 2 × the receive window plus the send buffer (64 KiB each by default), with at most 256 packets in flight and 256 held out of order. ACKs for packets we never sent are ignored. Packets for unknown connections are dropped silently, never answered, so the port can't be used as a reflector. Incoming connections are accepted only by a listener (the crawler has none).
+  - **No connection lives forever:** at most 8 per IP address (closing ones included) and 4,096 in all. An accepted connection whose initiator never answers its SYN-ACK closes after 8 s, restarted by each repeated SYN, which covers the initiator's SYN backoff. An open connection with nothing in flight that hears nothing for 60 s closes as timed out.
+  - Once the handshake completes, the retransmission timer drops the SYN's backoff (RFC 6298 §5.7), so data after a lossy handshake isn't retried on an 8 s timer.
+  - The accepting side sends nothing but its SYN-ACK until the initiator answers, as in libutp. Otherwise data reordered ahead of the SYN-ACK would desynchronise the initiator's sequence numbers.
+  - After both FINs, a connection lingers in TIME-WAIT (4 × RTO, at least 4 s, restarted by each packet) to re-acknowledge retransmissions. A dropped stream closes with a FIN in the background, capped at 5 s.
+  - Packets carry at most 1,200 payload bytes, which fits the IPv6 minimum MTU through tunnels and VPNs without path-MTU discovery.
+  - Measured: **77 MiB/s** on loopback (one connection, release build) and about **2.4 KB per idle connection endpoint**; at most 192 KiB per connection under load.
+- **Shared port (§5):** `lodestar_utp::classify` splits datagrams on the DHT's port by their first byte. uTP has version nibble 1 and type 0–4; KRPC starts with `d` (0x64), which would read as type 6, version 4, so the two never collide. `UtpSocket::with_sink` sends through the DHT's sockets (`DualSink` picks the IPv4 or IPv6 one) and receives via `feed`.
+- **In `peer-wire`:** the BEP 3/10/9 exchange and MSE run over any `AsyncRead + AsyncWrite` stream (`fetch_on_stream`). `FetchOptions` gains `transport` (TCP by default), `fallback_to_tcp` (on by default), `utp_fallback_after` (2 s) and `utp`.
+  - With uTP first, a peer that doesn't open a uTP connection within 2 s is fetched over TCP inside the same deadline. A peer that answered over uTP isn't retried over TCP.
+  - The deadline, the metadata size cap and every other limit are identical across transports. The TCP path is unchanged.
+- **Metrics:** `lodestar_fetch_{attempts,success,connect_timeouts}_total{transport}`, `lodestar_utp_retransmits_total` and `lodestar_utp_connection_timeouts_total`. The labelled success counter replaces the unlabelled one. It counts every verified info dict, so it can run slightly ahead of the pool's `fetched`, which drops a result whose key left the pool mid-fetch. Counting in the pool instead would need `Fetched` to carry its transport.
+- **Windows (§11):** all uTP connections share one UDP port, so they avoid TCP's ephemeral-port and TIME_WAIT exhaustion. The receive loop ignores per-datagram errors such as the `ConnectionReset` Windows reports for an ICMP "port unreachable". `UtpSocket::bind` on an IPv6 address is dual-stack on every OS: it clears `IPV6_V6ONLY` explicitly, because Windows sets it by default and Linux and macOS don't. (The DHT does the opposite, binding IPv6-only so its two sockets share a port; a shared-port uTP socket uses the DHT's sockets through `DualSink`.)
+
+**W4 implementation decisions (i18n):**
+- **Messages are merged, not committed.** `web/scripts/messages.ts` merges `features/<feature>/messages/{en,zh}.json` and the shared `i18n/messages/` into `web/messages/{en,zh}.json` (generated, gitignored), which Paraglide compiles into `src/lib/paraglide/` (also gitignored). Feature keys start with `<feature>_`; shared keys are the `docs/ui-glossary.md` key column as is (`torrent`, `seeders`, `video`, …) plus `common_*`.
+- **Strategy is `globalVariable` + base locale.** No URL or cookie strategy: the locale is a client setting, resolved as settings, then `navigator.languages`, then en (`web/src/lib/i18n/locale.svelte.ts`). The runtime adds about 1.3 KB gzipped to search-route JS; messages are tree-shaken per call site.
+- **Paraglide's JSON plugin is the pinned devDependency `@inlang/plugin-message-format` 4.5.5**, loaded from `node_modules` by `project.inlang/settings.json` instead of from jsDelivr, so compiles are offline and reproducible.
+- **The browser only auto-selects a locale whose catalogue covers at least 95% of en** (computed by the merge script into the generated `coverage.generated.ts`), so a zh-CN browser gets English text with `lang="en"` until zh is translated (WCAG 3.1.1). An explicit language setting always applies.
+- **Missing zh is a warning, not an error**; a zh key with no en key, a duplicate key or an invalid or mismatched placeholder fails the build. Messages use plain `{name}` placeholders, no ICU plural/select.
+
+**M5 decisions (index rebuild):**
+- **The directory name is the proof of completeness.** Under `data/index`, `v{schema}-t{tokenizer}` is complete, `….building` is in progress and `….trash` is being deleted. A build becomes complete only by an atomic rename, after its final commit and a `COMPLETE` marker. A crash between the marker and the rename just needs the rename at the next start. Directories from before this change already have the complete form, so upgrading doesn't rebuild.
+- **`Serving::open_or_rebuild(root, store_path, config)`** is the binary's entry point (wired in by B5a). It holds an exclusive lock on `root/.lock`. A second instance fails with `Error::Locked`; a filesystem that can't lock (some SMB or NAS shares) fails with `Error::LockFailed`, which says so. It serves through a `Mutex<Arc<SearchIndex>>` held only to clone or replace the `Arc` (an `RwLock` before the B5a swap fix): readers take the index once per query, which moves them to the new one between queries.
+  - When this build's index exists, it opens that index and starts the live indexer, as before.
+  - Otherwise, the newest complete older index keeps serving. Meanwhile, `Rebuild` follows the store into `….building` with the ordinary `Indexer::catch_up`, covering both indexes, per-index watermarks and `reindex_log`. It commits every 50k torrents, so an interrupted or stopped build resumes from its own watermarks. It builds up to a snapshot taken at the start (the highest torrent id and the `reindex_log` head) rather than chasing new torrents; those are added at the swap.
+  - Then it commits, waits for merges, writes the marker and renames. **The swap order keeps every visible torrent visible:** the old live indexer stops (committing), the new index catches up once more and commits, a live indexer starts on it, and only then do readers move. Each index follows `reindex_log` from its own sequence, so entries logged at any point are applied before the swap or after it.
+  - With nothing older to serve (a new install, or only indexes without the fields every search needs), any partial build is promoted and fills live, which is the old behaviour.
+- **An older index serves by field name, and a field it lacks is absent.** Its stored schema is used and each field of this build is resolved by name and value type. A field it doesn't have (one a later schema added, B6 and M7 included) or has with another value type resolves to an absent marker. Clauses on it match nothing, a sort on it falls back to relevance, and facets (B6) must skip it. `SearchIndex::missing_fields()` and `RebuildProgress::unavailable` list them so the API can say "index rebuilding; … not yet available".
+  - Only `id`, `name`, `text` and `discovered` (and the file index's `torrent` and `index`) are required; every schema since v1 has them. An index without one is a schema mismatch and isn't served.
+  - An identical schema (a tokenizer bump) keeps following the store until the swap. A different one serves read-only, and torrents stored meanwhile appear at the swap.
+  - An older index that fails to open is retried with backoff, then fails the start. It's never discarded over an error that may be transient (an antivirus scan, a share hiccup).
+- **Known limitation, tokenizer bumps:** the binary has only the current tokenizer, so an older index is queried with it until the swap. A word whose tokens changed may not match there meanwhile. Keeping old tokenizers around isn't worth it for a rebuild window of an hour or so at 10M.
+- **Old directories are renamed to trash and then deleted after the swap, with backoff retries** (Windows can't delete mapped files, §11). Whatever is left is retried at the next start. A newer version's directory is never deleted, so a downgrade and upgrade don't rebuild twice.
+- **`RebuildProgress { phase, done, total, replayed, errors, started_at, from, to, unavailable, error }`** comes from `Serving::progress()` for the "Index rebuilding" banner (§10.4) and Insights.
+  - `done` counts torrents added; replayed `reindex_log` entries and failed steps are counted apart. Rebuild errors stay out of the live indexer's `IndexStats`.
+  - The phases are `Building`, `Finishing`, `Swapping` and `Failed`. A failure is logged, the old index keeps serving and following the store, and the next start resumes the build.
+  - The live counters (`IndexStats`) are kept across the swap.
+- **Memory:** while a rebuild runs, two writers are active (live and build), each with the configured heap.
+- **Tests** use a version override in `ServingConfig`, and a hold point before finishing instead of timing, so they don't bump `SCHEMA_VERSION` or depend on speed.
+
+**B5a swap fix (Windows):**
+- **Renames of index directories retry with backoff, about 10 s in all, before they count as failures.** Windows refuses to rename a directory while any file in it is open, and an antivirus or search indexer opens freshly written segments for a moment. Before this, one such moment failed the whole rebuild at the finishing rename.
+  - A failed rebuild stays in `Failed` with the old index serving, so `rebuilding()` never cleared. That's the likely cause of B5b's swap test hanging on Windows CI (inferred from the code and the symptom, not reproduced on Windows).
+- **`RebuildProgress` gains `error`**, the failure's message, so the banner, Insights and tests can say why.
+- **The serving pointer is a `Mutex<Arc<SearchIndex>>`, held only to clone or replace the `Arc`,** in place of an `RwLock`. A swap then waits behind at most one clone, whatever the platform's reader/writer policy (Windows SRW locks promise none).
 
 **M4 implementation decisions (scrape scheduler, `pipeline::health`):**
 - **One round is up to 74 torrents** (one UDP packet).
@@ -2393,7 +2609,7 @@ Term lists (`@cs/…`) ship only as **hashed, normalized tokens**, so no indicat
 **As built (first slice, `crates/filter`):**
 - **Implemented:** CS-1a/1b, CS-8a, CS-2a, CS-3a/3b, CS-4a and CS-5a/5b, plus CSX-2 (name evidence only, outside Adult), CSX-3 and CSX-4.
 - **Matching:** normalized tokens are hashed with a stable 64-bit hash (FNV-1a with a domain prefix, MurmurHash3 finisher). All term lists compile into one map, so each token costs one lookup.
-- **Speed:** about 45 µs for a 30-file torrent on the core alone, measured by an ignored test that's run in release.
+- **Speed:** about 9 µs per torrent on the core alone on the CI runner (11–16 µs on the build VM), over a varied set averaging 15 files (§20.8 has the budget gate). Each word's tokens are planned once and replayed when the word repeats, as words do across file names. The plans are cached per thread, keyed by the exact word, and a property test holds the tokenizer to the earlier one token for token, since stored fixtures and shipped lists are hashes of its tokens.
 - **Shipped lists:** `@cs/sexual` and `@cs/child_roles` ship as hash lists. `@cs/codes` ships **empty**: code terms come only from lists you import.
 - **Fixtures:** the core's must-match fixtures are hashed token streams built from the shipped sets, so no indicative text exists anywhere.
 - **Payload signatures:** CS-8a counts a payload as specific at ≥ 50 MB, or with ≥ 2 files whose sizes are ≥ 64 KiB and not multiples of 64 KiB.
@@ -2522,6 +2738,24 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
 | SC-1 | "Free premium / crack / activator" for **online services** (streaming and music premium APKs, "free Robux/V-Bucks", crypto "wallet recovery", "Bitcoin generator") | hide | offline software cracks aren't covered (a preference, not a scam) |
 | SC-2 | "Generator / hack" for online-game currencies or accounts | hide | single-player trainers and mods excluded |
 
+**As built (store migration V7, `lodestar_filter` rules, packs and engine):**
+- **Engine layers:** precedence follows §20.1. Within the pack layer (packs and subscribed lists) the strongest action wins.
+- **Your rules:** a query, an action, an optional `unless`, and shadow mode. They're evaluated in memory with the search tokenizer, so a rule matches what the same search finds.
+- **CSX-5:**
+  - entries are exact torrents, keywords (normalized the same way the core normalizes, so evasion doesn't help) or queries, with an optional scope, an expiry and a shadow period;
+  - *Neutralize term* takes one word. It removes that word's evidence from the core and from query rules.
+- **Exceptions** are per rule, by exact torrents, payload or query. The floor takes none. *Always allow* skips your rules and the packs.
+- **Packs:** MW-1–5, LU-1–4, FK-1/2/4/5, SP-1/2 and SC-1 are built, reading the junk reasons and structure fingerprints. **Packs are off until chosen** (owner's decision, §16 "M5 decisions"): with nothing stored, no pack is on. A pack turns on only through a stored choice, from the first-run wizard (where all five are pre-checked) or from Settings through the filters API, so an install that skips the wizard has none. Not yet built:
+  - FK-3, which needs TMDB release dates;
+  - SP-3, which needs per-publisher rates;
+  - SP-4, which needs a signature index of hidden items.
+- **Actions on stored torrents:**
+  - *Hide*, *demote* and *flag* set flag bits 11–13. They're queryable as `hidden:`, `demoted:` and `flagged:`.
+  - The API leaves hidden torrents out of search unless `hidden=true`.
+  - Demotion's ranking penalty arrives with the M4 phase-2 re-rank.
+  - Shadow decisions are logged as filter hits with action bit `0x80`, and nothing is applied.
+- **Speed:** the budget is the owner's, under 50 µs per torrent at 10,000 rules (§1.6.6), and the `filter budget` CI job measures it in release on the CI runner (§20.8).
+
 **Your rules (layer 3)** start empty. The wizard offers presets, all **off**: *Hide CAM/TS/TC*, *Hide sample-only*, *Hide password-protected archives*, *Prefer my languages* (demote others).
 
 ### 20.7 Storage, API and UI
@@ -2539,6 +2773,8 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
 | `override_list` | CSX-5 entries: kind (hash / keyword / pattern), query, strength, scope, created, expiry/review date, shadow_until, hit count |
 | `rule_set_prev` | the previous rule set only, for one-step Undo |
 | `cs_hashes` | CS-1 entries (all hash forms) + CS-8 payload signatures, with origin (confirmed / reported / imported) |
+| `class_corrections` | Is adult / Not adult and Not junk, per torrent (V8) |
+| `class_rules` | classification rules: query → Is adult / Not adult (V9) |
 
 - **As built (store migration V4, pipeline):**
   - V4 adds `cs_hashes`, `cs_sigs`, `core_membership` (switches), `tombstones`, `quarantine` and `filter_hits`.
@@ -2548,8 +2784,38 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
     - **The writer** trusts a built-in worker's verdict at the current version and judges everything else again. It writes tombstones, quarantine rows and filter hits in the same transaction as the batch.
   - **Sealed names:** XChaCha20-Poly1305, keyed by `seal.key` in the data directory. The key isn't stored in the database, so a database copy alone reveals no names.
   - **Purge:** expired quarantine and filter hits past retention are purged hourly, and expired keys become fetchable again.
-  - **Old config blocklists:** the M1 `blocklist.files` load as imported CS-1b entries.
+  - **Config blocklists only add (owner's decision §2.7):**
+    - The M1 `blocklist.files` add their hashes to `cs_hashes` at start as imported CS-1b entries.
+    - An entry a file no longer lists, or one added by a file that left the config, stays in the floor. It waits in that file's *pending floor removals*, is reported once per start ("N floor entries were removed from <file>; remove them in the app to unblock") and counted in `lodestar_floor_removals_kept_total`.
+    - Each file's entries and its pending removals are kept in `settings` as packed hashes (`floor.file:<path>`, `floor.pending:file:<path>`), so no migration was needed.
+    - Your own confirmations and reports are never a file's to drop.
 - **API:** `filters` (rules CRUD, preview, warning, test, shadow, packs, review queue, release; password-gated for weakening changes) and `classify` corrections (Not adult / Is adult, Not junk).
+- **As built (`lodestar_api::filters`, behind the session):**
+  - **Routes:** `GET /filters` (core switches, packs, your rules, CSX-5 entries, exceptions, Always allow, list subscriptions, counts), `GET /filters/queue` (quarantine by hash and rule, never with names, plus the 30-day decisions per rule), `POST /filters/preview` and `POST /filters/apply`.
+  - **One change per request,** tagged by `op`: core and pack switches, your rules (add / update / remove), CSX-5 entries, exceptions, Always allow, report abuse, remove CS-1 entries, release, confirm, reveal a sealed name, list subscriptions (subscribe / unsubscribe / pause / resolve a held version), pending floor removals (`resolve_floor_removal`) and Undo.
+  - **Pending floor removals (§2.7):**
+    - `GET /filters` lists them by source (`file:<path>` or `list:<id>`), with up to 1,000 hashes each.
+    - `resolve_floor_removal {source, hashes?, remove}` with `remove: true` takes them out of the floor. That's weakening, so it gets the effect warning and the password.
+    - Without `remove`, they stay in the floor as ordinary imported CS-1b entries and the notice stops. That's strengthening, so it needs no password.
+    - The assessment names the entries its warning counts (`floor_entries`), at most 10,000; a longer pending list is removed in batches. A removal confirmed with the password must send them back as `hashes` (400 `floor_removal_needs_hashes` otherwise, before the password is read), so a refresh in between can't widen what the password confirmed. Keeping may leave `hashes` out and keeps what the assessment counted. A request names at most 10,000 hashes.
+    - An entry another config file still lists never waits in one file's pending list, and removing it through one file's list never unblocks it while another file adds it.
+  - **Accepting a held version of a floor-marked list isn't weakening:** what the shrunken version drops waits in the list's pending removals, still blocked, so *Accept anyway* needs no password there. For other lists it's weakening as before.
+  - **Strictness (§2.9):** `POST /filters/strictness {subscriptions?: [id], catalog?: [key]}` assesses any candidate set of lists without storing or connecting anything (§20.13).
+  - **Protocol (§20.11):** `preview` returns `{weakening, confirm, warning, preview, neutralize}` and never applies or asks for the password. `apply` runs the same assessment on the server; a change that needs confirming is refused with **428** and the assessment until the request carries the admin password, checked like a login (rate-limited per IP) and never remembered. Marking a list as part of the floor needs the password too.
+  - **Guardrails hold server-side:** the floor can't be switched off (409), floor rules take no exceptions, overrides and exceptions are validated by the engine, and list actions must be protective.
+  - **Preview numbers:** whole-rule changes count from the review queue, tombstones and `filter_hits` rollups. Entry-level changes (CSX-5, exceptions, Always allow) re-judge quarantined items from their sealed names and tombstones by hash, and are marked as estimates because file lists aren't kept. The 30-day figures are the upper bound for the rules the change can bypass. Previews also run as background jobs with progress (§20.10).
+  - **Undo:** the rule layers and switches are snapshotted into `rule_set_prev` only after a change to them succeeds, so a refused change never replaces the Undo step. Undo swaps the two sets, so a second Undo redoes. It can weaken, so it asks for the password.
+  - **Releases** clear the store row and the in-memory held set together, so intake fetches the torrent the next time it's seen.
+  - **Shadow:** rules and CSX-5 entries take `shadow_days`.
+  - **False positive** (`op: false_positive`, from the review queue): an exception for that torrent and the rule that held it, a release, and for a core rule a **must-not-match fixture** made from its sealed name as hashed tokens only (`Fixture::encode`: version, content type, then per text the token positions, hashes and small numbers; no text). It's a weakening change, so it warns and asks for the password.
+  - **Fixtures:** `GET /filters/fixtures` runs every core rule's stored fixtures against the rules as they are and reports how many each has and how many disagree.
+  - **Rule tests:** `POST /filters/test` tries a draft rule (`query`, `unless`) and the current rule set on up to 50 example torrents (name, files with optional sizes, optional type), classified as ingest would. Nothing about the examples is stored or logged.
+  - **Report abuse and Confirm** also delete any stored torrent with those hashes (store and, through `reindex_log`, the index).
+- **As built (store migration V8, `classify` corrections):** `POST /classify/correct {hash, adult: true|false|null, not_junk}` keeps one correction per torrent in `class_corrections` and classifies the torrent again with it at once (`classify_corrected`). **Is adult** gives the nearest adult kind at confidence 100, including Ebook (as Comics) and Other (as Scene), which detection leaves alone; **Not adult** skips adult detection; **Not junk** clears the score and its reasons. Background enrichment applies the correction whenever it classifies the torrent again (a newer parser), and an upgraded partial import with a correction is queued for that. Corrections are classification, not filtering, so they don't ask for the password.
+- **As built (store migration V9, classification rules):** corrections feed back as **rules** and **fixtures** (§20.9).
+  - **Rules:** `POST /classify/rules {query, adult}` saves a query plus Is adult / Not adult (`class_rules`); `POST /classify/rules/remove {id}`. The newest matching rule applies at ingest (prepare) and whenever a stored torrent is classified again; a torrent's own correction wins over any rule. Adding or removing a rule marks the stored torrents its query matches in the search index for re-classification (`SearchIndex::matching_ids`, up to 1M) and starts another background-enrichment pass; without search, only new and re-enriched torrents are affected. A rule's query can't test `type:` or `adult:`, because it decides them.
+  - **Filtering never sees corrections:** rules and corrections change what's stored and searched. The engine judges detection's own classification, so a Not adult rule can't take a torrent out of the Adult-only core checks (CS-5a/5b), and a `type:adult` rule of yours keeps acting on what detection found.
+  - **Fixtures:** `GET /classify` lists the rules and treats every per-torrent correction as a fixture for adult detection: it runs detection on each corrected torrent (up to 10,000) and reports how many disagree, with up to 50 examples, so a rule can cover their kind.
 - **UI: Settings → Filters & Safety:**
   - **Rules:** layer, action, status (active / shadow / modified), hits over 7 days, false-positive reports.
   - **Editor:** builder or text, live preview, fixtures, shadow toggle, diff against base for core and pack rules.
@@ -2568,6 +2834,30 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
 - **Precision corpus:** a labelled set of legitimate titles prone to false positives (the *Lolita* novel and films, *Sex Education*, medical and educational material, 18+ "teen"-labelled legal adult releases, games with age ratings in the name) must stay unblocked by the core. A sample of known-bad structures, in hashed fixture form, must stay blocked.
 - **Reversibility:** removing a rule restores hidden items and re-queues tombstones. Releasing a quarantined item re-fetches and indexes it.
 - **Performance:** under 50 µs per torrent at 10,000 rules; re-evaluation jobs stay within the §3 overhead budget.
+  - **As built:** `filter budget` in CI runs the ignored `budget` test in release on the runner.
+    - **The set:** 512 generated video releases (films and season packs, 1 to 60 files, 15 on average, with samples, subtitles and NFOs, varied sources, codecs, groups and made-up titles). Each pass judges every torrent once, so the tokenizer's per-word caches warm only as they would on ingest. It takes the median of seven passes after one warm-up.
+    - **The rules:** 10,000, with a share (1%, 10%, 25%) built on words the set has, so the narrowing can't rule them out by those words, and matching nothing. They're the review's `1080p <unique>` shape, phrases of two common words out of order, a common word with a size or a type no torrent has, and `file:(word size)`. The rest are keywords, phrases, groups, narrowed keywords and alternatives the set doesn't have, plus 1% that no word narrows: sizes, prefixes that start like the set's words (`1080z*`), and fuzzy words. The prefixes and fuzzy words get the full match on every torrent, about 40 rules per torrent.
+    - **The gate** holds the core, the 1% case and the 10% case under 50 µs, with no override. The 25% case is measured and reported, not held.
+    - **On the runner** (job 119777628892): core 8.93 µs; whole engine 32.92 µs at 1%, 40.78 µs at 10%, 48.05 µs at 25%. Fresh torrent sets cost the same as warm ones. The build VM runs about 1.4× slower and noisier (core 11–16, 1% 43–50, 10% 56–64, 25% 69–104), so the 10% case can fail there; the runner decides.
+    - **Scope:** the gate covers rule shapes the cheap check can reject. Shapes it can't decide get the full match on every torrent that has their words. The review measured them at 10% of rules on the build VM (divide by about 1.4 for the runner):
+
+      | Shape at 10% of rules | Build VM, µs per torrent |
+      |---|---|
+      | negation | 133–145 |
+      | NEAR/1 | 443–507 (208–234 since NEAR reads tokens in place) |
+      | prefix | 94–132 |
+      | fuzzy | 118–133 |
+      | `title:` | 83–85 |
+      | mix | 171–178 |
+
+      Most of that is the full match's first tokenization of every path (about 35 µs a torrent) and then a scan per rule. Whether to hold such shapes to the budget is the owner's call.
+    - **History:** the first version of this gate judged one torrent with rules none of whose words it had. The review measured 17 ms per torrent once 10% of the rules were candidates; this set measured 30 ms at 10% before the work below.
+  - **How the rules stay cheap:**
+    - **Narrowing:** each rule is indexed by a token text or tag it can't match without. Where several are each needed (an AND, a phrase's words), it's keyed on the rarest-looking, so `1080p cam` is looked at only for torrents that have `cam`. Rules are marked in a bit set by position and read in order.
+    - **A cheap check before the full match:** a query is compiled once, with its words tokenized and hashed. For a torrent, a three-valued check answers *no*, *yes* or *maybe* from what it has: its token texts, which token can follow which (a Bloom filter), the first two to four characters of its tokens (for prefixes), its extensions, file sizes, numbers and tags. It says *no* only where the full match must, and never *yes* from a hash, so a crafted hash collision can't make a rule match or stop one matching. Most rules that can't match cost a few lookups.
+    - **One scan per torrent** builds all of that: a byte scan of ASCII text (property-tested against the search tokenizer, token for token and pair for pair) or the tokenizer itself for other text. It also builds the torrent's vocabulary, each distinct token text once, compared byte for byte.
+    - **The full match** reads tokens from an exact ASCII fast path of the search tokenizer (property-tested), without a `String` per token. Prefixes and fuzzy words read the vocabulary. A fuzzy word skips texts whose length or character set rules them out before computing an edit distance, which allocates nothing.
+    - **Also compiled once:** *Always allow* queries, CSX-5 scopes and exception queries (remembered per thread by address, used only while the query there is unchanged). Keyword entries read the torrent's normalized texts once, not once per entry.
 - **Placement:** prepare and commit agree on the rule-set version; a mismatch is re-evaluated at commit (§19.4).
 - **Floor and switches:**
   - every core rule is on in a fresh install;
@@ -2607,7 +2897,7 @@ There are **two taxonomies**:
     - Supporting: each distinct adult term 35, and `Site.YY.MM.DD` scene naming 30, capped at 70; strong plus supporting adds 10.
     - Counter: a documentary, educational or medical word cancels the supporting score and takes 40 off the strong one. Season or episode numbers cancel the supporting score.
     - A torrent is adult at **≥ 60**. The kind follows the type it would otherwise have (TV and Video → Scene; Movie → Movie, or Scene with scene naming; Images → Photos; Comic → Comics; Game and Software → Game; Music and Audiobook → Audio), and VR words turn Scene or Movie into VR.
-    - **Ebook and Other keep their type** because no adult kind fits them. Source categories, enrichment matches and corrections arrive with the filter engine and plugins, and adjust this score.
+    - **Ebook and Other keep their type** because no adult kind fits them. Source categories and enrichment matches arrive with plugins and adjust this score. Your corrections and classification rules override the outcome rather than the score (§20.7, V8/V9): Is adult gives the nearest kind (Ebook as Comics, Other as Scene) at confidence 100.
 - **Visibility is a preference, not a legal tier:**
   - "Show adult content" is **off by default** and turned on with an **18+ confirmation**.
   - It applies to Search, Discover, Alerts and Insights segments. Outputs (Torznab, Stremio, export) each have their own adult setting, also off by default.
@@ -2632,6 +2922,7 @@ Every change to filtering shows its impact **before** it takes effect. That cove
 - **Exposure summary at the top:** "This change would release 37 items (2 caught by the core), and about 4 per day going forward."
 - **Then choose:** **Apply**, **Shadow for N days** (log what it would do, change nothing, and compare later in the same view), or **Cancel**. Changes that weaken protection show their effect warning (§20.11) and need your password before Apply or Shadow.
 - **After applying:** a "What changed" report matches the preview against what actually happened (they're reconciled in tests, §20.8). An **Undo** restores the previous rule set (hidden items return; re-fetched items are re-evaluated).
+- **As built:** `POST /filters/preview/jobs {change}` starts the preview in the background (202, a job id). `GET /filters/preview/jobs/{id}` returns the phase (`reading`, `quarantine`, `tombstones`, `done`) with items done and total, then the assessment or the error, kept for 10 minutes. `POST /filters/preview/jobs/{id}/cancel` stops it at its next step. At most 4 run at once. The store is locked only while the snapshot is read, so previews never hold up other changes. `POST /filters/preview` still answers inline for small changes, with the same result.
 - **Performance:** the preview runs as a background job over rollups, `filter_hits` and index queries. The target is under 5 seconds for a typical rule at 10M torrents, with progress shown. It never blocks crawling or search (§3 overhead budget).
 
 ### 20.11 Effect warnings and password confirmation (instead of an audit log)
@@ -2704,7 +2995,7 @@ Exceptions are how you correct false positives without switching rules off. Like
 - **Precedence and edits:** subscribed entries sit in the pack layer, so CSX-5, your exceptions and *Always allow* apply to them. False positives are fixed with exceptions, never by editing the list. A refresh can't undo your exceptions.
 - **The core and the floor:** subscriptions **never feed the locked floor by default** (owner's decision). A remote list that wrote into CS-1 could block things you can't unblock if its publisher errs or is compromised.
   - If you have access to a vetted child-abuse hash list (§20.5.2), you can mark that one subscription as **CS-1b** explicitly. That needs the effect warning and your password, because it locks its entries.
-  - Its entries then follow upstream additions **and removals**, so a publisher's correction takes effect.
+  - Its entries follow upstream additions. **Upstream removals don't unblock anything by themselves** (owner's decision §2.7, which supersedes following removals automatically): they stay blocked in the list's pending floor removals until you remove or keep them in the app. Removing needs the effect warning and the password.
 - **Weakening changes:** unsubscribing, pausing or narrowing a list releases what it blocked. As with disabling a pack (§20.11), that shows the impact preview and effect warning and needs your password. Subscribing and refreshing need neither.
 - **Storage:** a `subscriptions` table (URL, kind, format, action, scope, schedule, ETag, last fetch, entry count, status) and `subscription_entries` (hashes and signatures; IP ranges are kept as a compact blob per list). Like everything in §20, no history of who changed what is kept.
 - **Verification:** golden parsers for every format, plus fuzz targets (they parse untrusted input); a fake list server in tests for conditional GETs, the size caps and the sanity gates; and a check that an IP-listed peer or node is never contacted by the DHT, the fetch pool or the scraper.
@@ -2720,4 +3011,13 @@ Exceptions are how you correct false positives without switching rules off. Like
     - FireHOL level 1: about 19k ranges.
     - BT_BlockLists: 689k ranges, 394k after merging, 3.5 MB stored. It parses in about 0.5 s and costs about 110 ns per lookup.
     - **BT_BlockLists covered about 49% of IPv4,** because it blocks whole provider allocations. The catalog says so. Lodestar warns whenever the combined lists cover more than 10%, because the crawler loses that share of the DHT.
-  - **Configuration for now:** subscriptions come from `[subscriptions]` in `config.toml`, as catalog keys and `[[subscriptions.lists]]`. They're added to the store at start, never removed from it. The filters API (next) adds connecting, removing and *Accept anyway* / *Keep previous* for held versions.
+    - **Measured again 2026-10-22**, as shares of all IPv4 and of public IPv4 (all IPv4 minus the IANA special-purpose ranges, which hold no DHT nodes):
+      - BT_BlockLists: 49% and 41%, 393,709 merged ranges;
+      - FireHOL level 1: 14% and 0.5%, 3,919 ranges (mostly reserved space);
+      - FireHOL level 2: under 0.1% of either, 18,677 ranges.
+  - **Off by default, chosen by you (owner's decision §2.9):** `[subscriptions] catalog` and `lists` default to empty, so nothing is fetched until you choose.
+  - **Strictness assessment** (`lodestar_filter::strictness`, `POST /filters/strictness`): for any candidate set it reports the IPv4 share blocked (all and public), IPv6 ranges and their share of global unicast, the torrents dropped by hash (pack layer and floor), the kinds of list and a warning level with plain-language text (§10.14).
+    - Subscribed lists are measured from their stored data. Catalog lists not fetched yet use the catalog's measurement, and the result is then marked as an estimate (a lower bound when lists may overlap).
+    - Levels come from the **public** IPv4 share, because reserved ranges cost the crawler nothing: **notice** from 1%, **strong** from 10% (where §20.13 already warns) and **severe** from 25%. BT_BlockLists comes out severe.
+    - Other inputs: any IPv6 share counts the same way, any content list is at least a notice, a floor-marked list is strong, and a list never fetched is a notice.
+  - **Configuration for now:** subscriptions come from `[subscriptions]` in `config.toml`, as catalog keys and `[[subscriptions.lists]]`. They're added to the store at start, never removed from it. The filters API adds connecting, removing and *Accept anyway* / *Keep previous* for held versions. The catalog now lives in `lodestar_filter::strictness`, so the API can assess it.

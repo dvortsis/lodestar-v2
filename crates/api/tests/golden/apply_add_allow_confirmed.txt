@@ -1,0 +1,2 @@
+200
+{"applied":true,"assessment":{"confirm":true,"neutralize":null,"preview":{"caught_30d":0,"core_caught_30d":0,"estimate":true,"per_day":0.0,"quarantine":0,"removed_from_floor":0,"stored":0,"tombstones":0},"warning":"Everything this matches will skip your rules and the rule packs (malware, lures, fakes, spam, scams). The child-safety core still applies. In the last 30 days the rules it affects decided 0 items, about 0.0 per day. Counts come from names only, so treat them as estimates. Safer: narrow it, for example to one media type.","weakening":true},"id":1,"version":3}

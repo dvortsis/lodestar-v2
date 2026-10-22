@@ -1,0 +1,2 @@
+404
+{"error":{"code":"entry_not_found","message":"There's no such entry."}}

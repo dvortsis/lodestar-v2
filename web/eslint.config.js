@@ -3,9 +3,10 @@ import svelte from 'eslint-plugin-svelte';
 import globals from 'globals';
 import ts from 'typescript-eslint';
 import svelteConfig from './svelte.config.js';
-import { ARBITRARY_VALUE, FRAGMENT_ATTRIBUTES, HEX_COLOUR } from './scripts/bans.mjs';
+import { ARBITRARY_VALUE, FRAGMENT_ATTRIBUTES, HEX_COLOUR, offRampSteps } from './scripts/bans.mjs';
 
-// §10.18: no hex colours and no Tailwind arbitrary values outside the theme module.
+// §10.18: no hex colours and no Tailwind arbitrary values outside the theme module; §10.2:
+// spacing utilities only on the ramp (design-tokens.md §5).
 // Shares its patterns with scripts/check-bans.mjs.
 const noBannedLiterals = {
 	meta: { type: 'problem', schema: [] },
@@ -18,6 +19,13 @@ const noBannedLiterals = {
 				context.report({
 					node,
 					message: 'Tailwind arbitrary value: use a token or scale value.'
+				});
+			}
+			const steps = offRampSteps(text);
+			if (steps.length) {
+				context.report({
+					node,
+					message: `Spacing step ${steps.join(', ')} is off the ramp: use 0, 0.5, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13 or 14 (fixed sizes are layout tokens).`
 				});
 			}
 		}
@@ -36,7 +44,8 @@ export default ts.config(
 			'.svelte-kit/',
 			'node_modules/',
 			'src/lib/api/schema.d.ts',
-			'**/*.generated.*'
+			'**/*.generated.*',
+			'src/lib/paraglide/'
 		]
 	},
 	js.configs.recommended,

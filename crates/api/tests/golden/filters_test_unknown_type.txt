@@ -1,0 +1,2 @@
+400
+{"error":{"code":"unknown_type","field":"type","message":"There's no content type \"nonsense\"."}}

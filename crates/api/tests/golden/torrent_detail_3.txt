@@ -1,0 +1,2 @@
+200
+{"discovered_at":1700000000,"file_list":[{"attrs":[],"path":"01 Intro.flac","size":31457280}],"file_list_total":1,"files":1,"flags":["warnings"],"hash":"fa96f4ab075b6eaf74f4c202b7b24dab8c2c35ce","hash_v2":null,"id":4,"last_seen_at":1700000000,"magnet":"magnet:?xt=urn:btih:fa96f4ab075b6eaf74f4c202b7b24dab8c2c35ce&dn=Gotham.Soundtrack.FLAC","metadata_at":1700000001,"name":"Gotham.Soundtrack.FLAC","piece_len":65536,"seeders_approx":false,"size":31457280,"swarm_suspect":false,"swarm_trackers":[]}

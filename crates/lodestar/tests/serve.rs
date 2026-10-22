@@ -158,8 +158,35 @@ fn serves_status_and_stops_cleanly() {
     assert!(status.contains("\"search\":{"), "{status}");
     assert!(status.contains("\"swarm\":{"), "{status}");
     assert!(status.contains("udp://127.0.0.1:9"), "{status}");
+    // `/` is the UI (or its stub) under the strict policy; the status page
+    // moved to `/status` with its own.
     let page = get(port, "/").unwrap();
-    assert!(page.contains("Content-Security-Policy") || page.contains("content-security-policy"));
+    assert!(page.starts_with("HTTP/1.0 200"), "{page}");
+    assert!(
+        page.contains("content-security-policy: default-src 'self'; script-src 'self'"),
+        "{page}"
+    );
+    assert!(page.contains("<html"), "{page}");
+    let spa = get(port, "/search?q=x").unwrap();
+    assert!(
+        spa.starts_with("HTTP/1.0 200") && spa.contains("<html"),
+        "{spa}"
+    );
+    let status_page = get(port, "/status").unwrap();
+    assert!(status_page.starts_with("HTTP/1.0 200"), "{status_page}");
+    assert!(
+        status_page.contains("script-src 'unsafe-inline'"),
+        "{status_page}"
+    );
+    assert!(status_page.contains("fetch(\"/api/status\")"));
+    // The UI never shadows the API: unknown paths keep the envelope.
+    for path in ["/api/v1/nope", "/api/nope"] {
+        let r = get(port, path).unwrap();
+        assert!(
+            r.starts_with("HTTP/1.0 404") && r.contains("\"code\":\"no_route\""),
+            "{path}: {r}"
+        );
+    }
 
     let killed = Command::new("kill")
         .args(["-TERM", &child.id().to_string()])

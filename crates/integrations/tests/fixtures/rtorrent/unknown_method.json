@@ -1,0 +1,31 @@
+{
+  "recorded_from": "rTorrent 0.9.8 / libtorrent 0.13.8, XML-RPC over SCGI behind nginx 1.24 at /RPC2 with basic auth",
+  "note": "d.frobnicate: ",
+  "request": {
+    "method": "POST",
+    "path": "/RPC2",
+    "query": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "server",
+        "nginx/1.24.0 (Ubuntu)"
+      ],
+      [
+        "content-type",
+        "text/xml"
+      ],
+      [
+        "content-length",
+        "313"
+      ],
+      [
+        "connection",
+        "keep-alive"
+      ]
+    ],
+    "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n<methodResponse>\r\n<fault>\r\n<value><struct>\r\n<member><name>faultCode</name>\r\n<value><i4>-506</i4></value></member>\r\n<member><name>faultString</name>\r\n<value><string>Method 'd.frobnicate' not defined</string></value></member>\r\n</struct></value>\r\n</fault>\r\n</methodResponse>\r\n"
+  }
+}

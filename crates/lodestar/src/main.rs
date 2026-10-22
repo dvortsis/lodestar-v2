@@ -3,26 +3,25 @@
 //! running instance for Docker's `HEALTHCHECK`.
 
 mod config;
+mod floor;
 mod http;
 mod metrics;
+mod services;
 mod subscriptions;
+mod web;
+#[cfg(test)]
+mod web_build;
 
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use lodestar_filter::Sealer;
-use lodestar_filter::lists::SharedIps;
-use lodestar_pipeline::health::HealthHandle;
-use lodestar_pipeline::{DhtSource, HealthSetup, Pipeline, Rollups, metric};
-use lodestar_search::{LiveConfig, LiveIndexer, SearchIndex};
-use lodestar_sources::SourcePlugin;
-use lodestar_store::{Store, hot};
+use lodestar_store::Store;
 
 use crate::config::Config;
+use crate::services::{BoxError, Services};
 
 // musl's allocator is a severe bottleneck for multithreaded Rust (§11).
 #[global_allocator]
@@ -34,7 +33,8 @@ Usage: lodestar [serve|healthcheck] [--config <path>]
        lodestar lists
 
 Commands:
-  serve             Run the crawler, search, status page and metrics (default)
+  serve             Run the crawler, search, UI, status page and metrics
+                    (default)
   healthcheck       Exit 0 if the local instance answers /healthz, 1 otherwise
   import-bitmagnet  Import a bitmagnet database (read-only, resumable); run
                     it while the server is stopped
@@ -214,215 +214,8 @@ fn init_logging(filter: &str) {
         .init();
 }
 
-type BoxError = Box<dyn std::error::Error + Send + Sync>;
-
 async fn serve(config: Config) -> Result<(), BoxError> {
-    std::fs::create_dir_all(&config.data_dir)
-        .map_err(|e| format!("creating {}: {e}", config.data_dir.display()))?;
-    let mut pipeline_config = config.pipeline_config()?;
-    let key = seal_key(&config.data_dir.join("seal.key"))?;
-    pipeline_config.sealer = Some(Arc::new(Sealer::new(&key)));
-    let health = config.health_config()?;
-    // Subscribed IP lists (§20.13): one shared set, consulted by the fetch
-    // pool, the DHT and the tracker scraper before talking to anyone.
-    let ips = Arc::new(SharedIps::default());
-    let denied = {
-        let ips = ips.clone();
-        Arc::new(move |ip: IpAddr| ips.contains(ip))
-    };
-    pipeline_config.fetch.deny = Some(lodestar_peer_wire::Deny(denied.clone()));
-    let db = config.db_path();
-    let store_config = config.store_config();
-    let search = config.search.enabled;
-    let index_path = config.index_path();
-    let heap = config.search.heap_mib.max(16) << 20;
-    let hot_dir = config.data_dir.join("hot");
-    let weights = config.ranking.weights();
-    let suspect_penalty = config.ranking.suspect.clamp(0.0, 1.0);
-    let filter = pipeline_config.filter.clone();
-    let subs_config = config.subscriptions.clone();
-    let subs_ips = ips.clone();
-    let (db2, store_config2, hot_dir2) = (db.clone(), store_config.clone(), hot_dir.clone());
-    let (store, control, reader, live, hot) = tokio::task::spawn_blocking(move || {
-        let (db, store_config) = (db2, store_config2);
-        let mut store = Store::open(&db, store_config.clone())?;
-        // Settings and lists change through a second connection, so they
-        // never wait behind the ingest writer for long.
-        let mut control = Store::open(&db, store_config.clone())?;
-        subscriptions::sync_config(&mut control, &subs_config)?;
-        subscriptions::apply(&control, &filter, &subs_ips)?;
-        // Swarm stats for search and the writer (§7): last run's snapshot,
-        // or rebuilt from SQLite after a crash.
-        let started = std::time::Instant::now();
-        let (hot, from_snapshot) = lodestar_pipeline::open_hot(&mut store, &hot_dir2)?;
-        tracing::info!(
-            torrents = hot.len(),
-            ms = started.elapsed().as_millis() as u64,
-            "hot columns {}",
-            if from_snapshot {
-                "loaded"
-            } else {
-                "rebuilt from the store"
-            }
-        );
-        let hot = Arc::new(hot);
-        let reader = Store::open_reader(&db, store_config.clone())?;
-        // The indexer follows the store through its own connection.
-        let live = if search {
-            let suspect = hot.clone();
-            let index = SearchIndex::open(&index_path)?
-                .with_hot(hot.clone())
-                .with_weights(weights)
-                // §8: a fake-seeding swarm ranks well below its claim.
-                .with_penalty(Arc::new(move |id| {
-                    if suspect.flags(id) & hot::flags::SUSPECT != 0 {
-                        suspect_penalty
-                    } else {
-                        1.0
-                    }
-                }));
-            let live_reader = Store::open_reader(&db, store_config)?;
-            let config = LiveConfig {
-                heap_bytes: heap,
-                ..LiveConfig::default()
-            };
-            Some((
-                index.clone(),
-                LiveIndexer::spawn(index, live_reader, config)?,
-            ))
-        } else {
-            None
-        };
-        Ok::<_, BoxError>((store, control, reader, live, hot))
-    })
-    .await??;
-
-    let mut plugins: Vec<Arc<dyn SourcePlugin>> = Vec::new();
-    let mut dht_stats = None;
-    let mut dht_node = None;
-    if config.dht.enabled {
-        let mut dht_config = config.dht_config();
-        dht_config.deny = Some(lodestar_dht::node::Deny(denied.clone()));
-        let dht = Arc::new(DhtSource::new(dht_config));
-        dht_stats = Some(dht.stats_handle());
-        dht_node = Some(dht.node_handle());
-        plugins.push(dht);
-    }
-    pipeline_config.hot = Some(hot.clone());
-    pipeline_config.health = health.map(|(cfg, trackers)| HealthSetup {
-        config: lodestar_pipeline::health::HealthConfig {
-            deny: Some(lodestar_tracker_scrape::Deny(denied.clone())),
-            ..cfg
-        },
-        trackers,
-        db: db.clone(),
-        store: store_config.clone(),
-        dht: dht_node,
-    });
-    let auth = Arc::new(
-        lodestar_api::Auth::load(
-            &config.data_dir.join("auth.json"),
-            config.http.secure_cookies,
-        )
-        .map_err(|e| format!("loading auth: {e}"))?,
-    );
-    if let Some(token) = auth.setup_token() {
-        // §12: whoever can read the logs claims the instance.
-        tracing::warn!(
-            "first run: open http://{}/ and enter setup token {token} to create the admin password",
-            config.http.bind
-        );
-    }
-    let filter = pipeline_config.filter.clone();
-    let pipeline = Pipeline::start(pipeline_config, store, plugins).await?;
-    let control = Arc::new(Mutex::new(control));
-    let (stop_subscriptions, subscriptions_stopped) = tokio::sync::watch::channel(false);
-    let refresher = tokio::spawn(subscriptions::run(
-        control.clone(),
-        subscriptions::Limits::from_config(&config.subscriptions),
-        filter,
-        ips,
-        subscriptions_stopped,
-    ));
-    let reader = Arc::new(Mutex::new(reader));
-    let monitor = pipeline.monitor();
-    let api = lodestar_api::ApiState {
-        auth,
-        index: live.as_ref().map(|(index, _)| index.clone()),
-        reader: reader.clone(),
-        hot: Some(hot.clone()),
-        events: Some(Arc::new(Events {
-            health: monitor.health().cloned(),
-            rollups: monitor.rollups().clone(),
-        })),
-    };
-    let state = http::AppState {
-        monitor: pipeline.monitor(),
-        dht: dht_stats,
-        reader,
-        search: live.as_ref().map(|(index, l)| http::SearchState {
-            index: index.clone(),
-            stats: l.stats(),
-        }),
-    };
-    let listener = tokio::net::TcpListener::bind(config.http.bind)
-        .await
-        .map_err(|e| format!("binding {}: {e}", config.http.bind))?;
-    tracing::info!(
-        "status page on http://{}/ (data in {})",
-        config.http.bind,
-        config.data_dir.display()
-    );
-    let app =
-        http::router(state, api).into_make_service_with_connect_info::<std::net::SocketAddr>();
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
-    tracing::info!("shutting down: saving the queue and DHT state");
-    let _ = stop_subscriptions.send(true);
-    let _ = refresher.await;
-    let mut store = pipeline.shutdown().await?;
-    tokio::task::spawn_blocking(move || lodestar_pipeline::save_hot(&mut store, &hot, &hot_dir))
-        .await??;
-    if let Some((_, live)) = live {
-        // After the writer, so the last batch gets indexed too.
-        tokio::task::spawn_blocking(move || live.stop()).await??;
-    }
-    tracing::info!("stopped cleanly");
-    Ok(())
-}
-
-/// The API's interest hints go to the scrape scheduler; its searches to
-/// the Serve rollups (§10.9.5).
-#[derive(Debug)]
-struct Events {
-    health: Option<HealthHandle>,
-    rollups: Arc<Rollups>,
-}
-
-impl lodestar_api::ApiEvents for Events {
-    fn interest(&self, id: i64) {
-        if let Some(h) = &self.health {
-            h.interest(id);
-        }
-    }
-
-    fn searched(&self, took: Duration, total: Option<usize>) {
-        let now = unix_now();
-        let outcome = match total {
-            Some(0) => 1,
-            Some(_) => 0,
-            None => 2,
-        };
-        self.rollups.add_dim(now, metric::SEARCHES, 0, outcome, 1);
-        self.rollups.add_dim(
-            now,
-            metric::SEARCH_LATENCY,
-            0,
-            metric::latency_bucket(took),
-            1,
-        );
-    }
+    Services::start(&config).await?.run(shutdown_signal()).await
 }
 
 /// `lodestar import-bitmagnet`: everything from a bitmagnet database into
@@ -458,32 +251,6 @@ async fn import_bitmagnet(config: Config, url: &str, limit: Option<u64>) -> Resu
         report.read, report.new, report.existing, report.skipped, report.partial
     );
     Ok(())
-}
-
-/// The key that seals quarantined names (§20.3), created on first use.
-/// It lives beside the database, not in it, so a copy of the database
-/// alone doesn't reveal names; on Unix only the owner can read it.
-fn seal_key(path: &std::path::Path) -> Result<[u8; 32], BoxError> {
-    match std::fs::read(path) {
-        Ok(bytes) => {
-            return bytes
-                .try_into()
-                .map_err(|_| format!("{}: not a 32-byte key", path.display()).into());
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(format!("reading {}: {e}", path.display()).into()),
-    }
-    let key = Sealer::generate_key()?;
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    let mut file = options
-        .open(path)
-        .map_err(|e| format!("creating {}: {e}", path.display()))?;
-    file.write_all(&key)?;
-    file.sync_all()?;
-    Ok(key)
 }
 
 fn unix_now() -> i64 {

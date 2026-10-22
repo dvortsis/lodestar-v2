@@ -319,6 +319,9 @@ pub fn flag_names(bits: i64) -> impl Iterator<Item = &'static str> {
         (flags::SINGLE_FILE, "single_file"),
         (flags::WARNINGS, "warnings"),
         (flags::PRIVATE_SOURCE, "private_source"),
+        (flags::HIDDEN, "hidden"),
+        (flags::DEMOTED, "demoted"),
+        (flags::FLAGGED, "flagged"),
     ];
     NAMES
         .iter()
