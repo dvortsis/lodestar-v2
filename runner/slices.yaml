@@ -285,10 +285,12 @@ slices:
   - {id: H-zh, title: "zh message catalogue fill", kind: helper, model: haiku, deps: [S-search-6, S-insights-3, S-settings-1], owns: ["web/src/lib/features/*/messages/zh.json"], spec: ["§10.14"]}
   - {id: G-m5, title: "M5 exit gate: analytics-validation, overhead bench, design-review", kind: gate, model: opus, deps: [S-search-4, S-search-5, S-search-6, S-compare, S-discover, S-alerts, S-insights-3, S-wizard, S-appearance, S-filters, S-keys, S-e2e, H-zh, B5c], checks: ["§14 M5 exit criteria"]}
 
+  - {id: B17, title: "Show adult content: off by default; search, facets and Discover exclude Adult unless the preference is on (18+ confirmation in the UI)", kind: core, model: opus, deps: [B2, B5a], owns: ["crates/api/src/search.rs", "crates/search/src/compile.rs"], spec: ["§20.9", "docs/owner-decisions.md §1.8.12"]}
+  - {id: S-blocklists, title: "Wizard and Settings: choose blocklist subscriptions (off by default) with a strictness warning", kind: helper, model: sonnet, deps: [S-wizard, S-settings-1, B15], owns: ["web/src/lib/features/blocklists/**"], spec: ["§20.13", "docs/owner-decisions.md §2.9"]}
   # ── Pulled forward (independent of M5 and the M4 sessions' files; owner let the runner decide, 2026-10-22) ──
   - {id: X-utp, title: "uTP (BEP 29) transport behind a flag, shared UDP port demux", kind: core, model: opus, deps: [], owns: ["crates/utp/**", "crates/peer-wire/**", "crates/dht/src/socket.rs"], spec: ["§6", "§15", "§13"], notes: "config wiring waits for B2"}
   - {id: X-integrations, title: "integrations crate: DownloadClient and Notifier traits, secret storage, SSRF guard, qBittorrent + webhook as the pattern", kind: core, model: opus, deps: [], owns: ["crates/integrations/**"], spec: ["§9", "§12", "§18.10"]}
-  - {id: X-clients, title: "Transmission, Deluge, rTorrent, Aria2 adapters", kind: helper, model: sonnet, deps: [X-integrations], owns: ["crates/integrations/src/clients/**"], spec: ["§9"]}
+  - {id: X-clients, title: "Transmission, Deluge, rTorrent, Aria2 adapters (they parse remote responses, so Opus)", kind: core, model: opus, deps: [X-integrations], owns: ["crates/integrations/src/clients/**"], spec: ["§9"]}
   - {id: X-notify, title: "ntfy, Discord, email, RSS senders", kind: helper, model: sonnet, deps: [X-integrations], owns: ["crates/integrations/src/notify/**"], spec: ["§8", "§10.9.7"]}
   - {id: X-pack-static, title: "Unraid templates (main, worker, gluetun), systemd unit, operations docs draft", kind: helper, model: sonnet, deps: [], owns: ["packaging/unraid/**", "packaging/systemd/**", "docs/operations.md"], spec: ["§11", "§12", "§19.6"]}
 
