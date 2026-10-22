@@ -895,7 +895,11 @@ Stepped progress, with one primary action per step:
   - While any identifying kind is on, a **banner with the time remaining** shows on this screen, on `/logs` and on the Overview, with **Turn off now**.
   - Turning the kinds off offers to delete the files written meanwhile (§12.1).
 - **Preview:** a panel beside the choices, under them on narrow screens. It shows **example lines** for the staged events and kinds, rendered from sample data, and the **estimated volume per day** for each output. It updates as you change things, before you save.
-- **Never logged:** a short, fixed list (§12.1), each item with its reason, so it's clear what no setting can turn on.
+- **Opt-in only:** a separate group under the data kinds holds **Peer activity** and **Filter change details** (§12.1, owner's decision §2.11).
+  - Each is off, and turning it on opens its warning with a 1-hour or 24-hour duration.
+  - Presets never touch them; "Full" leaves them off.
+  - While one is on, its own banner shows, separate from the identifying-kinds banner, with Turn off now.
+- **Never logged:** a short, fixed list (secrets, and sealed item names), each with its reason, so it's clear what no setting can turn on.
 - **Outputs:**
   - console format (text or JSON);
   - console detail (off, or the same as the file);
@@ -1243,6 +1247,7 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
     | sign-in and API client addresses | **on**, since these are the admin's own and are useful for security |
     | peer addresses (connection-level only) | off |
     | sizes and counts | on, since they aren't identifying |
+    | **peer activity** (a peer address with a torrent) | off; **opt-in only**, never set by a preset (below) |
 
     - **Presets set the switches:** **Private** (the default: only the two kinds marked on), **Hashes** (adds info hashes), **Full** (everything), and **Custom**.
     - A kind that's off is never written. Torrents appear as references (below), and other kinds as `[hidden]`.
@@ -1253,9 +1258,19 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
 - **References, not identifiers.** With info hashes off, a line names a torrent as `ref:7f3a2c9e`. That's a keyed hash of its info hash under a random key made at each start and never written down. Lines from one run can be followed together, but a reference can't be turned back into a hash or matched against a public hash list. A restart starts new references.
 - **Never logged, at any setting:**
   - **Passwords, API keys, feed tokens, cookies, secrets and sealed values.** The setup token is the one exception: it's printed at start until setup completes, and stops working after that (§12).
-  - **A peer address together with any torrent identifier.** This is "No profiles of people" (§18.7). With peer addresses on, a connection-level line may show an address, but never with what that peer has.
-  - **The names or paths of quarantined, dropped or hash-listed items.** Lines carry the rule id and a reference only.
-  - **What a filtering change did.** Lines say only "filters: rule set updated (revision 42)", never which rule, term, exception or item was involved. This follows the owner's no-audit-log decisions (§1.8.8, §1.8.9).
+  - **The names or paths of quarantined, dropped or hash-listed items.** They stay sealed (§20.11: revealing one takes the warning and the password). Lines carry the rule id and a reference only.
+- **Logged only when you opt in** (owner's decision §2.11): two things are off by default and stay out of the log unless you turn them on. They're stricter than the other data kinds:
+  - **Peer activity:** a data kind that lets a line pair a peer address with a torrent ("peer 203.0.113.7:51413 had 7f3a… · fetch failed"). With it off, "No profiles of people" (§18.7) holds in the log as everywhere else, and connection-level lines may show an address only if peer addresses are on, never with what that peer has.
+  - **Filter change details:** an event, `filters.change_detail`, that records which rule, term, exception, pack or list changed, and how (before and after). With it off, lines say only "filters: rule set updated (revision 42)", following the no-audit-log decisions (§1.8.8, §1.8.9). Even with it on, the items a change released are never named, because they're sealed (above).
+  - **Both are opt-in for a limited time only:**
+    - they're off by default in every preset, Full included;
+    - turning one on shows a plain-language warning (below) and a duration of 1 hour (default) or 24 hours. There's no "until I turn it off";
+    - a banner shows while either is on, with **Turn off now**.
+  - **The warnings:**
+    - **Peer activity:** "Lodestar normally never keeps which peer had which torrent. For the next hour, the log file will record it: a list of people's addresses next to what they share."
+    - **Filter change details:** "Lodestar normally keeps no record of filtering changes. For the next hour, the log file will record each change you make to rules, terms, exceptions and lists."
+  - **Where they go:** only the log file and the live log. They never go to the console, the journal or the Windows Event Log, because Lodestar can't delete those. A worker's peer activity stays in that worker's own log (§19: peer addresses never leave a worker).
+  - **Files that contain them** carry a badge. **Download diagnostics** never includes them, and `redact=true` strips them like any identifying kind. Turning one off offers to delete the files written meanwhile.
 - **Enforced where the line is written, not scrubbed afterwards:**
   - First-party code logs only through `log_event!(EVENT_ID, …)`.
     - Each crate declares its events in a static catalogue. The binary gathers the catalogues; there's no registry dependency.
@@ -1265,7 +1280,9 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
     - Each wrapper renders according to its kind's switch for that output.
     - Each wrapper marks its field with its kind in the structured record.
   - Third-party crates (HTTP, TLS, Tantivy) are capped at warnings by default. URLs in their messages have query strings and passkeys removed.
-  - **A canary test** runs the pipeline over fixtures with every event on and the **Private** preset. It fails if any fixture's hash (hex or base32), name, path, tracker passkey or peer address appears in any output: console, file, ring buffer or live stream. A second run turns on one kind at a time and checks that only that kind appears.
+  - **A canary test** runs the pipeline over fixtures with every event on and the **Private** preset. It fails if any fixture's hash (hex or base32), name, path, tracker passkey or peer address appears in any output: console, file, ring buffer or live stream. A second run turns on one kind at a time and checks that only that kind appears. A third run checks the two opt-ins:
+    - peer-with-torrent and filter-change detail appear only while their opt-in is on, and only in the file and live log;
+    - they're gone from every output once the opt-in's time runs out.
 - **Where logs go:**
   - **Console (stderr):** always on, so `docker logs`, the systemd journal and Unraid's log viewer work. Text by default, JSON as an option. **The console stays on the Private data kinds even when the file has more turned on**, unless you choose "same as the file". Lodestar can't delete what the container runtime or journal keeps.
   - **Log file:** on by default, at `<data>/logs/lodestar.jsonl`, as structured JSON lines with sensitive fields marked.
@@ -2319,12 +2336,13 @@ docs/               architecture.md (this plan), query-language.md, operations.m
     - Each output has its own level and data kinds.
     - A preview shows example lines and the estimated volume before you save.
     - Plain `tracing` macros are refused in first-party crates, so the catalogue covers every line, and `GET /logs/catalog` serves it.
-    - The never-logged list (below) is unchanged and isn't user-controllable.
-- **Never logged, at any setting:**
-  - a peer address with a torrent identifier ("No profiles of people", §18.7);
-  - secrets;
-  - names of quarantined or dropped items;
-  - what a filtering change did. This extends the no-audit-log decisions (§1.8.8–9) to the log.
+    - Secrets and sealed item names stay unloggable. Peer activity and filter change details became opt-ins (next bullet).
+- **Never logged, at any setting:** secrets, and the names of quarantined or dropped items.
+- **Logged only by opt-in (owner's decision §2.11, the same day):** **Peer activity** (a peer address with a torrent) and **Filter change details** (which rule, term or exception changed).
+  - Both are off by default in every preset.
+  - Turning one on needs a plain-language warning and is time-limited (1 hour or 24 hours).
+  - They're written only to the file and the live log, never to the console, journal or Event Log, and never included in diagnostics.
+  - Outside these opt-ins, "No profiles of people" (§18.7) and the no-audit-log decisions (§1.8.8–9) hold in the log too.
 - **Enforced at the source.** Typed wrappers handle every sensitive field, a CI check catches bypasses, and a canary test asserts that no fixture identifier reaches any output under the Private preset.
 - **Outputs:**
   - the console stays without details unless you choose otherwise, because Lodestar can't delete what `docker logs` keeps;
@@ -2581,7 +2599,7 @@ Every item has a `network` field: `bt` (clearnet BitTorrent), `bt-i2p`, `ed2k`, 
 | Restricted | Anna's Archive/LibGen and other High-risk content sources; tracker-announce peer finding (it lists our IP in swarms) | a consent screen explaining the legal exposure; VPN strongly advised |
 | Overlay | I2P, eD2k/Kad, IPFS | a consent screen + VPN recommendation; isolated tier; one-click purge |
 
-- **No profiles of people.** Peer IPs and IDs are used only briefly, to fetch metadata or count a swarm, and are **never stored alongside what they share**.
+- **No profiles of people.** Peer IPs and IDs are used only briefly, to fetch metadata or count a swarm, and are **never stored alongside what they share**. The one exception is the opt-in, time-limited **Peer activity** log kind (§12.1, owner's decision §2.11), which writes only to the local log file and live log.
   - The index holds facts about content, never "this IP has these files". Swarm statistics stay aggregate counts.
   - That keeps Lodestar from becoming a surveillance tool, matters legally (IP addresses are personal data under GDPR and similar laws), and limits the damage if an instance's data leaks.
   - It applies to every network, including eD2k shared-file browsing.
@@ -3195,7 +3213,7 @@ Every change to filtering shows its impact **before** it takes effect. That cove
   - revealing a sealed name;
   - disabling a pack or pack rule;
   - deleting or narrowing your own drop/quarantine rules.
-- **No record is kept of any of these,** exceptions included: no author, reason, timestamp history or before/after.
+- **No record is kept of any of these,** exceptions included: no author, reason, timestamp history or before/after. The one exception is the opt-in, time-limited **Filter change details** log event (§12.1, owner's decision §2.11). It records what changed, never the items released.
 - **What a warning says** (generated from the change and its impact preview, §20.10):
   1. **What the change does, concretely,** in one or two sentences, naming the protections it bypasses.
   2. **What else it lets through:** the non-obvious side effect, stated honestly.
