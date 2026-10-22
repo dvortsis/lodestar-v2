@@ -16,6 +16,7 @@
 
 mod core;
 mod engine;
+mod fasttok;
 mod hash;
 mod held;
 pub mod lists;

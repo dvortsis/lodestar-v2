@@ -2,30 +2,31 @@
 //! (§20.8: under 50 µs per torrent at 10,000 rules).
 //!
 //! A query names text it can't match without: a word needs one of its
-//! token texts in the torrent, a phrase its first word, `group:x` that
-//! tag. That is its [`Need`]. A torrent's [`DocKeys`] are the hashes of
-//! every token text the search tokenizer would produce for its name and
-//! files. A rule whose need isn't among them can't match, so it isn't
-//! evaluated, and the torrent isn't tokenized for the full match unless
-//! some rule could match.
+//! token texts in the torrent, a phrase each of its words, `group:x` that
+//! tag. That is its [`Need`]; where several texts are each needed, the
+//! rarest-looking stands for them, so fewer rules are looked at.
+//!
+//! A torrent's [`DocKeys`] are the hashes of every token text the search
+//! tokenizer would produce for its name and files. A rule whose need isn't among them can't match, so it isn't
+//! looked at. Those that are get the matcher's cheap check next
+//! ([`crate::matcher`]), and only then the full match.
 //!
 //! The narrowing must never skip a rule that would match. For ASCII text
 //! (most names) the keys come from a byte scan that produces exactly the
 //! token texts [`tokenize`] does (property-tested against it); other text
 //! goes through the tokenizer itself. Queries that no text narrows
-//! (sizes, extensions, prefixes, negations) are always evaluated.
-
-use std::cell::OnceCell;
+//! (sizes, extensions, prefixes, negations) are always looked at.
 
 use lodestar_classify::FileInfo;
 use lodestar_search::query::TextField;
 use lodestar_search::tokenizer::{MAX_TOKEN_BYTES, TokKind, tokenize};
 use lodestar_search::{DocEnrichment, Node};
 
-/// Builds a torrent's tag keys, on first use.
-pub(crate) type Tags<'a> = &'a dyn Fn() -> IdSet;
+/// A torrent's tag keys, built on first use.
+pub(crate) type Tags<'a, 't> = &'a dyn Fn() -> &'t IdSet;
 
 use crate::hash::{IdMap, IdSet, fmix64, fnv_byte, fnv_start, term_hash};
+use crate::matcher::{Compiled, compile};
 use crate::rules::UserRule;
 
 /// What a query can't match without.
@@ -39,12 +40,46 @@ pub(crate) enum Need {
     Any(Vec<u64>),
 }
 
+/// How rare a need looks: the shortest of its texts, or 0 for words
+/// most release names have (`1080p`, `mkv`, `web`, numbers, one or two
+/// letters). Of an AND's needs, the index keys a rule on the rarest, so
+/// `1080p cam` is looked at only for torrents that have `cam`. Any need
+/// is correct; this only decides how many rules a torrent meets.
+fn rarity(text: &str) -> usize {
+    const COMMON: &[&str] = &[
+        "mkv", "mp4", "avi", "m4v", "ts", "srt", "sub", "subs", "idx", "ass", "nfo", "txt", "jpg",
+        "png", "sfv", "sample", "web", "webdl", "webrip", "bluray", "bdrip", "brrip", "hdtv",
+        "dvdrip", "remux", "x264", "x265", "h264", "h265", "hevc", "avc", "av1", "xvid", "aac",
+        "ac3", "eac3", "dts", "ddp", "dd+", "atmos", "truehd", "flac", "mp3", "hdr", "hdr10", "dv",
+        "uhd", "proper", "repack", "internal", "complete", "season", "episode", "the", "and", "of",
+        "eng", "multi", "subbed", "dubbed",
+    ];
+    let digits = text.bytes().all(|b| b.is_ascii_digit());
+    // Resolutions, seasons and episodes: 1080p, s01, e02.
+    let numbered = |p: &[u8]| {
+        text.len() > 1
+            && text.bytes().take(1).all(|b| p.contains(&b))
+            && text.bytes().skip(1).all(|b| b.is_ascii_digit())
+    };
+    let resolution =
+        text.ends_with('p') && text[..text.len() - 1].bytes().all(|b| b.is_ascii_digit());
+    if text.len() <= 2 || digits || resolution || numbered(b"se") || COMMON.contains(&text) {
+        0
+    } else {
+        text.chars().count()
+    }
+}
+
+/// [`Need::Any`] with how rare its keys look: the commonest of them,
+/// since any one present admits the rule.
+type Keyed = (Vec<u64>, usize);
+
 /// Words longer than this (in chars) aren't split (the tokenizer's
 /// `MAX_SPLIT_CHARS`).
 const MAX_SPLIT_CHARS: usize = 24;
 
 /// A tag's key, apart from text keys.
-fn tag_key(tag: &str) -> u64 {
+pub(crate) fn tag_key(tag: &str) -> u64 {
     let mut h = fnv_start();
     for b in b"\x01tag\x01".iter().chain(tag.as_bytes()) {
         h = fnv_byte(h, *b);
@@ -64,134 +99,186 @@ fn folded(word: &str) -> String {
 /// The need of a query. Inside `file:(…)`, every text field reads that
 /// file's name or path, so titles narrow there too.
 pub(crate) fn need(node: &Node) -> Need {
-    need_in(node, false)
-}
-
-fn need_in(node: &Node, in_file: bool) -> Need {
-    let text = |field: &TextField| in_file || *field != TextField::Title;
-    match node {
-        Node::And { of } => {
-            let mut best: Option<Vec<u64>> = None;
-            for n in of {
-                match need_in(n, in_file) {
-                    Need::Never => return Need::Never,
-                    Need::Always => {}
-                    Need::Any(k) => {
-                        if best.as_ref().is_none_or(|b| k.len() < b.len()) {
-                            best = Some(k);
-                        }
-                    }
-                }
-            }
-            best.map_or(Need::Always, Need::Any)
-        }
-        Node::Or { of } => {
-            let mut keys = Vec::new();
-            for n in of {
-                match need_in(n, in_file) {
-                    Need::Never => {}
-                    Need::Always => return Need::Always,
-                    Need::Any(k) => keys.extend(k),
-                }
-            }
-            if keys.is_empty() {
-                Need::Never
-            } else {
-                Need::Any(keys)
-            }
-        }
-        // A whole-token match, or the parts in a row (starting with the
-        // first part).
-        Node::Word { field, word } if text(field) => {
-            let q = tokenize(word);
-            let mut keys: Vec<u64> = q
-                .iter()
-                .filter(|t| t.kind != TokKind::Part)
-                .map(|t| term_hash(&t.text))
-                .collect();
-            if let Some(p) = q.iter().find(|t| t.kind == TokKind::Part) {
-                keys.push(term_hash(&p.text));
-            }
-            if keys.is_empty() {
-                Need::Never
-            } else {
-                Need::Any(keys)
-            }
-        }
-        Node::Phrase { field, text: t } if text(field) => {
-            match tokenize(t).into_iter().find(|t| t.kind == TokKind::Part) {
-                Some(p) => Need::Any(vec![term_hash(&p.text)]),
-                None => Need::Never,
-            }
-        }
-        Node::Near { field, words, .. } if text(field) => match words.first().map(|w| folded(w)) {
-            Some(f) if f.is_empty() => Need::Never,
-            Some(f) => Need::Any(vec![term_hash(&f)]),
-            None => Need::Always,
-        },
-        Node::File { of } => need_in(of, true),
-        Node::Tag { key, any } => {
-            if any.is_empty() {
-                Need::Never
-            } else {
-                Need::Any(
-                    any.iter()
-                        .map(|v| tag_key(&format!("{}:{v}", key.as_str())))
-                        .collect(),
-                )
-            }
-        }
-        _ => Need::Always,
+    match need_in(node, false) {
+        Ok(Some((keys, _))) => Need::Any(keys),
+        Ok(None) => Need::Always,
+        Err(()) => Need::Never,
     }
 }
 
-/// The keys of one torrent: its token texts, and its tags once a tag is
-/// asked about.
+/// `Ok(None)` for nothing narrowing it, `Err` for never matching.
+fn need_in(node: &Node, in_file: bool) -> Result<Option<Keyed>, ()> {
+    let text = |field: &TextField| in_file || *field != TextField::Title;
+    let any = |texts: Vec<String>| -> Result<Option<Keyed>, ()> {
+        let rare = texts.iter().map(|t| rarity(t)).min().ok_or(())?;
+        Ok(Some((texts.iter().map(|t| term_hash(t)).collect(), rare)))
+    };
+    // The rarest of several keys, all of which are needed.
+    let rarest = |texts: Vec<String>| -> Result<Option<Keyed>, ()> {
+        let t = texts.into_iter().max_by_key(|t| rarity(t)).ok_or(())?;
+        any(vec![t])
+    };
+    match node {
+        Node::And { of } => {
+            let mut best: Option<Keyed> = None;
+            for n in of {
+                if let Some(k) = need_in(n, in_file)? {
+                    let better = best.as_ref().is_none_or(|b| {
+                        (k.1, std::cmp::Reverse(k.0.len())) > (b.1, std::cmp::Reverse(b.0.len()))
+                    });
+                    if better {
+                        best = Some(k);
+                    }
+                }
+            }
+            Ok(best)
+        }
+        Node::Or { of } => {
+            let mut keys = Vec::new();
+            let mut rare = usize::MAX;
+            for n in of {
+                match need_in(n, in_file) {
+                    Err(()) => {}
+                    Ok(None) => return Ok(None),
+                    Ok(Some((k, r))) => {
+                        keys.extend(k);
+                        rare = rare.min(r);
+                    }
+                }
+            }
+            if keys.is_empty() {
+                Err(())
+            } else {
+                Ok(Some((keys, rare)))
+            }
+        }
+        // A whole or compound token, or the parts in a row: every part
+        // is needed then, so the rarest of them stands for them.
+        Node::Word { field, word } if text(field) => {
+            let q = tokenize(word);
+            let mut texts: Vec<String> = q
+                .iter()
+                .filter(|t| t.kind != TokKind::Part)
+                .map(|t| t.text.clone())
+                .collect();
+            if let Some(p) = q
+                .iter()
+                .filter(|t| t.kind == TokKind::Part)
+                .max_by_key(|t| rarity(&t.text))
+            {
+                texts.push(p.text.clone());
+            }
+            any(texts)
+        }
+        Node::Phrase { field, text: t } if text(field) => rarest(
+            tokenize(t)
+                .into_iter()
+                .filter(|t| t.kind == TokKind::Part)
+                .map(|t| t.text)
+                .collect(),
+        ),
+        Node::Near { field, words, .. } if text(field) => {
+            if words.is_empty() {
+                return Ok(None);
+            }
+            let f: Vec<String> = words.iter().map(|w| folded(w)).collect();
+            if f.iter().any(String::is_empty) {
+                return Err(());
+            }
+            rarest(f)
+        }
+        Node::File { of } => need_in(of, true),
+        Node::Tag { key, any } => {
+            if any.is_empty() {
+                return Err(());
+            }
+            // Release groups are rare; types, resolutions and codecs aren't.
+            let rare = match key {
+                lodestar_search::query::TagKey::Group => {
+                    any.iter().map(|v| v.chars().count()).min().unwrap_or(0)
+                }
+                _ => 0,
+            };
+            Ok(Some((
+                any.iter()
+                    .map(|v| tag_key(&format!("{}:{v}", key.as_str())))
+                    .collect(),
+                rare,
+            )))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// The keys of one torrent: its token texts, and which could follow
+/// which.
 #[derive(Debug, Default)]
 pub(crate) struct DocKeys {
     text: IdSet,
-    tags: OnceCell<IdSet>,
+    pairs: Bloom,
 }
 
 impl DocKeys {
     pub(crate) fn new(name: &str, files: &[FileInfo]) -> DocKeys {
         let mut scan = Scan {
             out: IdSet::with_capacity_and_hasher(256, Default::default()),
-            seen: [None; SEEN],
+            pairs: Bloom::for_text(
+                name.len()
+                    + files
+                        .iter()
+                        .take(crate::MAX_FILES)
+                        .flat_map(|f| &f.path)
+                        .map(|s| s.len() + 1)
+                        .sum::<usize>(),
+            ),
+            seen: [const { None }; SEEN],
+            at: At::default(),
         };
         scan.text(name);
         // A path's segments are joined by '/', which never joins tokens,
-        // so each segment is its own text, and folders shared with the
-        // previous file add nothing new.
-        let mut folder: &[String] = &[];
+        // so each segment is scanned on its own, continuing the path's
+        // positions. Folders shared with the previous file add nothing
+        // new, so the scan picks up where the folder ended.
+        let mut folder: (&[String], At) = (&[], At::default());
         for f in files.iter().take(crate::MAX_FILES) {
             let Some((file, dirs)) = f.path.split_last() else {
                 continue;
             };
-            if dirs != folder {
+            if dirs != folder.0 {
+                scan.at = At::default();
                 for seg in dirs {
                     scan.text(seg);
                 }
-                folder = dirs;
+                folder = (dirs, scan.at);
+            } else {
+                scan.at = folder.1;
             }
             scan.text(file);
         }
         DocKeys {
             text: scan.out,
-            tags: OnceCell::new(),
+            pairs: scan.pairs,
         }
     }
 
-    fn tags(&self, tags: Tags<'_>) -> &IdSet {
-        self.tags.get_or_init(tags)
+    /// Whether token `b` could follow token `a` in the name or a path.
+    pub(crate) fn could_follow(&self, a: u64, b: u64) -> bool {
+        self.pairs.contains(pair(a, b))
     }
 
-    fn has(&self, key: u64, tags: Tags<'_>) -> bool {
-        self.text.contains(&key) || self.tags(tags).contains(&key)
+    #[cfg(test)]
+    fn has(&self, key: u64, tags: &IdSet) -> bool {
+        self.text.contains(&key) || tags.contains(&key)
+    }
+
+    /// Whether a token text with this hash is in the name or a path.
+    pub(crate) fn has_text(&self, key: u64) -> bool {
+        self.text.contains(&key)
     }
 
     /// Whether a query with this need could match.
-    pub(crate) fn admits(&self, need: &Need, tags: Tags<'_>) -> bool {
+    #[cfg(test)]
+    pub(crate) fn admits(&self, need: &Need, tags: &IdSet) -> bool {
         match need {
             Need::Always => true,
             Need::Never => false,
@@ -206,26 +293,123 @@ pub(crate) fn tag_keys(e: Option<&DocEnrichment>) -> IdSet {
         .unwrap_or_default()
 }
 
-impl DocKeys {}
-
-/// Slots of the atom cache.
+/// Slots of the word cache.
 const SEEN: usize = 64;
 
-/// Collects a torrent's keys. Words repeat across file names, so a small
-/// cache of words already split (compared byte for byte, so it can't be
-/// fooled) skips splitting them again.
+/// A set of pair keys that may answer *yes* for a key never added
+/// (about 2% of the time at its sizing), never *no* for one that was:
+/// a *no* is all the cheap check relies on.
+#[derive(Debug, Default)]
+struct Bloom {
+    bits: Vec<u64>,
+}
+
+impl Bloom {
+    /// Sized for a text of `bytes`: eight bits per byte, a little more
+    /// than enough for its pairs, at least 8,192.
+    fn for_text(bytes: usize) -> Bloom {
+        let bits = (bytes * 8).next_power_of_two().clamp(1 << 13, 1 << 23);
+        Bloom {
+            bits: vec![0; bits / 64],
+        }
+    }
+
+    /// The two bits of a key.
+    fn probes(&self, key: u64) -> [(usize, u64); 2] {
+        let mask = self.bits.len() * 64 - 1;
+        let bit = |h: u64| {
+            let i = h as usize & mask;
+            (i / 64, 1u64 << (i % 64))
+        };
+        [bit(key), bit(key.rotate_right(32))]
+    }
+
+    fn insert(&mut self, key: u64) {
+        for (w, b) in self.probes(key) {
+            self.bits[w] |= b;
+        }
+    }
+
+    fn contains(&self, key: u64) -> bool {
+        self.bits.is_empty() || self.probes(key).iter().all(|&(w, b)| self.bits[w] & b != 0)
+    }
+}
+
+/// The key of token `b` at the position after token `a`.
+pub(crate) fn pair(a: u64, b: u64) -> u64 {
+    fmix64(a.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ b)
+}
+
+/// A word's token hashes: the whole word, and its first, second and
+/// last parts when it splits.
+#[derive(Debug, Default, Clone, Copy)]
+struct Word {
+    full: u64,
+    split: Option<(u64, u64, u64)>,
+}
+
+/// The tokens at one position: at most the word or its first part, its
+/// whole form, a trailing plus and a join.
+#[derive(Debug, Default, Clone, Copy)]
+struct Few {
+    n: usize,
+    v: [u64; 4],
+}
+
+impl Few {
+    fn one(h: u64) -> Few {
+        let mut f = Few::default();
+        f.push(h);
+        f
+    }
+
+    fn push(&mut self, h: u64) {
+        self.v[self.n] = h;
+        self.n += 1;
+    }
+
+    fn get(&self) -> &[u64] {
+        &self.v[..self.n]
+    }
+}
+
+/// Where the scan is in one text (a name, or a path across its
+/// segments): the tokens at the last position, at the one before the
+/// previous word's last, and the previous word's second part.
+#[derive(Debug, Default, Clone, Copy)]
+struct At {
+    last: Few,
+    before: Few,
+    second: Option<u64>,
+}
+
+/// Collects a torrent's keys, and every pair of tokens at neighbouring
+/// positions (with some pairs that aren't, which only costs a full match
+/// now and then). Words repeat across file names, so a small cache of
+/// words already split (compared byte for byte, so it can't be fooled)
+/// skips splitting them again.
 struct Scan<'a> {
     out: IdSet,
-    seen: [Option<&'a [u8]>; SEEN],
+    pairs: Bloom,
+    seen: [Option<(&'a [u8], Word)>; SEEN],
+    at: At,
+}
+
+fn pairs(out: &mut Bloom, a: &[u64], b: &[u64]) {
+    for x in a {
+        for y in b {
+            out.insert(pair(*x, *y));
+        }
+    }
 }
 
 impl<'a> Scan<'a> {
-    /// Adds the token texts [`tokenize`] produces for `text`.
+    /// Adds the token texts [`tokenize`] produces for `text`, which
+    /// continues the text before it at the next position (a path's next
+    /// segment) unless [`Scan::at`] was reset.
     fn text(&mut self, text: &'a str) {
         if !text.is_ascii() {
-            for t in tokenize(text) {
-                self.out.insert(term_hash(&t.text));
-            }
+            self.other(text);
             return;
         }
         let b = text.as_bytes();
@@ -234,13 +418,9 @@ impl<'a> Scan<'a> {
                 .iter()
                 .fold(h, |h, c| fnv_byte(h, c.to_ascii_lowercase()))
         };
-        let emit = |out: &mut IdSet, h: u64, len: usize| {
-            if len > 0 && len <= MAX_TOKEN_BYTES {
-                out.insert(fmix64(h));
-            }
-        };
+        let fits = |len: usize| len > 0 && len <= MAX_TOKEN_BYTES;
         let alnum = |c: u8| ALNUM[c as usize];
-        // The previous atom (a run of letters and digits), for joins.
+        // The previous word, for joins.
         let mut prev: Option<(usize, usize)> = None;
         let mut i = 0;
         while i < b.len() {
@@ -254,7 +434,72 @@ impl<'a> Scan<'a> {
             }
             let e = i;
             let word = &b[s..e];
-            // Joined to the previous word by a single '.' or '-'.
+            let slot = slot(word);
+            let w = match &self.seen[slot] {
+                Some((seen, w)) if same(seen, word) => *w,
+                _ => {
+                    // A word is emitted whole when it splits, and as its
+                    // one part when it doesn't: its text is a key either
+                    // way. Its own pairs are added once.
+                    let full = fmix64(hash(fnv_start(), word));
+                    if fits(word.len()) {
+                        self.out.insert(full);
+                    }
+                    let mut split = None;
+                    if word.len() <= MAX_SPLIT_CHARS && cuts(word).next().is_some() {
+                        let (mut first, mut second, mut last) = (0, 0, 0);
+                        let mut from = 0;
+                        for (n, cut) in cuts(word).chain(std::iter::once(word.len())).enumerate() {
+                            let h = fmix64(hash(fnv_start(), &word[from..cut]));
+                            if fits(cut - from) {
+                                self.out.insert(h);
+                            }
+                            match n {
+                                0 => first = h,
+                                1 => {
+                                    second = h;
+                                    self.pairs.insert(pair(full, h));
+                                }
+                                _ => {}
+                            }
+                            if n > 0 {
+                                self.pairs.insert(pair(last, h));
+                            }
+                            last = h;
+                            from = cut;
+                        }
+                        split = Some((first, second, last));
+                    }
+                    let w = Word { full, split };
+                    self.seen[slot] = Some((word, w));
+                    w
+                }
+            };
+            // The word's tokens at its first position: the word or its
+            // first part, its whole form, a trailing plus.
+            let mut first = Few::one(w.full);
+            if let Some((p0, ..)) = w.split {
+                first.push(p0);
+            }
+            // A trailing plus: DD+, C++.
+            if b.get(e) == Some(&b'+') {
+                let pluses = b[e..].iter().take_while(|&&c| c == b'+').count();
+                if pluses <= 2 {
+                    let plus = fmix64(hash(hash(fnv_start(), word), &b[e..e + pluses]));
+                    if fits(word.len() + pluses) {
+                        self.out.insert(plus);
+                    }
+                    first.push(plus);
+                    if let Some((_, p1, _)) = w.split {
+                        self.pairs.insert(pair(plus, p1));
+                    }
+                }
+            }
+            // The previous word's last position, then this word's first.
+            let mut last = self.at.last;
+            pairs(&mut self.pairs, last.get(), first.get());
+            // Joined to the previous word by a single '.' or '-': the
+            // compound sits at the previous word's first position.
             if let Some((ps, pe)) = prev {
                 if s == pe + 1
                     && matches!(b[pe], b'.' | b'-')
@@ -262,47 +507,65 @@ impl<'a> Scan<'a> {
                     && word.len() <= 4
                     && joins(&b[ps..pe], b[pe], word)
                 {
-                    let joined = hash(hash(fnv_start(), &b[ps..pe]), word);
-                    emit(&mut self.out, joined, pe - ps + word.len());
+                    let joined = fmix64(hash(hash(fnv_start(), &b[ps..pe]), word));
+                    if fits(pe - ps + word.len()) {
+                        self.out.insert(joined);
+                    }
+                    pairs(&mut self.pairs, self.at.before.get(), &[joined]);
+                    match self.at.second {
+                        // The previous word split: its second part follows.
+                        Some(p1) => {
+                            self.pairs.insert(pair(joined, p1));
+                        }
+                        // It didn't: its first position was its last.
+                        None => {
+                            pairs(&mut self.pairs, &[joined], first.get());
+                            last.push(joined);
+                        }
+                    }
                 }
             }
             prev = Some((s, e));
-            // A trailing plus: DD+, C++.
-            if b.get(e) == Some(&b'+') {
-                let pluses = b[e..].iter().take_while(|&&c| c == b'+').count();
-                if pluses <= 2 {
-                    let plus = hash(hash(fnv_start(), word), &b[e..e + pluses]);
-                    emit(&mut self.out, plus, word.len() + pluses);
-                }
-            }
-            // A word already split adds nothing new.
-            let slot = &mut self.seen[slot(word)];
-            if slot.is_some_and(|w| same(w, word)) {
-                continue;
-            }
-            *slot = Some(word);
-            // A word is emitted whole when it splits, and as its one part
-            // when it doesn't: its text is a key either way.
-            emit(&mut self.out, hash(fnv_start(), word), word.len());
-            if word.len() <= MAX_SPLIT_CHARS {
-                let mut from = 0;
-                for cut in cuts(word) {
-                    emit(
-                        &mut self.out,
-                        hash(fnv_start(), &word[from..cut]),
-                        cut - from,
-                    );
-                    from = cut;
-                }
-                if from > 0 {
-                    emit(
-                        &mut self.out,
-                        hash(fnv_start(), &word[from..]),
-                        word.len() - from,
-                    );
-                }
-            }
+            self.at = At {
+                before: last,
+                second: w.split.map(|(_, p1, _)| p1),
+                last: match w.split {
+                    Some((.., pl)) => Few::one(pl),
+                    None => first,
+                },
+            };
         }
+    }
+
+    /// Text with other than ASCII, through the tokenizer.
+    fn other(&mut self, text: &str) {
+        let mut by_pos: Vec<(usize, u64)> = tokenize(text)
+            .iter()
+            .map(|t| (t.position, term_hash(&t.text)))
+            .collect();
+        by_pos.sort_unstable();
+        self.out.extend(by_pos.iter().map(|t| t.1));
+        let Some(&(lo, _)) = by_pos.first() else {
+            return;
+        };
+        let at_pos =
+            |p: usize| -> Vec<u64> { by_pos.iter().filter(|t| t.0 == p).map(|t| t.1).collect() };
+        let hi = by_pos[by_pos.len() - 1].0;
+        pairs(&mut self.pairs, self.at.last.get(), &at_pos(lo));
+        for p in lo..hi {
+            pairs(&mut self.pairs, &at_pos(p), &at_pos(p + 1));
+        }
+        // No join reaches across segments, so only the last position
+        // carries over; it holds at most a part, its word and a plus.
+        let mut last = Few::default();
+        for h in at_pos(hi).into_iter().take(4) {
+            last.push(h);
+        }
+        self.at = At {
+            last,
+            before: self.at.last,
+            second: None,
+        };
     }
 }
 
@@ -392,6 +655,10 @@ struct RuleIndex {
     /// Rules nothing narrows, by position.
     always: Vec<u32>,
     by_key: IdMap<Vec<u32>>,
+    /// Each rule's query and `unless`, compiled.
+    compiled: Vec<(Compiled, Option<Compiled>)>,
+    /// Each rule's switch, read without touching the rule.
+    enabled: Vec<bool>,
 }
 
 impl RuleList {
@@ -399,6 +666,9 @@ impl RuleList {
         self.index.get_or_init(|| {
             let mut ix = RuleIndex::default();
             for (i, r) in self.rules.iter().enumerate() {
+                ix.compiled
+                    .push((compile(&r.query), r.unless.as_ref().map(compile)));
+                ix.enabled.push(r.enabled);
                 match need(&r.query) {
                     Need::Always => ix.always.push(i as u32),
                     Need::Never => {}
@@ -416,20 +686,39 @@ impl RuleList {
         })
     }
 
-    /// The rules that could match a torrent with these keys, in order.
-    pub(crate) fn candidates(&self, keys: &DocKeys, tags: Tags<'_>) -> Vec<&UserRule> {
+    /// Rule `i`'s query and `unless`, compiled.
+    pub(crate) fn compiled(&self, i: u32) -> (&Compiled, Option<&Compiled>) {
+        let (q, u) = &self.index().compiled[i as usize];
+        (q, u.as_ref())
+    }
+
+    /// The positions of the switched-on rules that could match a torrent
+    /// with these keys, in order.
+    pub(crate) fn candidates(&self, keys: &DocKeys, tags: Tags<'_, '_>) -> Vec<u32> {
         let ix = self.index();
-        let mut at: Vec<u32> = ix.always.clone();
+        // Marked by position, then read in order.
+        let mut marks = vec![0u64; self.rules.len().div_ceil(64)];
+        let mut mark = |i: u32| {
+            if ix.enabled[i as usize] {
+                marks[i as usize / 64] |= 1 << (i % 64);
+            }
+        };
+        ix.always.iter().for_each(|&i| mark(i));
         if !ix.by_key.is_empty() {
-            for k in keys.text.iter().chain(keys.tags(tags)) {
+            for k in keys.text.iter().chain(tags()) {
                 if let Some(rules) = ix.by_key.get(k) {
-                    at.extend(rules);
+                    rules.iter().for_each(|&i| mark(i));
                 }
             }
         }
-        at.sort_unstable();
-        at.dedup();
-        at.into_iter().map(|i| &self.rules[i as usize]).collect()
+        let mut at = Vec::new();
+        for (w, mut bits) in marks.into_iter().enumerate() {
+            while bits != 0 {
+                at.push(w as u32 * 64 + bits.trailing_zeros());
+                bits &= bits - 1;
+            }
+        }
+        at
     }
 }
 
@@ -500,6 +789,44 @@ mod tests {
             prop_assert_eq!(scan_keys(&text), tokenizer_keys(&text));
         }
 
+        /// Every pair of tokens at neighbouring positions, in the name and
+        /// in each whole path, is among the scanned pairs, whatever the
+        /// text and however files share folders.
+        #[test]
+        fn pairs_cover_the_tokenizers(
+            name in "\\PC{0,60}|[ -~]{0,80}",
+            segs in prop::collection::vec(
+                "[A-Za-z]{1,6}([._\\- +]{1,2}[A-Za-z0-9+]{1,6}){0,5}|[0-9]{1,3}[.\\-][0-9]{1,3}|\\PC{0,12}|[a-zA-Z0-9.+-]{0,30}",
+                1..6,
+            ),
+            layout in prop::collection::vec((0usize..6, 0usize..6, 0usize..3), 0..8),
+        ) {
+            // Files built from the segments, often sharing folders.
+            let files: Vec<FileInfo> = layout
+                .iter()
+                .map(|&(a, b, depth)| {
+                    let mut path: Vec<String> =
+                        (0..depth).map(|d| segs[(a + d) % segs.len()].clone()).collect();
+                    path.push(segs[b % segs.len()].clone());
+                    FileInfo::new(path, 1)
+                })
+                .collect();
+            let keys = DocKeys::new(&name, &files);
+            let texts = std::iter::once(name.clone())
+                .chain(files.iter().map(|f| f.path.join("/")));
+            for text in texts {
+                let toks = tokenize(&text);
+                for a in &toks {
+                    for b in toks.iter().filter(|b| b.position == a.position + 1) {
+                        prop_assert!(
+                            keys.could_follow(term_hash(&a.text), term_hash(&b.text)),
+                            "{:?} then {:?} in {:?}", a.text, b.text, text
+                        );
+                    }
+                }
+            }
+        }
+
         /// Any text: a rule the full match accepts is never skipped.
         #[test]
         fn needs_are_necessary(
@@ -517,7 +844,7 @@ mod tests {
                 let Ok(node) = parse(&q) else { continue };
                 let full = crate::matcher::Doc::new(&item, None).eval_full(&node);
                 if full {
-                    prop_assert!(keys.admits(&need(&node), &IdSet::default), "{q:?} on {name:?}");
+                    prop_assert!(keys.admits(&need(&node), &IdSet::default()), "{q:?} on {name:?}");
                 }
             }
         }
@@ -528,10 +855,13 @@ mod tests {
         let n = |q: &str| need(&parse(q).unwrap());
         let k = |t: &str| term_hash(t);
         assert_eq!(n("matrix"), Need::Any(vec![k("matrix")]));
-        // A compound query word: its whole form, or its first part.
-        assert_eq!(n("x264"), Need::Any(vec![k("x264"), k("x")]));
-        assert_eq!(n("\"the matrix\""), Need::Any(vec![k("the")]));
-        // The narrower side of AND; both sides of OR.
+        // A compound query word: its whole form, or one of its parts.
+        assert_eq!(n("x264"), Need::Any(vec![k("x264"), k("264")]));
+        // A phrase or AND by its rarest word.
+        assert_eq!(n("\"the matrix\""), Need::Any(vec![k("matrix")]));
+        assert_eq!(n("1080p cam"), Need::Any(vec![k("cam")]));
+        assert_eq!(n("cam 1080p"), Need::Any(vec![k("cam")]));
+        assert_eq!(n("mkv NEAR/2 matrix"), Need::Any(vec![k("matrix")]));
         assert_eq!(n("matrix size:>1GB"), Need::Any(vec![k("matrix")]));
         assert_eq!(n("cam | ts"), Need::Any(vec![k("cam"), k("ts")]));
         assert_eq!(n("cam | size:>1GB"), Need::Always);
@@ -558,6 +888,7 @@ mod tests {
 
     #[test]
     fn the_index_follows_changes() {
+        static NO_TAGS: std::sync::LazyLock<IdSet> = std::sync::LazyLock::new(IdSet::default);
         let rule = |id: u32, q: &str| UserRule {
             id,
             query: parse(q).unwrap(),
@@ -573,9 +904,9 @@ mod tests {
         ]);
         let keys = DocKeys::new("Alpha.Gamma", &[]);
         let ids = |l: &RuleList| {
-            l.candidates(&keys, &IdSet::default)
+            l.candidates(&keys, &|| &NO_TAGS)
                 .iter()
-                .map(|r| r.id)
+                .map(|&i| l[i as usize].id)
                 .collect::<Vec<_>>()
         };
         assert_eq!(ids(&list), [1, 2]);
@@ -584,6 +915,11 @@ mod tests {
         assert_eq!(ids(&list), [1, 2, 3]);
         assert_eq!(ids(&shared), [1, 2], "a clone keeps its own index");
         list.push(rule(4, "alpha | delta"));
+        assert_eq!(ids(&list), [1, 2, 3, 4]);
+        // A rule switched off isn't looked at, until it's switched on.
+        list[0].enabled = false;
+        assert_eq!(ids(&list), [2, 3, 4]);
+        list[0].enabled = true;
         assert_eq!(ids(&list), [1, 2, 3, 4]);
     }
 }

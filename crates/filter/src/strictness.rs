@@ -433,13 +433,13 @@ pub fn assess(candidates: &[Candidate]) -> Strictness {
     if !unknown.is_empty() {
         level = level.max(Level::Notice);
         let n: Vec<&str> = unknown.iter().map(String::as_str).collect();
-        let has = if unknown.len() == 1 {
-            "hasn't"
+        let (has, it, blocks, refresh) = if unknown.len() == 1 {
+            ("hasn't", "it", "blocks", "its first refresh")
         } else {
-            "haven't"
+            ("haven't", "they", "block", "their first refresh")
         };
         text.push(format!(
-            "{} {has} been fetched yet, so what it blocks isn't known until the first refresh.",
+            "{} {has} been fetched yet, so what {it} {blocks} isn't known until {refresh}.",
             names(&n)
         ));
     }
@@ -601,7 +601,30 @@ mod tests {
         }]);
         assert_eq!(s.level, Level::Notice);
         assert_eq!(s.unknown, ["New list"]);
-        assert!(s.text.contains("New list hasn't been fetched yet"));
+        assert!(s.text.contains(
+            "New list hasn't been fetched yet, so what it blocks isn't known until its first \
+             refresh."
+        ));
+        let s = assess(&[
+            Candidate {
+                facts: Facts::Unknown,
+                name: "One".into(),
+                ..ips(&[])
+            },
+            Candidate {
+                facts: Facts::Unknown,
+                name: "Two".into(),
+                ..ips(&[])
+            },
+        ]);
+        assert!(
+            s.text.contains(
+                "haven't been fetched yet, so what they block isn't known until their \
+                           first refresh."
+            ),
+            "{}",
+            s.text
+        );
         let s = assess(&[]);
         assert_eq!(s.level, Level::None);
         assert!(s.text.starts_with("No lists are chosen"));
