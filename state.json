@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-22T05:10:00Z",
+ "updated_at": "2026-10-22T05:16:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 9
@@ -652,10 +652,10 @@
  "migration_order": "V4 filter (merged); V5 swarm (#32); V6 subscriptions (#33, renumbers after #32); filter-rules persistence after that; M5 (B8) after all M4 migrations",
  "decisions": [
   "2026-10-22 spacing: keep Tailwind v4 default --spacing (p-4=16px); only utility steps matching the \u00a710.2 ramp are allowed; W2 extends the ban check to off-ramp steps",
-  "2026-10-22 owner: the design decided in the 'Modern DHT crawler architecture' session (recorded in docs/architecture.md) is the primary design strategy; ui-design-skills only fills gaps. Encoded in runner/standards.md (PR #39)."
+  "2026-10-22 owner: the design decided in the 'Modern DHT crawler architecture' session (recorded in docs/architecture.md) is the primary design strategy; ui-design-skills only fills gaps. Encoded in runner/standards.md (PR #39).",
+  "2026-10-22 owner: Riverstone is the default/official palette and keeps plum #9381B6 in categorical slot 6 (seafoam stays retired); the theme collection is 24 families x light/dark including Rosewood as the 24th. Log both in architecture \u00a716 with the next runner docs PR."
  ],
  "open_issues": [
-  "Owner decision needed: 24th theme family (Rosewood proposed by C1; \u00a710.18 lists 23)",
   "\u00a710.18 CVD claim (>=5.5 deutan/protan) doesn't hold under C1's model; log correction in \u00a716 after C1"
  ],
  "runner_prs": {
