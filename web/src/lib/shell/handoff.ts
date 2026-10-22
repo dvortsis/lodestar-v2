@@ -2,12 +2,22 @@
 // `/setup` while the instance has no password yet, otherwise `/login` with the way back.
 //
 // TODO(M-auth): M-auth owns the sign-in and setup flows. When it exports its own handler, replace
-// `handleLoginRequired` with it in `+layout.svelte`; `loginTarget` keeps the contract tested.
+// `handleLoginRequired` with it in `Shell.svelte`; `loginTarget` keeps the contract tested.
 import { goto } from '$app/navigation';
 
 /** Only same-origin paths may be a `next`: nothing that could leave the site. */
 export function safeNext(next: string): string {
-	return next.startsWith('/') && !next.startsWith('//') && !next.includes('\\') ? next : '/';
+	// URL parsing strips tabs and newlines, so `/\t/evil.com` would become `//evil.com`: refuse control
+	// characters (and backslashes), then check the parsed result stays on this origin.
+	// eslint-disable-next-line no-control-regex -- control characters are exactly what is refused
+	if (!next.startsWith('/') || next.startsWith('//') || /[\u0000-\u001f\u007f\\]/.test(next))
+		return '/';
+	try {
+		const base = 'http://lodestar.invalid';
+		return new URL(next, base).origin === base ? next : '/';
+	} catch {
+		return '/';
+	}
 }
 
 export function loginTarget(next: string, opts: { setupRequired: boolean }): string {

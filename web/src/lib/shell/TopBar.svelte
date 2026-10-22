@@ -4,8 +4,10 @@
 	// them under the bar (a disclosure, so nothing traps focus). Heavy widgets (the overflow menu,
 	// the palette) load on first use to keep the first load within budget (§10.1).
 	import { onMount } from 'svelte';
+	import { afterNavigate } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
+	import { isMacPlatform } from '$lib/keys/combo';
 	import { m } from '$lib/paraglide/messages.js';
 	import { FOCUS_RING, TARGET_MIN } from '$lib/ui/classes';
 	import Compass from './Compass.svelte';
@@ -15,6 +17,7 @@
 	import { statusRef } from './status-ref.svelte';
 
 	let navOpen = $state(false);
+	afterNavigate(() => (navOpen = false));
 	const hrefFor = (href: string) => withDensity(href, page.url.searchParams);
 	const link =
 		'relative inline-flex min-h-(--control-height) items-center gap-2 rounded-field px-3 text-body hover:bg-hover';
@@ -120,7 +123,7 @@
 				type="button"
 				class="btn btn-ghost btn-square {FOCUS_RING} {TARGET_MIN}"
 				aria-label={m.shell_palette_open()}
-				aria-keyshortcuts="Control+K Meta+K"
+				aria-keyshortcuts={isMacPlatform() ? 'Meta+K' : 'Control+K'}
 				data-testid="palette-button"
 				onclick={() => (shell.paletteOpen = true)}
 			>

@@ -9,7 +9,6 @@
 	"shell_nav_insights": "洞察",
 	"shell_nav_settings": "设置",
 	"shell_menu_open": "打开菜单",
-	"shell_menu_title": "菜单",
 	"shell_menu_close": "关闭菜单",
 	"shell_more_label": "更多",
 	"shell_more_import": "导入",
@@ -33,6 +32,7 @@
 	"shell_status_rebuilding": "正在重建索引",
 	"shell_status_failed": "索引重建失败",
 	"shell_status_torrents": "{count} 个种子",
+	"shell_status_torrents_one": "{count} 个种子",
 	"shell_status_rebuild_progress": "{done} / {total}",
 	"shell_banner_reconnecting": "与服务器失去联系。Lodestar 会持续重试，恢复后会自动更新此页面。",
 	"shell_state_unreachable_title": "无法连接 Lodestar",
@@ -47,6 +47,5 @@
 	"shell_cmd_go": "前往{destination}",
 	"shell_cmd_section_navigate": "导航",
 	"shell_cmd_section_general": "常规",
-	"shell_cmd_palette": "打开命令面板",
-	"shell_cmd_menu": "打开菜单"
+	"shell_cmd_palette": "打开命令面板"
 }

@@ -36,6 +36,12 @@ export interface Command {
 	scope?: string;
 	/** Fires while typing in a field (still needs a modifier or Escape). */
 	allowInInput?: boolean;
+	/**
+	 * Enter and Space activate a focused link, button, menu item and the like (§10.13), so a command
+	 * on them does not fire there. Set this for a command that owns the key on such a control (a
+	 * results row with `role=option`, say).
+	 */
+	onControl?: boolean;
 	/** Extra words the palette matches. */
 	keywords?: readonly string[];
 	/** Hide from the palette (shortcut-only commands). Default: listed. */
@@ -82,6 +88,13 @@ export function isEditable(target: EventTarget | null): boolean {
 	if (target instanceof HTMLInputElement) return TEXT_INPUT.test(target.type);
 	return /^(textbox|searchbox|combobox)$/.test(target.getAttribute('role') ?? '');
 }
+
+const CONTROL =
+	'a[href], button, summary, [role="button"], [role="link"], [role="menuitem"], [role="option"], [role="tab"], [role="checkbox"], [role="switch"]';
+
+/** True when Enter or Space on the target already does something (activates it). */
+const onControl = (target: EventTarget | null) =>
+	target instanceof Element && !!target.closest(CONTROL);
 
 const inOverlay = (target: EventTarget | null) =>
 	target instanceof Element &&
@@ -169,7 +182,12 @@ export function createKeys(options: KeysOptions = {}) {
 
 	const enabled = (c: Command) => (c.when ? c.when() : true);
 
-	function find(combo: string, editable: boolean, overlay: boolean): Command | undefined {
+	function find(
+		combo: string,
+		editable: boolean,
+		overlay: boolean,
+		control: boolean
+	): Command | undefined {
 		if (isSingleKey(combo) && (!singleKeys || overlay)) return undefined;
 		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- a local lookup, not state
 		const conflicting = new Set(
@@ -183,6 +201,7 @@ export function createKeys(options: KeysOptions = {}) {
 				(c) => (c.scope ?? GLOBAL) === scope && keysOf(c).includes(combo) && enabled(c)
 			);
 			if (!hit) continue;
+			if (control && (combo === 'enter' || combo === 'space') && !hit.onControl) return undefined;
 			if (editable && !(hit.allowInInput && (combo === 'escape' || hasCommandModifier(combo))))
 				return undefined;
 			return hit;
@@ -193,7 +212,12 @@ export function createKeys(options: KeysOptions = {}) {
 	/** Handles a keydown; true when a command ran (the event is then default-prevented). */
 	function handle(event: KeyboardEvent): boolean {
 		if (event.defaultPrevented || event.isComposing) return false;
-		const hit = find(comboFromEvent(event), isEditable(event.target), inOverlay(event.target));
+		const hit = find(
+			comboFromEvent(event),
+			isEditable(event.target),
+			inOverlay(event.target),
+			onControl(event.target)
+		);
 		if (!hit) return false;
 		event.preventDefault();
 		hit.run();
@@ -247,6 +271,7 @@ export function createKeys(options: KeysOptions = {}) {
 					combos.map((k) => normalizeCombo(k, mac))
 				);
 			bump();
+			for (const c of findConflicts()) if (c.ids.includes(id)) onConflict(c);
 		},
 		get singleKeys() {
 			return singleKeys;

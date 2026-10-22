@@ -23,6 +23,8 @@ const KEY_ALIASES: Record<string, string> = {
 	del: 'delete'
 };
 
+const isSymbol = (name: string) => name.length === 1 && name.toLowerCase() === name.toUpperCase();
+
 function canonical(mods: Set<Modifier>, key: string): string {
 	return [...MODIFIERS.filter((m) => mods.has(m)), key].join('+');
 }
@@ -48,8 +50,9 @@ export function normalizeCombo(spec: string, mac = isMacPlatform()): string {
 		else throw new Error(`unknown modifier "${raw}" in key combo "${spec}"`);
 	}
 	const name = keyName(key);
-	// A printable character already carries its shift ("?" is shift+/), so Shift alone is dropped.
-	if (name.length === 1 && mods.size === 1 && mods.has('shift')) mods.delete('shift');
+	// A printable non-letter already carries its shift ("?" is shift+/), so Shift alone is dropped.
+	// A letter keeps it: Shift+J is not the bare `j` command.
+	if (isSymbol(name) && mods.size === 1 && mods.has('shift')) mods.delete('shift');
 	return canonical(mods, name);
 }
 
@@ -62,8 +65,9 @@ export function comboFromEvent(
 	if (e.ctrlKey) mods.add('ctrl');
 	if (e.metaKey) mods.add('meta');
 	const name = keyName(e.key);
-	// Shift is kept for named keys (shift+tab) and for printable keys only beside another modifier.
-	if (e.shiftKey && (name.length > 1 || mods.size > 0)) mods.add('shift');
+	// Shift is kept for named keys (shift+tab), letters (shift+j) and beside another modifier; a
+	// non-letter character ("?", "/") carries its own shift.
+	if (e.shiftKey && (!isSymbol(name) || mods.size > 0)) mods.add('shift');
 	return canonical(mods, name);
 }
 

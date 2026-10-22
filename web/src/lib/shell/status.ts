@@ -58,15 +58,18 @@ export type ConnectionKind = 'ok' | 'reconnecting' | 'unreachable';
 
 /**
  * `unreachable`: the server never answered since the page opened (a full-page state, since there is
- * nothing to show). `reconnecting`: it answered before and went quiet (a banner; the page and
+ * nothing to show; a proxy that holds only the stream open is not this, see `restOk`). `reconnecting`: it answered before and went quiet (a banner; the page and
  * whatever the person was doing stay). A clean close without an error is only a reconnect.
  */
 export function connectionKind(input: {
 	stream: EventsStatus;
 	error: ApiError | undefined;
 	everLive: boolean;
+	/** Some other request got an answer (REST works even if the stream is held up). */
+	restOk?: boolean;
 }): ConnectionKind {
 	if (input.stream !== 'offline') return 'ok';
+	if (input.restOk && !input.everLive) return 'ok';
 	if (input.everLive) return 'reconnecting';
 	return input.error ? 'unreachable' : 'ok';
 }

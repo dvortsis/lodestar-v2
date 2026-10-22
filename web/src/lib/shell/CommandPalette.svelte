@@ -60,7 +60,7 @@
 	<div bind:this={wrap} class="flex flex-col gap-3">
 		<Input
 			role="combobox"
-			aria-expanded="true"
+			aria-expanded={results.length > 0}
 			aria-controls={results.length ? 'palette-list' : undefined}
 			aria-autocomplete="list"
 			aria-activedescendant={results.length ? `palette-option-${active}` : undefined}
