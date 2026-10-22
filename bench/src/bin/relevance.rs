@@ -38,7 +38,9 @@ use std::sync::Arc;
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::Info;
 use lodestar_search::query::TagKey;
-use lodestar_search::{CancelToken, Lease, Node, SearchIndex, Sort, Start, index_dir, parse};
+use lodestar_search::{
+    CancelToken, Lease, Node, SearchIndex, Sort, Start, index_dir, parse, with_filters,
+};
 use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig, SwarmUpdate, WriteBatch};
 
 /// Results read per query: recall's depth, and where forbidden torrents
@@ -46,8 +48,9 @@ use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig, SwarmUpdate, Writ
 const DEPTH: usize = 50;
 /// NDCG's depth.
 const NDCG_AT: usize = 10;
-/// How far overall NDCG@10 may fall below the baseline.
-const TOLERANCE: f64 = 0.01;
+/// How far overall NDCG@10 may fall below the baseline: the suite is
+/// deterministic, so this only covers the baseline's 4-decimal rounding.
+const TOLERANCE: f64 = 0.001;
 /// The corpus's clock: the first torrent is discovered here, the rest an
 /// hour apart, and "now" is a day after the last. Nothing reads the real
 /// clock, so every run ranks the same.
@@ -59,7 +62,7 @@ Usage: relevance [--dir PATH] [--gate] [--tolerance T] [--worst N] [--all] [--wr
   --dir PATH         the corpus, judgments and baseline (default bench/relevance)
   --gate             exit 1 on a regression past the tolerance, a forbidden
                      result, or inputs changed since the baseline
-  --tolerance T      allowed NDCG@10 drop below the baseline (default 0.01)
+  --tolerance T      allowed NDCG@10 drop below the baseline (default 0.001)
   --worst N          worst queries listed with their results (default 10)
   --all              list every query
   --write-baseline   record these figures as the baseline";
@@ -580,8 +583,8 @@ fn now(torrents: usize) -> i64 {
     EPOCH + torrents as i64 * 3600 + 86_400
 }
 
-/// `node` with `/search`'s default visibility (`lodestar_api`'s
-/// `base_query`): torrents a filter rule hid and Adult left out.
+/// `node` with `/search`'s default visibility, built as `lodestar_api`'s
+/// `base_query` builds it: torrents a filter rule hid and Adult left out.
 fn shown(node: Node) -> Node {
     let not_adult = Node::Not {
         of: Box::new(Node::Tag {
@@ -589,15 +592,7 @@ fn shown(node: Node) -> Node {
             any: vec!["adult".into()],
         }),
     };
-    match node.without_hidden() {
-        Node::And { mut of } => {
-            of.push(not_adult);
-            Node::And { of }
-        }
-        other => Node::And {
-            of: vec![other, not_adult],
-        },
-    }
+    with_filters(node.without_hidden(), &[not_adult])
 }
 
 struct Outcome<'j> {
@@ -629,6 +624,15 @@ fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
         let node = parse(&j.query).map_err(|e| format!("{:?}: {e}", j.query))?;
         let lease = Lease::new(index.clone(), &shown(node), now, Sort::Relevance, &cancel)?;
         let page = lease.page(Start::Offset(0), DEPTH, &cancel)?;
+        // Every match must fit in one page, or a forbidden torrent past
+        // it would go unseen.
+        if page.next.is_some() || page.hits.len() >= DEPTH {
+            return Err(format!(
+                "{:?} matches {DEPTH} or more torrents: narrow it so the forbidden check sees every result",
+                j.query
+            )
+            .into());
+        }
         let results: Vec<String> = page
             .hits
             .iter()
@@ -719,6 +723,12 @@ fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
                 if pass { "PASS" } else { "FAIL" }
             );
             ok &= pass;
+            if ndcg > base.ndcg + a.tolerance {
+                println!(
+                    "  WARN NDCG@10 beats the baseline by more than {}: raise it with --write-baseline so the gain is kept",
+                    a.tolerance
+                );
+            }
             if base.inputs != current.inputs || base.queries != current.queries {
                 println!(
                     "  FAIL the corpus or judgments changed since the baseline: run with --write-baseline and commit it"
