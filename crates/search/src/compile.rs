@@ -19,6 +19,12 @@ use crate::tokenizer::{self, Tok, TokKind};
 
 type Q = Box<dyn Query>;
 
+/// A field of this build's schema that the index being queried lacks:
+/// an older index serving while a newer one is built (§8). A clause on it
+/// matches nothing. Tantivy must never see it: it isn't in the schema.
+/// (Documents hold field ids up to `u16::MAX`; no schema has that many.)
+pub(crate) const ABSENT: Field = Field::from_field_id(u16::MAX as u32);
+
 /// The torrent ids with a matching file, for each `file:(…)` clause in
 /// a query, keyed by the clause's inner node (`{:?}`). The caller runs
 /// them on the file index first.
@@ -277,12 +283,21 @@ fn fast_range(node: &Node, cx: &Cx<'_>, now: i64) -> Option<FastRange> {
             lo: from.as_ref().map_or(i64::MIN, |w| resolve(w, now)),
             hi: to.as_ref().map_or(i64::MAX, |w| resolve(w, now)),
         },
-        Node::Share { by, cat, lo, hi } => FastRange::U64 {
-            field: share_name(*by, cat)?,
-            lo: u64::from(*lo),
-            hi: u64::from(*hi),
-            missing: Some(0),
-        },
+        Node::Share { by, cat, lo, hi } => {
+            let c = category(cat)?;
+            let fld = match by {
+                ShareBy::Count => cx.cat_count[c.index()],
+                ShareBy::Bytes => cx.cat_bytes[c.index()],
+            };
+            FastRange::U64 {
+                field: share_name(*by, cat)?,
+                lo: u64::from(*lo),
+                hi: u64::from(*hi),
+                // Unwritten shares are 0, but a field the index lacks
+                // matches nothing.
+                missing: (fld != ABSENT).then_some(0),
+            }
+        }
         Node::File { of } => FastRange::Ids { ids: cx.ids(of) },
         _ => return None,
     })
@@ -406,6 +421,9 @@ fn compile_opt(node: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
         }
         Node::Range { field, lo, hi } => {
             let fld = num_field(*field, f);
+            if fld == ABSENT {
+                return Some(Box::new(EmptyQuery));
+            }
             let bound = |v: &Option<u64>| match v {
                 Some(v) => Bound::Included(Term::from_field_u64(fld, *v)),
                 None => Bound::Unbounded,
@@ -413,6 +431,9 @@ fn compile_opt(node: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
             Box::new(RangeQuery::new(bound(lo), bound(hi)))
         }
         Node::Date { from, to, .. } => {
+            if f.discovered == ABSENT {
+                return Some(Box::new(EmptyQuery));
+            }
             let bound = |w: &Option<When>| match w {
                 Some(w) => Bound::Included(Term::from_field_i64(f.discovered, resolve(w, now))),
                 None => Bound::Unbounded,
@@ -456,6 +477,9 @@ fn compile_opt(node: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
                 ShareBy::Count => f.cat_count[c.index()],
                 ShareBy::Bytes => f.cat_bytes[c.index()],
             };
+            if fld == ABSENT {
+                return Some(Box::new(EmptyQuery));
+            }
             let range = |lo: u8, hi: u8| -> Q {
                 Box::new(RangeQuery::new(
                     Bound::Included(Term::from_field_u64(fld, u64::from(lo))),
@@ -483,11 +507,11 @@ fn compile_opt(node: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
             }
         }
         Node::Hash { hash } => match hex20(hash) {
-            Some(bytes) => Box::new(TermQuery::new(
+            Some(bytes) if f.hash != ABSENT => Box::new(TermQuery::new(
                 Term::from_field_bytes(f.hash, &bytes),
                 IndexRecordOption::Basic,
             )),
-            None => Box::new(EmptyQuery),
+            _ => Box::new(EmptyQuery),
         },
     })
 }
@@ -536,6 +560,9 @@ fn phrase_field(field: TextField) -> TextField {
 }
 
 fn term(field: Field, text: &str, opt: IndexRecordOption) -> Q {
+    if field == ABSENT {
+        return Box::new(EmptyQuery);
+    }
     Box::new(TermQuery::new(Term::from_field_text(field, text), opt))
 }
 
@@ -547,6 +574,13 @@ fn per_field(field: TextField, f: &Fields, build: impl Fn(Field, bool) -> Q) -> 
         TextField::Name => &[(f.name, 1.0, true)],
         TextField::Path => &[(f.path, 1.0, false)],
         TextField::Title => &[(f.title, 1.0, true)],
+    };
+    let build = |fld: Field, positions: bool| -> Q {
+        if fld == ABSENT {
+            Box::new(EmptyQuery)
+        } else {
+            build(fld, positions)
+        }
     };
     if let [(fld, _, positions)] = targets {
         return build(*fld, *positions);
@@ -611,6 +645,9 @@ pub(crate) fn word_query(field: Field, toks: &[Tok], positions: bool) -> Q {
 /// Parts in order as a phrase (with `slop`), or all of them without
 /// positions.
 pub(crate) fn parts_query(field: Field, parts: &[Tok], positions: bool, slop: u32) -> Q {
+    if field == ABSENT {
+        return Box::new(EmptyQuery);
+    }
     match parts {
         [one] => term(field, &one.text, IndexRecordOption::WithFreqs),
         many if positions => {

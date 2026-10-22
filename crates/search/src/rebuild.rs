@@ -146,13 +146,22 @@ pub struct RebuildProgress {
     /// Torrents in the new index so far (a resumed build starts with what
     /// it had).
     pub done: u64,
-    /// Torrents in the store when the build started.
+    /// Torrents in the store when the build started: the ones it builds
+    /// before finishing. Later ones are added at the swap.
     pub total: u64,
+    /// `reindex_log` entries replayed into the new index, apart from
+    /// `done`.
+    pub replayed: u64,
+    /// Failed steps (each is retried), apart from the live indexer's.
+    pub errors: u64,
     /// Unix seconds.
     pub started_at: u64,
     /// The index serving meanwhile, and the one being built.
     pub from: IndexVersion,
     pub to: IndexVersion,
+    /// Fields of this build the serving index lacks: clauses on them
+    /// match nothing until the swap ([`SearchIndex::missing_fields`]).
+    pub unavailable: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,6 +175,22 @@ pub enum RebuildPhase {
     /// It stopped on an error (logged); the old index keeps serving, and
     /// the next start resumes the build.
     Failed,
+}
+
+/// What one [`Rebuild::step`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Step {
+    /// Torrents added.
+    pub added: usize,
+    /// `reindex_log` entries replayed.
+    pub replayed: usize,
+}
+
+impl Step {
+    /// Nothing to do: caught up with the store.
+    pub fn is_empty(&self) -> bool {
+        self.added == 0 && self.replayed == 0
+    }
 }
 
 /// A build of one version's index in its `.building` directory. The
@@ -202,11 +227,17 @@ impl Rebuild {
         })
     }
 
-    /// Adds up to `batch` torrents (and replays `reindex_log`) like the
-    /// live indexer does. Returns how many it added or replaced; 0 means
-    /// it has caught up with the store.
-    pub fn step(&mut self, store: &mut Store, batch: usize) -> Result<usize> {
-        self.indexer.catch_up(store, batch)
+    /// Adds up to `batch` torrents, then replays up to `batch`
+    /// `reindex_log` entries, as the live indexer does.
+    pub fn step(&mut self, store: &mut Store, batch: usize) -> Result<Step> {
+        let (added, replayed) = self.indexer.catch_up_counted(store, batch)?;
+        Ok(Step { added, replayed })
+    }
+
+    /// Whether it has followed the store up to torrent `id` and
+    /// `reindex_log` entry `seq` (a snapshot taken when it started).
+    pub fn reached(&self, id: i64, seq: i64) -> bool {
+        self.indexer.reached(id, seq)
     }
 
     /// Torrents added or replaced since the last commit.
@@ -253,6 +284,34 @@ fn mark_complete(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The highest torrent id in the store (0 when empty), found with a few
+/// primary-key lookups: `ids_after(x, 1)` is empty exactly when `x` is at
+/// least the highest id.
+fn max_id(store: &Store) -> Result<i64> {
+    let above = |x: i64| -> Result<bool> { Ok(!store.ids_after(x, 1)?.is_empty()) };
+    if !above(0)? {
+        return Ok(0);
+    }
+    // `lo` has an id above it, `hi` doesn't.
+    let (mut lo, mut hi) = (0i64, 1i64);
+    while above(hi)? {
+        lo = hi;
+        hi = hi.saturating_mul(2);
+        if hi == i64::MAX {
+            break;
+        }
+    }
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        if above(mid)? {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    Ok(hi)
+}
+
 /// Settings for [`Serving::open_or_rebuild`].
 #[derive(Debug, Clone)]
 pub struct ServingConfig {
@@ -267,6 +326,10 @@ pub struct ServingConfig {
     /// The version to serve: [`IndexVersion::CURRENT`]. Only tests set
     /// another, to rebuild without bumping the real constants.
     pub version: IndexVersion,
+    /// Tests only: while set, a rebuild that has caught up waits before
+    /// finishing, so a test can act at that point.
+    #[doc(hidden)]
+    pub hold_before_finish: Option<Arc<AtomicBool>>,
 }
 
 impl Default for ServingConfig {
@@ -276,6 +339,7 @@ impl Default for ServingConfig {
             store: StoreConfig::default(),
             rebuild_commit_docs: 50_000,
             version: IndexVersion::CURRENT,
+            hold_before_finish: None,
         }
     }
 }
@@ -294,10 +358,14 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 impl Shared {
-    fn set_phase(&self, phase: RebuildPhase) {
+    fn update(&self, f: impl FnOnce(&mut RebuildProgress)) {
         if let Some(p) = lock(&self.progress).as_mut() {
-            p.phase = phase;
+            f(p);
         }
+    }
+
+    fn set_phase(&self, phase: RebuildPhase) {
+        self.update(|p| p.phase = phase);
     }
 
     fn stopping(&self) -> bool {
@@ -339,6 +407,23 @@ impl std::fmt::Debug for Serving {
     }
 }
 
+/// Takes the exclusive lock on the index root.
+fn lock_root(root: &Path) -> Result<DirectoryLock> {
+    use tantivy::directory::error::LockError;
+    MmapDirectory::open(root)?
+        .acquire_lock(&Lock {
+            filepath: PathBuf::from(LOCK_FILE),
+            is_blocking: false,
+        })
+        .map_err(|e| match e {
+            LockError::LockBusy => Error::Locked(root.to_path_buf()),
+            LockError::IoError(io) => Error::LockFailed {
+                root: root.to_path_buf(),
+                error: std::io::Error::new(io.kind(), io.to_string()),
+            },
+        })
+}
+
 impl Serving {
     /// Opens the index under `root` (e.g. `data/index`) and starts the
     /// live indexer, reading the store at `store_path`.
@@ -346,28 +431,20 @@ impl Serving {
     /// When `config.version`'s index isn't complete, the newest complete
     /// older index serves while it's built in the background, and the
     /// handle swaps to it once it has caught up with the store. With
-    /// nothing older to serve (a new install, or a schema too different
-    /// to query), this version's index is opened directly and fills as
-    /// the live indexer catches up, as it always did.
+    /// nothing older to serve (a new install, or only indexes too
+    /// different to query), this version's index is opened directly and
+    /// fills as the live indexer catches up, as it always did.
     ///
-    /// Fails with [`Error::Locked`] while another handle serves `root`.
+    /// Fails with [`Error::Locked`] while another handle serves `root`,
+    /// and with the error itself when an older index can't be opened
+    /// (rather than discarding it).
     pub fn open_or_rebuild(
         root: &Path,
         store_path: &Path,
         config: ServingConfig,
     ) -> Result<Serving> {
         std::fs::create_dir_all(root).map_err(Error::Io)?;
-        let dir_lock = MmapDirectory::open(root)?
-            .acquire_lock(&Lock {
-                filepath: PathBuf::from(LOCK_FILE),
-                is_blocking: false,
-            })
-            .map_err(|e| match e {
-                tantivy::directory::error::LockError::LockBusy => Error::Locked(root.to_path_buf()),
-                tantivy::directory::error::LockError::IoError(io) => {
-                    Error::Io(std::io::Error::new(io.kind(), io.to_string()))
-                }
-            })?;
+        let dir_lock = lock_root(root)?;
         let want = config.version;
         let final_dir = root.join(want.dir_name());
         let building = root.join(format!("{}{BUILDING}", want.dir_name()));
@@ -399,15 +476,21 @@ impl Serving {
             Some(from) => {
                 let store = open_reader()?;
                 let builder = Rebuild::open(root, want, config.live.heap_bytes)?;
+                // What the build covers before it finishes; later
+                // torrents and log entries are added at the swap.
+                let snapshot = (max_id(&store)?, store.reindex_head()?);
                 let progress = RebuildProgress {
                     phase: RebuildPhase::Building,
                     done: builder.indexed(),
                     total: store.count()?,
+                    replayed: 0,
+                    errors: 0,
                     started_at: unix_now(),
                     from,
                     to: want,
+                    unavailable: serving.missing_fields().to_vec(),
                 };
-                Some((store, builder, progress))
+                Some((store, builder, snapshot, progress))
             }
             None => None,
         };
@@ -431,43 +514,24 @@ impl Serving {
         });
 
         let thread = std::thread::Builder::new().name("index-rebuild".into());
+        let (sh, root_buf) = (shared.clone(), root.to_path_buf());
         let background = match build {
-            Some((mut store, builder, progress)) => {
+            Some((store, builder, snapshot, progress)) => {
                 tracing::info!("index: rebuilding {want} while {} serves", progress.from);
                 *lock(&shared.progress) = Some(progress);
-                let (shared, root) = (shared.clone(), root.to_path_buf());
                 thread.spawn(move || {
-                    match rebuild(&shared, builder, &mut store, &config) {
-                        Ok(Some(new)) => {
-                            let live = LiveIndexer::spawn_with_stats(
-                                new.clone(),
-                                store,
-                                config.live.clone(),
-                                shared.stats.clone(),
-                            );
-                            match live {
-                                Ok(live) => swap(&shared, new, live),
-                                Err(e) => {
-                                    // The next start finds it complete.
-                                    tracing::error!("index: can't follow the rebuilt index: {e}");
-                                    shared.set_phase(RebuildPhase::Failed);
-                                    return;
-                                }
-                            }
-                            clean(&shared, &root, want);
-                        }
-                        Ok(None) => {}
+                    let done = rebuild_and_swap(&sh, builder, store, snapshot, &config);
+                    match done {
+                        Ok(true) => clean(&sh, &root_buf, want),
+                        Ok(false) => {}
                         Err(e) => {
                             tracing::error!("index: rebuilding {want} failed: {e}");
-                            shared.set_phase(RebuildPhase::Failed);
+                            sh.set_phase(RebuildPhase::Failed);
                         }
                     }
                 })
             }
-            None => {
-                let (shared, root) = (shared.clone(), root.to_path_buf());
-                thread.spawn(move || clean(&shared, &root, want))
-            }
+            None => thread.spawn(move || clean(&sh, &root_buf, want)),
         }
         .map_err(Error::Io)?;
         Ok(Serving {
@@ -529,8 +593,15 @@ impl Drop for Serving {
     }
 }
 
+/// Tries to open an older index this many times before failing the
+/// start: an antivirus scan or a share hiccup is no reason to discard it.
+const OPEN_ATTEMPTS: u32 = 5;
+
 /// The newest complete index older than `want` that can serve this
-/// build's queries.
+/// build's queries. One without the fields every search needs is a
+/// schema mismatch and is passed over; one that won't open is retried,
+/// then fails the start, so a healthy index is never discarded over a
+/// transient error.
 fn newest_servable(
     root: &Path,
     want: IndexVersion,
@@ -544,87 +615,139 @@ fn newest_servable(
         .collect();
     older.sort_by_key(|o| std::cmp::Reverse(o.0));
     for (v, path) in older {
-        match SearchIndex::open_existing(&path) {
-            Ok(Some((index, compat))) => return Ok(Some((v, index, compat))),
-            Ok(None) => {
-                tracing::warn!("index: {v} lacks fields this build queries; not serving it")
+        // No index there at all (a crash while creating it): nothing to
+        // keep.
+        if !path.join("meta.json").exists() || !path.join("files").join("meta.json").exists() {
+            tracing::warn!("index: {v} holds no index; not serving it");
+            continue;
+        }
+        let mut wait = Duration::from_millis(100);
+        let mut attempt = 1;
+        let opened = loop {
+            match SearchIndex::open_existing(&path) {
+                Err(e) if attempt < OPEN_ATTEMPTS => {
+                    tracing::warn!("index: opening {v} (attempt {attempt}): {e}");
+                    std::thread::sleep(wait);
+                    wait *= 2;
+                    attempt += 1;
+                }
+                other => break other?,
             }
-            Err(e) => tracing::warn!("index: can't open {v} to serve during the rebuild: {e}"),
+        };
+        match opened {
+            Some((index, compat)) => return Ok(Some((v, index, compat))),
+            None => tracing::warn!("index: {v} lacks fields every search needs; not serving it"),
         }
     }
     Ok(None)
 }
 
-/// Builds until caught up, then finishes and opens the result. `None`
-/// when stopped first; what's committed is resumed next time.
-fn rebuild(
+/// Builds to the snapshot, finishes, and swaps the new index in.
+/// `false` when stopped first: what's committed is resumed next time.
+fn rebuild_and_swap(
     shared: &Shared,
     mut builder: Rebuild,
-    store: &mut Store,
+    mut store: Store,
+    (max_id, reindex_head): (i64, i64),
     config: &ServingConfig,
-) -> Result<Option<SearchIndex>> {
-    let mut done = builder.indexed();
-    loop {
+) -> Result<bool> {
+    let mut wait = config.live.poll;
+    while !builder.reached(max_id, reindex_head) {
         if shared.stopping() {
             builder.commit()?;
-            return Ok(None);
+            return Ok(false);
         }
-        match builder.step(store, config.live.batch) {
-            Ok(0) => break,
-            Ok(n) => {
-                done += n as u64;
-                if let Some(p) = lock(&shared.progress).as_mut() {
-                    p.done = done;
-                }
+        match builder.step(&mut store, config.live.batch) {
+            // Torrents at the end deleted since the snapshot.
+            Ok(step) if step.is_empty() => break,
+            Ok(step) => {
+                wait = config.live.poll;
+                shared.update(|p| {
+                    p.done += step.added as u64;
+                    p.replayed += step.replayed as u64;
+                    // The last step can run past the snapshot.
+                    p.total = p.total.max(p.done);
+                });
                 if builder.pending() >= config.rebuild_commit_docs {
                     builder.commit()?;
                 }
             }
             Err(e) => {
-                // A busy database; Tantivy errors repeat and are logged
-                // each time until the next start.
-                shared
-                    .stats
-                    .errors
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                // A busy database; anything else repeats and is logged
+                // each time.
+                shared.update(|p| p.errors += 1);
                 tracing::warn!("index rebuild: {e}");
-                shared.pause(config.live.poll);
+                shared.pause(wait);
+                wait = (wait * 2).min(Duration::from_secs(30));
             }
         }
+    }
+    if let Some(hold) = &config.hold_before_finish {
+        while hold.load(Ordering::Relaxed) && shared.pause(Duration::from_millis(5)) {}
+    }
+    if shared.stopping() {
+        builder.commit()?;
+        return Ok(false);
     }
     shared.set_phase(RebuildPhase::Finishing);
     let final_dir = builder.finish()?;
     if shared.stopping() {
         // Complete on disk: the next start serves it.
-        return Ok(None);
+        return Ok(false);
     }
     shared.set_phase(RebuildPhase::Swapping);
     let new = SearchIndex::open(&final_dir)?;
-    // Torrents stored since the last step, so readers lose nothing at
-    // the swap; the live indexer would add them within its commit
-    // interval anyway.
-    let mut w = new.writer(config.live.heap_bytes)?;
-    while w.catch_up(store, config.live.batch)? > 0 {}
-    w.commit()?;
-    w.finish()?;
-    Ok(Some(new))
-}
-
-/// Points readers and live indexing at `new`, then stops the old live
-/// indexer, which commits what it has to the old index only.
-fn swap(shared: &Shared, new: SearchIndex, live: LiveIndexer) {
-    let old_live = lock(&shared.live).replace(live);
-    *shared
-        .current
-        .write()
-        .unwrap_or_else(PoisonError::into_inner) = Arc::new(new);
-    *lock(&shared.progress) = None;
+    // The old live indexer stops (committing) before the new index's
+    // last catch-up, so everything readers could see in the old index is
+    // in the new one when they move.
+    let old_live = lock(&shared.live).take();
+    let old_followed = old_live.is_some();
     if let Some(old) = old_live
         && let Err(e) = old.stop()
     {
         tracing::warn!("index: stopping the old indexer: {e}");
     }
+    let caught_up = (|| {
+        let mut w = new.writer(config.live.heap_bytes)?;
+        while w.catch_up(&mut store, config.live.batch)? > 0 {}
+        w.commit()?;
+        w.finish()
+    })();
+    if let Err(e) = caught_up {
+        // The old index keeps serving, so it keeps following the store.
+        if old_followed {
+            let old = (*shared
+                .current
+                .read()
+                .unwrap_or_else(PoisonError::into_inner))
+            .as_ref()
+            .clone();
+            match LiveIndexer::spawn_with_stats(
+                old,
+                store,
+                config.live.clone(),
+                shared.stats.clone(),
+            ) {
+                Ok(live) => *lock(&shared.live) = Some(live),
+                Err(e) => tracing::error!("index: restarting the old indexer: {e}"),
+            }
+        }
+        return Err(e);
+    }
+    let live = LiveIndexer::spawn_with_stats(
+        new.clone(),
+        store,
+        config.live.clone(),
+        shared.stats.clone(),
+    )?;
+    *lock(&shared.live) = Some(live);
+    *shared
+        .current
+        .write()
+        .unwrap_or_else(PoisonError::into_inner) = Arc::new(new);
+    *lock(&shared.progress) = None;
     tracing::info!("index: swapped to the rebuilt index");
+    Ok(true)
 }
 
 /// Deletes what `want` makes obsolete: older complete indexes, other
@@ -692,6 +815,10 @@ fn discard(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::files::FileFields;
+    use crate::schema::Fields;
+    use crate::{LiveConfig, TorrentDoc};
+    use tantivy::TantivyDocument;
 
     #[test]
     fn names_parse_by_kind() {
@@ -718,32 +845,67 @@ mod tests {
         assert!(v(3, 9) < v(4, 1) && v(4, 1) < v(4, 2));
     }
 
-    /// An index whose schema has every field this build uses, but not
-    /// identically: here `junk` gained an inverted index and an old field
-    /// is left over. `drop_field` builds one that lacks a field instead.
-    fn older_schema(drop_field: Option<&str>) -> tantivy::schema::Schema {
+    /// An older index's schema: this build's, except that `junk` has an
+    /// inverted index too, a field this build dropped is left over, and
+    /// the fields in `drop` didn't exist yet.
+    fn older_schema(current: &tantivy::schema::Schema, drop: &[&str]) -> tantivy::schema::Schema {
         use tantivy::schema::{FAST, FieldEntry, INDEXED, Schema};
-        let (current, _) = crate::schema::build();
         let mut b = Schema::builder();
         b.add_text_field("legacy", tantivy::schema::STRING);
         for (_, entry) in current.fields() {
             match entry.name() {
+                name if drop.contains(&name) => continue,
                 "junk" => b.add_field(FieldEntry::new_u64("junk".into(), (FAST | INDEXED).into())),
-                name if Some(name) == drop_field => continue,
                 _ => b.add_field(entry.clone()),
             };
         }
         b.build()
     }
 
-    fn create_old(dir: &Path, drop_field: Option<&str>) {
+    fn create_old(dir: &Path, drop: &[&str], drop_files: &[&str]) {
         std::fs::create_dir_all(dir.join("files")).unwrap();
-        tantivy::Index::create_in_dir(dir, older_schema(drop_field)).unwrap();
+        tantivy::Index::create_in_dir(dir, older_schema(&crate::schema::build().0, drop)).unwrap();
         tantivy::Index::builder()
-            .schema(crate::files::schema().0)
+            .schema(older_schema(&crate::files::schema().0, drop_files))
             .settings(crate::files::settings())
             .create_in_dir(dir.join("files"))
             .unwrap();
+    }
+
+    /// `doc` without the values of fields the index lacks.
+    fn strip(doc: TantivyDocument) -> TantivyDocument {
+        let mut out = TantivyDocument::new();
+        for (f, v) in doc.field_values() {
+            if f != crate::compile::ABSENT {
+                out.add_field_value(f, v);
+            }
+        }
+        out
+    }
+
+    /// Fills an older index the way the build that made it would have:
+    /// documents carry only the fields it has.
+    fn fill_old(dir: &Path, store: &mut Store, fields: &Fields, file_fields: &FileFields) {
+        let open = |d: &Path| {
+            let index = tantivy::Index::open_in_dir(d).unwrap();
+            index.tokenizers().register(
+                crate::tokenizer::NAME_TOKENIZER,
+                crate::tokenizer::NameTokenizer::default(),
+            );
+            index.writer::<TantivyDocument>(15 << 20).unwrap()
+        };
+        let (mut w, mut fw) = (open(dir), open(&dir.join("files")));
+        for id in store.ids_after(0, 10_000).unwrap() {
+            let row = store.torrent(id).unwrap().unwrap();
+            let tree = store.files(id).unwrap().unwrap();
+            w.add_document(strip(TorrentDoc::new(&row, &tree).to_document(fields)))
+                .unwrap();
+            for d in crate::files::file_docs(id as u64, &tree) {
+                fw.add_document(strip(d.to_document(file_fields))).unwrap();
+            }
+        }
+        w.commit().unwrap();
+        fw.commit().unwrap();
     }
 
     fn add(store: &mut Store, name: &str) {
@@ -757,7 +919,7 @@ mod tests {
             )
         };
         let raw = to_vec(&d(vec![
-            ("length", OwnedValue::Int(1000)),
+            ("length", OwnedValue::Int(2_000_000_000)),
             ("name", b(name)),
             ("piece length", OwnedValue::Int(1 << 16)),
             ("pieces", OwnedValue::Bytes(vec![0; 20])),
@@ -775,22 +937,30 @@ mod tests {
             .unwrap();
     }
 
+    const NOW: i64 = 1_700_000_100;
+
     fn found(index: &SearchIndex, q: &str) -> usize {
         let node = crate::parse(q).unwrap();
+        index.search(&index.query(&node, NOW), 10).unwrap().total
+    }
+
+    fn found_sorted(index: &SearchIndex, q: &str, sort: crate::Sort) -> usize {
+        let node = crate::parse(q).unwrap();
         index
-            .search(&index.query(&node, 1_700_000_100), 10)
+            .search_with_fallback(&node, NOW, sort, 10, 0)
             .unwrap()
+            .0
             .total
     }
 
     #[test]
-    fn a_different_schema_serves_read_only_by_field_name() {
+    fn an_older_index_lacking_new_fields_serves_until_the_swap() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("index");
         let db = tmp.path().join("s.db");
         let mut writer = Store::open(&db, StoreConfig::default()).unwrap();
         for i in 0..50 {
-            add(&mut writer, &format!("Old.Show.{i}"));
+            add(&mut writer, &format!("Old.Show.{i}.1080p.mkv"));
         }
         let old = IndexVersion {
             schema: 1,
@@ -801,24 +971,28 @@ mod tests {
             tokenizer: 1,
         };
 
-        // Lacking a field this build queries, it can't serve.
-        create_old(&root.join("v0-t1"), Some("title_stem"));
-        assert!(
-            SearchIndex::open_existing(&root.join("v0-t1"))
-                .unwrap()
-                .is_none()
-        );
+        // Lacking a field every search needs is a schema mismatch.
+        let broken = root.join("v0-t1");
+        create_old(&broken, &["text"], &[]);
+        assert!(SearchIndex::open_existing(&broken).unwrap().is_none());
 
+        // `size` (a sort), `tag` (facets) and the files' `ext` are newer
+        // than this index.
         let dir = root.join(old.dir_name());
-        create_old(&dir, None);
-        let (index, compat) = SearchIndex::open_existing(&dir).unwrap().unwrap();
+        create_old(&dir, &["size", "tag"], &["ext"]);
+        let (probe, compat) = SearchIndex::open_existing(&dir).unwrap().unwrap();
         assert_eq!(compat, Compat::ReadOnly);
-        assert!(matches!(index.writer(HEAP), Err(Error::ReadOnly)));
-        let mut w = index.force_writable().writer(HEAP).unwrap();
-        while w.catch_up(&mut writer, 100).unwrap() > 0 {}
-        w.commit().unwrap();
-        w.finish().unwrap();
+        assert_eq!(probe.missing_fields(), ["size", "tag", "file.ext"]);
+        assert!(matches!(probe.writer(HEAP), Err(Error::ReadOnly)));
+        fill_old(&dir, &mut writer, probe.fields(), probe.file_fields());
+        drop(probe);
+        // Enriched after the old index was built: only the new one has
+        // the tags.
+        lodestar_pipeline::enrich::enrich_stored(&mut writer, 0, 100)
+            .unwrap()
+            .unwrap();
 
+        let hold = Arc::new(AtomicBool::new(true));
         let config = ServingConfig {
             live: LiveConfig {
                 heap_bytes: HEAP,
@@ -829,24 +1003,48 @@ mod tests {
             },
             rebuild_commit_docs: 20,
             version: new,
+            hold_before_finish: Some(hold.clone()),
             ..ServingConfig::default()
         };
         let serving = Serving::open_or_rebuild(&root, &db, config).unwrap();
-        assert_eq!(serving.progress().unwrap().from, old, "the newest servable");
-        // Queries compiled for this build run on it, fast fields included.
-        assert_eq!(found(&serving.index(), "old show"), 50);
-        assert_eq!(found(&serving.index(), "old show junk:0"), 50);
+        let p = serving.progress().unwrap();
+        assert_eq!(p.from, old, "the newest servable");
+        assert_eq!(p.unavailable, ["size", "tag", "file.ext"]);
+        let index = serving.index();
+        // Queries compiled for this build run on it without errors; a
+        // clause on a field it lacks matches nothing.
+        assert_eq!(found(&index, "old show"), 50);
+        assert_eq!(found(&index, "old show junk:0"), 50);
+        assert_eq!(found(&index, "res:1080p"), 0);
+        assert_eq!(found(&index, "old show size:>1"), 0);
+        assert_eq!(found(&index, "size:>1 | show"), 50);
+        assert_eq!(found(&index, "file:(ext:mkv)"), 0);
+        assert_eq!(found(&index, "file:(show)"), 50);
+        // A sort on a missing field falls back to relevance.
+        let by_size = crate::Sort::Size { desc: true };
+        assert!(!index.sort_available(by_size));
+        assert_eq!(found_sorted(&index, "show", by_size), 50);
+        drop(index);
+
+        hold.store(false, Ordering::Relaxed);
         let start = std::time::Instant::now();
         while serving.rebuilding() {
-            assert_eq!(found(&serving.index(), "old show"), 50);
             assert!(start.elapsed() < Duration::from_secs(30));
+            std::thread::sleep(Duration::from_millis(5));
         }
-        add(&mut writer, "New.Show");
+        let index = serving.index();
+        assert!(index.missing_fields().is_empty());
+        assert_eq!(found(&index, "res:1080p"), 50);
+        assert_eq!(found(&index, "old show size:>1"), 50);
+        assert_eq!(found(&index, "file:(ext:mkv)"), 50);
+        assert!(index.sort_available(by_size));
+        assert_eq!(found_sorted(&index, "show", by_size), 50);
+        drop(index);
+        add(&mut writer, "New.Show.mkv");
         while found(&serving.index(), "new show") == 0 {
             assert!(start.elapsed() < Duration::from_secs(30));
-            std::thread::sleep(Duration::from_millis(10));
+            std::thread::sleep(Duration::from_millis(5));
         }
-        assert_eq!(serving.index().num_docs(), 51);
         serving.shutdown().unwrap();
     }
 
