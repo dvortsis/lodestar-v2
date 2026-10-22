@@ -12,7 +12,8 @@
 		checkState,
 		toggleChecked,
 		visibleIndices,
-		type FlatNode
+		type FlatNode,
+		type TreeIndex
 	} from './tree-model';
 	import './lists.css';
 
@@ -25,10 +26,13 @@
 		/** Ids of checked files (controlled). Omit `onCheckedChange` for a tree without checkboxes. */
 		checked?: ReadonlySet<string>;
 		onCheckedChange?: (checked: Set<string>) => void;
-		/** Accessible name for a node's checkbox, e.g. "Select {name}". */
-		checkLabel?: (node: FlatNode) => string;
 		onActivate?: (node: FlatNode) => void;
-		/** Row height in px. */
+		/**
+		 * The index of `nodes`, when the caller built it elsewhere (a Web Worker, for big torrents:
+		 * its typed arrays transfer without copying). Built here when omitted.
+		 */
+		index?: TreeIndex;
+		/** Row height in px, fixed per density. Defaults to `--row-height-compact`. */
 		rowHeight?: number;
 		class?: string;
 	}
@@ -39,14 +43,14 @@
 		onExpandedChange,
 		checked = new Set<string>(),
 		onCheckedChange,
-		checkLabel,
 		onActivate,
-		rowHeight = 36,
+		index: indexProp,
+		rowHeight,
 		class: className = ''
 	}: Props = $props();
 
 	const checkable = $derived(!!onCheckedChange);
-	const index = $derived(buildIndex(nodes));
+	const index = $derived(indexProp ?? buildIndex(nodes));
 	const visible = $derived(visibleIndices(nodes, index, expanded));
 	const counts = $derived(checkable ? checkedCounts(nodes, index, checked) : null);
 
@@ -165,8 +169,8 @@
 		{@const n = node(i)}
 		<div
 			class="flex items-center gap-2 pe-3 text-body hover:bg-hover"
-			style:min-height="{rowHeight}px"
-			style:padding-inline-start="calc(var(--spacing) * {n.depth * 4 + 2})"
+			style:height="100%"
+			style:padding-inline-start="calc(var(--icon-size-row) * {n.depth} + var(--spacing) * 2)"
 		>
 			{#if n.dir}
 				<IconCaretRight
@@ -181,14 +185,11 @@
 				<input
 					type="checkbox"
 					tabindex="-1"
-					class="checkbox checkbox-sm"
-					aria-label={checkLabel?.(n)}
+					aria-hidden="true"
+					class="checkbox checkbox-sm pointer-coarse:size-(--target-min)"
 					checked={state === 'on'}
 					use:mixed={state === 'mixed'}
-					onclick={(e) => {
-						e.stopPropagation();
-						onCheckedChange?.(toggleChecked(nodes, index, checked, i));
-					}}
+					onclick={() => onCheckedChange?.(toggleChecked(nodes, index, checked, i))}
 				/>
 			{/if}
 			{#if n.dir}

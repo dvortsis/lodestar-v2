@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Drawer from '../Drawer.svelte';
+	import Tooltip from '../Tooltip.svelte';
 	let {
 		onWidthChange = () => {},
 		width = 560
@@ -17,4 +18,7 @@
 	{onWidthChange}
 >
 	<button type="button">Primary action</button>
+	<Tooltip content="Copies the magnet" delayDuration={0}>
+		{#snippet trigger({ props })}<button {...props} type="button">Copy</button>{/snippet}
+	</Tooltip>
 </Drawer>

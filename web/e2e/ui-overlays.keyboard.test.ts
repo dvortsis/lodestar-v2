@@ -82,15 +82,31 @@ test('menu: arrows, typeahead and Enter select an item, focus returns to the tri
 	await expect(trigger).toBeFocused();
 });
 
-test('popover is non-modal: Tab leaves it, Esc closes it', async ({ page, go, kbd }) => {
+test('popover is non-modal: Tab walks out of it, Esc closes it', async ({ page, go, kbd }) => {
 	await go(PATH);
-	await kbd.tabTo(page.getByRole('button', { name: 'Columns' }));
+	const trigger = page.getByRole('button', { name: 'Columns' });
+	await kbd.tabTo(trigger);
+	await kbd.press('Enter');
+	const panel = page.getByRole('dialog', { name: 'Columns' });
+	await expect(panel).toBeVisible();
+	// A trap would cycle inside the panel; a non-modal popover lets Tab walk out of it.
+	await panel.focus();
+	await kbd.press('Tab'); // the checkbox inside
+	expect(await panel.evaluate((p) => p.contains(document.activeElement))).toBe(true);
+	await kbd.press('Tab');
+	expect(await panel.evaluate((p) => p.contains(document.activeElement))).toBe(false);
+});
+
+test('popover: Esc closes it and returns focus to the trigger', async ({ page, go, kbd }) => {
+	await go(PATH);
+	const trigger = page.getByRole('button', { name: 'Columns' });
+	await kbd.tabTo(trigger);
 	await kbd.press('Enter');
 	const panel = page.getByRole('dialog', { name: 'Columns' });
 	await expect(panel).toBeVisible();
 	await kbd.press('Escape');
 	await expect(panel).toHaveCount(0);
-	await expect(page.getByRole('button', { name: 'Columns' })).toBeFocused();
+	await expect(trigger).toBeFocused();
 });
 
 test('dialog traps focus and restores it to the trigger on Esc', async ({ page, go, kbd }) => {

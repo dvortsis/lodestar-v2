@@ -7,7 +7,17 @@
 		size: string;
 		seeders: string;
 	}
-	let { rows, onSelected }: { rows: Row[]; onSelected?: (s: Set<string>) => void } = $props();
+	let {
+		rows,
+		onSelected,
+		hasMore = false,
+		initialVisible = ['name', 'size', 'seeders']
+	}: {
+		rows: Row[];
+		onSelected?: (s: Set<string>) => void;
+		hasMore?: boolean;
+		initialVisible?: string[];
+	} = $props();
 	const columns: Column<Row>[] = [
 		{
 			id: 'name',
@@ -21,7 +31,8 @@
 		{ id: 'seeders', header: 'Seeders', value: (r) => r.seeders, align: 'end' }
 	];
 	let sort = $state<SortState>(null);
-	let visible = $state(['name', 'size', 'seeders']);
+	// svelte-ignore state_referenced_locally
+	let visible = $state(initialVisible);
 	let selected = $state(new Set<string>());
 </script>
 
@@ -31,6 +42,7 @@
 	getKey={(r) => r.id}
 	label="Torrents"
 	columnsLabel="Columns"
+	{hasMore}
 	{sort}
 	onSortChange={(s) => (sort = s)}
 	visibleColumns={visible}
@@ -41,7 +53,6 @@
 		onSelected?.(s);
 	}}
 	selectAllLabel="Select all"
-	selectRowLabel={(r) => `Select ${r.name}`}
 />
 <span data-testid="sort">{sort ? `${sort.id}:${sort.dir}` : 'none'}</span>
 <span data-testid="selected">{[...selected].join(',')}</span>

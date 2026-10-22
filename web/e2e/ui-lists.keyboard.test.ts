@@ -4,6 +4,8 @@ import { expectNoA11yViolations } from './a11y';
 import { expect, test } from './support/test';
 
 const PATH = '/dev/ui/lists';
+// §10.1: INP < 100 ms; the budget here leaves a little headroom for a loaded CI runner.
+const PERF_BUDGET_MS = 150;
 
 for (const [themeId, colorMode] of [
 	['riverstone-light', 'light'],
@@ -109,4 +111,73 @@ test('Tree: arrows, *, Space, typeahead; 20k nodes stay windowed', async ({ page
 	await expect(page.getByTestId('tree-checked')).toHaveText('999');
 	await kbd.press('End');
 	await expect(tree.getByRole('treeitem').last()).toBeFocused();
+});
+
+test('Tree: * expand-all on 100k nodes stays within the interaction budget', async ({
+	page,
+	go,
+	kbd
+}) => {
+	await go(PATH);
+	const tree = page.getByRole('tree', { name: 'Files' });
+	await kbd.tabTo(tree.getByRole('treeitem').first());
+	// Time the key press to the next painted frame, in the page.
+	const ms = await page.evaluate(async () => {
+		const row = document.activeElement as HTMLElement;
+		const t0 = performance.now();
+		row.dispatchEvent(new KeyboardEvent('keydown', { key: '*', bubbles: true, cancelable: true }));
+		await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+		return performance.now() - t0;
+	});
+	console.log(`expand-all at 100k nodes: ${ms.toFixed(0)} ms`);
+	await expect(tree.getByRole('treeitem').first()).toHaveAttribute('aria-expanded', 'true');
+	expect(ms).toBeLessThan(PERF_BUDGET_MS);
+});
+
+test('VirtualList: rows prepended above keep the viewport and the active row in place', async ({
+	page,
+	go,
+	kbd
+}) => {
+	await go(PATH);
+	const list = page.getByRole('listbox', { name: 'Results' });
+	await kbd.tabTo(list.getByRole('option').first());
+	for (let i = 0; i < 4; i++) await kbd.press('PageDown');
+	const probe = list.getByRole('option', { name: /^Result \d+$/ }).nth(3);
+	const name = (await probe.textContent())!.trim();
+	const top = () =>
+		list.getByRole('option', { name, exact: true }).evaluate((e) => e.getBoundingClientRect().top);
+	const before = await top();
+	await kbd.tabTo(page.getByRole('button', { name: 'Prepend 3 results' }), 5).catch(async () => {
+		await page.getByRole('button', { name: 'Prepend 3 results' }).focus();
+	});
+	await kbd.press('Enter');
+	await expect(list.getByRole('option', { name, exact: true })).toBeVisible();
+	expect(Math.abs((await top()) - before)).toBeLessThan(2);
+});
+
+test.describe('coarse pointer', () => {
+	test.use({ hasTouch: true, isMobile: true });
+	test('Table and Tree checkboxes are at least 44 × 44', async ({ page, go }) => {
+		await go(PATH);
+		await expect(page.getByRole('grid').getByRole('row').nth(1)).toBeVisible();
+		await expect(page.getByRole('tree').getByRole('treeitem').first()).toBeVisible();
+		const sizes = await page.evaluate(() =>
+			[
+				...document.querySelectorAll<HTMLElement>(
+					'[role="grid"] input[type="checkbox"], [role="tree"] input[type="checkbox"]'
+				)
+			]
+				.slice(0, 12)
+				.map((e) => {
+					const r = e.getBoundingClientRect();
+					return [Math.round(r.width), Math.round(r.height)];
+				})
+		);
+		expect(sizes.length).toBeGreaterThan(2);
+		for (const [w, h] of sizes) {
+			expect(w).toBeGreaterThanOrEqual(44);
+			expect(h).toBeGreaterThanOrEqual(44);
+		}
+	});
 });

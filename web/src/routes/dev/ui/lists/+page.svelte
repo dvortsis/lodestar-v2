@@ -22,6 +22,15 @@
 		}, 50);
 	}
 	let opened = $state('none');
+	let prepended = 0;
+	function prepend() {
+		const fresh = Array.from({ length: 3 }, (_, i) => ({
+			id: `new${prepended}-${i}`,
+			name: `New ${prepended}-${i}`
+		}));
+		prepended += 1;
+		results = [...fresh, ...results];
+	}
 
 	// --- Table -----------------------------------------------------------------------------
 	interface Row {
@@ -66,9 +75,9 @@
 		);
 	});
 
-	// --- Tree (20k nodes) ------------------------------------------------------------------
+	// --- Tree (100k nodes) ------------------------------------------------------------------
 	const nodes: FlatNode[] = [];
-	for (let a = 0; a < 20; a++) {
+	for (let a = 0; a < 100; a++) {
 		nodes.push({ id: `d${a}`, depth: 0, name: `Season ${a + 1}`, dir: true, size: '10 GiB' });
 		for (let b = 0; b < 999; b++)
 			nodes.push({
@@ -92,6 +101,7 @@
 			Opened: <span data-testid="vl-opened">{opened}</span>, pages loaded:
 			<span data-testid="vl-pages">{pages}</span>
 		</p>
+		<button type="button" class="btn btn-sm self-start" onclick={prepend}>Prepend 3 results</button>
 		<div class="h-(--rail-width) rounded-box border border-base-300 bg-base-100">
 			<VirtualList
 				items={results}
@@ -134,7 +144,6 @@
 				{selected}
 				onSelectedChange={(s) => (selected = s)}
 				selectAllLabel="Select all"
-				selectRowLabel={(r) => `Select ${r.name}`}
 			/>
 		</div>
 	</section>
@@ -152,7 +161,6 @@
 				onExpandedChange={(e) => (expanded = e)}
 				{checked}
 				onCheckedChange={(c) => (checked = c)}
-				checkLabel={(n) => `Select ${n.name}`}
 			/>
 		</div>
 	</section>

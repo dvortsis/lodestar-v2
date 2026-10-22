@@ -8,6 +8,7 @@
 	import Popover from '../overlays/Popover.svelte';
 	import VirtualList from './VirtualList.svelte';
 	import type { Column, SortState } from './table-types';
+	import '../overlays/overlays.css';
 	import './lists.css';
 
 	interface Props {
@@ -26,8 +27,7 @@
 		selected?: ReadonlySet<string>;
 		onSelectedChange?: (selected: Set<string>) => void;
 		selectAllLabel?: string;
-		selectRowLabel?: (row: T) => string;
-		/** Row height in px (compact density: 36). */
+		/** Row height in px, fixed per density. Defaults to `--row-height-compact`. */
 		rowHeight?: number;
 		onActivate?: (row: T, index: number) => void;
 		hasMore?: boolean;
@@ -49,8 +49,7 @@
 		selected,
 		onSelectedChange,
 		selectAllLabel = '',
-		selectRowLabel,
-		rowHeight = 36,
+		rowHeight,
 		onActivate,
 		hasMore,
 		loadingMore,
@@ -77,7 +76,12 @@
 	}
 
 	// --- selection --------------------------------------------------------------------------
-	let anchor = -1;
+	// The shift-click anchor is a row key, so a prepend or a sort can't shift it onto another row.
+	let anchorKey: string | null = null;
+	$effect(() => {
+		void sort;
+		anchorKey = null;
+	});
 	const allSelected = $derived(rows.length > 0 && rows.every((r) => selected?.has(getKey(r))));
 	const someSelected = $derived(!allSelected && rows.some((r) => selected?.has(getKey(r))));
 
@@ -86,14 +90,15 @@
 		const next = new Set(selected);
 		const row = rows[index] as T;
 		const on = !next.has(getKey(row));
-		const [from, to] =
-			shift && anchor >= 0 ? [anchor, index].sort((a, b) => a - b) : [index, index];
+		const anchorAt =
+			shift && anchorKey !== null ? rows.findIndex((r) => getKey(r) === anchorKey) : -1;
+		const [from, to] = anchorAt >= 0 ? [anchorAt, index].sort((a, b) => a - b) : [index, index];
 		for (let i = from as number; i <= (to as number); i++) {
 			const k = getKey(rows[i] as T);
 			if (on) next.add(k);
 			else next.delete(k);
 		}
-		anchor = index;
+		anchorKey = getKey(row);
 		onSelectedChange?.(next);
 	}
 	function toggleAll() {
@@ -145,9 +150,10 @@
 							<label class="flex min-h-(--control-height-dense) items-center gap-2 text-body">
 								<input
 									type="checkbox"
-									class="ls-focus checkbox checkbox-sm"
+									class="ls-focus checkbox checkbox-sm pointer-coarse:size-(--target-min)"
 									checked={(visibleColumns ?? columns.map((c) => c.id)).includes(col.id)}
-									disabled={col.required}
+									disabled={col.required &&
+										(visibleColumns ?? columns.map((c) => c.id)).includes(col.id)}
 									onchange={(e) => toggleColumn(col.id, e.currentTarget.checked)}
 								/>
 								{col.header}
@@ -184,13 +190,13 @@
 				aria-rowindex={1}
 				class="grid items-center border-b border-base-300 text-small font-medium text-muted-text"
 				style:grid-template-columns={tracks}
-				style:min-height="{rowHeight}px"
+				style:min-height={rowHeight ? `${rowHeight}px` : 'var(--row-height-compact)'}
 			>
 				{#if selectable}
 					<div role="columnheader" class="flex items-center justify-center">
 						<input
 							type="checkbox"
-							class="ls-focus checkbox checkbox-sm"
+							class="ls-focus checkbox checkbox-sm pointer-coarse:size-(--target-min)"
 							aria-label={selectAllLabel}
 							checked={allSelected}
 							use:indeterminate={someSelected}
@@ -237,20 +243,17 @@
 				class="grid items-center border-b border-base-300 text-body hover:bg-hover"
 				class:bg-selected={selectable && selected?.has(getKey(r))}
 				style:grid-template-columns={tracks}
-				style:min-height="{rowHeight}px"
+				style:height="100%"
 			>
 				{#if selectable}
 					<div role="gridcell" class="flex items-center justify-center">
 						<input
 							type="checkbox"
 							tabindex="-1"
-							class="ls-focus checkbox checkbox-sm"
-							aria-label={selectRowLabel?.(r)}
+							aria-hidden="true"
+							class="checkbox checkbox-sm pointer-coarse:size-(--target-min)"
 							checked={!!selected?.has(getKey(r))}
-							onclick={(e) => {
-								e.stopPropagation();
-								toggleRow(index, e.shiftKey);
-							}}
+							onclick={(e) => toggleRow(index, e.shiftKey)}
 						/>
 					</div>
 				{/if}
