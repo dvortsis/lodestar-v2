@@ -34,7 +34,7 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::body::{Body, Bytes};
-use axum::extract::Extension;
+use axum::extract::{Extension, RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -50,7 +50,6 @@ use crate::dto::events::{
     TorrentsEvent,
 };
 use crate::error::{ApiError, ApiResult};
-use crate::extract::Query;
 use crate::{ApiState, auth};
 
 /// This module's half of `/openapi.json`.
@@ -168,10 +167,29 @@ struct CommitFeed {
 }
 
 impl CommitFeed {
+    /// The watermark first, then the count (Release): whoever sees the
+    /// count (Acquire) also sees the watermark that came with it.
     fn report(&self, c: Committed) {
-        self.added.fetch_add(c.docs_added, Ordering::Relaxed);
         self.max_id.fetch_max(c.max_torrent_id, Ordering::Relaxed);
+        self.added.fetch_add(c.docs_added, Ordering::Release);
         self.wake.notify_one();
+    }
+
+    /// What's new since `sent` (the totals last published), as one
+    /// event. A raised watermark alone is news too (`added: 0`), so an
+    /// event never stays behind the newest id it has seen.
+    fn take(&self, sent: &mut (u64, i64)) -> Option<TorrentsEvent> {
+        let added = self.added.load(Ordering::Acquire);
+        let max_id = self.max_id.load(Ordering::Relaxed);
+        if added <= sent.0 && max_id <= sent.1 {
+            return None;
+        }
+        let event = TorrentsEvent {
+            added: added - sent.0,
+            max_id: max_id.max(sent.1),
+        };
+        *sent = (added, event.max_id);
+        Some(event)
     }
 }
 
@@ -508,9 +526,16 @@ impl EventHub {
     }
 
     /// The response body for one client: `retry:`, then its subscription's
-    /// frames with heartbeats between, until it goes away or the hub
-    /// closes. `slot` is released when the body is dropped.
-    fn stream(self: &Arc<Self>, slot: Slot, topics: u8, last: Option<&str>) -> Body {
+    /// frames with heartbeats between, until it goes away, the hub closes
+    /// or `signed_in` (asked at each heartbeat) says its session has
+    /// ended. `slot` is released when the body is dropped.
+    fn stream(
+        self: &Arc<Self>,
+        slot: Slot,
+        topics: u8,
+        last: Option<&str>,
+        signed_in: impl Fn() -> bool + Send + 'static,
+    ) -> Body {
         let mut sub = self.subscribe(topics, last);
         let (out, rx) = mpsc::channel::<Bytes>(self.config.queue.max(1));
         let mut closed = self.closed.subscribe();
@@ -547,7 +572,14 @@ impl EventHub {
                         }
                         None => break,
                     },
-                    _ = beat.tick() => Bytes::from_static(b": keep-alive\n\n"),
+                    _ = beat.tick() => {
+                        // Expired, or the password changed (which ends
+                        // every other session): the stream ends with it.
+                        if !signed_in() {
+                            break;
+                        }
+                        Bytes::from_static(b": keep-alive\n\n")
+                    }
                 };
                 if !send(frame, &closed).await {
                     break;
@@ -601,7 +633,7 @@ async fn forward_commits(
     feed: Arc<CommitFeed>,
     mut closed: watch::Receiver<bool>,
 ) {
-    let mut sent = 0u64;
+    let mut sent = (0, 0);
     loop {
         tokio::select! {
             biased;
@@ -609,13 +641,8 @@ async fn forward_commits(
             () = feed.wake.notified() => {}
         }
         let Some(hub) = hub.upgrade() else { return };
-        let added = feed.added.load(Ordering::Relaxed);
-        if added > sent {
-            hub.publish(&Event::Torrents(TorrentsEvent {
-                added: added - sent,
-                max_id: feed.max_id.load(Ordering::Relaxed),
-            }));
-            sent = added;
+        if let Some(event) = feed.take(&mut sent) {
+            hub.publish(&Event::Torrents(event));
         }
     }
 }
@@ -720,10 +747,12 @@ fn parse_topics(raw: Option<&str>) -> ApiResult<u8> {
     for name in raw.split(',') {
         let topic = Topic::parse(name).ok_or_else(|| {
             let known: Vec<&str> = Topic::ALL.iter().map(|t| t.name()).collect();
+            // Echo at most 64 characters of what was sent.
+            let shown: String = name.chars().take(64).collect();
             ApiError::bad_request(
                 "unknown_topic",
                 format!(
-                    "Unknown topic {name:?}; use a comma-separated list of {}.",
+                    "Unknown topic {shown:?}; use a comma-separated list of {}.",
                     known.join(", ")
                 ),
             )
@@ -732,6 +761,22 @@ fn parse_topics(raw: Option<&str>) -> ApiResult<u8> {
         set |= topic.bit();
     }
     Ok(set)
+}
+
+/// `?topics=`, given at most once.
+fn topics_param(query: Option<&str>) -> ApiResult<Option<String>> {
+    let mut values = form_urlencoded::parse(query.unwrap_or("").as_bytes())
+        .filter(|(k, _)| k == "topics")
+        .map(|(_, v)| v.into_owned());
+    let first = values.next();
+    if values.next().is_some() {
+        return Err(ApiError::bad_request(
+            "bad_parameter",
+            "Give `topics` once, as a comma-separated list.",
+        )
+        .field("topics"));
+    }
+    Ok(first)
 }
 
 /// The session, for the per-session cap. The guard has already checked
@@ -788,11 +833,12 @@ fn session_of(headers: &HeaderMap) -> u64 {
     )
 )]
 pub(crate) async fn events(
+    State(s): State<ApiState>,
     hub: Option<Extension<Arc<EventHub>>>,
     headers: HeaderMap,
-    Query(q): Query<EventsQuery>,
+    RawQuery(query): RawQuery,
 ) -> ApiResult<Response> {
-    let topics = parse_topics(q.topics.as_deref())?;
+    let topics = parse_topics(topics_param(query.as_deref())?.as_deref())?;
     let unavailable = || {
         ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -820,7 +866,15 @@ pub(crate) async fn events(
         }
     };
     let last = headers.get("last-event-id").and_then(|v| v.to_str().ok());
-    let body = hub.stream(slot, topics, last);
+    // The guard's check, repeated at each heartbeat on the cookie it let
+    // in.
+    let cookie = headers
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let auth = s.auth.clone();
+    let body = hub.stream(slot, topics, last, move || auth.verify(&cookie));
     Ok((
         [
             (header::CONTENT_TYPE, "text/event-stream"),
@@ -1045,6 +1099,58 @@ mod tests {
             );
             assert_eq!(e.error_body().field.as_deref(), Some("topics"), "{bad}");
         }
+    }
+
+    #[test]
+    fn topics_come_once_and_echo_at_most_64_chars() {
+        assert_eq!(topics_param(None).unwrap(), None);
+        assert_eq!(
+            topics_param(Some("x=1&topics=torrents%2Ccrawler")).unwrap(),
+            Some("torrents,crawler".to_string())
+        );
+        for twice in ["topics=torrents&topics=crawler", "topics=a&topics=a"] {
+            let e = topics_param(Some(twice)).unwrap_err();
+            assert_eq!(
+                (e.code(), e.status()),
+                ("bad_parameter", StatusCode::BAD_REQUEST)
+            );
+            assert_eq!(e.error_body().field.as_deref(), Some("topics"));
+        }
+        let long = "é".repeat(500);
+        let e = parse_topics(Some(&long)).unwrap_err();
+        let message = e.error_body().message.clone();
+        assert!(message.contains(&"é".repeat(64)), "{message}");
+        assert!(!message.contains(&"é".repeat(65)), "{message}");
+    }
+
+    /// The watermark is never left behind by a publish that ran between
+    /// a report's two updates, in either order.
+    #[test]
+    fn a_torrents_event_never_keeps_a_stale_max_id() {
+        let feed = CommitFeed::default();
+        let mut sent = (0, 0);
+        feed.report(Committed {
+            docs_added: 2,
+            max_torrent_id: 10,
+            at: 0,
+        });
+        // The count half of a report lands first, then a publish runs.
+        feed.added.fetch_add(3, Ordering::Release);
+        let first = feed.take(&mut sent).unwrap();
+        assert_eq!((first.added, first.max_id), (5, 10));
+        feed.max_id.fetch_max(13, Ordering::Relaxed);
+        let next = feed.take(&mut sent).unwrap();
+        assert_eq!((next.added, next.max_id), (0, 13));
+        // The watermark half first (as `report` does it).
+        feed.max_id.fetch_max(20, Ordering::Relaxed);
+        let ahead = feed.take(&mut sent).unwrap();
+        assert_eq!((ahead.added, ahead.max_id), (0, 20));
+        feed.added.fetch_add(4, Ordering::Release);
+        let rest = feed.take(&mut sent).unwrap();
+        assert_eq!((rest.added, rest.max_id), (4, 20));
+        // Nothing new, nothing sent; the totals add up.
+        assert!(feed.take(&mut sent).is_none());
+        assert_eq!(sent, (9, 20));
     }
 
     /// A step of the property test.
