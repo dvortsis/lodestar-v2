@@ -883,7 +883,6 @@
   "blocked_on_owner": [
     "M4 continuation: waiting on ExitPlanMode approval (plan mode) \u2014 can't act on #48 review",
     "Modern DHT crawler architecture: waiting on an AskUserQuestion",
-    "W6 baselines: allow *.blob.core.windows.net (GitHub Actions artifact storage) in environment network, or owner commits artifact 12421952170 into web/e2e/ and removes web/e2e/.update-snapshots on slice/W6",
     "F1b #66: sign-off on calibrated filter budget (50us at reference runner speed, scale up to 1.6x on slower runners)"
   ],
   "launches_today": 7,
