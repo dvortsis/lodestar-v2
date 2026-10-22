@@ -8,7 +8,7 @@ The sources of truth, in order:
 1. the owner's explicit instructions and `CLAUDE.md`
 2. `docs/architecture.md`, the primary design strategy
 3. the contract docs derived from it: `docs/design-tokens.md`, `docs/metrics.md`, `docs/ui-glossary.md`
-4. `ui-design-skills`, only for what 1–3 leave open, in its own precedence order and applied by spirit for Svelte (§3)
+4. `ui-design-skills`, only for what 1–3 leave open, in its own precedence order and applied by spirit for Svelte (standards §3)
 5. the slice brief
 
 ## 1. Checks before every push
@@ -20,7 +20,7 @@ The sources of truth, in order:
 
 **Web (anything under `web/` touched):**
 - `npm ci`
-- `npm run check`: svelte-check, eslint, prettier, the hex and arbitrary-value bans, messages
+- `npm run check`: svelte-check, eslint, prettier, the hex and arbitrary-value bans, and the message merge once W4 adds it
 - `npx vitest run`
 - `npm run build`
 - `npx size-limit`
@@ -62,7 +62,7 @@ Every UI slice reads the skills listed in its brief, so it fills gaps consistent
 |---|---|
 | Any screen or primitive | `layout-spacing`, `layout-grids`, `responsive-layout`, `typography-ui`, `component-geometry`, `iconography-ui`, `motion-ui`, `application-interface-design`, `minimalist-visual-style` |
 | Charts, formatters | + `analytics-chart-selection`, `data-visualization-design` |
-| Insights and any dashboard page | + `dashboard-storytelling`, `analytics-validation` |
+| Insights and any dashboard page | the Charts row, plus `dashboard-storytelling` and `analytics-validation` |
 | Facets, counts, KPIs | + `analytics-validation` |
 | Onboarding explainer (wizard "How it works") | + `infographic-design` |
 | Themes, colour | colour is owner-defined (§10.18); contrast rules from `design-review` and `application-interface-design` |
@@ -78,7 +78,7 @@ Every UI slice reads the skills listed in its brief, so it fills gaps consistent
   - Every number on screen has a `data-testid`.
 - **Status** is always icon plus text, never colour alone. Focus is always visible, and targets are at least 44 × 44 px under `pointer: coarse`.
 - **Strings** live in the feature's `messages/{en,zh}.json`, worded per `docs/ui-glossary.md` and §10.14.
-- **Budgets (§10.1):** search-route JS ≤ 45 KB, CSS ≤ 20 KB, total first load ≤ 100 KB gzipped. Detail drawer ≤ 15 KB, Insights ≤ 45 KB.
+- **Budgets (§10.1):** search-route JS ≤ 45 KB, CSS ≤ 20 KB, total first load ≤ 100 KB gzipped. Detail drawer ≤ 15 KB, Insights ≤ 45 KB, fonts on first paint ≤ 35 KB.
 
 ## 5. Review checklist (every PR, by a fresh Opus reviewer)
 1. **Scope:** only owned paths changed, and nothing is missing from the brief's "Do" list.
