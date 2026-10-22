@@ -9,6 +9,8 @@ import {
 	AVIF_540_LIMIT_BYTES,
 	PackVerificationError,
 	assertSceneBudget,
+	assertSceneSizes,
+	compassFallbacks,
 	buildCompass,
 	buildFaviconSvg,
 	encodeIco,
@@ -82,7 +84,13 @@ describe('scene AVIF budget (45 KB at 540w)', () => {
 describe('scene metadata', () => {
 	it('derives one entry per state and mode from the manifest, aliases included', () => {
 		const manifest = JSON.parse(read('visuals/manifest.json'));
-		const entries = sceneEntries(manifest);
+		const sizes = new Map<string, { width: number; height: number }>();
+		for (const modes of Object.values<Record<string, string>>(manifest.stateAssets)) {
+			for (const rel of Object.values(modes)) {
+				sizes.set(/([^/]+)\.png$/.exec(rel)![1]!, { width: 724, height: 1086 });
+			}
+		}
+		const entries = sceneEntries(manifest, sizes);
 		expect(entries).toHaveLength(Object.keys(manifest.stateAssets).length * 2);
 		const found = entries.find((e) => e.id === 'found_nodes' && e.mode === 'dark')!;
 		const crawling = entries.find((e) => e.id === 'searching_crawling' && e.mode === 'dark')!;
@@ -108,6 +116,40 @@ describe('scene metadata', () => {
 	});
 });
 
+describe('scene sizes', () => {
+	const size = (width: number, height: number) => ({ width, height });
+	it('accepts sources that share one size', () => {
+		expect(() =>
+			assertSceneSizes(
+				new Map([
+					['a', size(724, 1086)],
+					['b', size(724, 1086)]
+				])
+			)
+		).not.toThrow();
+	});
+
+	it('fails when a source differs, or is narrower than the largest variant', () => {
+		expect(() =>
+			assertSceneSizes(
+				new Map([
+					['a', size(724, 1086)],
+					['b', size(724, 1000)]
+				])
+			)
+		).toThrow(/share one size/);
+		expect(() => assertSceneSizes(new Map([['a', size(600, 900)]]))).toThrow(/724px/);
+		expect(() => assertSceneSizes(new Map())).toThrow();
+	});
+
+	it('measures the real sources (the committed entries match the PNGs)', async () => {
+		const { default: sharp } = await import('sharp');
+		const meta = await sharp(join(source, 'visuals/no_results_light.png')).metadata();
+		const entry = scenes.find((s) => s.id === 'no_results' && s.mode === 'light')!;
+		expect([entry.width, entry.height]).toEqual([meta.width, meta.height]);
+	});
+});
+
 describe('compass', () => {
 	const light = read('icons/compass_light.svg');
 	const dark = read('icons/compass_dark.svg');
@@ -122,6 +164,22 @@ describe('compass', () => {
 			for (const role of ['surface', 'primary', 'accent', 'star']) {
 				expect(svg).toContain(`var(--brand-${role},#`);
 			}
+		}
+	});
+
+	it('takes its fallbacks from the Riverstone theme and the token table', () => {
+		const river = readFileSync('themes/riverstone.json', 'utf8');
+		const fallbacks = compassFallbacks(river);
+		const svg = readFileSync('src/lib/brand/compass.svg', 'utf8');
+		const found = Object.fromEntries(
+			[...svg.matchAll(/var\(--brand-(\w+),(#[0-9A-Fa-f]+)\)/g)].map((m) => [m[1], m[2]])
+		);
+		expect(found.surface).toBe('#FFFFFF');
+		expect(found).toMatchObject(fallbacks);
+		// design-tokens.md §4: every Riverstone-light fallback matches the documented table.
+		const doc = readFileSync('../docs/design-tokens.md', 'utf8');
+		for (const [role, hex] of Object.entries(found)) {
+			expect(doc).toMatch(new RegExp(`\\| \`--brand-${role}\` \\|[^|]*\\| \`${hex}\``, 'i'));
 		}
 	});
 
