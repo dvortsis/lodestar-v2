@@ -969,6 +969,12 @@
    "attempt": 1,
    "review_rounds": 0,
    "notes": "Launched 21:38 (\"run as many feature sessions as possible\")."
+  },
+  "F-budget": {
+   "status": "running",
+   "session": "session_01MRKeGCGmpz4LUQE5LbEXsz",
+   "owner_started": true,
+   "notes": "owner session 'Make the filter budget gate runner-robust'; may supersede F1b #66; needs owner sign-off on held gate"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
