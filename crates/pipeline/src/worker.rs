@@ -16,9 +16,9 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use lodestar_classify::{ContentType, FileInfo};
+use lodestar_classify::{Classification, FileInfo};
 use lodestar_cluster::{Token, WorkerId};
-use lodestar_filter::{Engine, Handle, Hit, Item};
+use lodestar_filter::{Engine, Facts, Handle, Item, Verdict};
 use lodestar_metainfo::{Info, InfoHash};
 use lodestar_sources::{FetchedKey, Funnel, FunnelCounts, Loss, Stage};
 use lodestar_store::{Prepared, Preparer, SourceId};
@@ -88,10 +88,12 @@ pub(crate) struct Results {
     pub metadata_at: i64,
     /// What the filter needs to judge again at commit.
     pub files: Vec<FileInfo>,
-    pub content_type: ContentType,
+    pub class: Classification,
     /// The worker's filter verdict, and the rule-set version it used.
-    pub verdict: Option<Hit>,
+    pub verdict: Verdict,
     pub version: u64,
+    /// Only private sources reported the key.
+    pub private_source: bool,
 }
 
 pub(crate) struct PrepareStage {
@@ -145,9 +147,10 @@ impl PrepareStage {
                             sources: fk.sources,
                             metadata_at: unix_now(),
                             files: done.files,
-                            content_type: done.content_type,
+                            class: done.class,
                             verdict: done.verdict,
                             version: done.version,
+                            private_source: fk.private_source,
                         };
                         if out.send(r).await.is_err() {
                             return;
@@ -171,8 +174,8 @@ impl PrepareStage {
 struct Done {
     torrent: Prepared,
     files: Vec<FileInfo>,
-    content_type: ContentType,
-    verdict: Option<Hit>,
+    class: Classification,
+    verdict: Verdict,
     version: u64,
 }
 
@@ -180,7 +183,7 @@ struct Done {
 /// the floor's hash list is refused before parsing; every other verdict
 /// goes to the writer, which records it and re-checks it (§19.4).
 fn prepare_one(preparer: &mut Preparer, engine: &Engine, fk: &FetchedKey) -> Result<Done, Loss> {
-    if engine.core.blocked_hash(&[fk.key.0]).is_some() {
+    if engine.blocked_hash(&[fk.key.0]).is_some() {
         return Err(Loss::Blocked);
     }
     // Hashes to the key but isn't usable metainfo: invalid.
@@ -193,19 +196,29 @@ fn prepare_one(preparer: &mut Preparer, engine: &Engine, fk: &FetchedKey) -> Res
         })?;
     // Enrichment runs here, on the worker side (§19.4).
     let files = crate::enrich::file_infos(&info.files, info.path_encoding);
-    let (enriched, content_type) = crate::enrich::enrich_infos(&prepared.name, &files);
+    let (enriched, class) = crate::enrich::enrich_infos(&prepared.name, &files);
     prepared.enrichment = Some(enriched);
     let hashes: Vec<[u8; 20]> = prepared.swarm_hashes().map(|h| h.0).collect();
-    let verdict = engine.judge(&Item {
+    let now = unix_now();
+    let facts = Facts {
+        class: &class,
+        size: prepared.size,
+        piece_len: prepared.piece_len,
+        flags: prepared.flags,
+        discovered_at: now,
+        now,
+    };
+    let item = Item {
         hashes: &hashes,
         name: &prepared.name,
         files: &files,
-        content_type,
-    });
+        content_type: class.content_type,
+    };
+    let verdict = engine.judge(&item, Some(&facts), now);
     Ok(Done {
         torrent: prepared,
         files,
-        content_type,
+        class,
         verdict,
         version: engine.version,
     })

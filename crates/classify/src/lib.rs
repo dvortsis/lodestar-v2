@@ -83,7 +83,49 @@ pub struct Classification {
     pub distinct_extensions: u16,
 }
 
+/// A correction you made to one torrent's classification (§20.7, §20.9).
+/// It's kept with the torrent and applied every time it's classified
+/// again, so a newer parser doesn't undo it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Correction {
+    /// `Some(true)`: Is adult. `Some(false)`: Not adult.
+    pub adult: Option<bool>,
+    /// Not junk: no junk score and no reasons.
+    pub not_junk: bool,
+}
+
+/// The file list of a parsed info dict, paths decoded with `encoding`.
+pub fn file_infos(
+    files: &[lodestar_metainfo::File],
+    encoding: lodestar_metainfo::TextEncoding,
+) -> Vec<FileInfo> {
+    files
+        .iter()
+        .map(|f| FileInfo {
+            path: f
+                .path
+                .iter()
+                .map(|seg| {
+                    lodestar_metainfo::Text {
+                        raw: seg.clone(),
+                        encoding,
+                    }
+                    .decode()
+                    .into_owned()
+                })
+                .collect(),
+            size: f.size,
+            padding: f.is_padding(),
+        })
+        .collect()
+}
+
 pub fn classify(name: &str, files: &[FileInfo]) -> Classification {
+    classify_corrected(name, files, Correction::default())
+}
+
+/// [`classify`], with your correction applied.
+pub fn classify_corrected(name: &str, files: &[FileInfo], fix: Correction) -> Classification {
     let mut composition = Composition::default();
     let mut largest: Option<usize> = None;
     let mut depth = 0usize;
@@ -111,18 +153,30 @@ pub fn classify(name: &str, files: &[FileInfo]) -> Classification {
     let title = effective::resolve(name, files, &composition);
     let (mut content_type, mut confidence) =
         content::content_type(&title, &composition, structure, files);
-    let adult_kind = adult::detect(
-        name,
-        &title.release,
-        largest.map(|i| &files[i]),
-        content_type,
-    )
+    let detected = match fix.adult {
+        Some(false) => None,
+        _ => adult::detect(
+            name,
+            &title.release,
+            largest.map(|i| &files[i]),
+            content_type,
+        ),
+    };
+    let adult_kind = match (detected, fix.adult) {
+        (Some(d), _) => Some(d),
+        (None, Some(true)) => Some((adult::forced_kind(content_type), 100)),
+        (None, _) => None,
+    }
     .map(|(kind, score)| {
         content_type = ContentType::Adult;
         confidence = score;
         kind
     });
-    let junk = junk::score(&title, &composition, structure, files);
+    let junk = if fix.not_junk {
+        Junk::default()
+    } else {
+        junk::score(&title, &composition, structure, files)
+    };
     Classification {
         composition,
         structure,

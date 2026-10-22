@@ -26,20 +26,22 @@ mod rollups;
 mod worker;
 mod writer;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use lodestar_cluster::{Claim, Claimed, RestoredLease, WorkerId};
-use lodestar_filter::{Core, CoreRule, CsList, Engine, Handle, Lists, Origin, Sealer, Switches};
+use lodestar_filter::{
+    Core, CoreRule, CsList, Engine, Handle, HeldSet, Lists, Origin, Sealer, Switches,
+};
 use lodestar_peer_wire::FetchOptions;
 use lodestar_sources::pool::{self, PeerWireFetcher};
 use lodestar_sources::{
     Discovery, Emitter, Fetcher, FunnelCounts, Kind, Loss, PluginError, PoolConfig, PoolHandle,
     PoolIo, PoolStats, Priority, Shutdown, SourceCtx, SourcePlugin,
 };
-use lodestar_store::{Event, FilterState, QueuedKey, SourceId, Store, WriteBatch};
+use lodestar_store::{Event, FilterState, QueuedKey, RuleSet, SourceId, Store, WriteBatch};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
@@ -83,6 +85,9 @@ pub struct PipelineConfig {
     pub quarantine: Duration,
     /// How long filter hits are kept (0–30 days, §20.11).
     pub filter_hits: Duration,
+    /// Tombstoned and quarantined keys, shared with the API so a release
+    /// takes effect at once. The store's are added at start.
+    pub held: Arc<HeldSet>,
     /// The crawler warm-up window: torrents found this soon after the
     /// first run are flagged `BACKFILL` (§6).
     pub backfill: Duration,
@@ -103,6 +108,7 @@ impl Default for PipelineConfig {
             sealer: None,
             quarantine: Duration::from_secs(30 * 86_400),
             filter_hits: Duration::from_secs(30 * 86_400),
+            held: Arc::new(HeldSet::default()),
             backfill: Duration::from_secs(30 * 86_400),
             flush_every: Duration::from_secs(5),
             save_queue_every: Duration::from_secs(300),
@@ -121,42 +127,6 @@ pub fn default_filter() -> Handle {
         CsList::default(),
         Switches::default(),
     )))
-}
-
-/// Tombstoned and quarantined keys (§20.3): intake refuses them, so a
-/// dropped torrent isn't fetched again and again.
-#[derive(Debug, Default)]
-pub struct HeldSet(RwLock<HashSet<[u8; 20]>>);
-
-impl HeldSet {
-    pub fn contains(&self, hash: &[u8; 20]) -> bool {
-        self.0
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .contains(hash)
-    }
-
-    pub fn insert(&self, hash: [u8; 20]) {
-        self.0
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(hash);
-    }
-
-    pub fn remove(&self, hash: &[u8; 20]) {
-        self.0
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(hash);
-    }
-
-    pub fn len(&self) -> usize {
-        self.0.read().unwrap_or_else(|e| e.into_inner()).len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
 }
 
 /// Adds the store's filter state to the engine: CS-1 entries, CS-8
@@ -358,7 +328,7 @@ impl Pipeline {
             })
             .collect();
         let backfill = config.backfill.as_secs() as i64;
-        let (store, ids, queue, have, backfill_until, stored_at_start, filter_state) =
+        let (store, ids, queue, have, backfill_until, stored_at_start, filter_state, rule_set) =
             tokio::task::spawn_blocking(move || prepare(store, &manifests, backfill))
                 .await
                 .map_err(Error::Join)??;
@@ -369,7 +339,10 @@ impl Pipeline {
         );
         let have = Arc::new(have);
         load_filter(&config.filter, &filter_state);
-        let held = Arc::new(HeldSet::default());
+        for note in config.filter.update_engine(|e| e.load_rules(&rule_set)) {
+            tracing::warn!("filter: {note}");
+        }
+        let held = config.held.clone();
         for (h, _) in &filter_state.held {
             held.insert(*h);
         }
@@ -677,6 +650,7 @@ fn prepare(
         i64,
         u64,
         FilterState,
+        RuleSet,
     ),
     Error,
 > {
@@ -728,6 +702,7 @@ fn prepare(
         ..WriteBatch::default()
     })?;
     let filter = store.filter_state()?;
+    let rules = store.rule_set()?;
     Ok((
         store,
         ids,
@@ -736,6 +711,7 @@ fn prepare(
         first_run + backfill,
         stored,
         filter,
+        rules,
     ))
 }
 
@@ -798,8 +774,7 @@ async fn intake(mut io: Intake, mut shutdown: Shutdown) {
         // Known-bad keys are claimed (so the harvest is counted once) and
         // lost straight away, never fetched (§20.3, §20.5.2).
         let key = d.found.key.0;
-        let refuse =
-            io.held.contains(&key) || io.filter.current().core.blocked_hash(&[key]).is_some();
+        let refuse = io.held.contains(&key) || io.filter.current().blocked_hash(&[key]).is_some();
         match io.coordinator.claim(WorkerId::LOCAL, claim, unix_now()) {
             Claimed::Granted(token) if refuse => {
                 io.stats.refused.fetch_add(1, Ordering::Relaxed);

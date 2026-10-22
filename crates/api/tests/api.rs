@@ -84,6 +84,7 @@ fn fixture() -> Fixture {
             auth: auth.clone(),
             index: Some(index),
             reader: Arc::new(Mutex::new(reader)),
+            filters: None,
         }),
     );
     let hashes = infos
