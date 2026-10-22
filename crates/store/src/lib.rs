@@ -10,6 +10,7 @@
 
 mod compress;
 pub mod filetree;
+mod filter;
 mod insights;
 mod schema;
 mod sources;
@@ -25,6 +26,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 pub use compress::{BlobCodec, Codec, Compressed};
 pub use filetree::{CodecError, FileTree};
+pub use filter::{FilterHit, FilterState, Filtered, Held, Quarantined};
 pub use insights::{CohortCount, Counter, Event};
 pub use rusqlite;
 pub use sources::{MAX_SOURCES, QueuedKey, SourceId, SourceRow, SourceState};
@@ -247,6 +249,8 @@ pub struct WriteBatch<'a> {
     pub counters: &'a [Counter],
     pub cohorts: &'a [CohortCount],
     pub events: &'a [Event],
+    /// Torrents a filter rule acted on (§20.3), recorded with the batch.
+    pub filtered: &'a [Filtered<'a>],
 }
 
 /// A stored torrent seen again: its swarm hash and the sources (a bitset)
@@ -445,6 +449,7 @@ impl Store {
             touched.push(id);
         }
         insights::write(&tx, batch.counters, batch.cohorts, batch.events)?;
+        filter::write(&tx, batch.filtered)?;
         tx.commit()?;
         Ok(Written {
             torrents: out,

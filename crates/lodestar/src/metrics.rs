@@ -115,6 +115,12 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>) -> String {
         "Rediscoveries dropped while the writer was behind.",
         get(&i.dropped),
     );
+    o.one(
+        "intake_refused_total",
+        "counter",
+        "Keys refused before fetching: CS-1 hashes, tombstones and quarantine.",
+        get(&i.refused),
+    );
 
     let p = m.pool_stats();
     o.one(
@@ -200,8 +206,14 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>) -> String {
     o.one(
         "writer_blocked_total",
         "counter",
-        "Torrents dropped by the blocklist.",
+        "Torrents dropped by a content filter rule.",
         get(&w.blocked),
+    );
+    o.one(
+        "writer_quarantined_total",
+        "counter",
+        "Torrents held in quarantine by a content filter rule.",
+        get(&w.quarantined),
     );
     o.one(
         "writer_rediscovered_total",

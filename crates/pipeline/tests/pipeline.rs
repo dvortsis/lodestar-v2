@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lodestar_bencode::{OwnedValue, to_vec};
+use lodestar_classify::FileInfo;
+use lodestar_filter::{Core, CsList, Engine, Handle, Lists, Origin, Sealer, Switches, TermSet};
 use lodestar_metainfo::InfoHash;
 use lodestar_peer_wire::testing::{Accept, Behavior, FakePeer, Seed};
 use lodestar_pipeline::{Pipeline, PipelineConfig, event, metric, strategy};
@@ -19,17 +21,24 @@ use lodestar_store::{Store, StoreConfig, flags};
 use tokio::sync::mpsc;
 
 fn info_dict(name: &str) -> Vec<u8> {
-    let mut f = BTreeMap::new();
-    f.insert(b"length".to_vec(), OwnedValue::Int(1_000_000));
-    f.insert(
-        b"path".to_vec(),
-        OwnedValue::List(vec![OwnedValue::from(format!("{name}.mkv").as_str())]),
-    );
+    info_dict_with(name, &[(&format!("{name}.mkv"), 1_000_000)])
+}
+
+fn info_dict_with(name: &str, files: &[(&str, i64)]) -> Vec<u8> {
+    let files = files
+        .iter()
+        .map(|(path, size)| {
+            let mut f = BTreeMap::new();
+            f.insert(b"length".to_vec(), OwnedValue::Int(*size));
+            f.insert(
+                b"path".to_vec(),
+                OwnedValue::List(vec![OwnedValue::from(*path)]),
+            );
+            OwnedValue::Dict(f)
+        })
+        .collect();
     let mut d = BTreeMap::new();
-    d.insert(
-        b"files".to_vec(),
-        OwnedValue::List(vec![OwnedValue::Dict(f)]),
-    );
+    d.insert(b"files".to_vec(), OwnedValue::List(files));
     d.insert(b"name".to_vec(), OwnedValue::from(name));
     d.insert(b"piece length".to_vec(), OwnedValue::Int(1 << 18));
     d.insert(b"pieces".to_vec(), OwnedValue::Bytes(vec![0; 80]));
@@ -158,8 +167,9 @@ async fn discoveries_become_stored_torrents_and_survive_a_restart() {
         manifest: manifest("finder", &[Kind::PeerFinder]),
         peers: HashMap::from([(beta, vec![peer.addr()])]),
     });
-    let mut cfg = config();
-    cfg.blocklist.insert(blocked.0);
+    let cfg = config();
+    cfg.filter
+        .update(|core| core.cs.add_hash(blocked.0, Origin::Imported));
     let store = Store::open(&db, StoreConfig::default()).unwrap();
     let pipeline = Pipeline::start(cfg, store, vec![feed, other, finder])
         .await
@@ -183,8 +193,9 @@ async fn discoveries_become_stored_torrents_and_survive_a_restart() {
         pipeline.writer_stats().stored.load(Ordering::Relaxed) == 2
     })
     .await;
-    until("blocked", || {
-        pipeline.writer_stats().blocked.load(Ordering::Relaxed) == 1
+    // A CS-1 key is refused at intake, never fetched.
+    until("refused", || {
+        pipeline.intake_stats().refused.load(Ordering::Relaxed) == 1
     })
     .await;
     until("no-peers loss", || {
@@ -229,8 +240,9 @@ async fn discoveries_become_stored_torrents_and_survive_a_restart() {
             .sum()
     };
     assert_eq!(count(Stage::Harvested, 0), 5);
-    assert_eq!(count(Stage::PeerFound, 0), 3);
-    assert_eq!(count(Stage::Fetched, 0), 3);
+    // The CS-1 key was refused before peer finding and fetching.
+    assert_eq!(count(Stage::PeerFound, 0), 2);
+    assert_eq!(count(Stage::Fetched, 0), 2);
     assert_eq!(count(Stage::Stored, 0), 2);
     assert_eq!(count(Stage::Lost, Loss::Blocked as u8), 1);
     assert_eq!(count(Stage::Lost, Loss::NoPeers as u8), 1);
@@ -529,4 +541,129 @@ async fn torrents_are_enriched_in_prepare_and_in_the_background() {
             .unwrap()
             .is_empty()
     );
+}
+
+/// A filter with neutral stand-in terms (`lexa` for a sexual term), so the
+/// pattern rules can be exercised without indicative text.
+fn stand_in_filter() -> Arc<Handle> {
+    let lists = Lists {
+        sexual: TermSet::of(&["lexa"]),
+        child_roles: TermSet::of(&["rolea"]),
+        codes: TermSet::of(&["codex"]),
+    };
+    Arc::new(Handle::new(Engine::new(Core::new(
+        lists,
+        CsList::default(),
+        Switches::default(),
+    ))))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn filtered_torrents_are_held_and_never_fetched_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lodestar.db");
+    // A pattern hit (CS-2a), a repost of a CS-1 payload (CS-8a), and a
+    // clean torrent.
+    let repost_files: &[(&str, i64)] = &[("a.mkv", 734_003_201), ("b.srt", 81_233)];
+    let seeds = vec![
+        Seed::v1(info_dict("Title 15yo lexa")),
+        Seed::v1(info_dict_with("Renamed", repost_files)),
+        Seed::v1(info_dict("Clean")),
+    ];
+    let [held, repost, clean] = [0, 1, 2].map(|i| InfoHash(seeds[i].info_hash));
+    let peer = FakePeer::spawn(seeds, Accept::Both, Behavior::Honest, vec![]).await;
+    let key = Sealer::generate_key().unwrap();
+
+    let start = |filter: Arc<Handle>| {
+        let mut cfg = config();
+        cfg.filter = filter;
+        cfg.sealer = Some(Arc::new(Sealer::new(&key)));
+        cfg
+    };
+    let filter = stand_in_filter();
+    let sizes: Vec<FileInfo> = repost_files
+        .iter()
+        .map(|(p, s)| FileInfo::new(vec![(*p).to_owned()], *s as u64))
+        .collect();
+    let sig = lodestar_filter::payload_sig(&sizes).unwrap();
+    assert!(sig.specific);
+    filter.update(|core| core.cs.add_sig(sig.sig));
+
+    let (feed, feed_tx) = scripted("feed");
+    let store = Store::open(&db, StoreConfig::default()).unwrap();
+    let pipeline = Pipeline::start(start(filter), store, vec![feed.clone()])
+        .await
+        .unwrap();
+    for k in [held, repost, clean] {
+        feed_tx
+            .send(Found::key(k, 0).with_peers(vec![peer.addr()]))
+            .await
+            .unwrap();
+    }
+    until("filtered", || {
+        let w = pipeline.writer_stats();
+        w.quarantined.load(Ordering::Relaxed) == 1
+            && w.blocked.load(Ordering::Relaxed) == 1
+            && w.stored.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    let store = pipeline.shutdown().await.unwrap();
+    assert_eq!(store.count().unwrap(), 1);
+    assert!(store.find(&held).unwrap().is_none());
+    let q = store.quarantined(10).unwrap();
+    assert_eq!(q.len(), 1);
+    assert_eq!((q[0].hash, q[0].rule.as_str()), (held.0, "CS-2a"));
+    let sealed = q[0].sealed.as_deref().expect("a sealed name");
+    assert_eq!(Sealer::new(&key).open(sealed).unwrap(), "Title 15yo lexa");
+    let state = store.filter_state().unwrap();
+    assert!(state.held.iter().any(|(h, _)| *h == repost.0));
+    let hits = store.filter_hits(0).unwrap();
+    let mut rules: Vec<&str> = hits.iter().map(|h| h.rule.as_str()).collect();
+    rules.sort();
+    assert_eq!(rules, ["CS-2a", "CS-8a"]);
+
+    // After a restart, both are refused at intake: no fetch loop.
+    let (feed, feed_tx) = scripted("feed");
+    let pipeline = Pipeline::start(start(stand_in_filter()), store, vec![feed])
+        .await
+        .unwrap();
+    for k in [held, repost] {
+        feed_tx
+            .send(Found::key(k, 0).with_peers(vec![peer.addr()]))
+            .await
+            .unwrap();
+    }
+    until("refused", || {
+        pipeline.intake_stats().refused.load(Ordering::Relaxed) == 2
+    })
+    .await;
+    let store = pipeline.shutdown().await.unwrap();
+    assert_eq!(store.count().unwrap(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn switched_off_rules_and_the_store_state_load_at_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lodestar.db");
+    let seeds = vec![Seed::v1(info_dict("Title 15yo lexa"))];
+    let key = InfoHash(seeds[0].info_hash);
+    let peer = FakePeer::spawn(seeds, Accept::Both, Behavior::Honest, vec![]).await;
+    let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+    // Stored switches outlive the run that set them.
+    store.set_core_switch("CS-2a", false).unwrap();
+    let mut cfg = config();
+    cfg.filter = stand_in_filter();
+    let (feed, feed_tx) = scripted("feed");
+    let pipeline = Pipeline::start(cfg, store, vec![feed]).await.unwrap();
+    feed_tx
+        .send(Found::key(key, 0).with_peers(vec![peer.addr()]))
+        .await
+        .unwrap();
+    until("stored", || {
+        pipeline.writer_stats().stored.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    let store = pipeline.shutdown().await.unwrap();
+    assert!(store.find(&key).unwrap().is_some());
+    assert!(store.quarantined(10).unwrap().is_empty());
 }
