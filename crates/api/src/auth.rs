@@ -176,6 +176,21 @@ impl Auth {
         Ok(self.cookie(&state.key))
     }
 
+    /// Checks the password again for one change that weakens filtering
+    /// (§20.11): asked every time, never remembered, rate-limited like a
+    /// login.
+    pub fn confirm(&self, ip: IpAddr, password: &str) -> Result<(), AuthError> {
+        self.allow(ip)?;
+        let state = self.state.read().expect("auth lock");
+        let Some(stored) = &state.password else {
+            return Err(AuthError::NotSetUp);
+        };
+        if password.len() > MAX_PASSWORD_BYTES || !verify_password(stored, password) {
+            return Err(AuthError::BadPassword);
+        }
+        Ok(())
+    }
+
     /// Sets a new password and ends every other session.
     pub fn change_password(&self, ip: IpAddr, old: &str, new: &str) -> Result<String, AuthError> {
         self.allow(ip)?;

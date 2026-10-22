@@ -18,6 +18,7 @@
 //! and CSX-5 arrive in later slices.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 
 use lodestar_classify::{ContentType, FileInfo};
 
@@ -54,6 +55,17 @@ impl Action {
     /// The stored code (`filter_hits.action`). Fixed forever.
     pub fn code(self) -> u8 {
         self as u8
+    }
+
+    pub fn from_code(code: u8) -> Option<Action> {
+        Some(match code {
+            0 => Action::Flag,
+            1 => Action::Demote,
+            2 => Action::Hide,
+            3 => Action::Quarantine,
+            4 => Action::Drop,
+            _ => return None,
+        })
     }
 }
 
@@ -211,6 +223,9 @@ impl Origin {
 pub struct CsList {
     hashes: HashMap<[u8; 20], Origin>,
     sigs: HashSet<u64>,
+    /// Subscribed lists you marked as child-abuse lists (§20.13): CS-1b,
+    /// replaced whole on each refresh so upstream removals take effect.
+    lists: Vec<(u32, Arc<HashSet<[u8; 20]>>)>,
 }
 
 impl CsList {
@@ -240,7 +255,20 @@ impl CsList {
     }
 
     pub fn hash(&self, hash: &[u8; 20]) -> Option<Origin> {
-        self.hashes.get(hash).copied()
+        self.hashes.get(hash).copied().or_else(|| {
+            self.lists
+                .iter()
+                .any(|(_, l)| l.contains(hash))
+                .then_some(Origin::Imported)
+        })
+    }
+
+    /// Sets (or with `None` removes) a floor-marked subscribed list.
+    pub fn set_list(&mut self, id: u32, hashes: Option<Arc<HashSet<[u8; 20]>>>) {
+        self.lists.retain(|(i, _)| *i != id);
+        if let Some(h) = hashes {
+            self.lists.push((id, h));
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -283,10 +311,30 @@ pub enum Field {
 pub enum Evidence {
     Hash(Origin),
     Payload,
-    MinorAge { field: Field, pos: u32 },
-    Sexual { field: Field, pos: u32 },
-    ChildRole { field: Field, pos: u32 },
-    Code { field: Field, pos: u32 },
+    MinorAge {
+        field: Field,
+        pos: u32,
+    },
+    Sexual {
+        field: Field,
+        pos: u32,
+    },
+    ChildRole {
+        field: Field,
+        pos: u32,
+    },
+    Code {
+        field: Field,
+        pos: u32,
+    },
+    /// The hash is in a subscribed list.
+    Listed,
+    /// One of your rules' queries matched.
+    Query,
+    /// A built-in pack rule matched.
+    Pack,
+    /// A shadow-mode override would have released this.
+    Released,
 }
 
 impl Evidence {
@@ -300,6 +348,22 @@ impl Evidence {
             }
             Evidence::Payload => {
                 out.push(1);
+                return;
+            }
+            Evidence::Listed => {
+                out.push(6);
+                return;
+            }
+            Evidence::Query => {
+                out.push(7);
+                return;
+            }
+            Evidence::Pack => {
+                out.push(8);
+                return;
+            }
+            Evidence::Released => {
+                out.push(9);
                 return;
             }
             Evidence::MinorAge { field, pos } => (2, (field, pos)),
@@ -475,7 +539,76 @@ impl Fixture {
             content_type,
         }
     }
+
+    /// The stored form (`filter_fixtures.tokens`): a version byte, the
+    /// content type, the file count (u16), then each text (name first) as
+    /// a token count (u32) and its tokens (pos u32, hash u64, num u16,
+    /// `u16::MAX` for none), little-endian. Hashes only: no names.
+    pub fn encode(&self) -> Vec<u8> {
+        let files = &self.files[..self.files.len().min(MAX_FILES)];
+        let mut out = vec![FIXTURE_V1, self.content_type.code()];
+        out.extend_from_slice(&(files.len() as u16).to_le_bytes());
+        for text in std::iter::once(&self.name).chain(files) {
+            let text = &text[..text.len().min(MAX_FIXTURE_TOKENS)];
+            out.extend_from_slice(&(text.len() as u32).to_le_bytes());
+            for t in text {
+                out.extend_from_slice(&t.pos.to_le_bytes());
+                out.extend_from_slice(&t.hash.to_le_bytes());
+                out.extend_from_slice(&t.num.unwrap_or(u16::MAX).to_le_bytes());
+            }
+        }
+        out
+    }
+
+    /// Reads [`Fixture::encode`]'s form; `None` for anything else.
+    pub fn decode(bytes: &[u8]) -> Option<Fixture> {
+        let mut r = bytes;
+        let mut take = |n: usize| -> Option<&[u8]> {
+            let (head, rest) = r.split_at_checked(n)?;
+            r = rest;
+            Some(head)
+        };
+        if take(1)? != [FIXTURE_V1] {
+            return None;
+        }
+        let content_type = ContentType::from_code(take(1)?[0])?;
+        let files = u16::from_le_bytes(take(2)?.try_into().ok()?) as usize;
+        if files > MAX_FILES {
+            return None;
+        }
+        let mut texts = Vec::with_capacity(files + 1);
+        for _ in 0..=files {
+            let n = u32::from_le_bytes(take(4)?.try_into().ok()?) as usize;
+            if n > MAX_FIXTURE_TOKENS {
+                return None;
+            }
+            let mut text = Vec::with_capacity(n);
+            for _ in 0..n {
+                let t = take(14)?;
+                let num = u16::from_le_bytes([t[12], t[13]]);
+                text.push(Token {
+                    pos: u32::from_le_bytes(t[0..4].try_into().ok()?),
+                    hash: u64::from_le_bytes(t[4..12].try_into().ok()?),
+                    num: (num != u16::MAX).then_some(num),
+                });
+            }
+            texts.push(text);
+        }
+        if !r.is_empty() {
+            return None;
+        }
+        let name = texts.remove(0);
+        Some(Fixture {
+            name,
+            files: texts,
+            content_type,
+        })
+    }
 }
+
+const FIXTURE_V1: u8 = 1;
+/// Tokens kept per text of a stored fixture.
+pub const MAX_FIXTURE_TOKENS: usize = 4096;
 
 #[derive(Debug, Clone)]
 pub struct Core {
@@ -518,7 +651,20 @@ impl Core {
         if let Some(hit) = self.floor(item) {
             return Some(hit);
         }
-        self.patterns(item).into_iter().find(|h| h.on)
+        self.patterns(item, &TermSet::default())
+            .into_iter()
+            .find(|h| h.on)
+    }
+
+    /// The floor alone (CS-1a/1b, CS-8a): final when it hits.
+    pub fn floor_hit(&self, item: &Item) -> Option<Hit> {
+        self.floor(item)
+    }
+
+    /// Every pattern rule's hit, switched on or not. `neutral` words are
+    /// ignored as evidence (CSX-5 *Neutralize term*, §20.5.5).
+    pub fn pattern_hits(&self, item: &Item, neutral: &TermSet) -> Vec<Hit> {
+        self.patterns(item, neutral)
     }
 
     /// The floor's verdict on bare hashes, before anything is fetched.
@@ -535,7 +681,7 @@ impl Core {
     /// queue).
     pub fn hits(&self, item: &Item) -> Vec<Hit> {
         let mut hits: Vec<Hit> = self.floor(item).into_iter().collect();
-        hits.extend(self.patterns(item));
+        hits.extend(self.patterns(item, &TermSet::default()));
         hits
     }
 
@@ -567,7 +713,7 @@ impl Core {
             .map(|_| self.hit(CoreRule::Cs8a, vec![Evidence::Payload]))
     }
 
-    fn signals(&self, tokens: &[Token]) -> Signals {
+    fn signals(&self, tokens: &[Token], neutral: &TermSet) -> Signals {
         let mut s = Signals::default();
         let at = |pos: u32, bit: u16| {
             tokens
@@ -591,7 +737,7 @@ impl Core {
                 continue;
             }
             let f = self.flags(t);
-            if f == 0 {
+            if f == 0 || (!neutral.is_empty() && neutral.contains(t.hash)) {
                 continue;
             }
             if f & SEXUAL != 0 {
@@ -608,11 +754,11 @@ impl Core {
         s
     }
 
-    fn patterns(&self, item: &Item) -> Vec<Hit> {
+    fn patterns(&self, item: &Item, neutral: &TermSet) -> Vec<Hit> {
         let mut tok = Tokenizer::default();
         let mut tokens = Vec::new();
         tok.text(item.name, &mut tokens);
-        let mut texts = vec![(Field::Name, self.signals(&tokens))];
+        let mut texts = vec![(Field::Name, self.signals(&tokens, neutral))];
         // Files in one folder share its tokens.
         let mut folder: &[String] = &[];
         let mut folder_tokens: Vec<Token> = Vec::new();
@@ -633,7 +779,7 @@ impl Core {
             tokens.clear();
             tokens.extend_from_slice(&folder_tokens);
             tok.continue_path(&[name], &mut tokens, 0, folder_end);
-            let s = self.signals(&tokens);
+            let s = self.signals(&tokens, neutral);
             if s.paired() {
                 texts.push((Field::File(i as u32), s));
             }
@@ -644,9 +790,10 @@ impl Core {
     /// Every pattern rule's hit on a hashed fixture (§20.4): the fixture
     /// stands in for the torrent's text.
     pub fn fixture_hits(&self, f: &Fixture) -> Vec<Hit> {
-        let mut texts = vec![(Field::Name, self.signals(&f.name))];
+        let none = TermSet::default();
+        let mut texts = vec![(Field::Name, self.signals(&f.name, &none))];
         for (i, tokens) in f.files.iter().enumerate().take(MAX_FILES) {
-            texts.push((Field::File(i as u32), self.signals(tokens)));
+            texts.push((Field::File(i as u32), self.signals(tokens, &none)));
         }
         self.judge(&texts, f.content_type)
     }
