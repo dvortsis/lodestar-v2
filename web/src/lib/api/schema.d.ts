@@ -363,6 +363,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/filters/tombstones": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Tombstones (dropped torrents) by hash and rule, never with names, in
+         *     pages; `adult=true` lists only adult holds.
+         */
+        get: operations["getFilterTombstones"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/login": {
         parameters: {
             query?: never;
@@ -1602,9 +1622,18 @@ export interface components {
             tombstones: number;
         };
         QuarantineEntry: {
+            /**
+             * @description Held only because you relabelled it adult (a correction or a
+             *     classification rule) and the Adult-only core caught it: at
+             *     `expires_at` it becomes a tombstone rather than being released.
+             */
+            adult_hold: boolean;
             /** Format: int64 */
             at: number;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description When its sealed name is deleted and its quarantine ends.
+             */
             expires_at: number;
             hash: string;
             rule: string;
@@ -1617,6 +1646,8 @@ export interface components {
          */
         Queue: {
             decisions_30d: components["schemas"]["DecisionCount"][];
+            /** @description The next page of quarantine, if there is one: pass as `cursor`. */
+            next_cursor: string | null;
             quarantine: components["schemas"]["QuarantineEntry"][];
         };
         /**
@@ -2205,6 +2236,23 @@ export interface components {
             /** @description Year spans (`2008`, `1990-1999`). */
             years: string[];
         };
+        TombstoneEntry: {
+            /** @description Left by an adult hold's quarantine at the 30-day purge. */
+            adult_hold: boolean;
+            /** Format: int64 */
+            at: number;
+            hash: string;
+            rule: string;
+        };
+        /**
+         * @description `GET /filters/tombstones`: dropped torrents, by hash and rule (no
+         *     names), so one can be found and released.
+         */
+        Tombstones: {
+            /** @description The next page, if there is one: pass as `cursor`. */
+            next_cursor: string | null;
+            tombstones: components["schemas"]["TombstoneEntry"][];
+        };
         /**
          * @description What a client subscribes to with `?topics=`.
          * @enum {string}
@@ -2742,7 +2790,12 @@ export interface operations {
     };
     getFilterQueue: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description The previous page's `next_cursor`. */
+                cursor?: string;
+                /** @description Quarantine rows per page: 1–1000, 1000 by default. */
+                limit?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -2803,6 +2856,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TestResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getFilterTombstones: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Only adult holds: torrents held because you relabelled them adult,
+                 *     which the 30-day purge left as tombstones.
+                 */
+                adult?: boolean;
+                /** @description The previous page's `next_cursor`. */
+                cursor?: string;
+                /** @description Tombstones per page: 1–1000, 1000 by default. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Tombstones"];
                 };
             };
             default: components["responses"]["Error"];
