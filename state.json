@@ -953,7 +953,7 @@
   "b6_from_b17_review": "B17 reviewer: B6 must AND visibility onto every own-clause variant (filters param), test Adult hidden + type:movie selection -> no adult in type facet, and check the lease fingerprint/visibility when a cursor lease is passed (no pre-toggle lease). Also Not-adult with leftover adult_kind tag matches adult:<kind> - B6 adult facet aware.",
   "unenriched_adult_gap": "Unenriched imports/backfill aren't hidden by B17 (no type tag). Put in importer/backfill brief; consider raising with owner.",
   "sse_crawler_paused": "B4 SSE crawler event lacks `paused` (B14 asked to add if cheap).",
-  "pr70_r3": "#70 R3 FIX 18:58: core switch off w/o password via race (assess unlocked vs apply) -> 409 changed_since_preview; ResolveHeld same; reload before release; purge INSERT OR IGNORE; merge main.",
+  "pr70_r3": "#70 R4 MERGE 19:36 (01c1626); asked 2 small fixes: was_on from store; purge ON CONFLICT keep floor only. Runner verifies delta then merges.",
   "slices_from_86": "After #86 merges: add B2b, B2c, M-settings-form, S-settings-2, M-security-settings, B-log1, B-log2, S-logs, S-about, B-update, S-updates, S-doc-shots to state.slices (pending). B2b + B-log1(after B2b) ready first.",
   "search_timing_flakes": "Windows CI: crates/search/tests/index.rs:214 NRT budget (the_live_indexer_follows_the_store_within_seconds) failed on B6 ee81535; plus rebuild.rs flake. Fix slice after B6 merges (crates/search owner).",
   "near_followups": "F-near follow-ups: prefix/fuzzy words share the folded-join bug; NEAR ignores CSX-5 'Neutralize term'; plain word over-matches vs NEAR word; single-token NEAR quadratic window.",
