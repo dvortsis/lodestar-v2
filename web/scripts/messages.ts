@@ -2,7 +2,7 @@
 // (messages/{en,zh}.json). One file per feature means translations never conflict.
 //
 //   src/lib/features/<feature>/messages/{en,zh}.json   keys start with "<feature>_"
-//   src/lib/i18n/messages/{en,zh}.json                 shared keys start with "common_" or "glossary_"
+//   src/lib/i18n/messages/{en,zh}.json                 shared keys: glossary terms (bare) and common_*
 //
 // Errors (exit 1): unreadable or non-string messages, bad key names, a key defined twice,
 // a zh key with no en key, a bad placeholder, zh placeholders that differ from en.
@@ -14,7 +14,8 @@ import { fileURLToPath } from 'node:url';
 export const LOCALES = ['en', 'zh'] as const;
 export type Locale = (typeof LOCALES)[number];
 
-export const SHARED_PREFIXES = ['common_', 'glossary_'];
+// Shared messages are the glossary terms (bare keys, as docs/ui-glossary.md specifies) and common_*.
+export const SHARED_PREFIXES = [''];
 
 const KEY = /^[a-z][a-z0-9]*(_[a-z0-9]+)*$/;
 const PLACEHOLDER_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;

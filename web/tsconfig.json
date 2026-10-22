@@ -10,7 +10,6 @@
 		"skipLibCheck": true,
 		"sourceMap": true,
 		"moduleResolution": "bundler",
-		"noUncheckedIndexedAccess": true,
-		"allowImportingTsExtensions": true
+		"noUncheckedIndexedAccess": true
 	}
 }
