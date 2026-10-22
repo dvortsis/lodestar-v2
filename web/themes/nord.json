@@ -1,0 +1,23 @@
+{
+	"id": "nord",
+	"name": "Nord",
+	"group": "community",
+	"license": "MIT (© Sven Greb, Arctic Ice Studio)",
+	"source": "https://github.com/nordtheme/nord",
+	"light": {
+		"background": "#E5E9F0",
+		"surface": "#ECEFF4",
+		"text": "#2E3440",
+		"primary": "#5E81AC",
+		"accent": "#A3BE8C",
+		"categorical": ["#5E81AC", "#A3BE8C", "#EBCB8B", "#BF616A", "#D08770", "#B48EAD"]
+	},
+	"dark": {
+		"background": "#2E3440",
+		"surface": "#3B4252",
+		"text": "#ECEFF4",
+		"primary": "#88C0D0",
+		"accent": "#A3BE8C",
+		"categorical": ["#81A1C1", "#A3BE8C", "#EBCB8B", "#BF616A", "#D08770", "#B48EAD"]
+	}
+}
