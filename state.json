@@ -358,7 +358,7 @@
    "pr": null,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "launched 15:59; includes first-run log address polish 18:46 R1 FIX: main merge semantic break (ops field), NAT false-reachable (SeenFilter refresh + threshold), pause race, index_lag, ring clear, dht_off, BEP42 per-/24. 19:23 R1 fixes eabd33a + main merges 3378ef5; R2 review in flight. 20:08 R2 FIX: replies must renew contacted (NAT false reachable); failed event-write test; PR body. Runner verifies R3 delta. 20:17 3b61a52 verified by runner -> APPROVED, merge on green. 20:39 macOS rebuild flake + budget red on 3b61a52 -> one rerun after run completes (21:00 sweep). | 22:42 green at dca8ed4 but main.rs conflict with D-puid; asked session to merge main. | 22:48 head c0c6334 main merged"
+   "notes": "launched 15:59; includes first-run log address polish 18:46 R1 FIX: main merge semantic break (ops field), NAT false-reachable (SeenFilter refresh + threshold), pause race, index_lag, ring clear, dht_off, BEP42 per-/24. 19:23 R1 fixes eabd33a + main merges 3378ef5; R2 review in flight. 20:08 R2 FIX: replies must renew contacted (NAT false reachable); failed event-write test; PR body. Runner verifies R3 delta. 20:17 3b61a52 verified by runner -> APPROVED, merge on green. 20:39 macOS rebuild flake + budget red on 3b61a52 -> one rerun after run completes (21:00 sweep). | 22:42 green at dca8ed4 but main.rs conflict with D-puid; asked session to merge main. | 22:48 head c0c6334 main merged | 23:58 fuzz(query) failure = main bug res:<64 digits> (fix going into #88); \u00a72.18 applies (B14 no crates/search)."
   },
   "B11b": {
    "status": "pending",
@@ -812,7 +812,7 @@
    "pr": 88,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 19:40: rebuild rename (macOS), interrupted rebuild resume, NRT budget (Windows), uTP WSAENOBUFS. | 23:08 review FIX: live.rs HANG=300s widens timeout; real cause likely LiveIndexer thread exits on commit error (production bug). Asked root-cause fix."
+   "notes": "Launched 19:40: rebuild rename (macOS), interrupted rebuild resume, NRT budget (Windows), uTP WSAENOBUFS. | 23:08 review FIX: live.rs HANG=300s widens timeout; real cause likely LiveIndexer thread exits on commit error (production bug). Asked root-cause fix. | 23:58 re-review FIX at 88c8871: report lost when reload fails post-commit (publish gap), backoff reset only after commit, indexed_total recount; plus fuzz res:<64 digits> 65-byte stored form (found on B14 CI). Sent."
   },
   "B2b": {
    "status": "review",
