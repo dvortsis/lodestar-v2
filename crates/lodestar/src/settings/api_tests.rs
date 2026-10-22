@@ -827,6 +827,9 @@ async fn every_save_publishes_a_settings_event_without_values() {
     assert!(text.contains(&format!("id: {id}-5\n")), "{text}");
 }
 
+// The lock is held across awaits on purpose: the save waits on it in its
+// blocking task, on another thread.
+#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn a_save_still_publishes_when_its_client_goes_away() {
     let f = fixture();

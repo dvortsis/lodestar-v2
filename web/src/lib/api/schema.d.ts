@@ -3660,8 +3660,35 @@ export interface operations {
                     "application/json": components["schemas"]["SettingsTestResult"];
                 };
             };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `unsupported_media_type`: not `application/json`. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description `bad_body`: not a test this endpoint runs. */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `tests_busy`: four tests are running already; try again shortly. */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3698,7 +3725,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
+                    "application/json": components["schemas"]["SettingsErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
