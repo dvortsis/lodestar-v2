@@ -327,8 +327,10 @@ fn a_failed_rebuild_keeps_the_old_index_serving() {
         serving.progress().is_some_and(|p| p.done == n as u64)
     });
     // Something in the way of the rename.
+    // A non-empty directory: every platform refuses to rename onto one
+    // (Windows replaces a plain file).
     let blocker = root.join(NEW.dir_name());
-    std::fs::write(&blocker, "not a directory").unwrap();
+    std::fs::create_dir_all(blocker.join("in-the-way")).unwrap();
     hold.store(false, Ordering::Relaxed);
     wait("the rebuild fails", || {
         serving
@@ -347,7 +349,7 @@ fn a_failed_rebuild_keeps_the_old_index_serving() {
 
     // Out of the way, the next start only needs the rename: the build
     // was marked complete.
-    std::fs::remove_file(&blocker).unwrap();
+    std::fs::remove_dir_all(&blocker).unwrap();
     let serving = Serving::open_or_rebuild(&root, &db, config(NEW)).unwrap();
     assert!(!serving.rebuilding());
     wait("it catches up", || {
