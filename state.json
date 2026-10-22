@@ -176,7 +176,7 @@
    "pr": 71,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "launched 14:40; not live.rs/compile.rs (B4/B17) | PR #71; reviewer started 16:45 | 17:15 r1 FIX: visibility via base(without_facet(user_ast)), merge main, category ranges, near-1M perf. 18:24 R1 all in (ee81535); R2 review in flight. 19:18 R2 MERGE at ee81535; must add B17 wiring + I1 lease precondition, I2 1M single-segment perf, I3 share selection, P2 bin cap before merge. 19:56 B17 wiring + I1/I2/I3/P2 pushed 3dd0eaf; R3 delta review in flight."
+   "notes": "launched 14:40; not live.rs/compile.rs (B4/B17) | PR #71; reviewer started 16:45 | 17:15 r1 FIX: visibility via base(without_facet(user_ast)), merge main, category ranges, near-1M perf. 18:24 R1 all in (ee81535); R2 review in flight. 19:18 R2 MERGE at ee81535; must add B17 wiring + I1 lease precondition, I2 1M single-segment perf, I3 share selection, P2 bin cap before merge. 19:56 B17 wiring + I1/I2/I3/P2 pushed 3dd0eaf; R3 delta review in flight. 20:20 R3 MERGE at 3dd0eaf (polish deferred: lease.rs doc swap, adult_kind wording, Hours cap test, bin_of clamp, golden note). Merge on green."
   },
   "B16": {
    "status": "pending",
@@ -188,22 +188,22 @@
    "notes": ""
   },
   "W5": {
-   "status": "review",
+   "status": "merged",
    "model": "sonnet",
    "session": "session_01RL3YBaUPYXgdgK3wY2DRpG",
    "pr": 83,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "R1 FIX 19:05: hidden-at-subscribe stream never closes (slot hog, queue growth); parsing stuck; typed wrapper gaps (202, required path/body, GET body); 401 halt; envelope extras (setup_required). 19:18 R2 FIX: PR body; aborted-conn test (given); abort-body test; superseded parse writes history; Retry-After 0 floor. 19:23 R2 fixes 300c35a verified by runner -> APPROVED, merge on green CI (include in 19:44 sweep)."
+   "notes": "R1 FIX 19:05: hidden-at-subscribe stream never closes (slot hog, queue growth); parsing stuck; typed wrapper gaps (202, required path/body, GET body); 401 halt; envelope extras (setup_required). 19:18 R2 FIX: PR body; aborted-conn test (given); abort-body test; superseded parse writes history; Retry-After 0 floor. 19:23 R2 fixes 300c35a verified by runner -> APPROVED, merge on green CI (include in 19:44 sweep). Merged 4fa8593 20:18."
   },
   "W7ab": {
-   "status": "changes_requested",
+   "status": "merged",
    "model": "sonnet",
    "session": "session_01PZaAbtPHeB2SiUMG9VFpth",
    "pr": 76,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #76; reviewer started 16:45 | 17:10 r1 FIX: exclude dev routes from prod build (scope exception), toast timer, ticker 60s, + a11y items. R2 FIX 18:15: PR size reason; toast dismiss drops focus. Approved tokens --toast-width/--listbox-max-height in tokens.css. 18:10 R2 fixes 11d9b0d; R3 review in flight. 18:27 R3 FIX: Chip focus crosses groups; PR body stale. Runner verifies R4 itself. 18:50 R3 fixes bb80f6a verified by runner; asked one Toaster focus-steal fix, then merge on green."
+   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #76; reviewer started 16:45 | 17:10 r1 FIX: exclude dev routes from prod build (scope exception), toast timer, ticker 60s, + a11y items. R2 FIX 18:15: PR size reason; toast dismiss drops focus. Approved tokens --toast-width/--listbox-max-height in tokens.css. 18:10 R2 fixes 11d9b0d; R3 review in flight. 18:27 R3 FIX: Chip focus crosses groups; PR body stale. Runner verifies R4 itself. 18:50 R3 fixes bb80f6a verified by runner; asked one Toaster focus-steal fix, then merge on green. Merged fdf7263 20:18."
   },
   "W7cd": {
    "status": "changes_requested",
@@ -770,7 +770,7 @@
    "pr": 85,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "R1 FIX 19:30: hostile-name NEAR DoS (places*tokens^2); safety claim wrong (CSX-5 overrides/exceptions/allow/unless match more). Owner Q on re-preview of stored CSX-5 entries. 19:58 DoS fix e6f6e72; R2 review in flight."
+   "notes": "R1 FIX 19:30: hostile-name NEAR DoS (places*tokens^2); safety claim wrong (CSX-5 overrides/exceptions/allow/unless match more). Owner Q on re-preview of stored CSX-5 entries. 19:58 DoS fix e6f6e72; R2 review in flight. 20:25 R2 MERGE; asked main merge + threshold test; runner verifies then merges."
   },
   "D-puid": {
    "status": "review",
@@ -895,8 +895,7 @@
  },
  "heartbeats": 4,
  "reviews_in_flight": {
-  "71": "B6 R3 delta (3dd0eaf)",
-  "85": "F-near R2 (e6f6e72)"
+  "81": "runner secure-delete R2 (f5d1085)"
  },
  "carry_forward": {
   "next-bans-touch": [
@@ -962,12 +961,14 @@
   "b6_from_b17_review": "B17 reviewer: B6 must AND visibility onto every own-clause variant (filters param), test Adult hidden + type:movie selection -> no adult in type facet, and check the lease fingerprint/visibility when a cursor lease is passed (no pre-toggle lease). Also Not-adult with leftover adult_kind tag matches adult:<kind> - B6 adult facet aware.",
   "unenriched_adult_gap": "Unenriched imports/backfill aren't hidden by B17 (no type tag). Put in importer/backfill brief; consider raising with owner.",
   "sse_crawler_paused": "B4 SSE crawler event lacks `paused` (B14 asked to add if cheap).",
-  "pr70_r3": "#70 APPROVED 19:43 at 3bf2c51 (runner verified cfb6e19). Merge on green. Then #81 adds WAL TRUNCATE after purge/release/delete + overflow test.",
+  "pr70_r3": "#70 MERGED fcf84d4 20:18.",
   "slices_from_86": "After #86 merges: add B2b, B2c, M-settings-form, S-settings-2, M-security-settings, B-log1, B-log2, S-logs, S-about, B-update, S-updates, S-doc-shots to state.slices (pending). B2b + B-log1(after B2b) ready first. (#86 approved 20:05)",
   "near_followups": "F-near follow-ups: prefix/fuzzy words share the folded-join bug; NEAR ignores CSX-5 'Neutralize term'; plain word over-matches vs NEAR word; single-token NEAR quadratic window.",
   "skills_repo_for_docs": "Docs slices + their reviewers need dvortsis/skills (documentation-skills scripts): attach via create_session sources or add_repo.",
   "typed_held_reason": "Typed held-reason for subscriptions (instead of matching 'shrank' in sub.error) needs a schema change: fold into B8.",
-  "word_file_clause_1M": "search-bench 'word + file clause' misses 30 ms target at 1M (45 ms/5 seg, 108 ms/1 seg); gated at 200k. Track for M8 10M perf gates / B5c cache."
+  "word_file_clause_1M": "search-bench 'word + file clause' misses 30 ms target at 1M (45 ms/5 seg, 108 ms/1 seg); gated at 200k. Track for M8 10M perf gates / B5c cache.",
+  "filter_quadratic": "F-perf follow-up (security): prefilter.rs Scan::other at_pos quadratic on non-ASCII; matcher.rs sequence() quadratic (phrases, multi-part words); NEAR per-place window scan -> precompute per-word place lists + binary search; cache sorted tokens per text. Launch after F-near merges.",
+  "b6_polish": "B6 polish deferred: lease.rs now() doc on node(); adult_kind stale-tag wording (unreachable today); Hours 2^16 cap test with real column; bin_of i64 clamp at import; golden note (BM25 avg length)."
  },
  "blocked_on_owner": [
   "Modern DHT crawler architecture: waiting on an AskUserQuestion",
