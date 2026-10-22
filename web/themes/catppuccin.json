@@ -2,7 +2,7 @@
 	"id": "catppuccin",
 	"name": "Catppuccin",
 	"group": "community",
-	"license": "MIT (© 2021 Catppuccin)",
+	"license": "MIT (© 2021 Catppuccin (Pocco81 and contributors))",
 	"source": "https://github.com/catppuccin/palette",
 	"light": {
 		"background": "#E6E9EF",

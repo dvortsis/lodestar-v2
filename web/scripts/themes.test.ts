@@ -426,8 +426,14 @@ describe('generated files', () => {
 		expect(file.v).toBe(1);
 		expect(file.keys).toEqual([...TOKEN_KEYS]);
 		// Every theme except Riverstone's two, which are inlined in critical.css.
-		expect(file.themes).toHaveLength(46);
-		expect(file.themes.map((t: { id: string }) => t.id)).not.toContain('riverstone-light');
+		const expected = (
+			JSON.parse(readFileSync(join(root, 'scripts/fixtures/families.json'), 'utf8')) as Family[]
+		)
+			.filter((f) => f.id !== 'riverstone')
+			.flatMap((f) => [`${f.id}-light`, `${f.id}-dark`])
+			.sort();
+		expect(file.themes.map((t: { id: string }) => t.id).sort()).toEqual(expected);
+		expect(expected).toHaveLength(46);
 	});
 });
 
