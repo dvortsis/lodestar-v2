@@ -182,7 +182,7 @@ fn get(uri: &str, headers: &[(&str, &str)]) -> Request<Body> {
 fn torrents(added: u64) -> Event {
     Event::Torrents(TorrentsEvent {
         added,
-        max_id: added as i64,
+        max_id: Some(added as i64),
     })
 }
 
@@ -635,48 +635,61 @@ async fn the_torrents_count_leaves_out_adult_while_it_is_hidden() {
         "Another.Clip.XXX.720p.mp4",
         "Third.Movie.2017.2160p.mkv",
     ];
-    // Hidden (the default): 3 of 5.
+    // Hidden (the default): 3 of 5, and no id (B4b-r2).
     run(&mixed, &mut store);
-    c.until("data: {\"added\":3,\"max_id\":5}\n\n", SOON).await;
-    // Shown: the same mix counts 5.
+    c.until("data: {\"added\":3,\"max_id\":null}\n\n", SOON)
+        .await;
+    // Shown: the same mix counts 5, with the newest id.
     show.send_replace(true);
     let again: Vec<String> = mixed.iter().map(|n| n.replacen('.', ".Two.", 1)).collect();
     let again: Vec<&str> = again.iter().map(String::as_str).collect();
     run(&again, &mut store);
     c.until("data: {\"added\":5,\"max_id\":10}\n\n", SOON).await;
-    // Hidden again: an all-Adult commit sends nothing, and the next
-    // event carries the newest watermark.
+    // Hidden again: an all-Adult commit sends nothing, and later events
+    // carry no id.
     show.send_replace(false);
     run(
         &["Third.Clip.XXX.1080p.mp4", "Fourth.Clip.XXX.720p.mp4"],
         &mut store,
     );
     run(&["Fourth.Movie.2016.1080p.mkv"], &mut store);
-    c.until("data: {\"added\":1,\"max_id\":13}\n\n", SOON).await;
-    assert!(!c.text.contains("\"max_id\":12"), "{}", c.text);
-    // B4b-r2: while hidden, `max_id` stops at the newest id that isn't
-    // Adult (14), not the newest overall (15).
+    // Each its own event: three complete `data:` frames so far.
+    c.until_more("}\n\n", 2).await;
     run(
         &["Fifth.Movie.2015.1080p.mkv", "Fifth.Clip.XXX.1080p.mp4"],
         &mut store,
     );
-    c.until("data: {\"added\":1,\"max_id\":14}\n\n", SOON).await;
-    assert!(!c.text.contains("\"max_id\":15"), "{}", c.text);
-    assert_eq!(c.text.matches("event: torrents").count(), 4, "{}", c.text);
+    // Four complete `data:` frames.
+    c.until_more("}\n\n", 3).await;
+    let frames = |text: &str| -> Vec<String> {
+        text.lines()
+            .filter_map(|l| l.strip_prefix("data: "))
+            .map(str::to_string)
+            .collect()
+    };
+    let hidden_then = r#"{"added":1,"max_id":null}"#;
+    let sent = [
+        r#"{"added":3,"max_id":null}"#,
+        r#"{"added":5,"max_id":10}"#,
+        hidden_then,
+        hidden_then,
+    ];
+    assert_eq!(frames(&c.text), sent, "{}", c.text);
 
-    // A tab that reconnects from the first event after Adult was turned
-    // off gets a `resync` in place of the event that counted Adult (the
-    // second), then the rest as they were.
+    // A tab that reconnects from before the first event after Adult was
+    // turned off: the hidden events as they were, a `resync` in place of
+    // the one made while Adult was shown, and no frame with an id.
     let ids = c.ids();
     assert_eq!(ids.len(), 4, "{}", c.text);
+    let epoch = ids[0].split('-').next().unwrap();
+    let from_start = format!("{epoch}-0");
     let mut back = Conn::open(
         addr,
         "/api/v1/events?topics=torrents",
-        &[("Cookie", &cookie), ("Last-Event-ID", &ids[0])],
+        &[("Cookie", &cookie), ("Last-Event-ID", &from_start)],
     )
     .await;
-    back.until("data: {\"added\":1,\"max_id\":14}\n\n", SOON)
-        .await;
+    back.until_more("}\n\n", 3).await;
     // The frames after `retry:`, without the chunked encoding's sizes.
     let replayed: String = back
         .text
@@ -689,26 +702,23 @@ async fn the_torrents_count_leaves_out_adult_while_it_is_hidden() {
     assert_eq!(
         replayed,
         format!(
-            "event: resync\ndata: {{\"reason\":\"visibility\"}}\n\n\
-             id: {}\nevent: torrents\ndata: {{\"added\":1,\"max_id\":13}}\n\n\
-             id: {}\nevent: torrents\ndata: {{\"added\":1,\"max_id\":14}}\n\n",
-            ids[2], ids[3]
+            "id: {}\nevent: torrents\ndata: {}\n\n\
+             event: resync\ndata: {{\"reason\":\"visibility\"}}\n\n\
+             id: {}\nevent: torrents\ndata: {hidden_then}\n\n\
+             id: {}\nevent: torrents\ndata: {hidden_then}\n\n",
+            ids[0], sent[0], ids[2], ids[3]
         )
     );
-    // Shown again, the same reconnect replays it as it was.
+    // Shown again, the same reconnect replays them as they were.
     show.send_replace(true);
     let mut shown = Conn::open(
         addr,
         "/api/v1/events?topics=torrents",
-        &[("Cookie", &cookie), ("Last-Event-ID", &ids[0])],
+        &[("Cookie", &cookie), ("Last-Event-ID", &from_start)],
     )
     .await;
-    shown.until("\"max_id\":14}\n\n", SOON).await;
-    assert!(
-        shown.text.contains("data: {\"added\":5,\"max_id\":10}"),
-        "{}",
-        shown.text
-    );
+    shown.until_more("}\n\n", 3).await;
+    assert_eq!(frames(&shown.text), sent, "{}", shown.text);
     assert!(!shown.text.contains("resync"), "{}", shown.text);
     hub.close();
 }

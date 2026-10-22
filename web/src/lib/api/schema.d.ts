@@ -2287,11 +2287,13 @@ export interface components {
             added: number;
             /**
              * Format: int64
-             * @description The highest torrent id searchable now. While Adult is hidden,
-             *     the highest that isn't Adult, so it can be lower than one sent
-             *     while Adult was shown.
+             * @description The highest torrent id searchable now, while Adult is shown.
+             *     **Null while Adult is hidden:** ids are sequential, so any real id
+             *     sent beside an exact `added` would show, in its gap from the last
+             *     one, how many hidden torrents arrived. To find what's new, use the
+             *     newest id among your own results (or a cursor), not this.
              */
-            max_id: number;
+            max_id: number | null;
         };
     };
     responses: {

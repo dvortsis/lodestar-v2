@@ -123,7 +123,9 @@ export function createEvents(deps: Partial<EventsDeps> = {}) {
 				if (prev) {
 					const a = prev.data as EventData<'torrents'>;
 					const b = item.data as EventData<'torrents'>;
-					prev.data = { added: a.added + b.added, max_id: Math.max(a.max_id, b.max_id) };
+					// `max_id` is null while Adult is hidden: the newer event's visibility wins.
+					const max_id = b.max_id === null ? null : Math.max(a.max_id ?? b.max_id, b.max_id);
+					prev.data = { added: a.added + b.added, max_id };
 					return;
 				}
 			}

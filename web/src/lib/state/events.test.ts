@@ -463,6 +463,28 @@ describe('hidden at subscribe', () => {
 		flushFrame();
 		expect(log).toEqual(['t15/15', 'c5']);
 	});
+
+	it('folds a null max_id (Adult hidden) to the newer event visibility', async () => {
+		const ev = make();
+		const s = stream();
+		fetchMock.mockResolvedValue(s.response());
+		const log: string[] = [];
+		ev.on('torrents', (d) => log.push(`t${d.added}/${d.max_id}`));
+		await tick();
+		setVisibility('hidden');
+		s.push(frame('torrents', { added: 1, max_id: 7 }, 'a-1'));
+		s.push(frame('torrents', { added: 2, max_id: null }, 'a-2'));
+		await tick();
+		setVisibility('visible');
+		flushFrame();
+		setVisibility('hidden');
+		s.push(frame('torrents', { added: 3, max_id: null }, 'a-3'));
+		s.push(frame('torrents', { added: 4, max_id: 9 }, 'a-4'));
+		await tick();
+		setVisibility('visible');
+		flushFrame();
+		expect(log).toEqual(['t3/null', 't7/9']);
+	});
 });
 
 describe('after a 401', () => {
