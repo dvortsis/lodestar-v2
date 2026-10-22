@@ -1006,7 +1006,7 @@
    "status": "review",
    "model": "opus",
    "session": "session_01SK5Ci2FahQUSGQuDVozi28",
-   "notes": "follow-up of #87 review: max_id visible-only, replay toggle, swap adult test | 23:32 PR #104 (branch slice/B4b). Runner decision (\u00a72.19, content-safety strengthening): max_id null while Adult hidden. Reviewer started. | 23:43 review FIX at ce2fd15: null max_id not landed yet; sent full plan + I1 (keep lastId on visibility resync) + I2 note. | 23:43 5ee6501 null max_id landed; I1 lastId pending.",
+   "notes": "follow-up of #87 review: max_id visible-only, replay toggle, swap adult test | 23:32 PR #104 (branch slice/B4b). Runner decision (\u00a72.19, content-safety strengthening): max_id null while Adult hidden. Reviewer started. | 23:43 review FIX at ce2fd15: null max_id not landed yet; sent full plan + I1 (keep lastId on visibility resync) + I2 note. | 23:43 5ee6501 null max_id landed; I1 lastId pending. | 23:49 5f56396: B1 per plan, I1/I2/B1.8/polish done; runner verified fold. Approved; merge on green.",
    "pr": 104
   },
   "runner-secure-delete": {
