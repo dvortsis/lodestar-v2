@@ -203,7 +203,7 @@
    "pr": 76,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #76; reviewer started 16:45 | 17:10 r1 FIX: exclude dev routes from prod build (scope exception), toast timer, ticker 60s, + a11y items. R2 FIX 18:15: PR size reason; toast dismiss drops focus. Approved tokens --toast-width/--listbox-max-height in tokens.css. 18:10 R2 fixes 11d9b0d; R3 review in flight."
+   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #76; reviewer started 16:45 | 17:10 r1 FIX: exclude dev routes from prod build (scope exception), toast timer, ticker 60s, + a11y items. R2 FIX 18:15: PR size reason; toast dismiss drops focus. Approved tokens --toast-width/--listbox-max-height in tokens.css. 18:10 R2 fixes 11d9b0d; R3 review in flight. 18:27 R3 FIX: Chip focus crosses groups; PR body stale. Runner verifies R4 itself."
   },
   "W7cd": {
    "status": "changes_requested",
@@ -873,8 +873,7 @@
   "72": "B17 round 2 (3e4d7b6)",
   "77": "B13 round 2 (29caca3)",
   "79": "B14 round 1 + security (e96480b)",
-  "71": "B6 round 2 (ee81535)",
-  "76": "W7ab round 3 (11d9b0d)"
+  "71": "B6 round 2 (ee81535)"
  },
  "carry_forward": {
   "next-bans-touch": [
@@ -939,7 +938,8 @@
   "pr81_fix": "#81 review FIX: (1) test must distinguish ON from FAST: >16KB value (overflow pages) deleted, assert gone from DB file; (2) WAL keeps insert-time frames until TRUNCATE (prod TRUNCATE only at shutdown): call store.checkpoint() (TRUNCATE) after purge_filter / release / delete_torrents / #70's release_rules when they deleted rows; drive test through those APIs. Do it after #70 merges (filter.rs conflict).",
   "tantivy_deleted_names": "Deleted torrents' names stay in Tantivy segment files until merge. Follow-up after B6: on delete_torrents, force-merge segments holding deleted docs (rare path). In the spirit of owner decision 'deleted data is overwritten' (\u00a72.17).",
   "w7ab_css_growth": "Record in \u00a716: daisyUI component CSS for the primitives adds ~5.6 KB gz to first-load CSS (11.89 -> 17.48 KB); accepted by runner (one global Tailwind sheet; screens need it). CSS headroom ~2.2 KB: watch W7cd/W7e/screens.",
-  "rebuild_windows_flake": "test (windows-latest) failed crates/search/tests/rebuild.rs:124 an_interrupted_rebuild_resumes_from_its_watermarks ('the rebuild finishes') on Q-docs da02e04 (no src change). Watch; if it recurs, root-cause (timeout on slow Windows runner?) in a small fix PR."
+  "rebuild_windows_flake": "test (windows-latest) failed crates/search/tests/rebuild.rs:124 an_interrupted_rebuild_resumes_from_its_watermarks ('the rebuild finishes') on Q-docs da02e04 (no src change). Watch; if it recurs, root-cause (timeout on slow Windows runner?) in a small fix PR.",
+  "runtime_chunk_growth": "W7cd measured: showcase pages using transitions/bind:offsetHeight/snippets grow the shared Svelte runtime chunk 16.8->21.7 kB gz that search loads. Screens using these primitives will do the same: budget JS 45 kB has ~12 kB headroom; watch in W9/search screens, keep transitions lazy where possible."
  },
  "blocked_on_owner": [
   "Modern DHT crawler architecture: waiting on an AskUserQuestion",
