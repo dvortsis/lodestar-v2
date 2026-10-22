@@ -176,13 +176,13 @@ async function gate() {
 $("setup").addEventListener("submit", async (e) => {
   e.preventDefault();
   const r = await post("/api/v1/setup", { token: $("setup-token").value, password: $("setup-pw").value });
-  $("setup-err").textContent = r.ok ? "" : r.data.error || "Setup failed.";
+  $("setup-err").textContent = r.ok ? "" : (r.data.error && r.data.error.message) || "Setup failed.";
   if (r.ok) gate();
 });
 $("login").addEventListener("submit", async (e) => {
   e.preventDefault();
   const r = await post("/api/v1/login", { password: $("login-pw").value });
-  $("login-err").textContent = r.ok ? "" : r.data.error || "Login failed.";
+  $("login-err").textContent = r.ok ? "" : (r.data.error && r.data.error.message) || "Login failed.";
   if (r.ok) gate();
 });
 $("logout").addEventListener("click", async () => {
@@ -196,7 +196,8 @@ $("search").addEventListener("submit", async (e) => {
   if (r.status === 401) { gate(); return; }
   const data = await r.json();
   if (!r.ok) {
-    $("q-err").textContent = data.error + (data.start !== undefined ? " — “" + q.slice(data.start, data.end) + "”" : "");
+    const err = data.error || {};
+    $("q-err").textContent = (err.message || "Search failed.") + (err.start !== undefined ? " — “" + q.slice(err.start, err.end) + "”" : "");
     $("results").hidden = true;
     return;
   }

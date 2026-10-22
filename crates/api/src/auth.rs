@@ -12,6 +12,11 @@
 //! - **Login attempts** are rate-limited per IP; Argon2 makes each one
 //!   slow anyway.
 
+mod http;
+
+pub(crate) use http::SessionAuth;
+pub use http::{protected, require_session, routes};
+
 use std::collections::HashMap;
 use std::io;
 use std::net::IpAddr;
