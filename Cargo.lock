@@ -1358,6 +1358,7 @@ dependencies = [
  "mimalloc",
  "proptest",
  "reqwest",
+ "rustix",
  "rustls",
  "serde",
  "serde_json",

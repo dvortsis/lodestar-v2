@@ -9,6 +9,7 @@ mod floor;
 mod fsdetect;
 mod http;
 mod metrics;
+mod privdrop;
 mod services;
 mod settings;
 mod subscriptions;
@@ -36,6 +37,30 @@ fn main() -> ExitCode {
     let cli = cli::parse();
     let config_path = cli.config;
     let command = cli.command.unwrap_or(Command::Serve);
+    // Root is dropped first: before the config file (in the data directory)
+    // is read, any socket is bound or any thread is spawned. Every command
+    // that touches the data directory runs as the target account, so a
+    // backup, rollback or vacuum never leaves root-owned files there; none
+    // needs root. `stats` and `healthcheck` only read. `lists` prints a
+    // built-in table and touches nothing, so it runs as started.
+    let scope = match command {
+        Command::Serve
+        | Command::ImportBitmagnet { .. }
+        | Command::Backup(_)
+        | Command::Rollback(_)
+        | Command::Vacuum
+        | Command::Reindex => Some(privdrop::Scope::DataDir),
+        Command::Healthcheck | Command::Stats(_) => Some(privdrop::Scope::ProcessOnly),
+        Command::Lists => None,
+    };
+    let dropped = match scope.map(|s| privdrop::run(s, |k| std::env::var(k).ok())) {
+        Some(Ok(report)) => report,
+        Some(Err(e)) => {
+            eprintln!("PUID/PGID: {e}");
+            return ExitCode::FAILURE;
+        }
+        None => privdrop::Report::default(),
+    };
     let load = |path: Option<PathBuf>| Config::load(path.as_deref(), |k| std::env::var(k).ok());
     match command {
         Command::Lists => {
@@ -73,6 +98,7 @@ fn main() -> ExitCode {
                 }
             };
             init_logging(&config.log);
+            dropped.log(&config.data_dir);
             let runtime = match tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
@@ -100,6 +126,7 @@ fn main() -> ExitCode {
                 }
             };
             init_logging(&config.log);
+            dropped.log(&config.data_dir);
             fsdetect::warn_at_start(&config.data_dir);
             let runtime = match tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -119,7 +146,7 @@ fn main() -> ExitCode {
                 }
             }
         }
-        other => cli::run(other, config_path.as_deref()),
+        other => cli::run(other, config_path.as_deref(), &dropped),
     }
 }
 

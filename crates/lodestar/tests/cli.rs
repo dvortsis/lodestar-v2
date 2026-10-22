@@ -42,15 +42,26 @@ impl Data {
         Store::open(self.db(), StoreConfig::default()).unwrap()
     }
 
+    /// Runs a command as the test runs: started as root (a CI container),
+    /// it stays root, so these tests are about the commands themselves.
+    /// `maintenance_runs_as_puid` covers the drop.
     fn run(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_lodestar"))
-            .args(args)
+        self.command(args)
+            .env("PUID", "0")
+            .env("PGID", "0")
+            .env("LODESTAR_ALLOW_ROOT", "1")
+            .output()
+            .unwrap()
+    }
+
+    fn command(&self, args: &[&str]) -> Command {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_lodestar"));
+        c.args(args)
             .env("LODESTAR_DATA_DIR", self.path())
             .env("LODESTAR_HTTP_BIND", format!("127.0.0.1:{}", self.port))
             .env("LODESTAR_LOG", "warn")
-            .stdin(Stdio::null())
-            .output()
-            .unwrap()
+            .stdin(Stdio::null());
+        c
     }
 
     fn journal(&self) {
@@ -391,4 +402,41 @@ fn bad_arguments_exit_2() {
     for command in ["serve", "backup", "rollback", "vacuum", "reindex", "stats"] {
         assert!(text(&out).contains(command), "{}", text(&out));
     }
+}
+
+/// Started as root, the maintenance commands drop to PUID/PGID first, so
+/// nothing they write in the data folder is root's.
+#[cfg(target_os = "linux")]
+#[test]
+fn maintenance_runs_as_puid() {
+    use std::os::unix::fs::MetadataExt;
+    if !rustix::process::geteuid().is_root() {
+        eprintln!("skipping: the PUID/PGID drop only happens when started as root");
+        return;
+    }
+    let data = Data::new();
+    with_snapshot(&data);
+    let as_puid = |args: &[&str]| {
+        data.command(args)
+            .env("PUID", "4242")
+            .env("PGID", "4343")
+            .output()
+            .unwrap()
+    };
+    status(&as_puid(&["backup"]), 0);
+    status(&as_puid(&["rollback", "v99", "--yes"]), 0);
+    status(&as_puid(&["vacuum"]), 0);
+    status(&as_puid(&["stats"]), 0);
+    let mut stack = vec![data.path().to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for e in std::fs::read_dir(&dir).unwrap() {
+            let e = e.unwrap();
+            let m = std::fs::symlink_metadata(e.path()).unwrap();
+            assert_eq!((m.uid(), m.gid()), (4242, 4343), "{}", e.path().display());
+            if m.is_dir() {
+                stack.push(e.path());
+            }
+        }
+    }
+    assert_eq!(data.marker(), "first");
 }
