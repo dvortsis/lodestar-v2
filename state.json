@@ -71,13 +71,13 @@
    "notes": "waits for B1 (both edit crates/api)"
   },
   "B3": {
-   "status": "in_review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01R8S4Q4PGSjv2tZYtdKuZu3",
    "pr": 56,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "round 1: proptests for key/pick/qvalue; deps listed"
+   "notes": "merged 08:45 as 5195a08 (#56)"
   },
   "W1": {
    "status": "merged",
@@ -278,13 +278,13 @@
    "notes": ""
   },
   "D-docker": {
-   "status": "pending",
+   "status": "running",
    "model": "sonnet",
-   "session": null,
+   "session": "session_019VGYFBetAiATAi4KbpB7JZ",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
-   "notes": ""
+   "notes": "launched 08:46 with briefs/D-docker.md"
   },
   "G-v05": {
    "status": "pending",
@@ -788,12 +788,6 @@
  "heartbeats": 3,
  "reviews_in_flight": [],
  "carry_forward": {
-  "D-docker": [
-   "Image must set LODESTAR_DATA_DIR=/data (templates rely on it)",
-   "Templates reference ghcr.io/dvortsis/lodestar-v2:latest; update them if the registry differs",
-   "Distroless has no shell: templates have no <Shell>",
-   "\u00a74 data layout differs from the code (lodestar.db, index/, dht-state.bin, auth.json, seal.key, config.toml); operations.md follows the code"
-  ],
   "next-bans-touch": [
    "bans.mjs:241 accept '=' so class:pb-11={x} is caught",
    "fonts.test.ts imports fontverter (transitive dep): comment or parse otherwise"
@@ -801,20 +795,20 @@
   "contract-docs": [
    "design-tokens.md CJK fallback: use installed family names (\"Noto Sans CJK SC\" etc.) \u2014 \u00a710.2 wording to align"
   ],
-  "B3": [
-   "/brand/* filenames are not content-hashed: serve them with short cache, not immutable",
-   "CSP needs the prepaint hash sha256-8sGxyFFW7xk/8Me2rukbUx/2+xX3j3SVt7SC1hk3xU8= (recompute from app.html at build time)"
-  ],
   "W6": [
    "size-limit assertion: no brand raster in first-load chunk set",
    "Playwright webServer timeout: cold `npm run assets` ~73 s; raise timeout or prebuild assets"
   ],
   "web.yml": [
    "add brand/source/** to path filters"
+  ],
+  "binary-puid": [
+   "PUID/PGID privilege drop in the binary (security, Opus): \u00a711 promises it, the Unraid template sets PUID=99/PGID=100; until then the image runs as nonroot and the template needs --user 99:100. Fold into the next Opus slice owning crates/lodestar/src/main.rs (B2 or M6 CLI)"
   ]
  },
  "blocked_on_owner": [
   "M4 continuation: waiting on ExitPlanMode approval (plan mode) \u2014 can't act on #48 review",
   "Modern DHT crawler architecture: waiting on an AskUserQuestion"
- ]
+ ],
+ "launches_today": 1
 }
