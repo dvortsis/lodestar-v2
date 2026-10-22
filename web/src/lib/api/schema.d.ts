@@ -72,7 +72,8 @@ export interface paths {
         put?: never;
         /**
          * Adds a classification rule; the stored torrents it matches are
-         *     classified again.
+         *     classified again. At most 1,000 rules: past that, 422
+         *     `too_many_class_rules`.
          */
         post: operations["addClassRule"];
         delete?: never;
@@ -395,6 +396,52 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every settings section, with the fields and JSON schema its form is
+         *     generated from.
+         */
+        get: operations["listSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings/{section}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One section's effective values, where each comes from, and which
+         *     can't be changed here or wait for a restart.
+         */
+        get: operations["getSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Changes some of a section's settings. Every field is checked first,
+         *     then all are saved together; live ones apply at once, and the rest
+         *     are listed in `restart_required`. A field an environment variable
+         *     sets is refused, naming the variable.
+         */
+        patch: operations["patchSettings"];
         trace?: never;
     };
     "/setup": {
@@ -797,6 +844,11 @@ export interface components {
              *     search index (only torrents arriving later are affected).
              */
             queued: number | null;
+            /**
+             * @description More stored torrents matched than are queued at once (1,000,000):
+             *     the rest are classified again when next re-enriched.
+             */
+            truncated: boolean;
         };
         /** @description `POST /classify/rules`. */
         ClassRuleBody: {
@@ -808,6 +860,8 @@ export interface components {
         ClassRuleRemoved: {
             /** @description As [`ClassRuleAdded::queued`]. */
             queued: number | null;
+            /** @description As [`ClassRuleAdded::truncated`]. */
+            truncated: boolean;
         };
         /**
          * @description `GET /classify`: your classification rules, and how detection
@@ -817,6 +871,35 @@ export interface components {
             corrections: number;
             detection: components["schemas"]["Detection"];
             rules: components["schemas"]["ClassRule"][];
+        };
+        /** @description One colour group's share of a torrent (`docs/metrics.md` §4, §7.1). */
+        CompositionShare: {
+            /**
+             * Format: int64
+             * @description Bytes in the group, padding excluded.
+             */
+            bytes: number;
+            /**
+             * Format: int32
+             * @description Files in the group, padding excluded.
+             */
+            files: number;
+            /**
+             * @description `video`, `audio`, `images`, `documents`, `archives`, `software` or
+             *     `other`.
+             */
+            group: string;
+            /**
+             * Format: int32
+             * @description Whole percent of the non-padding bytes: any non-zero share is at
+             *     least 1, and only a complete one is 100.
+             */
+            pct_bytes: number;
+            /**
+             * Format: int32
+             * @description The same, of the non-padding files.
+             */
+            pct_files: number;
         };
         CoreRuleState: {
             action: string;
@@ -839,6 +922,11 @@ export interface components {
         CorrectResponse: {
             /** @description Non-null only when `type` is `adult`. */
             adult_kind: string | null;
+            /**
+             * @description When relabelling it adult made filtering hold it back (§20.9): the
+             *     rule that did. It's then dropped or quarantined, no longer stored.
+             */
+            held_by: string | null;
             /**
              * Format: int32
              * @description Junk score, 0–100.
@@ -969,7 +1057,7 @@ export interface components {
             job: number;
         };
         /** @enum {string} */
-        JobState: "running" | "done" | "failed";
+        JobState: "running" | "done" | "failed" | "cancelled";
         /**
          * @description `GET /filters/preview/jobs/{id}`: progress while it runs, then the
          *     assessment or the error.
@@ -1180,10 +1268,27 @@ export interface components {
          */
         SearchHit: {
             /**
+             * @description `scene`, `movie`, `photos`, `comics`, `game`, `vr` or `audio`;
+             *     set only when `content_type` is `adult`.
+             */
+            adult_kind: string | null;
+            /**
              * Format: int32
              * @description Null = never scraped.
              */
             completed: number | null;
+            /**
+             * @description What the torrent is made of, by colour group, in the composition
+             *     bar's order; groups without files are left out, and it's empty
+             *     before classification.
+             */
+            composition: components["schemas"]["CompositionShare"][];
+            /**
+             * @description `movie`, `tv`, `music`, `audiobook`, `ebook`, `comic`, `software`,
+             *     `game`, `images`, `video`, `other` or `adult`; null = not
+             *     classified.
+             */
+            content_type: string | null;
             /** Format: int64 */
             discovered_at: number;
             /** Format: int64 */
@@ -1200,6 +1305,19 @@ export interface components {
             hash_v2: string | null;
             /** Format: int64 */
             id: number;
+            /**
+             * @description Stable reason keys (`docs/metrics.md` §7.1); empty when there are
+             *     none or before classification.
+             * @example [
+             *       "double-extension"
+             *     ]
+             */
+            junk_reasons: string[];
+            /**
+             * Format: int32
+             * @description 0–100; null = not classified.
+             */
+            junk_score: number | null;
             /**
              * Format: int64
              * @description Null = never scraped.
@@ -1221,6 +1339,12 @@ export interface components {
             /** Format: int64 */
             piece_len: number;
             /**
+             * @description How the title was found when the name wasn't informative:
+             *     `files`, `folder` or `structure`; null = from the name itself, or
+             *     not classified.
+             */
+            resolved_via: string | null;
+            /**
              * Format: double
              * @description Relevance; 0 under any sort but `relevance`.
              */
@@ -1232,6 +1356,8 @@ export interface components {
             seeders: number | null;
             /** Format: int64 */
             size: number;
+            /** @description The resolved title; null = not resolved. */
+            title: string | null;
             /**
              * Format: int32
              * @description Trackers that answered in the last answered round; null = never
@@ -1252,6 +1378,19 @@ export interface components {
             /** @default null */
             ast: null | components["schemas"]["AstNode"];
             /**
+             * @description The previous page's `next_cursor`, to read the next page from the
+             *     same index snapshot. Send the same `q` (or `ast`), `sort` and
+             *     `hidden` with it.
+             * @default null
+             */
+            cursor: string | null;
+            /**
+             * @description Count every match exactly, even above 100,000 (within a time
+             *     budget; `total_approx` says whether it made it). `1` or `true`.
+             * @default null
+             */
+            exact: boolean | null;
+            /**
              * @description Include torrents a filter rule hid (§20.3).
              * @default null
              */
@@ -1262,7 +1401,7 @@ export interface components {
              */
             limit: number | null;
             /**
-             * @description `offset + limit` may not pass 10,000.
+             * @description `offset + limit` may not pass 10,000. Not with `cursor`.
              * @default null
              */
             offset: number | null;
@@ -1285,6 +1424,13 @@ export interface components {
             canonical: string;
             hits: components["schemas"]["SearchHit"][];
             limit: number;
+            /**
+             * @description Pass as `cursor` for the next page, read from the same index
+             *     snapshot (§8); null on the last page. Opaque, URL-safe, at most
+             *     256 characters, valid for 10 minutes after its last use.
+             */
+            next_cursor: string | null;
+            /** @description Hits before this page. */
             offset: number;
             /**
              * @description Few exact matches: plural forms in titles were included too (§8),
@@ -1295,6 +1441,143 @@ export interface components {
             took_ms: number;
             /** @description Matches in all, not just this page. */
             total: number;
+            /**
+             * @description `total` is an estimate (above 100,000 matches; shown with "≈");
+             *     ask with `exact` for the exact count.
+             */
+            total_approx: boolean;
+        };
+        /**
+         * @description `GET /settings/{section}` and `PATCH /settings/{section}`: the
+         *     section's effective values.
+         * @example {
+         *       "fields": {
+         *         "intensity": {
+         *           "env": null,
+         *           "read_only": false,
+         *           "restart_required": false,
+         *           "source": "db",
+         *           "value": "low"
+         *         },
+         *         "timeout_secs": {
+         *           "env": null,
+         *           "read_only": false,
+         *           "restart_required": true,
+         *           "source": "db",
+         *           "value": 12
+         *         }
+         *       },
+         *       "restart_required": [
+         *         "timeout_secs"
+         *       ],
+         *       "section": "crawler"
+         *     }
+         */
+        SectionValues: {
+            fields: {
+                [key: string]: components["schemas"]["SettingValue"];
+            };
+            /**
+             * @description Fields whose saved value differs from the running one: they take
+             *     effect at the next restart.
+             */
+            restart_required: string[];
+            section: string;
+        };
+        /** @description One field of a section, for its form. */
+        SettingField: {
+            /** @description The environment variable that overrides it; null when none does. */
+            env: string | null;
+            /** @description Message key of the help text beside the field. */
+            help_key: string;
+            /** @description Message key of the field's label. */
+            label_key: string;
+            name: string;
+            /** @description Never editable in the app (e.g. the data directory). */
+            read_only: boolean;
+            /** @description A change takes effect at the next restart. */
+            restart_required: boolean;
+        };
+        /**
+         * @description Where a setting's effective value comes from, lowest to highest:
+         *     the built-in default, `config.toml`, a change saved in the app, or a
+         *     `LODESTAR_*` environment variable.
+         * @enum {string}
+         */
+        SettingSource: "default" | "file" | "db" | "env";
+        /** @description One field's effective value. */
+        SettingValue: {
+            /** @description The variable that set it when `source` is `env`; null otherwise. */
+            env: string | null;
+            /**
+             * @description Can't be changed in the app: set by the environment, or never
+             *     editable here.
+             */
+            read_only: boolean;
+            /** @description A change takes effect at the next restart. */
+            restart_required: boolean;
+            source: components["schemas"]["SettingSource"];
+            /** @description Any JSON value, of the type the section's schema gives the field. */
+            value: unknown;
+        };
+        /**
+         * @description `GET /settings`: every section, in display order.
+         * @example {
+         *       "sections": [
+         *         {
+         *           "fields": [
+         *             {
+         *               "env": "LODESTAR_INTENSITY",
+         *               "help_key": "settings.crawler.intensity.help",
+         *               "label_key": "settings.crawler.intensity.label",
+         *               "name": "intensity",
+         *               "read_only": false,
+         *               "restart_required": false
+         *             }
+         *           ],
+         *           "help_key": "settings.crawler.help",
+         *           "label_key": "settings.crawler.label",
+         *           "schema": {
+         *             "additionalProperties": false,
+         *             "properties": {
+         *               "intensity": {
+         *                 "enum": [
+         *                   "low",
+         *                   "balanced",
+         *                   "aggressive"
+         *                 ],
+         *                 "type": "string"
+         *               }
+         *             },
+         *             "type": "object"
+         *           },
+         *           "section": "crawler"
+         *         }
+         *       ]
+         *     }
+         */
+        SettingsIndex: {
+            sections: components["schemas"]["SettingsSection"][];
+        };
+        /**
+         * @description `PATCH /settings/{section}`: some of the section's fields and their
+         *     new values, as its schema in `GET /settings` describes. Fields left
+         *     out keep their values; an unknown field is refused. `null` resets a
+         *     field: its saved value is removed, and the `config.toml` value or the
+         *     default applies again.
+         */
+        SettingsPatch: Record<string, never>;
+        /** @description One section: its fields and the JSON schema of its values. */
+        SettingsSection: {
+            fields: components["schemas"]["SettingField"][];
+            help_key: string;
+            label_key: string;
+            /**
+             * @description A JSON Schema (2020-12) object for the section's values, with
+             *     each number field's bounds as `minimum`/`maximum`.
+             */
+            schema: Record<string, never>;
+            section: string;
         };
         /**
          * @description `POST /setup`: claims the instance.
@@ -2018,10 +2301,14 @@ export interface operations {
                 sort?: string;
                 /** @description Results per page: 1–200, 50 by default. */
                 limit?: number;
-                /** @description `offset + limit` may not pass 10,000. */
+                /** @description `offset + limit` may not pass 10,000. Not with `cursor`. */
                 offset?: number;
                 /** @description Include torrents a filter rule hid (§20.3). */
                 hidden?: boolean;
+                /** @description The previous page's `next_cursor`; send the same `q`, `sort` and `hidden` with it. An expired one is a 410 `cursor_expired`, a tampered one a 400 `bad_cursor`. */
+                cursor?: string;
+                /** @description `1` or `true`: count every match exactly, within a time budget. */
+                exact?: boolean;
             };
             header?: never;
             path?: never;
@@ -2059,6 +2346,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SearchResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsIndex"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The section, as `GET /settings` names it. */
+                section: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SectionValues"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    patchSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The section, as `GET /settings` names it. */
+                section: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettingsPatch"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SectionValues"];
                 };
             };
             default: components["responses"]["Error"];
