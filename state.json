@@ -211,8 +211,8 @@
    "session": "session_016RoHWZ8Vbbs5moJ2c2fHqS",
    "pr": 78,
    "attempt": 1,
-   "review_rounds": 2,
-   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #78; reviewer started 16:45 | 16:58 round 1 FIX: load-more stuck, shift anchor by index, touch targets, .ls-focus dup; + measure opt-in, tokens, tree index prop, 100k expand perf, dup names, roving on click, Esc in drawer, tests, PR size. R2 FIX 18:20: coarse targets overlap; Drawer Esc swallowed by aria-expanded; Menu focus invisible; popover test race (Bits rAF autofocus). 18:23 R2 fixes pushed 44fdd31; R3 review held until #76 merges (dev-routes move + search JS 37.5 vs 32.4 kB). 20:20 dev-routes moved + main merged; R3 review in flight. CSS 20.32 kB vs 20 budget?"
+   "review_rounds": 3,
+   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #78; reviewer started 16:45 | 16:58 round 1 FIX: load-more stuck, shift anchor by index, touch targets, .ls-focus dup; + measure opt-in, tokens, tree index prop, 100k expand perf, dup names, roving on click, Esc in drawer, tests, PR size. R2 FIX 18:20: coarse targets overlap; Drawer Esc swallowed by aria-expanded; Menu focus invisible; popover test race (Bits rAF autofocus). 18:23 R2 fixes pushed 44fdd31; R3 review held until #76 merges (dev-routes move + search JS 37.5 vs 32.4 kB). 20:20 dev-routes moved + main merged; R3 review in flight. CSS 20.32 kB vs 20 budget? 20:52 R3 FIX: CSS 20.32/20 (daisyUI exclude menu/modal/drawer/footer approved in app.css); popover must close on Tab-out."
   },
   "W7e": {
    "status": "changes_requested",
@@ -968,6 +968,10 @@
   {
    "at": "2026-10-22T19:25Z",
    "what": "rustix approved as a direct dependency of lodestar (D-puid): libc unusable under unsafe_code=forbid; already in the lockfile."
+  },
+  {
+   "at": "2026-10-22T20:52Z",
+   "what": "daisyUI components menu, modal, drawer, footer excluded in app.css (in-house Bits UI overlays; saves ~1.4 kB CSS)."
   }
  ],
  "open_issues": [
@@ -1003,8 +1007,7 @@
  },
  "heartbeats": 4,
  "reviews_in_flight": {
-  "81": "runner secure-delete R2 (f5d1085)",
-  "78": "W7cd R3"
+  "81": "runner secure-delete R2 (f5d1085)"
  },
  "carry_forward": {
   "next-bans-touch": [
