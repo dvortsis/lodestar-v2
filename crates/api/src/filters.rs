@@ -34,13 +34,45 @@ use lodestar_filter::{
 };
 use lodestar_search::{Node, parse};
 use lodestar_store::{ExceptionRow, FloorSource, OverrideRow, RuleRow, RuleSet, Store};
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use utoipa::OpenApi;
 
 use crate::ApiState;
 use crate::auth::{self, auth_error};
+use crate::dto::auth::OkResponse;
+use crate::dto::filters::{
+    AllowEntry, ApplyResponse, ClassRule, ClassRuleAdded, ClassRuleRemoved, Classes, CoreRuleState,
+    CorrectResponse, Decision, DecisionCount, Detection, DetectionExample, ExceptionEntry,
+    FixtureCounts, Fixtures, JobPhase, JobProgress, JobStarted, JobState, JobStatus, OverrideEntry,
+    Overview, PackRuleState, PackState, PendingFloorEntry, QuarantineEntry, Queue, RuleEntry,
+    Strictness, StrictnessList, SubscriptionEntry, TestResponse, TestResult,
+};
+pub use crate::dto::filters::{
+    Assessment, Change, ChangeBody, ClassRuleBody, CorrectBody, IdBody, MatchInput, Preview,
+    Sample, SampleFile, StrictnessBody, TestBody,
+};
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{ClientIp, Json as JsonBody, Path, same_origin_json};
+
+/// This module's half of `/openapi.json`.
+#[derive(OpenApi)]
+#[openapi(paths(
+    overview,
+    queue,
+    fixtures,
+    test,
+    strictness,
+    classes,
+    correct,
+    add_class_rule,
+    remove_class_rule,
+    preview,
+    start_preview,
+    preview_job,
+    cancel_preview,
+    apply
+))]
+pub(crate) struct ApiDoc;
 
 /// What the filters API works with. The store is the writable control
 /// connection, not the ingest writer's.
@@ -184,16 +216,6 @@ fn days(d: Option<u32>, now: i64) -> Option<i64> {
     d.map(|d| now + i64::from(d.min(3650)) * 86_400)
 }
 
-/// What an override, exception or allow entry matches, as sent.
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct MatchInput {
-    pub hashes: Option<Vec<String>>,
-    pub keyword: Option<String>,
-    pub query: Option<String>,
-    /// A payload signature, 16 hex digits.
-    pub payload: Option<String>,
-}
-
 impl MatchInput {
     fn to_match(&self) -> ApiResult<Match> {
         let given = [
@@ -233,169 +255,6 @@ impl MatchInput {
     }
 }
 
-/// One change to filtering (§20.7).
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "op", rename_all = "snake_case")]
-pub enum Change {
-    CoreSwitch {
-        rule: String,
-        on: bool,
-    },
-    /// A pack (`malware`) or one pack rule (`MW-2`).
-    PackSwitch {
-        id: String,
-        on: bool,
-    },
-    AddRule {
-        query: String,
-        action: String,
-        unless: Option<String>,
-        shadow_days: Option<u32>,
-    },
-    UpdateRule {
-        id: i64,
-        query: Option<String>,
-        action: Option<String>,
-        enabled: Option<bool>,
-        /// An empty string removes the clause.
-        unless: Option<String>,
-        shadow_days: Option<u32>,
-    },
-    RemoveRule {
-        id: i64,
-    },
-    AddOverride {
-        #[serde(flatten)]
-        what: MatchInput,
-        #[serde(default)]
-        neutralize: bool,
-        scope: Option<String>,
-        expires_days: Option<u32>,
-        shadow_days: Option<u32>,
-    },
-    RemoveOverride {
-        id: i64,
-    },
-    AddException {
-        rule: String,
-        #[serde(flatten)]
-        what: MatchInput,
-    },
-    RemoveException {
-        id: i64,
-    },
-    AddAllow {
-        query: String,
-    },
-    RemoveAllow {
-        id: i64,
-    },
-    /// Report torrents as child-abuse material (§20.5.2).
-    ReportAbuse {
-        hashes: Vec<String>,
-    },
-    RemoveCs1 {
-        hashes: Vec<String>,
-    },
-    /// A quarantined torrent a rule caught wrongly (§20.12): an exception
-    /// for that torrent and that rule only, a hashed must-not-match
-    /// fixture for a core rule, and a release.
-    FalsePositive {
-        hash: String,
-    },
-    /// Releases a quarantined or dropped torrent: fetched and processed
-    /// normally next time it's seen.
-    Release {
-        hash: String,
-    },
-    /// Confirms a quarantined torrent as abuse material: into CS-1, sealed
-    /// name deleted.
-    Confirm {
-        hash: String,
-    },
-    RevealName {
-        hash: String,
-    },
-    Subscribe {
-        url: String,
-        name: Option<String>,
-        /// `content` or `ip`.
-        kind: String,
-        format: Option<String>,
-        action: Option<String>,
-        #[serde(default)]
-        floor: bool,
-        refresh_hours: Option<u32>,
-    },
-    Unsubscribe {
-        id: i64,
-    },
-    PauseSubscription {
-        id: i64,
-        enabled: bool,
-    },
-    /// Accepts or discards a version the sanity gates held back.
-    ResolveHeld {
-        id: i64,
-        accept: bool,
-    },
-    /// Settles floor entries a config file or a floor-marked list dropped
-    /// (owner's decision §2.7). They stay blocked until this: `remove`
-    /// takes them out of the floor, which weakens it; otherwise they stay
-    /// in it as ordinary CS-1b entries. `source` is a pending source's key
-    /// (`file:<path>`, `list:<id>`); without `hashes`, all of its entries
-    /// the assessment counted ([`Assessment::floor_entries`]).
-    ResolveFloorRemoval {
-        source: String,
-        hashes: Option<Vec<String>>,
-        #[serde(default)]
-        remove: bool,
-    },
-    Undo,
-}
-
-/// What a change would do (§20.10). Counts come from the review queue,
-/// the tombstones, the filter hits of the replay window and the index.
-#[derive(Debug, Clone, Default, Serialize, PartialEq)]
-pub struct Preview {
-    /// Quarantined items it would release now.
-    pub quarantine: usize,
-    /// Dropped items it would let be fetched again.
-    pub tombstones: usize,
-    /// Stored items whose hide, demote or flag mark it would clear.
-    pub stored: u64,
-    /// Decisions in the replay window by the rules it affects.
-    pub caught_30d: i64,
-    /// Of those, by the child-safety core.
-    pub core_caught_30d: i64,
-    pub per_day: f64,
-    /// Counts from names only (sealed names, no file lists), so files'
-    /// evidence isn't re-checked: treat as an estimate.
-    pub estimate: bool,
-    /// Entries that would leave the locked floor.
-    pub removed_from_floor: usize,
-}
-
-#[derive(Debug, Clone, Default, Serialize, PartialEq)]
-pub struct Assessment {
-    pub weakening: bool,
-    /// The password is needed (every weakening change, and marking a list
-    /// as part of the locked floor).
-    pub confirm: bool,
-    pub warning: Option<String>,
-    pub preview: Preview,
-    /// For a keyword override: the same entry as *Neutralize term*.
-    pub neutralize: Option<Preview>,
-    /// For a floor removal: the entries the warning counts (up to 1,000
-    /// shown). Applying settles exactly these, even if more are pending
-    /// by then; send them back as `hashes` to confirm the same set later.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub floor_entries: Option<Vec<String>>,
-    /// All of them, for applying.
-    #[serde(skip)]
-    settles: Option<Vec<[u8; 20]>>,
-}
-
 /// How far a preview has got (§20.10): shared with a running job, read by
 /// `GET /filters/preview/jobs/{id}`.
 #[derive(Debug, Default)]
@@ -406,7 +265,12 @@ pub struct Progress {
     cancelled: AtomicBool,
 }
 
-const PHASES: [&str; 4] = ["reading", "quarantine", "tombstones", "done"];
+const PHASES: [JobPhase; 4] = [
+    JobPhase::Reading,
+    JobPhase::Quarantine,
+    JobPhase::Tombstones,
+    JobPhase::Done,
+];
 const READING: u8 = 0;
 const QUARANTINE: u8 = 1;
 const TOMBSTONES: u8 = 2;
@@ -433,13 +297,13 @@ impl Progress {
         self.cancelled.store(true, Ordering::Release);
     }
 
-    fn json(&self) -> Value {
+    fn snapshot(&self) -> JobProgress {
         let phase = self.phase.load(Ordering::Acquire) as usize;
-        json!({
-            "phase": PHASES[phase.min(PHASES.len() - 1)],
-            "done": self.done.load(Ordering::Relaxed),
-            "total": self.total.load(Ordering::Relaxed),
-        })
+        JobProgress {
+            done: self.done.load(Ordering::Relaxed),
+            phase: PHASES[phase.min(PHASES.len() - 1)],
+            total: self.total.load(Ordering::Relaxed),
+        }
     }
 }
 
@@ -1236,8 +1100,14 @@ impl FiltersApi {
         Ok(had)
     }
 
-    /// Applies `change`; the caller has already checked the password.
-    pub fn apply(&self, change: &Change, now: i64) -> ApiResult<Value> {
+    /// Applies `change`, whose `assessment` the caller has already
+    /// checked the password for.
+    pub fn apply(
+        &self,
+        change: &Change,
+        assessment: Assessment,
+        now: i64,
+    ) -> ApiResult<ApplyResponse> {
         let mut guard = self.store();
         let store = &mut *guard;
         let rule_layers = matches!(
@@ -1263,7 +1133,18 @@ impl FiltersApi {
             None
         };
         let gone = || not_found("entry_not_found", "There's no such entry.");
-        let mut out = json!({});
+        let mut out = ApplyResponse {
+            applied: true,
+            assessment,
+            deleted: None,
+            exception: None,
+            id: None,
+            name: None,
+            released: None,
+            removed: None,
+            settled: None,
+            version: 0,
+        };
         match change {
             Change::CoreSwitch { rule, on } => {
                 let r = CoreRule::from_id(rule).ok_or_else(|| {
@@ -1290,7 +1171,7 @@ impl FiltersApi {
                         for h in &held {
                             self.release(store, *h)?;
                         }
-                        out["released"] = json!(held.len());
+                        out.released = Some(held.len());
                     }
                 }
             }
@@ -1318,7 +1199,7 @@ impl FiltersApi {
                         unless.as_deref(),
                     )
                     .map_err(internal)?;
-                out["id"] = json!(id);
+                out.id = Some(id);
             }
             Change::UpdateRule {
                 id,
@@ -1389,7 +1270,7 @@ impl FiltersApi {
                         o.shadow_until,
                     )
                     .map_err(internal)?;
-                out["id"] = json!(id);
+                out.id = Some(id);
             }
             Change::RemoveOverride { id } => {
                 if !store.remove_override(*id).map_err(internal)? {
@@ -1402,7 +1283,7 @@ impl FiltersApi {
                 let id = store
                     .add_exception(&e.rule.id(), kind, &value)
                     .map_err(internal)?;
-                out["id"] = json!(id);
+                out.id = Some(id);
             }
             Change::RemoveException { id } => {
                 if !store.remove_exception(*id).map_err(internal)? {
@@ -1411,7 +1292,7 @@ impl FiltersApi {
             }
             Change::AddAllow { query: q } => {
                 let id = store.add_allow(&query(q)?.to_query()).map_err(internal)?;
-                out["id"] = json!(id);
+                out.id = Some(id);
             }
             Change::RemoveAllow { id } => {
                 if !store.remove_allow(*id).map_err(internal)? {
@@ -1431,7 +1312,7 @@ impl FiltersApi {
                         c.cs.add_hash(*h, Origin::Reported);
                     }
                 });
-                out["deleted"] = json!(store.delete_torrents(&hs).map_err(internal)?.len());
+                out.deleted = Some(store.delete_torrents(&hs).map_err(internal)?.len());
             }
             Change::RemoveCs1 { hashes } => {
                 let hs: Vec<[u8; 20]> =
@@ -1445,7 +1326,7 @@ impl FiltersApi {
                 for h in &hs {
                     self.release(store, *h)?;
                 }
-                out["removed"] = json!(n);
+                out.removed = Some(n);
             }
             Change::FalsePositive { hash } => {
                 let h = hex20(hash)?;
@@ -1463,10 +1344,10 @@ impl FiltersApi {
                     },
                 )?;
                 let (kind, value) = encode_match(&e.what);
-                out["exception"] = json!(
+                out.exception = Some(
                     store
                         .add_exception(&e.rule.id(), kind, &value)
-                        .map_err(internal)?
+                        .map_err(internal)?,
                 );
                 // The core's examples are kept as hashed tokens only.
                 let name = self
@@ -1505,7 +1386,7 @@ impl FiltersApi {
                 self.engine.update(|c| c.cs.add_hash(h, Origin::Confirmed));
                 // A quarantined torrent isn't stored, but another of its
                 // swarm hashes may have been.
-                out["deleted"] = json!(store.delete_torrents(&[h]).map_err(internal)?.len());
+                out.deleted = Some(store.delete_torrents(&[h]).map_err(internal)?.len());
             }
             Change::RevealName { hash } => {
                 let h = hex20(hash)?;
@@ -1527,7 +1408,7 @@ impl FiltersApi {
                             "No sealed name is kept for that torrent.",
                         )
                     })?;
-                out["name"] = json!(name);
+                out.name = Some(name);
             }
             Change::Subscribe {
                 url,
@@ -1589,7 +1470,7 @@ impl FiltersApi {
                         interval_secs: i64::from(refresh_hours.unwrap_or(24).max(1)) * 3600,
                     })
                     .map_err(internal)?;
-                out["id"] = json!(id);
+                out.id = Some(id);
             }
             Change::Unsubscribe { id } => {
                 if !store.remove_subscription(*id).map_err(internal)? {
@@ -1643,7 +1524,7 @@ impl FiltersApi {
                         self.release(store, *h)?;
                     }
                 }
-                out["settled"] = json!(settled.len());
+                out.settled = Some(settled.len());
             }
             Change::Undo => self.undo(store)?,
         }
@@ -1661,7 +1542,7 @@ impl FiltersApi {
             lodestar_filter::lists::apply(store, &self.engine, &self.ips).map_err(internal)?;
         }
         self.reload(store)?;
-        out["version"] = json!(self.engine.current().version);
+        out.version = self.engine.current().version;
         Ok(out)
     }
 
@@ -1683,127 +1564,184 @@ impl FiltersApi {
 
     /// The rule set, switches and lists, as the Filters & Safety screens
     /// show them.
-    pub fn overview(&self) -> ApiResult<Value> {
+    pub fn overview(&self) -> ApiResult<Overview> {
         let engine = self.engine.current();
         let store = self.store();
         let set = store.rule_set().map_err(internal)?;
         let subs = store.subscriptions().map_err(internal)?;
         let pending = store.pending_floor().map_err(internal)?;
         let quarantine = store.quarantined(PREVIEW_ROWS).map_err(internal)?.len();
-        let match_json = |kind: u8, value: &[u8]| match kind {
-            KIND_HASHES => json!({ "hashes": value.chunks(20).map(hex).collect::<Vec<_>>() }),
-            KIND_KEYWORD => json!({ "keyword": String::from_utf8_lossy(value) }),
-            KIND_QUERY => json!({ "query": String::from_utf8_lossy(value) }),
-            KIND_PAYLOAD => json!({ "payload": hex(value) }),
-            _ => json!({}),
-        };
-        Ok(json!({
-            "version": engine.version,
-            "core": CoreRule::ALL.iter().map(|r| json!({
-                "id": r.id(),
-                "floor": r.floor(),
-                "on": engine.core.switches.is_on(*r),
-                "action": r.action().as_str(),
-            })).collect::<Vec<_>>(),
-            "packs": Pack::ALL.iter().map(|p| json!({
-                "id": p.as_str(),
-                "on": engine.packs.on.contains(p),
-                "rules": PackRule::ALL.iter().filter(|r| r.pack() == *p).map(|r| json!({
-                    "id": r.id(),
-                    "on": engine.packs.is_on(*r),
-                    "action": r.action().as_str(),
-                })).collect::<Vec<_>>(),
-            })).collect::<Vec<_>>(),
-            "rules": set.rules.iter().map(|r| json!({
-                "id": r.id,
-                "query": r.query,
-                "action": Action::from_code(r.action).map(Action::as_str),
-                "enabled": r.enabled,
-                "shadow_until": r.shadow_until,
-                "unless": r.unless_query,
-            })).collect::<Vec<_>>(),
-            "overrides": set.overrides.iter().map(|o| {
-                let mut v = match_json(o.kind, &o.value);
-                v["id"] = json!(o.id);
-                v["strength"] = json!(if o.strength == 1 { "neutralize" } else { "override" });
-                v["scope"] = json!(o.scope);
-                v["expires_at"] = json!(o.expires_at);
-                v["shadow_until"] = json!(o.shadow_until);
-                v
-            }).collect::<Vec<_>>(),
-            "exceptions": set.exceptions.iter().map(|e| {
-                let mut v = match_json(e.kind, &e.value);
-                v["id"] = json!(e.id);
-                v["rule"] = json!(e.rule);
-                v
-            }).collect::<Vec<_>>(),
-            "allow": set.allow.iter().map(|(id, q)| json!({ "id": id, "query": q })).collect::<Vec<_>>(),
-            "cs1_entries": engine.core.cs.len(),
-            "quarantine": quarantine,
-            "ip_ranges": self.ips.current().len(),
+        let action_name = |code: u8| Action::from_code(code).map(|a| a.as_str().to_string());
+        Ok(Overview {
+            allow: set
+                .allow
+                .iter()
+                .map(|(id, q)| AllowEntry {
+                    id: *id,
+                    query: q.clone(),
+                })
+                .collect(),
+            core: CoreRule::ALL
+                .iter()
+                .map(|r| CoreRuleState {
+                    action: r.action().as_str().to_string(),
+                    floor: r.floor(),
+                    id: r.id().to_string(),
+                    on: engine.core.switches.is_on(*r),
+                })
+                .collect(),
+            cs1_entries: engine.core.cs.len(),
+            exceptions: set
+                .exceptions
+                .iter()
+                .map(|e| {
+                    let m = StoredMatch::of(e.kind, &e.value);
+                    ExceptionEntry {
+                        hashes: m.hashes,
+                        id: e.id,
+                        keyword: m.keyword,
+                        payload: m.payload,
+                        query: m.query,
+                        rule: e.rule.clone(),
+                    }
+                })
+                .collect(),
+            ip_ranges: self.ips.current().len(),
+            overrides: set
+                .overrides
+                .iter()
+                .map(|o| {
+                    let m = StoredMatch::of(o.kind, &o.value);
+                    OverrideEntry {
+                        expires_at: o.expires_at,
+                        hashes: m.hashes,
+                        id: o.id,
+                        keyword: m.keyword,
+                        payload: m.payload,
+                        query: m.query,
+                        scope: o.scope.clone(),
+                        shadow_until: o.shadow_until,
+                        strength: if o.strength == 1 {
+                            "neutralize"
+                        } else {
+                            "override"
+                        }
+                        .to_string(),
+                    }
+                })
+                .collect(),
             // Entries a config file or a floor-marked list dropped, still
             // blocked until settled (§2.7).
-            "pending_floor_removals": pending.iter().map(|p| json!({
-                "source": p.source.key(),
-                "kind": match p.source { FloorSource::File(_) => "file", FloorSource::List(_) => "list" },
-                "name": match &p.source {
-                    FloorSource::File(path) => path.clone(),
-                    FloorSource::List(id) => subs.iter().find(|s| s.id == *id)
-                        .map_or_else(|| format!("list {id}"), |s| s.name.clone()),
-                },
-                "entries": p.hashes.len(),
-                "hashes": p.hashes.iter().take(PENDING_HASHES).map(|h| hex(h)).collect::<Vec<_>>(),
-            })).collect::<Vec<_>>(),
-            "subscriptions": subs.iter().map(|s| json!({
-                "id": s.id,
-                "name": s.name,
-                "url": s.url,
-                "kind": if s.kind == lodestar_filter::lists::KIND_IP { "ip" } else { "content" },
-                "format": s.format,
-                "action": Action::from_code(s.action).map(Action::as_str),
-                "floor": s.floor,
-                "enabled": s.enabled,
-                "entries": s.entries,
-                "status": s.status,
-                "error": s.error,
-                "checked_at": s.checked_at,
-                "updated_at": s.updated_at,
-            })).collect::<Vec<_>>(),
-        }))
+            pending_floor_removals: pending
+                .iter()
+                .map(|p| PendingFloorEntry {
+                    entries: p.hashes.len(),
+                    hashes: p
+                        .hashes
+                        .iter()
+                        .take(PENDING_HASHES)
+                        .map(|h| hex(h))
+                        .collect(),
+                    kind: match p.source {
+                        FloorSource::File(_) => "file",
+                        FloorSource::List(_) => "list",
+                    }
+                    .to_string(),
+                    name: match &p.source {
+                        FloorSource::File(path) => path.clone(),
+                        FloorSource::List(id) => subs
+                            .iter()
+                            .find(|s| s.id == *id)
+                            .map_or_else(|| format!("list {id}"), |s| s.name.clone()),
+                    },
+                    source: p.source.key(),
+                })
+                .collect(),
+            packs: Pack::ALL
+                .iter()
+                .map(|p| PackState {
+                    id: p.as_str().to_string(),
+                    on: engine.packs.on.contains(p),
+                    rules: PackRule::ALL
+                        .iter()
+                        .filter(|r| r.pack() == *p)
+                        .map(|r| PackRuleState {
+                            action: r.action().as_str().to_string(),
+                            id: r.id().to_string(),
+                            on: engine.packs.is_on(*r),
+                        })
+                        .collect(),
+                })
+                .collect(),
+            quarantine,
+            rules: set
+                .rules
+                .iter()
+                .map(|r| RuleEntry {
+                    action: action_name(r.action),
+                    enabled: r.enabled,
+                    id: r.id,
+                    query: r.query.clone(),
+                    shadow_until: r.shadow_until,
+                    unless: r.unless_query.clone(),
+                })
+                .collect(),
+            subscriptions: subs
+                .iter()
+                .map(|s| SubscriptionEntry {
+                    action: action_name(s.action),
+                    checked_at: s.checked_at,
+                    enabled: s.enabled,
+                    entries: s.entries,
+                    error: s.error.clone(),
+                    floor: s.floor,
+                    format: s.format.clone(),
+                    id: s.id,
+                    kind: if s.kind == lodestar_filter::lists::KIND_IP {
+                        "ip"
+                    } else {
+                        "content"
+                    }
+                    .to_string(),
+                    name: s.name.clone(),
+                    status: s.status.clone(),
+                    updated_at: s.updated_at,
+                    url: s.url.clone(),
+                })
+                .collect(),
+            version: engine.version,
+        })
     }
 
     /// The review queue (§20.7): quarantine, never with names, and the
     /// replay window's decisions per rule.
-    pub fn queue(&self, now: i64) -> ApiResult<Value> {
+    pub fn queue(&self, now: i64) -> ApiResult<Queue> {
         let store = self.store();
         let q = store.quarantined(1_000).map_err(internal)?;
         let hits = store.hit_counts(now - REPLAY_SECS).map_err(internal)?;
-        Ok(json!({
-            "quarantine": q.iter().map(|q| json!({
-                "hash": hex(&q.hash),
-                "rule": q.rule,
-                "at": q.at,
-                "expires_at": q.expires_at,
-                "sealed": q.sealed.is_some(),
-            })).collect::<Vec<_>>(),
-            "decisions_30d": hits.iter().map(|(rule, act, n)| json!({
-                "rule": rule,
-                "action": Action::from_code(act & !lodestar_store::SHADOW).map(Action::as_str),
-                "shadow": act & lodestar_store::SHADOW != 0,
-                "count": n,
-            })).collect::<Vec<_>>(),
-        }))
+        Ok(Queue {
+            decisions_30d: hits
+                .iter()
+                .map(|(rule, act, n)| DecisionCount {
+                    action: Action::from_code(act & !lodestar_store::SHADOW)
+                        .map(|a| a.as_str().to_string()),
+                    count: *n,
+                    rule: rule.clone(),
+                    shadow: act & lodestar_store::SHADOW != 0,
+                })
+                .collect(),
+            quarantine: q
+                .iter()
+                .map(|q| QuarantineEntry {
+                    at: q.at,
+                    expires_at: q.expires_at,
+                    hash: hex(&q.hash),
+                    rule: q.rule.clone(),
+                    sealed: q.sealed.is_some(),
+                })
+                .collect(),
+        })
     }
-}
-
-/// A candidate set of lists to assess: subscriptions by id and catalog
-/// lists by key (`lodestar lists`), in any mix.
-#[derive(Debug, Default, Deserialize)]
-pub struct StrictnessBody {
-    #[serde(default)]
-    pub subscriptions: Vec<i64>,
-    #[serde(default)]
-    pub catalog: Vec<String>,
 }
 
 impl FiltersApi {
@@ -1812,7 +1750,7 @@ impl FiltersApi {
     /// what kind of lists they are, and a warning level with its text.
     /// Lists already fetched are measured from their data; catalog lists
     /// not subscribed yet use the catalog's measurement.
-    pub fn strictness(&self, body: &StrictnessBody) -> ApiResult<Value> {
+    pub fn strictness(&self, body: &StrictnessBody) -> ApiResult<Strictness> {
         use lodestar_filter::strictness::{self, Candidate, Category, Facts};
         let store = self.store();
         let subs = store.subscriptions().map_err(internal)?;
@@ -1868,59 +1806,71 @@ impl FiltersApi {
             });
         }
         let a = strictness::assess(&candidates);
-        let cats = |c: &[Category]| c.iter().map(|c| c.as_str()).collect::<Vec<_>>();
-        Ok(json!({
-            "level": a.level.as_str(),
-            "text": a.text,
-            "ipv4_share": a.v4_share,
-            "ipv4_public_share": a.v4_public_share,
-            "ipv6_ranges": a.v6_ranges,
-            "ipv6_share": a.v6_share,
-            "hashes": a.hashes,
-            "floor_hashes": a.floor_hashes,
-            "categories": cats(&a.categories),
-            "estimate": a.estimate,
-            "unknown": a.unknown,
-            "lists": a.lists.iter().map(|l| json!({
-                "name": l.name,
-                "kind": if l.ip { "ip" } else { "content" },
-                "floor": l.floor,
-                "categories": cats(&l.categories),
-                "ipv4_share": l.v4_share,
-                "ipv4_public_share": l.v4_public_share,
-                "ipv6_ranges": l.v6_ranges,
-                "hashes": l.hashes,
-                "measured": l.measured,
-            })).collect::<Vec<_>>(),
-        }))
+        let cats = |c: &[Category]| c.iter().map(|c| c.as_str().to_string()).collect::<Vec<_>>();
+        Ok(Strictness {
+            categories: cats(&a.categories),
+            estimate: a.estimate,
+            floor_hashes: a.floor_hashes,
+            hashes: a.hashes,
+            ipv4_public_share: a.v4_public_share,
+            ipv4_share: a.v4_share,
+            ipv6_ranges: a.v6_ranges,
+            ipv6_share: a.v6_share,
+            level: a.level.as_str().to_string(),
+            lists: a
+                .lists
+                .iter()
+                .map(|l| StrictnessList {
+                    categories: cats(&l.categories),
+                    floor: l.floor,
+                    hashes: l.hashes,
+                    ipv4_public_share: l.v4_public_share,
+                    ipv4_share: l.v4_share,
+                    ipv6_ranges: l.v6_ranges,
+                    kind: if l.ip { "ip" } else { "content" }.to_string(),
+                    measured: l.measured,
+                    name: l.name.clone(),
+                })
+                .collect(),
+            text: a.text,
+            unknown: a.unknown,
+        })
     }
 }
 
-/// One example torrent for `POST /filters/test`, never stored or logged.
-#[derive(Debug, Deserialize)]
-pub struct Sample {
-    pub name: String,
-    #[serde(default)]
-    pub files: Vec<SampleFile>,
-    /// A content type (`movie`, `adult`, …), replacing the classifier's.
-    #[serde(rename = "type")]
-    pub content_type: Option<String>,
+/// A stored match (kind and value), as the overview lists it: one of the
+/// four fields, or none for a kind this server doesn't know.
+#[derive(Default)]
+struct StoredMatch {
+    hashes: Option<Vec<String>>,
+    keyword: Option<String>,
+    payload: Option<String>,
+    query: Option<String>,
 }
 
-/// A sample's file: a path, or a path and its size.
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-pub enum SampleFile {
-    Path(String),
-    Sized { path: String, size: u64 },
-}
-
-/// A draft rule and examples to try it on.
-#[derive(Debug, Deserialize)]
-pub struct TestBody {
-    pub query: Option<String>,
-    pub unless: Option<String>,
-    pub samples: Vec<Sample>,
+impl StoredMatch {
+    fn of(kind: u8, value: &[u8]) -> StoredMatch {
+        let text = || Some(String::from_utf8_lossy(value).into_owned());
+        match kind {
+            KIND_HASHES => StoredMatch {
+                hashes: Some(value.chunks(20).map(hex).collect()),
+                ..StoredMatch::default()
+            },
+            KIND_KEYWORD => StoredMatch {
+                keyword: text(),
+                ..StoredMatch::default()
+            },
+            KIND_QUERY => StoredMatch {
+                query: text(),
+                ..StoredMatch::default()
+            },
+            KIND_PAYLOAD => StoredMatch {
+                payload: Some(hex(value)),
+                ..StoredMatch::default()
+            },
+            _ => StoredMatch::default(),
+        }
+    }
 }
 
 /// Samples per test request.
@@ -1930,17 +1880,6 @@ const MAX_SAMPLES: usize = 50;
 const MAX_CORRECTIONS: usize = 10_000;
 /// Stored torrents one classification rule change re-queues at most.
 const MAX_REQUEUE: usize = 1_000_000;
-
-#[derive(Debug, Deserialize)]
-pub struct ClassRuleBody {
-    pub query: String,
-    pub adult: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct IdBody {
-    pub id: i64,
-}
 
 /// A classification rule's query: it decides the type, so it can't test
 /// the type itself (the index already holds corrected types).
@@ -1964,25 +1903,14 @@ fn class_query(text: &str) -> ApiResult<Node> {
     Ok(node)
 }
 
-/// `POST /classify/correct`: your correction to one stored torrent,
-/// replacing any earlier one. `adult: null` and `not_junk: false` clear it.
-#[derive(Debug, Deserialize)]
-pub struct CorrectBody {
-    pub hash: String,
-    pub adult: Option<bool>,
-    #[serde(default)]
-    pub not_junk: bool,
-}
-
 impl FiltersApi {
     /// The core rules' hashed examples, run against the rules as they are
     /// (§20.8): how many each has and how many it still catches.
-    pub fn fixtures(&self) -> ApiResult<Value> {
+    pub fn fixtures(&self) -> ApiResult<Fixtures> {
         let engine = self.engine.current();
         let store = self.store();
         let mut out = Vec::new();
         for r in CoreRule::ALL {
-            let mut v = json!({ "rule": r.id() });
             let (mut must, mut must_not, mut failing) = (0, 0, 0);
             for (_, must_match, tokens) in store.fixtures(r.id()).map_err(internal)? {
                 let Some(f) = Fixture::decode(&tokens) else {
@@ -1999,17 +1927,19 @@ impl FiltersApi {
                     failing += 1;
                 }
             }
-            v["must_match"] = json!(must);
-            v["must_not_match"] = json!(must_not);
-            v["failing"] = json!(failing);
-            out.push(v);
+            out.push(FixtureCounts {
+                failing,
+                must_match: must,
+                must_not_match: must_not,
+                rule: r.id().to_string(),
+            });
         }
-        Ok(json!({ "core": out }))
+        Ok(Fixtures { core: out })
     }
 
     /// Applies a classification correction (§20.9) and classifies the
     /// torrent again with it, so search sees it at the next index commit.
-    pub fn correct(&self, body: &CorrectBody) -> ApiResult<Value> {
+    pub fn correct(&self, body: &CorrectBody) -> ApiResult<CorrectResponse> {
         let hash = hex20(&body.hash)?;
         let mut store = self.store();
         let id = store
@@ -2049,18 +1979,18 @@ impl FiltersApi {
             crate::unix_now(),
         );
         store.set_enrichments(&[(id, enriched)]).map_err(internal)?;
-        Ok(json!({
-            "type": c.content_type.as_str(),
-            "adult_kind": c.adult_kind.map(|k| k.as_str()),
-            "junk": c.junk.score,
-        }))
+        Ok(CorrectResponse {
+            adult_kind: c.adult_kind.map(|k| k.as_str().to_string()),
+            junk: c.junk.score,
+            content_type: c.content_type.as_str().to_string(),
+        })
     }
 
     /// Your classification rules and how detection compares with your
     /// per-torrent corrections (§20.9): each correction is a fixture for
     /// adult detection, and the ones detection gets wrong are listed (up to
     /// 50) so a rule can cover their kind.
-    pub fn classes(&self) -> ApiResult<Value> {
+    pub fn classes(&self) -> ApiResult<Classes> {
         let mut store = self.store();
         let rules = store.class_rules().map_err(internal)?;
         let corrections = store.corrections(MAX_CORRECTIONS).map_err(internal)?;
@@ -2081,22 +2011,30 @@ impl FiltersApi {
             if detected != adult {
                 disagree += 1;
                 if wrong.len() < 50 {
-                    wrong.push(json!({ "hash": hex(&row.info_hash.0), "adult": adult }));
+                    wrong.push(DetectionExample {
+                        adult,
+                        hash: hex(&row.info_hash.0),
+                    });
                 }
             }
         }
-        Ok(json!({
-            "rules": rules.iter().map(|(id, q, adult)| json!({
-                "id": id, "query": q, "adult": adult,
-            })).collect::<Vec<_>>(),
-            "corrections": corrections.len(),
-            "detection": { "checked": checked, "disagree": disagree, "examples": wrong },
-        }))
+        Ok(Classes {
+            corrections: corrections.len(),
+            detection: Detection {
+                checked,
+                disagree,
+                examples: wrong,
+            },
+            rules: rules
+                .into_iter()
+                .map(|(id, query, adult)| ClassRule { adult, id, query })
+                .collect(),
+        })
     }
 
     /// Adds a classification rule and queues the stored torrents it
     /// matches for classifying again.
-    pub fn add_class_rule(&self, body: &ClassRuleBody, now: i64) -> ApiResult<Value> {
+    pub fn add_class_rule(&self, body: &ClassRuleBody, now: i64) -> ApiResult<ClassRuleAdded> {
         let node = class_query(&body.query)?;
         let mut store = self.store();
         let id = store
@@ -2104,12 +2042,12 @@ impl FiltersApi {
             .map_err(internal)?;
         self.reload(&store)?;
         let queued = self.requeue(&mut store, &node, now)?;
-        Ok(json!({ "id": id, "queued": queued }))
+        Ok(ClassRuleAdded { id, queued })
     }
 
     /// Removes a classification rule; the torrents it matched are
     /// classified again without it.
-    pub fn remove_class_rule(&self, id: i64, now: i64) -> ApiResult<Value> {
+    pub fn remove_class_rule(&self, id: i64, now: i64) -> ApiResult<ClassRuleRemoved> {
         let mut store = self.store();
         let q = store
             .remove_class_rule(id)
@@ -2123,17 +2061,17 @@ impl FiltersApi {
         self.reload(&store)?;
         let queued = match parse(&q) {
             Ok(node) => self.requeue(&mut store, &node, now)?,
-            Err(_) => json!(null),
+            Err(_) => None,
         };
-        Ok(json!({ "queued": queued }))
+        Ok(ClassRuleRemoved { queued })
     }
 
     /// Marks the stored torrents `node` matches for background enrichment.
     /// Without a search index, only torrents arriving or re-enriched later
     /// are affected (`null`).
-    fn requeue(&self, store: &mut Store, node: &Node, now: i64) -> ApiResult<Value> {
+    fn requeue(&self, store: &mut Store, node: &Node, now: i64) -> ApiResult<Option<usize>> {
         let Some(index) = &self.index else {
-            return Ok(json!(null));
+            return Ok(None);
         };
         let compiled = index.query(node, now);
         let ids: Vec<i64> = index
@@ -2144,12 +2082,12 @@ impl FiltersApi {
             .collect();
         let n = store.mark_unenriched(&ids).map_err(internal)?;
         self.reenrich.store(true, Ordering::Release);
-        Ok(json!(n))
+        Ok(Some(n))
     }
 
     /// Tries a draft rule and the current rules on examples (the editor's
     /// live preview). Nothing is stored or logged.
-    pub fn test(&self, body: &TestBody, now: i64) -> ApiResult<Value> {
+    pub fn test(&self, body: &TestBody, now: i64) -> ApiResult<TestResponse> {
         if body.samples.len() > MAX_SAMPLES {
             return Err(bad(
                 "too_many_samples",
@@ -2202,16 +2140,16 @@ impl FiltersApi {
                 doc.matches(q, &[]) && !unless.as_ref().is_some_and(|u| doc.matches(u, &[]))
             });
             let v = engine.judge(&item, Some(&facts), now);
-            results.push(json!({
-                "draft": matched,
-                "decision": v.decision.as_ref().map(|d| json!({
-                    "rule": d.rule.id(),
-                    "action": d.action.as_str(),
-                })),
-                "shadow": v.shadow.iter().map(|d| d.rule.id()).collect::<Vec<_>>(),
-            }));
+            results.push(TestResult {
+                decision: v.decision.as_ref().map(|d| Decision {
+                    action: d.action.as_str().to_string(),
+                    rule: d.rule.id().to_string(),
+                }),
+                draft: matched,
+                shadow: v.shadow.iter().map(|d| d.rule.id().to_string()).collect(),
+            });
         }
-        Ok(json!({ "results": results }))
+        Ok(TestResponse { results })
     }
 }
 
@@ -2225,38 +2163,57 @@ fn filters(s: &ApiState) -> ApiResult<Arc<FiltersApi>> {
     })
 }
 
-#[derive(Debug, Deserialize)]
-pub struct ChangeBody {
-    pub change: Change,
-    pub password: Option<String>,
-}
-
-async fn overview(State(s): State<ApiState>) -> ApiResult<Json<Value>> {
+/// The rule set, switches and lists.
+#[utoipa::path(
+    operation_id = "getFilters",get, path = "/filters", tag = "filters", responses((status = 200, body = Overview)))]
+pub(crate) async fn overview(State(s): State<ApiState>) -> ApiResult<Json<Overview>> {
     let f = filters(&s)?;
     tokio::task::spawn_blocking(move || f.overview().map(Json))
         .await
         .map_err(internal)?
 }
 
-async fn queue(State(s): State<ApiState>) -> ApiResult<Json<Value>> {
+/// The review queue: quarantine (never with names) and the last 30 days'
+/// decisions per rule.
+#[utoipa::path(
+    operation_id = "getFilterQueue",get, path = "/filters/queue", tag = "filters", responses((status = 200, body = Queue)))]
+pub(crate) async fn queue(State(s): State<ApiState>) -> ApiResult<Json<Queue>> {
     let f = filters(&s)?;
     tokio::task::spawn_blocking(move || f.queue(crate::unix_now()).map(Json))
         .await
         .map_err(internal)?
 }
 
-async fn fixtures(State(s): State<ApiState>) -> ApiResult<Json<Value>> {
+/// The core rules' hashed examples, run against the rules as they are.
+#[utoipa::path(
+    operation_id = "getFilterFixtures",
+    get,
+    path = "/filters/fixtures",
+    tag = "filters",
+    responses((status = 200, body = Fixtures))
+)]
+pub(crate) async fn fixtures(State(s): State<ApiState>) -> ApiResult<Json<Fixtures>> {
     let f = filters(&s)?;
     tokio::task::spawn_blocking(move || f.fixtures().map(Json))
         .await
         .map_err(internal)?
 }
 
-async fn test(
+/// Tries a draft rule and the current rules on example torrents. Nothing
+/// is stored or logged.
+#[utoipa::path(
+    operation_id = "testFilterRule",
+    post,
+    path = "/filters/test",
+    tag = "filters",
+    request_body = TestBody,
+    responses((status = 200, body = TestResponse))
+)]
+pub(crate) async fn test(
     State(s): State<ApiState>,
     headers: HeaderMap,
     JsonBody(body): JsonBody<TestBody>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<TestResponse>> {
     same_origin_json(&headers)?;
     let f = filters(&s)?;
     tokio::task::spawn_blocking(move || f.test(&body, crate::unix_now()).map(Json))
@@ -2264,13 +2221,22 @@ async fn test(
         .map_err(internal)?
 }
 
-/// `POST /filters/strictness`: how strict a candidate set of lists is
-/// (§2.9, §20.13). Nothing is stored or connected.
-async fn strictness(
+/// How strict a candidate set of lists is (§2.9, §20.13): what it
+/// would block and a warning matched to it. Nothing is stored or
+/// connected.
+#[utoipa::path(
+    operation_id = "assessListStrictness",
+    post,
+    path = "/filters/strictness",
+    tag = "filters",
+    request_body = StrictnessBody,
+    responses((status = 200, body = Strictness))
+)]
+pub(crate) async fn strictness(
     State(s): State<ApiState>,
     headers: HeaderMap,
     JsonBody(body): JsonBody<StrictnessBody>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<Strictness>> {
     same_origin_json(&headers)?;
     let f = filters(&s)?;
     tokio::task::spawn_blocking(move || f.strictness(&body).map(Json))
@@ -2278,11 +2244,21 @@ async fn strictness(
         .map_err(internal)?
 }
 
-async fn correct(
+/// Your classification correction for one stored torrent; it's
+/// classified again at once.
+#[utoipa::path(
+    operation_id = "correctClassification",
+    post,
+    path = "/classify/correct",
+    tag = "classify",
+    request_body = CorrectBody,
+    responses((status = 200, body = CorrectResponse))
+)]
+pub(crate) async fn correct(
     State(s): State<ApiState>,
     headers: HeaderMap,
     JsonBody(body): JsonBody<CorrectBody>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<CorrectResponse>> {
     same_origin_json(&headers)?;
     let f = filters(&s)?;
     tokio::task::spawn_blocking(move || f.correct(&body).map(Json))
@@ -2290,18 +2266,32 @@ async fn correct(
         .map_err(internal)?
 }
 
-async fn classes(State(s): State<ApiState>) -> ApiResult<Json<Value>> {
+/// Your classification rules, and how detection compares with your
+/// corrections.
+#[utoipa::path(
+    operation_id = "getClassify",get, path = "/classify", tag = "classify", responses((status = 200, body = Classes)))]
+pub(crate) async fn classes(State(s): State<ApiState>) -> ApiResult<Json<Classes>> {
     let f = filters(&s)?;
     tokio::task::spawn_blocking(move || f.classes().map(Json))
         .await
         .map_err(internal)?
 }
 
-async fn add_class_rule(
+/// Adds a classification rule; the stored torrents it matches are
+/// classified again.
+#[utoipa::path(
+    operation_id = "addClassRule",
+    post,
+    path = "/classify/rules",
+    tag = "classify",
+    request_body = ClassRuleBody,
+    responses((status = 200, body = ClassRuleAdded))
+)]
+pub(crate) async fn add_class_rule(
     State(s): State<ApiState>,
     headers: HeaderMap,
     JsonBody(body): JsonBody<ClassRuleBody>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<ClassRuleAdded>> {
     same_origin_json(&headers)?;
     let f = filters(&s)?;
     tokio::task::spawn_blocking(move || f.add_class_rule(&body, crate::unix_now()).map(Json))
@@ -2309,11 +2299,21 @@ async fn add_class_rule(
         .map_err(internal)?
 }
 
-async fn remove_class_rule(
+/// Removes a classification rule; the torrents it matched are classified
+/// again without it.
+#[utoipa::path(
+    operation_id = "removeClassRule",
+    post,
+    path = "/classify/rules/remove",
+    tag = "classify",
+    request_body = IdBody,
+    responses((status = 200, body = ClassRuleRemoved))
+)]
+pub(crate) async fn remove_class_rule(
     State(s): State<ApiState>,
     headers: HeaderMap,
     JsonBody(body): JsonBody<IdBody>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<ClassRuleRemoved>> {
     same_origin_json(&headers)?;
     let f = filters(&s)?;
     tokio::task::spawn_blocking(move || f.remove_class_rule(body.id, crate::unix_now()).map(Json))
@@ -2321,13 +2321,20 @@ async fn remove_class_rule(
         .map_err(internal)?
 }
 
-/// `POST /filters/preview/jobs`: starts a preview in the background and
-/// returns its id (202).
-async fn start_preview(
+/// Starts a preview in the background; poll it by its id.
+#[utoipa::path(
+    operation_id = "startFilterPreviewJob",
+    post,
+    path = "/filters/preview/jobs",
+    tag = "filters",
+    request_body = ChangeBody,
+    responses((status = 202, body = JobStarted))
+)]
+pub(crate) async fn start_preview(
     State(s): State<ApiState>,
     headers: HeaderMap,
     JsonBody(body): JsonBody<ChangeBody>,
-) -> ApiResult<(StatusCode, Json<Value>)> {
+) -> ApiResult<(StatusCode, Json<JobStarted>)> {
     same_origin_json(&headers)?;
     let f = filters(&s)?;
     let (id, job) = f.jobs.start()?;
@@ -2337,43 +2344,72 @@ async fn start_preview(
         *job.result.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
         *job.finished.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
     });
-    Ok((StatusCode::ACCEPTED, Json(json!({ "job": id }))))
+    Ok((StatusCode::ACCEPTED, Json(JobStarted { job: id })))
 }
 
-/// `GET /filters/preview/jobs/{id}`: progress while it runs, then the
-/// assessment (or the error) once it's done.
-async fn preview_job(State(s): State<ApiState>, Path(id): Path<u64>) -> ApiResult<Json<Value>> {
+/// A preview job: progress while it runs, then the assessment (or the
+/// error) once it's done.
+#[utoipa::path(
+    operation_id = "getFilterPreviewJob",
+    get,
+    path = "/filters/preview/jobs/{id}",
+    tag = "filters",
+    params(("id" = u64, Path, description = "The job's id.")),
+    responses((status = 200, body = JobStatus))
+)]
+pub(crate) async fn preview_job(
+    State(s): State<ApiState>,
+    Path(id): Path<u64>,
+) -> ApiResult<Json<JobStatus>> {
     let job = filters(&s)?.jobs.get(id)?;
     let result = job.result.lock().unwrap_or_else(|e| e.into_inner());
-    Ok(Json(match result.as_ref() {
-        None => json!({ "state": "running", "progress": job.progress.json() }),
-        Some(Ok(a)) => json!({
-            "state": "done",
-            "progress": job.progress.json(),
-            "assessment": serde_json::to_value(a).map_err(internal)?,
-        }),
-        Some(Err(e)) => json!({
-            "state": "failed",
-            "progress": job.progress.json(),
-            "status": e.status().as_u16(),
-            "error": e.body()["error"].clone(),
-        }),
+    let progress = job.progress.snapshot();
+    let (state, assessment, error) = match result.as_ref() {
+        None => (JobState::Running, None, None),
+        Some(Ok(a)) => (JobState::Done, Some(a.clone()), None),
+        Some(Err(e)) => (JobState::Failed, None, Some(e)),
+    };
+    Ok(Json(JobStatus {
+        assessment,
+        error: error.map(ApiError::error_body),
+        progress,
+        state,
+        status: error.map(|e| e.status().as_u16()),
     }))
 }
 
-/// `POST /filters/preview/jobs/{id}/cancel`.
-async fn cancel_preview(
+/// Cancels a preview job; it stops at its next step.
+#[utoipa::path(
+    operation_id = "cancelFilterPreviewJob",
+    post,
+    path = "/filters/preview/jobs/{id}/cancel",
+    tag = "filters",
+    params(("id" = u64, Path, description = "The job's id.")),
+    request_body(content = Object, description = "Any JSON, such as `{}`."),
+    responses((status = 200, body = OkResponse))
+)]
+pub(crate) async fn cancel_preview(
     State(s): State<ApiState>,
     Path(id): Path<u64>,
     headers: HeaderMap,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<OkResponse>> {
     same_origin_json(&headers)?;
     let job = filters(&s)?.jobs.get(id)?;
     job.progress.cancel();
-    Ok(Json(json!({ "ok": true })))
+    Ok(Json(OkResponse::OK))
 }
 
-async fn preview(
+/// What a change would do, without applying it or asking for the
+/// password.
+#[utoipa::path(
+    operation_id = "previewFilterChange",
+    post,
+    path = "/filters/preview",
+    tag = "filters",
+    request_body = ChangeBody,
+    responses((status = 200, body = Assessment))
+)]
+pub(crate) async fn preview(
     State(s): State<ApiState>,
     headers: HeaderMap,
     JsonBody(body): JsonBody<ChangeBody>,
@@ -2385,12 +2421,23 @@ async fn preview(
         .map_err(internal)?
 }
 
-async fn apply(
+/// Applies a change. A change that weakens filtering is refused with 428
+/// (`confirm_required`, the assessment beside the error) until it's sent
+/// again with the admin password, every time (§20.11).
+#[utoipa::path(
+    operation_id = "applyFilterChange",
+    post,
+    path = "/filters/apply",
+    tag = "filters",
+    request_body = ChangeBody,
+    responses((status = 200, body = ApplyResponse))
+)]
+pub(crate) async fn apply(
     State(s): State<ApiState>,
     ClientIp(ip): ClientIp,
     headers: HeaderMap,
     JsonBody(body): JsonBody<ChangeBody>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<ApplyResponse>> {
     same_origin_json(&headers)?;
     let f = filters(&s)?;
     let auth = s.auth.clone();
@@ -2404,7 +2451,7 @@ fn apply_change(
     auth: &auth::Auth,
     ip: IpAddr,
     body: ChangeBody,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<ApplyResponse>> {
     let now = crate::unix_now();
     let assessment = f.assess(&body.change, now)?;
     if assessment.confirm {
@@ -2418,10 +2465,7 @@ fn apply_change(
                     "This change weakens filtering: read the warning and confirm with your password.",
                 )
                 .field("password")
-                .with(
-                    "assessment",
-                    serde_json::to_value(&assessment).map_err(internal)?,
-                ));
+                .assessment(assessment));
             }
             Some(p) => auth.confirm(ip, p).map_err(|e| auth_error(e, "password"))?,
         }
@@ -2443,8 +2487,5 @@ fn apply_change(
         },
         _ => body.change,
     };
-    let mut out = f.apply(&change, now)?;
-    out["applied"] = json!(true);
-    out["assessment"] = serde_json::to_value(&assessment).map_err(internal)?;
-    Ok(Json(out))
+    f.apply(&change, assessment, now).map(Json)
 }

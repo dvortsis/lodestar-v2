@@ -1,0 +1,2 @@
+400
+{"error":{"code":"q_and_ast","message":"Send q or ast, not both."}}
