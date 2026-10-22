@@ -1863,6 +1863,12 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Memory:** while a rebuild runs, two writers are active (live and build), each with the configured heap.
 - **Tests** use a version override in `ServingConfig`, and a hold point before finishing instead of timing, so they don't bump `SCHEMA_VERSION` or depend on speed.
 
+**B5a swap fix (Windows):**
+- **Renames of index directories retry with backoff, about 10 s in all, before they count as failures.** Windows refuses to rename a directory while any file in it is open, and an antivirus or search indexer opens freshly written segments for a moment. Before this, one such moment failed the whole rebuild at the finishing rename.
+  - A failed rebuild stays in `Failed` with the old index serving, so `rebuilding()` never cleared. That's how B5b's swap test hung on Windows CI.
+- **`RebuildProgress` gains `error`**, the failure's message, so the banner, Insights and tests can say why.
+- **The serving pointer is a `Mutex<Arc<SearchIndex>>`, held only to clone or replace the `Arc`,** in place of an `RwLock`. A swap then waits behind at most one clone, whatever the platform's reader/writer policy (Windows SRW locks promise none).
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.
