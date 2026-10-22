@@ -1,0 +1,2 @@
+404
+{"error":{"code":"no_route","message":"There's no such endpoint."}}

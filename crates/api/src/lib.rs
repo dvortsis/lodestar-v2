@@ -7,6 +7,11 @@
 //! [`auth::protected`]. To add a domain, add a module, add one line to
 //! [`router`].
 //!
+//! **Contract:** handlers take and return the typed DTOs in [`dto`],
+//! and each module lists its handlers in an `ApiDoc` that [`openapi`]
+//! merges into `/openapi.json` (see `README.md` for the pattern new
+//! endpoints follow).
+//!
 //! **Errors:** every failure is an [`ApiError`], which renders the one
 //! envelope `{ "error": { "code", "message", "field"?, "start"?, "end"? } }`
 //! (see [`error`]). Use the extractors in [`extract`] rather than axum's
@@ -18,9 +23,11 @@
 //! `Origin` must match `Host`.
 
 pub mod auth;
+pub mod dto;
 pub mod error;
 pub mod extract;
 pub mod filters;
+pub mod openapi;
 mod search;
 mod torrents;
 
@@ -56,6 +63,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(search::routes())
         .merge(torrents::routes())
         .merge(filters::routes())
+        .merge(openapi::routes())
         // What `auth::protected` checks sessions against.
         .layer(Extension(auth::SessionAuth(state.auth.clone())))
         // For open routes; `auth::protected` sets its own behind the
