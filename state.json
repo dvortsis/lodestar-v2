@@ -220,8 +220,8 @@
    "session": "session_01KbNDuqr2bBED88auAfEkNp",
    "pr": 74,
    "attempt": 1,
-   "review_rounds": 2,
-   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #74; reviewer started 16:45 | 17:10 r1 FIX: token classes (runner shared fix), dup groups, brush, null delta, dates, int axes. R2 FIX 17:55: computed-style test missing, x-axis tick overlap, showcase in prod (+1.83 kB; move to dev-routes after #76). 18:04 R2 fixes pushed 219eed7; waits on #80 and #76. 20:20 6ad522d dev-routes moved; computed-style tests red until #80 (owner baselines). Blocked on #80."
+   "review_rounds": 3,
+   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #74; reviewer started 16:45 | 17:10 r1 FIX: token classes (runner shared fix), dup groups, brush, null delta, dates, int axes. R2 FIX 17:55: computed-style test missing, x-axis tick overlap, showcase in prod (+1.83 kB; move to dev-routes after #76). 18:04 R2 fixes pushed 219eed7; waits on #80 and #76. 20:20 6ad522d dev-routes moved; computed-style tests red until #80 (owner baselines). Blocked on #80. 20:50 R3 FIX: brush external-selection commit, measured tick spacing, PR body. Verified all 6 specs pass with #80."
   },
   "W9": {
    "status": "pending",
@@ -1076,7 +1076,8 @@
   "typed_held_reason": "Typed held-reason for subscriptions (instead of matching 'shrank' in sub.error) needs a schema change: fold into B8.",
   "word_file_clause_1M": "search-bench 'word + file clause' misses 30 ms target at 1M (45 ms/5 seg, 108 ms/1 seg); gated at 200k. Track for M8 10M perf gates / B5c cache.",
   "filter_quadratic": "F-perf follow-up (security): prefilter.rs Scan::other at_pos quadratic on non-ASCII; matcher.rs sequence() quadratic (phrases, multi-part words); NEAR per-place window scan -> precompute per-word place lists + binary search; cache sorted tokens per text. Launch after F-near merges.",
-  "b6_polish": "B6 polish deferred: lease.rs now() doc on node(); adult_kind stale-tag wording (unreachable today); Hours 2^16 cap test with real column; bin_of i64 clamp at import; golden note (BM25 avg length)."
+  "b6_polish": "B6 polish deferred: lease.rs now() doc on node(); adult_kind stale-tag wording (unreachable today); Hours 2^16 cap test with real column; bin_of i64 clamp at import; golden note (BM25 avg length).",
+  "tailwind_scans_dev_routes": "Tailwind scans src/dev-routes, so showcase-only classes (grid-cols-2, self-start) land in production CSS. Project-wide follow-up: exclude src/dev-routes from the production Tailwind source set (@source not)."
  },
  "blocked_on_owner": [
   "Modern DHT crawler architecture: waiting on an AskUserQuestion",
