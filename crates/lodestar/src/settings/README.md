@@ -16,7 +16,7 @@ From lowest to highest: the built-in **default**, **`config.toml`**, a value **s
 
 Each section has a `tokio::sync::watch` channel (`Registry::subscribe::<T>()`), which a patch publishes on only when the section actually changes.
 
-- **Live:** `general.log_level` (`log::follow` reloads the filter) and `crawler.intensity` (`crawler::follow_intensity` hands it to the running DHT node; the fetch pool's socket count follows at the next start).
+- **Live:** `general.log_level` (`log::follow` reloads the filter), `crawler.intensity` (`crawler::follow_intensity` hands it to the running DHT node; the fetch pool's socket count follows at the next start) and `content.show_adult` (`content::follow` gives the API a reader over the channel, read at each request).
 - **Restart-only:** every other field is `restart_required`. A section's `restart_required` list names the fields whose saved value differs from the running one.
 
 ## Out of bounds
@@ -37,6 +37,7 @@ A later slice (Integrations, Notifications, Appearance, Insights & digest…) ad
    - `from_config` / `apply`: how it reads `Config`, and how one saved field is written back into it. A section no config key backs (like `transport`) returns its `Default` and applies nothing.
    - No field may be nullable: `null` in a patch means reset. Use a sentinel value instead (`max_sockets: 0`).
    - `check`: any validation beyond type and bounds.
+   - `CONFIRMATIONS` / `confirm`: patch keys that aren't fields but confirm a change (`content`'s `confirm_adult`), checked against the whole patch after the fields' own checks and never saved.
    - Mark enum fields `#[schema(inline)]` and leave them undocumented, so the schema has no `$ref` (forms can't follow one) and no `oneOf` wrapper.
 2. **One registration line** in `Registry::load`, in display order.
 3. **A subscriber** for each live field, started in `services.rs` with `registry.subscribe::<T>()`.
