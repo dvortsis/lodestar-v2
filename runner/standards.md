@@ -2,11 +2,11 @@
 
 These are the single bar for every slice session and every review. Briefs add slice-specific checks on top; they never lower these.
 
-**Design authority (owner's decision, 2026-10-22):** the design decided with the owner in the "Modern DHT crawler architecture" session is the **primary design strategy**. That session wrote `docs/architecture.md`, including all of §10 and §20, and it is the record of those decisions. `ui-design-skills` **fills the gaps** the architecture doesn't decide; it never overrides it.
+**Design authority (owner's decision, 2026-10-22):** the owner's decisions are the primary rules. They are in `docs/owner-decisions.md`, extracted from the design session. The approved plan built from them, `docs/architecture.md` (all of §10 and §20 included), comes next. `ui-design-skills` **fills the gaps** they leave; it never overrides them. CLAUDE.md says the same.
 
 The sources of truth, in order:
-1. the owner's explicit instructions and `CLAUDE.md`
-2. `docs/architecture.md`, the primary design strategy
+1. `docs/owner-decisions.md`, the owner's explicit instructions, and `CLAUDE.md`
+2. `docs/architecture.md`, the approved plan
 3. the contract docs derived from it: `docs/design-tokens.md`, `docs/metrics.md`, `docs/ui-glossary.md`
 4. `ui-design-skills`, only for what 1–3 leave open, in its own precedence order and applied by spirit for Svelte (standards §3)
 5. the slice brief
