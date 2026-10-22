@@ -1,0 +1,19 @@
+{
+  "recorded_from": "Built by hand from the Discord webhook documentation (discord.com/developers/docs/resources/webhook) and its documented error bodies, not recorded: there is no live webhook to record from",
+  "note": "A payload Discord refuses: 400, final",
+  "request": {
+    "method": "POST",
+    "path": "/api/webhooks/123456789012345678/Tk3n-SECRET_value",
+    "query": "wait=true"
+  },
+  "response": {
+    "status": 400,
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "body": "{\"message\":\"Invalid Form Body\",\"code\":50035,\"errors\":{\"embeds\":{\"0\":{\"description\":{\"_errors\":[{\"code\":\"BASE_TYPE_MAX_LENGTH\",\"message\":\"Must be 4096 or fewer in length.\"}]}}}}}"
+  }
+}

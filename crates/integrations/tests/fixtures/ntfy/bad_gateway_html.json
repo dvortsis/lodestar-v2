@@ -1,0 +1,19 @@
+{
+  "recorded_from": "Built by hand from the ntfy publishing API documentation (docs.ntfy.sh/publish, server v2.x), not recorded: no ntfy server was available in the build session",
+  "note": "A reverse proxy in front of ntfy that is down: 502 with an HTML page, retryable",
+  "request": {
+    "method": "POST",
+    "path": "/lodestar-alerts",
+    "query": null
+  },
+  "response": {
+    "status": 502,
+    "headers": [
+      [
+        "content-type",
+        "text/html"
+      ]
+    ],
+    "body": "<html><head><title>502 Bad Gateway</title></head><body><center><h1>502 Bad Gateway</h1></center><hr><center>nginx</center></body></html>"
+  }
+}

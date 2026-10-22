@@ -10,6 +10,9 @@
 //! sources are never sent to a channel: [`Notification::shareable_items`]
 //! leaves them out and senders say only how many were withheld.
 
+pub mod discord;
+pub mod ntfy;
+pub mod rss;
 pub mod webhook;
 
 use std::fmt;
