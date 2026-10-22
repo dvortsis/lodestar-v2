@@ -584,6 +584,20 @@ impl SearchIndex {
         Ok(Results { hits, total })
     }
 
+    /// The ids of every torrent `compiled` matches, at most `limit`, in no
+    /// particular order: for jobs over a query's whole result set (a
+    /// classification rule's torrents, §20.9), not for display.
+    pub fn matching_ids(&self, compiled: &Compiled, limit: usize) -> Result<Vec<u64>> {
+        let searcher = self.reader.searcher();
+        let collector = PostFilter {
+            ranges: &compiled.filters,
+            inner: IdsCollector { limit },
+        };
+        let mut ids = searcher.search(compiled.query.as_ref(), &collector)?;
+        ids.truncate(limit);
+        Ok(ids)
+    }
+
     /// The positions (in the torrent's file list) of the files of torrent
     /// `id` that match any `file:(…)` clause of `node`, at most `limit`:
     /// the "matched files" a result shows (§8).
@@ -833,5 +847,58 @@ impl Indexer {
         self.index.files.reader.reload()?;
         self.index.reader.reload()?;
         Ok(())
+    }
+}
+
+/// Collects torrent ids from the `id` fast field, at most `limit` per
+/// segment (the merge truncates the total).
+struct IdsCollector {
+    limit: usize,
+}
+
+struct IdsSegment {
+    col: tantivy::columnar::Column<u64>,
+    ids: Vec<u64>,
+    limit: usize,
+}
+
+impl tantivy::collector::Collector for IdsCollector {
+    type Fruit = Vec<u64>;
+    type Child = IdsSegment;
+
+    fn for_segment(
+        &self,
+        _: tantivy::SegmentOrdinal,
+        reader: &tantivy::SegmentReader,
+    ) -> tantivy::Result<IdsSegment> {
+        Ok(IdsSegment {
+            col: reader.fast_fields().u64("id")?,
+            ids: Vec::new(),
+            limit: self.limit,
+        })
+    }
+
+    fn requires_scoring(&self) -> bool {
+        false
+    }
+
+    fn merge_fruits(&self, fruits: Vec<Vec<u64>>) -> tantivy::Result<Vec<u64>> {
+        Ok(fruits.concat())
+    }
+}
+
+impl tantivy::collector::SegmentCollector for IdsSegment {
+    type Fruit = Vec<u64>;
+
+    fn collect(&mut self, doc: tantivy::DocId, _: tantivy::Score) {
+        if self.ids.len() < self.limit {
+            if let Some(id) = self.col.first(doc) {
+                self.ids.push(id);
+            }
+        }
+    }
+
+    fn harvest(self) -> Vec<u64> {
+        self.ids
     }
 }

@@ -22,7 +22,7 @@ use crate::core::{Action, Core, CoreRule, Evidence, Hit, Item};
 use crate::hash::TermSet;
 use crate::matcher::{Doc, Facts};
 use crate::packs::{self, PackRule, PackSwitches};
-use crate::rules::{self, Allow, Exception, Match, Override, Strength, UserRule};
+use crate::rules::{self, Allow, ClassRule, Exception, Match, Override, Strength, UserRule};
 
 /// Which rule decided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -120,6 +120,8 @@ pub struct Engine {
     pub overrides: Vec<Override>,
     pub exceptions: Vec<Exception>,
     pub allow: Vec<Allow>,
+    /// Classification rules, oldest first; not part of filtering.
+    pub class_rules: Vec<ClassRule>,
     pub version: u64,
 }
 
@@ -134,8 +136,23 @@ impl Engine {
             overrides: Vec::new(),
             exceptions: Vec::new(),
             allow: Vec::new(),
+            class_rules: Vec::new(),
             version: 1,
         }
+    }
+
+    /// What your classification rules say about this torrent: the newest
+    /// matching rule's Is adult (`true`) or Not adult (`false`).
+    pub fn class_correction(&self, item: &Item, facts: Option<&Facts>) -> Option<bool> {
+        if self.class_rules.is_empty() {
+            return None;
+        }
+        let doc = Doc::new(item, facts);
+        self.class_rules
+            .iter()
+            .rev()
+            .find(|r| doc.matches(&r.query, &[]))
+            .map(|r| r.adult)
     }
 
     /// The decision for one torrent. `facts` (classification and the
