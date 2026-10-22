@@ -88,6 +88,10 @@ pub struct PipelineConfig {
     /// Tombstoned and quarantined keys, shared with the API so a release
     /// takes effect at once. The store's are added at start.
     pub held: Arc<HeldSet>,
+    /// Set by the API when stored torrents were marked for classifying
+    /// again (a classification rule changed): background enrichment
+    /// starts another pass.
+    pub reenrich: Arc<AtomicBool>,
     /// The crawler warm-up window: torrents found this soon after the
     /// first run are flagged `BACKFILL` (§6).
     pub backfill: Duration,
@@ -109,6 +113,7 @@ impl Default for PipelineConfig {
             quarantine: Duration::from_secs(30 * 86_400),
             filter_hits: Duration::from_secs(30 * 86_400),
             held: Arc::new(HeldSet::default()),
+            reenrich: Arc::new(AtomicBool::new(false)),
             backfill: Duration::from_secs(30 * 86_400),
             flush_every: Duration::from_secs(5),
             save_queue_every: Duration::from_secs(300),
@@ -339,7 +344,12 @@ impl Pipeline {
         );
         let have = Arc::new(have);
         load_filter(&config.filter, &filter_state);
-        for note in config.filter.update_engine(|e| e.load_rules(&rule_set)) {
+        let (rule_set, class_rules) = rule_set;
+        for note in config.filter.update_engine(|e| {
+            let mut notes = e.load_rules(&rule_set);
+            notes.extend(e.load_class_rules(&class_rules));
+            notes
+        }) {
             tracing::warn!("filter: {note}");
         }
         let held = config.held.clone();
@@ -524,6 +534,7 @@ impl Pipeline {
             store: Some(store),
             backfill_after: 0,
             backfill_done: false,
+            reenrich: config.reenrich.clone(),
             cfg: writer::WriterConfig {
                 flush_every: config.flush_every,
                 batch_max: config.batch_max,
@@ -650,7 +661,7 @@ fn prepare(
         i64,
         u64,
         FilterState,
-        RuleSet,
+        (RuleSet, Vec<(i64, String, bool)>),
     ),
     Error,
 > {
@@ -702,7 +713,7 @@ fn prepare(
         ..WriteBatch::default()
     })?;
     let filter = store.filter_state()?;
-    let rules = store.rule_set()?;
+    let rules = (store.rule_set()?, store.class_rules()?);
     Ok((
         store,
         ids,
