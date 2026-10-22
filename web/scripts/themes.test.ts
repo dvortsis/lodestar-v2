@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
-import { contrast, deltaE } from './color.ts';
+import { contrast, deltaE, toOklch } from './color.ts';
 import {
 	DATA_SLOT,
 	PREPAINT,
@@ -31,68 +31,81 @@ const [light, dark] = expandFamily(riverstone) as [Theme, Theme];
 const L = derive(light);
 const D = derive(dark);
 
-// Every value design-tokens.md §1-4 prints for Riverstone, byte for byte, plus the derived
-// neutral-content (a "rule" token, ≥ 4.5:1 on neutral).
-const EXACT: Record<'light' | 'dark', Partial<Record<keyof Tokens, string>>> = {
+// Every token design-tokens.md §1-4 defines for Riverstone, light and dark, byte for byte (36 each).
+// Values the doc leaves to a rule (the *-content labels and neutral-content, which must reach
+// 4.5:1 on their fill) are the compiler's choice, pinned here so a rule change cannot slip by.
+const CONTRACT: Record<'light' | 'dark', Tokens> = {
 	light: {
-		'--color-accent-ink': '#5B7763',
-		'--color-success': '#5B7763',
-		'--color-muted-text': '#567079',
-		'--color-field-border': '#8796A2',
-		'--color-neutral': '#8796A2',
-		'--color-base-300': '#DCE4E1',
-		'--color-hover': '#F1F5F6',
-		'--color-selected': '#E7EDF0',
-		'--data-4': '#8796A2',
-		'--data-5': '#7E9B86',
-		'--color-neutral-content': '#193038',
 		'--color-base-100': '#FFFFFF',
 		'--color-base-200': '#F3F6F5',
+		'--color-base-300': '#DCE4E1',
 		'--color-base-content': '#243C44',
-		'--color-primary': '#4A7789', // primary-ink
-		'--color-info': '#4A7789',
+		'--color-primary': '#4A7789',
 		'--color-primary-content': '#FFFFFF',
 		'--color-secondary': '#4A7789',
+		'--color-secondary-content': '#FFFFFF',
 		'--color-accent': '#829F8A',
 		'--color-accent-content': '#243C44',
+		'--color-neutral': '#8796A2',
+		'--color-neutral-content': '#193038',
+		'--color-info': '#4A7789',
+		'--color-info-content': '#FFFFFF',
+		'--color-success': '#5B7763',
+		'--color-success-content': '#FFFFFF',
 		'--color-warning': '#896D2A',
+		'--color-warning-content': '#FFFFFF',
 		'--color-error': '#B45253',
+		'--color-error-content': '#FFFFFF',
+		'--color-accent-ink': '#5B7763',
+		'--color-muted-text': '#567079',
+		'--color-field-border': '#8796A2',
+		'--color-hover': '#F1F5F6',
+		'--color-selected': '#E7EDF0',
 		'--data-1': '#527F91',
 		'--data-2': '#AE9150',
 		'--data-3': '#BF8173',
+		'--data-4': '#8796A2',
+		'--data-5': '#7E9B86',
 		'--data-6': '#9381B6',
+		'--data-other': '#567079',
 		'--brand-surface': '#FFFFFF',
 		'--brand-primary': '#527F91',
 		'--brand-accent': '#829F8A',
 		'--brand-star': '#D49A4A'
 	},
 	dark: {
-		'--color-muted-text': '#B2C3C5',
-		'--data-other': '#B2C3C5',
-		'--color-error': '#DC8080',
-		'--color-base-300': '#354851',
-		'--color-hover': '#2A3B45',
-		'--color-selected': '#30434D',
-		'--color-neutral-content': '#22313A',
 		'--color-base-100': '#22313A',
 		'--color-base-200': '#141F25',
+		'--color-base-300': '#354851',
 		'--color-base-content': '#E5EEED',
 		'--color-primary': '#85AFC0',
-		'--color-info': '#85AFC0',
 		'--color-primary-content': '#141F25',
+		'--color-secondary': '#85AFC0',
+		'--color-secondary-content': '#141F25',
 		'--color-accent': '#A0C3A7',
 		'--color-accent-content': '#141F25',
-		'--color-accent-ink': '#A0C3A7',
-		'--color-success': '#A0C3A7',
-		'--color-warning': '#C4A765',
 		'--color-neutral': '#8C9BA7',
+		'--color-neutral-content': '#22313A',
+		'--color-info': '#85AFC0',
+		'--color-info-content': '#141F25',
+		'--color-success': '#A0C3A7',
+		'--color-success-content': '#141F25',
+		'--color-warning': '#C4A765',
+		'--color-warning-content': '#141F25',
+		'--color-error': '#DC8080',
+		'--color-error-content': '#141F25',
+		'--color-accent-ink': '#A0C3A7',
+		'--color-muted-text': '#B2C3C5',
 		'--color-field-border': '#8C9BA7',
+		'--color-hover': '#2A3B45',
+		'--color-selected': '#30434D',
 		'--data-1': '#527F91',
 		'--data-2': '#C4A765',
 		'--data-3': '#BF8173',
 		'--data-4': '#8C9BA7',
 		'--data-5': '#829F8A',
 		'--data-6': '#9381B6',
+		'--data-other': '#B2C3C5',
 		'--brand-surface': '#22313A',
 		'--brand-primary': '#85AFC0',
 		'--brand-accent': '#A0C3A7',
@@ -105,10 +118,9 @@ describe('Riverstone golden tokens (architecture §10.18)', () => {
 		['light', L],
 		['dark', D]
 	] as const) {
-		it(`${mode}: exact values`, () => {
-			for (const [key, want] of Object.entries(EXACT[mode])) {
-				expect(tokens[key as keyof Tokens], `${mode} ${key}`).toBe(want);
-			}
+		it(`${mode}: all 36 contract tokens, byte for byte`, () => {
+			expect(tokens).toEqual(CONTRACT[mode]);
+			expect(Object.keys(CONTRACT[mode])).toEqual([...TOKEN_KEYS]);
 		});
 		it(`${mode}: the rules alone land within ΔE_ok ≤ 0.5 of every pinned value`, () => {
 			const theme = mode === 'light' ? light : dark;
@@ -192,16 +204,20 @@ describe('derivation rules', () => {
 		colors: { ...light.colors, categorical: [...light.colors.categorical] }
 	};
 
-	it('keeps hue and chroma of the inks', () => {
-		const ink = derive(base)['--color-primary'];
-		expect(deltaE(ink, light.colors.primary)).toBeGreaterThan(0);
-		// same hue family: the ink is a lightness shift, not a different colour
-		const hue = (h: string) => {
-			const n = parseInt(h.slice(1), 16);
-			return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-		};
-		const [r, , b] = hue(ink);
-		expect(b!).toBeGreaterThan(r!);
+	it('keeps hue and chroma of the inks (lightness-only shift)', () => {
+		const t = derive(base);
+		for (const [ink, source] of [
+			[t['--color-primary'], light.colors.primary],
+			[t['--color-accent-ink'], light.colors.accent],
+			[t['--color-warning'], light.colors.categorical[2]!],
+			[t['--data-2'], light.colors.categorical[2]!]
+		] as const) {
+			const a = toOklch(ink);
+			const b = toOklch(source);
+			expect(a.l).toBeLessThan(b.l);
+			expect(Math.abs(a.h - b.h), `${ink} hue`).toBeLessThan(1.5);
+			expect(Math.abs(a.c - b.c), `${ink} chroma`).toBeLessThan(0.005);
+		}
 	});
 
 	it('leaves a colour that already passes untouched', () => {
@@ -418,7 +434,7 @@ describe('pre-paint script', () => {
 		expect(readFileSync(join(root, 'src/lib/theme/prepaint.js'), 'utf8')).toContain(PREPAINT);
 	});
 
-	function run(opts: { stored?: unknown; raw?: string; prefersDark?: boolean }) {
+	function run(opts: { stored?: unknown; raw?: string; prefersDark?: boolean; throws?: boolean }) {
 		const style = new Map<string, string>();
 		const el = {
 			dataset: {} as Record<string, string>,
@@ -428,14 +444,16 @@ describe('pre-paint script', () => {
 			}
 		};
 		const storage = {
-			getItem: (k: string) =>
-				k !== 'lodestar.theme'
+			getItem: (k: string) => {
+				if (opts.throws) throw new Error('SecurityError');
+				return k !== 'lodestar.theme'
 					? null
 					: opts.raw !== undefined
 						? opts.raw
 						: opts.stored === undefined
 							? null
-							: JSON.stringify(opts.stored)
+							: JSON.stringify(opts.stored);
+			}
 		};
 		new Function('document', 'localStorage', 'matchMedia', PREPAINT)(
 			{ documentElement: el },
@@ -451,13 +469,21 @@ describe('pre-paint script', () => {
 	});
 
 	it('follows prefers-color-scheme when the mode is "system"', () => {
-		const stored = { mode: 'system', light: { id: 'nord-light' }, dark: { id: 'nord-dark' } };
+		const stored = {
+			mode: 'system',
+			light: { id: 'nord-light', vars: { '--color-primary': '#5e81ac' } },
+			dark: { id: 'nord-dark', vars: { '--color-primary': '#88c0d0' } }
+		};
 		expect(run({ stored, prefersDark: true }).theme).toBe('nord-dark');
 		expect(run({ stored, prefersDark: false }).theme).toBe('nord-light');
 	});
 
 	it('an explicit mode wins over the system preference', () => {
-		const stored = { mode: 'light', light: { id: 'nord-light' }, dark: { id: 'nord-dark' } };
+		const stored = {
+			mode: 'light',
+			light: { id: 'nord-light', vars: { '--color-primary': '#5e81ac' } },
+			dark: { id: 'nord-dark', vars: { '--color-primary': '#88c0d0' } }
+		};
 		expect(run({ stored, prefersDark: true })).toMatchObject({
 			theme: 'nord-light',
 			scheme: 'light'
@@ -478,6 +504,24 @@ describe('pre-paint script', () => {
 		expect([...r.vars]).toEqual([['--color-primary', '#88c0d0']]);
 	});
 
+	it('falls back to Riverstone for the mode when a non-Riverstone id has no cached vars', () => {
+		// data-theme='nord-dark' would match no CSS and a dark-mode user would get light colours.
+		for (const vars of [undefined, {}, null, 'x']) {
+			const stored = { mode: 'dark', dark: { id: 'nord-dark', vars } };
+			const r = run({ stored });
+			expect(r.theme, JSON.stringify(vars)).toBe('riverstone-dark');
+			expect(r.scheme).toBe('dark');
+			expect(r.vars.size).toBe(0);
+		}
+		const system = { mode: 'system', dark: { id: 'nord-dark' } };
+		expect(run({ stored: system, prefersDark: true }).theme).toBe('riverstone-dark');
+	});
+
+	it('uses the resolved mode, not the stored Riverstone id', () => {
+		const stored = { mode: 'dark', dark: { id: 'riverstone-light' } };
+		expect(run({ stored }).theme).toBe('riverstone-dark');
+	});
+
 	it('does not override the critical CSS for Riverstone', () => {
 		const stored = {
 			mode: 'dark',
@@ -491,5 +535,13 @@ describe('pre-paint script', () => {
 		expect(run({ raw: 'null', prefersDark: true }).theme).toBe('riverstone-dark');
 		expect(run({ stored: { light: { id: 'x"><script>' } } }).theme).toBe('riverstone-light');
 		expect(run({ stored: { light: { id: 5 } } }).theme).toBe('riverstone-light');
+	});
+
+	it('survives localStorage.getItem throwing', () => {
+		expect(run({ throws: true })).toMatchObject({ theme: 'riverstone-light', scheme: 'light' });
+		expect(run({ throws: true, prefersDark: true })).toMatchObject({
+			theme: 'riverstone-dark',
+			scheme: 'dark'
+		});
 	});
 });

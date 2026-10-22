@@ -28,6 +28,7 @@ pub struct Config {
     pub store: Store,
     pub search: Search,
     pub blocklist: Blocklist,
+    pub subscriptions: Subscriptions,
 }
 
 impl Default for Config {
@@ -41,6 +42,7 @@ impl Default for Config {
             store: Store::default(),
             search: Search::default(),
             blocklist: Blocklist::default(),
+            subscriptions: Subscriptions::default(),
         }
     }
 }
@@ -185,6 +187,68 @@ pub struct Blocklist {
     /// Their hashes join the child-safety floor as imported CS-1b entries
     /// (§20.5.2); a hash removed from a file is no longer blocked.
     pub files: Vec<PathBuf>,
+}
+
+/// Blocklist subscriptions (§20.13). None by default: fetching a list
+/// reveals your address to its host.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Subscriptions {
+    /// Lists from the built-in catalog, by key (see `lodestar lists`).
+    pub catalog: Vec<String>,
+    /// Lists by URL.
+    pub lists: Vec<SubscribedList>,
+    /// Default refresh interval.
+    pub refresh_hours: u64,
+    /// Download cap (compressed).
+    pub max_download_mib: u64,
+    /// Cap on the expanded list.
+    pub max_expanded_mib: u64,
+}
+
+impl Default for Subscriptions {
+    fn default() -> Self {
+        Subscriptions {
+            catalog: Vec::new(),
+            lists: Vec::new(),
+            refresh_hours: 24,
+            max_download_mib: 64,
+            max_expanded_mib: 256,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubscribedList {
+    pub url: String,
+    pub name: Option<String>,
+    pub kind: ListKind,
+    /// Detected from the content when left out.
+    pub format: Option<String>,
+    /// For content lists: `drop` (default) or `quarantine`.
+    #[serde(default)]
+    pub action: ListAction,
+    /// A vetted child-abuse hash list: its hashes join the locked floor as
+    /// CS-1b (§20.13). Only for lists you have deliberately chosen.
+    #[serde(default)]
+    pub floor: bool,
+    pub refresh_hours: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ListKind {
+    Content,
+    Ip,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ListAction {
+    #[default]
+    Drop,
+    Quarantine,
 }
 
 #[derive(Debug)]
