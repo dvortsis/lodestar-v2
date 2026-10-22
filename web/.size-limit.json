@@ -1,0 +1,20 @@
+[
+	{
+		"name": "Search route JS (initial)",
+		"path": "build/_app/immutable/**/*.js",
+		"limit": "45 KB",
+		"gzip": true
+	},
+	{
+		"name": "CSS",
+		"path": "build/_app/immutable/**/*.css",
+		"limit": "20 KB",
+		"gzip": true
+	},
+	{
+		"name": "Total first load (JS + CSS + index.html)",
+		"path": ["build/index.html", "build/_app/immutable/**/*.{js,css}"],
+		"limit": "100 KB",
+		"gzip": true
+	}
+]

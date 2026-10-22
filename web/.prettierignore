@@ -1,0 +1,5 @@
+build
+.svelte-kit
+package-lock.json
+src/lib/api/openapi.json
+src/lib/api/schema.d.ts
