@@ -145,6 +145,44 @@ fn history_only_for_live_or_interesting_swarms() {
 }
 
 #[test]
+fn unanswered_scrapes_keep_what_we_knew() {
+    let mut store = mem();
+    let (id, _) = add(&mut store, "kept", false, 0);
+    let (fresh, _) = add(&mut store, "fresh", false, 0);
+    apply(&mut store, &[update(id, T, 8)]);
+    let unanswered = |id, at| SwarmUpdate {
+        trackers_reporting: 0,
+        trackers_checked: 0,
+        dht: None,
+        seeders: 0,
+        leechers: 0,
+        completed: 0,
+        per_tracker: Vec::new(),
+        ..update(id, at, 0)
+    };
+    assert!(unanswered(id, T).hot().is_none());
+    assert_eq!(
+        apply(
+            &mut store,
+            &[unanswered(id, T + 100), unanswered(fresh, T + 100)]
+        ),
+        [true, true]
+    );
+    let row = store.swarm(id).unwrap().unwrap();
+    assert_eq!((row.seeders, row.trackers_checked), (8, 3), "counts kept");
+    assert_eq!(row.last_scrape_at, T, "still the last answer");
+    assert_eq!(row.next_scrape_at, T + 100 + 21_600, "schedule moved");
+    assert_eq!(store.swarm_trackers(id).unwrap().len(), 1);
+    // A first scrape nobody answered still leaves the new lane, but reads
+    // as never scraped.
+    let row = store.swarm(fresh).unwrap().unwrap();
+    assert_eq!((row.trackers_checked, row.dht), (0, None));
+    assert!(store.history(fresh).unwrap().is_none());
+    assert!(store.unscraped_after(0, 10).unwrap().is_empty());
+    assert_eq!(store.max_id().unwrap(), fresh);
+}
+
+#[test]
 fn lanes_skip_private_torrents() {
     let mut store = mem();
     let (a, ha) = add(&mut store, "a", false, 0);

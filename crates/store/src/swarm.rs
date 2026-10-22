@@ -66,14 +66,21 @@ impl SwarmUpdate {
             || self.dht.is_some_and(|(s, p)| s > 0 || p > 0)
     }
 
-    /// The hot-column values this update sets.
-    pub fn hot(&self) -> SwarmHot {
-        SwarmHot {
+    /// Whether any tracker or the DHT answered. An unanswered scrape
+    /// changes only the schedule.
+    pub fn is_answered(&self) -> bool {
+        self.trackers_checked > 0 || self.dht.is_some()
+    }
+
+    /// The hot-column values this update sets: `None` when nobody
+    /// answered, so the columns keep what they had.
+    pub fn hot(&self) -> Option<SwarmHot> {
+        self.is_answered().then(|| SwarmHot {
             seeders: self.seeders,
             leechers: self.leechers,
             trackers: u32::from(self.trackers_reporting),
             dht: self.dht.map_or(NEVER, |(s, p)| s.saturating_add(p)),
-        }
+        })
     }
 }
 
@@ -209,6 +216,20 @@ pub(crate) fn apply(tx: &Connection, u: &SwarmUpdate) -> Result<bool> {
     if !exists {
         return Ok(false);
     }
+    if !u.is_answered() {
+        // Nobody answered: keep what we knew (a tracker outage isn't a
+        // dead swarm) and only move the schedule. A torrent's first scrape
+        // still gets a row, so it leaves the "new" lane; with nothing
+        // checked and no DHT estimate it reads as never scraped.
+        tx.prepare_cached(
+            "INSERT INTO swarm (torrent_id, seeders, leechers, completed, trackers_reporting,
+                 trackers_checked, dht_seeds, dht_peers, last_scrape_at, next_scrape_at, flags)
+             VALUES (?1, 0, 0, 0, 0, 0, NULL, NULL, ?2, ?3, 0)
+             ON CONFLICT (torrent_id) DO UPDATE SET next_scrape_at = excluded.next_scrape_at",
+        )?
+        .execute(params![u.torrent_id, u.at, u.next_scrape_at])?;
+        return Ok(true);
+    }
     tx.prepare_cached(
         "INSERT INTO swarm (torrent_id, seeders, leechers, completed, trackers_reporting,
              trackers_checked, dht_seeds, dht_peers, last_scrape_at, next_scrape_at, flags)
@@ -310,6 +331,17 @@ impl Store {
         rows.into_iter()
             .map(|(id, h, f)| Ok((id, hash20(h)?, f)))
             .collect()
+    }
+
+    /// The highest torrent id stored (0 when empty); a single index probe.
+    /// A scheduler that found no unscraped torrents above its watermark
+    /// moves the watermark here, so it doesn't walk the same ids again.
+    pub fn max_id(&self) -> Result<i64> {
+        Ok(self
+            .connection()
+            .query_row("SELECT coalesce(max(id), 0) FROM torrents", [], |r| {
+                r.get(0)
+            })?)
     }
 
     /// Never-scraped torrents (no `swarm` row) with ids above `after`, in
