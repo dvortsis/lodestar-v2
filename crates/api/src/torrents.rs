@@ -56,26 +56,34 @@ fn flags(row: &TorrentRow) -> Vec<String> {
 }
 
 /// A search result row. The swarm fields stay null (never scraped) until
-/// swarm health is served (M4).
+/// swarm health is served (M4); the classification fields are filled from
+/// the stored enrichment by `search::enrich`.
 pub(crate) fn hit(row: &TorrentRow, score: f32, matched_files: Option<Vec<u64>>) -> SearchHit {
     SearchHit {
+        adult_kind: None,
         completed: None,
+        composition: Vec::new(),
+        content_type: None,
         discovered_at: row.discovered_at,
         files: row.file_count,
         flags: flags(row),
         hash: hex(&row.info_hash.0),
         hash_v2: row.info_hash_v2.map(|h| hex(&h.0)),
         id: row.id,
+        junk_reasons: Vec::new(),
+        junk_score: None,
         last_scrape_at: None,
         leechers: None,
         matched_files,
         metadata_at: row.metadata_at,
         name: row.name.clone(),
         piece_len: row.piece_len,
+        resolved_via: None,
         // As `json!` widened it.
         score: f64::from(score),
         seeders: None,
         size: row.size,
+        title: None,
         trackers_checked: None,
         trackers_reporting: None,
     }
