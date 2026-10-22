@@ -15,6 +15,7 @@ lodestar-sources.workspace = true
 lodestar-store.workspace = true
 lodestar-cluster.workspace = true
 lodestar-classify.workspace = true
+lodestar-filter.workspace = true
 tokio = { version = "1.54.0", features = ["sync", "time", "rt", "macros"] }
 tracing = "0.1.44"
 
@@ -24,6 +25,7 @@ workspace = true
 [dev-dependencies]
 lodestar-bencode.workspace = true
 lodestar-classify.workspace = true
+lodestar-filter.workspace = true
 lodestar-metainfo.workspace = true
 lodestar-dht.workspace = true
 lodestar-peer-wire = { workspace = true, features = ["testing"] }

@@ -8,17 +8,17 @@
 //! the store moved in and back out; the async side never waits on anything
 //! that waits on it.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use lodestar_cluster::Lease;
+use lodestar_cluster::{Lease, WorkerId};
+use lodestar_filter::{Action, Handle, Hit, Item, Sealer};
 use lodestar_metainfo::InfoHash;
 use lodestar_sources::{Discovery, Funnel, FunnelCounts, Loss, Stage};
 use lodestar_store::{
-    CohortCount, Counter, Event, Inserted, PreparedTorrent, QueuedKey, SourceId, Store, Touch,
-    WriteBatch, flags,
+    CohortCount, Counter, Event, Filtered, Held, Inserted, PreparedTorrent, QueuedKey, SourceId,
+    Store, Touch, WriteBatch, flags,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, interval_at};
@@ -27,7 +27,7 @@ use crate::coordinator::Coordinator;
 use crate::have::{Bloom, Have, capacity_for};
 use crate::rollups::{Rollups, metric};
 use crate::worker::{Results, collect};
-use crate::{event, unix_now};
+use crate::{HeldSet, event, unix_now};
 
 #[derive(Debug, Clone)]
 pub(crate) struct WriterConfig {
@@ -37,7 +37,15 @@ pub(crate) struct WriterConfig {
     /// Torrents discovered before this (unix seconds) are flagged
     /// `BACKFILL`: their discovery date only means "when we first saw it".
     pub backfill_until: i64,
+    /// Quarantined torrents are purged after this many seconds unless
+    /// released or confirmed (§20.3).
+    pub quarantine_secs: i64,
+    /// Filter hits are kept this long (§20.11).
+    pub hits_secs: i64,
 }
+
+/// Expired quarantine and old filter hits are purged this often.
+const PURGE_EVERY: i64 = 3600;
 
 /// Counters for metrics and the status page.
 #[derive(Debug, Default)]
@@ -46,7 +54,10 @@ pub struct WriterStats {
     /// Fetched, but already stored (a race with the have-filter).
     pub existing: AtomicU64,
     pub invalid: AtomicU64,
+    /// Dropped by a filter rule (or refused by the floor before parsing).
     pub blocked: AtomicU64,
+    /// Held in quarantine by a filter rule.
+    pub quarantined: AtomicU64,
     pub rediscovered: AtomicU64,
     /// Have-filter "yes" answers the store contradicted; sent on to fetch.
     pub false_positives: AtomicU64,
@@ -81,7 +92,11 @@ pub(crate) struct Writer {
     pub have: Arc<Have>,
     pub funnel: Arc<FunnelCounts>,
     pub rollups: Arc<Rollups>,
-    pub blocklist: Arc<HashSet<[u8; 20]>>,
+    pub filter: Arc<Handle>,
+    pub sealer: Option<Arc<Sealer>>,
+    /// Tombstoned and quarantined keys, which intake refuses.
+    pub held: Arc<HeldSet>,
+    pub last_purge: i64,
     pub coordinator: Arc<Coordinator>,
     pub stats: Arc<WriterStats>,
 }
@@ -90,6 +105,10 @@ pub(crate) struct Writer {
 struct Committing {
     results: Results,
     lease: Lease,
+    /// The authoritative filter verdict, and the sealed name for a
+    /// quarantine.
+    verdict: Option<Hit>,
+    sealed: Option<Vec<u8>>,
 }
 
 /// What a transaction did, for the async side to account.
@@ -134,6 +153,9 @@ impl Writer {
                 () = std::future::ready(()), if !self.backfill_done => self.backfill().await,
                 _ = flush.tick() => {
                     self.commit(Vec::new(), Vec::new(), Vec::new(), &io.retry).await;
+                    if unix_now() - self.last_purge >= PURGE_EVERY {
+                        self.purge().await;
+                    }
                 }
             }
         }
@@ -157,6 +179,61 @@ impl Writer {
         .expect("checkpoint task")
     }
 
+    /// The authoritative filter check (§19.4, §20.4): a verdict from the
+    /// built-in worker under the current rule set stands; anything else is
+    /// judged again. Quarantined names are sealed here.
+    fn judge(&self, mut committing: Vec<Committing>) -> Vec<Committing> {
+        let engine = self.filter.current();
+        for c in &mut committing {
+            let r = &mut c.results;
+            c.verdict = if r.worker == WorkerId::LOCAL && r.version == engine.version {
+                r.verdict.take()
+            } else {
+                let hashes: Vec<[u8; 20]> = r.torrent.swarm_hashes().map(|h| h.0).collect();
+                engine.judge(&Item {
+                    hashes: &hashes,
+                    name: &r.torrent.name,
+                    files: &r.files,
+                    content_type: r.content_type,
+                })
+            };
+            if c.verdict
+                .as_ref()
+                .is_some_and(|h| h.action == Action::Quarantine)
+            {
+                c.sealed = self
+                    .sealer
+                    .as_ref()
+                    .and_then(|s| s.seal(&r.torrent.name).ok());
+            }
+        }
+        committing
+    }
+
+    /// Removes expired quarantine (its keys become fetchable again) and
+    /// filter hits past their retention.
+    async fn purge(&mut self) {
+        let now = unix_now();
+        self.last_purge = now;
+        let hits_before = now - self.cfg.hits_secs;
+        let mut store = self.store.take().expect("store");
+        let (store, result) = tokio::task::spawn_blocking(move || {
+            let r = store.purge_filter(now, hits_before);
+            (store, r)
+        })
+        .await
+        .expect("purge task");
+        self.store = Some(store);
+        match result {
+            Ok((expired, _)) => {
+                for h in expired {
+                    self.held.remove(&h);
+                }
+            }
+            Err(e) => tracing::warn!("purging filter state failed: {e}"),
+        }
+    }
+
     async fn commit(
         &mut self,
         results: Vec<Results>,
@@ -174,9 +251,15 @@ impl Writer {
                     .coordinator
                     .current(&r.key, r.token)
                     .filter(|l| l.holder == r.worker)?;
-                Some(Committing { results: r, lease })
+                Some(Committing {
+                    results: r,
+                    lease,
+                    verdict: None,
+                    sealed: None,
+                })
             })
             .collect();
+        let committing = self.judge(committing);
         let cohorts = self.funnel.drain();
         let counters = self.rollups.drain();
         if committing.is_empty()
@@ -188,7 +271,8 @@ impl Writer {
             return;
         }
         let mut store = self.store.take().expect("store");
-        let blocklist = self.blocklist.clone();
+        let now = unix_now();
+        let quarantine_until = now + self.cfg.quarantine_secs;
         let backfill_until = self.cfg.backfill_until;
         let (store, committing, touches, result) = tokio::task::spawn_blocking(move || {
             let result = transaction(
@@ -198,8 +282,9 @@ impl Writer {
                 &cohorts,
                 &counters,
                 &events,
-                &blocklist,
                 backfill_until,
+                now,
+                quarantine_until,
             );
             (store, committing, touches, result)
         })
@@ -245,7 +330,14 @@ impl Writer {
         }
         for i in outcome.blocked {
             let c = &committing[i];
-            self.stats.blocked.fetch_add(1, Ordering::Relaxed);
+            let counter = match c.verdict.as_ref().map(|h| h.action) {
+                Some(Action::Quarantine) => &self.stats.quarantined,
+                _ => &self.stats.blocked,
+            };
+            counter.fetch_add(1, Ordering::Relaxed);
+            for h in c.results.torrent.swarm_hashes() {
+                self.held.insert(h.0);
+            }
             self.coordinator
                 .lost(&c.results.key, c.results.token, Loss::Blocked);
         }
@@ -351,19 +443,64 @@ fn transaction(
     cohorts: &[CohortCount],
     counters: &[Counter],
     events: &[Event],
-    blocklist: &HashSet<[u8; 20]>,
     backfill_until: i64,
+    now: i64,
+    quarantine_until: i64,
 ) -> Result<Outcome, lodestar_store::Error> {
-    // The authoritative blocklist check, on the key and every swarm hash,
-    // before anything is stored (§18.7, §19.4).
-    let (accepted, blocked): (Vec<usize>, Vec<usize>) = (0..committing.len()).partition(|&i| {
-        let r = &committing[i].results;
-        !blocklist.contains(&r.key.0) && !r.torrent.swarm_hashes().any(|h| blocklist.contains(&h.0))
-    });
+    // Filtered torrents are never stored: a drop leaves a tombstone, a
+    // quarantine a sealed name (§20.3). Other actions (from rules that
+    // don't hold torrents back) don't stop storage.
+    let held = |c: &Committing| match c.verdict.as_ref().map(|h| h.action) {
+        Some(Action::Drop) => Some(Held::Tombstone),
+        Some(Action::Quarantine) => Some(Held::Quarantine),
+        _ => None,
+    };
+    let (blocked, accepted): (Vec<usize>, Vec<usize>) =
+        (0..committing.len()).partition(|&i| held(&committing[i]).is_some());
+    let filtered_hashes: Vec<Vec<[u8; 20]>> = blocked
+        .iter()
+        .map(|&i| {
+            committing[i]
+                .results
+                .torrent
+                .swarm_hashes()
+                .map(|h| h.0)
+                .collect()
+        })
+        .collect();
+    let evidence: Vec<Vec<u8>> = blocked
+        .iter()
+        .map(|&i| {
+            committing[i]
+                .verdict
+                .as_ref()
+                .map(Hit::evidence_codes)
+                .unwrap_or_default()
+        })
+        .collect();
+    let filtered: Vec<Filtered<'_>> = blocked
+        .iter()
+        .zip(&filtered_hashes)
+        .zip(&evidence)
+        .filter_map(|((&i, hashes), evidence)| {
+            let c = &committing[i];
+            let hit = c.verdict.as_ref()?;
+            Some(Filtered {
+                hashes,
+                rule: hit.rule.id(),
+                action: hit.action.code(),
+                held: held(c),
+                sealed: c.sealed.as_deref(),
+                evidence,
+                at: now,
+                expires_at: quarantine_until,
+            })
+        })
+        .collect();
     let prepared: Vec<PreparedTorrent<'_>> = accepted
         .iter()
         .map(|&i| {
-            let Committing { results, lease } = &committing[i];
+            let Committing { results, lease, .. } = &committing[i];
             PreparedTorrent {
                 torrent: &results.torrent,
                 discovered_at: lease.discovered_at,
@@ -404,6 +541,7 @@ fn transaction(
         counters,
         cohorts,
         events,
+        filtered: &filtered,
         ..WriteBatch::default()
     })?;
     let stored = accepted
