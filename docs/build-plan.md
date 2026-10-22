@@ -246,7 +246,8 @@ Each item is one PR of about 1,500 changed lines or fewer. **[M]** = main sessio
   - **[M] B2b, B2c:** API additions (schema hints, revisions, batch patch, preview, test, preferences, SSE, export/import; then `/system`, restart, the HTTP-address keep-or-revert timer).
   - **[M] M-settings-form:** the form engine every screen and the wizard use (draft store, validation and server-error mapping, atomic save, conflict merge, leave guard, drafts, Undo, the `SettingField` and widget registry).
   - **[S] S-settings-1:** the shell (grouped navigation, Overview, list → detail, settings search and palette entries, restart banner, Show changed only, View as config.toml) and the generated screens: General, Crawler, Network & VPN, Storage & retention, Search & ranking.
-  - **[S] S-settings-2:** Integrations, Notifications, Trackers, Insights & digest, Language & region, About.
+  - **[S] S-settings-2:** Integrations, Notifications, Trackers, Insights & digest, Language & region.
+  - **[S] S-about:** Settings → About (§10.10.13). B2c provides `/system`, the update check and `licenses.json`.
   - **[M] M-security-settings:** the Security screen (password, sessions, API keys, proxy auth).
   - **[M] B-log1, B-log2:** the logging core (§12.1): the event catalogue (`log_event!`) with per-event switches and counters, and per-kind data switches per output (Private by default), enforced by typed wrappers, a CI check and a canary test; the rotating log file; then the ring buffer, the `logs` SSE topic and the file API.
   - **[S] S-logs:** Settings → Logging and the live log at `/logs` (§10.10.12).
