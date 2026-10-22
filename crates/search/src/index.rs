@@ -52,6 +52,12 @@ pub enum Error {
     },
     /// An older index kept serving during a rebuild takes no writes.
     ReadOnly,
+    /// The search's [`CancelToken`](crate::CancelToken) was cancelled.
+    Cancelled,
+    /// The search ran out of its time budget.
+    OutOfTime,
+    /// The searcher lease a cursor names expired or never existed.
+    LeaseExpired,
 }
 
 impl std::fmt::Display for Error {
@@ -68,6 +74,9 @@ impl std::fmt::Display for Error {
                 root.display()
             ),
             Error::ReadOnly => write!(f, "this index is read-only while it's rebuilt"),
+            Error::Cancelled => write!(f, "the search was cancelled"),
+            Error::OutOfTime => write!(f, "the search ran out of time"),
+            Error::LeaseExpired => write!(f, "the searcher lease expired"),
         }
     }
 }
@@ -118,6 +127,9 @@ pub struct SearchIndex {
     read_only: bool,
     /// The fields of [`SearchIndex::missing_fields`].
     missing: Arc<[String]>,
+    /// Held by every clone, so [`SearchIndex::holders`] tells when the
+    /// last one (a lease's included) is gone.
+    holders: Arc<()>,
 }
 
 /// How an existing index can serve this build ([`SearchIndex::open_existing`]).
@@ -342,11 +354,11 @@ fn relative(node: &Node) -> bool {
 /// Phase-1 candidates re-ranked for a relevance page: four pages of 50.
 /// §8 sketched ~1,000; at 10M torrents a window that size costs about a
 /// quarter of the keyword budget in top-k upkeep alone (§16).
-const RERANK_WINDOW: usize = 200;
+pub(crate) const RERANK_WINDOW: usize = 200;
 
 /// Adds each candidate's score under `boosts` and sorts best first,
 /// ties by address.
-fn rerank(
+pub(crate) fn rerank(
     searcher: &Searcher,
     boosts: &dyn Query,
     mut hits: Vec<(f32, DocAddress)>,
@@ -372,7 +384,7 @@ fn rerank(
 }
 
 /// The fast field a sort orders by, and whether it's signed.
-fn sort_field(sort: Sort) -> Option<(&'static str, bool)> {
+pub(crate) fn sort_field(sort: Sort) -> Option<(&'static str, bool)> {
     match sort {
         Sort::Relevance => None,
         Sort::Discovered { .. } => Some(("discovered", true)),
@@ -446,6 +458,13 @@ impl SearchIndex {
         Ok(Some((s, compat)))
     }
 
+    /// The torrent index and its reader, for tests that write raw
+    /// documents.
+    #[cfg(test)]
+    pub(crate) fn raw(&self) -> (&Index, &IndexReader) {
+        (&self.index, &self.reader)
+    }
+
     /// The file index's fields, for tests.
     #[cfg(test)]
     pub(crate) fn file_fields(&self) -> &FileFields {
@@ -488,11 +507,27 @@ impl SearchIndex {
             },
             read_only: false,
             missing: Arc::new([]),
+            holders: Arc::default(),
         })
     }
 
     pub fn fields(&self) -> &Fields {
         &self.fields
+    }
+
+    /// Alive while any clone of this index is: a retired index's
+    /// directory is deleted only after that (leases, `lease.rs`).
+    pub(crate) fn holders(&self) -> std::sync::Weak<()> {
+        Arc::downgrade(&self.holders)
+    }
+
+    /// The current snapshot, which a lease pins.
+    pub(crate) fn searcher(&self) -> Searcher {
+        self.reader.searcher()
+    }
+
+    pub(crate) fn segment_cache(&self) -> &SegmentCache {
+        &self.cache
     }
 
     /// Fields of this build's schema this index lacks: an older index
@@ -507,6 +542,13 @@ impl SearchIndex {
     /// Whether `sort` works on this index; otherwise it's by relevance.
     pub fn sort_available(&self, sort: Sort) -> bool {
         sort_field(sort).is_none_or(|(field, _)| !self.missing.iter().any(|m| m == field))
+    }
+
+    /// Makes everything committed so far visible to this handle's
+    /// searches (the live indexer does this after each commit).
+    pub fn refresh(&self) -> Result<()> {
+        self.reader.reload()?;
+        Ok(())
     }
 
     /// The highest torrent id indexed (0 for a new index).
@@ -776,15 +818,20 @@ impl SearchIndex {
     /// The ids of every torrent `compiled` matches, at most `limit`, in no
     /// particular order: for jobs over a query's whole result set (a
     /// classification rule's torrents, §20.9), not for display.
-    pub fn matching_ids(&self, compiled: &Compiled, limit: usize) -> Result<Vec<u64>> {
+    /// `true` with them when more matched than `limit`.
+    pub fn matching_ids(&self, compiled: &Compiled, limit: usize) -> Result<(Vec<u64>, bool)> {
         let searcher = self.reader.searcher();
+        let left = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(limit));
+        let over = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let collector = PostFilter {
             ranges: &compiled.filters,
-            inner: IdsCollector { limit },
+            inner: IdsCollector {
+                left: left.clone(),
+                over: over.clone(),
+            },
         };
-        let mut ids = searcher.search(compiled.query.as_ref(), &collector)?;
-        ids.truncate(limit);
-        Ok(ids)
+        let ids = searcher.search(compiled.query.as_ref(), &collector)?;
+        Ok((ids, over.load(std::sync::atomic::Ordering::Relaxed)))
     }
 
     /// The positions (in the torrent's file list) of the files of torrent
@@ -1055,16 +1102,18 @@ impl Indexer {
     }
 }
 
-/// Collects torrent ids from the `id` fast field, at most `limit` per
-/// segment (the merge truncates the total).
+/// Collects torrent ids from the `id` fast field: at most `left` across
+/// all segments, setting `over` when a match had to be left out.
 struct IdsCollector {
-    limit: usize,
+    left: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    over: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 struct IdsSegment {
     col: tantivy::columnar::Column<u64>,
     ids: Vec<u64>,
-    limit: usize,
+    left: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    over: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl tantivy::collector::Collector for IdsCollector {
@@ -1079,7 +1128,8 @@ impl tantivy::collector::Collector for IdsCollector {
         Ok(IdsSegment {
             col: reader.fast_fields().u64("id")?,
             ids: Vec::new(),
-            limit: self.limit,
+            left: self.left.clone(),
+            over: self.over.clone(),
         })
     }
 
@@ -1096,10 +1146,27 @@ impl tantivy::collector::SegmentCollector for IdsSegment {
     type Fruit = Vec<u64>;
 
     fn collect(&mut self, doc: tantivy::DocId, _: tantivy::Score) {
-        if self.ids.len() < self.limit {
-            if let Some(id) = self.col.first(doc) {
-                self.ids.push(id);
+        use std::sync::atomic::Ordering::Relaxed;
+        let Some(id) = self.col.first(doc) else {
+            return;
+        };
+        let mut left = self.left.load(Relaxed);
+        let taken = loop {
+            if left == 0 {
+                break false;
             }
+            match self
+                .left
+                .compare_exchange_weak(left, left - 1, Relaxed, Relaxed)
+            {
+                Ok(_) => break true,
+                Err(now) => left = now,
+            }
+        };
+        if taken {
+            self.ids.push(id);
+        } else {
+            self.over.store(true, Relaxed);
         }
     }
 

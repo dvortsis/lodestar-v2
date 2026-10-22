@@ -794,34 +794,44 @@ async fn your_rules_mark_stored_torrents_and_shadow_rules_only_log() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn classification_rules_change_what_is_stored_not_what_filtering_sees() {
+async fn an_is_adult_rule_stores_adult_and_meets_adult_filtering() {
     use lodestar_classify::ContentType;
     use lodestar_store::flags;
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("lodestar.db");
+    // A child-role and a sexual stand-in ten words apart: only the
+    // Adult-only CS-5a (window 12) can catch them, not CS-4a (window 8).
+    let spread = "Studiox Rolea one two three four five six seven eight nine Lexa";
+    let file = |name: &str| format!("{}.mp4", name.replace(' ', "."));
     let seeds = vec![
         Seed::v1(info_dict("Holiday Clips 2023 Lexb")),
         Seed::v1(info_dict("Holiday Clips 2023 Other")),
+        Seed::v1(info_dict_with(spread, &[(&file(spread), 900 << 20)])),
     ];
     let keys: Vec<InfoHash> = seeds.iter().map(|s| InfoHash(s.info_hash)).collect();
     let peer = FakePeer::spawn(seeds, Accept::Both, Behavior::Honest, vec![]).await;
     let mut store = Store::open(&db, StoreConfig::default()).unwrap();
-    // Your rule hides adult torrents; your classification rule calls
-    // "lexb" ones adult.
+    // Your rule hides adult torrents; your classification rules call
+    // "lexb" and "studiox" ones adult.
     let hide = lodestar_filter::Action::Hide.code();
     store.add_rule("type:adult", hide, None, None).unwrap();
     store.add_class_rule("lexb", true).unwrap();
+    store.add_class_rule("studiox", true).unwrap();
     store.set_pack_switch("fakes", false).unwrap();
+    let mut cfg = config();
+    cfg.filter = stand_in_filter();
+    cfg.sealer = Some(Arc::new(Sealer::new(&Sealer::generate_key().unwrap())));
     let (feed, feed_tx) = scripted("feed");
-    let pipeline = Pipeline::start(config(), store, vec![feed]).await.unwrap();
+    let pipeline = Pipeline::start(cfg, store, vec![feed]).await.unwrap();
     for k in &keys {
         feed_tx
             .send(Found::key(*k, 0).with_peers(vec![peer.addr()]))
             .await
             .unwrap();
     }
-    until("stored", || {
-        pipeline.writer_stats().stored.load(Ordering::Relaxed) == 2
+    until("judged", || {
+        let w = pipeline.writer_stats();
+        w.stored.load(Ordering::Relaxed) == 2 && w.quarantined.load(Ordering::Relaxed) == 1
     })
     .await;
     let store = pipeline.shutdown().await.unwrap();
@@ -831,10 +841,15 @@ async fn classification_rules_change_what_is_stored_not_what_filtering_sees() {
     };
     assert_eq!(kind(&keys[0]), Some(ContentType::Adult), "stored as adult");
     assert_ne!(kind(&keys[1]), Some(ContentType::Adult));
-    // Filtering judged detection's classification: not adult, not hidden.
+    // Stored as adult, so judged as adult too: your type:adult rule hides it.
     let flags_of = |k: &InfoHash| store.torrent(id(k)).unwrap().unwrap().flags;
-    assert_eq!(flags_of(&keys[0]) & flags::HIDDEN, 0);
+    assert_ne!(flags_of(&keys[0]) & flags::HIDDEN, 0);
     assert_eq!(flags_of(&keys[1]) & flags::HIDDEN, 0);
+    // And the Adult-only core held the one only it can catch.
+    let q = store.quarantined(10).unwrap();
+    assert_eq!(q.len(), 1);
+    assert_eq!((q[0].hash, q[0].rule.as_str()), (keys[2].0, "CS-5a"));
+    assert!(store.find(&keys[2]).unwrap().is_none());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

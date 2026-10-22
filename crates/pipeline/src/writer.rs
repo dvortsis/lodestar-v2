@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use lodestar_cluster::{Lease, WorkerId};
-use lodestar_filter::{Action, Decision, Facts, Handle, HeldSet, Item, Sealer};
+use lodestar_filter::{Action, Decision, Engine, Facts, Handle, HeldSet, Item, Sealer, Verdict};
 use lodestar_metainfo::InfoHash;
 use lodestar_sources::{Discovery, Funnel, FunnelCounts, Loss, Stage};
 use lodestar_store::{
@@ -123,6 +123,8 @@ struct Outcome {
     blocked: Vec<usize>,
     /// Per touch: whether the store had it.
     touched: Vec<bool>,
+    /// The classification rules changed under the batch (§20.9).
+    stale_class: bool,
 }
 
 impl Writer {
@@ -197,23 +199,7 @@ impl Writer {
             let verdict = if r.worker == WorkerId::LOCAL && r.version == engine.version {
                 std::mem::take(&mut r.verdict)
             } else {
-                let now = unix_now();
-                let hashes: Vec<[u8; 20]> = r.torrent.swarm_hashes().map(|h| h.0).collect();
-                let facts = Facts {
-                    class: &r.class,
-                    size: r.torrent.size,
-                    piece_len: r.torrent.piece_len,
-                    flags: r.torrent.flags,
-                    discovered_at: c.lease.discovered_at,
-                    now,
-                };
-                let item = Item {
-                    hashes: &hashes,
-                    name: &r.torrent.name,
-                    files: &r.files,
-                    content_type: r.class.content_type,
-                };
-                engine.judge(&item, Some(&facts), now)
+                rejudge(&engine, r, c.lease.discovered_at, unix_now())
             };
             c.verdict = verdict.decision;
             c.shadow = verdict.shadow;
@@ -280,6 +266,10 @@ impl Writer {
                 })
             })
             .collect();
+        // The classification rules' generation before the rules
+        // themselves: a batch judged under rules older than the store's
+        // generation is marked for enriching again (§20.9).
+        let class_gen = self.store.as_ref().and_then(|s| s.class_gen().ok());
         let committing = self.judge(committing);
         let cohorts = self.funnel.drain();
         let counters = self.rollups.drain();
@@ -306,6 +296,7 @@ impl Writer {
                 backfill_until,
                 now,
                 quarantine_until,
+                class_gen,
             );
             (store, committing, touches, result)
         })
@@ -324,6 +315,10 @@ impl Writer {
             }
         };
         self.stats.transactions.fetch_add(1, Ordering::Relaxed);
+        if outcome.stale_class {
+            // Its torrents are marked: enrich them in another pass.
+            self.reenrich.store(true, Ordering::Release);
+        }
         self.stats
             .last_commit
             .store(unix_now() as u64, Ordering::Relaxed);
@@ -390,20 +385,33 @@ impl Writer {
     async fn backfill(&mut self) {
         let store = self.store.take().expect("store");
         let after = self.backfill_after;
-        let engine = self.filter.current();
+        let filter = self.filter.clone();
+        let sealer = self.sealer.clone();
+        let quarantine_secs = self.cfg.quarantine_secs;
         let (store, result) = tokio::task::spawn_blocking(move || {
             let mut store = store;
-            let result =
-                crate::enrich::enrich_stored_with(&mut store, after, BACKFILL_BATCH, Some(&engine));
+            let ctx = crate::enrich::Backfill {
+                filter: Some(&filter),
+                sealer: sealer.as_deref(),
+                quarantine_secs,
+            };
+            let result = crate::enrich::enrich_stored_with(&mut store, after, BACKFILL_BATCH, &ctx);
             (store, result)
         })
         .await
         .expect("backfill task");
         self.store = Some(store);
         match result {
-            Ok(Some((last, n))) => {
-                self.backfill_after = last;
-                self.stats.enriched.fetch_add(n as u64, Ordering::Relaxed);
+            // The rules changed under the batch: the same batch again.
+            Ok(Some(b)) if b.rejected => {}
+            Ok(Some(b)) => {
+                self.backfill_after = b.last;
+                self.stats
+                    .enriched
+                    .fetch_add(b.enriched as u64, Ordering::Relaxed);
+                for h in b.held {
+                    self.held.insert(h);
+                }
             }
             Ok(None) => self.backfill_done = true,
             Err(e) => {
@@ -454,6 +462,38 @@ impl Writer {
     }
 }
 
+/// Judges a torrent again at commit (a remote worker's, or one prepared
+/// under an older rule set), and stores what the classification rules say
+/// now if they changed since prepare (§20.9).
+pub(crate) fn rejudge(engine: &Engine, r: &mut Results, discovered_at: i64, now: i64) -> Verdict {
+    let hashes: Vec<[u8; 20]> = r.torrent.swarm_hashes().map(|h| h.0).collect();
+    let facts = Facts {
+        class: &r.class,
+        size: r.torrent.size,
+        piece_len: r.torrent.piece_len,
+        flags: r.torrent.flags,
+        discovered_at,
+        now,
+    };
+    let item = Item {
+        hashes: &hashes,
+        name: &r.torrent.name,
+        files: &r.files,
+        content_type: r.class.content_type,
+    };
+    let (verdict, says) = engine.judge_classified(&item, Some(&facts), now);
+    let fix = crate::enrich::rule_fix(says, &r.class);
+    if fix != r.fix {
+        r.torrent.enrichment = Some(crate::enrich::enrich_with_rule(
+            &r.torrent.name,
+            &r.files,
+            fix,
+        ));
+        r.fix = fix;
+    }
+    verdict
+}
+
 /// Torrents enriched per background step.
 const BACKFILL_BATCH: usize = 256;
 
@@ -469,6 +509,7 @@ fn transaction(
     backfill_until: i64,
     now: i64,
     quarantine_until: i64,
+    class_gen: Option<i64>,
 ) -> Result<Outcome, lodestar_store::Error> {
     // Filtered torrents are never stored: a drop leaves a tombstone, a
     // quarantine a sealed name (§20.3). Other actions (from rules that
@@ -573,6 +614,7 @@ fn transaction(
         cohorts,
         events,
         filtered: &filtered,
+        class_gen,
         ..WriteBatch::default()
     })?;
     let stored = accepted
@@ -589,6 +631,7 @@ fn transaction(
     Ok(Outcome {
         stored,
         blocked,
+        stale_class: written.stale_class,
         touched: written.touched[extra..]
             .iter()
             .map(Option::is_some)
@@ -609,4 +652,91 @@ fn marks(decision: Option<&Decision>) -> i64 {
 
 fn bit(source: SourceId) -> u64 {
     1u64 << source.get()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lodestar_bencode::{OwnedValue, to_vec};
+    use lodestar_classify::{ContentType, Record, classify};
+    use lodestar_cluster::Token;
+    use lodestar_filter::{Core, CoreRule, CsList, Lists, RuleRef, Switches, TermSet};
+    use lodestar_metainfo::Info;
+    use lodestar_store::{Store, StoreConfig};
+
+    /// A child-role and a sexual stand-in ten words apart: only the
+    /// Adult-only CS-5a (window 12) can catch it, not CS-4a (window 8).
+    const NAME: &str = "Studiox Rolea one two three four five six seven eight nine Lexa";
+
+    fn engine() -> Engine {
+        let lists = Lists {
+            sexual: TermSet::of(&["lexa"]),
+            child_roles: TermSet::of(&["rolea"]),
+            codes: TermSet::of(&["codex"]),
+        };
+        Engine::new(Core::new(lists, CsList::default(), Switches::default()))
+    }
+
+    fn results() -> Results {
+        let raw = to_vec(&OwnedValue::Dict(
+            [
+                (b"length".to_vec(), OwnedValue::Int(900 << 20)),
+                (
+                    b"name".to_vec(),
+                    OwnedValue::Bytes(format!("{NAME}.mp4").into_bytes()),
+                ),
+                (b"piece length".to_vec(), OwnedValue::Int(1 << 20)),
+                (b"pieces".to_vec(), OwnedValue::Bytes(vec![0; 20])),
+            ]
+            .into_iter()
+            .collect(),
+        ));
+        let info = Info::parse(&raw).unwrap();
+        let store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let mut torrent = store.preparer().prepare(&info, None).unwrap();
+        let files = crate::enrich::file_infos(&info.files, info.path_encoding);
+        let (enriched, class) = crate::enrich::enrich_infos(&torrent.name, &files);
+        torrent.enrichment = Some(enriched);
+        Results {
+            key: info.primary_hash(),
+            token: Token(1),
+            worker: WorkerId(7),
+            torrent,
+            sources: 1,
+            metadata_at: 0,
+            files,
+            class,
+            verdict: Verdict::default(),
+            version: 0,
+            fix: None,
+            private_source: false,
+        }
+    }
+
+    fn stored_type(r: &Results) -> ContentType {
+        let e = r.torrent.enrichment.as_ref().unwrap();
+        Record::decode(&e.data).unwrap().content_type
+    }
+
+    #[test]
+    fn rejudging_applies_an_is_adult_rule_and_the_adult_only_core() {
+        let mut r = results();
+        let detected = classify(&r.torrent.name, &r.files).content_type;
+        assert_ne!(detected, ContentType::Adult);
+        let mut e = engine();
+        assert_eq!(rejudge(&e, &mut r, 0, 1000).decision, None);
+        assert_eq!((r.fix, stored_type(&r)), (None, detected));
+
+        // A rule added since prepare: stored as adult, and held by CS-5a.
+        e.load_class_rules(&[(1, "studiox".into(), true)]);
+        let d = rejudge(&e, &mut r, 0, 1000).decision.expect("held");
+        assert_eq!(d.rule, RuleRef::Core(CoreRule::Cs5a));
+        assert_eq!(d.action, Action::Quarantine);
+        assert_eq!((r.fix, stored_type(&r)), (Some(true), ContentType::Adult));
+
+        // And removed again: back to detection's type.
+        e.load_class_rules(&[]);
+        assert_eq!(rejudge(&e, &mut r, 0, 1000).decision, None);
+        assert_eq!((r.fix, stored_type(&r)), (None, detected));
+    }
 }

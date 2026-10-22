@@ -16,7 +16,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use lodestar_classify::{Classification, ContentType, Correction, FileInfo};
+use lodestar_classify::{Classification, FileInfo};
 use lodestar_cluster::{Token, WorkerId};
 use lodestar_filter::{Engine, Facts, Handle, Item, Verdict};
 use lodestar_metainfo::{Info, InfoHash};
@@ -92,6 +92,9 @@ pub(crate) struct Results {
     /// The worker's filter verdict, and the rule-set version it used.
     pub verdict: Verdict,
     pub version: u64,
+    /// The classification rule applied to the stored enrichment (§20.9):
+    /// Is adult or Not adult, where it differs from detection.
+    pub fix: Option<bool>,
     /// Only private sources reported the key.
     pub private_source: bool,
 }
@@ -150,6 +153,7 @@ impl PrepareStage {
                             class: done.class,
                             verdict: done.verdict,
                             version: done.version,
+                            fix: done.fix,
                             private_source: fk.private_source,
                         };
                         if out.send(r).await.is_err() {
@@ -177,6 +181,7 @@ struct Done {
     class: Classification,
     verdict: Verdict,
     version: u64,
+    fix: Option<bool>,
 }
 
 /// Parses, prepares, enriches and judges one fetched info dict. A key in
@@ -214,18 +219,12 @@ fn prepare_one(preparer: &mut Preparer, engine: &Engine, fk: &FetchedKey) -> Res
         files: &files,
         content_type: class.content_type,
     };
-    let verdict = engine.judge(&item, Some(&facts), now);
-    // Your classification rules change what's stored, after filtering
-    // judged detection's classification (§20.9).
-    if let Some(adult) = engine.class_correction(&item, Some(&facts)) {
-        if adult != (class.content_type == ContentType::Adult) {
-            let fix = Correction {
-                adult: Some(adult),
-                not_junk: false,
-            };
-            prepared.enrichment =
-                Some(crate::enrich::enrich_corrected(&prepared.name, &files, fix).0);
-        }
+    // Your classification rules change what's stored; an Is adult one
+    // also makes the torrent meet the Adult-only core (§20.9).
+    let (verdict, says) = engine.judge_classified(&item, Some(&facts), now);
+    let fix = crate::enrich::rule_fix(says, &class);
+    if fix.is_some() {
+        prepared.enrichment = Some(crate::enrich::enrich_with_rule(&prepared.name, &files, fix));
     }
     Ok(Done {
         torrent: prepared,
@@ -233,6 +232,7 @@ fn prepare_one(preparer: &mut Preparer, engine: &Engine, fk: &FetchedKey) -> Res
         class,
         verdict,
         version: engine.version,
+        fix,
     })
 }
 

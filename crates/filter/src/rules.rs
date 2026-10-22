@@ -11,17 +11,68 @@ use crate::hash::TermSet;
 use crate::matcher::Doc;
 use crate::normalize::{self, Token};
 use crate::payload::payload_sig;
+use crate::prefilter::RuleList;
 
 /// A classification rule (§20.9): every torrent the query matches is
-/// stored as adult (or not), like a per-torrent correction. It changes
-/// what's stored and searched, never what filtering sees: the engine
-/// judges with detection's own classification, so a Not adult rule can't
-/// take a torrent out of the Adult-only core checks.
+/// stored as adult (or not), like a per-torrent correction. Filtering
+/// judges detection's own classification, so a Not adult rule can't take a
+/// torrent out of the Adult-only core checks; an Is adult rule adds them
+/// ([`Engine::judge_classified`](crate::Engine::judge_classified)).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassRule {
     pub id: u32,
     pub query: Node,
     pub adult: bool,
+}
+
+/// Classification rules kept at most (§16): each one is checked against
+/// every torrent its narrowing lets through.
+pub const MAX_CLASS_RULES: usize = 1_000;
+
+/// The classification rules, oldest first, indexed like your rules so a
+/// torrent meets only those that could match it.
+#[derive(Debug, Clone, Default)]
+pub struct ClassRules {
+    list: RuleList,
+    adult: Vec<bool>,
+}
+
+impl ClassRules {
+    pub fn new(rules: Vec<ClassRule>) -> ClassRules {
+        let adult = rules.iter().map(|r| r.adult).collect();
+        let list = rules
+            .into_iter()
+            .map(|r| UserRule {
+                id: r.id,
+                query: r.query,
+                action: Action::Flag,
+                enabled: true,
+                shadow_until: None,
+                unless: None,
+            })
+            .collect();
+        ClassRules { list, adult }
+    }
+
+    pub fn len(&self) -> usize {
+        self.adult.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.adult.is_empty()
+    }
+
+    /// The newest matching rule's Is adult (`true`) or Not adult (`false`).
+    pub(crate) fn decide(&self, doc: &Doc) -> Option<bool> {
+        if self.is_empty() {
+            return None;
+        }
+        doc.candidates(&self.list)
+            .into_iter()
+            .rev()
+            .find(|&i| doc.matches_compiled(self.list.compiled(i).0, &[]))
+            .map(|i| self.adult[i as usize])
+    }
 }
 
 /// A saved query plus an action (layer 3).

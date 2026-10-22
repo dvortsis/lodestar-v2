@@ -49,6 +49,16 @@ pub struct Filtered<'a> {
     pub expires_at: i64,
 }
 
+/// A stored torrent filtering judged again (§20.9), for
+/// [`Store::set_enrichments_at`]: the decision as ingest records it, and
+/// the `torrents.flags` marks of one it keeps.
+#[derive(Debug, Clone, Copy)]
+pub struct Refiled<'a> {
+    pub id: i64,
+    pub filtered: Filtered<'a>,
+    pub flags: i64,
+}
+
 /// One filter decision (`filter_hits`): no names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FilterHit {
