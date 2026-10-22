@@ -1,0 +1,19 @@
+{
+  "recorded_from": "Built by hand from the Discord webhook documentation (discord.com/developers/docs/resources/webhook) and its documented error bodies, not recorded: there is no live webhook to record from",
+  "note": "Cloudflare in front of Discord answering 502 with HTML: retryable",
+  "request": {
+    "method": "POST",
+    "path": "/api/webhooks/123456789012345678/Tk3n-SECRET_value",
+    "query": "wait=true"
+  },
+  "response": {
+    "status": 502,
+    "headers": [
+      [
+        "content-type",
+        "text/html"
+      ]
+    ],
+    "body": "<!DOCTYPE html><html><head><title>discord.com | 502: Bad gateway</title></head><body>Bad gateway</body></html>"
+  }
+}

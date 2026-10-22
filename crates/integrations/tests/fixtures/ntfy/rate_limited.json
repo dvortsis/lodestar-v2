@@ -1,0 +1,23 @@
+{
+  "recorded_from": "Built by hand from the ntfy publishing API documentation (docs.ntfy.sh/publish, server v2.x), not recorded: no ntfy server was available in the build session; the retry-after header is added by hand to exercise its handling",
+  "note": "Too many requests: 429 with ntfy's JSON error body",
+  "request": {
+    "method": "POST",
+    "path": "/lodestar-alerts",
+    "query": null
+  },
+  "response": {
+    "status": 429,
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "retry-after",
+        "1"
+      ]
+    ],
+    "body": "{\"code\":42908,\"http\":429,\"error\":\"limit reached: too many requests; increase your limits, see https://ntfy.sh/docs/publish/#limitations\",\"link\":\"https://ntfy.sh/docs/publish/#limitations\"}"
+  }
+}

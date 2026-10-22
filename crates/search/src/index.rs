@@ -18,7 +18,7 @@ use lodestar_store::Store;
 use tantivy::collector::{Count, TopDocs};
 use tantivy::directory::MmapDirectory;
 use tantivy::query::{BooleanQuery, EnableScoring, Occur, Query, TermQuery};
-use tantivy::schema::{IndexRecordOption, Value};
+use tantivy::schema::{Field, IndexRecordOption, Schema, Value};
 use tantivy::{
     DocAddress, DocSet, Index, IndexReader, IndexWriter, ReloadPolicy, Searcher, TantivyDocument,
     Term,
@@ -42,6 +42,16 @@ pub enum Error {
     Io(std::io::Error),
     /// The index's commit payload isn't ours.
     Corrupt(&'static str),
+    /// Another process (or handle) is serving the index root.
+    Locked(PathBuf),
+    /// The index root's lock couldn't be taken at all, which some network
+    /// shares (SMB, some NAS mounts) don't support.
+    LockFailed {
+        root: PathBuf,
+        error: std::io::Error,
+    },
+    /// An older index kept serving during a rebuild takes no writes.
+    ReadOnly,
 }
 
 impl std::fmt::Display for Error {
@@ -51,6 +61,13 @@ impl std::fmt::Display for Error {
             Error::Store(e) => e.fmt(f),
             Error::Io(e) => write!(f, "index directory: {e}"),
             Error::Corrupt(what) => write!(f, "corrupt index: {what}"),
+            Error::Locked(root) => write!(f, "{} is in use by another instance", root.display()),
+            Error::LockFailed { root, error } => write!(
+                f,
+                "can't lock {}: {error} (network shares may not support file locks; use a local disk for the index)",
+                root.display()
+            ),
+            Error::ReadOnly => write!(f, "this index is read-only while it's rebuilt"),
         }
     }
 }
@@ -95,6 +112,92 @@ pub struct SearchIndex {
     fields: Fields,
     cache: Arc<SegmentCache>,
     files: FileIndex,
+    /// An older index serving during a rebuild whose schema differs from
+    /// this build's: its fields are mapped by name, and documents built
+    /// for this schema can't be written to it.
+    read_only: bool,
+    /// The fields of [`SearchIndex::missing_fields`].
+    missing: Arc<[String]>,
+}
+
+/// How an existing index can serve this build ([`SearchIndex::open_existing`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Compat {
+    /// Same schema: it can keep following the store.
+    Exact,
+    /// Another schema, read by field name: it serves queries and takes
+    /// no writes.
+    ReadOnly,
+}
+
+/// Fields an index can't serve without: ids, names, words and dates.
+/// Every schema since v1 has them.
+const REQUIRED: [&str; 4] = ["id", "name", "text", "discovered"];
+/// The file index's: what a clause's result is made of.
+const FILE_REQUIRED: [&str; 2] = ["torrent", "index"];
+
+/// Resolves this build's fields (in `from`) in an older index's schema
+/// (`to`) by name. A field it lacks, or has with another value type,
+/// becomes [`compile::ABSENT`] and its name is recorded.
+struct Resolver<'a> {
+    from: &'a Schema,
+    to: &'a Schema,
+    absent: std::cell::RefCell<Vec<String>>,
+}
+
+impl Resolver<'_> {
+    fn get(&self, f: Field) -> Field {
+        let entry = self.from.get_field_entry(f);
+        let found = self.to.get_field(entry.name()).ok().filter(|g| {
+            self.to.get_field_entry(*g).field_type().value_type() == entry.field_type().value_type()
+        });
+        found.unwrap_or_else(|| {
+            self.absent.borrow_mut().push(entry.name().to_owned());
+            compile::ABSENT
+        })
+    }
+}
+
+/// This build's fields resolved in another schema. The literal names
+/// every field, so a new one can't be forgotten here.
+fn resolve_fields(f: &Fields, r: &Resolver<'_>) -> Fields {
+    let m = |f: Field| r.get(f);
+    Fields {
+        id: m(f.id),
+        hash: m(f.hash),
+        name: m(f.name),
+        path: m(f.path),
+        text: m(f.text),
+        ext: m(f.ext),
+        flag: m(f.flag),
+        size: m(f.size),
+        files: m(f.files),
+        largest: m(f.largest),
+        piece_len: m(f.piece_len),
+        discovered: m(f.discovered),
+        metadata: m(f.metadata),
+        title: m(f.title),
+        title_stem: m(f.title_stem),
+        tag: m(f.tag),
+        year: m(f.year),
+        season: m(f.season),
+        episode: m(f.episode),
+        junk: m(f.junk),
+        cat_count: f.cat_count.map(m),
+        cat_bytes: f.cat_bytes.map(m),
+    }
+}
+
+fn resolve_file_fields(f: &FileFields, r: &Resolver<'_>) -> FileFields {
+    let m = |f: Field| r.get(f);
+    FileFields {
+        torrent: m(f.torrent),
+        index: m(f.index),
+        name: m(f.name),
+        dir: m(f.dir),
+        ext: m(f.ext),
+        size: m(f.size),
+    }
 }
 
 /// The file index (§8, [`crate::files`]), in the `files` directory
@@ -268,6 +371,16 @@ fn rerank(
     Ok(hits)
 }
 
+/// The fast field a sort orders by, and whether it's signed.
+fn sort_field(sort: Sort) -> Option<(&'static str, bool)> {
+    match sort {
+        Sort::Relevance => None,
+        Sort::Discovered { .. } => Some(("discovered", true)),
+        Sort::Size { .. } => Some(("size", false)),
+        Sort::Files { .. } => Some(("files", false)),
+    }
+}
+
 /// Segments searched at once, at most: the §3 targets assume 4 cores.
 const SEARCH_THREADS: usize = 4;
 
@@ -284,6 +397,59 @@ impl SearchIndex {
             .settings(files::settings())
             .open_or_create(MmapDirectory::open(&files_dir)?)?;
         SearchIndex::wrap(index, fields, file_index, file_fields)
+    }
+
+    /// Opens the existing index in `dir` with the schema it was built
+    /// with, for serving while a newer one is built. Fields this build
+    /// added (or retyped) are absent there: clauses on them match nothing
+    /// and sorts on them are skipped ([`SearchIndex::missing_fields`]).
+    /// `None` when it lacks a field no search works without, which is a
+    /// schema mismatch; an error opening it is just an error.
+    pub(crate) fn open_existing(dir: &Path) -> Result<Option<(SearchIndex, Compat)>> {
+        let index = Index::open(MmapDirectory::open(dir)?)?;
+        let file_index = Index::open(MmapDirectory::open(dir.join("files"))?)?;
+        let (schema, fields) = schema::build();
+        let (file_schema, file_fields) = files::schema();
+        let compat = if index.schema() == schema && file_index.schema() == file_schema {
+            Compat::Exact
+        } else {
+            Compat::ReadOnly
+        };
+        let (old, old_files) = (index.schema(), file_index.schema());
+        let r = Resolver {
+            from: &schema,
+            to: &old,
+            absent: Default::default(),
+        };
+        let fields = resolve_fields(&fields, &r);
+        let fr = Resolver {
+            from: &file_schema,
+            to: &old_files,
+            absent: Default::default(),
+        };
+        let file_fields = resolve_file_fields(&file_fields, &fr);
+        let absent = r.absent.into_inner();
+        let file_absent = fr.absent.into_inner();
+        if absent.iter().any(|n| REQUIRED.contains(&n.as_str()))
+            || file_absent
+                .iter()
+                .any(|n| FILE_REQUIRED.contains(&n.as_str()))
+        {
+            return Ok(None);
+        }
+        let mut s = SearchIndex::wrap(index, fields, file_index, file_fields)?;
+        s.read_only = compat == Compat::ReadOnly;
+        s.missing = absent
+            .into_iter()
+            .chain(file_absent.into_iter().map(|n| format!("file.{n}")))
+            .collect();
+        Ok(Some((s, compat)))
+    }
+
+    /// The file index's fields, for tests.
+    #[cfg(test)]
+    pub(crate) fn file_fields(&self) -> &FileFields {
+        &self.files.fields
     }
 
     /// A RAM index, for tests.
@@ -320,11 +486,27 @@ impl SearchIndex {
                 fields: file_fields,
                 cache: Arc::default(),
             },
+            read_only: false,
+            missing: Arc::new([]),
         })
     }
 
     pub fn fields(&self) -> &Fields {
         &self.fields
+    }
+
+    /// Fields of this build's schema this index lacks: an older index
+    /// serving during a rebuild (file-index fields as `file.<name>`).
+    /// Clauses on them match nothing and sorts on them fall back to
+    /// relevance, so the API can say "index rebuilding; … not yet
+    /// available". Empty for this build's own index.
+    pub fn missing_fields(&self) -> &[String] {
+        &self.missing
+    }
+
+    /// Whether `sort` works on this index; otherwise it's by relevance.
+    pub fn sort_available(&self, sort: Sort) -> bool {
+        sort_field(sort).is_none_or(|(field, _)| !self.missing.iter().any(|m| m == field))
     }
 
     /// The highest torrent id indexed (0 for a new index).
@@ -386,6 +568,9 @@ impl SearchIndex {
     /// The writer for both indexes. `heap_bytes` is split between them:
     /// a quarter goes to the file index, which has smaller documents.
     pub fn writer(&self, heap_bytes: usize) -> Result<Indexer> {
+        if self.read_only {
+            return Err(Error::ReadOnly);
+        }
         // Tantivy wants at least 15 MB per writer.
         let file_heap = (heap_bytes / 4).max(15 << 20);
         let torrents = Side::new(
@@ -501,6 +686,9 @@ impl SearchIndex {
 
     /// The torrent with this swarm hash, if indexed.
     pub fn find_hash(&self, hash: &InfoHash) -> Result<Option<u64>> {
+        if self.fields.hash == compile::ABSENT {
+            return Ok(None);
+        }
         let q = TermQuery::new(
             Term::from_field_bytes(self.fields.hash, &hash.0),
             IndexRecordOption::Basic,
@@ -548,11 +736,12 @@ impl SearchIndex {
                 }
             },
             Sort::Discovered { desc } | Sort::Size { desc } | Sort::Files { desc } => {
-                let (field, signed) = match sort {
-                    Sort::Discovered { .. } => ("discovered", true),
-                    Sort::Size { .. } => ("size", false),
-                    _ => ("files", false),
+                let Some((field, signed)) = sort_field(sort) else {
+                    unreachable!("a field sort");
                 };
+                if !self.sort_available(sort) {
+                    return self.search_page(compiled, Sort::Relevance, limit, offset);
+                }
                 let order = sorted::Order {
                     field,
                     signed,
@@ -748,6 +937,13 @@ impl Indexer {
     /// re-indexes torrents changed since (upgraded partial imports, new
     /// enrichment). Returns how many torrents it added or replaced.
     pub fn catch_up(&mut self, store: &mut Store, limit: usize) -> Result<usize> {
+        let (added, replayed) = self.catch_up_counted(store, limit)?;
+        Ok(added + replayed)
+    }
+
+    /// [`Indexer::catch_up`], counting the torrents added and the
+    /// `reindex_log` entries replayed apart.
+    pub fn catch_up_counted(&mut self, store: &mut Store, limit: usize) -> Result<(usize, usize)> {
         for side in [&mut self.torrents, &mut self.files] {
             if side.last_id == 0 && side.reindex_seq == 0 {
                 // A new index reads every torrent's current data, so the
@@ -755,7 +951,8 @@ impl Indexer {
                 side.reindex_seq = store.reindex_head()?;
             }
         }
-        let mut added = self.catch_up_new(store, limit)?;
+        let added = self.catch_up_new(store, limit)?;
+        let mut replayed = 0;
         let after = self.torrents.reindex_seq.min(self.files.reindex_seq);
         for (seq, id) in store.reindex_after(after, limit)? {
             let t = load(store, id)?;
@@ -790,9 +987,17 @@ impl Indexer {
                 }
             }
             self.pending += 1;
-            added += 1;
+            replayed += 1;
         }
-        Ok(added)
+        Ok((added, replayed))
+    }
+
+    /// Whether both indexes have followed the store up to torrent `id`
+    /// and `reindex_log` entry `seq`.
+    pub fn reached(&self, id: i64, seq: i64) -> bool {
+        [&self.torrents, &self.files]
+            .iter()
+            .all(|s| s.last_id >= id && s.reindex_seq >= seq)
     }
 
     fn catch_up_new(&mut self, store: &mut Store, limit: usize) -> Result<usize> {
