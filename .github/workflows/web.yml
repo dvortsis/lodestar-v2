@@ -5,10 +5,12 @@ on:
     branches: [main]
     paths:
       - 'web/**'
+      - 'brand/source/**'
       - '.github/workflows/web.yml'
   pull_request:
     paths:
       - 'web/**'
+      - 'brand/source/**'
       - '.github/workflows/web.yml'
 
 permissions:

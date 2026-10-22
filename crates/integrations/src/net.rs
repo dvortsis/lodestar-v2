@@ -512,6 +512,126 @@ pub async fn read_limited(mut resp: Response, limit: usize) -> Result<Vec<u8>, N
     Ok(body)
 }
 
+/// Whether `url`'s host is plainly on the local network: a private IP
+/// literal, a single-label name, or a `.lan`, `.local` or `.home.arpa`
+/// name. Credentials may cross a plaintext connection only to such a host,
+/// so `http://ntfy.example.com` with a token is refused even when the
+/// channel may reach private addresses.
+pub(crate) fn is_local_host(url: &Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let literal = host.trim_start_matches('[').trim_end_matches(']');
+    if let Ok(ip) = literal.parse::<IpAddr>() {
+        return classify(ip) == AddrClass::Private;
+    }
+    let d = host.trim_end_matches('.').to_ascii_lowercase();
+    !d.contains('.') || d.ends_with(".lan") || d.ends_with(".local") || d.ends_with(".home.arpa")
+}
+
+/// A user-entered host name or address for a raw TCP endpoint (SMTP),
+/// normalised the way `Url` normalises an `http` host: every IPv4
+/// spelling (`0x7f.1`, `2130706433`) becomes dotted decimal, names are
+/// lowercased and IDNA-encoded, and a bare IPv6 address is bracketed. The
+/// result is an `http` URL with only that host, so the URL checks
+/// ([`check_url`], [`is_local_host`]) apply to it unchanged.
+pub fn host_url(host: &str) -> Result<Url, NetError> {
+    let host = host.trim();
+    if host.is_empty() {
+        return Err(NetError::InvalidUrl("it has no host"));
+    }
+    let bracketed;
+    let host = if host.parse::<Ipv6Addr>().is_ok() {
+        bracketed = format!("[{host}]");
+        bracketed.as_str()
+    } else {
+        host
+    };
+    // `set_host` would quietly drop a `:port` suffix; the port is its own
+    // setting, so a colon outside an IPv6 literal is refused.
+    if !host.starts_with('[') && host.contains(':') {
+        return Err(NetError::InvalidUrl("the host name isn't valid"));
+    }
+    let mut url = Url::parse("http://host.invalid/").map_err(|_| NetError::InvalidUrl("x"))?;
+    url.set_host(Some(host))
+        .map_err(|_| NetError::InvalidUrl("the host name isn't valid"))?;
+    if url.host_str().is_none_or(str::is_empty) {
+        return Err(NetError::InvalidUrl("it has no host"));
+    }
+    Ok(url)
+}
+
+/// The DNS-free checks for a TCP endpoint: the host as [`host_url`]
+/// normalises it, a usable port, and a literal IP against `policy`.
+pub fn check_host(host: &str, port: u16, policy: NetPolicy) -> Result<Url, NetError> {
+    if port == 0 {
+        return Err(NetError::InvalidUrl("the port isn't valid"));
+    }
+    let url = host_url(host)?;
+    check_url(&url, policy)?;
+    Ok(url)
+}
+
+/// Resolves a TCP endpoint once and checks every answer, as the HTTP guard
+/// does: a literal IP is checked without DNS, and a name is refused whole if
+/// any answer is disallowed. The result is the only addresses a caller may
+/// connect to.
+pub async fn resolve_tcp(
+    resolver: &dyn Resolve,
+    host: &str,
+    port: u16,
+    policy: NetPolicy,
+) -> Result<Vec<SocketAddr>, NetError> {
+    let url = check_host(host, port, policy)?;
+    if let Some(ip) = literal_ip(&url) {
+        return Ok(vec![SocketAddr::new(ip, port)]);
+    }
+    let name = url
+        .host_str()
+        .ok_or(NetError::InvalidUrl("it has no host"))?;
+    let addrs = resolve_checked(resolver, name, policy).await?;
+    Ok(addrs
+        .into_iter()
+        .map(|ip| SocketAddr::new(ip, port))
+        .collect())
+}
+
+/// A guarded TCP connection, for protocols that can't use
+/// [`GuardedClient`]'s HTTP stack (SMTP): the host is resolved once through
+/// the system resolver and checked like an HTTP host, and only a checked
+/// address is connected to. `timeout` covers resolving and connecting.
+pub async fn connect_tcp(
+    host: &str,
+    port: u16,
+    policy: NetPolicy,
+    timeout: Duration,
+) -> Result<tokio::net::TcpStream, NetError> {
+    connect_tcp_with(&SystemResolver, host, port, policy, timeout).await
+}
+
+/// [`connect_tcp`] through a given resolver (tests simulate rebinding this
+/// way). Each call resolves and checks from scratch.
+pub async fn connect_tcp_with(
+    resolver: &dyn Resolve,
+    host: &str,
+    port: u16,
+    policy: NetPolicy,
+    timeout: Duration,
+) -> Result<tokio::net::TcpStream, NetError> {
+    let connect = async {
+        let addrs = resolve_tcp(resolver, host, port, policy).await?;
+        for addr in addrs {
+            if let Ok(stream) = tokio::net::TcpStream::connect(addr).await {
+                return Ok(stream);
+            }
+        }
+        Err(NetError::Connect)
+    };
+    tokio::time::timeout(timeout, connect)
+        .await
+        .map_err(|_| NetError::Timeout)?
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -944,6 +1064,154 @@ pub(crate) mod tests {
             .unwrap();
         let resp = client.send(req).await.unwrap();
         assert_eq!(read_limited(resp, 99).await, Err(NetError::TooLarge));
+    }
+
+    #[test]
+    fn tcp_hosts_are_normalised_like_url_hosts() {
+        let host = |h: &str| host_url(h).map(|u| u.host_str().unwrap().to_owned());
+        assert_eq!(host("Mail.Example.COM").unwrap(), "mail.example.com");
+        assert_eq!(host("0x7f.1").unwrap(), "127.0.0.1");
+        assert_eq!(host("2130706433").unwrap(), "127.0.0.1");
+        assert_eq!(host("::1").unwrap(), "[::1]");
+        assert_eq!(host("[::ffff:7f00:1]").unwrap(), "[::ffff:7f00:1]");
+        assert_eq!(host("bücher.example").unwrap(), "xn--bcher-kva.example");
+        for bad in ["", " ", "a/b", "user@host", "host:25", "a b", "[::1"] {
+            assert!(host(bad).is_err(), "{bad:?}");
+        }
+        assert!(check_host("mail.example.com", 0, NetPolicy::notification(false)).is_err());
+    }
+
+    #[tokio::test]
+    async fn tcp_literals_are_refused_before_any_lookup_or_connection() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let r = ScriptedResolver::new(&[]);
+        let n = NetPolicy::notification(false);
+        let np = NetPolicy::notification(true);
+        for (host, policy, want) in [
+            ("127.0.0.1", np, AddrClass::Loopback),
+            ("127.1", np, AddrClass::Loopback),
+            ("0x7f.0.0.1", np, AddrClass::Loopback),
+            ("2130706433", np, AddrClass::Loopback),
+            ("::1", np, AddrClass::Loopback),
+            ("[::ffff:127.0.0.1]", np, AddrClass::Loopback),
+            ("169.254.169.254", np, AddrClass::Metadata),
+            ("fd00:ec2::254", np, AddrClass::Metadata),
+            ("10.0.0.1", n, AddrClass::Private),
+            ("0", np, AddrClass::Reserved),
+        ] {
+            assert_eq!(
+                connect_tcp_with(&*r, host, port, policy, Duration::from_secs(5))
+                    .await
+                    .unwrap_err(),
+                NetError::Blocked(want),
+                "{host}"
+            );
+        }
+        assert_eq!(r.lookups.load(Ordering::SeqCst), 0);
+        // Nothing connected: the listener has no pending connection.
+        let accepted = tokio::time::timeout(Duration::from_millis(50), listener.accept()).await;
+        assert!(accepted.is_err());
+    }
+
+    #[tokio::test]
+    async fn tcp_names_are_resolved_once_and_checked_whole() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let r = ScriptedResolver::new(&[
+            ("metadata.example", &[&["169.254.169.254"]]),
+            ("mixed.example", &[&["93.184.215.14", "127.0.0.1"]]),
+            ("loopback.example", &[&["127.0.0.1"]]),
+            ("rebind.example", &[&["127.0.0.1"], &["169.254.169.254"]]),
+        ]);
+        let t = Duration::from_secs(5);
+        let np = NetPolicy::notification(true);
+        let test = NetPolicy::loopback_for_tests();
+        assert_eq!(
+            connect_tcp_with(&*r, "metadata.example", port, test, t)
+                .await
+                .unwrap_err(),
+            NetError::Blocked(AddrClass::Metadata)
+        );
+        // A mixed answer is refused whole, even though one address is fine.
+        assert_eq!(
+            connect_tcp_with(&*r, "mixed.example", port, np, t)
+                .await
+                .unwrap_err(),
+            NetError::Blocked(AddrClass::Loopback)
+        );
+        assert_eq!(
+            connect_tcp_with(&*r, "loopback.example", port, np, t)
+                .await
+                .unwrap_err(),
+            NetError::Blocked(AddrClass::Loopback)
+        );
+        assert_eq!(
+            connect_tcp_with(&*r, "missing.example", port, test, t)
+                .await
+                .unwrap_err(),
+            NetError::Resolve
+        );
+        // Rebinding: the first connection is checked and made; the second
+        // resolves again and is refused.
+        let stream = connect_tcp_with(&*r, "rebind.example", port, test, t)
+            .await
+            .unwrap();
+        assert_eq!(stream.peer_addr().unwrap().port(), port);
+        assert!(listener.accept().await.is_ok());
+        assert_eq!(
+            connect_tcp_with(&*r, "rebind.example", port, test, t)
+                .await
+                .unwrap_err(),
+            NetError::Blocked(AddrClass::Metadata)
+        );
+        assert_eq!(r.lookups.load(Ordering::SeqCst), 6);
+    }
+
+    #[tokio::test]
+    async fn tcp_connection_failures_are_connect_errors() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let r = ScriptedResolver::new(&[("local.example", &[&["127.0.0.1"]])]);
+        assert_eq!(
+            connect_tcp_with(
+                &*r,
+                "local.example",
+                port,
+                NetPolicy::loopback_for_tests(),
+                Duration::from_secs(5)
+            )
+            .await
+            .unwrap_err(),
+            NetError::Connect
+        );
+    }
+
+    #[test]
+    fn local_hosts() {
+        let local = |h: &str| is_local_host(&host_url(h).unwrap());
+        for yes in [
+            "192.168.1.5",
+            "10.0.0.2",
+            "fd00::5",
+            "relay",
+            "relay.lan",
+            "R.Local",
+            "x.home.arpa",
+            "relay.",
+        ] {
+            assert!(local(yes), "{yes}");
+        }
+        for no in [
+            "smtp.example.com",
+            "relay.lan.example.com",
+            "93.184.216.34",
+            "127.0.0.1",
+            "x.arpa",
+        ] {
+            assert!(!local(no), "{no}");
+        }
     }
 
     #[test]
