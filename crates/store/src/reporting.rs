@@ -12,12 +12,13 @@
 //! **The query log** is off unless the user turns it on (§10.9.5: off by
 //! default, local, retained 30 days, clearable). It holds the time, the
 //! query, the result count and the latency, never an address, key or
-//! token: there's no column for one, and links in a query (a pasted
-//! magnet or tracker URL can carry a passkey) are replaced before writing.
+//! token: there's no column for one, and links and credentials in a query
+//! (a pasted magnet or tracker URL can carry a passkey) are replaced before
+//! writing.
 
 use rusqlite::{OptionalExtension, params};
 
-use crate::user_data::write_tx;
+use crate::user_data::{sql_limit, write_tx};
 use crate::{Error, Result, Store};
 
 /// Whether the query log is on: the setting's value, passed in by the
@@ -58,16 +59,31 @@ pub struct Resolved {
 
 const MAX_QUERY: usize = 2048;
 
-/// What the query log stores for `query`: every word that is or holds a
-/// link becomes `[link]`, then the text is cut at a character boundary.
+/// Words that mark a link or a credential, matched case-insensitively
+/// anywhere in a word.
+const SECRET_MARKS: &[&str] = &[
+    "://",
+    "magnet:",
+    "passkey=",
+    "apikey=",
+    "api_key=",
+    "token=",
+    "secret=",
+    "password=",
+];
+
+/// What the query log stores for `query`: words are split on any
+/// whitespace and joined with single spaces; every word that holds a link
+/// or a credential becomes `[link]`; then the text is cut at a character
+/// boundary.
 fn scrub_query(query: &str) -> String {
     let mut out = String::with_capacity(query.len().min(MAX_QUERY));
-    for (i, word) in query.split(' ').enumerate() {
+    for (i, word) in query.split_whitespace().enumerate() {
         if i > 0 {
             out.push(' ');
         }
-        let lower = word.to_ascii_lowercase();
-        if lower.contains("://") || lower.contains("magnet:") {
+        let lower = word.to_lowercase();
+        if SECRET_MARKS.iter().any(|m| lower.contains(m)) {
             out.push_str("[link]");
         } else {
             out.push_str(word);
@@ -221,7 +237,7 @@ impl Store {
              WHERE at >= ?1 AND at < ?2 AND (?3 = 0 OR results = 0)
              GROUP BY query ORDER BY n DESC, query LIMIT ?4",
         )?;
-        let rows = stmt.query_map(params![from, to, zero_only, limit as i64], |r| {
+        let rows = stmt.query_map(params![from, to, zero_only, sql_limit(limit)], |r| {
             Ok(QueryCount {
                 query: r.get(0)?,
                 count: crate::get_u64(r, 1)?,
@@ -263,7 +279,7 @@ impl Store {
              WHERE resolved_at IS NOT NULL AND (resolved_at, torrent_id) < (?1, ?2)
              ORDER BY resolved_at DESC, torrent_id DESC LIMIT ?3",
         )?;
-        let rows = stmt.query_map(params![at, id, limit as i64], |r| {
+        let rows = stmt.query_map(params![at, id, sql_limit(limit)], |r| {
             Ok(Resolved {
                 torrent_id: r.get(0)?,
                 at: r.get(1)?,
@@ -364,6 +380,11 @@ mod tests {
         );
         assert_eq!(scrub_query("a HTTPS://x/y?k=1 b"), "a [link] b");
         assert_eq!(scrub_query("Re:Zero s:2"), "Re:Zero s:2");
+        assert_eq!(
+            scrub_query("a\tTRACKER.example/announce?PassKey=s3cret\nb token=x apikey=y"),
+            "a [link] b [link] [link]"
+        );
+        assert_eq!(scrub_query("  dune   2160p "), "dune 2160p");
         let long = "é".repeat(1500);
         let cut = scrub_query(&long);
         assert!(cut.len() <= 2048 && cut.len() >= 2047);

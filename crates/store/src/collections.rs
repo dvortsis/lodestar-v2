@@ -7,7 +7,7 @@
 
 use rusqlite::{OptionalExtension, Transaction, params};
 
-use crate::user_data::{check_name, check_note, write_tx};
+use crate::user_data::{check_name, check_note, sql_limit, write_tx};
 use crate::{Error, Result, Store};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,11 +83,24 @@ impl Store {
         now: i64,
     ) -> Result<bool> {
         check(name, note)?;
-        let changed = self.conn.execute(
+        let tx = write_tx(&mut self.conn)?;
+        let old: Option<(String, Option<String>)> = tx
+            .prepare_cached("SELECT name, note FROM collections WHERE id = ?1")?
+            .query_row([id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()?;
+        let Some((old_name, old_note)) = old else {
+            return Ok(false);
+        };
+        tx.execute(
             "UPDATE collections SET name = ?2, note = ?3, updated_at = ?4 WHERE id = ?1",
             params![id, name, note, now],
         )?;
-        Ok(changed > 0)
+        tx.commit()?;
+        // The old text stays in WAL frames until a scrub (§2.17).
+        if old_name != name || (old_note.is_some() && old_note.as_deref() != note) {
+            self.after_user_delete();
+        }
+        Ok(true)
     }
 
     /// Deletes a collection and its entries (not the torrents).
@@ -143,13 +156,16 @@ impl Store {
             "SELECT torrent_id, position, added_at FROM collection_items
              WHERE collection_id = ?1 AND position > ?2 ORDER BY position LIMIT ?3",
         )?;
-        let rows = stmt.query_map(params![id, after.unwrap_or(i64::MIN), limit as i64], |r| {
-            Ok(CollectionItem {
-                torrent_id: r.get(0)?,
-                position: r.get(1)?,
-                added_at: r.get(2)?,
-            })
-        })?;
+        let rows = stmt.query_map(
+            params![id, after.unwrap_or(i64::MIN), sql_limit(limit)],
+            |r| {
+                Ok(CollectionItem {
+                    torrent_id: r.get(0)?,
+                    position: r.get(1)?,
+                    added_at: r.get(2)?,
+                })
+            },
+        )?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
