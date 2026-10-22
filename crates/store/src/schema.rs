@@ -431,9 +431,13 @@ CREATE TABLE saved_searches (
     query      TEXT NOT NULL CHECK (length(CAST(query AS BLOB)) <= 2048),
     ast        TEXT NOT NULL CHECK (json_valid(ast) AND length(ast) <= 65536),
     sort       TEXT CHECK (sort IS NULL OR length(sort) BETWEEN 1 AND 32),
-    -- Notify on new hits; serve an RSS feed of them. Both off is paused.
+    -- Notify in the app; serve an RSS feed; other channels (webhook, ntfy,
+    -- Discord, email: bits defined by the notifier, append only). Pausing
+    -- keeps them, so resuming restores them.
     alert      INTEGER NOT NULL CHECK (alert IN (0, 1)),
     rss        INTEGER NOT NULL CHECK (rss IN (0, 1)),
+    channels   INTEGER NOT NULL DEFAULT 0 CHECK (channels BETWEEN 0 AND 4294967295),
+    paused     INTEGER NOT NULL DEFAULT 0 CHECK (paused IN (0, 1)),
     -- The highest torrent id evaluated against this search.
     watermark  INTEGER NOT NULL CHECK (watermark >= 0),
     created_at INTEGER NOT NULL,

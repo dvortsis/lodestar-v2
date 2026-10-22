@@ -1,7 +1,9 @@
 //! API keys and feed tokens (architecture §12).
 //!
 //! The store never sees a secret. The auth code (B12) makes each one from
-//! at least 256 random bits, shows it once, and hands the store only:
+//! at least 256 random bits, apart from the public prefix (the prefix is
+//! shown, so it can't count towards them), shows it once, and hands the
+//! store only:
 //! - a short public **prefix**, unique, shown in the list to tell keys
 //!   apart and used to find the row;
 //! - the **SHA-256** of the whole secret.
@@ -47,7 +49,7 @@ impl KeyKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct NewApiKey<'a> {
     pub kind: KeyKind,
     pub name: &'a str,
@@ -60,6 +62,22 @@ pub struct NewApiKey<'a> {
     /// A feed token for one saved search; must be `None` for an API key.
     pub saved_search_id: Option<i64>,
     pub expires_at: Option<i64>,
+}
+
+/// The hash isn't secret, but it's never printed either: a log line
+/// shouldn't carry anything derived from a key (§12.1).
+impl std::fmt::Debug for NewApiKey<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NewApiKey")
+            .field("kind", &self.kind)
+            .field("name", &self.name)
+            .field("prefix", &self.prefix)
+            .field("hash", &"[redacted]")
+            .field("scopes", &self.scopes)
+            .field("saved_search_id", &self.saved_search_id)
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 /// A key as listed: everything but its hash.
@@ -436,6 +454,8 @@ mod tests {
                     sort: None,
                     alert: false,
                     rss: true,
+                    channels: 0,
+                    paused: false,
                 },
                 0,
                 0,
@@ -468,6 +488,13 @@ mod tests {
             "goes with its search"
         );
         assert_eq!(s.api_keys().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn debug_hides_the_hash() {
+        let shown = format!("{:?}", key("lsk_a1b2c3d4"));
+        assert!(shown.contains("[redacted]") && shown.contains("lsk_a1b2c3d4"));
+        assert!(!shown.contains("165"), "no hash bytes: {shown}");
     }
 
     #[test]

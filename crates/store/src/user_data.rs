@@ -16,6 +16,13 @@ pub(crate) fn write_tx(conn: &mut Connection) -> Result<Transaction<'_>> {
     Ok(conn.transaction_with_behavior(TransactionBehavior::Immediate)?)
 }
 
+/// A `usize` count as an SQL `LIMIT`/`OFFSET`, saturating: a plain cast
+/// turns `usize::MAX` into -1, which SQLite reads as "no limit" for LIMIT
+/// but as 0 for OFFSET.
+pub(crate) fn sql_limit(n: usize) -> i64 {
+    i64::try_from(n).unwrap_or(i64::MAX)
+}
+
 /// A name (saved search, collection, key): 1–200 characters, no control
 /// characters, no surrounding whitespace. The API trims before calling.
 pub(crate) fn check_name(name: &str) -> Result<()> {
@@ -27,7 +34,8 @@ pub(crate) fn check_name(name: &str) -> Result<()> {
 }
 
 /// A note: 1–4,000 characters, otherwise as [`check_name`] but line
-/// breaks and tabs are allowed.
+/// breaks (`\n`) and tabs are allowed. A carriage return is refused: the
+/// API normalizes CRLF to LF first.
 pub(crate) fn check_note(note: &str) -> Result<()> {
     let n = note.chars().count();
     let ok = (1..=4000).contains(&n)
@@ -55,13 +63,32 @@ pub(crate) fn check_text(s: &str, max: usize, what: &'static str) -> Result<()> 
 
 impl Store {
     /// Called after every committed delete of user data (a saved search
-    /// and its alerts, a collection, a key, a user item), whose rows
-    /// `secure_delete` zeroes in the main file.
+    /// and its alerts, a collection, a key, a user item, pruning), and
+    /// after an update that clears or replaces stored text (a name, query,
+    /// note or labels), whose old rows `secure_delete` zeroes in the main
+    /// file.
     ///
     /// TODO(#81): the WAL still holds the frames those rows were written
     /// in until a checkpoint truncates it. When #81 merges, call its WAL
     /// scrub here (best effort, as its other delete paths do).
-    pub(crate) fn after_user_delete(&self) {}
+    pub(crate) fn after_user_delete(&self) {
+        #[cfg(test)]
+        SCRUBS.with(|n| n.set(n.get() + 1));
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How often [`Store::after_user_delete`] ran on this thread.
+    static SCRUBS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Runs `f` and returns how many times it called the scrub hook.
+#[cfg(test)]
+pub(crate) fn scrubs_during(f: impl FnOnce()) -> u64 {
+    let before = SCRUBS.with(std::cell::Cell::get);
+    f();
+    SCRUBS.with(std::cell::Cell::get) - before
 }
 
 /// A store with torrents `1..=n`, for the M5 modules' tests.
@@ -114,6 +141,130 @@ mod tests {
         assert_eq!(store.add_to_collection(id, &[], 1).unwrap(), 0);
         store.reorder_collection(id, &[], 2).unwrap();
         holder.join().unwrap();
+    }
+
+    /// Deletes and text that's replaced or cleared reach the scrub hook;
+    /// updates that leave every old text in place don't.
+    #[test]
+    fn replaced_text_is_scrubbed() {
+        use crate::{SavedSearchInput, UserItemUpdate};
+        let mut s = test_store(2);
+        let c = s.create_collection("A", Some("n"), 0).unwrap();
+        assert_eq!(
+            scrubs_during(|| assert!(s.update_collection(c, "A", Some("n"), 1).unwrap())),
+            0
+        );
+        assert_eq!(
+            scrubs_during(|| assert!(s.update_collection(c, "B", Some("n"), 2).unwrap())),
+            1
+        );
+        assert_eq!(
+            scrubs_during(|| assert!(s.update_collection(c, "B", None, 3).unwrap())),
+            1
+        );
+        assert_eq!(
+            scrubs_during(|| assert!(s.update_collection(c, "B", Some("new"), 4).unwrap())),
+            0
+        );
+
+        let note = |n: Option<&'static str>| UserItemUpdate {
+            note: Some(n),
+            ..Default::default()
+        };
+        let fav = UserItemUpdate {
+            favourite: Some(true),
+            ..Default::default()
+        };
+        assert_eq!(
+            scrubs_during(|| {
+                s.set_user_item(1, &note(Some("a")), 0).unwrap();
+            }),
+            0
+        );
+        assert_eq!(
+            scrubs_during(|| {
+                s.set_user_item(1, &fav, 1).unwrap();
+            }),
+            0
+        );
+        assert_eq!(
+            scrubs_during(|| {
+                s.set_user_item(1, &note(Some("b")), 2).unwrap();
+            }),
+            1
+        );
+        assert_eq!(
+            scrubs_during(|| {
+                s.set_user_item(1, &note(None), 3).unwrap();
+            }),
+            1
+        );
+        let l1 = ["x"];
+        let labels = UserItemUpdate {
+            labels: Some(&l1),
+            ..Default::default()
+        };
+        assert_eq!(
+            scrubs_during(|| {
+                s.set_user_item(1, &labels, 4).unwrap();
+            }),
+            0
+        );
+        assert_eq!(
+            scrubs_during(|| {
+                s.set_user_item(1, &labels, 5).unwrap();
+            }),
+            0
+        );
+        let none = UserItemUpdate {
+            labels: Some(&[]),
+            favourite: Some(false),
+            ..Default::default()
+        };
+        assert_eq!(
+            scrubs_during(|| {
+                s.set_user_item(1, &none, 6).unwrap();
+            }),
+            1
+        );
+
+        let mut q = SavedSearchInput {
+            name: "a",
+            query: "dune",
+            ast: "{}",
+            sort: None,
+            alert: true,
+            rss: false,
+            channels: 0,
+            paused: false,
+        };
+        let id = s.create_saved_search(&q, 0, 0).unwrap();
+        q.paused = true;
+        assert_eq!(
+            scrubs_during(|| {
+                s.update_saved_search(id, &q, 0, 1).unwrap();
+            }),
+            0
+        );
+        q.query = "dune 2160p";
+        assert_eq!(
+            scrubs_during(|| {
+                s.update_saved_search(id, &q, 0, 2).unwrap();
+            }),
+            1
+        );
+        assert_eq!(
+            scrubs_during(|| {
+                s.delete_saved_search(id).unwrap();
+            }),
+            1
+        );
+        assert_eq!(
+            scrubs_during(|| {
+                s.delete_collection(c).unwrap();
+            }),
+            1
+        );
     }
 
     #[test]

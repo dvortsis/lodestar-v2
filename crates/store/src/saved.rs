@@ -10,7 +10,7 @@
 
 use rusqlite::{OptionalExtension, Transaction, params};
 
-use crate::user_data::{check_name, check_text, write_tx};
+use crate::user_data::{check_name, check_text, sql_limit, write_tx};
 use crate::{Error, Result, Store};
 
 /// What a caller sets on a saved search.
@@ -23,10 +23,16 @@ pub struct SavedSearchInput<'a> {
     pub ast: &'a str,
     /// The sort the results open with, e.g. `-seeders`.
     pub sort: Option<&'a str>,
-    /// Notify about new hits.
+    /// Notify about new hits in the app (SSE).
     pub alert: bool,
     /// Serve the hits as an RSS feed.
     pub rss: bool,
+    /// Other notification channels (webhook, ntfy, Discord, email): bits
+    /// defined by the notifier (B9), persisted, append only.
+    pub channels: u32,
+    /// Paused: the percolator skips it. Its channel choices are kept, so
+    /// resuming restores them (§10.8, "Pausing is a toggle").
+    pub paused: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,17 +44,12 @@ pub struct SavedSearch {
     pub sort: Option<String>,
     pub alert: bool,
     pub rss: bool,
+    pub channels: u32,
+    pub paused: bool,
     /// The highest torrent id evaluated against it.
     pub watermark: i64,
     pub created_at: i64,
     pub updated_at: i64,
-}
-
-impl SavedSearch {
-    /// Neither alerts nor a feed: the percolator skips it.
-    pub fn paused(&self) -> bool {
-        !self.alert && !self.rss
-    }
 }
 
 /// A saved search with what the list view shows beside it (§10.8).
@@ -79,7 +80,8 @@ pub struct SearchHits<'a> {
     pub torrent_ids: &'a [i64],
 }
 
-const COLUMNS: &str = "id, name, query, ast, sort, alert, rss, watermark, created_at, updated_at";
+const COLUMNS: &str =
+    "id, name, query, ast, sort, alert, rss, channels, paused, watermark, created_at, updated_at";
 
 fn search_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SavedSearch> {
     Ok(SavedSearch {
@@ -90,9 +92,11 @@ fn search_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SavedSearch> {
         sort: r.get(4)?,
         alert: r.get(5)?,
         rss: r.get(6)?,
-        watermark: r.get(7)?,
-        created_at: r.get(8)?,
-        updated_at: r.get(9)?,
+        channels: r.get(7)?,
+        paused: r.get(8)?,
+        watermark: r.get(9)?,
+        created_at: r.get(10)?,
+        updated_at: r.get(11)?,
     })
 }
 
@@ -141,8 +145,9 @@ impl Store {
         self.conn
             .execute(
                 "INSERT INTO saved_searches
-                     (name, query, ast, sort, alert, rss, watermark, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+                     (name, query, ast, sort, alert, rss, channels, paused, watermark,
+                      created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
                 params![
                     s.name,
                     s.query,
@@ -150,6 +155,8 @@ impl Store {
                     s.sort,
                     s.alert,
                     s.rss,
+                    s.channels,
+                    s.paused,
                     watermark.max(0),
                     now
                 ],
@@ -171,8 +178,8 @@ impl Store {
     /// Every saved search, oldest first, with its alert counts.
     pub fn saved_searches(&self) -> Result<Vec<SavedSearchSummary>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT s.id, s.name, s.query, s.ast, s.sort, s.alert, s.rss, s.watermark,
-                 s.created_at, s.updated_at,
+            "SELECT s.id, s.name, s.query, s.ast, s.sort, s.alert, s.rss, s.channels,
+                 s.paused, s.watermark, s.created_at, s.updated_at,
                  (SELECT count(*) FROM alerts a WHERE a.saved_search_id = s.id),
                  (SELECT count(*) FROM alerts a
                       WHERE a.saved_search_id = s.id AND a.read_at IS NULL),
@@ -183,9 +190,9 @@ impl Store {
         let rows = stmt.query_map([], |r| {
             Ok(SavedSearchSummary {
                 search: search_row(r)?,
-                alerts: crate::get_u64(r, 10)?,
-                unread: crate::get_u64(r, 11)?,
-                last_alert_at: r.get(12)?,
+                alerts: crate::get_u64(r, 12)?,
+                unread: crate::get_u64(r, 13)?,
+                last_alert_at: r.get(14)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -204,20 +211,32 @@ impl Store {
         now: i64,
     ) -> Result<bool> {
         check(s)?;
-        let changed = self
-            .conn
-            .execute(
-                "UPDATE saved_searches SET name = ?2, query = ?3, ast = ?4, sort = ?5,
-                     alert = ?6, rss = ?7, updated_at = ?9,
-                     watermark = CASE WHEN alert = 0 AND rss = 0 AND (?6 OR ?7)
-                         THEN max(watermark, ?8) ELSE watermark END
-                 WHERE id = ?1",
-                params![
-                    id, s.name, s.query, s.ast, s.sort, s.alert, s.rss, watermark, now
-                ],
-            )
-            .map_err(invalid_ast)?;
-        Ok(changed > 0)
+        let tx = write_tx(&mut self.conn)?;
+        let old: Option<(String, String, String)> = tx
+            .prepare_cached("SELECT name, query, ast FROM saved_searches WHERE id = ?1")?
+            .query_row([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .optional()?;
+        let Some((name, query, ast)) = old else {
+            return Ok(false);
+        };
+        tx.execute(
+            "UPDATE saved_searches SET name = ?2, query = ?3, ast = ?4, sort = ?5,
+                 alert = ?6, rss = ?7, channels = ?8, paused = ?9, updated_at = ?11,
+                 watermark = CASE WHEN paused = 1 AND ?9 = 0
+                     THEN max(watermark, ?10) ELSE watermark END
+             WHERE id = ?1",
+            params![
+                id, s.name, s.query, s.ast, s.sort, s.alert, s.rss, s.channels, s.paused,
+                watermark, now
+            ],
+        )
+        .map_err(invalid_ast)?;
+        tx.commit()?;
+        // The old text stays in WAL frames until a scrub (§2.17).
+        if name != s.name || query != s.query || ast != s.ast {
+            self.after_user_delete();
+        }
+        Ok(true)
     }
 
     /// Deletes a saved search with its alerts and feed tokens.
@@ -236,7 +255,7 @@ impl Store {
     pub fn percolation_due(&self, through: i64) -> Result<Vec<SavedSearch>> {
         let mut stmt = self.conn.prepare_cached(&format!(
             "SELECT {COLUMNS} FROM saved_searches
-             WHERE (alert = 1 OR rss = 1) AND watermark < ?1 ORDER BY id"
+             WHERE paused = 0 AND watermark < ?1 ORDER BY id"
         ))?;
         let rows = stmt.query_map([through], search_row)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -287,7 +306,11 @@ impl Store {
              ORDER BY torrent_id DESC LIMIT ?3",
         )?;
         let rows = stmt.query_map(
-            params![saved_search_id, before.unwrap_or(i64::MAX), limit as i64],
+            params![
+                saved_search_id,
+                before.unwrap_or(i64::MAX),
+                sql_limit(limit)
+            ],
             alert_row,
         )?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -353,7 +376,7 @@ impl Store {
                      ORDER BY torrent_id DESC LIMIT 1 OFFSET ?2)",
             )?;
             for id in ids {
-                deleted += stmt.execute(params![id, keep as i64])?;
+                deleted += stmt.execute(params![id, sql_limit(keep)])?;
             }
         }
         tx.commit()?;
@@ -417,6 +440,8 @@ mod tests {
             sort: Some("-seeders"),
             alert: true,
             rss: false,
+            channels: 0,
+            paused: false,
         }
     }
 
@@ -444,6 +469,8 @@ mod tests {
                 sort: Some("-seeders".into()),
                 alert: true,
                 rss: false,
+                channels: 0,
+                paused: false,
                 watermark: 7,
                 created_at: 100,
                 updated_at: 100,
@@ -470,21 +497,45 @@ mod tests {
     }
 
     #[test]
-    fn resuming_skips_what_was_indexed_while_paused() {
+    fn pausing_keeps_the_channels_and_resuming_skips_the_backlog() {
         let mut s = test_store(0);
-        let id = s.create_saved_search(&input("a"), 10, 0).unwrap();
-        let mut paused = input("a");
-        paused.alert = false;
+        let mut rss_only = input("a");
+        rss_only.alert = false;
+        rss_only.rss = true;
+        rss_only.channels = 0b10;
+        let id = s.create_saved_search(&rss_only, 10, 0).unwrap();
+        assert_eq!(s.percolation_due(1000).unwrap().len(), 1);
+
+        let mut paused = rss_only;
+        paused.paused = true;
         s.update_saved_search(id, &paused, 20, 1).unwrap();
-        assert!(s.saved_search(id).unwrap().unwrap().paused());
-        assert_eq!(s.saved_search(id).unwrap().unwrap().watermark, 10);
+        let got = s.saved_search(id).unwrap().unwrap();
+        assert!(got.paused);
+        assert_eq!(
+            (got.alert, got.rss, got.channels, got.watermark),
+            (false, true, 0b10, 10)
+        );
         assert!(s.percolation_due(1000).unwrap().is_empty());
-        s.update_saved_search(id, &input("a"), 500, 2).unwrap();
-        assert_eq!(s.saved_search(id).unwrap().unwrap().watermark, 500);
-        // A resume never moves it down.
+
+        // Resuming restores RSS-only and starts from the index's watermark.
+        s.update_saved_search(id, &rss_only, 500, 2).unwrap();
+        let got = s.saved_search(id).unwrap().unwrap();
+        assert_eq!(
+            (got.paused, got.alert, got.rss, got.channels, got.watermark),
+            (false, false, true, 0b10, 500)
+        );
+        // A resume never moves it down, and an edit while active keeps it.
         s.update_saved_search(id, &paused, 0, 3).unwrap();
-        s.update_saved_search(id, &input("a"), 100, 4).unwrap();
+        s.update_saved_search(id, &rss_only, 100, 4).unwrap();
         assert_eq!(s.saved_search(id).unwrap().unwrap().watermark, 500);
+        s.update_saved_search(id, &input("a"), 900, 5).unwrap();
+        assert_eq!(s.saved_search(id).unwrap().unwrap().watermark, 500);
+        // A search with every channel off still percolates: the list view
+        // shows its new hits (§10.8).
+        let mut silent = input("a");
+        silent.alert = false;
+        s.update_saved_search(id, &silent, 0, 6).unwrap();
+        assert_eq!(s.percolation_due(1000).unwrap().len(), 1);
     }
 
     #[test]
@@ -627,6 +678,9 @@ mod tests {
         assert_eq!(left, [10, 9, 8]);
         assert_eq!(s.alerts(b, None, 99).unwrap().len(), 2);
         assert_eq!(s.prune_alerts(3).unwrap(), 0);
+        // "Keep everything" keeps everything (a cast would make it -1).
+        assert_eq!(s.prune_alerts(usize::MAX).unwrap(), 0);
+        assert_eq!(s.alerts(a, None, usize::MAX).unwrap().len(), 3);
         assert_eq!(s.prune_alerts(0).unwrap(), 5);
     }
 

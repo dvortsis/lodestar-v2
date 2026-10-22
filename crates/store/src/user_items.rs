@@ -12,7 +12,7 @@
 
 use rusqlite::{OptionalExtension, params};
 
-use crate::user_data::{check_note, write_tx};
+use crate::user_data::{check_note, sql_limit, write_tx};
 use crate::{Error, Result, Store};
 
 /// At most this many labels per torrent.
@@ -127,19 +127,16 @@ impl Store {
     /// The marks of those of `ids` that have any, in id order: a search
     /// page's enrichment.
     pub fn user_items(&self, ids: &[i64]) -> Result<Vec<UserItem>> {
-        let mut stmt = self.conn.prepare_cached(&format!(
-            "SELECT {COLUMNS} FROM user_items WHERE torrent_id = ?1"
-        ))?;
-        let mut sorted = ids.to_vec();
-        sorted.sort_unstable();
-        sorted.dedup();
-        let mut out = Vec::new();
-        for id in sorted {
-            if let Some(r) = stmt.query_row([id], row).optional()? {
-                out.push(finish(r)?);
-            }
+        if ids.is_empty() {
+            return Ok(Vec::new());
         }
-        Ok(out)
+        let list = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "SELECT {COLUMNS} FROM user_items
+             WHERE torrent_id IN (SELECT value FROM json_each(?1)) ORDER BY torrent_id"
+        ))?;
+        let rows = stmt.query_map([format!("[{list}]")], row)?;
+        rows.map(|r| finish(r?)).collect()
     }
 
     /// Changes a torrent's marks and returns them; `None` when no mark is
@@ -178,11 +175,16 @@ impl Store {
         let hidden = u
             .hidden
             .unwrap_or(old_item.as_ref().is_some_and(|i| i.hidden));
-        let labels = labels.unwrap_or(old_labels);
+        let old_note = old_item.as_ref().and_then(|i| i.note.clone());
+        let labels = labels.unwrap_or(old_labels.clone());
         let note = match u.note {
             Some(n) => n.map(str::to_owned),
-            None => old_item.as_ref().and_then(|i| i.note.clone()),
+            None => old_note.clone(),
         };
+        // Old text left behind (cleared or replaced) stays in WAL frames
+        // until a scrub (§2.17).
+        let replaced = (old_labels.is_some() && old_labels != labels)
+            || (old_note.is_some() && old_note != note);
         let result = if !favourite && !hidden && labels.is_none() && note.is_none() {
             let deleted =
                 tx.execute("DELETE FROM user_items WHERE torrent_id = ?1", [torrent_id])?;
@@ -205,6 +207,9 @@ impl Store {
                 torrent_id, favourite, hidden, labels, note, created_at, now
             ])?;
             tx.commit()?;
+            if replaced {
+                self.after_user_delete();
+            }
             Some(UserItem {
                 torrent_id,
                 favourite,
@@ -252,7 +257,7 @@ impl Store {
              ORDER BY updated_at DESC, torrent_id DESC LIMIT ?6"
         ))?;
         let rows = stmt.query_map(
-            params![favourite, hidden, label, b_at, b_id, limit as i64],
+            params![favourite, hidden, label, b_at, b_id, sql_limit(limit)],
             row,
         )?;
         rows.map(|r| finish(r?)).collect()
