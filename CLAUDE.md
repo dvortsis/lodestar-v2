@@ -4,12 +4,12 @@ A from-scratch DHT crawler and torrent-metadata search engine: one Rust binary w
 
 ## Order of authority
 1. **`docs/owner-decisions.md`: the owner's own instructions and decisions.** These are the primary rules.
-2. **`docs/architecture.md`:** the approved plan built from them. It covers architecture, scope, milestones (§14), budgets (§3, §10.1) and every decision so far (logged in §16).
+2. **`docs/architecture.md`:** the approved plan built from them. It covers architecture, scope, milestones (§14), budgets (§3, §10.1) and every decision recorded before 2026-10-22 (§16). Later decisions are in `docs/decisions/`, one file per PR.
 3. **The contract docs:** `docs/design-tokens.md`, `docs/metrics.md`, `docs/ui-glossary.md`.
 4. **`ui-design-skills`:** only for what 1–3 leave open (see UI rules).
 5. **The task's brief.**
 
-Read the relevant sections before starting any task. If work changes a decision, update `docs/architecture.md` (§16) in the same PR. If it touches one of the owner's decisions, stop and ask the owner. Builds run through `docs/build-plan.md` and `runner/`; **`runner/standards.md` is the bar for every slice and review.**
+Read the relevant sections before starting any task. If work changes a decision, add a file under `docs/decisions/` in the same PR (see its README); don't append to §16 any more. If it touches one of the owner's decisions, stop and ask the owner. Builds run through `docs/build-plan.md` and `runner/`; **`runner/standards.md` is the bar for every slice and review.**
 
 ## Working conventions
 - **Branches:** one feature branch per milestone or coherent slice (`m0-foundations`, `m2-search-core`, …), merged into `main` by pull request. Nothing goes directly to `main` except trivial docs fixes. Keep PRs reviewable (≲ 1,500 changed lines where practical); split large milestones into several PRs. A larger PR needs a stated reason in its description.
@@ -48,6 +48,17 @@ Read the relevant sections before starting any task. If work changes a decision,
 - **Git LFS uploads are blocked by the proxy.** Brand assets in `brand/source/` are plain files, verified with `SHA256SUMS.txt`. Don't reintroduce LFS.
 - **Claude can't create GitHub repositories on this account;** the owner creates them.
 - **Clones are shallow.** Run `git fetch origin main` before pushing a branch.
+
+## User documentation
+- **Write for someone who can install an app from the Unraid app store but may not know how to set it up** (owner, 2026-10-22; `docs/owner-decisions.md` §2.14). They may not know Docker's architecture, Windows' security features and limits, or good security practice.
+  - Guide them to a safe setup: plainly, matter-of-fact, not wordy.
+  - Define terms and recommend the safe choice.
+  - Show screenshots and diagrams wherever you can.
+- **Use the owner's `documentation-skills`** (`dvortsis/skills/documentation-skills`) to guide the documentation process:
+  - `github-docs` for the guide in `docs/user/`;
+  - `material-composer` for release notes and any other material.
+- The project skill **`user-docs`** (`.claude/skills/user-docs/SKILL.md`) adds Lodestar's specifics on top of them: the folder, facts, screenshots, safe choices and gates. Use it for the README, `docs/user/`, `docs/operations.md`, release notes and in-app help.
+- Developer and contract docs (`architecture.md`, `build-plan.md`, the contract docs, `runner/`) are exempt.
 
 ## Repository layout
 See §13 of `docs/architecture.md`. In short:

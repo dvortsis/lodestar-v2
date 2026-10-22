@@ -235,6 +235,16 @@ impl TorrentDoc {
         for t in &e.tags {
             d.add_text(f.tag, t);
         }
+        // The file categories present, for the category facet: one pass
+        // over the tag column instead of ten share columns.
+        for (cat, count, _) in &e.shares {
+            if *count > 0 {
+                d.add_text(
+                    f.tag,
+                    format!("{}:{}", crate::facets::CATEGORY_TAG, cat.as_str()),
+                );
+            }
+        }
         for (field, values) in [
             (f.year, &e.years),
             (f.season, &e.seasons),
@@ -243,6 +253,10 @@ impl TorrentDoc {
             for v in values {
                 d.add_u64(field, *v);
             }
+        }
+        // `years` is sorted.
+        if let Some(y) = e.years.first() {
+            d.add_u64(f.release_year, *y);
         }
         d.add_u64(f.junk, e.junk);
         for (cat, count, bytes) in &e.shares {

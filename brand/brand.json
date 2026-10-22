@@ -1,0 +1,43 @@
+{
+  "format": "brand-profile",
+  "version": 1,
+  "name": "Lodestar",
+  "logo": "source/icons/compass_dark.svg",
+  "logo_on_dark": "source/icons/compass_light.svg",
+  "colors": {
+    "primary": "#4A7789",
+    "dark": "#263C44",
+    "secondary": "#829F8A",
+    "alert": "#896D2A",
+    "alert_text": "#796126",
+    "text": "#243C44",
+    "muted": "#767676",
+    "muted_text": "#6B6B6B",
+    "context": "#A8BFC8",
+    "card": "#E0E7E2",
+    "callout": "#E0E7E2",
+    "card_line": "#DFDFDF",
+    "track": "#DFDFDF",
+    "white": "#FFFFFF",
+    "black": "#000000"
+  },
+  "fonts": {
+    "body": "Atkinson Hyperlegible Next",
+    "heading": "Atkinson Hyperlegible Next",
+    "display": "Atkinson Hyperlegible Next",
+    "mono": "Atkinson Hyperlegible Mono"
+  },
+  "sources": {
+    "primary": "docs/architecture.md \u00a710.18 primary-ink (Riverstone light; #527F91 is 4.37:1 on white)",
+    "secondary": "brand/source/tokens/colors.json light.accent",
+    "alert": "web/scripts/themes.test.ts light.--color-warning",
+    "text": "brand/source/tokens/colors.json light.text",
+    "fonts": "docs/owner-decisions.md \u00a71.5.4 (Atkinson Hyperlegible Next and Mono)",
+    "logo": "brand/source/icons",
+    "name": "brand/source/favicons/site.webmanifest name",
+    "dark": "derived from primary",
+    "alert_text": "derived from alert",
+    "context": "derived from primary",
+    "card": "derived from secondary"
+  }
+}
