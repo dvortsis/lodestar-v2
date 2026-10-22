@@ -5,6 +5,9 @@ name: CI
 # run when a crate they build changes, and each fuzz target runs when a crate it
 # builds changes. macOS tests run on main and nightly, or on a PR labelled
 # `full-ci`, which also runs everything else. Main and nightly always run it all.
+# Skipped jobs show as skipped; a skipped matrix job keeps its unexpanded name
+# (`test (${{ matrix.os }})`), so if branch protection is ever added, require an
+# aggregate job rather than individual matrix entries.
 
 on:
   push:
@@ -18,8 +21,10 @@ on:
 permissions:
   contents: read
 
+# A label other than `full-ci` gets its own group (and does nothing), so adding
+# one never cancels the run in progress.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.event.action == 'labeled' && github.event.label.name != 'full-ci' && '-label' || '' }}
   cancel-in-progress: true
 
 env:
@@ -29,6 +34,8 @@ env:
 jobs:
   changes:
     name: changes
+    # A label restarts CI only when it's `full-ci`.
+    if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
     runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.c.outputs.rust }}

@@ -99,3 +99,5 @@ There's a **daily summary** on the first wake after 07:00 in the owner's time zo
 ## Stopping
 - **Disable the hourly scheduled task, or tell the runner to stop.** Running slices finish their current turn, and nothing new launches.
 - **`max_launches_per_day`** is a backstop against runaway loops. Hitting it stops launches and notifies the owner.
+
+**Green means every check run on the head finished `success`, `skipped` or `neutral`.** Since #90, CI skips the jobs a PR's files don't need, so a docs-only PR shows skipped Rust jobs; those count as passing.
