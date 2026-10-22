@@ -48,6 +48,7 @@ fn filtered_torrents_are_held_without_names() {
             evidence: &[1],
             at: 100,
             expires_at: 0,
+            adult_hold: false,
         },
         Filtered {
             hashes: &[C],
@@ -58,6 +59,7 @@ fn filtered_torrents_are_held_without_names() {
             evidence: &[2, 0],
             at: 200,
             expires_at: 300,
+            adult_hold: false,
         },
     ];
     s.write(&WriteBatch {
