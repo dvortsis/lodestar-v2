@@ -73,7 +73,7 @@ Every torrent that can be scraped is in one of a few lanes. The scheduler serves
 
 - **New torrents** are scraped once, soon after they're stored.
 - **Viewed and top-of-search torrents** are scraped promptly. A torrent you open is refreshed if its data is older than 30 minutes.
-- **Rediscovered torrents** get priority. When a known hash shows up in the DHT again, that's a free liveness signal (architecture §5), so its scrape moves up.
+- **Rediscovered torrents** get priority. When a known hash shows up in the DHT again, that's a free liveness signal (architecture §5), so its scrape moves up, unless it was scraped in the last 6 hours. Popular torrents are rediscovered constantly.
 - **Alive swarms** (some seeder or leecher) are rescraped every 6 hours. While the counts stay steady, the gap doubles, up to 3 days. It resets to 6 hours when a count moves by a fifth, or by 2 peers or more.
 - **Dead swarms** (nothing reported) are rescraped every 2 days, doubling to 30 days.
 - **Unreachable rounds**, where no tracker and no DHT answer arrived, retry after 1 hour, doubling to 1 day.

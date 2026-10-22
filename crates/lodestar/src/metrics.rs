@@ -535,6 +535,18 @@ pub fn render_scrape(
         get(&st.private_skipped),
     );
     o.one(
+        "scrape_fresh_skipped_total",
+        "counter",
+        "Interest and rediscovery hints for torrents scraped recently.",
+        get(&st.fresh_skipped),
+    );
+    o.one(
+        "scrape_dht_busy_total",
+        "counter",
+        "DHT scrapes not asked because the node was busy with others.",
+        get(&st.dht_busy),
+    );
+    o.one(
         "scrape_hints_dropped_total",
         "counter",
         "Interest and rediscovery hints dropped because a lane was full.",

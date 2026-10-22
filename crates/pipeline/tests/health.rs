@@ -194,6 +194,14 @@ async fn scrapes_new_torrents_into_the_store_and_hot_columns() {
 
     let monitor = pipeline.monitor();
     let h = monitor.health().unwrap();
+    // Just scraped: a look at it, or a rediscovery, doesn't scrape again.
+    // (A torrent with both hints queued is taken once.)
+    let get = |a: &std::sync::atomic::AtomicU64| a.load(std::sync::atomic::Ordering::Relaxed);
+    let rounds = get(&h.stats().rounds);
+    h.interest(alive.0);
+    until("fresh hints skipped", || get(&h.stats().fresh_skipped) >= 1).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(get(&h.stats().rounds), rounds, "no rescrape");
     assert_eq!(h.trackers().len(), 1);
     assert!(h.trackers()[0].rounds[0] >= 1, "{:?}", h.trackers());
     let store = pipeline.shutdown().await.unwrap();

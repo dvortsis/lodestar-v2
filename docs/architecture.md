@@ -1709,6 +1709,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **One round is up to 74 torrents** (one UDP packet).
   - Every tracker gets the round's hashes as one job. A task per tracker owns its client and pacer, and splits the job into requests that tracker accepts.
   - Interest, new and rediscovered torrents also get a DHT scrape (BEP 33). The due lane doesn't: decay sweeps would swamp the DHT budget.
+    - At most 8 DHT scrapes wait on the node at once. With all 8 permits taken, a torrent goes without a DHT estimate that round rather than joining a backlog, because the node serves about one scrape a second.
   - A round closes when every answer is in, or after 60 s with what arrived. Its torrents go to the writer as one batch.
 - **Pacing:**
   - Rounds start once per tracker interval, with at most 2 in flight. The interval is 2 s at Balanced, 5 s at Low and 1 s at Aggressive; HTTP trackers default to three times that.
@@ -1723,6 +1724,10 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - Health isn't persisted in M4: a restart starts every tracker as Ok, and a banning tracker costs one request to re-ban.
 - **Lanes, by deficit round robin:**
   - **Interest** (detail views, the top 10 hits of a first page) goes first, always.
+  - **Hints don't rescrape fresh data:**
+    - An interest hint for a torrent answered in the last 30 minutes is dropped.
+    - A rediscovered torrent is dropped if it was answered within the alive minimum (6 h), because popular torrents are rediscovered constantly.
+    - Without this, a busy search page or a popular swarm would spend the tracker budget re-asking the same questions.
   - **New** (weight 4), **rediscovered** (2) and **due** (3) share the rest. An empty lane forfeits its deficit, so idle lanes can't save up a burst.
   - A torrent is in at most one round at a time. The interest and rediscovered lanes hold 50,000 entries each and drop their oldest.
   - The new and due lanes refill from the store, 1,000 at a time, when they fall below four rounds' worth.
