@@ -8,6 +8,7 @@ version = "0.0.0"
 edition = "2024"
 rust-version = "1.85"
 publish = false
+license = "AGPL-3.0-or-later"
 repository = "https://github.com/dvortsis/lodestar-v2"
 
 [workspace.dependencies]

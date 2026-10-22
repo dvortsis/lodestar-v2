@@ -25,7 +25,7 @@ What the code shows (checked):
 
 The owner wants the rest of the application planned in detail through 1.0, with an outline after that. It should use as many helper agents as add value without trading away quality. So this plan covers both what gets built and how the work is cut, delegated and reviewed.
 
-`docs/architecture.md` stays the source of truth for *what* is built. This document covers *order and delegation*. When a slice changes a decision, the slice updates architecture.md (§16), not this file.
+`docs/architecture.md` stays the source of truth for *what* is built. This document covers *order and delegation*. When a slice changes a decision, the slice adds a file under `docs/decisions/`, not an edit to this file.
 
 ---
 
@@ -242,9 +242,18 @@ Each item is one PR of about 1,500 changed lines or fewer. **[M]** = main sessio
 - **Discover.**
 - **Alerts:** list, detail with the "New since" divider, and create/pause/delete dialogs.
 - **Insights, in three PRs:** the overview story, the five stage pages, then print and digest settings.
-- **Settings and the wizard:**
-  - forms generated from B2's schema, one file per section;
-  - the first-run wizard;
+- **Settings and the wizard** (architecture §10.10):
+  - **[M] B2b, B2c:** API additions (schema hints, revisions, batch patch, preview, test, preferences, SSE, export/import; then `/system`, restart, the HTTP-address keep-or-revert timer).
+  - **[M] M-settings-form:** the form engine every screen and the wizard use (draft store, validation and server-error mapping, atomic save, conflict merge, leave guard, drafts, Undo, the `SettingField` and widget registry).
+  - **[S] S-settings-1:** the shell (grouped navigation, Overview, list → detail, settings search and palette entries, restart banner, Show changed only, View as config.toml) and the generated screens: General, Crawler, Network & VPN, Storage & retention, Search & ranking.
+  - **[S] S-settings-2:** Integrations, Notifications, Trackers, Insights & digest, Language & region.
+  - **[M] B-update:** the update engine (§12.2): the signed manifest and key chain (key changes need the recovery key), levels and channels, the single update check, the overlay supervisor with probation, and automatic rollback. `/security-review` required. The Windows MSI path and manifest signing in `release.yml` come with M6.
+  - **[S] S-updates:** Settings → Updates and the wizard's Updates step (§10.10.14).
+  - **[S] S-about:** Settings → About (§10.10.13). B2c provides `/system` and `licenses.json`; Check now uses B-update's signed check.
+  - **[M] M-security-settings:** the Security screen (password, sessions, API keys, proxy auth).
+  - **[M] B-log1, B-log2:** the logging core (§12.1): the event catalogue (`log_event!`) with per-event switches and counters, and per-kind data switches per output (Private by default), enforced by typed wrappers, a CI check and a canary test; the rotating log file; then the ring buffer, the admin-only `GET /logs/stream` (not the `/events` hub) and the file API.
+  - **[S] S-logs:** Settings → Logging and the live log at `/logs` (§10.10.12).
+  - the first-run wizard, reusing the same fields;
   - Appearance: theme picker and custom-theme editor with a live contrast report.
 - **Filters & Safety:** rules, editor, preview, review queue, the CSX-5 override list, "Block this…", Not junk / Not adult, Show adult (18+) and Adult facets. Helpers do layout only. The main session writes the dialog state machines, all guardrails stay on the server, and `/security-review` runs on it.
 - **Keyboard map:** remapping and the shortcut sheet (§10.16).
@@ -256,7 +265,7 @@ Each item is one PR of about 1,500 changed lines or fewer. **[M]** = main sessio
 - the reporting-overhead benchmark (§3);
 - a `design-review` pass with every blocking finding fixed;
 - Playwright breakpoints × themes × densities, plus reduced motion and keyboard-only, and Lighthouse budgets;
-- an "M5 decisions" entry in architecture.md §16.
+- an "M5 decisions" file in `docs/decisions/`.
 
 ### P3: M6 packaging
 - **[M]**
@@ -268,7 +277,7 @@ Each item is one PR of about 1,500 changed lines or fewer. **[M]** = main sessio
   - WiX MSI via cargo-wix: service, firewall rules, opt-in Defender exclusion, Start-menu shortcut. Plus a portable zip.
   - A systemd unit, tarballs and the full `release.yml` matrix.
   - Smoke jobs: Docker; Windows MSI → service → `/healthz`; Linux tarball.
-  - `docs/operations.md`.
+  - **The user guide** (`docs/user/`, written with `github-docs` and the `user-docs` layer, owner's decision §2.14). github-docs' outline: Before you start, Install Lodestar (Unraid, Docker, Windows, Linux), Set up Lodestar, Keep Lodestar safe, Everyday use (updates, backups), Troubleshooting, then the answers, settings reference, glossary, revisions and index. Screenshots come from `S-doc-shots`, and diagrams are Mermaid. `docs/operations.md` is rewritten for the same reader, or folded into the guide. It's written today for readers who already know Docker, ports and environment variables. The guide's required **Keep Lodestar safe** chapter (github-docs) carries `user-docs` §6.
 - **Owner actions:** a code-signing certificate and the Unraid CA submission.
 
 ### P4: v0.6 (overlaps P3)
