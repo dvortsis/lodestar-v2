@@ -1,0 +1,2 @@
+400
+{"error":{"code":"class_rule_tests_type","field":"query","message":"A classification rule decides the type, so its query can't test type: or adult:."}}

@@ -29,6 +29,18 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
+  openapi:
+    name: openapi.json drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The committed document must be what the DTOs generate: run
+      # `cargo run -p lodestar --bin openapi` and commit the result.
+      - run: cargo run -p lodestar --bin openapi
+      - run: git diff --exit-code web/src/lib/api/openapi.json
+
   test:
     name: test (${{ matrix.os }})
     strategy:
@@ -97,7 +109,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [bencode, krpc, metainfo, filetree, tokenizer, query, release, tracker_scrape, lists]
+        target: [bencode, krpc, metainfo, filetree, tokenizer, query, release, tracker_scrape, lists, utp]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

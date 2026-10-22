@@ -1,0 +1,51 @@
+{
+  "recorded_from": "qBittorrent v4.6.3 (WebUI API 2.9.3)",
+  "note": "",
+  "request": {
+    "method": "GET",
+    "path": "/api/v2/torrents/files",
+    "query": "hash=f16304349815c2941fe00ababb5fe4e9098e0ee4"
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "connection",
+        "keep-alive"
+      ],
+      [
+        "content-length",
+        "421"
+      ],
+      [
+        "content-security-policy",
+        "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self' 'unsafe-inline'; object-src 'none'; form-action 'self'; frame-ancestors 'self';"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "referrer-policy",
+        "same-origin"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "x-xss-protection",
+        "1; mode=block"
+      ]
+    ],
+    "body": "[{\"availability\":0,\"index\":0,\"is_seed\":false,\"name\":\"Lodestar Fixture Pack/Disc 1/track01.flac\",\"piece_range\":[0,0],\"priority\":1,\"progress\":0,\"size\":4000},{\"availability\":0,\"index\":1,\"name\":\"Lodestar Fixture Pack/Disc 1/track02.flac\",\"piece_range\":[0,0],\"priority\":1,\"progress\":0,\"size\":5000},{\"availability\":0,\"index\":2,\"name\":\"Lodestar Fixture Pack/cover.jpg\",\"piece_range\":[0,0],\"priority\":0,\"progress\":0,\"size\":1000}]"
+  }
+}

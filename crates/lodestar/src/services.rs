@@ -63,6 +63,8 @@ impl Services {
             Arc::new(move |ip: IpAddr| ips.contains(ip))
         };
         pipeline_config.fetch.deny = Some(lodestar_peer_wire::Deny(denied.clone()));
+        // Fetch attempts and successes per transport, for /metrics.
+        let fetch_stats = pipeline_config.fetch.stats.clone();
         let db = config.db_path();
         let store_config = config.store_config();
         let search = config.search.enabled;
@@ -159,6 +161,7 @@ impl Services {
         let http = http::AppState {
             monitor: pipeline.monitor(),
             dht: dht_stats,
+            fetch: fetch_stats,
             reader,
             search: live.as_ref().map(|(index, l)| http::SearchState {
                 index: index.clone(),

@@ -1,0 +1,23 @@
+{
+	"id": "one",
+	"name": "One",
+	"group": "community",
+	"license": "MIT (© 2011-2022 GitHub Inc.)",
+	"source": "https://github.com/atom/atom",
+	"light": {
+		"background": "#EAEAEB",
+		"surface": "#FAFAFA",
+		"text": "#383A42",
+		"primary": "#4078F2",
+		"accent": "#50A14F",
+		"categorical": ["#4078F2", "#50A14F", "#CB7701", "#E45649", "#0184BC", "#A626A4"]
+	},
+	"dark": {
+		"background": "#21252B",
+		"surface": "#282C34",
+		"text": "#ABB2BF",
+		"primary": "#61AFEF",
+		"accent": "#98C379",
+		"categorical": ["#61AFEF", "#98C379", "#E5C07B", "#E06C75", "#56B6C2", "#C678DD"]
+	}
+}

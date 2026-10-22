@@ -1743,6 +1743,18 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Logo display widths:** wordmark 240, horizontal 320, stacked 200 px (§10.19 fixes only the wordmark).
 - **Size:** `web/static/brand/` is about 1.5 MiB (scenes 1.1 MB, logos 0.3 MB, favicons 0.13 MB). An earlier setting with three WebP widths came to 3.05 MiB.
 
+**B1 decisions (typed API contract):**
+- **Every `/api/v1` body is a typed DTO** in `crates/api/src/dto/` (one file per domain), with utoipa `ToSchema`. Each module lists its handlers in an `ApiDoc`, and `openapi::document` merges them one line per module, as the router does. `GET /api/v1/openapi.json` is open and holds no data.
+  - The document has OpenAPI 3.1 paths relative to the server `/api/v1`, a `session` cookie security scheme on every path except `/auth`, `/setup`, `/login`, `/logout` and `/openapi.json`, and the error envelope as every operation's `default` response.
+  - `lodestar`'s `openapi` binary writes `web/src/lib/api/openapi.json` (pretty-printed, sorted keys), and `npm run api:types` turns that into `schema.d.ts`. CI fails if either committed file is stale.
+- **The JSON stayed byte-compatible** with the old `json!` handlers, held there by per-endpoint golden files recorded before the change (`crates/api/tests/golden/`). That's why response fields are declared in alphabetical order (a `Value` serializes its keys sorted). `POST /filters/preview` keeps the declaration order it always had.
+- **The `docs/metrics.md` §7 swarm fields are served now as `null`** ("never scraped") until M4 fills them: `seeders`, `leechers`, `completed`, `trackers_reporting`, `trackers_checked` and `last_scrape_at` on hits and detail, plus `dht_seeds`, `dht_peers`, `swarm_trend` and `swarm_history` on detail. The non-nullable M4 fields (`seeders_approx`, `swarm_suspect`, `swarm_trackers`, `last_seen_at`) arrive with M4's values, not as placeholders.
+- **B1 doesn't serve the other `docs/metrics.md` §7.1/§7.3 fields yet.** Adding one later is a DTO field plus a golden update, not a new endpoint. The fields are `title`, `resolved_via`, `content_type`, `adult_kind`, `composition`, `junk_score`, `junk_reasons`, `hidden_by_filter`, `why`, `total_approx`, `hidden_junk` and `hidden_count`.
+  - `total_approx` comes with B5a (exact count on demand).
+  - `hidden_by_filter`, `why` and `hidden_count` come with B15 (the filter decisions on search results).
+  - The M3 enrichment fields (`title`, `resolved_via`, `content_type`, `adult_kind`, `composition`, `junk_score`, `junk_reasons`) and `hidden_junk` have no slice in `docs/build-plan.md` yet; the runner assigns one. They read the stored enrichment in `torrents::hit` and `torrents::detail_of`.
+- **New endpoints land as a typed DTO plus a 501 stub** (`error::not_implemented`, code `not_implemented`) with an example, then the handler (`crates/api/README.md`).
+
 **M5 decisions (build process and UI conventions):**
 - **Spacing uses Tailwind's default scale** (`p-4` = 16 px), restricted to the steps that match the §10.2 ramp: 0, 0.5, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14 (= 0–56 px).
   - Redefining the scale so that `p-4` = 4 px was considered and rejected. Standard Tailwind written against it would be silently wrong, and no lint can catch that.
@@ -1789,6 +1801,75 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - `img-src data:` is for daisyUI's data-URI SVG icons. A page with an inline event handler fails the build instead of being allowed.
   - Also on HTML: `X-Content-Type-Options: nosniff` (on every file), `Referrer-Policy: no-referrer`, and a `Permissions-Policy` that denies accelerometer, camera, display capture, geolocation, gyroscope, magnetometer, microphone, MIDI, payment and USB.
 - **The M1 status page moved from `/` to `/status`.** It stays open (it asks for a login itself, and `/api/status` needs a session) and keeps its own `'unsafe-inline'` policy, now with `object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`, plus `no-referrer`, the same `Permissions-Policy` and `no-cache`.
+
+**Integrations crate decisions (download clients, notifications, secrets, SSRF guard):**
+- **HTTP stack:** the workspace's: reqwest 0.13 with `rustls-no-provider` and the `ring` provider, the same build and trust store as the tracker scraper and the subscriptions fetcher. System proxies are off for integrations: a proxy resolves names itself, which would bypass the guard.
+  - The raw client doesn't leave `GuardedClient`.
+  - `crates/integrations/clippy.toml` forbids `RequestBuilder::send` and `Client::execute`, so every request in the crate passes the literal-IP check.
+- **SSRF policy (§12):**
+  - Link-local, metadata (`169.254.169.254`, `fd00:ec2::254`, `100.100.100.200`) and reserved addresses are never reachable.
+  - Notification endpoints never reach loopback, even with the per-channel private-range opt-in. Download clients may reach loopback, because companions bind to localhost (§18.10).
+  - Carrier-grade NAT (`100.64.0.0/10`, Tailscale) counts as private.
+  - IPv4 embedded in IPv6 (mapped, compatible, NAT64, 6to4) is classified by its IPv4 address. Local-use NAT64 (`64:ff9b:1::/48`) counts only in the /96 layout; any other layout is reserved.
+  - The IPv6 special-purpose blocks `2001:2::/48`, `2001:10::/28`, `3fff::/20` and `5f00::/16` are reserved.
+  - A name with any disallowed answer is refused whole. Every new connection re-resolves and re-checks, which catches rebinding.
+  - Only 307/308 redirects are followed, each hop checked; credentials headers are dropped across origins, and `https` → `http` is refused. Other 3xx responses would turn a POST into a GET and report a lost payload as delivered.
+- **Secrets at rest (§18.10):**
+  - The per-install key lives in `secrets.key` in the data directory, outside the database.
+  - Each secret is sealed with XChaCha20-Poly1305 under a random nonce, with the record's name as associated data, so a sealed value can't be moved between records.
+  - On Windows the key file's ACL is replaced through `icacls` (by its absolute path), because the workspace forbids `unsafe` Win32 calls. It's applied before the key is written and re-applied on every read.
+  - **Rotation:** the key file holds several keys, each identified by an id, and every sealed value records its key's id. `rotate` adds a primary key, callers re-seal their records in their own transaction, and `retire_old_keys` drops the rest. The file always holds every key a stored record may use, so a crash mid-rotation loses nothing.
+- **qBittorrent "Send selected files":** the torrent is added paused, unselected files get priority 0 once the client has the metadata, and then the torrent starts. If a magnet's metadata doesn't arrive within 30 s, the torrent stays paused and the UI says the selection is pending, so nothing unwanted downloads.
+- **Webhook payload:** `lodestar.notification`, `schema_version` 1, with an `id` that stays the same across retries for deduplication. Private-source items are left out, and only their count is sent (§18.7).
+
+**X-utp implementation decisions (uTP, `lodestar-utp`, behind a flag):**
+- **Our own crate, not a dependency.** The maintained candidates were measured against the §15 criteria (MIT/Apache, tokio-native, LEDBAT, bounded memory, no `unsafe` on our side, fuzzable parsing, active):
+  - `librqbit-utp` 0.7 (Apache-2.0, tokio, active) has no LEDBAT: Cubic only, with LEDBAT a TODO. It also pulls in `libc`, `socket2`, `parking_lot` and `lazy_static`.
+  - `utp-rs` 0.1.0-alpha.17 (MIT, tokio, LEDBAT) is an alpha with no release since March 2025, and uses unbounded channels per connection, so a peer can grow our memory.
+  - `utp` and `tokio-utp` haven't had a release since 2017; `libutp` bindings need `unsafe` FFI.
+  - `crates/utp` adds no new third-party crates: tokio and rand, plus socket2, which the DHT already uses.
+- **Design:** a sans-IO connection state machine (packet codec, selective ACK, fast retransmit on three duplicate or selectively acknowledged packets, RFC 6298 timeouts with exponential backoff, LEDBAT with a 100 ms target and slow start, sequence-number wraparound), driven by a thin tokio layer: one mutex per connection, a timer task per connection, non-blocking sends.
+  - The state machine is tested over a simulated network with a virtual clock: loss, duplication, reordering and starting sequence numbers near 65535. A fuzz target (`utp`) drives the parser and the state machine with hostile packets.
+  - **Hostile-input limits:** buffered bytes per connection stay under 2 × the receive window plus the send buffer (64 KiB each by default), with at most 256 packets in flight and 256 held out of order. ACKs for packets we never sent are ignored. Packets for unknown connections are dropped silently, never answered, so the port can't be used as a reflector. Incoming connections are accepted only by a listener (the crawler has none).
+  - **No connection lives forever:** at most 8 per IP address (closing ones included) and 4,096 in all. An accepted connection whose initiator never answers its SYN-ACK closes after 8 s, restarted by each repeated SYN, which covers the initiator's SYN backoff. An open connection with nothing in flight that hears nothing for 60 s closes as timed out.
+  - Once the handshake completes, the retransmission timer drops the SYN's backoff (RFC 6298 §5.7), so data after a lossy handshake isn't retried on an 8 s timer.
+  - The accepting side sends nothing but its SYN-ACK until the initiator answers, as in libutp. Otherwise data reordered ahead of the SYN-ACK would desynchronise the initiator's sequence numbers.
+  - After both FINs, a connection lingers in TIME-WAIT (4 × RTO, at least 4 s, restarted by each packet) to re-acknowledge retransmissions. A dropped stream closes with a FIN in the background, capped at 5 s.
+  - Packets carry at most 1,200 payload bytes, which fits the IPv6 minimum MTU through tunnels and VPNs without path-MTU discovery.
+  - Measured: **77 MiB/s** on loopback (one connection, release build) and about **2.4 KB per idle connection endpoint**; at most 192 KiB per connection under load.
+- **Shared port (§5):** `lodestar_utp::classify` splits datagrams on the DHT's port by their first byte. uTP has version nibble 1 and type 0–4; KRPC starts with `d` (0x64), which would read as type 6, version 4, so the two never collide. `UtpSocket::with_sink` sends through the DHT's sockets (`DualSink` picks the IPv4 or IPv6 one) and receives via `feed`.
+- **In `peer-wire`:** the BEP 3/10/9 exchange and MSE run over any `AsyncRead + AsyncWrite` stream (`fetch_on_stream`). `FetchOptions` gains `transport` (TCP by default), `fallback_to_tcp` (on by default), `utp_fallback_after` (2 s) and `utp`.
+  - With uTP first, a peer that doesn't open a uTP connection within 2 s is fetched over TCP inside the same deadline. A peer that answered over uTP isn't retried over TCP.
+  - The deadline, the metadata size cap and every other limit are identical across transports. The TCP path is unchanged.
+- **Metrics:** `lodestar_fetch_{attempts,success,connect_timeouts}_total{transport}`, `lodestar_utp_retransmits_total` and `lodestar_utp_connection_timeouts_total`. The labelled success counter replaces the unlabelled one. It counts every verified info dict, so it can run slightly ahead of the pool's `fetched`, which drops a result whose key left the pool mid-fetch. Counting in the pool instead would need `Fetched` to carry its transport.
+- **Windows (§11):** all uTP connections share one UDP port, so they avoid TCP's ephemeral-port and TIME_WAIT exhaustion. The receive loop ignores per-datagram errors such as the `ConnectionReset` Windows reports for an ICMP "port unreachable". `UtpSocket::bind` on an IPv6 address is dual-stack on every OS: it clears `IPV6_V6ONLY` explicitly, because Windows sets it by default and Linux and macOS don't. (The DHT does the opposite, binding IPv6-only so its two sockets share a port; a shared-port uTP socket uses the DHT's sockets through `DualSink`.)
+
+**W4 implementation decisions (i18n):**
+- **Messages are merged, not committed.** `web/scripts/messages.ts` merges `features/<feature>/messages/{en,zh}.json` and the shared `i18n/messages/` into `web/messages/{en,zh}.json` (generated, gitignored), which Paraglide compiles into `src/lib/paraglide/` (also gitignored). Feature keys start with `<feature>_`; shared keys are the `docs/ui-glossary.md` key column as is (`torrent`, `seeders`, `video`, …) plus `common_*`.
+- **Strategy is `globalVariable` + base locale.** No URL or cookie strategy: the locale is a client setting, resolved as settings, then `navigator.languages`, then en (`web/src/lib/i18n/locale.svelte.ts`). The runtime adds about 1.3 KB gzipped to search-route JS; messages are tree-shaken per call site.
+- **Paraglide's JSON plugin is the pinned devDependency `@inlang/plugin-message-format` 4.5.5**, loaded from `node_modules` by `project.inlang/settings.json` instead of from jsDelivr, so compiles are offline and reproducible.
+- **The browser only auto-selects a locale whose catalogue covers at least 95% of en** (computed by the merge script into the generated `coverage.generated.ts`), so a zh-CN browser gets English text with `lang="en"` until zh is translated (WCAG 3.1.1). An explicit language setting always applies.
+- **Missing zh is a warning, not an error**; a zh key with no en key, a duplicate key or an invalid or mismatched placeholder fails the build. Messages use plain `{name}` placeholders, no ICU plural/select.
+
+**M5 decisions (index rebuild):**
+- **The directory name is the proof of completeness.** Under `data/index`, `v{schema}-t{tokenizer}` is complete, `….building` is in progress and `….trash` is being deleted. A build becomes complete only by an atomic rename, after its final commit and a `COMPLETE` marker. A crash between the marker and the rename just needs the rename at the next start. Directories from before this change already have the complete form, so upgrading doesn't rebuild.
+- **`Serving::open_or_rebuild(root, store_path, config)`** is the binary's entry point (wired in by B5a). It holds an exclusive lock on `root/.lock`. A second instance fails with `Error::Locked`; a filesystem that can't lock (some SMB or NAS shares) fails with `Error::LockFailed`, which says so. It serves through an `RwLock<Arc<SearchIndex>>`: readers take the index once per query, which moves them to the new one between queries.
+  - When this build's index exists, it opens that index and starts the live indexer, as before.
+  - Otherwise, the newest complete older index keeps serving. Meanwhile, `Rebuild` follows the store into `….building` with the ordinary `Indexer::catch_up`, covering both indexes, per-index watermarks and `reindex_log`. It commits every 50k torrents, so an interrupted or stopped build resumes from its own watermarks. It builds up to a snapshot taken at the start (the highest torrent id and the `reindex_log` head) rather than chasing new torrents; those are added at the swap.
+  - Then it commits, waits for merges, writes the marker and renames. **The swap order keeps every visible torrent visible:** the old live indexer stops (committing), the new index catches up once more and commits, a live indexer starts on it, and only then do readers move. Each index follows `reindex_log` from its own sequence, so entries logged at any point are applied before the swap or after it.
+  - With nothing older to serve (a new install, or only indexes without the fields every search needs), any partial build is promoted and fills live, which is the old behaviour.
+- **An older index serves by field name, and a field it lacks is absent.** Its stored schema is used and each field of this build is resolved by name and value type. A field it doesn't have (one a later schema added, B6 and M7 included) or has with another value type resolves to an absent marker. Clauses on it match nothing, a sort on it falls back to relevance, and facets (B6) must skip it. `SearchIndex::missing_fields()` and `RebuildProgress::unavailable` list them so the API can say "index rebuilding; … not yet available".
+  - Only `id`, `name`, `text` and `discovered` (and the file index's `torrent` and `index`) are required; every schema since v1 has them. An index without one is a schema mismatch and isn't served.
+  - An identical schema (a tokenizer bump) keeps following the store until the swap. A different one serves read-only, and torrents stored meanwhile appear at the swap.
+  - An older index that fails to open is retried with backoff, then fails the start. It's never discarded over an error that may be transient (an antivirus scan, a share hiccup).
+- **Known limitation, tokenizer bumps:** the binary has only the current tokenizer, so an older index is queried with it until the swap. A word whose tokens changed may not match there meanwhile. Keeping old tokenizers around isn't worth it for a rebuild window of an hour or so at 10M.
+- **Old directories are renamed to trash and then deleted after the swap, with backoff retries** (Windows can't delete mapped files, §11). Whatever is left is retried at the next start. A newer version's directory is never deleted, so a downgrade and upgrade don't rebuild twice.
+- **`RebuildProgress { phase, done, total, replayed, errors, started_at, from, to, unavailable }`** comes from `Serving::progress()` for the "Index rebuilding" banner (§10.4) and Insights.
+  - `done` counts torrents added; replayed `reindex_log` entries and failed steps are counted apart. Rebuild errors stay out of the live indexer's `IndexStats`.
+  - The phases are `Building`, `Finishing`, `Swapping` and `Failed`. A failure is logged, the old index keeps serving and following the store, and the next start resumes the build.
+  - The live counters (`IndexStats`) are kept across the swap.
+- **Memory:** while a rebuild runs, two writers are active (live and build), each with the configured heap.
+- **Tests** use a version override in `ServingConfig`, and a hold point before finishing instead of timing, so they don't bump `SCHEMA_VERSION` or depend on speed.
 
 ## 17. Verification (once built)
 
