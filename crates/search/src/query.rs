@@ -1168,6 +1168,16 @@ impl Node {
         }
     }
 
+    /// Whether the query tests the `key` facet anywhere.
+    pub fn mentions_tag(&self, key: TagKey) -> bool {
+        match self {
+            Node::Tag { key: k, .. } => *k == key,
+            Node::And { of } | Node::Or { of } => of.iter().any(|n| n.mentions_tag(key)),
+            Node::Not { of } | Node::File { of } => of.mentions_tag(key),
+            _ => false,
+        }
+    }
+
     /// The query with torrents a filter rule hid left out (§20.3), unless
     /// it asks about hidden torrents itself.
     pub fn without_hidden(self) -> Node {

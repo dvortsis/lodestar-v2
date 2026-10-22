@@ -2,6 +2,7 @@
 //! changes apply at once, weakening ones need the password every time,
 //! the floor stays locked, and Undo goes back one step.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use axum::Router;
@@ -14,6 +15,7 @@ use lodestar_classify::ContentType;
 use lodestar_filter::lists::SharedIps;
 use lodestar_filter::{Action, Core, CsList, Engine, Handle, HeldSet, Lists, Sealer, Switches};
 use lodestar_metainfo::Info;
+use lodestar_search::SearchIndex;
 use lodestar_store::{Filtered, Held, NewTorrent, SourceId, Store, StoreConfig, WriteBatch};
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -28,6 +30,10 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
+    fixture_with(None)
+}
+
+fn fixture_with(index: Option<SearchIndex>) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("t.db");
     let store = Store::open(&db, StoreConfig::default()).unwrap();
@@ -43,6 +49,9 @@ fn fixture() -> Fixture {
         held: Arc::new(HeldSet::default()),
         sealer: Some(Arc::new(Sealer::new(&[7; 32]))),
         ips: Arc::new(SharedIps::default()),
+        index,
+        reenrich: Arc::new(AtomicBool::new(false)),
+        jobs: Default::default(),
     });
     let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
     let app = Router::new().nest(
@@ -727,8 +736,8 @@ async fn classification_corrections_reclassify_the_stored_torrent() {
 #[tokio::test]
 async fn every_filters_route_needs_a_session_and_errors_use_the_envelope() {
     let f = fixture();
-    // Without a session, all seven are a 401 in the envelope, whatever
-    // the method.
+    // Without a session, every filters route is a 401 in the envelope,
+    // whatever the method.
     for (method, uri) in [
         ("GET", "/api/v1/filters"),
         ("GET", "/api/v1/filters/queue"),
@@ -737,6 +746,12 @@ async fn every_filters_route_needs_a_session_and_errors_use_the_envelope() {
         ("POST", "/api/v1/filters/preview"),
         ("POST", "/api/v1/filters/apply"),
         ("POST", "/api/v1/classify/correct"),
+        ("GET", "/api/v1/classify"),
+        ("POST", "/api/v1/classify/rules"),
+        ("POST", "/api/v1/classify/rules/remove"),
+        ("POST", "/api/v1/filters/preview/jobs"),
+        ("GET", "/api/v1/filters/preview/jobs/1"),
+        ("POST", "/api/v1/filters/preview/jobs/1/cancel"),
         ("DELETE", "/api/v1/filters/apply"),
     ] {
         let req = Request::builder()
@@ -802,4 +817,298 @@ async fn every_filters_route_needs_a_session_and_errors_use_the_envelope() {
             "field": "password",
         } })
     );
+}
+
+/// Stores a single-file torrent and returns its id and hash (hex).
+fn store_torrent(f: &Fixture, name: &str, size: i64) -> (i64, String) {
+    let raw = to_vec(&OwnedValue::Dict(
+        [
+            (b"length".to_vec(), OwnedValue::Int(size)),
+            (
+                b"name".to_vec(),
+                OwnedValue::Bytes(name.as_bytes().to_vec()),
+            ),
+            (b"piece length".to_vec(), OwnedValue::Int(1 << 20)),
+            (b"pieces".to_vec(), OwnedValue::Bytes(vec![0; 20])),
+        ]
+        .into_iter()
+        .collect(),
+    ));
+    let info = Info::parse(&raw).unwrap();
+    let id = f
+        .api
+        .store
+        .lock()
+        .unwrap()
+        .insert(&[NewTorrent {
+            info: &info,
+            raw_info: Some(&raw),
+            discovered_at: 1_700_000_000,
+            metadata_at: 1_700_000_000,
+            extra_flags: 0,
+            source: SourceId::new(0).unwrap(),
+        }])
+        .unwrap()[0]
+        .id();
+    let hash = info
+        .primary_hash()
+        .0
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    (id, hash)
+}
+
+#[tokio::test]
+async fn classification_rules_requeue_matching_torrents_and_corrections_are_fixtures() {
+    use std::sync::atomic::Ordering;
+    let f = fixture_with(Some(SearchIndex::in_memory().unwrap()));
+    let c = logged_in(&f).await;
+    let (a, _) = store_torrent(&f, "Holiday.Clips.2023.Lexb.mp4", 900 << 20);
+    let (_, _) = store_torrent(&f, "Holiday.Clips.2023.Other.mp4", 900 << 20);
+    let (_, mhash) = store_torrent(&f, "The.Matrix.1999.1080p.BluRay.x264-GRP.mkv", 8 << 30);
+    {
+        let mut store = f.api.store.lock().unwrap();
+        enrich_all(&mut store);
+        let index = f.api.index.as_ref().unwrap();
+        let mut w = index.writer(15 << 20).unwrap();
+        w.catch_up(&mut store, 10).unwrap();
+        w.commit().unwrap();
+    }
+    let rules = |body: Value| post("/api/v1/classify/rules", Some(&c), body);
+
+    // The query can't test what the rule decides.
+    for q in ["type:movie lexb", "adult:scene", "-type:adult"] {
+        let (status, _, body) = call(&f.app, rules(json!({ "query": q, "adult": true }))).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{q}: {body}");
+        assert_eq!(body["error"]["code"], json!("class_rule_tests_type"), "{q}");
+        assert_eq!(body["error"]["field"], json!("query"), "{q}");
+    }
+    let (status, _, body) = call(&f.app, rules(json!({ "query": "", "adult": true }))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], json!("class_rule_needs_query"));
+
+    let (status, _, body) = call(&f.app, rules(json!({ "query": "lexb", "adult": true }))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["queued"], json!(1), "one stored torrent matches");
+    let rule = body["id"].as_i64().unwrap();
+    assert!(
+        f.api.reenrich.swap(false, Ordering::AcqRel),
+        "pipeline told"
+    );
+    assert_eq!(f.api.engine.current().class_rules.len(), 1);
+    {
+        let store = f.api.store.lock().unwrap();
+        assert!(
+            store
+                .unenriched(0, lodestar_classify::ENRICHMENT_VERSION, 10)
+                .unwrap()
+                .contains(&a)
+        );
+    }
+
+    // A per-torrent correction detection disagrees with is listed.
+    let (status, _, _) = call(
+        &f.app,
+        post(
+            "/api/v1/classify/correct",
+            Some(&c),
+            json!({ "hash": mhash, "adult": true }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, body) = call(&f.app, get("/api/v1/classify", &c)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["rules"],
+        json!([{ "id": rule, "query": "lexb", "adult": true }])
+    );
+    assert_eq!(body["corrections"], json!(1));
+    assert_eq!(body["detection"]["checked"], json!(1));
+    assert_eq!(body["detection"]["disagree"], json!(1));
+    assert_eq!(body["detection"]["examples"][0]["hash"], json!(mhash));
+
+    // Removing the rule re-queues what it matched.
+    let remove = |id: i64| {
+        post(
+            "/api/v1/classify/rules/remove",
+            Some(&c),
+            json!({ "id": id }),
+        )
+    };
+    let (status, _, body) = call(&f.app, remove(rule)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["queued"], json!(1));
+    assert!(f.api.engine.current().class_rules.is_empty());
+    let (status, _, body) = call(&f.app, remove(rule)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["code"], json!("class_rule_not_found"));
+}
+
+/// Enriches every stored torrent, as the pipeline's background pass does.
+fn enrich_all(store: &mut Store) {
+    let ids = store
+        .unenriched(0, lodestar_classify::ENRICHMENT_VERSION, 100)
+        .unwrap();
+    let mut batch = Vec::new();
+    for id in ids {
+        let row = store.torrent(id).unwrap().unwrap();
+        let tree = store.files(id).unwrap().unwrap();
+        let files = lodestar_classify::file_infos(&tree.files, tree.encoding);
+        let (e, _) = lodestar_filter::reclassify::enrich_corrected(
+            &row.name,
+            &files,
+            lodestar_classify::Correction::default(),
+        );
+        batch.push((id, e));
+    }
+    store.set_enrichments(&batch).unwrap();
+}
+
+/// Quarantines `n` torrents under CS-3a with sealed names.
+fn quarantine(f: &Fixture, n: u8) {
+    let sealer = f.api.sealer.clone().unwrap();
+    let sealed: Vec<Vec<u8>> = (0..n)
+        .map(|i| sealer.seal(&format!("Held.Name.{i}")).unwrap())
+        .collect();
+    let hashes: Vec<[u8; 20]> = (0..n).map(|i| [i.wrapping_add(0x60); 20]).collect();
+    let filtered: Vec<Filtered<'_>> = (0..n as usize)
+        .map(|i| Filtered {
+            hashes: std::slice::from_ref(&hashes[i]),
+            rule: "CS-3a",
+            action: Action::Quarantine.code(),
+            held: Some(Held::Quarantine),
+            sealed: Some(&sealed[i]),
+            evidence: &[],
+            at: lodestar_api_now(),
+            expires_at: lodestar_api_now() + 86_400,
+        })
+        .collect();
+    f.api
+        .store
+        .lock()
+        .unwrap()
+        .write(&WriteBatch {
+            filtered: &filtered,
+            ..WriteBatch::default()
+        })
+        .unwrap();
+}
+
+#[tokio::test]
+async fn previews_run_as_background_jobs_with_progress() {
+    let f = fixture();
+    let c = logged_in(&f).await;
+    quarantine(&f, 20);
+    // Releases two of the twenty by exact hash.
+    let change = json!({
+        "op": "add_exception", "rule": "CS-3a",
+        "hashes": ["60".repeat(20), "61".repeat(20)],
+    });
+    let (status, _, body) = call(
+        &f.app,
+        post(
+            "/api/v1/filters/preview/jobs",
+            Some(&c),
+            json!({ "change": change }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let job = body["job"].as_u64().unwrap();
+    let uri = format!("/api/v1/filters/preview/jobs/{job}");
+    let mut done = Value::Null;
+    for _ in 0..200 {
+        let (status, _, body) = call(&f.app, get(&uri, &c)).await;
+        assert_eq!(status, StatusCode::OK);
+        if body["state"] == "done" {
+            done = body;
+            break;
+        }
+        assert_eq!(body["state"], json!("running"));
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(done["progress"]["phase"], json!("done"));
+    assert_eq!(done["assessment"]["preview"]["quarantine"], json!(2));
+    assert_eq!(done["assessment"]["weakening"], json!(true));
+    // The same as the inline preview.
+    let (_, _, inline) = call(
+        &f.app,
+        post(
+            "/api/v1/filters/preview",
+            Some(&c),
+            json!({ "change": change }),
+        ),
+    )
+    .await;
+    assert_eq!(done["assessment"], inline);
+
+    // A failing preview reports its error.
+    let bad = json!({ "op": "core_switch", "rule": "CS-1a", "on": false });
+    let (_, _, body) = call(
+        &f.app,
+        post(
+            "/api/v1/filters/preview/jobs",
+            Some(&c),
+            json!({ "change": bad }),
+        ),
+    )
+    .await;
+    let uri = format!("/api/v1/filters/preview/jobs/{}", body["job"]);
+    let mut state = Value::Null;
+    for _ in 0..200 {
+        let (_, _, body) = call(&f.app, get(&uri, &c)).await;
+        if body["state"] != "running" {
+            state = body;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(state["state"], json!("failed"));
+    assert_eq!(state["status"], json!(409));
+    assert!(state["error"]["code"].is_string(), "{state}");
+    assert!(state["error"]["message"].is_string(), "{state}");
+
+    // Unknown jobs, and cancelling.
+    let (status, _, body) = call(&f.app, get("/api/v1/filters/preview/jobs/999", &c)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["code"], json!("preview_not_found"));
+    let (status, _, _) = call(
+        &f.app,
+        post(
+            &format!("/api/v1/filters/preview/jobs/{job}/cancel"),
+            Some(&c),
+            json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_cancelled_preview_stops() {
+    let f = fixture();
+    quarantine(&f, 5);
+    let change: lodestar_api::filters::Change = serde_json::from_value(json!({
+        "op": "add_exception", "rule": "CS-3a", "hashes": ["60".repeat(20)],
+    }))
+    .unwrap();
+    let progress = lodestar_api::filters::Progress::default();
+    progress.cancel();
+    let err = f
+        .api
+        .assess_tracked(&change, lodestar_api_now(), &progress)
+        .unwrap_err();
+    assert!(format!("{err:?}").contains("cancelled"), "{err:?}");
+    // Not cancelled: it completes.
+    let a = f
+        .api
+        .assess_tracked(
+            &change,
+            lodestar_api_now(),
+            &lodestar_api::filters::Progress::default(),
+        )
+        .unwrap();
+    assert_eq!(a.preview.quarantine, 1);
 }

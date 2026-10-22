@@ -376,4 +376,69 @@ impl Store {
             })
             .optional()?)
     }
+
+    /// Your corrections, by torrent id, at most `limit`.
+    pub fn corrections(&self, limit: usize) -> Result<Vec<(i64, ClassCorrection)>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT torrent_id, adult, not_junk FROM class_corrections
+             ORDER BY torrent_id LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit as i64], |r| {
+            Ok((
+                r.get(0)?,
+                ClassCorrection {
+                    adult: r.get(1)?,
+                    not_junk: r.get(2)?,
+                },
+            ))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Adds a classification rule: `(query, adult)`.
+    pub fn add_class_rule(&mut self, query: &str, adult: bool) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO class_rules (query, adult) VALUES (?1, ?2)",
+            params![query, adult],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Removes a classification rule, returning its query.
+    pub fn remove_class_rule(&mut self, id: i64) -> Result<Option<String>> {
+        let tx = self.conn.transaction()?;
+        let query: Option<String> = tx
+            .query_row("SELECT query FROM class_rules WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        tx.execute("DELETE FROM class_rules WHERE id = ?1", [id])?;
+        tx.commit()?;
+        Ok(query)
+    }
+
+    /// Classification rules, oldest first: `(id, query, adult)`.
+    pub fn class_rules(&self) -> Result<Vec<(i64, String, bool)>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT id, query, adult FROM class_rules ORDER BY id")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Marks stored torrents' enrichment as outdated, so background
+    /// enrichment classifies them again. Returns how many were marked.
+    pub fn mark_unenriched(&mut self, ids: &[i64]) -> Result<usize> {
+        let tx = self.conn.transaction()?;
+        let mut n = 0;
+        {
+            let mut stmt = tx
+                .prepare_cached("UPDATE torrent_parsed SET parser_ver = 0 WHERE torrent_id = ?1")?;
+            for id in ids {
+                n += stmt.execute([id])?;
+            }
+        }
+        tx.commit()?;
+        Ok(n)
+    }
 }

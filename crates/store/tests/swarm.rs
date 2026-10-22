@@ -380,7 +380,7 @@ fn migrates_a_v4_database_with_data() {
             .execute_batch(
                 "DROP TABLE filter_rules; DROP TABLE pack_switches; DROP TABLE override_list;
                  DROP TABLE filter_exceptions; DROP TABLE filter_allow; DROP TABLE filter_fixtures;
-                 DROP TABLE rule_set_prev; DROP TABLE class_corrections;
+                 DROP TABLE rule_set_prev; DROP TABLE class_corrections; DROP TABLE class_rules;
                  DROP TABLE subscription_data; DROP TABLE subscriptions;
                  DROP TABLE swarm_history; DROP TABLE swarm_trackers; DROP TABLE swarm;
                  DROP TABLE trackers; DELETE FROM schema_migrations WHERE version >= 5;",
