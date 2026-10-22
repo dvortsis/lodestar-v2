@@ -35,7 +35,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 pub use compress::{BlobCodec, Codec, Compressed};
 pub use filetree::{CodecError, FileTree};
 pub use filter::{FilterHit, FilterState, Filtered, Held, Quarantined, SHADOW};
-pub use floor::{FloorSource, PendingFloor};
+pub use floor::{FloorSource, PendingFloor, Settled};
 pub use history::{History, trend};
 pub use hot::{Col, HotColumns, NEVER, SwarmHot};
 pub use insights::{CohortCount, Counter, Event};
