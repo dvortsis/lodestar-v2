@@ -1,0 +1,21 @@
+{
+	"id": "graphite",
+	"name": "Graphite",
+	"group": "original",
+	"light": {
+		"background": "#F3F4F5",
+		"surface": "#FFFFFF",
+		"text": "#22262B",
+		"primary": "#4A5866",
+		"accent": "#5B7FA6",
+		"categorical": ["#44678D", "#829B89", "#AB9256", "#B07466", "#6C737B", "#8A7DAA"]
+	},
+	"dark": {
+		"background": "#151719",
+		"surface": "#202326",
+		"text": "#E6E8EA",
+		"primary": "#A9B4BF",
+		"accent": "#8DB0D6",
+		"categorical": ["#6C8DB2", "#8BA492", "#CDB37A", "#B27668", "#B9C1C9", "#AC9FCC"]
+	}
+}

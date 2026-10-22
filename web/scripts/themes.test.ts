@@ -355,7 +355,7 @@ describe('npm run themes (CLI)', () => {
 	it('exits 0 for Riverstone', () => {
 		const r = run(themesDir);
 		expect(r.status, r.stderr).toBe(0);
-		expect(r.stdout).toContain('2 theme(s) pass');
+		expect(r.stdout).toContain('48 theme(s) pass');
 	});
 
 	it('exits 1, with a readable report, for a fixture whose text contrast is below 4.5:1', () => {
@@ -395,9 +395,12 @@ describe('npm run themes (CLI)', () => {
 describe('generated files', () => {
 	const { compiled, problems } = compileDir(themesDir);
 
-	it('compiles Riverstone without problems', () => {
+	it('compiles every family without problems', () => {
 		expect(problems).toEqual([]);
-		expect(compiled.map((c) => c.theme.id)).toEqual(['riverstone-light', 'riverstone-dark']);
+		expect(compiled.map((c) => c.theme.id)).toEqual(
+			expect.arrayContaining(['riverstone-light', 'riverstone-dark'])
+		);
+		expect(compiled).toHaveLength(48);
 	});
 
 	it('are up to date with themes/*.json (run `npm run themes`)', async () => {
@@ -422,7 +425,9 @@ describe('generated files', () => {
 		const file = JSON.parse(readFileSync(join(root, 'static/themes.json'), 'utf8'));
 		expect(file.v).toBe(1);
 		expect(file.keys).toEqual([...TOKEN_KEYS]);
-		expect(file.themes).toEqual([]); // only Riverstone exists until W1b adds the rest
+		// Every theme except Riverstone's two, which are inlined in critical.css.
+		expect(file.themes).toHaveLength(46);
+		expect(file.themes.map((t: { id: string }) => t.id)).not.toContain('riverstone-light');
 	});
 });
 

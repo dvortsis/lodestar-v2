@@ -1,0 +1,23 @@
+{
+	"id": "rose-pine",
+	"name": "Rosé Pine",
+	"group": "community",
+	"license": "MIT (© mvllow and the Rosé Pine contributors)",
+	"source": "https://github.com/rose-pine/palette",
+	"light": {
+		"background": "#FAF4ED",
+		"surface": "#FFFAF3",
+		"text": "#464261",
+		"primary": "#907AA9",
+		"accent": "#286983",
+		"categorical": ["#286983", "#56949F", "#EA9D34", "#B4637A", "#D7827E", "#907AA9"]
+	},
+	"dark": {
+		"background": "#191724",
+		"surface": "#1F1D2E",
+		"text": "#E0DEF4",
+		"primary": "#C4A7E7",
+		"accent": "#9CCFD8",
+		"categorical": ["#9CCFD8", "#31748F", "#F6C177", "#EB6F92", "#EBBCBA", "#C4A7E7"]
+	}
+}

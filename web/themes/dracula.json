@@ -1,0 +1,23 @@
+{
+	"id": "dracula",
+	"name": "Dracula",
+	"group": "community",
+	"license": "MIT (© Dracula Theme, Zeno Rocha and contributors)",
+	"source": "https://github.com/dracula/dracula-theme",
+	"light": {
+		"background": "#FFFBEB",
+		"surface": "#FFFFFF",
+		"text": "#1F1F1F",
+		"primary": "#644AC9",
+		"accent": "#14710A",
+		"categorical": ["#036A96", "#14710A", "#846E15", "#CB3A2A", "#A34D14", "#644AC9"]
+	},
+	"dark": {
+		"background": "#282A36",
+		"surface": "#44475A",
+		"text": "#F8F8F2",
+		"primary": "#BD93F9",
+		"accent": "#50FA7B",
+		"categorical": ["#8BE9FD", "#50FA7B", "#F1FA8C", "#FF5555", "#FFB86C", "#BD93F9"]
+	}
+}
