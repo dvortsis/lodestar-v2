@@ -27,6 +27,8 @@
 	// The element focus came from when it entered the region; kept only while focus stays inside.
 	let cameFrom: HTMLElement | null = null;
 	let focusInside = false;
+	// The toast that holds focus, so the effect below only reacts to *its* removal.
+	let focusedId: number | null = null;
 
 	function onfocusin(event: FocusEvent) {
 		if (!focusInside) {
@@ -34,6 +36,16 @@
 			cameFrom = from && !region?.contains(from) ? from : null;
 		}
 		focusInside = true;
+		const id = (event.target as Element).closest('[data-toast-id]')?.getAttribute('data-toast-id');
+		focusedId = id ? Number(id) : null;
+	}
+
+	// Clicking elsewhere drops focus without a relatedTarget; that is the user leaving, not a removal.
+	function onwindowpointerdown(event: PointerEvent) {
+		if (region?.contains(event.target as Node)) return;
+		focusInside = false;
+		focusedId = null;
+		cameFrom = null;
 	}
 
 	function onfocusout(event: FocusEvent) {
@@ -42,6 +54,7 @@
 		const to = event.relatedTarget as Node | null;
 		if (to && !region?.contains(to)) {
 			focusInside = false;
+			focusedId = null;
 			cameFrom = null;
 		}
 	}
@@ -51,7 +64,10 @@
 		const first = region?.querySelector<HTMLElement>('[data-toast-dismiss]');
 		const target = [neighbour, first, cameFrom, returnFocus?.()].find((el) => el?.isConnected);
 		focusInside = !!target && !!region?.contains(target);
-		if (!focusInside) cameFrom = null;
+		if (!focusInside) {
+			cameFrom = null;
+			focusedId = null;
+		}
 		target?.focus();
 	}
 
@@ -66,10 +82,11 @@
 		if (held) void restoreFocus(neighbour);
 	}
 
-	// The queue cap can drop a toast that holds focus; treat it like a dismissal.
+	// The queue cap can drop a toast that holds focus; treat it like a dismissal. A new toast arriving
+	// never moves focus: only the removal of the toast that held it does.
 	$effect(() => {
-		void toasts.items.length;
-		if (!focusInside) return;
+		const ids = toasts.items.map((t) => t.id);
+		if (!focusInside || focusedId === null || ids.includes(focusedId)) return;
 		void tick().then(() => {
 			if (focusInside && !region?.contains(document.activeElement)) void restoreFocus();
 		});
@@ -111,6 +128,8 @@
 	}
 </script>
 
+<svelte:window onpointerdown={onwindowpointerdown} />
+
 <!-- The live region is always in the DOM so screen readers register it before content arrives.
      Toasts never take focus. -->
 <div
@@ -129,6 +148,7 @@
 			use:timed={item}
 			class="toast-in pointer-events-auto flex items-start gap-3 rounded-box border border-base-300 bg-base-100 p-3 text-body text-base-content"
 			data-testid="toast"
+			data-toast-id={item.id}
 		>
 			<Icon class="mt-0.5 size-5 shrink-0 {ink[item.kind]}" aria-hidden="true" />
 			<p class="min-w-0 flex-1">
