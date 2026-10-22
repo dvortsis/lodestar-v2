@@ -744,6 +744,15 @@
    "attempt": 1,
    "review_rounds": 0,
    "notes": "runner opened PR #65 from B5a commit 223a0cc (rename retry, progress.error, Mutex pointer); reviewer started 11:48"
+  },
+  "F1b": {
+   "status": "running",
+   "model": "opus",
+   "session": "session_01V5sNo28tD6bZx3CNFdYjWY",
+   "pr": null,
+   "attempt": 1,
+   "review_rounds": 0,
+   "notes": "calibrate filter budget gate to runner speed (main red: 10% 40.8 vs 51.3 us across runners for identical code); branch slice/F1 restarted from main"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -874,6 +883,7 @@
  "launches_today": 7,
  "last_heartbeat": "2026-10-22T11:40Z",
  "owner_questions": [
-  "F1 budget scope: gate covers cheaply-rejectable rule shapes (10% = 40.8 us on runner). Shapes the cheap check cannot decide cost more at 10% of rules (VM: NEAR/1 ~450-500, negation ~140, fuzzy ~125, prefix ~110 us; runner ~1.4x faster). Should those shapes be gated at 50 us too?"
+  "F1 budget scope: gate covers cheaply-rejectable rule shapes (10% = 40.8 us on runner). Shapes the cheap check cannot decide cost more at 10% of rules (VM: NEAR/1 ~450-500, negation ~140, fuzzy ~125, prefix ~110 us; runner ~1.4x faster). Should those shapes be gated at 50 us too?",
+  "Filter budget hardware: 50 us has no reference machine; gate now calibrated to the runner F1 measured on (10%=40.8 us), slower runners scale up to 1.6x. Confirm or set a reference machine."
  ]
 }
