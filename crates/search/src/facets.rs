@@ -201,23 +201,31 @@ impl Facet {
         }
     }
 
-    /// The values a leaf on this facet's field names; `None` for any
-    /// other node.
-    fn leaf_values(self, node: &Node) -> Option<Vec<String>> {
+    /// The values a leaf on this facet's field names, and whether the leaf
+    /// excludes them; `None` for any other node. A category share is the
+    /// facet's only as "has some" (`cat:video`, any range from 1) or "has
+    /// none" (`cat:video=0`); other ranges (`cat:video<50`) are filters
+    /// like any other.
+    fn leaf_values(self, node: &Node) -> Option<(Vec<String>, bool)> {
         match (self.source(), node) {
-            (Source::Tag(k), Node::Tag { key, any }) if *key == k => Some(any.clone()),
-            (Source::Ext, Node::Ext { any }) => Some(any.clone()),
+            (Source::Tag(k), Node::Tag { key, any }) if *key == k => Some((any.clone(), false)),
+            (Source::Ext, Node::Ext { any }) => Some((any.clone(), false)),
             (Source::Flag(f), Node::Flag { name, value }) if name == f => {
-                Some(vec![yes_no(*value).to_owned()])
+                Some((vec![yes_no(*value).to_owned()], false))
             }
             (
                 Source::Category,
                 Node::Share {
                     by: ShareBy::Count,
                     cat,
-                    ..
+                    lo,
+                    hi,
                 },
-            ) => Some(vec![cat.clone()]),
+            ) => match (lo, hi) {
+                (1.., _) => Some((vec![cat.clone()], false)),
+                (0, 0) => Some((vec![cat.clone()], true)),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -239,7 +247,11 @@ impl Facet {
             }
             Node::Not { of } => self.collect(of, !negated, out),
             leaf => {
-                for v in self.leaf_values(leaf).unwrap_or_default() {
+                let Some((values, excludes)) = self.leaf_values(leaf) else {
+                    return;
+                };
+                let negated = negated != excludes;
+                for v in values {
                     if !out.iter().any(|(w, n)| *w == v && *n == negated) {
                         out.push((v, negated));
                     }
@@ -402,7 +414,9 @@ pub struct Facets {
     pub terms: Vec<(Facet, TermCounts)>,
     pub histograms: Vec<(Histo, Histogram)>,
     /// The share of the documents a sampled pass visited; `None` when
-    /// nothing was sampled.
+    /// nothing was sampled. One value for the whole response: every
+    /// sampled pass visits the same slices of the same segments, so they
+    /// share it (each group says whether it was sampled).
     pub sample_rate: Option<f64>,
     /// Facets and histograms the index can't serve: fields an older
     /// index lacks while it's rebuilt, and the swarm buckets until M4.
