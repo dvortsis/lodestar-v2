@@ -6,7 +6,10 @@ qBittorrent and the webhook sender are the reference implementations. Copy them 
 
 ## The rules every adapter follows
 
-1. **Every request goes through a `GuardedClient`.** Never build a `reqwest::Client` yourself, and never call `.execute()` on `GuardedClient::http()`. Use `GuardedClient::send` (no redirects) or `send_following` (307/308 only, each hop re-checked).
+1. **Every request goes through a `GuardedClient`.** Never build a `reqwest::Client` yourself.
+   - Build requests with `GuardedClient::request(method, url)` (crate-private; the raw client never leaves the crate), then `.build()` them.
+   - Send with `GuardedClient::send` (no redirects) or `send_following` (307/308 only, each hop re-checked). These check literal-IP hosts before connecting; the resolver checks every name.
+   - `crates/integrations/clippy.toml` forbids `RequestBuilder::send` and `Client::execute`, which would skip the literal-IP check. `net.rs` has the single allowed, checked call. Don't add `#[allow]`s elsewhere.
    - Download clients use `NetPolicy::download_client()`: public, private and loopback addresses, but never link-local, metadata or reserved ones.
    - Notification channels use `NetPolicy::notification(allow_private)`: public addresses, plus private ranges only when the user opts in for that channel. Never loopback.
    - Parse the user's URL with `net::parse_url` in the constructor, so a refused address fails when the setting is saved, not at send time.
@@ -104,11 +107,26 @@ A notification channel needs unit tests with a local receiver (see `src/notify/w
 
 ## Secret storage
 
-`SecretStore::open_or_create(data_dir)` keeps a 32-byte key in `<data_dir>/secrets.key`. The file holds `LSK1` followed by the key.
+`SecretStore::open_or_create(data_dir)` keeps the install's keys in `<data_dir>/secrets.key`.
 
-- **Creation:** the file is written privately and linked into place atomically, so concurrent first starts agree on one key.
+- **Formats:**
+  - **Key file:** `LSK1`, a count byte, then per key a little-endian `u32` id and the 32-byte key. The last key is the primary.
+  - **Sealed secret:** `0x01 ‖ key id (u32 LE) ‖ nonce(24) ‖ ciphertext ‖ tag(16)`.
+- **Writing:** a key file is always written to a new temporary file that's created empty, restricted, and only then filled. It's then moved into place atomically:
+  - by a hard link on first use, so concurrent first starts agree on one key;
+  - by a rename on rotation.
 - **Permissions:**
-  - **Unix:** the file is created `0600`. A key file found readable by group or others is tightened back to `0600`, with a warning.
-  - **Windows:** `icacls <file> /inheritance:r /grant:r *S-1-3-4:F *S-1-5-18:F *S-1-5-32-544:F` replaces the ACL. Inheritance is removed, and full control goes to the file's owner (`OWNER RIGHTS`), `SYSTEM` and `Administrators`. `Users` and `Everyone` get nothing. `icacls` is used so the crate stays free of `unsafe` Win32 code (the workspace forbids it). If `icacls` fails, key creation fails rather than leaving a readable key.
-- **Sealing:** secrets are sealed with XChaCha20-Poly1305 (`chacha20poly1305`) under a fresh random 192-bit nonce. The caller's context is the associated data. The sealed format is `0x01 ‖ nonce(24) ‖ ciphertext ‖ tag(16)`.
-- **Losing the key** makes stored credentials unreadable (`SecretError::Open`). Settings then asks for them again. The database alone never reveals them.
+  - **Unix:** created `0600`. A key file found readable by group or others is tightened back to `0600`, with a warning. If that chmod fails, opening fails, because the key is exposed. A file that's already restrictive is never touched, so a read-only mount works.
+  - **Windows:** `%SystemRoot%\System32\icacls.exe <file> /inheritance:r /grant:r *S-1-3-4:F *S-1-5-18:F *S-1-5-32-544:F` replaces the ACL.
+    - Inheritance is removed, and full control goes to the file's owner (`OWNER RIGHTS`), `SYSTEM` and `Administrators`. `Users` and `Everyone` get nothing.
+    - `icacls` is called by its absolute path, so a planted copy isn't used, and so the crate stays free of `unsafe` Win32 code (the workspace forbids it).
+    - It runs before any key byte is written; if it fails, key creation fails.
+    - It's re-applied every time the key is read, because reading an ACL back without `unsafe` would mean parsing localised output. A failure there is logged, not fatal.
+- **Sealing:** XChaCha20-Poly1305 (`chacha20poly1305`) under a fresh random 192-bit nonce. The associated data is the sealed header (version and key id) followed by the caller's context.
+- **Rotation:**
+  1. `store.rotate()` adds a new primary key, keeping the old ones in the file.
+  2. Re-seal every stored record with `store.reseal(context, &sealed)` (`needs_reseal` says which ones) and commit them, in one database transaction.
+  3. `store.retire_old_keys()` drops the old keys.
+
+  The file always holds every key a stored record may use, so a crash between steps loses nothing. Only one process (the coordinator) rotates.
+- **Losing the key file** makes stored credentials unreadable (`SecretError::UnknownKey` or `SecretError::Open`). Settings then asks for them again. The database alone never reveals them.

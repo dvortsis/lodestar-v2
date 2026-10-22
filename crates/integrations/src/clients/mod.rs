@@ -98,7 +98,11 @@ pub struct AddOptions {
 #[derive(Clone, PartialEq, Eq)]
 pub struct TorrentFile {
     pub bytes: Vec<u8>,
-    /// Lowercase hex, 40 characters.
+    /// The torrent's ID in the client's API: lowercase hex, 40 characters.
+    /// For a v1 or hybrid torrent that's the v1 info-hash. For a v2-only
+    /// torrent, pass the first 20 bytes of the v2 (SHA-256) info-hash, as
+    /// [`Magnet::torrent_id`] does; qBittorrent and libtorrent use that
+    /// truncated hash as the ID.
     pub info_hash: String,
 }
 

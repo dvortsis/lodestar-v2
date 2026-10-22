@@ -31,7 +31,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::header::{AUTHORIZATION, COOKIE, LOCATION};
-use reqwest::{Request, Response, Url};
+use reqwest::{Method, Request, Response, Url};
 
 use crate::BoxFuture;
 
@@ -108,7 +108,10 @@ fn classify_v6(ip: Ipv6Addr) -> AddrClass {
     if let Some(v4) = embedded_v4(ip) {
         return classify_v4(v4);
     }
-    if ip.is_unspecified() {
+    let s = ip.segments();
+    // Local-use NAT64 with any other layout: the embedded address can't be
+    // known, so it can't be checked.
+    if ip.is_unspecified() || (s[0] == 0x64 && s[1] == 0xff9b) {
         return AddrClass::Reserved;
     }
     if ip.is_loopback() {
@@ -117,21 +120,28 @@ fn classify_v6(ip: Ipv6Addr) -> AddrClass {
     if ip == METADATA_V6 {
         return AddrClass::Metadata;
     }
-    let s = ip.segments();
     match s[0] {
         x if x & 0xffc0 == 0xfe80 => AddrClass::LinkLocal,
         x if x & 0xffc0 == 0xfec0 => AddrClass::Private,
         x if x & 0xfe00 == 0xfc00 => AddrClass::Private,
         x if x & 0xff00 == 0xff00 => AddrClass::Reserved,
-        0x2001 if s[1] == 0x0db8 || s[1] == 0 => AddrClass::Reserved,
+        // Documentation (`2001:db8::/32`, `3fff::/20`), Teredo
+        // (`2001::/32`), benchmarking (`2001:2::/48`) and ORCHID
+        // (`2001:10::/28`).
+        0x2001 if s[1] == 0x0db8 || s[1] == 0 || (s[1] == 2 && s[2] == 0) => AddrClass::Reserved,
+        0x2001 if s[1] & 0xfff0 == 0x0010 => AddrClass::Reserved,
+        0x3fff if s[1] & 0xf000 == 0 => AddrClass::Reserved,
+        // Outside global unicast `2000::/3`, which also covers the SRv6
+        // SID block `5f00::/16`.
         x if x & 0xe000 != 0x2000 => AddrClass::Reserved,
         _ => AddrClass::Public,
     }
 }
 
 /// The IPv4 address an IPv6 address carries: mapped (`::ffff:0:0/96`),
-/// compatible (`::/96`, except `::` and `::1`), NAT64 (`64:ff9b::/96` and
-/// the local-use `64:ff9b:1::/48`) and 6to4 (`2002::/16`).
+/// compatible (`::/96`, except `::` and `::1`), NAT64 (`64:ff9b::/96`, and
+/// the local-use `64:ff9b:1::/48` when it follows the /96 layout) and 6to4
+/// (`2002::/16`).
 fn embedded_v4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
     let s = ip.segments();
     let low = || Ipv4Addr::new((s[6] >> 8) as u8, s[6] as u8, (s[7] >> 8) as u8, s[7] as u8);
@@ -141,7 +151,7 @@ fn embedded_v4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
     if s[..6] == [0; 6] && !(s[6] == 0 && s[7] <= 1) {
         return Some(low());
     }
-    if s[0] == 0x64 && s[1] == 0xff9b && (s[2..6] == [0; 4] || s[2] == 1) {
+    if s[0] == 0x64 && s[1] == 0xff9b && s[3..6] == [0; 3] && s[2] <= 1 {
         return Some(low());
     }
     if s[0] == 0x2002 {
@@ -390,6 +400,9 @@ impl GuardedClient {
         timeout: Duration,
         resolver: Arc<dyn Resolve>,
     ) -> Result<GuardedClient, NetError> {
+        // The workspace's TLS provider (§16). Only the first install wins,
+        // and one installed by the host process is fine too.
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let http = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
@@ -410,19 +423,23 @@ impl GuardedClient {
         self.policy
     }
 
-    /// The underlying client, for building requests. Send them with
-    /// [`send`](Self::send) or [`send_following`](Self::send_following),
-    /// never with `reqwest::Client::execute`, which skips the literal-host
-    /// check.
-    pub fn http(&self) -> &reqwest::Client {
-        &self.http
+    /// A request builder, for adapters in this crate. Finish it with
+    /// `.build()` and send it with [`send`](Self::send) or
+    /// [`send_following`](Self::send_following). `RequestBuilder::send` and
+    /// `Client::execute` would skip the literal-IP check, so `clippy.toml`
+    /// forbids them outside this module. Other crates build a
+    /// `reqwest::Request` themselves; the raw client never leaves the crate.
+    pub(crate) fn request(&self, method: Method, url: Url) -> reqwest::RequestBuilder {
+        self.http.request(method, url)
     }
 
     /// Sends one request without following redirects.
     pub async fn send(&self, req: Request) -> Result<Response, NetError> {
         // Literal IP hosts never reach the resolver, so check them here.
         check_url(req.url(), self.policy)?;
-        self.http.execute(req).await.map_err(map_reqwest)
+        #[allow(clippy::disallowed_methods)] // the one checked call site
+        let sent = self.http.execute(req).await;
+        sent.map_err(map_reqwest)
     }
 
     /// Sends a request, following up to [`MAX_REDIRECTS`] method-preserving
@@ -557,6 +574,15 @@ pub(crate) mod tests {
             ("2001:0::1", AddrClass::Reserved),
             ("100::1", AddrClass::Reserved),
             ("4000::1", AddrClass::Reserved),
+            ("2001:2::1", AddrClass::Reserved),
+            ("2001:2:1::1", AddrClass::Public),
+            ("2001:10::1", AddrClass::Reserved),
+            ("2001:1f::1", AddrClass::Reserved),
+            ("2001:20::1", AddrClass::Public),
+            ("3fff::1", AddrClass::Reserved),
+            ("3fff:fff::1", AddrClass::Reserved),
+            ("3fff:1000::1", AddrClass::Public),
+            ("5f00::1", AddrClass::Reserved),
         ] {
             assert_eq!(class(ip), want, "{ip}");
         }
@@ -576,6 +602,11 @@ pub(crate) mod tests {
             ("64:ff9b::7f00:1", AddrClass::Loopback),
             ("64:ff9b::808:808", AddrClass::Public),
             ("64:ff9b:1::c0a8:1", AddrClass::Private),
+            ("64:ff9b:1::a9fe:a9fe", AddrClass::Metadata),
+            // Local-use NAT64 laid out other than /96: unknowable, refused.
+            ("64:ff9b:1:a9fe:a9fe::", AddrClass::Reserved),
+            ("64:ff9b:1:0:0:1:808:808", AddrClass::Reserved),
+            ("64:ff9b:2::808:808", AddrClass::Reserved),
             ("2002:7f00:1::1", AddrClass::Loopback),
             ("2002:a9fe:a9fe::", AddrClass::Metadata),
             ("2002:0808:0808::1", AddrClass::Public),
@@ -783,15 +814,20 @@ pub(crate) mod tests {
         )
         .unwrap();
         let url = format!("http://hook.example:{}/x", addr.port());
-        let req = client.http().post(url).build().unwrap();
+        let req = client
+            .request(Method::POST, Url::parse(&url).unwrap())
+            .build()
+            .unwrap();
         assert_eq!(
             client.send(req).await.unwrap_err(),
             NetError::Blocked(AddrClass::Loopback)
         );
         // An IP literal is refused before any resolution or connection.
         let req = client
-            .http()
-            .post(format!("http://127.0.0.1:{}/x", addr.port()))
+            .request(
+                Method::POST,
+                Url::parse(&format!("http://127.0.0.1:{}/x", addr.port())).unwrap(),
+            )
             .build()
             .unwrap();
         assert_eq!(
@@ -813,8 +849,10 @@ pub(crate) mod tests {
         )
         .unwrap();
         let req = client
-            .http()
-            .get(format!("http://local.example:{}/", addr.port()))
+            .request(
+                Method::GET,
+                Url::parse(&format!("http://local.example:{}/", addr.port())).unwrap(),
+            )
             .build()
             .unwrap();
         let resp = client.send(req).await.unwrap();
@@ -850,8 +888,10 @@ pub(crate) mod tests {
         .unwrap();
         let go = |path: &str| {
             client
-                .http()
-                .post(format!("http://local.example:{}{path}", addr.port()))
+                .request(
+                    Method::POST,
+                    Url::parse(&format!("http://local.example:{}{path}", addr.port())).unwrap(),
+                )
                 .body("{}")
                 .build()
                 .unwrap()
@@ -896,8 +936,10 @@ pub(crate) mod tests {
         )
         .unwrap();
         let req = client
-            .http()
-            .get(format!("http://local.example:{}/", addr.port()))
+            .request(
+                Method::GET,
+                Url::parse(&format!("http://local.example:{}/", addr.port())).unwrap(),
+            )
             .build()
             .unwrap();
         let resp = client.send(req).await.unwrap();
