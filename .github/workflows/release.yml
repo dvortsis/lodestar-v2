@@ -1,0 +1,190 @@
+name: Release
+
+# Docker image (architecture §11, §12):
+#   tag vX.Y.Z       -> ghcr.io/dvortsis/lodestar-v2:X.Y.Z, :X.Y, :latest
+#   daily/manual run -> ghcr.io/dvortsis/lodestar-v2:nightly   (main only)
+#   pull request     -> build and smoke test only; nothing is pushed
+# Every trigger runs the smoke job before anything can be pushed.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "packaging/docker/**"
+      - "docker-compose.yml"
+      - ".dockerignore"
+      - "crates/**"
+      - "web/**"
+      - "Cargo.*"
+      - ".github/workflows/release.yml"
+
+permissions:
+  contents: read
+
+# One run per ref. A newer pull-request push supersedes the older one; a
+# release or nightly run in progress is never cancelled halfway through a push.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/dvortsis/lodestar-v2
+
+jobs:
+  smoke:
+    name: smoke (linux/amd64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: packaging/docker/Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: lodestar:smoke
+          build-args: |
+            VERSION=smoke
+            REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=amd64
+          cache-to: type=gha,scope=amd64,mode=max
+
+      - name: Image size
+        run: |
+          bytes=$(docker image inspect lodestar:smoke --format '{{.Size}}')
+          echo "Image size: $((bytes / 1024 / 1024)) MiB ($bytes bytes)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Start the container
+        run: |
+          data=$(mktemp -d)
+          # The image runs as distroless "nonroot" (65532).
+          sudo chown 65532:65532 "$data"
+          docker run -d --name lodestar-smoke \
+            --health-interval 2s --health-timeout 5s \
+            --health-start-period 5s --health-retries 5 \
+            -p 8090:8090 -v "$data:/data" \
+            lodestar:smoke
+
+      - name: Wait for the container to be healthy
+        run: |
+          for i in $(seq 1 60); do
+            state=$(docker inspect --format '{{.State.Status}}' lodestar-smoke)
+            health=$(docker inspect --format '{{.State.Health.Status}}' lodestar-smoke)
+            echo "[$i] state=$state health=$health"
+            if [ "$health" = healthy ]; then exit 0; fi
+            if [ "$state" != running ] || [ "$health" = unhealthy ]; then break; fi
+            sleep 2
+          done
+          echo "::error::the container did not become healthy"
+          docker logs lodestar-smoke || true
+          exit 1
+
+      - name: /healthz and the embedded UI
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8090/healthz
+          curl --fail --silent --show-error --max-time 10 \
+            --output index.html http://127.0.0.1:8090/
+          if grep -q "UI not built" index.html; then
+            echo "::error::/ served the stub page: the SPA was not embedded"
+            exit 1
+          fi
+          asset=$(grep -oE '_app/[^"'"'"' )]+\.js' index.html | head -n 1 || true)
+          if [ -z "$asset" ]; then
+            echo "::error::/ is not the SvelteKit index.html (no _app/ script reference)"
+            cat index.html
+            exit 1
+          fi
+          echo "checking /$asset"
+          curl --fail --silent --show-error --max-time 10 --output /dev/null "http://127.0.0.1:8090/$asset"
+
+      - name: Compose file is valid
+        run: docker compose -f docker-compose.yml config --quiet
+
+      - name: Container log
+        if: always()
+        run: docker logs lodestar-smoke || true
+
+  # Cross-compiled (no emulation); checks that the arm64 build works on every
+  # trigger. The binary can't run on the amd64 runner, so this is build-only.
+  build-arm64:
+    name: build (linux/arm64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: packaging/docker/Dockerfile
+          platforms: linux/arm64
+          push: false
+          outputs: type=cacheonly
+          build-args: |
+            VERSION=smoke
+            REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=arm64
+          cache-to: type=gha,scope=arm64,mode=max
+
+  publish:
+    name: publish (amd64 + arm64)
+    needs: [smoke, build-arm64]
+    # Tags, and the nightly from main (schedule, or a manual run on main).
+    if: >-
+      github.event_name != 'pull_request' &&
+      (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tags and labels
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: latest=auto
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=nightly,enable=${{ !startsWith(github.ref, 'refs/tags/') }}
+
+      - name: Build and push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: packaging/docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            REVISION=${{ github.sha }}
+          cache-from: |
+            type=gha,scope=amd64
+            type=gha,scope=arm64
