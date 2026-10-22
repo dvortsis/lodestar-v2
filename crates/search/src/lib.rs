@@ -14,11 +14,13 @@ mod handle;
 mod index;
 mod lease;
 mod live;
+pub mod natural;
 pub mod query;
 mod rebuild;
 pub mod schema;
 mod sorted;
 mod stem;
+pub mod suggest;
 #[cfg(test)]
 mod testing;
 pub mod tokenizer;

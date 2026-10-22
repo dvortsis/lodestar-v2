@@ -416,7 +416,9 @@ export interface paths {
         };
         /**
          * Parses a query: the AST and its canonical text, or a `query_syntax`
-         *     error whose `start`/`end` span the UI highlights.
+         *     error whose `start`/`end` span the UI highlights. With
+         *     `natural=true`, also the query `q` means as natural phrasing
+         *     (`natural_too_long` past 512 bytes or 32 words).
          */
         get: operations["parseQuery"];
         put?: never;
@@ -522,6 +524,27 @@ export interface paths {
          *     password; logs in.
          */
         post: operations["setup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/suggest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Suggestions for the token at the caret: field names, values with
+         *     counts, titles, smart chips and "did you mean". `replace` ranges are
+         *     in characters, so the client never tokenises the query again.
+         */
+        get: operations["suggest"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -918,6 +941,14 @@ export interface components {
              *     ignored by previews.
              */
             password?: string | null;
+        };
+        /**
+         * @description A range of characters (Unicode scalar values) in the query, end
+         *     exclusive.
+         */
+        CharRange: {
+            end: number;
+            start: number;
         };
         ClassRule: {
             adult: boolean;
@@ -1437,6 +1468,50 @@ export interface components {
             payload?: string | null;
             query?: string | null;
         };
+        /** @description One recognised clause and the words it came from. */
+        NaturalChip: {
+            /** @description Characters of `q`, end exclusive. */
+            from: components["schemas"]["CharRange"];
+            /** @description The clause as query text (`res:2160p`). */
+            text: string;
+        };
+        /**
+         * @description What natural phrasing proposes (§10.4): recognised words become
+         *     clauses, and every other word stays as text.
+         * @example {
+         *       "ast": {
+         *         "of": [],
+         *         "op": "and"
+         *       },
+         *       "canonical": "res:2160p type:movie year:2020 size:>=10GB",
+         *       "chips": [
+         *         {
+         *           "from": {
+         *             "end": 2,
+         *             "start": 0
+         *           },
+         *           "text": "res:2160p"
+         *         },
+         *         {
+         *           "from": {
+         *             "end": 9,
+         *             "start": 3
+         *           },
+         *           "text": "type:movie"
+         *         }
+         *       ],
+         *       "text": []
+         *     }
+         */
+        NaturalProposal: {
+            ast: components["schemas"]["AstNode"];
+            /** @description The proposed query; it always parses back to `ast`. */
+            canonical: string;
+            /** @description The recognised clauses, in the order they appear. */
+            chips: components["schemas"]["NaturalChip"][];
+            /** @description The words kept as text. */
+            text: string[];
+        };
         /** @description The body of a write that has nothing else to say. */
         OkResponse: {
             /** @description Always `true`. */
@@ -1500,6 +1575,11 @@ export interface components {
         ParseResponse: {
             ast: components["schemas"]["AstNode"];
             canonical: string;
+            /**
+             * @description With `natural=true`: the query `q` means as natural phrasing, for
+             *     the UI to preview as chips. Nothing applies it.
+             */
+            natural?: components["schemas"]["NaturalProposal"];
         };
         /**
          * @description `POST /password`: ends every other session.
@@ -2096,6 +2176,64 @@ export interface components {
             /** Format: int64 */
             updated_at: number | null;
             url: string;
+        };
+        /**
+         * @description One suggestion: replace the query's characters `replace.start` to
+         *     `replace.end` (end exclusive) with `insert`. A leading `-` or `!`
+         *     stays outside the range.
+         */
+        SuggestItem: {
+            /**
+             * Format: int64
+             * @description Torrents it would find, of those this search may show; absent for
+             *     field names, categories and "did you mean".
+             */
+            count?: number;
+            /** @description The query text to put in. */
+            insert: string;
+            kind: components["schemas"]["SuggestKind"];
+            replace: components["schemas"]["CharRange"];
+            /**
+             * @description What to show: the value, title or field, or for `did_you_mean`
+             *     the whole corrected query.
+             */
+            text: string;
+        };
+        /**
+         * @description What an item offers.
+         * @enum {string}
+         */
+        SuggestKind: "field" | "value" | "title" | "chip" | "did_you_mean";
+        /**
+         * @description `GET /suggest`.
+         * @example {
+         *       "items": [
+         *         {
+         *           "count": 1284,
+         *           "insert": "res:2160p",
+         *           "kind": "chip",
+         *           "replace": {
+         *             "end": 5,
+         *             "start": 0
+         *           },
+         *           "text": "res:2160p"
+         *         },
+         *         {
+         *           "count": 12,
+         *           "insert": "title:\"The Dark Knight\"",
+         *           "kind": "title",
+         *           "replace": {
+         *             "end": 5,
+         *             "start": 0
+         *           },
+         *           "text": "The Dark Knight"
+         *         }
+         *       ]
+         *     }
+         */
+        SuggestResponse: {
+            /** @description "Did you mean" first, then chips, field names, values and titles. */
+            items: components["schemas"]["SuggestItem"][];
         };
         /**
          * @description Seeders and trackers reporting, as `≥1`, `≥5`, `≥50` and
@@ -2893,6 +3031,11 @@ export interface operations {
             query?: {
                 /** @description The query text; empty matches everything. */
                 q?: string;
+                /**
+                 * @description Also read `q` as natural phrasing ("4k movies from 2020 over
+                 *     10gb") and propose the query it means, in `natural`.
+                 */
+                natural?: boolean;
             };
             header?: never;
             path?: never;
@@ -3098,6 +3241,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    suggest: {
+        parameters: {
+            query?: {
+                /** @description The query text as typed so far. */
+                q?: string;
+                /** @description The caret, in characters from the start; the end by default. */
+                pos?: number;
+                /** @description Items at most: 8 by default, 1–20. */
+                limit?: number;
+                /** @description Include torrents a filter rule hid (§20.3), as `/search`. */
+                hidden?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuggestResponse"];
                 };
             };
             default: components["responses"]["Error"];

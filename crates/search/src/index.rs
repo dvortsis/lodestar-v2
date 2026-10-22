@@ -130,6 +130,8 @@ pub struct SearchIndex {
     /// Held by every clone, so [`SearchIndex::holders`] tells when the
     /// last one (a lease's included) is gone.
     holders: Arc<()>,
+    /// The title FST beside this index (B7, `suggest::titles`).
+    titles: Arc<crate::suggest::Titles>,
 }
 
 /// How an existing index can serve this build ([`SearchIndex::open_existing`]).
@@ -509,6 +511,7 @@ impl SearchIndex {
             read_only: false,
             missing: Arc::new([]),
             holders: Arc::default(),
+            titles: Arc::default(),
         })
     }
 
@@ -520,6 +523,12 @@ impl SearchIndex {
     /// directory is deleted only after that (leases, `lease.rs`).
     pub(crate) fn holders(&self) -> std::sync::Weak<()> {
         Arc::downgrade(&self.holders)
+    }
+
+    /// The title set typeahead completes from (B7), rebuilt as the live
+    /// indexer commits.
+    pub fn titles(&self) -> &Arc<crate::suggest::Titles> {
+        &self.titles
     }
 
     /// The current snapshot, which a lease pins.
