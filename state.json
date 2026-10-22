@@ -634,8 +634,8 @@
    "session": "session_0141epGbZVUkFGWnyYhDra42",
    "pr": 51,
    "attempt": 1,
-   "review_rounds": 1,
-   "notes": "round 1: merge main, half-open/idle timeouts, per-IP cap, CI fuzz"
+   "review_rounds": 2,
+   "notes": "round 2 approve; blocked on Windows dual_stack_socket_reaches_ipv4_peers failure (V6ONLY) + \u00a716 conflict; sent 09:13"
   },
   "X-integrations": {
    "status": "merged",
@@ -656,22 +656,22 @@
    "notes": "merged after round 2"
   },
   "X-clients": {
-   "status": "pending",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01ENLgps19e6tSx74Sv1SxUB",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
-   "notes": ""
+   "notes": "launched 09:14 (briefs/X-clients.md); quick-xml approved"
   },
   "X-notify": {
-   "status": "pending",
+   "status": "running",
    "model": "sonnet",
-   "session": null,
+   "session": "session_01JVt8W2aGJyEFgv7HYwQJUF",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
-   "notes": ""
+   "notes": "launched 09:14 (briefs/X-notify.md); ntfy, Discord, RSS renderer; email split out"
   },
   "B17": {
    "status": "pending",
@@ -726,6 +726,15 @@
    "attempt": 1,
    "review_rounds": 1,
    "notes": "merged 07:50"
+  },
+  "X-email": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": "NEW: split from X-notify. deps X-notify. owns src/net.rs (guarded TCP connect), src/notify/email.rs, tests/email.rs; lettre approved exact pin, rustls on ring, no aws-lc/openssl. Add to slices.yaml at next runner PR"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -808,7 +817,9 @@
   ],
   "runner-pr": [
    "slices.yaml W1b title says 47 JSONs: is 23 families/46 themes; widen W1b owns",
-   "docs/themes.md derived-token gates table still says 9 pending (W1c): all 48 pass now"
+   "docs/themes.md derived-token gates table still says 9 pending (W1c): all 48 pass now",
+   "slices.yaml: add X-email (opus, deps X-notify); narrow X-notify owns to notify/{ntfy,discord,rss}.rs + tests",
+   "slices.yaml: X-clients/X-notify owns include their tests/ and fixtures/"
   ],
   "B1-polish": [
    "golden: add stemmed:true and non-null hash_v2 fixtures",
@@ -825,5 +836,5 @@
   "M4 continuation: waiting on ExitPlanMode approval (plan mode) \u2014 can't act on #48 review",
   "Modern DHT crawler architecture: waiting on an AskUserQuestion"
  ],
- "launches_today": 1
+ "launches_today": 3
 }
