@@ -72,6 +72,12 @@ pub struct FilterHit {
 /// Marks a filter hit as shadow mode: logged, not applied (§20.3).
 pub const SHADOW: u8 = 0x80;
 
+/// The `expires_at` of a quarantine that doesn't expire: one held because
+/// of your own correction, which a refetch wouldn't know (§20.9). It's
+/// held until you release it. The largest integer JSON clients read
+/// exactly.
+pub const HELD_UNTIL_RELEASED: i64 = (1 << 53) - 1;
+
 /// One quarantined torrent, as the review queue lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Quarantined {

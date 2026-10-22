@@ -1219,7 +1219,11 @@ export interface components {
         QuarantineEntry: {
             /** Format: int64 */
             at: number;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description When it's released for refetching; 2^53 − 1 when it's held until you
+             *     release it (held because of your own Is adult correction).
+             */
             expires_at: number;
             hash: string;
             rule: string;

@@ -1281,6 +1281,7 @@ dependencies = [
  "lodestar-classify",
  "lodestar-filter",
  "lodestar-metainfo",
+ "lodestar-pipeline",
  "lodestar-search",
  "lodestar-store",
  "rand 0.10.3",

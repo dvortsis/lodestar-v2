@@ -28,7 +28,6 @@ use axum::{Json, Router};
 use lodestar_classify::ContentType;
 use lodestar_filter::lists::SharedIps;
 use lodestar_filter::load::{KIND_HASHES, KIND_KEYWORD, KIND_PAYLOAD, KIND_QUERY, encode_match};
-use lodestar_filter::reclassify::Refiling;
 use lodestar_filter::{
     Action, CoreRule, Doc, Engine, Exception, Facts, Fixture, Handle, HeldSet, Item,
     MAX_CLASS_RULES, Match, Origin, Override, Pack, PackRule, RuleRef, Sealer, Strength,
@@ -2051,19 +2050,27 @@ impl FiltersApi {
                 "There's no torrent with that hash.",
             ));
         };
+        let was_adult = store
+            .enrichment(id)
+            .map_err(internal)?
+            .is_some_and(|e| e.content_type == lodestar_classify::ContentType::Adult.code());
         let files = lodestar_classify::file_infos(&tree.files, tree.encoding);
         // Under the lock, the generation can't move between reading it and
         // the write; the check still guards the order (§20.9).
         let generation = store.class_gen().map_err(internal)?;
         let engine = self.engine.current();
         let now = crate::unix_now();
-        // Relabelled adult, it's judged as adult too, as at ingest (§20.9).
-        let r = lodestar_filter::reclassify::reclassify_row(&row, &files, fix, Some(&engine), now);
-        let refiling = r
-            .as_adult
-            .as_ref()
-            .map(|d| Refiling::new(&row, d, self.sealer.as_deref()));
-        let refiled: Vec<_> = refiling
+        // Becoming adult, it's judged as adult too, as at ingest (§20.9).
+        let r = lodestar_filter::reclassify::reclassify_row(
+            &row,
+            &files,
+            fix,
+            was_adult,
+            Some(&engine),
+            now,
+        );
+        let refilings = r.refilings(&row, self.sealer.as_deref());
+        let refiled: Vec<_> = refilings
             .iter()
             .map(|f| f.refiled(now, now + self.quarantine_secs))
             .collect();
@@ -2074,8 +2081,9 @@ impl FiltersApi {
             store.mark_unenriched(&[id]).map_err(internal)?;
             self.reenrich.store(true, Ordering::Release);
         }
-        let held_by = refiling
-            .filter(|f| written.is_some() && f.held.is_some())
+        let held_by = refilings
+            .into_iter()
+            .find(|f| written.is_some() && f.held.is_some())
             .map(|f| {
                 for h in &f.hashes {
                     self.held.insert(*h);

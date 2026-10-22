@@ -35,7 +35,9 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 pub use compress::{BlobCodec, Codec, Compressed};
 pub use filetree::{CodecError, FileTree};
-pub use filter::{FilterHit, FilterState, Filtered, Held, Quarantined, Refiled, SHADOW};
+pub use filter::{
+    FilterHit, FilterState, Filtered, HELD_UNTIL_RELEASED, Held, Quarantined, Refiled, SHADOW,
+};
 pub use floor::{FloorSource, PendingFloor, Settled};
 pub use history::{History, trend};
 pub use hot::{Col, HotColumns, NEVER, SwarmHot};
@@ -582,7 +584,9 @@ impl Store {
     /// were relabelled adult (§20.9), as ingest would record them: one
     /// that's held back (dropped or quarantined) is deleted, its hashes
     /// tombstoned or quarantined; any other decision sets its `flags`
-    /// marks. Either way the decision is a filter hit.
+    /// marks. Either way the decision is a filter hit, except a mark the
+    /// torrent already has: that's the same verdict again, so nothing is
+    /// written for it.
     pub fn set_enrichments_at(
         &mut self,
         generation: i64,
@@ -594,19 +598,23 @@ impl Store {
             return Ok(None);
         }
         let done = enrich_rows(&tx, batch)?;
+        let mut filtered: Vec<Filtered<'_>> = Vec::with_capacity(refiled.len());
         for r in refiled {
             if r.filtered.held.is_some() {
                 tx.execute("DELETE FROM torrents WHERE id = ?1", [r.id])?;
                 tx.execute("INSERT INTO reindex_log (torrent_id) VALUES (?1)", [r.id])?;
             } else if r.flags != 0 {
-                tx.execute(
-                    "UPDATE torrents SET flags = flags | ?2 WHERE id = ?1",
+                let marked = tx.execute(
+                    "UPDATE torrents SET flags = flags | ?2 WHERE id = ?1 AND flags & ?2 != ?2",
                     params![r.id, r.flags],
                 )?;
+                if marked == 0 {
+                    continue;
+                }
                 tx.execute("INSERT INTO reindex_log (torrent_id) VALUES (?1)", [r.id])?;
             }
+            filtered.push(r.filtered);
         }
-        let filtered: Vec<Filtered<'_>> = refiled.iter().map(|r| r.filtered).collect();
         filter::write(&tx, &filtered)?;
         tx.commit()?;
         Ok(Some(done))

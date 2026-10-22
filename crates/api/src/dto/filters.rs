@@ -553,6 +553,8 @@ pub struct DecisionCount {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct QuarantineEntry {
     pub at: i64,
+    /// When it's released for refetching; 2^53 − 1 when it's held until you
+    /// release it (held because of your own Is adult correction).
     pub expires_at: i64,
     pub hash: String,
     pub rule: String,
