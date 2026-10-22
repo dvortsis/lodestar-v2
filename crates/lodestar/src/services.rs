@@ -165,7 +165,7 @@ impl Services {
             .await
             .map_err(|e| format!("binding {}: {e}", config.http.bind))?;
         tracing::info!(
-            "status page on http://{}/ (data in {})",
+            "UI on http://{}/, status page on /status (data in {})",
             config.http.bind,
             config.data_dir.display()
         );

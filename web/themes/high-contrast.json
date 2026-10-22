@@ -1,0 +1,21 @@
+{
+	"id": "high-contrast",
+	"name": "High Contrast",
+	"group": "accessibility",
+	"light": {
+		"background": "#F2F2F2",
+		"surface": "#FFFFFF",
+		"text": "#0A0A0A",
+		"primary": "#0B4F8A",
+		"accent": "#1B6B2F",
+		"categorical": ["#0B5CAD", "#3B893E", "#825505", "#950003", "#5A6470", "#542581"]
+	},
+	"dark": {
+		"background": "#000000",
+		"surface": "#121212",
+		"text": "#FFFFFF",
+		"primary": "#7CC4FF",
+		"accent": "#7EE08A",
+		"categorical": ["#3F97E4", "#5AC77D", "#FFD271", "#E36058", "#D2DEE8", "#CDA9FF"]
+	}
+}

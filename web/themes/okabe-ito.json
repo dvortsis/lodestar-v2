@@ -1,0 +1,23 @@
+{
+	"id": "okabe-ito",
+	"name": "Okabe-Ito",
+	"group": "accessibility",
+	"license": "Published recommendation, free to use with credit (Masataka Okabe and Kei Ito)",
+	"source": "https://jfly.uni-koeln.de/color/",
+	"light": {
+		"background": "#F4F4F2",
+		"surface": "#FFFFFF",
+		"text": "#1A1A1A",
+		"primary": "#0072B2",
+		"accent": "#009E73",
+		"categorical": ["#0072B2", "#009E73", "#E69F00", "#D55E00", "#56B4E9", "#CC79A7"]
+	},
+	"dark": {
+		"background": "#121417",
+		"surface": "#1E2226",
+		"text": "#EDEDED",
+		"primary": "#56B4E9",
+		"accent": "#009E73",
+		"categorical": ["#56B4E9", "#009E73", "#E69F00", "#D55E00", "#F0E442", "#CC79A7"]
+	}
+}

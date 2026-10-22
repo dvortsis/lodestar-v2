@@ -1,0 +1,21 @@
+{
+	"id": "sandstone",
+	"name": "Sandstone",
+	"group": "original",
+	"light": {
+		"background": "#F6F2EC",
+		"surface": "#FFFDF9",
+		"text": "#3B3128",
+		"primary": "#8A6A4A",
+		"accent": "#8C9B6E",
+		"categorical": ["#5F7F96", "#8A996C", "#A37A34", "#9E5B45", "#847769", "#A085AE"]
+	},
+	"dark": {
+		"background": "#1C1814",
+		"surface": "#29231D",
+		"text": "#EFE7DC",
+		"primary": "#D3B48C",
+		"accent": "#B8C29A",
+		"categorical": ["#7796AB", "#A9B888", "#BE9955", "#BA7A61", "#CFC0B0", "#BAA2C8"]
+	}
+}
