@@ -737,13 +737,13 @@
    "notes": "round 1 fixes pushed af0a35e (transient drops, =? broken, private peer for plaintext auth, resolve timeout); merge on CI green (filter gate pending F1b); 12:50 one rerun of filter budget"
   },
   "B5a-swapfix": {
-   "status": "in_review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01Uk4thMoRJwF3Rzg9SUrxUQ",
    "pr": 65,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "round 1 FIX (error field untested) fixed by runner 87a5a06 + \u00a716 wording; merge on CI green; 12:50 one rerun of filter budget (main-side runner variance)"
+   "notes": "merged 12:59 as 3577c1d (#65); filter budget passed on rerun (fast runner)"
   },
   "F1b": {
    "status": "blocked",
@@ -869,7 +869,8 @@
   "flaky": [
    "2026-10-22 11:13 Windows: search/tests/rebuild.rs searches_keep_working_through_a_rebuild_and_the_swap timed out (rebuild never finished in 30s) on PR #61 run 39768313014. Hypothesis: SRWLock writer starvation by spinning readers of Serving RwLock. Routed to B5a to root-cause.",
    "11:22 failed again on PR #62 (job 119791380998): now consistent; asked B5a for a separate fix PR slice/B5a-swapfix first",
-   "11:48 root cause per B5a: finishing rename refused on Windows (scanner holds files) -> Failed phase, rebuilding() stays true. Fix PR #65."
+   "11:48 root cause per B5a: finishing rename refused on Windows (scanner holds files) -> Failed phase, rebuilding() stays true. Fix PR #65.",
+   "12:59 swap fix #65 merged; Windows rebuild test green on #64 and #65 runs"
   ],
   "filter-followup": [
    "NEAR quirk (pre-existing, #42): words that split into several tokens (1080p, x264) can never match inside NEAR; needs a fix in a filter slice"
