@@ -367,7 +367,10 @@ pub struct Store {
     codec: BlobCodec,
     config: StoreConfig,
     /// A WAL scrub after a delete couldn't finish (a reader held an old
-    /// snapshot): the next delete or purge tries again.
+    /// snapshot): the next delete or purge tries again. When another
+    /// connection's purge finishes the scrub (they share the WAL), this
+    /// stays true until this store's next delete. That's harmless: it
+    /// costs one extra checkpoint.
     scrub_pending: bool,
 }
 
@@ -392,7 +395,7 @@ impl Store {
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
         conn.pragma_update(None, "mmap_size", config.mmap_size as i64)?;
-        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        conn.busy_timeout(schema::BUSY_TIMEOUT)?;
         schema::check_current(&conn)?;
         Store::load(conn, config)
     }
@@ -476,7 +479,7 @@ impl Store {
             .iter()
             .map(|t| prepare(codec, config.archive_raw, t.info, t.raw_info))
             .collect::<Result<_>>()?;
-        let tx = conn.transaction()?;
+        let tx = begin_write(conn)?;
         let mut out = Vec::with_capacity(batch.torrents.len());
         for (t, p) in batch.torrents.iter().zip(&own) {
             let pt = PreparedTorrent {
@@ -585,7 +588,7 @@ impl Store {
     /// Sets the enrichment of stored torrents in one transaction and
     /// queues them for re-indexing. Ids no longer stored are skipped.
     pub fn set_enrichments(&mut self, batch: &[(i64, Enriched)]) -> Result<usize> {
-        let tx = self.conn.transaction()?;
+        let tx = begin_write(&mut self.conn)?;
         let done = enrich_rows(&tx, batch)?;
         tx.commit()?;
         Ok(done)
@@ -609,7 +612,7 @@ impl Store {
         batch: &[(i64, Enriched)],
         refiled: &[Refiled<'_>],
     ) -> Result<Option<usize>> {
-        let tx = self.conn.transaction()?;
+        let tx = begin_write(&mut self.conn)?;
         if rules::class_gen(&tx)? != generation {
             return Ok(None);
         }
@@ -1185,6 +1188,15 @@ const FIND_BY_HASH: &str = "SELECT id FROM torrents WHERE info_hash = ?1
      SELECT id FROM torrents
      WHERE info_hash_v2 IS NOT NULL AND substr(info_hash_v2, 1, 20) = ?1
      LIMIT 1";
+
+/// Begins a write transaction that reads before it writes, taking the
+/// write lock up front (`BEGIN IMMEDIATE`) and waiting for it up to the
+/// busy timeout. A deferred one would get SQLITE_BUSY at once when its
+/// first write finds another connection holding the lock (a WAL scrub's
+/// checkpoint, say): SQLite doesn't wait to upgrade a read to a write.
+pub(crate) fn begin_write(conn: &mut Connection) -> rusqlite::Result<rusqlite::Transaction<'_>> {
+    conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+}
 
 pub(crate) fn find_any(
     conn: &Connection,

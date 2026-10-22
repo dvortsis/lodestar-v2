@@ -76,13 +76,13 @@ pub struct FilterHit {
 /// Marks a filter hit as shadow mode: logged, not applied (§20.3).
 pub const SHADOW: u8 = 0x80;
 
-/// The locked floor's rule ids (the filter's `CoreRule::floor`; a filter
-/// test keeps them equal). An adult hold's purge never replaces their
-/// tombstones.
 /// How long a WAL scrub's TRUNCATE checkpoint may wait for readers and
 /// writers on other connections (see [`Store::scrub_wal`]).
 const SCRUB_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
 
+/// The locked floor's rule ids (the filter's `CoreRule::floor`; a filter
+/// test keeps them equal). An adult hold's purge never replaces their
+/// tombstones.
 pub const FLOOR_RULES: [&str; 3] = ["CS-1a", "CS-1b", "CS-8a"];
 
 /// Appended to the stored rule id of an adult hold
@@ -287,7 +287,7 @@ impl Store {
     /// deleted ids. Ids are never reused, so hot-column slots left behind
     /// are never read again.
     pub fn delete_torrents(&mut self, hashes: &[[u8; 20]]) -> Result<Vec<i64>> {
-        let tx = self.conn.transaction()?;
+        let tx = crate::begin_write(&mut self.conn)?;
         let mut ids = Vec::new();
         for h in hashes {
             if let Some(id) = crate::find_any(&tx, std::iter::once(InfoHash(*h)))? {
@@ -356,7 +356,7 @@ impl Store {
     /// its sealed name goes, its hash stays refused (§20.9). Returns the
     /// released hashes and how many hits were removed.
     pub fn purge_filter(&mut self, now: i64, hits_before: i64) -> Result<(Vec<[u8; 20]>, usize)> {
-        let tx = self.conn.transaction()?;
+        let tx = crate::begin_write(&mut self.conn)?;
         let mut expired = Vec::new();
         {
             let mut stmt = tx.prepare(
@@ -457,9 +457,10 @@ impl Store {
     /// A PASSIVE checkpoint first copies the frames back without taking
     /// the write lock. The TRUNCATE that follows needs that lock and every
     /// reader to be done with the WAL, so it waits at most
-    /// [`SCRUB_WAIT`] instead of the store's 5 s busy timeout: another
-    /// connection's write (an ingest batch) gets SQLITE_BUSY at once while
-    /// the lock is held, and mustn't be made to fail by a long wait.
+    /// [`SCRUB_WAIT`] instead of the store's 5 s busy timeout: a write on
+    /// another connection (an ingest batch) waits for the lock meanwhile,
+    /// and its writes begin IMMEDIATE ([`begin_write`](crate::begin_write))
+    /// so that wait is the busy timeout, not an instant SQLITE_BUSY.
     ///
     /// Best effort, and it never fails the delete that already committed.
     /// A busy reader, a writer on another connection or an I/O error sets
@@ -732,6 +733,116 @@ mod tests {
             delete(&mut s, h);
             assert!(!contains(&on_disk()), "{name}: the deleted name survived");
         }
+    }
+
+    /// A reader's snapshot that keeps one connection's scrub busy: the
+    /// hourly purge on another connection finishes it, since they share
+    /// the WAL, and the busy scrub leaves the normal busy timeout behind.
+    #[test]
+    fn a_purge_on_any_connection_finishes_a_busy_scrub() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.db");
+        let wal = dir.path().join("t.db-wal");
+        let mut api = Store::open(&path, StoreConfig::default()).unwrap();
+        let mut writer = Store::open(&path, StoreConfig::default()).unwrap();
+        let marker = b"busy-scrub-marker-2b7d";
+        let h = [7u8; 20];
+        let row = Filtered {
+            hashes: &[h],
+            rule: "U-1",
+            action: 4,
+            held: Some(Held::Quarantine),
+            sealed: Some(marker),
+            evidence: &[],
+            at: 10,
+            expires_at: 20,
+            adult_hold: false,
+        };
+        let tx = api.conn.transaction().unwrap();
+        write(&tx, &[row]).unwrap();
+        tx.commit().unwrap();
+        let on_disk = || {
+            let mut all = std::fs::read(&path).unwrap();
+            all.extend(std::fs::read(&wal).unwrap_or_default());
+            all.windows(marker.len()).any(|w| w == marker)
+        };
+        let reader = rusqlite::Connection::open(&path).unwrap();
+        reader
+            .execute_batch("BEGIN; SELECT count(*) FROM quarantine;")
+            .unwrap();
+        assert!(api.release(&h).unwrap());
+        assert!(api.scrub_pending, "the reader kept the scrub busy");
+        assert!(on_disk(), "the WAL still holds the name");
+        let timeout: i64 = api
+            .conn
+            .pragma_query_value(None, "busy_timeout", |r| r.get(0))
+            .unwrap();
+        assert_eq!(timeout, crate::schema::BUSY_TIMEOUT.as_millis() as i64);
+        reader.execute_batch("COMMIT").unwrap();
+        // Deletes nothing, and still scrubs.
+        assert_eq!(writer.purge_filter(0, 0).unwrap(), (vec![], 0));
+        assert!(
+            !on_disk(),
+            "the purge finished the other connection's scrub"
+        );
+    }
+
+    /// Ingest on one connection waits out a scrub that holds the write
+    /// lock on another (its TRUNCATE checkpoint, kept busy by a reader)
+    /// instead of failing with "database is locked".
+    #[test]
+    fn ingest_waits_out_a_busy_scrub_on_another_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.db");
+        let mut api = Store::open(&path, StoreConfig::default()).unwrap();
+        let mut writer = Store::open(&path, StoreConfig::default()).unwrap();
+        let torrent = |n: u32| {
+            let name = format!("Torrent.{n:06}");
+            let mut raw = format!("d6:lengthi5e4:name{}:{name}", name.len()).into_bytes();
+            raw.extend_from_slice(b"12:piece lengthi16384e6:pieces20:");
+            raw.extend_from_slice(&[0; 20]);
+            raw.push(b'e');
+            raw
+        };
+        let insert = |s: &mut Store, n: u32| {
+            let raw = torrent(n);
+            let info = lodestar_metainfo::Info::parse(&raw).unwrap();
+            s.insert(&[crate::NewTorrent {
+                info: &info,
+                raw_info: Some(&raw),
+                discovered_at: 1,
+                metadata_at: 1,
+                extra_flags: 0,
+                source: crate::SourceId::new(0).unwrap(),
+            }])
+            .map(|_| ())
+        };
+        // WAL frames the reader's snapshot pins, so every scrub is busy.
+        insert(&mut writer, 0).unwrap();
+        let reader = rusqlite::Connection::open(&path).unwrap();
+        reader
+            .execute_batch("BEGIN; SELECT count(*) FROM torrents;")
+            .unwrap();
+        let scrubs = std::thread::spawn(move || {
+            for _ in 0..10 {
+                api.scrub_wal();
+                assert!(api.scrub_pending, "the reader kept the scrub busy");
+            }
+        });
+        let started = std::time::Instant::now();
+        let (mut n, mut failed, mut first) = (0, 0, None);
+        while !scrubs.is_finished() {
+            assert!(started.elapsed().as_secs() < 120, "hang guard");
+            n += 1;
+            if let Err(e) = insert(&mut writer, n) {
+                failed += 1;
+                first.get_or_insert(e.to_string());
+            }
+        }
+        scrubs.join().unwrap();
+        reader.execute_batch("COMMIT").unwrap();
+        assert!(n > 0);
+        assert_eq!(failed, 0, "of {n} inserts; first error: {first:?}");
     }
 
     /// An adult hold's purge never replaces the floor's tombstone:

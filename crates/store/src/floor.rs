@@ -175,7 +175,7 @@ impl Store {
     /// in the floor, and it waits in that file's list if that file drops
     /// it too.
     pub fn sync_floor_file(&mut self, path: &str, hashes: &[[u8; 20]], at: i64) -> Result<usize> {
-        let tx = self.conn.transaction()?;
+        let tx = crate::begin_write(&mut self.conn)?;
         let listed: Set = hashes.iter().copied().collect();
         let manifest_key = format!("{MANIFEST}{path}");
         let key = pending_key(&FloorSource::File(path.to_owned()));
@@ -258,7 +258,7 @@ impl Store {
         remove: bool,
         at: i64,
     ) -> Result<Settled> {
-        let tx = self.conn.transaction()?;
+        let tx = crate::begin_write(&mut self.conn)?;
         let mut unblocked = Vec::new();
         let key = pending_key(source);
         let mut pending = read(&tx, &key)?;
