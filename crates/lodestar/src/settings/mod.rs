@@ -518,11 +518,28 @@ impl Registry {
             "settings section {} registered twice",
             T::SECTION
         );
-        let rows = self
-            .store
-            .lock()
-            .expect("store lock")
-            .settings_with_prefix(&key(T::SECTION, ""))?;
+        let mut store = self.store.lock().expect("store lock");
+        let prefix = key(T::SECTION, "");
+        let (retired, rows): (Vec<_>, Vec<_>) = store
+            .settings_with_prefix(&prefix)?
+            .into_iter()
+            .partition(|(k, _)| {
+                let name = &k[prefix.len()..];
+                T::FIELDS.iter().any(|f| f.name == name && f.read_only)
+            });
+        // A field that has since become read-only (an earlier build saved
+        // it): removed, so it doesn't come back at every start.
+        if !retired.is_empty() {
+            let keys: Vec<&str> = retired.iter().map(|(k, _)| k.as_str()).collect();
+            store.update_settings_text(&[], &keys)?;
+            for k in keys {
+                tracing::info!(
+                    "settings: removed saved {}: it can only be set in config.toml or the environment now",
+                    &k[KEY_PREFIX.len()..]
+                );
+            }
+        }
+        drop(store);
         self.sections.push(Box::new(Entry::<T>::new(config, rows)));
         Ok(())
     }
