@@ -54,9 +54,13 @@ const ESTIMATE_FROM: usize = 20_000;
 
 const USAGE: &str = "\
 Usage: search-bench [--torrents N] [--queries N] [--dir PATH] [--seed S] [--gate]
+                    [--commit-every N]
 
   --torrents N   corpus size (default 1000000)
   --queries N    queries per class (default 300)
+  --commit-every N
+                 index commits every N torrents (default 200000): fewer,
+                 larger segments, as a live index's merges make them
   --dir PATH     keep the store and index here and reuse them next run
   --seed S       generator seed (default 1)
   --gate         exit 1 if a p95 target is missed";
@@ -67,6 +71,7 @@ struct Args {
     dir: Option<PathBuf>,
     seed: u64,
     gate: bool,
+    commit_every: usize,
 }
 
 fn args() -> Result<Args, String> {
@@ -76,6 +81,7 @@ fn args() -> Result<Args, String> {
         dir: None,
         seed: 1,
         gate: false,
+        commit_every: 200_000,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -88,6 +94,11 @@ fn args() -> Result<Args, String> {
             "--dir" => a.dir = Some(PathBuf::from(value("--dir")?)),
             "--seed" => a.seed = value("--seed")?.parse().map_err(|_| "bad --seed")?,
             "--gate" => a.gate = true,
+            "--commit-every" => {
+                a.commit_every = value("--commit-every")?
+                    .parse()
+                    .map_err(|_| "bad --commit-every")?
+            }
             "-h" | "--help" => return Err(USAGE.into()),
             other => return Err(format!("unknown argument {other}\n\n{USAGE}")),
         }
@@ -101,6 +112,7 @@ fn build(
     index: &SearchIndex,
     seed: u64,
     n: usize,
+    commit_every: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let have = (store.count()? as usize).min(n);
     let mut generator = Generator::new(seed);
@@ -165,7 +177,7 @@ fn build(
         if added == 0 {
             break;
         }
-        if indexer.pending() >= 200_000 {
+        if indexer.pending() >= commit_every {
             indexer.commit()?;
             eprintln!(
                 "  indexed up to id {} ({:.0}/s)",
@@ -366,7 +378,7 @@ fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
     let index = SearchIndex::open(&index_dir(&dir.join("index")))?;
     {
         let mut store = Store::open(&db, StoreConfig::default())?;
-        build(&mut store, &index, a.seed, a.torrents)?;
+        build(&mut store, &index, a.seed, a.torrents, a.commit_every)?;
         store.checkpoint()?;
     }
     let reader = Store::open_reader(&db, StoreConfig::default())?;

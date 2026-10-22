@@ -3610,7 +3610,7 @@
           },
           "unit": {
             "type": "string",
-            "description": "What the edges measure: `bytes`; `hour`, `day`, `week` (from a\nThursday) or `month` in UTC seconds; or `year`."
+            "description": "What the edges measure: `bytes`; `hour`, `day`, `week` (from a\nThursday), `month` or `year` in UTC seconds (`discovered`, whose\nfirst and last bins may be irregular edge bins); or `year` (the\nrelease year)."
           }
         }
       },

@@ -1301,7 +1301,9 @@ export interface components {
             missing: number;
             /**
              * @description What the edges measure: `bytes`; `hour`, `day`, `week` (from a
-             *     Thursday) or `month` in UTC seconds; or `year`.
+             *     Thursday), `month` or `year` in UTC seconds (`discovered`, whose
+             *     first and last bins may be irregular edge bins); or `year` (the
+             *     release year).
              */
             unit: string;
         };

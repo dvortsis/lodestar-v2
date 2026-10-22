@@ -204,9 +204,9 @@ impl Facet {
 
     /// The values a leaf on this facet's field names, and whether the leaf
     /// excludes them; `None` for any other node. A category share is the
-    /// facet's only as "has some" (`cat:video`, any range from 1) or "has
-    /// none" (`cat:video=0`); other ranges (`cat:video<50`) are filters
-    /// like any other.
+    /// facet's only as "has some" (`cat:video`, 1–100%), which is what
+    /// the facet counts, or "has none" (`cat:video=0`); any other range
+    /// (`cat:video>=80%`, `cat:video<50`) is a filter like any other.
     fn leaf_values(self, node: &Node) -> Option<(Vec<String>, bool)> {
         match (self.source(), node) {
             (Source::Tag(k), Node::Tag { key, any }) if *key == k => Some((any.clone(), false)),
@@ -223,7 +223,7 @@ impl Facet {
                     hi,
                 },
             ) => match (lo, hi) {
-                (1.., _) => Some((vec![cat.clone()], false)),
+                (1, 100) => Some((vec![cat.clone()], false)),
                 (0, 0) => Some((vec![cat.clone()], true)),
                 _ => None,
             },
@@ -303,18 +303,24 @@ fn adult_class() -> Node {
     }
 }
 
-/// `node` ANDed with `filters`.
-fn with_filters(node: Node, filters: &[Node]) -> Node {
-    if filters.is_empty() {
-        return node;
-    }
-    let mut of = match node {
-        Node::All => Vec::new(),
-        Node::And { of } => of,
-        n => vec![n],
-    };
-    of.extend(filters.iter().cloned());
-    Node::And { of }
+/// `node` ANDed with `filters`: the query a search of the user's `node`
+/// under the server's always-on `filters` runs, and the one its lease
+/// must be taken for (see [`facets`]). The API's `BaseQuery` builds its
+/// query with this too.
+pub fn with_filters(node: Node, filters: &[Node]) -> Node {
+    filters
+        .iter()
+        .cloned()
+        .fold(node, |node, clause| match node {
+            Node::All => clause,
+            Node::And { mut of } => {
+                of.push(clause);
+                Node::And { of }
+            }
+            other => Node::And {
+                of: vec![other, clause],
+            },
+        })
 }
 
 /// A histogram.
@@ -507,9 +513,12 @@ pub struct Bin {
     pub backfill: bool,
 }
 
-/// The facets of the search `lease` holds. The lease was taken for the
-/// user's query `node` ANDed with `filters`: clauses the server always
-/// applies (Adult visibility, §20.9). Disjunction removes a facet's own
+/// The facets of the search `lease` holds. The lease must have been taken
+/// for [`with_filters`]`(node, filters)`: the user's query `node` ANDed
+/// with `filters`, clauses the server always applies (Adult visibility,
+/// §20.9); one taken for anything else is a caller's bug (asserted in
+/// debug builds; release builds count `with_filters(node, filters)`
+/// rather than the lease's query). Disjunction removes a facet's own
 /// clauses from `node` only; `filters` are ANDed onto every pass as they
 /// are, so a facet never counts what they hide (`-type:adult` is not the
 /// `type` facet's selection).
@@ -555,17 +564,21 @@ pub fn facets(
     let base = Want {
         facets: shared,
         histos,
+        now: lease.now(),
     };
-    let base_sampled = lease.total().value > policy.sample_above;
+    let full = with_filters(node.clone(), filters);
+    debug_assert_eq!(lease.node(), &full, "a lease for another query");
+    let rebuilt;
+    let (shared_query, base_sampled) = if lease.node() == &full {
+        (lease.compiled(), lease.total().value > policy.sample_above)
+    } else {
+        rebuilt = index.compile(&full, lease.now(), lease.stemmed());
+        let estimate =
+            count::estimate_with(searcher, &rebuilt, cancel, policy.segment_sample_above)?;
+        (&rebuilt, estimate.value > policy.sample_above)
+    };
     let mut sample_rate = None;
-    let shared_tally = pass(
-        lease.compiled(),
-        searcher,
-        &base,
-        base_sampled,
-        policy,
-        cancel,
-    )?;
+    let shared_tally = pass(shared_query, searcher, &base, base_sampled, policy, cancel)?;
     if shared_tally.sampled {
         sample_rate = Some(shared_tally.rate);
     }
@@ -582,6 +595,7 @@ pub fn facets(
         let want = Want {
             facets: vec![f],
             histos: Vec::new(),
+            now: lease.now(),
         };
         let t = pass(
             &compiled,
@@ -634,6 +648,8 @@ pub fn facets(
 struct Want {
     facets: Vec<Facet>,
     histos: Vec<Histo>,
+    /// The lease's `now`, which the dense hour counts end at.
+    now: i64,
 }
 
 impl Want {
@@ -795,29 +811,32 @@ struct Counts {
     with_year: u64,
 }
 
-/// Counts by UTC hour: dense from the segment's earliest hour when its
-/// span is reasonable, by hash otherwise (and for anything outside it,
-/// which a column's bounds rule out).
+/// Counts by UTC hour: dense over the segment's hours, but at most
+/// [`DENSE_HOURS`] of them ending a day past `now`, and by hash outside
+/// that. A stray date (a source's `created_at` of 0, a year 9999) then
+/// costs a hash entry, not a vector spanning decades.
 struct Hours {
     base: i64,
     dense: Vec<u32>,
     sparse: HashMap<i64, u64>,
 }
 
-const DENSE_HOURS: i64 = 1 << 20;
+/// About 7.5 years of hours: 256 KiB of counts per segment and pass.
+const DENSE_HOURS: i64 = 1 << 16;
 
 impl Hours {
-    fn for_column(col: Option<&Column<i64>>) -> Hours {
+    fn for_column(col: Option<&Column<i64>>, now: i64) -> Hours {
         let mut h = Hours {
             base: 0,
             dense: Vec::new(),
             sparse: HashMap::new(),
         };
         if let Some(col) = col {
-            let (lo, hi) = (hour(col.min_value()), hour(col.max_value()));
-            if let Some(span) = hi.checked_sub(lo).filter(|s| *s < DENSE_HOURS) {
+            let hi = hour(col.max_value()).min(hour(now) + 24);
+            let lo = hour(col.min_value()).max(hi - DENSE_HOURS + 1);
+            if let Ok(len) = usize::try_from(hi - lo + 1) {
                 h.base = lo;
-                h.dense = vec![0; span as usize + 1];
+                h.dense = vec![0; len];
             }
         }
         h
@@ -850,7 +869,7 @@ fn hour(t: i64) -> i64 {
 }
 
 impl Counts {
-    fn new(cols: &Columns) -> Counts {
+    fn new(cols: &Columns, now: i64) -> Counts {
         let terms = |c: &Option<StrColumn>| vec![0; c.as_ref().map_or(0, |c| c.num_terms())];
         Counts {
             docs: 0,
@@ -858,7 +877,7 @@ impl Counts {
             ext: terms(&cols.ext),
             flag: terms(&cols.flag),
             size: [0; SIZE_BINS],
-            hours: Hours::for_column(cols.discovered.as_ref()),
+            hours: Hours::for_column(cols.discovered.as_ref(), now),
             years: HashMap::new(),
             with_year: 0,
         }
@@ -1024,7 +1043,7 @@ fn segment(
 ) -> tantivy::Result<(Tally, u64, u64)> {
     let max = reader.max_doc();
     let cols = Columns::open(reader, want)?;
-    let mut counts = Counts::new(&cols);
+    let mut counts = Counts::new(&cols, want.now);
     let mut m = Matcher::new(weight, reader, compiled, cancel)?;
     let (mut buf, mut times) = (Vec::new(), Vec::new());
     let mut add = |docs: &[DocId]| counts.add(&cols, docs, &mut buf, &mut times);
@@ -1175,7 +1194,7 @@ const DAY: i64 = 24 * HOUR;
 const WEEK: i64 = 7 * DAY;
 
 /// The bin unit for matches spanning `first..=last` (UTC hours): about
-/// 50 to 100 bins at most, but for months.
+/// 50 to 100 bins at most, but for months (up to 120).
 fn unit_for(first: i64, last: i64) -> Unit {
     let span = last - first;
     if span < 48 {
@@ -1184,10 +1203,15 @@ fn unit_for(first: i64, last: i64) -> Unit {
         Unit::Day
     } else if span < 104 * 7 * 24 {
         Unit::Week
-    } else {
+    } else if span < 10 * 366 * 24 {
         Unit::Month
+    } else {
+        Unit::Year
     }
 }
+
+/// Discovered bins listed at most, edge bins included.
+const MAX_DISCOVERED_BINS: usize = 130;
 
 /// The start of the bin holding UTC time `t`, and the next bin's.
 fn bin_of(unit: Unit, t: i64) -> (i64, i64) {
@@ -1196,6 +1220,13 @@ fn bin_of(unit: Unit, t: i64) -> (i64, i64) {
         Unit::Hour => (floor(HOUR), floor(HOUR) + HOUR),
         Unit::Day => (floor(DAY), floor(DAY) + DAY),
         Unit::Week => (floor(WEEK), floor(WEEK) + WEEK),
+        Unit::Year => {
+            let (y, _, _) = civil(t.div_euclid(DAY));
+            (
+                days_from_civil(y, 1, 1) * DAY,
+                days_from_civil(y + 1, 1, 1) * DAY,
+            )
+        }
         _ => {
             let (y, m, _) = civil(t.div_euclid(DAY));
             let next = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
@@ -1207,26 +1238,96 @@ fn bin_of(unit: Unit, t: i64) -> (i64, i64) {
     }
 }
 
+/// Discovered bins over the matches' range, or over its 1st to 99th
+/// percentile (widened by half on each side, to the nearest dates) when
+/// the whole range is more than four times wider, so a
+/// few stray dates (a source's `created_at` of 0, a year 9999) don't
+/// stretch every broad search's chart across decades: what falls before
+/// or after that goes in one edge bin each, `[earliest, start)` and
+/// `[end, ∞)`. At most [`MAX_DISCOVERED_BINS`] bins: if the range still
+/// needs more years than that, the earliest go in the lower edge bin.
 fn discovered_bins(hours: &HashMap<i64, f64>, first_run: Option<i64>) -> (Unit, Vec<Bin>) {
-    let (Some(&first), Some(&last)) = (hours.keys().min(), hours.keys().max()) else {
+    let mut sorted: Vec<(i64, f64)> = hours.iter().map(|(h, c)| (*h, *c)).collect();
+    sorted.sort_unstable_by_key(|(h, _)| *h);
+    let (Some(&(earliest, _)), Some(&(latest, _))) = (sorted.first(), sorted.last()) else {
         return (Unit::Day, Vec::new());
     };
+    let total: f64 = sorted.iter().map(|(_, c)| c).sum();
+    let at = |share: f64| {
+        let mut seen = 0.0;
+        for (h, c) in &sorted {
+            seen += c;
+            if seen >= share * total {
+                return *h;
+            }
+        }
+        latest
+    };
+    // Stray dates are the tails of a range far wider than its bulk's.
+    let (p1, p99) = (at(0.01), at(0.99));
+    let width = (p99 - p1).max(48);
+    let (first, last) = if latest - earliest > 4 * width {
+        // The bulk, and anything within half its width of it.
+        let near = |h: &&(i64, f64)| (p1 - width / 2..=p99 + width / 2).contains(&h.0);
+        let first = sorted.iter().find(near).map_or(p1, |h| h.0);
+        let last = sorted.iter().rev().find(near).map_or(p99, |h| h.0);
+        (first, last)
+    } else {
+        (earliest, latest)
+    };
     let unit = unit_for(first, last);
-    let mut by_bin: BTreeMap<i64, f64> = BTreeMap::new();
-    for (h, c) in hours {
-        *by_bin.entry(bin_of(unit, h * HOUR).0).or_default() += c;
+    let mut start = bin_of(unit, first * HOUR).0;
+    let end = bin_of(unit, last * HOUR).1;
+    // Back from the end, as many bins as fit beside the two edge bins.
+    let mut span = 0;
+    let mut lo = end;
+    while lo > start && span + 2 < MAX_DISCOVERED_BINS {
+        lo = bin_of(unit, lo - 1).0;
+        span += 1;
     }
+    if lo > start {
+        start = lo;
+    }
+    let mut by_bin: BTreeMap<i64, f64> = BTreeMap::new();
+    let (mut under, mut over) = (0.0, 0.0);
+    for (h, c) in &sorted {
+        let t = h * HOUR;
+        if t < start {
+            under += c;
+        } else if t >= end {
+            over += c;
+        } else {
+            *by_bin.entry(bin_of(unit, t).0).or_default() += c;
+        }
+    }
+    let backfill = |hi: Option<i64>| first_run.is_some_and(|f| hi.is_some_and(|hi| hi <= f));
     let mut bins = Vec::new();
-    let (mut lo, end) = (bin_of(unit, first * HOUR).0, bin_of(unit, last * HOUR).1);
+    if earliest * HOUR < start {
+        bins.push(Bin {
+            lo: earliest * HOUR,
+            hi: Some(start),
+            count: under.round() as u64,
+            backfill: backfill(Some(start)),
+        });
+    }
+    let mut lo = start;
     while lo < end {
         let hi = bin_of(unit, lo).1;
         bins.push(Bin {
             lo,
             hi: Some(hi),
             count: by_bin.get(&lo).copied().unwrap_or(0.0).round() as u64,
-            backfill: first_run.is_some_and(|f| hi <= f),
+            backfill: backfill(Some(hi)),
         });
         lo = hi;
+    }
+    if latest * HOUR >= end {
+        bins.push(Bin {
+            lo: end,
+            hi: None,
+            count: over.round() as u64,
+            backfill: false,
+        });
     }
     (unit, bins)
 }
