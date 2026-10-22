@@ -62,6 +62,7 @@ fn fixture_with(index: Option<SearchIndex>) -> Fixture {
             index: None,
             reader: Arc::new(Mutex::new(reader)),
             filters: Some(api.clone()),
+            settings: None,
         }),
     );
     Fixture {

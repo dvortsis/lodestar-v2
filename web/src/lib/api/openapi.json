@@ -891,6 +891,123 @@
         ]
       }
     },
+    "/settings": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Every settings section, with the fields and JSON schema its form is\ngenerated from.",
+        "operationId": "listSettings",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsIndex"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/settings/{section}": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "One section's effective values, where each comes from, and which\ncan't be changed here or wait for a restart.",
+        "operationId": "getSettings",
+        "parameters": [
+          {
+            "name": "section",
+            "in": "path",
+            "description": "The section, as `GET /settings` names it.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SectionValues"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Changes some of a section's settings. Every field is checked first,\nthen all are saved together; live ones apply at once, and the rest\nare listed in `restart_required`. A field an environment variable\nsets is refused, naming the variable.",
+        "operationId": "patchSettings",
+        "parameters": [
+          {
+            "name": "section",
+            "in": "path",
+            "description": "The section, as `GET /settings` names it.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SectionValues"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/setup": {
       "post": {
         "tags": [
@@ -3757,6 +3874,226 @@
           }
         }
       },
+      "SectionValues": {
+        "type": "object",
+        "description": "`GET /settings/{section}` and `PATCH /settings/{section}`: the\nsection's effective values.",
+        "required": [
+          "fields",
+          "restart_required",
+          "section"
+        ],
+        "properties": {
+          "fields": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SettingValue"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "restart_required": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields whose saved value differs from the running one: they take\neffect at the next restart."
+          },
+          "section": {
+            "type": "string"
+          }
+        },
+        "example": {
+          "fields": {
+            "intensity": {
+              "env": null,
+              "read_only": false,
+              "restart_required": false,
+              "source": "db",
+              "value": "low"
+            },
+            "timeout_secs": {
+              "env": null,
+              "read_only": false,
+              "restart_required": true,
+              "source": "db",
+              "value": 12
+            }
+          },
+          "restart_required": [
+            "timeout_secs"
+          ],
+          "section": "crawler"
+        }
+      },
+      "SettingField": {
+        "type": "object",
+        "description": "One field of a section, for its form.",
+        "required": [
+          "env",
+          "help_key",
+          "label_key",
+          "name",
+          "read_only",
+          "restart_required"
+        ],
+        "properties": {
+          "env": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The environment variable that overrides it; null when none does."
+          },
+          "help_key": {
+            "type": "string",
+            "description": "Message key of the help text beside the field."
+          },
+          "label_key": {
+            "type": "string",
+            "description": "Message key of the field's label."
+          },
+          "name": {
+            "type": "string"
+          },
+          "read_only": {
+            "type": "boolean",
+            "description": "Never editable in the app (e.g. the data directory)."
+          },
+          "restart_required": {
+            "type": "boolean",
+            "description": "A change takes effect at the next restart."
+          }
+        }
+      },
+      "SettingSource": {
+        "type": "string",
+        "description": "Where a setting's effective value comes from, lowest to highest:\nthe built-in default, `config.toml`, a change saved in the app, or a\n`LODESTAR_*` environment variable.",
+        "enum": [
+          "default",
+          "file",
+          "db",
+          "env"
+        ]
+      },
+      "SettingValue": {
+        "type": "object",
+        "description": "One field's effective value.",
+        "required": [
+          "env",
+          "read_only",
+          "restart_required",
+          "source",
+          "value"
+        ],
+        "properties": {
+          "env": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The variable that set it when `source` is `env`; null otherwise."
+          },
+          "read_only": {
+            "type": "boolean",
+            "description": "Can't be changed in the app: set by the environment, or never\neditable here."
+          },
+          "restart_required": {
+            "type": "boolean",
+            "description": "A change takes effect at the next restart."
+          },
+          "source": {
+            "$ref": "#/components/schemas/SettingSource"
+          },
+          "value": {
+            "description": "Any JSON value, of the type the section's schema gives the field."
+          }
+        }
+      },
+      "SettingsIndex": {
+        "type": "object",
+        "description": "`GET /settings`: every section, in display order.",
+        "required": [
+          "sections"
+        ],
+        "properties": {
+          "sections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SettingsSection"
+            }
+          }
+        },
+        "example": {
+          "sections": [
+            {
+              "fields": [
+                {
+                  "env": "LODESTAR_INTENSITY",
+                  "help_key": "settings.crawler.intensity.help",
+                  "label_key": "settings.crawler.intensity.label",
+                  "name": "intensity",
+                  "read_only": false,
+                  "restart_required": false
+                }
+              ],
+              "help_key": "settings.crawler.help",
+              "label_key": "settings.crawler.label",
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "intensity": {
+                    "enum": [
+                      "low",
+                      "balanced",
+                      "aggressive"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "section": "crawler"
+            }
+          ]
+        }
+      },
+      "SettingsPatch": {
+        "type": "object",
+        "description": "`PATCH /settings/{section}`: some of the section's fields and their\nnew values, as its schema in `GET /settings` describes. Fields left\nout keep their values; an unknown field is refused. `null` resets a\nfield: its saved value is removed, and the `config.toml` value or the\ndefault applies again."
+      },
+      "SettingsSection": {
+        "type": "object",
+        "description": "One section: its fields and the JSON schema of its values.",
+        "required": [
+          "fields",
+          "help_key",
+          "label_key",
+          "schema",
+          "section"
+        ],
+        "properties": {
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SettingField"
+            }
+          },
+          "help_key": {
+            "type": "string"
+          },
+          "label_key": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "object",
+            "description": "A JSON Schema (2020-12) object for the section's values, with\neach number field's bounds as `minimum`/`maximum`."
+          },
+          "section": {
+            "type": "string"
+          }
+        }
+      },
       "SetupRequest": {
         "type": "object",
         "description": "`POST /setup`: claims the instance.\n`Debug` redacts the secrets.",
@@ -4381,6 +4718,10 @@
     {
       "name": "classify",
       "description": "Classification rules and corrections (§20.9)."
+    },
+    {
+      "name": "settings",
+      "description": "The runtime settings registry (§10.10, §11)."
     },
     {
       "name": "meta",

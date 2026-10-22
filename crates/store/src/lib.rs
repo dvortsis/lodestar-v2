@@ -19,6 +19,7 @@ pub mod hot;
 mod insights;
 mod rules;
 mod schema;
+mod settings;
 mod sources;
 mod subscriptions;
 mod swarm;

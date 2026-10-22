@@ -20,7 +20,7 @@ use super::peers::PeerStore;
 use super::sampler::{self, Sampler};
 use super::seen::SeenFilter;
 use super::tokens::Tokens;
-use super::{Command, Config, DhtEstimate, Harvest, Snapshot, Source, Stats};
+use super::{Command, Config, DhtEstimate, Harvest, Intensity, Snapshot, Source, Stats};
 use crate::compact::{self, CompactNodes, NodeId, NodeInfo};
 use crate::krpc::{self, Body, ErrorBody, Message, Method, Query, Response, Want, error_code};
 use crate::routing::{Contact, Inserted, RoutingTable, Status};
@@ -96,6 +96,23 @@ struct TokenBucket {
     burst: f64,
     tokens: f64,
     last: Instant,
+}
+
+/// Outbound queries at `intensity`'s rate.
+fn query_bucket(intensity: Intensity, now: Instant) -> TokenBucket {
+    TokenBucket::new(intensity.queries_per_sec(), now)
+}
+
+/// Replies are capped too, so we can't be used as an amplifier.
+fn reply_bucket(intensity: Intensity, now: Instant) -> TokenBucket {
+    TokenBucket::new(intensity.queries_per_sec() * 2, now)
+}
+
+/// Scrape lookups: [`SCRAPE_SHARE`] of the query rate.
+fn scrape_bucket(intensity: Intensity, now: Instant) -> TokenBucket {
+    let qps = f64::from(intensity.queries_per_sec());
+    let per_sec = qps * SCRAPE_SHARE / QUERIES_PER_SCRAPE;
+    TokenBucket::with_burst(per_sec, per_sec, now)
 }
 
 impl TokenBucket {
@@ -233,9 +250,8 @@ pub(crate) async fn run(
     let bootstrap = resolve(&cfg.bootstrap).await;
     let mut actor = Actor {
         tokens: Tokens::new(now, &mut rng),
-        query_rate: TokenBucket::new(cfg.intensity.queries_per_sec(), now),
-        // Replies are capped too, so we can't be used as an amplifier.
-        reply_rate: TokenBucket::new(cfg.intensity.queries_per_sec() * 2, now),
+        query_rate: query_bucket(cfg.intensity, now),
+        reply_rate: reply_bucket(cfg.intensity, now),
         families,
         ids,
         external: ExternalIp {
@@ -265,11 +281,7 @@ pub(crate) async fn run(
         scrape_queue: VecDeque::new(),
         active_scrapes: 0,
         scrape_waiters: HashMap::new(),
-        scrape_rate: {
-            let qps = f64::from(cfg.intensity.queries_per_sec());
-            let per_sec = qps * SCRAPE_SHARE / QUERIES_PER_SCRAPE;
-            TokenBucket::with_burst(per_sec, per_sec, now)
-        },
+        scrape_rate: scrape_bucket(cfg.intensity, now),
         stalled: Vec::new(),
         last_prune: now,
         cfg,
@@ -387,7 +399,17 @@ impl Actor {
                     sample_known: self.sampler.known(),
                     stored_peer_hashes: self.peer_store.len(),
                     seen_filter_bytes: self.seen.memory(),
+                    intensity: self.cfg.intensity,
                 });
+            }
+            Command::SetIntensity(intensity) => {
+                // The rates and the outstanding cap follow at once; the
+                // buckets start full, as at start.
+                let now = Instant::now();
+                self.cfg.intensity = intensity;
+                self.query_rate = query_bucket(intensity, now);
+                self.reply_rate = reply_bucket(intensity, now);
+                self.scrape_rate = scrape_bucket(intensity, now);
             }
             Command::GetPeers(hash) => {
                 if self.get_peers_queue.len() < MAX_GET_PEERS_QUEUE {
