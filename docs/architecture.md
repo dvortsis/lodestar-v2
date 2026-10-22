@@ -272,10 +272,14 @@ The tracker list ships with a curated default. It can optionally **auto-refresh*
 
 Magnet links can **append the best-scoring trackers** from scrape data (toggle), which noticeably improves magnet start-up time. Download-client integrations: qBittorrent, Transmission, Deluge, rTorrent/ruTorrent, Aria2 (one-click send and bulk send).
 
-## 10. UI plan (Svelte 5), governed by `ui-design-skills`
+## 10. UI plan (Svelte 5): the owner's decisions first, `ui-design-skills` for the gaps
 
 ### 10.0 Authority and decisions
-- **Source of truth:** `dvortsis/skills/ui-design-skills` (15 skills). Its precedence applies: explicit user requirements → accessibility/correctness → coherent existing product language (Lodestar) where no skill owns the decision → skill defaults → `minimalist-visual-style`.
+- **Order of authority** (owner, 2026-10-22; `docs/owner-decisions.md`):
+  1. the owner's decisions and this UI plan, which applies `dvortsis/skills/ui-design-skills` (15 skills) as the owner asked when it was written;
+  2. the skills, only for what the plan leaves open, in their own precedence: explicit user requirements → accessibility/correctness → coherent existing product language (Lodestar) where no skill owns the decision → skill defaults → `minimalist-visual-style`.
+
+  A skill default never overrides a decision made here.
 - **Explicit user decisions:** **Svelte 5**, and the **smallest, fastest UI** is the top UI priority. Skills written for React/Tremor are applied **by concept and spirit**. In particular, `data-visualization-design` keeps its data contracts, single formatter per metric, state handling, accessible alternatives, performance rules and validation hooks, but Tremor components are replaced by tiny in-house Svelte SVG chart primitives plus uPlot (lazy-loaded) for time series. `application-interface-design`'s Tailwind + daisyUI guidance applies literally, because daisyUI is CSS-only and framework-agnostic.
 - **Who owns which decision:**
 
@@ -806,7 +810,7 @@ With the plum swap, all six colours are distinguishable. Colour is still never t
 | Official | **Riverstone** (default) |
 | Accessibility | High Contrast (AAA 7:1 text), Okabe-Ito (colour-vision-safe categorical set), Paper & Ink (near-monochrome) |
 | Community-inspired | Nord, Solarized, Gruvbox, Catppuccin (Latte/Mocha), Rosé Pine (Dawn/Main), Tokyo Night (Day/Night), Everforest, Kanagawa (Lotus/Wave), Dracula (Alucard/Dracula), One (Light/Dark), Ayu |
-| Originals (muted, Riverstone-adjacent) | Tidewater (cool blues), Sandstone (warm neutrals), Moss (greens), Ember (rust/clay), Lavender Field (dusty purples), Graphite (cool greys, minimal accent), Sepia (low-blue reading), Midnight OLED (true-black dark / "Daylight" light) |
+| Originals (muted, Riverstone-adjacent) | Tidewater (cool blues), Sandstone (warm neutrals), Moss (greens), Ember (rust/clay), Lavender Field (dusty purples), Graphite (cool greys, minimal accent), Sepia (low-blue reading), Midnight OLED (true-black dark / "Daylight" light), Rosewood (dusty rose; the 24th family, owner-approved 2026-10-22) |
 
 **Theme compiler** (`web/scripts/themes.ts`, runs at build time):
 - **Input:** `themes/*.json` in the exact Riverstone schema.
@@ -1524,6 +1528,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - Redefining the scale so that `p-4` = 4 px was considered and rejected. Standard Tailwind written against it would be silently wrong, and no lint can catch that.
   - The ban check rejects off-ramp steps (W2).
   - `docs/design-tokens.md` §5 holds the table.
+- **Order of authority (owner, 2026-10-22):** the owner's decisions are the primary rules, recorded in `docs/owner-decisions.md` and extracted from the design session. Then come this plan and the contract docs. `ui-design-skills` fills only the gaps. §10.0 is amended to match. In practice little changes, because §10 was written by applying the skills as the owner then asked; but a skill default can no longer override anything decided here.
 - **Themes (owner, 2026-10-22):**
   - Riverstone is the default and official palette, with plum `#9381B6` in categorical slot 6. Seafoam `#92A9A0` stays retired: it was too close to sage.
   - The collection is **24 families × light and dark = 48 themes**. §10.18 names 23 families; the 24th is **Rosewood**, proposed in the palette work (PR #37) and approved.
