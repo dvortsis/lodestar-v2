@@ -356,7 +356,7 @@
    "pr": null,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "launched 15:59; includes first-run log address polish 18:46 R1 FIX: main merge semantic break (ops field), NAT false-reachable (SeenFilter refresh + threshold), pause race, index_lag, ring clear, dht_off, BEP42 per-/24."
+   "notes": "launched 15:59; includes first-run log address polish 18:46 R1 FIX: main merge semantic break (ops field), NAT false-reachable (SeenFilter refresh + threshold), pause race, index_lag, ring clear, dht_off, BEP42 per-/24. 19:23 R1 fixes eabd33a + main merges 3378ef5; R2 review in flight."
   },
   "B11b": {
    "status": "pending",
@@ -778,8 +778,8 @@
    "session": "session_01WpNDR3rzep43npFMCvj48Q",
    "pr": 84,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": "launched 17:33; PUID/PGID privilege drop; security review"
+   "review_rounds": 1,
+   "notes": "R1 MERGE-quality 19:25; asked to fold in: chown only empty/marker dir, compose+operations docs, CAP hint, NO_NEW_PRIVS, CI root test step. Runner verifies delta."
   },
   "Q-docs": {
    "status": "running",
@@ -847,6 +847,10 @@
   {
    "at": "2026-10-22T18:52Z",
    "what": "#75 merged: runner limits 16/16 in slices.yaml; owner-decisions \u00a72.15-17 (concurrency, adult-relabel tombstones, secure_delete)."
+  },
+  {
+   "at": "2026-10-22T19:25Z",
+   "what": "rustix approved as a direct dependency of lodestar (D-puid): libc unusable under unsafe_code=forbid; already in the lockfile."
   }
  ],
  "open_issues": [
@@ -882,9 +886,9 @@
  },
  "heartbeats": 4,
  "reviews_in_flight": {
-  "84": "D-puid R1 + security",
   "85": "F-near R1",
-  "86": "settings-plan PR R1"
+  "86": "settings-plan PR R1",
+  "79": "B14 R2 (3378ef5)"
  },
  "carry_forward": {
   "next-bans-touch": [
