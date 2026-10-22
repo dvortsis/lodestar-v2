@@ -98,17 +98,17 @@ illustrative; the outputs above are the contract.
 |---|---|---|---|---|
 | **Size** | Total payload bytes (`torrents.size`), padding files included as stored | `formatBytes` | Never null. 0 is shown as `0 B` (padding-only torrents are junk-flagged) | — |
 | **Files** | Number of files in the info dict (`file_count`) | `formatCount` | Never null | — |
-| **Seeders** | **Max across sources within the freshness window** (§10.12): the highest seeders count among the sources that answered within the window. *Pending in M4: the store keeps what the scheduler gives (PR #32), and the scheduler (slice 4) fixes the window's length and whether the BEP 33 estimate counts as a source.* | `formatCount` | **Null = never scraped → `—`** (and "Never scraped" in the drawer). 0 = scraped, nobody seeding → `0`. ≈ only if the server sets `seeders_approx` (the value came from the DHT estimate alone). | Per-torrent (`last_scrape_at`) |
+| **Seeders** | **Max across sources within the freshness window** (§10.12): the highest seeders count among the sources that answered within the window. The window is the **last answered round**: one scrape round asks every tracker at once. The BEP 33 DHT estimate is **not** a source in the max. It stands in only when no tracker reports (s + l + c > 0), and then `seeders_approx` is true. | `formatCount` | **Null = never scraped → `—`** (and "Never scraped" in the drawer). 0 = scraped, nobody seeding → `0`. ≈ only if the server sets `seeders_approx` (the value came from the DHT estimate alone). | Per-torrent (`last_scrape_at`) |
 | **Leechers** | As seeders, for leechers | `formatCount` | As seeders | Per-torrent |
 | **Completed** | Max `completed` (downloaded) across reporting trackers; a coarse age hint (§6) | `formatCount` | Null = never scraped | Per-torrent |
-| **Trackers reporting** | n of m: n = trackers whose answer had **s + l + c > 0** (opentracker rule, §15); **m = trackers that answered in the last answered round** (`SwarmUpdate.trackers_checked`, PR #32). Trackers that didn't answer are in neither number. | `formatCount` for each; row `4 / 20`; drawer "Reported by 4 of 20 trackers checked" | Null = never scraped → `—`. `0 / 20` is a real zero. A round where no tracker answered changes nothing, so n and m keep the last answered round's values. | Per-torrent |
+| **Trackers reporting** | n of m: n = trackers whose answer had **s + l + c > 0** (opentracker rule, §15); **m = trackers that answered in the last answered round** (`SwarmUpdate.trackers_checked`). Trackers that didn't answer are in neither number. | `formatCount` for each; row `4 / 20`; drawer "Reported by 4 of 20 trackers checked" | Null = never scraped → `—`. `0 / 20` is a real zero. A round where nothing answered (no tracker, no DHT) changes nothing, so n and m keep the last answered round's values. A round only the DHT answered gives `0 / 0` with approximate counts. | Per-torrent |
 | **DHT estimate** | BEP 33 bloom-filter estimate of seeds and peers from up to 8 closest responders | `formatCount` | **Always ≈** ("≈ 1,225 seeds"; labelled "estimate"). Null = no estimate (no DHT answer, or no responder stores the hash: "unknown", not "dead") | Per-torrent |
 | **Scrape age** | `now − last_scrape_at` (time of the last *answered* round) | `formatRelative` (row focus/hover), `formatDateTime` (drawer) | Null = never scraped | Per-torrent |
-| **Swarm trend** | Least-squares slope of the last 7 daily seeders samples, seeders/day; needs ≥ 3 samples (PR #32) | `formatDelta` + "/day" (message) | Null = fewer than 3 samples → "Not enough history" | Per-torrent (daily ring) |
+| **Swarm trend** | Least-squares slope of the last 7 daily seeders samples, seeders/day; needs ≥ 3 samples | `formatDelta` + "/day" (message) | Null = fewer than 3 samples → "Not enough history" | Per-torrent (daily ring) |
 | **Swarm history** | 14 daily + 26 weekly (seeders, leechers) samples, newest first | Axis: `formatCount`, `formatDate`; tooltip `formatDateFull` | Gap samples are `null` → line gaps | Per-torrent, UTC day/week |
 | **Suspect swarm** | One tracker reports a swarm the DHT and other trackers don't see (fake-seeding signature, §8) | Label "Suspect seeders" + icon | Boolean | Per-torrent |
 | **Discovered** | `discovered_at`: when *we* first saw the key (§6) | `formatRelative` in rows, `formatDateTime` in the drawer | Never null. If the `backfill` flag is set, add the marker "First seen during backfill" | Per-torrent |
-| **Last seen** | `last_seen_at`: latest DHT sighting; SQLite is at most 1 h behind the hot column (PR #32) | `formatRelative` / `formatDateTime` | Never null for stored torrents | Per-torrent |
+| **Last seen** | `last_seen_at`: latest DHT sighting; SQLite is at most 1 h behind the hot column; the API serves the later of the two | `formatRelative` / `formatDateTime` | Never null for stored torrents | Per-torrent |
 | **Metadata fetched** | `metadata_at` | `formatDateTime` | Never null | Per-torrent |
 | **Piece size** | `piece_len` bytes | `formatBytes` | Never null | — |
 | **Junk score** | 0–100, sum of reason weights, capped (§6, M3) | `formatScore` + reasons as text | Null = not classified yet → `—` | — |
@@ -239,8 +239,8 @@ the metric they quote (e.g. "Index lag 42 s" → `formatSpan`; "Disk full in
 JSON field names the API exposes, for B1's DTOs. Types are JSON types;
 **nullable** means the field is always present and may be `null` (never
 omitted). Times are Unix seconds. Status: **main** = served on `main` today;
-**#32** = backed by the store in open PR #32 (M4 slices 1–3), API exposure is
-M4 slice 6, still pending; **planned** = named here and in the build plan
+**M4** = served since M4's second PR (slices 4–6; the store landed with
+#32); **planned** = named here and in the build plan
 (§1 "M4 contract"), no code yet.
 
 ### 7.1 Torrent summary (search hits and detail)
@@ -258,7 +258,7 @@ M4 slice 6, still pending; **planned** = named here and in the build plan
 | `piece_len` | integer (bytes) | no | Piece size | main |
 | `discovered_at` | integer | no | Discovered | main |
 | `metadata_at` | integer | no | Metadata fetched | main |
-| `last_seen_at` | integer | no | Last seen | planned (store: main; written through by #32) |
+| `last_seen_at` | integer | no | Last seen | M4 |
 | `flags` | string[] | no | `private`, `v2`, `hybrid`, `padding`, `symlinks`, `imported`, `backfill`, `files_partial`, `single_file`, `warnings` | main |
 | `content_type` | string | yes | `movie`, `tv`, `music`, `audiobook`, `ebook`, `comic`, `software`, `game`, `images`, `video`, `other`, `adult`; null = not classified | planned |
 | `adult_kind` | string | yes | `scene`, `movie`, `photos`, `comics`, `game`, `vr`, `audio`; non-null only when `content_type = "adult"` | planned |
@@ -267,19 +267,20 @@ M4 slice 6, still pending; **planned** = named here and in the build plan
 | `junk_reasons` | string[] | no | Stable reason keys (§6 M3) | planned |
 | `hidden_by_filter` | boolean | no | Hidden by a §20 filter rule | planned |
 | `why` | string[] | no | Filter reason keys; empty unless hidden | planned |
-| `seeders` | integer | **yes: null = never scraped** | Seeders | #32 |
-| `leechers` | integer | yes (as seeders) | Leechers | #32 |
-| `completed` | integer | yes (as seeders) | Completed | #32 |
-| `seeders_approx` | boolean | no | True when the DHT estimate alone supplied the counts; always false if slice 4 keeps the DHT out of the max | planned, **needs M4 sign-off** |
-| `trackers_reporting` | integer | yes (as seeders) | Trackers reporting (n) | #32 |
-| `trackers_checked` | integer | yes (as seeders) | Trackers checked (m): trackers that answered in the last answered round | #32 |
-| `last_scrape_at` | integer | yes (as seeders) | Scrape age | #32 |
-| `swarm_suspect` | boolean | no | Suspect swarm (`swarm_flags::SUSPECT`) | #32 (flag in the store; API name planned) |
+| `seeders` | integer | **yes: null = never scraped** | Seeders | M4 |
+| `leechers` | integer | yes (as seeders) | Leechers | M4 |
+| `completed` | integer | yes (as seeders) | Completed | M4 |
+| `seeders_approx` | boolean | no | True when no tracker reported and the DHT estimate supplied the counts (signed off in M4: the DHT stands in, it's never part of the max) | M4 |
+| `trackers_reporting` | integer | yes (as seeders) | Trackers reporting (n) | M4 |
+| `trackers_checked` | integer | yes (as seeders) | Trackers checked (m): trackers that answered in the last answered round | M4 |
+| `last_scrape_at` | integer | yes (as seeders) | Scrape age | M4 |
+| `swarm_suspect` | boolean | no | Suspect swarm (`swarm_flags::SUSPECT`) | M4 |
 | `score` | number | no | Relevance (hits only) | main |
 | `matched_files` | integer[] | omitted unless the query has a file clause | Matched-file positions | main |
+| `explain` | `{text, seeders, freshness, trackers, junk, penalty, score}` (numbers) | omitted unless `explain=1` on a relevance search | Score breakdown: the text score and each re-ranker multiplier (architecture §16 M4) | M4 |
 
 "Never scraped" means: no `swarm` row, or a row with `trackers_checked = 0`
-and no DHT estimate (PR #32). The six nullable swarm fields (`seeders`,
+and no DHT estimate. The six nullable swarm fields (`seeders`,
 `leechers`, `completed`, `trackers_reporting`, `trackers_checked`,
 `last_scrape_at`) are then all `null` together.
 
@@ -287,12 +288,12 @@ and no DHT estimate (PR #32). The six nullable swarm fields (`seeders`,
 
 | Field | Type | Nullable | Metric | Status |
 |---|---|---|---|---|
-| `dht_seeds` | integer | yes: null = no estimate | DHT estimate (always ≈) | #32 |
-| `dht_peers` | integer | yes (as `dht_seeds`) | DHT estimate | #32 |
-| `swarm_trend` | number (seeders/day) | yes: null = < 3 daily samples | Swarm trend | #32 (`history::trend`; API name planned) |
-| `swarm_trackers` | `{url, seeders, leechers, completed}[]` | no (may be empty) | Per-tracker table; reporting trackers only, from the last round | #32 (`Store::swarm_trackers`) |
-| `swarm_history` | `{daily: Sample[14], weekly: Sample[26]}` | yes: null = no ring kept | Swarm history; newest first | #32 (`Store::history`) |
-| `Sample` | `{at: integer, seeders: integer\|null, leechers: integer\|null}` | — | `at` = start of the UTC day or week; null counts = gap (`0xFFFF`). Days are Unix epoch days (UTC); a week is epoch-day / 7, so **weeks start on Thursday 00:00 UTC**. Counts saturate at **65,534**: show 65,534 as `≥ 65,534` | #32 |
+| `dht_seeds` | integer | yes: null = no estimate | DHT estimate (always ≈) | M4 |
+| `dht_peers` | integer | yes (as `dht_seeds`) | DHT estimate | M4 |
+| `swarm_trend` | number (seeders/day) | yes: null = < 3 daily samples | Swarm trend | M4 |
+| `swarm_trackers` | `{url, seeders, leechers, completed, at}[]` | no (may be empty) | Per-tracker table; reporting trackers only, as of the last answered round. `at` is when that tracker answered | M4 |
+| `swarm_history` | `{daily: Sample[14], weekly: Sample[26]}` | yes: null = no ring kept | Swarm history; newest first | M4 |
+| `Sample` | `{at: integer, seeders: integer\|null, leechers: integer\|null}` | — | `at` = start of the UTC day or week; null counts = gap (`0xFFFF`). Days are Unix epoch days (UTC); a week is epoch-day / 7, so **weeks start on Thursday 00:00 UTC**. Counts saturate at **65,534**: show 65,534 as `≥ 65,534` | M4 |
 | `file_list`, `file_list_total`, `magnet` | as today | no | — | main |
 
 ### 7.3 Search response
