@@ -22,16 +22,19 @@ mod coordinator;
 mod dht;
 pub mod enrich;
 mod have;
+pub mod health;
 mod rollups;
 mod worker;
 mod writer;
 
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use lodestar_cluster::{Claim, Claimed, RestoredLease, WorkerId};
+use lodestar_dht::node::NodeHandle;
 use lodestar_filter::{Core, CoreRule, CsList, Engine, Handle, Lists, Origin, Sealer, Switches};
 use lodestar_peer_wire::FetchOptions;
 use lodestar_sources::pool::{self, PeerWireFetcher};
@@ -39,11 +42,15 @@ use lodestar_sources::{
     Discovery, Emitter, Fetcher, FunnelCounts, Kind, Loss, PluginError, PoolConfig, PoolHandle,
     PoolIo, PoolStats, Priority, Shutdown, SourceCtx, SourcePlugin,
 };
-use lodestar_store::{Event, FilterState, QueuedKey, SourceId, Store, WriteBatch};
+use lodestar_store::{
+    Event, FilterState, HotColumns, QueuedKey, SourceId, Store, StoreConfig, WriteBatch,
+};
+use lodestar_tracker_scrape::TrackerUrl;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 use crate::coordinator::Coordinator;
+use crate::health::{HealthConfig, HealthHandle};
 use crate::worker::{PrepareStage, WorkerFunnel, WorkerLeases};
 
 pub use coordinator::LeaseStats;
@@ -91,6 +98,22 @@ pub struct PipelineConfig {
     pub batch_max: usize,
     pub batch_wait: Duration,
     pub intake_capacity: usize,
+    /// The writer keeps these up to date after each commit (§7).
+    pub hot: Option<Arc<HotColumns>>,
+    /// The scrape scheduler; `None` turns scraping off.
+    pub health: Option<HealthSetup>,
+}
+
+/// What the scrape scheduler needs besides its settings.
+#[derive(Debug, Clone)]
+pub struct HealthSetup {
+    pub config: HealthConfig,
+    pub trackers: Vec<TrackerUrl>,
+    /// The database, for the scheduler's own read-only connection.
+    pub db: PathBuf,
+    pub store: StoreConfig,
+    /// The DHT plugin's node, for BEP 33 scrapes, while it runs.
+    pub dht: Option<Arc<Mutex<Option<NodeHandle>>>>,
 }
 
 impl Default for PipelineConfig {
@@ -109,6 +132,8 @@ impl Default for PipelineConfig {
             batch_max: 256,
             batch_wait: Duration::from_millis(250),
             intake_capacity: 16_384,
+            hot: None,
+            health: None,
         }
     }
 }
@@ -185,6 +210,8 @@ fn load_filter(filter: &Handle, state: &FilterState) {
 pub enum Error {
     Store(lodestar_store::Error),
     Join(tokio::task::JoinError),
+    /// Reading or writing the hot-column snapshot.
+    Io(std::io::Error),
 }
 
 impl std::fmt::Display for Error {
@@ -192,6 +219,7 @@ impl std::fmt::Display for Error {
         match self {
             Error::Store(e) => e.fmt(f),
             Error::Join(e) => write!(f, "pipeline task failed: {e}"),
+            Error::Io(e) => write!(f, "hot columns: {e}"),
         }
     }
 }
@@ -248,6 +276,9 @@ pub struct Monitor {
     sources: Arc<Vec<SourceEntry>>,
     stored_at_start: u64,
     started_at: i64,
+    health: Option<HealthHandle>,
+    hot: Option<Arc<HotColumns>>,
+    rollups: Arc<Rollups>,
 }
 
 impl std::fmt::Debug for Monitor {
@@ -295,6 +326,21 @@ impl Monitor {
         self.started_at
     }
 
+    /// The scrape scheduler, when scraping is on.
+    pub fn health(&self) -> Option<&HealthHandle> {
+        self.health.as_ref()
+    }
+
+    pub fn hot(&self) -> Option<&Arc<HotColumns>> {
+        self.hot.as_ref()
+    }
+
+    /// Counters the writer flushes into the Insights rollups; for stages
+    /// outside the pipeline (the API's Serve counters).
+    pub fn rollups(&self) -> &Arc<Rollups> {
+        &self.rollups
+    }
+
     pub fn sources(&self) -> Vec<SourceStatus> {
         self.sources
             .iter()
@@ -322,6 +368,8 @@ pub struct Pipeline {
     saver: JoinHandle<()>,
     finish: oneshot::Sender<Vec<QueuedKey>>,
     writer: JoinHandle<Store>,
+    /// The scrape scheduler, stopped first.
+    health: Option<(watch::Sender<bool>, JoinHandle<Store>)>,
 }
 
 impl std::fmt::Debug for Pipeline {
@@ -546,7 +594,45 @@ impl Pipeline {
             })
         };
 
+        // The scrape scheduler: its trackers registered while we still
+        // hold the writer's store, and a read-only connection of its own.
+        let (swarm_tx, swarm_rx) = mpsc::channel(16);
+        let mut store = store;
+        let (health, health_task) = match config.health.clone() {
+            Some(h) => {
+                let urls = h.trackers.clone();
+                let (back, trackers) = tokio::task::spawn_blocking(move || {
+                    let r = health::register_trackers(&mut store, &urls);
+                    (store, r)
+                })
+                .await
+                .map_err(Error::Join)?;
+                store = back;
+                let trackers = trackers?;
+                let (db, cfg) = (h.db.clone(), h.store.clone());
+                let reader = tokio::task::spawn_blocking(move || Store::open_reader(db, cfg))
+                    .await
+                    .map_err(Error::Join)??;
+                let (stop, shutdown) = Shutdown::new();
+                let (handle, task) = health::spawn(health::Setup {
+                    cfg: h.config,
+                    reader,
+                    trackers,
+                    dht: h.dht.unwrap_or_default(),
+                    out: swarm_tx,
+                    rollups: rollups.clone(),
+                    shutdown,
+                });
+                (Some(handle), Some((stop, task)))
+            }
+            None => {
+                drop(swarm_tx);
+                (None, None)
+            }
+        };
+
         let lease_stats = coordinator.stats.clone();
+        let rollups_handle = rollups.clone();
         let writer = writer::Writer {
             store: Some(store),
             backfill_after: 0,
@@ -568,6 +654,8 @@ impl Pipeline {
             last_purge: 0,
             coordinator,
             stats: writer_stats.clone(),
+            hot: config.hot.clone(),
+            health: health.clone(),
         };
         drop(pool_tx);
         let writer = tokio::spawn(writer.run(writer::WriterIo {
@@ -576,6 +664,7 @@ impl Pipeline {
             queues: queue_rx,
             retry: retry_tx,
             finish: finish_rx,
+            swarm: swarm_rx,
         }));
 
         Ok(Pipeline {
@@ -588,6 +677,9 @@ impl Pipeline {
                 sources: Arc::new(sources),
                 stored_at_start,
                 started_at,
+                health,
+                hot: config.hot.clone(),
+                rollups: rollups_handle,
             },
             tasks,
             stop_plugins,
@@ -600,6 +692,7 @@ impl Pipeline {
             saver,
             finish: finish_tx,
             writer,
+            health: health_task,
         })
     }
 
@@ -634,6 +727,12 @@ impl Pipeline {
     /// Stops the stages in order (plugins, intake, pool, prepare, writer), saving
     /// the DHT state and the fetch queue, and returns the store.
     pub async fn shutdown(self) -> Result<Store, Error> {
+        // The scheduler first: its last rounds reach the writer, which
+        // commits them on its way out.
+        if let Some((stop, task)) = self.health {
+            let _ = stop.send(true);
+            task.await.map_err(Error::Join)?;
+        }
         let _ = self.stop_plugins.send(true);
         for (s, mut task) in self.monitor.sources.iter().zip(self.tasks) {
             let id = s.plugin.manifest().id;
@@ -830,4 +929,42 @@ pub(crate) fn unix_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64)
+}
+
+/// `settings` key holding the stamp of the hot-column snapshot that's
+/// current, or 0 while the columns are live and the snapshot is stale.
+const HOT_STAMP: &str = "hot_stamp";
+
+/// Loads the hot columns (blocking): the snapshot in `dir` when it's the
+/// one the last clean shutdown recorded, else a rebuild from SQLite. The
+/// recorded stamp is cleared either way, so a crash from here on forces a
+/// rebuild. Returns whether the snapshot was used.
+pub fn open_hot(store: &mut Store, dir: &Path) -> Result<(HotColumns, bool), Error> {
+    let stamp = store.setting_i64(HOT_STAMP)?.unwrap_or(0);
+    let snapshot = match stamp {
+        0 => None,
+        s => HotColumns::load(dir, s as u64).map_err(Error::Io)?,
+    };
+    store.set_setting_i64(HOT_STAMP, 0)?;
+    match snapshot {
+        Some(hot) => Ok((hot, true)),
+        None => {
+            let hot = HotColumns::new();
+            store.load_hot(&hot)?;
+            Ok((hot, false))
+        }
+    }
+}
+
+/// Snapshots the hot columns into `dir` and records the stamp (blocking).
+/// Call after the pipeline has stopped, so nothing changes them meanwhile.
+pub fn save_hot(store: &mut Store, hot: &HotColumns, dir: &Path) -> Result<(), Error> {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(1, |d| d.as_nanos() as u64)
+        ^ u64::from(std::process::id()).rotate_left(32);
+    let stamp = (stamp & (i64::MAX as u64)).max(1);
+    hot.save(dir, stamp).map_err(Error::Io)?;
+    store.set_setting_i64(HOT_STAMP, stamp as i64)?;
+    Ok(())
 }
