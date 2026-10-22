@@ -148,7 +148,8 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
         get(&p.lookup_backlog),
     );
     // Attempts and successes per transport; the success family replaces
-    // the pool's unlabelled count, which it sums to. The uTP socket's own
+    // the pool's unlabelled count (see `write_prometheus` for how the two
+    // can differ). The uTP socket's own
     // counters join once the DHT shares its port with uTP.
     fetch.write_prometheus(None, &mut o.0);
     o.one(

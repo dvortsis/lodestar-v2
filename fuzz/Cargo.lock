@@ -1141,6 +1141,7 @@ name = "lodestar-utp"
 version = "0.0.0"
 dependencies = [
  "rand 0.10.3",
+ "socket2",
  "tokio",
 ]
 

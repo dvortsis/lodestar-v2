@@ -243,6 +243,18 @@ impl fmt::Debug for UtpSocket {
     }
 }
 
+/// A non-blocking UDP socket on `addr`; dual-stack when `addr` is IPv6.
+fn bind_udp(addr: SocketAddr) -> io::Result<std::net::UdpSocket> {
+    use socket2::{Domain, Protocol, Socket, Type};
+    let socket = Socket::new(Domain::for_address(addr), Type::DGRAM, Some(Protocol::UDP))?;
+    if addr.is_ipv6() {
+        socket.set_only_v6(false)?;
+    }
+    socket.set_nonblocking(true)?;
+    socket.bind(&addr.into())?;
+    Ok(socket.into())
+}
+
 /// IPv4-mapped IPv6 addresses (from dual-stack sockets) as plain IPv4, so
 /// a peer has one key whichever way its packets arrive.
 fn canonical(a: SocketAddr) -> SocketAddr {
@@ -261,9 +273,12 @@ impl UtpSocket {
         UtpSocket::bind_with(addr, Config::default()).await
     }
 
+    /// An IPv6 address binds a dual-stack socket, which also reaches IPv4
+    /// peers through v4-mapped addresses. `IPV6_V6ONLY` is cleared
+    /// explicitly because its default differs: off on Linux and macOS, on
+    /// on Windows.
     pub async fn bind_with(addr: SocketAddr, config: Config) -> io::Result<UtpSocket> {
-        let std = std::net::UdpSocket::bind(addr)?;
-        std.set_nonblocking(true)?;
+        let std = bind_udp(addr)?;
         let send = Arc::new(OwnedSink {
             udp: std.try_clone()?,
             ipv6: std.local_addr()?.is_ipv6(),

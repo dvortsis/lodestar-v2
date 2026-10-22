@@ -75,8 +75,10 @@ impl FetchStats {
     /// Appends these counters, and the uTP socket's if given, in the
     /// Prometheus text format.
     ///
-    /// `lodestar_fetch_success_total{transport}` sums to what the pool
-    /// reports unlabelled today, so it replaces that series.
+    /// `lodestar_fetch_success_total{transport}` replaces the pool's
+    /// unlabelled series. It counts every verified info dict, so it can
+    /// run slightly ahead of the pool's `fetched`, which drops a result
+    /// whose key left the pool while the fetch ran.
     pub fn write_prometheus(&self, utp: Option<&StatsSnapshot>, out: &mut String) {
         let mut family = |name: &str, help: &str, value: &dyn Fn(Transport) -> u64| {
             let _ = writeln!(out, "# HELP lodestar_{name} {help}");
