@@ -13,6 +13,7 @@ description: Lodestar's rules for user-facing documentation, layered on the owne
 3. `documentation-skills`, which supplies the process, format, voice and gates for everything this file doesn't say.
 
 ## 1. Get the skills
+**If your session lists them as skills** (`github-docs`, `material-composer`, `document-builder`, `slide-deck`, `training-material-designer`, sometimes with a prefix such as `anthropic-skills:`), invoke them directly. Otherwise, clone the collection:
 ```bash
 git clone --depth 1 https://github.com/dvortsis/skills ../skills
 python3 ../skills/documentation-skills/skills/github-docs/scripts/preflight.py
