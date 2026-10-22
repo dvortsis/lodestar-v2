@@ -11,8 +11,11 @@ use lodestar_dht::node::{self as dht, HarvestConfig, Intensity};
 use lodestar_filter::Origin;
 use lodestar_peer_wire::{Encryption, FetchOptions};
 use lodestar_pipeline::PipelineConfig;
+use lodestar_pipeline::health::HealthConfig;
+use lodestar_search::RankWeights;
 use lodestar_sources::PoolConfig;
 use lodestar_store::StoreConfig;
+use lodestar_tracker_scrape::TrackerUrl;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -27,6 +30,8 @@ pub struct Config {
     pub fetch: Fetch,
     pub store: Store,
     pub search: Search,
+    pub scrape: Scrape,
+    pub ranking: Ranking,
     pub blocklist: Blocklist,
 }
 
@@ -40,6 +45,8 @@ impl Default for Config {
             fetch: Fetch::default(),
             store: Store::default(),
             search: Search::default(),
+            scrape: Scrape::default(),
+            ranking: Ranking::default(),
             blocklist: Blocklist::default(),
         }
     }
@@ -178,6 +185,104 @@ impl Default for Search {
     }
 }
 
+/// Public UDP trackers that answer scrapes and have stayed up for years.
+/// Scraping announces nothing, so our address never enters a swarm (§6).
+pub const DEFAULT_TRACKERS: &[&str] = &[
+    "udp://tracker.opentrackr.org:1337/announce",
+    "udp://open.demonii.com:1337/announce",
+    "udp://open.stealth.si:80/announce",
+    "udp://tracker.torrent.eu.org:451/announce",
+    "udp://exodus.desync.com:6969/announce",
+    "udp://explodie.org:6969/announce",
+    "udp://tracker.theoks.net:6969/announce",
+    "udp://opentracker.io:6969/announce",
+    "udp://tracker.dler.org:6969/announce",
+    "udp://tracker.tiny-vps.com:6969/announce",
+];
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Scrape {
+    /// Keep seeders and trackers-reporting fresh (§15).
+    pub enabled: bool,
+    /// Announce URLs (udp, http or https) to scrape.
+    pub trackers: Vec<String>,
+    /// BEP 33 DHT scrapes for new, viewed and rediscovered torrents.
+    pub dht: bool,
+    /// Seconds between requests to one UDP tracker; unset follows the
+    /// DHT intensity (Low 5, Balanced 2, Aggressive 1).
+    pub interval_secs: Option<u64>,
+    /// Seconds between requests to one HTTP tracker; unset is three
+    /// times the UDP interval.
+    pub http_interval_secs: Option<u64>,
+}
+
+impl Default for Scrape {
+    fn default() -> Self {
+        Scrape {
+            enabled: true,
+            trackers: DEFAULT_TRACKERS.iter().map(|s| s.to_string()).collect(),
+            dht: true,
+            interval_secs: None,
+            http_interval_secs: None,
+        }
+    }
+}
+
+/// Relevance priors (§8): each multiplies the text score, so text stays
+/// first and these order near-ties. `?explain=1` shows their effect.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Ranking {
+    /// `1 + seeders · ln(1 + s)`.
+    pub seeders: f32,
+    /// Seeders assumed before a torrent's first scrape.
+    pub unscraped_seeders: u32,
+    /// Freshness never drops a score below this share.
+    pub freshness_floor: f32,
+    pub freshness_half_life_days: f32,
+    /// `1 + trackers · min(t, cap) / cap`.
+    pub trackers: f32,
+    pub trackers_cap: u32,
+    pub unscraped_trackers: u32,
+    /// `1 − junk · score / 100`.
+    pub junk: f32,
+    /// The multiplier for a swarm flagged as fake seeding.
+    pub suspect: f32,
+}
+
+impl Default for Ranking {
+    fn default() -> Self {
+        let w = RankWeights::default();
+        Ranking {
+            seeders: w.seeders,
+            unscraped_seeders: w.unscraped_seeders,
+            freshness_floor: w.freshness_floor,
+            freshness_half_life_days: w.freshness_half_life_days,
+            trackers: w.trackers,
+            trackers_cap: w.trackers_cap,
+            unscraped_trackers: w.unscraped_trackers,
+            junk: w.junk,
+            suspect: 0.2,
+        }
+    }
+}
+
+impl Ranking {
+    pub fn weights(&self) -> RankWeights {
+        RankWeights {
+            seeders: self.seeders.max(0.0),
+            unscraped_seeders: self.unscraped_seeders,
+            freshness_floor: self.freshness_floor.clamp(0.0, 1.0),
+            freshness_half_life_days: self.freshness_half_life_days.max(0.1),
+            trackers: self.trackers.max(0.0),
+            trackers_cap: self.trackers_cap.max(1),
+            unscraped_trackers: self.unscraped_trackers,
+            junk: self.junk.clamp(0.0, 1.0),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Blocklist {
@@ -246,6 +351,11 @@ impl Config {
         }
         if let Some(v) = env("LODESTAR_DHT_ENABLED") {
             config.dht.enabled = v.parse().map_err(|_| parse("LODESTAR_DHT_ENABLED", &v))?;
+        }
+        if let Some(v) = env("LODESTAR_SCRAPE_ENABLED") {
+            config.scrape.enabled = v
+                .parse()
+                .map_err(|_| parse("LODESTAR_SCRAPE_ENABLED", &v))?;
         }
         Ok(config)
     }
@@ -322,6 +432,54 @@ impl Config {
             filter: Arc::new(filter),
             ..PipelineConfig::default()
         })
+    }
+}
+
+impl Config {
+    /// The scrape scheduler's settings and trackers, or `None` when
+    /// scraping is off. Tracker URLs that name the same tracker count
+    /// once; a URL that can't be scraped is an error, so typos surface.
+    pub fn health_config(&self) -> Result<Option<(HealthConfig, Vec<TrackerUrl>)>, ConfigError> {
+        if !self.scrape.enabled {
+            return Ok(None);
+        }
+        let mut trackers: Vec<TrackerUrl> = Vec::new();
+        for raw in &self.scrape.trackers {
+            let url = TrackerUrl::parse(raw)
+                .map_err(|e| ConfigError(format!("scrape.trackers {raw:?}: {e}")))?;
+            if !trackers.iter().any(|t| t.as_str() == url.as_str()) {
+                trackers.push(url);
+            }
+        }
+        let interval = Duration::from_secs(self.scrape.interval_secs.unwrap_or(
+            match self.dht.intensity {
+                IntensityName::Low => 5,
+                IntensityName::Balanced => 2,
+                IntensityName::Aggressive => 1,
+            },
+        ))
+        .max(Duration::from_secs(1));
+        let http_interval = self
+            .scrape
+            .http_interval_secs
+            .map_or(interval * 3, Duration::from_secs)
+            .max(Duration::from_secs(1));
+        // Scrapes leave from the crawler's address, so they take the same
+        // route (and VPN) as the DHT (§5).
+        let bind = self
+            .dht
+            .bind
+            .iter()
+            .find(|a| a.is_ipv4() && !a.ip().is_unspecified())
+            .map(|a| SocketAddr::new(a.ip(), 0));
+        let mut cfg = HealthConfig {
+            interval,
+            http_interval,
+            dht: self.scrape.dht && self.dht.enabled,
+            ..HealthConfig::default()
+        };
+        cfg.udp.bind = bind;
+        Ok(Some((cfg, trackers)))
     }
 }
 
@@ -408,6 +566,58 @@ mod tests {
             c.pipeline_config().unwrap().fetch.encryption,
             Encryption::Require
         );
+    }
+
+    #[test]
+    fn scrape_settings() {
+        let c = Config::load(None, no_env).unwrap();
+        let (h, trackers) = c.health_config().unwrap().unwrap();
+        assert_eq!(trackers.len(), DEFAULT_TRACKERS.len());
+        assert_eq!(h.interval, Duration::from_secs(2));
+        assert_eq!(h.http_interval, Duration::from_secs(6));
+        assert!(h.dht);
+        assert_eq!(h.udp.bind, None, "unspecified DHT bind: any address");
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+            [dht]
+            intensity = "low"
+            bind = ["10.8.0.2:6881"]
+            [scrape]
+            trackers = ["udp://a.example:1/announce", "udp://A.example:1", "http://b.example/announce"]
+            "#,
+        )
+        .unwrap();
+        let c = Config::load(Some(&path), no_env).unwrap();
+        let (h, trackers) = c.health_config().unwrap().unwrap();
+        assert_eq!(trackers.len(), 2, "the same tracker counts once");
+        assert_eq!(h.interval, Duration::from_secs(5));
+        assert_eq!(h.udp.bind, Some("10.8.0.2:0".parse().unwrap()));
+
+        std::fs::write(&path, "[scrape]\ntrackers = [\"wss://x.example\"]\n").unwrap();
+        let c = Config::load(Some(&path), no_env).unwrap();
+        assert!(c.health_config().is_err());
+
+        let off = |k: &str| (k == "LODESTAR_SCRAPE_ENABLED").then(|| "false".to_string());
+        let c = Config::load(None, off).unwrap();
+        assert!(c.health_config().unwrap().is_none());
+    }
+
+    #[test]
+    fn ranking_weights() {
+        let c = Config::load(None, no_env).unwrap();
+        assert_eq!(c.ranking.weights(), RankWeights::default());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[ranking]\nseeders = 0.5\nfreshness_floor = 3.0\n").unwrap();
+        let w = Config::load(Some(&path), no_env).unwrap().ranking.weights();
+        assert_eq!(w.seeders, 0.5);
+        assert_eq!(w.freshness_floor, 1.0, "clamped");
+        std::fs::write(&path, "[ranking]\nseeder = 0.5\n").unwrap();
+        assert!(Config::load(Some(&path), no_env).is_err());
     }
 
     #[test]

@@ -14,10 +14,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lodestar_filter::Sealer;
-use lodestar_pipeline::{DhtSource, Pipeline};
+use lodestar_pipeline::health::HealthHandle;
+use lodestar_pipeline::{DhtSource, HealthSetup, Pipeline, Rollups, metric};
 use lodestar_search::{LiveConfig, LiveIndexer, SearchIndex};
 use lodestar_sources::SourcePlugin;
-use lodestar_store::Store;
+use lodestar_store::{Store, hot};
 
 use crate::config::Config;
 
@@ -42,7 +43,7 @@ Options:
   -h, --help       Print this help
 
 Environment: LODESTAR_DATA_DIR, LODESTAR_HTTP_BIND, LODESTAR_DHT_PORT,
-LODESTAR_DHT_ENABLED, LODESTAR_INTENSITY, LODESTAR_LOG";
+LODESTAR_DHT_ENABLED, LODESTAR_INTENSITY, LODESTAR_SCRAPE_ENABLED, LODESTAR_LOG";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
@@ -202,17 +203,49 @@ async fn serve(config: Config) -> Result<(), BoxError> {
     let mut pipeline_config = config.pipeline_config()?;
     let key = seal_key(&config.data_dir.join("seal.key"))?;
     pipeline_config.sealer = Some(Arc::new(Sealer::new(&key)));
+    let health = config.health_config()?;
     let db = config.db_path();
     let store_config = config.store_config();
     let search = config.search.enabled;
     let index_path = config.index_path();
     let heap = config.search.heap_mib.max(16) << 20;
-    let (store, reader, live) = tokio::task::spawn_blocking(move || {
-        let store = Store::open(&db, store_config.clone())?;
+    let hot_dir = config.data_dir.join("hot");
+    let weights = config.ranking.weights();
+    let suspect_penalty = config.ranking.suspect.clamp(0.0, 1.0);
+    let (db2, store_config2, hot_dir2) = (db.clone(), store_config.clone(), hot_dir.clone());
+    let (store, reader, live, hot) = tokio::task::spawn_blocking(move || {
+        let (db, store_config) = (db2, store_config2);
+        let mut store = Store::open(&db, store_config.clone())?;
+        // Swarm stats for search and the writer (§7): last run's snapshot,
+        // or rebuilt from SQLite after a crash.
+        let started = std::time::Instant::now();
+        let (hot, from_snapshot) = lodestar_pipeline::open_hot(&mut store, &hot_dir2)?;
+        tracing::info!(
+            torrents = hot.len(),
+            ms = started.elapsed().as_millis() as u64,
+            "hot columns {}",
+            if from_snapshot {
+                "loaded"
+            } else {
+                "rebuilt from the store"
+            }
+        );
+        let hot = Arc::new(hot);
         let reader = Store::open_reader(&db, store_config.clone())?;
         // The indexer follows the store through its own connection.
         let live = if search {
-            let index = SearchIndex::open(&index_path)?;
+            let suspect = hot.clone();
+            let index = SearchIndex::open(&index_path)?
+                .with_hot(hot.clone())
+                .with_weights(weights)
+                // §8: a fake-seeding swarm ranks well below its claim.
+                .with_penalty(Arc::new(move |id| {
+                    if suspect.flags(id) & hot::flags::SUSPECT != 0 {
+                        suspect_penalty
+                    } else {
+                        1.0
+                    }
+                }));
             let live_reader = Store::open_reader(&db, store_config)?;
             let config = LiveConfig {
                 heap_bytes: heap,
@@ -225,17 +258,27 @@ async fn serve(config: Config) -> Result<(), BoxError> {
         } else {
             None
         };
-        Ok::<_, BoxError>((store, reader, live))
+        Ok::<_, BoxError>((store, reader, live, hot))
     })
     .await??;
 
     let mut plugins: Vec<Arc<dyn SourcePlugin>> = Vec::new();
     let mut dht_stats = None;
+    let mut dht_node = None;
     if config.dht.enabled {
         let dht = Arc::new(DhtSource::new(config.dht_config()));
         dht_stats = Some(dht.stats_handle());
+        dht_node = Some(dht.node_handle());
         plugins.push(dht);
     }
+    pipeline_config.hot = Some(hot.clone());
+    pipeline_config.health = health.map(|(cfg, trackers)| HealthSetup {
+        config: cfg,
+        trackers,
+        db: db.clone(),
+        store: store_config.clone(),
+        dht: dht_node,
+    });
     let auth = Arc::new(
         lodestar_api::Auth::load(
             &config.data_dir.join("auth.json"),
@@ -252,10 +295,16 @@ async fn serve(config: Config) -> Result<(), BoxError> {
     }
     let pipeline = Pipeline::start(pipeline_config, store, plugins).await?;
     let reader = Arc::new(Mutex::new(reader));
+    let monitor = pipeline.monitor();
     let api = lodestar_api::ApiState {
         auth,
         index: live.as_ref().map(|(index, _)| index.clone()),
         reader: reader.clone(),
+        hot: Some(hot.clone()),
+        events: Some(Arc::new(Events {
+            health: monitor.health().cloned(),
+            rollups: monitor.rollups().clone(),
+        })),
     };
     let state = http::AppState {
         monitor: pipeline.monitor(),
@@ -280,13 +329,48 @@ async fn serve(config: Config) -> Result<(), BoxError> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     tracing::info!("shutting down: saving the queue and DHT state");
-    pipeline.shutdown().await?;
+    let mut store = pipeline.shutdown().await?;
+    tokio::task::spawn_blocking(move || lodestar_pipeline::save_hot(&mut store, &hot, &hot_dir))
+        .await??;
     if let Some((_, live)) = live {
         // After the writer, so the last batch gets indexed too.
         tokio::task::spawn_blocking(move || live.stop()).await??;
     }
     tracing::info!("stopped cleanly");
     Ok(())
+}
+
+/// The API's interest hints go to the scrape scheduler; its searches to
+/// the Serve rollups (§10.9.5).
+#[derive(Debug)]
+struct Events {
+    health: Option<HealthHandle>,
+    rollups: Arc<Rollups>,
+}
+
+impl lodestar_api::ApiEvents for Events {
+    fn interest(&self, id: i64) {
+        if let Some(h) = &self.health {
+            h.interest(id);
+        }
+    }
+
+    fn searched(&self, took: Duration, total: Option<usize>) {
+        let now = unix_now();
+        let outcome = match total {
+            Some(0) => 1,
+            Some(_) => 0,
+            None => 2,
+        };
+        self.rollups.add_dim(now, metric::SEARCHES, 0, outcome, 1);
+        self.rollups.add_dim(
+            now,
+            metric::SEARCH_LATENCY,
+            0,
+            metric::latency_bucket(took),
+            1,
+        );
+    }
 }
 
 /// `lodestar import-bitmagnet`: everything from a bitmagnet database into

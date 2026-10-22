@@ -83,6 +83,14 @@ async fn prometheus(State(s): State<AppState>) -> Response {
     if let Some(search) = &s.search {
         metrics::render_search(&mut body, search.index.num_docs(), &search.stats);
     }
+    if let (Some(health), Some(hot)) = (s.monitor.health(), s.monitor.hot()) {
+        let stored = s
+            .monitor
+            .writer_stats()
+            .swarm_updates
+            .load(Ordering::Relaxed);
+        metrics::render_scrape(&mut body, health, hot, stored);
+    }
     ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], body).into_response()
 }
 
@@ -229,6 +237,33 @@ async fn status(State(s): State<AppState>) -> Response {
         })),
         "funnel_24h": funnel,
         "latest": latest,
+        "swarm": s.monitor.health().map(|h| {
+            let st = h.stats();
+            let get = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
+            json!({
+                "rounds": get(&st.rounds),
+                "alive": get(&st.alive),
+                "dead": get(&st.dead),
+                "unreached": get(&st.unreached),
+                "suspect": get(&st.suspect),
+                "dht_requested": get(&st.dht_requested),
+                "dht_estimates": get(&st.dht_estimates),
+                "hints_dropped": get(&st.hints_dropped),
+                "private_skipped": get(&st.private_skipped),
+                "trackers": h.trackers().iter().map(|t| {
+                    let mut v = json!({
+                        "url": t.url,
+                        "health": metrics::health_name(t.health),
+                        "failures": t.failures,
+                        "last_ok_at": t.last_ok_at,
+                    });
+                    for (code, label) in metrics::SCRAPE_OUTCOMES.iter().enumerate() {
+                        v[*label] = json!(t.rounds[code]);
+                    }
+                    v
+                }).collect::<Vec<_>>(),
+            })
+        }),
     });
     axum::Json(body).into_response()
 }

@@ -8,6 +8,7 @@
 //! `Origin` must match `Host`.
 
 pub mod auth;
+mod swarm;
 mod torrents;
 
 use std::net::{IpAddr, SocketAddr};
@@ -22,11 +23,12 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use lodestar_search::query::Node;
 use lodestar_search::{SearchIndex, Sort, parse};
-use lodestar_store::Store;
+use lodestar_store::{HotColumns, Store};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 pub use auth::Auth;
+pub use swarm::{ApiEvents, INTEREST_TOP};
 
 /// Results per page, at most.
 pub const MAX_LIMIT: usize = 200;
@@ -43,6 +45,10 @@ pub struct ApiState {
     pub index: Option<SearchIndex>,
     /// A read-only connection for detail and enrichment.
     pub reader: Arc<Mutex<Store>>,
+    /// Swarm numbers for hits (§7); `None` shows them as unknown.
+    pub hot: Option<Arc<HotColumns>>,
+    /// Interest hints and Serve counters; `None` drops them.
+    pub events: Option<Arc<dyn ApiEvents>>,
 }
 
 /// An API error: a status and a JSON body.
@@ -287,7 +293,14 @@ struct SearchParams {
     sort: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
+    /// The user's zone, in minutes east of UTC, for `time:` (§8).
+    tz: Option<i32>,
+    /// `1` returns each hit's score parts (§8 `?explain=1`).
+    explain: Option<u8>,
 }
+
+/// The widest real UTC offsets, in minutes.
+const TZ_RANGE: std::ops::RangeInclusive<i32> = -14 * 60..=14 * 60;
 
 fn sort_param(s: Option<&str>) -> ApiResult<Sort> {
     Ok(match s.unwrap_or("relevance") {
@@ -298,11 +311,20 @@ fn sort_param(s: Option<&str>) -> ApiResult<Sort> {
         "+size" => Sort::Size { desc: false },
         "files" | "-files" => Sort::Files { desc: true },
         "+files" => Sort::Files { desc: false },
+        "seeders" | "-seeders" => Sort::Seeders { desc: true },
+        "+seeders" => Sort::Seeders { desc: false },
+        "leechers" | "-leechers" => Sort::Leechers { desc: true },
+        "+leechers" => Sort::Leechers { desc: false },
+        "trackers" | "-trackers" => Sort::Trackers { desc: true },
+        "+trackers" => Sort::Trackers { desc: false },
+        "seen" | "-seen" => Sort::Seen { desc: true },
+        "+seen" => Sort::Seen { desc: false },
         other => {
             return Err(ApiError::new(
                 StatusCode::BAD_REQUEST,
                 format!(
-                    "unknown sort {other:?} (relevance, discovered, size, files; +/- for order)"
+                    "unknown sort {other:?} (relevance, discovered, size, files, seeders, \
+                     leechers, trackers, seen; +/- for order)"
                 ),
             ));
         }
@@ -356,6 +378,14 @@ async fn run_search(s: ApiState, p: SearchParams) -> ApiResult<Json<Value>> {
         }
     };
     let sort = sort_param(p.sort.as_deref())?;
+    let tz = p.tz.unwrap_or(0);
+    if !TZ_RANGE.contains(&tz) {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "tz is minutes east of UTC, between -840 and 840",
+        ));
+    }
+    let explain = p.explain == Some(1);
     let limit = p.limit.unwrap_or(50).clamp(1, MAX_LIMIT);
     let offset = p.offset.unwrap_or(0);
     if offset + limit > MAX_WINDOW {
@@ -365,18 +395,50 @@ async fn run_search(s: ApiState, p: SearchParams) -> ApiResult<Json<Value>> {
         ));
     }
     let reader = s.reader.clone();
+    let (hot, events) = (s.hot.clone(), s.events.clone());
     tokio::task::spawn_blocking(move || {
         let started = Instant::now();
-        let (results, stemmed) = index
-            .search_with_fallback(&ast, unix_now(), sort, limit, offset)
-            .map_err(internal)?;
+        let now = unix_now();
+        let searched = if explain {
+            // Exactly the query asked, no stem fallback, with score parts.
+            index
+                .search_page_explained(&index.query_at(&ast, now, tz * 60), sort, limit, offset)
+                .map(|r| (r, false))
+        } else {
+            index.search_with_fallback_at(&ast, now, tz * 60, sort, limit, offset)
+        };
+        if let Some(e) = &events {
+            e.searched(
+                started.elapsed(),
+                searched.as_ref().ok().map(|(r, _)| r.total),
+            );
+        }
+        let (results, stemmed) = searched.map_err(internal)?;
+        // The first screenful is what people look at: scrape it soon.
+        if let (Some(e), 0) = (&events, offset) {
+            for h in results.hits.iter().take(INTEREST_TOP) {
+                e.interest(h.id as i64);
+            }
+        }
         let store = reader.lock().expect("reader lock");
         let mut hits = Vec::with_capacity(results.hits.len());
-        for h in &results.hits {
+        for (i, h) in results.hits.iter().enumerate() {
             // A torrent deleted since indexing just drops out of the page.
             if let Some(row) = store.torrent(h.id as i64).map_err(internal)? {
                 let mut v = torrents::summary(&row);
                 v["score"] = json!(h.score);
+                v["swarm"] = swarm::hit(hot.as_deref(), row.id);
+                if let Some(p) = results.explain.get(i) {
+                    v["explain"] = json!({
+                        "text": p.text,
+                        "seeders": p.seeders,
+                        "freshness": p.freshness,
+                        "trackers": p.trackers,
+                        "junk": p.junk,
+                        "penalty": p.penalty,
+                        "score": p.score,
+                    });
+                }
                 if ast.has_file_clause() {
                     // Positions in the torrent's file list (§8).
                     v["matched_files"] = json!(
