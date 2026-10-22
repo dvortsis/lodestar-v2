@@ -1,0 +1,10 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc bfbea1ec627912d80a0ea019e70f7606434aefc906ae93ac11ee3b40b9ab62d8 # shrinks to texts = ["a aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa A a a$ A a A A A aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa a A A aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa е A aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa x264 a a a A aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa a A S01E02 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa a0a3 a 0a A aa a a AA a S01E02 A "]
+cc 66aee7359a467807df263b22165a9bde88ceed76ffdd7b6b7535729a5f890ed3 # shrinks to text = "h3ll0 16yo a aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa A A A a A a aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa A A a a S01E02 a AA a A S01E02 S01E02 A x264 a 0a8a A aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa x264 2a aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa A aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa A е 𐞲 a A A h3ll0 a A a a Σ a A a 𞟭8AA A A A A A 3a a0 a3a3a3 A a 8a a3 0a A aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa h3ll0 "
+cc 325f269eec8ed17f07062d3c85f21ea4f8e5102cd1f8caf1274af1a0ec157d58 # shrinks to text = "A "
+cc 8b3910fcd97fdbccb7c7e6385ea70e7a2a64c5c82a80d63e9b6bd84812e24d08 # shrinks to texts = ["A "]

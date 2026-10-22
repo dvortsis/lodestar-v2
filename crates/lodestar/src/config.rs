@@ -8,7 +8,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lodestar_dht::node::{self as dht, HarvestConfig, Intensity};
-use lodestar_filter::Origin;
 use lodestar_peer_wire::{Encryption, FetchOptions};
 use lodestar_pipeline::PipelineConfig;
 use lodestar_sources::PoolConfig;
@@ -185,7 +184,9 @@ impl Default for Search {
 pub struct Blocklist {
     /// Files of hex info hashes, one per line (`#` starts a comment).
     /// Their hashes join the child-safety floor as imported CS-1b entries
-    /// (§20.5.2); a hash removed from a file is no longer blocked.
+    /// (§20.5.2). A file only adds (owner's decision §2.7): a hash deleted
+    /// from it, or a file dropped from this list, stays blocked until it's
+    /// removed in the app with the effect warning and the password.
     pub files: Vec<PathBuf>,
 }
 
@@ -363,20 +364,9 @@ impl Config {
             },
             ..FetchOptions::default()
         };
-        let mut blocklist = HashSet::new();
-        for path in &self.blocklist.files {
-            let text = std::fs::read_to_string(path)
-                .map_err(|e| ConfigError(format!("blocklist {}: {e}", path.display())))?;
-            parse_blocklist(&text, &mut blocklist).map_err(|line| {
-                ConfigError(format!("blocklist {}: bad line {line}", path.display()))
-            })?;
-        }
+        // Config files add to the floor through the store at start
+        // (`floor::sync_files`), so the store's floor is the only one.
         let filter = lodestar_pipeline::default_filter();
-        filter.update(|core| {
-            for hash in blocklist {
-                core.cs.add_hash(hash, Origin::Imported);
-            }
-        });
         Ok(PipelineConfig {
             pool: PoolConfig {
                 max_sockets: sockets,
@@ -386,6 +376,26 @@ impl Config {
             filter: Arc::new(filter),
             ..PipelineConfig::default()
         })
+    }
+}
+
+/// A `blocklist.files` path, as written, and its hashes.
+pub type BlocklistFile = (String, Vec<[u8; 20]>);
+
+impl Config {
+    /// Each `blocklist.files` entry's hashes, keyed by the path as written.
+    pub fn blocklist_files(&self) -> Result<Vec<BlocklistFile>, ConfigError> {
+        let mut out = Vec::new();
+        for path in &self.blocklist.files {
+            let text = std::fs::read_to_string(path)
+                .map_err(|e| ConfigError(format!("blocklist {}: {e}", path.display())))?;
+            let mut hashes = HashSet::new();
+            parse_blocklist(&text, &mut hashes).map_err(|line| {
+                ConfigError(format!("blocklist {}: bad line {line}", path.display()))
+            })?;
+            out.push((path.display().to_string(), hashes.into_iter().collect()));
+        }
+        Ok(out)
     }
 }
 

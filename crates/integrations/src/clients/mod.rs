@@ -5,14 +5,25 @@
 //! [`DownloadClient`]. [`qbittorrent`] is the reference; the README lists
 //! what a new adapter must do and test.
 
+pub mod aria2;
+pub mod deluge;
 pub mod magnet;
 pub mod qbittorrent;
+pub mod rtorrent;
+pub mod transmission;
+mod xmlrpc;
 
 use std::fmt;
+use std::future::Future;
 use std::time::Duration;
 
+use tokio::time::Instant;
+
+use serde::Deserialize;
+use serde::de::{Deserializer, IgnoredAny, SeqAccess, Visitor};
+
 use crate::BoxFuture;
-use crate::net::{AddrClass, NetError};
+use crate::net::{AddrClass, NetError, redact};
 use crate::secret::Secret;
 
 pub use magnet::{Magnet, MagnetError};
@@ -51,6 +62,10 @@ pub struct Capabilities {
     pub paused: bool,
     /// Downloading only some of a torrent's files.
     pub file_selection: bool,
+    /// File selection for a magnet too. A client that fetches a paused
+    /// magnet's metadata only once it's started can't select before
+    /// anything downloads; there, only a `.torrent` can be selected.
+    pub magnet_file_selection: bool,
     /// Adding from `.torrent` bytes, not only magnets.
     pub torrent_file: bool,
     /// Several magnets in one request (adapters without it loop).
@@ -64,6 +79,8 @@ pub enum Feature {
     SavePath,
     Paused,
     FileSelection,
+    /// File selection for a magnet (a `.torrent` still can be).
+    MagnetFileSelection,
     TorrentFile,
 }
 
@@ -74,6 +91,9 @@ impl Feature {
             Feature::SavePath => "a save path",
             Feature::Paused => "adding paused",
             Feature::FileSelection => "selecting files",
+            Feature::MagnetFileSelection => {
+                "selecting a magnet's files; send all files, or the .torrent file"
+            }
             Feature::TorrentFile => "adding .torrent files",
         }
     }
@@ -196,6 +216,13 @@ pub enum ClientError {
     InvalidRequest(&'static str),
     /// The client answered with something this adapter doesn't understand.
     Protocol(&'static str),
+    /// A bulk send failed part-way: the client took the first `sent`
+    /// torrents (counted as for [`AddOutcome::sent`]), then `cause`
+    /// stopped the rest. Retrying all of them would send those again.
+    Partial {
+        sent: usize,
+        cause: Box<ClientError>,
+    },
 }
 
 /// Why authentication failed.
@@ -211,6 +238,10 @@ pub enum AuthFailure {
     OriginRefused,
     /// The session was refused again straight after logging in.
     SessionRefused,
+    /// The client refuses this address: it isn't on the client's IP
+    /// allow-list, or the client banned it after failed logins. Some
+    /// clients (Transmission) answer both the same way.
+    AddressRefused,
 }
 
 impl fmt::Display for ClientError {
@@ -228,6 +259,9 @@ impl fmt::Display for ClientError {
             ClientError::Auth(AuthFailure::SessionRefused) => {
                 f.write_str("the client refused the session after logging in")
             }
+            ClientError::Auth(AuthFailure::AddressRefused) => f.write_str(
+                "the client refuses this address; check its IP allow-list, or whether it banned this address after failed logins",
+            ),
             ClientError::Unreachable => f.write_str("couldn't reach the client"),
             ClientError::Rejected(why) => write!(f, "the client refused: {why}"),
             ClientError::Unsupported(feature) => {
@@ -241,6 +275,9 @@ impl fmt::Display for ClientError {
             ),
             ClientError::InvalidRequest(why) => write!(f, "invalid request: {why}"),
             ClientError::Protocol(why) => write!(f, "unexpected answer from the client: {why}"),
+            ClientError::Partial { sent, cause } => {
+                write!(f, "the client took the first {sent}, then: {cause}")
+            }
         }
     }
 }
@@ -323,6 +360,20 @@ pub fn check_request(
     Ok(Some(selected))
 }
 
+/// [`check_request`] for magnets: also refuses a selection where the
+/// client can't select a magnet's files.
+pub fn check_magnets(
+    caps: Capabilities,
+    opts: &AddOptions,
+    magnets: usize,
+) -> Result<Option<Vec<u32>>, ClientError> {
+    let selection = check_request(caps, opts, magnets)?;
+    if selection.is_some() && !caps.magnet_file_selection {
+        return Err(ClientError::Unsupported(Feature::MagnetFileSelection));
+    }
+    Ok(selection)
+}
+
 fn check_text(value: &str) -> Result<(), ClientError> {
     if value.trim().is_empty() || value.len() > 4096 || value.chars().any(char::is_control) {
         return Err(ClientError::InvalidRequest(
@@ -369,15 +420,59 @@ pub trait DownloadClient: Send + Sync + fmt::Debug {
     fn categories(&self) -> BoxFuture<'_, Result<Vec<Category>, ClientError>>;
 }
 
-/// A configured client, as Settings → Integrations stores it (credentials
-/// already opened from the [`SecretStore`](crate::SecretStore)).
+/// HTTP basic authentication: Transmission's RPC password, or the web
+/// server in front of rTorrent's XML-RPC.
 #[derive(Debug, Clone)]
+pub struct BasicAuth {
+    pub username: String,
+    pub password: Secret,
+}
+
+/// A configured client, as Settings → Integrations stores it (credentials
+/// already opened from the [`SecretStore`](crate::SecretStore)). Its
+/// `Debug` shows each URL's scheme, host and port only.
+#[derive(Clone)]
 pub enum ClientConfig {
     QBittorrent {
         url: String,
         username: String,
         password: Secret,
     },
+    /// The daemon's address (`http://host:9091/`), or the full RPC URL.
+    Transmission {
+        url: String,
+        auth: Option<BasicAuth>,
+    },
+    /// The Web UI's address (`http://host:8112/`).
+    Deluge { url: String, password: Secret },
+    /// The XML-RPC endpoint a web server exposes (`http://host/RPC2`).
+    RTorrent {
+        url: String,
+        auth: Option<BasicAuth>,
+    },
+    /// The RPC address (`http://host:6800/jsonrpc`); `secret` is
+    /// `--rpc-secret`.
+    Aria2 { url: String, secret: Option<Secret> },
+}
+
+impl fmt::Debug for ClientConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (kind, url) = match self {
+            ClientConfig::QBittorrent { url, .. } => (ClientKind::QBittorrent, url),
+            ClientConfig::Transmission { url, .. } => (ClientKind::Transmission, url),
+            ClientConfig::Deluge { url, .. } => (ClientKind::Deluge, url),
+            ClientConfig::RTorrent { url, .. } => (ClientKind::RTorrent, url),
+            ClientConfig::Aria2 { url, .. } => (ClientKind::Aria2, url),
+        };
+        let url = match reqwest::Url::parse(url) {
+            Ok(u) => redact(&u),
+            Err(_) => "(not a URL)".to_owned(),
+        };
+        f.debug_struct("ClientConfig")
+            .field("kind", &kind)
+            .field("url", &url)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The default timeout for one client request.
@@ -394,7 +489,195 @@ pub fn connect(config: ClientConfig) -> Result<Box<dyn DownloadClient>, ClientEr
         } => Ok(Box::new(qbittorrent::QBittorrent::new(
             &url, username, password,
         )?)),
+        ClientConfig::Transmission { url, auth } => {
+            Ok(Box::new(transmission::Transmission::new(&url, auth)?))
+        }
+        ClientConfig::Deluge { url, password } => {
+            Ok(Box::new(deluge::Deluge::new(&url, password)?))
+        }
+        ClientConfig::RTorrent { url, auth } => Ok(Box::new(rtorrent::RTorrent::new(&url, auth)?)),
+        ClientConfig::Aria2 { url, secret } => Ok(Box::new(aria2::Aria2::new(&url, secret)?)),
     }
+}
+
+/// How long an adapter waits for a magnet's metadata before leaving a file
+/// selection [`Selection::Pending`] (§16).
+pub const METADATA_WAIT: Duration = Duration::from_secs(30);
+
+/// How often an adapter looks while it waits.
+pub const POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Calls `look` until it returns `Some`, and returns that; `None` once
+/// `wait` has passed. It always looks at least once, and never sleeps past
+/// the deadline.
+pub(crate) async fn poll<T, F, Fut>(
+    wait: Duration,
+    every: Duration,
+    mut look: F,
+) -> Result<Option<T>, ClientError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<Option<T>, ClientError>>,
+{
+    let deadline = Instant::now() + wait;
+    loop {
+        if let Some(found) = look().await? {
+            return Ok(Some(found));
+        }
+        if Instant::now() + every > deadline {
+            return Ok(None);
+        }
+        tokio::time::sleep(every).await;
+    }
+}
+
+/// The zero-based indices a selection skips, given the torrent's file
+/// count. `selected` is sorted and de-duplicated ([`check_request`]). An
+/// index past the last file is refused; the caller has left the torrent
+/// paused by then.
+pub(crate) fn skipped_files(selected: &[u32], count: usize) -> Result<Vec<u32>, ClientError> {
+    check_file_count(count)?;
+    if selected.last().is_some_and(|&last| last as usize >= count) {
+        return Err(ClientError::InvalidRequest(
+            "a selected file isn't in the torrent; it was added paused",
+        ));
+    }
+    Ok((0..count as u32)
+        .filter(|i| selected.binary_search(i).is_err())
+        .collect())
+}
+
+/// Standard base64 with padding, for `.torrent` bytes in JSON and XML-RPC
+/// bodies.
+pub(crate) fn base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = u32::from(b[0]) << 16 | u32::from(b[1]) << 8 | u32::from(b[2]);
+        for (i, shift) in [18, 12, 6, 0].into_iter().enumerate() {
+            if i <= chunk.len() {
+                out.push(TABLE[(n >> shift & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// The most files a torrent is believed to have. A client reporting more is
+/// broken or hostile, and the count would otherwise size allocations.
+pub(crate) const MAX_FILES: usize = 1_000_000;
+
+/// Refuses a file count past [`MAX_FILES`].
+pub(crate) fn check_file_count(count: usize) -> Result<usize, ClientError> {
+    if count > MAX_FILES {
+        return Err(ClientError::Protocol(
+            "the client reported more files than a torrent has",
+        ));
+    }
+    Ok(count)
+}
+
+/// A JSON list read only for its length, refused past [`MAX_FILES`]
+/// entries without storing them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FileCount(pub(crate) usize);
+
+impl<'de> Deserialize<'de> for FileCount {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<FileCount, D::Error> {
+        struct Counter;
+        impl<'de> Visitor<'de> for Counter {
+            type Value = FileCount;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a file list")
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<FileCount, A::Error> {
+                let mut n = 0;
+                while seq.next_element::<IgnoredAny>()?.is_some() {
+                    n += 1;
+                    if n > MAX_FILES {
+                        return Err(serde::de::Error::custom("too many files"));
+                    }
+                }
+                Ok(FileCount(n))
+            }
+        }
+        d.deserialize_seq(Counter)
+    }
+}
+
+/// A JSON list of file priorities, at most [`MAX_FILES`] long; an entry
+/// that isn't a non-negative integer is `None`, keeping later entries in
+/// place.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Priorities(pub(crate) Vec<Option<u64>>);
+
+impl<'de> Deserialize<'de> for Priorities {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Priorities, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Entry {
+            Number(u64),
+            Other(IgnoredAny),
+        }
+        struct Collector;
+        impl<'de> Visitor<'de> for Collector {
+            type Value = Priorities;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a priority list")
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Priorities, A::Error> {
+                let mut out = Vec::new();
+                while let Some(entry) = seq.next_element::<Entry>()? {
+                    if out.len() == MAX_FILES {
+                        return Err(serde::de::Error::custom("too many files"));
+                    }
+                    out.push(match entry {
+                        Entry::Number(n) => Some(n),
+                        Entry::Other(_) => None,
+                    });
+                }
+                Ok(Priorities(out))
+            }
+        }
+        d.deserialize_seq(Collector)
+    }
+}
+
+/// A category or label name from the client: control characters dropped,
+/// trimmed, at most 256 characters; `None` when nothing is left.
+pub(crate) fn category_name(raw: &str) -> Option<String> {
+    let name: String = raw.chars().filter(|c| !c.is_control()).take(256).collect();
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_owned())
+}
+
+/// The error for a bulk send that failed after `sent` torrents went in.
+pub(crate) fn partial(sent: usize, cause: ClientError) -> ClientError {
+    if sent == 0 {
+        cause
+    } else {
+        ClientError::Partial {
+            sent,
+            cause: Box::new(cause),
+        }
+    }
+}
+
+/// The answer to an add that found every torrent already in the client.
+pub(crate) fn already_there() -> ClientError {
+    ClientError::Rejected("the torrent is already in the client".into())
+}
+
+/// The error for an HTTP status an adapter has no meaning for.
+pub(crate) fn rejected_status(status: u16, body: &[u8]) -> ClientError {
+    ClientError::Rejected(format!("HTTP {status}: {}", client_reason(body)))
 }
 
 #[cfg(test)]
@@ -406,6 +689,7 @@ mod tests {
         save_path: true,
         paused: true,
         file_selection: true,
+        magnet_file_selection: false,
         torrent_file: true,
         batch: true,
     };
@@ -483,6 +767,129 @@ mod tests {
         let f = TorrentFile::new(b"d4:infod3:key5:valueee".to_vec(), &"A".repeat(40)).unwrap();
         assert_eq!(f.info_hash, "a".repeat(40));
         assert!(!format!("{f:?}").contains("value"));
+    }
+
+    #[test]
+    fn base64_matches_rfc_4648() {
+        for (raw, enc) in [
+            (&b""[..], ""),
+            (b"f", "Zg=="),
+            (b"fo", "Zm8="),
+            (b"foo", "Zm9v"),
+            (b"foob", "Zm9vYg=="),
+            (b"fooba", "Zm9vYmE="),
+            (b"foobar", "Zm9vYmFy"),
+            (&[0xff, 0xfe, 0x00], "//4A"),
+        ] {
+            assert_eq!(base64(raw), enc);
+        }
+    }
+
+    #[test]
+    fn hostile_file_counts_are_refused_without_allocating() {
+        assert!(matches!(
+            skipped_files(&[0], 20_000_000),
+            Err(ClientError::Protocol(_))
+        ));
+        assert!(matches!(
+            skipped_files(&[0], usize::MAX),
+            Err(ClientError::Protocol(_))
+        ));
+        assert_eq!(
+            skipped_files(&[0], MAX_FILES).map(|v| v.len()),
+            Ok(MAX_FILES - 1)
+        );
+        let count = |json: &str| serde_json::from_str::<FileCount>(json);
+        assert_eq!(count("[1, {}, []]").unwrap(), FileCount(3));
+        let many = format!("[{}0]", "0,".repeat(MAX_FILES));
+        assert!(count(&many).is_err());
+        assert!(serde_json::from_str::<Priorities>(&many).is_err());
+        assert_eq!(
+            serde_json::from_str::<Priorities>("[4, \"x\", -1, 7]").unwrap(),
+            Priorities(vec![Some(4), None, None, Some(7)])
+        );
+    }
+
+    #[test]
+    fn magnet_selection_needs_its_own_capability() {
+        let select = AddOptions {
+            selected_files: Some(vec![0]),
+            ..AddOptions::default()
+        };
+        assert_eq!(
+            check_magnets(ALL, &select, 1),
+            Err(ClientError::Unsupported(Feature::MagnetFileSelection))
+        );
+        let caps = Capabilities {
+            magnet_file_selection: true,
+            ..ALL
+        };
+        assert_eq!(check_magnets(caps, &select, 1), Ok(Some(vec![0])));
+        assert_eq!(check_request(ALL, &select, 1), Ok(Some(vec![0])));
+    }
+
+    #[test]
+    fn partial_sends_and_category_names() {
+        assert_eq!(partial(0, ClientError::Timeout), ClientError::Timeout);
+        let e = partial(2, ClientError::Timeout);
+        assert_eq!(
+            e.to_string(),
+            "the client took the first 2, then: the client didn't answer in time"
+        );
+        assert_eq!(
+            category_name(" TV\u{1b}[31m\nShows "),
+            Some("TV[31mShows".into())
+        );
+        assert_eq!(category_name("\u{0}\t "), None);
+        assert_eq!(category_name(&"x".repeat(300)).map(|n| n.len()), Some(256));
+    }
+
+    #[test]
+    fn config_debug_shows_only_scheme_host_and_port() {
+        let config = ClientConfig::Aria2 {
+            url: "http://user:pw@nas:6800/jsonrpc?token=hunter2".into(),
+            secret: Some(Secret::new("s3cret")),
+        };
+        let debug = format!("{config:?}");
+        assert!(
+            debug.contains("nas:6800") && debug.contains("Aria2"),
+            "{debug}"
+        );
+        for secret in ["hunter2", "pw", "s3cret", "jsonrpc"] {
+            assert!(!debug.contains(secret), "{debug}");
+        }
+    }
+
+    #[test]
+    fn skipped_files_and_range() {
+        assert_eq!(skipped_files(&[0, 2], 3), Ok(vec![1]));
+        assert_eq!(skipped_files(&[0, 1, 2], 3), Ok(vec![]));
+        assert_eq!(skipped_files(&[1], 4), Ok(vec![0, 2, 3]));
+        assert!(matches!(
+            skipped_files(&[0, 3], 3),
+            Err(ClientError::InvalidRequest(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn poll_looks_once_with_no_wait_and_stops_when_found() {
+        let mut looks = 0;
+        let found: Option<()> = poll(Duration::ZERO, Duration::from_millis(1), || {
+            looks += 1;
+            async { Ok(None) }
+        })
+        .await
+        .unwrap();
+        assert_eq!((found, looks), (None, 1));
+        let mut looks = 0;
+        let found = poll(Duration::from_secs(5), Duration::from_millis(1), || {
+            looks += 1;
+            let n = looks;
+            async move { Ok((n == 3).then_some(n)) }
+        })
+        .await
+        .unwrap();
+        assert_eq!(found, Some(3));
     }
 
     #[test]
