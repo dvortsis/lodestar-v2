@@ -37,22 +37,34 @@ EVERYTHING = re.compile(
 
 def packages() -> dict[str, tuple[Path, set[str]]]:
     """Workspace packages: name -> (directory, names of its path dependencies)."""
+    root = tomllib.loads((ROOT / "Cargo.toml").read_text())
+    inherited = root.get("workspace", {}).get("dependencies", {})
     dirs = [d for d in (ROOT / "crates").iterdir() if (d / "Cargo.toml").is_file()]
     dirs += [ROOT / "bench", ROOT / "fuzz"]
+
+    def path_deps(table: dict) -> set[str]:
+        deps = set()
+        for dep, spec in table.items():
+            if not isinstance(spec, dict):
+                continue
+            if spec.get("workspace"):  # `foo.workspace = true`: the root says where it lives
+                root_spec = inherited.get(dep)
+                if isinstance(root_spec, dict) and "path" in root_spec:
+                    deps.add(root_spec.get("package", dep))
+            elif "path" in spec:
+                deps.add(spec.get("package", dep))
+        return deps
+
     found: dict[str, tuple[Path, set[str]]] = {}
     for d in dirs:
         manifest = tomllib.loads((d / "Cargo.toml").read_text())
         name = manifest["package"]["name"]
         deps: set[str] = set()
         for table in ("dependencies", "dev-dependencies", "build-dependencies"):
-            for dep, spec in manifest.get(table, {}).items():
-                if isinstance(spec, dict) and "path" in spec:
-                    deps.add(spec.get("package", dep))
+            deps |= path_deps(manifest.get(table, {}))
         for target in manifest.get("target", {}).values():
-            for table in ("dependencies", "dev-dependencies"):
-                for dep, spec in target.get(table, {}).items():
-                    if isinstance(spec, dict) and "path" in spec:
-                        deps.add(spec.get("package", dep))
+            for table in ("dependencies", "dev-dependencies", "build-dependencies"):
+                deps |= path_deps(target.get(table, {}))
         found[name] = (d, deps)
     return found
 
