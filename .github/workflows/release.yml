@@ -69,18 +69,14 @@ jobs:
           bytes=$(docker image inspect lodestar:smoke --format '{{.Size}}')
           echo "Image size: $((bytes / 1024 / 1024)) MiB ($bytes bytes)" | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Image runs as a non-root user
-        run: |
-          user=$(docker image inspect lodestar:smoke --format '{{.Config.User}}')
-          echo "Config.User=$user"
-          case "$user" in ""|0|root|0:*|root:*) echo "::error::image runs as root"; exit 1 ;; esac
-
       - name: Start the containers
         run: |
+          # The image starts as root and the binary drops to PUID/PGID
+          # (default 65532, distroless "nonroot"); --user skips the drop.
           data=$(mktemp -d)
-          # The image runs as distroless "nonroot" (65532).
           sudo chown 65532:65532 "$data"
-          docker run -d --name lodestar-smoke \
+          echo "SMOKE_DATA=$data" >> "$GITHUB_ENV"
+          docker run -d --name lodestar-smoke --user 65532:65532 \
             --health-interval 2s --health-timeout 5s \
             --health-start-period 30s --health-retries 5 \
             -p 8090:8090 -v "$data:/data" \
@@ -91,10 +87,19 @@ jobs:
             --health-start-period 30s --health-retries 5 \
             -v lodestar-smoke-data:/data \
             lodestar:smoke
+          # Unraid's ids on a root-owned bind mount: the binary hands it over.
+          puid_data=$(mktemp -d)
+          sudo chown 0:0 "$puid_data"
+          echo "SMOKE_PUID_DATA=$puid_data" >> "$GITHUB_ENV"
+          docker run -d --name lodestar-puid -e PUID=99 -e PGID=100 \
+            --health-interval 2s --health-timeout 5s \
+            --health-start-period 30s --health-retries 5 \
+            -v "$puid_data:/data" \
+            lodestar:smoke
 
       - name: Wait for the containers to be healthy
         run: |
-          for name in lodestar-smoke lodestar-volume; do
+          for name in lodestar-smoke lodestar-volume lodestar-puid; do
             ok=false
             for i in $(seq 1 60); do
               state=$(docker inspect --format '{{.State.Status}}' "$name")
@@ -110,6 +115,26 @@ jobs:
               exit 1
             fi
           done
+
+      - name: Process ids and /data ownership (PUID/PGID)
+        run: |
+          volume=$(docker volume inspect --format '{{.Mountpoint}}' lodestar-smoke-data)
+          rc=0
+          packaging/docker/check-ids.sh lodestar-smoke user 65532 65532 "$SMOKE_DATA" || rc=1
+          packaging/docker/check-ids.sh lodestar-volume drop 65532 65532 "$volume" || rc=1
+          packaging/docker/check-ids.sh lodestar-puid drop 99 100 "$SMOKE_PUID_DATA" || rc=1
+          [ "$rc" = 0 ] || exit 1
+          # The files the server created there are the new account's too.
+          owner=$(sudo stat --format '%u:%g' "$SMOKE_PUID_DATA/lodestar.db")
+          [ "$owner" = 99:100 ] || { echo "::error::lodestar.db is owned by $owner"; exit 1; }
+          # A root PUID is refused before anything starts (exit 1, not a
+          # hang: timeout's 124 fails too).
+          code=0
+          out=$(timeout 30 docker run --rm -e PUID=0 lodestar:smoke 2>&1) || code=$?
+          echo "$out"
+          if [ "$code" != 1 ] || ! grep -q LODESTAR_ALLOW_ROOT <<<"$out"; then
+            echo "::error::PUID=0 was not refused (exit $code)"; exit 1
+          fi
 
       - name: /healthz and the embedded UI
         run: |
@@ -135,7 +160,7 @@ jobs:
 
       - name: Stop cleanly (SIGTERM, exit code 0)
         run: |
-          for name in lodestar-smoke lodestar-volume; do
+          for name in lodestar-smoke lodestar-volume lodestar-puid; do
             docker stop --time 60 "$name"
             code=$(docker inspect --format '{{.State.ExitCode}}' "$name")
             echo "$name exit code: $code"
@@ -151,6 +176,7 @@ jobs:
         run: |
           docker logs lodestar-smoke || true
           docker logs lodestar-volume || true
+          docker logs lodestar-puid || true
 
   # Whether a pull request touches what the arm64 build depends on beyond the
   # Rust code (the smoke job already builds the same code for amd64).
