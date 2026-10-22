@@ -40,6 +40,9 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET", "/filters/preview/jobs/{id}"),
     ("POST", "/filters/preview/jobs/{id}/cancel"),
     ("POST", "/filters/apply"),
+    ("GET", "/settings"),
+    ("GET", "/settings/{section}"),
+    ("PATCH", "/settings/{section}"),
     ("GET", "/events"),
     ("GET", "/openapi.json"),
 ];
@@ -183,6 +186,7 @@ fn app() -> (tempfile::TempDir, Router) {
             index: None,
             reader: Arc::new(Mutex::new(reader)),
             filters: None,
+            settings: None,
         }),
     );
     (dir, app)
@@ -196,6 +200,7 @@ async fn every_documented_route_is_served() {
             "/api/v1{}",
             path.replace("{hash}", &"ab".repeat(20))
                 .replace("{id}", "1")
+                .replace("{section}", "crawler")
         );
         let req = Request::builder()
             .method(Method::from_bytes(method.as_bytes()).unwrap())

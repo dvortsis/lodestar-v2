@@ -18,6 +18,7 @@ pub mod error;
 pub mod events;
 pub mod filters;
 pub mod search;
+pub mod settings;
 pub mod torrents;
 
 /// What a secret (a password, the setup token) shows as in `Debug`
