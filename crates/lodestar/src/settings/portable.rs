@@ -172,9 +172,7 @@ pub(super) fn import(
     dry_run: bool,
 ) -> Result<Imported, SettingsFailure> {
     if import.toml.len() > MAX_IMPORT {
-        return Err(invalid(
-            "The file is larger than 64 KiB; it isn't a settings export.",
-        ));
+        return Err(SettingsError::ImportTooLarge.into());
     }
     // The parser's own message, never the line it quotes.
     let table: toml::Table = toml::from_str(&import.toml).map_err(|e| {
