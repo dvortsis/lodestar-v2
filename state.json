@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-22T06:45:00Z",
+ "updated_at": "2026-10-22T06:50:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 14
@@ -40,8 +40,8 @@
    "session": "session_01NSdirPw4xiTrGseUFMRd8U",
    "pr": 37,
    "attempt": 1,
-   "review_rounds": 1,
-   "notes": "round 1: changes requested (categorical order to Riverstone order; Rosewood pending owner; CVD both models; Rose Pine accent)"
+   "review_rounds": 2,
+   "notes": "round 2: doc-only fix (list 9 compiler gate failures); palettes unchanged by decision"
   },
   "W0": {
    "status": "merged",
@@ -717,6 +717,15 @@
    "attempt": 0,
    "review_rounds": 0,
    "notes": "built by the filter session in #52"
+  },
+  "W1c": {
+   "status": "running",
+   "model": "sonnet",
+   "session": "session_013n3VVF4K4QtH4YeGKjACBY",
+   "pr": null,
+   "attempt": 1,
+   "review_rounds": 0,
+   "notes": "gate-satisfying derivation for all 48 themes; reuses the W1 session"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -745,7 +754,8 @@
   "2026-10-22 spacing: keep Tailwind v4 default --spacing (p-4=16px); only utility steps matching the \u00a710.2 ramp are allowed; W2 extends the ban check to off-ramp steps",
   "2026-10-22 owner: the design decided in the 'Modern DHT crawler architecture' session (recorded in docs/architecture.md) is the primary design strategy; ui-design-skills only fills gaps. Encoded in runner/standards.md (PR #39).",
   "2026-10-22 owner: Riverstone is the default/official palette and keeps plum #9381B6 in categorical slot 6 (seafoam stays retired); the theme collection is 24 families x light/dark including Rosewood as the 24th. Log both in architecture \u00a716 with the next runner docs PR.",
-  "2026-10-22 owner (audit follow-up): floor add-by-file/remove-in-app; packs per \u00a720.6; subscriptions off by default, user-chosen in wizard/settings with strictness-based warning; Riverstone unchanged, \u00a710.18 CVD claim corrected. Recorded in owner-decisions.md \u00a72.7-2.10 (PR #39)."
+  "2026-10-22 owner (audit follow-up): floor add-by-file/remove-in-app; packs per \u00a720.6; subscriptions off by default, user-chosen in wizard/settings with strictness-based warning; Riverstone unchanged, \u00a710.18 CVD claim corrected. Recorded in owner-decisions.md \u00a72.7-2.10 (PR #39).",
+  "2026-10-22 runner: community palette values stay as published; the theme compiler must derive content/tint tokens that satisfy the gates for every theme (W1c). W1b now waits for W1c and C1."
  ],
  "open_issues": [
   "Filter session self-merged #42 against owner decision (packs on by default) + budget env; follow-up fix requested. Suggest owner consider branch protection."
