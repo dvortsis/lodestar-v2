@@ -87,3 +87,18 @@ Category labels (facets, file tree) and the group each colours as
 | duplicate (for an identical payload) | clone |
 | title (when it's the raw name) | raw name |
 | 0 (when never scraped) | — / Never scraped |
+
+## 5. Settings labels (§10.10)
+
+| Key | en label | Definition | zh (proposed, TBD) |
+|---|---|---|---|
+| `setting_default` | Default | The value Lodestar ships with; nothing overrides it. | 默认 (TBD) |
+| `setting_file` | From config.toml | Set in `config.toml`; a value saved in the app overrides it. | 来自 config.toml (TBD) |
+| `setting_saved` | Saved in app | Saved from Settings. Reset to default removes it. | 已在应用中保存 (TBD) |
+| `setting_env` | Set by {variable} | Set by a `LODESTAR_*` environment variable. It wins over everything, so the field is locked. | 由 {variable} 设置 (TBD) |
+| `setting_restart` | Applies after restart | Saved, but the running server uses the old value until it restarts. | 重启后生效 (TBD) |
+| `setting_changed` | Changed from default | Any value other than the default, whatever its source. | 已更改 (TBD) |
+| `setting_automatic` | Automatic | The value follows another setting; the effective value is shown next to it ("Automatic · 400 at Balanced"). | 自动 (TBD) |
+| `needs_attention` | Needs attention | The Overview's list of problems, each with one action that fixes it. | 需要注意 (TBD) |
+
+Don't write "env", "override", "custom" or "dirty" in these labels.
