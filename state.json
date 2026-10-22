@@ -3,7 +3,7 @@
  "updated_at": "2026-10-22T21:45Z",
  "launches": {
   "date": "2026-10-22",
-  "count": 25
+  "count": 27
  },
  "tags": {},
  "slices": {
@@ -161,13 +161,13 @@
    "notes": "launched 14:14 after B5a merged | PR #69 opened; reviewer (+security) started 15:40 | 16:35 round 1 FIX: stale max_id race; futures-core approved by runner; session re-verify per heartbeat; lodestar composition test; topics dup field; W5 429 note. | 16:30 fixes b6105c7 verified by runner (ordering, take(), verify per heartbeat, serve.rs composition test); merge on green CI. Merged a97c63f 17:38."
   },
   "B8": {
-   "status": "launching",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01MGoJoWccVxrfA2o7SDSEUh",
    "pr": null,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": "waits ext:m4-schema-settled (M4 PR2 #48)"
+   "notes": "launched 22:38; ext:m4-schema-settled satisfied (#32,#33 merged; no open PR edits MIGRATIONS)"
   },
   "B6": {
    "status": "merged",
@@ -225,13 +225,13 @@
    "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #74; reviewer started 16:45 | 17:10 r1 FIX: token classes (runner shared fix), dup groups, brush, null delta, dates, int axes. R2 FIX 17:55: computed-style test missing, x-axis tick overlap, showcase in prod (+1.83 kB; move to dev-routes after #76). 18:04 R2 fixes pushed 219eed7; waits on #80 and #76. 20:20 6ad522d dev-routes moved; computed-style tests red until #80 (owner baselines). Blocked on #80. 20:50 R3 FIX: brush external-selection commit, measured tick spacing, PR body. Verified all 6 specs pass with #80. 20:56 b6fc4b1 verified by runner -> APPROVED, merge after #80 lands (computed-style tests). | 22:35 #80 merged; asked W7e to merge main + fix playwright fail (run 39851958635)"
   },
   "W9": {
-   "status": "launching",
+   "status": "running",
    "model": "sonnet",
-   "session": null,
+   "session": "session_01HpQ4gCiiJq5eRwciaE8Lus",
    "pr": null,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": ""
+   "notes": "launched 22:38; deps W7ab,W7cd,W5,W3 merged"
   },
   "M-auth": {
    "status": "running",
@@ -962,7 +962,7 @@
    "pr": 96,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:38 (\"run as many feature sessions as possible\")."
+   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 22:36 security review FIX: TLS1.3 resumption skips client verify (revocation/expiry) + 3 low; sent to session. Design reviewer still running."
   },
   "DOC-install": {
    "status": "running",
@@ -989,7 +989,8 @@
   "S-settings-polish": {},
   "runner-owner-rules": {
    "status": "in_review",
-   "pr": 99
+   "pr": 99,
+   "notes": "r1 FIX applied verbatim bb4b544; merge on green"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
