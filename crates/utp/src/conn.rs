@@ -11,9 +11,9 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::io;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use crate::ledbat::{Ledbat, Rtt};
+use crate::ledbat::{INITIAL_RTO, Ledbat, Rtt};
 use crate::packet::{self, Header, MAX_SACK_LEN, Packet, PacketType};
 
 /// Payload bytes per packet. 1200 fits the IPv6 minimum MTU after the IP,
@@ -28,7 +28,11 @@ const MAX_OOO: u16 = (MAX_SACK_LEN * 8) as u16;
 const MAX_TIMEOUTS: u32 = 6;
 /// SYN retransmissions before connecting fails.
 const MAX_SYN_RETRIES: u32 = 3;
-const TIME_WAIT_MIN: std::time::Duration = std::time::Duration::from_secs(4);
+const TIME_WAIT_MIN: Duration = Duration::from_secs(4);
+/// How long an accepted connection waits for the initiator to answer our
+/// SYN-ACK. Each repeated SYN restarts it, so it only has to outlast the
+/// longest gap in the initiator's SYN backoff (1, 2, then 4 RTOs).
+const HANDSHAKE_TIMEOUT: Duration = INITIAL_RTO.saturating_mul(8);
 /// Duplicate ACKs (or packets selectively acknowledged past a hole) that
 /// mean the hole was lost.
 const DUP_ACK_THRESHOLD: u32 = 3;
@@ -40,6 +44,9 @@ pub(crate) struct Limits {
     pub recv_window: u32,
     /// The most bytes we hold to send (unsent plus unacknowledged).
     pub send_buffer: usize,
+    /// A connection with nothing in flight that hears nothing for this
+    /// long is closed as timed out.
+    pub idle_timeout: Duration,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,6 +115,11 @@ pub(crate) struct Connection {
     /// timeout only counts towards giving up when the peer went silent
     /// (a live peer with a full window isn't dead).
     heard: bool,
+    /// When the last packet from the peer arrived (or the connection was
+    /// created), for the idle timeout.
+    last_recv: Instant,
+    /// An accepted connection must hear from the initiator by then.
+    handshake_deadline: Option<Instant>,
     timeouts: u32,
     dup_acks: u32,
     fin_requested: bool,
@@ -140,7 +152,14 @@ impl Connection {
         epoch: Instant,
         now: Instant,
     ) -> Connection {
-        let mut c = Connection::new(recv_id, recv_id.wrapping_add(1), initial_seq, limits, epoch);
+        let mut c = Connection::new(
+            recv_id,
+            recv_id.wrapping_add(1),
+            initial_seq,
+            limits,
+            epoch,
+            now,
+        );
         c.state = State::SynSent;
         c.inflight.push_back(Sent {
             seq: initial_seq,
@@ -170,8 +189,10 @@ impl Connection {
             initial_seq,
             limits,
             epoch,
+            now,
         );
         c.state = State::SynRecv;
+        c.handshake_deadline = Some(now + HANDSHAKE_TIMEOUT);
         c.ack_nr = syn.seq_nr;
         c.peer_wnd = syn.wnd_size;
         c.reply_micro = c.micros(now).wrapping_sub(syn.timestamp_us);
@@ -179,7 +200,14 @@ impl Connection {
         c
     }
 
-    fn new(recv_id: u16, send_id: u16, seq_nr: u16, limits: Limits, epoch: Instant) -> Connection {
+    fn new(
+        recv_id: u16,
+        send_id: u16,
+        seq_nr: u16,
+        limits: Limits,
+        epoch: Instant,
+        now: Instant,
+    ) -> Connection {
         Connection {
             state: State::SynSent,
             recv_id,
@@ -201,6 +229,8 @@ impl Connection {
             rtt: Rtt::new(),
             timer: None,
             heard: false,
+            last_recv: now,
+            handshake_deadline: None,
             timeouts: 0,
             dup_acks: 0,
             fin_requested: false,
@@ -233,6 +263,7 @@ impl Connection {
         if !self.is_closed() {
             self.state = State::Closed(why);
             self.timer = None;
+            self.handshake_deadline = None;
             self.unsent = VecDeque::new();
             self.inflight = VecDeque::new();
             self.ooo = HashMap::new();
@@ -335,10 +366,33 @@ impl Connection {
     // ---- Time ------------------------------------------------------------
 
     pub fn deadline(&self) -> Option<Instant> {
-        self.timer
+        if self.is_closed() {
+            return None;
+        }
+        [self.timer, self.handshake_deadline, self.idle_deadline()]
+            .into_iter()
+            .flatten()
+            .min()
+    }
+
+    /// Set while the connection is open with nothing of ours in flight
+    /// (data in flight has the retransmission timer instead).
+    fn idle_deadline(&self) -> Option<Instant> {
+        (self.state == State::Connected && self.inflight.is_empty() && !self.time_wait)
+            .then(|| self.last_recv + self.limits.idle_timeout)
     }
 
     pub fn on_timeout(&mut self, now: Instant) {
+        if self.is_closed() {
+            return;
+        }
+        // A half-open accepted connection, or a silent idle one.
+        if self.handshake_deadline.is_some_and(|d| now >= d)
+            || self.idle_deadline().is_some_and(|d| now >= d)
+        {
+            self.close_with(Closed::TimedOut);
+            return;
+        }
         let Some(t) = self.timer else { return };
         if now < t {
             return;
@@ -386,6 +440,10 @@ impl Connection {
             if matches!(self.state, State::SynRecv | State::Connected) && h.conn_id == self.send_id
             {
                 self.ack_pending = true;
+                if self.state == State::SynRecv {
+                    // The initiator is alive and still waiting for us.
+                    self.handshake_deadline = Some(now + HANDSHAKE_TIMEOUT);
+                }
             }
             return;
         }
@@ -400,10 +458,13 @@ impl Connection {
             self.ack_nr = h.seq_nr.wrapping_sub(1);
             // Confirm at once, so the peer may start sending.
             self.ack_pending = true;
+            self.rtt.reset_backoff();
         } else if self.state == State::SynRecv {
             self.state = State::Connected;
+            self.handshake_deadline = None;
         }
         self.heard = true;
+        self.last_recv = now;
         self.reply_micro = self.micros(now).wrapping_sub(h.timestamp_us);
         let reopened = self.peer_wnd < MSS as u32 && h.wnd_size >= MSS as u32;
         self.peer_wnd = h.wnd_size;

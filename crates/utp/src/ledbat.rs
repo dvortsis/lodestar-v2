@@ -166,6 +166,13 @@ impl Rtt {
         base.saturating_mul(1 << self.backoff.min(16)).min(MAX_RTO)
     }
 
+    /// Drops the backoff without a sample: a retransmitted SYN gives no
+    /// RTT (Karn), but once the handshake completes the path is known to
+    /// work, so data starts from the plain timeout (RFC 6298 §5.7).
+    pub fn reset_backoff(&mut self) {
+        self.backoff = 0;
+    }
+
     pub fn back_off(&mut self) {
         self.backoff = self.backoff.saturating_add(1);
     }

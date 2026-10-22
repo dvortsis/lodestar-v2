@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::future::poll_fn;
 use std::io;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
@@ -99,8 +99,13 @@ pub struct Config {
     pub send_buffer: usize,
     /// Connections at once, incoming and outgoing.
     pub max_connections: usize,
+    /// Connections at once with one IP address, closing ones included.
+    pub max_per_ip: usize,
     /// How long a dropped stream may take to finish closing.
     pub linger: Duration,
+    /// An open connection with nothing in flight that hears nothing from
+    /// the peer for this long is closed as timed out.
+    pub idle_timeout: Duration,
 }
 
 impl Default for Config {
@@ -111,7 +116,9 @@ impl Default for Config {
             // Closed connections linger briefly (TIME-WAIT), so this sits
             // well above the 400 concurrent fetches of §6.
             max_connections: 4096,
+            max_per_ip: 8,
             linger: Duration::from_secs(5),
+            idle_timeout: Duration::from_secs(60),
         }
     }
 }
@@ -160,6 +167,14 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 /// (peer address, the connection id the peer sends to us with).
 type Key = (SocketAddr, u16);
 
+/// Live connections, and how many each IP has (closing ones included,
+/// so a peer can't churn past the cap).
+#[derive(Default)]
+struct Table {
+    cells: HashMap<Key, Arc<Cell>>,
+    per_ip: HashMap<IpAddr, usize>,
+}
+
 enum Refused {
     Full,
     Taken,
@@ -171,7 +186,7 @@ struct Shared {
     config: Config,
     epoch: Instant,
     local_addr: Option<SocketAddr>,
-    conns: Mutex<HashMap<Key, Arc<Cell>>>,
+    conns: Mutex<Table>,
     listener: Mutex<Option<mpsc::Sender<UtpStream>>>,
     stats: Stats,
     recv_task: Mutex<Option<AbortHandle>>,
@@ -263,6 +278,10 @@ impl UtpSocket {
                 // unreachable" for an earlier send surfaces here as
                 // ConnectionReset, and must not stop the loop.
                 let Ok((n, from)) = udp.recv_from(&mut buf).await else {
+                    // A socket nobody holds any more can't recover; stop.
+                    if weak.strong_count() == 0 {
+                        break;
+                    }
                     tokio::task::yield_now().await;
                     continue;
                 };
@@ -287,7 +306,7 @@ impl UtpSocket {
                 config,
                 epoch: Instant::now(),
                 local_addr,
-                conns: Mutex::new(HashMap::new()),
+                conns: Mutex::new(Table::default()),
                 listener: Mutex::new(None),
                 stats: Stats::default(),
                 recv_task: Mutex::new(None),
@@ -301,7 +320,7 @@ impl UtpSocket {
     }
 
     pub fn connections(&self) -> usize {
-        lock(&self.shared.conns).len()
+        lock(&self.shared.conns).cells.len()
     }
 
     pub fn stats(&self) -> StatsSnapshot {
@@ -337,7 +356,7 @@ impl UtpSocket {
             PacketType::Syn => p.header.conn_id.wrapping_add(1),
             _ => p.header.conn_id,
         };
-        let cell = lock(&shared.conns).get(&(from, id)).cloned();
+        let cell = lock(&shared.conns).cells.get(&(from, id)).cloned();
         match cell {
             Some(cell) => shared.drive(&cell, true, |inner, now| inner.conn.on_packet(&p, now)),
             None if p.header.ty == PacketType::Syn => self.accept_syn(&p.header, (from, id)),
@@ -396,7 +415,11 @@ impl UtpSocket {
             let conn = Connection::connect(id, 1, shared.limits(), shared.epoch, now);
             match shared.insert((to, id), conn) {
                 Ok(cell) => break cell,
-                Err(Full) => return Err(io::Error::other("too many uTP connections")),
+                Err(Full) => {
+                    return Err(io::Error::other(
+                        "too many uTP connections (in all or to this IP)",
+                    ));
+                }
                 Err(Taken) => continue,
             }
         };
@@ -417,6 +440,7 @@ impl Shared {
         Limits {
             recv_window: self.config.recv_window,
             send_buffer: self.config.send_buffer,
+            idle_timeout: self.config.idle_timeout,
         }
     }
 
@@ -436,14 +460,18 @@ impl Shared {
             timer: Notify::new(),
         });
         {
-            let mut conns = lock(&self.conns);
-            if conns.contains_key(&key) {
+            let mut table = lock(&self.conns);
+            if table.cells.contains_key(&key) {
                 return Err(Taken);
             }
-            if conns.len() >= self.config.max_connections {
+            let ip = key.0.ip();
+            if table.cells.len() >= self.config.max_connections
+                || table.per_ip.get(&ip).copied().unwrap_or(0) >= self.config.max_per_ip
+            {
                 return Err(Full);
             }
-            conns.insert(key, cell.clone());
+            table.cells.insert(key, cell.clone());
+            *table.per_ip.entry(ip).or_default() += 1;
         }
         tokio::spawn(run_timer(self.clone(), cell.clone()));
         Ok(cell)
@@ -535,9 +563,20 @@ async fn run_timer(shared: Arc<Shared>, cell: Arc<Cell>) {
             }
         });
     }
-    let mut conns = lock(&shared.conns);
-    if conns.get(&cell.key).is_some_and(|c| Arc::ptr_eq(c, &cell)) {
-        conns.remove(&cell.key);
+    let mut table = lock(&shared.conns);
+    if table
+        .cells
+        .get(&cell.key)
+        .is_some_and(|c| Arc::ptr_eq(c, &cell))
+    {
+        table.cells.remove(&cell.key);
+        let ip = cell.key.0.ip();
+        if let Some(n) = table.per_ip.get_mut(&ip) {
+            *n -= 1;
+            if *n == 0 {
+                table.per_ip.remove(&ip);
+            }
+        }
     }
 }
 

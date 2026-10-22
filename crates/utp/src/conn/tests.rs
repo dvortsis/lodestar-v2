@@ -14,6 +14,7 @@ use crate::packet::parse;
 const LIMITS: Limits = Limits {
     recv_window: 16 << 10,
     send_buffer: 16 << 10,
+    idle_timeout: std::time::Duration::from_secs(60),
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -121,9 +122,11 @@ impl Sim {
             let p = parse(&datagram).expect("we only send valid packets");
             if !to_b {
                 self.a.on_packet(&p, now);
-            } else if let Some(b) = self.b.as_mut() {
+            } else if let Some(b) = self.b.as_mut().filter(|b| !b.is_closed()) {
                 b.on_packet(&p, now);
             } else if p.header.ty == PacketType::Syn {
+                // As the socket does: a closed connection is gone, and a
+                // new SYN starts a new one.
                 self.b = Some(Connection::accept(
                     &p.header, self.b_seq, LIMITS, self.t0, now,
                 ));
@@ -532,4 +535,83 @@ fn accepted_side_waits_for_the_initiator() {
     let (at_a, at_b) = exchange(&mut sim, b"", b"x");
     assert_eq!(at_b, b"");
     assert_eq!(at_a, b"x");
+}
+
+#[test]
+fn half_open_accepted_connection_times_out() {
+    let t0 = Instant::now();
+    let mut a = Connection::connect(70, 1, LIMITS, t0, t0);
+    let mut out = Vec::new();
+    a.poll_transmit(t0, &mut out);
+    // The initiator vanishes after its SYN: nothing ever follows our SYN-ACK.
+    let mut b = Connection::accept(&parse(&out).unwrap().header, 9, LIMITS, t0, t0);
+    while b.poll_transmit(t0, &mut out) {}
+    let d = b.deadline().expect("a handshake deadline is set");
+    assert_eq!(d - t0, HANDSHAKE_TIMEOUT);
+    b.on_timeout(d - Duration::from_millis(1));
+    assert_eq!(b.state(), State::SynRecv);
+    b.on_timeout(d);
+    assert_eq!(b.state(), State::Closed(Closed::TimedOut));
+}
+
+#[test]
+fn completed_handshake_clears_its_deadline() {
+    let mut sim = Sim::new(9, CLEAN, 1, 1);
+    while sim.b.as_ref().is_none_or(|b| b.state() != State::Connected) {
+        assert!(sim.step());
+    }
+    let b = sim.b.as_mut().unwrap();
+    assert!(b.handshake_deadline.is_none());
+    // Idle from here on: the idle timeout is what remains.
+    let d = b.deadline().expect("idle deadline");
+    assert_eq!(d, b.last_recv + LIMITS.idle_timeout);
+}
+
+#[test]
+fn idle_connection_times_out_and_traffic_postpones_it() {
+    let mut sim = Sim::new(10, CLEAN, 1, 1);
+    while sim.b.is_none() || sim.a.state() != State::Connected {
+        assert!(sim.step());
+    }
+    // A sends a little; once it's acknowledged A is idle.
+    sim.a.write(b"ping").unwrap();
+    while sim.a.buffered() > 0 {
+        assert!(sim.step());
+    }
+    let first = sim
+        .a
+        .deadline()
+        .expect("idle deadline while nothing is in flight");
+    // Fresh traffic from the peer moves A's idle deadline later. (Step
+    // only until it arrives: stepping an idle pair jumps to the deadline.)
+    sim.now += Duration::from_secs(5);
+    sim.b.as_mut().unwrap().write(b"pong").unwrap();
+    let mut buf = [0u8; 8];
+    while sim.a.read(&mut buf).is_err() {
+        assert!(sim.step());
+    }
+    let later = sim.a.deadline().expect("idle deadline");
+    assert!(later > first, "{later:?} vs {first:?}");
+    // Then silence: both sides close as timed out, not before the timeout.
+    while !sim.a.is_closed() {
+        assert!(sim.step());
+    }
+    assert_eq!(sim.a.state(), State::Closed(Closed::TimedOut));
+    assert!(sim.now - sim.t0 >= LIMITS.idle_timeout);
+}
+
+#[test]
+fn data_in_flight_is_governed_by_retransmission_not_idle() {
+    let t0 = Instant::now();
+    let mut a = Connection::connect(80, 1, LIMITS, t0, t0);
+    let mut out = Vec::new();
+    a.poll_transmit(t0, &mut out);
+    let mut b = Connection::accept(&parse(&out).unwrap().header, 9, LIMITS, t0, t0);
+    b.poll_transmit(t0, &mut out);
+    a.on_packet(&parse(&out).unwrap(), t0);
+    a.write(&[1; 100]).unwrap();
+    while a.poll_transmit(t0, &mut out) {}
+    // The data's retransmission timer (≈1 s), not the 60 s idle deadline.
+    let d = a.deadline().unwrap();
+    assert!(d - t0 <= Duration::from_secs(2), "{:?}", d - t0);
 }

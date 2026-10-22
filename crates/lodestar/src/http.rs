@@ -25,6 +25,8 @@ const STATUS_PAGE: &str = include_str!("status.html");
 pub struct AppState {
     pub monitor: Monitor,
     pub dht: Option<Arc<Mutex<Option<StatsSnapshot>>>>,
+    /// Fetch outcomes per transport (TCP, uTP).
+    pub fetch: Arc<lodestar_peer_wire::FetchStats>,
     /// A read-only store connection for the funnel and recent torrents.
     pub reader: Arc<Mutex<Store>>,
     pub search: Option<SearchState>,
@@ -79,7 +81,7 @@ async fn page() -> Response {
 }
 
 async fn prometheus(State(s): State<AppState>) -> Response {
-    let mut body = metrics::render(&s.monitor, s.dht().as_ref());
+    let mut body = metrics::render(&s.monitor, s.dht().as_ref(), &s.fetch);
     if let Some(search) = &s.search {
         metrics::render_search(&mut body, search.index.num_docs(), &search.stats);
     }

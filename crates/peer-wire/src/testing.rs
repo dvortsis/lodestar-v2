@@ -102,7 +102,12 @@ impl FakePeer {
         behavior: Behavior,
         pex: Vec<SocketAddr>,
     ) -> FakePeer {
-        let socket = UtpSocket::bind("127.0.0.1:0".parse().expect("addr"))
+        // Test clients all come from 127.0.0.1: lift the per-IP cap.
+        let config = lodestar_utp::Config {
+            max_per_ip: 1024,
+            ..lodestar_utp::Config::default()
+        };
+        let socket = UtpSocket::bind_with("127.0.0.1:0".parse().expect("addr"), config)
             .await
             .expect("bind");
         let addr = socket.local_addr().expect("bound");

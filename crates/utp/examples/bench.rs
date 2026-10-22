@@ -65,6 +65,7 @@ async fn main() {
     // Memory: idle connections.
     let config = Config {
         max_connections: connections + 16,
+        max_per_ip: connections + 16,
         ..Config::default()
     };
     let server = UtpSocket::bind_with(any, config.clone()).await.unwrap();
