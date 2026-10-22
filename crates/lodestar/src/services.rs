@@ -1,6 +1,7 @@
 //! Builds and wires every long-running service of `lodestar serve`: the
 //! store and its readers, the blocklist subscriptions, the pipeline, the
-//! live indexer, the filters API, the API state and the HTTP server. `main.rs` parses the command line and calls
+//! live indexer, the filters API, the settings registry, the API state
+//! and the HTTP server. `main.rs` parses the command line and calls
 //! [`Services::start`]; [`Services::run`] serves until a signal, then
 //! shuts down in order.
 //!
@@ -28,7 +29,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::config::Config;
-use crate::{floor, http, subscriptions};
+use crate::{floor, http, settings, subscriptions};
 
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -59,6 +60,18 @@ impl Services {
     pub async fn start(config: &Config) -> Result<Services, BoxError> {
         std::fs::create_dir_all(&config.data_dir)
             .map_err(|e| format!("creating {}: {e}", config.data_dir.display()))?;
+        // The settings registry (§11) over its own connection: saved
+        // values join the file and environment before anything starts.
+        let settings = {
+            let (db, store_config, base) =
+                (config.db_path(), config.store_config(), config.clone());
+            tokio::task::spawn_blocking(move || {
+                let store = Arc::new(Mutex::new(Store::open(&db, store_config)?));
+                Ok::<_, BoxError>(Arc::new(settings::Registry::load(&base, store)?))
+            })
+            .await??
+        };
+        let config = &settings.effective_config(config);
         let mut pipeline_config = config.pipeline_config()?;
         let key = seal_key(&config.data_dir.join("seal.key"))?;
         pipeline_config.sealer = Some(Arc::new(Sealer::new(&key)));
@@ -126,6 +139,7 @@ impl Services {
             dht_config.deny = Some(lodestar_dht::node::Deny(denied.clone()));
             let dht = Arc::new(DhtSource::new(dht_config));
             dht_stats = Some(dht.stats_handle());
+            settings::crawler::follow_intensity(settings.subscribe(), dht.node_handle());
             plugins.push(dht);
         }
         let auth = Arc::new(
@@ -173,7 +187,9 @@ impl Services {
             index: search.clone(),
             reader: reader.clone(),
             filters: Some(filters),
+            settings: Some(settings.clone()),
         };
+        settings::log::follow(settings.subscribe());
         let http = http::AppState {
             monitor: pipeline.monitor(),
             dht: dht_stats,

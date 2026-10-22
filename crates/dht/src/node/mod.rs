@@ -311,12 +311,15 @@ pub struct Snapshot {
     pub stored_peer_hashes: usize,
     /// Memory held by the seen filter (fixed at start).
     pub seen_filter_bytes: usize,
+    /// The intensity the node runs at now.
+    pub intensity: Intensity,
 }
 
 pub(crate) enum Command {
     Snapshot(oneshot::Sender<Snapshot>),
     GetPeers(InfoHash),
     Scrape(InfoHash, oneshot::Sender<Option<DhtEstimate>>),
+    SetIntensity(Intensity),
 }
 
 /// A DHT swarm estimate (BEP 33) from the nodes closest to a hash.
@@ -345,6 +348,16 @@ impl NodeHandle {
         let (tx, rx) = oneshot::channel();
         self.commands.send(Command::Scrape(hash, tx)).await.ok()?;
         rx.await.ok().flatten()
+    }
+
+    /// Runs the node at `intensity` from now on: its query and reply
+    /// rates and its cap on outstanding queries (the settings registry's
+    /// live change, §11). `false` if the node has stopped.
+    pub async fn set_intensity(&self, intensity: Intensity) -> bool {
+        self.commands
+            .send(Command::SetIntensity(intensity))
+            .await
+            .is_ok()
     }
 }
 

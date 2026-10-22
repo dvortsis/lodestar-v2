@@ -30,6 +30,7 @@ pub mod extract;
 pub mod filters;
 pub mod openapi;
 mod search;
+pub mod settings;
 mod torrents;
 
 use std::sync::{Arc, Mutex};
@@ -54,6 +55,8 @@ pub struct ApiState {
     pub reader: Arc<Mutex<Store>>,
     /// `None` when the filters API isn't served (tests, tools).
     pub filters: Option<Arc<filters::FiltersApi>>,
+    /// `None` when the settings registry isn't served (tests, tools).
+    pub settings: Option<Arc<dyn settings::SettingsApi>>,
 }
 
 /// The `/api/v1` routes. The server must be run with
@@ -65,6 +68,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(search::routes())
         .merge(torrents::routes())
         .merge(filters::routes())
+        .merge(settings::routes())
         .merge(events::routes())
         .merge(openapi::routes())
         // What `auth::protected` checks sessions against.

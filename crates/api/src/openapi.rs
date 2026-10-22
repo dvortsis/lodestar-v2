@@ -44,6 +44,7 @@ const OPEN: [&str; 5] = ["/auth", "/setup", "/login", "/logout", "/openapi.json"
         (name = "torrents", description = "One torrent's details and files."),
         (name = "filters", description = "Filtering and safety (§20)."),
         (name = "classify", description = "Classification rules and corrections (§20.9)."),
+        (name = "settings", description = "The runtime settings registry (§10.10, §11)."),
         (name = "events", description = "The live server-sent event stream (§9)."),
         (name = "meta", description = "This document."),
     ),
@@ -60,6 +61,7 @@ pub fn document() -> Doc {
     doc.merge(crate::search::ApiDoc::openapi());
     doc.merge(crate::torrents::ApiDoc::openapi());
     doc.merge(crate::filters::ApiDoc::openapi());
+    doc.merge(crate::settings::ApiDoc::openapi());
     doc.merge(crate::events::ApiDoc::openapi());
     finish(&mut doc);
     doc
