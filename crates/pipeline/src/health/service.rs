@@ -91,6 +91,10 @@ pub struct HealthStats {
     pub suspect: std::sync::atomic::AtomicU64,
     /// Private torrents taken from a lane and dropped unscraped.
     pub private_skipped: std::sync::atomic::AtomicU64,
+    /// Interest and rediscovery hints for torrents scraped recently.
+    pub fresh_skipped: std::sync::atomic::AtomicU64,
+    /// DHT scrapes not asked because the node was busy with others.
+    pub dht_busy: std::sync::atomic::AtomicU64,
     pub dht_requested: std::sync::atomic::AtomicU64,
     pub dht_estimates: std::sync::atomic::AtomicU64,
     /// Interest and rediscovery hints dropped because a lane was full.
@@ -199,7 +203,8 @@ pub(crate) fn spawn(s: Setup) -> (HealthHandle, JoinHandle<Store>) {
             None => None,
         };
         let Some(tracker) = tracker else {
-            tracing::warn!(tracker = %url, "tracker can't be scraped; skipped");
+            // The host only: an HTTP tracker URL may carry a passkey.
+            tracing::warn!(tracker = url.host(), "tracker can't be scraped; skipped");
             continue;
         };
         let interval = if udp {
@@ -309,6 +314,17 @@ struct Loaded {
     hash: InfoHash,
     private: bool,
     before: Option<Before>,
+    /// When a tracker or the DHT last answered for it.
+    scraped_at: Option<i64>,
+}
+
+/// Hints don't rescrape fresh data: a torrent someone looks at is
+/// refreshed when its numbers are older than this…
+const INTEREST_FRESH: i64 = 30 * 60;
+/// …and one the DHT sees again when they're older than an alive swarm's
+/// shortest interval (popular torrents are rediscovered constantly).
+fn rediscovered_fresh(s: &Schedule) -> i64 {
+    s.alive_min.as_secs() as i64
 }
 
 impl Scheduler {
@@ -443,8 +459,21 @@ impl Scheduler {
         let mut items = Vec::with_capacity(taken.len());
         let mut hashes = Vec::with_capacity(taken.len());
         let mut dropped = Vec::new();
+        let now = unix_now();
+        let fresh = |lane: Lane, at: Option<i64>| {
+            let age = match lane {
+                Lane::Interest => INTEREST_FRESH,
+                Lane::Rediscovered => rediscovered_fresh(&self.cfg.schedule),
+                Lane::New | Lane::Due => return false,
+            };
+            at.is_some_and(|t| now - t < age)
+        };
         for ((lane, id), l) in taken.into_iter().zip(loaded) {
             match l {
+                Some(l) if !l.private && fresh(lane, l.scraped_at) => {
+                    inc(&self.stats.fresh_skipped);
+                    dropped.push(id);
+                }
                 Some(l) if !l.private => {
                     items.push(Item {
                         id,
@@ -503,19 +532,20 @@ impl Scheduler {
                 if item.lane == Lane::Due {
                     continue;
                 }
+                // The node scrapes about one swarm a second (10% of its
+                // query budget): with every permit taken, this torrent
+                // goes without a DHT estimate rather than queueing behind
+                // an ever-growing backlog.
+                let Ok(permit) = self.dht_permits.clone().try_acquire_owned() else {
+                    inc(&self.stats.dht_busy);
+                    continue;
+                };
                 r.waiting_dht += 1;
                 inc(&self.stats.dht_requested);
-                let (node, tx, permits, hash) = (
-                    node.clone(),
-                    self.dht_tx.clone(),
-                    self.dht_permits.clone(),
-                    hashes[i],
-                );
+                let (node, tx, hash) = (node.clone(), self.dht_tx.clone(), hashes[i]);
                 tokio::spawn(async move {
-                    let est = match permits.acquire_owned().await {
-                        Ok(_permit) => node.scrape(hash).await,
-                        Err(_) => None,
-                    };
+                    let est = node.scrape(hash).await;
+                    drop(permit);
                     let _ = tx.send((round, i, est)).await;
                 });
             }
@@ -642,16 +672,23 @@ impl Scheduler {
 fn load(s: &mut Store, id: i64) -> Option<Loaded> {
     let row = s.torrent(id).ok()??;
     let private = row.flags & (flags::PRIVATE | flags::PRIVATE_SOURCE) != 0;
-    let before = s.swarm(id).ok().flatten().map(|w| Before {
+    let swarm = s.swarm(id).ok().flatten();
+    let before = swarm.as_ref().map(|w| Before {
         seen: Seen {
             seeders: w.seeders,
             leechers: w.leechers,
         },
         interval: (w.next_scrape_at - w.last_scrape_at).max(0),
     });
+    // A row nobody answered for (`trackers_checked` 0, no DHT estimate)
+    // has no data to be fresh.
+    let scraped_at = swarm
+        .filter(|w| w.trackers_checked > 0 || w.dht.is_some())
+        .map(|w| w.last_scrape_at);
     Some(Loaded {
         hash: row.info_hash,
         private,
         before,
+        scraped_at,
     })
 }
