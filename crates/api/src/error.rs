@@ -14,7 +14,10 @@ use std::borrow::Cow;
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use serde_json::{Map, Value, json};
+use serde_json::Value;
+
+use crate::dto::error::{ErrorBody, ErrorEnvelope};
+use crate::dto::filters::Assessment;
 
 /// An API error: a status plus the envelope's fields.
 #[derive(Debug)]
@@ -24,8 +27,9 @@ pub struct ApiError {
     message: Cow<'static, str>,
     field: Option<Cow<'static, str>>,
     span: Option<(usize, usize)>,
-    /// Top-level keys beside `error` (the 401's `setup_required`).
-    extra: Map<String, Value>,
+    /// Top-level keys beside `error` (keep these rare).
+    setup_required: Option<bool>,
+    assessment: Option<Box<Assessment>>,
 }
 
 pub type ApiResult<T> = Result<T, ApiError>;
@@ -49,7 +53,8 @@ impl ApiError {
             message: message.into(),
             field: None,
             span: None,
-            extra: Map::new(),
+            setup_required: None,
+            assessment: None,
         }
     }
 
@@ -69,10 +74,17 @@ impl ApiError {
         self
     }
 
-    /// A top-level key beside `error`, for context a client needs to
-    /// recover (keep these rare).
-    pub fn with(mut self, key: &str, value: impl Into<Value>) -> ApiError {
-        self.extra.insert(key.to_string(), value.into());
+    /// The 401's `setup_required` beside `error`: whether to send the
+    /// client to first-run setup rather than the login form.
+    pub fn setup_required(mut self, required: bool) -> ApiError {
+        self.setup_required = Some(required);
+        self
+    }
+
+    /// The 428's `assessment` beside `error`: the warning the client
+    /// shows before asking for the password.
+    pub fn assessment(mut self, assessment: Assessment) -> ApiError {
+        self.assessment = Some(Box::new(assessment));
         self
     }
 
@@ -84,21 +96,29 @@ impl ApiError {
         self.code
     }
 
+    /// The envelope's `error` object.
+    pub fn error_body(&self) -> ErrorBody {
+        ErrorBody {
+            code: self.code.to_string(),
+            end: self.span.map(|(_, end)| end),
+            field: self.field.as_deref().map(str::to_string),
+            message: self.message.to_string(),
+            start: self.span.map(|(start, _)| start),
+        }
+    }
+
     /// The response body: the envelope plus any top-level keys.
+    pub fn envelope(&self) -> ErrorEnvelope {
+        ErrorEnvelope {
+            assessment: self.assessment.as_deref().cloned(),
+            error: self.error_body(),
+            setup_required: self.setup_required,
+        }
+    }
+
+    /// [`ApiError::envelope`] as JSON.
     pub fn body(&self) -> Value {
-        let mut error = Map::new();
-        error.insert("code".into(), self.code.into());
-        error.insert("message".into(), json!(self.message));
-        if let Some(field) = &self.field {
-            error.insert("field".into(), json!(field));
-        }
-        if let Some((start, end)) = self.span {
-            error.insert("start".into(), start.into());
-            error.insert("end".into(), end.into());
-        }
-        let mut body = self.extra.clone();
-        body.insert("error".into(), error.into());
-        body.into()
+        serde_json::to_value(self.envelope()).expect("the envelope serializes")
     }
 }
 
@@ -118,7 +138,7 @@ impl std::error::Error for ApiError {}
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.status, Json(self.body())).into_response()
+        (self.status, Json(self.envelope())).into_response()
     }
 }
 
@@ -129,6 +149,16 @@ pub fn internal(e: impl std::fmt::Display) -> ApiError {
         StatusCode::INTERNAL_SERVER_ERROR,
         "internal",
         "Something went wrong on the server.",
+    )
+}
+
+/// The 501 an endpoint returns while it's a typed stub (see `README.md`):
+/// its route and contract are served before its handler is written.
+pub fn not_implemented() -> ApiError {
+    ApiError::new(
+        StatusCode::NOT_IMPLEMENTED,
+        "not_implemented",
+        "This endpoint isn't implemented yet.",
     )
 }
 
@@ -153,6 +183,7 @@ pub async fn wrong_method() -> ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn the_envelope_has_only_the_fields_set() {
@@ -164,14 +195,32 @@ mod tests {
         let e = ApiError::bad_request("query_syntax", "Nope.")
             .field("q")
             .span(2, 5)
-            .with("hint", true);
+            .setup_required(true);
         assert_eq!(
             e.body(),
             json!({
                 "error": { "code": "query_syntax", "message": "Nope.", "field": "q", "start": 2, "end": 5 },
-                "hint": true,
+                "setup_required": true,
             })
         );
+        // Keys in the order a `Value` body always had them.
+        let e = ApiError::new(
+            StatusCode::PRECONDITION_REQUIRED,
+            "confirm_required",
+            "Confirm.",
+        )
+        .field("password")
+        .assessment(Assessment::default())
+        .setup_required(false);
+        let text = serde_json::to_string(&e.envelope()).unwrap();
+        assert_eq!(text, e.body().to_string());
+    }
+
+    #[test]
+    fn stubs_are_501_in_the_envelope() {
+        let e = not_implemented();
+        assert_eq!(e.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(e.body()["error"]["code"], json!("not_implemented"));
     }
 
     #[test]

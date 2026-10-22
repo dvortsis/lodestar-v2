@@ -1038,6 +1038,7 @@ version = "0.0.0"
 name = "lodestar-classify"
 version = "0.0.0"
 dependencies = [
+ "lodestar-metainfo",
  "lodestar-release-parser",
 ]
 
@@ -1063,6 +1064,7 @@ dependencies = [
  "lodestar-classify",
  "lodestar-search",
  "lodestar-store",
+ "tracing",
  "unicode-normalization",
 ]
 
@@ -1080,6 +1082,7 @@ dependencies = [
  "lodestar-search",
  "lodestar-store",
  "lodestar-tracker-scrape",
+ "lodestar-utp",
 ]
 
 [[package]]
@@ -1131,6 +1134,15 @@ dependencies = [
  "rustls",
  "tokio",
  "url",
+]
+
+[[package]]
+name = "lodestar-utp"
+version = "0.0.0"
+dependencies = [
+ "rand 0.10.3",
+ "socket2",
+ "tokio",
 ]
 
 [[package]]

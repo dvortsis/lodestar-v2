@@ -1,0 +1,2 @@
+400
+{"error":{"code":"unknown_sort","field":"sort","message":"Unknown sort \"seeders\": use relevance, discovered, size or files, with + or - for the order."}}
