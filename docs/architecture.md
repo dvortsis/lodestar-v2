@@ -2555,3 +2555,16 @@ Exceptions are how you correct false positives without switching rules off. Like
 - **Weakening changes:** unsubscribing, pausing or narrowing a list releases what it blocked. As with disabling a pack (§20.11), that shows the impact preview and effect warning and needs your password. Subscribing and refreshing need neither.
 - **Storage:** a `subscriptions` table (URL, kind, format, action, scope, schedule, ETag, last fetch, entry count, status) and `subscription_entries` (hashes and signatures; IP ranges are kept as a compact blob per list). Like everything in §20, no history of who changed what is kept.
 - **Verification:** golden parsers for every format, plus fuzz targets (they parse untrusted input); a fake list server in tests for conditional GETs, the size caps and the sanity gates; and a check that an IP-listed peer or node is never contacted by the DHT, the fetch pool or the scraper.
+- **As built (store migration V6, `lodestar_filter::lists`, `lodestar` subscriptions):**
+  - **Formats:** hash lists (hex, base32, magnets), `.p2p`, eMule `.dat` (access level ≥ 128 allows) and CIDR/netset. Bodies are gzip or plain, capped at 64 MB downloaded and 256 MB expanded.
+  - **Storage:** content lists are stored as packed 20-byte hashes. IP lists are stored as merged ranges.
+  - **Enforcement:** the DHT drops packets to and from listed addresses (`dht_denied_total`), and the fetch pool never connects to them (`Error::Denied`). The tracker scraper will use the same check when it lands in M4.
+  - **Content-list actions:** drop or quarantine only. A `hide` action needs search to honour it, so it arrives with your rules.
+  - **Catalog** (`lodestar lists`; checked live when added):
+    - FireHOL level 1 and level 2 netsets;
+    - Naunter's BT_BlockLists.
+  - **Measured on the real lists:**
+    - FireHOL level 1: about 19k ranges.
+    - BT_BlockLists: 689k ranges, 394k after merging, 3.5 MB stored. It parses in about 0.5 s and costs about 110 ns per lookup.
+    - **BT_BlockLists covered about 49% of IPv4,** because it blocks whole provider allocations. The catalog says so. Lodestar warns whenever the combined lists cover more than 10%, because the crawler loses that share of the DHT.
+  - **Configuration for now:** subscriptions come from `[subscriptions]` in `config.toml`, as catalog keys and `[[subscriptions.lists]]`. They're added to the store at start, never removed from it. The filters API (next) adds connecting, removing and *Accept anyway* / *Keep previous* for held versions.

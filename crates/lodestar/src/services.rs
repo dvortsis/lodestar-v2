@@ -1,6 +1,6 @@
 //! Builds and wires every long-running service of `lodestar serve`: the
-//! store and its readers, the pipeline, the live indexer, the API state
-//! and the HTTP server. `main.rs` parses the command line and calls
+//! store and its readers, the blocklist subscriptions, the pipeline, the
+//! live indexer, the API state and the HTTP server. `main.rs` parses the command line and calls
 //! [`Services::start`]; [`Services::run`] serves until a signal, then
 //! shuts down in order.
 //!
@@ -9,19 +9,22 @@
 
 use std::future::Future;
 use std::io::Write;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use lodestar_filter::Sealer;
+use lodestar_filter::lists::SharedIps;
 use lodestar_pipeline::{DhtSource, Pipeline};
 use lodestar_search::{LiveConfig, LiveIndexer, SearchIndex};
 use lodestar_sources::SourcePlugin;
 use lodestar_store::Store;
 use tokio::net::TcpListener;
+use tokio::sync::watch;
+use tokio::task::JoinHandle;
 
 use crate::config::Config;
-use crate::http;
+use crate::{http, subscriptions};
 
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -37,6 +40,8 @@ pub struct Services {
 
 /// What has to be stopped on the way out.
 pub struct Handles {
+    /// The blocklist refresher (§20.13) and its stop signal.
+    subscriptions: (watch::Sender<bool>, JoinHandle<()>),
     pipeline: Pipeline,
     live: Option<LiveIndexer>,
 }
@@ -50,13 +55,29 @@ impl Services {
         let mut pipeline_config = config.pipeline_config()?;
         let key = seal_key(&config.data_dir.join("seal.key"))?;
         pipeline_config.sealer = Some(Arc::new(Sealer::new(&key)));
+        // Subscribed IP lists (§20.13): one shared set, consulted by the
+        // fetch pool and the DHT before talking to anyone.
+        let ips = Arc::new(SharedIps::default());
+        let denied = {
+            let ips = ips.clone();
+            Arc::new(move |ip: IpAddr| ips.contains(ip))
+        };
+        pipeline_config.fetch.deny = Some(lodestar_peer_wire::Deny(denied.clone()));
         let db = config.db_path();
         let store_config = config.store_config();
         let search = config.search.enabled;
         let index_path = config.index_path();
         let heap = config.search.heap_mib.max(16) << 20;
-        let (store, reader, live) = tokio::task::spawn_blocking(move || {
+        let filter = pipeline_config.filter.clone();
+        let subs_config = config.subscriptions.clone();
+        let subs_ips = ips.clone();
+        let (store, control, reader, live) = tokio::task::spawn_blocking(move || {
             let store = Store::open(&db, store_config.clone())?;
+            // Settings and lists change through a second connection, so
+            // they never wait behind the ingest writer for long.
+            let mut control = Store::open(&db, store_config.clone())?;
+            subscriptions::sync_config(&mut control, &subs_config)?;
+            subscriptions::apply(&control, &filter, &subs_ips)?;
             let reader = Store::open_reader(&db, store_config.clone())?;
             // The indexer follows the store through its own connection.
             let live = if search {
@@ -73,14 +94,16 @@ impl Services {
             } else {
                 None
             };
-            Ok::<_, BoxError>((store, reader, live))
+            Ok::<_, BoxError>((store, control, reader, live))
         })
         .await??;
 
         let mut plugins: Vec<Arc<dyn SourcePlugin>> = Vec::new();
         let mut dht_stats = None;
         if config.dht.enabled {
-            let dht = Arc::new(DhtSource::new(config.dht_config()));
+            let mut dht_config = config.dht_config();
+            dht_config.deny = Some(lodestar_dht::node::Deny(denied.clone()));
+            let dht = Arc::new(DhtSource::new(dht_config));
             dht_stats = Some(dht.stats_handle());
             plugins.push(dht);
         }
@@ -98,7 +121,17 @@ impl Services {
                 config.http.bind
             );
         }
+        let filter = pipeline_config.filter.clone();
         let pipeline = Pipeline::start(pipeline_config, store, plugins).await?;
+        let control = Arc::new(Mutex::new(control));
+        let (stop_subscriptions, subscriptions_stopped) = watch::channel(false);
+        let refresher = tokio::spawn(subscriptions::run(
+            control,
+            subscriptions::Limits::from_config(&config.subscriptions),
+            filter,
+            ips,
+            subscriptions_stopped,
+        ));
         let reader = Arc::new(Mutex::new(reader));
         let api = lodestar_api::ApiState {
             auth,
@@ -126,6 +159,7 @@ impl Services {
             api,
             http,
             handles: Handles {
+                subscriptions: (stop_subscriptions, refresher),
                 pipeline,
                 live: live.map(|(_, live)| live),
             },
@@ -153,10 +187,14 @@ impl Services {
 }
 
 impl Handles {
-    /// Stops every service in order: the pipeline (which saves the queue
-    /// and DHT state and commits the last batch), then the indexer.
+    /// Stops every service in order: the blocklist refresher, the
+    /// pipeline (which saves the queue and DHT state and commits the last
+    /// batch), then the indexer.
     pub async fn shutdown(self) -> Result<(), BoxError> {
         tracing::info!("shutting down: saving the queue and DHT state");
+        let (stop, refresher) = self.subscriptions;
+        let _ = stop.send(true);
+        let _ = refresher.await;
         self.pipeline.shutdown().await?;
         if let Some(live) = self.live {
             // After the writer, so the last batch gets indexed too.

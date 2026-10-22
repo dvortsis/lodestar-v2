@@ -6,6 +6,7 @@ mod config;
 mod http;
 mod metrics;
 mod services;
+mod subscriptions;
 
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
@@ -25,12 +26,14 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 const USAGE: &str = "\
 Usage: lodestar [serve|healthcheck] [--config <path>]
        lodestar import-bitmagnet <postgres-url> [--limit N] [--config <path>]
+       lodestar lists
 
 Commands:
   serve             Run the crawler, search, status page and metrics (default)
   healthcheck       Exit 0 if the local instance answers /healthz, 1 otherwise
   import-bitmagnet  Import a bitmagnet database (read-only, resumable); run
                     it while the server is stopped
+  lists             Show the blocklist catalog ([subscriptions] catalog keys)
 
 Options:
   --config <path>  config.toml (default: $LODESTAR_DATA_DIR/config.toml or
@@ -50,6 +53,7 @@ enum Command {
         url: String,
         limit: Option<u64>,
     },
+    Lists,
     Version,
     Help,
 }
@@ -71,7 +75,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
                 let n = args.next().ok_or("--limit needs a number")?;
                 limit = Some(n.parse().map_err(|_| format!("bad --limit {n:?}"))?);
             }
-            "serve" | "healthcheck" | "import-bitmagnet" if command.is_none() => {
+            "serve" | "healthcheck" | "import-bitmagnet" | "lists" if command.is_none() => {
                 command = Some(arg)
             }
             other if command.as_deref() == Some("import-bitmagnet") && !other.starts_with('-') => {
@@ -82,6 +86,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
     }
     Ok(match command.as_deref() {
         Some("healthcheck") => Command::Healthcheck(config),
+        Some("lists") => Command::Lists,
         Some("import-bitmagnet") => match positional.as_slice() {
             [url] => Command::ImportBitmagnet {
                 config,
@@ -110,6 +115,19 @@ fn main() -> ExitCode {
         }
         Command::Version => {
             println!("lodestar {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
+        Command::Lists => {
+            for e in subscriptions::CATALOG {
+                println!(
+                    "{}\n  {} ({})\n  {}\n  {}\n",
+                    e.key,
+                    e.name,
+                    e.format.as_str(),
+                    e.url,
+                    e.about
+                );
+            }
             ExitCode::SUCCESS
         }
         Command::Healthcheck(path) => match load(path) {
@@ -302,6 +320,7 @@ mod tests {
     #[test]
     fn parses_the_command_line() {
         assert_eq!(args(""), Ok(Command::Serve(None)));
+        assert_eq!(args("lists"), Ok(Command::Lists));
         assert_eq!(
             args("serve --config /x.toml"),
             Ok(Command::Serve(Some("/x.toml".into())))

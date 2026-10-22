@@ -17,6 +17,7 @@
 mod core;
 mod engine;
 mod hash;
+pub mod lists;
 pub mod normalize;
 mod payload;
 mod seal;
@@ -25,7 +26,7 @@ pub use crate::core::{
     Action, Core, CoreRule, CsList, Evidence, Field, Fixture, Hit, Item, Lists, Locked, MAX_FILES,
     Origin, Switches,
 };
-pub use engine::{Engine, Handle};
+pub use engine::{Decision, Engine, Handle, ListLayer, RuleRef};
 pub use hash::{TermSet, TermSetError, term_hash};
 pub use payload::{PayloadSig, SPECIFIC_BYTES, SPECIFIC_FILES, payload_sig};
 pub use seal::{SealError, Sealer};

@@ -24,6 +24,7 @@ fn config(bootstrap: Vec<String>) -> Config {
         save_every: Duration::from_secs(3600),
         read_only: false,
         harvest: Default::default(),
+        deny: None,
     }
 }
 
