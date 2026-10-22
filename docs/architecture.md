@@ -1976,6 +1976,21 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **`RebuildProgress` gains `error`**, the failure's message, so the banner, Insights and tests can say why.
 - **The serving pointer is a `Mutex<Arc<SearchIndex>>`, held only to clone or replace the `Arc`,** in place of an `RwLock`. A swap then waits behind at most one clone, whatever the platform's reader/writer policy (Windows SRW locks promise none).
 
+**Runner-recorded decisions (2026-10-22):**
+- **X-notify:**
+  - Discord sends without following redirects, so a webhook URL can't be bounced to another host.
+  - ntfy needs a JSON body with an `id` on a 2xx answer. Anything else (a captive portal or a proxy's HTML page) is a failed delivery.
+  - ntfy credentials travel over plain `http` only to private hosts. A public host needs `https`.
+- **D-docker:**
+  - **Build overrides:** the image builds with `CARGO_PROFILE_RELEASE_STRIP=symbols` and `CARGO_PROFILE_RELEASE_DEBUG=false`. The release profile in `Cargo.toml` keeps line tables, and the image drops them (about 100 MB).
+  - **§4 data layout as built:** the text of §4 (line 105) stays as planned. What the code writes under `/data` today is `lodestar.db`, `index/`, `dht-state.bin`, `auth.json`, `seal.key`, an optional `config.toml` and `import-bitmagnet.cursor` (`crates/lodestar/src/config.rs`, `packaging/docker/README.md`). There is no `data/hot/` or `data/cold/` yet, no `index/torrents/` and `index/files/` split (the index lives in one `index/` directory), and no separate hot-path or cold-path mounts. The Unraid template's hot and cold paths are marked "planned, not used yet".
+  - **`/data` is the image's only volume,** and it ships empty and owned by the `nonroot` user (65532).
+- **W6 snapshot policy:**
+  - Snapshots cover key screens only.
+  - The theme set is the shared 46-theme set (23 families, two modes), at breakpoint 1366.
+  - Compact density is snapshotted only on routes that are density-aware.
+  - Baselines are generated in the pinned Playwright container, never on a developer machine. They're updated through the `.update-snapshots` marker file or a `workflow_dispatch` run, and the owner imports them by hand when the artifact host is blocked.
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.

@@ -87,11 +87,11 @@ slices:
     owns: ["web/scripts/themes.ts", "web/scripts/themes.test.ts", "web/themes/riverstone.json"]
     spec: ["§10.18"]
   - id: W1b
-    title: Generate the other 47 theme JSONs from docs/themes.md
+    title: Generate the other 23 theme families (46 themes) from docs/themes.md
     kind: helper
     model: haiku
     deps: [W1, C1]
-    owns: ["web/themes/*.json"]
+    owns: ["web/themes/*.json", "web/static/themes.json", "web/scripts/theme-files.test.ts", "web/scripts/themes.test.ts"]
     spec: ["§10.18"]
   - id: W3
     title: Brand asset pipeline
@@ -112,7 +112,7 @@ slices:
     kind: helper
     model: sonnet
     deps: [W0, B1]
-    owns: ["web/tests/**", "web/playwright.config.ts", "web/lighthouserc.json", ".github/workflows/e2e.yml"]
+    owns: ["web/e2e/**", "web/playwright.config.ts", "web/lighthouserc*.json", ".github/workflows/e2e.yml"]
     spec: ["§10.17", "§17"]
   - id: W2
     title: Tokens, daisyUI mapping and font subsets
@@ -290,8 +290,10 @@ slices:
   # ── Pulled forward (independent of M5 and the M4 sessions' files; owner let the runner decide, 2026-10-22) ──
   - {id: X-utp, title: "uTP (BEP 29) transport behind a flag, shared UDP port demux", kind: core, model: opus, deps: [], owns: ["crates/utp/**", "crates/peer-wire/**", "crates/dht/src/socket.rs"], spec: ["§6", "§15", "§13"], notes: "config wiring waits for B2"}
   - {id: X-integrations, title: "integrations crate: DownloadClient and Notifier traits, secret storage, SSRF guard, qBittorrent + webhook as the pattern", kind: core, model: opus, deps: [], owns: ["crates/integrations/**"], spec: ["§9", "§12", "§18.10"]}
-  - {id: X-clients, title: "Transmission, Deluge, rTorrent, Aria2 adapters (they parse remote responses, so Opus)", kind: core, model: opus, deps: [X-integrations], owns: ["crates/integrations/src/clients/**"], spec: ["§9"]}
-  - {id: X-notify, title: "ntfy, Discord, email, RSS senders", kind: helper, model: sonnet, deps: [X-integrations], owns: ["crates/integrations/src/notify/**"], spec: ["§8", "§10.9.7"]}
+  - {id: X-clients, title: "Transmission, Deluge, rTorrent, Aria2 adapters (they parse remote responses, so Opus)", kind: core, model: opus, deps: [X-integrations], owns: ["crates/integrations/src/clients/**", "crates/integrations/tests/{transmission,deluge,rtorrent,aria2}.rs", "crates/integrations/tests/fixtures/{transmission,deluge,rtorrent,aria2}/**"], spec: ["§9"]}
+  - {id: X-notify, title: "ntfy, Discord, email, RSS senders", kind: helper, model: sonnet, deps: [X-integrations], owns: ["crates/integrations/src/notify/{ntfy,discord,rss,webhook,mod}.rs", "crates/integrations/tests/{ntfy,discord,rss}.rs", "crates/integrations/tests/fixtures/{ntfy,discord}/**"], spec: ["§8", "§10.9.7"]}
+  - {id: X-email, title: "SMTP channel, guarded TCP connect, shared text helpers", kind: core, model: opus, deps: [X-notify], owns: ["crates/integrations/src/notify/{email,text}.rs", "crates/integrations/src/net.rs", "crates/integrations/tests/email.rs", "crates/integrations/tests/fixtures/email/**"], spec: ["§8", "§10.9.7"]}
+  - {id: R-docs, title: "Runner, contract and packaging doc cleanups", kind: helper, model: sonnet, deps: [], owns: ["runner/README.md", "runner/slices.yaml", "docs/metrics.md", "docs/design-tokens.md", "docs/themes.md", "crates/integrations/README.md", "packaging/unraid/lodestar.xml"], spec: ["docs"]}
   - {id: X-pack-static, title: "Unraid templates (main, worker, gluetun), systemd unit, operations docs draft", kind: helper, model: sonnet, deps: [], owns: ["packaging/unraid/**", "packaging/systemd/**", "docs/operations.md"], spec: ["§11", "§12", "§19.6"]}
 
   # ── Later phases: expanded into slices by the runner when their deps clear ──
