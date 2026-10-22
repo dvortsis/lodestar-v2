@@ -206,13 +206,14 @@
    "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #76; reviewer started 16:45 | 17:10 r1 FIX: exclude dev routes from prod build (scope exception), toast timer, ticker 60s, + a11y items. R2 FIX 18:15: PR size reason; toast dismiss drops focus. Approved tokens --toast-width/--listbox-max-height in tokens.css. 18:10 R2 fixes 11d9b0d; R3 review in flight. 18:27 R3 FIX: Chip focus crosses groups; PR body stale. Runner verifies R4 itself. 18:50 R3 fixes bb80f6a verified by runner; asked one Toaster focus-steal fix, then merge on green. Merged fdf7263 20:18."
   },
   "W7cd": {
-   "status": "changes_requested",
+   "status": "merged",
    "model": "sonnet",
    "session": "session_016RoHWZ8Vbbs5moJ2c2fHqS",
    "pr": 78,
    "attempt": 1,
    "review_rounds": 3,
-   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #78; reviewer started 16:45 | 16:58 round 1 FIX: load-more stuck, shift anchor by index, touch targets, .ls-focus dup; + measure opt-in, tokens, tree index prop, 100k expand perf, dup names, roving on click, Esc in drawer, tests, PR size. R2 FIX 18:20: coarse targets overlap; Drawer Esc swallowed by aria-expanded; Menu focus invisible; popover test race (Bits rAF autofocus). 18:23 R2 fixes pushed 44fdd31; R3 review held until #76 merges (dev-routes move + search JS 37.5 vs 32.4 kB). 20:20 dev-routes moved + main merged; R3 review in flight. CSS 20.32 kB vs 20 budget? 20:52 R3 FIX: CSS 20.32/20 (daisyUI exclude menu/modal/drawer/footer approved in app.css); popover must close on Tab-out. 20:56 dac5aa0 verified by runner -> APPROVED, merge on green."
+   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #78; reviewer started 16:45 | 16:58 round 1 FIX: load-more stuck, shift anchor by index, touch targets, .ls-focus dup; + measure opt-in, tokens, tree index prop, 100k expand perf, dup names, roving on click, Esc in drawer, tests, PR size. R2 FIX 18:20: coarse targets overlap; Drawer Esc swallowed by aria-expanded; Menu focus invisible; popover test race (Bits rAF autofocus). 18:23 R2 fixes pushed 44fdd31; R3 review held until #76 merges (dev-routes move + search JS 37.5 vs 32.4 kB). 20:20 dev-routes moved + main merged; R3 review in flight. CSS 20.32 kB vs 20 budget? 20:52 R3 FIX: CSS 20.32/20 (daisyUI exclude menu/modal/drawer/footer approved in app.css); popover must close on Tab-out. 20:56 dac5aa0 verified by runner -> APPROVED, merge on green.",
+   "merge": "d860168"
   },
   "W7e": {
    "status": "changes_requested",
@@ -782,13 +783,14 @@
    "notes": "R1 MERGE-quality 19:25; asked to fold in: chown only empty/marker dir, compose+operations docs, CAP hint, NO_NEW_PRIVS, CI root test step. Runner verifies delta. 19:48 hardening 19e6397 + main 87dabac verified by runner -> APPROVED, merge on green (filter budget = known flake; one rerun then main-merge). 20:39 green but dirty -> asked main merge."
   },
   "Q-docs": {
-   "status": "running",
+   "status": "merged",
    "model": "sonnet",
    "session": "session_012oddgqW1doBy4thnkcJW1U",
    "pr": 82,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "R1 FIX 18:30: test must extract examples from the page itself; planned UI marked; ranking step 1; table pipe. 18:44 R2 fixes aa0eaaf verified by runner (test reads page; 134 examples pass). Merge on green; Adult paragraph says (planned) -> update after B17 merges."
+   "notes": "R1 FIX 18:30: test must extract examples from the page itself; planned UI marked; ranking step 1; table pipe. 18:44 R2 fixes aa0eaaf verified by runner (test reads page; 134 examples pass). Merge on green; Adult paragraph says (planned) -> update after B17 merges.",
+   "merge": "a81a2ca"
   },
   "B4b": {
    "status": "review",
