@@ -25,7 +25,7 @@ use std::cell::OnceCell;
 use lodestar_classify::{Category, Classification, FileInfo, Record};
 use lodestar_search::DocEnrichment;
 use lodestar_search::query::{DateField, NumField, ShareBy, TextField, When};
-use lodestar_search::tokenizer::{TokKind, tokenize};
+use lodestar_search::tokenizer::{Tok, TokKind, tokenize};
 use lodestar_search::{Node, flag_names};
 
 use crate::core::Item;
@@ -85,7 +85,7 @@ pub(crate) enum Compiled {
     },
     Near {
         field: TextField,
-        words: Vec<Term>,
+        words: Vec<Operand>,
         slop: u32,
     },
     Prefix {
@@ -114,6 +114,32 @@ pub(crate) enum Compiled {
     File(Box<Compiled>),
     /// Dates, flags, hashes and shares, read as they are.
     Leaf(Box<Node>),
+}
+
+/// A word inside NEAR: its parts in a row (a phrase), or one token of
+/// its whole text (`webdl` for `web-dl`), as a word matches (§16).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Operand {
+    parts: Vec<Term>,
+    whole: Vec<Term>,
+}
+
+/// A NEAR word's parts, and the compound or whole forms that cover all
+/// of them (not a compound of only some, like `webdl` in `web-dl.x264`).
+/// No parts, no forms: such a word matches nothing.
+pub(crate) fn near_operand(word: &str) -> (Vec<String>, Vec<String>) {
+    let q = tokenize(word);
+    let parts: Vec<&Tok> = q.iter().filter(|t| t.kind == TokKind::Part).collect();
+    let (Some(first), Some(last)) = (parts.first(), parts.last()) else {
+        return (Vec::new(), Vec::new());
+    };
+    let whole = q
+        .iter()
+        .filter(|t| t.kind != TokKind::Part && t.from <= first.from && t.to >= last.to);
+    (
+        parts.iter().map(|t| t.text.clone()).collect(),
+        whole.map(|t| t.text.clone()).collect(),
+    )
 }
 
 /// A word for fuzzy matching, with what rules most tokens out before an
@@ -219,7 +245,16 @@ pub(crate) fn compile(node: &Node) -> Compiled {
         },
         Node::Near { field, words, slop } => Compiled::Near {
             field: *field,
-            words: words.iter().map(|w| Term::new(&folded(w))).collect(),
+            words: words
+                .iter()
+                .map(|w| {
+                    let (parts, whole) = near_operand(w);
+                    Operand {
+                        parts: parts.iter().map(|t| Term::new(t)).collect(),
+                        whole: whole.iter().map(|t| Term::new(t)).collect(),
+                    }
+                })
+                .collect(),
             slop: *slop,
         },
         Node::Prefix { field, prefix } => {
@@ -446,6 +481,15 @@ impl<'a> Doc<'a> {
         })
     }
 
+    /// Whether a word could be here: one of its whole or compound forms,
+    /// or all its parts, each able to follow the one before.
+    fn could_have(&self, whole: &[Term], parts: &[Term]) -> bool {
+        whole.iter().any(|t| self.has_key(t))
+            || (!parts.is_empty()
+                && parts.iter().all(|t| self.has_key(t))
+                && self.could_follow(parts))
+    }
+
     /// Whether these parts could follow one another somewhere.
     fn could_follow(&self, parts: &[Term]) -> bool {
         parts.len() < 2
@@ -531,15 +575,10 @@ impl<'a> Doc<'a> {
                 parts,
                 ..
             } if keyed(field) => {
-                if whole.iter().any(|t| self.has_key(t)) {
+                if self.could_have(whole, parts) {
                     Tri::Maybe
-                } else if parts.is_empty()
-                    || !parts.iter().all(|t| self.has_key(t))
-                    || !self.could_follow(parts)
-                {
-                    Tri::No
                 } else {
-                    Tri::Maybe
+                    Tri::No
                 }
             }
             Compiled::Phrase { field, parts, .. } if keyed(field) => {
@@ -558,7 +597,7 @@ impl<'a> Doc<'a> {
                 ..
             } if keyed(field) && !self.keys().could_start(*k) => Tri::No,
             Compiled::Near { field, words, .. } if keyed(field) => {
-                if words.iter().all(|t| self.has_key(t)) {
+                if words.iter().all(|w| self.could_have(&w.whole, &w.parts)) {
                     Tri::Maybe
                 } else {
                     Tri::No
@@ -821,24 +860,78 @@ fn sequence(field: &Text, words: &[Term]) -> bool {
 
 /// Every word within a window of `slop` extra positions, in any order:
 /// for some place of the first word, every word has a place within the
-/// window. Reads the tokens in place, allocating nothing.
-fn has_near(field: &Text, words: &[Term], slop: u32) -> bool {
-    let Some(first) = words.first() else {
+/// window. A word of several parts takes up their span, and distances
+/// run between the nearest ends of two spans (§16), so `1080p NEAR/1 x`
+/// allows one token between `p` and `x`, as a single word would. Reads
+/// the tokens in place, allocating nothing.
+fn has_near(field: &Text, words: &[Operand], slop: u32) -> bool {
+    let Some((first, rest)) = words.split_first() else {
         return false;
     };
     let span = words.len() + slop as usize;
-    fn places<'a>(field: &'a Text, w: &'a Term) -> impl Iterator<Item = u32> + 'a {
+    // Words of one token each: their positions, as before multi-token
+    // words, at about half the cost of spans.
+    if words
+        .iter()
+        .all(|w| w.whole.is_empty() && w.parts.len() == 1)
+    {
+        fn places<'a>(field: &'a Text, w: &'a Operand) -> impl Iterator<Item = u32> + 'a {
+            let w = &w.parts[0];
+            field
+                .toks
+                .iter()
+                .filter(move |t| field.is(t, w.hash, &w.text))
+                .map(|t| t.position)
+        }
+        return places(field, first).any(|p0| {
+            rest.iter()
+                .all(|w| places(field, w).any(|p| (p.abs_diff(p0) as usize) < span))
+        });
+    }
+    spans(field, first).any(|a| {
+        rest.iter()
+            .all(|w| spans(field, w).any(|s| gap(a, s) < span))
+    })
+}
+
+/// Where a NEAR word is, as first and last positions: a token of a whole
+/// form, or its parts in a row from a token of the first part.
+fn spans<'a>(field: &'a Text, w: &'a Operand) -> impl Iterator<Item = (u32, u32)> + 'a {
+    // Most tokens are neither, so the hashes decide first.
+    let (first, rest) = match w.parts.split_first() {
+        Some((f, r)) => (Some(f), r),
+        None => (None, &[][..]),
+    };
+    let first_hash = first.map(|f| f.hash);
+    let at = move |pos: u32, x: &Term| {
         field
             .toks
             .iter()
-            .filter(move |t| field.is(t, w.hash, &w.text))
-            .map(|t| t.position)
-    }
-    places(field, first).any(|p0| {
-        words
-            .iter()
-            .all(|w| places(field, w).any(|p| (p.abs_diff(p0) as usize) < span))
+            .any(|t| t.position == pos && field.is(t, x.hash, &x.text))
+    };
+    field.toks.iter().filter_map(move |t| {
+        if Some(t.hash) == first_hash {
+            let first = first?;
+            if field.text(t) == &*first.text
+                && rest.iter().zip(1..).all(|(x, i)| at(t.position + i, x))
+            {
+                return Some((t.position, t.position + rest.len() as u32));
+            }
+        }
+        (!w.whole.is_empty() && w.whole.iter().any(|x| field.is(t, x.hash, &x.text)))
+            .then_some((t.position, t.position))
     })
+}
+
+/// The positions between two spans' nearest ends; 0 where they overlap.
+fn gap((a0, a1): (u32, u32), (b0, b1): (u32, u32)) -> usize {
+    if b0 > a1 {
+        (b0 - a1) as usize
+    } else if a0 > b1 {
+        (a0 - b1) as usize
+    } else {
+        0
+    }
 }
 
 fn edit_distance(a: &str, b: &[char]) -> usize {
@@ -942,6 +1035,49 @@ mod tests {
         // A phrase across a folder and its file.
         assert!(check(MOVIE, FILES, "\"sample sample\""));
         assert!(!check(MOVIE, FILES, "\"mkv sample\""));
+    }
+
+    #[test]
+    fn near_words_of_several_tokens() {
+        // `1080p`, `BluRay` and `x264` split into parts: the at 0, matrix
+        // 1, 1999 2, 1080 p 3–4, blu ray 5–6, x 264 7–8, grp 9. Each
+        // matches as its parts in a row, and distances run from the
+        // nearest end.
+        assert!(check(MOVIE, FILES, "1080p NEAR/1 bluray"));
+        assert!(check(MOVIE, FILES, "bluray NEAR/1 1080p"));
+        assert!(check(MOVIE, FILES, "1080p NEAR/2 x264"));
+        assert!(!check(MOVIE, FILES, "1080p NEAR/1 x264"));
+        assert!(check(MOVIE, FILES, "x264 NEAR/1 grp"));
+        assert!(check(MOVIE, FILES, "1999 NEAR/2 1080p NEAR/2 bluray"));
+        assert!(!check(MOVIE, FILES, "1999 NEAR/2 1080p NEAR/2 x264"));
+        assert!(!check(MOVIE, FILES, "1080p NEAR/3 grp"));
+        assert!(check(MOVIE, FILES, "1080p NEAR/4 grp"));
+        assert!(check(MOVIE, FILES, "matrix NEAR/1 1080p"));
+        assert!(!check(MOVIE, FILES, "matrix NEAR/2 x264"));
+        assert!(check(MOVIE, FILES, "-(1080p NEAR/1 grp)"));
+        assert!(!check(MOVIE, FILES, "-(1080p NEAR/2 x264)"));
+        // The same word twice may be the same place, as before.
+        assert!(check(MOVIE, FILES, "1080p NEAR/1 1080p"));
+        // A part of a compound token is a word of its own.
+        assert!(check(MOVIE, FILES, "264 NEAR/1 grp"));
+        // Both sides of a compound: `web-dl` matches `WEBDL`, and the parts.
+        let tv = [("Show.S01E02.WEBDL.x265.mkv", 1 << 30)];
+        assert!(check("Show.S01E02.WEBDL.x265", &tv, "web-dl NEAR/1 x265"));
+        assert!(check("Show.S01E02.WEB-DL.x265", &tv, "webdl NEAR/1 s01e02"));
+        assert!(check(
+            "Show.S01E02.WEB-DL.x265",
+            &tv,
+            "web-dl NEAR/1 s01e02"
+        ));
+        assert!(check("Show.S01E02.DD+5.1.x265", &tv, "dd+ NEAR/1 5.1"));
+        // A form of only some of the parts doesn't stand for the word.
+        assert!(!check(
+            "Show WEBDL",
+            &tv,
+            "name:web-dl.x265 NEAR/1 name:show"
+        ));
+        // Parts out of order aren't the word.
+        assert!(!check("p 1080 Show", &tv, "name:1080p NEAR/5 name:show"));
     }
 
     #[test]
@@ -1083,6 +1219,8 @@ mod tests {
             (field(), word(), word(), word())
                 .prop_map(|(f, a, b, c)| format!("{f}\"{a} {b} {c}\"")),
             (word(), word(), 1u32..4).prop_map(|(a, b, n)| format!("{a} NEAR/{n} {b}")),
+            (field(), word(), word(), word(), 1u32..4)
+                .prop_map(|(f, a, b, c, n)| format!("{f}{a} NEAR/{n} {f}{b} NEAR/{n} {f}{c}")),
             (field(), "[a-z0-9]{2,4}").prop_map(|(f, p)| format!("{f}{p}*")),
             "[a-z0-9]{3,7}".prop_map(|w| format!("~{w}")),
             (0u64..12).prop_map(|n| format!("size:>{n}GB")),
