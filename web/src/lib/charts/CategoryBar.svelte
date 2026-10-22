@@ -23,9 +23,14 @@
 	}
 	let { segments, summary, dominant, max, testid = 'category-bar' }: Props = $props();
 
-	// Fixed order regardless of the order the server sent.
+	// Fixed order regardless of the order the server sent; repeated groups are summed, so the
+	// keyed each below can never see a duplicate.
 	const ordered = $derived(
-		GROUP_ORDER.flatMap((g) => segments.filter((s) => s.group === g && (s.value ?? 0) > 0))
+		GROUP_ORDER.flatMap((g) => {
+			const mine = segments.filter((s) => s.group === g);
+			const value = mine.reduce((sum, s) => sum + Math.max(0, s.value ?? 0), 0);
+			return value > 0 ? [{ group: g, value, label: mine[0]!.label }] : [];
+		})
 	);
 	const total = $derived(ordered.reduce((sum, s) => sum + (s.value ?? 0), 0));
 	const width = $derived(max === undefined ? '100%' : lengthPct(total, max));

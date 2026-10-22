@@ -37,3 +37,11 @@ export function dragRange(a: number, b: number, bins: number): BrushRange {
 	}
 	return { from: Math.max(0, from), to: Math.min(bins, to) };
 }
+
+/** A range fitted to `bins`, or null when nothing of it remains (e.g. zero bins). */
+export function clampRange(range: BrushRange, bins: number): BrushRange | null {
+	if (bins < 1) return null;
+	const from = Math.max(0, Math.min(range.from, bins - 1));
+	const to = Math.max(from + 1, Math.min(range.to, bins));
+	return { from, to };
+}

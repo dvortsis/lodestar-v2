@@ -1,6 +1,7 @@
 // Pure options for the uPlot wrapper, so they can be tested without a canvas. No uPlot import
 // here: this file is part of the eager chunk and uPlot itself stays lazy.
 import type uPlot from 'uplot';
+import { DASH } from '$lib/format';
 
 export interface LineSeries {
 	label: string;
@@ -17,13 +18,20 @@ export interface LinePalette {
 }
 
 export interface LineFormat {
-	/** Axis tick and legend value: the metric's formatter. */
+	/** Value-axis tick: compact (`1.2K`). */
+	axis: (v: number) => string;
+	/** Legend and tooltip value: the exact metric formatter. */
 	y: (v: number) => string;
-	/** Axis tick for a time (Unix seconds): date only. */
+	/** Time-axis tick for a time (Unix seconds). */
 	tick: (seconds: number) => string;
-	/** Legend and tooltip heading: the full absolute date. */
+	/** Legend and tooltip heading: the full absolute date (`formatDateFull`). */
 	full: (seconds: number) => string;
 }
+
+/** 1, 2, 5, 10, 20, 50, … so a count axis never repeats a label ("0, 1, 1, 2"). */
+const INTEGER_STEPS = Array.from({ length: 13 }, (_, e) =>
+	[1, 2, 5].map((m) => m * 10 ** e)
+).flat();
 
 /** The tokens a chart reads (design-tokens.md §3): primary series `--data-1`, comparison muted. */
 export const DEFAULT_TOKENS = [
@@ -59,8 +67,10 @@ export function buildOptions(args: {
 	format: LineFormat;
 	/** Axis unit label ("seeders", "GiB"), shown beside the value axis. */
 	unit: string;
-	/** `{ x, y }` axis fonts; the tokens' body font. */
+	/** CSS font shorthand for the axes; the tokens' body font. */
 	font: string;
+	/** Counts: the value axis steps by whole numbers only. Default true. */
+	integers?: boolean;
 }): uPlot.Options {
 	const { palette, format } = args;
 	const axis = (extra: uPlot.Axis): uPlot.Axis => ({
@@ -81,18 +91,19 @@ export function buildOptions(args: {
 			axis({
 				label: args.unit,
 				labelFont: args.font,
-				values: (_u, splits) => splits.map((s) => format.y(s))
+				...(args.integers === false ? {} : { incrs: INTEGER_STEPS }),
+				values: (_u, splits) => splits.map((s) => format.axis(s))
 			})
 		],
 		series: [
-			{ label: '', value: (_u, v) => (v === null ? '—' : format.full(v)) },
+			{ label: '', value: (_u, v) => (v === null ? DASH : format.full(v)) },
 			...args.series.map((s, i) => ({
 				label: s.label,
 				stroke: palette.series[i],
 				width: 2,
 				spanGaps: false,
 				points: { show: false },
-				value: (_u: uPlot, v: number | null) => (v === null ? '—' : format.y(v))
+				value: (_u: uPlot, v: number | null) => (v === null ? DASH : format.y(v))
 			}))
 		]
 	};
