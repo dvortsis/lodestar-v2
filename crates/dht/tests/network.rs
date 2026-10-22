@@ -3,9 +3,10 @@
 
 use std::collections::HashSet;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
-use lodestar_dht::node::{Config, Intensity, Node};
+use lodestar_dht::node::{Config, Deny, Intensity, Node};
 use lodestar_dht::routing::{K, prefix_len};
 
 fn config(bootstrap: Vec<String>) -> Config {
@@ -21,6 +22,7 @@ fn config(bootstrap: Vec<String>) -> Config {
         save_every: Duration::from_secs(3600),
         read_only: false,
         harvest: Default::default(),
+        deny: None,
     }
 }
 
@@ -160,6 +162,23 @@ async fn read_only_node_does_not_answer() {
     assert_eq!(asker.snapshot().await.unwrap().table_sizes[0], 0);
     asker.shutdown().await.unwrap();
     ro.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn denied_addresses_are_never_contacted_or_answered() {
+    let seed = Node::start(config(vec![]), None).await.unwrap();
+    let seed_addr = seed.local_addrs()[0].to_string();
+    let mut cfg = config(vec![seed_addr]);
+    // Loopback stands in for a blocklisted range.
+    cfg.deny = Some(Deny(Arc::new(|ip| ip.is_loopback())));
+    let denying = Node::start(cfg, None).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    assert!(denying.stats().denied > 0);
+    assert_eq!(denying.stats().packets_out, 0);
+    assert_eq!(seed.stats().packets_in, 0);
+    assert_eq!(denying.snapshot().await.unwrap().table_sizes[0], 0);
+    denying.shutdown().await.unwrap();
+    seed.shutdown().await.unwrap();
 }
 
 #[tokio::test]

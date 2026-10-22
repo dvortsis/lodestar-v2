@@ -18,6 +18,7 @@
 //! and CSX-5 arrive in later slices.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 
 use lodestar_classify::{ContentType, FileInfo};
 
@@ -54,6 +55,17 @@ impl Action {
     /// The stored code (`filter_hits.action`). Fixed forever.
     pub fn code(self) -> u8 {
         self as u8
+    }
+
+    pub fn from_code(code: u8) -> Option<Action> {
+        Some(match code {
+            0 => Action::Flag,
+            1 => Action::Demote,
+            2 => Action::Hide,
+            3 => Action::Quarantine,
+            4 => Action::Drop,
+            _ => return None,
+        })
     }
 }
 
@@ -211,6 +223,9 @@ impl Origin {
 pub struct CsList {
     hashes: HashMap<[u8; 20], Origin>,
     sigs: HashSet<u64>,
+    /// Subscribed lists you marked as child-abuse lists (§20.13): CS-1b,
+    /// replaced whole on each refresh so upstream removals take effect.
+    lists: Vec<(u32, Arc<HashSet<[u8; 20]>>)>,
 }
 
 impl CsList {
@@ -240,7 +255,20 @@ impl CsList {
     }
 
     pub fn hash(&self, hash: &[u8; 20]) -> Option<Origin> {
-        self.hashes.get(hash).copied()
+        self.hashes.get(hash).copied().or_else(|| {
+            self.lists
+                .iter()
+                .any(|(_, l)| l.contains(hash))
+                .then_some(Origin::Imported)
+        })
+    }
+
+    /// Sets (or with `None` removes) a floor-marked subscribed list.
+    pub fn set_list(&mut self, id: u32, hashes: Option<Arc<HashSet<[u8; 20]>>>) {
+        self.lists.retain(|(i, _)| *i != id);
+        if let Some(h) = hashes {
+            self.lists.push((id, h));
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -283,10 +311,24 @@ pub enum Field {
 pub enum Evidence {
     Hash(Origin),
     Payload,
-    MinorAge { field: Field, pos: u32 },
-    Sexual { field: Field, pos: u32 },
-    ChildRole { field: Field, pos: u32 },
-    Code { field: Field, pos: u32 },
+    MinorAge {
+        field: Field,
+        pos: u32,
+    },
+    Sexual {
+        field: Field,
+        pos: u32,
+    },
+    ChildRole {
+        field: Field,
+        pos: u32,
+    },
+    Code {
+        field: Field,
+        pos: u32,
+    },
+    /// The hash is in a subscribed list.
+    Listed,
 }
 
 impl Evidence {
@@ -300,6 +342,10 @@ impl Evidence {
             }
             Evidence::Payload => {
                 out.push(1);
+                return;
+            }
+            Evidence::Listed => {
+                out.push(6);
                 return;
             }
             Evidence::MinorAge { field, pos } => (2, (field, pos)),

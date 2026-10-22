@@ -388,6 +388,10 @@ impl Actor {
         to: SocketAddr,
         msg: &Message<'_>,
     ) -> bool {
+        if self.cfg.deny.as_ref().is_some_and(|d| d.denies(to.ip())) {
+            Stats::inc(&self.stats.denied);
+            return false;
+        }
         self.out.clear();
         msg.encode_into(&mut self.out);
         match sockets[family].send_to(&self.out, to) {
@@ -474,6 +478,10 @@ impl Actor {
         from: SocketAddr,
     ) {
         Stats::inc(&self.stats.packets_in);
+        if self.cfg.deny.as_ref().is_some_and(|d| d.denies(from.ip())) {
+            Stats::inc(&self.stats.denied);
+            return;
+        }
         let Ok(msg) = krpc::parse(data) else {
             Stats::inc(&self.stats.malformed_in);
             return;
