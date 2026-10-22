@@ -143,13 +143,13 @@
    "notes": "merged after round 2"
   },
   "B5a": {
-   "status": "pending",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01Uk4thMoRJwF3Rzg9SUrxUQ",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
-   "notes": ""
+   "notes": "launched 10:00 (briefs/B5a.md); also wires Serving, swap-failure fix, deferred hit fields"
   },
   "B4": {
    "status": "ready",
@@ -158,7 +158,7 @@
    "pr": null,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": "held until B5b #46 merges (both own crates/search/src/live.rs)"
+   "notes": "held until B5a merges (B5a owns crates/search/** incl. live.rs)"
   },
   "B8": {
    "status": "pending",
@@ -826,12 +826,6 @@
   "X-notify": [
    "Webhook HMAC signature not implemented yet: add as additive field"
   ],
-  "unassigned-fields": [
-   "SearchHit/TorrentDetail M3 enrichment fields (title, resolved_via, content_type, adult_kind, composition, junk_*) and hidden_junk have no slice: assign at next API brief (B5a or B6), per \u00a716 B1 entry"
-  ],
-  "B5a": [
-   "B5b: if new live indexer fails to start during swap, old one already stopped -> old index serves but stops ingesting until restart (fix: pass store_path+StoreConfig into rebuild thread and reopen to restart old indexer)"
-  ],
   "B6": [
    "B5b: fields present-but-not-fast: resolve fast-column needs per use (sorts/lifted ranges skip, term queries still use field)"
   ],
@@ -851,12 +845,15 @@
   ],
   "notify-followup": [
    "move ntfy.rs pub(crate) text helpers to notify/text.rs, drop duplicate web_link in rss.rs (next slice owning notify/mod.rs, e.g. X-email)"
+  ],
+  "M4-48": [
+   "#48 rewrites crates/search index/query/compile/filter/sorted; main has since gained B0,B1,B5b (+B5a soon): #48 needs a large merge of main before it can land"
   ]
  },
  "blocked_on_owner": [
   "M4 continuation: waiting on ExitPlanMode approval (plan mode) \u2014 can't act on #48 review",
   "Modern DHT crawler architecture: waiting on an AskUserQuestion"
  ],
- "launches_today": 4,
+ "launches_today": 5,
  "last_heartbeat": "2026-10-22T09:38Z"
 }
