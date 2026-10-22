@@ -1,8 +1,15 @@
 //! The engine the pipeline holds (§20.4): the rule set at a version, and
 //! a handle that swaps in a new rule set without stopping anything.
 //!
-//! Layers run in precedence order (§20.1): the child-safety core (floor
-//! first), then the pack layer, where subscribed lists sit (§20.13).
+//! Layers run in precedence order (§20.1):
+//! 1. the locked floor: a hit is final;
+//! 2. CSX-5, the override list: an Override match passes everything
+//!    below; a Neutralize entry removes its word from the evidence;
+//! 3. the rest of the core, with your exceptions for single rules;
+//! 4. *Always allow*, which skips your rules and the packs;
+//! 5. your rules, in order;
+//! 6. the pack layer: built-in packs and subscribed lists, the strongest
+//!    action winning.
 //!
 //! Prepare stamps its verdict with the version it used; commit trusts a
 //! verdict from the built-in worker at the current version and judges
@@ -12,13 +19,22 @@ use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 
 use crate::core::{Action, Core, CoreRule, Evidence, Hit, Item};
+use crate::hash::TermSet;
+use crate::matcher::{Doc, Facts};
+use crate::packs::{self, PackRule, PackSwitches};
+use crate::rules::{self, Allow, ClassRule, Exception, Match, Override, Strength, UserRule};
 
 /// Which rule decided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuleRef {
     Core(CoreRule),
+    Pack(PackRule),
     /// A subscribed content list, by subscription id.
     List(u32),
+    /// One of your rules.
+    User(u32),
+    /// A CSX-5 entry (in shadow mode, what it would have released).
+    Override(u32),
 }
 
 impl RuleRef {
@@ -26,8 +42,28 @@ impl RuleRef {
     pub fn id(self) -> String {
         match self {
             RuleRef::Core(r) => r.id().to_owned(),
+            RuleRef::Pack(r) => r.id().to_owned(),
             RuleRef::List(id) => format!("L-{id}"),
+            RuleRef::User(id) => format!("U-{id}"),
+            RuleRef::Override(id) => format!("O-{id}"),
         }
+    }
+
+    pub fn from_id(id: &str) -> Option<RuleRef> {
+        if let Some(r) = CoreRule::from_id(id) {
+            return Some(RuleRef::Core(r));
+        }
+        if let Some(r) = PackRule::from_id(id) {
+            return Some(RuleRef::Pack(r));
+        }
+        let (kind, n) = id.split_once('-')?;
+        let n: u32 = n.parse().ok()?;
+        Some(match kind {
+            "L" => RuleRef::List(n),
+            "U" => RuleRef::User(n),
+            "O" => RuleRef::Override(n),
+            _ => return None,
+        })
     }
 }
 
@@ -58,6 +94,15 @@ impl From<Hit> for Decision {
     }
 }
 
+/// What the rules made of a torrent.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Verdict {
+    /// The decision that applies, if any.
+    pub decision: Option<Decision>,
+    /// What rules in shadow mode would have done: logged, never applied.
+    pub shadow: Vec<Decision>,
+}
+
 /// A subscribed content list in the pack layer.
 #[derive(Debug, Clone)]
 pub struct ListLayer {
@@ -70,41 +115,192 @@ pub struct ListLayer {
 pub struct Engine {
     pub core: Core,
     pub lists: Vec<ListLayer>,
+    pub packs: PackSwitches,
+    pub rules: Vec<UserRule>,
+    pub overrides: Vec<Override>,
+    pub exceptions: Vec<Exception>,
+    pub allow: Vec<Allow>,
+    /// Classification rules, oldest first; not part of filtering.
+    pub class_rules: Vec<ClassRule>,
     pub version: u64,
 }
 
 impl Engine {
+    /// The core alone: no packs, rules, lists or exceptions.
     pub fn new(core: Core) -> Engine {
         Engine {
             core,
             lists: Vec::new(),
+            packs: PackSwitches::default(),
+            rules: Vec::new(),
+            overrides: Vec::new(),
+            exceptions: Vec::new(),
+            allow: Vec::new(),
+            class_rules: Vec::new(),
             version: 1,
         }
     }
 
-    /// The decision for one torrent: the first rule that acts, in
-    /// precedence order.
-    pub fn judge(&self, item: &Item) -> Option<Decision> {
-        if let Some(hit) = self.core.verdict(item) {
-            return Some(hit.into());
+    /// What your classification rules say about this torrent: the newest
+    /// matching rule's Is adult (`true`) or Not adult (`false`).
+    pub fn class_correction(&self, item: &Item, facts: Option<&Facts>) -> Option<bool> {
+        if self.class_rules.is_empty() {
+            return None;
         }
-        self.listed(item.hashes)
+        let doc = Doc::new(item, facts);
+        self.class_rules
+            .iter()
+            .rev()
+            .find(|r| doc.matches(&r.query, &[]))
+            .map(|r| r.adult)
+    }
+
+    /// The decision for one torrent. `facts` (classification and the
+    /// stored fields) let packs and your rules read more than the name
+    /// and files; `now` resolves shadow periods, expiries and relative
+    /// dates.
+    pub fn judge(&self, item: &Item, facts: Option<&Facts>, now: i64) -> Verdict {
+        let mut v = Verdict::default();
+        if let Some(hit) = self.core.floor_hit(item) {
+            v.decision = Some(hit.into());
+            return v;
+        }
+        let doc = Doc::new(item, facts);
+        let mut neutral = Vec::new();
+        let mut shadow_overrides = Vec::new();
+        let mut overridden = false;
+        for o in &self.overrides {
+            if o.expires_at.is_some_and(|t| t <= now)
+                || !rules::matches(&o.what, item, &doc)
+                || o.scope.as_ref().is_some_and(|q| !doc.matches(q, &[]))
+            {
+                continue;
+            }
+            if o.shadow_until.is_some_and(|t| t > now) {
+                shadow_overrides.push(o.id);
+                continue;
+            }
+            match o.strength {
+                Strength::Override => overridden = true,
+                Strength::Neutralize => neutral.push(o),
+            }
+        }
+        let (neutral_set, neutral_words) = rules::neutral_sets(&neutral);
+        if !overridden {
+            v.decision = self.below_overrides(
+                item,
+                facts,
+                &doc,
+                &neutral_set,
+                &neutral_words,
+                now,
+                &mut v.shadow,
+            );
+        }
+        if let Some(d) = &v.decision {
+            for id in shadow_overrides {
+                v.shadow.push(Decision {
+                    rule: RuleRef::Override(id),
+                    action: d.action,
+                    evidence: vec![Evidence::Released],
+                });
+            }
+        }
+        v
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn below_overrides(
+        &self,
+        item: &Item,
+        facts: Option<&Facts>,
+        doc: &Doc,
+        neutral: &TermSet,
+        neutral_words: &[String],
+        now: i64,
+        shadow: &mut Vec<Decision>,
+    ) -> Option<Decision> {
+        for hit in self.core.pattern_hits(item, neutral) {
+            if hit.on && !self.excepted(RuleRef::Core(hit.rule), item, doc) {
+                return Some(hit.into());
+            }
+        }
+        if self
+            .allow
+            .iter()
+            .any(|a| doc.matches(&a.query, neutral_words))
+        {
+            return None;
+        }
+        for r in self.rules.iter().filter(|r| r.enabled) {
+            if !doc.matches(&r.query, neutral_words)
+                || r.unless.as_ref().is_some_and(|u| doc.matches(u, &[]))
+                || self.excepted(RuleRef::User(r.id), item, doc)
+            {
+                continue;
+            }
+            let d = Decision {
+                rule: RuleRef::User(r.id),
+                action: r.action,
+                evidence: vec![Evidence::Query],
+            };
+            if r.shadow_until.is_some_and(|t| t > now) {
+                shadow.push(d);
+                continue;
+            }
+            return Some(d);
+        }
+        let ctx = facts.map(|f| packs::Ctx::new(item, f));
+        let packs = PackRule::ALL
+            .into_iter()
+            .filter(|r| self.packs.is_on(*r) && ctx.as_ref().is_some_and(|c| c.matches(*r)))
+            .map(|r| Decision {
+                rule: RuleRef::Pack(r),
+                action: r.action(),
+                evidence: vec![Evidence::Pack],
+            });
+        packs
+            .chain(self.listed(item.hashes))
+            .filter(|d| !self.excepted(d.rule, item, doc))
+            .max_by_key(|d| d.action)
+    }
+
+    fn excepted(&self, rule: RuleRef, item: &Item, doc: &Doc) -> bool {
+        self.exceptions
+            .iter()
+            .any(|e| e.rule == rule && rules::matches(&e.what, item, doc))
     }
 
     /// The decision on bare hashes, before anything is fetched: the floor,
-    /// then subscribed lists that drop.
+    /// then subscribed lists that drop, unless something that needs the
+    /// torrent's text could still let it through.
     pub fn blocked_hash(&self, hashes: &[[u8; 20]]) -> Option<Decision> {
         if let Some(hit) = self.core.blocked_hash(hashes) {
             return Some(hit.into());
         }
-        self.listed(hashes).filter(|d| d.action == Action::Drop)
+        let d = self.listed(hashes).filter(|d| d.action == Action::Drop)?;
+        let by_hash = |m: &Match| match m {
+            Match::Hashes(hs) => hashes.iter().any(|h| hs.contains(h)),
+            _ => true,
+        };
+        let releasable = !self.allow.is_empty()
+            || self
+                .overrides
+                .iter()
+                .any(|o| o.strength == Strength::Override && by_hash(&o.what))
+            || self
+                .exceptions
+                .iter()
+                .any(|e| e.rule == d.rule && by_hash(&e.what));
+        (!releasable).then_some(d)
     }
 
     fn listed(&self, hashes: &[[u8; 20]]) -> Option<Decision> {
         let l = self
             .lists
             .iter()
-            .find(|l| hashes.iter().any(|h| l.hashes.contains(h)))?;
+            .filter(|l| hashes.iter().any(|h| l.hashes.contains(h)))
+            .max_by_key(|l| l.action)?;
         Some(Decision {
             rule: RuleRef::List(l.id),
             action: l.action,
@@ -191,13 +387,17 @@ mod tests {
         });
         let e = h.current();
         assert_eq!(e.version, v + 1);
-        let d = e.judge(&item(&[[1; 20]])).unwrap();
+        let d = e.judge(&item(&[[1; 20]]), None, 0).decision.unwrap();
         assert_eq!((d.rule, d.action), (RuleRef::List(3), Action::Hide));
         assert_eq!(d.rule.id(), "L-3");
-        // A hiding list doesn't stop a fetch; a dropping one does.
+        // A hiding list doesn't stop a fetch.
         assert!(e.blocked_hash(&[[1; 20]]).is_none());
         h.update(|c| c.cs.add_hash([1; 20], crate::Origin::Confirmed));
-        let d = h.current().judge(&item(&[[1; 20]])).unwrap();
+        let d = h
+            .current()
+            .judge(&item(&[[1; 20]]), None, 0)
+            .decision
+            .unwrap();
         assert_eq!(d.rule, RuleRef::Core(CoreRule::Cs1a));
         h.update_engine(|e| e.set_list(None, 3));
         assert!(h.current().lists.is_empty());

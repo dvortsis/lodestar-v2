@@ -658,3 +658,42 @@ fn plurals_match_through_the_title_stem_as_a_fallback() {
     assert!(!stemmed);
     assert!(!hits.contains(&tdk.to_string()));
 }
+
+#[test]
+fn hidden_torrents_stay_out_unless_asked_for() {
+    use lodestar_store::flags;
+    let shown = torrent("Open Day", &["a.mkv"]);
+    let hidden = torrent("Hidden Day", &["b.mkv"]);
+    let infos = [Info::parse(&shown).unwrap(), Info::parse(&hidden).unwrap()];
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let new = |i: usize, extra_flags: i64| NewTorrent {
+        info: &infos[i],
+        raw_info: None,
+        discovered_at: 1_700_000_000,
+        metadata_at: 1_700_000_001,
+        extra_flags,
+        source: SourceId::new(0).unwrap(),
+    };
+    store
+        .insert(&[new(0, 0), new(1, flags::HIDDEN | flags::DEMOTED)])
+        .unwrap();
+    let index = SearchIndex::in_memory().unwrap();
+    let mut w = index.writer(15 << 20).unwrap();
+    w.catch_up(&mut store, 10).unwrap();
+    w.commit().unwrap();
+    let visible = |q: &str| {
+        let ast = lodestar_search::parse(q).unwrap().without_hidden();
+        let hits = index.search(&index.query(&ast, NOW), 50).unwrap().hits;
+        let mut n = index.names(&hits).unwrap();
+        n.sort();
+        n
+    };
+    assert_eq!(visible("day"), vec!["Open Day".to_string()]);
+    assert_eq!(visible(""), vec!["Open Day".to_string()]);
+    assert_eq!(visible("day hidden:yes"), vec!["Hidden Day".to_string()]);
+    assert_eq!(
+        names(&index, "day demoted:yes"),
+        vec!["Hidden Day".to_string()]
+    );
+    assert_eq!(names(&index, "day").len(), 2);
+}
