@@ -260,6 +260,14 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
    - The app shows a **warning matched to how strict the chosen lists are**, for example a list that would hide a large share of the DHT.
    - The owner didn't address the refresh mechanics (24 h refresh; holding a version that is empty, shrinks by more than half or grows tenfold); they stay as designed in §20.13.
 10. **Riverstone stays exactly as chosen.** The §10.18 claim about colour-blind distinctness was wrong and is corrected. The non-colour cues (2 px gaps, fixed order, labels, the "High-legibility data" patterns option) carry the difference.
+11. **Users control what is logged** (owner, 2026-10-22, settings session: "Allow user control over what is actually logged").
+    - Every log event and every kind of data in a line can be switched by the user. By default there are no torrent specifics (architecture §12.1).
+    - Asked whether the items otherwise never logged should be controllable too, the owner chose **"Allow both"**:
+      - **Peer activity** (a peer address together with a torrent) and **Filter change details** (which rule, term or exception changed) may be logged;
+      - each is **opt-in, off by default, time-limited and shown with a warning**;
+      - they're written only to the local log file and live log.
+    - This narrows "No profiles of people" (§1.9.7) and the no-audit-log decisions (§1.8.8, §1.8.9) for the log only, while the user has opted in. Outside that, they stand unchanged.
+    - **Secrets are never logged.** The names of sealed (quarantined or dropped) items stay unloggable as well; they weren't part of the question, and revealing one keeps §20.11's warning and password.
 
 ## 3. Points still open (not decided by the owner)
 - **Name-pattern blocklists.** The owner said "build those" *(M4, 10-22 03:27:05)*; they were then moved into the §20 rule engine by the approved design PR #27. Assumed satisfied by the rule engine unless the owner says otherwise.
