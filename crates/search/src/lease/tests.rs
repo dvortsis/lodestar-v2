@@ -181,6 +181,7 @@ fn slow_lease(index: &Arc<SearchIndex>, sort: Sort, delay: Duration) -> Lease {
     Lease {
         index: index.clone(),
         searcher: index.searcher(),
+        node: crate::Node::All,
         compiled: slow(index, delay),
         stemmed: false,
         sort,
@@ -188,6 +189,7 @@ fn slow_lease(index: &Arc<SearchIndex>, sort: Sort, delay: Duration) -> Lease {
             value: 0,
             approx: true,
         }),
+        now: 0,
     }
 }
 
