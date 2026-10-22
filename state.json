@@ -1,54 +1,54 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-22T05:00:00Z",
+ "updated_at": "2026-10-22T04:41:00Z",
  "launches": {
   "date": "2026-10-22",
-  "count": 0
+  "count": 5
  },
  "tags": {},
  "slices": {
   "B0": {
-   "status": "ready",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01A5BEzkYtiRur7VEKtby9FH",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
    "notes": ""
   },
   "B5b": {
-   "status": "ready",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01BEmSnYW9wHszPF16AVqmtL",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
    "notes": ""
   },
   "C0": {
-   "status": "ready",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01F4G5nVWxS91JsSEEC2mka5",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
    "notes": ""
   },
   "C1": {
-   "status": "ready",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01NSdirPw4xiTrGseUFMRd8U",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
    "notes": ""
   },
   "W0": {
-   "status": "ready",
+   "status": "running",
    "model": "sonnet",
-   "session": null,
+   "session": "session_01G472Ud4a5RmEjGnhwpwTQw",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
    "notes": ""
   },
@@ -628,5 +628,7 @@
    "review_rounds": 0,
    "notes": ""
   }
- }
+ },
+ "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
+ "runner_pr": 34
 }
