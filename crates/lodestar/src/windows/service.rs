@@ -18,7 +18,9 @@
 //! - reports a service-specific exit code 1 when it stops on an error, so
 //!   the SCM's recovery actions (restart) apply.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use crate::config::Config;
 
 /// The service's name, for the installer and `sc.exe`.
 pub const NAME: &str = "Lodestar";
@@ -26,6 +28,28 @@ pub const NAME: &str = "Lodestar";
 /// The data folder when nothing else sets one: `%ProgramData%\Lodestar`.
 pub fn default_data_dir(program_data: Option<String>) -> PathBuf {
     PathBuf::from(program_data.unwrap_or_else(|| r"C:\ProgramData".into())).join("Lodestar")
+}
+
+/// The config file: `path` if given, else `config.toml` in
+/// `LODESTAR_DATA_DIR` or the default data folder, if it exists.
+pub fn config_path(
+    path: Option<PathBuf>,
+    default_dir: &Path,
+    env: impl Fn(&str) -> Option<String>,
+) -> Option<PathBuf> {
+    path.or_else(|| {
+        let dir = env("LODESTAR_DATA_DIR").map_or_else(|| default_dir.to_path_buf(), PathBuf::from);
+        let p = dir.join("config.toml");
+        p.exists().then_some(p)
+    })
+}
+
+/// Puts the data in `default_dir` unless the config file or the
+/// environment chose a folder.
+pub fn default_data_dir_unless_set(config: &mut Config, default_dir: &Path) {
+    if !config.layers.in_file("data_dir") && !config.layers.in_env("LODESTAR_DATA_DIR") {
+        config.data_dir = default_dir.to_path_buf();
+    }
 }
 
 /// The service's command line (the image path's arguments): an optional
@@ -174,13 +198,13 @@ mod scm {
         if std::fs::create_dir_all(&default_dir).is_ok() {
             let _ = std::env::set_current_dir(&default_dir);
         }
+        let env = |k: &str| std::env::var(k).ok();
         let config = super::parse_args(std::env::args().skip(1)).and_then(|path| {
-            Config::load(path.as_deref(), |k| {
-                std::env::var(k).ok().or_else(|| {
-                    (k == "LODESTAR_DATA_DIR").then(|| default_dir.display().to_string())
-                })
-            })
-            .map_err(|e| format!("config: {e}"))
+            let path = super::config_path(path, &default_dir, env);
+            let mut config =
+                Config::load(path.as_deref(), env).map_err(|e| format!("config: {e}"))?;
+            super::default_data_dir_unless_set(&mut config, &default_dir);
+            Ok(config)
         });
         let data_dir = config.as_ref().map_or(default_dir, |c| c.data_dir.clone());
         init_logging(
@@ -265,6 +289,39 @@ mod tests {
         assert!(args("--config").is_err());
         assert!(args("serve serve").is_err());
         assert!(args("healthcheck").unwrap_err().contains("healthcheck"));
+    }
+
+    #[test]
+    fn the_default_data_folder_yields_to_the_file_and_environment() {
+        let dir = tempfile::tempdir().unwrap();
+        let default = dir.path().join("pd");
+        let none = |_: &str| None;
+        // Nothing set: the default, and no config file there yet.
+        assert_eq!(config_path(None, &default, none), None);
+        let mut c = Config::load(None, none).unwrap();
+        default_data_dir_unless_set(&mut c, &default);
+        assert_eq!(c.data_dir, default);
+        // A config.toml in the default folder is found.
+        std::fs::create_dir_all(&default).unwrap();
+        std::fs::write(default.join("config.toml"), "data_dir = 'elsewhere'\n").unwrap();
+        let path = config_path(None, &default, none);
+        assert_eq!(path, Some(default.join("config.toml")));
+        // The file's data_dir wins over the default.
+        let mut c = Config::load(path.as_deref(), none).unwrap();
+        default_data_dir_unless_set(&mut c, &default);
+        assert_eq!(c.data_dir, PathBuf::from("elsewhere"));
+        // So does LODESTAR_DATA_DIR, which also says where the file is.
+        let other = dir.path().join("env");
+        let env = |k: &str| (k == "LODESTAR_DATA_DIR").then(|| other.display().to_string());
+        assert_eq!(config_path(None, &default, env), None);
+        let mut c = Config::load(None, env).unwrap();
+        default_data_dir_unless_set(&mut c, &default);
+        assert_eq!(c.data_dir, other);
+        // An explicit --config is taken as given.
+        assert_eq!(
+            config_path(Some("x.toml".into()), &default, none),
+            Some("x.toml".into())
+        );
     }
 
     #[test]
