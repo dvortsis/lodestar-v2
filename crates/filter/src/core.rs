@@ -114,6 +114,11 @@ impl CoreRule {
         CoreRule::ALL.into_iter().find(|r| r.id() == id)
     }
 
+    /// Checks only torrents classified Adult (CS-5a/5b).
+    pub fn adult_only(self) -> bool {
+        matches!(self, CoreRule::Cs5a | CoreRule::Cs5b)
+    }
+
     /// The locked floor: always on, never overridden (§20.5.3).
     pub fn floor(self) -> bool {
         matches!(self, CoreRule::Cs1a | CoreRule::Cs1b | CoreRule::Cs8a)
@@ -921,6 +926,17 @@ impl Core {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    /// The store keeps the floor's rule ids for the purge (§20.9).
+    #[test]
+    fn the_stores_floor_rules_are_the_floor() {
+        let floor: Vec<&str> = CoreRule::ALL
+            .iter()
+            .filter(|r| r.floor())
+            .map(|r| r.id())
+            .collect();
+        assert_eq!(floor, lodestar_store::FLOOR_RULES);
+    }
 
     fn core() -> Core {
         let lists = Lists {
