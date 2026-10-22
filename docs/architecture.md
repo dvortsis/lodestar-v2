@@ -217,9 +217,10 @@ Text extracted from NFOs is indexed into an `nfo_text` field (boost ~2).
 ## 8. Search engine (Tantivy)
 
 **Torrent index** (one doc per torrent; only `id` and `name` are stored, and all other display data comes from SQLite by id):
-- Text: `name` (positions, boost 3, also **stored** in the compressed docstore for regex verification and snippets without SQLite round-trips), `title` (effective/parsed title, positions, boost 4), `alt_titles` (boost 2), `path_tokens` (each distinct directory name once, then every file name; **words only, without positions**, boost 1. Phrase/NEAR within one file name runs on the file index, whose `name` keeps positions. Positions here measured 372 B per torrent, over the whole index budget; see §16), `name_trigram` (for substring/infix and the regex prefilter; turned off in low-resource mode).
-- Keyword/fast fields: `ext[]`, `category[]`, `content_type`, `resolution`, `source`, `vcodec`, `acodec`, `hdr`, `lang[]`, `group`, `year`, `season`, `episode`, `flags`.
-- Numeric fast fields: `size`, `file_count`, `largest_file`, `piece_len`, `depth`, `cat_{count,bytes,pct}_{video,audio,image,document,ebook,archive,disc,software,subtitle,other}`, `junk`, `group_key`.
+- Text: `name` (positions, boost 3, also **stored** in the compressed docstore for regex verification and snippets without SQLite round-trips), `title` (the effective title and each alternative title, positions; a word found there adds a boost of 2 on top of the name's 3 in phase 2), `path_tokens` (each distinct directory name once, then every file name; **words only, without positions**, boost 1. Phrase/NEAR within one file name runs on the file index, whose `name` keeps positions. Positions here measured 372 B per torrent, over the whole index budget; see §16), `name_trigram` (for substring/infix and the regex prefilter; turned off in low-resource mode).
+- Keyword/fast fields: `ext[]`, `flag[]`, and `tag[]`, one field of `key:value` terms for `type`, `res`, `hdr`, `codec`, `audio`, `lang`, `group`, `has` and `resolved` (§16).
+- Multi-valued numbers in the inverted index: `year`, `season`, `episode` (every number of a span, so `s:2` finds an `S01-S03` pack).
+- Numeric fast fields: `size`, `file_count`, `largest_file`, `piece_len`, `junk`, `cat_{count,bytes}_{video,audio,image,document,ebook,archive,disc,software,subtitle,other}` (percentages, written only when non-zero), and later `depth` and `group_key`.
 - Dates: `discovered_at`, `metadata_at`.
 - From hot columns (not indexed): `seeders`, `leechers`, `trackers`, `last_seen`, user flags.
 
@@ -234,14 +235,14 @@ dark knight                      all terms (AND), ranked
 batman | joker   batman OR joker (a | b) AND c   -cam  NOT cam        grouping & negation
 comput*   ~knigth (fuzzy, edit distance 1–2)    /S0[1-9]E\d+/ (regex on full name)
 name:  title:  file:  path:  group:  lang:       field scoping
-ext:mkv,mp4   type:movie|tv|music|software|…    cat:video>=80%   cat:software=0   bytes:video>90%
+ext:mkv,mp4   type:movie,tv,music,software,…    cat:video>=80%   cat:software=0   bytes:video>90%
 size:>4GB  size:700MB..1.5GB   files:>=10   largest:>2GB  piece:16MB
 res:2160p  hdr:dv  codec:x265  audio:atmos  year:2019..2021  s:2 e:5
 seeders:>=5  trackers:>=3  dht:>100  junk:<20  private:no  v2:yes
 discovered:<7d  discovered:2026-01-01..2026-03-31  seen:<24h  time:22:00..02:00 (time-of-day, user TZ)
 file:(ext:flac size:>50MB)      a file matching ALL inner clauses
 has:nfo  has:subs  has:cue  has:sample  has:sfv   structural presence filters
-ambiguous:yes   resolved:files|folder|structure|plugin   sig:7a9f3c12 (identical payload)
+ambiguous:yes   resolved:files,folder,structure,plugin   sig:7a9f3c12 (identical payload)
 !ext:exe (alias of -ext:exe)   age:<6h (alias of discovered:<6h)
 hash:abc123…  (or a bare 40-hex / magnet link pasted into the box)
 ```
@@ -257,7 +258,7 @@ Units and relative dates are parsed. Unknown fields trigger a helpful error, not
 - **Stable pagination:** a cursor carries a **searcher lease id**, so later pages read the same index snapshot (leases expire after 10 min). NRT commits therefore can't cause duplicate or missing rows while you scroll.
 - Sorts: relevance, discovered, seen, size, files, seeders, trackers, plus a secondary sort key. A sort on a hot column (e.g. seeders) for a very broad query does a full fast scan (~5–20 ns/doc), which is covered by the benchmark gates.
 - Collapse-by-group option ("show best version, +N others"). The count reports both groups and torrents.
-- **Index evolution:** each index directory is versioned (`index/v{schema}-{tokenizer}-{parser}`). A tokenizer or parser change triggers a **background rebuild into a new directory** while the old one keeps serving, then an atomic swap, with progress shown in the dashboard. There's never downtime for a reindex.
+- **Index evolution:** each index directory is versioned (`index/v{schema}-t{tokenizer}`). A parser or classifier change re-derives the stored enrichment and reindexes the affected documents in place through `reindex_log` (§16). A schema or tokenizer change triggers a **background rebuild into a new directory** while the old one keeps serving, then an atomic swap, with progress shown in the dashboard. There's never downtime for a reindex.
 - Suggest/typeahead comes from the term dictionaries and the parsed-title FST. "Did you mean" uses fuzzy terms.
 - **Saved searches → alerts:** on each NRT commit, each saved query runs against **only the new doc range** (cheap percolation). Notifications go to the UI (SSE), webhook, ntfy, Discord, email, or an RSS feed per saved search.
 - **Indexing:** one `IndexWriter` per index (torrent + file) with a 256 MB heap each; commit every 2 s or 5k docs; a log-merge policy tuned for many small commits; reader reload on commit. Both indexes commit under the same id watermark, recorded in SQLite after both succeed. A crash between the two commits is caught up idempotently from that watermark, so `file:(…)` never sees a torrent the torrent index lacks.
@@ -1360,7 +1361,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - Anime ` - 05` numbering needs anime evidence (a leading group, zero padding or a range), so `Adele - 30 (2021)` stays an album.
   - Music, book and scene-music names (`Artist_Name-Album-WEB-2024-GROUP`) get artist, album and author fields from the title. This only happens when there's no video or episode marker.
 - **Bounded on untrusted input:** at most 512 bytes and 96 words, never panics. It's property-tested (determinism, and title and group text always taken from the name) and fuzzed (`fuzz/release`; 660k runs clean on first add). A parse costs about 7 µs.
-- **`PARSER_VERSION`** goes into the index directory name (§8), so a parser change rebuilds the index in the background.
+- **`PARSER_VERSION`** is part of the stored enrichment's version. A parser change re-derives the records in the background and reindexes them in place (see "search fields" below). It was planned for the index directory name, but in-place reindexing needs no second index on disk.
 - **`is_uninformative`** flags hashes, random short words and generic names (`New Folder (2)`, `Season 1`) for the ambiguity flag. Picking the effective title from files and folders belongs to `classify`, which has the file tree.
 - **Golden corpus:** 316 hand-labelled names across movies, TV, anime, music, software, games, books, Cyrillic and CJK. No third-party suites were copied (guessit's data is LGPL-3.0).
   - The gate is 95% field accuracy, scored over expected and parsed fields together, so invented fields count as misses.
@@ -1431,6 +1432,27 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - Each batch appends to `reindex_log`, so the live indexer picks up the new fields.
   - After an error the backfill stops until the next start, rather than retrying in a loop.
   - Metric: `lodestar_writer_enriched_total`.
+
+**M3 implementation decisions (search fields, schema v3):**
+- **The index reads the stored record** (`torrent_parsed` plus `torrents.comp`), never re-classifying. A torrent not enriched yet is indexed without the fields, and the backfill's `reindex_log` entry fills them in later.
+  - A new index starts following `reindex_log` at its current head, because everything it indexes is read after those changes. Otherwise the first start after this upgrade (backfill plus schema rebuild) would index the corpus twice.
+- **`title`:** the effective title and each alternative title, with positions for `title:"…"`. An unfielded word that is in the title adds a boost of 2 to the phase-2 re-rank (the name's is 3), so a torrent whose files say it's the thing outranks one that only mentions it in a path. It isn't part of matching, since titles come from the name and paths, which `text` already covers.
+- **One `tag` keyword field, `key:value` terms,** for `type`, `res`, `hdr`, `codec`, `audio`, `lang`, `group`, `has` and `resolved`. That's one term dictionary instead of nine fields, and it's a fast field, ready for term facets.
+  - Query values are normalised by running the release parser over them (`codec:x265` → `h265`, `res:4k` → `2160p`, `hdr:dovi` → `dv`, `audio:DD+` → `eac3`, `lang:french` → `fr`). An unrecognised plain value is taken as written (`lang:fr`, `res:1080` → `1080p`).
+  - Normalising at parse time means the AST holds the stored form and still round-trips. Lists use commas (`type:movie,tv`), as `ext:` does, since `|` is the OR operator.
+  - `type:`, `has:` and `resolved:` are checked against their fixed names and list them in the error.
+  - `ambiguous:` is a flag (`flag:ambiguous`).
+- **`year`, `s`, `e` are multi-valued numbers in the inverted index.** Every number of a span is indexed (capped at 50 years, 100 seasons, 500 episodes), so `s:2` finds an `S01-S03` pack. They aren't fast fields, so their ranges stay in the query rather than in the collector.
+  - `e:` is the release's own episode (and absolute number). A season pack's episodes belong to its files, which `file:(…)` covers.
+- **`junk`** is a fast field, 0 until enriched. **Category shares** are 20 fast fields (`cat_{count,bytes}_{category}`), written only when non-zero.
+  - In the collector, a missing value reads as 0. In a query, a range that includes 0 runs as "everything but the torrents above it", so `cat:software=0` is exact.
+  - A segment where no torrent has a category has no column at all, and the collector treats that as all zeros.
+  - `cat:video` alone means any share (1–100).
+- **Measured:** 100k synthetic torrents.
+  - The index is 404 B per torrent (it was 377 B; the budget is 512). `title` costs 9 B and `tag` 8 B; the shares cost about 1 B per common category.
+  - The canonical store is 764 B per torrent, of which `torrent_parsed` is 160 B.
+  - At 200k, a new "word + facets" latency class has p95 1.0 ms, and every gated class still passes with wide margins.
+  - Enrichment runs at about 20k torrents/s on one core.
 
 ## 17. Verification (once built)
 

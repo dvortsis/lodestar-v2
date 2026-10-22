@@ -14,9 +14,12 @@ use tantivy::{DocId, Score, SegmentOrdinal, SegmentReader};
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum FastRange {
     U64 {
-        field: &'static str,
+        field: String,
         lo: u64,
         hi: u64,
+        /// The value of a document without one (category shares are only
+        /// written when non-zero); `None` fails it.
+        missing: Option<u64>,
     },
     I64 {
         field: &'static str,
@@ -32,14 +35,19 @@ pub(crate) struct PostFilter<'a, C> {
 }
 
 pub(crate) enum Check {
-    U64(Column<u64>, u64, u64),
+    /// No column: no document in the segment has the field.
+    U64(Option<Column<u64>>, u64, u64, Option<u64>),
     I64(Column<i64>, i64, i64),
 }
 
 impl Check {
     pub(crate) fn passes(&self, doc: DocId) -> bool {
         match self {
-            Check::U64(col, lo, hi) => col.first(doc).is_some_and(|v| *lo <= v && v <= *hi),
+            Check::U64(col, lo, hi, missing) => col
+                .as_ref()
+                .and_then(|c| c.first(doc))
+                .or(*missing)
+                .is_some_and(|v| *lo <= v && v <= *hi),
             Check::I64(col, lo, hi) => col.first(doc).is_some_and(|v| *lo <= v && v <= *hi),
         }
     }
@@ -52,7 +60,12 @@ pub(crate) fn checks(ranges: &[FastRange], reader: &SegmentReader) -> tantivy::R
         .iter()
         .map(|r| {
             Ok(match r {
-                FastRange::U64 { field, lo, hi } => Check::U64(fast.u64(field)?, *lo, *hi),
+                FastRange::U64 {
+                    field,
+                    lo,
+                    hi,
+                    missing,
+                } => Check::U64(fast.column_opt(field)?, *lo, *hi, *missing),
                 FastRange::I64 { field, lo, hi } => Check::I64(fast.i64(field)?, *lo, *hi),
             })
         })

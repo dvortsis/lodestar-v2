@@ -684,6 +684,17 @@ impl Store {
             .collect::<rusqlite::Result<_>>()?)
     }
 
+    /// The newest `reindex_log` entry, 0 when there are none. An index
+    /// built from scratch starts following the log here: everything it
+    /// indexes is read after the changes logged so far.
+    pub fn reindex_head(&self) -> Result<i64> {
+        Ok(self
+            .conn
+            .query_row("SELECT COALESCE(MAX(seq), 0) FROM reindex_log", [], |r| {
+                r.get(0)
+            })?)
+    }
+
     /// Up to `limit` torrent ids greater than `after`, ascending: the
     /// search indexer follows the store this way (§8).
     pub fn ids_after(&self, after: i64, limit: usize) -> Result<Vec<i64>> {

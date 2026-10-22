@@ -327,3 +327,133 @@ fn browse_follows_new_segments_and_deletions() {
     assert_eq!(total, 4, "replaced, not duplicated");
     assert_eq!(names[0], "pack", "the upgrade's four files sort first");
 }
+
+/// A multi-file v1 torrent with file sizes.
+fn sized(name: &str, files: &[(&str, i64)]) -> Vec<u8> {
+    let files = files
+        .iter()
+        .map(|(p, len)| {
+            d(vec![
+                ("length", OwnedValue::Int(*len)),
+                ("path", OwnedValue::List(p.split('/').map(b).collect())),
+            ])
+        })
+        .collect();
+    to_vec(&d(vec![
+        ("files", OwnedValue::List(files)),
+        ("name", b(name)),
+        ("piece length", OwnedValue::Int(1 << 16)),
+        ("pieces", OwnedValue::Bytes(vec![0; 20])),
+    ]))
+}
+
+const GB: i64 = 1 << 30;
+
+#[test]
+fn enrichment_fields_are_searchable_once_enriched() {
+    let movie = "The.Dark.Knight.2008.2160p.UHD.BluRay.x265.HDR.DV.Atmos-NTb";
+    let show = "Show.Name.S02.1080p.WEB-DL.FRENCH-GRP";
+    let doc = "a8f3x";
+    let lure = "Free.Movie.2021.1080p";
+    let mut store = store_with(&[
+        sized(
+            movie,
+            &[
+                (
+                    "The.Dark.Knight.2008.2160p.UHD.BluRay.x265-NTb.mkv",
+                    40 * GB,
+                ),
+                ("The.Dark.Knight.2008.2160p.UHD.BluRay.x265-NTb.nfo", 5_000),
+            ],
+        ),
+        sized(
+            show,
+            &[
+                ("Show.Name.S02E01.1080p.mkv", GB),
+                ("Show.Name.S02E02.1080p.mkv", GB),
+                ("Show.Name.S02E03.1080p.mkv", GB),
+                ("Show.Name.S02.srt", 50_000),
+            ],
+        ),
+        sized(
+            doc,
+            &[(
+                "Some Documentary 2019/Some.Documentary.2019.720p.mkv",
+                2 * GB,
+            )],
+        ),
+        sized(lure, &[("Free.Movie.2021.1080p.mp4.exe", 2_000_000)]),
+    ]);
+    let index = SearchIndex::in_memory().unwrap();
+    let mut w = index.writer(15 << 20).unwrap();
+    w.catch_up(&mut store, 100).unwrap();
+    w.commit().unwrap();
+    // Not enriched yet: no facets, and every junk score reads 0.
+    assert!(names(&index, "res:2160p").is_empty());
+    assert_eq!(names(&index, "junk:0").len(), 4);
+
+    // The writer's backfill enriches them and logs them for reindexing.
+    let (_, n) = lodestar_pipeline::enrich::enrich_stored(&mut store, 0, 100)
+        .unwrap()
+        .unwrap();
+    assert_eq!(n, 4);
+    assert_eq!(w.catch_up(&mut store, 100).unwrap(), 4);
+    w.commit().unwrap();
+    assert_eq!(index.num_docs(), 4);
+    // An index built after the backfill reads the enrichment directly
+    // and doesn't replay the log.
+    let rebuilt = SearchIndex::in_memory().unwrap();
+    let mut r = rebuilt.writer(15 << 20).unwrap();
+    assert_eq!(r.catch_up(&mut store, 100).unwrap(), 4);
+    assert_eq!(r.catch_up(&mut store, 100).unwrap(), 0);
+
+    let one = |s: &str| vec![s.to_string()];
+    let check = |q: &str, want: &[&str]| {
+        let mut want: Vec<String> = want.iter().map(|s| s.to_string()).collect();
+        want.sort();
+        assert_eq!(names(&index, q), want, "{q}");
+    };
+    for q in [
+        "res:2160p",
+        "res:4k",
+        "codec:x265",
+        "hdr:dv audio:atmos",
+        "group:NTB",
+        "has:nfo",
+        "year:2008",
+        "year:2000..2010",
+        "title:\"dark knight\"",
+        "knight type:movie",
+    ] {
+        assert_eq!(names(&index, q), one(movie), "{q}");
+    }
+    for q in [
+        "s:2",
+        "s:1..3 res:1080p",
+        "lang:french",
+        "type:tv",
+        "cat:subtitle",
+    ] {
+        assert_eq!(names(&index, q), one(show), "{q}");
+    }
+    check("s:1", &[]);
+    // `e:` is the release's own episode; a pack's episodes are its
+    // files' (`file:(…)`).
+    check("e:2", &[]);
+    for q in ["ambiguous:yes", "resolved:files", "title:documentary"] {
+        assert_eq!(names(&index, q), one(doc), "{q}");
+    }
+    check("ambiguous:no", &[movie, show, lure]);
+    check("junk:>=50", &[lure]);
+    check("junk:<50", &[movie, show, doc]);
+    // Shares: by count and by bytes, through the collector (with a word
+    // to drive) and in the query (alone).
+    check("cat:video=50", &[movie]);
+    check("cat:video<=60", &[movie, lure]);
+    check("bytes:video>=99", &[movie, show, doc]);
+    check("cat:software=0", &[movie, show, doc]);
+    check("mkv cat:software=0", &[movie, show, doc]);
+    check("mkv bytes:video>=99 cat:video<=80", &[movie, show]);
+    check("cat:software", &[lure]);
+    check("type:movie,tv -cat:subtitle", &[movie, doc]);
+}

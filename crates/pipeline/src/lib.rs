@@ -20,7 +20,7 @@
 
 mod coordinator;
 mod dht;
-mod enrich;
+pub mod enrich;
 mod have;
 mod rollups;
 mod worker;

@@ -20,6 +20,12 @@ pub enum ResolvedVia {
 }
 
 impl ResolvedVia {
+    pub const ALL: [ResolvedVia; 3] = [
+        ResolvedVia::File,
+        ResolvedVia::Folder,
+        ResolvedVia::Structure,
+    ];
+
     /// The name used by `resolved:` queries and the UI tooltip.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -30,13 +36,7 @@ impl ResolvedVia {
     }
 
     pub fn from_name(name: &str) -> Option<ResolvedVia> {
-        [
-            ResolvedVia::File,
-            ResolvedVia::Folder,
-            ResolvedVia::Structure,
-        ]
-        .into_iter()
-        .find(|v| v.as_str() == name)
+        ResolvedVia::ALL.into_iter().find(|v| v.as_str() == name)
     }
 }
 

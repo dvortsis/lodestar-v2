@@ -160,6 +160,13 @@ fn run(args: &Args) -> Result<bool, Box<dyn std::error::Error>> {
         args.torrents - first,
         &mut totals,
     )?;
+    // Enrichment (§6), as the writer's background pass stores it.
+    let t3 = Instant::now();
+    let mut after = 0;
+    while let Some((last, _)) = lodestar_pipeline::enrich::enrich_stored(&mut store, after, 5000)? {
+        after = last;
+    }
+    let enrich_time = t3.elapsed();
     store.checkpoint()?;
 
     // The torrent index (§8), built by the same catch-up path the server
@@ -272,11 +279,12 @@ fn run(args: &Args) -> Result<bool, Box<dyn std::error::Error>> {
 
     println!(
         "\n  throughput          generate+parse {:.0}/s, store {:.0}/s; \
-         training + recompressing {} blobs took {:.1} s; indexing {:.0}/s",
+         training + recompressing {} blobs took {:.1} s; enriching {:.0}/s; indexing {:.0}/s",
         n / totals.generate_parse.as_secs_f64(),
         n / totals.store.as_secs_f64(),
         group(recompressed),
         train_time.as_secs_f64(),
+        n / enrich_time.as_secs_f64(),
         n / index_time.as_secs_f64()
     );
 

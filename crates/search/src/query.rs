@@ -7,14 +7,20 @@
 //! dark NEAR/5 knight   proximity        batman | joker     either (also OR)
 //! (a | b) c            grouping         -cam  !cam         not
 //! comput*              prefix           ~knigth            fuzzy (1–2 edits)
-//! name:  path:         field scope      ext:mkv,mp4        any of
+//! name:  path:  title:  field scope      ext:mkv,mp4        any of
 //! size:>4GB  size:700MB..1.5GB  files:>=10  largest:>2GB  piece:16MB
 //! discovered:<7d  discovered:2026-01-01..2026-03-31  age:<6h
 //! private:no  v2:yes  hash:<40 hex>  (or a bare hash or magnet link)
+//! type:movie,tv  res:4k  hdr:dv  codec:x265  audio:atmos  lang:fr
+//! group:ntb  has:nfo  resolved:files  ambiguous:yes
+//! year:2019..2021  s:2  e:5  junk:<20  cat:video>=80%  bytes:video>90%
 //! ```
 //!
-//! Fields that need later milestones (`title:`, `res:`, `seeders:`, …)
-//! parse to a clear "not available yet" error rather than being ignored.
+//! Keyword values are normalised as the release parser reads them
+//! (`codec:x265` is `codec:h265`, `res:4k` is `res:2160p`), so the AST
+//! holds what the index holds. Fields that need later milestones
+//! (`file:`, `seeders:`, …) parse to a clear "not available yet" error
+//! rather than being ignored.
 //! Input is untrusted: length, clause count and nesting are bounded.
 
 use std::fmt::{self, Write as _};
@@ -38,6 +44,8 @@ pub enum TextField {
     Any,
     Name,
     Path,
+    /// The effective title and alternative titles (§6).
+    Title,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,6 +55,70 @@ pub enum NumField {
     Files,
     Largest,
     Piece,
+    /// Release year (any year of a span).
+    Year,
+    /// Season number (any season of a pack).
+    Season,
+    /// Episode number (any episode of a range, absolute numbers too).
+    Episode,
+    /// Junk score, 0–100.
+    Junk,
+}
+
+impl NumField {
+    /// Whether the field is one value per torrent in a fast column, so a
+    /// range on it can be checked in the collector. Years, seasons and
+    /// episodes are multi-valued and live in the inverted index.
+    pub(crate) fn is_fast(self) -> bool {
+        !matches!(self, NumField::Year | NumField::Season | NumField::Episode)
+    }
+
+    /// Counted in plain numbers rather than bytes.
+    fn is_count(self) -> bool {
+        !matches!(self, NumField::Size | NumField::Largest | NumField::Piece)
+    }
+}
+
+/// Keyword facets from enrichment (§6), one term each in the `tag`
+/// field as `key:value`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TagKey {
+    Type,
+    Res,
+    Hdr,
+    Codec,
+    Audio,
+    Lang,
+    Group,
+    Has,
+    Resolved,
+}
+
+impl TagKey {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TagKey::Type => "type",
+            TagKey::Res => "res",
+            TagKey::Hdr => "hdr",
+            TagKey::Codec => "codec",
+            TagKey::Audio => "audio",
+            TagKey::Lang => "lang",
+            TagKey::Group => "group",
+            TagKey::Has => "has",
+            TagKey::Resolved => "resolved",
+        }
+    }
+}
+
+/// How a `cat:`/`bytes:` share is measured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShareBy {
+    /// Share of the files.
+    Count,
+    /// Share of the bytes.
+    Bytes,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,6 +199,19 @@ pub enum Node {
     Hash {
         hash: String,
     },
+    /// A keyword facet; matches any of the values.
+    Tag {
+        key: TagKey,
+        any: Vec<String>,
+    },
+    /// A category's share of the files or bytes, inclusive percentages.
+    Share {
+        by: ShareBy,
+        /// A category name (`video`, `software`, …).
+        cat: String,
+        lo: u8,
+        hi: u8,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -164,6 +249,8 @@ enum FieldKind {
     Flag(&'static str),
     Hash,
     Magnet,
+    Tag(TagKey),
+    Share(ShareBy),
     /// Known, but needs a later milestone.
     Later(&'static str),
 }
@@ -186,25 +273,25 @@ const FIELDS: &[(&str, FieldKind)] = &[
     ("partial", FieldKind::Flag("files_partial")),
     ("hash", FieldKind::Hash),
     ("magnet", FieldKind::Magnet),
+    ("title", FieldKind::Text(TextField::Title)),
+    ("type", FieldKind::Tag(TagKey::Type)),
+    ("res", FieldKind::Tag(TagKey::Res)),
+    ("hdr", FieldKind::Tag(TagKey::Hdr)),
+    ("codec", FieldKind::Tag(TagKey::Codec)),
+    ("audio", FieldKind::Tag(TagKey::Audio)),
+    ("lang", FieldKind::Tag(TagKey::Lang)),
+    ("group", FieldKind::Tag(TagKey::Group)),
+    ("has", FieldKind::Tag(TagKey::Has)),
+    ("resolved", FieldKind::Tag(TagKey::Resolved)),
+    ("ambiguous", FieldKind::Flag("ambiguous")),
+    ("year", FieldKind::Num(NumField::Year)),
+    ("s", FieldKind::Num(NumField::Season)),
+    ("e", FieldKind::Num(NumField::Episode)),
+    ("junk", FieldKind::Num(NumField::Junk)),
+    ("cat", FieldKind::Share(ShareBy::Count)),
+    ("bytes", FieldKind::Share(ShareBy::Bytes)),
     ("file", FieldKind::Later("the file index (M3)")),
-    ("title", FieldKind::Later("release parsing (M3)")),
-    ("group", FieldKind::Later("release parsing (M3)")),
-    ("lang", FieldKind::Later("release parsing (M3)")),
-    ("type", FieldKind::Later("classification (M3)")),
-    ("cat", FieldKind::Later("classification (M3)")),
-    ("bytes", FieldKind::Later("classification (M3)")),
-    ("res", FieldKind::Later("release parsing (M3)")),
-    ("hdr", FieldKind::Later("release parsing (M3)")),
-    ("codec", FieldKind::Later("release parsing (M3)")),
-    ("audio", FieldKind::Later("release parsing (M3)")),
-    ("year", FieldKind::Later("release parsing (M3)")),
-    ("s", FieldKind::Later("release parsing (M3)")),
-    ("e", FieldKind::Later("release parsing (M3)")),
-    ("junk", FieldKind::Later("classification (M3)")),
-    ("has", FieldKind::Later("classification (M3)")),
-    ("ambiguous", FieldKind::Later("release parsing (M3)")),
-    ("resolved", FieldKind::Later("release parsing (M3)")),
-    ("sig", FieldKind::Later("classification (M3)")),
+    ("sig", FieldKind::Later("grouping keys (M7)")),
     ("seeders", FieldKind::Later("swarm health (M4)")),
     ("trackers", FieldKind::Later("swarm health (M4)")),
     ("dht", FieldKind::Later("swarm health (M4)")),
@@ -656,7 +743,7 @@ fn field_value(
     match kind {
         FieldKind::Text(f) => word(f, value, start, end),
         FieldKind::Num(f) => {
-            let unit = if f == NumField::Files {
+            let unit = if f.is_count() {
                 parse_count
             } else {
                 parse_bytes
@@ -704,8 +791,133 @@ fn field_value(
             Some(hash) => Ok(Node::Hash { hash }),
             None => err("magnet link without a btih hash", start, end),
         },
+        FieldKind::Tag(key) => {
+            let mut any = Vec::new();
+            for v in value.split(',') {
+                let v = tag_value(key, v).ok_or_else(|| ParseError {
+                    message: tag_help(key, name, v),
+                    start,
+                    end,
+                })?;
+                if !any.contains(&v) {
+                    any.push(v);
+                }
+            }
+            Ok(Node::Tag { key, any })
+        }
+        FieldKind::Share(by) => share(by, name, value, start, end),
         FieldKind::Later(what) => err(format!("{name}: arrives with {what}"), start, end),
     }
+}
+
+/// Longest keyword value accepted.
+const MAX_TAG_BYTES: usize = 64;
+
+/// A keyword value as the index holds it, or `None` if it can't be one.
+fn tag_value(key: TagKey, v: &str) -> Option<String> {
+    use lodestar_classify::{ContentType, ResolvedVia, Structure};
+    let lower = v.to_lowercase();
+    if lower.is_empty() || lower.len() > MAX_TAG_BYTES {
+        return None;
+    }
+    let release_key = match key {
+        TagKey::Type => return ContentType::from_name(&lower).map(|t| t.as_str().to_owned()),
+        TagKey::Has => return Structure::from_name(&lower).map(|_| lower),
+        TagKey::Resolved => {
+            return ResolvedVia::from_name(&lower).map(|r| r.as_str().to_owned());
+        }
+        TagKey::Group => return Some(lower),
+        TagKey::Res => "res",
+        TagKey::Hdr => "hdr",
+        TagKey::Codec => "vcodec",
+        TagKey::Audio => "acodec",
+        TagKey::Lang => "lang",
+    };
+    // Read the value the way the parser reads it in a name, so aliases
+    // (`x265`, `4k`, `dovi`, `french`) land on the stored form.
+    let parsed = lodestar_release_parser::parse(&format!("A [{v}]"));
+    if let Some((_, found)) = parsed.fields().into_iter().find(|(k, _)| *k == release_key) {
+        return found.split(", ").next().map(str::to_owned);
+    }
+    // Otherwise take it as written, if it looks like a stored value
+    // (`fr`, `1080p`), with `res:1080` as `1080p`.
+    let plain = lower
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'));
+    if !plain {
+        return None;
+    }
+    if key == TagKey::Res && lower.bytes().all(|b| b.is_ascii_digit()) {
+        return Some(format!("{lower}p"));
+    }
+    Some(lower)
+}
+
+fn tag_help(key: TagKey, name: &str, v: &str) -> String {
+    use lodestar_classify::{ContentType, ResolvedVia, Structure};
+    let list = |names: Vec<&str>| names.join(", ");
+    match key {
+        TagKey::Type => format!(
+            "{name}: expects one of {}",
+            list(ContentType::ALL.iter().map(|t| t.as_str()).collect())
+        ),
+        TagKey::Has => format!(
+            "{name}: expects one of {}",
+            list(Structure::NAMED.iter().map(|(_, n)| *n).collect())
+        ),
+        TagKey::Resolved => format!(
+            "{name}: expects one of {}",
+            list(ResolvedVia::ALL.iter().map(|r| r.as_str()).collect())
+        ),
+        _ => format!("{name}: can't read {v:?}"),
+    }
+}
+
+/// `cat:video` (any), `cat:video>=80%`, `cat:software=0`,
+/// `bytes:video=10..50`.
+fn share(
+    by: ShareBy,
+    name: &str,
+    value: &str,
+    start: usize,
+    end: usize,
+) -> Result<Node, ParseError> {
+    use lodestar_classify::Category;
+    let split = value.find(['<', '>', '=']).unwrap_or(value.len());
+    let (cat, rest) = value.split_at(split);
+    let cat = cat.to_ascii_lowercase();
+    let Some(cat) = Category::ALL.iter().find(|c| c.as_str() == cat) else {
+        let names: Vec<&str> = Category::ALL.iter().map(|c| c.as_str()).collect();
+        return err(
+            format!("{name}: expects a category: {}", names.join(", ")),
+            start,
+            end,
+        );
+    };
+    let (lo, hi) = if rest.is_empty() {
+        (1, 100)
+    } else {
+        let rest = rest
+            .strip_prefix('=')
+            .filter(|r| r.contains(".."))
+            .unwrap_or(rest);
+        let (lo, hi) = range(rest, parse_percent, start, end)?;
+        let (lo, hi) = (lo.unwrap_or(0), hi.unwrap_or(100).min(100));
+        if lo > hi {
+            return err(format!("{name}: shares run 0–100%"), start, end);
+        }
+        (lo as u8, hi as u8)
+    };
+    Ok(Node::Share {
+        by,
+        cat: cat.as_str().to_owned(),
+        lo,
+        hi,
+    })
+}
+
+fn parse_percent(s: &str) -> Option<u64> {
+    s.strip_suffix('%').unwrap_or(s).parse().ok()
 }
 
 // ---- values ----------------------------------------------------------------
@@ -917,6 +1129,7 @@ impl Node {
             TextField::Any => "",
             TextField::Name => "name:",
             TextField::Path => "path:",
+            TextField::Title => "title:",
         };
         match self {
             Node::All => {}
@@ -982,13 +1195,18 @@ impl Node {
                 let _ = write!(out, "{}~{word}", text_field(*field));
             }
             Node::Range { field, lo, hi } => {
-                let (name, files) = match field {
-                    NumField::Size => ("size", false),
-                    NumField::Files => ("files", true),
-                    NumField::Largest => ("largest", false),
-                    NumField::Piece => ("piece", false),
+                let name = match field {
+                    NumField::Size => "size",
+                    NumField::Files => "files",
+                    NumField::Largest => "largest",
+                    NumField::Piece => "piece",
+                    NumField::Year => "year",
+                    NumField::Season => "s",
+                    NumField::Episode => "e",
+                    NumField::Junk => "junk",
                 };
-                let v = |n: u64| if files { n.to_string() } else { bytes_text(n) };
+                let count = field.is_count();
+                let v = |n: u64| if count { n.to_string() } else { bytes_text(n) };
                 let _ = match (lo, hi) {
                     (Some(l), Some(h)) if l == h => write!(out, "{name}:{}", v(*l)),
                     (Some(l), Some(h)) => write!(out, "{name}:{}..{}", v(*l), v(*h)),
@@ -1031,6 +1249,22 @@ impl Node {
             }
             Node::Hash { hash } => {
                 let _ = write!(out, "hash:{hash}");
+            }
+            Node::Tag { key, any } => {
+                let _ = write!(out, "{}:{}", key.as_str(), any.join(","));
+            }
+            Node::Share { by, cat, lo, hi } => {
+                let name = match by {
+                    ShareBy::Count => "cat",
+                    ShareBy::Bytes => "bytes",
+                };
+                let _ = match (lo, hi) {
+                    (1, 100) => write!(out, "{name}:{cat}"),
+                    (l, h) if l == h => write!(out, "{name}:{cat}={l}"),
+                    (l, 100) => write!(out, "{name}:{cat}>={l}"),
+                    (0, h) => write!(out, "{name}:{cat}<={h}"),
+                    (l, h) => write!(out, "{name}:{cat}={l}..{h}"),
+                };
             }
         }
     }
@@ -1222,7 +1456,12 @@ mod tests {
     fn helpful_errors() {
         let e = |q: &str| parse(q).unwrap_err().message;
         assert_eq!(e("sise:>1GB"), "unknown field sise: (did you mean size:?)");
-        assert_eq!(e("res:2160p"), "res: arrives with release parsing (M3)");
+        assert_eq!(e("file:x"), "file: arrives with the file index (M3)");
+        assert!(e("type:film").starts_with("type: expects one of movie, tv"));
+        assert!(e("has:nope").contains("nfo"));
+        assert!(e("cat:vid>1").contains("expects a category"));
+        assert!(e("cat:video>100").contains("0–100%"));
+        assert_eq!(e("codec:a$b"), "codec: can't read \"a$b\"");
         assert_eq!(e("seeders:>5"), "seeders: arrives with swarm health (M4)");
         assert!(e("size:huge").contains("can't read"));
         assert!(e("(a b").contains("missing ')'"));
@@ -1236,6 +1475,133 @@ mod tests {
         assert!(e("/S0[1-9]/").contains("regex"));
         let err = parse("x sise:1").unwrap_err();
         assert_eq!((err.start, err.end), (2, 7));
+    }
+
+    #[test]
+    fn enrichment_fields() {
+        let tag = |key, any: &[&str]| Node::Tag {
+            key,
+            any: any.iter().map(|s| s.to_string()).collect(),
+        };
+        // Values land on the stored form, as the parser reads them.
+        assert_eq!(parse("codec:x265").unwrap(), tag(TagKey::Codec, &["h265"]));
+        assert_eq!(parse("res:4K").unwrap(), tag(TagKey::Res, &["2160p"]));
+        assert_eq!(parse("res:1080").unwrap(), tag(TagKey::Res, &["1080p"]));
+        assert_eq!(parse("hdr:dovi").unwrap(), tag(TagKey::Hdr, &["dv"]));
+        assert_eq!(parse("audio:DD+").unwrap(), tag(TagKey::Audio, &["eac3"]));
+        assert_eq!(
+            parse("lang:french,fr,multi").unwrap(),
+            tag(TagKey::Lang, &["fr", "multi"])
+        );
+        assert_eq!(
+            parse("type:Movie,tv").unwrap(),
+            tag(TagKey::Type, &["movie", "tv"])
+        );
+        assert_eq!(parse("group:NTb").unwrap(), tag(TagKey::Group, &["ntb"]));
+        assert_eq!(parse("has:nfo").unwrap(), tag(TagKey::Has, &["nfo"]));
+        assert_eq!(
+            parse("resolved:files").unwrap(),
+            tag(TagKey::Resolved, &["files"])
+        );
+        assert_eq!(
+            parse("ambiguous:yes").unwrap(),
+            Node::Flag {
+                name: "ambiguous".into(),
+                value: true
+            }
+        );
+        assert_eq!(
+            parse("title:\"dark knight\"").unwrap(),
+            Node::Phrase {
+                field: TextField::Title,
+                text: "dark knight".into()
+            }
+        );
+        let range = |field, lo, hi| Node::Range { field, lo, hi };
+        assert_eq!(
+            parse("year:2019..2021").unwrap(),
+            range(NumField::Year, Some(2019), Some(2021))
+        );
+        assert_eq!(
+            parse("s:2").unwrap(),
+            range(NumField::Season, Some(2), Some(2))
+        );
+        assert_eq!(
+            parse("e:>5").unwrap(),
+            range(NumField::Episode, Some(6), None)
+        );
+        assert_eq!(
+            parse("junk:<20").unwrap(),
+            range(NumField::Junk, None, Some(19))
+        );
+        let share = |by, lo, hi| Node::Share {
+            by,
+            cat: "video".into(),
+            lo,
+            hi,
+        };
+        assert_eq!(
+            parse("cat:video>=80%").unwrap(),
+            share(ShareBy::Count, 80, 100)
+        );
+        assert_eq!(parse("cat:video=0").unwrap(), share(ShareBy::Count, 0, 0));
+        assert_eq!(parse("cat:VIDEO").unwrap(), share(ShareBy::Count, 1, 100));
+        assert_eq!(
+            parse("bytes:video>90%").unwrap(),
+            share(ShareBy::Bytes, 91, 100)
+        );
+        assert_eq!(
+            parse("bytes:video=10..50").unwrap(),
+            share(ShareBy::Bytes, 10, 50)
+        );
+        assert_eq!(
+            parse("cat:video<=100").unwrap(),
+            share(ShareBy::Count, 0, 100)
+        );
+    }
+
+    #[test]
+    fn stored_values_normalise_to_themselves() {
+        // Every value the release parser stores must query as itself, or
+        // a facet the UI offers would match nothing.
+        for (key, values) in [
+            (
+                TagKey::Res,
+                &[
+                    "480p", "576p", "720p", "1080i", "1080p", "1440p", "2160p", "4320p",
+                ][..],
+            ),
+            (
+                TagKey::Codec,
+                &["h264", "h265", "av1", "vp9", "xvid", "divx", "mpeg2", "vc1"],
+            ),
+            (TagKey::Hdr, &["hdr", "hdr10", "hdr10+", "dv", "hlg"]),
+            (
+                TagKey::Audio,
+                &[
+                    "aac",
+                    "ac3",
+                    "eac3",
+                    "dts",
+                    "dts-hd",
+                    "dts-hd-ma",
+                    "dts-x",
+                    "truehd",
+                    "atmos",
+                    "flac",
+                    "mp3",
+                    "opus",
+                    "lpcm",
+                    "alac",
+                    "vorbis",
+                ],
+            ),
+            (TagKey::Lang, &["en", "fr", "de", "ru", "ja", "multi"]),
+        ] {
+            for v in values {
+                assert_eq!(tag_value(key, v).as_deref(), Some(*v), "{key:?} {v}");
+            }
+        }
     }
 
     #[test]
@@ -1275,6 +1641,10 @@ mod tests {
             "discovered:2026-01-01..2026-03-31 discovered:2026-02-02 discovered:>2026-01-01",
             "-(a | b) -\"x y\"",
             "hash:0123456789abcdef0123456789abcdef01234567",
+            "title:\"dark knight\" title:batman type:movie,tv res:2160p codec:h265",
+            "hdr:dv audio:atmos lang:fr group:ntb has:nfo resolved:folder ambiguous:no",
+            "year:2019..2021 s:2 e:>=5 junk:<=20",
+            "cat:video cat:software=0 bytes:video>=91 cat:audio<=40 bytes:image=10..50",
             // Found by fuzzing: phrase words that look like syntax, and a
             // lone `!` before `)`.
             "\"a\" NEAR \"NEAR $*\" NEAR \"x|y\"",

@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use lodestar_classify::{Composition, Record};
 use lodestar_metainfo::InfoHash;
 use lodestar_store::Store;
 use tantivy::collector::{Count, TopDocs};
@@ -21,7 +22,7 @@ use tantivy::{
 };
 
 use crate::compile;
-use crate::doc::TorrentDoc;
+use crate::doc::{DocEnrichment, TorrentDoc};
 use crate::filter::{FastRange, PostFilter};
 use crate::query::{Node, When};
 use crate::schema::{self, Fields, SCHEMA_VERSION, TOKENIZER_VERSION};
@@ -452,6 +453,27 @@ impl SearchIndex {
     }
 }
 
+/// A stored torrent as a document, with its enrichment when it has a
+/// readable one. A record the codec rejects is left out: the writer's
+/// backfill derives it again and logs the torrent for reindexing.
+fn load(store: &mut Store, id: i64) -> Result<Option<TorrentDoc>> {
+    let (Some(row), Some(tree)) = (store.torrent(id)?, store.files(id)?) else {
+        return Ok(None);
+    };
+    let mut doc = TorrentDoc::new(&row, &tree);
+    if let Some(e) = store.enrichment(id)? {
+        match Record::decode(&e.data) {
+            Ok(record) => {
+                // An empty or unreadable `comp` only loses the shares.
+                let comp = Composition::decode(&e.comp).ok();
+                doc.enriched = DocEnrichment::new(&record, comp.as_ref());
+            }
+            Err(err) => tracing::debug!(id, "unreadable enrichment: {err}"),
+        }
+    }
+    Ok(Some(doc))
+}
+
 /// Adds torrents to the index in id order and commits with the watermark.
 pub struct Indexer {
     index: SearchIndex,
@@ -495,6 +517,11 @@ impl Indexer {
     /// re-indexes torrents changed since (upgraded partial imports).
     /// Returns how many documents it added or replaced.
     pub fn catch_up(&mut self, store: &mut Store, limit: usize) -> Result<usize> {
+        if self.last_id == 0 && self.reindex_seq == 0 {
+            // A new index reads every torrent's current data, so the
+            // changes logged before it started are already in it.
+            self.reindex_seq = store.reindex_head()?;
+        }
         let mut added = self.catch_up_new(store, limit)?;
         for (seq, id) in store.reindex_after(self.reindex_seq, limit)? {
             self.reindex_seq = seq;
@@ -504,9 +531,9 @@ impl Indexer {
             }
             self.writer
                 .delete_term(Term::from_field_u64(self.index.fields.id, id as u64));
-            if let (Some(row), Some(tree)) = (store.torrent(id)?, store.files(id)?) {
+            if let Some(doc) = load(store, id)? {
                 self.writer
-                    .add_document(TorrentDoc::new(&row, &tree).to_document(&self.index.fields))?;
+                    .add_document(doc.to_document(&self.index.fields))?;
             }
             self.pending += 1;
             added += 1;
@@ -518,12 +545,12 @@ impl Indexer {
         let ids = store.ids_after(self.last_id, limit)?;
         let mut added = 0;
         for id in ids {
-            let (Some(row), Some(tree)) = (store.torrent(id)?, store.files(id)?) else {
-                // Deleted between the two reads: nothing to index.
+            let Some(doc) = load(store, id)? else {
+                // Deleted between the reads: nothing to index.
                 self.last_id = id;
                 continue;
             };
-            self.add(&TorrentDoc::new(&row, &tree))?;
+            self.add(&doc)?;
             added += 1;
         }
         Ok(added)

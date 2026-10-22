@@ -1,9 +1,9 @@
-//! The torrent index schema (architecture §8), as far as M2 fills it.
-//! Parsed-title, category and composition fields arrive with enrichment
-//! (M3), the trigram field with regex search.
+//! The torrent index schema (architecture §8). The trigram field arrives
+//! with regex search, the swarm fields with M4.
 //!
 //! Only `id` and `name` are stored; everything shown comes from SQLite.
 
+use lodestar_classify::Category;
 use tantivy::schema::{
     BytesOptions, FAST, Field, INDEXED, IndexRecordOption, NumericOptions, STORED, Schema,
     TextFieldIndexing, TextOptions,
@@ -13,13 +13,17 @@ use crate::tokenizer::NAME_TOKENIZER;
 
 /// Bump on any schema change: a new version is a new index directory,
 /// built in the background while the old one serves (§8).
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 /// Bump on any tokenizer change, for the same reason.
 pub const TOKENIZER_VERSION: u32 = 1;
 
 /// Field boosts for phase-1 ranking (§8).
 pub const NAME_BOOST: f32 = 3.0;
 pub const PATH_BOOST: f32 = 1.0;
+/// Added for a word in the effective title, on top of the name boost: a
+/// torrent whose files say it's the thing outranks one that only
+/// mentions it in a path (§8).
+pub const TITLE_BOOST: f32 = 2.0;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Fields {
@@ -47,6 +51,31 @@ pub struct Fields {
     pub piece_len: Field,
     pub discovered: Field,
     pub metadata: Field,
+    /// The effective title and each alternative title (§6), with
+    /// positions for `title:"…"`.
+    pub title: Field,
+    /// Keyword facets as `key:value` (`res:2160p`, `type:movie`,
+    /// `has:nfo`); see [`TagKey`](crate::query::TagKey).
+    pub tag: Field,
+    /// Every year, season and episode the release names (a pack or a
+    /// range gives several), in the inverted index.
+    pub year: Field,
+    pub season: Field,
+    pub episode: Field,
+    pub junk: Field,
+    /// Per-category share of the files and of the bytes, 0–100, in
+    /// [`Category::ALL`] order. Only non-zero shares are written.
+    pub cat_count: [Field; 10],
+    pub cat_bytes: [Field; 10],
+}
+
+/// The fast-field name of a category share.
+pub fn share_field(bytes: bool, cat: Category) -> String {
+    format!(
+        "cat_{}_{}",
+        if bytes { "bytes" } else { "count" },
+        cat.as_str()
+    )
 }
 
 pub fn build() -> (Schema, Fields) {
@@ -74,6 +103,11 @@ pub fn build() -> (Schema, Fields) {
     // Range filters run on fast fields; an inverted index would only add
     // bytes (§3).
     let num = || NumericOptions::default().set_fast();
+    let multi = || NumericOptions::default().set_indexed();
+    let mut shares =
+        |bytes: bool| Category::ALL.map(|c| b.add_u64_field(&share_field(bytes, c), num()));
+    let cat_count = shares(false);
+    let cat_bytes = shares(true);
     let fields = Fields {
         id: b.add_u64_field("id", FAST | INDEXED | STORED),
         hash: b.add_bytes_field("hash", BytesOptions::default().set_indexed()),
@@ -81,13 +115,21 @@ pub fn build() -> (Schema, Fields) {
         path: b.add_text_field("path", text(false, false)),
         text: b.add_text_field("text", text(false, false)),
         ext: b.add_text_field("ext", keyword.clone()),
-        flag: b.add_text_field("flag", keyword),
+        flag: b.add_text_field("flag", keyword.clone()),
         size: b.add_u64_field("size", num()),
         files: b.add_u64_field("files", num()),
         largest: b.add_u64_field("largest", num()),
         piece_len: b.add_u64_field("piece_len", num()),
         discovered: b.add_i64_field("discovered", num()),
         metadata: b.add_i64_field("metadata", num()),
+        title: b.add_text_field("title", text(false, true)),
+        tag: b.add_text_field("tag", keyword.clone()),
+        year: b.add_u64_field("year", multi()),
+        season: b.add_u64_field("season", multi()),
+        episode: b.add_u64_field("episode", multi()),
+        junk: b.add_u64_field("junk", num()),
+        cat_count,
+        cat_bytes,
     };
     (b.build(), fields)
 }

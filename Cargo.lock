@@ -896,6 +896,7 @@ dependencies = [
  "encoding_rs",
  "lodestar-bencode",
  "lodestar-metainfo",
+ "lodestar-pipeline",
  "lodestar-search",
  "lodestar-store",
  "rand 0.10.3",
@@ -996,7 +997,10 @@ name = "lodestar-search"
 version = "0.0.0"
 dependencies = [
  "lodestar-bencode",
+ "lodestar-classify",
  "lodestar-metainfo",
+ "lodestar-pipeline",
+ "lodestar-release-parser",
  "lodestar-store",
  "proptest",
  "serde",
