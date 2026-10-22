@@ -11,7 +11,7 @@ use std::time::Instant;
 use lodestar_classify::{ContentType, FileInfo, classify};
 use lodestar_filter::{
     Action, Core, CsList, Doc, Engine, Facts, Item, Lists, PackSwitches, RuleRef, Switches,
-    UserRule,
+    TermSet, UserRule,
 };
 use lodestar_search::parse;
 use lodestar_search::tokenizer::{TokKind, tokenize};
@@ -96,17 +96,55 @@ fn matches(name: &str, query: &str) -> bool {
 }
 
 /// Words that split into several tokens, their parts, compounds and run
-/// together forms, and plain words.
+/// together forms, plain words, and CJK (bigrams). `x264+` and `aB-cd`
+/// make the tokenizer emit a compound after a later part, so positions
+/// come out of order.
 const VOCAB: &[&str] = &[
-    "1080p", "1080", "p", "x264", "x", "264", "web-dl", "WEB-DL", "WEBDL", "web", "dl", "DD+",
-    "dd", "5.1", "51", "5", "1", "H.264", "h264", "ShowName", "show", "name", "S01E02", "s01",
-    "e02", "a", "b", "c",
+    "1080p",
+    "1080",
+    "p",
+    "x264",
+    "x",
+    "264",
+    "web-dl",
+    "WEB-DL",
+    "WEBDL",
+    "web",
+    "dl",
+    "DD+",
+    "dd",
+    "5.1",
+    "51",
+    "5",
+    "1",
+    "H.264",
+    "h264",
+    "ShowName",
+    "show",
+    "name",
+    "S01E02",
+    "s01",
+    "e02",
+    "a",
+    "b",
+    "c",
+    "x264+",
+    "aB-cd",
+    "ab",
+    "cd",
+    "abcd",
+    "日本語",
+    "日本",
+    "本語",
+    "映画",
 ];
 
+/// Up to 40 words, so a word can have more places than the plain scans
+/// cover and the windowed search runs too.
 fn stream() -> impl Strategy<Value = String> {
     (
-        prop::collection::vec(prop::sample::select(VOCAB), 1..14),
-        prop::collection::vec(prop::sample::select(vec![" ", ".", "-", "_", " "]), 14),
+        prop::collection::vec(prop::sample::select(VOCAB), 1..40),
+        prop::collection::vec(prop::sample::select(vec![" ", ".", "-", "_", " "]), 40),
     )
         .prop_map(|(w, s)| w.iter().zip(s).map(|(w, s)| format!("{w}{s}")).collect())
 }
@@ -136,6 +174,51 @@ proptest! {
         prop_assert_eq!(matches(&text, &format!("-({q})")), !expect, "-({}) on {:?}", q, text);
         // Phrases inside NEAR are their words, each a NEAR word.
         prop_assert_eq!(matches(&text, &render(&words, slop)), expect);
+    }
+
+    /// Through the engine: the rule index and the cheap check never stop
+    /// a NEAR rule that matches, among rules the torrent doesn't match.
+    #[test]
+    fn near_rules_reach_the_engine(
+        text in stream(),
+        words in prop::collection::vec(prop::sample::select(VOCAB), 2..4),
+        slop in 1u32..4,
+        path in any::<bool>(),
+    ) {
+        let q = words.iter().map(|w| w.to_string()).collect::<Vec<_>>().join(&format!(" NEAR/{slop} "));
+        let mut rules = vec![user(1, &q)];
+        rules.extend((2..40).map(|i| user(i, &format!("kzorq{i} | \"{} vmikq{i}\"", words[0]))));
+        let mut e = Engine::new(Core::new(
+            Lists { sexual: TermSet::of(&[]), child_roles: TermSet::of(&[]), codes: TermSet::of(&[]) },
+            CsList::default(),
+            Switches::default(),
+        ));
+        e.rules = rules.into();
+        let (name, files) = if path { ("x", vec![(format!("d/{text}.mkv"), 1 << 30)]) } else { (text.as_str(), vec![("a.mkv".to_owned(), 1 << 30)]) };
+        let files: Vec<(&str, u64)> = files.iter().map(|(p, s)| (p.as_str(), *s)).collect();
+        // NEAR reads the name and every path.
+        let expect = reference(name, &words, slop)
+            || files.iter().any(|(p, _)| reference(p, &words, slop));
+        prop_assert_eq!(judge(&e, name, &files) == Some(RuleRef::User(1)), expect, "{} on {:?}", q, text);
+    }
+
+    /// Long names of words whose compounds come after their later parts,
+    /// so the windowed search runs on positions out of order.
+    #[test]
+    fn out_of_order_names_are_the_brute_force(
+        words in prop::collection::vec(
+            prop::sample::select(vec!["x264+", "aB-cd", "x", "264", "x264", "abcd", "ab", "cd", "b", "zz"]),
+            20..60,
+        ),
+        query in prop::collection::vec(
+            prop::sample::select(vec!["x264+", "aB-cd", "x264", "abcd", "x", "264", "cd", "b"]),
+            2..4,
+        ),
+        slop in 1u32..4,
+    ) {
+        let text = words.join(" ");
+        let q = query.join(&format!(" NEAR/{slop} "));
+        prop_assert_eq!(matches(&text, &q), reference(&text, &query, slop), "{} on {:?}", q, text);
     }
 
     /// Words of one token match as they did before.
@@ -191,6 +274,14 @@ fn edges() {
     // A run-together name matches the hyphenated word, and the reverse.
     assert!(matches("Show WEBDL x264", "web-dl NEAR/1 x264"));
     assert!(matches("Show WEB-DL x264", "webdl NEAR/1 x264"));
+    // A compound token sits at its first part's position, as in search:
+    // web 0, webdl 0, dl 1, a 2, x264 3.
+    assert!(!matches("WEB-DL.a.x264", "webdl NEAR/1 x264"));
+    assert!(matches("WEB-DL.a.x264", "web-dl NEAR/1 x264"));
+    // A plain word matches a form of only some of its parts; a NEAR word
+    // doesn't (§16, a follow-up for the plain word).
+    assert!(matches("Show WEBDL", "web-dl.x264"));
+    assert!(!matches("Show WEBDL", "web-dl.x264 NEAR/1 show"));
 }
 
 fn engine() -> Engine {
@@ -423,4 +514,69 @@ fn videos(n: usize) -> Vec<(String, Vec<FileInfo>)> {
             (name, files)
         })
         .collect()
+}
+
+/// A hostile name: one word repeated `n` times, three fillers, then the
+/// other word `n` times, never close enough for `NEAR/1`.
+fn hostile(a: &str, b: &str, n: usize) -> String {
+    let mut s = format!("{a} ").repeat(n);
+    s.push_str("zz zz zz ");
+    s.push_str(&format!("{b} ").repeat(n));
+    s
+}
+
+/// Seconds to judge `name` against `query` `times` times, tokenizing
+/// afresh each time as a new torrent would.
+fn time(name: &str, query: &str, times: u32) -> f64 {
+    let node = parse(query).unwrap();
+    let start = Instant::now();
+    for _ in 0..times {
+        let item = Item {
+            hashes: &[[3; 20]],
+            name,
+            files: &[],
+            content_type: ContentType::Other,
+        };
+        assert!(!Doc::new(&item, None).matches(&node, &[]));
+    }
+    start.elapsed().as_secs_f64() / f64::from(times)
+}
+
+/// Names from the DHT are untrusted (§6): a word repeated hundreds of
+/// times must not make NEAR cost grow faster than the name. Each name
+/// here is 2,000 tokens; the bound is far above the linear cost even in
+/// a debug build, and far below the quadratic one.
+#[test]
+fn hostile_names_stay_cheap() {
+    for (a, b, q) in [
+        ("1080p", "x264", "1080p NEAR/1 x264"),
+        ("aa", "bb", "aa NEAR/1 bb"),
+        ("web-dl", "x", "web-dl NEAR/1 x"),
+    ] {
+        let parts = tokenize(a)
+            .iter()
+            .filter(|t| t.kind == TokKind::Part)
+            .count();
+        let name = hostile(a, b, 2000 / (parts + 1));
+        let secs = time(&name, q, 1);
+        assert!(secs < 0.2, "{q}: {secs:.3} s on a 2,000-token name");
+    }
+}
+
+/// The hostile shape's cost per text, in release: `cargo test --release
+/// -p lodestar-filter --test near -- --ignored --nocapture near_hostile`.
+#[test]
+#[ignore]
+fn near_hostile() {
+    for (a, b, q, n) in [
+        ("1080p", "x264", "1080p NEAR/1 x264", 84),
+        ("1080p", "x264", "1080p NEAR/1 x264", 336),
+        ("aa", "bb", "aa NEAR/1 bb", 250),
+        ("aa", "bb", "aa NEAR/1 bb", 1000),
+    ] {
+        let name = hostile(a, b, n);
+        let tokens = tokenize(&name).len();
+        let secs = time(&name, q, 20);
+        println!("{q} on {tokens} tokens: {:.1} µs per text", secs * 1e6);
+    }
 }
