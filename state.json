@@ -176,7 +176,7 @@
    "pr": 71,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "launched 14:40; not live.rs/compile.rs (B4/B17) | PR #71; reviewer started 16:45 | 17:15 r1 FIX: visibility via base(without_facet(user_ast)), merge main, category ranges, near-1M perf."
+   "notes": "launched 14:40; not live.rs/compile.rs (B4/B17) | PR #71; reviewer started 16:45 | 17:15 r1 FIX: visibility via base(without_facet(user_ast)), merge main, category ranges, near-1M perf. 18:24 R1 all in (ee81535); R2 review in flight."
   },
   "B16": {
    "status": "pending",
@@ -203,7 +203,7 @@
    "pr": 76,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #76; reviewer started 16:45 | 17:10 r1 FIX: exclude dev routes from prod build (scope exception), toast timer, ticker 60s, + a11y items. R2 FIX 18:15: PR size reason; toast dismiss drops focus. Approved tokens --toast-width/--listbox-max-height in tokens.css."
+   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #76; reviewer started 16:45 | 17:10 r1 FIX: exclude dev routes from prod build (scope exception), toast timer, ticker 60s, + a11y items. R2 FIX 18:15: PR size reason; toast dismiss drops focus. Approved tokens --toast-width/--listbox-max-height in tokens.css. 18:10 R2 fixes 11d9b0d; R3 review in flight."
   },
   "W7cd": {
    "status": "changes_requested",
@@ -212,7 +212,7 @@
    "pr": 78,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #78; reviewer started 16:45 | 16:58 round 1 FIX: load-more stuck, shift anchor by index, touch targets, .ls-focus dup; + measure opt-in, tokens, tree index prop, 100k expand perf, dup names, roving on click, Esc in drawer, tests, PR size. R2 FIX 18:20: coarse targets overlap; Drawer Esc swallowed by aria-expanded; Menu focus invisible; popover test race (Bits rAF autofocus)."
+   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #78; reviewer started 16:45 | 16:58 round 1 FIX: load-more stuck, shift anchor by index, touch targets, .ls-focus dup; + measure opt-in, tokens, tree index prop, 100k expand perf, dup names, roving on click, Esc in drawer, tests, PR size. R2 FIX 18:20: coarse targets overlap; Drawer Esc swallowed by aria-expanded; Menu focus invisible; popover test race (Bits rAF autofocus). 18:23 R2 fixes pushed 44fdd31; R3 review held until #76 merges (dev-routes move + search JS 37.5 vs 32.4 kB)."
   },
   "W7e": {
    "status": "changes_requested",
@@ -785,10 +785,10 @@
    "status": "running",
    "model": "sonnet",
    "session": "session_012oddgqW1doBy4thnkcJW1U",
-   "pr": null,
+   "pr": 82,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": "launched 17:33; docs/query-language.md + doc example test"
+   "review_rounds": 1,
+   "notes": "R1 FIX 18:30: test must extract examples from the page itself; planned UI marked; ranking step 1; table pipe."
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -872,7 +872,9 @@
   "70": "round 3 (f7fddd8)",
   "72": "B17 round 2 (3e4d7b6)",
   "77": "B13 round 2 (29caca3)",
-  "79": "B14 round 1 + security (e96480b)"
+  "79": "B14 round 1 + security (e96480b)",
+  "71": "B6 round 2 (ee81535)",
+  "76": "W7ab round 3 (11d9b0d)"
  },
  "carry_forward": {
   "next-bans-touch": [
@@ -936,7 +938,8 @@
   },
   "pr81_fix": "#81 review FIX: (1) test must distinguish ON from FAST: >16KB value (overflow pages) deleted, assert gone from DB file; (2) WAL keeps insert-time frames until TRUNCATE (prod TRUNCATE only at shutdown): call store.checkpoint() (TRUNCATE) after purge_filter / release / delete_torrents / #70's release_rules when they deleted rows; drive test through those APIs. Do it after #70 merges (filter.rs conflict).",
   "tantivy_deleted_names": "Deleted torrents' names stay in Tantivy segment files until merge. Follow-up after B6: on delete_torrents, force-merge segments holding deleted docs (rare path). In the spirit of owner decision 'deleted data is overwritten' (\u00a72.17).",
-  "w7ab_css_growth": "Record in \u00a716: daisyUI component CSS for the primitives adds ~5.6 KB gz to first-load CSS (11.89 -> 17.48 KB); accepted by runner (one global Tailwind sheet; screens need it). CSS headroom ~2.2 KB: watch W7cd/W7e/screens."
+  "w7ab_css_growth": "Record in \u00a716: daisyUI component CSS for the primitives adds ~5.6 KB gz to first-load CSS (11.89 -> 17.48 KB); accepted by runner (one global Tailwind sheet; screens need it). CSS headroom ~2.2 KB: watch W7cd/W7e/screens.",
+  "rebuild_windows_flake": "test (windows-latest) failed crates/search/tests/rebuild.rs:124 an_interrupted_rebuild_resumes_from_its_watermarks ('the rebuild finishes') on Q-docs da02e04 (no src change). Watch; if it recurs, root-cause (timeout on slow Windows runner?) in a small fix PR."
  },
  "blocked_on_owner": [
   "Modern DHT crawler architecture: waiting on an AskUserQuestion",
