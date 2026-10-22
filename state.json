@@ -1,9 +1,9 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-22T05:22:00Z",
+ "updated_at": "2026-10-22T05:29:00Z",
  "launches": {
   "date": "2026-10-22",
-  "count": 9
+  "count": 12
  },
  "tags": {},
  "slices": {
@@ -622,6 +622,51 @@
   "E-M8": {
    "status": "pending",
    "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "X-utp": {
+   "status": "running",
+   "model": "opus",
+   "session": "session_0141epGbZVUkFGWnyYhDra42",
+   "pr": null,
+   "attempt": 1,
+   "review_rounds": 0,
+   "notes": "DHT receive-loop demux lines to be applied by the runner after #32 merges"
+  },
+  "X-integrations": {
+   "status": "running",
+   "model": "opus",
+   "session": "session_01Pbk94fn6LWmUvc4LYw2c2P",
+   "pr": null,
+   "attempt": 1,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "X-pack-static": {
+   "status": "running",
+   "model": "sonnet",
+   "session": "session_0159tQEctmkzsDhjisVQgZ3b",
+   "pr": null,
+   "attempt": 1,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "X-clients": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "X-notify": {
+   "status": "pending",
+   "model": "sonnet",
    "session": null,
    "pr": null,
    "attempt": 0,
