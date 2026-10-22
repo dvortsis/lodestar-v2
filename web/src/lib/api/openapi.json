@@ -3105,6 +3105,7 @@
           "fetch_pending",
           "fetched",
           "harvested",
+          "paused",
           "stored",
           "torrents"
         ],
@@ -3148,6 +3149,10 @@
             "description": "Hashes received from sources since start.",
             "minimum": 0
           },
+          "paused": {
+            "type": "boolean",
+            "description": "The crawler is paused (`POST /crawler/pause`): the counters stand\nstill because nothing is harvested or fetched, not because\nsomething broke."
+          },
           "stored": {
             "type": "integer",
             "format": "int64",
@@ -3168,6 +3173,7 @@
           "fetch_pending": 1200,
           "fetched": 3400,
           "harvested": 91000,
+          "paused": false,
           "stored": 3100,
           "torrents": 48211
         }
@@ -3583,7 +3589,7 @@
       },
       "ExternalAddress": {
         "type": "object",
-        "description": "Our address as other DHT nodes see it: the BEP 42 `ip` key of their\nreplies, one vote per node, the last 32 nodes.",
+        "description": "Our address as other DHT nodes see it: the BEP 42 `ip` key of their\nreplies, one vote per network (/24 or /64), the last 32 networks,\nIPv4 and IPv6 tallied apart (the IPv4 consensus wins when both have\none).",
         "required": [
           "agreeing",
           "ip",
@@ -3594,7 +3600,7 @@
           "agreeing": {
             "type": "integer",
             "format": "int32",
-            "description": "Voters naming the leading address.",
+            "description": "Voting networks naming the leading address.",
             "minimum": 0
           },
           "ip": {
@@ -3961,6 +3967,7 @@
           "reachable",
           "reason",
           "unsolicited_queries",
+          "unsolicited_sources",
           "window_s",
           "window_started_at"
         ],
@@ -4015,6 +4022,7 @@
               "bootstrapping",
               "measuring",
               "unsolicited_queries",
+              "few_unsolicited_sources",
               "no_unsolicited_queries"
             ]
           },
@@ -4025,6 +4033,15 @@
             ],
             "format": "int64",
             "description": "Of `inbound_queries`, the ones from nodes we never queried.",
+            "minimum": 0
+          },
+          "unsolicited_sources": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The distinct networks (/24 or /64) those came from, counting at\nmost the 64 most recent; null until measuring. `reachable` needs\nat least 3.",
             "minimum": 0
           },
           "window_s": {
@@ -4057,6 +4074,7 @@
           "reachable": true,
           "reason": "unsolicited_queries",
           "unsolicited_queries": 37,
+          "unsolicited_sources": 21,
           "window_s": 600,
           "window_started_at": 1792677610
         }
