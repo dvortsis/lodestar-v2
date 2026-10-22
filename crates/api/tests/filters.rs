@@ -64,6 +64,7 @@ fn fixture_with(index: Option<SearchIndex>) -> Fixture {
             filters: Some(api.clone()),
             settings: None,
             ops: None,
+            adult: Default::default(),
         }),
     );
     Fixture {

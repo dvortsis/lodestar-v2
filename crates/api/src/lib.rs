@@ -44,7 +44,7 @@ pub use auth::{Auth, require_session};
 pub use error::{ApiError, ApiResult};
 pub use extract::ClientIp;
 pub(crate) use search::unix_now;
-pub use search::{MATCHED_FILES, MAX_LIMIT, MAX_WINDOW};
+pub use search::{AdultVisibility, MATCHED_FILES, MAX_LIMIT, MAX_WINDOW};
 
 #[derive(Clone, Debug)]
 pub struct ApiState {
@@ -60,6 +60,8 @@ pub struct ApiState {
     pub settings: Option<Arc<dyn settings::SettingsApi>>,
     /// `None` when no pipeline runs (tests, tools).
     pub ops: Option<Arc<dyn ops::OpsApi>>,
+    /// "Show adult content" (§20.9), followed live; hidden by default.
+    pub adult: AdultVisibility,
 }
 
 /// The `/api/v1` routes. The server must be run with

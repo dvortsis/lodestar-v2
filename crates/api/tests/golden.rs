@@ -226,6 +226,7 @@ fn fixture() -> Fixture {
             filters: Some(api.clone()),
             settings: None,
             ops: None,
+            adult: Default::default(),
         }),
     );
     let hashes = infos
@@ -1160,6 +1161,7 @@ async fn filters_without_an_index_or_filters() {
                 filters,
                 settings: None,
                 ops: None,
+                adult: Default::default(),
             }),
         )
     };

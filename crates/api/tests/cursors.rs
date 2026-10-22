@@ -89,6 +89,7 @@ fn fixture(n: usize) -> Fixture {
             filters: None,
             settings: None,
             ops: None,
+            adult: Default::default(),
         }),
     );
     let mut f = Fixture {
