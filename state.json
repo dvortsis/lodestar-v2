@@ -167,7 +167,7 @@
    "pr": 101,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": "launched 22:38; ext:m4-schema-settled satisfied (#32,#33 merged; no open PR edits MIGRATIONS) | 23:45 PR #101 head e80c7ba (IMMEDIATE via write_tx; after_user_delete stub to wire to #81). Reviewer started. | 23:52 review MERGE-with-fixes: paused column + channels, prune_alerts usize::MAX wipes all, scrub on text rewrite, pruning owners; polish. Sent."
+   "notes": "launched 22:38; ext:m4-schema-settled satisfied (#32,#33 merged; no open PR edits MIGRATIONS) | 23:45 PR #101 head e80c7ba (IMMEDIATE via write_tx; after_user_delete stub to wire to #81). Reviewer started. | 23:52 review MERGE-with-fixes: paused column + channels, prune_alerts usize::MAX wipes all, scrub on text rewrite, pruning owners; polish. Sent. | 23:59 2e8da39 all review items + polish done. Approved pending #81 merge -> B8 merges main, wires begin_write + scrub (runner verifies 2 call sites), then merge on green."
   },
   "B6": {
    "status": "merged",
