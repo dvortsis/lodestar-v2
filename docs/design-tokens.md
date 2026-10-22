@@ -238,6 +238,8 @@ No `rounded-full` on containers or primary buttons. Tailwind's default
 | `--compbar-min-width` | 64px | Composition bar in a row, minimum. |
 | `--compbar-max-width` | 120px | Composition bar in a row, maximum. |
 | `--compbar-gap` | 2px | Surface-coloured gap between composition segments. |
+| `--toast-width` | 384px | Toast region width from `large` up (full width minus gutters below). The toast fade reuses `--duration-banner` (0 under reduced motion). |
+| `--listbox-max-height` | 5 × `--row-height-comfortable` | Popup listboxes (Combobox, later Select/Menu) scroll beyond this. |
 | `--art-height-large` | 240px | Illustration height at large (art above text). |
 | `--art-height-small` | 160px | Illustration height at medium/small; hidden when the viewport is < 600px tall. |
 
