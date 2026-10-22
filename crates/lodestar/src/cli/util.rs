@@ -119,13 +119,49 @@ pub fn vacuum_into(conn: &Connection, to: &Path) -> Outcome {
     let target = to
         .to_str()
         .ok_or_else(|| Failure::Failed(format!("{} isn't valid UTF-8", to.display())))?;
-    conn.execute("VACUUM INTO ?1", [target])
-        .map_err(failed(format!("writing {}", to.display())))?;
-    sync_file(to).map_err(failed(format!("syncing {}", to.display())))
+    let written = conn
+        .execute("VACUUM INTO ?1", [target])
+        .map_err(failed(format!("writing {}", to.display())))
+        .and_then(|_| sync_file(to).map_err(failed(format!("syncing {}", to.display()))));
+    if written.is_err() {
+        // It didn't exist before: a partial copy is ours to remove.
+        let _ = fs::remove_file(to);
+    }
+    written
 }
 
+/// Flushes a file to disk. Windows' `FlushFileBuffers` needs write access,
+/// so it's opened for writing (never truncated).
 pub fn sync_file(path: &Path) -> io::Result<()> {
-    File::open(path)?.sync_all()
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)?
+        .sync_all()
+}
+
+/// Says which account a permission error happened as: the commands run
+/// as PUID/PGID once root is dropped, so a folder root can write may not
+/// be writable.
+pub fn explain_denied(e: &io::Error) -> String {
+    if e.kind() != io::ErrorKind::PermissionDenied {
+        return e.to_string();
+    }
+    #[cfg(unix)]
+    {
+        let (uid, gid) = (
+            rustix::process::geteuid().as_raw(),
+            rustix::process::getegid().as_raw(),
+        );
+        format!(
+            "{e}. Lodestar runs as {uid}:{gid} (PUID/PGID), so the folder must be writable by \
+             that account"
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        format!("{e}. The folder must be writable by the account Lodestar runs as")
+    }
 }
 
 /// Makes a rename or a new file in `dir` durable. Windows can't open a

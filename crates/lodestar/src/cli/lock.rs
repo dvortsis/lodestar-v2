@@ -99,8 +99,9 @@ impl StoreLock {
     /// the same directory) by a rename, so a crash leaves one or the other
     /// whole, and unlocks.
     ///
-    /// The stale `-wal`, `-shm` and `-journal` go first, while the lock
-    /// still keeps everyone out, so none is ever applied to the new file.
+    /// The stale `-wal`, `-shm` and `-journal` are removed before the
+    /// rename, while nobody else can open the store, so none is ever
+    /// applied to the new file.
     /// On Unix the rename happens under the lock, which then stays held
     /// for longer than [`STORE_BUSY_TIMEOUT`]: a process that opened the
     /// old file meanwhile gives up instead of carrying on with the
@@ -111,10 +112,13 @@ impl StoreLock {
     /// The connection is closed as it is: switching it back to WAL after
     /// the rename would create a `-wal` beside the new file.
     pub fn replace_with(mut self, new_file: &Path) -> Outcome {
-        for side in super::util::side_files(&self.db) {
-            super::util::remove_if_present(&side)
-                .map_err(failed(format!("removing {}", side.display())))?;
-        }
+        let [wal, shm, journal] = super::util::side_files(&self.db);
+        let remove = |side: &Path| {
+            super::util::remove_if_present(side)
+                .map_err(failed(format!("removing {}", side.display())))
+        };
+        remove(&wal)?;
+        remove(&shm)?;
         let db = self.db.clone();
         let rename = || {
             std::fs::rename(new_file, &db).map_err(failed(format!(
@@ -123,8 +127,13 @@ impl StoreLock {
                 new_file.display()
             )))
         };
+        // The lock connection holds `-journal` open (exclusive locking
+        // mode keeps it), which Unix can unlink but Windows can't until
+        // it's closed. Its header is zeroed after each commit, so it's
+        // never hot; it goes anyway so the new file starts clean.
         #[cfg(unix)]
         {
+            remove(&journal)?;
             rename()?;
             if let Some(dir) = db.parent() {
                 super::util::sync_dir(dir);
@@ -135,6 +144,7 @@ impl StoreLock {
         #[cfg(not(unix))]
         {
             self.close_as_is();
+            remove(&journal)?;
             rename()?;
         }
         Ok(())

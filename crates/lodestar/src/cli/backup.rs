@@ -44,11 +44,11 @@ pub fn run(config: &Config, config_file: Option<&Path>, to: Option<&Path>) -> Ou
         report.schema
     );
     println!(
-        "The search index isn't included: Lodestar rebuilds it from the store after a restore."
+        "The search index isn't included. After a restore, rebuild it with `lodestar reindex`."
     );
     println!(
-        "The folder holds secrets (seal.key, auth.json): keep it private. To restore, stop \
-         Lodestar, copy these files into the data folder, then start it."
+        "The folder holds secrets (seal.key, auth.json): keep it private. Its README.txt has the \
+         restore steps."
     );
     Ok(())
 }
@@ -68,7 +68,13 @@ pub fn backup(
         Some(p) => p.to_path_buf(),
         None => data.join("backups"),
     };
-    std::fs::create_dir_all(&parent).map_err(failed(format!("creating {}", parent.display())))?;
+    std::fs::create_dir_all(&parent).map_err(|e| {
+        Failure::Failed(format!(
+            "creating {}: {}",
+            parent.display(),
+            super::util::explain_denied(&e)
+        ))
+    })?;
     let parent = std::fs::canonicalize(&parent)
         .map_err(failed(format!("resolving {}", parent.display())))?;
     let dir = parent.join(format!("lodestar-backup-{}", file_stamp(now)));
@@ -77,7 +83,11 @@ pub fn backup(
         std::io::ErrorKind::AlreadyExists => {
             Failure::Refused(format!("{} exists already", dir.display()))
         }
-        _ => Failure::Failed(format!("creating {}: {e}", dir.display())),
+        _ => Failure::Failed(format!(
+            "creating {}: {}",
+            dir.display(),
+            super::util::explain_denied(&e)
+        )),
     })?;
 
     let mut files = Vec::new();
@@ -149,12 +159,19 @@ fn write_readme(dir: &Path, files: &[(String, u64)], now: i64) -> Outcome {
         text.push_str(&format!("  {name}\n"));
     }
     text.push_str(
-        "\nThe search index isn't included: Lodestar rebuilds it from lodestar.db.\n\
+        "\nThe search index isn't included: it's rebuilt from lodestar.db.\n\
          The update trust state (bin/trust.json) isn't included either, so a restore can\n\
          never undo a signing-key revocation.\n\n\
-         To restore: stop Lodestar, copy these files into the data folder (replacing\n\
-         lodestar.db and deleting any lodestar.db-wal and lodestar.db-shm there), then\n\
-         start Lodestar.\n\n\
+         To restore:\n\
+         1. Stop Lodestar.\n\
+         2. In the data folder, delete lodestar.db-wal and lodestar.db-shm if they exist.\n\
+         3. Copy these files into the data folder, replacing the ones there.\n\
+         4. Run `lodestar reindex`. The old search index doesn't match the restored store\n\
+            and would show the wrong torrents; this rebuilds it at the next start.\n\
+         5. Start Lodestar.\n\
+         6. Sign out all sessions and create new API keys: auth.json brings back the\n\
+            sessions and keys that existed when this backup was taken, including any\n\
+            you have revoked since.\n\n\
          seal.key and auth.json are secrets: keep this folder private.\n",
     );
     let mut f = create_new_private(&path).map_err(failed(format!("writing {}", path.display())))?;

@@ -290,20 +290,32 @@ pub fn restore(
     } else {
         None
     };
+    // From here a failure leaves the store as it was, but the index has
+    // moved: say where, and that the next start rebuilds it.
+    let index_note = |e: Failure| match (&index_aside, e) {
+        (Some(aside), Failure::Failed(m)) => Failure::Failed(format!(
+            "{m}. The store wasn't restored. The search index was moved to {} and is rebuilt \
+             from the store at the next start; delete that folder once search works again.",
+            aside.display()
+        )),
+        (_, e) => e,
+    };
     // 6. The snapshot, copied beside the store and renamed into place.
     let staged = dir.join(format!("{stem}.rollback-{stamp}.tmp"));
-    remove_if_present(&staged).map_err(failed(format!("removing {}", staged.display())))?;
+    remove_if_present(&staged)
+        .map_err(failed(format!("removing {}", staged.display())))
+        .map_err(index_note)?;
     let copied = std::fs::copy(&snapshot.path, &staged)
         .map_err(failed(format!("copying {}", snapshot.path.display())))
         .and_then(|_| sync_file(&staged).map_err(failed(format!("syncing {}", staged.display()))));
     if let Err(e) = copied {
         let _ = std::fs::remove_file(&staged);
         lock.release()?;
-        return Err(e);
+        return Err(index_note(e));
     }
     if let Err(e) = lock.replace_with(&staged) {
         let _ = std::fs::remove_file(&staged);
-        return Err(e);
+        return Err(index_note(e));
     }
     Ok(Some(Restored {
         kept,

@@ -158,7 +158,10 @@ fn is_unc(path: &Path) -> bool {
     let s = path.as_os_str().to_string_lossy();
     let s = s.replace('/', "\\");
     if let Some(rest) = s.strip_prefix(r"\\?\") {
-        return rest.len() >= 4 && rest[..4].eq_ignore_ascii_case(r"UNC\");
+        return rest
+            .as_bytes()
+            .get(..4)
+            .is_some_and(|p| p.eq_ignore_ascii_case(br"UNC\"));
     }
     // `\\.\` is a device path, not a share.
     s.starts_with(r"\\") && !s.starts_with(r"\\.\")
@@ -187,8 +190,10 @@ fn from_mountinfo(path: &Path, table: &str) -> FsReport {
         return by_path(path.to_path_buf());
     };
     let mut kind = classify(&fs_type);
-    // A host path under /mnt/user is shfs even if the type is unusual.
-    if kind == FsKind::Local && under_unraid_user(path) {
+    // A host path under /mnt/user is shfs even if the type is unusual,
+    // unless its mount is itself under /mnt/user: an Unraid 6.12+
+    // exclusive share, a bind mount of the pool that bypasses shfs.
+    if kind == FsKind::Local && under_unraid_user(path) && !under_unraid_user(&mount) {
         kind = FsKind::UnraidUserShare;
     }
     FsReport {
@@ -318,6 +323,13 @@ mod tests {
             .kind,
             FsKind::UnraidUserShare
         );
+        // An exclusive share is a bind mount of the pool: fine.
+        let exclusive = "1 0 8:1 / / rw - xfs /dev/sda1 rw\n\
+                         2 1 0:30 /appdata /mnt/user/appdata rw - btrfs /dev/nvme0n1p1 rw";
+        assert_eq!(
+            from_mountinfo(Path::new("/mnt/user/appdata/lodestar"), exclusive).kind,
+            FsKind::Local
+        );
     }
 
     #[test]
@@ -346,6 +358,31 @@ mod tests {
             from_mountinfo(Path::new("/a"), "junk").kind,
             by_path("/a".into()).kind
         );
+    }
+
+    proptest::proptest! {
+        // The mount table is the kernel's, but a parser never panics.
+        #[test]
+        fn parsers_never_panic(table in "[ -~\n]{0,400}|\\PC{0,200}", path in "\\PC{0,60}") {
+            let _ = from_mountinfo(Path::new(&path), &table);
+            for line in table.lines() {
+                let _ = parse_mountinfo_line(line);
+            }
+            let _ = unescape(&table);
+            let _ = is_unc(Path::new(&path));
+        }
+
+        #[test]
+        fn unescape_inverts_the_kernels_escaping(s in "\\PC{0,80}") {
+            let mut escaped = String::new();
+            for c in s.chars() {
+                match c {
+                    ' ' | '\t' | '\n' | '\\' => escaped.push_str(&format!("\\{:03o}", c as u32)),
+                    c => escaped.push(c),
+                }
+            }
+            proptest::prop_assert_eq!(unescape(&escaped), s);
+        }
     }
 
     #[test]
