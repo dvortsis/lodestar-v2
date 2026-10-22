@@ -28,7 +28,7 @@ export const scenes: readonly Scene[] = [
 		height: 1086,
 		srcset: {
 			avif: '/brand/scenes/welcome_onboarding_light-360.avif 360w, /brand/scenes/welcome_onboarding_light-540.avif 540w, /brand/scenes/welcome_onboarding_light-724.avif 724w',
-			webp: '/brand/scenes/welcome_onboarding_light-360.webp 360w, /brand/scenes/welcome_onboarding_light-540.webp 540w, /brand/scenes/welcome_onboarding_light-724.webp 724w'
+			webp: '/brand/scenes/welcome_onboarding_light-540.webp 540w'
 		}
 	},
 	{
@@ -38,7 +38,7 @@ export const scenes: readonly Scene[] = [
 		height: 1086,
 		srcset: {
 			avif: '/brand/scenes/welcome_onboarding_dark-360.avif 360w, /brand/scenes/welcome_onboarding_dark-540.avif 540w, /brand/scenes/welcome_onboarding_dark-724.avif 724w',
-			webp: '/brand/scenes/welcome_onboarding_dark-360.webp 360w, /brand/scenes/welcome_onboarding_dark-540.webp 540w, /brand/scenes/welcome_onboarding_dark-724.webp 724w'
+			webp: '/brand/scenes/welcome_onboarding_dark-540.webp 540w'
 		}
 	},
 	{
@@ -48,7 +48,7 @@ export const scenes: readonly Scene[] = [
 		height: 1086,
 		srcset: {
 			avif: '/brand/scenes/searching_crawling_light-360.avif 360w, /brand/scenes/searching_crawling_light-540.avif 540w, /brand/scenes/searching_crawling_light-724.avif 724w',
-			webp: '/brand/scenes/searching_crawling_light-360.webp 360w, /brand/scenes/searching_crawling_light-540.webp 540w, /brand/scenes/searching_crawling_light-724.webp 724w'
+			webp: '/brand/scenes/searching_crawling_light-540.webp 540w'
 		}
 	},
 	{
@@ -58,7 +58,7 @@ export const scenes: readonly Scene[] = [
 		height: 1086,
 		srcset: {
 			avif: '/brand/scenes/searching_crawling_dark-360.avif 360w, /brand/scenes/searching_crawling_dark-540.avif 540w, /brand/scenes/searching_crawling_dark-724.avif 724w',
-			webp: '/brand/scenes/searching_crawling_dark-360.webp 360w, /brand/scenes/searching_crawling_dark-540.webp 540w, /brand/scenes/searching_crawling_dark-724.webp 724w'
+			webp: '/brand/scenes/searching_crawling_dark-540.webp 540w'
 		}
 	},
 	{
@@ -68,7 +68,7 @@ export const scenes: readonly Scene[] = [
 		height: 1086,
 		srcset: {
 			avif: '/brand/scenes/indexing_light-360.avif 360w, /brand/scenes/indexing_light-540.avif 540w, /brand/scenes/indexing_light-724.avif 724w',
-			webp: '/brand/scenes/indexing_light-360.webp 360w, /brand/scenes/indexing_light-540.webp 540w, /brand/scenes/indexing_light-724.webp 724w'
+			webp: '/brand/scenes/indexing_light-540.webp 540w'
 		}
 	},
 	{
@@ -78,7 +78,7 @@ export const scenes: readonly Scene[] = [
 		height: 1086,
 		srcset: {
 			avif: '/brand/scenes/indexing_dark-360.avif 360w, /brand/scenes/indexing_dark-540.avif 540w, /brand/scenes/indexing_dark-724.avif 724w',
-			webp: '/brand/scenes/indexing_dark-360.webp 360w, /brand/scenes/indexing_dark-540.webp 540w, /brand/scenes/indexing_dark-724.webp 724w'
+			webp: '/brand/scenes/indexing_dark-540.webp 540w'
 		}
 	},
 	{
@@ -88,7 +88,7 @@ export const scenes: readonly Scene[] = [
 		height: 1086,
 		srcset: {
 			avif: '/brand/scenes/searching_crawling_light-360.avif 360w, /brand/scenes/searching_crawling_light-540.avif 540w, /brand/scenes/searching_crawling_light-724.avif 724w',
-			webp: '/brand/scenes/searching_crawling_light-360.webp 360w, /brand/scenes/searching_crawling_light-540.webp 540w, /brand/scenes/searching_crawling_light-724.webp 724w'
+			webp: '/brand/scenes/searching_crawling_light-540.webp 540w'
 		}
 	},
 	{
@@ -98,7 +98,7 @@ export const scenes: readonly Scene[] = [
 		height: 1086,
 		srcset: {
 			avif: '/brand/scenes/searching_crawling_dark-360.avif 360w, /brand/scenes/searching_crawling_dark-540.avif 540w, /brand/scenes/searching_crawling_dark-724.avif 724w',
-			webp: '/brand/scenes/searching_crawling_dark-360.webp 360w, /brand/scenes/searching_crawling_dark-540.webp 540w, /brand/scenes/searching_crawling_dark-724.webp 724w'
+			webp: '/brand/scenes/searching_crawling_dark-540.webp 540w'
 		}
 	},
 	{
@@ -108,7 +108,7 @@ export const scenes: readonly Scene[] = [
 		height: 1086,
 		srcset: {
 			avif: '/brand/scenes/no_results_light-360.avif 360w, /brand/scenes/no_results_light-540.avif 540w, /brand/scenes/no_results_light-724.avif 724w',
-			webp: '/brand/scenes/no_results_light-360.webp 360w, /brand/scenes/no_results_light-540.webp 540w, /brand/scenes/no_results_light-724.webp 724w'
+			webp: '/brand/scenes/no_results_light-540.webp 540w'
 		}
 	},
 	{
@@ -118,7 +118,7 @@ export const scenes: readonly Scene[] = [
 		height: 1086,
 		srcset: {
 			avif: '/brand/scenes/no_results_dark-360.avif 360w, /brand/scenes/no_results_dark-540.avif 540w, /brand/scenes/no_results_dark-724.avif 724w',
-			webp: '/brand/scenes/no_results_dark-360.webp 360w, /brand/scenes/no_results_dark-540.webp 540w, /brand/scenes/no_results_dark-724.webp 724w'
+			webp: '/brand/scenes/no_results_dark-540.webp 540w'
 		}
 	},
 	{
@@ -128,7 +128,7 @@ export const scenes: readonly Scene[] = [
 		height: 1086,
 		srcset: {
 			avif: '/brand/scenes/connection_error_light-360.avif 360w, /brand/scenes/connection_error_light-540.avif 540w, /brand/scenes/connection_error_light-724.avif 724w',
-			webp: '/brand/scenes/connection_error_light-360.webp 360w, /brand/scenes/connection_error_light-540.webp 540w, /brand/scenes/connection_error_light-724.webp 724w'
+			webp: '/brand/scenes/connection_error_light-540.webp 540w'
 		}
 	},
 	{
@@ -138,7 +138,7 @@ export const scenes: readonly Scene[] = [
 		height: 1086,
 		srcset: {
 			avif: '/brand/scenes/connection_error_dark-360.avif 360w, /brand/scenes/connection_error_dark-540.avif 540w, /brand/scenes/connection_error_dark-724.avif 724w',
-			webp: '/brand/scenes/connection_error_dark-360.webp 360w, /brand/scenes/connection_error_dark-540.webp 540w, /brand/scenes/connection_error_dark-724.webp 724w'
+			webp: '/brand/scenes/connection_error_dark-540.webp 540w'
 		}
 	},
 	{
@@ -148,7 +148,7 @@ export const scenes: readonly Scene[] = [
 		height: 1086,
 		srcset: {
 			avif: '/brand/scenes/welcome_onboarding_light-360.avif 360w, /brand/scenes/welcome_onboarding_light-540.avif 540w, /brand/scenes/welcome_onboarding_light-724.avif 724w',
-			webp: '/brand/scenes/welcome_onboarding_light-360.webp 360w, /brand/scenes/welcome_onboarding_light-540.webp 540w, /brand/scenes/welcome_onboarding_light-724.webp 724w'
+			webp: '/brand/scenes/welcome_onboarding_light-540.webp 540w'
 		}
 	},
 	{
@@ -158,7 +158,7 @@ export const scenes: readonly Scene[] = [
 		height: 1086,
 		srcset: {
 			avif: '/brand/scenes/welcome_onboarding_dark-360.avif 360w, /brand/scenes/welcome_onboarding_dark-540.avif 540w, /brand/scenes/welcome_onboarding_dark-724.avif 724w',
-			webp: '/brand/scenes/welcome_onboarding_dark-360.webp 360w, /brand/scenes/welcome_onboarding_dark-540.webp 540w, /brand/scenes/welcome_onboarding_dark-724.webp 724w'
+			webp: '/brand/scenes/welcome_onboarding_dark-540.webp 540w'
 		}
 	},
 	{
@@ -168,7 +168,7 @@ export const scenes: readonly Scene[] = [
 		height: 1086,
 		srcset: {
 			avif: '/brand/scenes/updating_repair_light-360.avif 360w, /brand/scenes/updating_repair_light-540.avif 540w, /brand/scenes/updating_repair_light-724.avif 724w',
-			webp: '/brand/scenes/updating_repair_light-360.webp 360w, /brand/scenes/updating_repair_light-540.webp 540w, /brand/scenes/updating_repair_light-724.webp 724w'
+			webp: '/brand/scenes/updating_repair_light-540.webp 540w'
 		}
 	},
 	{
@@ -178,7 +178,7 @@ export const scenes: readonly Scene[] = [
 		height: 1086,
 		srcset: {
 			avif: '/brand/scenes/updating_repair_dark-360.avif 360w, /brand/scenes/updating_repair_dark-540.avif 540w, /brand/scenes/updating_repair_dark-724.avif 724w',
-			webp: '/brand/scenes/updating_repair_dark-360.webp 360w, /brand/scenes/updating_repair_dark-540.webp 540w, /brand/scenes/updating_repair_dark-724.webp 724w'
+			webp: '/brand/scenes/updating_repair_dark-540.webp 540w'
 		}
 	},
 	{
@@ -188,7 +188,7 @@ export const scenes: readonly Scene[] = [
 		height: 1086,
 		srcset: {
 			avif: '/brand/scenes/empty_state_explore_light-360.avif 360w, /brand/scenes/empty_state_explore_light-540.avif 540w, /brand/scenes/empty_state_explore_light-724.avif 724w',
-			webp: '/brand/scenes/empty_state_explore_light-360.webp 360w, /brand/scenes/empty_state_explore_light-540.webp 540w, /brand/scenes/empty_state_explore_light-724.webp 724w'
+			webp: '/brand/scenes/empty_state_explore_light-540.webp 540w'
 		}
 	},
 	{
@@ -198,7 +198,7 @@ export const scenes: readonly Scene[] = [
 		height: 1086,
 		srcset: {
 			avif: '/brand/scenes/empty_state_explore_dark-360.avif 360w, /brand/scenes/empty_state_explore_dark-540.avif 540w, /brand/scenes/empty_state_explore_dark-724.avif 724w',
-			webp: '/brand/scenes/empty_state_explore_dark-360.webp 360w, /brand/scenes/empty_state_explore_dark-540.webp 540w, /brand/scenes/empty_state_explore_dark-724.webp 724w'
+			webp: '/brand/scenes/empty_state_explore_dark-540.webp 540w'
 		}
 	}
 ];

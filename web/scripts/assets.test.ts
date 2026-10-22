@@ -97,7 +97,7 @@ describe('scene metadata', () => {
 			expect(s.width, s.id).toBeGreaterThan(0);
 			expect(s.height, s.id).toBeGreaterThan(0);
 			expect(s.srcset.avif).toMatch(/360w.*540w.*724w/);
-			expect(s.srcset.webp).toMatch(/360w.*540w.*724w/);
+			expect(s.srcset.webp).toMatch(/-540\.webp 540w$/);
 		}
 		expect(logos.length).toBe(6);
 		for (const l of logos) {

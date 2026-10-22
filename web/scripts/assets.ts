@@ -18,6 +18,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 
 /** §10.19: scene widths, and the AVIF-at-540w ceiling (decimal KB, the stricter reading). */
 export const SCENE_WIDTHS = [360, 540, 724] as const;
+/** WebP is only the fallback for browsers without AVIF, so one width keeps the pack small. */
+export const WEBP_SCENE_WIDTHS = [540] as const;
+export const SCENE_AVIF = { quality: 32, effort: 4 } as const;
+export const SCENE_WEBP = { quality: 28, effort: 6, smartSubsample: true } as const;
 export const AVIF_540_LIMIT_BYTES = 45_000;
 /** Intrinsic size of every scene PNG; srcset variants keep this aspect ratio. */
 const SCENE_SOURCE = { width: 724, height: 1086 };
@@ -121,7 +125,9 @@ export interface SceneEntry {
 }
 
 const srcsetFor = (base: string, ext: 'avif' | 'webp') =>
-	SCENE_WIDTHS.map((w) => `/brand/scenes/${base}-${w}.${ext} ${w}w`).join(', ');
+	(ext === 'avif' ? SCENE_WIDTHS : WEBP_SCENE_WIDTHS)
+		.map((w) => `/brand/scenes/${base}-${w}.${ext} ${w}w`)
+		.join(', ');
 
 interface StateManifest {
 	stateAssets: Record<string, Record<Mode, string>>;
@@ -162,12 +168,12 @@ async function buildScenes(p: Paths, manifest: StateManifest): Promise<Output[]>
 			const input = readFileSync(join(p.source, rel));
 			for (const width of SCENE_WIDTHS) {
 				const resized = () => sharp(input).resize({ width });
-				const avif = await resized().avif({ quality: 42, effort: 4 }).toBuffer();
-				const webp = await resized()
-					.webp({ quality: 40, effort: 4, smartSubsample: true })
-					.toBuffer();
+				const avif = await resized().avif(SCENE_AVIF).toBuffer();
 				outputs.push({ path: join(p.staticOut, 'scenes', `${base}-${width}.avif`), data: avif });
-				outputs.push({ path: join(p.staticOut, 'scenes', `${base}-${width}.webp`), data: webp });
+				if ((WEBP_SCENE_WIDTHS as readonly number[]).includes(width)) {
+					const webp = await resized().webp(SCENE_WEBP).toBuffer();
+					outputs.push({ path: join(p.staticOut, 'scenes', `${base}-${width}.webp`), data: webp });
+				}
 				if (width === 540) budget.push({ file: `${base}-540.avif`, bytes: avif.length });
 			}
 		})
@@ -199,8 +205,8 @@ async function buildLogos(p: Paths): Promise<{ outputs: Output[]; entries: LogoE
 			const height = Math.round((meta.height! * width) / meta.width!);
 			for (const scale of [1, 2]) {
 				const resized = () => sharp(trimmed).resize({ width: width * scale });
-				const avif = await resized().avif({ quality: 60, effort: 4 }).toBuffer();
-				const webp = await resized().webp({ quality: 85, alphaQuality: 100, effort: 4 }).toBuffer();
+				const avif = await resized().avif({ quality: 40, effort: 4 }).toBuffer();
+				const webp = await resized().webp({ quality: 50, alphaQuality: 80, effort: 6 }).toBuffer();
 				const name = `${kind}_${mode}@${scale}x`;
 				outputs.push({ path: join(p.staticOut, 'logos', `${name}.avif`), data: avif });
 				outputs.push({ path: join(p.staticOut, 'logos', `${name}.webp`), data: webp });
