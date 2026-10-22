@@ -1,5 +1,6 @@
 // Self-tests of the harness: the OpenAPI mock, the theme rotation, and the keyboard-only guard.
-import { loadOperations } from './mock/openapi-mock';
+import { loadOperations, OpenApiMock, type OperationId, type Spec } from './mock/openapi-mock';
+import { fullPageAt, snapshotName } from './support/policy';
 import { rotationSeed, sampleThemes, OTHER_THEMES, ALL_THEMES } from './support/themes';
 import { expect, test } from './support/test';
 
@@ -18,18 +19,21 @@ test.describe('OpenAPI mock', () => {
 	});
 
 	test('answers an operation with a typed override', async ({ page, mock }) => {
-		mock.on('getAuthStatus', { authenticated: true, setup_required: false } as never);
+		mock.on('getAuthStatus', { logged_in: true, setup_required: false });
 		const res = await fetchJson(page, '/api/v1/auth');
 		expect(res.status).toBe(200);
-		expect(res.body).toEqual({ authenticated: true, setup_required: false });
+		expect(res.body).toEqual({ logged_in: true, setup_required: false });
 		expect(mock.calls('getAuthStatus')).toHaveLength(1);
 	});
 
 	test('matches path templates, preferring static segments', async ({ page, mock }) => {
 		mock
-			.on('getFilterQueue', { held: true } as never)
-			.on('getFilterPreviewJob', { id: 'x' } as never);
-		expect((await fetchJson(page, '/api/v1/filters/queue')).body).toEqual({ held: true });
+			.on('getFilterQueue', { decisions_30d: [], quarantine: [] })
+			.on('getFilterPreviewJob', { status: 200, body: { id: 'x' } });
+		expect((await fetchJson(page, '/api/v1/filters/queue')).body).toEqual({
+			decisions_30d: [],
+			quarantine: []
+		});
 		expect((await fetchJson(page, '/api/v1/filters/preview/jobs/abc')).body).toEqual({ id: 'x' });
 	});
 
@@ -43,10 +47,10 @@ test.describe('OpenAPI mock', () => {
 	});
 
 	test('overrides may be functions of the request', async ({ page, mock }) => {
-		mock.on(
-			'parseQuery',
-			(request) => ({ echoed: new URL(request.url()).searchParams.get('q') }) as never
-		);
+		mock.on('parseQuery', (request) => ({
+			status: 200,
+			body: { echoed: new URL(request.url()).searchParams.get('q') }
+		}));
 		expect((await fetchJson(page, '/api/v1/parse?q=ubuntu')).body).toEqual({ echoed: 'ubuntu' });
 	});
 
@@ -75,12 +79,142 @@ test.describe('OpenAPI mock', () => {
 	});
 
 	test('mock.on rejects an unknown operation', ({ mock }) => {
-		expect(() => mock.on('nope' as never, {} as never)).toThrow(/no operation "nope"/);
+		expect(() => mock.on('nope' as OperationId, {})).toThrow(/no operation "nope"/);
 	});
 
 	test('every operation id is unique', () => {
 		const ids = loadOperations().map((o) => o.id);
 		expect(new Set(ids).size).toBe(ids.length);
+	});
+});
+
+// openapi.json has no examples yet (a B1 follow-up), so the example path is tested on a synthetic
+// spec covering every place a documented example can live.
+test.describe('OpenAPI mock: documented examples', () => {
+	const json = (extra: Record<string, unknown>) => ({
+		description: '',
+		content: { 'application/json': extra }
+	});
+	const spec: Spec = {
+		servers: [{ url: '/api/v1' }],
+		paths: {
+			'/inline': {
+				get: { operationId: 'inline', responses: { '200': json({ example: { a: 1 } }) } }
+			},
+			'/named': {
+				get: {
+					operationId: 'named',
+					responses: {
+						'200': json({ examples: { first: { value: { b: 2 } }, second: { value: {} } } })
+					}
+				}
+			},
+			'/schema': {
+				get: {
+					operationId: 'fromSchema',
+					responses: { '200': json({ schema: { $ref: '#/components/schemas/Thing' } }) }
+				}
+			},
+			'/shared': {
+				get: {
+					operationId: 'sharedResponse',
+					responses: { '200': { $ref: '#/components/responses/Ok' } }
+				}
+			},
+			'/jobs': {
+				post: { operationId: 'startJob', responses: { '202': json({ example: { id: 'j1' } }) } }
+			},
+			'/things/queue': {
+				get: { operationId: 'queue', responses: { '200': json({ example: { kind: 'queue' } }) } }
+			},
+			'/things/{id}': {
+				get: { operationId: 'thing', responses: { '200': json({ example: { kind: 'thing' } }) } }
+			},
+			'/bare': {
+				get: {
+					operationId: 'bare',
+					responses: { '200': json({ schema: { type: 'object' } }), default: {} }
+				}
+			}
+		},
+		components: {
+			schemas: { Thing: { type: 'object', example: { c: 3 } } },
+			responses: { Ok: json({ example: { shared: true } }) }
+		}
+	};
+	const ops = loadOperations(spec);
+	const example = (id: string) => ops.find((o) => o.id === id)?.example;
+
+	test('finds an example in each supported place', () => {
+		expect(example('inline')).toEqual({ status: 200, body: { a: 1 } });
+		expect(example('named')).toEqual({ status: 200, body: { b: 2 } });
+		expect(example('fromSchema')).toEqual({ status: 200, body: { c: 3 } });
+		expect(example('sharedResponse')).toEqual({ status: 200, body: { shared: true } });
+	});
+
+	test('keeps the documented 2xx status (202)', () => {
+		expect(example('startJob')).toEqual({ status: 202, body: { id: 'j1' } });
+	});
+
+	test('an operation without an example has none', () => {
+		expect(example('bare')).toBeNull();
+	});
+
+	test('static segments are tried before parameters', () => {
+		const hit = (path: string) => ops.find((o) => o.method === 'GET' && o.regex.test(path))?.id;
+		expect(hit('/api/v1/things/queue')).toBe('queue');
+		expect(hit('/api/v1/things/42')).toBe('thing');
+	});
+
+	test('the mock replays the documented examples end to end', async ({ page, mock }) => {
+		const synthetic = new OpenApiMock(ops);
+		await synthetic.install(page);
+		await page.goto('/search');
+		expect(await fetchJson(page, '/api/v1/inline')).toEqual({ status: 200, body: { a: 1 } });
+		expect(await fetchJson(page, '/api/v1/jobs', { method: 'POST' })).toEqual({
+			status: 202,
+			body: { id: 'j1' }
+		});
+		expect((await fetchJson(page, '/api/v1/things/queue')).body).toEqual({ kind: 'queue' });
+		expect(() => mock.assertNoFailures()).not.toThrow();
+	});
+});
+
+test.describe('snapshot policy', () => {
+	const key = { name: 'k', key: true as const };
+	const dense = { name: 'd', key: true as const, densityAware: true as const };
+	const plain = { name: 'p' };
+	const m = (density: 'comfortable' | 'compact') => ({
+		shots: 'matrix' as const,
+		density,
+		themeId: 'riverstone-dark'
+	});
+
+	test('matrix: key routes in Comfortable, only density-aware routes in Compact', () => {
+		expect(snapshotName(key, m('comfortable'))).toBe('k');
+		expect(snapshotName(plain, m('comfortable'))).toBeNull();
+		expect(snapshotName(dense, m('compact'))).toBe('d');
+		expect(snapshotName(key, m('compact'))).toBeNull();
+	});
+
+	test('themes: key routes, named by theme; Riverstone belongs to the matrix', () => {
+		const t = (themeId: string) => ({
+			shots: 'themes' as const,
+			density: 'comfortable' as const,
+			themeId
+		});
+		expect(snapshotName(key, t('nord-dark'))).toBe('k--nord-dark');
+		expect(snapshotName(plain, t('nord-dark'))).toBeNull();
+		expect(snapshotName(key, t('riverstone-dark'))).toBeNull();
+	});
+
+	test('none: never', () => {
+		expect(snapshotName(dense, { shots: 'none', density: 'comfortable', themeId: 'x' })).toBeNull();
+	});
+
+	test('full-page shots only below 1920 px', () => {
+		expect(fullPageAt(1366)).toBe(true);
+		expect(fullPageAt(1920)).toBe(false);
 	});
 });
 

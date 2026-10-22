@@ -20,18 +20,20 @@ export class KeyboardOnly {
 				throw new Error(`keyboard-only test used page.mouse.${m}()`);
 			};
 		}
-		// A trusted click with detail > 0, or any pointerdown of type mouse/touch, came from a pointer.
-		// Keyboard activation (Enter/Space) produces a click with detail 0.
+		// A trusted pointerdown, a pointermove that actually moved, or a click with detail > 0 came
+		// from a pointer. Not pointerover/enter: the browser fires those itself when layout changes
+		// under a stationary cursor. Keyboard activation (Enter/Space) clicks with detail 0.
 		await this.page.addInitScript(() => {
 			window.__pointerUsed = [];
 			const note = (e: Event) =>
 				window.__pointerUsed!.push(`${e.type}:${(e.target as Element)?.tagName}`);
 			addEventListener('pointerdown', (e) => e.isTrusted && note(e), true);
 			addEventListener(
-				'click',
-				(e) => e.isTrusted && (e as MouseEvent).detail > 0 && note(e),
+				'pointermove',
+				(e) => e.isTrusted && (e.movementX !== 0 || e.movementY !== 0) && note(e),
 				true
 			);
+			addEventListener('click', (e) => e.isTrusted && e.detail > 0 && note(e), true);
 		});
 	}
 

@@ -14,10 +14,9 @@ async function probe(page: Page) {
 			const root = document.documentElement;
 			w.__frames[when] = `${root.dataset.theme}|${getComputedStyle(root).backgroundColor}`;
 		};
-		document.addEventListener('DOMContentLoaded', () => {
-			snap('domcontentloaded');
-			requestAnimationFrame(() => snap('first-frame'));
-		});
+		// Registered at document start, so this is the first frame the page can produce.
+		requestAnimationFrame(() => snap('first-frame'));
+		document.addEventListener('DOMContentLoaded', () => snap('domcontentloaded'));
 	});
 }
 

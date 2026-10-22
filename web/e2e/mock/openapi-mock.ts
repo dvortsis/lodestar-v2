@@ -10,12 +10,12 @@ import type { operations } from '../../src/lib/api/schema';
 
 type Json = unknown;
 type Schema = Record<string, unknown>;
-interface Spec {
+export interface Spec {
 	servers?: { url: string }[];
 	paths: Record<string, Record<string, OperationSpec>>;
 	components: { schemas: Record<string, Schema>; responses?: Record<string, Schema> };
 }
-interface OperationSpec {
+export interface OperationSpec {
 	operationId?: string;
 	responses: Record<string, Schema>;
 }
@@ -38,7 +38,7 @@ export type Override<K extends OperationId> =
 const METHODS = ['get', 'post', 'put', 'patch', 'delete'];
 const specUrl = new URL('../../src/lib/api/openapi.json', import.meta.url);
 
-interface Operation {
+export interface Operation {
 	id: string;
 	method: string;
 	template: string;
@@ -100,7 +100,8 @@ export function loadOperations(
 }
 
 export class OpenApiMock {
-	readonly operations = loadOperations();
+	constructor(readonly operations: Operation[] = loadOperations()) {}
+
 	private overrides = new Map<string, Override<OperationId>>();
 	private seen: { op: string; request: Request }[] = [];
 	private failures: string[] = [];

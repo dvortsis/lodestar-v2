@@ -1,7 +1,7 @@
 # Web end-to-end harness
 
 Playwright + axe + an OpenAPI mock, plus Lighthouse CI. Architecture §10.17; budgets §10.1.
-Chromium only. Locally it is the preinstalled one in `/opt/pw-browsers`: **never run `playwright install`** (CI does, in `e2e.yml`).
+Chromium only. Locally it is the preinstalled one in `/opt/pw-browsers`: **never run `playwright install`**. CI runs in the pinned Playwright container, which ships the browser. Locally, snapshot tests have no valid baselines (see Snapshots): use `--ignore-snapshots` for everything else.
 
 ## Projects
 
@@ -14,7 +14,7 @@ Filter with `--project=<name>` (globs work). Every project starts the web server
 | `sample-<theme-id>`       | the same smoke at 1366 for a rotating 6 non-Riverstone themes                                                                                                     | `npm run e2e:sample`     |
 | `reduced-motion`          | smoke + the motion-token test under `prefers-reduced-motion: reduce`                                                                                              | `npm run e2e:motion`     |
 | `keyboard-only`           | `*.keyboard.test.ts`                                                                                                                                              | `npm run e2e:keyboard`   |
-| `all-themes`              | axe on every route in all 48 themes. Opt-in (`--project=all-themes` or `E2E_ALL_THEMES=1`); nightly in CI                                                         | `npm run e2e:all-themes` |
+| `all-themes`              | axe on every route in all 48 themes, plus the 46-theme baselines. Opt-in (`--project=all-themes` or `E2E_ALL_THEMES=1`); nightly in CI                            | `npm run e2e:all-themes` |
 
 `npx playwright test` runs everything except `all-themes`.
 
@@ -33,7 +33,7 @@ Import `test`/`expect` from `./support/test` (not `@playwright/test`) to get the
 
 Helpers: `expectNoA11yViolations(page, opts)` (`a11y.ts`, WCAG 2.2 AA, prints rule, targets and help URL) and `expectPageSnapshot(page, name)` (`snapshot.ts`, full page, fonts ready, animations frozen).
 
-New routes: add an entry to `support/routes.ts`; the smoke matrix then covers it everywhere. `coverage.test.ts` annotates any route under `src/routes` that is missing.
+New routes: add an entry to `support/routes.ts` (flag `key` / `densityAware` per the snapshot policy; `mock` for the requests it makes on load); the smoke matrix then covers it everywhere. `coverage.test.ts` annotates any route under `src/routes` that is missing.
 
 ## The OpenAPI mock
 
@@ -41,7 +41,16 @@ New routes: add an entry to `support/routes.ts`; the smoke matrix then covers it
 
 ```ts
 test('search shows results', async ({ page, mock, go }) => {
-	mock.on('searchGet', { hits: [], total: 0 /* … typed as SearchResponse */ });
+	mock.on('searchGet', {
+		canonical: 'ubuntu',
+		hits: [],
+		limit: 50,
+		offset: 0,
+		stemmed: false,
+		took_ms: 1,
+		total: 0
+	}); // typed as SearchResponse
+	mock.on('getAuthStatus', { logged_in: true, setup_required: false });
 	mock.on('getTorrent', (request) => ({ status: 200, body: fixtureFor(request.url()) }));
 	mock.error('searchGet', 400, 'unknown_sort', 'Unknown sort', { field: 'sort' }); // error envelope
 	await go('/search?q=ubuntu');
@@ -49,18 +58,35 @@ test('search shows results', async ({ page, mock, go }) => {
 });
 ```
 
-A request that matches no operation, or an operation with neither example nor override, gets a `501` error envelope and **fails the test at teardown**, naming the operation. When the fixture server (`lodestar serve --fixture`, B16) exists, point `baseURL` at it and drop the mock.
+`openapi.json` has no examples yet, so today every operation a route calls needs a `mock.on` (per route: `mock` in its `RouteCase`). Once the utoipa schemas carry `example`s the mock answers from them with no test code. A request that matches no operation, or an operation with neither example nor override, gets a `501` error envelope and **fails the test at teardown**, naming the operation. When the fixture server (`lodestar serve --fixture`, B16) exists, point `baseURL` at it and drop the mock.
 
 ## Snapshots
 
-Baselines are **Linux only** (`*-linux.png`, next to each spec in `<spec>-snapshots/`); never commit macOS or Windows ones. Compare with a pixel ratio of 0.001.
+Baselines are Linux PNGs (`*-linux.png`) next to the specs (`smoke.test.ts-snapshots/`, `tokens.test.ts-snapshots/`, `theme-snapshots/`). They are **generated in CI**, in the pinned `mcr.microsoft.com/playwright:v1.56.1-noble` container that `e2e.yml` runs every job in. Never commit PNGs generated on a laptop or in a cloud session: text rasterisation differs and the diffs fail in CI. Pixel tolerance is 0.001 of the image.
 
-To update after an intended visual change:
+### Snapshot policy
 
-1. Locally, on Linux with the preinstalled Chromium: `npm run e2e:update` (or `npx playwright test --project=<name> --update-snapshots`), review the PNG diffs, commit.
-2. If your local output differs from CI's (fonts, GPU), run the **E2E** workflow by hand (Actions → E2E → Run workflow → `update_snapshots`). It regenerates every baseline in the job and uploads them as the `snapshot-baselines` artifact; unzip into `web/e2e/` and commit.
+PNGs live in git (no LFS), so only key screens get baselines:
 
-When a snapshot fails in CI, the `playwright-report` artifact holds the HTML report and the expected/actual/diff images (`test-results/`).
+- **Matrix projects** (7 breakpoints × Riverstone light/dark): axe and a render check on every route; a baseline for routes flagged `key` in `support/routes.ts` (search, welcome, settings, torrent). At 1920 and 2560 the shot is the viewport, not the full page.
+- **Compact** projects: baselines only for routes flagged `densityAware` (search); axe and a render check elsewhere.
+- **Theme set**: all 46 non-Riverstone themes × key screens at 1366 (`theme-snapshots/<route>--<theme-id>-linux.png`). A PR run (`sample-*`) checks the rotating 6; the nightly `all-themes` project checks all 46. Riverstone's baselines are the matrix's.
+- **Reduced motion**: the motion-token test and axe, no baselines (its pixels equal Riverstone light's).
+
+A new key screen, or a new theme, needs its baselines generated (below).
+
+### Updating snapshots
+
+After an intended visual change, a new key route or a new theme:
+
+1. Add an empty marker file `web/e2e/.update-snapshots` and push. The **E2E** run then executes `playwright test --update-snapshots` (with `all-themes`, so the whole 46-theme set), passes, and uploads every baseline as the `snapshot-baselines` artifact.
+2. Download the artifact, unzip it into `web/e2e/` (paths inside match the repo), delete the marker file, review the PNG diffs and push. The next run compares against them.
+
+The same regeneration is available by hand from the Actions tab (E2E → Run workflow → `update_snapshots`) once `e2e.yml` is on `main`; the marker file works on any PR branch, which is why it exists.
+
+When a snapshot fails in CI, the `playwright-report` artifact holds the HTML report and the expected/actual/diff images (`test-results/`); an `*-actual.png` there can also be used as the new baseline.
+
+Type-check the harness with `npm run e2e:typecheck` (`tsc -p e2e`, also run in CI).
 
 ## Keyboard-only flows
 
@@ -78,7 +104,7 @@ test('search → open → send', async ({ page, go, kbd }) => {
 });
 ```
 
-`page.mouse.*` throws, and a trusted pointer event (`pointerdown`, or a click with `detail > 0`) is recorded; the fixture fails the test at teardown if any occurred. Do not call `locator.click()`, `hover()` or `fill()` in these tests: `click` and `hover` use the pointer; drive inputs with `kbd.press` / `page.keyboard.type`.
+`page.mouse.*` throws, and a trusted pointer event (`pointerdown`, a `pointermove` that moved, or a click with `detail > 0`) is recorded; the fixture fails the test at teardown if any occurred. Do not call `locator.click()`, `hover()` or `fill()` in these tests: `click` and `hover` use the pointer; drive inputs with `kbd.press` / `page.keyboard.type`.
 
 ## Theme gate and reduced motion
 
