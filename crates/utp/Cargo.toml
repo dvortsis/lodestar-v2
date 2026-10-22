@@ -3,6 +3,7 @@ name = "lodestar-utp"
 description = "uTP (BEP 29) with LEDBAT, selective ACK and bounded buffers, over an owned or shared UDP socket"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true

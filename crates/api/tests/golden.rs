@@ -691,6 +691,7 @@ fn quarantine(f: &Fixture, hashes: &[[u8; 20]], rule: &str) {
             evidence: &[],
             at: now(),
             expires_at: now() + 86_400,
+            adult_hold: false,
         })
         .collect();
     f.api
