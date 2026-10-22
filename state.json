@@ -1,1109 +1,1163 @@
 {
- "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-22T17:41Z",
- "launches": {
-  "date": "2026-10-22",
-  "count": 17
- },
- "tags": {},
- "slices": {
-  "B0": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_01A5BEzkYtiRur7VEKtby9FH",
-   "pr": 38,
-   "attempt": 1,
-   "review_rounds": 4,
-   "notes": "merged 07:40 after round 4 + #52 port"
-  },
-  "B5b": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_01BEmSnYW9wHszPF16AVqmtL",
-   "pr": 46,
-   "attempt": 1,
-   "review_rounds": 2,
-   "notes": "merged 10:00 as ce190f2 (#46)"
-  },
-  "C0": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_01F4G5nVWxS91JsSEEC2mka5",
-   "pr": 36,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "round 1: changes requested (trackers_checked meaning; Intl examples; stale/segments/exceptions fields; keep Tailwind default spacing, restrict to ramp steps)"
-  },
-  "C1": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_01NSdirPw4xiTrGseUFMRd8U",
-   "pr": 37,
-   "attempt": 1,
-   "review_rounds": 2,
-   "notes": "merged 08:44 after round 2"
-  },
-  "W0": {
-   "status": "merged",
-   "model": "sonnet",
-   "session": "session_01G472Ud4a5RmEjGnhwpwTQw",
-   "pr": 35,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "merged after round 2"
-  },
-  "B1": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_01UxCJe2QQNeBEaCZrmcDRJi",
-   "pr": 57,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "merged 09:27 as a569b51 (#57)"
-  },
-  "B2": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_01QHUDtvte2DFAiHz6swmiU8",
-   "pr": 67,
-   "attempt": 1,
-   "review_rounds": 2,
-   "notes": "Round 2 (14:05): fixes OK; blocking: file max_sockets=0 -> 0 sockets (inconsistent sentinel). Also purge stale read-only rows, shadow-log test. | 14:07 round-2 fixes 6b3450d reviewed by runner (diff OK); merge on green CI. | 14:20 session merged main itself (4de8e52, incl cursors.rs settings:None); CI running. Budget re-run spent on 6b3450d. | merged 14:39 as 724c347."
-  },
-  "B3": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_01R8S4Q4PGSjv2tZYtdKuZu3",
-   "pr": 56,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "merged 08:45 as 5195a08 (#56)"
-  },
-  "W1": {
-   "status": "merged",
-   "model": "sonnet",
-   "session": "session_013n3VVF4K4QtH4YeGKjACBY",
-   "pr": 43,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "merged after round 2"
-  },
-  "W1b": {
-   "status": "merged",
-   "model": "haiku",
-   "session": "session_01B4Sk9GZoxWRASeUcVB2C9W",
-   "pr": 58,
-   "attempt": 0,
-   "review_rounds": 1,
-   "notes": "merged 09:01 as 4d6ee4f (#58)"
-  },
-  "W3": {
-   "status": "merged",
-   "model": "sonnet",
-   "session": "session_01PtZR2UWvbfVrwEjd3TsbrG",
-   "pr": 44,
-   "attempt": 1,
-   "review_rounds": 2,
-   "notes": "merged 08:52 as 5c7b413 (#44)"
-  },
-  "W4": {
-   "status": "merged",
-   "model": "sonnet",
-   "session": "session_01Xz6N6pccu7mmGoppsJH6w1",
-   "pr": 41,
-   "attempt": 1,
-   "review_rounds": 2,
-   "notes": "merged 09:40 as 2352de1 (#41)"
-  },
-  "W6": {
-   "status": "merged",
-   "model": "sonnet",
-   "session": "session_01QpHMCsgJt8gZPg3S2SnCGv",
-   "pr": 61,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "13:44: W6 pushed de6a17d (256 baselines, .update-snapshots removed) + main merge 43c57b8. Asked session how baselines were obtained (policy check). filter budget red (base red): re-run once after run 39789471408 completes (rerun refused while running). | 13:53 provenance OK: owner supplied zip (sha256 ebbfc84e\u2026 = artifact digest); e2e compared, 456 passed. Merge after CI + one budget re-run. | 14:19 budget re-run failed again (spent). Holding for F1b; commented on PR; owner pushed 14:19. | 15:40 asked session to merge main (moved: #64,#67,#68) for fresh CI | new head e76feec (main merged); check 16:08 | merged 16:00 as 4d3a020 (all green incl. budget on fresh run)"
-  },
-  "W2": {
-   "status": "merged",
-   "model": "sonnet",
-   "session": "session_01EFumqKZRWcv8y4PCvuGEV4",
-   "pr": 50,
-   "attempt": 1,
-   "review_rounds": 0,
-   "notes": "approved round 1; playwright.config.ts edit accepted"
-  },
-  "W8": {
-   "status": "merged",
-   "model": "sonnet",
-   "session": "session_0121PwTE5wgafTpKrc4nNuuz",
-   "pr": 40,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "merged after round 2"
-  },
-  "B5a": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_01Uk4thMoRJwF3Rzg9SUrxUQ",
-   "pr": 64,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "round 1: no blocking in code; asked: de-flake cancellation timing tests, revert index_root rename (B2 owns config.rs), tolerance wording, periodic lease sweep, PR description; optional seal-key HMAC. Scope exceptions accepted. | 13:42: fixes at b05bd31; only filter budget red (51.5us, runner variance, base red) -> one re-run spent; round-2 verifier started. | 13:43 all 23 checks green (budget passed on re-run); awaiting verifier. | merged 14:12 as e2702bc. Polish carry: exact-count test still wall-clock (cancelled_after_30ms); sweep test upgrade() race window; sweeper spawn-failure join."
-  },
-  "B4": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_01VDuBzguUByMRWK2Af6LkX3",
-   "pr": 69,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "launched 14:14 after B5a merged | PR #69 opened; reviewer (+security) started 15:40 | 16:35 round 1 FIX: stale max_id race; futures-core approved by runner; session re-verify per heartbeat; lodestar composition test; topics dup field; W5 429 note. | 16:30 fixes b6105c7 verified by runner (ordering, take(), verify per heartbeat, serve.rs composition test); merge on green CI. Merged a97c63f 17:38."
-  },
-  "B8": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": "waits ext:m4-schema-settled (M4 PR2 #48)"
-  },
-  "B6": {
-   "status": "changes_requested",
-   "model": "opus",
-   "session": "session_0113YcyKf7mgWsV9sNN3mNaW",
-   "pr": 71,
-   "attempt": 1,
-   "review_rounds": 2,
-   "notes": "launched 14:40; not live.rs/compile.rs (B4/B17) | PR #71; reviewer started 16:45 | 17:15 r1 FIX: visibility via base(without_facet(user_ast)), merge main, category ranges, near-1M perf. 18:24 R1 all in (ee81535); R2 review in flight. 19:18 R2 MERGE at ee81535; must add B17 wiring + I1 lease precondition, I2 1M single-segment perf, I3 share selection, P2 bin cap before merge. 19:56 B17 wiring + I1/I2/I3/P2 pushed 3dd0eaf; R3 delta review in flight. 20:20 R3 MERGE at 3dd0eaf (polish deferred: lease.rs doc swap, adult_kind wording, Hours cap test, bin_of clamp, golden note). Merge on green. 20:45 243443a main merge only; merge on green."
-  },
-  "B16": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "W5": {
-   "status": "merged",
-   "model": "sonnet",
-   "session": "session_01RL3YBaUPYXgdgK3wY2DRpG",
-   "pr": 83,
-   "attempt": 1,
-   "review_rounds": 2,
-   "notes": "R1 FIX 19:05: hidden-at-subscribe stream never closes (slot hog, queue growth); parsing stuck; typed wrapper gaps (202, required path/body, GET body); 401 halt; envelope extras (setup_required). 19:18 R2 FIX: PR body; aborted-conn test (given); abort-body test; superseded parse writes history; Retry-After 0 floor. 19:23 R2 fixes 300c35a verified by runner -> APPROVED, merge on green CI (include in 19:44 sweep). Merged 4fa8593 20:18."
-  },
-  "W7ab": {
-   "status": "merged",
-   "model": "sonnet",
-   "session": "session_01PZaAbtPHeB2SiUMG9VFpth",
-   "pr": 76,
-   "attempt": 1,
-   "review_rounds": 2,
-   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #76; reviewer started 16:45 | 17:10 r1 FIX: exclude dev routes from prod build (scope exception), toast timer, ticker 60s, + a11y items. R2 FIX 18:15: PR size reason; toast dismiss drops focus. Approved tokens --toast-width/--listbox-max-height in tokens.css. 18:10 R2 fixes 11d9b0d; R3 review in flight. 18:27 R3 FIX: Chip focus crosses groups; PR body stale. Runner verifies R4 itself. 18:50 R3 fixes bb80f6a verified by runner; asked one Toaster focus-steal fix, then merge on green. Merged fdf7263 20:18."
-  },
-  "W7cd": {
-   "status": "changes_requested",
-   "model": "sonnet",
-   "session": "session_016RoHWZ8Vbbs5moJ2c2fHqS",
-   "pr": 78,
-   "attempt": 1,
-   "review_rounds": 3,
-   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #78; reviewer started 16:45 | 16:58 round 1 FIX: load-more stuck, shift anchor by index, touch targets, .ls-focus dup; + measure opt-in, tokens, tree index prop, 100k expand perf, dup names, roving on click, Esc in drawer, tests, PR size. R2 FIX 18:20: coarse targets overlap; Drawer Esc swallowed by aria-expanded; Menu focus invisible; popover test race (Bits rAF autofocus). 18:23 R2 fixes pushed 44fdd31; R3 review held until #76 merges (dev-routes move + search JS 37.5 vs 32.4 kB). 20:20 dev-routes moved + main merged; R3 review in flight. CSS 20.32 kB vs 20 budget? 20:52 R3 FIX: CSS 20.32/20 (daisyUI exclude menu/modal/drawer/footer approved in app.css); popover must close on Tab-out. 20:56 dac5aa0 verified by runner -> APPROVED, merge on green."
-  },
-  "W7e": {
-   "status": "changes_requested",
-   "model": "sonnet",
-   "session": "session_01KbNDuqr2bBED88auAfEkNp",
-   "pr": 74,
-   "attempt": 1,
-   "review_rounds": 3,
-   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #74; reviewer started 16:45 | 17:10 r1 FIX: token classes (runner shared fix), dup groups, brush, null delta, dates, int axes. R2 FIX 17:55: computed-style test missing, x-axis tick overlap, showcase in prod (+1.83 kB; move to dev-routes after #76). 18:04 R2 fixes pushed 219eed7; waits on #80 and #76. 20:20 6ad522d dev-routes moved; computed-style tests red until #80 (owner baselines). Blocked on #80. 20:50 R3 FIX: brush external-selection commit, measured tick spacing, PR body. Verified all 6 specs pass with #80. 20:56 b6fc4b1 verified by runner -> APPROVED, merge after #80 lands (computed-style tests)."
-  },
-  "W9": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "M-auth": {
-   "status": "running",
-   "model": "opus",
-   "session": "session_01SLtBN2YZg1WidnV1PRro9w",
-   "pr": null,
-   "attempt": 1,
-   "review_rounds": 0,
-   "notes": "Launched 21:33."
-  },
-  "S-search-1": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-search-2": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-search-3": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-detail": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "D-docker": {
-   "status": "merged",
-   "model": "sonnet",
-   "session": "session_019VGYFBetAiATAi4KbpB7JZ",
-   "pr": 59,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "merged 09:58 as 2773dd2 (#59); image 22 MiB, smoke healthy/SPA/clean stop on CI"
-  },
-  "G-v05": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "B11a": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "B7": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "B12": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "B9": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "B5c": {
-   "status": "ready",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": "deps met; held (crates/search busy with B6)"
-  },
-  "B13": {
-   "status": "changes_requested",
-   "model": "opus",
-   "session": "session_012gnQYQihLxoGDKXk5pckME",
-   "pr": 77,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "launched 15:59 (owner asked to start more work); no crates/search edits | PR #77; reviewer started 16:45 | 17:10 r1 MERGE-ish: fix compare lock scope + conditional test, then merge. 18:45 R2 MERGE at 29caca3 pending main merge (B4 trivial conflicts) + B17 base_query switch after #72 lands. 19:38 bbc17ee (main+B17 switch) verified by runner -> APPROVED, merge on green. 20:27 eaa3a0e main merge; merge on green."
-  },
-  "B14": {
-   "status": "running",
-   "model": "opus",
-   "session": "session_01Sd8GqCEZSAxKFSwHKrXyHt",
-   "pr": null,
-   "attempt": 1,
-   "review_rounds": 2,
-   "notes": "launched 15:59; includes first-run log address polish 18:46 R1 FIX: main merge semantic break (ops field), NAT false-reachable (SeenFilter refresh + threshold), pause race, index_lag, ring clear, dht_off, BEP42 per-/24. 19:23 R1 fixes eabd33a + main merges 3378ef5; R2 review in flight. 20:08 R2 FIX: replies must renew contacted (NAT false reachable); failed event-write test; PR body. Runner verifies R3 delta. 20:17 3b61a52 verified by runner -> APPROVED, merge on green. 20:39 macOS rebuild flake + budget red on 3b61a52 -> one rerun after run completes (21:00 sweep)."
-  },
-  "B11b": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "B10b": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "B15": {
-   "status": "merged_elsewhere",
-   "model": "opus",
-   "session": null,
-   "pr": 47,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": "#47 merged by the filter session 06:19"
-  },
-  "B10a": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "B11c": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-search-4": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-search-5": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-search-6": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-compare": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-discover": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-alerts": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-insights-1": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-insights-2": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-insights-3": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-settings-1": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-wizard": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-appearance": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "M-filters-dialogs": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-filters": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-keys": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-e2e": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "H-zh": {
-   "status": "pending",
-   "model": "haiku",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "G-m5": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "E-M6": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "E-v06-workers": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "E-v06-companions": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "E-v06-sources": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "E-M7": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "E-v08": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "E-M8": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "X-utp": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_0141epGbZVUkFGWnyYhDra42",
-   "pr": 51,
-   "attempt": 1,
-   "review_rounds": 2,
-   "notes": "merged 09:29 as cedc5cd (#51)"
-  },
-  "X-integrations": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_01Pbk94fn6LWmUvc4LYw2c2P",
-   "pr": 49,
-   "attempt": 1,
-   "review_rounds": 0,
-   "notes": "merged 09:14 as a6c18ef (#49)"
-  },
-  "X-pack-static": {
-   "status": "merged",
-   "model": "sonnet",
-   "session": "session_0159tQEctmkzsDhjisVQgZ3b",
-   "pr": 45,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "merged after round 2"
-  },
-  "X-clients": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_01ENLgps19e6tSx74Sv1SxUB",
-   "pr": 62,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "merged 11:54 as 813ef0d (#62)"
-  },
-  "X-notify": {
-   "status": "merged",
-   "model": "sonnet",
-   "session": "session_01JVt8W2aGJyEFgv7HYwQJUF",
-   "pr": 60,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "merged 10:19 as e8e6c6a (#60)"
-  },
-  "B17": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_01PZdBjxYQXsnEVmfRxJCCXw",
-   "pr": 72,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "launched 14:40; owns compile.rs clause + settings content section | PR #72; reviewer started 16:45 | 17:10 r1 FIX: BaseQuery returns visibility conjuncts separately; merge main; \u00a716 qualifiers; utoipa responses. 17:48 merged main (557121f), no code change since 3e4d7b6. 18:45 R2 MERGE at 557121f (no blockers). Waiting on CI: drift in progress, filter budget red -> 1 rerun. Merged 4296f94 19:17."
-  },
-  "S-blocklists": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "F1": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_01V5sNo28tD6bZx3CNFdYjWY",
-   "pr": 55,
-   "attempt": 1,
-   "review_rounds": 2,
-   "notes": "merged 11:43 as df5cb91 (#55)"
-  },
-  "F2": {
-   "status": "done_elsewhere",
-   "model": "opus",
-   "session": null,
-   "pr": 52,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": "built by the filter session in #52 (open, to review after B0)"
-  },
-  "F3": {
-   "status": "done_elsewhere",
-   "model": "opus",
-   "session": null,
-   "pr": 52,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": "built by the filter session in #52"
-  },
-  "W1c": {
-   "status": "merged",
-   "model": "sonnet",
-   "session": "session_013n3VVF4K4QtH4YeGKjACBY",
-   "pr": 53,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "merged 07:50"
-  },
-  "X-email": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_01XTY2bFUF4NSdqoD8YDJjpA",
-   "pr": 63,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "round 1 fixes pushed af0a35e (transient drops, =? broken, private peer for plaintext auth, resolve timeout); merge on CI green (filter gate pending F1b); 12:50 one rerun of filter budget | 15:40 asked session to merge main for fresh CI | merged 16:10 as 1cef0e2 (all green after main merge)"
-  },
-  "B5a-swapfix": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_01Uk4thMoRJwF3Rzg9SUrxUQ",
-   "pr": 65,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "merged 12:59 as 3577c1d (#65); filter budget passed on rerun (fast runner)"
-  },
-  "F1b": {
-   "status": "blocked",
-   "model": "opus",
-   "session": "session_01V5sNo28tD6bZx3CNFdYjWY",
-   "pr": 66,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "round 1 fixes pushed: REFERENCE_NS=60ms (stricter, derived from 3 runner measurements), per-pass calibration, docs \u00a720.8/\u00a716; awaiting OWNER sign-off before merge"
-  },
-  "R-docs": {
-   "status": "in_review",
-   "model": "sonnet",
-   "session": "session_019N5xwViePFBt7ZEYQrKaH8",
-   "pr": 73,
-   "attempt": 1,
-   "review_rounds": 0,
-   "notes": "launched 15:59; carry-forwards runner-pr, runner-docs-pr, metrics-contract, contract-docs, themes table, integrations-readme (if X-email merged), unraid --user | PR #73; owner-file edits moved to runner PR #75 20:28 main (#86) merged; merge on green."
-  },
-  "F-near": {
-   "status": "review",
-   "model": "opus",
-   "session": "session_01Gn7rDcpkcoFRJjXXADJHQQ",
-   "pr": 85,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "R1 FIX 19:30: hostile-name NEAR DoS (places*tokens^2); safety claim wrong (CSX-5 overrides/exceptions/allow/unless match more). Owner Q on re-preview of stored CSX-5 entries. 19:58 DoS fix e6f6e72; R2 review in flight. 20:25 R2 MERGE; asked main merge + threshold test; runner verifies then merges. 20:36 4c6de89 (main + threshold test ba5cdcb) verified by runner -> APPROVED, merge on green. Pre-release: CSX-5 re-preview question stays with owner (follow-up only if owner wants it)."
-  },
-  "D-puid": {
-   "status": "review",
-   "model": "opus",
-   "session": "session_01WpNDR3rzep43npFMCvj48Q",
-   "pr": 84,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "R1 MERGE-quality 19:25; asked to fold in: chown only empty/marker dir, compose+operations docs, CAP hint, NO_NEW_PRIVS, CI root test step. Runner verifies delta. 19:48 hardening 19e6397 + main 87dabac verified by runner -> APPROVED, merge on green (filter budget = known flake; one rerun then main-merge). 20:39 green but dirty -> asked main merge."
-  },
-  "Q-docs": {
-   "status": "running",
-   "model": "sonnet",
-   "session": "session_012oddgqW1doBy4thnkcJW1U",
-   "pr": 82,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "R1 FIX 18:30: test must extract examples from the page itself; planned UI marked; ranking step 1; table pipe. 18:44 R2 fixes aa0eaaf verified by runner (test reads page; 134 examples pass). Merge on green; Adult paragraph says (planned) -> update after B17 merges."
-  },
-  "B4b": {
-   "status": "running",
-   "model": "opus",
-   "session": "session_01SK5Ci2FahQUSGQuDVozi28",
-   "pr": null,
-   "attempt": 1,
-   "review_rounds": 0,
-   "notes": "Launched 19:18 after B17 merged."
-  },
-  "X-flakes": {
-   "status": "running",
-   "model": "opus",
-   "session": "session_01DU5FDv74GuCpGhpTHM6Vte",
-   "pr": null,
-   "attempt": 1,
-   "review_rounds": 0,
-   "notes": "Launched 19:40: rebuild rename (macOS), interrupted rebuild resume, NRT budget (Windows), uTP WSAENOBUFS."
-  },
-  "B2b": {
-   "status": "running",
-   "model": "opus",
-   "session": "session_018cM4vT2o5voJrbVBmt6CZA",
-   "pr": null,
-   "attempt": 1,
-   "review_rounds": 0,
-   "notes": "Launched 20:29 after #86 merged."
-  },
-  "B2c": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": "from #86"
-  },
-  "M-settings-form": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": "from #86"
-  },
-  "S-settings-2": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": "from #86"
-  },
-  "M-security-settings": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": "from #86"
-  },
-  "B-log1": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": "from #86"
-  },
-  "B-log2": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": "from #86"
-  },
-  "S-logs": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": "from #86"
-  },
-  "S-about": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": "from #86"
-  },
-  "B-update": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": "from #86"
-  },
-  "S-updates": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": "from #86"
-  },
-  "S-doc-shots": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": "from #86"
-  }
- },
- "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
- "runner_pr": {
-  "number": 34,
-  "status": "merged",
-  "sha": "36100b9"
- },
- "policy": {
-  "merge_fallback": "If a direct merge is refused, enable GitHub auto-merge (merge commit) on the PR, only after CI is green and the review has no blocking findings. Owner-approved 2026-10-22. Fold into runner/README.md with the next runner PR.",
-  "merges": "All PRs, including the M4 sessions', are reviewed by a fresh Opus reviewer and merged by the runner (both M4 sessions told 05:58).",
-  "limits": {
-   "max_core": 16,
-   "max_helpers": 16,
-   "source": "owner 2026-10-22: 8 (16:03), doubled to 16/16 (17:20). In slices.yaml via runner PR #75."
-  },
-  "owner_questions": "Owner 2026-10-22 17:15: never stop monitoring/driving sessions to wait for an owner answer. Ask in the chat reply (and a push notification if the owner may be away), not with a blocking prompt; keep working on everything else meanwhile."
- },
- "watched_sessions": {
-  "session_015F9H2aHowz7TJLffFYxUvf": {
-   "title": "M4 continuation",
-   "work": "M4 swarm health, branch claude/relaxed-knuth-vexgae (PR #32), migration V5"
-  },
-  "session_01N83eB81W8xkqJgXiD7JLM3": {
-   "title": "Modern DHT crawler architecture",
-   "work": "content filter rule persistence and writer judging, migration V6"
-  },
-  "session_01NpcZEgW1eEWwKES8bNP3Cd": "Owner's 'In-application settings screen' session \u2014 owner 18:59: runner now manages it. Branch claude/brave-newton-53jgly (planning \u00a710.10 Settings, \u00a712.1 logging, \u00a712.2 auto-update, About, AGPL LICENSE, packaging/keys, user-docs skill + documentation-skills, brand/brand.json, slices B2b/B2c/M-settings-form/S-settings-1/2/M-security-settings/B-log1/2/S-logs/S-about/B-update/S-updates/S-doc-shots). Asked it (19:00) for status of owner requests/open questions, merge main, open PR. Runner reviews + merges. 19:15 status: all owner requests done, none open; runner opened PR #86 (review in flight). Owner says GitHub `release` env + RELEASE_SIGNING_KEY secret set up (unverified). 19:33 #86 R1 FIX sent (key rotation hijack, logs vs B4 hub, security-fix default, rollback supervisor, docs gate cmd). 19:50 #86 R2 FIX (trust state outside snapshots, future-timestamp freeze, crash-safe rollback journal). 20:00 #86 R3 FIX: 3 blockers (store lock during rollback, trust floor/revocation on start, restore disk) + 'B-update must resolve' checklist; runner verifies R4 itself then merges. 20:05 #86 R3 fixes 43a674c verified by runner -> APPROVED, merge on green (in 20:16 sweep). After merge: add 12 new slices to state, launch B2b. 20:27 #86 MERGED c5f9b74. Session done."
- },
- "watch_policy": "Owner asked the runner to keep an eye on and manage these sessions: each heartbeat check status; report a pending permission prompt to the owner (runner cannot approve); nudge an idle session with remaining work; flag conflicts with slice ownership and migration order.",
- "migration_order": "V4 filter, V5 swarm, V6 subscriptions, V7 filter rules, V8 class_corrections (all merged), V9 class_rules (#52 open), V10 reserved M4 PR2, V11 next free (F1 if needed, then M5 B8). Runner assigns.",
- "decisions": [
-  "2026-10-22 spacing: keep Tailwind v4 default --spacing (p-4=16px); only utility steps matching the \u00a710.2 ramp are allowed; W2 extends the ban check to off-ramp steps",
-  "2026-10-22 owner: the design decided in the 'Modern DHT crawler architecture' session (recorded in docs/architecture.md) is the primary design strategy; ui-design-skills only fills gaps. Encoded in runner/standards.md (PR #39).",
-  "2026-10-22 owner: Riverstone is the default/official palette and keeps plum #9381B6 in categorical slot 6 (seafoam stays retired); the theme collection is 24 families x light/dark including Rosewood as the 24th. Log both in architecture \u00a716 with the next runner docs PR.",
-  "2026-10-22 owner (audit follow-up): floor add-by-file/remove-in-app; packs per \u00a720.6; subscriptions off by default, user-chosen in wizard/settings with strictness-based warning; Riverstone unchanged, \u00a710.18 CVD claim corrected. Recorded in owner-decisions.md \u00a72.7-2.10 (PR #39).",
-  "2026-10-22 runner: community palette values stay as published; the theme compiler must derive content/tint tokens that satisfy the gates for every theme (W1c). W1b now waits for W1c and C1.",
-  "2026-10-22 W1b: ownership extended to web/scripts/themes.test.ts, theme-files.test.ts, web/static/themes.json (generated output and W1 placeholder assertions); record in slices.yaml at next runner PR",
-  "15:59 owner asked to start more work: launched B13, B14 (core, above max_core 4 while B4 is in review) and R-docs (helper).",
-  "16:25 OWNER: correction-driven Adult holds keep the 30-day name purge and become tombstones (hash+rule, no name) at purge; deliberate release with warning+password. (Option b for #70.) Record in owner-decisions.md \u00a72 via R-docs or #70.",
-  "17:05 OWNER: SQLite secure_delete ON (overwrite deleted rows). Runner implements in crates/store; record in owner-decisions \u00a72 item 13 via #75.",
-  "17:10 runner: dev showcase routes must not ship in production builds (W7ab changes shared build config). Accent fill deviation in W7ab accepted (accent-content 4.03:1 at 13px) -> \u00a716.",
-  {
-   "at": "2026-10-22T17:45Z",
-   "what": "LICENSE answered by the owner in the settings session: AGPL-3.0-or-later (owner-decisions \u00a72.12 on claude/brave-newton-53jgly)."
-  },
-  {
-   "at": "2026-10-22T18:52Z",
-   "what": "#75 merged: runner limits 16/16 in slices.yaml; owner-decisions \u00a72.15-17 (concurrency, adult-relabel tombstones, secure_delete)."
-  },
-  {
-   "at": "2026-10-22T19:25Z",
-   "what": "rustix approved as a direct dependency of lodestar (D-puid): libc unusable under unsafe_code=forbid; already in the lockfile."
-  },
-  {
-   "at": "2026-10-22T20:52Z",
-   "what": "daisyUI components menu, modal, drawer, footer excluded in app.css (in-house Bits UI overlays; saves ~1.4 kB CSS)."
-  },
-  {
-   "at": "2026-10-22T21:30Z",
-   "what": "Owner: make whatever CI/process changes improve efficiency. Runner PR #90: path-based CI, macOS nightly/full-ci, arm64 PR only on packaging changes, docs/decisions per-PR files (\u00a716 closed). main has no branch protection (owner confirmed)."
-  }
- ],
- "open_issues": [
-  "Filter session self-merged #42 against owner decision (packs on by default) + budget env; follow-up fix requested. Suggest owner consider branch protection.",
-  "Filter session keeps self-merging (#33,#42,#47,#52) driven by the owner's '/goal finish whatever is left to do' loop; only the owner can end that goal"
- ],
- "runner_prs": {
-  "34": "merged",
-  "39": "merged 07:43",
-  "75": "merged 51d3a9d 18:52",
-  "80": "open: token role utilities (@theme inline reference)",
-  "81": "open: secure_delete (owner decision)"
- },
- "m4_plan": "M4 swarm: #32 now; PR2 after #32 (scrape scheduler, search on hot columns, API/binary wiring) touching crates/api/**, crates/lodestar/src/{main,http,metrics,config}.rs, crates/search/src/{index,lib,compile,filter,sorted,query}.rs \u2014 overlaps B0/B5b/B5a/B6; M4 session merges main over them. It will message the runner when M4 is complete.",
- "audit_2026_10_22": {
-  "result": "no owner-decision violations",
-  "actions": {
-   "W1 #43": "contract values exact; neutral-content >=4.5; web/themes/<family>.json",
-   "W3 #44": "cut to ~1.5 MB; one script line; \u00a716 entry",
-   "W4 #41": "npm plugin instead of vendoring; glossary keys; list shared-file edits",
-   "W8 #40": "\u00a716 entry",
-   "M4 filter #33/#42": "V7 for #42; no budget env loosening; packs per \u00a720.6; floor add-only from config; subscriptions off by default + strictness warning",
-   "new slices": "B17 adult default, S-blocklists; X-clients -> Opus"
-  }
- },
- "m4_prs": {
-  "32": "merged 05:36 by M4 session",
-  "33": "merged 05:51 by filter session (owner decisions follow-up requested)",
-  "42": "MERGED 06:07 by the filter session despite the runner's request; packs on by default (contradicts owner \u00a72.8) and LODESTAR_BUDGET_US kept. Follow-up fix PR requested 06:14; owner told.",
-  "47": "merged 06:19 by the filter session (V8 class_corrections)",
-  "48": "review round 1: merge main (B0 layout), 10M exit evidence, scheduler fixes",
-  "52": "MERGED by the filter session (self-merge again), conflicts with B0"
- },
- "heartbeats": 4,
- "reviews_in_flight": {
-  "81": "runner secure-delete R3 (d2263b9)"
- },
- "carry_forward": {
-  "next-bans-touch": [
-   "bans.mjs:241 accept '=' so class:pb-11={x} is caught",
-   "fonts.test.ts imports fontverter (transitive dep): comment or parse otherwise"
+  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
+  "updated_at": "2026-10-22T21:39Z",
+  "launches": {
+    "date": "2026-10-22",
+    "count": 23
+  },
+  "tags": {},
+  "slices": {
+    "B0": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_01A5BEzkYtiRur7VEKtby9FH",
+      "pr": 38,
+      "attempt": 1,
+      "review_rounds": 4,
+      "notes": "merged 07:40 after round 4 + #52 port"
+    },
+    "B5b": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_01BEmSnYW9wHszPF16AVqmtL",
+      "pr": 46,
+      "attempt": 1,
+      "review_rounds": 2,
+      "notes": "merged 10:00 as ce190f2 (#46)"
+    },
+    "C0": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_01F4G5nVWxS91JsSEEC2mka5",
+      "pr": 36,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "round 1: changes requested (trackers_checked meaning; Intl examples; stale/segments/exceptions fields; keep Tailwind default spacing, restrict to ramp steps)"
+    },
+    "C1": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_01NSdirPw4xiTrGseUFMRd8U",
+      "pr": 37,
+      "attempt": 1,
+      "review_rounds": 2,
+      "notes": "merged 08:44 after round 2"
+    },
+    "W0": {
+      "status": "merged",
+      "model": "sonnet",
+      "session": "session_01G472Ud4a5RmEjGnhwpwTQw",
+      "pr": 35,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "merged after round 2"
+    },
+    "B1": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_01UxCJe2QQNeBEaCZrmcDRJi",
+      "pr": 57,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "merged 09:27 as a569b51 (#57)"
+    },
+    "B2": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_01QHUDtvte2DFAiHz6swmiU8",
+      "pr": 67,
+      "attempt": 1,
+      "review_rounds": 2,
+      "notes": "Round 2 (14:05): fixes OK; blocking: file max_sockets=0 -> 0 sockets (inconsistent sentinel). Also purge stale read-only rows, shadow-log test. | 14:07 round-2 fixes 6b3450d reviewed by runner (diff OK); merge on green CI. | 14:20 session merged main itself (4de8e52, incl cursors.rs settings:None); CI running. Budget re-run spent on 6b3450d. | merged 14:39 as 724c347."
+    },
+    "B3": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_01R8S4Q4PGSjv2tZYtdKuZu3",
+      "pr": 56,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "merged 08:45 as 5195a08 (#56)"
+    },
+    "W1": {
+      "status": "merged",
+      "model": "sonnet",
+      "session": "session_013n3VVF4K4QtH4YeGKjACBY",
+      "pr": 43,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "merged after round 2"
+    },
+    "W1b": {
+      "status": "merged",
+      "model": "haiku",
+      "session": "session_01B4Sk9GZoxWRASeUcVB2C9W",
+      "pr": 58,
+      "attempt": 0,
+      "review_rounds": 1,
+      "notes": "merged 09:01 as 4d6ee4f (#58)"
+    },
+    "W3": {
+      "status": "merged",
+      "model": "sonnet",
+      "session": "session_01PtZR2UWvbfVrwEjd3TsbrG",
+      "pr": 44,
+      "attempt": 1,
+      "review_rounds": 2,
+      "notes": "merged 08:52 as 5c7b413 (#44)"
+    },
+    "W4": {
+      "status": "merged",
+      "model": "sonnet",
+      "session": "session_01Xz6N6pccu7mmGoppsJH6w1",
+      "pr": 41,
+      "attempt": 1,
+      "review_rounds": 2,
+      "notes": "merged 09:40 as 2352de1 (#41)"
+    },
+    "W6": {
+      "status": "merged",
+      "model": "sonnet",
+      "session": "session_01QpHMCsgJt8gZPg3S2SnCGv",
+      "pr": 61,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "13:44: W6 pushed de6a17d (256 baselines, .update-snapshots removed) + main merge 43c57b8. Asked session how baselines were obtained (policy check). filter budget red (base red): re-run once after run 39789471408 completes (rerun refused while running). | 13:53 provenance OK: owner supplied zip (sha256 ebbfc84e\u2026 = artifact digest); e2e compared, 456 passed. Merge after CI + one budget re-run. | 14:19 budget re-run failed again (spent). Holding for F1b; commented on PR; owner pushed 14:19. | 15:40 asked session to merge main (moved: #64,#67,#68) for fresh CI | new head e76feec (main merged); check 16:08 | merged 16:00 as 4d3a020 (all green incl. budget on fresh run)"
+    },
+    "W2": {
+      "status": "merged",
+      "model": "sonnet",
+      "session": "session_01EFumqKZRWcv8y4PCvuGEV4",
+      "pr": 50,
+      "attempt": 1,
+      "review_rounds": 0,
+      "notes": "approved round 1; playwright.config.ts edit accepted"
+    },
+    "W8": {
+      "status": "merged",
+      "model": "sonnet",
+      "session": "session_0121PwTE5wgafTpKrc4nNuuz",
+      "pr": 40,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "merged after round 2"
+    },
+    "B5a": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_01Uk4thMoRJwF3Rzg9SUrxUQ",
+      "pr": 64,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "round 1: no blocking in code; asked: de-flake cancellation timing tests, revert index_root rename (B2 owns config.rs), tolerance wording, periodic lease sweep, PR description; optional seal-key HMAC. Scope exceptions accepted. | 13:42: fixes at b05bd31; only filter budget red (51.5us, runner variance, base red) -> one re-run spent; round-2 verifier started. | 13:43 all 23 checks green (budget passed on re-run); awaiting verifier. | merged 14:12 as e2702bc. Polish carry: exact-count test still wall-clock (cancelled_after_30ms); sweep test upgrade() race window; sweeper spawn-failure join."
+    },
+    "B4": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_01VDuBzguUByMRWK2Af6LkX3",
+      "pr": 69,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "launched 14:14 after B5a merged | PR #69 opened; reviewer (+security) started 15:40 | 16:35 round 1 FIX: stale max_id race; futures-core approved by runner; session re-verify per heartbeat; lodestar composition test; topics dup field; W5 429 note. | 16:30 fixes b6105c7 verified by runner (ordering, take(), verify per heartbeat, serve.rs composition test); merge on green CI. Merged a97c63f 17:38."
+    },
+    "B8": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": "waits ext:m4-schema-settled (M4 PR2 #48)"
+    },
+    "B6": {
+      "status": "changes_requested",
+      "model": "opus",
+      "session": "session_0113YcyKf7mgWsV9sNN3mNaW",
+      "pr": 71,
+      "attempt": 1,
+      "review_rounds": 2,
+      "notes": "launched 14:40; not live.rs/compile.rs (B4/B17) | PR #71; reviewer started 16:45 | 17:15 r1 FIX: visibility via base(without_facet(user_ast)), merge main, category ranges, near-1M perf. 18:24 R1 all in (ee81535); R2 review in flight. 19:18 R2 MERGE at ee81535; must add B17 wiring + I1 lease precondition, I2 1M single-segment perf, I3 share selection, P2 bin cap before merge. 19:56 B17 wiring + I1/I2/I3/P2 pushed 3dd0eaf; R3 delta review in flight. 20:20 R3 MERGE at 3dd0eaf (polish deferred: lease.rs doc swap, adult_kind wording, Hours cap test, bin_of clamp, golden note). Merge on green. 20:45 243443a main merge only; merge on green."
+    },
+    "B16": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "W5": {
+      "status": "merged",
+      "model": "sonnet",
+      "session": "session_01RL3YBaUPYXgdgK3wY2DRpG",
+      "pr": 83,
+      "attempt": 1,
+      "review_rounds": 2,
+      "notes": "R1 FIX 19:05: hidden-at-subscribe stream never closes (slot hog, queue growth); parsing stuck; typed wrapper gaps (202, required path/body, GET body); 401 halt; envelope extras (setup_required). 19:18 R2 FIX: PR body; aborted-conn test (given); abort-body test; superseded parse writes history; Retry-After 0 floor. 19:23 R2 fixes 300c35a verified by runner -> APPROVED, merge on green CI (include in 19:44 sweep). Merged 4fa8593 20:18."
+    },
+    "W7ab": {
+      "status": "merged",
+      "model": "sonnet",
+      "session": "session_01PZaAbtPHeB2SiUMG9VFpth",
+      "pr": 76,
+      "attempt": 1,
+      "review_rounds": 2,
+      "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #76; reviewer started 16:45 | 17:10 r1 FIX: exclude dev routes from prod build (scope exception), toast timer, ticker 60s, + a11y items. R2 FIX 18:15: PR size reason; toast dismiss drops focus. Approved tokens --toast-width/--listbox-max-height in tokens.css. 18:10 R2 fixes 11d9b0d; R3 review in flight. 18:27 R3 FIX: Chip focus crosses groups; PR body stale. Runner verifies R4 itself. 18:50 R3 fixes bb80f6a verified by runner; asked one Toaster focus-steal fix, then merge on green. Merged fdf7263 20:18."
+    },
+    "W7cd": {
+      "status": "changes_requested",
+      "model": "sonnet",
+      "session": "session_016RoHWZ8Vbbs5moJ2c2fHqS",
+      "pr": 78,
+      "attempt": 1,
+      "review_rounds": 3,
+      "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #78; reviewer started 16:45 | 16:58 round 1 FIX: load-more stuck, shift anchor by index, touch targets, .ls-focus dup; + measure opt-in, tokens, tree index prop, 100k expand perf, dup names, roving on click, Esc in drawer, tests, PR size. R2 FIX 18:20: coarse targets overlap; Drawer Esc swallowed by aria-expanded; Menu focus invisible; popover test race (Bits rAF autofocus). 18:23 R2 fixes pushed 44fdd31; R3 review held until #76 merges (dev-routes move + search JS 37.5 vs 32.4 kB). 20:20 dev-routes moved + main merged; R3 review in flight. CSS 20.32 kB vs 20 budget? 20:52 R3 FIX: CSS 20.32/20 (daisyUI exclude menu/modal/drawer/footer approved in app.css); popover must close on Tab-out. 20:56 dac5aa0 verified by runner -> APPROVED, merge on green."
+    },
+    "W7e": {
+      "status": "changes_requested",
+      "model": "sonnet",
+      "session": "session_01KbNDuqr2bBED88auAfEkNp",
+      "pr": 74,
+      "attempt": 1,
+      "review_rounds": 3,
+      "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #74; reviewer started 16:45 | 17:10 r1 FIX: token classes (runner shared fix), dup groups, brush, null delta, dates, int axes. R2 FIX 17:55: computed-style test missing, x-axis tick overlap, showcase in prod (+1.83 kB; move to dev-routes after #76). 18:04 R2 fixes pushed 219eed7; waits on #80 and #76. 20:20 6ad522d dev-routes moved; computed-style tests red until #80 (owner baselines). Blocked on #80. 20:50 R3 FIX: brush external-selection commit, measured tick spacing, PR body. Verified all 6 specs pass with #80. 20:56 b6fc4b1 verified by runner -> APPROVED, merge after #80 lands (computed-style tests)."
+    },
+    "W9": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "M-auth": {
+      "status": "running",
+      "model": "opus",
+      "session": "session_01SLtBN2YZg1WidnV1PRro9w",
+      "pr": null,
+      "attempt": 1,
+      "review_rounds": 0,
+      "notes": "Launched 21:33."
+    },
+    "S-search-1": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-search-2": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-search-3": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-detail": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "D-docker": {
+      "status": "merged",
+      "model": "sonnet",
+      "session": "session_019VGYFBetAiATAi4KbpB7JZ",
+      "pr": 59,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "merged 09:58 as 2773dd2 (#59); image 22 MiB, smoke healthy/SPA/clean stop on CI"
+    },
+    "G-v05": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "B11a": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "B7": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "B12": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "B9": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "B5c": {
+      "status": "ready",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": "deps met; held (crates/search busy with B6)"
+    },
+    "B13": {
+      "status": "changes_requested",
+      "model": "opus",
+      "session": "session_012gnQYQihLxoGDKXk5pckME",
+      "pr": 77,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "launched 15:59 (owner asked to start more work); no crates/search edits | PR #77; reviewer started 16:45 | 17:10 r1 MERGE-ish: fix compare lock scope + conditional test, then merge. 18:45 R2 MERGE at 29caca3 pending main merge (B4 trivial conflicts) + B17 base_query switch after #72 lands. 19:38 bbc17ee (main+B17 switch) verified by runner -> APPROVED, merge on green. 20:27 eaa3a0e main merge; merge on green."
+    },
+    "B14": {
+      "status": "running",
+      "model": "opus",
+      "session": "session_01Sd8GqCEZSAxKFSwHKrXyHt",
+      "pr": null,
+      "attempt": 1,
+      "review_rounds": 2,
+      "notes": "launched 15:59; includes first-run log address polish 18:46 R1 FIX: main merge semantic break (ops field), NAT false-reachable (SeenFilter refresh + threshold), pause race, index_lag, ring clear, dht_off, BEP42 per-/24. 19:23 R1 fixes eabd33a + main merges 3378ef5; R2 review in flight. 20:08 R2 FIX: replies must renew contacted (NAT false reachable); failed event-write test; PR body. Runner verifies R3 delta. 20:17 3b61a52 verified by runner -> APPROVED, merge on green. 20:39 macOS rebuild flake + budget red on 3b61a52 -> one rerun after run completes (21:00 sweep)."
+    },
+    "B11b": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "B10b": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "B15": {
+      "status": "merged_elsewhere",
+      "model": "opus",
+      "session": null,
+      "pr": 47,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": "#47 merged by the filter session 06:19"
+    },
+    "B10a": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "B11c": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-search-4": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-search-5": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-search-6": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-compare": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-discover": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-alerts": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-insights-1": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-insights-2": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-insights-3": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-settings-1": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-wizard": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-appearance": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "M-filters-dialogs": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-filters": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-keys": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-e2e": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "H-zh": {
+      "status": "pending",
+      "model": "haiku",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "G-m5": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "E-M6": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "E-v06-workers": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "E-v06-companions": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "E-v06-sources": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "E-M7": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "E-v08": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "E-M8": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "X-utp": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_0141epGbZVUkFGWnyYhDra42",
+      "pr": 51,
+      "attempt": 1,
+      "review_rounds": 2,
+      "notes": "merged 09:29 as cedc5cd (#51)"
+    },
+    "X-integrations": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_01Pbk94fn6LWmUvc4LYw2c2P",
+      "pr": 49,
+      "attempt": 1,
+      "review_rounds": 0,
+      "notes": "merged 09:14 as a6c18ef (#49)"
+    },
+    "X-pack-static": {
+      "status": "merged",
+      "model": "sonnet",
+      "session": "session_0159tQEctmkzsDhjisVQgZ3b",
+      "pr": 45,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "merged after round 2"
+    },
+    "X-clients": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_01ENLgps19e6tSx74Sv1SxUB",
+      "pr": 62,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "merged 11:54 as 813ef0d (#62)"
+    },
+    "X-notify": {
+      "status": "merged",
+      "model": "sonnet",
+      "session": "session_01JVt8W2aGJyEFgv7HYwQJUF",
+      "pr": 60,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "merged 10:19 as e8e6c6a (#60)"
+    },
+    "B17": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_01PZdBjxYQXsnEVmfRxJCCXw",
+      "pr": 72,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "launched 14:40; owns compile.rs clause + settings content section | PR #72; reviewer started 16:45 | 17:10 r1 FIX: BaseQuery returns visibility conjuncts separately; merge main; \u00a716 qualifiers; utoipa responses. 17:48 merged main (557121f), no code change since 3e4d7b6. 18:45 R2 MERGE at 557121f (no blockers). Waiting on CI: drift in progress, filter budget red -> 1 rerun. Merged 4296f94 19:17."
+    },
+    "S-blocklists": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "F1": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_01V5sNo28tD6bZx3CNFdYjWY",
+      "pr": 55,
+      "attempt": 1,
+      "review_rounds": 2,
+      "notes": "merged 11:43 as df5cb91 (#55)"
+    },
+    "F2": {
+      "status": "done_elsewhere",
+      "model": "opus",
+      "session": null,
+      "pr": 52,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": "built by the filter session in #52 (open, to review after B0)"
+    },
+    "F3": {
+      "status": "done_elsewhere",
+      "model": "opus",
+      "session": null,
+      "pr": 52,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": "built by the filter session in #52"
+    },
+    "W1c": {
+      "status": "merged",
+      "model": "sonnet",
+      "session": "session_013n3VVF4K4QtH4YeGKjACBY",
+      "pr": 53,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "merged 07:50"
+    },
+    "X-email": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_01XTY2bFUF4NSdqoD8YDJjpA",
+      "pr": 63,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "round 1 fixes pushed af0a35e (transient drops, =? broken, private peer for plaintext auth, resolve timeout); merge on CI green (filter gate pending F1b); 12:50 one rerun of filter budget | 15:40 asked session to merge main for fresh CI | merged 16:10 as 1cef0e2 (all green after main merge)"
+    },
+    "B5a-swapfix": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_01Uk4thMoRJwF3Rzg9SUrxUQ",
+      "pr": 65,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "merged 12:59 as 3577c1d (#65); filter budget passed on rerun (fast runner)"
+    },
+    "F1b": {
+      "status": "blocked",
+      "model": "opus",
+      "session": "session_01V5sNo28tD6bZx3CNFdYjWY",
+      "pr": 66,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "round 1 fixes pushed: REFERENCE_NS=60ms (stricter, derived from 3 runner measurements), per-pass calibration, docs \u00a720.8/\u00a716; awaiting OWNER sign-off before merge"
+    },
+    "R-docs": {
+      "status": "in_review",
+      "model": "sonnet",
+      "session": "session_019N5xwViePFBt7ZEYQrKaH8",
+      "pr": 73,
+      "attempt": 1,
+      "review_rounds": 0,
+      "notes": "launched 15:59; carry-forwards runner-pr, runner-docs-pr, metrics-contract, contract-docs, themes table, integrations-readme (if X-email merged), unraid --user | PR #73; owner-file edits moved to runner PR #75 20:28 main (#86) merged; merge on green."
+    },
+    "F-near": {
+      "status": "review",
+      "model": "opus",
+      "session": "session_01Gn7rDcpkcoFRJjXXADJHQQ",
+      "pr": 85,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "R1 FIX 19:30: hostile-name NEAR DoS (places*tokens^2); safety claim wrong (CSX-5 overrides/exceptions/allow/unless match more). Owner Q on re-preview of stored CSX-5 entries. 19:58 DoS fix e6f6e72; R2 review in flight. 20:25 R2 MERGE; asked main merge + threshold test; runner verifies then merges. 20:36 4c6de89 (main + threshold test ba5cdcb) verified by runner -> APPROVED, merge on green. Pre-release: CSX-5 re-preview question stays with owner (follow-up only if owner wants it)."
+    },
+    "D-puid": {
+      "status": "review",
+      "model": "opus",
+      "session": "session_01WpNDR3rzep43npFMCvj48Q",
+      "pr": 84,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "R1 MERGE-quality 19:25; asked to fold in: chown only empty/marker dir, compose+operations docs, CAP hint, NO_NEW_PRIVS, CI root test step. Runner verifies delta. 19:48 hardening 19e6397 + main 87dabac verified by runner -> APPROVED, merge on green (filter budget = known flake; one rerun then main-merge). 20:39 green but dirty -> asked main merge."
+    },
+    "Q-docs": {
+      "status": "running",
+      "model": "sonnet",
+      "session": "session_012oddgqW1doBy4thnkcJW1U",
+      "pr": 82,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "R1 FIX 18:30: test must extract examples from the page itself; planned UI marked; ranking step 1; table pipe. 18:44 R2 fixes aa0eaaf verified by runner (test reads page; 134 examples pass). Merge on green; Adult paragraph says (planned) -> update after B17 merges."
+    },
+    "B4b": {
+      "status": "running",
+      "model": "opus",
+      "session": "session_01SK5Ci2FahQUSGQuDVozi28",
+      "pr": null,
+      "attempt": 1,
+      "review_rounds": 0,
+      "notes": "Launched 19:18 after B17 merged."
+    },
+    "X-flakes": {
+      "status": "running",
+      "model": "opus",
+      "session": "session_01DU5FDv74GuCpGhpTHM6Vte",
+      "pr": null,
+      "attempt": 1,
+      "review_rounds": 0,
+      "notes": "Launched 19:40: rebuild rename (macOS), interrupted rebuild resume, NRT budget (Windows), uTP WSAENOBUFS."
+    },
+    "B2b": {
+      "status": "running",
+      "model": "opus",
+      "session": "session_018cM4vT2o5voJrbVBmt6CZA",
+      "pr": null,
+      "attempt": 1,
+      "review_rounds": 0,
+      "notes": "Launched 20:29 after #86 merged."
+    },
+    "B2c": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": "from #86"
+    },
+    "M-settings-form": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": "from #86"
+    },
+    "S-settings-2": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": "from #86"
+    },
+    "M-security-settings": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": "from #86"
+    },
+    "B-log1": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": "from #86"
+    },
+    "B-log2": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": "from #86"
+    },
+    "S-logs": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": "from #86"
+    },
+    "S-about": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": "from #86"
+    },
+    "B-update": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": "from #86"
+    },
+    "S-updates": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": "from #86"
+    },
+    "S-doc-shots": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": "from #86"
+    },
+    "P-release": {
+      "status": "running",
+      "model": "sonnet",
+      "session": "session_01Pzq27d7V3yu5T8D2v5xiFG",
+      "pr": null,
+      "attempt": 1,
+      "review_rounds": 0,
+      "notes": "Launched 21:38 (\"run as many feature sessions as possible\")."
+    },
+    "M6-cli": {
+      "status": "running",
+      "model": "opus",
+      "session": "session_01FathNdcyDX2ZjCqYnfipQs",
+      "pr": null,
+      "attempt": 1,
+      "review_rounds": 0,
+      "notes": "Launched 21:38 (\"run as many feature sessions as possible\")."
+    },
+    "M6-win": {
+      "status": "running",
+      "model": "opus",
+      "session": "session_01CqsN771NrbwFdVvvzXpoLm",
+      "pr": null,
+      "attempt": 1,
+      "review_rounds": 0,
+      "notes": "Launched 21:38 (\"run as many feature sessions as possible\")."
+    },
+    "R-relevance": {
+      "status": "running",
+      "model": "opus",
+      "session": "session_01HedMy8BMpmR1uFHZkW2HsR",
+      "pr": null,
+      "attempt": 1,
+      "review_rounds": 0,
+      "notes": "Launched 21:38 (\"run as many feature sessions as possible\")."
+    },
+    "V6-cluster1": {
+      "status": "running",
+      "model": "opus",
+      "session": "session_016PSd1TREK3Wjy3haR5ZVux",
+      "pr": null,
+      "attempt": 1,
+      "review_rounds": 0,
+      "notes": "Launched 21:38 (\"run as many feature sessions as possible\")."
+    },
+    "DOC-install": {
+      "status": "running",
+      "model": "sonnet",
+      "session": "session_01HkZAMVce8znDed5m6X2aoQ",
+      "pr": null,
+      "attempt": 1,
+      "review_rounds": 0,
+      "notes": "Launched 21:38 (\"run as many feature sessions as possible\")."
+    }
+  },
+  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
+  "runner_pr": {
+    "number": 34,
+    "status": "merged",
+    "sha": "36100b9"
+  },
+  "policy": {
+    "merge_fallback": "If a direct merge is refused, enable GitHub auto-merge (merge commit) on the PR, only after CI is green and the review has no blocking findings. Owner-approved 2026-10-22. Fold into runner/README.md with the next runner PR.",
+    "merges": "All PRs, including the M4 sessions', are reviewed by a fresh Opus reviewer and merged by the runner (both M4 sessions told 05:58).",
+    "limits": {
+      "max_core": 16,
+      "max_helpers": 16,
+      "source": "owner 2026-10-22: 8 (16:03), doubled to 16/16 (17:20). In slices.yaml via runner PR #75."
+    },
+    "owner_questions": "Owner 2026-10-22 17:15: never stop monitoring/driving sessions to wait for an owner answer. Ask in the chat reply (and a push notification if the owner may be away), not with a blocking prompt; keep working on everything else meanwhile."
+  },
+  "watched_sessions": {
+    "session_015F9H2aHowz7TJLffFYxUvf": {
+      "title": "M4 continuation",
+      "work": "M4 swarm health, branch claude/relaxed-knuth-vexgae (PR #32), migration V5"
+    },
+    "session_01N83eB81W8xkqJgXiD7JLM3": {
+      "title": "Modern DHT crawler architecture",
+      "work": "content filter rule persistence and writer judging, migration V6"
+    },
+    "session_01NpcZEgW1eEWwKES8bNP3Cd": "Owner's 'In-application settings screen' session \u2014 owner 18:59: runner now manages it. Branch claude/brave-newton-53jgly (planning \u00a710.10 Settings, \u00a712.1 logging, \u00a712.2 auto-update, About, AGPL LICENSE, packaging/keys, user-docs skill + documentation-skills, brand/brand.json, slices B2b/B2c/M-settings-form/S-settings-1/2/M-security-settings/B-log1/2/S-logs/S-about/B-update/S-updates/S-doc-shots). Asked it (19:00) for status of owner requests/open questions, merge main, open PR. Runner reviews + merges. 19:15 status: all owner requests done, none open; runner opened PR #86 (review in flight). Owner says GitHub `release` env + RELEASE_SIGNING_KEY secret set up (unverified). 19:33 #86 R1 FIX sent (key rotation hijack, logs vs B4 hub, security-fix default, rollback supervisor, docs gate cmd). 19:50 #86 R2 FIX (trust state outside snapshots, future-timestamp freeze, crash-safe rollback journal). 20:00 #86 R3 FIX: 3 blockers (store lock during rollback, trust floor/revocation on start, restore disk) + 'B-update must resolve' checklist; runner verifies R4 itself then merges. 20:05 #86 R3 fixes 43a674c verified by runner -> APPROVED, merge on green (in 20:16 sweep). After merge: add 12 new slices to state, launch B2b. 20:27 #86 MERGED c5f9b74. Session done."
+  },
+  "watch_policy": "Owner asked the runner to keep an eye on and manage these sessions: each heartbeat check status; report a pending permission prompt to the owner (runner cannot approve); nudge an idle session with remaining work; flag conflicts with slice ownership and migration order.",
+  "migration_order": "V4 filter, V5 swarm, V6 subscriptions, V7 filter rules, V8 class_corrections (all merged), V9 class_rules (#52 open), V10 reserved M4 PR2, V11 next free (F1 if needed, then M5 B8). Runner assigns.",
+  "decisions": [
+    "2026-10-22 spacing: keep Tailwind v4 default --spacing (p-4=16px); only utility steps matching the \u00a710.2 ramp are allowed; W2 extends the ban check to off-ramp steps",
+    "2026-10-22 owner: the design decided in the 'Modern DHT crawler architecture' session (recorded in docs/architecture.md) is the primary design strategy; ui-design-skills only fills gaps. Encoded in runner/standards.md (PR #39).",
+    "2026-10-22 owner: Riverstone is the default/official palette and keeps plum #9381B6 in categorical slot 6 (seafoam stays retired); the theme collection is 24 families x light/dark including Rosewood as the 24th. Log both in architecture \u00a716 with the next runner docs PR.",
+    "2026-10-22 owner (audit follow-up): floor add-by-file/remove-in-app; packs per \u00a720.6; subscriptions off by default, user-chosen in wizard/settings with strictness-based warning; Riverstone unchanged, \u00a710.18 CVD claim corrected. Recorded in owner-decisions.md \u00a72.7-2.10 (PR #39).",
+    "2026-10-22 runner: community palette values stay as published; the theme compiler must derive content/tint tokens that satisfy the gates for every theme (W1c). W1b now waits for W1c and C1.",
+    "2026-10-22 W1b: ownership extended to web/scripts/themes.test.ts, theme-files.test.ts, web/static/themes.json (generated output and W1 placeholder assertions); record in slices.yaml at next runner PR",
+    "15:59 owner asked to start more work: launched B13, B14 (core, above max_core 4 while B4 is in review) and R-docs (helper).",
+    "16:25 OWNER: correction-driven Adult holds keep the 30-day name purge and become tombstones (hash+rule, no name) at purge; deliberate release with warning+password. (Option b for #70.) Record in owner-decisions.md \u00a72 via R-docs or #70.",
+    "17:05 OWNER: SQLite secure_delete ON (overwrite deleted rows). Runner implements in crates/store; record in owner-decisions \u00a72 item 13 via #75.",
+    "17:10 runner: dev showcase routes must not ship in production builds (W7ab changes shared build config). Accent fill deviation in W7ab accepted (accent-content 4.03:1 at 13px) -> \u00a716.",
+    {
+      "at": "2026-10-22T17:45Z",
+      "what": "LICENSE answered by the owner in the settings session: AGPL-3.0-or-later (owner-decisions \u00a72.12 on claude/brave-newton-53jgly)."
+    },
+    {
+      "at": "2026-10-22T18:52Z",
+      "what": "#75 merged: runner limits 16/16 in slices.yaml; owner-decisions \u00a72.15-17 (concurrency, adult-relabel tombstones, secure_delete)."
+    },
+    {
+      "at": "2026-10-22T19:25Z",
+      "what": "rustix approved as a direct dependency of lodestar (D-puid): libc unusable under unsafe_code=forbid; already in the lockfile."
+    },
+    {
+      "at": "2026-10-22T20:52Z",
+      "what": "daisyUI components menu, modal, drawer, footer excluded in app.css (in-house Bits UI overlays; saves ~1.4 kB CSS)."
+    },
+    {
+      "at": "2026-10-22T21:30Z",
+      "what": "Owner: make whatever CI/process changes improve efficiency. Runner PR #90: path-based CI, macOS nightly/full-ci, arm64 PR only on packaging changes, docs/decisions per-PR files (\u00a716 closed). main has no branch protection (owner confirmed)."
+    }
   ],
-  "B1-polish": [
-   "golden: add stemmed:true and non-null hash_v2 fixtures",
-   "explicit operation_ids if not done in #57",
-   "add OpenAPI examples to utoipa schemas (W6 mock defaults; 0/24 ops have examples)"
+  "open_issues": [
+    "Filter session self-merged #42 against owner decision (packs on by default) + budget env; follow-up fix requested. Suggest owner consider branch protection.",
+    "Filter session keeps self-merging (#33,#42,#47,#52) driven by the owner's '/goal finish whatever is left to do' loop; only the owner can end that goal"
   ],
-  "X-notify": [
-   "Webhook HMAC signature not implemented yet: add as additive field"
-  ],
-  "B6": [
-   "B5b: fields present-but-not-fast: resolve fast-column needs per use (sorts/lifted ranges skip, term queries still use field)"
-  ],
-  "X-utp-wire": [
-   "DHT receive-loop demux + Node::utp() per PR #51 \"Shared-file edits still needed\" (crates/dht/src/node/{mod,actor}.rs, dht Cargo.toml); hold until M4 #48 merges (touches DHT). lodestar wiring (FetchOptions::utp, metrics utp stats, uTP settings flag) goes with B2. Docs \u00a713/\u00a76 update."
-  ],
-  "D-docker-followups": [
-   "packaging/unraid/lodestar.xml ExtraParams --user 99:100 (X-pack-static owner)",
-   "No LICENSE file: owner to choose a licence (image label NOASSERTION)"
-  ],
-  "polish": [
-   "first-run log says \"open http://0.0.0.0:8090/\": print a reachable address or \"this host\" (lodestar services.rs)"
-  ],
-  "M4-48": [
-   "#48 rewrites crates/search index/query/compile/filter/sorted; main has since gained B0,B1,B5b (+B5a soon): #48 needs a large merge of main before it can land"
-  ],
-  "flaky": [
-   "2026-10-22 11:13 Windows: search/tests/rebuild.rs searches_keep_working_through_a_rebuild_and_the_swap timed out (rebuild never finished in 30s) on PR #61 run 39768313014. Hypothesis: SRWLock writer starvation by spinning readers of Serving RwLock. Routed to B5a to root-cause.",
-   "11:22 failed again on PR #62 (job 119791380998): now consistent; asked B5a for a separate fix PR slice/B5a-swapfix first",
-   "11:48 root cause per B5a: finishing rename refused on Windows (scanner holds files) -> Failed phase, rebuilding() stays true. Fix PR #65.",
-   "12:59 swap fix #65 merged; Windows rebuild test green on #64 and #65 runs"
-  ],
-  "posthoc_52_54": "Reviewed 14:00: FOLLOW-UP. Blocking: Is-adult class rule skips CS-5 core (worker.rs prepare_one). Also preview job slot leak/cap, requeue lock+chunking, class-rule race, /classify lock, class-rule cost cap, \u00a716. Sent to filter session session_01N83eB81W8xkqJgXiD7JLM3 for PR on fix/m4-class-rules (runner merges). Bench addition after F1b. | 14:26 fix PR #68 (fix/m4-class-rules) opened; reviewer started (incl. stored-torrent Is-adult re-filter gap). | 14:50 #68 round 1 FIX: stored-torrent Is-adult relabel skips CS-5 (confirmed) + clippy fetch_update; chunk mark_unenriched_after; no-index stale rows. | 15:18 #68 round 2 MERGE (verifier); budget re-run spent; merge if green else hold for F1b. Follow-up PR fix/m4-adult-followups requested (parser re-derive relabel, correction lost on quarantine expiry, polish). | 15:29 #68 MERGED as d35f8ee (budget passed on re-run). Follow-up fix/m4-adult-followups started. | 15:45 follow-up PR #70 opened; reviewer started (check non-expiring correction holds vs owner decisions). | 16:25 #70 review: OWNER -> owner chose (b) tombstone at purge; rework sent (qualifying holds only, release warning, queue paging, rule-removal release, tests, \u00a720.3/\u00a720.5.6). | 16:29 #70 reworked ec57e25 (option b); re-review started. | 17:00 #70 round 2 FIX: warning wording for rule-driven holds, CoreSwitch-off release test; chunk release_rules; preview count; FalsePositive warning; list adult tombstones.",
-  "settings_form_patch_changed_only": "S-settings-1 brief: settings forms must PATCH only changed fields (re-saving dht_port moves every DHT bind to it).",
-  "b5a_polish": "B5a polish: replace cancelled_after_30ms in exact-count test with tripwire; wait_for in expired_leases_are_swept test; join rebuild thread if sweeper spawn fails. Fold into B5c (B6 brief did not include it) (crates/search owners).",
-  "w7cd_s16": "Runner to add \u00a716 entries suggested in PR #78 (W7cd) after merge.",
-  "reviewer_shared_target": "Do not share CARGO_TARGET_DIR across reviewer worktrees: test fixture paths (CARGO_MANIFEST_DIR) and workspace artifacts collide. One target per reviewer; clean up after.",
-  "token_gap_toast": "W7ab: no toast width/duration token; local props from --row-height-comfortable and --duration-banner. Record in \u00a716 token gaps.",
-  "pr80_baselines": "#80: artifact host blocked by proxy (blob.core.windows.net 403). Workflow commit-back job was denied by the auto-mode classifier (write token in CI). Needs owner: import tokens-{light,dark}-linux.png from run 39824206645 artifact 'snapshot-baselines' + delete marker, or approve the commit-back job. DO NOT merge #80 with the marker (it disables visual regression repo-wide).",
-  "pw_port": "playwright.config.ts hard-codes port 4173 + reuseExistingServer outside CI; parallel worktrees cross-talk. Small follow-up (W6 owner area): read the port from an env var (e.g. PW_PORT) and add --strictPort.",
-  "ping_on_merge": {
-   "#80": [
-    "W7e session_01KbNDuqr2bBED88auAfEkNp",
-    "W7ab session_01PZaAbtPHeB2SiUMG9VFpth",
-    "W7cd session_016RoHWZ8Vbbs5moJ2c2fHqS"
-   ],
-   "#76": [
-    "W7e (move showcase to src/dev-routes/ui/charts)",
-    "W7cd (adopt dev-routes)"
-   ],
-   "#72": [
-    "done 19:17: B13, B6, Q-docs, B14, R-docs told; B4b brief pending"
-   ]
+  "runner_prs": {
+    "34": "merged",
+    "39": "merged 07:43",
+    "75": "merged 51d3a9d 18:52",
+    "80": "open: token role utilities (@theme inline reference)",
+    "81": "open: secure_delete (owner decision)"
   },
-  "tantivy_deleted_names": "Deleted torrents' names stay in Tantivy segment files until merge. Follow-up after B6: on delete_torrents, force-merge segments holding deleted docs (rare path). In the spirit of owner decision 'deleted data is overwritten' (\u00a72.17). (noted in #81 body as follow-up)",
-  "w7ab_css_growth": "Record in \u00a716: daisyUI component CSS for the primitives adds ~5.6 KB gz to first-load CSS (11.89 -> 17.48 KB); accepted by runner (one global Tailwind sheet; screens need it). CSS headroom ~2.2 KB: watch W7cd/W7e/screens.",
-  "runtime_chunk_growth": "W7cd measured: showcase pages using transitions/bind:offsetHeight/snippets grow the shared Svelte runtime chunk 16.8->21.7 kB gz that search loads. Screens using these primitives will do the same: budget JS 45 kB has ~12 kB headroom; watch in W9/search screens, keep transitions lazy where possible.",
-  "b6_from_b17_review": "B17 reviewer: B6 must AND visibility onto every own-clause variant (filters param), test Adult hidden + type:movie selection -> no adult in type facet, and check the lease fingerprint/visibility when a cursor lease is passed (no pre-toggle lease). Also Not-adult with leftover adult_kind tag matches adult:<kind> - B6 adult facet aware.",
-  "unenriched_adult_gap": "Unenriched imports/backfill aren't hidden by B17 (no type tag). Put in importer/backfill brief; consider raising with owner.",
-  "sse_crawler_paused": "B4 SSE crawler event lacks `paused` (B14 asked to add if cheap).",
-  "pr70_r3": "#70 MERGED fcf84d4 20:18.",
-  "near_followups": "F-near follow-ups: prefix/fuzzy words share the folded-join bug; NEAR ignores CSX-5 'Neutralize term'; plain word over-matches vs NEAR word; single-token NEAR quadratic window.",
-  "skills_repo_for_docs": "Docs slices + their reviewers need dvortsis/skills (documentation-skills scripts): attach via create_session sources or add_repo.",
-  "typed_held_reason": "Typed held-reason for subscriptions (instead of matching 'shrank' in sub.error) needs a schema change: fold into B8.",
-  "word_file_clause_1M": "search-bench 'word + file clause' misses 30 ms target at 1M (45 ms/5 seg, 108 ms/1 seg); gated at 200k. Track for M8 10M perf gates / B5c cache.",
-  "filter_quadratic": "F-perf follow-up (security): prefilter.rs Scan::other at_pos quadratic on non-ASCII; matcher.rs sequence() quadratic (phrases, multi-part words); NEAR per-place window scan -> precompute per-word place lists + binary search; cache sorted tokens per text. Launch after F-near merges.",
-  "b6_polish": "B6 polish deferred: lease.rs now() doc on node(); adult_kind stale-tag wording (unreachable today); Hours 2^16 cap test with real column; bin_of i64 clamp at import; golden note (BM25 avg length).",
-  "tailwind_scans_dev_routes": "Tailwind scans src/dev-routes, so showcase-only classes (grid-cols-2, self-start) land in production CSS. Project-wide follow-up: exclude src/dev-routes from the production Tailwind source set (@source not)."
- },
- "blocked_on_owner": [
-  "Modern DHT crawler architecture: waiting on an AskUserQuestion",
-  "F1b #66: sign-off on calibrated filter budget (50us at reference runner speed, scale up to 1.6x on slower runners)"
- ],
- "launches_today": 8,
- "last_heartbeat": "2026-10-22T20:39Z",
- "owner_questions": [
-  "F1 budget scope: gate covers cheaply-rejectable rule shapes (10% = 40.8 us on runner). Shapes the cheap check cannot decide cost more at 10% of rules (VM: NEAR/1 ~450-500, negation ~140, fuzzy ~125, prefix ~110 us; runner ~1.4x faster). Should those shapes be gated at 50 us too?",
-  "Filter budget hardware: 50 us has no reference machine; gate now calibrated to the runner F1 measured on (10%=40.8 us), slower runners scale up to 1.6x. Confirm or set a reference machine.",
-  "Migration snapshots (<db>.pre-vN.db, VACUUM INTO before each migration, kept forever) retain quarantine names purged later, defeating 'deleted data is overwritten'. Recommend: run the same expiry purge on snapshots and delete them after 90 days (rollback window).",
-  "F-near: multi-token NEAR words now match where they never did; stored CSX-5 overrides/exceptions/Always-allow using such words would release more without a new impact preview (\u00a71.8.6). Pre-release, no installs. Recommend: note only, no re-preview machinery.",
-  "Release signing hygiene (owner actions): restrict the GitHub `release` environment to tags with a required reviewer (nightlies signed from main expose the key to any merged workflow change), and consider a separate nightly key trusted only on Nightly.",
-  "Auto-update recovery key: compromise/rotation of the offline recovery key. Recommend: accepted risk (offline, password-protected; remedy = new build + manual update), no recovery-key rotation statement. Or design a self-signed sequenced recovery-key statement."
- ],
- "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
- "runner_prs_open": {
-  "80": "token classes: owner imported baselines b2b46df; CI running; merge on green",
-  "81": "secure-delete R4 fixes c9cf868 (PASSIVE+100ms TRUNCATE, purge always scrubs, release_many test); needs fresh review",
-  "90": "CI speed + docs/decisions; review fixes 77a2f6a; needs re-review"
- },
- "pull_forward": "After #90 merges: M6 packaging (WiX MSI, tarball, systemd, release matrix; sonnet). After B6: B5c, B7, tantivy delete force-merge. After F-near: F-perf. Relevance set (M8) any time. Install guide (docs/user) after UI unless owner wants earlier."
+  "m4_plan": "M4 swarm: #32 now; PR2 after #32 (scrape scheduler, search on hot columns, API/binary wiring) touching crates/api/**, crates/lodestar/src/{main,http,metrics,config}.rs, crates/search/src/{index,lib,compile,filter,sorted,query}.rs \u2014 overlaps B0/B5b/B5a/B6; M4 session merges main over them. It will message the runner when M4 is complete.",
+  "audit_2026_10_22": {
+    "result": "no owner-decision violations",
+    "actions": {
+      "W1 #43": "contract values exact; neutral-content >=4.5; web/themes/<family>.json",
+      "W3 #44": "cut to ~1.5 MB; one script line; \u00a716 entry",
+      "W4 #41": "npm plugin instead of vendoring; glossary keys; list shared-file edits",
+      "W8 #40": "\u00a716 entry",
+      "M4 filter #33/#42": "V7 for #42; no budget env loosening; packs per \u00a720.6; floor add-only from config; subscriptions off by default + strictness warning",
+      "new slices": "B17 adult default, S-blocklists; X-clients -> Opus"
+    }
+  },
+  "m4_prs": {
+    "32": "merged 05:36 by M4 session",
+    "33": "merged 05:51 by filter session (owner decisions follow-up requested)",
+    "42": "MERGED 06:07 by the filter session despite the runner's request; packs on by default (contradicts owner \u00a72.8) and LODESTAR_BUDGET_US kept. Follow-up fix PR requested 06:14; owner told.",
+    "47": "merged 06:19 by the filter session (V8 class_corrections)",
+    "48": "review round 1: merge main (B0 layout), 10M exit evidence, scheduler fixes",
+    "52": "MERGED by the filter session (self-merge again), conflicts with B0"
+  },
+  "heartbeats": 4,
+  "reviews_in_flight": {
+    "81": "runner secure-delete R3 (d2263b9)"
+  },
+  "carry_forward": {
+    "next-bans-touch": [
+      "bans.mjs:241 accept '=' so class:pb-11={x} is caught",
+      "fonts.test.ts imports fontverter (transitive dep): comment or parse otherwise"
+    ],
+    "B1-polish": [
+      "golden: add stemmed:true and non-null hash_v2 fixtures",
+      "explicit operation_ids if not done in #57",
+      "add OpenAPI examples to utoipa schemas (W6 mock defaults; 0/24 ops have examples)"
+    ],
+    "X-notify": [
+      "Webhook HMAC signature not implemented yet: add as additive field"
+    ],
+    "B6": [
+      "B5b: fields present-but-not-fast: resolve fast-column needs per use (sorts/lifted ranges skip, term queries still use field)"
+    ],
+    "X-utp-wire": [
+      "DHT receive-loop demux + Node::utp() per PR #51 \"Shared-file edits still needed\" (crates/dht/src/node/{mod,actor}.rs, dht Cargo.toml); hold until M4 #48 merges (touches DHT). lodestar wiring (FetchOptions::utp, metrics utp stats, uTP settings flag) goes with B2. Docs \u00a713/\u00a76 update."
+    ],
+    "D-docker-followups": [
+      "packaging/unraid/lodestar.xml ExtraParams --user 99:100 (X-pack-static owner)",
+      "No LICENSE file: owner to choose a licence (image label NOASSERTION)"
+    ],
+    "polish": [
+      "first-run log says \"open http://0.0.0.0:8090/\": print a reachable address or \"this host\" (lodestar services.rs)"
+    ],
+    "M4-48": [
+      "#48 rewrites crates/search index/query/compile/filter/sorted; main has since gained B0,B1,B5b (+B5a soon): #48 needs a large merge of main before it can land"
+    ],
+    "flaky": [
+      "2026-10-22 11:13 Windows: search/tests/rebuild.rs searches_keep_working_through_a_rebuild_and_the_swap timed out (rebuild never finished in 30s) on PR #61 run 39768313014. Hypothesis: SRWLock writer starvation by spinning readers of Serving RwLock. Routed to B5a to root-cause.",
+      "11:22 failed again on PR #62 (job 119791380998): now consistent; asked B5a for a separate fix PR slice/B5a-swapfix first",
+      "11:48 root cause per B5a: finishing rename refused on Windows (scanner holds files) -> Failed phase, rebuilding() stays true. Fix PR #65.",
+      "12:59 swap fix #65 merged; Windows rebuild test green on #64 and #65 runs"
+    ],
+    "posthoc_52_54": "Reviewed 14:00: FOLLOW-UP. Blocking: Is-adult class rule skips CS-5 core (worker.rs prepare_one). Also preview job slot leak/cap, requeue lock+chunking, class-rule race, /classify lock, class-rule cost cap, \u00a716. Sent to filter session session_01N83eB81W8xkqJgXiD7JLM3 for PR on fix/m4-class-rules (runner merges). Bench addition after F1b. | 14:26 fix PR #68 (fix/m4-class-rules) opened; reviewer started (incl. stored-torrent Is-adult re-filter gap). | 14:50 #68 round 1 FIX: stored-torrent Is-adult relabel skips CS-5 (confirmed) + clippy fetch_update; chunk mark_unenriched_after; no-index stale rows. | 15:18 #68 round 2 MERGE (verifier); budget re-run spent; merge if green else hold for F1b. Follow-up PR fix/m4-adult-followups requested (parser re-derive relabel, correction lost on quarantine expiry, polish). | 15:29 #68 MERGED as d35f8ee (budget passed on re-run). Follow-up fix/m4-adult-followups started. | 15:45 follow-up PR #70 opened; reviewer started (check non-expiring correction holds vs owner decisions). | 16:25 #70 review: OWNER -> owner chose (b) tombstone at purge; rework sent (qualifying holds only, release warning, queue paging, rule-removal release, tests, \u00a720.3/\u00a720.5.6). | 16:29 #70 reworked ec57e25 (option b); re-review started. | 17:00 #70 round 2 FIX: warning wording for rule-driven holds, CoreSwitch-off release test; chunk release_rules; preview count; FalsePositive warning; list adult tombstones.",
+    "settings_form_patch_changed_only": "S-settings-1 brief: settings forms must PATCH only changed fields (re-saving dht_port moves every DHT bind to it).",
+    "b5a_polish": "B5a polish: replace cancelled_after_30ms in exact-count test with tripwire; wait_for in expired_leases_are_swept test; join rebuild thread if sweeper spawn fails. Fold into B5c (B6 brief did not include it) (crates/search owners).",
+    "w7cd_s16": "Runner to add \u00a716 entries suggested in PR #78 (W7cd) after merge.",
+    "reviewer_shared_target": "Do not share CARGO_TARGET_DIR across reviewer worktrees: test fixture paths (CARGO_MANIFEST_DIR) and workspace artifacts collide. One target per reviewer; clean up after.",
+    "token_gap_toast": "W7ab: no toast width/duration token; local props from --row-height-comfortable and --duration-banner. Record in \u00a716 token gaps.",
+    "pr80_baselines": "#80: artifact host blocked by proxy (blob.core.windows.net 403). Workflow commit-back job was denied by the auto-mode classifier (write token in CI). Needs owner: import tokens-{light,dark}-linux.png from run 39824206645 artifact 'snapshot-baselines' + delete marker, or approve the commit-back job. DO NOT merge #80 with the marker (it disables visual regression repo-wide).",
+    "pw_port": "playwright.config.ts hard-codes port 4173 + reuseExistingServer outside CI; parallel worktrees cross-talk. Small follow-up (W6 owner area): read the port from an env var (e.g. PW_PORT) and add --strictPort.",
+    "ping_on_merge": {
+      "#80": [
+        "W7e session_01KbNDuqr2bBED88auAfEkNp",
+        "W7ab session_01PZaAbtPHeB2SiUMG9VFpth",
+        "W7cd session_016RoHWZ8Vbbs5moJ2c2fHqS"
+      ],
+      "#76": [
+        "W7e (move showcase to src/dev-routes/ui/charts)",
+        "W7cd (adopt dev-routes)"
+      ],
+      "#72": [
+        "done 19:17: B13, B6, Q-docs, B14, R-docs told; B4b brief pending"
+      ]
+    },
+    "tantivy_deleted_names": "Deleted torrents' names stay in Tantivy segment files until merge. Follow-up after B6: on delete_torrents, force-merge segments holding deleted docs (rare path). In the spirit of owner decision 'deleted data is overwritten' (\u00a72.17). (noted in #81 body as follow-up)",
+    "w7ab_css_growth": "Record in \u00a716: daisyUI component CSS for the primitives adds ~5.6 KB gz to first-load CSS (11.89 -> 17.48 KB); accepted by runner (one global Tailwind sheet; screens need it). CSS headroom ~2.2 KB: watch W7cd/W7e/screens.",
+    "runtime_chunk_growth": "W7cd measured: showcase pages using transitions/bind:offsetHeight/snippets grow the shared Svelte runtime chunk 16.8->21.7 kB gz that search loads. Screens using these primitives will do the same: budget JS 45 kB has ~12 kB headroom; watch in W9/search screens, keep transitions lazy where possible.",
+    "b6_from_b17_review": "B17 reviewer: B6 must AND visibility onto every own-clause variant (filters param), test Adult hidden + type:movie selection -> no adult in type facet, and check the lease fingerprint/visibility when a cursor lease is passed (no pre-toggle lease). Also Not-adult with leftover adult_kind tag matches adult:<kind> - B6 adult facet aware.",
+    "unenriched_adult_gap": "Unenriched imports/backfill aren't hidden by B17 (no type tag). Put in importer/backfill brief; consider raising with owner.",
+    "sse_crawler_paused": "B4 SSE crawler event lacks `paused` (B14 asked to add if cheap).",
+    "pr70_r3": "#70 MERGED fcf84d4 20:18.",
+    "near_followups": "F-near follow-ups: prefix/fuzzy words share the folded-join bug; NEAR ignores CSX-5 'Neutralize term'; plain word over-matches vs NEAR word; single-token NEAR quadratic window.",
+    "skills_repo_for_docs": "Docs slices + their reviewers need dvortsis/skills (documentation-skills scripts): attach via create_session sources or add_repo.",
+    "typed_held_reason": "Typed held-reason for subscriptions (instead of matching 'shrank' in sub.error) needs a schema change: fold into B8.",
+    "word_file_clause_1M": "search-bench 'word + file clause' misses 30 ms target at 1M (45 ms/5 seg, 108 ms/1 seg); gated at 200k. Track for M8 10M perf gates / B5c cache.",
+    "filter_quadratic": "F-perf follow-up (security): prefilter.rs Scan::other at_pos quadratic on non-ASCII; matcher.rs sequence() quadratic (phrases, multi-part words); NEAR per-place window scan -> precompute per-word place lists + binary search; cache sorted tokens per text. Launch after F-near merges.",
+    "b6_polish": "B6 polish deferred: lease.rs now() doc on node(); adult_kind stale-tag wording (unreachable today); Hours 2^16 cap test with real column; bin_of i64 clamp at import; golden note (BM25 avg length).",
+    "tailwind_scans_dev_routes": "Tailwind scans src/dev-routes, so showcase-only classes (grid-cols-2, self-start) land in production CSS. Project-wide follow-up: exclude src/dev-routes from the production Tailwind source set (@source not)."
+  },
+  "blocked_on_owner": [
+    "Modern DHT crawler architecture: waiting on an AskUserQuestion",
+    "F1b #66: sign-off on calibrated filter budget (50us at reference runner speed, scale up to 1.6x on slower runners)"
+  ],
+  "launches_today": 8,
+  "last_heartbeat": "2026-10-22T20:39Z",
+  "owner_questions": [
+    "F1 budget scope: gate covers cheaply-rejectable rule shapes (10% = 40.8 us on runner). Shapes the cheap check cannot decide cost more at 10% of rules (VM: NEAR/1 ~450-500, negation ~140, fuzzy ~125, prefix ~110 us; runner ~1.4x faster). Should those shapes be gated at 50 us too?",
+    "Filter budget hardware: 50 us has no reference machine; gate now calibrated to the runner F1 measured on (10%=40.8 us), slower runners scale up to 1.6x. Confirm or set a reference machine.",
+    "Migration snapshots (<db>.pre-vN.db, VACUUM INTO before each migration, kept forever) retain quarantine names purged later, defeating 'deleted data is overwritten'. Recommend: run the same expiry purge on snapshots and delete them after 90 days (rollback window).",
+    "F-near: multi-token NEAR words now match where they never did; stored CSX-5 overrides/exceptions/Always-allow using such words would release more without a new impact preview (\u00a71.8.6). Pre-release, no installs. Recommend: note only, no re-preview machinery.",
+    "Release signing hygiene (owner actions): restrict the GitHub `release` environment to tags with a required reviewer (nightlies signed from main expose the key to any merged workflow change), and consider a separate nightly key trusted only on Nightly.",
+    "Auto-update recovery key: compromise/rotation of the offline recovery key. Recommend: accepted risk (offline, password-protected; remedy = new build + manual update), no recovery-key rotation statement. Or design a self-signed sequenced recovery-key statement."
+  ],
+  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
+  "runner_prs_open": {
+    "80": "token classes: owner imported baselines b2b46df; CI running; merge on green",
+    "81": "secure-delete R4 fixes c9cf868 (PASSIVE+100ms TRUNCATE, purge always scrubs, release_many test); needs fresh review",
+    "90": "CI speed + docs/decisions; review fixes 77a2f6a; needs re-review"
+  },
+  "pull_forward": "After #90 merges: M6 packaging (WiX MSI, tarball, systemd, release matrix; sonnet). After B6: B5c, B7, tantivy delete force-merge. After F-near: F-perf. Relevance set (M8) any time. Install guide (docs/user) after UI unless owner wants earlier."
 }
