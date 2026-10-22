@@ -89,13 +89,13 @@
    "notes": "merged after round 2"
   },
   "W1b": {
-   "status": "pending",
+   "status": "in_review",
    "model": "haiku",
-   "session": null,
-   "pr": null,
+   "session": "session_01B4Sk9GZoxWRASeUcVB2C9W",
+   "pr": 58,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": "ready once C1 (#37) merges (doc-only fix pending)"
+   "notes": "PR #58 opened 08:43; 23 theme families; review pending"
   },
   "W3": {
    "status": "in_review",
