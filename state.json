@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-22T05:59:00Z",
+ "updated_at": "2026-10-22T06:06:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 12
@@ -85,8 +85,8 @@
    "session": "session_013n3VVF4K4QtH4YeGKjACBY",
    "pr": 43,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": "audit notes sent; full review after fixes"
+   "review_rounds": 1,
+   "notes": "round 1 changes: merge conflict \u00a716, full 36-key golden, prepaint fallback, PR description"
   },
   "W1b": {
    "status": "pending",
@@ -139,8 +139,8 @@
    "session": "session_0121PwTE5wgafTpKrc4nNuuz",
    "pr": 40,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": "audit notes sent; full review after fixes"
+   "review_rounds": 1,
+   "notes": "round 1 changes: timeZone fallback, drop sampled flag, bytes digits after rounding"
   },
   "B5a": {
    "status": "pending",
@@ -652,8 +652,8 @@
    "session": "session_0159tQEctmkzsDhjisVQgZ3b",
    "pr": 45,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": ""
+   "review_rounds": 1,
+   "notes": "round 1 changes: worker PostArgs, 6881/tcp planned, hot/cold planned"
   },
   "X-clients": {
    "status": "pending",
@@ -713,7 +713,7 @@
   }
  },
  "watch_policy": "Owner asked the runner to keep an eye on and manage these sessions: each heartbeat check status; report a pending permission prompt to the owner (runner cannot approve); nudge an idle session with remaining work; flag conflicts with slice ownership and migration order.",
- "migration_order": "V4 filter, V5 swarm (#32 merged), V6 subscriptions (#33 merged), V7 filter rules (#42), M4 PR2 and M5 (B8) take V8+",
+ "migration_order": "V4 filter, V5 swarm (#32 merged), V6 subscriptions (#33 merged), V7 filter rules (#42), V8 class_corrections (#47), V9 reserved for M4 PR2, then M5 (B8). The runner assigns numbers (both M4 sessions told 06:06).",
  "decisions": [
   "2026-10-22 spacing: keep Tailwind v4 default --spacing (p-4=16px); only utility steps matching the \u00a710.2 ramp are allowed; W2 extends the ban check to off-ramp steps",
   "2026-10-22 owner: the design decided in the 'Modern DHT crawler architecture' session (recorded in docs/architecture.md) is the primary design strategy; ui-design-skills only fills gaps. Encoded in runner/standards.md (PR #39).",
