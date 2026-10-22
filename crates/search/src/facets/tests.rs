@@ -184,6 +184,7 @@ fn ids_of(index: &SearchIndex, node: &Node) -> Vec<u64> {
     index
         .matching_ids(&index.query(node, NOW), usize::MAX)
         .unwrap()
+        .0
 }
 
 fn total(index: &SearchIndex, node: &Node) -> usize {
