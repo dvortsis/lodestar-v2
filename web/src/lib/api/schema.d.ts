@@ -1358,6 +1358,11 @@ export interface components {
             trackers_reporting: number | null;
         };
         /**
+         * @description A note on what a search left out.
+         * @enum {string}
+         */
+        SearchNotice: "adult_hidden";
+        /**
          * @description `POST /search`'s body, and `GET /search`'s parameters (where `ast` is
          *     refused: send an AST with POST).
          */
@@ -1417,6 +1422,13 @@ export interface components {
              *     256 characters, valid for 10 minutes after its last use.
              */
             next_cursor: string | null;
+            /**
+             * @description What the server left out of these results, for the UI to say:
+             *     `adult_hidden` when the query asks for Adult (`type:adult`,
+             *     `adult:…`) while "Show adult content" is off, so it matched
+             *     nothing adult (§20.9).
+             */
+            notices: components["schemas"]["SearchNotice"][];
             /** @description Hits before this page. */
             offset: number;
             /**

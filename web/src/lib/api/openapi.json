@@ -3718,6 +3718,13 @@
           }
         }
       },
+      "SearchNotice": {
+        "type": "string",
+        "description": "A note on what a search left out.",
+        "enum": [
+          "adult_hidden"
+        ]
+      },
       "SearchRequest": {
         "type": "object",
         "description": "`POST /search`'s body, and `GET /search`'s parameters (where `ast` is\nrefused: send an AST with POST).",
@@ -3803,6 +3810,7 @@
           "hits",
           "limit",
           "next_cursor",
+          "notices",
           "offset",
           "stemmed",
           "took_ms",
@@ -3830,6 +3838,13 @@
               "null"
             ],
             "description": "Pass as `cursor` for the next page, read from the same index\nsnapshot (§8); null on the last page. Opaque, URL-safe, at most\n256 characters, valid for 10 minutes after its last use."
+          },
+          "notices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchNotice"
+            },
+            "description": "What the server left out of these results, for the UI to say:\n`adult_hidden` when the query asks for Adult (`type:adult`,\n`adult:…`) while \"Show adult content\" is off, so it matched\nnothing adult (§20.9)."
           },
           "offset": {
             "type": "integer",

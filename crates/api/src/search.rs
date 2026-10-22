@@ -10,6 +10,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::routing::get;
 use hmac::{Hmac, KeyInit, Mac};
 use lodestar_classify::{Category, Composition, Record};
+use lodestar_search::query::TagKey;
 use lodestar_search::{
     CancelToken, Cursor, Error as SearchError, Lease, Node, ParseError, Sort, Start, parse,
 };
@@ -19,7 +20,8 @@ use sha2::{Digest, Sha256};
 use utoipa::OpenApi;
 
 use crate::dto::search::{
-    CompositionShare, ParseQuery, ParseResponse, SearchHit, SearchRequest, SearchResponse,
+    CompositionShare, ParseQuery, ParseResponse, SearchHit, SearchNotice, SearchRequest,
+    SearchResponse,
 };
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{Json, Query, same_origin_json};
@@ -37,6 +39,111 @@ pub const MAX_LIMIT: usize = 200;
 pub const MAX_WINDOW: usize = 10_000;
 /// Matched files listed per hit for a query with `file:(…)`.
 pub const MATCHED_FILES: usize = 20;
+
+/// Whether "Show adult content" is on (§20.9), read live: the server
+/// hands in a reader over the settings registry's `content` channel, so
+/// a change applies to the next request with no restart. The default,
+/// for tests and tools, keeps Adult hidden.
+#[derive(Clone, Default)]
+pub struct AdultVisibility(Option<Arc<dyn Fn() -> bool + Send + Sync>>);
+
+impl AdultVisibility {
+    /// Follows `shown`, called once per request.
+    pub fn follow(shown: impl Fn() -> bool + Send + Sync + 'static) -> AdultVisibility {
+        AdultVisibility(Some(Arc::new(shown)))
+    }
+
+    /// Whether Adult is shown now.
+    pub fn shown(&self) -> bool {
+        self.0.as_ref().is_some_and(|f| f())
+    }
+}
+
+impl std::fmt::Debug for AdultVisibility {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("AdultVisibility")
+            .field(&self.shown())
+            .finish()
+    }
+}
+
+/// What a search may show of the index, besides what the query asks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Visibility {
+    /// Torrents a filter rule hid are included (`hidden=true`, §20.3).
+    pub hidden: bool,
+    /// Adult torrents are included ("Show adult content", §20.9).
+    pub adult: bool,
+}
+
+/// A query as it runs against the index, with what it left out.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BaseQuery {
+    pub node: Node,
+    /// What the response tells the user about it.
+    pub notices: Vec<SearchNotice>,
+}
+
+/// The query every count of the index runs (search, totals, exact
+/// counts, cursors and facets): `ast` without the torrents a filter rule
+/// hid unless `v.hidden` (or it asks about them itself), and without
+/// Adult unless `v.adult`.
+///
+/// Adult is left out whatever the query asks: `type:adult` or `adult:…`
+/// while it's hidden matches nothing and carries the `adult_hidden`
+/// notice. Adult follows the stored, effective class (`type:adult` in
+/// the index), so your Is adult / Not adult corrections apply once the
+/// live indexer picks them up.
+pub fn base_query(ast: &Node, v: Visibility) -> BaseQuery {
+    let mut node = if v.hidden {
+        ast.clone()
+    } else {
+        ast.clone().without_hidden()
+    };
+    let mut notices = Vec::new();
+    if !v.adult {
+        if asks_for_adult(ast, true) {
+            notices.push(SearchNotice::AdultHidden);
+        }
+        let no_adult = Node::Not {
+            of: Box::new(Node::Tag {
+                key: TagKey::Type,
+                any: vec![ADULT.to_string()],
+            }),
+        };
+        node = match node {
+            Node::All => no_adult,
+            Node::And { mut of } => {
+                of.push(no_adult);
+                Node::And { of }
+            }
+            other => Node::And {
+                of: vec![other, no_adult],
+            },
+        };
+    }
+    BaseQuery { node, notices }
+}
+
+/// `type:adult`, as the index stores it.
+const ADULT: &str = "adult";
+
+/// Whether a clause that isn't negated asks for Adult (`type:adult`,
+/// `adult:…`). `-type:adult` doesn't.
+fn asks_for_adult(node: &Node, positive: bool) -> bool {
+    match node {
+        Node::Tag {
+            key: TagKey::Type,
+            any,
+        } => positive && any.iter().any(|t| t == ADULT),
+        Node::Tag {
+            key: TagKey::Adult, ..
+        } => positive,
+        Node::And { of } | Node::Or { of } => of.iter().any(|n| asks_for_adult(n, positive)),
+        Node::Not { of } => asks_for_adult(of, !positive),
+        _ => false,
+    }
+}
 
 pub fn routes() -> Router<ApiState> {
     auth::protected(
@@ -190,12 +297,15 @@ async fn run_search(
         )
         .field("offset"));
     }
-    let shown = if p.hidden.unwrap_or(false) {
-        ast.clone()
-    } else {
-        ast.clone().without_hidden()
+    let visibility = Visibility {
+        hidden: p.hidden.unwrap_or(false),
+        adult: s.adult.shown(),
     };
-    let fingerprint = fingerprint(&shown, sort);
+    let BaseQuery {
+        node: shown,
+        notices,
+    } = base_query(&ast, visibility);
+    let fingerprint = fingerprint(&shown, visibility, sort);
     let client = client_of(headers);
     let cursor = p
         .cursor
@@ -251,6 +361,12 @@ async fn run_search(
         for h in &page.hits {
             // A torrent deleted since indexing just drops out of the page.
             if let Some(row) = store.torrent(h.id as i64).map_err(internal)? {
+                let enrichment = store.enrichment(row.id).map_err(internal)?;
+                // A correction to Is adult reaches the index at the next
+                // commit; until then the stored class still keeps it out.
+                if !visibility.adult && enrichment.as_ref().is_some_and(is_adult) {
+                    continue;
+                }
                 let matched_files = if ast.has_file_clause() {
                     // Positions in the torrent's file list (§8), from the
                     // lease's index.
@@ -264,7 +380,7 @@ async fn run_search(
                     None
                 };
                 let mut hit = torrents::hit(&row, h.score, matched_files);
-                enrich(&mut hit, store.enrichment(row.id).map_err(internal)?);
+                enrich(&mut hit, enrichment);
                 hits.push(hit);
             }
         }
@@ -273,6 +389,7 @@ async fn run_search(
             hits,
             limit,
             next_cursor,
+            notices,
             offset: served as usize,
             stemmed: lease.stemmed(),
             took_ms: started.elapsed().as_secs_f64() * 1000.0,
@@ -310,12 +427,14 @@ fn bad_cursor() -> ApiError {
     .field("cursor")
 }
 
-/// The search a cursor continues: the query as run (hidden torrents
-/// included or not) and the sort.
-fn fingerprint(shown: &Node, sort: Sort) -> [u8; 8] {
+/// The search a cursor continues: the query as run, what it may show
+/// (hidden torrents, Adult) and the sort. A cursor from before "Show
+/// adult content" changed is refused rather than reading its old
+/// snapshot.
+fn fingerprint(shown: &Node, v: Visibility, sort: Sort) -> [u8; 8] {
     let mut h = Sha256::new();
-    h.update(b"lodestar-search-v1|");
-    h.update(format!("{shown:?}|{sort:?}").as_bytes());
+    h.update(b"lodestar-search-v2|");
+    h.update(format!("{shown:?}|{v:?}|{sort:?}").as_bytes());
     let d = h.finalize();
     let mut out = [0; 8];
     out.copy_from_slice(&d[..8]);
@@ -412,7 +531,8 @@ fn open_cursor(text: &str, fingerprint: &[u8; 8]) -> ApiResult<Cursor> {
     if cursor.fingerprint != *fingerprint {
         return Err(ApiError::bad_request(
             "bad_cursor",
-            "That cursor belongs to another search: send the same q, sort and hidden with it.",
+            "That cursor belongs to another search: send the same q, sort and hidden with it. \
+             If Show adult content changed since, start the search again.",
         )
         .field("cursor"));
     }
@@ -464,6 +584,12 @@ fn shares(c: &Composition) -> Vec<CompositionShare> {
             })
         })
         .collect()
+}
+
+/// Whether a stored classification is Adult (its effective class, your
+/// correction included).
+pub(crate) fn is_adult(e: &Enriched) -> bool {
+    e.content_type == lodestar_classify::ContentType::Adult.code()
 }
 
 /// Fills a hit's classification fields (`docs/metrics.md` §7.1) from the
