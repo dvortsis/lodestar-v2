@@ -11,16 +11,14 @@ services:
     # more than Docker's default 10 s.
     stop_grace_period: 60s
 
-    # The account the process runs as. The image has no shell, so it can't
-    # switch users itself yet (PUID/PGID are not supported): pick the
-    # account here. Without this line it runs as distroless "nonroot"
-    # (65532:65532). The data directory must be writable by this account.
-    # To run as another account, use a bind mount owned by it (for 1000:1000:
-    # `mkdir data && sudo chown 1000:1000 data`, `- ./data:/data` below). A
-    # named volume is created owned by 65532.
-    user: "65532:65532"
-
     environment:
+      # The user and group Lodestar runs as. It starts as root only to make
+      # /data theirs, then gives root up for good. The default, 65532, is
+      # the safe choice: leave these commented out unless the files in /data
+      # must belong to a particular account (find its IDs with `id`).
+      # Never use 0: that's root, which is unsafe, and Lodestar refuses it.
+      # PUID: "65532"
+      # PGID: "65532"
       # Accepted, but log timestamps are UTC today (the tracing timer is UTC).
       TZ: Etc/UTC
       # LODESTAR_INTENSITY: balanced   # low | balanced | aggressive

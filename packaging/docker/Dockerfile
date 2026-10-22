@@ -82,7 +82,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && mkdir -p /out/data
 
 # ---- 3. Runtime ------------------------------------------------------------
-# distroless/static-debian12:nonroot (uid/gid 65532), no shell.
+# distroless/static-debian12:nonroot, no shell. It starts as root (USER below)
+# only so the binary can apply PUID/PGID: before it reads the config, binds a
+# socket or starts a thread, it hands /data to PUID:PGID (default 65532,
+# "nonroot") and drops root for good (crates/lodestar/src/privdrop.rs).
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 
 ARG VERSION=dev
@@ -99,7 +102,8 @@ LABEL org.opencontainers.image.title="Lodestar" \
 
 COPY --from=build /out/lodestar /lodestar
 # An empty /data owned by nonroot: a new named volume copies this ownership,
-# so the default user can write to it. (Bind mounts keep the host's owner.)
+# so the default PUID/PGID start without a chown. (Bind mounts keep the host's
+# owner until the binary changes it.)
 COPY --from=build --chown=65532:65532 /out/data /data
 
 # 0.0.0.0 so the published port reaches it (config.rs: a SocketAddr);
@@ -107,10 +111,15 @@ COPY --from=build --chown=65532:65532 /out/data /data
 ENV LODESTAR_DATA_DIR=/data \
     LODESTAR_HTTP_BIND=0.0.0.0:8090
 
+# Root, so PUID/PGID can be applied; the binary drops it at once. `--user`
+# (or compose `user:`) starts it unprivileged instead, which skips the drop.
+USER 0:0
+
 VOLUME /data
 EXPOSE 8090/tcp 6881/udp 6881/tcp
 
-# Exec form: there is no shell in this image.
+# Exec form: there is no shell in this image. It runs as the image's user
+# (root) and drops to PUID/PGID like the server; it needs no privilege.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD ["/lodestar", "healthcheck"]
 
