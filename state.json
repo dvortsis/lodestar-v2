@@ -116,13 +116,13 @@
       "notes": "merged 09:40 as 2352de1 (#41)"
     },
     "W6": {
-      "status": "in_review",
+      "status": "merged",
       "model": "sonnet",
       "session": "session_01QpHMCsgJt8gZPg3S2SnCGv",
       "pr": 61,
       "attempt": 1,
       "review_rounds": 1,
-      "notes": "13:44: W6 pushed de6a17d (256 baselines, .update-snapshots removed) + main merge 43c57b8. Asked session how baselines were obtained (policy check). filter budget red (base red): re-run once after run 39789471408 completes (rerun refused while running). | 13:53 provenance OK: owner supplied zip (sha256 ebbfc84e\u2026 = artifact digest); e2e compared, 456 passed. Merge after CI + one budget re-run. | 14:19 budget re-run failed again (spent). Holding for F1b; commented on PR; owner pushed 14:19. | 15:40 asked session to merge main (moved: #64,#67,#68) for fresh CI | new head e76feec (main merged); check 16:08"
+      "notes": "13:44: W6 pushed de6a17d (256 baselines, .update-snapshots removed) + main merge 43c57b8. Asked session how baselines were obtained (policy check). filter budget red (base red): re-run once after run 39789471408 completes (rerun refused while running). | 13:53 provenance OK: owner supplied zip (sha256 ebbfc84e\u2026 = artifact digest); e2e compared, 456 passed. Merge after CI + one budget re-run. | 14:19 budget re-run failed again (spent). Holding for F1b; commented on PR; owner pushed 14:19. | 15:40 asked session to merge main (moved: #64,#67,#68) for fresh CI | new head e76feec (main merged); check 16:08 | merged 16:00 as 4d3a020 (all green incl. budget on fresh run)"
     },
     "W2": {
       "status": "merged",
@@ -197,31 +197,31 @@
       "notes": ""
     },
     "W7ab": {
-      "status": "pending",
+      "status": "running",
       "model": "sonnet",
-      "session": null,
+      "session": "session_01PZaAbtPHeB2SiUMG9VFpth",
       "pr": null,
-      "attempt": 0,
+      "attempt": 1,
       "review_rounds": 0,
-      "notes": ""
+      "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys"
     },
     "W7cd": {
-      "status": "pending",
+      "status": "running",
       "model": "sonnet",
-      "session": null,
+      "session": "session_016RoHWZ8Vbbs5moJ2c2fHqS",
       "pr": null,
-      "attempt": 0,
+      "attempt": 1,
       "review_rounds": 0,
-      "notes": ""
+      "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys"
     },
     "W7e": {
-      "status": "pending",
+      "status": "running",
       "model": "sonnet",
-      "session": null,
+      "session": "session_01KbNDuqr2bBED88auAfEkNp",
       "pr": null,
-      "attempt": 0,
+      "attempt": 1,
       "review_rounds": 0,
-      "notes": ""
+      "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys"
     },
     "W9": {
       "status": "pending",
