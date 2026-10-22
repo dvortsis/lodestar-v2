@@ -2,7 +2,8 @@
 //! (architecture §6): the BEP 3 handshake, the BEP 10 extension protocol,
 //! BEP 9 `ut_metadata` with SHA-1 (v1) or SHA-256 (v2) verification, MSE/PE
 //! obfuscation with plaintext fallback, and reading BEP 11 PEX peers along
-//! the way.
+//! the way. It runs over TCP or, behind [`FetchOptions::transport`], uTP
+//! (BEP 29, `lodestar-utp`), with outcomes counted per transport.
 //!
 //! Every byte from a peer is untrusted: message sizes, the advertised
 //! metadata size and piece data are all bounded and checked, and the whole
@@ -12,6 +13,7 @@ mod fetch;
 pub mod message;
 pub mod mse;
 mod rc4;
+mod stats;
 mod wire;
 
 #[cfg(feature = "testing")]
@@ -20,7 +22,10 @@ pub mod testing;
 use std::fmt;
 use std::io;
 
-pub use fetch::{Deny, Encryption, FetchOptions, Fetched, fetch};
+pub use fetch::{Deny, Encryption, FetchOptions, Fetched, fetch, fetch_on_stream};
+/// The uTP crate, for building the socket `FetchOptions::utp` takes.
+pub use lodestar_utp as utp;
+pub use stats::{FetchStats, Transport};
 
 #[derive(Debug)]
 #[non_exhaustive]

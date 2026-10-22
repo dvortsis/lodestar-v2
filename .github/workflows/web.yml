@@ -33,6 +33,10 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
+      # The committed types must be what openapi.json generates: run
+      # `npm run api:types` and commit the result.
+      - run: npm run api:types
+      - run: git diff --exit-code src/lib/api/schema.d.ts
       - run: npm run check
       - run: npx vitest run
       - run: npm run build

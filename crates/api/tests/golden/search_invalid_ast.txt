@@ -1,0 +1,2 @@
+400
+{"error":{"code":"invalid_ast","field":"ast","message":"That query AST isn't one the parser can produce."}}
