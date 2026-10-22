@@ -1755,6 +1755,26 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - One bar for every slice and review: `runner/standards.md`.
   - Merges happen only with green CI and no blocking findings from a fresh Opus reviewer.
 
+**B3 decisions (embedded UI serving, CSP):**
+- **Embedding:** `crates/lodestar/build.rs` bundles `web/build/` (or `$LODESTAR_WEB_BUILD`) when the default-on `web` feature is set. Every text file is precompressed at build time with brotli (q11) and gzip (level 9), each kept only if smaller; fonts and raster images are stored once. With no build (or `--no-default-features`), a stub page says "UI not built: run `npm run build` in web/", so `cargo test` needs no Node. No embed crate: `include_bytes!` from `OUT_DIR`, with `brotli` 9 and the workspace's `flate2` and `sha2` as build dependencies. The bundle adds about 285 KiB to the stripped binary (raw 184 KiB + br 40 KiB + gz 46 KiB).
+- **Serving** is the router's fallback, so declared routes (`/api/**`, `/metrics`, `/healthz`, `/status`) always win. Unknown `/api/**` paths, including percent-encoded ones, get the API's `no_route` envelope. Other unknown GET paths get `index.html`, except under `/_app/`, `/fonts/`, `/brand/` and `/themes.json`, which 404 so a stale chunk fails loudly. Lookups go to a compile-time table, never the filesystem; dot segments, empty segments, backslashes and control characters, raw or percent-encoded, are 404s.
+- **Caching classes:**
+
+  | Paths | `Cache-Control` |
+  |---|---|
+  | `/_app/immutable/**` (content-hashed) | `public, max-age=31536000, immutable` |
+  | HTML (`/`, the SPA fallback) and `/_app/version.json` (SvelteKit's update probe) | `no-cache` |
+  | everything else: `/brand/**`, `/fonts/**`, `/themes.json` (stable names) | `public, max-age=3600` |
+
+  Every file has a strong ETag (SHA-256 prefix, with `-br`/`-gzip` per encoding) and answers `If-None-Match` with 304. The encoding is the client's highest-q of brotli and gzip (brotli on a tie), with `Vary: Accept-Encoding`.
+- **CSP on every HTML response**, computed at build time from the built page:
+  `default-src 'self'; script-src 'self' 'sha256-…'; style-src 'self'; style-src-attr 'unsafe-hashes' 'sha256-…'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`.
+  - `script-src` hashes each inline script: the theme pre-paint script and SvelteKit's bootstrap, whose text changes every build.
+  - `style-src` stays `'self'`: Tailwind and daisyUI are one stylesheet, the fonts are files, and Svelte sets dynamic styles through the CSSOM, which CSP doesn't govern. Static `style="…"` attributes are another matter: SvelteKit emits two (`<div style="display: contents">` in the page, and its visually hidden route announcer in a component template), so `style-src-attr` allows exactly the static values in the build, by hash. Interpolated values aren't hashed; they go through the CSSOM.
+  - `img-src data:` is for daisyUI's data-URI SVG icons. A page with an inline event handler fails the build instead of being allowed.
+  - Also on HTML: `X-Content-Type-Options: nosniff` (on every file), `Referrer-Policy: no-referrer`, and a `Permissions-Policy` that denies accelerometer, camera, display capture, geolocation, gyroscope, magnetometer, microphone, MIDI, payment and USB.
+- **The M1 status page moved from `/` to `/status`.** It stays open (it asks for a login itself, and `/api/status` needs a session) and keeps its own `'unsafe-inline'` policy, now with `frame-ancestors 'none'; base-uri 'none'; form-action 'self'`, `no-referrer` and `no-cache`.
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.
