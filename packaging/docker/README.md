@@ -70,6 +70,9 @@ compose project a network with `enable_ipv6: true` and an IPv6 subnet. With
 | `LODESTAR_DHT_ENABLED` | `true`            | `false` turns the DHT off.                 |
 | `LODESTAR_INTENSITY`   | `balanced`        | `low`, `balanced` or `aggressive`.         |
 | `LODESTAR_LOG`         | `info`            | Log filter (`error`, `warn`, `info`, `debug`). |
+| `PUID`                 | `65532`           | User id the server runs as (see below).    |
+| `PGID`                 | `65532`           | Group id the server runs as.               |
+| `LODESTAR_ALLOW_ROOT`  |                   | `1` permits `PUID=0`/`PGID=0`. Don't.      |
 | `TZ`                   |                   | Accepted, but log timestamps are UTC today. |
 
 Settings can also go in `/data/config.toml`; environment variables override
@@ -79,13 +82,34 @@ not in the file.
 
 ## Volume, user and permissions
 
-`/data` is the only volume. The image runs as distroless **`nonroot`
-(65532:65532)** and ships an empty `/data` owned by that account, so a new
-**named volume** is writable out of the box.
+`/data` is the only volume. The container starts as root only long enough for
+the binary to apply **`PUID`/`PGID`** (there's no shell for an entrypoint
+script to do it). Before it reads `config.toml`, binds a port or starts a
+thread, it:
 
-To run as a different account, set `user: "<uid>:<gid>"` in compose (or
-`--user <uid>:<gid>` for `docker run`) **and** make the data directory writable
-by it, which means a bind mount you own:
+1. checks `PUID`/`PGID`: plain numbers, default `65532` (distroless
+   `nonroot`). `0` is refused unless `LODESTAR_ALLOW_ROOT=1`;
+2. makes `/data` theirs. If `/data` itself already belongs to `PUID:PGID`,
+   nothing is touched. Otherwise the whole tree is handed over, without
+   following symlinks; hard-linked files and device, fifo or socket entries
+   are left alone. A symlinked `/data` is refused. The log says what changed;
+3. clears the supplementary groups, then sets the group and user ids, and
+   checks that root can't be regained (`setuid(0)` fails and no capabilities
+   remain). If any step fails, it doesn't start.
+
+So a new **named volume** works out of the box, and so does a **bind mount**
+owned by anyone: it's handed to `PUID:PGID` on the first start.
+
+```sh
+docker run -e PUID=1000 -e PGID=1000 -v "$PWD/data:/data" ...
+```
+
+Unraid's template sets `PUID=99`/`PGID=100` (`nobody:users`).
+
+**`--user` still works** (compose `user:`). The container then starts
+unprivileged, `PUID`/`PGID` are ignored (the log says so if they differ), and
+nothing is chowned, so the data directory must already be writable by that
+account:
 
 ```sh
 mkdir data && sudo chown 1000:1000 data
@@ -95,9 +119,9 @@ docker run --user 1000:1000 -v "$PWD/data:/data" ...
 If the container exits with a permission error creating files in `/data`, the
 mounted directory isn't writable by the account the process runs as.
 
-**`PUID`/`PGID` aren't supported yet.** The binary doesn't drop privileges
-itself, and the image has no shell to do it, so use `user:` as above.
-(Unraid: add `--user 99:100` to *Extra Parameters* until it does.)
+`config.toml` can't move the data directory for `PUID`/`PGID`: ownership is
+checked on `LODESTAR_DATA_DIR` (`/data` in the image), which overrides the
+file anyway.
 
 Keep `/data` on local SSD/NVMe storage; the index does random I/O and the
 database is SQLite. Avoid network shares and FUSE filesystems.
@@ -125,7 +149,8 @@ database, which can take longer than Docker's default 10 s. Keep that (or
 ## Health check
 
 `HEALTHCHECK` runs `/lodestar healthcheck` (exec form, no shell) every 30 s.
-It requests `/healthz` on `127.0.0.1` at the port of `LODESTAR_HTTP_BIND`, and
+It needs no privilege: started as root, it drops to `PUID`/`PGID` first, like
+the server (without touching `/data`). It requests `/healthz` on `127.0.0.1` at the port of `LODESTAR_HTTP_BIND`, and
 exits 0 on a `200`. Check it with
 `docker inspect --format '{{.State.Health.Status}}' lodestar`.
 

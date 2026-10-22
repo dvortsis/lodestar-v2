@@ -31,6 +31,12 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
 utoipa = { version = "5.5.0", default-features = false, features = ["macros"] }
 
+# PUID/PGID privilege drop (src/privdrop.rs): safe wrappers for the set*id
+# and *at syscalls, since the workspace forbids `unsafe` (and so libc). It is
+# already in the lock through tantivy's fs4 and tempfile.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.5", features = ["fs", "process", "thread"] }
+
 [features]
 default = ["web"]
 # Embed web/build (the Svelte UI) when it exists; without it, a stub page.
