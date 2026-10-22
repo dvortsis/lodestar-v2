@@ -29,6 +29,8 @@ describe('combos', () => {
 		expect(normalizeCombo('?')).toBe('?');
 		expect(normalizeCombo('shift+?')).toBe('?');
 		expect(comboFromEvent(ev('?', { shiftKey: true }))).toBe('?');
+		expect(comboFromEvent(ev('J', { shiftKey: true }))).toBe('shift+j');
+		expect(normalizeCombo('shift+j')).toBe('shift+j');
 		expect(comboFromEvent(ev('K', { ctrlKey: true, shiftKey: true }))).toBe('ctrl+shift+k');
 		expect(comboFromEvent(ev('Tab', { shiftKey: true }))).toBe('shift+tab');
 		expect(() => normalizeCombo('hyper+k')).toThrow(/unknown modifier/);
@@ -128,6 +130,51 @@ describe('registry', () => {
 		expect(keys.handle(ev('z'))).toBe(true);
 		pop();
 		expect(keys.handle(ev('x'))).toBe(true);
+	});
+
+	it('does not run the bare-letter command for Shift+letter', () => {
+		const { keys } = make();
+		const run = vi.fn();
+		keys.register({ id: 'list.next', title: 'Next', run });
+		expect(keys.handle(ev('J', { shiftKey: true }))).toBe(false);
+		expect(keys.handle(ev('j'))).toBe(true);
+		expect(run).toHaveBeenCalledOnce();
+	});
+
+	it('leaves Enter and Space to a focused link, button or menu item, unless the command opts in', () => {
+		const { keys } = make();
+		const open = vi.fn();
+		const own = vi.fn();
+		keys.register({ id: 'detail.open', title: 'Open', run: open });
+		keys.register({ id: 'mine', title: 'Mine', keys: ['space'], onControl: true, run: own });
+		const controls = [
+			el('a', { href: '/x' }),
+			el('button'),
+			el('summary'),
+			el('div', { role: 'menuitem' }),
+			el('div', { role: 'option' }),
+			el('div', { role: 'tab' }),
+			el('div', { role: 'switch' })
+		];
+		for (const c of controls) {
+			expect(keys.handle(ev('Enter', {}, c))).toBe(false);
+		}
+		expect(open).not.toHaveBeenCalled();
+		// An opted-in command still runs there; a plain element still triggers the default command.
+		expect(keys.handle(ev(' ', {}, controls[1]!))).toBe(true);
+		expect(own).toHaveBeenCalledOnce();
+		expect(keys.handle(ev('Enter', {}, el('div')))).toBe(true);
+		expect(open).toHaveBeenCalledOnce();
+		// An anchor without href is not a control.
+		expect(keys.handle(ev('Enter', {}, el('a')))).toBe(true);
+	});
+
+	it('reports a conflict created by remap', () => {
+		const { keys, conflicts } = make();
+		keys.register({ id: 'a', title: 'A', keys: ['x'], run: () => {} });
+		keys.register({ id: 'b', title: 'B', keys: ['y'], run: () => {} });
+		keys.remap('b', ['x']);
+		expect(conflicts).toEqual([{ combo: 'x', scope: 'global', ids: ['a', 'b'] }]);
 	});
 
 	it('never fires a single-key shortcut while typing', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ApiError } from '$lib/api/client';
+import { ApiError, sessionOk } from '$lib/api/client';
 import { isBareRoute } from './chrome';
 import { loginTarget, safeNext } from './handoff';
 import { DESTINATIONS, isActive, withDensity } from './nav';
@@ -101,6 +101,11 @@ describe('connectionKind', () => {
 		expect(connectionKind({ stream: 'offline', error: err, everLive: false })).toBe('unreachable');
 		expect(connectionKind({ stream: 'offline', error: undefined, everLive: false })).toBe('ok');
 	});
+	it('is not a full-page state when something else got an answer (only the stream is held up)', () => {
+		expect(connectionKind({ stream: 'offline', error: err, everLive: false, restOk: true })).toBe(
+			'ok'
+		);
+	});
 	it('is a banner once it had answered, and fine in every other stream state', () => {
 		expect(connectionKind({ stream: 'offline', error: err, everLive: true })).toBe('reconnecting');
 		for (const stream of ['connecting', 'live', 'busy', 'stopped'] as const) {
@@ -138,13 +143,48 @@ describe('createShellStatus', () => {
 		expect(off).toHaveBeenCalledTimes(2);
 	});
 
-	it('remembers that the stream answered once, so a later failure is a banner', () => {
+	it('calls the server unreachable when the stream and the probe both fail', async () => {
 		const { client } = fake();
-		const s = createShellStatus(client as never);
+		const probe = vi.fn(async () => false);
+		const s = createShellStatus(client as never, probe);
 		client.status = 'offline';
 		client.error = new ApiError(0, 'network', 'x');
 		s.observe();
+		await Promise.resolve();
+		expect(probe).toHaveBeenCalledOnce();
 		expect(s.connection).toBe('unreachable');
+	});
+
+	it('does not, when the stream is held up but the probe gets an answer', async () => {
+		const { client } = fake();
+		const s = createShellStatus(client as never, async () => true);
+		client.status = 'offline';
+		client.error = new ApiError(0, 'network', 'x');
+		s.observe();
+		await vi.waitFor(() => expect(s.connection).toBe('ok'));
+	});
+
+	it('does not, once any request has succeeded', () => {
+		const { client } = fake();
+		const probe = vi.fn(async () => false);
+		const s = createShellStatus(client as never, probe);
+		sessionOk('/search');
+		client.status = 'offline';
+		client.error = new ApiError(0, 'network', 'x');
+		s.observe();
+		expect(s.connection).toBe('ok');
+		expect(probe).not.toHaveBeenCalled();
+	});
+
+	it('a stream that answered once and then fails is a banner, not a full page', () => {
+		const { client } = fake();
+		const s = createShellStatus(client as never, async () => false);
+		client.status = 'live';
+		s.observe();
+		client.status = 'offline';
+		client.error = new ApiError(0, 'network', 'x');
+		s.observe();
+		expect(s.connection).toBe('reconnecting');
 	});
 });
 
@@ -200,7 +240,12 @@ describe('login hand-off', () => {
 			'//evil.example',
 			'https://evil.example',
 			'/\\evil',
-			'javascript:alert(1)'
+			'javascript:alert(1)',
+			'/\t/evil.example',
+			'/\n/evil.example',
+			'/\r/evil.example',
+			'/\u0000/x',
+			'/\u007f'
 		]) {
 			expect(safeNext(bad)).toBe('/');
 		}

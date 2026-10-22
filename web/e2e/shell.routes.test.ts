@@ -253,6 +253,7 @@ test.describe('full-page states', () => {
 		go
 	}) => {
 		await page.route('**/api/v1/events*', (route) => route.abort('connectionrefused'));
+		await page.route('**/api/v1/auth', (route) => route.abort('connectionrefused'));
 		await go('/search');
 		await expect(
 			page.getByRole('heading', { level: 1, name: 'Can’t reach Lodestar' })
@@ -265,6 +266,19 @@ test.describe('full-page states', () => {
 		await liveEvents(page);
 		await page.getByRole('button', { name: 'Try again' }).click();
 		await expect(page.getByRole('heading', { name: 'Search' })).toBeVisible();
+	});
+
+	test('a blocked event stream does not lock anyone out while the rest of the API answers', async ({
+		page,
+		go,
+		mock
+	}) => {
+		mock.on('getAuthStatus', { logged_in: true, setup_required: false });
+		await page.route('**/api/v1/events*', (route) => route.abort('connectionrefused'));
+		await go('/search');
+		await expect(page.getByTestId('status-pill')).toHaveAttribute('data-state', 'reconnecting');
+		await expect(page.getByRole('heading', { name: 'Search' })).toBeVisible();
+		await expect(page.getByRole('heading', { name: 'Can’t reach Lodestar' })).toHaveCount(0);
 	});
 
 	test('a failing page load shows the error state with a code', async ({ page, go }) => {
@@ -376,6 +390,7 @@ for (const [name, themeId, colorMode] of [
 
 		test('the unreachable page', async ({ page, go }) => {
 			await page.route('**/api/v1/events*', (route) => route.abort('connectionrefused'));
+			await page.route('**/api/v1/auth', (route) => route.abort('connectionrefused'));
 			await go('/search');
 			await expect(page.getByRole('heading', { name: 'Can’t reach Lodestar' })).toBeVisible();
 			await expectNoA11yViolations(page);

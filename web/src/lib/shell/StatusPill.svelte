@@ -50,7 +50,9 @@
 					total: formatCount(state.total, locale)
 				})
 			: showsCount
-				? m.shell_status_torrents({ count: formatCompact(state.torrents, locale) })
+				? (state.torrents === 1 ? m.shell_status_torrents_one : m.shell_status_torrents)({
+						count: formatCompact(state.torrents, locale)
+					})
 				: ''
 	);
 </script>

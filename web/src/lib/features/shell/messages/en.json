@@ -9,7 +9,6 @@
 	"shell_nav_insights": "Insights",
 	"shell_nav_settings": "Settings",
 	"shell_menu_open": "Open menu",
-	"shell_menu_title": "Menu",
 	"shell_menu_close": "Close menu",
 	"shell_more_label": "More",
 	"shell_more_import": "Import",
@@ -33,6 +32,7 @@
 	"shell_status_rebuilding": "Rebuilding index",
 	"shell_status_failed": "Index rebuild failed",
 	"shell_status_torrents": "{count} torrents",
+	"shell_status_torrents_one": "{count} torrent",
 	"shell_status_rebuild_progress": "{done} of {total}",
 	"shell_banner_reconnecting": "Lost contact with the server. Lodestar keeps trying and will update this page when it is back.",
 	"shell_state_unreachable_title": "Can’t reach Lodestar",
@@ -47,6 +47,5 @@
 	"shell_cmd_go": "Go to {destination}",
 	"shell_cmd_section_navigate": "Navigate",
 	"shell_cmd_section_general": "General",
-	"shell_cmd_palette": "Open command palette",
-	"shell_cmd_menu": "Open menu"
+	"shell_cmd_palette": "Open command palette"
 }

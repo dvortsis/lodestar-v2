@@ -12,5 +12,3 @@ export const shell = {
 		paletteOpen = !paletteOpen;
 	}
 };
-
-/** Registers the palette shortcut and "Go to …" for each destination; returns the unregister. */

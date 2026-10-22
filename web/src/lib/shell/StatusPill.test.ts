@@ -21,6 +21,11 @@ describe('StatusPill', () => {
 		expect(screen.getByTestId('status-pill-count').textContent).toBe('· 1.2M torrents');
 	});
 
+	it('says "1 torrent", not "1 torrents"', () => {
+		pill({ kind: 'idle', ...none, torrents: 1 });
+		expect(screen.getByTestId('status-pill-count').textContent).toBe('· 1 torrent');
+	});
+
 	it('shows zero as 0, and unknown as an em dash, never the other way round', () => {
 		const { unmount } = pill({ kind: 'idle', ...none, torrents: 0 });
 		expect(screen.getByTestId('status-pill-count').textContent).toBe('· 0 torrents');
