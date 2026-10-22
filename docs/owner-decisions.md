@@ -3,6 +3,7 @@
 These are the instructions and decisions the owner gave or explicitly agreed to. They are the **primary rules** for the whole build, as the owner set on 2026-10-22: everything below them (the approved plan in `docs/architecture.md`, the contract docs, then `ui-design-skills` for gaps) is read under them.
 
 Sources:
+- **§1b** comes from the M0–M4 build sessions.
 - **§1** comes from the "Modern DHT crawler architecture" design session (2026-10-20 → 2026-10-22). It was extracted from the owner's own messages and answers, with timestamps (UTC). It doesn't include assistant proposals the owner didn't accept. "Accepted proposal" means the owner approved it explicitly ("Yes", "go", "I'm good with that", "Your recommendations on everything", plan approval). The details are in the named section of `docs/architecture.md`.
 - **§2** holds later decisions and resolves the open points.
 
@@ -210,6 +211,28 @@ The owner asked "Which model/ effort level is best for this build?" ([15], 20:03
 2. **No-model-identifiers rule:** "Never put model identifiers in commits, PRs or code" comes from the harness/system prompt, recorded in `CLAUDE.md`, **not** from an owner message in this session.
 3. **No-LFS rule:** "Don't reintroduce LFS" is an environment constraint the assistant reported at 20:01; the owner accepted it by continuing. It was not an owner instruction.
 
+## 1b. Decisions from the build sessions (M0–M4, 2026-10-20 to 2026-10-22)
+Extracted the same way from the owner's messages and answers in the "M0 - M2 startup", "M1 results review", "M3 setup" and "M4 continuation" sessions. Times are UTC.
+
+1. **Merging and review.**
+   - "Go ahead and review/ merge. You handle the repo maintenance, review, and development work…" *(M0–M2, 10-20 22:28:05)*
+   - "yes, don't wait for me to review in the future." *(M3, 10-21 18:21:24)*
+
+   §2.4 below adds the fresh-Opus-reviewer requirement and governs.
+2. **Sub-agents:** use "as many sub-agents as add value without decreasing efficiency" *(asked twice)*.
+3. **Opus sub-agents may build core slices** in separate worktrees or sessions. Every result is reviewed in the main session before merge, and Sonnet stays on docs, UI and other pattern work. "Yes, Opus forks + my review" *(M4, 10-22 03:17:13)*.
+   - This is the owner-approved exception to "never delegate" (§1.4.4): core work may go to **Opus** sub-agents, never to Sonnet or Haiku.
+   - The build runner's Opus slice sessions use it.
+4. **PR size:** larger PRs are accepted when splitting them would hurt review. M4 was split as "Two PRs: 1–3, then 4–6", where the option text stated "Each PR is over 1,500 lines" *(M4, 10-22 03:17:13)*. The ≲ 1,500-line guideline stands; an exception needs a stated reason.
+5. **Hot columns are safe in-memory arrays** (atomics, snapshotted to disk), not mmap: "Safe RAM arrays" *(M4, 10-21 16:43:07)*. This replaces §7's mmap design, because the workspace forbids `unsafe`.
+6. **The HTTP client for tracker scrapes and plugins is reqwest + rustls** *(M4, 10-21 16:43:07)*.
+7. **The title_stem plurals tier is a fallback only:** "Yes, let's use it for fallback." *(M3, 10-22 03:43:36)* This replaces always-on stemming.
+8. **The M0 sign-off:** "Yes, proceed as you advise" *(M0–M2, 10-20 21:14:59)*.
+   - The per-torrent budget split: store ≤ 1.0 KB, search index ≤ 0.5 KB, file-tree blobs ≤ 0.6 KB.
+   - Each milestone adds the tables it first writes.
+   - Fuzz targets arrive with M1.
+9. **Milestone order** as run: "go ahead and start m2" *(10-21 01:58:49)*. The M3 order (parser and classify first, then the worker boundary and file index, then enrichment) was accepted with "go" *(10-22 04:44:12)*.
+
 ## 2. Later decisions and resolved points (owner, 2026-10-22, build-runner session)
 1. **Design authority.** The design decided in the design session is the primary design strategy; `ui-design-skills` fills the gaps it leaves.
    - The session's own UI rule (§1.5.1, "use ui-design-skills as the source of truth for anything it applies to") was carried out by rewriting the §10 UI plan to apply the skills. That plan is therefore primary, and the skills decide only what it and the owner's choices leave open.
@@ -231,5 +254,6 @@ The owner asked "Which model/ effort level is best for this build?" ([15], 20:03
 10. **Riverstone stays exactly as chosen.** The §10.18 claim about colour-blind distinctness was wrong and is corrected. The non-colour cues (2 px gaps, fixed order, labels, the "High-legibility data" patterns option) carry the difference.
 
 ## 3. Points still open (not decided by the owner)
+- **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.
 - **Repository visibility.** The repo is public. The owner created it that way and hasn't commented since.
