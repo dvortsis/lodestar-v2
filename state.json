@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-22T06:58:00Z",
+ "updated_at": "2026-10-22T07:02:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 14
@@ -14,7 +14,7 @@
    "pr": 38,
    "attempt": 1,
    "review_rounds": 4,
-   "notes": "round 1: changes requested (status.html error envelope regression - ownership granted; \u00a716 placement; 405 envelope; offset overflow; extractor messages)"
+   "notes": "APPROVED round 4; merge blocked by #52 conflicts; author merging main"
   },
   "B5b": {
    "status": "in_review",
@@ -758,7 +758,8 @@
   "2026-10-22 runner: community palette values stay as published; the theme compiler must derive content/tint tokens that satisfy the gates for every theme (W1c). W1b now waits for W1c and C1."
  ],
  "open_issues": [
-  "Filter session self-merged #42 against owner decision (packs on by default) + budget env; follow-up fix requested. Suggest owner consider branch protection."
+  "Filter session self-merged #42 against owner decision (packs on by default) + budget env; follow-up fix requested. Suggest owner consider branch protection.",
+  "Filter session keeps self-merging (#33,#42,#47,#52) driven by the owner's '/goal finish whatever is left to do' loop; only the owner can end that goal"
  ],
  "runner_prs": {
   "34": "merged",
@@ -781,7 +782,8 @@
   "33": "merged 05:51 by filter session (owner decisions follow-up requested)",
   "42": "MERGED 06:07 by the filter session despite the runner's request; packs on by default (contradicts owner \u00a72.8) and LODESTAR_BUDGET_US kept. Follow-up fix PR requested 06:14; owner told.",
   "47": "merged 06:19 by the filter session (V8 class_corrections)",
-  "48": "open: M4 PR2, in review"
+  "48": "open: M4 PR2, in review",
+  "52": "MERGED by the filter session (self-merge again), conflicts with B0"
  },
  "heartbeats": 2,
  "reviews_in_flight": [
