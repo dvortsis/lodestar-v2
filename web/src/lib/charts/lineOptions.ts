@@ -2,6 +2,7 @@
 // here: this file is part of the eager chunk and uPlot itself stays lazy.
 import type uPlot from 'uplot';
 import { DASH } from '$lib/format';
+import { fontPx, measureText, widest } from './text';
 
 export interface LineSeries {
 	label: string;
@@ -60,8 +61,10 @@ export const TIME_STEPS = {
 	day: [DAY, 2 * DAY, 7 * DAY, 14 * DAY, 30 * DAY, 91 * DAY, 365 * DAY],
 	week: [7 * DAY, 14 * DAY, 28 * DAY, 91 * DAY, 365 * DAY]
 } as const;
-/** Pixels per label character at the axis font: an upper bound for Atkinson at 12px. */
-const CHAR_PX = 7;
+/** Gap between neighbouring time labels, in px. */
+const LABEL_GAP = 16;
+/** uPlot's default tick length and tick-to-label gap on the value axis. */
+const TICK_AND_GAP = 15;
 
 export function buildData(
 	times: readonly number[],
@@ -107,12 +110,16 @@ export function buildOptions(args: {
 			axis({
 				incrs: [...TIME_STEPS[args.bucket ?? 'day']],
 				// Room for the longest label plus a gap, so neighbours never touch.
-				space: format.tick(args.sample ?? 0).length * CHAR_PX + 24,
+				space: measureText(args.font, format.tick(args.sample ?? 0)) + LABEL_GAP,
 				values: (_u, splits) => splits.map((s) => format.tick(s))
 			}),
 			axis({
 				label: args.unit,
 				labelFont: args.font,
+				labelSize: Math.ceil(fontPx(args.font) * 1.5) + 8,
+				// Wide enough for the widest tick label at this font size, so values never run
+				// into the unit label.
+				size: (_u, values) => TICK_AND_GAP + Math.ceil(values ? widest(args.font, values) : 40),
 				...(args.integers === false ? {} : { incrs: INTEGER_STEPS }),
 				values: (_u, splits) => splits.map((s) => format.axis(s))
 			})

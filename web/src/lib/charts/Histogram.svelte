@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
 	import { DASH, formatCount, RANGE_SEPARATOR, type MetricValue } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import {
@@ -10,6 +9,7 @@
 		type BrushKey,
 		type BrushRange
 	} from './brush';
+	import { widest } from './text';
 	import { lengthPct, numeric, type ValueFormatter } from './shared';
 
 	interface Props {
@@ -55,15 +55,18 @@
 	$effect(() => {
 		if (!row || typeof ResizeObserver === 'undefined') return;
 		const node = row;
-		const watch = new ResizeObserver(() => (rowWidth = node.clientWidth));
+		const read = () => {
+			rowWidth = node.clientWidth;
+			rowFont = getComputedStyle(node).font;
+		};
+		const watch = new ResizeObserver(read);
 		watch.observe(node);
-		rowWidth = node.clientWidth;
+		read();
 		return () => watch.disconnect();
 	});
-	const CHAR = 7; // px per caption character, an upper bound for Atkinson at 12px
+	let rowFont = $state('12px sans-serif');
 	const stride = $derived.by(() => {
-		const longest = Math.max(1, ...edges.map((e) => e.length));
-		const per = longest * CHAR + 8;
+		const per = widest(rowFont, edges) + 16;
 		const fit = rowWidth > 0 ? Math.max(1, Math.floor(rowWidth / per)) : 2;
 		return Math.max(1, Math.ceil((edges.length - 1) / Math.max(1, fit - 1)));
 	});
@@ -86,7 +89,9 @@
 
 	// Commit only when the range differs from the last committed one: a key at the limit, key
 	// auto-repeat and a release without movement change nothing, so they must not re-query.
-	let committed: BrushRange | null = untrack(() => sel);
+	// The reference is the range at the start of each gesture, so a selection the parent changed
+	// meanwhile (cleared chip, history, new bins) is never mistaken for the last commit.
+	let committed: BrushRange | null = null;
 	function commit(range: BrushRange | null) {
 		if (same(committed, range)) return;
 		committed = range;
@@ -108,6 +113,7 @@
 	function down(event: PointerEvent) {
 		if (!handleLabels || !plot || bins < 1) return;
 		const anchor = edgeAt(event);
+		committed = sel;
 		drag = { kind: 'new', anchor };
 		plot.setPointerCapture?.(event.pointerId);
 		set(dragRange(anchor, anchor, bins), false);
@@ -116,6 +122,7 @@
 	function handleDown(event: PointerEvent, edge: 'from' | 'to') {
 		if (!plot || !sel) return;
 		event.stopPropagation();
+		committed = sel;
 		drag = { kind: edge };
 		plot.setPointerCapture?.(event.pointerId);
 	}
@@ -141,11 +148,13 @@
 		// Keyboard entry into the brush: Enter or an arrow selects every bin; the handles take over.
 		if (event.target !== plot || sel || !handleLabels || bins < 1) return;
 		if (!['Enter', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+		committed = sel;
 		set({ from: 0, to: bins }, true);
 		event.preventDefault();
 	}
 	function key(event: KeyboardEvent, edge: 'from' | 'to') {
 		if (!sel) return;
+		committed = sel;
 		if (event.key === 'Escape') {
 			set(null, true);
 			plot?.focus();
