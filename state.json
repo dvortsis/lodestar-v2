@@ -17,13 +17,13 @@
    "notes": "merged 07:40 after round 4 + #52 port"
   },
   "B5b": {
-   "status": "in_review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01BEmSnYW9wHszPF16AVqmtL",
    "pr": 46,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "runner merging main (\u00a716) locally; checks running; then push + merge on CI green"
+   "notes": "merged 10:00 as ce190f2 (#46)"
   },
   "C0": {
    "status": "merged",
