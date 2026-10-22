@@ -877,7 +877,8 @@
     ],
     "integrations-readme": [
       "README rule 1: mention net::connect_tcp/resolve_tcp for non-HTTP protocols"
-    ]
+    ],
+    "posthoc_52_54": "Post-hoc review of M4 #52 (V9 class_rules, preview jobs) and #54, merged by the M4 filter session without runner review (runner msgs reached it ~7h late). Reviewer started 13:40; blocking findings go to session_01N83eB81W8xkqJgXiD7JLM3 for a fix PR."
   },
   "blocked_on_owner": [
     "M4 continuation: waiting on ExitPlanMode approval (plan mode) \u2014 can't act on #48 review",
