@@ -49,6 +49,17 @@ Read the relevant sections before starting any task. If work changes a decision,
 - **Claude can't create GitHub repositories on this account;** the owner creates them.
 - **Clones are shallow.** Run `git fetch origin main` before pushing a branch.
 
+## User documentation
+- **Write for someone who can install an app from the Unraid app store but may not know how to set it up** (owner, 2026-10-22; `docs/owner-decisions.md` §2.14). They may not know Docker's architecture, Windows' security features and limits, or good security practice.
+  - Guide them to a safe setup: plainly, matter-of-fact, not wordy.
+  - Define terms and recommend the safe choice.
+  - Show screenshots and diagrams wherever you can.
+- **Use the owner's `documentation-skills`** (`dvortsis/skills/documentation-skills`) to guide the documentation process:
+  - `github-docs` for the guide in `docs/user/`;
+  - `material-composer` for release notes and any other material.
+- The project skill **`user-docs`** (`.claude/skills/user-docs/SKILL.md`) adds Lodestar's specifics on top of them: the folder, facts, screenshots, safe choices and gates. Use it for the README, `docs/user/`, `docs/operations.md`, release notes and in-app help.
+- Developer and contract docs (`architecture.md`, `build-plan.md`, the contract docs, `runner/`) are exempt.
+
 ## Repository layout
 See §13 of `docs/architecture.md`. In short:
 - `crates/*`: Rust workspace
