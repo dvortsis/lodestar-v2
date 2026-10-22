@@ -29,15 +29,18 @@
 	let focusInside = false;
 
 	function onfocusin(event: FocusEvent) {
+		if (!focusInside) {
+			const from = event.relatedTarget as HTMLElement | null;
+			cameFrom = from && !region?.contains(from) ? from : null;
+		}
 		focusInside = true;
-		const from = event.relatedTarget as HTMLElement | null;
-		if (from && !region?.contains(from)) cameFrom = from;
 	}
 
 	function onfocusout(event: FocusEvent) {
-		// A removed element may fire focusout too: only a still-connected one means focus left.
-		if (!(event.target as Element).isConnected) return;
-		if (!region?.contains(event.relatedTarget as Node | null)) {
+		// Focus moved to another element outside the region. A null relatedTarget (the focused toast
+		// was removed, or the page lost focus) keeps the state so a removal can still restore focus.
+		const to = event.relatedTarget as Node | null;
+		if (to && !region?.contains(to)) {
 			focusInside = false;
 			cameFrom = null;
 		}
