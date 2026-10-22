@@ -938,7 +938,7 @@
    "pr": 95,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 22:53 head bd40bcb (main+D-puid merged, drop scopes per subcommand) | 23:30 review FIX: Windows sync_file needs write access; -journal delete sharing violation; restore docs (reindex, auth.json); run maintenance_runs_as_puid under sudo in CI (allowed ci.yml edit); polish."
+   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 22:53 head bd40bcb (main+D-puid merged, drop scopes per subcommand) | 23:30 review FIX: Windows sync_file needs write access; -journal delete sharing violation; restore docs (reindex, auth.json); run maintenance_runs_as_puid under sudo in CI (allowed ci.yml edit); polish. | 23:36 head 467c3db: all review items done; merge on green (Windows CI must pass: proves sync_file/journal fixes)."
   },
   "M6-win": {
    "status": "running",
