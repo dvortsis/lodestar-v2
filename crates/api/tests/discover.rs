@@ -207,7 +207,11 @@ async fn golden(f: &Fixture, name: &str, req: Request<Body>) -> Value {
     } else {
         let want = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("{}: {e} (bless with LODESTAR_BLESS=1)", path.display()));
-        assert_eq!(got, want.replace("\r\n", "\n"), "{name}: the response changed");
+        assert_eq!(
+            got,
+            want.replace("\r\n", "\n"),
+            "{name}: the response changed"
+        );
     }
     serde_json::from_str(&body).unwrap_or(Value::Null)
 }
@@ -349,7 +353,10 @@ async fn newest_by_type() {
     let cursor = body["newest"]["next_cursor"].as_str().unwrap();
     let (status, body) = json_of(
         &f.app,
-        get(&format!("/api/v1/discover?type=tv&limit=1&cursor={cursor}"), c),
+        get(
+            &format!("/api/v1/discover?type=tv&limit=1&cursor={cursor}"),
+            c,
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);

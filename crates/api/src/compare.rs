@@ -328,7 +328,7 @@ pub(crate) async fn compare(
                 ((*k).to_string(), values.iter().any(|v| v[*k] != *first))
             })
             .collect();
-        let file_diff = file_diff(&mut *store, rows.iter().map(|(r, _)| r.id))?;
+        let file_diff = file_diff(&mut store, rows.iter().map(|(r, _)| r.id))?;
         let scale_bytes = rows.iter().map(|(r, _)| r.size).max().unwrap_or(0);
         let torrents = rows
             .into_iter()
@@ -438,10 +438,7 @@ fn file_diff(store: &mut Store, ids: impl Iterator<Item = i64>) -> ApiResult<Fil
     }
     let has = |i: usize, k: &Key| sets[i].binary_search(k).is_ok();
     let n = sets.len();
-    let common_count = sets[0]
-        .iter()
-        .filter(|k| (1..n).all(|j| has(j, k)))
-        .count() as u64;
+    let common_count = sets[0].iter().filter(|k| (1..n).all(|j| has(j, k))).count() as u64;
     let only_counts: Vec<u64> = (0..n)
         .map(|i| {
             sets[i]
@@ -513,7 +510,13 @@ mod tests {
     #[test]
     fn title_words_fold_spelling_variants_together() {
         let want = vec!["spider".to_string(), "man".to_string()];
-        for t in ["Spider-Man", "Spider Man", "SpiderMan", "spider.man", "SPIDER  MAN"] {
+        for t in [
+            "Spider-Man",
+            "Spider Man",
+            "SpiderMan",
+            "spider.man",
+            "SPIDER  MAN",
+        ] {
             assert_eq!(title_words(t), want, "{t}");
         }
         assert_ne!(title_words("Spider-Man 2"), want);
