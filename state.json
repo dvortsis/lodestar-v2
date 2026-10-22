@@ -816,7 +816,7 @@
    "title": "Modern DHT crawler architecture",
    "work": "content filter rule persistence and writer judging, migration V6"
   },
-  "session_01NpcZEgW1eEWwKES8bNP3Cd": "Owner's 'In-application settings screen' session \u2014 owner 18:59: runner now manages it. Branch claude/brave-newton-53jgly (planning \u00a710.10 Settings, \u00a712.1 logging, \u00a712.2 auto-update, About, AGPL LICENSE, packaging/keys, user-docs skill + documentation-skills, brand/brand.json, slices B2b/B2c/M-settings-form/S-settings-1/2/M-security-settings/B-log1/2/S-logs/S-about/B-update/S-updates/S-doc-shots). Asked it (19:00) for status of owner requests/open questions, merge main, open PR. Runner reviews + merges."
+  "session_01NpcZEgW1eEWwKES8bNP3Cd": "Owner's 'In-application settings screen' session \u2014 owner 18:59: runner now manages it. Branch claude/brave-newton-53jgly (planning \u00a710.10 Settings, \u00a712.1 logging, \u00a712.2 auto-update, About, AGPL LICENSE, packaging/keys, user-docs skill + documentation-skills, brand/brand.json, slices B2b/B2c/M-settings-form/S-settings-1/2/M-security-settings/B-log1/2/S-logs/S-about/B-update/S-updates/S-doc-shots). Asked it (19:00) for status of owner requests/open questions, merge main, open PR. Runner reviews + merges. 19:15 status: all owner requests done, none open; runner opened PR #86 (review in flight). Owner says GitHub `release` env + RELEASE_SIGNING_KEY secret set up (unverified)."
  },
  "watch_policy": "Owner asked the runner to keep an eye on and manage these sessions: each heartbeat check status; report a pending permission prompt to the owner (runner cannot approve); nudge an idle session with remaining work; flag conflicts with slice ownership and migration order.",
  "migration_order": "V4 filter, V5 swarm, V6 subscriptions, V7 filter rules, V8 class_corrections (all merged), V9 class_rules (#52 open), V10 reserved M4 PR2, V11 next free (F1 if needed, then M5 B8). Runner assigns.",
@@ -875,7 +875,8 @@
  "reviews_in_flight": {
   "71": "B6 round 2 (ee81535)",
   "84": "D-puid R1 + security",
-  "85": "F-near R1"
+  "85": "F-near R1",
+  "86": "settings-plan PR R1"
  },
  "carry_forward": {
   "next-bans-touch": [
@@ -940,12 +941,13 @@
   "pr81_fix": "#81 review FIX: (1) test must distinguish ON from FAST: >16KB value (overflow pages) deleted, assert gone from DB file; (2) WAL keeps insert-time frames until TRUNCATE (prod TRUNCATE only at shutdown): call store.checkpoint() (TRUNCATE) after purge_filter / release / delete_torrents / #70's release_rules when they deleted rows; drive test through those APIs. Do it after #70 merges (filter.rs conflict).",
   "tantivy_deleted_names": "Deleted torrents' names stay in Tantivy segment files until merge. Follow-up after B6: on delete_torrents, force-merge segments holding deleted docs (rare path). In the spirit of owner decision 'deleted data is overwritten' (\u00a72.17).",
   "w7ab_css_growth": "Record in \u00a716: daisyUI component CSS for the primitives adds ~5.6 KB gz to first-load CSS (11.89 -> 17.48 KB); accepted by runner (one global Tailwind sheet; screens need it). CSS headroom ~2.2 KB: watch W7cd/W7e/screens.",
-  "rebuild_windows_flake": "test (windows-latest) failed crates/search/tests/rebuild.rs:124 an_interrupted_rebuild_resumes_from_its_watermarks ('the rebuild finishes') on Q-docs da02e04 (no src change). Watch; if it recurs, root-cause (timeout on slow Windows runner?) in a small fix PR.",
+  "rebuild_windows_flake": "test (windows-latest) failed crates/search/tests/rebuild.rs:124 an_interrupted_rebuild_resumes_from_its_watermarks ('the rebuild finishes') on Q-docs da02e04 (no src change). Watch; if it recurs, root-cause (timeout on slow Windows runner?) in a small fix PR. 2nd occurrence (settings session, linux local): rebuild.rs:283 'resumed, not started over' left 1050 right 1000 \u2014 background rebuild stepped before progress() read. Two hits -> schedule a fix slice (search/rebuild.rs test; after B6 merges since B6 owns crates/search).",
   "runtime_chunk_growth": "W7cd measured: showcase pages using transitions/bind:offsetHeight/snippets grow the shared Svelte runtime chunk 16.8->21.7 kB gz that search loads. Screens using these primitives will do the same: budget JS 45 kB has ~12 kB headroom; watch in W9/search screens, keep transitions lazy where possible.",
   "b6_from_b17_review": "B17 reviewer: B6 must AND visibility onto every own-clause variant (filters param), test Adult hidden + type:movie selection -> no adult in type facet, and check the lease fingerprint/visibility when a cursor lease is passed (no pre-toggle lease). Also Not-adult with leftover adult_kind tag matches adult:<kind> - B6 adult facet aware.",
   "unenriched_adult_gap": "Unenriched imports/backfill aren't hidden by B17 (no type tag). Put in importer/backfill brief; consider raising with owner.",
   "sse_crawler_paused": "B4 SSE crawler event lacks `paused` (B14 asked to add if cheap).",
-  "pr70_r3": "#70 R3 FIX 18:58: core switch off w/o password via race (assess unlocked vs apply) -> 409 changed_since_preview; ResolveHeld same; reload before release; purge INSERT OR IGNORE; merge main."
+  "pr70_r3": "#70 R3 FIX 18:58: core switch off w/o password via race (assess unlocked vs apply) -> 409 changed_since_preview; ResolveHeld same; reload before release; purge INSERT OR IGNORE; merge main.",
+  "slices_from_86": "After #86 merges: add B2b, B2c, M-settings-form, S-settings-2, M-security-settings, B-log1, B-log2, S-logs, S-about, B-update, S-updates, S-doc-shots to state.slices (pending). B2b + B-log1(after B2b) ready first."
  },
  "blocked_on_owner": [
   "Modern DHT crawler architecture: waiting on an AskUserQuestion",
