@@ -142,6 +142,30 @@ describe('Toaster', () => {
 		expect(vi.getTimerCount()).toBe(0);
 	});
 
+	it('dismissing the toast that holds focus moves focus on, never to <body>', async () => {
+		const outside = document.createElement('button');
+		document.body.append(outside);
+		render(Toaster, { dismissLabel: 'Close' });
+		toast.push({ text: 'One', timeout: 0 });
+		toast.push({ text: 'Two', timeout: 0 });
+		flushSync();
+		const [first, second] = screen.getAllByRole('button', { name: 'Close' });
+		// Focus enters the region from `outside`, then the first toast is dismissed.
+		outside.focus();
+		await fireEvent.focusIn(first!, { relatedTarget: outside });
+		first!.focus();
+		await fireEvent.click(first!);
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(document.activeElement).toBe(second);
+		// Dismissing the last one returns focus to where it came from.
+		await fireEvent.click(second!);
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(document.activeElement).toBe(outside);
+		outside.remove();
+	});
+
 	it('caps the queue, dropping the oldest non-error first', () => {
 		toast.push({ text: 'err', kind: 'error' });
 		for (let i = 0; i < 5; i++) toast.push({ text: `t${i}` });

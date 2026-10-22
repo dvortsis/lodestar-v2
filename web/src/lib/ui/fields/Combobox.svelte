@@ -160,9 +160,8 @@
 		aria-label={aria['aria-labelledby'] ? undefined : label}
 		aria-labelledby={aria['aria-labelledby']}
 		hidden={!open}
-		style:--combobox-max-height="calc(var(--row-height-comfortable) * 5)"
 		onmousedown={(e) => e.preventDefault()}
-		class="absolute z-10 mt-1 max-h-(--combobox-max-height) w-full overflow-auto rounded-box border border-base-300 bg-base-100 p-1"
+		class="absolute z-10 mt-1 max-h-(--listbox-max-height) w-full overflow-auto rounded-box border border-base-300 bg-base-100 p-1"
 	>
 		{#each shown as option, i (option.value)}
 			<!-- mousedown keeps focus on the input; click would arrive after blur closed the list. -->

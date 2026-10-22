@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { tick } from 'svelte';
 	import IconInfo from '~icons/ph/info';
 	import IconSuccess from '~icons/ph/check-circle';
 	import IconWarning from '~icons/ph/warning';
@@ -13,9 +14,37 @@
 		label?: string;
 		/** Name of each dismiss button; defaults to the shared "Dismiss". */
 		dismissLabel?: string;
+		/**
+		 * Where focus goes after dismissing a toast that held it, when no neighbouring toast is left
+		 * and the element focus came from is gone. Defaults to that element.
+		 */
+		returnFocus?: () => HTMLElement | null | undefined;
 	}
 
-	let { label, dismissLabel }: Props = $props();
+	let { label, dismissLabel, returnFocus }: Props = $props();
+
+	let region: HTMLDivElement | undefined = $state();
+	// The element focus came from when it entered the region; kept while focus stays inside.
+	let cameFrom: HTMLElement | null = null;
+
+	function onfocusin(event: FocusEvent) {
+		const from = event.relatedTarget as HTMLElement | null;
+		if (from && !region?.contains(from)) cameFrom = from;
+	}
+
+	// Dismissing the toast that holds focus must not drop it to <body>: next toast's button, else the
+	// previous one, else where focus came from, else `returnFocus`.
+	async function dismiss(id: number, button: HTMLElement) {
+		const held = region?.contains(document.activeElement);
+		const buttons = [...(region?.querySelectorAll<HTMLElement>('[data-toast-dismiss]') ?? [])];
+		const at = buttons.indexOf(button);
+		const neighbour = buttons[at + 1] ?? buttons[at - 1];
+		toast.dismiss(id);
+		if (!held) return;
+		await tick();
+		const target = [neighbour, cameFrom, returnFocus?.()].find((el) => el?.isConnected);
+		target?.focus();
+	}
 
 	const icons = { info: IconInfo, success: IconSuccess, warning: IconWarning, error: IconError };
 	const ink = {
@@ -60,7 +89,9 @@
 	aria-label={label ?? m.common_notifications()}
 	aria-live="polite"
 	aria-relevant="additions text"
-	class="toaster pointer-events-none fixed inset-x-4 bottom-4 z-50 flex flex-col gap-2 large:left-auto"
+	bind:this={region}
+	{onfocusin}
+	class="pointer-events-none fixed inset-x-4 bottom-4 z-50 flex flex-col gap-2 large:left-auto large:w-(--toast-width)"
 >
 	{#each toasts.items as item (item.id)}
 		{@const Icon = icons[item.kind]}
@@ -77,7 +108,8 @@
 				type="button"
 				aria-label={dismissLabel ?? m.common_dismiss()}
 				class="inline-flex size-6 shrink-0 items-center justify-center rounded-selector hover:bg-hover {FOCUS_RING} {TARGET_MIN}"
-				onclick={() => toast.dismiss(item.id)}
+				data-toast-dismiss
+				onclick={(e) => dismiss(item.id, e.currentTarget)}
 			>
 				<IconClose class="size-4" aria-hidden="true" />
 			</button>
@@ -86,20 +118,9 @@
 </div>
 
 <style>
-	/* Opacity only; the banner duration token is 0 under reduced motion, so it appears instantly. */
-	/* No toast token exists yet: the width is derived from the row height, the fade reuses the
-	   banner duration (0 under reduced motion). Listed as a token gap in the W7ab PR. */
-	.toaster {
-		--toast-width: calc(var(--row-height-comfortable) * 6);
-		--toast-duration: var(--duration-banner);
-	}
-	@media (min-width: 640px) {
-		.toaster {
-			width: var(--toast-width);
-		}
-	}
+	/* Opacity only. --duration-banner is 0 under reduced motion, so the toast just appears. */
 	.toast-in {
-		animation: toast-in var(--toast-duration) var(--ease-out);
+		animation: toast-in var(--duration-banner) var(--ease-out);
 	}
 	@keyframes toast-in {
 		from {

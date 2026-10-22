@@ -34,13 +34,20 @@
 	async function remove() {
 		if (!onremove) return;
 		// Pick the neighbour before the DOM changes; it is another chip, so it survives the removal.
-		const siblings = [...(root?.parentElement?.querySelectorAll('[data-chip-remove]') ?? [])];
+		// Chips may be wrapped (e.g. each in an <li>), so search the nearest chip group, not the parent:
+		// the closest ancestor that holds other remove buttons.
+		let scope: HTMLElement | null = root?.parentElement ?? null;
+		while (scope && scope.querySelectorAll('[data-chip-remove]').length < 2) {
+			scope = scope.parentElement;
+		}
+		const siblings = [...(scope?.querySelectorAll('[data-chip-remove]') ?? [])];
 		const own = root?.querySelector('[data-chip-remove]') ?? null;
 		const at = siblings.indexOf(own as Element);
 		const neighbour = (siblings[at + 1] ?? siblings[at - 1]) as HTMLElement | undefined;
 		onremove();
 		await tick();
-		(neighbour ?? fallbackFocus?.())?.focus();
+		const target = [neighbour, fallbackFocus?.()].find((el) => el?.isConnected);
+		target?.focus();
 	}
 
 	function onkeydown(event: KeyboardEvent) {
