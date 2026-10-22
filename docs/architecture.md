@@ -1749,6 +1749,10 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - `lodestar`'s `openapi` binary writes `web/src/lib/api/openapi.json` (pretty-printed, sorted keys), and `npm run api:types` turns that into `schema.d.ts`. CI fails if either committed file is stale.
 - **The JSON stayed byte-compatible** with the old `json!` handlers, held there by per-endpoint golden files recorded before the change (`crates/api/tests/golden/`). That's why response fields are declared in alphabetical order (a `Value` serializes its keys sorted). `POST /filters/preview` keeps the declaration order it always had.
 - **The `docs/metrics.md` §7 swarm fields are served now as `null`** ("never scraped") until M4 fills them: `seeders`, `leechers`, `completed`, `trackers_reporting`, `trackers_checked` and `last_scrape_at` on hits and detail, plus `dht_seeds`, `dht_peers`, `swarm_trend` and `swarm_history` on detail. The non-nullable M4 fields (`seeders_approx`, `swarm_suspect`, `swarm_trackers`, `last_seen_at`) arrive with M4's values, not as placeholders.
+- **B1 doesn't serve the other `docs/metrics.md` §7.1/§7.3 fields yet.** Adding one later is a DTO field plus a golden update, not a new endpoint. The fields are `title`, `resolved_via`, `content_type`, `adult_kind`, `composition`, `junk_score`, `junk_reasons`, `hidden_by_filter`, `why`, `total_approx`, `hidden_junk` and `hidden_count`.
+  - `total_approx` comes with B5a (exact count on demand).
+  - `hidden_by_filter`, `why` and `hidden_count` come with B15 (the filter decisions on search results).
+  - The M3 enrichment fields (`title`, `resolved_via`, `content_type`, `adult_kind`, `composition`, `junk_score`, `junk_reasons`) and `hidden_junk` have no slice in `docs/build-plan.md` yet; the runner assigns one. They read the stored enrichment in `torrents::hit` and `torrents::detail_of`.
 - **New endpoints land as a typed DTO plus a 501 stub** (`error::not_implemented`, code `not_implemented`) with an example, then the handler (`crates/api/README.md`).
 
 **M5 decisions (build process and UI conventions):**

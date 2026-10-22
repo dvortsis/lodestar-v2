@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use super::REDACTED;
 use super::error::ErrorBody;
 
 /// What an override, exception or allow entry matches, as sent: exactly
@@ -132,12 +133,22 @@ pub enum Change {
 }
 
 /// `POST /filters/preview`, `/filters/preview/jobs` and `/filters/apply`.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+/// `Debug` shows whether a password was sent, never the password.
+#[derive(Clone, Serialize, Deserialize, ToSchema)]
 pub struct ChangeBody {
     pub change: Change,
     /// The admin password, for a change that weakens filtering (§20.11);
     /// ignored by previews.
     pub password: Option<String>,
+}
+
+impl std::fmt::Debug for ChangeBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChangeBody")
+            .field("change", &self.change)
+            .field("password", &self.password.as_ref().map(|_| REDACTED))
+            .finish()
+    }
 }
 
 /// What a change would do (§20.10). Counts come from the review queue,
@@ -590,4 +601,31 @@ pub struct ClassRuleRemoved {
     /// As [`ClassRuleAdded::queued`].
     #[schema(required = true)]
     pub queued: Option<usize>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_never_shows_the_password() {
+        let body = ChangeBody {
+            change: Change::Undo,
+            password: Some("hunter2-correct-horse".into()),
+        };
+        let shown = format!("{body:?}");
+        assert!(!shown.contains("hunter2"), "{shown}");
+        assert!(
+            shown.contains(REDACTED) && shown.contains("Undo"),
+            "{shown}"
+        );
+        let none = format!(
+            "{:?}",
+            ChangeBody {
+                change: Change::Undo,
+                password: None,
+            }
+        );
+        assert!(none.contains("password: None"), "{none}");
+    }
 }

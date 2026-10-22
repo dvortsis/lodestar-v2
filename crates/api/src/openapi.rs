@@ -103,6 +103,9 @@ impl Modify for Envelope {
             ),
         );
         doc.servers = Some(vec![ServerBuilder::new().url(PREFIX).build()]);
+        // utoipa fills the license from Cargo's, which the workspace
+        // doesn't set; an empty name isn't a license.
+        doc.info.license = None;
     }
 }
 
@@ -146,6 +149,7 @@ pub fn routes() -> Router<ApiState> {
 
 /// This document.
 #[utoipa::path(
+    operation_id = "getOpenApi",
     get,
     path = "/openapi.json",
     tag = "meta",

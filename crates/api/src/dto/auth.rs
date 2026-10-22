@@ -1,7 +1,11 @@
 //! `/auth`, `/setup`, `/login`, `/logout` and `/password` (§12).
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+
+use super::REDACTED;
 
 /// `GET /auth`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -24,7 +28,8 @@ impl OkResponse {
 }
 
 /// `POST /setup`: claims the instance.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+/// `Debug` redacts the secrets.
+#[derive(Clone, Serialize, Deserialize, ToSchema)]
 pub struct SetupRequest {
     /// The one-time token printed to the logs (`XXXX-XXXX-XXXX-XXXX`, any
     /// case).
@@ -34,15 +39,79 @@ pub struct SetupRequest {
 }
 
 /// `POST /login`.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+/// `Debug` redacts the secrets.
+#[derive(Clone, Serialize, Deserialize, ToSchema)]
 pub struct LoginRequest {
     pub password: String,
 }
 
 /// `POST /password`: ends every other session.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+/// `Debug` redacts the secrets.
+#[derive(Clone, Serialize, Deserialize, ToSchema)]
 pub struct PasswordRequest {
     pub old: String,
     /// At least 10 characters.
     pub new: String,
+}
+
+impl fmt::Debug for SetupRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SetupRequest")
+            .field("token", &REDACTED)
+            .field("password", &REDACTED)
+            .finish()
+    }
+}
+
+impl fmt::Debug for LoginRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LoginRequest")
+            .field("password", &REDACTED)
+            .finish()
+    }
+}
+
+impl fmt::Debug for PasswordRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PasswordRequest")
+            .field("old", &REDACTED)
+            .field("new", &REDACTED)
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_never_shows_the_secrets() {
+        let secret = "hunter2-correct-horse";
+        let shown = [
+            format!(
+                "{:?}",
+                SetupRequest {
+                    token: secret.into(),
+                    password: secret.into(),
+                }
+            ),
+            format!(
+                "{:?}",
+                LoginRequest {
+                    password: secret.into(),
+                }
+            ),
+            format!(
+                "{:?}",
+                PasswordRequest {
+                    old: secret.into(),
+                    new: secret.into(),
+                }
+            ),
+        ];
+        for s in shown {
+            assert!(!s.contains(secret), "{s}");
+            assert!(s.contains(REDACTED), "{s}");
+        }
+    }
 }

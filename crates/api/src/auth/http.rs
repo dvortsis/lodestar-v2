@@ -135,6 +135,7 @@ fn with_cookie(cookie: String) -> Response {
 
 /// Whether the instance is set up and the caller logged in.
 #[utoipa::path(
+    operation_id = "getAuthStatus",
     get,
     path = "/auth",
     tag = "auth",
@@ -153,6 +154,7 @@ pub(crate) async fn auth_status(
 /// Claims a fresh instance with the setup token from the logs and a new
 /// password; logs in.
 #[utoipa::path(
+    operation_id = "setup",
     post,
     path = "/setup",
     tag = "auth",
@@ -183,6 +185,7 @@ pub(crate) async fn setup(
 
 /// Logs in; rate-limited per address.
 #[utoipa::path(
+    operation_id = "login",
     post,
     path = "/login",
     tag = "auth",
@@ -211,6 +214,7 @@ pub(crate) async fn login(
 
 /// Clears the session cookie. The body is ignored but must be JSON.
 #[utoipa::path(
+    operation_id = "logout",
     post,
     path = "/logout",
     tag = "auth",
@@ -228,6 +232,7 @@ pub(crate) async fn logout(State(s): State<ApiState>, headers: HeaderMap) -> Api
 
 /// Changes the password and ends every other session.
 #[utoipa::path(
+    operation_id = "changePassword",
     post,
     path = "/password",
     tag = "auth",
