@@ -11,8 +11,10 @@
 //! leaves them out and senders say only how many were withheld.
 
 pub mod discord;
+pub mod email;
 pub mod ntfy;
 pub mod rss;
+pub(crate) mod text;
 pub mod webhook;
 
 use std::fmt;
@@ -130,6 +132,11 @@ pub enum DeliveryError {
     Rejected {
         status: u16,
     },
+    /// A mail server refused with this SMTP reply code (4xx retryable, 5xx
+    /// final).
+    SmtpRejected {
+        code: u16,
+    },
     Unreachable,
     Timeout,
     /// Anything else (an unsafe redirect, a payload that couldn't be built).
@@ -143,6 +150,9 @@ impl fmt::Display for DeliveryError {
             DeliveryError::InvalidEndpoint(why) => write!(f, "invalid endpoint: {why}"),
             DeliveryError::Rejected { status } => {
                 write!(f, "the endpoint answered HTTP {status}")
+            }
+            DeliveryError::SmtpRejected { code } => {
+                write!(f, "the mail server answered {code}")
             }
             DeliveryError::Unreachable => f.write_str("couldn't reach the endpoint"),
             DeliveryError::Timeout => f.write_str("the endpoint didn't answer in time"),
