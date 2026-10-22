@@ -82,18 +82,20 @@ test('menu: arrows, typeahead and Enter select an item, focus returns to the tri
 	await expect(trigger).toBeFocused();
 });
 
-test('popover is non-modal: Tab walks out of it, Esc closes it', async ({ page, go, kbd }) => {
+test('popover is non-modal: Shift+Tab walks out of it', async ({ page, go, kbd }) => {
 	await go(PATH);
 	const trigger = page.getByRole('button', { name: 'Columns' });
 	await kbd.tabTo(trigger);
 	await kbd.press('Enter');
 	const panel = page.getByRole('dialog', { name: 'Columns' });
 	await expect(panel).toBeVisible();
-	// A trap would cycle inside the panel; a non-modal popover lets Tab walk out of it.
+	// A trap would cycle inside the panel. Shift+Tab from its first control has an earlier page
+	// element to land on in any browser mode (Tab past the last control may go to browser chrome,
+	// which leaves document.activeElement unchanged in headed Chromium).
 	await panel.focus();
 	await kbd.press('Tab'); // the checkbox inside
 	expect(await panel.evaluate((p) => p.contains(document.activeElement))).toBe(true);
-	await kbd.press('Tab');
+	await kbd.press('Shift+Tab'); // back onto the (tabindex -1) panel is skipped
 	expect(await panel.evaluate((p) => p.contains(document.activeElement))).toBe(false);
 });
 
