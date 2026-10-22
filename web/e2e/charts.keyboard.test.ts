@@ -7,12 +7,12 @@ for (const mode of ['light', 'dark'] as const) {
 	test.describe(`riverstone ${mode}`, () => {
 		test.use({ themeId: `riverstone-${mode}`, colorMode: mode });
 
-		test('charts showcase has no axe violations', async ({ page, go }) => {
+		test('charts showcase has no axe violations', async ({ page, go, kbd }) => {
 			await go('/dev/ui/charts');
 			await expect(page.getByTestId('line')).toHaveAttribute('data-ready', 'true');
 			await expectNoA11yViolations(page);
 			await page.getByTestId('line-toggle').focus();
-			await page.keyboard.press('Enter');
+			await kbd.press('Enter');
 			await expect(page.getByTestId('line-table')).not.toHaveClass(/sr-only/);
 			await expectNoA11yViolations(page);
 		});
@@ -25,10 +25,10 @@ for (const mode of ['light', 'dark'] as const) {
 	test.describe(`computed styles, riverstone ${mode}`, () => {
 		test.use({ themeId: `riverstone-${mode}`, colorMode: mode });
 
-		test('selection band and muted text use their tokens', async ({ page, go }) => {
+		test('selection band and muted text use their tokens', async ({ page, go, kbd }) => {
 			await go('/dev/ui/charts');
 			await page.getByRole('group', { name: 'Torrents by size' }).focus();
-			await page.keyboard.press('Enter');
+			await kbd.press('Enter');
 			const resolve = (prop: 'background-color' | 'color', token: string) =>
 				page.evaluate(
 					([p, t]) => {
@@ -62,20 +62,20 @@ for (const mode of ['light', 'dark'] as const) {
 	});
 }
 
-test('histogram brush works with the keyboard', async ({ page, go }) => {
+test('histogram brush works with the keyboard', async ({ page, go, kbd }) => {
 	await go('/dev/ui/charts');
 	const plot = page.getByRole('group', { name: 'Torrents by size' });
 	await plot.focus();
-	await page.keyboard.press('Enter');
+	await kbd.press('Enter');
 	const sel = page.getByTestId('hist-range');
 	await expect(sel).toHaveAttribute('data-range', '0-8');
-	await page.keyboard.press('Tab');
+	await kbd.press('Tab');
 	await expect(page.getByRole('slider', { name: 'Smallest size' })).toBeFocused();
-	await page.keyboard.press('ArrowRight');
-	await page.keyboard.press('Tab');
-	await page.keyboard.press('ArrowLeft');
+	await kbd.press('ArrowRight');
+	await kbd.press('Tab');
+	await kbd.press('ArrowLeft');
 	await expect(sel).toHaveAttribute('data-range', '1-7');
-	await page.keyboard.press('Escape');
+	await kbd.press('Escape');
 	await expect(sel).toHaveAttribute('data-range', 'none');
 	await expect(plot).toBeFocused();
 });
@@ -84,5 +84,8 @@ test('the line chart waits for uPlot and shows the unit', async ({ page, go }) =
 	await go('/dev/ui/charts');
 	await expect(page.getByTestId('line')).toHaveAttribute('data-ready', 'true');
 	await expect(page.getByTestId('line').locator('canvas')).toHaveCount(1);
-	await expect(page.getByTestId('line').locator('.u-legend')).toContainText('Seeders');
+	const legend = page.getByTestId('line').locator('.u-legend');
+	await expect(legend).toContainText('Seeders');
+	await expect(legend).toContainText('Date');
+	await expect(legend).not.toContainText('Time');
 });

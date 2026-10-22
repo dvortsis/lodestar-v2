@@ -278,6 +278,19 @@ describe('Histogram', () => {
 		await fireEvent.pointerUp(screen.getByRole('group', { name: 'Sizes' }));
 		expect(oncommit).toHaveBeenCalledTimes(2);
 	});
+	it('commits after the parent cleared the selection from outside', async () => {
+		const oncommit = vi.fn();
+		const { rerender } = render(Histogram, { ...base, oncommit });
+		const plot = screen.getByRole('group', { name: 'Sizes' });
+		await fireEvent.keyDown(plot, { key: 'Enter' });
+		expect(oncommit).toHaveBeenCalledTimes(1);
+		// A "clear size" chip, back/forward or new bins empties the filter.
+		await rerender({ ...base, oncommit, selection: null });
+		expect(screen.queryByRole('slider')).toBeNull();
+		await fireEvent.keyDown(plot, { key: 'Enter' });
+		expect(oncommit).toHaveBeenCalledTimes(2);
+		expect(oncommit).toHaveBeenLastCalledWith({ from: 0, to: 4 });
+	});
 	it('drags a handle without restarting the selection', async () => {
 		const onbrush = vi.fn();
 		render(Histogram, { ...base, selection: { from: 1, to: 3 }, onbrush });

@@ -148,11 +148,11 @@
 			}
 		);
 
-		const resize = new ResizeObserver(() => {
+		const sizeWatch = new ResizeObserver(() => {
 			width = host.clientWidth;
 			plot?.setSize({ width: Math.max(width, 1), height });
 		});
-		resize.observe(host);
+		sizeWatch.observe(host);
 
 		// A theme switch rewrites custom properties on <html>; re-read them by rebuilding.
 		const theme = new MutationObserver(() => create?.());
@@ -164,7 +164,7 @@
 		return () => {
 			disposed = true;
 			create = undefined;
-			resize.disconnect();
+			sizeWatch.disconnect();
 			theme.disconnect();
 			destroy();
 		};

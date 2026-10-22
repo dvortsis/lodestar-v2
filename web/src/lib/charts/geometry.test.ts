@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { clampRange, dragRange, moveEdge, nearestEdge } from './brush';
 import { buildData, buildOptions, readPalette, TIME_STEPS } from './lineOptions';
 import { lengthPct, numeric } from './shared';
 import { sparkPath } from './sparkline';
+import { measureText, resetMeasure } from './text';
 
 describe('sparkPath', () => {
 	it('breaks the line at nulls instead of zero-filling', () => {
@@ -42,6 +43,44 @@ describe('brush', () => {
 		expect(dragRange(5, 2, 8)).toEqual({ from: 2, to: 5 });
 		expect(dragRange(3, 3, 8)).toEqual({ from: 3, to: 4 });
 		expect(dragRange(8, 8, 8)).toEqual({ from: 7, to: 8 });
+	});
+});
+
+describe('text-driven spacing', () => {
+	const args = {
+		width: 1,
+		height: 1,
+		series: [{ label: 'a', values: [1] }],
+		palette: { series: ['red'], text: 'gray', grid: 'silver' },
+		format: {
+			axis: (v: number) => `${v}`,
+			y: (v: number) => `${v}`,
+			tick: () => 'Oct 20, 2025',
+			full: () => ''
+		},
+		unit: 'seeders',
+		sample: 1
+	};
+	it('grows time-tick spacing and the value-axis size with the font size', () => {
+		const at = (px: number) =>
+			buildOptions({ ...args, font: `${px}px sans-serif` }).axes as [
+				{ space: number },
+				{ size: (u: unknown, v: string[]) => number; labelSize: number }
+			];
+		const [small, big] = [at(16), at(24)];
+		expect(big[0].space).toBeGreaterThan(small[0].space);
+		const values = ['0', '1.2K', '120K'];
+		expect(big[1].size(null, values)).toBeGreaterThan(small[1].size(null, values));
+		expect(big[1].labelSize).toBeGreaterThan(small[1].labelSize);
+	});
+	it('measures with the canvas when there is one', () => {
+		const getContext = HTMLCanvasElement.prototype.getContext;
+		const measure = vi.fn((t: string) => ({ width: t.length * 3 }));
+		HTMLCanvasElement.prototype.getContext = (() => ({ font: '', measureText: measure })) as never;
+		resetMeasure();
+		expect(measureText('16px x', 'abcd')).toBe(12);
+		HTMLCanvasElement.prototype.getContext = getContext;
+		resetMeasure();
 	});
 });
 
