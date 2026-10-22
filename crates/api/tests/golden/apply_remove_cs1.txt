@@ -1,0 +1,2 @@
+200
+{"applied":true,"assessment":{"confirm":true,"neutralize":null,"preview":{"caught_30d":0,"core_caught_30d":0,"estimate":false,"per_day":0.0,"quarantine":0,"stored":0,"tombstones":0},"warning":"You confirmed these torrents as abuse material. Removing them lets them, and exact reposts of their files, be fetched and indexed again. In the last 30 days the rules it affects decided 0 items, about 0.0 per day.","weakening":true},"removed":1,"version":16}
