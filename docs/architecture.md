@@ -640,12 +640,12 @@ Settings is where an owner fixes things at 2 a.m. without reading docs. It needs
   - **Crawling:** Crawler, Network & VPN, Sources, Workers, Companions
   - **Library:** Storage & retention, Search & ranking, Trackers, Filters & Safety
   - **Connections:** Integrations, Notifications, Insights & digest
-  - **System:** General, Logging, Security, About
+  - **System:** General, Updates, Logging, Security, About
 
   Screens whose features haven't shipped yet (Workers, Companions, and Sources before v0.6) don't appear in the navigation. They are never shown as empty placeholders.
 - **`/settings` is the Overview** (§10.10.3). `/settings/{screen}` opens a screen, and `#field` deep-links to one setting. Copy link appears in every field's menu.
 - **x-large and wider (≥ 1024 px):** two panes. On the left is a sticky navigation (search box, then the groups). On the right is the manuscript column (max 720 px).
-- **Below 1024 px:** list, then detail. `/settings` shows the search box and the grouped list, with status badges. A screen opens full width with a Back link to the list. This **replaces "becomes a select on narrow screens"**, because a select can't show status badges, and 20 screens are too many to scan in one.
+- **Below 1024 px:** list, then detail. `/settings` shows the search box and the grouped list, with status badges. A screen opens full width with a Back link to the list. This **replaces "becomes a select on narrow screens"**, because a select can't show status badges, and 21 screens are too many to scan in one.
 - **Navigation items** have an icon and a label. An item that needs attention gets an icon + text badge ("1 problem", "Restart needed"), and its accessible name says so ("Network & VPN, 1 problem"). The current screen is marked with `aria-current`. Navigation entries are links, not tabs.
 - **Inside a screen:**
   - The heading and a one-sentence purpose come first.
@@ -666,7 +666,7 @@ Settings is where an owner fixes things at 2 a.m. without reading docs. It needs
     - errors logged in the last hour ("12 errors in the last hour · View", opening `/logs` filtered to errors)
     - torrent details turned on in the logs, with the time remaining and Turn off now (§12.1)
     - no backup in 14 days
-    - an update available (only when update checks are on)
+    - an update available, installing tonight, failed or rolled back (§12.2)
   - **Changed from default:** a count per screen, linking to that screen with Show changed only turned on.
   - When nothing needs attention, it says so in one line and shows the changed-settings summary. There's no illustration here; this is a working surface.
 - **Settings search** (the box at the top of the navigation; `/` focuses it while on a Settings page):
@@ -793,7 +793,8 @@ Generated screens render from the schema with no screen-specific code beyond gro
 | Integrations | download clients, Torznab/*arr, each with **Test connection** run on the unsaved values | integrations API | S-settings-2 |
 | Notifications | channels (ntfy, Discord, email, webhook), each with **Send test**, and which events go where | integrations API | S-settings-2 |
 | Insights & digest | digest schedule and channels with a preview (§10.9.7), query logging and retention, clear usage data | `insights`, digest API | S-settings-2 (digest preview: S-insights-3) |
-| General | update check (off by default), backup schedule, Backup & portability (§10.10.6), Reset all | `general`, `/system` | S-settings-1 |
+| General | backup schedule, Backup & portability (§10.10.6), Reset all | `general`, `/system` | S-settings-1 |
+| Updates | status and Check now, Off / Check and notify / Install automatically (Fixes only, Fixes and features, All releases), always install security fixes, channel, wait, window, release notes, history, pause, roll back (§10.10.14, §12.2) | `updates`, updates API | S-updates |
 | Logging | events (Verbosity preset, each event on/off with its rate), data kinds (Private preset by default; identifying kinds time-limited), outputs (level and data kinds per output), a live preview with volume estimate, and rotation with a size preview, log files with download, delete (§10.10.12, §12.1) | `logging`, logs API | S-logs |
 | Security | password, sessions, API keys and feed tokens, trusted-proxy auth, secure cookies (read-only) | auth API (B12) | M-security-settings |
 | About | version and build, data formats, this installation, updates (Check now), help and community links, "No telemetry, ever" with everything Lodestar connects to, diagnostics, licences and credits (§10.10.13) | `/system` | S-about |
@@ -827,7 +828,8 @@ Stepped progress, with one primary action per step:
 5. Storage & retention
 6. Import from bitmagnet (optional)
 7. Download client (optional; recommended: qBittorrent, installed or detected by the companion manager, §18.10)
-8. Done
+8. Updates: Off / Check and notify / Install automatically (Fixes only is labelled recommended). Nothing is preselected beyond Off, because checking contacts GitHub (§12.2).
+9. Done
 
 - The **Intensity**, **Storage & retention** and **Download client** steps render the same `SettingField`s, previews and **Test connection** as Settings, from the same schema. Each step saves through the multi-section patch, so validation can't drift.
 - One **"How it works"** step uses a static SVG sequence (DHT → metadata → index → search) in the spirit of `infographic-design`, with no AntV dependency and a text equivalent.
@@ -980,7 +982,7 @@ It needs a signed-in session, like the rest of Settings. Version details aren't 
   - From v0.6: each worker's and companion's version, flagging any that don't match the coordinator.
 - **Updates:**
   - **Status:**
-    - "Update checks are off" (the default), or the last automatic result;
+    - the update setting (Off, Check and notify, Install automatically), or the last check's result;
     - **Check now**, which says first that it makes **one request to GitHub's releases API** through your egress settings (§5) and sends nothing about you;
     - the result: "You're up to date", or "0.5.3 is available · What's new".
   - **How to update, for this installation:**
@@ -989,8 +991,7 @@ It needs a signed-in session, like the rest of Settings. Version details aren't 
     - Windows: the MSI download link;
     - tarball: the download link and the `systemctl restart` line.
 
-    Lodestar never updates itself (§12: it takes a snapshot before any migration, and `lodestar rollback` exists).
-  - **Turn on automatic checks** links to Settings → General.
+    When automatic updates are on, About shows when the next install is due. **Update settings** links to Settings → Updates (§10.10.14, §12.2).
 - **Help and community:** each link opens in a new tab, with an external-link icon and "(opens in a new tab)" for screen readers, and `rel="noopener noreferrer"`. The URLs come from the build's `repository` field (`Cargo.toml`), so a fork points to its own repository:
   - **GitHub repository**
   - **Source code for this version:** the exact tag, or the commit for a nightly or a fork. This is the AGPL's offer of source to network users (`owner-decisions.md` §2.12).
@@ -1001,7 +1002,7 @@ It needs a signed-in session, like the rest of Settings. Version details aren't 
   - **Report a security issue**, which links to the repository's private vulnerability reporting, not to public issues.
 - **Privacy: "No telemetry, ever."** Below that, a short list of **everything Lodestar connects to**, each with its current state and a link to its setting:
   - the DHT and peers (on);
-  - the update check (off, or when it last ran);
+  - updates (off, check and notify, or install automatically, and when it last checked);
   - enabled sources and plugins (§18);
   - blocklist subscriptions (§20.13);
   - integrations and notification channels;
@@ -1025,6 +1026,36 @@ It needs a signed-in session, like the rest of Settings. Version details aren't 
   - **If the update check fails,** the error says why ("GitHub didn't answer within 10 s") and how to retry. The rest of the screen stays usable.
   - **If the server is unreachable,** About still shows the UI's own build id and version from the bundle, so you can tell what you're looking at.
 - **Performance:** About is part of the Settings chunk. `licenses.json` and the release notes load only when their sections are opened.
+
+#### 10.10.14 Updates
+**Settings → Updates** (`/settings/updates`, System group) sets how Lodestar updates itself (§12.2). About shows the version and links here.
+
+- **Status card, at the top:**
+  - "Lodestar 0.5.2 · up to date · checked 2 h ago", with **Check now**;
+  - or "0.5.3 available (Fix, security) · installs tonight at 03:00 · **Install now** · Skip this version";
+  - or an install in progress, with its steps (downloading → verifying → installing → restarting → checking health) from the `updates` SSE topic.
+
+  After a rollback, the card says what failed, what was restored, and what to do next.
+- **How to update:** a radio group with one line of consequence each:
+  - **Off:** Lodestar never contacts GitHub. Check now still works when you press it.
+  - **Check and notify:** "You'll be told about new releases. Nothing installs without you."
+  - **Install automatically.** On Docker and Unraid there's a fourth choice, **Container image updates**: "Use this if Unraid's auto-update or Watchtower updates the image".
+
+  Choosing automatic opens the level choice directly under it:
+  - **Fixes only** (recommended): "Bug and security fixes. No data migrations."
+  - **Fixes and features:** "May migrate data, with a snapshot first, or rebuild the search index in the background."
+  - **All releases:** "Includes major releases. Releases that need manual steps still wait for you."
+- **Always install security fixes:** a toggle, on by default, with its consequence.
+- **Advanced** (closed by default): channel (Stable / Beta / Nightly; changing it opens a dialog), wait after a release, install window, allow index rebuilds, and what to be notified about.
+- **Release notes:** each available release with its level badges (Fix, Feature, Major, Security, Manual steps), its date and its notes. "Read on GitHub" opens in a new tab.
+- **History:** the last updates as a table (version, level, date, result: installed / rolled back / skipped, with the reason).
+- **Roll back to 0.5.2** sits in the Danger zone (§10.10.7), with what it restores and how many torrents would be lost.
+- **Pause automatic updates** for 1, 7 or 30 days. While paused, a status line shows with Resume.
+- **When this installation can't update itself** (a `noexec` volume, a read-only install, or a package manager), the automatic options are disabled. The reason is shown in text next to them ("Your data volume is mounted noexec"), with the fix.
+- **Elsewhere:**
+  - the Overview's Needs attention shows available, failed and rolled-back updates, plus a pending install with its time;
+  - the status pill shows "Updating…" during an install;
+  - the restart overlay (§10.10.6) is reused for the restart step.
 
 ### 10.11 Component inventory (one canonical primitive per role)
 - **Controls and fields:** Button (primary / secondary / quiet / danger × dense / default, with a loading state), IconButton, Field (Input, Select, Combobox, Textarea, Checkbox, Radio, Toggle, Slider, RangeInput with units), SegmentedControl.
@@ -1299,7 +1330,7 @@ With the plum swap, all six colours are distinct under normal vision. Under colo
 ## 12. Security & operations
 
 - First-run setup requires a **one-time setup token printed to the logs/console** (the Jupyter/Portainer pattern), so nobody else on the LAN can claim a fresh headless instance. It then creates an admin password (argon2). Session cookies. API keys for Torznab and integrations. Optional trusted reverse-proxy header auth. CSP and security headers. Rate limiting on the API.
-- **Upgrades:** an automatic SQLite snapshot before any schema migration, with `lodestar rollback`. Docker tags: `x.y.z`, `x.y`, `latest`, `nightly`. Optional in-app "update available" check (no telemetry, ever).
+- **Upgrades:** an automatic SQLite snapshot before any schema migration, with `lodestar rollback`. Docker tags: `x.y.z`, `x.y`, `latest`, `nightly`. Updates are off until you choose Check and notify or Install automatically. Automatic installs are graded by release level, signed, health-checked and rolled back on failure (§12.2). No telemetry, ever.
 - **Cluster security** (§19.6): mutual TLS with a cluster CA created on first use; one-time join tokens (15-minute expiry); per-worker certificates with immediate revocation; workers receive only the have-filter, assignments, sealed credentials and leases; 0.5% re-verification sampling with quarantine and purge-by-worker.
 - **Companion supply chain** (§18.10): a signed catalogue pinned per release, with SHA-256 and upstream signatures verified before anything runs. Every install needs confirmation; companions run with the least privilege, bound to localhost or the internal network; credentials are random and encrypted at rest.
 - **Content safety (§20):** the child-safety core is **always on**, on every source, network and worker. Its **locked floor** (CS-1a/1b, CS-8a: torrents you confirmed or imported, plus their exact reposts) can't be removed. Every other core rule is **editable and can be switched off** behind guardrails: intent fixtures, protective-only actions, overrides over signed base rules, and, for any change that weakens protection, a plain-language effect warning (§20.11) and your password. No audit log is kept. Your **CSX-5 override list** can override everything except the floor, always after a mandatory **impact preview**. Hash-list matches are dropped; pattern matches are quarantined (hash + sealed name) for review. Nothing else is stored or indexed.
@@ -1386,6 +1417,90 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
   - **`GET /logs/files`:** name, size, time range, and whether the file contains torrent details.
   - **`GET /logs/files/{name}?format=text|jsonl&redact=true|false`** and **`GET /logs/archive.zip`**. `redact=true` strips the fields marked as sensitive, so a log written with identifying kinds on can still be shared safely. It's the default whenever a file contains details.
   - **`DELETE /logs/files`:** delete log files, all of them or only those containing details.
+
+### 12.2 Updates and auto-update
+**The owner's decision (§2.13): updating should be easy, automatic if you want it, and optional at each release level.** Auto-update is **off until you choose it**, because Lodestar is offline by default (§1.2.3) and checking for updates contacts GitHub. Once on, an update must never leave you worse off. Every artifact is verified before it runs. Every install is checked afterwards, and rolled back on its own if it fails.
+
+- **Release levels.** Every release's signed manifest (below) declares its level. The level is set by the release process, not guessed from the version number, so 0.x releases are graded honestly too:
+  - **Fix:** bug and security fixes. No schema migration, no reindex, no config change.
+  - **Feature:** may migrate the store (with the automatic snapshot, §12) or start a background reindex (§8; search keeps serving). Never needs manual steps.
+  - **Major:** may change config or behaviour in ways you should read about first.
+
+  The manifest also says whether a release is a **security** release, whether it needs **manual steps**, the **oldest version it upgrades from**, and whether it has been **withdrawn**.
+- **Channels:** **Stable** (version tags, the default), **Beta** (`-beta.N` pre-releases, which also receive stable releases), **Nightly** (built every day from `main`; for testing only). Moving to a less stable channel warns that it may need a restore from snapshot. Moving back waits for the next release on the chosen channel; it never downgrades.
+- **Your choices** (Settings → Updates, §10.10.14). Each is a setting, and a `LODESTAR_UPDATES_*` variable can lock it:
+
+  | Setting | Options | Default |
+  |---|---|---|
+  | Updates | **Off** · **Check and notify** · **Install automatically** | Off; the first-run wizard asks (§10.10.10) |
+  | Install automatically | **Fixes only** · **Fixes and features** · **All releases** | Fixes only |
+  | Always install security fixes | on / off: installs a security release even when the level above or "Check and notify" wouldn't | on (once updates aren't Off) |
+  | Channel | Stable · Beta · Nightly | Stable |
+  | Wait after a release | 0–14 days before auto-installing, so a bad release can be withdrawn first; doesn't apply to security fixes | 3 days |
+  | Install window | a daily time range, local time | 03:00–05:00 |
+  | Allow updates that rebuild the search index | on / off | on |
+  | Notify me | before an install, after it, and on failure, through any notification channel (§10.10.8) | after and on failure |
+
+  Releases that need manual steps are **never** auto-installed, at any level. They're announced with their notes and a guided **Install now**.
+- **Checking:**
+  - at most every 6 hours, at a random minute;
+  - one request for the signed manifest of the chosen channel, from GitHub Releases, through the egress settings (§5) and the SSRF guard;
+  - **no identifier, version or other data about you is sent** beyond what any download reveals (your IP, to GitHub). The "No telemetry, ever" promise (§12, About) stands.
+- **Verification. Nothing runs that isn't signed:**
+  - The **manifest** is signed with the project's release key (Ed25519, minisign format). The public key is built into the binary.
+  - Each **artifact** (binary, MSI) is pinned in the manifest by SHA-256 and size, and checked after download. Windows artifacts are also Authenticode-signed (M6), and that signature is checked too.
+  - **Key rotation:** a new key is announced in a manifest signed by the old key. Lodestar never accepts a key it can't chain back to the built-in one.
+  - A **downgrade** or a **replayed old manifest** is refused: versions only go up, and manifests carry a timestamp and an expiry.
+  - Release engineering (M6 `release.yml`) signs with a key the owner holds as a CI secret. The private key never enters the repository. *Owner action: create the key pair.*
+- **Before installing:**
+  - **Where the installation can update itself:** `noexec` data volumes, a read-only binary location with no data-directory fallback, and package-managed installs fall back to Check and notify, with the reason.
+  - **Free space:** enough for the store snapshot, the new binary, and the manifest's reindex estimate.
+  - **Not busy:** no background rebuild, import or backup running. Otherwise it defers to the next window.
+  - **The upgrade path:** if the installed version is older than the release's oldest supported version, Lodestar installs the intermediate releases in order.
+- **How it installs, per deployment:**
+  - **Docker and Unraid (in-container update):**
+    - The verified binary goes to `<data>/bin/lodestar-<version>`.
+    - At start, the image's binary checks `<data>/bin/` for a **newer, verified** version and `exec`s it, so the container's PID 1 survives. The signature is checked again at every start.
+    - A newer **image** always wins: when you pull an image newer than the overlay, the overlay is removed.
+    - About shows "Image 0.5.2 · running 0.5.3 (updated in place)".
+    - If you'd rather update the image yourself (Unraid's auto-update plugin, Watchtower, a pinned tag), choose **Container image updates**. Lodestar then only notifies, so two updaters don't fight. Setting `LODESTAR_UPDATES=notify` in the template locks this.
+  - **Linux tarball or systemd:** the same overlay in the data directory. The unit's `ExecStart` is the stable path, and that binary hands over at start. Lodestar never writes to `/usr/local/bin` or anywhere outside the data directory.
+  - **Windows service (MSI):** a small detached helper (`lodestar update-helper`) verifies the MSI, runs `msiexec` quietly, and watches the service come back. Windows Installer handles files, the service and the firewall rules.
+  - **Windows portable:** the running `.exe` is renamed aside, the new one is put in place, and Lodestar restarts.
+  - **Workers (v0.6):** the coordinator updates first, then offers each worker the same signed release over the cluster channel (§19.6). Workers drain, update and rejoin one at a time, within the protocol's version window.
+- **After installing: health check and automatic rollback:**
+  - The new version must pass a **self-test within 5 minutes**:
+    - the store opens and its migrations are complete;
+    - the search index answers a query;
+    - the HTTP and DHT ports are bound;
+    - `/healthz` is green.
+  - **If it fails**, Lodestar rolls back on its own:
+    1. it restores the pre-update store snapshot if a migration ran;
+    2. it starts the previous binary (the last one is always kept);
+    3. it marks the version as **skipped**;
+    4. it notifies you with the reason.
+
+    Torrents ingested during those few minutes are lost in a store restore. The notification says how many.
+  - **A withdrawn release** (the manifest says so) is never installed. If it's already running, Lodestar offers **Roll back to 0.5.2**. It doesn't roll back silently, because the data may have moved on.
+  - Manual rollback is always there: **Roll back** in Settings → Updates (the previous version, while its snapshot is kept), and `lodestar rollback` (§12).
+- **Update history:** the last 20 updates (version, level, when, result, and any rollback with its reason), kept in `settings`. This is about software, not torrents, so the owner's no-audit-log decisions don't apply. **Clear history** is there anyway.
+- **API:**
+  - `GET /updates`: status, available releases with notes and levels, the next window, and history;
+  - `POST /updates/check`;
+  - `POST /updates/install {version}`: now, or at the next window;
+  - `POST /updates/skip {version}`;
+  - `POST /updates/pause {days}`;
+  - `POST /updates/rollback`.
+
+  An `updates` SSE topic carries progress (downloading, verifying, waiting for the window, installing, restarting, checking health, done or rolled back).
+- **Tests:**
+  - a fake release server with signed fixture manifests: good, bad signature, wrong hash, downgrade, replay, expired, withdrawn, needs-manual, a skipped-version chain;
+  - per-deployment installs in CI: the Docker overlay, Linux, and the Windows MSI on the Windows runner;
+  - a forced self-test failure that must restore the snapshot and the previous binary;
+  - a `noexec` volume that must fall back to notify;
+  - an install window that holds while a rebuild runs.
+
+  The supply-chain path gets `/security-review`.
 
 ## 13. Repo layout (Cargo workspace)
 
@@ -2447,7 +2562,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Stale-tab check:** a mismatch between the UI and the server build is caught on every page load, not only on About.
 - **Embedded release notes** for the running version.
 - **Data formats and this installation:** schema and index versions, deployment, data sizes.
-- **Updates:** a manual **Check now** (one GitHub request; automatic checks stay off by default), plus update steps for each deployment. Lodestar never updates itself.
+- **Updates:** a manual **Check now**, update steps for each deployment, and a link to Settings → Updates. Auto-update came the same day (§12.2).
 - **Help and community links:** built from `Cargo.toml`'s `repository`. Report a problem shows what it will prefill before anything leaves.
 - **"No telemetry, ever"**, with a list of everything Lodestar connects to.
 - **Diagnostics.**
@@ -2455,6 +2570,32 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **About needs sign-in**, so the version isn't disclosed to anyone else.
 - **Licence:** the owner chose **AGPL-3.0-or-later** (owner's decision §2.12), applied in this PR, with the brand assets kept outside it. The licence allowlist in CI follows from it.
 - **Slices:** the screen is a Sonnet slice, `S-about`. The build metadata, the update check and the licence generation sit with B2c, which owns `/system`; the update check goes through the network stack and the SSRF guard.
+
+**Auto-update (owner, 2026-10-22, §12.2, §10.10.14):** the owner asked for "easy auto update capability", optional at various release levels. This replaces "Lodestar never updates itself" and the optional update check (owner's decision §2.13).
+- **Off until chosen**, because checking contacts GitHub (offline by default, §1.2.3). The choices are **Check and notify** and **Install automatically**.
+- **Levels:** Fixes only (the recommended choice), Fixes and features, All releases.
+  - **Always install security fixes** is on by default.
+  - Releases that need manual steps never auto-install.
+  - Levels come from the signed manifest, not from version numbers.
+- **Channels:** Stable, Beta, Nightly.
+- **Safety:**
+  - a 3-day wait after release, except for security fixes;
+  - an install window;
+  - Ed25519 signatures on the manifest, SHA-256 pins for artifacts, Authenticode on Windows;
+  - downgrade and replay refused;
+  - pre-flight checks;
+  - a self-test within 5 minutes, with automatic rollback (snapshot and previous binary);
+  - withdrawn releases never installed.
+- **Per deployment:**
+  - **Docker, Unraid and Linux** get a verified binary overlay in the data directory, `exec`'d at start. A newer image wins.
+  - **"Container image updates"** defers to Unraid's or Watchtower's image updates.
+  - **The Windows MSI** goes through a detached helper. Portable Windows uses rename-and-replace.
+  - **Workers** update after the coordinator.
+- **Slices:**
+  - the update engine (`B-update`, Opus, `/security-review`);
+  - the Windows paths and the signed manifest in `release.yml` (with M6);
+  - the screen (`S-updates`, Sonnet).
+- **Owner action:** create the release signing key pair and store the private key as a CI secret.
 
 ## 17. Verification (once built)
 

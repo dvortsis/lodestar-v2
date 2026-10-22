@@ -104,6 +104,10 @@ Category labels (facets, file tree) and the group each colours as
 | `log_private` | Private | The default data preset: no torrent or peer identifiers in any line. | 私密 (TBD) |
 | `live_log` | Live log | The page that follows new log lines as they're written (`/logs`). | 实时日志 (TBD) |
 | `full_log` | Log files | The log files on disk, listed in Settings → Logging, for download. | 日志文件 (TBD) |
+| `update_fix` | Fix | A release with bug and security fixes only: no data migration, no reindex, no config change. | 修复 (TBD) |
+| `update_feature` | Feature | A release that may migrate data (after a snapshot) or rebuild the search index in the background. | 功能 (TBD) |
+| `update_major` | Major | A release that may change config or behaviour; read its notes first. | 重大 (TBD) |
+| `update_rolled_back` | Rolled back | An update that failed its health check and was undone automatically. | 已回滚 (TBD) |
 | `needs_attention` | Needs attention | The Overview's list of problems, each with one action that fixes it. | 需要注意 (TBD) |
 
 Don't write "env", "override", "custom" or "dirty" in these labels.
