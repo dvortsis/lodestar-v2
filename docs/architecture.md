@@ -1776,6 +1776,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 **M5 decisions (filtering, owner 2026-10-22):** PRs #33, #42 and #47 merged before §2.7–2.9 were applied. F1 brought `main` into line:
 - **Rule packs are off until chosen (§2.8, §20.6).** With nothing stored, `pack_switches` starts from no pack on. Packs turn on only through a stored choice: the wizard (pre-checked there) or Settings through the filters API. The guards and pack logic are unchanged.
 - **The 50 µs budget is the owner's (§1.6.6, §20.8).** `LODESTAR_BUDGET_US` is gone. The `filter budget` CI job runs the gate in release.
+  - **Held at the reference runner's speed (F1b, waiting for the owner's OK):** shared runners differ by 25–30%, so the gate scales a slower runner's budget by a calibration workload's time over the reference runner's (60 ms), never below 50 µs and at most 1.6×. The evidence and the strict-side tracking error are in §20.8.
   - **The first gate wasn't honest.** It judged one torrent, over and over, against rules none of whose words it had, so the narrowing skipped 99% of them. The review made 10% of the rules candidates that matched nothing and measured 16.8–17.0 ms per torrent.
   - **The gate now** judges a varied set of 512 torrents with 1%, 10% and 25% of the rules built on words they have, and about 40 rules per torrent that get the full match (§20.8). It holds the core, 1% and 10%; 25% is reported.
   - **What made it:** compiled queries with a three-valued cheap check (token texts, a Bloom filter of neighbouring tokens, token starts, extensions, sizes, tags); an index keyed on each rule's rarest-looking word; an exact ASCII fast path of the search tokenizer for the full match; a per-torrent vocabulary for prefixes and fuzzy words; and word plans and a flag table in the core's tokenizer and signals. On this set the engine went from 30 ms per torrent at 10% to 40.8 µs on the runner (core 8.9, 1% 32.9, 25% 48.1 reported). The build VM runs about 1.4× slower.
@@ -2673,8 +2674,26 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
   - **As built:** `filter budget` in CI runs the ignored `budget` test in release on the runner.
     - **The set:** 512 generated video releases (films and season packs, 1 to 60 files, 15 on average, with samples, subtitles and NFOs, varied sources, codecs, groups and made-up titles). Each pass judges every torrent once, so the tokenizer's per-word caches warm only as they would on ingest. It takes the median of seven passes after one warm-up.
     - **The rules:** 10,000, with a share (1%, 10%, 25%) built on words the set has, so the narrowing can't rule them out by those words, and matching nothing. They're the review's `1080p <unique>` shape, phrases of two common words out of order, a common word with a size or a type no torrent has, and `file:(word size)`. The rest are keywords, phrases, groups, narrowed keywords and alternatives the set doesn't have, plus 1% that no word narrows: sizes, prefixes that start like the set's words (`1080z*`), and fuzzy words. The prefixes and fuzzy words get the full match on every torrent, about 40 rules per torrent.
-    - **The gate** holds the core, the 1% case and the 10% case under 50 µs, with no override. The 25% case is measured and reported, not held.
-    - **On the runner** (job 119777628892): core 8.93 µs; whole engine 32.92 µs at 1%, 40.78 µs at 10%, 48.05 µs at 25%. Fresh torrent sets cost the same as warm ones. The build VM runs about 1.4× slower and noisier (core 11–16, 1% 43–50, 10% 56–64, 25% 69–104), so the 10% case can fail there; the runner decides.
+    - **The gate** holds the core, the 1% case and the 10% case under 50 µs at the reference runner's speed, with no override. The 25% case is measured and reported, not held.
+    - **Calibrated to the runner (F1b):** GitHub's runners differ by 25–30% in speed. The same filter code measured 40.8 µs at 10% on one (df5cb91) and 51.3 µs on the next (813ef0d), so a fixed threshold can't be stable.
+      - Before each timing pass, the test times a fixed CPU workload that shares no code with the filter: splitting, lowercasing, hashing and sorting a fixed corpus, the median of three runs.
+      - The pass is scaled by that time over the reference's, `REFERENCE_NS` = 60 ms, which is the speed of the runner that set the 40.8 µs.
+      - The median of the seven scaled passes is held to 50 µs.
+      - The scale only goes up, so a runner as fast as the reference or faster gets exactly 50 µs. It's capped at 1.6× (80 µs), so a pathologically slow or overloaded runner fails rather than passing anything.
+      - The log gives each pass's calibration and scale, and each case's raw time, scaled time and effective budget.
+    - **Calibration evidence:**
+
+      | Runner (job) | Calibration | Core | 10% |
+      |---|---|---|---|
+      | reference (119803975616, df5cb91) | not measured | 8.93 µs | 40.78 µs |
+      | A (119813282517) | 62.3 ms | 9.16 µs | 42.65 µs |
+      | B (119818398095) | 68.6 ms | 11.56 µs | 52.80 µs |
+
+      - A is 2.6–4.6% slower than the reference by the filter's own numbers, which puts the reference near 62.3 / 1.04 ≈ 60 ms.
+      - From A to B the filter slowed 1.24–1.26×, but the calibration only 1.10×. The calibration tracks a runner's speed in direction but not in full, so it errs strict: a slower runner gets less allowance than its slowdown. B scales by 1.14 to a 57 µs budget for a 52.8 µs case.
+      - The build VM likewise comes out about 3% over at 10% (51.3–51.8 µs scaled, across runs), where it used to swing by 20 µs.
+      - Deriving the reference from B with 1:1 tracking would give 53 ms, a budget about 13% looser on runners like A.
+    - **On the reference runner** (job 119777628892): core 8.93 µs; whole engine 32.92 µs at 1%, 40.78 µs at 10%, 48.05 µs at 25%. Fresh torrent sets cost the same as warm ones. The build VM runs about 1.4× slower and noisier (core 11–16, 1% 43–50, 10% 56–64, 25% 69–104), so the 10% case can fail there; the runner decides.
     - **Scope:** the gate covers rule shapes the cheap check can reject. Shapes it can't decide get the full match on every torrent that has their words. The review measured them at 10% of rules on the build VM (divide by about 1.4 for the runner):
 
       | Shape at 10% of rules | Build VM, µs per torrent |

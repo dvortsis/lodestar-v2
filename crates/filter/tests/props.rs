@@ -1,6 +1,6 @@
 //! Hostile input (§6 "Hostile-input limits"): any text, any file list.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use lodestar_classify::{ContentType, FileInfo};
 use lodestar_filter::{Core, CsList, Fixture, Item, Lists, Switches, normalize};
@@ -246,10 +246,25 @@ fn ten_thousand_rules(share: usize) -> Vec<lodestar_filter::UserRule> {
         .collect()
 }
 
-/// The calibration workload's median time on the reference runner, in
-/// nanoseconds: the runner that measured F1's merge commit (df5cb91, job
-/// 119803975616: core 8.9 µs, 10% 40.8 µs). See [`calibrate`].
-const REFERENCE_NS: u64 = 51_000_000;
+/// The calibration workload's time on the reference runner, in
+/// nanoseconds: the speed at which the owner's 50 µs is held.
+///
+/// The reference runner is the one that measured F1's merge commit
+/// (df5cb91, job 119803975616: core 8.93 µs, 10% 40.78 µs), before this
+/// calibration existed, so the value comes from the nearest measured
+/// runner. PR #66's first run (job 119813282517) calibrated at 62.3 ms
+/// with core 9.16 µs and 10% 42.65 µs: 2.6-4.6% slower than the reference
+/// by the filter's own numbers, so the reference is 62.3 / 1.04 ≈ 60 ms.
+///
+/// A second runner (job 119818398095) calibrated at 68.6 ms with core
+/// 11.56 µs and 10% 52.80 µs. There the filter ran 1.24-1.26 times slower
+/// than on the first, but the calibration only 1.10 times: it tracks the
+/// direction of a runner's speed, not all of it, which errs strict (a
+/// slower runner gets less allowance than its slowdown). Deriving the
+/// reference from that runner instead, assuming 1:1 tracking, would give
+/// 53 ms and a budget about 13% looser on a runner like the first.
+/// Re-check this if a run lands on a runner as fast as the reference.
+const REFERENCE_NS: u64 = 60_000_000;
 
 /// The budget's scale is capped here, so a pathologically slow or
 /// overloaded machine fails rather than passing anything.
@@ -258,33 +273,43 @@ const MAX_SCALE: f64 = 1.6;
 /// A fixed CPU workload that shares no code with the filter crate: split
 /// a fixed corpus of release-like lines into words, lowercase them into a
 /// buffer, hash them (FNV-1a), count them in a table and sort each line's
-/// hashes. It's what the filter does in kind (bytes, small strings,
-/// hashing, branches), so it tracks the same CPU differences. Returns the
-/// median of seven runs, in nanoseconds, after one warm-up.
-fn calibrate() -> u64 {
-    let mut r = Rng(0x2545_f491_4f6c_dd1d);
-    let corpus: Vec<String> = (0..4_000)
-        .map(|_| {
-            let words = 6 + r.next() as usize % 10;
-            (0..words)
-                .map(|_| {
-                    let w = r.word();
-                    match r.next() % 4 {
-                        0 => w.to_uppercase(),
-                        1 => format!("{w}{}", r.next() % 2160),
-                        _ => w,
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(if r.next() % 2 == 0 { "." } else { " " })
-        })
-        .collect();
-    let run = || {
+/// hashes: what the filter does in kind (bytes, small strings, hashing,
+/// branches). On the one runner pair measured it moved 1.10 times where
+/// the filter moved 1.24-1.26 times ([`REFERENCE_NS`]), so it errs strict.
+struct Calibration {
+    corpus: Vec<String>,
+}
+
+impl Calibration {
+    fn new() -> Calibration {
+        let mut r = Rng(0x2545_f491_4f6c_dd1d);
+        let corpus = (0..4_000)
+            .map(|_| {
+                let words = 6 + r.next() as usize % 10;
+                (0..words)
+                    .map(|_| {
+                        let w = r.word();
+                        match r.next() % 4 {
+                            0 => w.to_uppercase(),
+                            1 => format!("{w}{}", r.next() % 2160),
+                            _ => w,
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(if r.next() % 2 == 0 { "." } else { " " })
+            })
+            .collect();
+        let c = Calibration { corpus };
+        c.work();
+        c
+    }
+
+    fn work(&self) {
         let mut table = vec![0u32; 4096];
         let mut word = String::new();
         let mut hashes: Vec<u64> = Vec::new();
         for _ in 0..30 {
-            for line in &corpus {
+            for line in &self.corpus {
                 hashes.clear();
                 for w in line.split(|c: char| !c.is_ascii_alphanumeric()) {
                     word.clear();
@@ -296,20 +321,24 @@ fn calibrate() -> u64 {
                     hashes.push(h);
                 }
                 hashes.sort_unstable();
+                std::hint::black_box(&hashes);
             }
         }
         std::hint::black_box(&table);
-    };
-    run();
-    let mut times: Vec<u64> = (0..7)
-        .map(|_| {
-            let start = Instant::now();
-            run();
-            start.elapsed().as_nanos() as u64
-        })
-        .collect();
-    times.sort_unstable();
-    times[3]
+    }
+
+    /// The workload's time now, in nanoseconds: the median of three runs.
+    fn measure(&self) -> u64 {
+        let mut t: Vec<u64> = (0..3)
+            .map(|_| {
+                let start = Instant::now();
+                self.work();
+                start.elapsed().as_nanos() as u64
+            })
+            .collect();
+        t.sort_unstable();
+        t[1]
+    }
 }
 
 /// §20.8 and the owner's budget (§1.6.6): under 50 µs per torrent at
@@ -324,25 +353,13 @@ fn calibrate() -> u64 {
 ///
 /// The owner's 50 µs holds at the reference runner's speed. A slower
 /// machine gets the budget scaled by how much slower it runs a fixed
-/// workload ([`calibrate`]), up to [`MAX_SCALE`]; a faster one never gets
+/// workload ([`Calibration`]), up to [`MAX_SCALE`]; a faster one never gets
 /// more than 50 µs.
 #[test]
 #[ignore]
 fn budget() {
     const OWNERS_US: f64 = 50.0;
-    // Calibrated right before each case, so a shared machine's speed is
-    // read when the case runs.
-    let calibrated = || {
-        let now = calibrate();
-        let scale = (now as f64 / REFERENCE_NS as f64).clamp(1.0, MAX_SCALE);
-        let budget = std::time::Duration::from_secs_f64(OWNERS_US * scale / 1e6);
-        let line = format!(
-            "calibration {:.1} ms (reference {:.1} ms), scale {scale:.2}, budget {budget:?}",
-            now as f64 / 1e6,
-            REFERENCE_NS as f64 / 1e6
-        );
-        (budget, line)
-    };
+    let calibration = Calibration::new();
     let set = torrents(512);
     let classes: Vec<_> = set
         .iter()
@@ -377,32 +394,50 @@ fn budget() {
         files as f64 / items.len() as f64
     );
     // A warm-up pass (the first judgment also builds the rule index),
-    // then the median of seven passes over the set, so one noisy pass on
-    // a shared runner doesn't decide. Each pass's mean is printed.
+    // then seven passes over the set, each right after a calibration, so
+    // a shared machine's speed is read as each pass runs. Each pass is
+    // scaled to the reference runner's speed (never faster than it, at
+    // most MAX_SCALE slower), and the median of those decides, so one
+    // noisy pass doesn't. Returns that median: the time at the reference
+    // runner's speed, which the owner's 50 µs holds.
     let time = |what: &str, f: &dyn Fn(usize)| {
         (0..items.len()).for_each(f);
-        let mut passes: Vec<_> = (0..7)
+        let mut passes: Vec<(Duration, f64, f64)> = (0..7)
             .map(|_| {
+                let c = calibration.measure() as f64;
+                let scale = (c / REFERENCE_NS as f64).clamp(1.0, MAX_SCALE);
                 let start = Instant::now();
                 (0..items.len()).for_each(f);
-                start.elapsed() / items.len() as u32
+                (start.elapsed() / items.len() as u32, scale, c / 1e6)
             })
             .collect();
-        println!("{what}: passes {passes:?}");
-        passes.sort();
-        let per = passes[3];
-        println!("{what}: {per:?} per torrent");
-        per
+        let shown: Vec<String> = passes
+            .iter()
+            .map(|(t, s, c)| format!("{t:.1?} (calibration {c:.1} ms, scale {s:.2})"))
+            .collect();
+        println!("{what}: passes {shown:?}");
+        let mut raw: Vec<Duration> = passes.iter().map(|p| p.0).collect();
+        raw.sort();
+        passes.sort_by_key(|p| p.0.div_f64(p.1));
+        let (t, scale, _) = passes[3];
+        let judged = t.div_f64(scale);
+        println!(
+            "{what}: {:?} per torrent; {judged:.1?} at the reference speed \
+             (reference {:.1} ms, scale {scale:.2}, budget {:.1?})",
+            raw[3],
+            REFERENCE_NS as f64 / 1e6,
+            Duration::from_secs_f64(OWNERS_US * scale / 1e6)
+        );
+        judged
     };
     let core = shipped();
     let mut over = Vec::new();
-    let (budget, line) = calibrated();
+    let budget = Duration::from_secs_f64(OWNERS_US / 1e6);
     let per = time("core", &|i| {
         std::hint::black_box(core.verdict(std::hint::black_box(&items[i])));
     });
-    println!("core: {line}");
     if per >= budget {
-        over.push(format!("core: {per:?} ({line})"));
+        over.push(format!("core: {per:?} at the reference speed"));
     }
 
     // The whole engine: the core, every pack, and 10,000 of your rules,
@@ -421,7 +456,6 @@ fn budget() {
             met as f64 / items.len() as f64,
             full as f64 / items.len() as f64
         );
-        let (budget, line) = calibrated();
         let per = time(&what, &|i| {
             let v = engine.judge(std::hint::black_box(&items[i]), Some(&facts[i]), 0);
             assert!(
@@ -430,12 +464,11 @@ fn budget() {
                 "no rule of yours matches the set"
             );
         });
-        println!("{what}: {line}");
         if per >= budget {
             if held {
-                over.push(format!("{what}: {per:?} ({line})"));
+                over.push(format!("{what}: {per:?} at the reference speed"));
             } else {
-                println!("{what}: over {budget:?} (reported, not held)");
+                println!("{what}: over the budget (reported, not held)");
             }
         }
     }
