@@ -24,6 +24,9 @@ pub struct LiveConfig {
     pub commit_docs: usize,
     /// Torrents read from the store per step.
     pub batch: usize,
+    /// Tests only: while above zero, a commit fails (counting down).
+    #[cfg(test)]
+    pub(crate) fail_commits: Option<Arc<AtomicU64>>,
 }
 
 impl Default for LiveConfig {
@@ -34,9 +37,15 @@ impl Default for LiveConfig {
             commit_every: Duration::from_secs(2),
             commit_docs: 5000,
             batch: 1000,
+            #[cfg(test)]
+            fail_commits: None,
         }
     }
 }
+
+/// An error waits at least the poll interval before the indexer retries,
+/// doubling up to this.
+const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
 /// Counters for metrics and the status page.
 #[derive(Debug, Default)]
@@ -46,7 +55,10 @@ pub struct IndexStats {
     /// The highest id searchable.
     pub watermark: AtomicI64,
     pub commits: AtomicU64,
+    /// Errors the indexer recovered from (it retries each).
     pub errors: AtomicU64,
+    /// The latest of them, as text.
+    pub last_error: std::sync::Mutex<Option<String>>,
     /// Unix seconds of the last commit.
     pub last_commit: AtomicU64,
 }
@@ -145,60 +157,49 @@ impl LiveIndexer {
         stats: Arc<IndexStats>,
         hook: Arc<CommitHook>,
     ) -> Result<LiveIndexer> {
-        let mut indexer = index.writer(config.heap_bytes)?;
+        let indexer = index.writer(config.heap_bytes)?;
         let stop = Arc::new(AtomicBool::new(false));
         stats.watermark.store(indexer.last_id(), Ordering::Relaxed);
         let (s, st) = (stop.clone(), stats.clone());
         let thread = std::thread::Builder::new()
             .name("indexer".into())
             .spawn(move || {
-                let mut since = Instant::now();
-                // New torrents since the last commit, for the hook.
-                let mut new_docs = 0u64;
-                let commit = |indexer: &mut crate::Indexer, new_docs: &mut u64| -> Result<()> {
-                    indexer.commit()?;
-                    st.watermark.store(indexer.last_id(), Ordering::Relaxed);
-                    st.commits.fetch_add(1, Ordering::Relaxed);
-                    let now = unix_now();
-                    st.last_commit.store(now, Ordering::Relaxed);
-                    if *new_docs > 0 {
-                        hook.publish(Committed {
-                            docs_added: std::mem::take(new_docs),
-                            max_torrent_id: indexer.last_id(),
-                            at: now,
-                        });
+                let mut first = Some(indexer);
+                let mut backoff = config.poll;
+                loop {
+                    // After an error, a fresh writer resumes from the
+                    // committed watermarks, as after a crash: work since
+                    // the last commit is read from the store again, and
+                    // nothing is skipped or counted twice.
+                    let next = first
+                        .take()
+                        .map_or_else(|| index.writer(config.heap_bytes), Ok);
+                    let result = next.and_then(|mut indexer| {
+                        st.watermark.store(indexer.last_id(), Ordering::Relaxed);
+                        follow(
+                            &mut indexer,
+                            &mut store,
+                            &config,
+                            &st,
+                            &hook,
+                            &s,
+                            &mut backoff,
+                        )
+                    });
+                    let Err(e) = result else { return Ok(()) };
+                    // Counted and logged every time; the indexer never
+                    // stops on an error, only when told to.
+                    st.errors.fetch_add(1, Ordering::Relaxed);
+                    *st.last_error.lock().unwrap_or_else(PoisonError::into_inner) =
+                        Some(e.to_string());
+                    tracing::warn!("indexer: {e}; retrying in {backoff:?}");
+                    if !pause(&s, backoff) {
+                        // Stopping: what failed (the last commit, say) is
+                        // what `stop` reports.
+                        return Err(e);
                     }
-                    Ok(())
-                };
-                while !s.load(Ordering::Relaxed) {
-                    let added = match indexer.catch_up_counted(&mut store, config.batch) {
-                        Ok((added, replayed)) => {
-                            new_docs += added as u64;
-                            added + replayed
-                        }
-                        Err(e) => {
-                            // Transient (a busy database); try again shortly.
-                            st.errors.fetch_add(1, Ordering::Relaxed);
-                            tracing::warn!("indexer: {e}");
-                            std::thread::sleep(config.poll);
-                            continue;
-                        }
-                    };
-                    st.indexed.fetch_add(added as u64, Ordering::Relaxed);
-                    let due = indexer.pending() >= config.commit_docs
-                        || (indexer.pending() > 0 && since.elapsed() >= config.commit_every);
-                    if due {
-                        commit(&mut indexer, &mut new_docs)?;
-                        since = Instant::now();
-                    }
-                    if added == 0 {
-                        std::thread::sleep(config.poll);
-                    }
+                    backoff = (backoff * 2).min(MAX_BACKOFF);
                 }
-                if indexer.pending() > 0 {
-                    commit(&mut indexer, &mut new_docs)?;
-                }
-                Ok(())
             })
             .map_err(crate::index::Error::Io)?;
         Ok(LiveIndexer {
@@ -221,6 +222,84 @@ impl LiveIndexer {
             None => Ok(()),
         }
     }
+}
+
+/// Follows the store into `indexer` until stopped, committing what's
+/// pending at the end. Returns the first error, from the store or the
+/// index, leaving the retry to the caller.
+fn follow(
+    indexer: &mut crate::Indexer,
+    store: &mut Store,
+    config: &LiveConfig,
+    st: &IndexStats,
+    hook: &CommitHook,
+    stop: &AtomicBool,
+    backoff: &mut Duration,
+) -> Result<()> {
+    let mut since = Instant::now();
+    // New torrents since the last commit, for the hook.
+    let mut new_docs = 0u64;
+    while !stop.load(Ordering::Relaxed) {
+        let (added, replayed) = indexer.catch_up_counted(store, config.batch)?;
+        new_docs += added as u64;
+        let added = added + replayed;
+        st.indexed.fetch_add(added as u64, Ordering::Relaxed);
+        let due = indexer.pending() >= config.commit_docs
+            || (indexer.pending() > 0 && since.elapsed() >= config.commit_every);
+        if due {
+            commit(indexer, &mut new_docs, config, st, hook)?;
+            since = Instant::now();
+        }
+        *backoff = config.poll;
+        if added == 0 {
+            std::thread::sleep(config.poll);
+        }
+    }
+    if indexer.pending() > 0 {
+        commit(indexer, &mut new_docs, config, st, hook)?;
+    }
+    Ok(())
+}
+
+fn commit(
+    indexer: &mut crate::Indexer,
+    new_docs: &mut u64,
+    #[cfg_attr(not(test), allow(unused_variables))] config: &LiveConfig,
+    st: &IndexStats,
+    hook: &CommitHook,
+) -> Result<()> {
+    #[cfg(test)]
+    if let Some(n) = &config.fail_commits
+        && n.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
+            .is_ok()
+    {
+        return Err(crate::index::Error::Corrupt("test: the commit failed"));
+    }
+    indexer.commit()?;
+    st.watermark.store(indexer.last_id(), Ordering::Relaxed);
+    st.commits.fetch_add(1, Ordering::Relaxed);
+    let now = unix_now();
+    st.last_commit.store(now, Ordering::Relaxed);
+    if *new_docs > 0 {
+        hook.publish(Committed {
+            docs_added: std::mem::take(new_docs),
+            max_torrent_id: indexer.last_id(),
+            at: now,
+        });
+    }
+    Ok(())
+}
+
+/// Sleeps up to `d`, waking early when stopping. Returns whether to go on.
+fn pause(stop: &AtomicBool, d: Duration) -> bool {
+    let step = Duration::from_millis(20);
+    let mut left = d;
+    while !left.is_zero() && !stop.load(Ordering::Relaxed) {
+        let s = left.min(step);
+        std::thread::sleep(s);
+        left -= s;
+    }
+    !stop.load(Ordering::Relaxed)
 }
 
 impl Drop for LiveIndexer {
@@ -287,30 +366,71 @@ mod tests {
         (hook, seen)
     }
 
-    /// Only a hang takes this long. A 30 s deadline was a time budget
-    /// that a starved Windows CI runner missed (X-flakes).
+    /// An indexer whose counters don't move this long is stuck.
+    const STALL: Duration = Duration::from_secs(30);
+    /// A backstop: one that keeps moving without getting there.
     const HANG: Duration = Duration::from_secs(300);
 
-    /// Waits until `done`, failing with `what` only on a hang.
-    fn eventually(what: &str, mut done: impl FnMut() -> bool) {
-        let start = Instant::now();
+    /// What the indexer has done: torrents indexed, commits, errors.
+    fn progress(stats: &IndexStats) -> (u64, u64, u64) {
+        let get = |a: &AtomicU64| a.load(Ordering::Relaxed);
+        (get(&stats.indexed), get(&stats.commits), get(&stats.errors))
+    }
+
+    /// Waits until `done`. Fails at once, with the error, when the
+    /// indexer reports more than `errors` errors in all or its thread has
+    /// ended, and when its counters stop moving for [`STALL`].
+    fn eventually(
+        stats: &IndexStats,
+        thread: Option<&JoinHandle<Result<()>>>,
+        errors: u64,
+        what: &str,
+        mut done: impl FnMut() -> bool,
+    ) {
+        let (start, mut last) = (Instant::now(), progress(stats));
+        let mut moved = start;
         while !done() {
-            assert!(start.elapsed() < HANG, "{what}");
+            let now = progress(stats);
+            let error = || stats.last_error.lock().unwrap().clone();
+            assert!(now.2 <= errors, "{what}: the indexer failed: {:?}", error());
+            assert!(
+                !thread.is_some_and(JoinHandle::is_finished),
+                "{what}: the indexer stopped: {:?}",
+                error()
+            );
+            if now != last {
+                (last, moved) = (now, Instant::now());
+            }
+            assert!(moved.elapsed() < STALL, "{what}: stalled at {now:?}");
+            assert!(start.elapsed() < HANG, "{what}: never got there");
             std::thread::sleep(Duration::from_millis(5));
         }
     }
 
-    /// Waits until the reports add up to `n` torrents.
-    fn wait_for(seen: &Mutex<Vec<Committed>>, n: u64) -> Vec<Committed> {
-        let start = Instant::now();
-        loop {
-            let got = seen.lock().unwrap().clone();
-            if got.iter().map(|c| c.docs_added).sum::<u64>() >= n {
-                return got;
-            }
-            assert!(start.elapsed() < HANG, "{got:?}");
-            std::thread::sleep(Duration::from_millis(5));
-        }
+    /// Waits until the reports add up to `n` torrents, failing as
+    /// [`eventually`] does past `errors` errors.
+    fn wait_for(
+        stats: &IndexStats,
+        thread: Option<&JoinHandle<Result<()>>>,
+        errors: u64,
+        seen: &Mutex<Vec<Committed>>,
+        n: u64,
+    ) -> Vec<Committed> {
+        let sum = || {
+            seen.lock()
+                .unwrap()
+                .iter()
+                .map(|c| c.docs_added)
+                .sum::<u64>()
+        };
+        eventually(
+            stats,
+            thread,
+            errors,
+            &format!("reports adding up to {n}"),
+            || sum() >= n,
+        );
+        seen.lock().unwrap().clone()
     }
 
     #[test]
@@ -338,7 +458,8 @@ mod tests {
             hook.clone(),
         )
         .unwrap();
-        let first = wait_for(&seen, 3);
+        let (stats, thread) = (live.stats(), live.thread.as_ref());
+        let first = wait_for(&stats, thread, 0, &seen, 3);
         assert_eq!(first.len(), 1, "{first:?}");
         assert_eq!((first[0].docs_added, first[0].max_torrent_id), (3, 3));
         assert!(first[0].at > 0);
@@ -347,7 +468,7 @@ mod tests {
         for i in 0..3 {
             add(&mut writer, &format!("Batch.Two.{i}"));
         }
-        let both = wait_for(&seen, 6);
+        let both = wait_for(&stats, thread, 0, &seen, 6);
         assert_eq!(both.len(), 2, "{both:?}");
         assert_eq!((both[1].docs_added, both[1].max_torrent_id), (3, 6));
         // Without a sink, commits go on and report nothing.
@@ -355,11 +476,55 @@ mod tests {
         for i in 0..3 {
             add(&mut writer, &format!("Unreported.{i}"));
         }
-        eventually("the watermark reaches 9", || {
+        eventually(&stats, thread, 0, "the watermark reaches 9", || {
             index.watermark().unwrap() >= 9
         });
         live.stop().unwrap();
         assert_eq!(seen.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_failed_commit_is_retried_and_nothing_is_skipped_or_counted_twice() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("s.db");
+        let mut writer = Store::open(&db, StoreConfig::default()).unwrap();
+        for i in 0..3 {
+            add(&mut writer, &format!("Before.{i}"));
+        }
+        let index = SearchIndex::open(&tmp.path().join("index")).unwrap();
+        let (hook, seen) = collecting();
+        let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
+        let fail = Arc::new(AtomicU64::new(0));
+        let config = LiveConfig {
+            commit_every: Duration::from_secs(3600),
+            commit_docs: 3,
+            fail_commits: Some(fail.clone()),
+            ..quick()
+        };
+        let live =
+            LiveIndexer::spawn_with_stats(index.clone(), reader, config, Arc::default(), hook)
+                .unwrap();
+        let (stats, thread) = (live.stats(), live.thread.as_ref());
+        wait_for(&stats, thread, 0, &seen, 3);
+        // The next commit fails once (a sharing violation on Windows,
+        // say): the indexer goes on from what was committed.
+        fail.store(1, Ordering::Relaxed);
+        for i in 0..3 {
+            add(&mut writer, &format!("After.{i}"));
+        }
+        eventually(&stats, thread, 1, "the watermark reaches 6", || {
+            index.watermark().unwrap() >= 6
+        });
+        assert_eq!(stats.errors.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            stats.last_error.lock().unwrap().as_deref(),
+            Some("corrupt index: test: the commit failed")
+        );
+        let got = wait_for(&stats, thread, 1, &seen, 6);
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert_eq!((got[1].docs_added, got[1].max_torrent_id), (3, 6));
+        assert_eq!(index.num_docs(), 6, "added once");
+        live.stop().unwrap();
     }
 
     #[test]
@@ -374,16 +539,20 @@ mod tests {
         let live =
             LiveIndexer::spawn_with_stats(index.clone(), reader, quick(), Arc::default(), hook)
                 .unwrap();
-        wait_for(&seen, 1);
         let stats = live.stats();
+        wait_for(&stats, live.thread.as_ref(), 0, &seen, 1);
         let commits = stats.commits.load(Ordering::Relaxed);
         // New enrichment logs a re-index of the same torrent.
         lodestar_pipeline::enrich::enrich_stored(&mut writer, 0, 100)
             .unwrap()
             .unwrap();
-        eventually("a commit for the re-index", || {
-            stats.commits.load(Ordering::Relaxed) != commits
-        });
+        eventually(
+            &stats,
+            live.thread.as_ref(),
+            0,
+            "a commit for the re-index",
+            || stats.commits.load(Ordering::Relaxed) != commits,
+        );
         live.stop().unwrap();
         assert_eq!(seen.lock().unwrap().len(), 1);
     }
@@ -431,7 +600,8 @@ mod tests {
             .set(move |c| s.lock().unwrap().push(c));
         // Before the swap: the old index's indexer reports.
         add(&mut writer, "Before.Swap");
-        wait_for(&seen, 1);
+        let stats = serving.stats();
+        wait_for(&stats, None, 0, &seen, 1);
         // The rebuild's own commits (20 torrents, in fours) reported
         // nothing.
         assert_eq!(seen.lock().unwrap().len(), 1);
@@ -448,11 +618,13 @@ mod tests {
             })
         };
         hold.store(false, Ordering::Relaxed);
-        eventually("the rebuild finishes", || !serving.rebuilding());
+        eventually(&stats, None, 0, "the rebuild finishes", || {
+            !serving.rebuilding()
+        });
         adding.join().unwrap();
         // After it: the new index's indexer reports to the same hook.
         add(&mut writer, "After.Swap");
-        let got = wait_for(&seen, 32);
+        let got = wait_for(&stats, None, 0, &seen, 32);
         assert_eq!(got.iter().map(|c| c.docs_added).sum::<u64>(), 32, "{got:?}");
         assert_eq!(got.iter().map(|c| c.max_torrent_id).max(), Some(52));
         serving.shutdown().unwrap();
