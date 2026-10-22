@@ -15,11 +15,14 @@
 //! locked floor, protective core actions, valid overrides and exceptions)
 //! hold on this server whatever a client sends.
 
+use std::collections::HashMap;
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use lodestar_classify::ContentType;
 use lodestar_filter::lists::SharedIps;
@@ -44,6 +47,11 @@ pub struct FiltersApi {
     pub held: Arc<HeldSet>,
     pub sealer: Option<Arc<Sealer>>,
     pub ips: Arc<SharedIps>,
+    /// For finding the stored torrents a classification rule matches.
+    pub index: Option<lodestar_search::SearchIndex>,
+    /// Starts another background-enrichment pass in the pipeline.
+    pub reenrich: Arc<AtomicBool>,
+    pub jobs: PreviewJobs,
 }
 
 /// The replay window (§20.10).
@@ -277,6 +285,115 @@ pub struct Assessment {
     pub neutralize: Option<Preview>,
 }
 
+/// How far a preview has got (§20.10): shared with a running job, read by
+/// `GET /filters/preview/jobs/{id}`.
+#[derive(Debug, Default)]
+pub struct Progress {
+    phase: AtomicU8,
+    done: AtomicU64,
+    total: AtomicU64,
+    cancelled: AtomicBool,
+}
+
+const PHASES: [&str; 4] = ["reading", "quarantine", "tombstones", "done"];
+const READING: u8 = 0;
+const QUARANTINE: u8 = 1;
+const TOMBSTONES: u8 = 2;
+const DONE: u8 = 3;
+
+impl Progress {
+    fn begin(&self, phase: u8, total: usize) {
+        self.done.store(0, Ordering::Relaxed);
+        self.total.store(total as u64, Ordering::Relaxed);
+        self.phase.store(phase, Ordering::Release);
+    }
+
+    /// Counts `n` more items; refused once the job was cancelled.
+    fn step(&self, n: u64) -> ApiResult<()> {
+        self.done.fetch_add(n, Ordering::Relaxed);
+        if self.cancelled.load(Ordering::Acquire) {
+            return Err(ApiError::new(StatusCode::CONFLICT, "preview cancelled"));
+        }
+        Ok(())
+    }
+
+    /// Stops the preview at its next step.
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
+    fn json(&self) -> Value {
+        let phase = self.phase.load(Ordering::Acquire) as usize;
+        json!({
+            "phase": PHASES[phase.min(PHASES.len() - 1)],
+            "done": self.done.load(Ordering::Relaxed),
+            "total": self.total.load(Ordering::Relaxed),
+        })
+    }
+}
+
+/// A preview running in the background (§20.10), so a large one never
+/// holds a request open and can be cancelled.
+#[derive(Debug, Default)]
+pub struct Job {
+    progress: Progress,
+    result: Mutex<Option<ApiResult<Assessment>>>,
+    finished: Mutex<Option<Instant>>,
+}
+
+/// The preview jobs of this server; finished ones are kept for
+/// [`JOB_KEEP`].
+#[derive(Debug, Default)]
+pub struct PreviewJobs {
+    next: AtomicU64,
+    jobs: Mutex<HashMap<u64, Arc<Job>>>,
+}
+
+/// Previews running at once, at most.
+const MAX_JOBS: usize = 4;
+/// How long a finished preview's result is kept.
+const JOB_KEEP: Duration = Duration::from_secs(600);
+
+impl PreviewJobs {
+    fn start(&self) -> ApiResult<(u64, Arc<Job>)> {
+        let mut jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
+        jobs.retain(|_, j| {
+            j.finished
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_none_or(|at| at.elapsed() < JOB_KEEP)
+        });
+        let running = jobs
+            .values()
+            .filter(|j| {
+                j.finished
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .is_none()
+            })
+            .count();
+        if running >= MAX_JOBS {
+            return Err(ApiError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "too many previews running; wait for one to finish or cancel it",
+            ));
+        }
+        let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
+        let job = Arc::new(Job::default());
+        jobs.insert(id, job.clone());
+        Ok((id, job))
+    }
+
+    fn get(&self, id: u64) -> ApiResult<Arc<Job>> {
+        self.jobs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "no such preview"))
+    }
+}
+
 /// The current state, read once per preview.
 struct Snapshot {
     quarantine: Vec<lodestar_store::Quarantined>,
@@ -335,12 +452,15 @@ impl Snapshot {
         after: &Engine,
         sealer: Option<&Sealer>,
         now: i64,
-    ) -> Preview {
+        progress: &Progress,
+    ) -> ApiResult<Preview> {
         let mut p = Preview {
             estimate: true,
             ..Preview::default()
         };
+        progress.begin(QUARANTINE, self.quarantine.len());
         for q in &self.quarantine {
+            progress.step(1)?;
             let name = sealer
                 .zip(q.sealed.as_deref())
                 .and_then(|(s, sealed)| s.open(sealed).ok())
@@ -371,12 +491,15 @@ impl Snapshot {
                 p.quarantine += 1;
             }
         }
-        p.tombstones = self
-            .tombstones
-            .iter()
-            .filter(|(h, rule, _)| released_by_hash(after, h, rule))
-            .count();
-        p
+        progress.begin(TOMBSTONES, self.tombstones.len());
+        for chunk in self.tombstones.chunks(1024) {
+            p.tombstones += chunk
+                .iter()
+                .filter(|(h, rule, _)| released_by_hash(after, h, rule))
+                .count();
+            progress.step(chunk.len() as u64)?;
+        }
+        Ok(p)
     }
 }
 
@@ -577,8 +700,19 @@ impl FiltersApi {
 
     /// What `change` would do, without doing it.
     pub fn assess(&self, change: &Change, now: i64) -> ApiResult<Assessment> {
-        let store = self.store();
-        let snap = Snapshot::read(&store, now).map_err(internal)?;
+        self.assess_tracked(change, now, &Progress::default())
+    }
+
+    /// [`FiltersApi::assess`], reporting progress. The store is locked
+    /// only while the snapshot is read.
+    pub fn assess_tracked(
+        &self,
+        change: &Change,
+        now: i64,
+        progress: &Progress,
+    ) -> ApiResult<Assessment> {
+        progress.begin(READING, 0);
+        let snap = Snapshot::read(&self.store(), now).map_err(internal)?;
         let engine = self.engine.current();
         let sealer = self.sealer.as_deref();
         let mut a = Assessment::default();
@@ -664,7 +798,7 @@ impl FiltersApi {
                     id: u32::MAX,
                     ..o.clone()
                 });
-                a.preview = snap.rejudged(&engine, &after, sealer, now);
+                a.preview = snap.rejudged(&engine, &after, sealer, now, progress)?;
                 // Every non-floor rule could be bypassed: the replay's
                 // upper bound.
                 let bypassable: Vec<String> = snap
@@ -686,7 +820,7 @@ impl FiltersApi {
                     if single.validate().is_ok() {
                         let mut alt = Engine::clone(&engine);
                         alt.overrides.push(single);
-                        a.neutralize = Some(snap.rejudged(&engine, &alt, sealer, now));
+                        a.neutralize = Some(snap.rejudged(&engine, &alt, sealer, now, progress)?);
                     }
                 }
             }
@@ -695,7 +829,7 @@ impl FiltersApi {
                 a.weakening = true;
                 let mut after = Engine::clone(&engine);
                 after.exceptions.push(Exception { id: u32::MAX, ..e });
-                a.preview = snap.rejudged(&engine, &after, sealer, now);
+                a.preview = snap.rejudged(&engine, &after, sealer, now, progress)?;
                 let bound = rules(vec![rule.clone()]);
                 a.preview.caught_30d = bound.caught_30d;
                 a.preview.core_caught_30d = bound.core_caught_30d;
@@ -709,7 +843,7 @@ impl FiltersApi {
                     id: u32::MAX,
                     query: node,
                 });
-                a.preview = snap.rejudged(&engine, &after, sealer, now);
+                a.preview = snap.rejudged(&engine, &after, sealer, now, progress)?;
                 let layers: Vec<String> = snap
                     .hits
                     .iter()
@@ -773,7 +907,8 @@ impl FiltersApi {
                 }
             }
             Change::ResolveHeld { id, accept } => {
-                let sub = store
+                let sub = self
+                    .store()
                     .subscription(*id)
                     .map_err(internal)?
                     .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "no such subscription"))?;
@@ -803,12 +938,14 @@ impl FiltersApi {
         if a.confirm {
             a.warning = Some(warning(change, &a.preview, a.neutralize.as_ref()));
         }
+        progress.begin(DONE, 0);
         Ok(a)
     }
 
     /// Reloads the rule layers and switches from the store.
     fn reload(&self, store: &Store) -> ApiResult<()> {
         let set = store.rule_set().map_err(internal)?;
+        let class_rules = store.class_rules().map_err(internal)?;
         let state = store.filter_state().map_err(internal)?;
         for note in self.engine.update_engine(|e| {
             for (rule, on) in &state.switches {
@@ -816,7 +953,9 @@ impl FiltersApi {
                     let _ = e.core.switches.set(r, *on);
                 }
             }
-            e.load_rules(&set)
+            let mut notes = e.load_rules(&set);
+            notes.extend(e.load_class_rules(&class_rules));
+            notes
         }) {
             tracing::warn!("filters: {note}");
         }
@@ -1440,6 +1579,38 @@ pub struct TestBody {
 /// Samples per test request.
 const MAX_SAMPLES: usize = 50;
 
+/// Corrections compared with detection per `GET /classify`.
+const MAX_CORRECTIONS: usize = 10_000;
+/// Stored torrents one classification rule change re-queues at most.
+const MAX_REQUEUE: usize = 1_000_000;
+
+#[derive(Debug, Deserialize)]
+pub struct ClassRuleBody {
+    pub query: String,
+    pub adult: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IdBody {
+    pub id: i64,
+}
+
+/// A classification rule's query: it decides the type, so it can't test
+/// the type itself (the index already holds corrected types).
+fn class_query(text: &str) -> ApiResult<Node> {
+    let node = query(text)?;
+    if matches!(node, Node::All) {
+        return Err(bad("a classification rule needs a query"));
+    }
+    use lodestar_search::query::TagKey;
+    if node.mentions_tag(TagKey::Type) || node.mentions_tag(TagKey::Adult) {
+        return Err(bad(
+            "a classification rule decides the type, so its query can't test type: or adult:",
+        ));
+    }
+    Ok(node)
+}
+
 /// `POST /classify/correct`: your correction to one stored torrent,
 /// replacing any earlier one. `adult: null` and `not_junk: false` clear it.
 #[derive(Debug, Deserialize)]
@@ -1510,20 +1681,106 @@ impl FiltersApi {
             return Err(ApiError::new(StatusCode::NOT_FOUND, "no such torrent"));
         };
         let files = lodestar_classify::file_infos(&tree.files, tree.encoding);
-        let c = lodestar_classify::classify_corrected(&row.name, &files, fix);
-        let enriched = lodestar_store::Enriched {
-            version: lodestar_classify::ENRICHMENT_VERSION,
-            content_type: c.content_type.code(),
-            junk_score: c.junk.score,
-            comp: c.composition.encode(),
-            data: lodestar_classify::Record::new(&c).encode(),
-        };
+        let engine = self.engine.current();
+        let (enriched, c) = lodestar_filter::reclassify::enrich_row(
+            &row,
+            &files,
+            fix,
+            Some(&engine),
+            crate::unix_now(),
+        );
         store.set_enrichments(&[(id, enriched)]).map_err(internal)?;
         Ok(json!({
             "type": c.content_type.as_str(),
             "adult_kind": c.adult_kind.map(|k| k.as_str()),
             "junk": c.junk.score,
         }))
+    }
+
+    /// Your classification rules and how detection compares with your
+    /// per-torrent corrections (§20.9): each correction is a fixture for
+    /// adult detection, and the ones detection gets wrong are listed (up to
+    /// 50) so a rule can cover their kind.
+    pub fn classes(&self) -> ApiResult<Value> {
+        let mut store = self.store();
+        let rules = store.class_rules().map_err(internal)?;
+        let corrections = store.corrections(MAX_CORRECTIONS).map_err(internal)?;
+        let (mut checked, mut wrong) = (0, Vec::new());
+        let mut disagree = 0;
+        for (id, c) in &corrections {
+            let Some(adult) = c.adult else { continue };
+            let (Some(row), Some(tree)) = (
+                store.torrent(*id).map_err(internal)?,
+                store.files(*id).map_err(internal)?,
+            ) else {
+                continue;
+            };
+            let files = lodestar_classify::file_infos(&tree.files, tree.encoding);
+            let detected =
+                lodestar_classify::classify(&row.name, &files).content_type == ContentType::Adult;
+            checked += 1;
+            if detected != adult {
+                disagree += 1;
+                if wrong.len() < 50 {
+                    wrong.push(json!({ "hash": hex(&row.info_hash.0), "adult": adult }));
+                }
+            }
+        }
+        Ok(json!({
+            "rules": rules.iter().map(|(id, q, adult)| json!({
+                "id": id, "query": q, "adult": adult,
+            })).collect::<Vec<_>>(),
+            "corrections": corrections.len(),
+            "detection": { "checked": checked, "disagree": disagree, "examples": wrong },
+        }))
+    }
+
+    /// Adds a classification rule and queues the stored torrents it
+    /// matches for classifying again.
+    pub fn add_class_rule(&self, body: &ClassRuleBody, now: i64) -> ApiResult<Value> {
+        let node = class_query(&body.query)?;
+        let mut store = self.store();
+        let id = store
+            .add_class_rule(&node.to_query(), body.adult)
+            .map_err(internal)?;
+        self.reload(&store)?;
+        let queued = self.requeue(&mut store, &node, now)?;
+        Ok(json!({ "id": id, "queued": queued }))
+    }
+
+    /// Removes a classification rule; the torrents it matched are
+    /// classified again without it.
+    pub fn remove_class_rule(&self, id: i64, now: i64) -> ApiResult<Value> {
+        let mut store = self.store();
+        let q = store
+            .remove_class_rule(id)
+            .map_err(internal)?
+            .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "no such rule"))?;
+        self.reload(&store)?;
+        let queued = match parse(&q) {
+            Ok(node) => self.requeue(&mut store, &node, now)?,
+            Err(_) => json!(null),
+        };
+        Ok(json!({ "queued": queued }))
+    }
+
+    /// Marks the stored torrents `node` matches for background enrichment.
+    /// Without a search index, only torrents arriving or re-enriched later
+    /// are affected (`null`).
+    fn requeue(&self, store: &mut Store, node: &Node, now: i64) -> ApiResult<Value> {
+        let Some(index) = &self.index else {
+            return Ok(json!(null));
+        };
+        let compiled = index.query(node, now);
+        let ids: Vec<i64> = index
+            .matching_ids(&compiled, MAX_REQUEUE)
+            .map_err(internal)?
+            .into_iter()
+            .map(|id| id as i64)
+            .collect();
+        let n = store.mark_unenriched(&ids).map_err(internal)?;
+        self.reenrich.store(true, Ordering::Release);
+        Ok(json!(n))
     }
 
     /// Tries a draft rule and the current rules on examples (the editor's
@@ -1644,6 +1901,92 @@ pub(crate) async fn correct(
     tokio::task::spawn_blocking(move || f.correct(&body).map(Json))
         .await
         .map_err(internal)?
+}
+
+pub(crate) async fn classes(State(s): State<ApiState>) -> ApiResult<Json<Value>> {
+    let f = filters(&s)?;
+    tokio::task::spawn_blocking(move || f.classes().map(Json))
+        .await
+        .map_err(internal)?
+}
+
+pub(crate) async fn add_class_rule(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<ClassRuleBody>,
+) -> ApiResult<Json<Value>> {
+    same_origin_json(&headers)?;
+    let f = filters(&s)?;
+    tokio::task::spawn_blocking(move || f.add_class_rule(&body, crate::unix_now()).map(Json))
+        .await
+        .map_err(internal)?
+}
+
+pub(crate) async fn remove_class_rule(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<IdBody>,
+) -> ApiResult<Json<Value>> {
+    same_origin_json(&headers)?;
+    let f = filters(&s)?;
+    tokio::task::spawn_blocking(move || f.remove_class_rule(body.id, crate::unix_now()).map(Json))
+        .await
+        .map_err(internal)?
+}
+
+/// `POST /filters/preview/jobs`: starts a preview in the background and
+/// returns its id (202).
+pub(crate) async fn start_preview(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<ChangeBody>,
+) -> ApiResult<(StatusCode, Json<Value>)> {
+    same_origin_json(&headers)?;
+    let f = filters(&s)?;
+    let (id, job) = f.jobs.start()?;
+    let now = crate::unix_now();
+    tokio::task::spawn_blocking(move || {
+        let result = f.assess_tracked(&body.change, now, &job.progress);
+        *job.result.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
+        *job.finished.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+    });
+    Ok((StatusCode::ACCEPTED, Json(json!({ "job": id }))))
+}
+
+/// `GET /filters/preview/jobs/{id}`: progress while it runs, then the
+/// assessment (or the error) once it's done.
+pub(crate) async fn preview_job(
+    State(s): State<ApiState>,
+    Path(id): Path<u64>,
+) -> ApiResult<Json<Value>> {
+    let job = filters(&s)?.jobs.get(id)?;
+    let result = job.result.lock().unwrap_or_else(|e| e.into_inner());
+    Ok(Json(match result.as_ref() {
+        None => json!({ "state": "running", "progress": job.progress.json() }),
+        Some(Ok(a)) => json!({
+            "state": "done",
+            "progress": job.progress.json(),
+            "assessment": serde_json::to_value(a).map_err(internal)?,
+        }),
+        Some(Err(e)) => json!({
+            "state": "failed",
+            "progress": job.progress.json(),
+            "status": e.status.as_u16(),
+            "error": e.body["error"],
+        }),
+    }))
+}
+
+/// `POST /filters/preview/jobs/{id}/cancel`.
+pub(crate) async fn cancel_preview(
+    State(s): State<ApiState>,
+    Path(id): Path<u64>,
+    headers: HeaderMap,
+) -> ApiResult<Json<Value>> {
+    same_origin_json(&headers)?;
+    let job = filters(&s)?.jobs.get(id)?;
+    job.progress.cancel();
+    Ok(Json(json!({ "ok": true })))
 }
 
 pub(crate) async fn preview(

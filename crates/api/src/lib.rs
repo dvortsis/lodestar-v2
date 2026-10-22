@@ -90,8 +90,17 @@ pub fn router(state: ApiState) -> Router {
         .route("/filters/queue", get(filters::queue))
         .route("/filters/fixtures", get(filters::fixtures))
         .route("/filters/test", post(filters::test))
+        .route("/classify", get(filters::classes))
         .route("/classify/correct", post(filters::correct))
+        .route("/classify/rules", post(filters::add_class_rule))
+        .route("/classify/rules/remove", post(filters::remove_class_rule))
         .route("/filters/preview", post(filters::preview))
+        .route("/filters/preview/jobs", post(filters::start_preview))
+        .route("/filters/preview/jobs/{id}", get(filters::preview_job))
+        .route(
+            "/filters/preview/jobs/{id}/cancel",
+            post(filters::cancel_preview),
+        )
         .route("/filters/apply", post(filters::apply))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),

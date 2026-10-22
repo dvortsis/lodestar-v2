@@ -16,7 +16,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use lodestar_classify::{Classification, FileInfo};
+use lodestar_classify::{Classification, ContentType, Correction, FileInfo};
 use lodestar_cluster::{Token, WorkerId};
 use lodestar_filter::{Engine, Facts, Handle, Item, Verdict};
 use lodestar_metainfo::{Info, InfoHash};
@@ -215,6 +215,18 @@ fn prepare_one(preparer: &mut Preparer, engine: &Engine, fk: &FetchedKey) -> Res
         content_type: class.content_type,
     };
     let verdict = engine.judge(&item, Some(&facts), now);
+    // Your classification rules change what's stored, after filtering
+    // judged detection's classification (§20.9).
+    if let Some(adult) = engine.class_correction(&item, Some(&facts)) {
+        if adult != (class.content_type == ContentType::Adult) {
+            let fix = Correction {
+                adult: Some(adult),
+                not_junk: false,
+            };
+            prepared.enrichment =
+                Some(crate::enrich::enrich_corrected(&prepared.name, &files, fix).0);
+        }
+    }
     Ok(Done {
         torrent: prepared,
         files,
