@@ -87,6 +87,46 @@ describe('Chip', () => {
 		fallback.remove();
 	});
 
+	it('finds neighbours through wrappers and stays inside its own group', async () => {
+		const host = document.createElement('div');
+		host.innerHTML = '<ul id="g1"></ul><ul id="g2"></ul>';
+		document.body.append(host);
+		const fallback = document.createElement('input');
+		document.body.append(fallback);
+		const handles: Record<string, ReturnType<typeof mount>> = {};
+		const put = (group: string, n: string) => {
+			const li = document.createElement('li');
+			host.querySelector(`#${group}`)!.append(li);
+			handles[n] = mount(Chip, {
+				target: li,
+				props: {
+					children: text(n),
+					removeLabel: `Remove ${n}`,
+					fallbackFocus: () => fallback,
+					onremove: () => unmount(handles[n]!)
+				}
+			});
+		};
+		put('g1', 'x');
+		put('g2', 'p');
+		put('g2', 'q');
+		flushSync();
+		const press = async (n: string) => {
+			const b = host.querySelector(`[aria-label="Remove ${n}"]`) as HTMLElement;
+			b.focus();
+			await fireEvent.keyDown(b, { key: 'Backspace' });
+			await new Promise((r) => setTimeout(r, 0));
+		};
+		// (a) wrapped in <li>: p's neighbour is q
+		await press('p');
+		expect(document.activeElement!.getAttribute('aria-label')).toBe('Remove q');
+		// (b) the last chip of its group goes to fallbackFocus, not into another group
+		await press('x');
+		expect(document.activeElement).toBe(fallback);
+		host.remove();
+		fallback.remove();
+	});
+
 	it('falls back to the shared remove label', () => {
 		render(Chip, { children: text('video'), onremove: () => {} });
 		expect(screen.getByRole('button', { name: 'Remove' })).toBeTruthy();

@@ -11,8 +11,9 @@
 		/** Accessible name of the remove button, e.g. "Remove filter: video". */
 		removeLabel?: string;
 		/**
-		 * Focus after removal: the next removable chip among this chip's siblings, else the previous
-		 * one, else this element (e.g. the query input). Without it focus would drop to <body>.
+		 * Focus after removal: the next removable chip in this chip's group (`data-chip-group`, a
+		 * list/group element, or the parent), else the previous one, else this element (e.g. the query
+		 * input). Without it focus would drop to <body>.
 		 */
 		fallbackFocus?: () => HTMLElement | null | undefined;
 		/** Selected/active filter tint. */
@@ -29,17 +30,16 @@
 		class: className = ''
 	}: Props = $props();
 
+	const GROUP = '[data-chip-group], [role="list"], [role="group"], ul, ol';
+
 	let root: HTMLSpanElement | undefined = $state();
 
 	async function remove() {
 		if (!onremove) return;
 		// Pick the neighbour before the DOM changes; it is another chip, so it survives the removal.
-		// Chips may be wrapped (e.g. each in an <li>), so search the nearest chip group, not the parent:
-		// the closest ancestor that holds other remove buttons.
-		let scope: HTMLElement | null = root?.parentElement ?? null;
-		while (scope && scope.querySelectorAll('[data-chip-remove]').length < 2) {
-			scope = scope.parentElement;
-		}
+		// Search only this chip's own group: mark it with data-chip-group, or use a list/group
+		// element; a bare container falls back to the chip's parent. Chips may be wrapped in <li>s.
+		const scope = root?.closest(GROUP) ?? root?.parentElement;
 		const siblings = [...(scope?.querySelectorAll('[data-chip-remove]') ?? [])];
 		const own = root?.querySelector('[data-chip-remove]') ?? null;
 		const at = siblings.indexOf(own as Element);
