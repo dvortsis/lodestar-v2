@@ -1,0 +1,2 @@
+422
+{"error":{"code":"adult_confirmation_required","field":"show_adult","message":"Showing adult content needs your confirmation that you're 18 or older: send \"confirm_adult\": true with it."}}

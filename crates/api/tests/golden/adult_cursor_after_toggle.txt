@@ -1,0 +1,2 @@
+400
+{"error":{"code":"bad_cursor","field":"cursor","message":"That cursor belongs to another search: send the same q, sort and hidden with it. If Show adult content changed since, start the search again."}}
