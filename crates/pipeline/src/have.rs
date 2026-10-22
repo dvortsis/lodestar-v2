@@ -150,10 +150,14 @@ mod tests {
     #[test]
     fn reports_full_and_can_be_replaced() {
         let have = Have::new(10);
-        for i in 0..11 {
+        // The count skips a hash whose bits are all set already, which a
+        // filter this small hits often (the seed differs per run), so
+        // insert until it passes capacity rather than exactly 11 times.
+        let filled = (0..1_000).any(|i| {
             have.insert(&hash(i));
-        }
-        assert!(have.is_full());
+            have.is_full()
+        });
+        assert!(filled, "never full: {}", have.len());
         let bigger = Bloom::new(capacity_for(11));
         bigger.insert(&hash(3));
         have.replace(bigger);
