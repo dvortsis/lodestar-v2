@@ -1,0 +1,48 @@
+**M4 implementation decisions (store v4: swarm tables, history, last seen):**
+- **Migration v4** adds four tables:
+  - `trackers`: the scrape list.
+    - Ids are `AUTOINCREMENT` within u16 and never reused, because `swarm_trackers` packs them. A reused id would credit old counts to a new tracker.
+    - The canonical URL is unique.
+    - `state` records health: ok, backoff, down or banned.
+  - `swarm`: one row per scraped torrent. A torrent without a row has never been scraped.
+    - The DHT estimate columns are NULL when there's no estimate.
+    - `next_scrape_at` is indexed for the scheduler's due lane. A test pins that the due query walks the index without a sort.
+  - `swarm_trackers`: per-tracker counts, only for trackers that report the hash (s+l+c > 0).
+  - `swarm_history`: the ring buffer.
+  
+  All four cascade when a torrent is deleted.
+- **One scrape round is one `SwarmUpdate`,** applied in the writer's transaction (`WriteBatch.swarm`):
+  - The store keeps what it's given. Which number counts as "seeders" is the scheduler's rule.
+  - An update for a deleted torrent is skipped and reported as `false` in `Written.swarm`, rather than failing the batch.
+  - Per-tracker detail is replaced each round and deleted when nothing reports.
+- **Per-tracker blob, format 1:**
+  - Layout: a version byte, the scrape time as a varint, then per tracker its id (u16), seeders, leechers and completed as varints.
+  - Every entry comes from the same round, so the time is stored once.
+  - Decoding is strict: only canonical varints, and anything the encoder wouldn't write is an error.
+- **History ring, format 1:**
+  - Layout: 169 bytes. A version byte, the newest day and week numbers, then 14 daily and 26 weekly (seeders, leechers) u16 samples, newest first.
+  - `0xFFFF` is a gap and counts saturate below it. A day or week keeps its latest sample, and samples older than the ring are dropped.
+  - It's kept only for swarms that were ever live, or that someone looked at (`interest`). Once kept, it follows the swarm down to zero, because "this died" is the point of a history.
+  - A corrupt ring is replaced rather than failing the batch: it's derived data.
+  - `trend` is the least-squares slope of the last 7 daily seeders samples, in seeders per day. It needs 3 or more samples.
+  - Property-tested: round trips, arbitrary bytes, and gaps staying gaps.
+- **Last seen:**
+  - Rediscoveries now carry their time.
+  - `torrents.last_seen_at` is written through only when it moves forward by an hour or more (`LAST_SEEN_WRITE_EVERY`). The hot column holds the exact value.
+  - So SQLite is at most an hour behind after a crash, and busy torrents cost one write per hour, not one per sighting.
+- **Rebuilding hot columns:** `Store::load_hot` reads `swarm` and then `torrents.last_seen_at` in id-ordered chunks of 10,000, one short statement each. A rebuild therefore never pins the WAL. A torrent without a DHT estimate keeps "never" in that column.
+- **`flags::PRIVATE_SOURCE` (bit 10):**
+  - It's set when only private sources reported a key. It's carried from the fetch pool (`FetchedKey.private_source`) through the worker's `Results` to the commit.
+  - The scheduler's lanes (`due_for_scrape`, `unscraped_after`) skip it and `flags::PRIVATE`, so neither ever reaches a public scrape.
+  - **A public sighting makes it public.** The store clears the bit on a public rediscovery (`Touch.public`), and on a public commit of a stored torrent.
+  - Nothing sets it on a stored public torrent. A partial-import upgrade keeps it only when both the stored row and the new commit are private-source.
+- **Scheduler lanes:**
+  - `unscraped_after(id)` is the new lane: torrents with no `swarm` row, past a watermark, so ingest writes no swarm row.
+  - `due_for_scrape(now)` is the decay lane, most overdue first.
+- **Size** (the 50k synthetic size report, with every torrent scraped once and 40% of swarms live):
+  - Swarm health costs **132 B per torrent**:
+    - history 73 B;
+    - `swarm` 30 B;
+    - its due index 14 B;
+    - per-tracker 14 B.
+  - The whole store is **926 B** against the 1,024 B gate, so it still passes, with 98 B left. A history row costs about 180 B with page overhead, so the share of live swarms drives the total.
