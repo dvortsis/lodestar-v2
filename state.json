@@ -1,0 +1,632 @@
+{
+ "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
+ "updated_at": "2026-10-22T05:00:00Z",
+ "launches": {
+  "date": "2026-10-22",
+  "count": 0
+ },
+ "tags": {},
+ "slices": {
+  "B0": {
+   "status": "ready",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "B5b": {
+   "status": "ready",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "C0": {
+   "status": "ready",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "C1": {
+   "status": "ready",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "W0": {
+   "status": "ready",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "B1": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "B2": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "B3": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "W1": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "W1b": {
+   "status": "pending",
+   "model": "haiku",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "W3": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "W4": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "W6": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "W2": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "W8": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "B5a": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "B4": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "B8": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "B6": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "B16": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "W5": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "W7ab": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "W7cd": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "W7e": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "W9": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "M-auth": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "S-search-1": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "S-search-2": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "S-search-3": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "S-detail": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "D-docker": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "G-v05": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "B11a": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "B7": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "B12": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "B9": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "B5c": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "B13": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "B14": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "B11b": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "B10b": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "B15": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "B10a": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "B11c": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "S-search-4": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "S-search-5": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "S-search-6": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "S-compare": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "S-discover": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "S-alerts": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "S-insights-1": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "S-insights-2": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "S-insights-3": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "S-settings-1": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "S-wizard": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "S-appearance": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "M-filters-dialogs": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "S-filters": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "S-keys": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "S-e2e": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "H-zh": {
+   "status": "pending",
+   "model": "haiku",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "G-m5": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "E-M6": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "E-v06-workers": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "E-v06-companions": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "E-v06-sources": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "E-M7": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "E-v08": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  },
+  "E-M8": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": ""
+  }
+ }
+}
