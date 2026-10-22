@@ -10,7 +10,6 @@
 //! client disconnect cancels, and [`BUDGET`].
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::Router;
@@ -18,9 +17,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::get;
 use lodestar_search::facets::{MAX_LIMIT, SWARM_BUCKETS};
-use lodestar_search::{
-    CancelToken, Error as SearchError, Facet, FacetParams, Facets, Lease, facets,
-};
+use lodestar_search::{CancelToken, Error as SearchError, Facet, FacetParams, FacetSpec, Facets};
 use utoipa::OpenApi;
 
 use crate::dto::facets::{
@@ -29,8 +26,8 @@ use crate::dto::facets::{
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{Json, Query, same_origin_json};
 use crate::search::{
-    Visibility, base_query, client_of, fingerprint, open_cursor, request_ast, search_error,
-    sort_param, unix_now,
+    Visibility, base_query, client_of, fingerprint, open_cursor, request_ast, scope_of,
+    search_error, sort_param, unix_now,
 };
 use crate::{ApiState, auth};
 
@@ -212,13 +209,13 @@ async fn run_facets(
             e => search_error(e),
         };
         let lease = match cursor {
-            Some(c) => search
-                .leases()
-                .get(&c.lease, client)
-                .map_err(|e| search_error(e).field("lease"))?,
-            None => Arc::new(
-                Lease::new(search.index(), &shown, unix_now(), sort, &budget).map_err(timeout)?,
+            Some(c) => Some(
+                search
+                    .leases()
+                    .get(&c.lease, client)
+                    .map_err(|e| search_error(e).field("lease"))?,
             ),
+            None => None,
         };
         let first_run = reader
             .lock()
@@ -227,12 +224,26 @@ async fn run_facets(
             .map_err(internal)?;
         let params = FacetParams::new(limits, first_run, !visibility.adult);
         // Disjunction edits the user's part only; the visibility clauses
-        // hold in every pass.
-        let got =
-            facets(&lease, &base.node, &base.visibility, &params, &budget).map_err(timeout)?;
-        let total = lease.total();
+        // hold in every pass. From the result cache (§8) when the
+        // snapshot has them.
+        let spec = FacetSpec {
+            query: &shown,
+            node: &base.node,
+            filters: &base.visibility,
+            params: &params,
+            scope: &scope_of(visibility),
+            sort,
+            now: unix_now(),
+        };
+        let cache = search.cache();
+        let (got, _) = match &lease {
+            Some(lease) => cache.facets_on(lease, &spec, &budget),
+            None => cache.facets(&search.index(), &spec, &budget),
+        }
+        .map_err(timeout)?;
+        let total = got.total;
         Ok(axum::Json(response(
-            &got,
+            &got.facets,
             ast.to_query(),
             first_run,
             total.value,

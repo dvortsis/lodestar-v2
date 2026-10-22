@@ -343,7 +343,7 @@ pub struct Results {
 }
 
 /// Whether `node` has a date relative to now.
-fn relative(node: &Node) -> bool {
+pub(crate) fn relative(node: &Node) -> bool {
     match node {
         Node::And { of } | Node::Or { of } => of.iter().any(relative),
         Node::Not { of } => relative(of),
@@ -525,6 +525,11 @@ impl SearchIndex {
     /// The current snapshot, which a lease pins.
     pub(crate) fn searcher(&self) -> Searcher {
         self.reader.searcher()
+    }
+
+    /// The file index's current snapshot (the result cache's key).
+    pub(crate) fn files_searcher(&self) -> Searcher {
+        self.files.reader.searcher()
     }
 
     pub(crate) fn segment_cache(&self) -> &SegmentCache {
