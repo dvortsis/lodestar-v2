@@ -367,25 +367,25 @@ fn load_hot_rebuilds_the_columns() {
 }
 
 #[test]
-fn migrates_a_v3_database_with_data() {
+fn migrates_a_v4_database_with_data() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("lodestar.db");
     let id = {
         let mut store = Store::open(&path, StoreConfig::default()).unwrap();
         let (id, _) = add(&mut store, "kept", false, 0);
-        // Roll the file back to v3, as an M3 build left it.
+        // Roll the file back to v4, as the build before swarm health left it.
         store
             .connection()
             .execute_batch(
                 "DROP TABLE swarm_history; DROP TABLE swarm_trackers; DROP TABLE swarm;
-                 DROP TABLE trackers; DELETE FROM schema_migrations WHERE version = 4;",
+                 DROP TABLE trackers; DELETE FROM schema_migrations WHERE version = 5;",
             )
             .unwrap();
         id
     };
     let mut store = Store::open(&path, StoreConfig::default()).unwrap();
     assert!(
-        dir.path().join("lodestar.pre-v4.db").exists(),
+        dir.path().join("lodestar.pre-v5.db").exists(),
         "snapshot before migrating"
     );
     assert_eq!(store.torrent(id).unwrap().unwrap().name, "kept");

@@ -1539,7 +1539,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
      - Only the counts are kept, never the filters (§18.7).
      - Scrape lookups get a capped share of the query budget (about 10%), so they serve new, viewed and rediscovered torrents, not decay sweeps.
      - The node also answers `scrape=1` queries from its own peer store.
-  3. **Store v4 and hot columns:**
+  3. **Store migration v5 and hot columns** (the content filter took v4 first):
      - `trackers`, `swarm` (indexed on `next_scrape_at`), `swarm_trackers` and `swarm_history`.
      - The history ring holds 14 daily and 26 weekly samples, as u16 seeders and leechers with `0xFFFF` for gaps.
      - Hot columns use a "never scraped" sentinel.
@@ -1618,7 +1618,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - One torrent's columns are written one after another, so a racing reader may briefly mix old and new values of one torrent. That's harmless for display and ranking.
   - **Epoch:** it advances at most once a minute while values change, and never otherwise. Search caches that read hot columns key on it.
   - **Snapshots:** one file per column (`data/hot/*.col`), with magic, format, column, stamp, length and an FNV-1a checksum. They're written beside the final name and renamed. Anything missing, from another stamp, truncated or corrupt loads as `None`, and the caller rebuilds from SQLite.
-- **How M4 was built (owner decision):** the core slices (DHT scrape, store v4, search on hot columns) were built in parallel by sub-agents on the same model and effort as the main session, each in its own worktree, against interfaces fixed first (`HotColumns`, `SwarmUpdate`, `NodeHandle`). This is an explicit exception to CLAUDE.md's "never delegate" list. Every result was reviewed, fixed where needed and tested in the main session before merge. Docs and the status page went to a smaller helper.
+- **How M4 was built (owner decision):** the core slices (DHT scrape, the swarm store, search on hot columns) were built in parallel by sub-agents on the same model and effort as the main session, each in its own worktree, against interfaces fixed first (`HotColumns`, `SwarmUpdate`, `NodeHandle`). This is an explicit exception to CLAUDE.md's "never delegate" list. Every result was reviewed, fixed where needed and tested in the main session before merge. Docs and the status page went to a smaller helper.
 
 **M4 implementation decisions (DHT scrape, BEP 33):**
 - **The filters follow the BEP exactly:**
@@ -1655,8 +1655,8 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - a raw-client test of the answers (`scrape` off: no filters; on: correct filters; `noseed`; an unknown hash);
   - an in-process network test. Four seeds and seven leechers on distinct loopback IPs announce to six nodes, and a crawler's `scrape` returns exactly 4 and 7. An unknown hash returns zero responders. It was stable over 8 repeated runs.
 
-**M4 implementation decisions (store v4: swarm tables, history, last seen):**
-- **Migration v4** adds four tables:
+**M4 implementation decisions (store: swarm tables, history, last seen):**
+- **Migration v5** adds four tables (the content filter's tables took v4):
   - `trackers`: the scrape list.
     - Ids are `AUTOINCREMENT` within u16 and never reused, because `swarm_trackers` packs them. A reused id would credit old counts to a new tracker.
     - The canonical URL is unique.
