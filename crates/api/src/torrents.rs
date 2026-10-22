@@ -10,6 +10,7 @@ use lodestar_search::flag_names;
 use lodestar_store::{FileTree, TorrentRow};
 use utoipa::OpenApi;
 
+use crate::dto::error::ErrorEnvelope;
 use crate::dto::search::{ScoreParts, SearchHit};
 use crate::dto::torrents::{FileEntry, FilesPage, FilesQuery, TorrentDetail};
 use crate::error::{ApiError, ApiResult, internal};
@@ -130,7 +131,9 @@ fn file_entry(tree: &FileTree, f: &lodestar_metainfo::File) -> FileEntry {
     }
 }
 
-/// Reads a torrent and its files by any swarm hash.
+/// Reads a torrent and its files by any swarm hash. An Adult torrent
+/// while "Show adult content" is off is a 404 `adult_hidden`, so a
+/// pasted hash doesn't get round the preference (§20.9).
 fn load(s: &ApiState, hash: &str) -> ApiResult<(TorrentRow, FileTree)> {
     let hash = parse_hash(hash)?;
     let mut store = s.reader.lock().expect("reader lock");
@@ -142,6 +145,18 @@ fn load(s: &ApiState, hash: &str) -> ApiResult<(TorrentRow, FileTree)> {
         )
     };
     let id = store.find(&hash).map_err(internal)?.ok_or_else(not_found)?;
+    if !s.adult.shown()
+        && store
+            .enrichment(id)
+            .map_err(internal)?
+            .is_some_and(|e| crate::search::is_adult(&e))
+    {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "adult_hidden",
+            "This torrent is Adult, which is hidden: turn on Show adult content in Settings to see it.",
+        ));
+    }
     let row = store.torrent(id).map_err(internal)?.ok_or_else(not_found)?;
     let tree = store.files(id).map_err(internal)?.ok_or_else(not_found)?;
     Ok((row, tree))
@@ -196,7 +211,10 @@ fn detail_of(row: &TorrentRow, tree: &FileTree, swarm: Summary, more: Detail) ->
     path = "/torrents/{hash}",
     tag = "torrents",
     params(("hash" = String, Path, description = "A 40-character hex info hash.")),
-    responses((status = 200, body = TorrentDetail))
+    responses(
+        (status = 200, body = TorrentDetail),
+        (status = 404, body = ErrorEnvelope, description = "`torrent_not_found`, or `adult_hidden`: an Adult torrent while \"Show adult content\" is off."),
+    )
 )]
 pub(crate) async fn detail(
     State(s): State<ApiState>,
@@ -230,7 +248,10 @@ pub(crate) async fn detail(
         ("hash" = String, Path, description = "A 40-character hex info hash."),
         FilesQuery,
     ),
-    responses((status = 200, body = FilesPage))
+    responses(
+        (status = 200, body = FilesPage),
+        (status = 404, body = ErrorEnvelope, description = "`torrent_not_found`, or `adult_hidden`: an Adult torrent while \"Show adult content\" is off."),
+    )
 )]
 pub(crate) async fn files(
     State(s): State<ApiState>,

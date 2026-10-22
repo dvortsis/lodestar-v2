@@ -142,6 +142,7 @@ fn fixture() -> Fixture {
             events: Some(events.clone()),
             filters: None,
             settings: None,
+            adult: Default::default(),
         }),
     );
     let hashes = infos
@@ -476,6 +477,7 @@ async fn errors_share_one_envelope() {
         Request::delete("/api/v1/password")
             .body(Body::empty())
             .unwrap(),
+        get("/api/v1/facets", None),
         get("/api/v1/settings", None),
         get("/api/v1/settings/crawler", None),
         get("/api/v1/settings/nope", None),
@@ -636,6 +638,7 @@ async fn protected_routes_fail_closed_outside_the_router() {
         hot: None,
         events: None,
         settings: None,
+        adult: Default::default(),
     });
     let (status, _, body) = call(&stray, get("/x", Some(&cookie))).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);

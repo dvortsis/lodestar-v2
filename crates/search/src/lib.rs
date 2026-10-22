@@ -7,6 +7,7 @@ mod compile;
 mod count;
 mod cursor;
 mod doc;
+pub mod facets;
 pub mod files;
 mod filter;
 mod handle;
@@ -26,6 +27,10 @@ pub use cancel::{CancelOnDrop, CancelToken};
 pub use count::{EXACT_UP_TO, Total};
 pub use cursor::{Cursor, LeaseId, Position};
 pub use doc::{DocEnrichment, TorrentDoc, extension, flag_names};
+pub use facets::{
+    Bin, Facet, FacetParams, Facets, Histo, Histogram, TermCounts, Unit, ValueCount, facets,
+    with_filters,
+};
 pub use filter::{in_time, minute_of_day};
 pub use handle::SearchHandle;
 pub use index::{

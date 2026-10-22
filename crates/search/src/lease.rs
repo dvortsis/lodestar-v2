@@ -44,10 +44,16 @@ pub const EXACT_BUDGET: Duration = Duration::from_secs(5);
 pub struct Lease {
     index: Arc<SearchIndex>,
     searcher: Searcher,
+    /// The query it was taken for, as given.
+    node: Node,
     compiled: Compiled,
     stemmed: bool,
     sort: Sort,
     total: Mutex<Total>,
+    /// The time relative dates were resolved against.
+    now: i64,
+    /// The offset `time:` clauses were resolved in (seconds east of UTC).
+    utc_offset: i32,
 }
 
 impl std::fmt::Debug for Lease {
@@ -144,11 +150,57 @@ impl Lease {
         Ok(Lease {
             index,
             searcher,
+            node: node.clone(),
             compiled,
             stemmed,
             sort,
             total: Mutex::new(total),
+            now,
+            utc_offset,
         })
+    }
+
+    /// A lease over `index`'s current snapshot that runs `compiled` as is
+    /// (tests: slow or tripwire queries).
+    #[cfg(test)]
+    pub(crate) fn raw(index: Arc<SearchIndex>, compiled: Compiled, total: Total) -> Lease {
+        Lease {
+            searcher: index.searcher(),
+            index,
+            node: crate::Node::All,
+            compiled,
+            stemmed: false,
+            sort: Sort::Relevance,
+            total: Mutex::new(total),
+            now: 0,
+            utc_offset: 0,
+        }
+    }
+
+    /// The snapshot, for facets over the same documents (`facets.rs`).
+    pub(crate) fn searcher(&self) -> &Searcher {
+        &self.searcher
+    }
+
+    pub(crate) fn compiled(&self) -> &Compiled {
+        &self.compiled
+    }
+
+    /// The query this lease was taken for.
+    pub fn node(&self) -> &Node {
+        &self.node
+    }
+
+    /// The time the query's relative dates resolved against: facets
+    /// compile their variants of it at the same instant.
+    pub fn now(&self) -> i64 {
+        self.now
+    }
+
+    /// The offset (seconds east of UTC) `time:` clauses resolved in:
+    /// facets compile their variants in it too.
+    pub fn utc_offset(&self) -> i32 {
+        self.utc_offset
     }
 
     /// The index the snapshot belongs to (for matched files).

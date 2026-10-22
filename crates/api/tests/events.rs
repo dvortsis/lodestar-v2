@@ -53,6 +53,7 @@ fn fixture(config: EventsConfig) -> Fixture {
                 settings: None,
                 hot: None,
                 events: None,
+                adult: Default::default(),
             }),
         )
         .layer(Extension(hub.clone()));
@@ -493,6 +494,7 @@ async fn without_a_hub_it_is_unavailable() {
             settings: None,
             hot: None,
             events: None,
+            adult: Default::default(),
         }),
     );
     let cookie = session(&auth);

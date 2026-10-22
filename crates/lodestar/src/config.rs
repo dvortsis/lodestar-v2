@@ -35,6 +35,7 @@ pub struct Config {
     pub search: Search,
     pub scrape: Scrape,
     pub ranking: Ranking,
+    pub content: Content,
     pub blocklist: Blocklist,
     pub subscriptions: Subscriptions,
 }
@@ -52,6 +53,7 @@ impl Default for Config {
             search: Search::default(),
             scrape: Scrape::default(),
             ranking: Ranking::default(),
+            content: Content::default(),
             blocklist: Blocklist::default(),
             subscriptions: Subscriptions::default(),
         }
@@ -97,6 +99,7 @@ pub const ENV_VARS: &[&str] = &[
     "LODESTAR_INTENSITY",
     "LODESTAR_DHT_ENABLED",
     "LODESTAR_SECURE_COOKIES",
+    "LODESTAR_SHOW_ADULT",
 ];
 
 #[derive(Debug, Clone, Deserialize)]
@@ -330,6 +333,16 @@ impl Ranking {
     }
 }
 
+/// What's shown (§20.9). Set here or in `LODESTAR_SHOW_ADULT`, Adult is
+/// shown without the app's 18+ confirmation: whoever edits the server's
+/// configuration has decided.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Content {
+    /// Show adult content in search (off by default).
+    pub show_adult: bool,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Blocklist {
@@ -483,6 +496,9 @@ impl Config {
             config.http.secure_cookies = v
                 .parse()
                 .map_err(|_| parse("LODESTAR_SECURE_COOKIES", &v))?;
+        }
+        if let Some(v) = env("LODESTAR_SHOW_ADULT") {
+            config.content.show_adult = v.parse().map_err(|_| parse("LODESTAR_SHOW_ADULT", &v))?;
         }
         Ok(config)
     }
