@@ -222,15 +222,29 @@ impl Credentials {
         let io = |op: &'static str| move |e: std::io::Error| ClusterError::Io(op, e.kind());
         fs::create_dir_all(dir).map_err(io("create the cluster folder"))?;
         let tmp = dir.join(format!("{FILE}.tmp"));
+        // A leftover from a crash may have looser permissions, which
+        // `mode` wouldn't change on an existing file.
+        match fs::remove_file(&tmp) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(io("remove a stale credentials file")(e));
+            }
+            _ => {}
+        }
         let mut options = fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true);
+        options.write(true).create_new(true);
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
         let mut file = options.open(&tmp).map_err(io("write the credentials"))?;
         file.write_all(text.as_bytes())
             .and_then(|()| file.sync_all())
             .map_err(io("write the credentials"))?;
-        fs::rename(&tmp, Credentials::path(dir)).map_err(io("replace the credentials"))
+        fs::rename(&tmp, Credentials::path(dir)).map_err(io("replace the credentials"))?;
+        // Make the rename itself durable.
+        #[cfg(unix)]
+        fs::File::open(dir)
+            .and_then(|d| d.sync_all())
+            .map_err(io("write the credentials"))?;
+        Ok(())
     }
 
     /// Reads `dir/credentials`, or `None` if the worker hasn't joined.
