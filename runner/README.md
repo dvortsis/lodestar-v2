@@ -49,7 +49,7 @@ The list lives in `state.json` under `watched_sessions`.
    - **Blocking findings:** send them to the slice session, with the exact items, to fix and push. Then review again.
    - **No blocking findings:** merge with a merge commit. Then set the slice to `merged`, and pass important and polish findings to the next slice that touches those files.
    - **Merge conflict with `main`:** tell the slice session to merge `origin/main` (never rebase) and push.
-   - **CI red:** send the slice session the failing job and the log excerpt.
+   - **CI red:** send the slice session the failing job and the log excerpt, unless the check isn't the PR's (see below).
 4. **Retry limits:**
    - A **Sonnet or Haiku** slice that fails review twice is relaunched **on Opus** on the same branch. That's the "weak output is redone on Opus" rule.
    - An **Opus** slice that fails twice is `parked`, and the owner is notified.
@@ -59,7 +59,7 @@ The list lives in `state.json` under `watched_sessions`.
    - at most `max_helpers` Sonnet and Haiku slices;
    - docs-only slices don't count towards either limit;
    - at most `max_launches_per_day` new sessions;
-   - **never two running slices whose `owns` overlap.** One shared exception: any core slice may append its decisions entry to `docs/architecture.md` §16. That doesn't count as owning the file, and a conflict there is resolved by merging `main`;
+   - **never two running slices whose `owns` overlap.** Every slice records its decisions in its own new file under `docs/decisions/`, so no two slices share a decisions file (§16 is closed to new entries);
    - **order:** critical-path core slices first, then the slices that unblock the most others.
 7. **Expand epics.**
    - When an `epic` entry's deps are merged, the runner (Opus) reads the relevant architecture sections and the code as it now stands.
@@ -88,14 +88,21 @@ Use `create_session` with these settings:
 > - If you're blocked, comment on the PR (or open a draft PR) saying exactly what's missing, then stop.
 > - No model identifiers in commits, PRs or code.
 
+## Conflicts in `docs/architecture.md` §16
+When a PR conflicts with `main` only in `docs/architecture.md` §16, the runner (or the slice) resolves it by merging `main` and keeping both blocks, main's first. A semantic conflict, such as a new required struct field, is fixed in the same merge commit and the checks re-run.
+
 ## Notifying the owner
 Send a push notification only for:
 - a parked slice;
 - an external blocker that needs the owner (signing certificate, Unraid submission, a policy question);
 - a milestone exit gate (v0.5, M5, …) being met.
 
-There's a **daily summary** on the first wake after 07:00 in the owner's time zone. It covers what merged, what's running, what's parked and why, and the next ready slices.
+There's a **daily summary** on the first wake after 07:00 in the owner's time zone. It covers what merged, what's running, what's parked and why, the next ready slices, and every refinement of an owner decision decided since the last summary (`docs/owner-decisions.md` §2.19), which the owner can veto.
 
 ## Stopping
 - **Disable the hourly scheduled task, or tell the runner to stop.** Running slices finish their current turn, and nothing new launches.
 - **`max_launches_per_day`** is a backstop against runaway loops. Hitting it stops launches and notifies the owner.
+
+**Green means every check run on the head finished `success`, `skipped` or `neutral`.** Since #90, CI skips the jobs a PR's files don't need, so a docs-only PR shows skipped Rust jobs; those count as passing. So does a red check that isn't the PR's (next paragraph).
+
+**A red check that isn't the PR's doesn't block** (owner, 2026-10-22, `docs/owner-decisions.md` §2.18). That means a check that's also red on `main`, or a known flake with a fix PR open, failing in code the PR doesn't touch. The runner counts it as passing and says so on the PR, naming the check, the evidence (the same check red on `main`, or the fix PR) and the fix PR if there is one. Anything else red is the PR's to fix.

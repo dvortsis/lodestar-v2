@@ -71,6 +71,10 @@ pub struct Committed {
     /// Torrents new to the index in this commit. Re-indexed ones
     /// (`reindex_log`) aren't counted.
     pub docs_added: u64,
+    /// How many of `docs_added` are Adult: indexed with `type:adult`,
+    /// the term that hides them while "Show adult content" is off
+    /// (§20.9), so whoever announces them can leave them out.
+    pub adult_added: u64,
     /// The highest torrent id searchable after it.
     pub max_torrent_id: i64,
     /// Unix seconds.
@@ -237,11 +241,13 @@ fn follow(
     backoff: &mut Duration,
 ) -> Result<()> {
     let mut since = Instant::now();
-    // New torrents since the last commit, for the hook.
-    let mut new_docs = 0u64;
+    // New torrents since the last commit, and how many of them are
+    // Adult, for the hook.
+    let mut new_docs = (0u64, 0u64);
     while !stop.load(Ordering::Relaxed) {
-        let (added, replayed) = indexer.catch_up_counted(store, config.batch)?;
-        new_docs += added as u64;
+        let (added, adult, replayed) = indexer.catch_up_counted(store, config.batch)?;
+        new_docs.0 += added as u64;
+        new_docs.1 += adult as u64;
         let added = added + replayed;
         st.indexed.fetch_add(added as u64, Ordering::Relaxed);
         let due = indexer.pending() >= config.commit_docs
@@ -263,7 +269,7 @@ fn follow(
 
 fn commit(
     indexer: &mut crate::Indexer,
-    new_docs: &mut u64,
+    new_docs: &mut (u64, u64),
     #[cfg_attr(not(test), allow(unused_variables))] config: &LiveConfig,
     st: &IndexStats,
     hook: &CommitHook,
@@ -280,9 +286,11 @@ fn commit(
     st.commits.fetch_add(1, Ordering::Relaxed);
     let now = unix_now();
     st.last_commit.store(now, Ordering::Relaxed);
-    if *new_docs > 0 {
+    if new_docs.0 > 0 {
+        let (docs_added, adult_added) = std::mem::take(new_docs);
         hook.publish(Committed {
-            docs_added: std::mem::take(new_docs),
+            docs_added,
+            adult_added,
             max_torrent_id: indexer.last_id(),
             at: now,
         });
@@ -555,6 +563,47 @@ mod tests {
         );
         live.stop().unwrap();
         assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    /// B4b: each report says how many of its torrents are Adult, as the
+    /// index stores them (`type:adult`).
+    #[test]
+    fn a_report_counts_its_adult_torrents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("s.db");
+        let mut writer = Store::open(&db, StoreConfig::default()).unwrap();
+        for name in [
+            "Big.Movie.2019.1080p.mkv",
+            "Studio.Scene.XXX.1080p.mp4",
+            "Other.Movie.2018.720p.mkv",
+            "Another.Clip.XXX.720p.mp4",
+            "Third.Movie.2017.2160p.mkv",
+        ] {
+            add(&mut writer, name);
+        }
+        lodestar_pipeline::enrich::enrich_stored(&mut writer, 0, 100)
+            .unwrap()
+            .unwrap();
+        let index = SearchIndex::open(&tmp.path().join("index")).unwrap();
+        let (hook, seen) = collecting();
+        let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
+        let config = LiveConfig {
+            commit_every: Duration::from_secs(3600),
+            commit_docs: 5,
+            ..quick()
+        };
+        let live =
+            LiveIndexer::spawn_with_stats(index.clone(), reader, config, Arc::default(), hook)
+                .unwrap();
+        let got = wait_for(&live.stats(), live.thread.as_ref(), 0, &seen, 5);
+        live.stop().unwrap();
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!((got[0].docs_added, got[0].adult_added), (5, 2));
+        // The swap counts the same way, from the index itself.
+        assert_eq!(index.adult_between(0, 5).unwrap(), 2);
+        assert_eq!(index.adult_between(2, 5).unwrap(), 1);
+        assert_eq!(index.adult_between(0, 1).unwrap(), 0);
+        assert_eq!(index.adult_between(4, 5).unwrap(), 0);
     }
 
     /// An index of this build's version under `root`, filled from
