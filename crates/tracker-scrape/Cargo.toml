@@ -3,6 +3,7 @@ name = "lodestar-tracker-scrape"
 description = "Tracker scrape clients: UDP (BEP 15) and HTTP (BEP 48), with bounded parsers for their replies"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true
