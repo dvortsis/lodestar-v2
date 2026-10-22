@@ -176,7 +176,7 @@
    "pr": 71,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "launched 14:40; not live.rs/compile.rs (B4/B17) | PR #71; reviewer started 16:45 | 17:15 r1 FIX: visibility via base(without_facet(user_ast)), merge main, category ranges, near-1M perf. 18:24 R1 all in (ee81535); R2 review in flight. 19:18 R2 MERGE at ee81535; must add B17 wiring + I1 lease precondition, I2 1M single-segment perf, I3 share selection, P2 bin cap before merge."
+   "notes": "launched 14:40; not live.rs/compile.rs (B4/B17) | PR #71; reviewer started 16:45 | 17:15 r1 FIX: visibility via base(without_facet(user_ast)), merge main, category ranges, near-1M perf. 18:24 R1 all in (ee81535); R2 review in flight. 19:18 R2 MERGE at ee81535; must add B17 wiring + I1 lease precondition, I2 1M single-segment perf, I3 share selection, P2 bin cap before merge. 19:56 B17 wiring + I1/I2/I3/P2 pushed 3dd0eaf; R3 delta review in flight."
   },
   "B16": {
    "status": "pending",
@@ -895,7 +895,8 @@
  },
  "heartbeats": 4,
  "reviews_in_flight": {
-  "79": "B14 R2 (3378ef5)"
+  "79": "B14 R2 (3378ef5)",
+  "71": "B6 R3 delta (3dd0eaf)"
  },
  "carry_forward": {
   "next-bans-touch": [
@@ -965,7 +966,8 @@
   "slices_from_86": "After #86 merges: add B2b, B2c, M-settings-form, S-settings-2, M-security-settings, B-log1, B-log2, S-logs, S-about, B-update, S-updates, S-doc-shots to state.slices (pending). B2b + B-log1(after B2b) ready first.",
   "near_followups": "F-near follow-ups: prefix/fuzzy words share the folded-join bug; NEAR ignores CSX-5 'Neutralize term'; plain word over-matches vs NEAR word; single-token NEAR quadratic window.",
   "skills_repo_for_docs": "Docs slices + their reviewers need dvortsis/skills (documentation-skills scripts): attach via create_session sources or add_repo.",
-  "typed_held_reason": "Typed held-reason for subscriptions (instead of matching 'shrank' in sub.error) needs a schema change: fold into B8."
+  "typed_held_reason": "Typed held-reason for subscriptions (instead of matching 'shrank' in sub.error) needs a schema change: fold into B8.",
+  "word_file_clause_1M": "search-bench 'word + file clause' misses 30 ms target at 1M (45 ms/5 seg, 108 ms/1 seg); gated at 200k. Track for M8 10M perf gates / B5c cache."
  },
  "blocked_on_owner": [
   "Modern DHT crawler architecture: waiting on an AskUserQuestion",
