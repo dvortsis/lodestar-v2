@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { clampRange, dragRange, moveEdge, nearestEdge } from './brush';
-import { buildData, buildOptions, readPalette } from './lineOptions';
+import { buildData, buildOptions, readPalette, TIME_STEPS } from './lineOptions';
 import { lengthPct, numeric } from './shared';
 import { sparkPath } from './sparkline';
 
@@ -111,6 +111,40 @@ describe('line options', () => {
 			integers: false
 		});
 		expect(free.axes?.[1]?.incrs).toBeUndefined();
+	});
+	it('keeps time ticks to whole buckets and spaces them by label width', () => {
+		const day = opts.axes?.[0];
+		expect(Math.min(...(day?.incrs as number[]))).toBe(86400);
+		const week = buildOptions({
+			width: 1,
+			height: 1,
+			series,
+			palette: { series: ['red'], text: 'gray', grid: 'silver' },
+			format,
+			unit: 'u',
+			font: '12px sans-serif',
+			bucket: 'week'
+		});
+		expect(Math.min(...(week.axes?.[0]?.incrs as number[]))).toBe(7 * 86400);
+		const sampled = buildOptions({
+			width: 1,
+			height: 1,
+			series,
+			palette: { series: ['red'], text: 'gray', grid: 'silver' },
+			format,
+			unit: 'u',
+			font: '12px sans-serif',
+			sample: 1761000000
+		});
+		expect(Math.min(...TIME_STEPS.hour)).toBe(3600);
+		// "t1761000000" is 11 characters: the minimum gap grows with the label.
+		expect(sampled.axes?.[0]?.space).toBeGreaterThan(11 * 6);
+		expect(sampled.axes?.[0]?.space).toBeGreaterThan(Number(day?.space));
+	});
+	it('replaces the English "Time" legend heading with the given text', () => {
+		const label = opts.series?.[0]?.label as unknown as HTMLElement;
+		expect(label).toBeInstanceOf(HTMLElement);
+		expect(label.textContent).toBe('');
 	});
 	it('starts the value scale at zero', () => {
 		const range = opts.scales?.y?.range as unknown as (

@@ -52,6 +52,17 @@ export function readPalette(el: Element, series: readonly LineSeries[]): LinePal
 	};
 }
 
+const HOUR = 3600;
+const DAY = 86400;
+/** Allowed tick steps in seconds per bucket: never finer than the bucket, so a label can't repeat. */
+export const TIME_STEPS = {
+	hour: [HOUR, 2 * HOUR, 6 * HOUR, 12 * HOUR, DAY, 2 * DAY, 7 * DAY, 30 * DAY, 365 * DAY],
+	day: [DAY, 2 * DAY, 7 * DAY, 14 * DAY, 30 * DAY, 91 * DAY, 365 * DAY],
+	week: [7 * DAY, 14 * DAY, 28 * DAY, 91 * DAY, 365 * DAY]
+} as const;
+/** Pixels per label character at the axis font: an upper bound for Atkinson at 12px. */
+const CHAR_PX = 7;
+
 export function buildData(
 	times: readonly number[],
 	series: readonly LineSeries[]
@@ -71,6 +82,12 @@ export function buildOptions(args: {
 	font: string;
 	/** Counts: the value axis steps by whole numbers only. Default true. */
 	integers?: boolean;
+	/** Series resolution: keeps time ticks to whole buckets. Default day. */
+	bucket?: 'hour' | 'day' | 'week';
+	/** A time (Unix seconds) whose tick label sizes the spacing between time ticks. */
+	sample?: number;
+	/** Heading of the legend's date row (a prop, like every string). Default empty. */
+	timeLabel?: string;
 }): uPlot.Options {
 	const { palette, format } = args;
 	const axis = (extra: uPlot.Axis): uPlot.Axis => ({
@@ -87,7 +104,12 @@ export function buildOptions(args: {
 		cursor: { drag: { x: false, y: false } },
 		scales: { x: { time: true }, y: { range: (_u, _min, max) => [0, max > 0 ? max * 1.1 : 1] } },
 		axes: [
-			axis({ values: (_u, splits) => splits.map((s) => format.tick(s)) }),
+			axis({
+				incrs: [...TIME_STEPS[args.bucket ?? 'day']],
+				// Room for the longest label plus a gap, so neighbours never touch.
+				space: format.tick(args.sample ?? 0).length * CHAR_PX + 24,
+				values: (_u, splits) => splits.map((s) => format.tick(s))
+			}),
 			axis({
 				label: args.unit,
 				labelFont: args.font,
@@ -96,7 +118,13 @@ export function buildOptions(args: {
 			})
 		],
 		series: [
-			{ label: '', value: (_u, v) => (v === null ? DASH : format.full(v)) },
+			{
+				// uPlot falls back to an English "Time" for an empty string, but accepts an element.
+				label: Object.assign(document.createElement('span'), {
+					textContent: args.timeLabel ?? ''
+				}),
+				value: (_u, v) => (v === null ? DASH : format.full(v))
+			},
 			...args.series.map((s, i) => ({
 				label: s.label,
 				stroke: palette.series[i],

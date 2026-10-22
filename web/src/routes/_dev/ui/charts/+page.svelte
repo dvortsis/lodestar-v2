@@ -48,7 +48,7 @@
 	const seeders = [120, 130, 128, null, null, 150, 160, 158, 170, 180, 175, 190, 200, 210];
 	const rows = times.map((t, i) => ({
 		day: formatDate(t, 'en', { timeZone: 'UTC' }),
-		n: seeders[i] == null ? '—' : String(seeders[i])
+		n: formatCount(seeders[i])
 	}));
 	let table = $state(false);
 
@@ -119,6 +119,19 @@
 			visible={table}
 			testid="compbar-table"
 		/>
+		<DataTableAlternative
+			caption="Composition on a shared scale"
+			columns={[
+				{ key: 'name', label: 'Torrent' },
+				{ key: 'count', label: 'Files', numeric: true }
+			]}
+			rows={[
+				{ name: 'Small', count: formatCount(400) },
+				{ name: 'Large', count: formatCount(sum) }
+			]}
+			visible={table}
+			testid="compare-table"
+		/>
 		<div class="flex flex-col gap-2">
 			<CategoryBar
 				segments={small}
@@ -173,6 +186,7 @@
 	<section class="flex flex-col gap-2" aria-label="Trend">
 		<LineChart
 			{times}
+			timeLabel="Date"
 			series={[{ label: 'Seeders', values: seeders }]}
 			label="Seeders rose from 120 to 210 over 14 days, with a two-day gap"
 			unit="seeders"

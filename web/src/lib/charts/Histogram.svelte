@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { DASH, formatCount, RANGE_SEPARATOR, type MetricValue } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import {
@@ -83,13 +84,21 @@
 	const same = (a: BrushRange | null, b: BrushRange | null) =>
 		a === b || (!!a && !!b && a.from === b.from && a.to === b.to);
 
-	function set(range: BrushRange | null, commit: boolean) {
-		const changed = !same(sel, range);
-		if (changed) {
+	// Commit only when the range differs from the last committed one: a key at the limit, key
+	// auto-repeat and a release without movement change nothing, so they must not re-query.
+	let committed: BrushRange | null = untrack(() => sel);
+	function commit(range: BrushRange | null) {
+		if (same(committed, range)) return;
+		committed = range;
+		oncommit?.(range);
+	}
+
+	function set(range: BrushRange | null, settle: boolean) {
+		if (!same(sel, range)) {
 			selection = range;
 			onbrush?.(range);
 		}
-		if (commit) oncommit?.(range);
+		if (settle) commit(range);
 	}
 
 	function edgeAt(event: PointerEvent): number {
@@ -125,7 +134,7 @@
 	function up() {
 		if (!drag) return;
 		drag = null;
-		oncommit?.(sel);
+		commit(sel);
 	}
 
 	function plotKey(event: KeyboardEvent) {
@@ -192,7 +201,7 @@
 			></div>
 			{#each ['from', 'to'] as const as edge (edge)}
 				<div
-					class="absolute inset-y-0 -ml-1 w-2 cursor-ew-resize rounded-selector bg-primary {FOCUS}"
+					class="absolute inset-y-0 -ml-1 w-2 cursor-ew-resize rounded-selector bg-base-content ring-2 ring-base-100 {FOCUS}"
 					style:left={pos(sel[edge])}
 					role="slider"
 					tabindex="0"

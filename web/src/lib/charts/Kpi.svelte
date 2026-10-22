@@ -58,7 +58,7 @@
 							? 'M6 10V2M2.5 5.5 6 2l3.5 3.5'
 							: arrow === 'down'
 								? 'M6 2v8M2.5 6.5 6 10l3.5-3.5'
-								: 'M2 6h8'}
+								: 'M2 4.5h8M2 7.5h8'}
 					/>
 				</svg>{/if}
 			<span>{deltaText}</span>

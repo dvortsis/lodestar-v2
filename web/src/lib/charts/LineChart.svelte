@@ -37,6 +37,8 @@
 		integers?: boolean;
 		/** IANA time zone, the user's setting. */
 		timeZone?: string;
+		/** Heading of the legend's date row, e.g. "Date". Empty by default. */
+		timeLabel?: string;
 		/** uPlot failed to load (offline, blocked chunk). The container stays empty. */
 		onerror?: (error: unknown) => void;
 		height?: number;
@@ -52,6 +54,7 @@
 		bucket = 'day',
 		integers = true,
 		timeZone,
+		timeLabel,
 		onerror,
 		height = 240,
 		testid = 'line-chart'
@@ -75,7 +78,14 @@
 	});
 	// Anything that changes how the chart is built (not just what it plots) forces a rebuild.
 	const shape = $derived(
-		JSON.stringify([series.map((s) => [s.label, s.token]), unit, height, integers])
+		JSON.stringify([
+			series.map((s) => [s.label, s.token]),
+			unit,
+			height,
+			integers,
+			bucket,
+			timeLabel
+		])
 	);
 
 	function destroy() {
@@ -112,6 +122,9 @@
 					format: fmt,
 					unit,
 					integers,
+					bucket,
+					sample: times.at(-1),
+					timeLabel,
 					font: `${css.fontSize} ${css.fontFamily}`
 				}),
 				buildData(times, series),
