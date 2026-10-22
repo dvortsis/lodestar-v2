@@ -5,13 +5,19 @@
 ## Context
 M0–M3 are merged: the crawler with MSE fetch, store schema v3, the Tantivy torrent and file indexes, the query language, enrichment and the worker boundary. There's also a minimal API (setup, login, parse, search with offset paging, detail, files) and a 211-line status page.
 
-M4 is being built **in another session**: swarm health, the §20 filter rule engine and `ContentType::Adult`. This plan uses M4's fields and APIs but doesn't build them.
+M4 is being built **in other sessions**. Merged so far:
+- `ContentType::Adult` (#28);
+- the `filter` crate with the child-safety core (#29);
+- the filter wired into store and pipeline (migration V4, #31);
+- `title_stem` (#30, search `SCHEMA_VERSION` 4).
+
+Still open: tracker scrape, BEP 33 and hot columns (#32), and blocklist subscriptions (#33, migration V5). This plan uses M4's fields and APIs but doesn't build them.
 
 What the code shows (checked):
 - `web/` and `packaging/` don't exist.
 - API handlers return untyped `json!` values, so there's no typed contract yet.
 - Routes are split between `crates/api/src/lib.rs` and `crates/lodestar/src/http.rs`.
-- Migrations are one append-only array in `crates/store/src/schema.rs`.
+- Migrations are one append-only array in `crates/store/src/schema.rs`. M4 is actively adding to it (V4 merged, V5 open).
 - The `settings` table already exists.
 - `index_watermark_hour` doesn't exist yet.
 - There's no blue/green index rebuild, so any `SCHEMA_VERSION` bump today starts from an empty index.
@@ -92,7 +98,7 @@ To protect the critical path, **the main session writes almost no Svelte.** Its 
 | Shared thing | Rule |
 |---|---|
 | `crates/store/src/schema.rs` migrations | Main session only. One M5 migration, merged after M4's schema lands; renumber on rebase |
-| `crates/search` `SCHEMA_VERSION` | Exactly one bump per milestone (M5: facets + `title_stem`; M7: trigram, `payload_sig`, file category/`pieces_root`, v0.6 network/source/verified fields), and only after the blue/green rebuild lands |
+| `crates/search` `SCHEMA_VERSION` | Exactly one bump per milestone (M5: facets; M7: trigram, `payload_sig`, file category/`pieces_root`, v0.6 network/source/verified fields), and only after the blue/green rebuild lands |
 | `crates/api/src/lib.rs`, `crates/lodestar/src/services.rs` | After the router split, each slice adds one line; merged in sequence |
 | `openapi.json` / `schema.d.ts` | Regenerated after a rebase, never merged by hand |
 | `web/package.json` and the lockfile | W0 pins every expected dependency up front. Adding one later needs main-session approval |
@@ -213,7 +219,7 @@ Each item is one PR of about 1,500 changed lines or fewer. **[M]** = main sessio
 ### P2: M5 complete
 **Main track:**
 - **B11a** Insights overview: KPIs, cohort finality, compare period, events, the "stale" flag.
-- **B7** `/suggest` (term prefixes, an FST over titles, fields and units, "did you mean"), `title_stem` and natural phrasing on `/parse`.
+- **B7** `/suggest` (term prefixes, an FST over titles, fields and units, "did you mean") and natural phrasing on `/parse`.
 - **B12** API keys and feed tokens, rate limits, the fresh-password confirmation primitive (§20.11), proxy-header auth.
 - **B9** Percolator: each commit runs saved searches over ids above the watermark → alerts → SSE, plus RSS per saved search.
 - **B5c** Result cache and `?explain=1`.
@@ -378,7 +384,16 @@ Done when: npm run check && npx vitest run <dir> && npx size-limit && npx playwr
 Report: files changed, hub edits needed, missing contract fields, deviations from spec and why.
 ```
 
-## 8. First steps
+## 8. Automation: the runner
+`runner/README.md` describes a long-lived Opus **runner session**:
+- It starts each slice in a new cloud session as soon as the slice's dependencies are merged.
+- It has a fresh Opus reviewer check every PR.
+- It merges PRs that are green and have no blocking findings, as the owner allowed on 2026-10-22.
+- It keeps going around the clock.
+
+The slice graph is in `runner/slices.yaml`.
+
+## 9. First steps
 1. Start B0 (router split) on the main track.
 2. In parallel, launch W0 (scaffold) as the first helper.
 3. Then the contract docs: `docs/design-tokens.md`, `docs/metrics.md`, `docs/ui-glossary.md`.
