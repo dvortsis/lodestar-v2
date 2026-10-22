@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
-use super::search::SearchHit;
+use super::search::{SearchHit, SearchNotice};
 
 /// `GET /discover`.
 #[derive(Debug, Clone, Default, Deserialize, IntoParams)]
@@ -45,6 +45,9 @@ pub struct NewestSection {
     /// Pass as `cursor` for the next page; null on the last page.
     #[schema(required = true)]
     pub next_cursor: Option<String>,
+    /// As search's: `adult_hidden` for the `adult` tab while "Show adult
+    /// content" is off, so it's empty.
+    pub notices: Vec<SearchNotice>,
     /// Rows before this page.
     pub offset: usize,
     /// Searchable torrents in this tab, not just this page.

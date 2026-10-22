@@ -12,7 +12,6 @@ use axum::routing::get;
 use axum::{Json, Router};
 use lodestar_classify::ContentType;
 use lodestar_search::Node;
-use lodestar_search::query::TagKey;
 use lodestar_store::{Enriched, TorrentRow, flags};
 use utoipa::OpenApi;
 
@@ -20,6 +19,7 @@ use crate::dto::discover::{DiscoverQuery, DiscoverResponse, HitGroup, NewestSect
 use crate::dto::search::SearchRequest;
 use crate::error::{ApiError, ApiResult};
 use crate::extract::Query;
+use crate::search::Visibility;
 use crate::{ApiState, auth, search};
 
 /// This module's half of `/openapi.json`.
@@ -31,42 +31,30 @@ pub fn routes() -> Router<ApiState> {
     auth::protected(Router::new().route("/discover", get(discover)))
 }
 
-/// `type:adult`, as the index stores it.
-const ADULT: &str = "adult";
-
-/// What may be shown of the index: `node` without the torrents a filter
-/// rule hid (the clause search adds), and without Adult.
-///
-/// TODO(B17): "Show adult content" isn't a setting on `main` yet, so
-/// Adult is always hidden, its default (§20.9). When B17 merges, this
-/// becomes its `search::base_query(&node, Visibility { hidden: false,
-/// adult: s.adult.shown() }).node`, and Discover's Newest drops the
-/// `-type:adult` it adds to its query text.
-pub(crate) fn shown(node: Node) -> Node {
-    let no_adult = Node::Not {
-        of: Box::new(Node::Tag {
-            key: TagKey::Type,
-            any: vec![ADULT.to_string()],
-        }),
-    };
-    match node.without_hidden() {
-        Node::And { mut of } => {
-            of.push(no_adult);
-            Node::And { of }
-        }
-        other => Node::And {
-            of: vec![other, no_adult],
+/// What may be shown of the index: `node` through B17's base query, the
+/// one search runs, so it leaves out the torrents a filter rule hid and,
+/// unless `adult` ("Show adult content", read once per request), Adult.
+pub(crate) fn shown(node: &Node, adult: bool) -> Node {
+    search::base_query(
+        node,
+        Visibility {
+            hidden: false,
+            adult,
         },
-    }
+    )
+    .query()
 }
 
 /// Whether the stored state keeps a torrent out of view, whatever the
-/// index says (it may lag a reclassification): Adult while Adult is
-/// hidden (always, until B17), or hidden by a filter rule unless
-/// `hidden_ok`.
-pub(crate) fn withheld(row: &TorrentRow, e: Option<&Enriched>, hidden_ok: bool) -> bool {
-    let adult = e.is_some_and(|e| e.content_type == ContentType::Adult.code());
-    adult || (!hidden_ok && row.flags & flags::HIDDEN != 0)
+/// index says (it may lag a reclassification): Adult unless `adult`
+/// shows it, or hidden by a filter rule unless `hidden_ok`.
+pub(crate) fn withheld(
+    row: &TorrentRow,
+    e: Option<&Enriched>,
+    hidden_ok: bool,
+    adult: bool,
+) -> bool {
+    (!adult && e.is_some_and(search::is_adult)) || (!hidden_ok && row.flags & flags::HIDDEN != 0)
 }
 
 /// Newest's tab, checked: a content type, and never query text.
@@ -115,13 +103,10 @@ pub(crate) async fn discover(
             "Search is turned off.",
         ));
     }
-    // Newest is a search sorted by discovery, so it gets search's
-    // hidden-torrent clause, leases and cursors. `-type:adult`: see
-    // `shown` (TODO(B17)).
-    let q = match kind {
-        Some(t) => format!("type:{t} -type:{ADULT}"),
-        None => format!("-type:{ADULT}"),
-    };
+    // Newest is a search sorted by discovery, so it gets search's base
+    // query (hidden torrents, and Adult unless shown), leases, cursors
+    // and notices.
+    let q = kind.map_or_else(String::new, |t| format!("type:{t}"));
     let request = SearchRequest {
         q: Some(q),
         sort: Some("-discovered".to_string()),
@@ -137,6 +122,7 @@ pub(crate) async fn discover(
             hits: page.hits,
             limit: page.limit,
             next_cursor: page.next_cursor,
+            notices: page.notices,
             offset: page.offset,
             total: page.total,
             total_approx: page.total_approx,
@@ -158,11 +144,15 @@ mod tests {
     use lodestar_search::parse;
 
     #[test]
-    fn shown_leaves_out_hidden_and_adult() {
-        assert_eq!(shown(Node::All).to_query(), "hidden:no -type:adult");
+    fn shown_follows_hidden_and_adult() {
+        assert_eq!(shown(&Node::All, false).to_query(), "hidden:no -type:adult");
         assert_eq!(
-            shown(parse("knight").unwrap()).to_query(),
+            shown(&parse("knight").unwrap(), false).to_query(),
             "knight hidden:no -type:adult"
+        );
+        assert_eq!(
+            shown(&parse("knight").unwrap(), true).to_query(),
+            "knight hidden:no"
         );
     }
 
