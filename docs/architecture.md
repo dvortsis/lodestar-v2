@@ -1996,7 +1996,7 @@ Filtering must **block exactly what it's meant to block** and **avoid false posi
   - **file-structure evidence;**
   - optional **weighted scoring**, where independent signals add up and the action fires only above a threshold.
 - **Explainability:** every hit records the rule, its version and the evidence that fired (which terms, fields and weights).
-- **Test cases per rule:** "must match" and "must not match" examples run on every edit and on every pack update. False-positive reports become must-not-match cases automatically.
+- **Test cases per rule:** "must match" and "must not match" examples run on every edit and on every pack update. False-positive reports become must-not-match cases automatically, stored as **hashed normalized tokens** (never the torrent's name, §20.11).
 - **Performance:**
   - All active rules compile into: a hash set (exact hashes and signatures), **one Aho-Corasick automaton** over normalized literals, a linear-time `RegexSet`, and numeric predicates.
   - Target: **< 50 µs per torrent at 10,000 rules.**
@@ -2095,7 +2095,7 @@ Plain-text must-not-match fixtures ship with them: *Sex Education S02E03 – The
 #### 20.5.6 Guardrails on editing core rules
 1. **No delete.** A core rule can be edited, reset to its signed default, or switched off (non-floor rules only, §20.5.3).
 2. **Protective actions only** (`quarantine` / `drop`) while a rule is in the core.
-3. **Intent fixtures:** an edit that makes any must-match fixture (hashed tokens) stop matching is rejected, with an explanation. Your false-positive examples become must-not-match fixtures.
+3. **Intent fixtures:** an edit that makes any must-match fixture (hashed tokens) stop matching is rejected, with an explanation. Your false-positive examples become must-not-match fixtures, stored hashed.
 4. **Breadth check:** an edit releasing more than 25% of a rule's 30-day catches is a **broad edit**. The effect warning says so in plain words ("this edit stops CS-4a from catching about 3 in 4 of what it caught last month") before you enter your password.
 5. **Effect warning + password** for every core edit that weakens it (§20.11). Strengthening edits (adding terms, rules or hashes) need neither.
 6. **Overrides over signed base rules,** with a diff against the base and rebasing on update. Conflicts are flagged, never dropped.
@@ -2162,7 +2162,7 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
 |---|---|
 | `filter_rules` | id, layer, base_id, version, query AST, action, scope, enabled, shadow_until, weights |
 | `filter_overrides` | core/pack overrides, layered over base rules |
-| `filter_fixtures` | must-match / must-not-match, plain or hashed |
+| `filter_fixtures` | must-match / must-not-match. Shipped pack fixtures may be plain text; the core's and **all fixtures you create are hashed** |
 | `filter_hits` | rule, item/hash, time, action, evidence; detail kept 30 days, plus counts in rollups |
 | `tombstones` | hash, rule, time |
 | `quarantine` | hash, rule, sealed name, time, expiry |
@@ -2252,7 +2252,16 @@ Every change to filtering shows its impact **before** it takes effect. That cove
 
 ### 20.11 Effect warnings and password confirmation (instead of an audit log)
 **Owner's decision: filtering changes aren't recorded in an audit log.** Lodestar deals with torrents, and a record of what was unblocked, when and why is itself sensitive. Instead, every change that **weakens** protection shows a **plain-language warning about its effect** and needs **your password** to go ahead. Changes that strengthen protection (adding terms, rules, hashes or packs) need neither.
-- **Which changes get a warning:** switching off a core rule; editing a core rule so it catches less; a CSX-5 entry (exact, keyword or pattern; Override or Neutralize term); releasing an item from quarantine; removing a CS-1 entry; revealing a sealed name; disabling a pack or pack rule; deleting or narrowing your own drop/quarantine rules.
+- **Which changes get a warning:**
+  - switching off a core rule, or editing one so it catches less;
+  - a CSX-5 entry (exact, keyword or pattern; Override or Neutralize term);
+  - **adding or widening any exception (§20.12):** false-positive exceptions, `unless` clauses on any rule, the Always-allow list, and edits that widen the built-in CSX-1 to CSX-4;
+  - releasing an item from quarantine;
+  - removing a CS-1 entry;
+  - revealing a sealed name;
+  - disabling a pack or pack rule;
+  - deleting or narrowing your own drop/quarantine rules.
+- **No record is kept of any of these,** exceptions included: no author, reason, timestamp history or before/after.
 - **What a warning says** (generated from the change and its impact preview, §20.10):
   1. **What the change does, concretely,** in one or two sentences, naming the protections it bypasses.
   2. **What else it lets through:** the non-obvious side effect, stated honestly.
@@ -2267,5 +2276,31 @@ Every change to filtering shows its impact **before** it takes effect. That cove
   - **Releasing a quarantined item:** "This torrent was held by CS-2a because a file name has an under-18 age next to a sexual term. Releasing it fetches and indexes it normally."
   - **Removing a CS-1 entry:** "You confirmed this torrent as abuse material. Removing it lets it, and exact reposts of its files, be fetched and indexed again."
 - **Password:** the admin password is entered in the warning dialog itself, for every weakening change (there's no "remember for 15 minutes"). Strengthening changes and previews never ask.
-- **What *is* stored:** only what filtering needs to work. That's the current rule set and switches, CSX-5 entries (match, strength, scope, dates, hit count), and the previous rule set for one-step Undo. It also includes `filter_hits` (hash, rule, time and evidence codes; no names), which the review queue and the 30-day replay need. Its retention is configurable from 0 to 30 days (default 30), and a shorter window shortens the replay.
+- **What *is* stored:** only what filtering needs to work. That's the current rule set and switches, exceptions (match, scope, the rule they apply to), CSX-5 entries (match, strength, scope, dates, hit count), hashed fixtures, and the previous rule set for one-step Undo. It also includes `filter_hits` (hash, rule, time and evidence codes; no names), which the review queue and the 30-day replay need. Its retention is configurable from 0 to 30 days (default 30), and a shorter window shortens the replay.
+
+### 20.12 Your exceptions
+Exceptions are how you correct false positives without switching rules off. Like every other filtering change, **they aren't recorded in any log**. Adding or widening one shows an **effect warning** and needs **your password** (§20.11). Removing or narrowing one makes filtering stricter, so it needs neither.
+
+| Exception | Created from | Applies to | Reaches the core? |
+|---|---|---|---|
+| **False positive (item)** | the review queue, or "Not junk" on a hidden result | **that exact torrent** (its hashes, optionally its payload signature), for **that rule only** | Yes, for non-floor core rules. Floor items are never released (§20.5.5) |
+| **`unless` clause (rule-level)** | the review queue's "fix this rule" suggestion, or the rule editor | everything the clause matches, for **that rule only** | Yes, as a core rule edit (intent fixtures still apply, §20.5.6) |
+| **Always allow** | Filters & Safety → Exceptions, or "Always allow this uploader / group / source" | everything it matches, for **packs and your rules** | No. Use CSX-5 (§20.5.5) to reach the core |
+| **Built-in CSX-1 to CSX-4** | shipped; editable | the evidence each one declares (§20.5.4) | Yes; widening edits warn and need the password |
+
+- **Example warning (item false positive on a core rule):**
+  > **This releases one torrent from CS-4a only.** It was held because "school" appears next to a sexual term in its title. Other core rules still check it, and future torrents with similar names are still checked. It will be fetched and indexed.
+  >
+  > Enter your password to apply. [Cancel]
+- **Example warning (Always allow for an uploader):**
+  > **Everything from this uploader will skip your rules and the rule packs** (malware, lures, fakes, spam, scams), including torrents with executables hidden in video. Core rules still apply. In the last 30 days this would have released 58 items, about 2 per day. **Safer:** allow only their video releases (`type:movie | type:tv`), which would have released 51.
+  >
+  > Enter your password to apply. [Shadow for 7 days] [Cancel]
+- **The narrowest option is suggested first**, as with blocking: this torrent → this payload → this uploader → a phrase.
+- **What's stored per exception:** the match, its scope, and the rule it applies to. Nothing else: no name of the torrent that prompted it (false-positive examples become **hashed** must-not-match fixtures), no author, no reason, no history.
+- **Tests (§20.8):**
+  - every exception-widening API call is refused without a fresh password, and returns its warning text first;
+  - no table stores an exception's author, reason, prompting torrent name or history;
+  - fixtures created from false positives are hashed;
+  - removing or narrowing an exception needs no password and re-applies filtering.
 
