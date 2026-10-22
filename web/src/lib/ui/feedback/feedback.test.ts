@@ -166,6 +166,21 @@ describe('Toaster', () => {
 		outside.remove();
 	});
 
+	it('moves focus when the queue cap drops the toast that holds it', async () => {
+		render(Toaster, { dismissLabel: 'Close' });
+		toast.push({ text: 'Held', timeout: 0 });
+		flushSync();
+		const close = screen.getByRole('button', { name: 'Close' });
+		close.focus();
+		await fireEvent.focusIn(close);
+		for (let i = 0; i < 4; i++) toast.push({ text: `n${i}`, timeout: 0 });
+		flushSync();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(screen.queryByText('Held')).toBeNull();
+		expect(document.activeElement).not.toBe(document.body);
+		expect(document.activeElement!.getAttribute('aria-label')).toBe('Close');
+	});
+
 	it('caps the queue, dropping the oldest non-error first', () => {
 		toast.push({ text: 'err', kind: 'error' });
 		for (let i = 0; i < 5; i++) toast.push({ text: `t${i}` });

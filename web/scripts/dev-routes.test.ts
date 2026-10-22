@@ -5,6 +5,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readlinkSync,
+	realpathSync,
 	rmSync,
 	symlinkSync
 } from 'node:fs';
@@ -54,8 +55,18 @@ describe('syncDevRoutes', () => {
 	it('recreates a dangling or mis-targeted link', () => {
 		symlinkSync('../gone', link(), 'junction');
 		syncDevRoutes(root, true, false);
-		expect(readlinkSync(link())).toBe('../dev-routes');
-		expect(existsSync(link())).toBe(true);
+		expect(realpathSync(link())).toBe(realpathSync(join(root, 'src/dev-routes')));
+		rmSync(link());
+		mkdirSync(join(root, 'src/other'));
+		symlinkSync('../other', link(), 'junction');
+		syncDevRoutes(root, true, false);
+		expect(realpathSync(link())).toBe(realpathSync(join(root, 'src/dev-routes')));
+	});
+
+	it('keeps a link that resolves correctly even if its text differs', () => {
+		symlinkSync(join(root, 'src/dev-routes'), link(), 'junction'); // absolute, as Windows reads back
+		syncDevRoutes(root, true, false);
+		expect(readlinkSync(link())).toBe(join(root, 'src/dev-routes'));
 	});
 
 	it('refuses a real src/routes/dev folder with a clear message', () => {

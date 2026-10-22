@@ -24,27 +24,53 @@
 	let { label, dismissLabel, returnFocus }: Props = $props();
 
 	let region: HTMLDivElement | undefined = $state();
-	// The element focus came from when it entered the region; kept while focus stays inside.
+	// The element focus came from when it entered the region; kept only while focus stays inside.
 	let cameFrom: HTMLElement | null = null;
+	let focusInside = false;
 
 	function onfocusin(event: FocusEvent) {
+		focusInside = true;
 		const from = event.relatedTarget as HTMLElement | null;
 		if (from && !region?.contains(from)) cameFrom = from;
 	}
 
+	function onfocusout(event: FocusEvent) {
+		// A removed element may fire focusout too: only a still-connected one means focus left.
+		if (!(event.target as Element).isConnected) return;
+		if (!region?.contains(event.relatedTarget as Node | null)) {
+			focusInside = false;
+			cameFrom = null;
+		}
+	}
+
+	async function restoreFocus(neighbour?: HTMLElement) {
+		await tick();
+		const first = region?.querySelector<HTMLElement>('[data-toast-dismiss]');
+		const target = [neighbour, first, cameFrom, returnFocus?.()].find((el) => el?.isConnected);
+		focusInside = !!target && !!region?.contains(target);
+		if (!focusInside) cameFrom = null;
+		target?.focus();
+	}
+
 	// Dismissing the toast that holds focus must not drop it to <body>: next toast's button, else the
 	// previous one, else where focus came from, else `returnFocus`.
-	async function dismiss(id: number, button: HTMLElement) {
+	function dismiss(id: number, button: HTMLElement) {
 		const held = region?.contains(document.activeElement);
 		const buttons = [...(region?.querySelectorAll<HTMLElement>('[data-toast-dismiss]') ?? [])];
 		const at = buttons.indexOf(button);
 		const neighbour = buttons[at + 1] ?? buttons[at - 1];
 		toast.dismiss(id);
-		if (!held) return;
-		await tick();
-		const target = [neighbour, cameFrom, returnFocus?.()].find((el) => el?.isConnected);
-		target?.focus();
+		if (held) void restoreFocus(neighbour);
 	}
+
+	// The queue cap can drop a toast that holds focus; treat it like a dismissal.
+	$effect(() => {
+		void toasts.items.length;
+		if (!focusInside) return;
+		void tick().then(() => {
+			if (focusInside && !region?.contains(document.activeElement)) void restoreFocus();
+		});
+	});
 
 	const icons = { info: IconInfo, success: IconSuccess, warning: IconWarning, error: IconError };
 	const ink = {
@@ -91,6 +117,7 @@
 	aria-relevant="additions text"
 	bind:this={region}
 	{onfocusin}
+	{onfocusout}
 	class="pointer-events-none fixed inset-x-4 bottom-4 z-50 flex flex-col gap-2 large:left-auto large:w-(--toast-width)"
 >
 	{#each toasts.items as item (item.id)}

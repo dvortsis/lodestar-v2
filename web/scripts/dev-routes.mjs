@@ -3,7 +3,7 @@
 // are linked into the routes tree as src/routes/dev (gitignored). The link is removed only by a
 // build without them, so it survives vitest, check and eslint and a running `vite dev`.
 // Called from svelte.config.js.
-import { existsSync, lstatSync, readlinkSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, lstatSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
 const TARGET = '../dev-routes';
@@ -36,8 +36,10 @@ export function syncDevRoutes(
 				'(e.g. src/dev-routes/ui/<group>/+page.svelte); scripts/dev-routes.mjs links that folder in.'
 		);
 	}
-	// A link is good when it points at the right folder and that folder resolves.
-	const good = stat && readlinkSync(link) === TARGET && existsSync(link);
+	// A link is good when it resolves to the showcase folder. Compare real paths: on Windows a
+	// junction reads back as an absolute path, so the link text can't be compared.
+	const good =
+		stat && existsSync(link) && realpathSync(link) === realpathSync(join(root, 'src/dev-routes'));
 	if (want) {
 		if (good) return;
 		if (stat) rmSync(link); // dangling or pointing elsewhere: recreate
