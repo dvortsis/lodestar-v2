@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-22T04:51:00Z",
+ "updated_at": "2026-10-22T05:00:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 5
@@ -49,8 +49,8 @@
    "session": "session_01G472Ud4a5RmEjGnhwpwTQw",
    "pr": 35,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": ""
+   "review_rounds": 1,
+   "notes": "round 1: changes requested (axe main landmark; playwright browser pin; size-limit scoping; ban regex holes)"
   },
   "B1": {
    "status": "pending",
@@ -637,5 +637,17 @@
  },
  "policy": {
   "merge_fallback": "If a direct merge is refused, enable GitHub auto-merge (merge commit) on the PR, only after CI is green and the review has no blocking findings. Owner-approved 2026-10-22. Fold into runner/README.md with the next runner PR."
- }
+ },
+ "watched_sessions": {
+  "session_015F9H2aHowz7TJLffFYxUvf": {
+   "title": "M4 continuation",
+   "work": "M4 swarm health, branch claude/relaxed-knuth-vexgae (PR #32), migration V5"
+  },
+  "session_01N83eB81W8xkqJgXiD7JLM3": {
+   "title": "Modern DHT crawler architecture",
+   "work": "content filter rule persistence and writer judging, migration V6"
+  }
+ },
+ "watch_policy": "Owner asked the runner to keep an eye on and manage these sessions: each heartbeat check status; report a pending permission prompt to the owner (runner cannot approve); nudge an idle session with remaining work; flag conflicts with slice ownership and migration order.",
+ "migration_order": "V4 filter (merged), V5 M4 swarm, V6 filter rules; M5 (B8) takes the next number after M4 settles"
 }
