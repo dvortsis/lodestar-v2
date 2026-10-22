@@ -5,7 +5,6 @@
   <Registry>https://github.com/dvortsis/lodestar-v2/pkgs/container/lodestar-v2</Registry>
   <Network>bridge</Network>
   <MyIP/>
-  <Shell>sh</Shell>
   <Privileged>false</Privileged>
   <Support>https://github.com/dvortsis/lodestar-v2/issues</Support>
   <Project>https://github.com/dvortsis/lodestar-v2</Project>
@@ -15,16 +14,15 @@
   <Category>Network:Web Downloaders:Other</Category>
   <WebUI></WebUI>
   <ExtraParams></ExtraParams>
-  <PostArgs/>
+  <PostArgs>worker</PostArgs>
   <CPUset/>
   <DateInstalled/>
   <DonateText/>
   <DonateLink/>
   <Requires>Lodestar v0.6 or newer running as the main instance</Requires>
   <Icon>https://raw.githubusercontent.com/dvortsis/lodestar-v2/main/packaging/icons/lodestar-256.png</Icon>
-  <Config Name="DHT / peers (UDP)" Target="6881" Default="6881" Mode="udp" Description="DHT traffic. Forward this UDP port on your router for best reach." Type="Port" Display="always" Required="true" Mask="false">6881</Config>
-  <Config Name="Peers (TCP)" Target="6881" Default="6881" Mode="tcp" Description="Peer connections for metadata exchange." Type="Port" Display="always" Required="true" Mask="false">6881</Config>
-  <Config Name="Join address" Target="LODESTAR_JOIN" Default="https://lodestar.example:8091" Mode="rw" Description="Cluster address of the main Lodestar, for example https://192.168.1.10:8091." Type="Variable" Display="always" Required="true" Mask="false">https://lodestar.example:8091</Config>
+  <Config Name="DHT (UDP)" Target="6881" Default="6882" Mode="udp" Description="DHT traffic. Host port defaults to 6882 so the worker can run beside the main Lodestar container, which uses 6881. Forward this UDP port on your router." Type="Port" Display="always" Required="true" Mask="false">6882</Config>
+  <Config Name="Join address" Target="LODESTAR_JOIN" Default="" Mode="rw" Description="Cluster address of the main Lodestar, for example https://192.168.1.10:8091." Type="Variable" Display="always" Required="true" Mask="false"></Config>
   <Config Name="Join token" Target="LODESTAR_TOKEN" Default="" Mode="rw" Description="One-time token from Settings, Workers, Add worker. It expires after 15 minutes. After joining, the worker keeps its own certificate and the token is not needed again." Type="Variable" Display="always" Required="true" Mask="true"></Config>
   <Config Name="State path" Target="/data" Default="/mnt/cache/appdata/lodestar-worker" Mode="rw" Description="Worker certificate and the on-disk spool used while the main instance is unreachable. Use a pool path, not /mnt/user." Type="Path" Display="always" Required="true" Mask="false">/mnt/cache/appdata/lodestar-worker</Config>
   <Config Name="PUID" Target="PUID" Default="99" Mode="rw" Description="User ID the container runs as (99 = nobody)." Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
