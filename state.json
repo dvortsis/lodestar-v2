@@ -62,13 +62,13 @@
    "notes": "merged 09:27 as a569b51 (#57)"
   },
   "B2": {
-   "status": "running",
+   "status": "in_review",
    "model": "opus",
    "session": "session_01QHUDtvte2DFAiHz6swmiU8",
-   "pr": null,
+   "pr": 67,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "launched 11:44 (briefs/B2.md); includes utp transport setting (unwired)"
+   "notes": "PR #67; reviewer (incl. security) started 12:45"
   },
   "B3": {
    "status": "merged",
@@ -746,13 +746,13 @@
    "notes": "round 1 FIX (error field untested) fixed by runner 87a5a06 + \u00a716 wording; merge on CI green"
   },
   "F1b": {
-   "status": "running",
+   "status": "in_review",
    "model": "opus",
    "session": "session_01V5sNo28tD6bZx3CNFdYjWY",
-   "pr": null,
+   "pr": 66,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "calibrate filter budget gate to runner speed (main red: 10% 40.8 vs 51.3 us across runners for identical code); branch slice/F1 restarted from main"
+   "notes": "PR #66 (props.rs only, CI green); reviewer started 12:45"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -884,7 +884,7 @@
   "W6 baselines: allow *.blob.core.windows.net (GitHub Actions artifact storage) in environment network, or owner commits artifact 12421952170 into web/e2e/ and removes web/e2e/.update-snapshots on slice/W6"
  ],
  "launches_today": 7,
- "last_heartbeat": "2026-10-22T11:40Z",
+ "last_heartbeat": "2026-10-22T12:44Z",
  "owner_questions": [
   "F1 budget scope: gate covers cheaply-rejectable rule shapes (10% = 40.8 us on runner). Shapes the cheap check cannot decide cost more at 10% of rules (VM: NEAR/1 ~450-500, negation ~140, fuzzy ~125, prefix ~110 us; runner ~1.4x faster). Should those shapes be gated at 50 us too?",
   "Filter budget hardware: 50 us has no reference machine; gate now calibrated to the runner F1 measured on (10%=40.8 us), slower runners scale up to 1.6x. Confirm or set a reference machine."
