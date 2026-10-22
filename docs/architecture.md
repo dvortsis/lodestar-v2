@@ -1894,6 +1894,12 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - **`hidden_junk` isn't served:** nothing hides junk by default yet, so there's no count to report. It arrives with the slice that adds the default junk threshold of §10.4's "N hidden · Show".
 - **Error codes:** `410 cursor_expired` ("These results changed or expired; reload the search."), `400 bad_cursor`, `400 cursor_and_offset`, and `503 search_cancelled` (seen only by a client that's gone).
 
+**B5a swap fix (Windows):**
+- **Renames of index directories retry with backoff, about 10 s in all, before they count as failures.** Windows refuses to rename a directory while any file in it is open, and an antivirus or search indexer opens freshly written segments for a moment. Before this, one such moment failed the whole rebuild at the finishing rename.
+  - A failed rebuild stays in `Failed` with the old index serving, so `rebuilding()` never cleared. That's how B5b's swap test hung on Windows CI.
+- **`RebuildProgress` gains `error`**, the failure's message, so the banner, Insights and tests can say why.
+- **The serving pointer is a `Mutex<Arc<SearchIndex>>`, held only to clone or replace the `Arc`,** in place of an `RwLock`. A swap then waits behind at most one clone, whatever the platform's reader/writer policy (Windows SRW locks promise none).
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.
