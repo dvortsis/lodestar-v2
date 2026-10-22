@@ -1147,6 +1147,7 @@ export interface components {
          *       "fetch_pending": 1200,
          *       "fetched": 3400,
          *       "harvested": 91000,
+         *       "paused": false,
          *       "stored": 3100,
          *       "torrents": 48211
          *     }
@@ -1183,6 +1184,12 @@ export interface components {
              * @description Hashes received from sources since start.
              */
             harvested: number;
+            /**
+             * @description The crawler is paused (`POST /crawler/pause`): the counters stand
+             *     still because nothing is harvested or fetched, not because
+             *     something broke.
+             */
+            paused: boolean;
             /**
              * Format: int64
              * @description Torrents stored since start.
@@ -1365,12 +1372,14 @@ export interface components {
         };
         /**
          * @description Our address as other DHT nodes see it: the BEP 42 `ip` key of their
-         *     replies, one vote per node, the last 32 nodes.
+         *     replies, one vote per network (/24 or /64), the last 32 networks,
+         *     IPv4 and IPv6 tallied apart (the IPv4 consensus wins when both have
+         *     one).
          */
         ExternalAddress: {
             /**
              * Format: int32
-             * @description Voters naming the leading address.
+             * @description Voting networks naming the leading address.
              */
             agreeing: number;
             /**
@@ -1544,6 +1553,7 @@ export interface components {
          *       "reachable": true,
          *       "reason": "unsolicited_queries",
          *       "unsolicited_queries": 37,
+         *       "unsolicited_sources": 21,
          *       "window_s": 600,
          *       "window_started_at": 1792677610
          *     }
@@ -1581,12 +1591,19 @@ export interface components {
              * @description Why `reachable` reads as it does.
              * @enum {string}
              */
-            reason: "dht_off" | "bootstrapping" | "measuring" | "unsolicited_queries" | "no_unsolicited_queries";
+            reason: "dht_off" | "bootstrapping" | "measuring" | "unsolicited_queries" | "few_unsolicited_sources" | "no_unsolicited_queries";
             /**
              * Format: int64
              * @description Of `inbound_queries`, the ones from nodes we never queried.
              */
             unsolicited_queries: number | null;
+            /**
+             * Format: int64
+             * @description The distinct networks (/24 or /64) those came from, counting at
+             *     most the 64 most recent; null until measuring. `reachable` needs
+             *     at least 3.
+             */
+            unsolicited_sources: number | null;
             /**
              * Format: int64
              * @description The longest stretch of evidence looked at.
