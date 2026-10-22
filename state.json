@@ -1008,6 +1008,12 @@
    "session": "session_01SK5Ci2FahQUSGQuDVozi28",
    "notes": "follow-up of #87 review: max_id visible-only, replay toggle, swap adult test | 23:32 PR #104 (branch slice/B4b). Runner decision (\u00a72.19, content-safety strengthening): max_id null while Adult hidden. Reviewer started.",
    "pr": 104
+  },
+  "runner-secure-delete": {
+   "status": "approved",
+   "pr": 81,
+   "branch": "runner/secure-delete",
+   "notes": "r5 MERGE 23:36; runner added decisions file 67fc001; merge on green. B8 told begin_write rule."
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
