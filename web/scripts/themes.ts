@@ -49,42 +49,77 @@ export type Theme = {
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
 const COLOUR_KEYS = ['background', 'surface', 'text', 'primary', 'accent'] as const;
+const GROUPS = ['official', 'accessibility', 'community', 'original'] as const;
 
-/** Schema errors for one parsed theme file; empty when it is valid. */
-export function validateTheme(raw: unknown): string[] {
+/** One file per family, `themes/<id>.json`, as in docs/themes.md: a light and a dark palette. */
+export type Palette = Theme['colors'];
+export type Family = {
+	id: string;
+	name: string;
+	group: (typeof GROUPS)[number];
+	license?: string;
+	source?: string;
+	light: Palette;
+	dark: Palette;
+};
+
+function validatePalette(raw: unknown, where: string): string[] {
 	const errors: string[] = [];
+	if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+		return [`"${where}" must be an object`];
+	}
+	const c = raw as Record<string, unknown>;
+	for (const key of COLOUR_KEYS) {
+		if (typeof c[key] !== 'string' || !HEX.test(c[key])) {
+			errors.push(`${where}.${key} must be #RRGGBB`);
+		}
+	}
+	const cat = c.categorical;
+	if (!Array.isArray(cat) || cat.length !== 6) {
+		errors.push(`${where}.categorical must hold exactly 6 colours`);
+	} else {
+		cat.forEach((v, i) => {
+			if (typeof v !== 'string' || !HEX.test(v)) {
+				errors.push(`${where}.categorical[${i}] must be #RRGGBB`);
+			}
+		});
+	}
+	return errors;
+}
+
+/** Schema errors for one parsed family file; empty when it is valid. */
+export function validateFamily(raw: unknown): string[] {
 	if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return ['not a JSON object'];
 	const t = raw as Record<string, unknown>;
-	for (const key of ['id', 'name', 'family', 'group'] as const) {
+	const errors: string[] = [];
+	for (const key of ['id', 'name'] as const) {
 		if (typeof t[key] !== 'string' || !t[key]) errors.push(`"${key}" must be a non-empty string`);
 	}
 	if (typeof t.id === 'string' && !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(t.id)) {
 		errors.push('"id" must be lowercase kebab-case');
 	}
-	if (t.mode !== 'light' && t.mode !== 'dark') errors.push('"mode" must be "light" or "dark"');
+	if (!GROUPS.includes(t.group as (typeof GROUPS)[number])) {
+		errors.push(`"group" must be one of ${GROUPS.join(', ')}`);
+	}
 	for (const key of ['license', 'source'] as const) {
 		if (t[key] !== undefined && typeof t[key] !== 'string')
 			errors.push(`"${key}" must be a string`);
 	}
-	const colors = t.colors as Record<string, unknown> | undefined;
-	if (typeof colors !== 'object' || colors === null) {
-		errors.push('"colors" must be an object');
-		return errors;
-	}
-	for (const key of COLOUR_KEYS) {
-		const v = colors[key];
-		if (typeof v !== 'string' || !HEX.test(v)) errors.push(`colors.${key} must be #RRGGBB`);
-	}
-	const cat = colors.categorical;
-	if (!Array.isArray(cat) || cat.length !== 6) {
-		errors.push('colors.categorical must hold exactly 6 colours');
-	} else {
-		cat.forEach((v, i) => {
-			if (typeof v !== 'string' || !HEX.test(v))
-				errors.push(`colors.categorical[${i}] must be #RRGGBB`);
-		});
-	}
-	return errors;
+	return [...errors, ...validatePalette(t.light, 'light'), ...validatePalette(t.dark, 'dark')];
+}
+
+/** The two themes a family file defines: ids `<id>-light` and `<id>-dark`. */
+export function expandFamily(f: Family): Theme[] {
+	return (['light', 'dark'] as const).map((mode) => ({
+		id: `${f.id}-${mode}`,
+		name: `${f.name} ${mode === 'light' ? 'Light' : 'Dark'}`,
+		family: f.name,
+		group: f.group,
+		mode,
+		...(f.license ? { license: f.license } : {}),
+		...(f.source ? { source: f.source } : {}),
+		colors: f[mode]
+	}));
 }
 
 // ---- derivation -------------------------------------------------------------------------
@@ -170,6 +205,65 @@ export type Tokens = Record<(typeof TOKEN_KEYS)[number], string>;
 
 const up = (hex: string) => hex.toUpperCase();
 
+/**
+ * Riverstone's published values (docs/design-tokens.md §1-4) are a contract, so they are pinned
+ * byte for byte. The rules above land within ΔE_ok 0.5 of each of these (tested), one 8-bit
+ * step away because the published values carry a little extra margin or hue drift.
+ */
+export const PINS: Record<string, Record<string, string>> = {
+	'riverstone-light': {
+		'--color-base-300': '#DCE4E1',
+		'--color-accent-ink': '#5B7763',
+		'--color-success': '#5B7763',
+		'--color-muted-text': '#567079',
+		'--data-other': '#567079',
+		'--color-field-border': '#8796A2',
+		'--color-neutral': '#8796A2',
+		'--data-4': '#8796A2',
+		'--data-5': '#7E9B86',
+		'--color-hover': '#F1F5F6',
+		'--color-selected': '#E7EDF0'
+	},
+	'riverstone-dark': {
+		'--color-base-300': '#354851',
+		'--color-muted-text': '#B2C3C5',
+		'--data-other': '#B2C3C5',
+		'--color-error': '#DC8080',
+		'--color-hover': '#2A3B45',
+		'--color-selected': '#30434D'
+	}
+};
+
+/**
+ * Labels on fills. Status and primary fills take whichever ground contrasts more. Accent and
+ * neutral fills take the text or surface colour; neutral-content must reach 4.5:1, so when
+ * neither does it is shifted in lightness (hue and chroma kept) away from the fill.
+ */
+function fillContents(
+	t: Record<string, string>,
+	text: string,
+	bg: string,
+	surface: string
+): Record<string, string> {
+	const on = (fill: string) => bestContrast(fill, [surface, bg]);
+	const neutral = t['--color-neutral']!;
+	let neutralContent = bestContrast(neutral, [text, surface]);
+	if (contrast(neutralContent, neutral) < 4.5) {
+		const away = toOklch(neutralContent).l > toOklch(neutral).l ? 'lighter' : 'darker';
+		neutralContent = shiftUntil(neutralContent, away, (c) => contrast(c, neutral) >= 4.5);
+	}
+	return {
+		'--color-primary-content': on(t['--color-primary']!),
+		'--color-secondary-content': on(t['--color-primary']!),
+		'--color-info-content': on(t['--color-info']!),
+		'--color-success-content': on(t['--color-success']!),
+		'--color-warning-content': on(t['--color-warning']!),
+		'--color-error-content': on(t['--color-error']!),
+		'--color-accent-content': bestContrast(t['--color-accent']!, [text, bg]),
+		'--color-neutral-content': neutralContent
+	};
+}
+
 /** Derive every role token for a theme. Values are upper-case #RRGGBB. */
 export function derive(theme: Theme): Tokens {
 	const { background: bg, surface, text, primary, accent, categorical: cat } = theme.colors;
@@ -204,29 +298,19 @@ export function derive(theme: Theme): Tokens {
 	);
 
 	const withDivider = r.dividerWith === 'accent' ? accent : primary;
-	const content = (fill: string) => bestContrast(fill, [surface, bg]);
-
 	const tokens: Record<string, string> = {
 		'--color-base-100': surface,
 		'--color-base-200': bg,
 		'--color-base-300': mix(bg, withDivider, r.dividerMix),
 		'--color-base-content': text,
 		'--color-primary': primaryInk,
-		'--color-primary-content': content(primaryInk),
 		'--color-secondary': primaryInk,
-		'--color-secondary-content': content(primaryInk),
 		'--color-accent': accent,
-		'--color-accent-content': bestContrast(accent, [text, bg]),
 		'--color-neutral': slate,
-		'--color-neutral-content': bestContrast(slate, [text, surface]),
 		'--color-info': primaryInk,
-		'--color-info-content': content(primaryInk),
 		'--color-success': accentInk,
-		'--color-success-content': content(accentInk),
 		'--color-warning': warning,
-		'--color-warning-content': content(warning),
 		'--color-error': error,
-		'--color-error-content': content(error),
 		'--color-accent-ink': accentInk,
 		'--color-muted-text': mutedText,
 		'--color-field-border': slate,
@@ -239,6 +323,9 @@ export function derive(theme: Theme): Tokens {
 		'--brand-star': BRAND_STAR[theme.mode]
 	};
 	DATA_SLOT.forEach((slot, i) => (tokens[`--data-${slot}`] = data[i]!));
+
+	for (const [key, value] of Object.entries(PINS[theme.id] ?? {})) tokens[key] = value;
+	Object.assign(tokens, fillContents(tokens, text, bg, surface));
 
 	const ordered = {} as Record<string, string>;
 	for (const key of TOKEN_KEYS) ordered[key] = up(tokens[key]!);
@@ -282,8 +369,7 @@ export function evaluate(theme: Theme, t: Tokens): Report {
 		const value = contrast(fg, on);
 		checks.push({ label, value, min, severity, pass: value >= min });
 	};
-	// Riverstone is grandfathered (§10.18): its warnings are known and mitigated, so they
-	// are recorded as passing rather than reported on every build.
+	// §10.18 grandfathers Riverstone on categorical ΔE only, never on text contrast.
 	const grandfathered = theme.family === 'Riverstone';
 
 	const textMin = isHighContrast(theme) ? 7 : 4.5;
@@ -319,15 +405,9 @@ export function evaluate(theme: Theme, t: Tokens): Report {
 	] as const) {
 		add(`${name} on its fill`, t[label], t[fill], 4.5);
 	}
-	// Accent and neutral fills carry short labels; design-tokens.md allows large/bold there.
+	// Accent fills carry short labels; design-tokens.md allows large/bold there.
 	add('accent-content on accent', t['--color-accent-content'], t['--color-accent'], 4.5, 'warn');
-	add(
-		'neutral-content on neutral',
-		t['--color-neutral-content'],
-		t['--color-neutral'],
-		4.5,
-		'warn'
-	);
+	add('neutral-content on neutral', t['--color-neutral-content'], t['--color-neutral'], 4.5);
 
 	add('text on hover tint', t['--color-base-content'], t['--color-hover'], 4.5);
 	add('text on selected tint', t['--color-base-content'], t['--color-selected'], 4.5);
@@ -353,7 +433,7 @@ export function evaluate(theme: Theme, t: Tokens): Report {
 
 	if (grandfathered) {
 		for (const c of checks) {
-			if (c.severity === 'warn' && !c.pass) {
+			if (c.label.includes('min pairwise') && !c.pass) {
 				c.pass = true;
 				c.label += ' (grandfathered)';
 			}
@@ -490,7 +570,7 @@ export type Compiled = {
 	errors: string[];
 };
 
-/** Load, validate, derive and gate every themes/*.json in `dir`. */
+/** Load, validate, derive and gate every family file themes/<id>.json in `dir`. */
 export function compileDir(dir: string): { compiled: Compiled[]; problems: string[] } {
 	const problems: string[] = [];
 	const compiled: Compiled[] = [];
@@ -508,21 +588,23 @@ export function compileDir(dir: string): { compiled: Compiled[]; problems: strin
 			problems.push(`${file}: invalid JSON (${(e as Error).message})`);
 			continue;
 		}
-		const errors = validateTheme(raw);
+		const errors = validateFamily(raw);
 		if (errors.length) {
 			problems.push(...errors.map((e) => `${file}: ${e}`));
 			continue;
 		}
-		const theme = raw as Theme;
-		if (seen.has(theme.id)) problems.push(`${file}: duplicate id "${theme.id}"`);
-		seen.add(theme.id);
-		if (file !== `${theme.id}.json`) problems.push(`${file}: file name must be "${theme.id}.json"`);
-		const tokens = derive(theme);
-		compiled.push({ theme, tokens, report: evaluate(theme, tokens), errors });
+		const family = raw as Family;
+		if (seen.has(family.id)) problems.push(`${file}: duplicate id "${family.id}"`);
+		seen.add(family.id);
+		if (file !== `${family.id}.json`) {
+			problems.push(`${file}: file name must be "${family.id}.json"`);
+		}
+		for (const theme of expandFamily(family)) {
+			const tokens = derive(theme);
+			compiled.push({ theme, tokens, report: evaluate(theme, tokens), errors });
+		}
 	}
-	for (const id of Object.values(RIVERSTONE)) {
-		if (!seen.has(id)) problems.push(`missing required theme "${id}"`);
-	}
+	if (!seen.has('riverstone')) problems.push('missing required family "riverstone"');
 	return { compiled, problems };
 }
 

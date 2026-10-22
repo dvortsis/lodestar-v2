@@ -16,23 +16,36 @@ import {
 	failures,
 	injectPrepaint,
 	renderOutputs,
-	validateTheme,
+	PINS,
+	expandFamily,
+	validateFamily,
+	type Family,
 	type Theme,
 	type Tokens
 } from './themes.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const themesDir = join(root, 'themes');
-const load = (id: string) =>
-	JSON.parse(readFileSync(join(themesDir, `${id}.json`), 'utf8')) as Theme;
-const light = load('riverstone-light');
-const dark = load('riverstone-dark');
+const riverstone = JSON.parse(readFileSync(join(themesDir, 'riverstone.json'), 'utf8')) as Family;
+const [light, dark] = expandFamily(riverstone) as [Theme, Theme];
 const L = derive(light);
 const D = derive(dark);
 
-// Values the rules reproduce byte for byte.
+// Every value design-tokens.md §1-4 prints for Riverstone, byte for byte, plus the derived
+// neutral-content (a "rule" token, ≥ 4.5:1 on neutral).
 const EXACT: Record<'light' | 'dark', Partial<Record<keyof Tokens, string>>> = {
 	light: {
+		'--color-accent-ink': '#5B7763',
+		'--color-success': '#5B7763',
+		'--color-muted-text': '#567079',
+		'--color-field-border': '#8796A2',
+		'--color-neutral': '#8796A2',
+		'--color-base-300': '#DCE4E1',
+		'--color-hover': '#F1F5F6',
+		'--color-selected': '#E7EDF0',
+		'--data-4': '#8796A2',
+		'--data-5': '#7E9B86',
+		'--color-neutral-content': '#193038',
 		'--color-base-100': '#FFFFFF',
 		'--color-base-200': '#F3F6F5',
 		'--color-base-content': '#243C44',
@@ -54,6 +67,13 @@ const EXACT: Record<'light' | 'dark', Partial<Record<keyof Tokens, string>>> = {
 		'--brand-star': '#D49A4A'
 	},
 	dark: {
+		'--color-muted-text': '#B2C3C5',
+		'--data-other': '#B2C3C5',
+		'--color-error': '#DC8080',
+		'--color-base-300': '#354851',
+		'--color-hover': '#2A3B45',
+		'--color-selected': '#30434D',
+		'--color-neutral-content': '#22313A',
 		'--color-base-100': '#22313A',
 		'--color-base-200': '#141F25',
 		'--color-base-content': '#E5EEED',
@@ -80,32 +100,6 @@ const EXACT: Record<'light' | 'dark', Partial<Record<keyof Tokens, string>>> = {
 	}
 };
 
-// Values the rules reproduce within ΔE_ok ≤ 0.5. Each is the minimal lightness shift that meets
-// the contrast rule, so it is an 8-bit step away from the value printed in §10.18. Listed in the
-// PR description.
-const APPROX: Record<'light' | 'dark', Partial<Record<keyof Tokens, string>>> = {
-	light: {
-		'--color-accent-ink': '#5B7763',
-		'--color-success': '#5B7763',
-		'--color-muted-text': '#567079',
-		'--color-field-border': '#8796A2',
-		'--color-neutral': '#8796A2',
-		'--color-base-300': '#DCE4E1',
-		'--color-hover': '#F1F5F6',
-		'--color-selected': '#E7EDF0',
-		'--data-4': '#8796A2',
-		'--data-5': '#7E9B86'
-	},
-	dark: {
-		'--color-muted-text': '#B2C3C5',
-		'--data-other': '#B2C3C5',
-		'--color-error': '#DC8080',
-		'--color-base-300': '#354851',
-		'--color-hover': '#2A3B45',
-		'--color-selected': '#30434D'
-	}
-};
-
 describe('Riverstone golden tokens (architecture §10.18)', () => {
 	for (const [mode, tokens] of [
 		['light', L],
@@ -116,9 +110,11 @@ describe('Riverstone golden tokens (architecture §10.18)', () => {
 				expect(tokens[key as keyof Tokens], `${mode} ${key}`).toBe(want);
 			}
 		});
-		it(`${mode}: ΔE_ok ≤ 0.5 values`, () => {
-			for (const [key, want] of Object.entries(APPROX[mode])) {
-				const got = tokens[key as keyof Tokens];
+		it(`${mode}: the rules alone land within ΔE_ok ≤ 0.5 of every pinned value`, () => {
+			const theme = mode === 'light' ? light : dark;
+			const raw = derive({ ...theme, id: `probe-${mode}` }); // no pins
+			for (const [key, want] of Object.entries(PINS[theme.id]!)) {
+				const got = raw[key as keyof Tokens];
 				expect(deltaE(got, want), `${mode} ${key}: ${got} vs ${want}`).toBeLessThanOrEqual(0.5);
 			}
 		});
@@ -127,8 +123,16 @@ describe('Riverstone golden tokens (architecture §10.18)', () => {
 	it('light data marks by slot are blue, ochre, terracotta, slate, sage, plum', () => {
 		const want = ['#527F91', '#AE9150', '#BF8173', '#8796A2', '#7E9B86', '#9381B6'];
 		[1, 2, 3, 4, 5, 6].forEach((slot, i) => {
-			expect(deltaE(L[`--data-${slot}` as keyof Tokens], want[i]!)).toBeLessThanOrEqual(0.5);
+			expect(L[`--data-${slot}` as keyof Tokens]).toBe(want[i]);
 		});
+	});
+
+	it('neutral-content reaches 4.5:1 on neutral by a lightness-only shift', () => {
+		for (const t of [L, D]) {
+			expect(contrast(t['--color-neutral-content'], t['--color-neutral'])).toBeGreaterThanOrEqual(
+				4.5
+			);
+		}
 	});
 
 	it('maps categorical[i] to slot [1,5,2,3,4,6][i]', () => {
@@ -277,17 +281,14 @@ describe('gates', () => {
 
 describe('schema validation', () => {
 	it('accepts Riverstone', () => {
-		expect(validateTheme(light)).toEqual([]);
-		expect(validateTheme(dark)).toEqual([]);
+		expect(validateFamily(riverstone)).toEqual([]);
 	});
 	it('names every problem', () => {
-		const errors = validateTheme({
+		const errors = validateFamily({
 			id: 'Bad Id',
 			name: '',
-			family: 'x',
 			group: 'y',
-			mode: 'sepia',
-			colors: {
+			light: {
 				background: 'red',
 				surface: '#FFF',
 				text: '#000000',
@@ -295,17 +296,24 @@ describe('schema validation', () => {
 				accent: '#000000',
 				categorical: ['#000000']
 			}
-		});
-		expect(errors.join('\n')).toMatch(/id/);
-		expect(errors.join('\n')).toMatch(/name/);
-		expect(errors.join('\n')).toMatch(/mode/);
-		expect(errors.join('\n')).toMatch(/colors\.background/);
-		expect(errors.join('\n')).toMatch(/colors\.surface/);
-		expect(errors.join('\n')).toMatch(/exactly 6/);
+		}).join('\n');
+		expect(errors).toMatch(/"id"/);
+		expect(errors).toMatch(/"name"/);
+		expect(errors).toMatch(/"group"/);
+		expect(errors).toMatch(/light\.background/);
+		expect(errors).toMatch(/light\.surface/);
+		expect(errors).toMatch(/light\.categorical must hold exactly 6/);
+		expect(errors).toMatch(/"dark" must be an object/);
 	});
 	it('rejects non-objects', () => {
-		expect(validateTheme(null)).toEqual(['not a JSON object']);
-		expect(validateTheme([])).toEqual(['not a JSON object']);
+		expect(validateFamily(null)).toEqual(['not a JSON object']);
+		expect(validateFamily([])).toEqual(['not a JSON object']);
+	});
+	it('expands a family into <id>-light and <id>-dark', () => {
+		expect(expandFamily(riverstone).map((t) => [t.id, t.mode, t.family, t.group])).toEqual([
+			['riverstone-light', 'light', 'Riverstone', 'official'],
+			['riverstone-dark', 'dark', 'Riverstone', 'official']
+		]);
 	});
 });
 
@@ -319,6 +327,11 @@ describe('npm run themes (CLI)', () => {
 			['--experimental-strip-types', join(root, 'scripts/themes.ts'), '--dir', dir, '--no-write'],
 			{ encoding: 'utf8' }
 		);
+	const copy = (name: string) => {
+		const dir = join(tmp, name);
+		cpSync(themesDir, dir, { recursive: true });
+		return dir;
+	};
 
 	it('exits 0 for Riverstone', () => {
 		const r = run(themesDir);
@@ -327,32 +340,33 @@ describe('npm run themes (CLI)', () => {
 	});
 
 	it('exits 1, with a readable report, for a fixture whose text contrast is below 4.5:1', () => {
-		const dir = join(tmp, 'failing');
-		cpSync(themesDir, dir, { recursive: true });
-		const bad = { ...light, id: 'fixture-low-contrast', name: 'Fixture', family: 'Fixture' };
-		bad.colors = { ...light.colors, text: '#8C9BA7' };
+		const dir = copy('failing');
+		const bad: Family = {
+			...riverstone,
+			id: 'fixture-low-contrast',
+			name: 'Fixture',
+			light: { ...riverstone.light, text: '#8C9BA7' }
+		};
 		writeFileSync(join(dir, 'fixture-low-contrast.json'), JSON.stringify(bad));
 		const r = run(dir);
 		expect(r.status).toBe(1);
-		expect(r.stderr).toContain('✗ fixture-low-contrast');
+		expect(r.stderr).toContain('✗ fixture-low-contrast-light');
 		expect(r.stderr).toMatch(/FAIL text on background: \d\.\d\d \(needs ≥ 4\.5\)/);
 		expect(r.stderr).toContain('nothing written');
 	});
 
-	it('exits 1 on a schema error and when Riverstone is missing', () => {
-		const dir = join(tmp, 'broken');
-		cpSync(themesDir, dir, { recursive: true });
-		writeFileSync(join(dir, 'riverstone-dark.json'), '{ not json');
+	it('exits 1 on invalid JSON and when Riverstone is missing', () => {
+		const dir = copy('broken');
+		writeFileSync(join(dir, 'riverstone.json'), '{ not json');
 		const r = run(dir);
 		expect(r.status).toBe(1);
 		expect(r.stderr).toContain('invalid JSON');
-		expect(r.stderr).toContain('missing required theme "riverstone-dark"');
+		expect(r.stderr).toContain('missing required family "riverstone"');
 	});
 
 	it('reports a file whose name does not match its id', () => {
-		const dir = join(tmp, 'misnamed');
-		cpSync(themesDir, dir, { recursive: true });
-		writeFileSync(join(dir, 'other.json'), JSON.stringify({ ...light, id: 'misnamed' }));
+		const dir = copy('misnamed');
+		writeFileSync(join(dir, 'other.json'), JSON.stringify({ ...riverstone, id: 'misnamed' }));
 		const r = run(dir);
 		expect(r.status).toBe(1);
 		expect(r.stderr).toContain('file name must be "misnamed.json"');
@@ -364,7 +378,7 @@ describe('generated files', () => {
 
 	it('compiles Riverstone without problems', () => {
 		expect(problems).toEqual([]);
-		expect(compiled.map((c) => c.theme.id)).toEqual(['riverstone-dark', 'riverstone-light']);
+		expect(compiled.map((c) => c.theme.id)).toEqual(['riverstone-light', 'riverstone-dark']);
 	});
 
 	it('are up to date with themes/*.json (run `npm run themes`)', async () => {
