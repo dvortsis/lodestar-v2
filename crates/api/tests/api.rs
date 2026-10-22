@@ -87,6 +87,7 @@ fn fixture() -> Fixture {
             filters: None,
             settings: None,
             ops: None,
+            adult: Default::default(),
         }),
     );
     let hashes = infos
@@ -490,6 +491,7 @@ async fn protected_routes_fail_closed_outside_the_router() {
         filters: None,
         settings: None,
         ops: None,
+        adult: Default::default(),
     });
     let (status, _, body) = call(&stray, get("/x", Some(&cookie))).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);

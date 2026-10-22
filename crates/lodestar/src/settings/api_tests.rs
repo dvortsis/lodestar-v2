@@ -48,6 +48,7 @@ fn fixture() -> Fixture {
             filters: None,
             settings: Some(registry),
             ops: None,
+            adult: Default::default(),
         }),
     );
     Fixture {
@@ -135,7 +136,7 @@ async fn settings_endpoints() {
     let c = Some(cookie.as_str());
 
     let index = golden(&f, "settings_index", get("/api/v1/settings", c)).await;
-    assert_eq!(index["sections"].as_array().unwrap().len(), 6);
+    assert_eq!(index["sections"].as_array().unwrap().len(), 7);
     let crawler = golden(&f, "settings_crawler", get("/api/v1/settings/crawler", c)).await;
     assert_eq!(crawler["fields"]["timeout_secs"]["source"], json!("file"));
     let network = golden(&f, "settings_network", get("/api/v1/settings/network", c)).await;
@@ -316,4 +317,58 @@ async fn settings_endpoints() {
         patch("/api/v1/settings/network", c, r#"{"secure_cookies":true}"#),
     )
     .await;
+}
+
+#[tokio::test]
+async fn showing_adult_content_needs_the_18_plus_confirmation() {
+    let f = fixture();
+    let cookie = session(&f).await;
+    let c = Some(cookie.as_str());
+    let uri = "/api/v1/settings/content";
+    let before = golden(&f, "settings_content", get(uri, c)).await;
+    assert_eq!(before["fields"]["show_adult"]["value"], json!(false));
+    assert_eq!(
+        before["fields"]["show_adult"]["restart_required"],
+        json!(false)
+    );
+    // Without the confirmation (or with anything but `true`), refused.
+    for body in [
+        r#"{"show_adult":true}"#,
+        r#"{"show_adult":true,"confirm_adult":false}"#,
+        r#"{"show_adult":true,"confirm_adult":1}"#,
+    ] {
+        let (status, text) = send(&f, patch(uri, c, body)).await;
+        assert_eq!(status, 422, "{body}: {text}");
+        let v: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["error"]["code"], json!("adult_confirmation_required"));
+        assert_eq!(v["error"]["field"], json!("show_adult"));
+    }
+    golden(
+        &f,
+        "settings_patch_adult_unconfirmed",
+        patch(uri, c, r#"{"show_adult":true}"#),
+    )
+    .await;
+    // Nothing was saved.
+    let (_, text) = send(&f, get(uri, c)).await;
+    assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), before);
+    // Confirmed, it's on, live; the confirmation isn't saved.
+    let on = golden(
+        &f,
+        "settings_patch_adult_confirmed",
+        patch(uri, c, r#"{"show_adult":true,"confirm_adult":true}"#),
+    )
+    .await;
+    assert_eq!(on["fields"]["show_adult"]["value"], json!(true));
+    assert_eq!(on["fields"]["show_adult"]["source"], json!("db"));
+    assert_eq!(on["restart_required"], json!([]));
+    assert!(on["fields"].get("confirm_adult").is_none());
+    // Turning it off needs nothing.
+    let off = golden(
+        &f,
+        "settings_patch_adult_off",
+        patch(uri, c, r#"{"show_adult":false}"#),
+    )
+    .await;
+    assert_eq!(off["fields"]["show_adult"]["value"], json!(false));
 }

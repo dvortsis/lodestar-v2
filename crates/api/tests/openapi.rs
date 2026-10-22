@@ -197,6 +197,7 @@ fn app() -> (tempfile::TempDir, Router) {
             filters: None,
             settings: None,
             ops: None,
+            adult: Default::default(),
         }),
     );
     (dir, app)
