@@ -341,22 +341,22 @@
       "notes": "deps met; held (crates/search busy with B6)"
     },
     "B13": {
-      "status": "ready",
+      "status": "running",
       "model": "opus",
-      "session": null,
+      "session": "session_012gnQYQihLxoGDKXk5pckME",
       "pr": null,
-      "attempt": 0,
+      "attempt": 1,
       "review_rounds": 0,
-      "notes": "deps met; held for core cap (B4,B6,B17 active)"
+      "notes": "launched 15:59 (owner asked to start more work); no crates/search edits"
     },
     "B14": {
-      "status": "ready",
+      "status": "running",
       "model": "opus",
-      "session": null,
+      "session": "session_01Sd8GqCEZSAxKFSwHKrXyHt",
       "pr": null,
-      "attempt": 0,
+      "attempt": 1,
       "review_rounds": 0,
-      "notes": "deps met (B2); held for core cap"
+      "notes": "launched 15:59; includes first-run log address polish"
     },
     "B11b": {
       "status": "pending",
@@ -753,6 +753,15 @@
       "attempt": 1,
       "review_rounds": 1,
       "notes": "round 1 fixes pushed: REFERENCE_NS=60ms (stricter, derived from 3 runner measurements), per-pass calibration, docs \u00a720.8/\u00a716; awaiting OWNER sign-off before merge"
+    },
+    "R-docs": {
+      "status": "running",
+      "model": "sonnet",
+      "session": "session_019N5xwViePFBt7ZEYQrKaH8",
+      "pr": null,
+      "attempt": 1,
+      "review_rounds": 0,
+      "notes": "launched 15:59; carry-forwards runner-pr, runner-docs-pr, metrics-contract, contract-docs, themes table, integrations-readme (if X-email merged), unraid --user"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -783,7 +792,8 @@
     "2026-10-22 owner: Riverstone is the default/official palette and keeps plum #9381B6 in categorical slot 6 (seafoam stays retired); the theme collection is 24 families x light/dark including Rosewood as the 24th. Log both in architecture \u00a716 with the next runner docs PR.",
     "2026-10-22 owner (audit follow-up): floor add-by-file/remove-in-app; packs per \u00a720.6; subscriptions off by default, user-chosen in wizard/settings with strictness-based warning; Riverstone unchanged, \u00a710.18 CVD claim corrected. Recorded in owner-decisions.md \u00a72.7-2.10 (PR #39).",
     "2026-10-22 runner: community palette values stay as published; the theme compiler must derive content/tint tokens that satisfy the gates for every theme (W1c). W1b now waits for W1c and C1.",
-    "2026-10-22 W1b: ownership extended to web/scripts/themes.test.ts, theme-files.test.ts, web/static/themes.json (generated output and W1 placeholder assertions); record in slices.yaml at next runner PR"
+    "2026-10-22 W1b: ownership extended to web/scripts/themes.test.ts, theme-files.test.ts, web/static/themes.json (generated output and W1 placeholder assertions); record in slices.yaml at next runner PR",
+    "15:59 owner asked to start more work: launched B13, B14 (core, above max_core 4 while B4 is in review) and R-docs (helper)."
   ],
   "open_issues": [
     "Filter session self-merged #42 against owner decision (packs on by default) + budget env; follow-up fix requested. Suggest owner consider branch protection.",
