@@ -6,10 +6,10 @@
 
 use lodestar_classify::{ENRICHMENT_VERSION, FileInfo, Record, classify};
 use lodestar_metainfo::{File, Text, TextEncoding};
-use lodestar_store::Enriched;
+use lodestar_store::{Enriched, Store};
 
 /// The file list with decoded paths, as classification takes it.
-pub(crate) fn file_infos(files: &[File], encoding: TextEncoding) -> Vec<FileInfo> {
+pub fn file_infos(files: &[File], encoding: TextEncoding) -> Vec<FileInfo> {
     files
         .iter()
         .map(|f| FileInfo {
@@ -31,7 +31,8 @@ pub(crate) fn file_infos(files: &[File], encoding: TextEncoding) -> Vec<FileInfo
         .collect()
 }
 
-pub(crate) fn enrich(name: &str, files: &[File], encoding: TextEncoding) -> Enriched {
+/// The enrichment of a torrent with this name and file list.
+pub fn enrich(name: &str, files: &[File], encoding: TextEncoding) -> Enriched {
     let files = file_infos(files, encoding);
     let c = classify(name, &files);
     Enriched {
@@ -41,6 +42,29 @@ pub(crate) fn enrich(name: &str, files: &[File], encoding: TextEncoding) -> Enri
         comp: c.composition.encode(),
         data: Record::new(&c).encode(),
     }
+}
+
+/// Enriches up to `limit` stored torrents after `after` (by id) whose
+/// enrichment is missing or outdated, and logs them for re-indexing.
+/// Returns the last id looked at and how many were enriched, or `None`
+/// when none are left.
+pub fn enrich_stored(
+    store: &mut Store,
+    after: i64,
+    limit: usize,
+) -> Result<Option<(i64, usize)>, lodestar_store::Error> {
+    let ids = store.unenriched(after, ENRICHMENT_VERSION, limit)?;
+    let Some(&last) = ids.last() else {
+        return Ok(None);
+    };
+    let mut batch = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let (Some(row), Some(tree)) = (store.torrent(id)?, store.files(id)?) {
+            batch.push((id, enrich(&row.name, &tree.files, tree.encoding)));
+        }
+    }
+    let n = store.set_enrichments(&batch)?;
+    Ok(Some((last, n)))
 }
 
 #[cfg(test)]

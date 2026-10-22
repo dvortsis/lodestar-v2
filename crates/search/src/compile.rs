@@ -2,6 +2,7 @@
 
 use std::ops::Bound;
 
+use lodestar_classify::Category;
 use tantivy::Term;
 use tantivy::query::{
     AllQuery, BooleanQuery, BoostQuery, EmptyQuery, FuzzyTermQuery, Occur, PhraseQuery, Query,
@@ -10,8 +11,8 @@ use tantivy::query::{
 use tantivy::schema::{Field, IndexRecordOption};
 
 use crate::filter::FastRange;
-use crate::query::{Node, NumField, TextField, When};
-use crate::schema::{Fields, NAME_BOOST, PATH_BOOST};
+use crate::query::{Node, NumField, ShareBy, TagKey, TextField, When};
+use crate::schema::{Fields, NAME_BOOST, PATH_BOOST, TITLE_BOOST, share_field};
 use crate::tokenizer::{self, Tok, TokKind};
 
 type Q = Box<dyn Query>;
@@ -42,9 +43,7 @@ pub(crate) fn compile(node: &Node, f: &Fields, now: i64) -> Parts {
         Node::And { of } => of.iter().collect(),
         n => vec![n],
     };
-    let (ranges, mut rest): (Vec<&Node>, Vec<&Node>) = of
-        .into_iter()
-        .partition(|n| matches!(n, Node::Range { .. } | Node::Date { .. }));
+    let (ranges, mut rest): (Vec<&Node>, Vec<&Node>) = of.into_iter().partition(|n| liftable(n));
     // A clause drives when it narrows the matches by itself; a negation
     // (`-x`, `private:no`) only removes a few from everything.
     let drives = |n: &&Node| {
@@ -53,7 +52,10 @@ pub(crate) fn compile(node: &Node, f: &Fields, now: i64) -> Parts {
     };
     let keep = usize::from(!rest.iter().any(drives)).min(ranges.len());
     rest.extend(&ranges[..keep]);
-    let filters = ranges[keep..].iter().map(|n| fast_range(n, now)).collect();
+    let filters = ranges[keep..]
+        .iter()
+        .map(|n| fast_range(n, now).expect("liftable"))
+        .collect();
     let mut clauses = Vec::new();
     let mut boosts = Vec::new();
     for n in rest {
@@ -102,13 +104,26 @@ fn conjunction(mut clauses: Vec<(Occur, Q)>) -> Q {
     Box::new(BooleanQuery::new(clauses))
 }
 
-/// An unfielded word: required on `text`, plus its boost on `name`.
+/// An unfielded word: required on `text`, plus its boosts on `name` and
+/// `title`.
 fn any_word(word: &str, f: &Fields) -> Option<(Q, Q)> {
     let toks = tokenizer::tokenize(word);
     if toks.is_empty() {
         return None;
     }
-    let boost = BoostQuery::new(word_query(f.name, &toks, true), NAME_BOOST);
+    let boost = BooleanQuery::new(vec![
+        (
+            Occur::Should,
+            Box::new(BoostQuery::new(word_query(f.name, &toks, true), NAME_BOOST)) as Q,
+        ),
+        (
+            Occur::Should,
+            Box::new(BoostQuery::new(
+                word_query(f.title, &toks, true),
+                TITLE_BOOST,
+            )),
+        ),
+    ]);
     Some((word_query(f.text, &toks, false), Box::new(boost)))
 }
 
@@ -119,30 +134,72 @@ fn resolve(w: &When, now: i64) -> i64 {
     }
 }
 
-fn num_field(field: &NumField) -> &'static str {
+fn num_field(field: NumField, f: &Fields) -> Field {
+    match field {
+        NumField::Size => f.size,
+        NumField::Files => f.files,
+        NumField::Largest => f.largest,
+        NumField::Piece => f.piece_len,
+        NumField::Year => f.year,
+        NumField::Season => f.season,
+        NumField::Episode => f.episode,
+        NumField::Junk => f.junk,
+    }
+}
+
+fn fast_name(field: NumField) -> &'static str {
     match field {
         NumField::Size => "size",
         NumField::Files => "files",
         NumField::Largest => "largest",
         NumField::Piece => "piece_len",
+        NumField::Junk => "junk",
+        NumField::Year | NumField::Season | NumField::Episode => unreachable!("not fast"),
     }
 }
 
-/// A `Range` or `Date` node as a fast-field check.
-fn fast_range(node: &Node, now: i64) -> FastRange {
-    match node {
-        Node::Range { field, lo, hi } => FastRange::U64 {
-            field: num_field(field),
+/// A category by name, or `None` for a name that isn't one (only
+/// possible in AST JSON).
+fn category(cat: &str) -> Option<Category> {
+    Category::ALL.into_iter().find(|c| c.as_str() == cat)
+}
+
+fn share_name(by: ShareBy, cat: &str) -> Option<String> {
+    category(cat).map(|c| share_field(by == ShareBy::Bytes, c))
+}
+
+/// Whether a top-level clause can be checked in the collector.
+fn liftable(n: &Node) -> bool {
+    match n {
+        Node::Range { field, .. } => field.is_fast(),
+        Node::Date { .. } => true,
+        Node::Share { by, cat, .. } => share_name(*by, cat).is_some(),
+        _ => false,
+    }
+}
+
+/// A liftable node as a fast-field check.
+fn fast_range(node: &Node, now: i64) -> Option<FastRange> {
+    Some(match node {
+        Node::Range { field, lo, hi } if field.is_fast() => FastRange::U64 {
+            field: fast_name(*field).to_owned(),
             lo: lo.unwrap_or(0),
             hi: hi.unwrap_or(u64::MAX),
+            missing: None,
         },
         Node::Date { from, to, .. } => FastRange::I64 {
             field: "discovered",
             lo: from.as_ref().map_or(i64::MIN, |w| resolve(w, now)),
             hi: to.as_ref().map_or(i64::MAX, |w| resolve(w, now)),
         },
-        _ => unreachable!("only ranges are lifted"),
-    }
+        Node::Share { by, cat, lo, hi } => FastRange::U64 {
+            field: share_name(*by, cat)?,
+            lo: u64::from(*lo),
+            hi: u64::from(*hi),
+            missing: Some(0),
+        },
+        _ => return None,
+    })
 }
 
 /// `None` for a clause that constrains nothing (a word with no tokens,
@@ -257,12 +314,7 @@ fn compile_opt(node: &Node, f: &Fields, now: i64) -> Option<Q> {
             })
         }
         Node::Range { field, lo, hi } => {
-            let fld = match field {
-                NumField::Size => f.size,
-                NumField::Files => f.files,
-                NumField::Largest => f.largest,
-                NumField::Piece => f.piece_len,
-            };
+            let fld = num_field(*field, f);
             let bound = |v: &Option<u64>| match v {
                 Some(v) => Bound::Included(Term::from_field_u64(fld, *v)),
                 None => Bound::Unbounded,
@@ -292,6 +344,43 @@ fn compile_opt(node: &Node, f: &Fields, now: i64) -> Option<Q> {
                     (Occur::Must, Box::new(AllQuery) as Q),
                     (Occur::MustNot, q),
                 ]))
+            }
+        }
+        Node::Tag { key, any } => {
+            let mut clauses: Vec<(Occur, Q)> = any
+                .iter()
+                .map(|v| (Occur::Should, tag_term(f, *key, v)))
+                .collect();
+            match clauses.len() {
+                0 => return None,
+                1 => clauses.pop().expect("one").1,
+                _ => Box::new(BooleanQuery::new(clauses)),
+            }
+        }
+        Node::Share { by, cat, lo, hi } => {
+            let Some(c) = category(cat) else {
+                return Some(Box::new(EmptyQuery));
+            };
+            let fld = match by {
+                ShareBy::Count => f.cat_count[c.index()],
+                ShareBy::Bytes => f.cat_bytes[c.index()],
+            };
+            let range = |lo: u8, hi: u8| -> Q {
+                Box::new(RangeQuery::new(
+                    Bound::Included(Term::from_field_u64(fld, u64::from(lo))),
+                    Bound::Included(Term::from_field_u64(fld, u64::from(hi))),
+                ))
+            };
+            match (*lo, *hi) {
+                (lo, hi) if lo > hi => Box::new(EmptyQuery),
+                // Shares of 0 aren't written: everything but the
+                // torrents above the range.
+                (0, 100..) => Box::new(AllQuery),
+                (0, hi) => Box::new(BooleanQuery::new(vec![
+                    (Occur::Must, Box::new(AllQuery) as Q),
+                    (Occur::MustNot, range(hi + 1, 100)),
+                ])),
+                (lo, hi) => range(lo, hi),
             }
         }
         Node::Hash { hash } => match hex20(hash) {
@@ -331,6 +420,15 @@ fn push_must(clauses: &mut Vec<(Occur, Q)>, q: Q) {
     clauses.push((Occur::Must, q));
 }
 
+/// A `tag` term: `key:value`.
+pub(crate) fn tag_term(f: &Fields, key: TagKey, value: &str) -> Q {
+    term(
+        f.tag,
+        &format!("{}:{value}", key.as_str()),
+        IndexRecordOption::Basic,
+    )
+}
+
 fn phrase_field(field: TextField) -> TextField {
     match field {
         TextField::Any => TextField::Name,
@@ -349,6 +447,7 @@ fn per_field(field: TextField, f: &Fields, build: impl Fn(Field, bool) -> Q) -> 
         TextField::Any => &[(f.name, NAME_BOOST, true), (f.path, PATH_BOOST, false)],
         TextField::Name => &[(f.name, 1.0, true)],
         TextField::Path => &[(f.path, 1.0, false)],
+        TextField::Title => &[(f.title, 1.0, true)],
     };
     if let [(fld, _, positions)] = targets {
         return build(*fld, *positions);

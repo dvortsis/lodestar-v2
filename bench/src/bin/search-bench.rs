@@ -112,6 +112,22 @@ fn build(
             );
         }
     }
+    // Enrichment (§6), as the writer's background pass stores it. Only
+    // missing or outdated records are derived, so a stored corpus is
+    // enriched once per parser version.
+    let started = Instant::now();
+    let mut after = 0;
+    let mut enriched = 0;
+    while let Some((last, n)) = lodestar_pipeline::enrich::enrich_stored(store, after, 5000)? {
+        after = last;
+        enriched += n;
+    }
+    if enriched > 0 {
+        eprintln!(
+            "  enriched {enriched} ({:.0}/s)",
+            enriched as f64 / started.elapsed().as_secs_f64()
+        );
+    }
     // The index catches up from its watermark, so a new schema version
     // reuses the stored corpus.
     let started = Instant::now();
@@ -196,6 +212,16 @@ fn classes(seed: u64, per_class: usize) -> Vec<Class> {
         "ext:flac,mp3",
         "private:no size:1GB..8GB",
     ];
+    let facets = [
+        "type:movie",
+        "res:1080p",
+        "codec:h265 res:2160p",
+        "cat:video>=80",
+        "type:music bytes:audio>=50",
+        "type:tv junk:<20",
+        "year:2015..2020",
+        "has:nfo -type:software",
+    ];
     vec![
         Class {
             name: "1 common word",
@@ -242,6 +268,21 @@ fn classes(seed: u64, per_class: usize) -> Vec<Class> {
                     "{} {}",
                     pick(r, common),
                     browse[r.random_range(1..browse.len())]
+                )
+            }),
+        },
+        // Enrichment facets (§6): keyword tags, multi-valued numbers,
+        // junk and category shares.
+        Class {
+            name: "word + facets",
+            target: Some(KEYWORD_P95),
+            cold: false,
+            sort: Sort::Relevance,
+            queries: make(&mut |r| {
+                format!(
+                    "{} {}",
+                    pick(r, common),
+                    facets[r.random_range(0..facets.len())]
                 )
             }),
         },

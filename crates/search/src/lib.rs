@@ -12,7 +12,7 @@ pub mod schema;
 mod sorted;
 pub mod tokenizer;
 
-pub use doc::{TorrentDoc, extension, flag_names};
+pub use doc::{DocEnrichment, TorrentDoc, extension, flag_names};
 pub use index::{Compiled, Error, Hit, Indexer, Result, Results, SearchIndex, Sort, index_dir};
 pub use live::{IndexStats, LiveConfig, LiveIndexer};
 pub use query::{Node, ParseError, parse};
