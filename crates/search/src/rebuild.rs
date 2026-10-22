@@ -263,7 +263,7 @@ impl Rebuild {
     /// Adds up to `batch` torrents, then replays up to `batch`
     /// `reindex_log` entries, as the live indexer does.
     pub fn step(&mut self, store: &mut Store, batch: usize) -> Result<Step> {
-        let (added, replayed) = self.indexer.catch_up_counted(store, batch)?;
+        let (added, _, replayed) = self.indexer.catch_up_counted(store, batch)?;
         Ok(Step { added, replayed })
     }
 
@@ -847,6 +847,7 @@ fn rebuild_and_swap(
         // A count that fails only leaves those torrents unannounced.
         if let Ok(visible) = visible {
             fresh = stored_between(&store, visible, last)
+                .and_then(|n| Ok((n, new.adult_between(visible, last)?)))
                 .ok()
                 .map(|n| (n, last));
         }
@@ -877,9 +878,10 @@ fn rebuild_and_swap(
     *lock(&shared.live) = Some(live);
     let old = std::mem::replace(&mut *lock(&shared.current), Arc::new(new));
     *lock(&shared.progress) = None;
-    if let Some((docs_added, max_torrent_id)) = fresh.filter(|f| f.0 > 0) {
+    if let Some(((docs_added, adult_added), max_torrent_id)) = fresh.filter(|f| f.0.0 > 0) {
         shared.hook.publish(Committed {
             docs_added,
+            adult_added,
             max_torrent_id,
             at: unix_now(),
         });
