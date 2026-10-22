@@ -122,7 +122,7 @@
       "pr": 61,
       "attempt": 1,
       "review_rounds": 1,
-      "notes": "13:44: W6 pushed de6a17d (256 baselines, .update-snapshots removed) + main merge 43c57b8. Asked session how baselines were obtained (policy check). filter budget red (base red): re-run once after run 39789471408 completes (rerun refused while running)."
+      "notes": "13:44: W6 pushed de6a17d (256 baselines, .update-snapshots removed) + main merge 43c57b8. Asked session how baselines were obtained (policy check). filter budget red (base red): re-run once after run 39789471408 completes (rerun refused while running). | 13:53 provenance OK: owner supplied zip (sha256 ebbfc84e\u2026 = artifact digest); e2e compared, 456 passed. Merge after CI + one budget re-run."
     },
     "W2": {
       "status": "merged",
