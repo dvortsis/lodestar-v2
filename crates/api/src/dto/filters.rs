@@ -540,7 +540,42 @@ pub struct QueueQuery {
     /// The previous page's `next_cursor`.
     pub cursor: Option<String>,
     /// Quarantine rows per page: 1–1000, 1000 by default.
+    #[param(minimum = 1, maximum = 1000)]
     pub limit: Option<usize>,
+}
+
+/// `GET /filters/tombstones`: one page of tombstones, newest first.
+#[derive(Debug, Clone, Default, Deserialize, IntoParams)]
+#[serde(default)]
+#[into_params(parameter_in = Query)]
+pub struct TombstonesQuery {
+    /// Only adult holds: torrents held because you relabelled them adult,
+    /// which the 30-day purge left as tombstones.
+    pub adult: bool,
+    /// The previous page's `next_cursor`.
+    pub cursor: Option<String>,
+    /// Tombstones per page: 1–1000, 1000 by default.
+    #[param(minimum = 1, maximum = 1000)]
+    pub limit: Option<usize>,
+}
+
+/// `GET /filters/tombstones`: dropped torrents, by hash and rule (no
+/// names), so one can be found and released.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct Tombstones {
+    /// The next page, if there is one: pass as `cursor`.
+    #[schema(required = true)]
+    pub next_cursor: Option<String>,
+    pub tombstones: Vec<TombstoneEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct TombstoneEntry {
+    /// Left by an adult hold's quarantine at the 30-day purge.
+    pub adult_hold: bool,
+    pub at: i64,
+    pub hash: String,
+    pub rule: String,
 }
 
 /// `GET /filters/queue`: quarantine (never with names) and the replay

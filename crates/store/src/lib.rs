@@ -530,7 +530,6 @@ impl Store {
         })
     }
 
-    /// A torrent's enrichment, if it has any.
     /// The content type a torrent is stored with: `None` when it isn't
     /// stored or was never classified.
     pub fn content_type(&self, id: i64) -> Result<Option<u8>> {
@@ -542,6 +541,7 @@ impl Store {
             .flatten())
     }
 
+    /// A torrent's enrichment, if it has any.
     pub fn enrichment(&self, id: i64) -> Result<Option<Enriched>> {
         Ok(self
             .conn

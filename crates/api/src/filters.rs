@@ -46,6 +46,7 @@ use crate::dto::filters::{
     FixtureCounts, Fixtures, JobPhase, JobProgress, JobStarted, JobState, JobStatus, OverrideEntry,
     Overview, PackRuleState, PackState, PendingFloorEntry, QuarantineEntry, Queue, QueueQuery,
     RuleEntry, Strictness, StrictnessList, SubscriptionEntry, TestResponse, TestResult,
+    TombstoneEntry, Tombstones, TombstonesQuery,
 };
 pub use crate::dto::filters::{
     Assessment, Change, ChangeBody, ClassRuleBody, CorrectBody, IdBody, MatchInput, Preview,
@@ -59,6 +60,7 @@ use crate::extract::{ClientIp, Json as JsonBody, Path, Query, same_origin_json};
 #[openapi(paths(
     overview,
     queue,
+    tombstones,
     fixtures,
     test,
     strictness,
@@ -111,6 +113,7 @@ pub fn routes() -> Router<ApiState> {
         Router::new()
             .route("/filters", get(overview))
             .route("/filters/queue", get(queue))
+            .route("/filters/tombstones", get(tombstones))
             .route("/filters/fixtures", get(fixtures))
             .route("/filters/test", post(test))
             .route("/filters/strictness", post(strictness))
@@ -436,6 +439,9 @@ impl PreviewJobs {
 
 /// The current state, read once per preview.
 struct Snapshot {
+    /// Every rule's held hashes: `(quarantined, tombstoned)`, counted in
+    /// full (the rows below are the newest only).
+    held: HashMap<String, (usize, usize)>,
     quarantine: Vec<lodestar_store::Quarantined>,
     tombstones: Vec<lodestar_store::Tombstone>,
     hits: Vec<(String, u8, i64)>,
@@ -444,6 +450,11 @@ struct Snapshot {
 impl Snapshot {
     fn read(store: &Store, now: i64) -> lodestar_store::Result<Snapshot> {
         Ok(Snapshot {
+            held: store
+                .held_counts()?
+                .into_iter()
+                .map(|(r, q, t)| (r, (q, t)))
+                .collect(),
             quarantine: store.quarantined(PREVIEW_ROWS)?,
             tombstones: store.tombstones(PREVIEW_ROWS)?,
             hits: store.hit_counts(now - REPLAY_SECS)?,
@@ -466,8 +477,16 @@ impl Snapshot {
             .collect();
         let caught: i64 = live.iter().map(|(_, _, n)| n).sum();
         Preview {
-            quarantine: self.quarantine.iter().filter(|q| hit(&q.rule)).count(),
-            tombstones: self.tombstones.iter().filter(|t| hit(&t.rule)).count(),
+            quarantine: rules
+                .iter()
+                .filter_map(|r| self.held.get(r))
+                .map(|h| h.0)
+                .sum(),
+            tombstones: rules
+                .iter()
+                .filter_map(|r| self.held.get(r))
+                .map(|h| h.1)
+                .sum(),
             stored: live
                 .iter()
                 .filter(|(_, a, _)| mark(*a))
@@ -655,6 +674,13 @@ fn count_line(p: &Preview) -> String {
     s
 }
 
+/// The side effect of releasing an adult hold (§20.11): the relabel that
+/// made the Adult-only checks apply may not be there when it's next seen.
+const ADULT_HOLD_NOTE: &str = "It was held because your correction or an Is adult \
+    classification rule made it adult. A correction is deleted with the torrent: if no Is \
+    adult rule matches it when it's next seen, it's judged as detection classifies it, and if \
+    that isn't adult, the Adult-only child-safety checks won't look at it.";
+
 /// The effect warning (§20.11): what it does, what else it lets
 /// through, the numbers, and a safer alternative.
 fn warning(change: &Change, p: &Preview, neutral: Option<&Preview>, adult_hold: bool) -> String {
@@ -718,15 +744,17 @@ fn warning(change: &Change, p: &Preview, neutral: Option<&Preview>, adult_hold: 
         Change::FalsePositive { .. } => format!(
             "This releases one torrent from the rule that held it, and from that rule only. \
              Other rules still check it, and future torrents with similar names are still \
-             checked. It will be fetched and indexed. {n}"
+             checked. It will be fetched and indexed. {n}{}",
+            if adult_hold {
+                format!(" {ADULT_HOLD_NOTE}")
+            } else {
+                String::new()
+            }
         ),
         Change::Release { .. } if adult_hold => {
-            "You marked this torrent adult, and the Adult-only child-safety checks held it. \
-             That mark was deleted with it, so if you release it, it's fetched and judged as \
-             detection classifies it the next time it's seen: if that isn't adult, the \
-             Adult-only checks won't look at it again, and it will be indexed. Safer: keep it \
-             held."
-                .to_owned()
+            format!(
+                "Releasing this torrent fetches and indexes it the next time it's seen. {ADULT_HOLD_NOTE} Safer: keep it held."
+            )
         }
         Change::Release { .. } => {
             "Releasing this torrent fetches and indexes it normally the next time it's seen. \
@@ -1068,7 +1096,7 @@ impl FiltersApi {
         a.confirm |= a.weakening;
         if a.confirm {
             let adult_hold = match change {
-                Change::Release { hash } => {
+                Change::Release { hash } | Change::FalsePositive { hash } => {
                     let h = hex20(hash)?;
                     self.store().adult_hold(&h).map_err(internal)?
                 }
@@ -1210,11 +1238,13 @@ impl FiltersApi {
     /// Releases everything `rules` hold, quarantine and tombstones: they
     /// stopped applying. Returns how many hashes were released.
     fn release_rules(&self, store: &mut Store, rules: &[String]) -> ApiResult<usize> {
-        let released = store.release_rules(rules).map_err(internal)?;
-        for h in &released {
-            self.held.remove(h);
-        }
-        Ok(released.len())
+        store
+            .release_rules(rules, |hashes| {
+                for h in hashes {
+                    self.held.remove(h);
+                }
+            })
+            .map_err(internal)
     }
 
     /// Applies `change`, whose `assessment` the caller has already
@@ -1275,8 +1305,9 @@ impl FiltersApi {
                         ));
                     }
                 } else {
+                    let was_on = self.engine.current().core.switches.is_on(r);
                     store.set_core_switch(r.id(), *on).map_err(internal)?;
-                    if !on {
+                    if !on && was_on {
                         // What it holds is released and processed (§20.5.3).
                         out.released = Some(self.release_rules(store, &[r.id().to_owned()])?);
                     }
@@ -1828,6 +1859,37 @@ impl FiltersApi {
                 })
                 .collect(),
             version: engine.version,
+        })
+    }
+
+    /// Tombstones, newest first, never with names (none is kept): a page,
+    /// with `adult` only adult holds, so one can be found and released.
+    pub fn tombstones(&self, page: &TombstonesQuery) -> ApiResult<Tombstones> {
+        let limit = page.limit.unwrap_or(QUEUE_PAGE);
+        if !(1..=QUEUE_PAGE).contains(&limit) {
+            return Err(bad("bad_limit", "limit must be 1–1000.").field("limit"));
+        }
+        let before = page.cursor.as_deref().map(queue_cursor).transpose()?;
+        let mut t = self
+            .store()
+            .tombstones_before(before, page.adult, limit + 1)
+            .map_err(internal)?;
+        let more = t.len() > limit;
+        t.truncate(limit);
+        Ok(Tombstones {
+            next_cursor: t
+                .last()
+                .filter(|_| more)
+                .map(|l| format!("{}.{}", l.at, hex(&l.hash))),
+            tombstones: t
+                .iter()
+                .map(|t| TombstoneEntry {
+                    adult_hold: t.adult_hold,
+                    at: t.at,
+                    hash: hex(&t.hash),
+                    rule: t.rule.clone(),
+                })
+                .collect(),
         })
     }
 
@@ -2414,6 +2476,26 @@ pub(crate) async fn queue(
 ) -> ApiResult<Json<Queue>> {
     let f = filters(&s)?;
     tokio::task::spawn_blocking(move || f.queue(crate::unix_now(), &page).map(Json))
+        .await
+        .map_err(internal)?
+}
+
+/// Tombstones (dropped torrents) by hash and rule, never with names, in
+/// pages; `adult=true` lists only adult holds.
+#[utoipa::path(
+    operation_id = "getFilterTombstones",
+    get,
+    path = "/filters/tombstones",
+    tag = "filters",
+    params(TombstonesQuery),
+    responses((status = 200, body = Tombstones))
+)]
+pub(crate) async fn tombstones(
+    State(s): State<ApiState>,
+    Query(page): Query<TombstonesQuery>,
+) -> ApiResult<Json<Tombstones>> {
+    let f = filters(&s)?;
+    tokio::task::spawn_blocking(move || f.tombstones(&page).map(Json))
         .await
         .map_err(internal)?
 }

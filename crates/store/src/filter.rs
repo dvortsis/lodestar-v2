@@ -331,15 +331,17 @@ impl Store {
         let mut expired = Vec::new();
         {
             let mut stmt = tx.prepare(
-                "SELECT hash FROM quarantine WHERE expires_at <= ?1 AND rule NOT LIKE ?2",
+                "SELECT hash FROM quarantine
+                 WHERE expires_at <= ?1 AND substr(rule, -length(?2)) != ?2",
             )?;
-            let adult = format!("%{ADULT_HOLD}");
+            let adult = ADULT_HOLD;
             for row in stmt.query_map(params![now, adult], |r| r.get::<_, Vec<u8>>(0))? {
                 expired.push(hash20(row?)?);
             }
             tx.execute(
                 "INSERT OR REPLACE INTO tombstones (hash, rule, at)
-                 SELECT hash, rule, at FROM quarantine WHERE expires_at <= ?1 AND rule LIKE ?2",
+                 SELECT hash, rule, at FROM quarantine
+                 WHERE expires_at <= ?1 AND substr(rule, -length(?2)) = ?2",
                 params![now, adult],
             )?;
         }
@@ -350,26 +352,79 @@ impl Store {
     }
 
     /// Releases everything `rules` hold (quarantine and tombstones), so it
-    /// can be fetched again: the rules stopped applying. Returns the
-    /// released hashes.
-    pub fn release_rules(&mut self, rules: &[String]) -> Result<Vec<[u8; 20]>> {
-        let tx = self.conn.transaction()?;
-        let mut out = Vec::new();
+    /// can be fetched again: the rules stopped applying. Deletes in
+    /// transactions of up to [`MARK_CHUNK`](crate::MARK_CHUNK) rows, so
+    /// ingest isn't kept waiting, and calls `released` after each with the
+    /// hashes no longer held by anything (another rule may still hold
+    /// one). Returns how many were released.
+    pub fn release_rules(
+        &mut self,
+        rules: &[String],
+        mut released: impl FnMut(&[[u8; 20]]),
+    ) -> Result<usize> {
+        let mut total = 0;
         for rule in rules {
             for table in ["quarantine", "tombstones"] {
-                let mut stmt = tx.prepare(&format!(
-                    "DELETE FROM {table} WHERE rule = ?1 OR rule = ?2 RETURNING hash"
-                ))?;
-                let rows = stmt.query_map(params![rule, held_rule(rule, true)], |r| {
-                    r.get::<_, Vec<u8>>(0)
-                })?;
-                for h in rows {
-                    out.push(hash20(h?)?);
+                loop {
+                    let tx = self.conn.transaction()?;
+                    let mut deleted = Vec::new();
+                    {
+                        let mut stmt = tx.prepare_cached(&format!(
+                            "DELETE FROM {table} WHERE hash IN (
+                                 SELECT hash FROM {table} WHERE rule IN (?1, ?2) LIMIT ?3
+                             ) RETURNING hash"
+                        ))?;
+                        let rows = stmt.query_map(
+                            params![rule, held_rule(rule, true), crate::MARK_CHUNK as i64],
+                            |r| r.get::<_, Vec<u8>>(0),
+                        )?;
+                        for h in rows {
+                            deleted.push(hash20(h?)?);
+                        }
+                    }
+                    let mut free = Vec::with_capacity(deleted.len());
+                    {
+                        let mut held = tx.prepare_cached(
+                            "SELECT 1 FROM quarantine WHERE hash = ?1
+                             UNION ALL SELECT 1 FROM tombstones WHERE hash = ?1",
+                        )?;
+                        for h in &deleted {
+                            if !held.exists([&h[..]])? {
+                                free.push(*h);
+                            }
+                        }
+                    }
+                    tx.commit()?;
+                    released(&free);
+                    total += free.len();
+                    if deleted.len() < crate::MARK_CHUNK {
+                        break;
+                    }
                 }
             }
         }
-        tx.commit()?;
-        Ok(out)
+        Ok(total)
+    }
+
+    /// How many hashes each rule holds: `(rule, quarantined, tombstoned)`.
+    pub fn held_counts(&self) -> Result<Vec<(String, usize, usize)>> {
+        let mut by_rule: std::collections::BTreeMap<String, (usize, usize)> = Default::default();
+        for (i, table) in ["quarantine", "tombstones"].into_iter().enumerate() {
+            let mut stmt = self
+                .conn
+                .prepare_cached(&format!("SELECT rule, count(*) FROM {table} GROUP BY rule"))?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+            for row in rows {
+                let (rule, n) = row?;
+                let e = by_rule.entry(split_rule(rule).0).or_default();
+                if i == 0 {
+                    e.0 += n as usize;
+                } else {
+                    e.1 += n as usize;
+                }
+            }
+        }
+        Ok(by_rule.into_iter().map(|(r, (q, t))| (r, q, t)).collect())
     }
 
     /// Filter decisions since `since`, per rule and action code.
@@ -384,10 +439,25 @@ impl Store {
 
     /// Tombstones, newest first.
     pub fn tombstones(&self, limit: usize) -> Result<Vec<Tombstone>> {
+        self.tombstones_before(None, false, limit)
+    }
+
+    /// Tombstones, newest first, after the one at `before` (`(at, hash)`,
+    /// exclusive): one page. With `adult`, only adult holds.
+    pub fn tombstones_before(
+        &self,
+        before: Option<(i64, [u8; 20])>,
+        adult: bool,
+        limit: usize,
+    ) -> Result<Vec<Tombstone>> {
+        let (at, hash) = before.map_or((i64::MAX, None), |(at, h)| (at, Some(h.to_vec())));
         let mut stmt = self.conn.prepare_cached(
-            "SELECT hash, rule, at FROM tombstones ORDER BY at DESC, hash LIMIT ?1",
+            "SELECT hash, rule, at FROM tombstones
+             WHERE (?1 IS NULL OR at < ?2 OR (at = ?2 AND hash > ?1))
+               AND (NOT ?4 OR substr(rule, -length(?5)) = ?5)
+             ORDER BY at DESC, hash LIMIT ?3",
         )?;
-        let rows = stmt.query_map([limit as i64], |r| {
+        let rows = stmt.query_map(params![hash, at, limit as i64, adult, ADULT_HOLD], |r| {
             Ok((r.get::<_, Vec<u8>>(0)?, r.get(1)?, r.get(2)?))
         })?;
         let mut out = Vec::new();
@@ -409,9 +479,10 @@ impl Store {
         Ok(self
             .conn
             .query_row(
-                "SELECT 1 FROM quarantine WHERE hash = ?1 AND rule LIKE ?2
-                 UNION ALL SELECT 1 FROM tombstones WHERE hash = ?1 AND rule LIKE ?2",
-                params![&hash[..], format!("%{ADULT_HOLD}")],
+                "SELECT 1 FROM quarantine WHERE hash = ?1 AND substr(rule, -length(?2)) = ?2
+                 UNION ALL
+                 SELECT 1 FROM tombstones WHERE hash = ?1 AND substr(rule, -length(?2)) = ?2",
+                params![&hash[..], ADULT_HOLD],
                 |_| Ok(()),
             )
             .optional()?
@@ -444,5 +515,111 @@ impl Store {
             });
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::StoreConfig;
+
+    /// The adult-hold mark is a suffix on the stored rule id; reads strip
+    /// it. Pinned because no migration records it (§20.7).
+    #[test]
+    fn the_adult_hold_mark_is_a_rule_suffix() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        fn f(hash: &[[u8; 20]], held: Held, adult_hold: bool) -> Filtered<'_> {
+            Filtered {
+                hashes: hash,
+                rule: "CS-5a",
+                action: 4,
+                held: Some(held),
+                sealed: None,
+                evidence: &[],
+                at: 10,
+                expires_at: 20,
+                adult_hold,
+            }
+        }
+        let tx = s.conn.transaction().unwrap();
+        write(
+            &tx,
+            &[
+                f(&[[1; 20]], Held::Quarantine, true),
+                f(&[[2; 20]], Held::Tombstone, true),
+                f(&[[3; 20]], Held::Quarantine, false),
+            ],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        let stored = |table: &str, h: u8| -> String {
+            s.conn
+                .query_row(
+                    &format!("SELECT rule FROM {table} WHERE hash = ?1"),
+                    [&[h; 20][..]],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(stored("quarantine", 1), "CS-5a+adult");
+        assert_eq!(stored("tombstones", 2), "CS-5a+adult");
+        assert_eq!(stored("quarantine", 3), "CS-5a");
+        assert_eq!(split_rule("CS-5a+adult".into()), ("CS-5a".into(), true));
+        assert_eq!(split_rule("U-12".into()), ("U-12".into(), false));
+        let q = s.quarantined(10).unwrap();
+        assert!(q.iter().all(|q| q.rule == "CS-5a"));
+        assert!(s.adult_hold(&[1; 20]).unwrap() && s.adult_hold(&[2; 20]).unwrap());
+        assert!(!s.adult_hold(&[3; 20]).unwrap());
+        assert_eq!(s.held_counts().unwrap(), vec![("CS-5a".into(), 2, 1)]);
+        let adult = s.tombstones_before(None, true, 10).unwrap();
+        assert_eq!(adult.len(), 1);
+        assert!(adult[0].adult_hold);
+    }
+
+    /// Releasing a rule's holds runs in chunks and reports each, and a
+    /// hash another rule still holds isn't reported as released.
+    #[test]
+    fn releasing_a_rule_runs_in_chunks() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let n = crate::MARK_CHUNK + 5;
+        let hashes: Vec<[u8; 20]> = (0..n as u32)
+            .map(|i| {
+                let mut h = [0u8; 20];
+                h[..4].copy_from_slice(&i.to_be_bytes());
+                h
+            })
+            .collect();
+        let row = |hashes, rule, held| Filtered {
+            hashes,
+            rule,
+            action: 4,
+            held: Some(held),
+            sealed: None,
+            evidence: &[],
+            at: 10,
+            expires_at: 20,
+            adult_hold: false,
+        };
+        let tx = s.conn.transaction().unwrap();
+        let mut rows: Vec<Filtered<'_>> = hashes
+            .iter()
+            .map(|h| row(std::slice::from_ref(h), "U-1", Held::Quarantine))
+            .collect();
+        rows.push(row(&hashes[..1], "FK-4", Held::Tombstone));
+        write(&tx, &rows).unwrap();
+        tx.commit().unwrap();
+        let mut calls = 0;
+        let mut freed = Vec::new();
+        let total = s
+            .release_rules(&["U-1".into()], |hs| {
+                calls += 1;
+                freed.extend_from_slice(hs);
+            })
+            .unwrap();
+        assert_eq!(total, n - 1, "the pack still holds one");
+        assert_eq!(freed.len(), n - 1);
+        assert!(!freed.contains(&hashes[0]));
+        assert!(calls >= 2, "{calls}");
+        assert!(s.quarantined(10).unwrap().is_empty());
     }
 }
