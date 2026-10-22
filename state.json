@@ -697,8 +697,8 @@
    "session": "session_01V5sNo28tD6bZx3CNFdYjWY",
    "pr": 55,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": "owner filtering decisions on main: packs off, budget gate, floor add-only, subscription strictness"
+   "review_rounds": 1,
+   "notes": "round 1 CHANGES: budget gate unrealistic (10% candidate rules = 17 ms/torrent vs 50 \u00b5s); asked honest gate + pre-tokenise + report; important: wrong-password tests, strictness 401, multi-manifest hash; possible owner escalation if 50 \u00b5s unreachable"
   },
   "F2": {
    "status": "done_elsewhere",
