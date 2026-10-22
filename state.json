@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-22T05:45:00Z",
+ "updated_at": "2026-10-22T05:59:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 12
@@ -13,14 +13,14 @@
    "session": "session_01A5BEzkYtiRur7VEKtby9FH",
    "pr": 38,
    "attempt": 1,
-   "review_rounds": 1,
+   "review_rounds": 3,
    "notes": "round 1: changes requested (status.html error envelope regression - ownership granted; \u00a716 placement; 405 envelope; offset overflow; extractor messages)"
   },
   "B5b": {
-   "status": "running",
+   "status": "in_review",
    "model": "opus",
    "session": "session_01BEmSnYW9wHszPF16AVqmtL",
-   "pr": null,
+   "pr": 46,
    "attempt": 1,
    "review_rounds": 0,
    "notes": ""
@@ -377,13 +377,13 @@
    "notes": ""
   },
   "B15": {
-   "status": "pending",
+   "status": "done_elsewhere",
    "model": "opus",
    "session": null,
-   "pr": null,
+   "pr": 47,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": ""
+   "notes": "built by the filter session (#47); runner reviews #47 under standards instead"
   },
   "B10a": {
    "status": "pending",
@@ -647,10 +647,10 @@
    "notes": ""
   },
   "X-pack-static": {
-   "status": "running",
+   "status": "in_review",
    "model": "sonnet",
    "session": "session_0159tQEctmkzsDhjisVQgZ3b",
-   "pr": null,
+   "pr": 45,
    "attempt": 1,
    "review_rounds": 0,
    "notes": ""
@@ -699,7 +699,8 @@
   "sha": "36100b9"
  },
  "policy": {
-  "merge_fallback": "If a direct merge is refused, enable GitHub auto-merge (merge commit) on the PR, only after CI is green and the review has no blocking findings. Owner-approved 2026-10-22. Fold into runner/README.md with the next runner PR."
+  "merge_fallback": "If a direct merge is refused, enable GitHub auto-merge (merge commit) on the PR, only after CI is green and the review has no blocking findings. Owner-approved 2026-10-22. Fold into runner/README.md with the next runner PR.",
+  "merges": "All PRs, including the M4 sessions', are reviewed by a fresh Opus reviewer and merged by the runner (both M4 sessions told 05:58)."
  },
  "watched_sessions": {
   "session_015F9H2aHowz7TJLffFYxUvf": {
@@ -712,7 +713,7 @@
   }
  },
  "watch_policy": "Owner asked the runner to keep an eye on and manage these sessions: each heartbeat check status; report a pending permission prompt to the owner (runner cannot approve); nudge an idle session with remaining work; flag conflicts with slice ownership and migration order.",
- "migration_order": "V4 filter (merged); V5 swarm (#32); V6 subscriptions (#33, renumbers after #32); filter-rules persistence after that; M5 (B8) after all M4 migrations",
+ "migration_order": "V4 filter, V5 swarm (#32 merged), V6 subscriptions (#33 merged), V7 filter rules (#42), M4 PR2 and M5 (B8) take V8+",
  "decisions": [
   "2026-10-22 spacing: keep Tailwind v4 default --spacing (p-4=16px); only utility steps matching the \u00a710.2 ramp are allowed; W2 extends the ban check to off-ramp steps",
   "2026-10-22 owner: the design decided in the 'Modern DHT crawler architecture' session (recorded in docs/architecture.md) is the primary design strategy; ui-design-skills only fills gaps. Encoded in runner/standards.md (PR #39).",
@@ -735,5 +736,12 @@
    "M4 filter #33/#42": "V7 for #42; no budget env loosening; packs per \u00a720.6; floor add-only from config; subscriptions off by default + strictness warning",
    "new slices": "B17 adult default, S-blocklists; X-clients -> Opus"
   }
- }
+ },
+ "m4_prs": {
+  "32": "merged 05:36 by M4 session",
+  "33": "merged 05:51 by filter session (owner decisions follow-up requested)",
+  "42": "open, filter rules V7",
+  "47": "open, filters API (B15)"
+ },
+ "heartbeats": 1
 }
