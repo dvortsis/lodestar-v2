@@ -1743,6 +1743,18 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Logo display widths:** wordmark 240, horizontal 320, stacked 200 px (§10.19 fixes only the wordmark).
 - **Size:** `web/static/brand/` is about 1.5 MiB (scenes 1.1 MB, logos 0.3 MB, favicons 0.13 MB). An earlier setting with three WebP widths came to 3.05 MiB.
 
+**B1 decisions (typed API contract):**
+- **Every `/api/v1` body is a typed DTO** in `crates/api/src/dto/` (one file per domain), with utoipa `ToSchema`. Each module lists its handlers in an `ApiDoc`, and `openapi::document` merges them one line per module, as the router does. `GET /api/v1/openapi.json` is open and holds no data.
+  - The document has OpenAPI 3.1 paths relative to the server `/api/v1`, a `session` cookie security scheme on every path except `/auth`, `/setup`, `/login`, `/logout` and `/openapi.json`, and the error envelope as every operation's `default` response.
+  - `lodestar`'s `openapi` binary writes `web/src/lib/api/openapi.json` (pretty-printed, sorted keys), and `npm run api:types` turns that into `schema.d.ts`. CI fails if either committed file is stale.
+- **The JSON stayed byte-compatible** with the old `json!` handlers, held there by per-endpoint golden files recorded before the change (`crates/api/tests/golden/`). That's why response fields are declared in alphabetical order (a `Value` serializes its keys sorted). `POST /filters/preview` keeps the declaration order it always had.
+- **The `docs/metrics.md` §7 swarm fields are served now as `null`** ("never scraped") until M4 fills them: `seeders`, `leechers`, `completed`, `trackers_reporting`, `trackers_checked` and `last_scrape_at` on hits and detail, plus `dht_seeds`, `dht_peers`, `swarm_trend` and `swarm_history` on detail. The non-nullable M4 fields (`seeders_approx`, `swarm_suspect`, `swarm_trackers`, `last_seen_at`) arrive with M4's values, not as placeholders.
+- **B1 doesn't serve the other `docs/metrics.md` §7.1/§7.3 fields yet.** Adding one later is a DTO field plus a golden update, not a new endpoint. The fields are `title`, `resolved_via`, `content_type`, `adult_kind`, `composition`, `junk_score`, `junk_reasons`, `hidden_by_filter`, `why`, `total_approx`, `hidden_junk` and `hidden_count`.
+  - `total_approx` comes with B5a (exact count on demand).
+  - `hidden_by_filter`, `why` and `hidden_count` come with B15 (the filter decisions on search results).
+  - The M3 enrichment fields (`title`, `resolved_via`, `content_type`, `adult_kind`, `composition`, `junk_score`, `junk_reasons`) and `hidden_junk` have no slice in `docs/build-plan.md` yet; the runner assigns one. They read the stored enrichment in `torrents::hit` and `torrents::detail_of`.
+- **New endpoints land as a typed DTO plus a 501 stub** (`error::not_implemented`, code `not_implemented`) with an example, then the handler (`crates/api/README.md`).
+
 **M5 decisions (build process and UI conventions):**
 - **Spacing uses Tailwind's default scale** (`p-4` = 16 px), restricted to the steps that match the §10.2 ramp: 0, 0.5, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14 (= 0–56 px).
   - Redefining the scale so that `p-4` = 4 px was considered and rejected. Standard Tailwind written against it would be silently wrong, and no lint can catch that.
