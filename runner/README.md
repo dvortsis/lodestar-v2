@@ -59,7 +59,7 @@ The list lives in `state.json` under `watched_sessions`.
    - at most `max_helpers` Sonnet and Haiku slices;
    - docs-only slices don't count towards either limit;
    - at most `max_launches_per_day` new sessions;
-   - **never two running slices whose `owns` overlap.** One shared exception: any core slice may append its decisions entry to `docs/architecture.md` §16. That doesn't count as owning the file, and a conflict there is resolved by merging `main`;
+   - **never two running slices whose `owns` overlap.** Every slice records its decisions in its own new file under `docs/decisions/`, so no two slices share a decisions file (§16 is closed to new entries);
    - **order:** critical-path core slices first, then the slices that unblock the most others.
 7. **Expand epics.**
    - When an `epic` entry's deps are merged, the runner (Opus) reads the relevant architecture sections and the code as it now stands.
