@@ -1,0 +1,27 @@
+{
+  "recorded_from": "Deluge 2.1.2.dev0 (Web UI JSON-RPC, libtorrent 2.0.10), deluged + deluge-web on Ubuntu 24.04",
+  "note": "auth.login: correct password; the session is the _session_id cookie",
+  "request": {
+    "method": "POST",
+    "path": "/json",
+    "query": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "server",
+        "TwistedWeb"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "set-cookie",
+        "_session_id=51cec5b254ced983cc6da4135a601fd4b21cc9fcf5daee1f2d5b20dc59e7d8554811; Expires=Thu, 22 Oct 2026 10:28:21 GMT; Path=/json"
+      ]
+    ],
+    "body": "{\"result\": true, \"error\": null, \"id\": 3}"
+  }
+}

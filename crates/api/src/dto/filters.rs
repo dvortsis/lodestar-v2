@@ -129,6 +129,23 @@ pub enum Change {
         id: i64,
         accept: bool,
     },
+    /// Settles floor entries a config file or a floor-marked list dropped
+    /// (owner's decision §2.7). They stay blocked until this: `remove`
+    /// takes them out of the floor, which weakens it; otherwise they stay
+    /// in it as ordinary CS-1b entries. `source` is a pending source's key
+    /// (`file:<path>`, `list:<id>`).
+    ///
+    /// A removal confirmed with the password must name its entries: send
+    /// back the assessment's [`Assessment::floor_entries`], so the
+    /// password confirms what the warning listed. Keeping may leave
+    /// `hashes` out, which keeps what the assessment counted.
+    ResolveFloorRemoval {
+        source: String,
+        /// 40 hex digits each, at most 10,000.
+        hashes: Option<Vec<String>>,
+        #[serde(default)]
+        remove: bool,
+    },
     Undo,
 }
 
@@ -172,6 +189,8 @@ pub struct Preview {
     /// Counts from names only (sealed names, no file lists), so files'
     /// evidence isn't re-checked: treat as an estimate.
     pub estimate: bool,
+    /// Entries that would leave the locked floor.
+    pub removed_from_floor: usize,
 }
 
 /// A change's assessment (§20.10, §20.11). Field order: see [`Preview`].
@@ -188,6 +207,16 @@ pub struct Assessment {
     /// For a keyword override: the same entry as *Neutralize term*.
     #[schema(required = true)]
     pub neutralize: Option<Preview>,
+    /// For a floor removal: the entries the warning counts, 40 hex digits
+    /// each. A removal settles at most 10,000 at a time, so a longer
+    /// pending list goes in batches. Send these back as `hashes` to
+    /// confirm the removal with the password.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub floor_entries: Option<Vec<String>>,
+    /// All of them, for applying.
+    #[serde(skip)]
+    pub(crate) settles: Option<Vec<[u8; 20]>>,
 }
 
 /// `POST /filters/apply`: the change took effect.
@@ -222,6 +251,10 @@ pub struct ApplyResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub removed: Option<usize>,
+    /// `resolve_floor_removal`: pending floor entries settled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub settled: Option<usize>,
     /// The rule set's version after the change.
     pub version: u64,
 }
@@ -295,6 +328,9 @@ pub struct Overview {
     pub ip_ranges: usize,
     pub overrides: Vec<OverrideEntry>,
     pub packs: Vec<PackState>,
+    /// Entries a config file or a floor-marked list dropped, still blocked
+    /// until you settle them (§2.7).
+    pub pending_floor_removals: Vec<PendingFloorEntry>,
     /// Items in quarantine.
     pub quarantine: usize,
     pub rules: Vec<RuleEntry>,
@@ -393,6 +429,80 @@ pub struct ExceptionEntry {
     pub query: Option<String>,
     /// The rule it releases from.
     pub rule: String,
+}
+
+/// Floor entries one source dropped, waiting for a decision (§2.7).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct PendingFloorEntry {
+    pub entries: usize,
+    /// Up to 1,000 of them, 40 hex digits each.
+    pub hashes: Vec<String>,
+    /// `file` or `list`.
+    pub kind: String,
+    /// The file's path, or the list's name.
+    pub name: String,
+    /// `file:<path>` or `list:<id>`, for `resolve_floor_removal`.
+    pub source: String,
+}
+
+/// `POST /filters/strictness`: a candidate set of lists to assess,
+/// subscriptions by id and catalog lists by key (`lodestar lists`), in
+/// any mix.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+pub struct StrictnessBody {
+    #[serde(default)]
+    pub subscriptions: Vec<i64>,
+    #[serde(default)]
+    pub catalog: Vec<String>,
+}
+
+/// `POST /filters/strictness`: what the lists would block, and a warning
+/// matched to it (§2.9, §20.13).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct Strictness {
+    /// `anti_p2p`, `peers`, `content`, `child_abuse`, …
+    pub categories: Vec<String>,
+    /// Some figures are the catalog's measurements of lists not fetched
+    /// yet, and lists may overlap: a lower bound.
+    pub estimate: bool,
+    /// Torrents a floor-marked list blocks by hash.
+    pub floor_hashes: u64,
+    /// Torrents blocked by hash.
+    pub hashes: u64,
+    /// The share of public IPv4 blocked (0–1); the level reads this.
+    pub ipv4_public_share: f64,
+    /// The share of all IPv4 blocked (0–1).
+    pub ipv4_share: f64,
+    pub ipv6_ranges: usize,
+    /// The share of IPv6 global unicast blocked (0–1).
+    pub ipv6_share: f64,
+    /// `none`, `notice`, `strong` or `severe`.
+    pub level: String,
+    pub lists: Vec<StrictnessList>,
+    /// The plain-language warning.
+    pub text: String,
+    /// Lists never fetched, so what they block isn't known.
+    pub unknown: Vec<String>,
+}
+
+/// One list's figures in a [`Strictness`]; null where unknown.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct StrictnessList {
+    pub categories: Vec<String>,
+    pub floor: bool,
+    #[schema(required = true)]
+    pub hashes: Option<u64>,
+    #[schema(required = true)]
+    pub ipv4_public_share: Option<f64>,
+    #[schema(required = true)]
+    pub ipv4_share: Option<f64>,
+    #[schema(required = true)]
+    pub ipv6_ranges: Option<usize>,
+    /// `content` or `ip`.
+    pub kind: String,
+    /// The figures are a catalog measurement, not this list's data.
+    pub measured: bool,
+    pub name: String,
 }
 
 /// A list subscription (§20.6).
