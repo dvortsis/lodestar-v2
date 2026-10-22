@@ -1,0 +1,2 @@
+200
+{"discovered_at":1700000000,"file_list":[{"attrs":[],"path":"batman.mkv","size":4294967296}],"file_list_total":1,"files":1,"flags":["warnings"],"hash":"5ce3578f03e7bf8ee4d9da1afc13491025fe56e4","hash_v2":null,"id":2,"magnet":"magnet:?xt=urn:btih:5ce3578f03e7bf8ee4d9da1afc13491025fe56e4&dn=Batman%20Begins%20720p","metadata_at":1700000001,"name":"Batman Begins 720p","piece_len":65536,"size":4294967296}
