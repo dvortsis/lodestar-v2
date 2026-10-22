@@ -1807,7 +1807,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - `librqbit-utp` 0.7 (Apache-2.0, tokio, active) has no LEDBAT: Cubic only, with LEDBAT a TODO. It also pulls in `libc`, `socket2`, `parking_lot` and `lazy_static`.
   - `utp-rs` 0.1.0-alpha.17 (MIT, tokio, LEDBAT) is an alpha with no release since March 2025, and uses unbounded channels per connection, so a peer can grow our memory.
   - `utp` and `tokio-utp` haven't had a release since 2017; `libutp` bindings need `unsafe` FFI.
-  - `crates/utp` has no new dependencies (tokio, rand).
+  - `crates/utp` adds no new third-party crates: tokio and rand, plus socket2, which the DHT already uses.
 - **Design:** a sans-IO connection state machine (packet codec, selective ACK, fast retransmit on three duplicate or selectively acknowledged packets, RFC 6298 timeouts with exponential backoff, LEDBAT with a 100 ms target and slow start, sequence-number wraparound), driven by a thin tokio layer: one mutex per connection, a timer task per connection, non-blocking sends.
   - The state machine is tested over a simulated network with a virtual clock: loss, duplication, reordering and starting sequence numbers near 65535. A fuzz target (`utp`) drives the parser and the state machine with hostile packets.
   - **Hostile-input limits:** buffered bytes per connection stay under 2 × the receive window plus the send buffer (64 KiB each by default), with at most 256 packets in flight and 256 held out of order. ACKs for packets we never sent are ignored. Packets for unknown connections are dropped silently, never answered, so the port can't be used as a reflector. Incoming connections are accepted only by a listener (the crawler has none).
@@ -1821,8 +1821,8 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **In `peer-wire`:** the BEP 3/10/9 exchange and MSE run over any `AsyncRead + AsyncWrite` stream (`fetch_on_stream`). `FetchOptions` gains `transport` (TCP by default), `fallback_to_tcp` (on by default), `utp_fallback_after` (2 s) and `utp`.
   - With uTP first, a peer that doesn't open a uTP connection within 2 s is fetched over TCP inside the same deadline. A peer that answered over uTP isn't retried over TCP.
   - The deadline, the metadata size cap and every other limit are identical across transports. The TCP path is unchanged.
-- **Metrics:** `lodestar_fetch_{attempts,success,connect_timeouts}_total{transport}`, `lodestar_utp_retransmits_total` and `lodestar_utp_connection_timeouts_total`. The labelled success counter sums to today's unlabelled one and replaces it.
-- **Windows (§11):** all uTP connections share one UDP port, so they avoid TCP's ephemeral-port and TIME_WAIT exhaustion. The receive loop ignores per-datagram errors such as the `ConnectionReset` Windows reports for an ICMP "port unreachable".
+- **Metrics:** `lodestar_fetch_{attempts,success,connect_timeouts}_total{transport}`, `lodestar_utp_retransmits_total` and `lodestar_utp_connection_timeouts_total`. The labelled success counter replaces the unlabelled one. It counts every verified info dict, so it can run slightly ahead of the pool's `fetched`, which drops a result whose key left the pool mid-fetch. Counting in the pool instead would need `Fetched` to carry its transport.
+- **Windows (§11):** all uTP connections share one UDP port, so they avoid TCP's ephemeral-port and TIME_WAIT exhaustion. The receive loop ignores per-datagram errors such as the `ConnectionReset` Windows reports for an ICMP "port unreachable". `UtpSocket::bind` on an IPv6 address is dual-stack on every OS: it clears `IPV6_V6ONLY` explicitly, because Windows sets it by default and Linux and macOS don't. (The DHT does the opposite, binding IPv6-only so its two sockets share a port; a shared-port uTP socket uses the DHT's sockets through `DualSink`.)
 
 ## 17. Verification (once built)
 

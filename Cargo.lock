@@ -1491,6 +1491,7 @@ version = "0.0.0"
 dependencies = [
  "proptest",
  "rand 0.10.3",
+ "socket2",
  "tokio",
 ]
 
