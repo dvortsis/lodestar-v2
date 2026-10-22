@@ -253,7 +253,8 @@ pub(crate) async fn search_get(
     run_search(s, &headers, p).await
 }
 
-/// Searches with query text or a query AST.
+/// Searches with query text or a query AST. The body also takes
+/// `"explain": true` (as `GET`'s `explain`).
 #[utoipa::path(
     operation_id = "searchPost",
     post,
