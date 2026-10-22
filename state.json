@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-22T06:42:00Z",
+ "updated_at": "2026-10-22T06:45:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 14
@@ -647,13 +647,13 @@
    "notes": ""
   },
   "X-pack-static": {
-   "status": "in_review",
+   "status": "merged",
    "model": "sonnet",
    "session": "session_0159tQEctmkzsDhjisVQgZ3b",
    "pr": 45,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "round 1 changes: worker PostArgs, 6881/tcp planned, hot/cold planned"
+   "notes": "merged after round 2"
   },
   "X-clients": {
    "status": "pending",
@@ -777,7 +777,6 @@
  "reviews_in_flight": [
   "#38 B0 r4",
   "#40 W8 r2",
-  "#45 pack r2",
   "#37 C1 r2",
   "#44 W3",
   "#41 W4",
@@ -785,5 +784,13 @@
   "#51 X-utp",
   "#49 X-integrations",
   "#48 M4 PR2"
- ]
+ ],
+ "carry_forward": {
+  "D-docker": [
+   "Image must set LODESTAR_DATA_DIR=/data (templates rely on it)",
+   "Templates reference ghcr.io/dvortsis/lodestar-v2:latest; update them if the registry differs",
+   "Distroless has no shell: templates have no <Shell>",
+   "\u00a74 data layout differs from the code (lodestar.db, index/, dht-state.bin, auth.json, seal.key, config.toml); operations.md follows the code"
+  ]
+ }
 }
