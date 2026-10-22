@@ -235,23 +235,50 @@ export const PINS: Record<string, Record<string, string>> = {
 };
 
 /**
- * Labels on fills. Status and primary fills take whichever ground contrasts more. Accent and
- * neutral fills take the text or surface colour; neutral-content must reach 4.5:1, so when
- * neither does it is shifted in lightness (hue and chroma kept) away from the fill.
+ * A label colour for text drawn on `fill` that reaches `min`:1, whatever the theme.
+ *   1. the best of `preferred` (the theme's own grounds or text) when it already passes;
+ *   2. otherwise the theme's text colour moved in lightness only (hue and chroma kept), in
+ *      whichever direction reaches `min` with the smaller change;
+ *   3. otherwise pure black or white, whichever contrasts more.
+ * Step 2 is always reachable in practice, because black or white clears 4.58:1 on any fill.
+ */
+export function labelOn(fill: string, preferred: string[], text: string, min: number): string {
+	const best = bestContrast(fill, preferred);
+	if (contrast(best, fill) >= min) return best;
+	const ok = (c: string) => contrast(c, fill) >= min;
+	const shifted = (['darker', 'lighter'] as const)
+		.map((direction) => shiftUntil(text, direction, ok))
+		.filter(ok)
+		.sort(
+			(x, y) => Math.abs(toOklch(x).l - toOklch(text).l) - Math.abs(toOklch(y).l - toOklch(text).l)
+		);
+	return shifted[0] ?? bestContrast(fill, ['#000000', '#FFFFFF']);
+}
+
+/** `labelOn` that aims for 7:1 where the family requires AAA text and the fill allows it. */
+function label(fill: string, preferred: string[], text: string, strict: boolean): string {
+	if (strict) {
+		const aaa = labelOn(fill, preferred, text, 7);
+		if (contrast(aaa, fill) >= 7) return aaa;
+	}
+	return labelOn(fill, preferred, text, 4.5);
+}
+
+/**
+ * Labels on fills. Primary and status fills take whichever ground contrasts more; the neutral
+ * fill takes the text or surface colour. Either is replaced by a lightness-shifted text colour
+ * when it falls short, so every label reaches 4.5:1 (7:1 for High Contrast where possible).
+ * The accent label is the one exception: design-tokens.md allows large/bold text there, so it
+ * only warns.
  */
 function fillContents(
 	t: Record<string, string>,
 	text: string,
 	bg: string,
-	surface: string
+	surface: string,
+	strict: boolean
 ): Record<string, string> {
-	const on = (fill: string) => bestContrast(fill, [surface, bg]);
-	const neutral = t['--color-neutral']!;
-	let neutralContent = bestContrast(neutral, [text, surface]);
-	if (contrast(neutralContent, neutral) < 4.5) {
-		const away = toOklch(neutralContent).l > toOklch(neutral).l ? 'lighter' : 'darker';
-		neutralContent = shiftUntil(neutralContent, away, (c) => contrast(c, neutral) >= 4.5);
-	}
+	const on = (fill: string) => label(fill, [surface, bg], text, strict);
 	return {
 		'--color-primary-content': on(t['--color-primary']!),
 		'--color-secondary-content': on(t['--color-primary']!),
@@ -260,8 +287,17 @@ function fillContents(
 		'--color-warning-content': on(t['--color-warning']!),
 		'--color-error-content': on(t['--color-error']!),
 		'--color-accent-content': bestContrast(t['--color-accent']!, [text, bg]),
-		'--color-neutral-content': neutralContent
+		'--color-neutral-content': label(t['--color-neutral']!, [text, surface], text, strict)
 	};
+}
+
+/**
+ * A hover/selected tint: the mix of surface and primary, moved in lightness toward the
+ * background until `text` on it reaches 4.5:1. The mix is kept when it already passes.
+ */
+function tint(mixed: string, bg: string, text: string): string {
+	const away = toOklch(bg).l < toOklch(mixed).l ? 'darker' : 'lighter';
+	return shiftUntil(mixed, away, (c) => contrast(text, c) >= 4.5);
 }
 
 /** Derive every role token for a theme. Values are upper-case #RRGGBB. */
@@ -314,8 +350,8 @@ export function derive(theme: Theme): Tokens {
 		'--color-accent-ink': accentInk,
 		'--color-muted-text': mutedText,
 		'--color-field-border': slate,
-		'--color-hover': mix(surface, primary, r.hoverMix),
-		'--color-selected': mix(surface, primary, r.selectedMix),
+		'--color-hover': tint(mix(surface, primary, r.hoverMix), bg, text),
+		'--color-selected': tint(mix(surface, primary, r.selectedMix), bg, text),
 		'--data-other': mutedText,
 		'--brand-surface': surface,
 		'--brand-primary': primary,
@@ -325,7 +361,7 @@ export function derive(theme: Theme): Tokens {
 	DATA_SLOT.forEach((slot, i) => (tokens[`--data-${slot}`] = data[i]!));
 
 	for (const [key, value] of Object.entries(PINS[theme.id] ?? {})) tokens[key] = value;
-	Object.assign(tokens, fillContents(tokens, text, bg, surface));
+	Object.assign(tokens, fillContents(tokens, text, bg, surface, isHighContrast(theme)));
 
 	const ordered = {} as Record<string, string>;
 	for (const key of TOKEN_KEYS) ordered[key] = up(tokens[key]!);
@@ -576,12 +612,12 @@ export type Compiled = {
 export function compileDir(dir: string): { compiled: Compiled[]; problems: string[] } {
 	const problems: string[] = [];
 	const compiled: Compiled[] = [];
-	const seen = new Set<string>();
 	const files = existsSync(dir)
 		? readdirSync(dir)
 				.filter((f) => f.endsWith('.json'))
 				.sort()
 		: [];
+	const families: { file: string; family: Family }[] = [];
 	for (const file of files) {
 		let raw: unknown;
 		try {
@@ -595,7 +631,23 @@ export function compileDir(dir: string): { compiled: Compiled[]; problems: strin
 			problems.push(...errors.map((e) => `${file}: ${e}`));
 			continue;
 		}
-		const family = raw as Family;
+		families.push({ file, family: raw as Family });
+	}
+	const result = compileFamilies(families);
+	problems.push(...result.problems);
+	compiled.push(...result.compiled);
+	return { compiled, problems };
+}
+
+/** Derive and gate already-validated families; `file` is only used in messages. */
+export function compileFamilies(families: { file: string; family: Family }[]): {
+	compiled: Compiled[];
+	problems: string[];
+} {
+	const problems: string[] = [];
+	const compiled: Compiled[] = [];
+	const seen = new Set<string>();
+	for (const { file, family } of families) {
 		if (seen.has(family.id)) problems.push(`${file}: duplicate id "${family.id}"`);
 		seen.add(family.id);
 		if (file !== `${family.id}.json`) {
@@ -603,7 +655,7 @@ export function compileDir(dir: string): { compiled: Compiled[]; problems: strin
 		}
 		for (const theme of expandFamily(family)) {
 			const tokens = derive(theme);
-			compiled.push({ theme, tokens, report: evaluate(theme, tokens), errors });
+			compiled.push({ theme, tokens, report: evaluate(theme, tokens), errors: [] });
 		}
 	}
 	if (!seen.has('riverstone')) problems.push('missing required family "riverstone"');

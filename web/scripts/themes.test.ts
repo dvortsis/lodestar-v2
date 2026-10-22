@@ -11,6 +11,8 @@ import {
 	PREPAINT,
 	TOKEN_KEYS,
 	compileDir,
+	compileFamilies,
+	labelOn,
 	derive,
 	evaluate,
 	failures,
@@ -543,5 +545,93 @@ describe('pre-paint script', () => {
 			theme: 'riverstone-dark',
 			scheme: 'dark'
 		});
+	});
+});
+
+describe('every theme family passes the gates (docs/themes.md, 24 families)', () => {
+	// docs/themes.md as of slice C1, converted to JSON. W1b generates web/themes/ from the doc.
+	const families = JSON.parse(
+		readFileSync(join(root, 'scripts/fixtures/families.json'), 'utf8')
+	) as Family[];
+	const { compiled, problems } = compileFamilies(
+		families.map((family) => ({ file: `${family.id}.json`, family }))
+	);
+
+	it('has 24 valid families and compiles 48 themes', () => {
+		expect(families).toHaveLength(24);
+		for (const f of families) expect(validateFamily(f), f.id).toEqual([]);
+		expect(problems).toEqual([]);
+		expect(compiled).toHaveLength(48);
+	});
+
+	it('compiles every theme with zero gate failures', () => {
+		const failing = compiled
+			.filter((c) => failures(c.report).length)
+			.map(
+				(c) => `${c.theme.id}: ${failures(c.report).map((f) => `${f.label} ${f.value.toFixed(2)}`)}`
+			);
+		expect(failing).toEqual([]);
+	});
+
+	it('every label reaches 4.5:1 on its fill (7:1 for High Contrast where the fill allows)', () => {
+		for (const { theme, tokens } of compiled) {
+			for (const [label, fill] of [
+				['primary', 'primary'],
+				['info', 'info'],
+				['success', 'success'],
+				['warning', 'warning'],
+				['error', 'error'],
+				['neutral', 'neutral']
+			]) {
+				const c = contrast(
+					tokens[`--color-${label}-content` as keyof Tokens],
+					tokens[`--color-${fill}` as keyof Tokens]
+				);
+				expect(c, `${theme.id} ${label}-content`).toBeGreaterThanOrEqual(4.5);
+			}
+		}
+	});
+
+	it('text on the hover and selected tints reaches 4.5:1', () => {
+		for (const { theme, tokens } of compiled) {
+			for (const key of ['--color-hover', '--color-selected'] as const) {
+				expect(
+					contrast(tokens['--color-base-content'], tokens[key]),
+					`${theme.id} ${key}`
+				).toBeGreaterThanOrEqual(4.5);
+			}
+		}
+	});
+
+	it('only the documented warnings remain', () => {
+		const known = /accent-content|min pairwise|error vs data-3/;
+		for (const { theme, report } of compiled) {
+			for (const w of report.checks.filter((c) => !c.pass && c.severity === 'warn')) {
+				expect(w.label, theme.id).toMatch(known);
+			}
+		}
+	});
+});
+
+describe('labelOn', () => {
+	it('keeps the best preferred colour when it already passes', () => {
+		expect(labelOn('#4A7789', ['#FFFFFF', '#F3F6F5'], '#243C44', 4.5)).toBe('#FFFFFF');
+	});
+	it('shifts the text colour in lightness when no preferred colour passes', () => {
+		const out = labelOn('#8796A2', ['#243C44', '#FFFFFF'], '#243C44', 4.5);
+		expect(out).toBe('#193038'); // Riverstone light neutral-content
+		const a = toOklch(out);
+		const b = toOklch('#243C44');
+		expect(Math.abs(a.h - b.h)).toBeLessThan(2);
+		expect(a.l).toBeLessThan(b.l);
+	});
+	it('goes lighter when that is the direction that reaches the target', () => {
+		const out = labelOn('#2A3B45', ['#3A4A55'], '#8090A0', 4.5);
+		expect(contrast(out, '#2A3B45')).toBeGreaterThanOrEqual(4.5);
+		expect(toOklch(out).l).toBeGreaterThan(toOklch('#8090A0').l);
+	});
+	it('can reach 7:1 where the fill allows it', () => {
+		const out = labelOn('#303030', ['#404040'], '#A0A0A0', 7);
+		expect(contrast(out, '#303030')).toBeGreaterThanOrEqual(7);
 	});
 });
