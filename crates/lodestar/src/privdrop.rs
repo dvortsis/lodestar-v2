@@ -308,17 +308,23 @@ mod imp {
                 ids.uid, ids.gid
             ));
         }
+        let root = rustix::fs::stat("/").map_err(|e| format!("stat /: {e}"))?;
+        if (st.st_dev, st.st_ino) == (root.st_dev, root.st_ino) {
+            return Err(format!(
+                "the data directory {shown} is the filesystem root; refusing to chown it"
+            ));
+        }
+        // The directory itself last: a walk that fails part-way is retried
+        // on the next start, which only walks while its owner differs.
+        let mut walk = Walk::default();
+        chown_tree(fd.as_fd(), dir, ids, 0, &mut walk)?;
         rustix::fs::fchown(
             &fd,
             Some(Uid::from_raw(ids.uid)),
             Some(Gid::from_raw(ids.gid)),
         )
         .map_err(|e| format!("chown {shown}: {e}"))?;
-        let mut walk = Walk {
-            changed: 1,
-            ..Walk::default()
-        };
-        chown_tree(fd.as_fd(), dir, ids, 0, &mut walk)?;
+        walk.changed += 1;
         let mut line = format!(
             "data directory {shown} was owned by {}:{}; changed {} entries to {}:{}",
             st.st_uid, st.st_gid, walk.changed, ids.uid, ids.gid
@@ -658,6 +664,18 @@ mod tests {
             let line = chown_data_dir(&data, ids).unwrap();
             assert!(line.contains("is owned by 4242:4343"), "{line}");
             assert_eq!(owner(&data.join("stray")), (0, 0));
+
+            // Never the whole filesystem.
+            assert!(
+                chown_data_dir(Path::new("/"), ids)
+                    .unwrap_err()
+                    .contains("root")
+            );
+            assert!(
+                chown_data_dir(Path::new("/proc/.."), ids)
+                    .unwrap_err()
+                    .contains("root")
+            );
 
             // Missing: created and handed over.
             let fresh = tmp.path().join("new/data");
