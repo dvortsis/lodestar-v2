@@ -188,6 +188,40 @@ fn serves_status_and_stops_cleanly() {
         );
     }
 
+    // The live stream goes out through the whole router as written: never
+    // compressed (a compression layer would hold frames back), and the
+    // first crawler snapshot within one 5 s period. It stays open across
+    // the shutdown below, which must still finish.
+    let mut events = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    events
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    write!(
+        events,
+        "GET /api/v1/events?topics=crawler HTTP/1.1\r\nHost: localhost\r\n\
+         Cookie: {cookie}\r\nAccept-Encoding: gzip, br\r\n\r\n"
+    )
+    .unwrap();
+    let mut stream = String::new();
+    let start = Instant::now();
+    let mut buf = [0u8; 4096];
+    while !stream.contains("event: crawler\n") {
+        assert!(
+            start.elapsed() < Duration::from_secs(8),
+            "no crawler event: {stream}"
+        );
+        match events.read(&mut buf) {
+            Ok(0) => panic!("the stream closed: {stream}"),
+            Ok(n) => stream.push_str(&String::from_utf8_lossy(&buf[..n])),
+            Err(_) => {}
+        }
+    }
+    assert!(stream.contains("retry: 5000\n\n"), "{stream}");
+    let head = stream.to_ascii_lowercase();
+    assert!(head.starts_with("http/1.1 200"), "{head}");
+    assert!(head.contains("content-type: text/event-stream"), "{head}");
+    assert!(!head.contains("content-encoding"), "{head}");
+
     let killed = Command::new("kill")
         .args(["-TERM", &child.id().to_string()])
         .status()
@@ -196,6 +230,15 @@ fn serves_status_and_stops_cleanly() {
     let exit = child.wait().unwrap();
     let stderr = log.join().unwrap();
     assert!(exit.success(), "exit {exit:?}: {stderr}");
+    // The shutdown ended the open stream.
+    events
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    while let Ok(n) = events.read(&mut buf) {
+        if n == 0 {
+            break;
+        }
+    }
     assert!(dir.path().join("dht-state.bin").exists());
     assert!(dir.path().join("lodestar.db").exists());
     assert!(dir.path().join("index").is_dir(), "search index created");
