@@ -171,3 +171,42 @@ async fn only_known_tests_are_run() {
         assert_eq!(v["error"]["code"], json!("bad_body"), "{body}");
     }
 }
+
+#[tokio::test]
+async fn a_refusal_shows_its_status_never_the_body() {
+    let f = fixture();
+    // Any service on the LAN or this machine: its pages must not be
+    // readable through the test.
+    let app = Router::new().fallback(|| async {
+        (
+            StatusCode::NOT_FOUND,
+            "internal-marker: the admin page of something else",
+        )
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    for client in ["rtorrent", "transmission", "aria2", "deluge", "qbittorrent"] {
+        let (status, v, text) = test(
+            &f,
+            json!({ "kind": "download_client", "client": client, "url": format!("http://{addr}/any/path") }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{client}");
+        assert_eq!(v["ok"], json!(false), "{client}");
+        assert!(
+            !text.contains("marker") && !text.contains("admin page"),
+            "{client}: {text}"
+        );
+    }
+    let (_, v, _) = test(
+        &f,
+        json!({ "kind": "download_client", "client": "rtorrent", "url": format!("http://{addr}/RPC2") }),
+    )
+    .await;
+    assert_eq!(v["error"]["code"], json!("rejected"));
+    assert!(
+        v["error"]["message"].as_str().unwrap().contains("HTTP 404"),
+        "{v}"
+    );
+}

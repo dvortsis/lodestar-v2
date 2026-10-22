@@ -255,8 +255,9 @@ impl Field {
         }
     }
 
-    /// No section has a secret yet (credentials live in the integrations
-    /// `SecretStore`); the tests hold the rules for the first one.
+    /// A credential. [`Registry::register`] refuses a section with one
+    /// until saved values can be sealed; the tests hold the redaction
+    /// rules the first one will rely on.
     #[allow(dead_code)]
     pub const fn secret(self) -> Field {
         Field {
@@ -557,24 +558,48 @@ impl<T: Section> Entry<T> {
                 next.remove(name);
                 continue;
             }
-            // Each field alone first, so an error names the field at fault.
+            // Each field's type and bounds alone first, so an error names
+            // the field at fault.
             let mut trial = self.effective_map(saved);
             trial.insert(name.clone(), value.clone());
-            validate::<T>(&trial, field).map_err(|message| SettingsError::Invalid {
+            typed::<T>(&trial, field).map_err(|message| SettingsError::Invalid {
                 field: name.clone(),
                 message,
             })?;
             next.insert(name.clone(), value.clone());
         }
-        T::confirm(patch)?;
         let merged = self.effective_map(&next);
         let section: T = from_object(&merged).map_err(|e| {
             let field = fields.first().copied().unwrap_or(&T::FIELDS[0]);
+            // serde may quote any value of the patch: none, if one is a
+            // secret.
+            let message = if fields.iter().any(|f| f.secret) {
+                "Not a valid value.".to_string()
+            } else {
+                not_valid(field, e)
+            };
             SettingsError::Invalid {
                 field: field.name.to_string(),
-                message: not_valid(field, e),
+                message,
             }
         })?;
+        // Each patched field's own check again, on the section the whole
+        // patch makes: a check that compares fields sees the new values of
+        // all of them, and an error still names the field at fault (the
+        // first in display order).
+        let mut ordered = fields.clone();
+        ordered.sort_by_key(|f| T::FIELDS.iter().position(|x| x.name == f.name));
+        for f in &ordered {
+            section
+                .check(f.name)
+                .map_err(|message| SettingsError::Invalid {
+                    field: f.name.to_string(),
+                    message,
+                })?;
+        }
+        // The confirmations last, as B17 has them: after every field's own
+        // checks.
+        T::confirm(patch)?;
         // Saved as the section serializes them (e.g. a normalized address).
         let normalized = object(&section);
         let out: Changes = fields
@@ -605,6 +630,13 @@ fn apply_changes(saved: &mut Map<String, Value>, changes: &Changes) {
 /// Checks `field` of the section `m` makes: its type, its bounds and the
 /// section's own check.
 fn validate<T: Section>(m: &Map<String, Value>, field: &Field) -> Result<T, String> {
+    let section = typed::<T>(m, field)?;
+    section.check(field.name)?;
+    Ok(section)
+}
+
+/// Checks `field` of the section `m` makes: its type and bounds.
+fn typed<T: Section>(m: &Map<String, Value>, field: &Field) -> Result<T, String> {
     let section: T = from_object(m).map_err(|e| not_valid(field, e))?;
     if let (Some((min, max)), Some(v)) = (field.range, m.get(field.name))
         && !v.is_null()
@@ -616,7 +648,6 @@ fn validate<T: Section>(m: &Map<String, Value>, field: &Field) -> Result<T, Stri
             return Err(format!("Must be from {min} to {max}."));
         }
     }
-    section.check(field.name)?;
     Ok(section)
 }
 
@@ -695,7 +726,7 @@ impl<T: Section> Erased for Entry<T> {
 
     fn plan(&self, patch: &Map<String, Value>) -> Result<Planned, SettingsError> {
         let (fields, section, changed) = Entry::plan(self, patch)?;
-        let revision = self.lock().revision + u64::from(changed);
+        let revision = self.lock().revision.saturating_add(u64::from(changed));
         Ok(Planned {
             fields,
             section: Box::new(section),
@@ -886,6 +917,31 @@ impl Registry {
     }
 
     fn register<T: Section>(&mut self, config: &Config) -> Result<(), lodestar_store::Error> {
+        // Saved values are plain JSON text in the store. A secret must be
+        // sealed (the integrations `SecretStore`, context
+        // `settings.<section>.<field>`) before a section may have one.
+        assert!(
+            T::FIELDS.iter().all(|f| !f.secret),
+            "settings section {}: secret fields need sealed storage, which the registry doesn't have yet",
+            T::SECTION
+        );
+        self.register_unchecked::<T>(config)
+    }
+
+    /// [`Registry::register`] without the secret check: the tests hold the
+    /// redaction rules the first sealed secret will rely on.
+    #[cfg(test)]
+    fn register_with_secrets<T: Section>(
+        &mut self,
+        config: &Config,
+    ) -> Result<(), lodestar_store::Error> {
+        self.register_unchecked::<T>(config)
+    }
+
+    fn register_unchecked<T: Section>(
+        &mut self,
+        config: &Config,
+    ) -> Result<(), lodestar_store::Error> {
         assert!(
             self.sections.iter().all(|s| s.name() != T::SECTION),
             "settings section {} registered twice",

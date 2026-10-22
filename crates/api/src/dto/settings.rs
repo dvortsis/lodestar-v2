@@ -141,10 +141,17 @@ pub struct SectionValues {
 /// section's `revision` the edit started from; a save over a newer one is
 /// refused with `409 stale_revision`) and a section's confirmations
 /// (`content`'s `confirm_adult`).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(transparent)]
 #[schema(value_type = Object, example = json!({ "if_revision": 3, "intensity": "low", "timeout_secs": 12 }))]
 pub struct SettingsPatch(pub Map<String, Value>);
+
+/// The keys only: a patch can carry a secret field's new value.
+impl std::fmt::Debug for SettingsPatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_set().entries(self.0.keys()).finish()
+    }
+}
 
 /// `PATCH /settings` and `POST /settings/preview`: patches for several
 /// sections, `{section: {field: value}}`, each as `PATCH
