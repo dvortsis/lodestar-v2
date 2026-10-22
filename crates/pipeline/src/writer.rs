@@ -9,16 +9,16 @@
 //! that waits on it.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use lodestar_cluster::{Lease, WorkerId};
-use lodestar_filter::{Action, Decision, Handle, Item, Sealer};
+use lodestar_filter::{Action, Decision, Facts, Handle, HeldSet, Item, Sealer};
 use lodestar_metainfo::InfoHash;
 use lodestar_sources::{Discovery, Funnel, FunnelCounts, Loss, Stage};
 use lodestar_store::{
-    CohortCount, Counter, Event, Filtered, Held, Inserted, PreparedTorrent, QueuedKey, SourceId,
-    Store, Touch, WriteBatch, flags,
+    CohortCount, Counter, Event, Filtered, Held, Inserted, PreparedTorrent, QueuedKey, SHADOW,
+    SourceId, Store, Touch, WriteBatch, flags,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, interval_at};
@@ -27,7 +27,7 @@ use crate::coordinator::Coordinator;
 use crate::have::{Bloom, Have, capacity_for};
 use crate::rollups::{Rollups, metric};
 use crate::worker::{Results, collect};
-use crate::{HeldSet, event, unix_now};
+use crate::{event, unix_now};
 
 #[derive(Debug, Clone)]
 pub(crate) struct WriterConfig {
@@ -88,6 +88,8 @@ pub(crate) struct Writer {
     /// it has found nothing left to do.
     pub backfill_after: i64,
     pub backfill_done: bool,
+    /// Starts another background-enrichment pass (see `PipelineConfig`).
+    pub reenrich: Arc<AtomicBool>,
     pub cfg: WriterConfig,
     pub have: Arc<Have>,
     pub funnel: Arc<FunnelCounts>,
@@ -108,6 +110,8 @@ struct Committing {
     /// The authoritative filter verdict, and the sealed name for a
     /// quarantine.
     verdict: Option<Decision>,
+    /// What rules in shadow mode would have done (logged only).
+    shadow: Vec<Decision>,
     sealed: Option<Vec<u8>>,
 }
 
@@ -152,6 +156,10 @@ impl Writer {
                 // fair share between ingest batches.
                 () = std::future::ready(()), if !self.backfill_done => self.backfill().await,
                 _ = flush.tick() => {
+                    if self.reenrich.swap(false, Ordering::AcqRel) {
+                        self.backfill_after = 0;
+                        self.backfill_done = false;
+                    }
                     self.commit(Vec::new(), Vec::new(), Vec::new(), &io.retry).await;
                     if unix_now() - self.last_purge >= PURGE_EVERY {
                         self.purge().await;
@@ -186,17 +194,29 @@ impl Writer {
         let engine = self.filter.current();
         for c in &mut committing {
             let r = &mut c.results;
-            c.verdict = if r.worker == WorkerId::LOCAL && r.version == engine.version {
-                r.verdict.take()
+            let verdict = if r.worker == WorkerId::LOCAL && r.version == engine.version {
+                std::mem::take(&mut r.verdict)
             } else {
+                let now = unix_now();
                 let hashes: Vec<[u8; 20]> = r.torrent.swarm_hashes().map(|h| h.0).collect();
-                engine.judge(&Item {
+                let facts = Facts {
+                    class: &r.class,
+                    size: r.torrent.size,
+                    piece_len: r.torrent.piece_len,
+                    flags: r.torrent.flags,
+                    discovered_at: c.lease.discovered_at,
+                    now,
+                };
+                let item = Item {
                     hashes: &hashes,
                     name: &r.torrent.name,
                     files: &r.files,
-                    content_type: r.content_type,
-                })
+                    content_type: r.class.content_type,
+                };
+                engine.judge(&item, Some(&facts), now)
             };
+            c.verdict = verdict.decision;
+            c.shadow = verdict.shadow;
             if c.verdict
                 .as_ref()
                 .is_some_and(|h| h.action == Action::Quarantine)
@@ -255,6 +275,7 @@ impl Writer {
                     results: r,
                     lease,
                     verdict: None,
+                    shadow: Vec::new(),
                     sealed: None,
                 })
             })
@@ -369,9 +390,11 @@ impl Writer {
     async fn backfill(&mut self) {
         let store = self.store.take().expect("store");
         let after = self.backfill_after;
+        let engine = self.filter.current();
         let (store, result) = tokio::task::spawn_blocking(move || {
             let mut store = store;
-            let result = crate::enrich::enrich_stored(&mut store, after, BACKFILL_BATCH);
+            let result =
+                crate::enrich::enrich_stored_with(&mut store, after, BACKFILL_BATCH, Some(&engine));
             (store, result)
         })
         .await
@@ -457,55 +480,41 @@ fn transaction(
     };
     let (blocked, accepted): (Vec<usize>, Vec<usize>) =
         (0..committing.len()).partition(|&i| held(&committing[i]).is_some());
-    let filtered_hashes: Vec<Vec<[u8; 20]>> = blocked
+    // One hit per decision (held, marked or shadow), for the review
+    // queue and the replay (§20.7).
+    let records: Vec<(usize, &Decision, bool)> = committing
         .iter()
-        .map(|&i| {
-            committing[i]
-                .results
-                .torrent
-                .swarm_hashes()
-                .map(|h| h.0)
-                .collect()
+        .enumerate()
+        .flat_map(|(i, c)| {
+            c.verdict
+                .iter()
+                .map(move |d| (i, d, false))
+                .chain(c.shadow.iter().map(move |d| (i, d, true)))
         })
         .collect();
-    let evidence: Vec<Vec<u8>> = blocked
+    let hashes: Vec<Vec<[u8; 20]>> = committing
         .iter()
-        .map(|&i| {
-            committing[i]
-                .verdict
-                .as_ref()
-                .map(Decision::evidence_codes)
-                .unwrap_or_default()
-        })
+        .map(|c| c.results.torrent.swarm_hashes().map(|h| h.0).collect())
         .collect();
-    let rules: Vec<String> = blocked
+    let owned: Vec<(String, Vec<u8>)> = records
         .iter()
-        .map(|&i| {
-            committing[i]
-                .verdict
-                .as_ref()
-                .map(|d| d.rule.id())
-                .unwrap_or_default()
-        })
+        .map(|(_, d, _)| (d.rule.id(), d.evidence_codes()))
         .collect();
-    let filtered: Vec<Filtered<'_>> = blocked
+    let filtered: Vec<Filtered<'_>> = records
         .iter()
-        .zip(&filtered_hashes)
-        .zip(&evidence)
-        .zip(&rules)
-        .filter_map(|(((&i, hashes), evidence), rule)| {
+        .zip(&owned)
+        .map(|(&(i, d, shadow), (rule, evidence))| {
             let c = &committing[i];
-            let hit = c.verdict.as_ref()?;
-            Some(Filtered {
-                hashes,
+            Filtered {
+                hashes: &hashes[i],
                 rule,
-                action: hit.action.code(),
-                held: held(c),
-                sealed: c.sealed.as_deref(),
+                action: d.action.code() | if shadow { SHADOW } else { 0 },
+                held: if shadow { None } else { held(c) },
+                sealed: c.sealed.as_deref().filter(|_| !shadow),
                 evidence,
                 at: now,
                 expires_at: quarantine_until,
-            })
+            }
         })
         .collect();
     let prepared: Vec<PreparedTorrent<'_>> = accepted
@@ -524,7 +533,7 @@ fn transaction(
                     flags::PRIVATE_SOURCE
                 } else {
                     0
-                },
+                } | marks(committing[i].verdict.as_ref()),
                 source: lease.source,
                 verified: true,
             }
@@ -585,6 +594,17 @@ fn transaction(
             .map(Option::is_some)
             .collect(),
     })
+}
+
+/// The flag bits for a rule that keeps a torrent but changes how it's
+/// shown (§20.3).
+fn marks(decision: Option<&Decision>) -> i64 {
+    match decision.map(|d| d.action) {
+        Some(Action::Hide) => flags::HIDDEN,
+        Some(Action::Demote) => flags::DEMOTED,
+        Some(Action::Flag) => flags::FLAGGED,
+        _ => 0,
+    }
 }
 
 fn bit(source: SourceId) -> u64 {

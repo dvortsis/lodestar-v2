@@ -8,6 +8,7 @@
 //! `Origin` must match `Host`.
 
 pub mod auth;
+pub mod filters;
 mod torrents;
 
 use std::net::{IpAddr, SocketAddr};
@@ -43,6 +44,8 @@ pub struct ApiState {
     pub index: Option<SearchIndex>,
     /// A read-only connection for detail and enrichment.
     pub reader: Arc<Mutex<Store>>,
+    /// `None` when the filters API isn't served (tests, tools).
+    pub filters: Option<Arc<filters::FiltersApi>>,
 }
 
 /// An API error: a status and a JSON body.
@@ -83,6 +86,22 @@ pub fn router(state: ApiState) -> Router {
         .route("/torrents/{hash}", get(torrents::detail))
         .route("/torrents/{hash}/files", get(torrents::files))
         .route("/password", post(change_password))
+        .route("/filters", get(filters::overview))
+        .route("/filters/queue", get(filters::queue))
+        .route("/filters/fixtures", get(filters::fixtures))
+        .route("/filters/test", post(filters::test))
+        .route("/classify", get(filters::classes))
+        .route("/classify/correct", post(filters::correct))
+        .route("/classify/rules", post(filters::add_class_rule))
+        .route("/classify/rules/remove", post(filters::remove_class_rule))
+        .route("/filters/preview", post(filters::preview))
+        .route("/filters/preview/jobs", post(filters::start_preview))
+        .route("/filters/preview/jobs/{id}", get(filters::preview_job))
+        .route(
+            "/filters/preview/jobs/{id}/cancel",
+            post(filters::cancel_preview),
+        )
+        .route("/filters/apply", post(filters::apply))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_session,
@@ -287,6 +306,8 @@ struct SearchParams {
     sort: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
+    /// Include torrents a filter rule hid (§20.3).
+    hidden: Option<bool>,
 }
 
 fn sort_param(s: Option<&str>) -> ApiResult<Sort> {
@@ -365,10 +386,15 @@ async fn run_search(s: ApiState, p: SearchParams) -> ApiResult<Json<Value>> {
         ));
     }
     let reader = s.reader.clone();
+    let shown = if p.hidden.unwrap_or(false) {
+        ast.clone()
+    } else {
+        ast.clone().without_hidden()
+    };
     tokio::task::spawn_blocking(move || {
         let started = Instant::now();
         let (results, stemmed) = index
-            .search_with_fallback(&ast, unix_now(), sort, limit, offset)
+            .search_with_fallback(&shown, unix_now(), sort, limit, offset)
             .map_err(internal)?;
         let store = reader.lock().expect("reader lock");
         let mut hits = Vec::with_capacity(results.hits.len());

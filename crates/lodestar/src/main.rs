@@ -288,8 +288,21 @@ async fn serve(config: Config) -> Result<(), BoxError> {
         );
     }
     let filter = pipeline_config.filter.clone();
+    let held = pipeline_config.held.clone();
+    let sealer = pipeline_config.sealer.clone();
+    let reenrich = pipeline_config.reenrich.clone();
     let pipeline = Pipeline::start(pipeline_config, store, plugins).await?;
     let control = Arc::new(Mutex::new(control));
+    let filters = Arc::new(lodestar_api::filters::FiltersApi {
+        store: control.clone(),
+        engine: filter.clone(),
+        held,
+        sealer,
+        ips: ips.clone(),
+        index: live.as_ref().map(|(index, _)| index.clone()),
+        reenrich,
+        jobs: Default::default(),
+    });
     let (stop_subscriptions, subscriptions_stopped) = tokio::sync::watch::channel(false);
     let refresher = tokio::spawn(subscriptions::run(
         control.clone(),
@@ -303,6 +316,7 @@ async fn serve(config: Config) -> Result<(), BoxError> {
         auth,
         index: live.as_ref().map(|(index, _)| index.clone()),
         reader: reader.clone(),
+        filters: Some(filters),
     };
     let state = http::AppState {
         monitor: pipeline.monitor(),

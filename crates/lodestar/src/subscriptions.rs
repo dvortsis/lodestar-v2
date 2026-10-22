@@ -8,12 +8,11 @@
 //! into one set that the DHT, the fetch pool and the scraper consult
 //! before talking to anyone.
 
-use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lodestar_filter::lists::{self, Format, IpSet, SharedIps};
-use lodestar_filter::{Action, Handle, ListLayer};
+use lodestar_filter::{Action, Handle};
 use lodestar_store::{NewSubscription, Refresh, Store, Subscription};
 use tokio::sync::watch;
 
@@ -67,8 +66,6 @@ pub const CATALOG: &[CatalogEntry] = &[
 const MAX_SHRINK: f64 = 0.5;
 /// Or that grows more than this many times.
 const MAX_GROWTH: i64 = 10;
-/// IP lists covering more than this share of IPv4 get a warning.
-const BROAD: f64 = 0.10;
 /// How often due subscriptions are looked for.
 const TICK: Duration = Duration::from_secs(60);
 
@@ -145,65 +142,7 @@ pub fn sync_config(store: &mut Store, c: &Subscriptions) -> Result<(), String> {
     Ok(())
 }
 
-/// Rebuilds the filter's list layers and the shared IP set from every
-/// enabled subscription's applied version.
-pub fn apply(store: &Store, filter: &Handle, ips: &SharedIps) -> Result<(), String> {
-    let subs = store.subscriptions().map_err(|e| e.to_string())?;
-    let mut ip_sets = Vec::new();
-    let mut content = Vec::new();
-    for s in &subs {
-        let data = if s.enabled {
-            store
-                .subscription_data(s.id, false)
-                .map_err(|e| e.to_string())?
-        } else {
-            None
-        };
-        match s.kind {
-            IP => {
-                if let Some(set) = data.as_deref().and_then(IpSet::decode) {
-                    ip_sets.push(set);
-                }
-            }
-            _ => {
-                let hashes = data.map(|d| {
-                    Arc::new(
-                        d.chunks_exact(20)
-                            .map(|c| <[u8; 20]>::try_from(c).expect("20 bytes"))
-                            .collect::<HashSet<_>>(),
-                    )
-                });
-                content.push((s, hashes));
-            }
-        }
-    }
-    let set = IpSet::union(&ip_sets);
-    let coverage = set.v4_coverage();
-    if coverage > BROAD {
-        tracing::warn!(
-            "subscribed IP lists block {:.0}% of IPv4 addresses; the crawler will see \
-             correspondingly less of the DHT",
-            coverage * 100.0
-        );
-    }
-    ips.replace(set);
-    filter.update_engine(|e| {
-        for (s, hashes) in content {
-            let id = s.id as u32;
-            if s.floor {
-                e.core.cs.set_list(id, hashes);
-                e.set_list(None, id);
-            } else {
-                let action = Action::from_code(s.action)
-                    .filter(|a| a.protective())
-                    .unwrap_or(Action::Drop);
-                e.set_list(hashes.map(|hashes| ListLayer { id, action, hashes }), id);
-                e.core.cs.set_list(id, None);
-            }
-        }
-    });
-    Ok(())
-}
+pub use lodestar_filter::lists::apply;
 
 /// The HTTP client (§16: reqwest on rustls with ring, as the tracker
 /// scraper uses).
@@ -500,6 +439,7 @@ mod tests {
     use crate::config::SubscribedList;
     use lodestar_filter::{CoreRule, Engine, Item, RuleRef};
     use lodestar_store::StoreConfig;
+    use std::collections::HashSet;
     use std::net::IpAddr;
 
     #[test]
@@ -664,7 +604,7 @@ mod tests {
             files: &[],
             content_type: lodestar_classify::ContentType::Other,
         };
-        let da = e.judge(&item(&[[0xaa; 20]])).unwrap();
+        let da = e.judge(&item(&[[0xaa; 20]]), None, 0).decision.unwrap();
         assert!(matches!(da.rule, RuleRef::List(_)));
         assert_eq!(da.action, Action::Drop);
         let db = e.blocked_hash(&[[0xbb; 20]]).unwrap();
@@ -678,7 +618,7 @@ mod tests {
             apply(&s, &filter, &ips).unwrap();
         }
         let e = filter.current();
-        assert!(e.judge(&item(&[[0xaa; 20]])).is_none());
+        assert!(e.judge(&item(&[[0xaa; 20]]), None, 0).decision.is_none());
         assert!(e.blocked_hash(&[[0xbb; 20]]).is_none());
     }
 
