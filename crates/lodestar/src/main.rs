@@ -7,6 +7,7 @@ mod floor;
 mod http;
 mod metrics;
 mod services;
+mod settings;
 mod subscriptions;
 mod web;
 #[cfg(test)]
@@ -206,12 +207,8 @@ fn main() -> ExitCode {
 }
 
 fn init_logging(filter: &str) {
-    let filter = tracing_subscriber::EnvFilter::try_new(filter)
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(std::io::stderr)
-        .init();
+    // Reloadable: a saved `log_level` applies while serving.
+    settings::log::init(filter);
 }
 
 async fn serve(config: Config) -> Result<(), BoxError> {

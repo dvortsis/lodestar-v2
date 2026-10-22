@@ -1,0 +1,2 @@
+422
+{"error":{"code":"invalid_setting","field":"intensity","message":"Not a valid value: unknown variant `turbo`, expected one of `low`, `balanced`, `aggressive`."}}

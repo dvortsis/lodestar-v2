@@ -397,6 +397,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every settings section, with the fields and JSON schema its form is
+         *     generated from.
+         */
+        get: operations["listSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings/{section}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One section's effective values, where each comes from, and which
+         *     can't be changed here or wait for a restart.
+         */
+        get: operations["getSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Changes some of a section's settings. Every field is checked first,
+         *     then all are saved together; live ones apply at once, and the rest
+         *     are listed in `restart_required`. A field an environment variable
+         *     sets is refused, naming the variable.
+         */
+        patch: operations["patchSettings"];
+        trace?: never;
+    };
     "/setup": {
         parameters: {
             query?: never;
@@ -1297,6 +1343,136 @@ export interface components {
             total: number;
         };
         /**
+         * @description `GET /settings/{section}` and `PATCH /settings/{section}`: the
+         *     section's effective values.
+         * @example {
+         *       "fields": {
+         *         "intensity": {
+         *           "env": null,
+         *           "read_only": false,
+         *           "restart_required": false,
+         *           "source": "db",
+         *           "value": "low"
+         *         },
+         *         "timeout_secs": {
+         *           "env": null,
+         *           "read_only": false,
+         *           "restart_required": true,
+         *           "source": "db",
+         *           "value": 12
+         *         }
+         *       },
+         *       "restart_required": [
+         *         "timeout_secs"
+         *       ],
+         *       "section": "crawler"
+         *     }
+         */
+        SectionValues: {
+            fields: {
+                [key: string]: components["schemas"]["SettingValue"];
+            };
+            /**
+             * @description Fields whose saved value differs from the running one: they take
+             *     effect at the next restart.
+             */
+            restart_required: string[];
+            section: string;
+        };
+        /** @description One field of a section, for its form. */
+        SettingField: {
+            /** @description The environment variable that overrides it; null when none does. */
+            env: string | null;
+            /** @description Message key of the help text beside the field. */
+            help_key: string;
+            /** @description Message key of the field's label. */
+            label_key: string;
+            name: string;
+            /** @description Never editable in the app (e.g. the data directory). */
+            read_only: boolean;
+            /** @description A change takes effect at the next restart. */
+            restart_required: boolean;
+        };
+        /**
+         * @description Where a setting's effective value comes from, lowest to highest:
+         *     the built-in default, `config.toml`, a change saved in the app, or a
+         *     `LODESTAR_*` environment variable.
+         * @enum {string}
+         */
+        SettingSource: "default" | "file" | "db" | "env";
+        /** @description One field's effective value. */
+        SettingValue: {
+            /** @description The variable that set it when `source` is `env`; null otherwise. */
+            env: string | null;
+            /**
+             * @description Can't be changed in the app: set by the environment, or never
+             *     editable here.
+             */
+            read_only: boolean;
+            /** @description A change takes effect at the next restart. */
+            restart_required: boolean;
+            source: components["schemas"]["SettingSource"];
+            /** @description Any JSON value, of the type the section's schema gives the field. */
+            value: unknown;
+        };
+        /**
+         * @description `GET /settings`: every section, in display order.
+         * @example {
+         *       "sections": [
+         *         {
+         *           "fields": [
+         *             {
+         *               "env": "LODESTAR_INTENSITY",
+         *               "help_key": "settings.crawler.intensity.help",
+         *               "label_key": "settings.crawler.intensity.label",
+         *               "name": "intensity",
+         *               "read_only": false,
+         *               "restart_required": false
+         *             }
+         *           ],
+         *           "help_key": "settings.crawler.help",
+         *           "label_key": "settings.crawler.label",
+         *           "schema": {
+         *             "additionalProperties": false,
+         *             "properties": {
+         *               "intensity": {
+         *                 "enum": [
+         *                   "low",
+         *                   "balanced",
+         *                   "aggressive"
+         *                 ],
+         *                 "type": "string"
+         *               }
+         *             },
+         *             "type": "object"
+         *           },
+         *           "section": "crawler"
+         *         }
+         *       ]
+         *     }
+         */
+        SettingsIndex: {
+            sections: components["schemas"]["SettingsSection"][];
+        };
+        /**
+         * @description `PATCH /settings/{section}`: some of the section's fields and their
+         *     new values, as its schema in `GET /settings` describes. Fields left
+         *     out keep their values; an unknown field is refused.
+         */
+        SettingsPatch: Record<string, never>;
+        /** @description One section: its fields and the JSON schema of its values. */
+        SettingsSection: {
+            fields: components["schemas"]["SettingField"][];
+            help_key: string;
+            label_key: string;
+            /**
+             * @description A JSON Schema (2020-12) object for the section's values, with
+             *     each number field's bounds as `minimum`/`maximum`.
+             */
+            schema: Record<string, never>;
+            section: string;
+        };
+        /**
          * @description `POST /setup`: claims the instance.
          *     `Debug` redacts the secrets.
          */
@@ -2059,6 +2235,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SearchResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsIndex"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The section, as `GET /settings` names it. */
+                section: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SectionValues"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    patchSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The section, as `GET /settings` names it. */
+                section: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettingsPatch"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SectionValues"];
                 };
             };
             default: components["responses"]["Error"];
