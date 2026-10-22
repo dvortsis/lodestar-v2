@@ -197,13 +197,14 @@ pub fn follow_control(mut rx: watch::Receiver<Crawler>, control: Control) -> Joi
     rx.borrow_and_update();
     tokio::spawn(async move {
         while rx.changed().await.is_ok() {
-            let now = rx.borrow_and_update().clone();
-            if let Err(e) = control.set_paused(now.paused).await {
-                tracing::error!("crawler: applying the pause failed: {e}");
-            }
-            if let Err(e) = control.note_intensity(now.intensity.into()).await {
-                tracing::error!("crawler: recording the intensity failed: {e}");
-            }
+            // The value as it is when the control's lock is taken, not
+            // when the change was seen (see `Control::sync`).
+            control
+                .sync(|| {
+                    let now = rx.borrow_and_update();
+                    (now.paused, now.intensity.into())
+                })
+                .await;
         }
     })
 }

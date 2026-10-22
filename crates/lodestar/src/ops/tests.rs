@@ -153,6 +153,7 @@ async fn fixture() -> Fixture {
     settings::crawler::follow_control(registry.subscribe(), control.clone());
     let ops = Arc::new(Ops::new(
         control,
+        registry.subscribe(),
         pipeline.monitor(),
         None,
         dir.path().to_path_buf(),
@@ -557,6 +558,91 @@ async fn sources_and_the_network_check() {
     f.stop().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_toggles_leave_the_process_as_the_registry_says() {
+    let f = fixture().await;
+    let cookie = f.session().await;
+    for round in 0..5 {
+        let mut calls = tokio::task::JoinSet::new();
+        for i in 0..16 {
+            let path = if (i + round) % 2 == 0 {
+                "pause"
+            } else {
+                "resume"
+            };
+            let mut r = req(
+                "POST",
+                &format!("/api/v1/crawler/{path}"),
+                &cookie,
+                Some("{}"),
+            );
+            r.extensions_mut()
+                .insert(ConnectInfo(SocketAddr::from(([10, 9, 0, 1], 1))));
+            let app = f.app.clone();
+            calls.spawn(async move { app.oneshot(r).await.unwrap().status().as_u16() });
+        }
+        while let Some(status) = calls.join_next().await {
+            assert_eq!(status.unwrap(), 200);
+        }
+        // Whatever order they finished in, the process is as saved.
+        let saved = f.registry.get::<settings::crawler::Crawler>().paused;
+        assert_eq!(f.ops.control.status().paused, saved, "round {round}");
+        // And so is the DHT node, which applies it in its own task.
+        for _ in 0..200 {
+            if node_paused(&f.dht).await == Some(saved) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert_eq!(node_paused(&f.dht).await, Some(saved), "round {round}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dht_disabled_in_the_store_reads_as_off() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let dht = Arc::new(DhtSource::new(lodestar_dht::node::Config {
+        bind: vec![SocketAddr::from(([127, 0, 0, 1], free_udp_port()))],
+        bootstrap: Vec::new(),
+        ..lodestar_dht::node::Config::default()
+    }));
+    {
+        let m = dht.manifest();
+        let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        let id = store.register_source(m.id, m.version, 0).unwrap();
+        store
+            .set_source_state(id, lodestar_store::SourceState::Disabled)
+            .unwrap();
+    }
+    let pipeline = Pipeline::start_with(
+        PipelineConfig::default(),
+        Store::open(&db, StoreConfig::default()).unwrap(),
+        vec![dht.clone(), Arc::new(Feed)],
+        Arc::new(Counting(Arc::default())),
+    )
+    .await
+    .unwrap();
+    let store = Arc::new(Mutex::new(
+        Store::open(&db, StoreConfig::default()).unwrap(),
+    ));
+    let control = Control::start(
+        pipeline.monitor(),
+        Some(dht),
+        store,
+        false,
+        Intensity::Balanced,
+    )
+    .await
+    .unwrap();
+    // Not `bootstrapping` forever: off, and nothing to show.
+    let check = control.network();
+    assert_eq!(check.reach.reason, control::ReachReason::DhtOff);
+    assert_eq!(check.reach.reachable, None);
+    assert_eq!(control.status().dht, None);
+    pipeline.shutdown().await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_pause_survives_a_restart() {
     let mut f = fixture().await;
@@ -622,11 +708,15 @@ fn the_first_run_log_names_a_reachable_address() {
 }
 
 #[test]
-fn index_lag_needs_both_commits() {
-    assert_eq!(index_lag(0, 0), None);
+fn index_lag_is_zero_when_level() {
+    // Nothing new stored: the index has nothing to catch up with.
+    assert_eq!(index_lag(0, 0), Some(0));
+    assert_eq!(index_lag(0, 100), Some(0));
+    // New torrents, no index commit yet: unknown.
     assert_eq!(index_lag(100, 0), None);
-    assert_eq!(index_lag(0, 100), None);
     assert_eq!(index_lag(105, 100), Some(5));
+    // The index committed after the last new torrent: level, however
+    // long ago that was (rediscoveries don't move `last_stored`).
     assert_eq!(index_lag(100, 105), Some(0));
 }
 
