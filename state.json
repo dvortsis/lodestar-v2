@@ -226,10 +226,10 @@
    "merge": "8c1159e"
   },
   "W9": {
-   "status": "running",
+   "status": "review",
    "model": "sonnet",
    "session": "session_01HpQ4gCiiJq5eRwciaE8Lus",
-   "pr": null,
+   "pr": 103,
    "attempt": 0,
    "review_rounds": 0,
    "notes": "launched 22:38; deps W7ab,W7cd,W5,W3 merged"
@@ -1105,7 +1105,8 @@
  },
  "heartbeats": 4,
  "reviews_in_flight": [
-  "88"
+  "88",
+  103
  ],
  "carry_forward": {
   "next-bans-touch": [
