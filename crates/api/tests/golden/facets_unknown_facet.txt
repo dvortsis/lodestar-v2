@@ -1,0 +1,2 @@
+400
+{"error":{"code":"unknown_facet","field":"limit.seeders","message":"There's no facet \"seeders\": use one of type, ext, res, category, lang, group, codec, audio, hdr, private, v2, has, ambiguous, imported, backfill, adult."}}
