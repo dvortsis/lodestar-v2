@@ -1,0 +1,59 @@
+# Lodestar: run with `docker compose up -d`, then open http://localhost:8090.
+# The first-run setup token is in the log: `docker compose logs lodestar`.
+#
+# Docs: packaging/docker/README.md
+services:
+  lodestar:
+    image: ghcr.io/dvortsis/lodestar-v2:latest
+    container_name: lodestar
+    restart: unless-stopped
+    # Shutdown flushes the index and database (architecture §12); give it
+    # more than Docker's default 10 s.
+    stop_grace_period: 60s
+
+    # The account the process runs as. The image has no shell, so it can't
+    # switch users itself yet (PUID/PGID are not supported): pick the
+    # account here. Without this line it runs as distroless "nonroot"
+    # (65532:65532). The data directory must be writable by this account.
+    # To run as another account, use a bind mount owned by it (for 1000:1000:
+    # `mkdir data && sudo chown 1000:1000 data`, `- ./data:/data` below). A
+    # named volume is created owned by 65532.
+    user: "65532:65532"
+
+    environment:
+      # Accepted, but log timestamps are UTC today (the tracing timer is UTC).
+      TZ: Etc/UTC
+      # LODESTAR_INTENSITY: balanced   # low | balanced | aggressive
+      # LODESTAR_LOG: info             # error | warn | info | debug
+
+    volumes:
+      # Index, database and settings. A named volume keeps ownership simple;
+      # for a bind mount use a local-disk path (SSD/NVMe), not a network share.
+      - lodestar-data:/data
+
+    # --- Networking ----------------------------------------------------
+    # Default: bridge networking with explicit port mappings.
+    #   8090/tcp  web UI and API
+    #   6881/udp  DHT (forward this one on your router for the best reach)
+    #   6881/tcp  reserved for incoming peer connections; nothing listens yet
+    ports:
+      - "8090:8090/tcp"
+      - "6881:6881/udp"
+      - "6881:6881/tcp"
+
+    # For better DHT reachability on Linux, host networking skips Docker's
+    # UDP NAT, so remote nodes see the real address and port. To use it,
+    # delete the `ports:` block above and uncomment the next line. The
+    # container then binds 8090 and 6881 on the host directly (the
+    # LODESTAR_HTTP_BIND and LODESTAR_DHT_PORT variables change them). Host
+    # networking doesn't work on Docker Desktop for Mac or Windows.
+    # network_mode: host
+
+    # IPv6: Docker's default bridge is IPv4-only. To use IPv6 in bridge mode,
+    # enable it on the daemon (`"ipv6": true` and a `fixed-cidr-v6` in
+    # daemon.json) or on a user-defined network (`enable_ipv6: true`, with an
+    # IPv6 subnet), and publish the ports as usual. With `network_mode: host`
+    # the container uses the host's IPv6 addresses as they are.
+
+volumes:
+  lodestar-data:
