@@ -1,0 +1,104 @@
+/* Overlay motion (design-tokens.md §9): transform and opacity only. Durations are tokens, which
+   `prefers-reduced-motion: reduce` redefines to 0ms except --duration-reduced-fade. */
+@keyframes ls-fade-in {
+	from {
+		opacity: 0;
+	}
+}
+@keyframes ls-fade-out {
+	to {
+		opacity: 0;
+	}
+}
+@keyframes ls-slide-right-in {
+	from {
+		transform: translateX(100%);
+	}
+}
+@keyframes ls-slide-right-out {
+	to {
+		transform: translateX(100%);
+	}
+}
+@keyframes ls-slide-left-in {
+	from {
+		transform: translateX(-100%);
+	}
+}
+@keyframes ls-slide-left-out {
+	to {
+		transform: translateX(-100%);
+	}
+}
+@keyframes ls-slide-bottom-in {
+	from {
+		transform: translateY(100%);
+	}
+}
+@keyframes ls-slide-bottom-out {
+	to {
+		transform: translateY(100%);
+	}
+}
+
+.ls-pop[data-state='delayed-open'],
+.ls-pop[data-state='instant-open'],
+.ls-pop[data-state='open'],
+.ls-overlay[data-state='open'],
+.ls-dialog[data-state='open'] {
+	animation: ls-fade-in var(--duration-fast) var(--ease-out);
+}
+.ls-pop[data-state='closed'] {
+	animation: ls-fade-out var(--duration-popover-out) var(--ease-in) forwards;
+}
+.ls-overlay[data-state='closed'],
+.ls-dialog[data-state='closed'] {
+	animation: ls-fade-out var(--duration-drawer-out) var(--ease-in) forwards;
+}
+
+.ls-sheet[data-state='open'] {
+	animation: var(--ls-slide-in) var(--duration-drawer-in) var(--ease-out);
+}
+.ls-sheet[data-state='closed'] {
+	animation: var(--ls-slide-out) var(--duration-drawer-out) var(--ease-in) forwards;
+}
+.ls-sheet[data-side='right'] {
+	--ls-slide-in: ls-slide-right-in;
+	--ls-slide-out: ls-slide-right-out;
+}
+.ls-sheet[data-side='left'] {
+	--ls-slide-in: ls-slide-left-in;
+	--ls-slide-out: ls-slide-left-out;
+}
+.ls-sheet[data-side='bottom'] {
+	--ls-slide-in: ls-slide-bottom-in;
+	--ls-slide-out: ls-slide-bottom-out;
+}
+
+.ls-drawer {
+	animation: ls-slide-right-in var(--duration-drawer-in) var(--ease-out);
+}
+
+/* Reduced motion keeps only a short opacity crossfade. */
+@media (prefers-reduced-motion: reduce) {
+	.ls-pop[data-state='delayed-open'],
+	.ls-pop[data-state='instant-open'],
+	.ls-pop[data-state='open'],
+	.ls-overlay[data-state='open'],
+	.ls-dialog[data-state='open'],
+	.ls-sheet[data-state='open'],
+	.ls-drawer {
+		animation: ls-fade-in var(--duration-reduced-fade) var(--ease-out);
+	}
+	.ls-pop[data-state='closed'],
+	.ls-overlay[data-state='closed'],
+	.ls-dialog[data-state='closed'],
+	.ls-sheet[data-state='closed'] {
+		animation: ls-fade-out var(--duration-reduced-fade) var(--ease-in) forwards;
+	}
+}
+
+.ls-focus:focus-visible {
+	outline: var(--focus-ring-width) solid var(--color-primary);
+	outline-offset: var(--focus-ring-offset);
+}

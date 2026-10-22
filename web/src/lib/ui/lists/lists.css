@@ -1,0 +1,4 @@
+.ls-focus:focus-visible {
+	outline: var(--focus-ring-width) solid var(--color-primary);
+	outline-offset: calc(var(--focus-ring-width) * -1);
+}
