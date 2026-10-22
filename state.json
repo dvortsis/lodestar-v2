@@ -161,13 +161,13 @@
    "notes": "launched 14:14 after B5a merged | PR #69 opened; reviewer (+security) started 15:40 | 16:35 round 1 FIX: stale max_id race; futures-core approved by runner; session re-verify per heartbeat; lodestar composition test; topics dup field; W5 429 note. | 16:30 fixes b6105c7 verified by runner (ordering, take(), verify per heartbeat, serve.rs composition test); merge on green CI. Merged a97c63f 17:38."
   },
   "B8": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01MGoJoWccVxrfA2o7SDSEUh",
-   "pr": null,
+   "pr": 101,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": "launched 22:38; ext:m4-schema-settled satisfied (#32,#33 merged; no open PR edits MIGRATIONS)"
+   "notes": "launched 22:38; ext:m4-schema-settled satisfied (#32,#33 merged; no open PR edits MIGRATIONS) | 23:45 PR #101 head e80c7ba (IMMEDIATE via write_tx; after_user_delete stub to wire to #81). Reviewer started."
   },
   "B6": {
    "status": "merged",
@@ -1006,7 +1006,7 @@
    "status": "review",
    "model": "opus",
    "session": "session_01SK5Ci2FahQUSGQuDVozi28",
-   "notes": "follow-up of #87 review: max_id visible-only, replay toggle, swap adult test | 23:32 PR #104 (branch slice/B4b). Runner decision (\u00a72.19, content-safety strengthening): max_id null while Adult hidden. Reviewer started. | 23:43 review FIX at ce2fd15: null max_id not landed yet; sent full plan + I1 (keep lastId on visibility resync) + I2 note.",
+   "notes": "follow-up of #87 review: max_id visible-only, replay toggle, swap adult test | 23:32 PR #104 (branch slice/B4b). Runner decision (\u00a72.19, content-safety strengthening): max_id null while Adult hidden. Reviewer started. | 23:43 review FIX at ce2fd15: null max_id not landed yet; sent full plan + I1 (keep lastId on visibility resync) + I2 note. | 23:43 5ee6501 null max_id landed; I1 lastId pending.",
    "pr": 104
   },
   "runner-secure-delete": {
@@ -1112,7 +1112,8 @@
  },
  "heartbeats": 4,
  "reviews_in_flight": [
-  "88"
+  "88",
+  101
  ],
  "carry_forward": {
   "next-bans-touch": [
