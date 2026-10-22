@@ -39,7 +39,7 @@ pub(crate) fn enrich(name: &str, files: &[File], encoding: TextEncoding) -> Enri
         content_type: c.content_type.code(),
         junk_score: c.junk.score,
         comp: c.composition.encode(),
-        data: Record::new(&c, &files).encode(),
+        data: Record::new(&c).encode(),
     }
 }
 

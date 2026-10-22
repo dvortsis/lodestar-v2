@@ -1421,10 +1421,11 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Storage reuses the V1 schema; there's no migration.**
   - `torrents.content_type`, `junk_score` and `comp` hold the filterable values.
   - `torrent_parsed(torrent_id, parser_ver, data)` holds the full record, which the index and the UI read back without classifying again.
-- **The record (`classify::Record`) is line-based text:** a `lodestar-enrichment 1` header, then `key<TAB>value` lines for the type, confidences, junk score and reasons, structure, largest file, depth and the effective release under `r.` keys. Each alternative title gets its own `r.alt` line, so a comma in a title survives.
+- **The record (`classify::Record`) is line-based text:** an `e1` header, then `key<TAB>value` lines for the type, confidences, junk score and reasons, structure, depth and the effective release under `r.` keys. Each alternative title gets its own `r.alt` line, so a comma in a title survives.
+  - Fields at their usual value (not ambiguous, full title confidence, no junk, no structure, depth 0, one extension) are left out. That took the synthetic corpus's mean from 244 to about 144 bytes, since the record is the store's second-largest table after file trees.
   - Control characters in values become spaces, so a crafted name can't add a line.
-  - Decoding is strict. An unknown key or a bad value is an error, and the record is derived again. The round-trip is property-tested.
-  - Typical records are 150–300 bytes. Text was chosen over a binary codec because it's small enough, it's readable in `sqlite3`, and the release fields can grow without a format change.
+  - Decoding is strict: an unknown key or a bad value is an error. The round-trip is property-tested. Any format change bumps `CLASSIFY_VERSION`, so stored records are derived again rather than left unreadable.
+  - Text was chosen over a binary codec because it's small enough, it's readable in `sqlite3`, and the release fields can grow without a format change.
 - **`ENRICHMENT_VERSION` = `PARSER_VERSION << 16 | CLASSIFY_VERSION`** is stored as `parser_ver`. Any parser or classifier change makes every stored record outdated.
 - **Background backfill in the writer:** torrents with no record or an outdated one (imports, rows stored before M3, an older parser) are enriched 256 at a time in id order, from an always-ready branch of the writer's loop. Fetch results and rediscoveries interleave with it, because the loop's select is unbiased.
   - Each batch appends to `reindex_log`, so the live indexer picks up the new fields.

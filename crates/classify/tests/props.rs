@@ -58,7 +58,7 @@ proptest! {
         prop_assert_eq!(Composition::decode(&c.composition.encode()), Ok(c.composition.clone()));
         prop_assert_eq!(&c, &classify(&name, &files), "deterministic");
         // The stored record reads back to the bytes it was written as.
-        let stored = Record::new(&c, &files).encode();
+        let stored = Record::new(&c).encode();
         let back = Record::decode(&stored);
         prop_assert!(back.is_ok(), "{back:?}");
         prop_assert_eq!(back.unwrap().encode(), stored);
