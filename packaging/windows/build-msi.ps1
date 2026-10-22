@@ -37,8 +37,11 @@ try {
   cargo wix --package lodestar --target $Target --no-build --nocapture `
     --include (Join-Path $PSScriptRoot 'main.wxs') `
     --install-version $Version `
-    --compiler-arg '-ext WixUtilExtension' `
-    --linker-arg '-ext WixUIExtension -ext WixUtilExtension' `
+    --compiler-arg '-ext' --compiler-arg 'WixUtilExtension' `
+    --compiler-arg '-ext' --compiler-arg 'WixFirewallExtension' `
+    --linker-arg '-ext' --linker-arg 'WixUIExtension' `
+    --linker-arg '-ext' --linker-arg 'WixUtilExtension' `
+    --linker-arg '-ext' --linker-arg 'WixFirewallExtension' `
     --output $msi
   if ($LASTEXITCODE -ne 0) { throw "cargo wix failed ($LASTEXITCODE)" }
 } finally { Pop-Location }
