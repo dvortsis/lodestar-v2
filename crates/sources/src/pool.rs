@@ -110,6 +110,9 @@ pub struct FetchedKey {
     pub strategy: u8,
     /// Unix seconds of the first discovery.
     pub discovered_at: i64,
+    /// Only private sources reported it (§18.7); the torrent is stored
+    /// flagged so it's never scraped publicly.
+    pub private_source: bool,
 }
 
 /// Counters for metrics and the status page.
@@ -799,6 +802,7 @@ impl Pool {
                     cohort: e.cohort,
                     strategy: e.strategy,
                     discovered_at: e.discovered_at,
+                    private_source: e.private,
                 };
                 // Waiting here is the backpressure from a slow writer.
                 let _ = self.out.send(out).await;
