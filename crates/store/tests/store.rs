@@ -781,6 +781,41 @@ fn deleted_rows_leave_no_trace_in_the_file() {
     assert!(!contains(&wal, secret.as_bytes()), "the WAL kept the value");
 }
 
+#[test]
+fn deleted_torrents_leave_no_trace_on_disk() {
+    // The WAL is truncated after the delete, so the frames written when
+    // the torrent went in go too, and secure_delete zeroes the freed pages
+    // in the main file. (Names are capped at 4 KiB, under the 16 KiB page,
+    // so the overflow-page case is covered by the quarantine test in
+    // filter.rs.)
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.db");
+    let mut store = Store::open(&path, StoreConfig::default()).unwrap();
+    let marker = "deleted-torrent-marker-91d2";
+    let name: String = (0..4_000u32)
+        .map(|i| char::from(b'a' + ((i.wrapping_mul(2_654_435_761) >> 24) % 26) as u8))
+        .chain(marker.chars())
+        .collect();
+    let raw = single(name.as_bytes(), vec![]);
+    let info = Info::parse(&raw).unwrap();
+    store.insert(&[new(&info, &raw)]).unwrap();
+    let on_disk = || {
+        let mut all = std::fs::read(&path).unwrap();
+        all.extend(std::fs::read(dir.path().join("t.db-wal")).unwrap_or_default());
+        all
+    };
+    assert!(
+        contains(&on_disk(), marker.as_bytes()),
+        "the name was written"
+    );
+    let gone = store.delete_torrents(&[info.primary_hash().0]).unwrap();
+    assert_eq!(gone.len(), 1);
+    assert!(
+        !contains(&on_disk(), marker.as_bytes()),
+        "the deleted name survived"
+    );
+}
+
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
