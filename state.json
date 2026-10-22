@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-22T06:50:00Z",
+ "updated_at": "2026-10-22T06:53:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 14
@@ -134,13 +134,13 @@
    "notes": ""
   },
   "W8": {
-   "status": "in_review",
+   "status": "merged",
    "model": "sonnet",
    "session": "session_0121PwTE5wgafTpKrc4nNuuz",
    "pr": 40,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "round 1 changes: timeZone fallback, drop sampled flag, bytes digits after rounding"
+   "notes": "merged after round 2"
   },
   "B5a": {
    "status": "pending",
@@ -786,8 +786,6 @@
  "heartbeats": 2,
  "reviews_in_flight": [
   "#38 B0 r4",
-  "#40 W8 r2",
-  "#37 C1 r2",
   "#44 W3",
   "#41 W4",
   "#50 W2",
