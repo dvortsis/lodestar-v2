@@ -769,8 +769,8 @@
    "session": "session_01Gn7rDcpkcoFRJjXXADJHQQ",
    "pr": 85,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": "launched 17:33; NEAR multi-token filter fix; avoid reclassify.rs/props.rs"
+   "review_rounds": 1,
+   "notes": "R1 FIX 19:30: hostile-name NEAR DoS (places*tokens^2); safety claim wrong (CSX-5 overrides/exceptions/allow/unless match more). Owner Q on re-preview of stored CSX-5 entries."
   },
   "D-puid": {
    "status": "review",
@@ -886,7 +886,6 @@
  },
  "heartbeats": 4,
  "reviews_in_flight": {
-  "85": "F-near R1",
   "86": "settings-plan PR R1",
   "79": "B14 R2 (3378ef5)"
  },
@@ -957,7 +956,8 @@
   "sse_crawler_paused": "B4 SSE crawler event lacks `paused` (B14 asked to add if cheap).",
   "pr70_r3": "#70 R3 FIX 18:58: core switch off w/o password via race (assess unlocked vs apply) -> 409 changed_since_preview; ResolveHeld same; reload before release; purge INSERT OR IGNORE; merge main.",
   "slices_from_86": "After #86 merges: add B2b, B2c, M-settings-form, S-settings-2, M-security-settings, B-log1, B-log2, S-logs, S-about, B-update, S-updates, S-doc-shots to state.slices (pending). B2b + B-log1(after B2b) ready first.",
-  "search_timing_flakes": "Windows CI: crates/search/tests/index.rs:214 NRT budget (the_live_indexer_follows_the_store_within_seconds) failed on B6 ee81535; plus rebuild.rs flake. Fix slice after B6 merges (crates/search owner)."
+  "search_timing_flakes": "Windows CI: crates/search/tests/index.rs:214 NRT budget (the_live_indexer_follows_the_store_within_seconds) failed on B6 ee81535; plus rebuild.rs flake. Fix slice after B6 merges (crates/search owner).",
+  "near_followups": "F-near follow-ups: prefix/fuzzy words share the folded-join bug; NEAR ignores CSX-5 'Neutralize term'; plain word over-matches vs NEAR word; single-token NEAR quadratic window."
  },
  "blocked_on_owner": [
   "Modern DHT crawler architecture: waiting on an AskUserQuestion",
@@ -968,7 +968,8 @@
  "owner_questions": [
   "F1 budget scope: gate covers cheaply-rejectable rule shapes (10% = 40.8 us on runner). Shapes the cheap check cannot decide cost more at 10% of rules (VM: NEAR/1 ~450-500, negation ~140, fuzzy ~125, prefix ~110 us; runner ~1.4x faster). Should those shapes be gated at 50 us too?",
   "Filter budget hardware: 50 us has no reference machine; gate now calibrated to the runner F1 measured on (10%=40.8 us), slower runners scale up to 1.6x. Confirm or set a reference machine.",
-  "Migration snapshots (<db>.pre-vN.db, VACUUM INTO before each migration, kept forever) retain quarantine names purged later, defeating 'deleted data is overwritten'. Recommend: run the same expiry purge on snapshots and delete them after 90 days (rollback window)."
+  "Migration snapshots (<db>.pre-vN.db, VACUUM INTO before each migration, kept forever) retain quarantine names purged later, defeating 'deleted data is overwritten'. Recommend: run the same expiry purge on snapshots and delete them after 90 days (rollback window).",
+  "F-near: multi-token NEAR words now match where they never did; stored CSX-5 overrides/exceptions/Always-allow using such words would release more without a new impact preview (\u00a71.8.6). Pre-release, no installs. Recommend: note only, no re-preview machinery."
  ],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)"
 }
