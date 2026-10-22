@@ -356,7 +356,7 @@
    "pr": null,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "launched 15:59; includes first-run log address polish 18:46 R1 FIX: main merge semantic break (ops field), NAT false-reachable (SeenFilter refresh + threshold), pause race, index_lag, ring clear, dht_off, BEP42 per-/24. 19:23 R1 fixes eabd33a + main merges 3378ef5; R2 review in flight. 20:08 R2 FIX: replies must renew contacted (NAT false reachable); failed event-write test; PR body. Runner verifies R3 delta. 20:17 3b61a52 verified by runner -> APPROVED, merge on green."
+   "notes": "launched 15:59; includes first-run log address polish 18:46 R1 FIX: main merge semantic break (ops field), NAT false-reachable (SeenFilter refresh + threshold), pause race, index_lag, ring clear, dht_off, BEP42 per-/24. 19:23 R1 fixes eabd33a + main merges 3378ef5; R2 review in flight. 20:08 R2 FIX: replies must renew contacted (NAT false reachable); failed event-write test; PR body. Runner verifies R3 delta. 20:17 3b61a52 verified by runner -> APPROVED, merge on green. 20:39 macOS rebuild flake + budget red on 3b61a52 -> one rerun after run completes (21:00 sweep)."
   },
   "B11b": {
    "status": "pending",
@@ -779,7 +779,7 @@
    "pr": 84,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "R1 MERGE-quality 19:25; asked to fold in: chown only empty/marker dir, compose+operations docs, CAP hint, NO_NEW_PRIVS, CI root test step. Runner verifies delta. 19:48 hardening 19e6397 + main 87dabac verified by runner -> APPROVED, merge on green (filter budget = known flake; one rerun then main-merge)."
+   "notes": "R1 MERGE-quality 19:25; asked to fold in: chown only empty/marker dir, compose+operations docs, CAP hint, NO_NEW_PRIVS, CI root test step. Runner verifies delta. 19:48 hardening 19e6397 + main 87dabac verified by runner -> APPROVED, merge on green (filter budget = known flake; one rerun then main-merge). 20:39 green but dirty -> asked main merge."
   },
   "Q-docs": {
    "status": "running",
@@ -1083,7 +1083,7 @@
   "F1b #66: sign-off on calibrated filter budget (50us at reference runner speed, scale up to 1.6x on slower runners)"
  ],
  "launches_today": 8,
- "last_heartbeat": "2026-10-22T19:40Z",
+ "last_heartbeat": "2026-10-22T20:39Z",
  "owner_questions": [
   "F1 budget scope: gate covers cheaply-rejectable rule shapes (10% = 40.8 us on runner). Shapes the cheap check cannot decide cost more at 10% of rules (VM: NEAR/1 ~450-500, negation ~140, fuzzy ~125, prefix ~110 us; runner ~1.4x faster). Should those shapes be gated at 50 us too?",
   "Filter budget hardware: 50 us has no reference machine; gate now calibrated to the runner F1 measured on (10%=40.8 us), slower runners scale up to 1.6x. Confirm or set a reference machine.",
