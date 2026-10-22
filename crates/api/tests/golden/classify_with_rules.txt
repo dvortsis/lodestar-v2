@@ -1,0 +1,2 @@
+200
+{"corrections":1,"detection":{"checked":1,"disagree":1,"examples":[{"adult":true,"hash":"5ce3578f03e7bf8ee4d9da1afc13491025fe56e4"}]},"rules":[{"adult":true,"id":1,"query":"lexb"}]}

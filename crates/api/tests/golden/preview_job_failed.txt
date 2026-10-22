@@ -1,0 +1,2 @@
+200
+{"error":{"code":"floor_locked","message":"CS-1a is part of the locked floor and can't be switched off."},"progress":{"done":0,"phase":"reading","total":0},"state":"failed","status":409}
