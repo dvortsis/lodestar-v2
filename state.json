@@ -777,7 +777,8 @@
       "max_core": 8,
       "max_helpers": 8,
       "source": "owner 2026-10-22 16:03: \"increase the runner's limit to 8\" (max_core 4 -> 8; helpers already 8). Folded into slices.yaml via R-docs."
-    }
+    },
+    "owner_questions": "Owner 2026-10-22 17:15: never stop monitoring/driving sessions to wait for an owner answer. Ask in the chat reply (and a push notification if the owner may be away), not with a blocking prompt; keep working on everything else meanwhile."
   },
   "watched_sessions": {
     "session_015F9H2aHowz7TJLffFYxUvf": {
