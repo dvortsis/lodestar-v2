@@ -149,7 +149,7 @@
       "pr": 64,
       "attempt": 1,
       "review_rounds": 1,
-      "notes": "round 1: no blocking in code; asked: de-flake cancellation timing tests, revert index_root rename (B2 owns config.rs), tolerance wording, periodic lease sweep, PR description; optional seal-key HMAC. Scope exceptions accepted."
+      "notes": "round 1: no blocking in code; asked: de-flake cancellation timing tests, revert index_root rename (B2 owns config.rs), tolerance wording, periodic lease sweep, PR description; optional seal-key HMAC. Scope exceptions accepted. | 13:42: fixes at b05bd31; only filter budget red (51.5us, runner variance, base red) -> one re-run spent; round-2 verifier started."
     },
     "B4": {
       "status": "ready",
