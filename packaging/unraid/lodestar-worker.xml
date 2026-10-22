@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>Lodestar-worker</Name>
+  <Repository>ghcr.io/dvortsis/lodestar-v2:latest</Repository>
+  <Registry>https://github.com/dvortsis/lodestar-v2/pkgs/container/lodestar-v2</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/dvortsis/lodestar-v2/issues</Support>
+  <Project>https://github.com/dvortsis/lodestar-v2</Project>
+  <ReadMe>https://github.com/dvortsis/lodestar-v2/blob/main/docs/operations.md</ReadMe>
+  <TemplateURL>https://github.com/dvortsis/lodestar-v2/raw/main/packaging/unraid/lodestar-worker.xml</TemplateURL>
+  <Overview>Requires Lodestar v0.6+. A worker adds crawling, metadata fetching and processing capacity to an existing Lodestar and sends the results to it. It keeps no database and no search index and has no web UI. In the main Lodestar, open Settings, then Workers, then Add worker. Copy the address and the one-time token (valid for 15 minutes) into the fields below. The worker only needs to reach the main instance's cluster port (8091/tcp).</Overview>
+  <Category>Network:Web Downloaders:Other</Category>
+  <WebUI></WebUI>
+  <ExtraParams></ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires>Lodestar v0.6 or newer running as the main instance</Requires>
+  <Icon>https://raw.githubusercontent.com/dvortsis/lodestar-v2/main/packaging/icons/lodestar-256.png</Icon>
+  <Config Name="DHT / peers (UDP)" Target="6881" Default="6881" Mode="udp" Description="DHT traffic. Forward this UDP port on your router for best reach." Type="Port" Display="always" Required="true" Mask="false">6881</Config>
+  <Config Name="Peers (TCP)" Target="6881" Default="6881" Mode="tcp" Description="Peer connections for metadata exchange." Type="Port" Display="always" Required="true" Mask="false">6881</Config>
+  <Config Name="Join address" Target="LODESTAR_JOIN" Default="https://lodestar.example:8091" Mode="rw" Description="Cluster address of the main Lodestar, for example https://192.168.1.10:8091." Type="Variable" Display="always" Required="true" Mask="false">https://lodestar.example:8091</Config>
+  <Config Name="Join token" Target="LODESTAR_TOKEN" Default="" Mode="rw" Description="One-time token from Settings, Workers, Add worker. It expires after 15 minutes. After joining, the worker keeps its own certificate and the token is not needed again." Type="Variable" Display="always" Required="true" Mask="true"></Config>
+  <Config Name="State path" Target="/data" Default="/mnt/cache/appdata/lodestar-worker" Mode="rw" Description="Worker certificate and the on-disk spool used while the main instance is unreachable. Use a pool path, not /mnt/user." Type="Path" Display="always" Required="true" Mask="false">/mnt/cache/appdata/lodestar-worker</Config>
+  <Config Name="PUID" Target="PUID" Default="99" Mode="rw" Description="User ID the container runs as (99 = nobody)." Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
+  <Config Name="PGID" Target="PGID" Default="100" Mode="rw" Description="Group ID the container runs as (100 = users)." Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
+  <Config Name="TZ" Target="TZ" Default="Etc/UTC" Mode="rw" Description="Time zone for log timestamps, for example Europe/Berlin." Type="Variable" Display="advanced" Required="false" Mask="false">Etc/UTC</Config>
+  <Config Name="Intensity" Target="LODESTAR_INTENSITY" Default="balanced" Mode="rw" Description="How hard the crawler works: low, balanced or aggressive. Balanced opens about 400 metadata connections at once. Aggressive opens about 1000, and some home routers cannot track that many." Type="Variable" Display="advanced" Required="false" Mask="false">balanced</Config>
+  <Config Name="Log level" Target="LODESTAR_LOG" Default="info" Mode="rw" Description="error, warn, info or debug." Type="Variable" Display="advanced" Required="false" Mask="false">info</Config>
+</Container>
