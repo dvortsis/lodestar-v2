@@ -798,8 +798,7 @@ async fn intake(mut io: Intake, mut shutdown: Shutdown) {
         // Known-bad keys are claimed (so the harvest is counted once) and
         // lost straight away, never fetched (§20.3, §20.5.2).
         let key = d.found.key.0;
-        let refuse =
-            io.held.contains(&key) || io.filter.current().core.blocked_hash(&[key]).is_some();
+        let refuse = io.held.contains(&key) || io.filter.current().blocked_hash(&[key]).is_some();
         match io.coordinator.claim(WorkerId::LOCAL, claim, unix_now()) {
             Claimed::Granted(token) if refuse => {
                 io.stats.refused.fetch_add(1, Ordering::Relaxed);

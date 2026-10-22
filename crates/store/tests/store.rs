@@ -420,6 +420,7 @@ fn counters_add_up_inside_writes() {
             cohorts: &[cohort(7)],
             events: &events,
             filtered: &[],
+            swarm: &[],
         })
         .unwrap();
     // A counters-only transaction (nothing to ingest).
@@ -484,10 +485,14 @@ fn touches_add_sources_and_report_misses() {
                 Touch {
                     hash: v2_short,
                     sources: 0b110,
+                    at: 0,
+                    public: true,
                 },
                 Touch {
                     hash: InfoHash([7; 20]),
                     sources: 1,
+                    at: 0,
+                    public: true,
                 },
             ],
             ..WriteBatch::default()
