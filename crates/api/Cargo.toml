@@ -3,6 +3,7 @@ name = "lodestar-api"
 description = "HTTP API: auth (setup token, password, sessions), search, parse and torrent detail"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true
