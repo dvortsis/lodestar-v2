@@ -849,7 +849,8 @@
    "#48 rewrites crates/search index/query/compile/filter/sorted; main has since gained B0,B1,B5b (+B5a soon): #48 needs a large merge of main before it can land"
   ],
   "flaky": [
-   "2026-10-22 11:13 Windows: search/tests/rebuild.rs searches_keep_working_through_a_rebuild_and_the_swap timed out (rebuild never finished in 30s) on PR #61 run 39768313014. Hypothesis: SRWLock writer starvation by spinning readers of Serving RwLock. Routed to B5a to root-cause."
+   "2026-10-22 11:13 Windows: search/tests/rebuild.rs searches_keep_working_through_a_rebuild_and_the_swap timed out (rebuild never finished in 30s) on PR #61 run 39768313014. Hypothesis: SRWLock writer starvation by spinning readers of Serving RwLock. Routed to B5a to root-cause.",
+   "11:22 failed again on PR #62 (job 119791380998): now consistent; asked B5a for a separate fix PR slice/B5a-swapfix first"
   ]
  },
  "blocked_on_owner": [
