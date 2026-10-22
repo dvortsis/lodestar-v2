@@ -22,8 +22,8 @@
    "session": "session_01BEmSnYW9wHszPF16AVqmtL",
    "pr": 46,
    "attempt": 1,
-   "review_rounds": 1,
-   "notes": "round 1: absent-field approach for added fields; swap ordering; no delete on transient errors; Windows test; no sleeps"
+   "review_rounds": 2,
+   "notes": "round 2 APPROVE at e578d70; only blocker = \u00a716 conflict with main; sent 09:24"
   },
   "C0": {
    "status": "merged",
@@ -833,6 +833,10 @@
   ],
   "unassigned-fields": [
    "SearchHit/TorrentDetail M3 enrichment fields (title, resolved_via, content_type, adult_kind, composition, junk_*) and hidden_junk have no slice: assign at next API brief (B5a or B6), per \u00a716 B1 entry"
+  ],
+  "B5a": [
+   "B5b: if new live indexer fails to start during swap, old one already stopped -> old index serves but stops ingesting until restart",
+   "B5b: field present in old index with same type but not FAST can still fail a query (absent-field handling covers only missing fields)"
   ]
  },
  "blocked_on_owner": [
