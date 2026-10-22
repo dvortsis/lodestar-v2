@@ -1,0 +1,43 @@
+{
+  "recorded_from": "Transmission 4.0.5 (rpc-version 17), transmission-daemon on Ubuntu 24.04",
+  "note": "wrong password: Transmission answers 401 before checking the session id",
+  "request": {
+    "method": "POST",
+    "path": "/transmission/rpc",
+    "query": null
+  },
+  "response": {
+    "status": 401,
+    "headers": [
+      [
+        "server",
+        "Transmission"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "content-security-policy",
+        "frame-ancestors 'self'"
+      ],
+      [
+        "access-control-allow-origin",
+        "*"
+      ],
+      [
+        "www-authenticate",
+        "Basic realm=\"Transmission\""
+      ],
+      [
+        "content-length",
+        "26"
+      ],
+      [
+        "content-type",
+        "text/html; charset=ISO-8859-1"
+      ]
+    ],
+    "body": "<h1>401: Unauthorized</h1>"
+  }
+}
