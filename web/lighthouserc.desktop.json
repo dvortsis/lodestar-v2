@@ -1,0 +1,52 @@
+{
+	"ci": {
+		"collect": {
+			"startServerCommand": "npm run preview -- --port 4174",
+			"startServerReadyPattern": "4174",
+			"startServerReadyTimeout": 60000,
+			"url": ["http://localhost:4174/search"],
+			"numberOfRuns": 3,
+			"settings": {
+				"preset": "desktop",
+				"onlyCategories": ["performance"],
+				"chromeFlags": "--no-sandbox --headless=new"
+			}
+		},
+		"assert": {
+			"assertions": {
+				"largest-contentful-paint": [
+					"error",
+					{
+						"maxNumericValue": 1000,
+						"aggregationMethod": "median"
+					}
+				],
+				"total-blocking-time": [
+					"error",
+					{
+						"maxNumericValue": 100,
+						"aggregationMethod": "median"
+					}
+				],
+				"cumulative-layout-shift": [
+					"error",
+					{
+						"maxNumericValue": 0.02,
+						"aggregationMethod": "median"
+					}
+				],
+				"total-byte-weight": [
+					"error",
+					{
+						"maxNumericValue": 102400,
+						"aggregationMethod": "median"
+					}
+				]
+			}
+		},
+		"upload": {
+			"target": "filesystem",
+			"outputDir": ".lighthouseci/desktop"
+		}
+	}
+}
