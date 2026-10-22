@@ -255,6 +255,9 @@ fn ten_thousand_rules(share: usize) -> Vec<lodestar_filter::UserRule> {
 /// only as they would on ingest. The engine is measured with 1%, 10% and
 /// 25% of the rules built on words the torrents have. The budget holds
 /// the core, 1% and 10%; 25% is measured and reported, not held.
+///
+/// The CI runner is authoritative. A slower machine (the build VM runs
+/// about 1.4 times slower) can fail the 10% case locally.
 #[test]
 #[ignore]
 fn budget() {

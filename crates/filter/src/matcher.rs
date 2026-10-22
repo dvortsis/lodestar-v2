@@ -819,27 +819,25 @@ fn sequence(field: &Text, words: &[Term]) -> bool {
         })
 }
 
-/// Every word within a window of `slop` extra positions, in any order.
+/// Every word within a window of `slop` extra positions, in any order:
+/// for some place of the first word, every word has a place within the
+/// window. Reads the tokens in place, allocating nothing.
 fn has_near(field: &Text, words: &[Term], slop: u32) -> bool {
-    let positions: Vec<Vec<u32>> = words
-        .iter()
-        .map(|w| {
-            field
-                .toks
-                .iter()
-                .filter(|t| field.is(t, w.hash, &w.text))
-                .map(|t| t.position)
-                .collect()
-        })
-        .collect();
-    if positions.is_empty() || positions.iter().any(Vec::is_empty) {
+    let Some(first) = words.first() else {
         return false;
-    }
+    };
     let span = words.len() + slop as usize;
-    positions[0].iter().any(|&p0| {
-        positions
+    fn places<'a>(field: &'a Text, w: &'a Term) -> impl Iterator<Item = u32> + 'a {
+        field
+            .toks
             .iter()
-            .all(|ps| ps.iter().any(|&p| (p.abs_diff(p0) as usize) < span))
+            .filter(move |t| field.is(t, w.hash, &w.text))
+            .map(|t| t.position)
+    }
+    places(field, first).any(|p0| {
+        words
+            .iter()
+            .all(|w| places(field, w).any(|p| (p.abs_diff(p0) as usize) < span))
     })
 }
 
