@@ -19,7 +19,7 @@
 
 use rusqlite::{OptionalExtension, params};
 
-use crate::user_data::check_name;
+use crate::user_data::{check_name, write_tx};
 use crate::{Error, Result, Store};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -134,7 +134,7 @@ impl Store {
                 "only a feed token belongs to a saved search",
             ));
         }
-        let tx = self.conn.transaction()?;
+        let tx = write_tx(&mut self.conn)?;
         let taken: bool = tx
             .prepare_cached("SELECT EXISTS (SELECT 1 FROM api_keys WHERE prefix = ?1)")?
             .query_row([k.prefix], |r| r.get(0))?;
