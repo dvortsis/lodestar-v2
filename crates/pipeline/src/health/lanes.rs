@@ -2,8 +2,9 @@
 //! shared by deficit round robin.
 //!
 //! - **Interest:** torrents someone is looking at (a detail view, the top
-//!   of a search). Served before anything else, like the fetch pool's
-//!   user-interest keys (§18.4).
+//!   of a search). Served first, like the fetch pool's user-interest keys
+//!   (§18.4), but with at most half of a round while other lanes wait, so
+//!   a busy search page can't stop new torrents getting their one scrape.
 //! - **New:** stored but never scraped ("new torrents once", §15).
 //! - **Rediscovered:** seen again on the DHT, so probably alive (§5).
 //! - **Due:** the decay schedule says it's time.
@@ -113,8 +114,9 @@ impl Lanes {
     /// They stay in flight until [`Lanes::finish`].
     pub fn take(&mut self, n: usize) -> Vec<(Lane, i64)> {
         let mut out = Vec::with_capacity(n);
-        // Interest first, always.
-        self.drain(Lane::Interest, n, &mut out);
+        // Interest first, up to half the round: a flood of searches can't
+        // starve "new torrents once" (§15).
+        self.drain(Lane::Interest, n.div_ceil(2), &mut out);
         // Then DRR: each pass adds a lane's weight to its deficit; a lane
         // spends one per torrent. An empty lane forfeits its deficit, so
         // idle lanes can't save up a burst.
@@ -138,6 +140,8 @@ impl Lanes {
                 }
             }
         }
+        // What the other lanes left goes to interest after all.
+        self.drain(Lane::Interest, n, &mut out);
         out
     }
 
@@ -189,6 +193,32 @@ mod tests {
         assert_eq!(t[0], (Lane::Interest, 100));
         assert_eq!(t[1], (Lane::Interest, 101));
         assert_eq!(t[2], (Lane::Due, 0));
+    }
+
+    #[test]
+    fn interest_takes_at_most_half_while_others_wait() {
+        let mut l = Lanes::new(Weights::default());
+        for id in 0..1000 {
+            l.push(Lane::Interest, id);
+            l.push(Lane::New, 10_000 + id);
+        }
+        let t = l.take(74);
+        let count = |lane| t.iter().filter(|(l, _)| *l == lane).count();
+        assert_eq!((count(Lane::Interest), count(Lane::New)), (37, 37));
+        // Alone, interest fills the round.
+        let mut l = Lanes::new(Weights::default());
+        for id in 0..1000 {
+            l.push(Lane::Interest, id);
+        }
+        assert_eq!(l.take(74).len(), 74);
+        // And it tops up what the other lanes can't fill.
+        let mut l = Lanes::new(Weights::default());
+        for id in 0..1000 {
+            l.push(Lane::Interest, id);
+        }
+        l.push(Lane::New, 5000);
+        let t = l.take(10);
+        assert_eq!(t.iter().filter(|(l, _)| *l == Lane::Interest).count(), 9);
     }
 
     #[test]

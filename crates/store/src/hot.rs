@@ -205,14 +205,26 @@ impl HotColumns {
         }
     }
 
-    /// Sets or clears flag bits, writing only when they change.
+    /// Sets or clears flag bits, writing only when they change. Other
+    /// bits written at the same time are kept: it's a compare-exchange,
+    /// not a load and a store.
     pub fn set_flags(&self, id: u64, bits: u32, on: bool) {
-        let now = self.flags(id);
-        let next = if on { now | bits } else { now & !bits };
-        if next != now {
-            self.set(Col::Flags, id, next);
-            self.changed();
+        let Some(slot) = self.slot_mut(Col::Flags, id) else {
+            return;
+        };
+        let mut cur = slot.load(Ordering::Relaxed);
+        loop {
+            let now = if cur == NEVER { 0 } else { cur };
+            let next = if on { now | bits } else { now & !bits };
+            if next == now {
+                return;
+            }
+            match slot.compare_exchange_weak(cur, next, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => break,
+                Err(seen) => cur = seen,
+            }
         }
+        self.changed();
     }
 
     /// Records DHT activity at `at` (unix seconds); last-seen only moves
@@ -587,5 +599,26 @@ mod tests {
         bytes.truncate(bytes.len() - 3);
         fs::write(&path, &bytes).unwrap();
         assert!(HotColumns::load(dir.path(), 42).unwrap().is_none());
+    }
+
+    #[test]
+    fn concurrent_flag_writers_keep_each_others_bits() {
+        let hot = Arc::new(HotColumns::new());
+        let threads: Vec<_> = (0..8u32)
+            .map(|b| {
+                let hot = hot.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..2000 {
+                        hot.set_flags(7, 1 << b, true);
+                        hot.set_flags(7, 1 << (b + 8), true);
+                        hot.set_flags(7, 1 << (b + 8), false);
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        assert_eq!(hot.flags(7), 0xff);
     }
 }

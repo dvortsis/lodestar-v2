@@ -7,14 +7,15 @@ use std::time::Duration;
 
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::{Info, InfoHash};
-use lodestar_pipeline::health::HealthConfig;
+use lodestar_pipeline::health::trackers::Health;
+use lodestar_pipeline::health::{HealthConfig, Outcome};
 use lodestar_pipeline::{HealthSetup, Pipeline, PipelineConfig, metric, open_hot, save_hot};
 use lodestar_sources::{
     BoxFuture, Consent, Found, Kind, Manifest, Network, PluginError, Priority, Risk, SourceCtx,
     SourcePlugin,
 };
 use lodestar_store::{
-    Col, HotColumns, NEVER, NewTorrent, Store, StoreConfig, SwarmUpdate, WriteBatch,
+    Col, HotColumns, NEVER, NewTorrent, Store, StoreConfig, SwarmUpdate, WriteBatch, swarm_flags,
 };
 use lodestar_tracker_scrape::testing::{http_tracker, udp_tracker};
 use lodestar_tracker_scrape::{Counts, HttpConfig, TrackerUrl, UdpConfig};
@@ -265,7 +266,7 @@ async fn an_http_tracker_answers_rounds_spanning_several_requests() {
     let rounds = h.trackers()[0].rounds;
     assert_eq!(
         rounds,
-        [2, 0, 0, 0, 0],
+        [2, 0, 0, 0, 0, 0],
         "both rounds answered, none skipped"
     );
     pipeline.shutdown().await.unwrap();
@@ -316,6 +317,145 @@ async fn a_due_rescrape_keeps_the_dht_estimate_it_didnt_ask_for() {
     assert_eq!((row.seeders, row.trackers_reporting), (12, 1));
     assert_eq!(row.dht, Some((5, 9)), "carried over");
     assert_eq!(hot.get(Col::Dht, t[0].0 as u64), 14, "seeds + peers");
+}
+
+/// Like [`until`], for slower conditions.
+async fn within(what: &str, secs: u64, mut f: impl FnMut() -> bool) {
+    let end = std::time::Instant::now() + Duration::from_secs(secs);
+    while !f() {
+        assert!(
+            std::time::Instant::now() < end,
+            "timed out waiting for {what}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+fn names(prefix: &str, n: usize) -> Vec<String> {
+    (0..n).map(|i| format!("{prefix} {i}")).collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_banning_tracker_is_left_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let t = seed(&db, &["refused one", "refused two"]);
+    let tracker = udp_tracker().await;
+    *tracker.state.refuse.lock().unwrap() = Some("banned: too many requests".into());
+    let hot = Arc::new(HotColumns::new());
+    let store = Store::open(&db, StoreConfig::default()).unwrap();
+    let pipeline = Pipeline::start(
+        config(&hot, health(&db, vec![tracker.url(true)])),
+        store,
+        Vec::new(),
+    )
+    .await
+    .unwrap();
+    let h = pipeline.monitor().health().unwrap().clone();
+    until("banned", || h.trackers()[0].health == Health::Banned).await;
+    let get = |a: &std::sync::atomic::AtomicU64| a.load(std::sync::atomic::Ordering::Relaxed);
+    let (rounds, asked) = (
+        get(&h.stats().rounds),
+        tracker
+            .state
+            .scrapes
+            .load(std::sync::atomic::Ordering::Relaxed),
+    );
+    // Banned for a day: no round can ask anyone, so none starts, and the
+    // torrents' outage isn't counted again and again.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(get(&h.stats().rounds), rounds, "no rounds while banned");
+    assert_eq!(
+        tracker
+            .state
+            .scrapes
+            .load(std::sync::atomic::Ordering::Relaxed),
+        asked
+    );
+    let store = pipeline.shutdown().await.unwrap();
+    for (id, _) in t {
+        let row = store.swarm(id).unwrap().unwrap();
+        assert_eq!(swarm_flags::unreached(row.flags), 1, "one unanswered round");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_drops_rounds_in_flight() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let t = seed(&db, &["in flight"]);
+    let tracker = udp_tracker().await;
+    tracker
+        .state
+        .drop_next
+        .store(1000, std::sync::atomic::Ordering::Relaxed);
+    let mut setup = health(&db, vec![tracker.url(true)]);
+    setup.config.udp.timeout = Duration::from_secs(5);
+    setup.config.round_deadline = Duration::from_secs(30);
+    let hot = Arc::new(HotColumns::new());
+    let store = Store::open(&db, StoreConfig::default()).unwrap();
+    let pipeline = Pipeline::start(config(&hot, setup), store, Vec::new())
+        .await
+        .unwrap();
+    let h = pipeline.monitor().health().unwrap().clone();
+    until("a round in flight", || {
+        h.stats().rounds.load(std::sync::atomic::Ordering::Relaxed) >= 1
+            && tracker
+                .state
+                .connects
+                .load(std::sync::atomic::Ordering::Relaxed)
+                == 0
+    })
+    .await;
+    let started = std::time::Instant::now();
+    let store = pipeline.shutdown().await.unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "shutdown waits for no tracker: {:?}",
+        started.elapsed()
+    );
+    assert!(store.swarm(t[0].0).unwrap().is_none(), "old schedule kept");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_slow_tracker_answers_partial_jobs() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let names = names("slow", 30);
+    let t = seed(&db, &names.iter().map(String::as_str).collect::<Vec<_>>());
+    let tracker = http_tracker().await;
+    for &(_, hash) in &t {
+        tracker.state.set(hash, SWARM);
+    }
+    // One request a second from its first answer on: a full round of
+    // three requests no longer fits the tracker's wait.
+    *tracker.state.min_interval.lock().unwrap() = Some(1);
+    let mut setup = health(&db, vec![tracker.url(false)]);
+    setup.config.round_size = 15;
+    setup.config.http = HttpConfig {
+        max_hashes: 5,
+        ..HttpConfig::default()
+    };
+    let hot = Arc::new(HotColumns::with_epoch_every(Duration::ZERO));
+    let store = Store::open(&db, StoreConfig::default()).unwrap();
+    let pipeline = Pipeline::start(config(&hot, setup), store, Vec::new())
+        .await
+        .unwrap();
+    within("every torrent scraped", 20, || {
+        t.iter()
+            .all(|&(id, _)| hot.get(Col::Seeders, id as u64) == 12)
+    })
+    .await;
+    let h = pipeline.monitor().health().unwrap().clone();
+    let rounds = h.trackers()[0].rounds;
+    assert_eq!(rounds[Outcome::Late as usize], 0, "{rounds:?}");
+    assert_eq!(
+        h.stats()
+            .unreached
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    pipeline.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

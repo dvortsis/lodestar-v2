@@ -103,6 +103,9 @@ pub struct HealthStats {
     pub dht_estimates: std::sync::atomic::AtomicU64,
     /// Interest and rediscovery hints dropped because a lane was full.
     pub hints_dropped: std::sync::atomic::AtomicU64,
+    /// Tracker answers that came after their round closed, and were
+    /// dropped.
+    pub late: std::sync::atomic::AtomicU64,
 }
 
 fn inc(c: &std::sync::atomic::AtomicU64) {
@@ -195,7 +198,7 @@ pub(crate) fn spawn(mut s: Setup) -> (HealthHandle, JoinHandle<Store>) {
             url: url.to_string(),
             health: Health::Ok,
             failures: 0,
-            rounds: [0; 5],
+            rounds: [0; 6],
             last_ok_at: None,
         }));
         let udp = url.scheme() == lodestar_tracker_scrape::Scheme::Udp;
@@ -235,13 +238,24 @@ pub(crate) fn spawn(mut s: Setup) -> (HealthHandle, JoinHandle<Store>) {
             status: status.clone(),
             gate: gate.clone(),
         };
+        // The longest one request can take: over UDP a connect and a
+        // scrape, each with its retries. Capped at half a round, so a
+        // timeout longer than the round can't keep a tracker from ever
+        // being asked.
+        let request = if udp {
+            s.cfg.udp.timeout * 2 * (s.cfg.udp.retries + 1)
+        } else {
+            s.cfg.http.timeout
+        }
+        .min(s.cfg.round_deadline / 2);
         let (job_tx, job_rx) = mpsc::channel(1);
         tokio::spawn(task.run(job_rx, done_tx.clone()));
         jobs.push(Slot {
             id: *id,
             jobs: job_tx,
             gate,
-            per_request,
+            status: status.clone(),
+            request_ms: request.as_millis() as u64,
             max_wait_ms: max_wait.as_millis() as u64,
         });
         statuses.push(status);
@@ -298,19 +312,27 @@ struct Slot {
     id: u16,
     jobs: mpsc::Sender<Job>,
     gate: Arc<Gate>,
-    /// Hashes the tracker takes per request.
-    per_request: usize,
+    status: Arc<Mutex<TrackerStatus>>,
+    /// The longest one request can take.
+    request_ms: u64,
     max_wait_ms: u64,
 }
 
 impl Slot {
-    /// Free, and allowed to send all of `hashes` within its wait: a job
-    /// sent now would be worked on, not queued or skipped.
-    fn ready(&self, now_ms: u64, hashes: usize) -> bool {
+    /// The last moment a request of a round closing at `deadline_ms` may
+    /// start and still be answered in time.
+    fn last_start(&self, deadline_ms: u64) -> u64 {
+        deadline_ms.saturating_sub(self.request_ms)
+    }
+
+    /// Free, and able to start a request within its wait and in time for
+    /// a round closing at `deadline_ms`: a job sent now would be worked
+    /// on, not queued or skipped.
+    fn ready(&self, now_ms: u64, deadline_ms: u64) -> bool {
         !self.gate.busy.load(std::sync::atomic::Ordering::Relaxed)
             && self
                 .gate
-                .fits(now_ms, hashes, self.per_request, self.max_wait_ms)
+                .can_start((now_ms + self.max_wait_ms).min(self.last_start(deadline_ms)))
     }
 }
 
@@ -331,9 +353,25 @@ struct Round {
     dht_asked: Vec<bool>,
     waiting_trackers: usize,
     waiting_dht: usize,
-    /// Trackers that sent a request for this round.
-    asked: usize,
+    /// Per item: whether some tracker sent a request with its hash.
+    asked: Vec<bool>,
     deadline: Instant,
+}
+
+/// Which of a round's items to write: those some tracker or the DHT was
+/// asked about. The rest learned nothing, not even an outage, and go back
+/// to their lanes.
+fn settle(asked: &[bool], dht_asked: &[bool]) -> Vec<bool> {
+    asked.iter().zip(dht_asked).map(|(t, d)| *t || *d).collect()
+}
+
+/// The rounds whose deadline has passed at `now`.
+fn expired(rounds: &HashMap<u64, Round>, now: Instant) -> Vec<u64> {
+    rounds
+        .iter()
+        .filter(|(_, r)| r.deadline <= now)
+        .map(|(id, _)| *id)
+        .collect()
 }
 
 struct Scheduler {
@@ -407,13 +445,7 @@ impl Scheduler {
     /// Returns `false` once the writer has gone.
     async fn on_tick(&mut self) -> bool {
         let now = Instant::now();
-        let expired: Vec<u64> = self
-            .rounds
-            .iter()
-            .filter(|(_, r)| r.deadline <= now)
-            .map(|(id, _)| *id)
-            .collect();
-        for id in expired {
+        for id in expired(&self.rounds, now) {
             if !self.finish(id).await {
                 return false;
             }
@@ -447,7 +479,8 @@ impl Scheduler {
         if self.jobs.is_empty() {
             return self.cfg.dht && self.dht.lock().expect("dht handle lock").is_some();
         }
-        self.jobs.iter().any(|j| j.ready(now, self.cfg.round_size))
+        let deadline = now + self.cfg.round_deadline.as_millis() as u64;
+        self.jobs.iter().any(|j| j.ready(now, deadline))
     }
 
     /// Runs `f` on the blocking pool with the store.
@@ -592,18 +625,20 @@ impl Scheduler {
             items,
             waiting_trackers: 0,
             waiting_dht: 0,
-            asked: 0,
+            asked: vec![false; n],
             deadline: Instant::now() + self.cfg.round_deadline,
         };
         let now_ms = self.clock.now();
+        let deadline_ms = now_ms + self.cfg.round_deadline.as_millis() as u64;
         for slot in &self.jobs {
             let job = Job {
                 round,
                 hashes: hashes.clone(),
+                deadline_ms: slot.last_start(deadline_ms),
             };
             // Busy with an earlier round, or backing off: it sits this one
             // out instead of holding it up.
-            if slot.ready(now_ms, hashes.len()) && slot.jobs.try_send(job).is_ok() {
+            if slot.ready(now_ms, deadline_ms) && slot.jobs.try_send(job).is_ok() {
                 r.waiting_trackers += 1;
             } else {
                 self.rollups.add_dim(
@@ -648,24 +683,34 @@ impl Scheduler {
     }
 
     async fn on_done(&mut self, d: Done) {
+        // Answers for a round already closed are dropped: counted as late,
+        // not as a success that went somewhere.
+        let late = d.outcome == Outcome::Ok && !self.rounds.contains_key(&d.round);
+        let outcome = if late { Outcome::Late } else { d.outcome };
         self.rollups.add_dim(
             unix_now(),
             metric::SCRAPE_REQUESTS,
             u32::from(d.tracker),
-            d.outcome as i64,
+            outcome as i64,
             1,
         );
+        if late {
+            inc(&self.stats.late);
+            if let Some(slot) = self.jobs.iter().find(|j| j.id == d.tracker) {
+                let mut st = slot.status.lock().expect("tracker status lock");
+                st.rounds[Outcome::Ok as usize] = st.rounds[Outcome::Ok as usize].saturating_sub(1);
+                st.rounds[Outcome::Late as usize] += 1;
+            }
+        }
         let Some(r) = self.rounds.get_mut(&d.round) else {
             return;
         };
         r.waiting_trackers = r.waiting_trackers.saturating_sub(1);
-        if d.asked {
-            r.asked += 1;
+        for a in r.asked.iter_mut().take(d.asked) {
+            *a = true;
         }
-        if let Some(answers) = d.answers {
-            for (slot, a) in r.answers.iter_mut().zip(answers) {
-                slot.push((d.tracker, a));
-            }
+        for (slot, a) in r.answers.iter_mut().zip(d.answers) {
+            slot.push((d.tracker, a));
         }
         if r.waiting_trackers == 0 && r.waiting_dht == 0 {
             self.finish(d.round).await;
@@ -706,17 +751,17 @@ impl Scheduler {
             return true;
         };
         let now = unix_now();
-        // Nobody was asked (every tracker skipped, no DHT): nothing was
-        // learned, not even an outage. The torrents go back to their lanes.
-        if r.asked == 0 && !r.dht_asked.iter().any(|a| *a) {
-            self.lanes.finish(r.items.iter().map(|i| i.id));
-            for item in &r.items {
-                self.lanes.push(item.lane, item.id);
-            }
-            return true;
-        }
+        let write = settle(&r.asked, &r.dht_asked);
+        self.lanes.finish(r.items.iter().map(|i| i.id));
         let mut updates = Vec::with_capacity(r.items.len());
         for (i, item) in r.items.iter().enumerate() {
+            // Nobody asked about it (every tracker skipped, or a partial
+            // job stopped short, and no DHT): nothing was learned, not
+            // even an outage. Back to its lane.
+            if !write[i] {
+                self.lanes.push(item.lane, item.id);
+                continue;
+            }
             let answers = &r.answers[i];
             // A DHT estimate not asked for this round carries over, as
             // long as some tracker answered: alone it would make an outage
@@ -780,7 +825,9 @@ impl Scheduler {
                 interest: item.lane == Lane::Interest,
             });
         }
-        self.lanes.finish(r.items.iter().map(|i| i.id));
+        if updates.is_empty() {
+            return true;
+        }
         self.out.send(updates).await.is_ok()
     }
 }
@@ -817,4 +864,52 @@ fn load(s: &mut Store, id: i64) -> Option<Loaded> {
         dht,
         dht_only_alive,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn round(n: usize, deadline: Instant) -> Round {
+        Round {
+            items: (0..n)
+                .map(|i| Item {
+                    id: i as i64,
+                    lane: Lane::New,
+                    before: None,
+                    prev_dht: None,
+                })
+                .collect(),
+            answers: vec![Vec::new(); n],
+            dht: vec![None; n],
+            dht_asked: vec![false; n],
+            waiting_trackers: 0,
+            waiting_dht: 0,
+            asked: vec![false; n],
+            deadline,
+        }
+    }
+
+    #[test]
+    fn only_what_someone_asked_about_is_written() {
+        // Nobody asked: every item goes back to its lane.
+        assert_eq!(settle(&[false; 3], &[false; 3]), [false; 3]);
+        // A partial job asked about the first two; the DHT about the last.
+        assert_eq!(
+            settle(&[true, true, false, false], &[false, false, false, true]),
+            [true, true, false, true]
+        );
+    }
+
+    #[test]
+    fn rounds_expire_at_their_deadline() {
+        let now = Instant::now();
+        let mut rounds = HashMap::new();
+        rounds.insert(1, round(2, now - Duration::from_millis(1)));
+        rounds.insert(2, round(2, now));
+        rounds.insert(3, round(2, now + Duration::from_secs(1)));
+        let mut gone = expired(&rounds, now);
+        gone.sort_unstable();
+        assert_eq!(gone, [1, 2]);
+    }
 }
