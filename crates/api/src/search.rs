@@ -77,11 +77,47 @@ pub struct Visibility {
 }
 
 /// A query as it runs against the index, with what it left out.
+///
+/// The user's part and the visibility clauses are kept apart because a
+/// visibility clause has the same shape as a user's own (`-type:adult`):
+/// a pass that edits the user's query, like a facet dropping its own
+/// clauses, must never see them. Run [`BaseQuery::query`], or
+/// [`BaseQuery::restrict`] on whatever the pass made of `node`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BaseQuery {
+    /// The user's query, without the torrents a filter rule hid unless
+    /// asked. Never run it on its own.
     pub node: Node,
+    /// Clauses ANDed onto every query the index runs, after any edit of
+    /// `node` (today: `-type:adult` while Adult is hidden).
+    pub visibility: Vec<Node>,
     /// What the response tells the user about it.
     pub notices: Vec<SearchNotice>,
+}
+
+impl BaseQuery {
+    /// `node` as the index runs it.
+    pub fn query(&self) -> Node {
+        self.restrict(self.node.clone())
+    }
+
+    /// `node` (the user's query, or a pass's edit of it) with the
+    /// visibility clauses ANDed on.
+    pub fn restrict(&self, node: Node) -> Node {
+        self.visibility
+            .iter()
+            .cloned()
+            .fold(node, |node, clause| match node {
+                Node::All => clause,
+                Node::And { mut of } => {
+                    of.push(clause);
+                    Node::And { of }
+                }
+                other => Node::And {
+                    of: vec![other, clause],
+                },
+            })
+    }
 }
 
 /// The query every count of the index runs (search, totals, exact
@@ -94,35 +130,34 @@ pub struct BaseQuery {
 /// notice. Adult follows the stored, effective class (`type:adult` in
 /// the index), so your Is adult / Not adult corrections apply once the
 /// live indexer picks them up.
+///
+/// Facets (B6) strip their own clauses from `node`, then run
+/// `restrict(stripped)` for every pass, so `type` never counts Adult
+/// while it's hidden.
 pub fn base_query(ast: &Node, v: Visibility) -> BaseQuery {
-    let mut node = if v.hidden {
+    let node = if v.hidden {
         ast.clone()
     } else {
         ast.clone().without_hidden()
     };
+    let mut visibility = Vec::new();
     let mut notices = Vec::new();
     if !v.adult {
         if asks_for_adult(ast, true) {
             notices.push(SearchNotice::AdultHidden);
         }
-        let no_adult = Node::Not {
+        visibility.push(Node::Not {
             of: Box::new(Node::Tag {
                 key: TagKey::Type,
                 any: vec![ADULT.to_string()],
             }),
-        };
-        node = match node {
-            Node::All => no_adult,
-            Node::And { mut of } => {
-                of.push(no_adult);
-                Node::And { of }
-            }
-            other => Node::And {
-                of: vec![other, no_adult],
-            },
-        };
+        });
     }
-    BaseQuery { node, notices }
+    BaseQuery {
+        node,
+        visibility,
+        notices,
+    }
 }
 
 /// `type:adult`, as the index stores it.
@@ -301,10 +336,9 @@ async fn run_search(
         hidden: p.hidden.unwrap_or(false),
         adult: s.adult.shown(),
     };
-    let BaseQuery {
-        node: shown,
-        notices,
-    } = base_query(&ast, visibility);
+    let base = base_query(&ast, visibility);
+    let shown = base.query();
+    let notices = base.notices;
     let fingerprint = fingerprint(&shown, visibility, sort);
     let client = client_of(headers);
     let cursor = p
@@ -621,4 +655,103 @@ pub(crate) fn unix_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tag(key: TagKey, v: &str) -> Node {
+        Node::Tag {
+            key,
+            any: vec![v.into()],
+        }
+    }
+
+    fn word(w: &str) -> Node {
+        Node::Word {
+            field: lodestar_search::query::TextField::Any,
+            word: w.into(),
+        }
+    }
+
+    fn not(n: Node) -> Node {
+        Node::Not { of: Box::new(n) }
+    }
+
+    /// What B6's `type` facet does to a query: drop its own top-level
+    /// conjuncts, negations included.
+    fn without_type(node: &Node) -> Node {
+        let owns = |n: &Node| match n {
+            Node::Tag { key, .. } => *key == TagKey::Type,
+            Node::Not { of } => matches!(
+                **of,
+                Node::Tag {
+                    key: TagKey::Type,
+                    ..
+                }
+            ),
+            _ => false,
+        };
+        match node {
+            Node::And { of } => Node::And {
+                of: of.iter().filter(|n| !owns(n)).cloned().collect(),
+            },
+            n if owns(n) => Node::All,
+            n => n.clone(),
+        }
+    }
+
+    const HIDDEN: Visibility = Visibility {
+        hidden: true,
+        adult: false,
+    };
+
+    #[test]
+    fn a_facet_pass_cannot_strip_adult_visibility() {
+        let no_adult = not(tag(TagKey::Type, ADULT));
+        for ast in [
+            Node::All,
+            tag(TagKey::Type, "movie"),
+            not(tag(TagKey::Type, ADULT)),
+            Node::And {
+                of: vec![word("dark"), tag(TagKey::Type, ADULT)],
+            },
+        ] {
+            let base = base_query(&ast, HIDDEN);
+            assert_eq!(base.visibility, vec![no_adult.clone()], "{ast:?}");
+            let pass = base.restrict(without_type(&base.node));
+            let kept = match &pass {
+                Node::And { of } => of.contains(&no_adult),
+                n => *n == no_adult,
+            };
+            assert!(kept, "{ast:?} ran as {pass:?}");
+        }
+    }
+
+    #[test]
+    fn the_query_is_the_users_with_visibility_anded_on() {
+        let ast = word("dark");
+        let base = base_query(&ast, HIDDEN);
+        assert_eq!(base.node, ast);
+        assert_eq!(
+            base.query(),
+            Node::And {
+                of: vec![ast.clone(), not(tag(TagKey::Type, ADULT))],
+            }
+        );
+        let shown = base_query(
+            &ast,
+            Visibility {
+                hidden: true,
+                adult: true,
+            },
+        );
+        assert!(shown.visibility.is_empty());
+        assert_eq!(shown.query(), ast);
+        assert_eq!(
+            base_query(&Node::All, HIDDEN).query(),
+            not(tag(TagKey::Type, ADULT))
+        );
+    }
 }

@@ -997,6 +997,16 @@
               }
             }
           },
+          "422": {
+            "description": "`adult_confirmation_required`: a patch turning on an adult setting without `\"confirm_adult\": true`; nothing is saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -1080,6 +1090,16 @@
               }
             }
           },
+          "404": {
+            "description": "`torrent_not_found`, or `adult_hidden`: an Adult torrent while \"Show adult content\" is off.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -1136,6 +1156,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FilesPage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`torrent_not_found`, or `adult_hidden`: an Adult torrent while \"Show adult content\" is off.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }

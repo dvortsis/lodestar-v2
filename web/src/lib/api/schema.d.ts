@@ -2430,6 +2430,15 @@ export interface operations {
                     "application/json": components["schemas"]["SectionValues"];
                 };
             };
+            /** @description `adult_confirmation_required`: a patch turning on an adult setting without `"confirm_adult": true`; nothing is saved. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -2480,6 +2489,15 @@ export interface operations {
                     "application/json": components["schemas"]["TorrentDetail"];
                 };
             };
+            /** @description `torrent_not_found`, or `adult_hidden`: an Adult torrent while "Show adult content" is off. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -2506,6 +2524,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FilesPage"];
+                };
+            };
+            /** @description `torrent_not_found`, or `adult_hidden`: an Adult torrent while "Show adult content" is off. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];

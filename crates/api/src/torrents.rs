@@ -10,6 +10,7 @@ use lodestar_search::flag_names;
 use lodestar_store::{FileTree, TorrentRow};
 use utoipa::OpenApi;
 
+use crate::dto::error::ErrorEnvelope;
 use crate::dto::search::SearchHit;
 use crate::dto::torrents::{FileEntry, FilesPage, FilesQuery, TorrentDetail};
 use crate::error::{ApiError, ApiResult, internal};
@@ -197,7 +198,10 @@ fn detail_of(row: &TorrentRow, tree: &FileTree) -> TorrentDetail {
     path = "/torrents/{hash}",
     tag = "torrents",
     params(("hash" = String, Path, description = "A 40-character hex info hash.")),
-    responses((status = 200, body = TorrentDetail))
+    responses(
+        (status = 200, body = TorrentDetail),
+        (status = 404, body = ErrorEnvelope, description = "`torrent_not_found`, or `adult_hidden`: an Adult torrent while \"Show adult content\" is off."),
+    )
 )]
 pub(crate) async fn detail(
     State(s): State<ApiState>,
@@ -221,7 +225,10 @@ pub(crate) async fn detail(
         ("hash" = String, Path, description = "A 40-character hex info hash."),
         FilesQuery,
     ),
-    responses((status = 200, body = FilesPage))
+    responses(
+        (status = 200, body = FilesPage),
+        (status = 404, body = ErrorEnvelope, description = "`torrent_not_found`, or `adult_hidden`: an Adult torrent while \"Show adult content\" is off."),
+    )
 )]
 pub(crate) async fn files(
     State(s): State<ApiState>,
