@@ -5,6 +5,10 @@ name: CI
 # run when a crate they build changes, and each fuzz target runs when a crate it
 # builds changes. macOS tests run on main and nightly, or on a PR labelled
 # `full-ci`, which also runs everything else. Main and nightly always run it all.
+# Labels are read on the next push; `labeled` isn't a trigger, because a run
+# whose jobs all skip would replace the head's failed checks with skipped ones.
+# To run everything now, add `full-ci` and start CI by hand on the branch
+# (workflow_dispatch runs everything).
 # Skipped jobs show as skipped; a skipped matrix job keeps its unexpanded name
 # (`test (${{ matrix.os }})`), so if branch protection is ever added, require an
 # aggregate job rather than individual matrix entries.
@@ -13,7 +17,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened]
   schedule:
     - cron: "41 2 * * *"
   workflow_dispatch:
@@ -21,10 +25,8 @@ on:
 permissions:
   contents: read
 
-# A label other than `full-ci` gets its own group (and does nothing), so adding
-# one never cancels the run in progress.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}${{ github.event.action == 'labeled' && github.event.label.name != 'full-ci' && '-label' || '' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -34,8 +36,6 @@ env:
 jobs:
   changes:
     name: changes
-    # A label restarts CI only when it's `full-ci`.
-    if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
     runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.c.outputs.rust }}
@@ -54,6 +54,9 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        # bash (not the default `bash -e`) sets pipefail, so a crash in the
+        # script fails the job instead of leaving every output empty.
+        shell: bash
         run: python3 .github/scripts/ci_changes.py "$EVENT" "$BASE" "$HEAD" "$LABELS" | tee -a "$GITHUB_OUTPUT"
 
   lint:
