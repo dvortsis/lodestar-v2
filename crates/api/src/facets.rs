@@ -2,8 +2,9 @@
 //! request of its own that the UI fires beside `/search`.
 //!
 //! It takes `/search`'s query parameters and builds the same base query
-//! with [`search::request_query`], so it counts exactly the torrents the
-//! search returns. With `lease` (a search's `next_cursor`) it reads that
+//! with [`search::base_query`], so it counts exactly the torrents the
+//! search returns: Adult visibility (§20.9) included, which it passes to
+//! the counting apart from the user's query. With `lease` (a search's `next_cursor`) it reads that
 //! search's index snapshot; otherwise it takes one as `/search` does.
 //! The work runs on the blocking pool under the request's token, which a
 //! client disconnect cancels, and [`BUDGET`].
@@ -28,7 +29,8 @@ use crate::dto::facets::{
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{Json, Query, same_origin_json};
 use crate::search::{
-    client_of, fingerprint, open_cursor, request_query, search_error, sort_param, unix_now,
+    Visibility, base_query, client_of, fingerprint, open_cursor, request_ast, search_error,
+    sort_param, unix_now,
 };
 use crate::{ApiState, auth};
 
@@ -168,13 +170,19 @@ async fn run_facets(
             "Search is turned off.",
         ));
     };
-    let (ast, shown) = request_query(p.ast, p.q, p.hidden.unwrap_or(false))?;
+    let ast = request_ast(p.ast, p.q)?;
     let sort = sort_param(p.sort.as_deref())?;
     let limits = limits(&p.limits)?;
+    let visibility = Visibility {
+        hidden: p.hidden.unwrap_or(false),
+        adult: s.adult.shown(),
+    };
+    let base = base_query(&ast, visibility);
+    let shown = base.query();
     let cursor = p
         .lease
         .as_deref()
-        .map(|c| open_cursor(c, &fingerprint(&shown, sort)))
+        .map(|c| open_cursor(c, &fingerprint(&shown, visibility, sort)))
         .transpose()
         .map_err(|e| match e.code() {
             // The parameter is `lease` here.
@@ -217,12 +225,11 @@ async fn run_facets(
             .expect("reader lock")
             .setting_i64(FIRST_RUN)
             .map_err(internal)?;
-        let params = FacetParams::new(limits, first_run);
-        // TODO(B17): pass its always-on visibility clauses here, apart from
-        // the user's query, so no facet's disjunction removes them. The
-        // hidden-torrent clause in `shown` belongs to no facet.
-        let filters: &[lodestar_search::Node] = &[];
-        let got = facets(&lease, &shown, filters, &params, &budget).map_err(timeout)?;
+        let params = FacetParams::new(limits, first_run, !visibility.adult);
+        // Disjunction edits the user's part only; the visibility clauses
+        // hold in every pass.
+        let got =
+            facets(&lease, &base.node, &base.visibility, &params, &budget).map_err(timeout)?;
         let total = lease.total();
         Ok(axum::Json(response(
             &got,

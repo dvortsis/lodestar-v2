@@ -94,9 +94,10 @@ pub enum Facet {
     Hdr,
     /// Structural presence: `nfo`, `subs`, `cue`, `sample`, `sfv`.
     Has,
-    /// Adult subtypes (§20.9). Listed only when the search's documents
-    /// include adult ones or the query selects one: with Adult hidden,
-    /// none are left to count.
+    /// Adult subtypes (§20.9), counted only over torrents whose class is
+    /// Adult: an `adult:<kind>` tag can outlive a Not-adult correction.
+    /// Not served while Adult is hidden ([`FacetParams::hide_adult`]),
+    /// and listed only when there's a value to list.
     Adult,
     Private,
     V2,
@@ -293,6 +294,15 @@ pub fn without_facet(node: &Node, facet: Facet) -> Option<Node> {
     })
 }
 
+/// The torrents whose class is Adult, which the `adult` facet counts
+/// within.
+fn adult_class() -> Node {
+    Node::Tag {
+        key: TagKey::Type,
+        any: vec!["adult".to_owned()],
+    }
+}
+
 /// `node` ANDed with `filters`.
 fn with_filters(node: Node, filters: &[Node]) -> Node {
     if filters.is_empty() {
@@ -375,14 +385,23 @@ pub struct FacetParams {
     /// When the crawler first ran (the store's `first_run_at`):
     /// discovered bins that end by then are marked `backfill` (§10.4).
     pub first_run: Option<i64>,
+    /// Adult is hidden ("Show adult content" off, §20.9): the `adult`
+    /// facet isn't served. The filters that hide the torrents themselves
+    /// are the caller's (see [`facets`]).
+    pub hide_adult: bool,
     pub(crate) policy: Policy,
 }
 
 impl FacetParams {
-    pub fn new(limits: BTreeMap<Facet, usize>, first_run: Option<i64>) -> FacetParams {
+    pub fn new(
+        limits: BTreeMap<Facet, usize>,
+        first_run: Option<i64>,
+        hide_adult: bool,
+    ) -> FacetParams {
         FacetParams {
             limits,
             first_run,
+            hide_adult,
             policy: Policy::default(),
         }
     }
@@ -510,7 +529,7 @@ pub fn facets(
     for f in Facet::ALL {
         if lacks(&f.index_fields()) {
             unavailable.push(f.name().into());
-        } else {
+        } else if !(f == Facet::Adult && params.hide_adult) {
             served.push(f);
         }
     }
@@ -526,10 +545,11 @@ pub fn facets(
         unavailable.extend(["seeders".into(), "trackers".into()]);
     }
 
-    // Facets with their own clauses get a pass of their own.
+    // Facets with their own clauses get a pass of their own, and so does
+    // `adult`, which counts within the Adult class.
     let (own, shared): (Vec<Facet>, Vec<Facet>) = served
         .into_iter()
-        .partition(|f| conjuncts(node).iter().any(|c| f.owns(c)));
+        .partition(|f| *f == Facet::Adult || conjuncts(node).iter().any(|c| f.owns(c)));
     let searcher = lease.searcher();
     let policy = params.policy;
     let base = Want {
@@ -551,7 +571,11 @@ pub fn facets(
     }
     let mut tallies: Vec<(Vec<Facet>, Tally)> = vec![(base.facets.clone(), shared_tally)];
     for f in own {
-        let variant = with_filters(without_facet(node, f).expect("an own clause"), filters);
+        let mut variant = without_facet(node, f).unwrap_or_else(|| node.clone());
+        if f == Facet::Adult {
+            variant = with_filters(variant, &[adult_class()]);
+        }
+        let variant = with_filters(variant, filters);
         let compiled = index.compile(&variant, lease.now(), lease.stemmed());
         let estimate =
             count::estimate_with(searcher, &compiled, cancel, policy.segment_sample_above)?;
