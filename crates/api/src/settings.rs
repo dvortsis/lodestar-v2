@@ -23,6 +23,7 @@ use utoipa::OpenApi;
 
 use crate::ApiState;
 use crate::auth;
+use crate::dto::error::ErrorEnvelope;
 pub use crate::dto::settings::{
     SectionValues, SettingField, SettingSource, SettingValue, SettingsIndex, SettingsPatch,
     SettingsSection,
@@ -189,7 +190,10 @@ pub(crate) async fn section(
     tag = "settings",
     params(("section" = String, Path, description = "The section, as `GET /settings` names it.")),
     request_body = SettingsPatch,
-    responses((status = 200, body = SectionValues))
+    responses(
+        (status = 200, body = SectionValues),
+        (status = 422, body = ErrorEnvelope, description = "`adult_confirmation_required`: a patch turning on an adult setting without `\"confirm_adult\": true`; nothing is saved."),
+    )
 )]
 pub(crate) async fn patch(
     State(s): State<ApiState>,
