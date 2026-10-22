@@ -15,20 +15,27 @@ minisign -V -p packaging/keys/lodestar-release.pub -m release.json
 
 ## Replacing the release key
 
-A key change is a signed statement that names the new release public key and carries a **sequence number** one higher than the last accepted statement. Installed copies accept it only under these rules (§12.2):
+A key change is a signed statement. It names the new release public key and carries a **sequence number one higher than the last one published**. Installed copies accept it only under these rules (architecture §12.2):
 
 - **The recovery key must sign it.** The current release key may co-sign, but its signature alone is never accepted. A leaked release key therefore can't rotate to an attacker's key.
-- **Accepting it revokes the previous release key** for manifests.
+- **Accepting it revokes the previous release key** for new installs.
 - **A statement whose sequence number isn't higher than the last one accepted is refused,** so an old statement can't be replayed.
+- **Installed copies keep this trust state** (the accepted statements, the sequence number, the revoked keys, and the newest manifest time seen) in `<data>/bin/trust.json`. It sits outside the database and every snapshot, so rolling back a failed update never undoes a revocation.
 
 To rotate:
 1. Generate a new key pair (`minisign -G -W`).
 2. Write the key-change statement: the new public key, the next sequence number and the date.
 3. Sign the statement with the **recovery** key, and with the old release key too if it's still trusted.
-4. Publish the statement with the next release's manifest.
-5. Replace `lodestar-release.pub` and the CI secret.
+4. Publish the statement with the next release. **From then on, every manifest carries the statements** that chain its key to the recovery key, weekly re-signs included, so a copy that was offline across the rotation can still verify.
+5. Replace `lodestar-release.pub` and the CI secret, and re-sign each channel's current manifest with the new key.
 
-If the recovery key itself is lost, installed copies can't take a new release key automatically, and users must update by hand once.
+## The recovery key: an accepted risk
+
+The recovery key is offline and password-protected, and **there's no protocol to rotate it.** If it's lost or compromised:
+- installed copies can't take a new release key automatically;
+- the remedy is a new Lodestar build with a new embedded recovery key, which every user installs **by hand** once.
+
+Whether to add a recovery-key rotation statement (signed by the current recovery key, sequenced, revoking the old one) is the owner's decision. It isn't designed yet.
 
 ## Recommended hardening (owner actions, not yet decided)
 

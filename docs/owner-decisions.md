@@ -276,7 +276,7 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
       - the README has a licence section.
     - **The About screen's "Source code for this version" link** is the offer of source the AGPL requires (architecture §10.10.13).
     - **Brand assets** (the name as a product name, the logos, the mascot, the scenes and the icons) are outside the AGPL: all rights reserved, usable unmodified to refer to Lodestar (`brand/LICENSE.md`).
-    - **Dependency allowlist (CI, with B2c's licence generation; it applies to shipped components only):**
+    - **Dependency allowlist** *(detail added by the settings session to carry out this decision, not the owner's words; architecture §16)*. It's enforced by CI, with B2c's licence generation, and applies to shipped components only:
       - **Allowed:** MIT, MIT-0, Apache-2.0, BSD-2/3-Clause, ISC, Zlib, 0BSD, BSL-1.0, BlueOak-1.0.0, Unicode-3.0, MPL-2.0, CC0-1.0, OFL-1.1 (fonts, shipped as separate files) and the GPL-3.0/AGPL-3.0 family.
       - Packages with no licence field go in a reviewed overrides file. The list is generated per shipped target, so platform-only crates drop out (architecture §10.10.13).
       - **Refused:** GPL-2.0-only, SSPL, non-commercial and proprietary licences.
