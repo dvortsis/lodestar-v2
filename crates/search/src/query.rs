@@ -94,6 +94,8 @@ pub enum TagKey {
     Group,
     Has,
     Resolved,
+    /// What an adult torrent would otherwise be (§20.9).
+    Adult,
 }
 
 impl TagKey {
@@ -108,6 +110,7 @@ impl TagKey {
             TagKey::Group => "group",
             TagKey::Has => "has",
             TagKey::Resolved => "resolved",
+            TagKey::Adult => "adult",
         }
     }
 }
@@ -291,6 +294,7 @@ const FIELDS: &[(&str, FieldKind)] = &[
     ("group", FieldKind::Tag(TagKey::Group)),
     ("has", FieldKind::Tag(TagKey::Has)),
     ("resolved", FieldKind::Tag(TagKey::Resolved)),
+    ("adult", FieldKind::Tag(TagKey::Adult)),
     ("ambiguous", FieldKind::Flag("ambiguous")),
     ("year", FieldKind::Num(NumField::Year)),
     ("s", FieldKind::Num(NumField::Season)),
@@ -843,7 +847,7 @@ const MAX_TAG_BYTES: usize = 64;
 
 /// A keyword value as the index holds it, or `None` if it can't be one.
 fn tag_value(key: TagKey, v: &str) -> Option<String> {
-    use lodestar_classify::{ContentType, ResolvedVia, Structure};
+    use lodestar_classify::{AdultKind, ContentType, ResolvedVia, Structure};
     let lower = v.to_lowercase();
     if lower.is_empty() || lower.len() > MAX_TAG_BYTES {
         return None;
@@ -854,6 +858,7 @@ fn tag_value(key: TagKey, v: &str) -> Option<String> {
         TagKey::Resolved => {
             return ResolvedVia::from_name(&lower).map(|r| r.as_str().to_owned());
         }
+        TagKey::Adult => return AdultKind::from_name(&lower).map(|k| k.as_str().to_owned()),
         TagKey::Group => return Some(lower),
         TagKey::Res => "res",
         TagKey::Hdr => "hdr",
@@ -882,7 +887,7 @@ fn tag_value(key: TagKey, v: &str) -> Option<String> {
 }
 
 fn tag_help(key: TagKey, name: &str, v: &str) -> String {
-    use lodestar_classify::{ContentType, ResolvedVia, Structure};
+    use lodestar_classify::{AdultKind, ContentType, ResolvedVia, Structure};
     let list = |names: Vec<&str>| names.join(", ");
     match key {
         TagKey::Type => format!(
@@ -896,6 +901,10 @@ fn tag_help(key: TagKey, name: &str, v: &str) -> String {
         TagKey::Resolved => format!(
             "{name}: expects one of {}",
             list(ResolvedVia::ALL.iter().map(|r| r.as_str()).collect())
+        ),
+        TagKey::Adult => format!(
+            "{name}: expects one of {}",
+            list(AdultKind::ALL.iter().map(|k| k.as_str()).collect())
         ),
         _ => format!("{name}: can't read {v:?}"),
     }
@@ -1578,6 +1587,17 @@ mod tests {
         );
         assert_eq!(parse("group:NTb").unwrap(), tag(TagKey::Group, &["ntb"]));
         assert_eq!(parse("has:nfo").unwrap(), tag(TagKey::Has, &["nfo"]));
+        assert_eq!(parse("type:Adult").unwrap(), tag(TagKey::Type, &["adult"]));
+        assert_eq!(
+            parse("adult:scene,VR").unwrap(),
+            tag(TagKey::Adult, &["scene", "vr"])
+        );
+        assert!(
+            parse("adult:nope")
+                .unwrap_err()
+                .message
+                .contains("scene, movie")
+        );
         assert_eq!(
             parse("resolved:files").unwrap(),
             tag(TagKey::Resolved, &["files"])

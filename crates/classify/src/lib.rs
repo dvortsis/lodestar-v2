@@ -7,13 +7,15 @@
 //! - [`Structure`] fingerprints: disc layouts, rips, scene sets, repacks;
 //! - the [`Effective`] title: the release parse of the name, or, for an
 //!   uninformative name, of the dominant files or top folder;
-//! - the [`ContentType`] with a confidence;
+//! - the [`ContentType`] with a confidence, and for adult content its
+//!   [`AdultKind`] (§20.9);
 //! - the [`Junk`] score with its reasons.
 //!
 //! It's pure and CPU-only, so it runs on the worker side of the prepare
 //! step (§19.4). The cost is one pass over the files plus at most a few
 //! release parses, whatever the file count.
 
+mod adult;
 mod composition;
 mod content;
 mod effective;
@@ -24,6 +26,7 @@ mod structure;
 
 use std::collections::HashSet;
 
+pub use adult::{ADULT_THRESHOLD, AdultKind};
 pub use composition::{COMP_VERSION, CategoryStat, Composition, DecodeError};
 pub use content::ContentType;
 pub use effective::{Effective, ResolvedVia};
@@ -34,7 +37,7 @@ pub use structure::Structure;
 
 /// Bumped whenever a change alters any classification, so stored
 /// results can be re-derived (§6 "Re-derivation without the raw dict").
-pub const CLASSIFY_VERSION: u32 = 1;
+pub const CLASSIFY_VERSION: u32 = 2;
 
 /// One file of a torrent, with its path decoded to text. A single-file
 /// torrent is one entry whose path is the torrent name.
@@ -70,6 +73,8 @@ pub struct Classification {
     pub content_type: ContentType,
     /// 0–100: how sure the content type is.
     pub confidence: u8,
+    /// Set exactly when the content type is [`ContentType::Adult`].
+    pub adult_kind: Option<AdultKind>,
     pub junk: Junk,
     /// Index of the largest non-padding file.
     pub largest: Option<usize>,
@@ -104,7 +109,19 @@ pub fn classify(name: &str, files: &[FileInfo]) -> Classification {
     }
     let structure = Structure::scan(files);
     let title = effective::resolve(name, files, &composition);
-    let (content_type, confidence) = content::content_type(&title, &composition, structure, files);
+    let (mut content_type, mut confidence) =
+        content::content_type(&title, &composition, structure, files);
+    let adult_kind = adult::detect(
+        name,
+        &title.release,
+        largest.map(|i| &files[i]),
+        content_type,
+    )
+    .map(|(kind, score)| {
+        content_type = ContentType::Adult;
+        confidence = score;
+        kind
+    });
     let junk = junk::score(&title, &composition, structure, files);
     Classification {
         composition,
@@ -112,6 +129,7 @@ pub fn classify(name: &str, files: &[FileInfo]) -> Classification {
         title,
         content_type,
         confidence,
+        adult_kind,
         junk,
         largest,
         depth: u16::try_from(depth).unwrap_or(u16::MAX),
