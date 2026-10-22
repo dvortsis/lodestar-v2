@@ -102,6 +102,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The live event stream.
+         * @description Each frame is `id: <epoch>-<seq>` (none on `resync`), `event: <name>`
+         *     and `data: <json>`, the payload of the `Event` variant of that name.
+         *     Send the last id back as `Last-Event-ID` (`EventSource` does) to
+         *     replay what was missed; when that can't be done exactly (a restart,
+         *     too long ago, or an id that isn't ours), a `resync` comes first. A
+         *     client that falls behind gets a `resync` and carries on from live. A
+         *     comment every 15 s keeps the connection open; `retry:` is 5 s.
+         */
+        get: operations["getEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/facets": {
         parameters: {
             query?: never;
@@ -520,6 +546,32 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description `event: alerts` (reserved: B9 publishes it): a saved search matched
+         *     new torrents. The matches themselves come from the API.
+         */
+        AlertsEvent: {
+            /**
+             * Format: int64
+             * @description The alert's id.
+             */
+            alert: number;
+            /**
+             * Format: int64
+             * @description New matches.
+             */
+            matched: number;
+            /**
+             * Format: int64
+             * @description The highest matching torrent id.
+             */
+            max_id: number;
+            /**
+             * Format: int64
+             * @description The saved search's id.
+             */
+            saved_search: number;
+        };
         AllowEntry: {
             /** Format: int64 */
             id: number;
@@ -952,6 +1004,63 @@ export interface components {
             junk: number;
             type: string;
         };
+        /**
+         * @description `event: crawler`: the same counters as the status page and
+         *     `/metrics`, sent every 5 s while anyone subscribes.
+         * @example {
+         *       "at": 1700000000,
+         *       "dht_nodes": 812,
+         *       "fetch_active": 40,
+         *       "fetch_pending": 1200,
+         *       "fetched": 3400,
+         *       "harvested": 91000,
+         *       "stored": 3100,
+         *       "torrents": 48211
+         *     }
+         */
+        CrawlerEvent: {
+            /**
+             * Format: int64
+             * @description Unix seconds.
+             */
+            at: number;
+            /**
+             * Format: int64
+             * @description Nodes in the DHT routing table; null when the DHT is off or
+             *     hasn't reported yet.
+             */
+            dht_nodes: number | null;
+            /**
+             * Format: int64
+             * @description Metadata fetches running now.
+             */
+            fetch_active: number;
+            /**
+             * Format: int64
+             * @description Hashes waiting for a fetch.
+             */
+            fetch_pending: number;
+            /**
+             * Format: int64
+             * @description Metadata fetched since start.
+             */
+            fetched: number;
+            /**
+             * Format: int64
+             * @description Hashes received from sources since start.
+             */
+            harvested: number;
+            /**
+             * Format: int64
+             * @description Torrents stored since start.
+             */
+            stored: number;
+            /**
+             * Format: int64
+             * @description Torrents in the store.
+             */
+            torrents: number;
+        };
         Decision: {
             action: string;
             rule: string;
@@ -1008,6 +1117,36 @@ export interface components {
             error: components["schemas"]["ErrorBody"];
             /** @description On a 401: whether the instance still needs its first-run setup. */
             setup_required?: boolean;
+        };
+        /**
+         * @description One frame of the stream: `event:` names the variant and `data:` holds
+         *     its payload. Every event but `resync` has an `id:` of the form
+         *     `<epoch>-<seq>` to send back as `Last-Event-ID`.
+         */
+        Event: {
+            data: components["schemas"]["TorrentsEvent"];
+            /** @enum {string} */
+            event: "torrents";
+        } | {
+            data: components["schemas"]["CrawlerEvent"];
+            /** @enum {string} */
+            event: "crawler";
+        } | {
+            data: components["schemas"]["RebuildEvent"];
+            /** @enum {string} */
+            event: "rebuild";
+        } | {
+            data: components["schemas"]["AlertsEvent"];
+            /** @enum {string} */
+            event: "alerts";
+        } | {
+            data: components["schemas"]["InsightsEvent"];
+            /** @enum {string} */
+            event: "insights";
+        } | {
+            data: components["schemas"]["ResyncEvent"];
+            /** @enum {string} */
+            event: "resync";
         };
         ExceptionEntry: {
             hashes?: string[];
@@ -1186,6 +1325,34 @@ export interface components {
         IdBody: {
             /** Format: int64 */
             id: number;
+        };
+        /**
+         * @description `event: insights` (reserved: B11a publishes it every 30 s): the stage
+         *     strip's headline numbers (`docs/metrics.md` §6.1, §7.5).
+         */
+        InsightsEvent: {
+            stages: components["schemas"]["InsightsStages"];
+            /**
+             * Format: int64
+             * @description Unix seconds.
+             */
+            updated_at: number;
+        };
+        /** @description `docs/metrics.md` §7.5 `stages`. */
+        InsightsStages: {
+            /**
+             * Format: int64
+             * @description Always approximate.
+             */
+            discover: number;
+            /** Format: int64 */
+            fetch: number;
+            /** Format: int64 */
+            index: number;
+            /** Format: int64 */
+            serve: number;
+            /** Format: int64 */
+            understand: number;
         };
         /** @enum {string} */
         JobPhase: "reading" | "quarantine" | "tombstones" | "done";
@@ -1385,6 +1552,51 @@ export interface components {
             decisions_30d: components["schemas"]["DecisionCount"][];
             quarantine: components["schemas"]["QuarantineEntry"][];
         };
+        /**
+         * @description `event: rebuild`: index rebuild progress (§8, the "Index rebuilding"
+         *     banner of §10.4), sent when it changes, and once more with `done`.
+         */
+        RebuildEvent: {
+            /**
+             * Format: int64
+             * @description Torrents in the new index so far.
+             */
+            done: number;
+            /** @description Why it stopped, once `failed`. */
+            error: string | null;
+            /** @description The index serving meanwhile, e.g. `v3-t1`. */
+            from: string;
+            phase: components["schemas"]["RebuildPhase"];
+            /** @description The index being built. */
+            to: string;
+            /**
+             * Format: int64
+             * @description Torrents to build before finishing.
+             */
+            total: number;
+            /** @description Fields that match nothing until the swap. */
+            unavailable: string[];
+        };
+        /**
+         * @description A rebuild's phase; `done` once the new index serves.
+         * @enum {string}
+         */
+        RebuildPhase: "building" | "finishing" | "swapping" | "failed" | "done";
+        /**
+         * @description `event: resync`: events were missed; refetch what the page shows, then
+         *     carry on with the events that follow. It has no `id:`.
+         * @example {
+         *       "reason": "lagged"
+         *     }
+         */
+        ResyncEvent: {
+            reason: components["schemas"]["ResyncReason"];
+        };
+        /**
+         * @description Why a `resync` was sent.
+         * @enum {string}
+         */
+        ResyncReason: "restarted" | "expired" | "malformed" | "lagged";
         /** @description One of your rules. */
         RuleEntry: {
             /** @description Null for an action code this server doesn't know. */
@@ -1907,6 +2119,11 @@ export interface components {
             shadow: string[];
         };
         /**
+         * @description What a client subscribes to with `?topics=`.
+         * @enum {string}
+         */
+        Topic: "torrents" | "crawler" | "rebuild" | "alerts" | "insights";
+        /**
          * @description `GET /torrents/{hash}`: the torrent summary (`docs/metrics.md` §7.1),
          *     its swarm section (§7.2) and the first 500 files.
          *
@@ -1985,6 +2202,27 @@ export interface components {
              * @description Of those, trackers that reported anyone; null = never scraped.
              */
             trackers_reporting: number | null;
+        };
+        /**
+         * @description `event: torrents`: torrents became searchable. Commits close together
+         *     may arrive as one event.
+         * @example {
+         *       "added": 12,
+         *       "max_id": 48211
+         *     }
+         */
+        TorrentsEvent: {
+            /**
+             * Format: int64
+             * @description Torrents new to the index since the previous `torrents` event;
+             *     can be 0 when only `max_id` moved on.
+             */
+            added: number;
+            /**
+             * Format: int64
+             * @description The highest torrent id searchable now.
+             */
+            max_id: number;
         };
     };
     responses: {
@@ -2112,6 +2350,78 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClassRuleRemoved"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getEvents: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Comma-separated topics, e.g. `torrents,crawler`; all of them when
+                 *     absent. An unknown or empty one is a 400 with `field: "topics"`.
+                 */
+                topics?: components["schemas"]["Topic"][];
+            };
+            header?: {
+                /** @description The last `id:` received, to resume after it. */
+                "Last-Event-ID"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The stream: one `Event` per frame (`event:` names the variant, `data:` holds its payload). */
+            200: {
+                headers: {
+                    /** @description `no-store`. */
+                    "Cache-Control"?: string;
+                    /** @description `no`, so a proxy doesn't buffer it. */
+                    "X-Accel-Buffering"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["Event"];
+                };
+            };
+            /** @description An unknown topic (`unknown_topic`, `field: "topics"`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description No session (`login_required`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Too many open streams, in all or for this session (`too_many_streams`). */
+            429: {
+                headers: {
+                    /** @description Seconds to wait. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not served here, or shutting down (`events_unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];

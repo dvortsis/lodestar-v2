@@ -15,6 +15,7 @@
 
 pub mod auth;
 pub mod error;
+pub mod events;
 pub mod facets;
 pub mod filters;
 pub mod search;
