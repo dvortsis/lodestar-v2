@@ -1273,12 +1273,18 @@ mod tests {
         for i in 0..20 {
             add(&mut writer, &format!("New.Show.{i}.mkv"));
         }
+        // A reader scrolling slowly keeps its lease alive meanwhile.
+        let touch = || drop(handle.leases().get(&id, 1).unwrap());
         wait_for("the old index to take the new torrents", || {
+            touch();
             found(&serving.index(), "new show") == 20
         });
         page(&mut next, &mut got);
         hold.store(false, Ordering::Relaxed);
-        wait_for("the swap", || !serving.rebuilding());
+        wait_for("the swap", || {
+            touch();
+            !serving.rebuilding()
+        });
         let old_dir = root.join(old.dir_name());
         assert!(old_dir.exists(), "a lease still reads the old index");
         while next.is_some() {

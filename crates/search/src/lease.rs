@@ -849,7 +849,11 @@ impl Leases {
     /// then the client's least recently used past its cap, then the least
     /// recently used of all past the total cap.
     pub fn insert(&self, lease: Arc<Lease>, client: u64) -> LeaseId {
-        let now = Instant::now();
+        self.insert_at(lease, client, Instant::now())
+    }
+
+    /// [`Leases::insert`] at `now` (tests pass their own clock).
+    pub(crate) fn insert_at(&self, lease: Arc<Lease>, client: u64, now: Instant) -> LeaseId {
         let mut map = lock(&self.map);
         map.retain(|_, s| !self.expired(s, now));
         let lru = |map: &HashMap<LeaseId, Slot>, of: Option<u64>| {
@@ -889,7 +893,10 @@ impl Leases {
     /// `client`'s lease `id`, refreshed. An expired, evicted, unknown or
     /// someone else's lease is [`Error::LeaseExpired`].
     pub fn get(&self, id: &LeaseId, client: u64) -> Result<Arc<Lease>> {
-        let now = Instant::now();
+        self.get_at(id, client, Instant::now())
+    }
+
+    pub(crate) fn get_at(&self, id: &LeaseId, client: u64, now: Instant) -> Result<Arc<Lease>> {
         let mut map = lock(&self.map);
         let Some(slot) = map.get_mut(id) else {
             return Err(Error::LeaseExpired);
@@ -907,7 +914,10 @@ impl Leases {
 
     /// Drops expired leases; returns how many are left.
     pub fn sweep(&self) -> usize {
-        let now = Instant::now();
+        self.sweep_at(Instant::now())
+    }
+
+    pub(crate) fn sweep_at(&self, now: Instant) -> usize {
         let mut map = lock(&self.map);
         map.retain(|_, s| !self.expired(s, now));
         map.len()

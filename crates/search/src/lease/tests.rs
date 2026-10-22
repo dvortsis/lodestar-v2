@@ -284,30 +284,45 @@ fn tiny(ttl_ms: u64, max_leases: usize, per_client: usize) -> Leases {
 
 #[test]
 fn leases_expire_after_their_last_use() {
+    // On an explicit clock: sleeps are too coarse on a loaded runner.
     let (index, _) = index_with(10, 1);
     let index = Arc::new(index);
+    let ms = |n: u64| Duration::from_millis(n);
+    let t0 = Instant::now();
     let leases = tiny(150, 10, 10);
-    let id = leases.insert(Arc::new(lease(&index, "", Sort::Relevance)), 1);
-    // Used within the ttl, again and again: still there.
-    for _ in 0..4 {
-        std::thread::sleep(Duration::from_millis(60));
-        leases.get(&id, 1).unwrap();
+    let id = leases.insert_at(Arc::new(lease(&index, "", Sort::Relevance)), 1, t0);
+    // Used within the ttl, again and again: still there, past one ttl.
+    for k in 1..=4 {
+        leases.get_at(&id, 1, t0 + ms(100 * k)).unwrap();
     }
-    std::thread::sleep(Duration::from_millis(200));
-    assert!(matches!(leases.get(&id, 1), Err(Error::LeaseExpired)));
-    assert_eq!(leases.sweep(), 0);
+    // 149 ms after the last use it's there; 150 ms after, it's gone.
+    leases.get_at(&id, 1, t0 + ms(549)).unwrap();
+    let gone = t0 + ms(549 + 150);
+    assert!(matches!(
+        leases.get_at(&id, 1, gone),
+        Err(Error::LeaseExpired)
+    ));
+    assert_eq!(leases.sweep_at(gone), 0);
     // And at most `max_age` after it was taken, however busy.
     let aged = Leases::new(LeaseConfig {
-        max_age: Duration::from_millis(100),
+        max_age: ms(100),
         ..LeaseConfig::default()
     });
-    let id = aged.insert(Arc::new(lease(&index, "", Sort::Relevance)), 1);
-    for _ in 0..2 {
-        std::thread::sleep(Duration::from_millis(30));
-        aged.get(&id, 1).unwrap();
-    }
-    std::thread::sleep(Duration::from_millis(80));
-    assert!(matches!(aged.get(&id, 1), Err(Error::LeaseExpired)));
+    let id = aged.insert_at(Arc::new(lease(&index, "", Sort::Relevance)), 1, t0);
+    aged.get_at(&id, 1, t0 + ms(40)).unwrap();
+    aged.get_at(&id, 1, t0 + ms(99)).unwrap();
+    assert!(matches!(
+        aged.get_at(&id, 1, t0 + ms(100)),
+        Err(Error::LeaseExpired)
+    ));
+    // A sweep drops the expired, not the live.
+    let live = aged.insert_at(
+        Arc::new(lease(&index, "", Sort::Relevance)),
+        1,
+        t0 + ms(100),
+    );
+    assert_eq!(aged.sweep_at(t0 + ms(150)), 1);
+    aged.get_at(&live, 1, t0 + ms(150)).unwrap();
 }
 
 #[test]
@@ -329,31 +344,33 @@ fn past_the_caps_the_least_recently_used_go() {
     let (index, _) = index_with(10, 1);
     let index = Arc::new(index);
     let new = || Arc::new(lease(&index, "", Sort::Relevance));
+    let t0 = Instant::now();
+    let at = |n: u64| t0 + Duration::from_millis(n);
     // Per client: 3.
     let leases = tiny(60_000, 100, 3);
-    let a: Vec<LeaseId> = (0..3).map(|_| leases.insert(new(), 1)).collect();
-    std::thread::sleep(Duration::from_millis(2));
-    leases.get(&a[0], 1).unwrap(); // a[1] is now the least recent
-    let other = leases.insert(new(), 2);
-    leases.insert(new(), 1);
-    assert!(matches!(leases.get(&a[1], 1), Err(Error::LeaseExpired)));
+    let a: Vec<LeaseId> = (0..3).map(|k| leases.insert_at(new(), 1, at(k))).collect();
+    leases.get_at(&a[0], 1, at(10)).unwrap(); // a[1] is now the least recent
+    let other = leases.insert_at(new(), 2, at(11));
+    leases.insert_at(new(), 1, at(12));
+    assert!(matches!(
+        leases.get_at(&a[1], 1, at(13)),
+        Err(Error::LeaseExpired)
+    ));
     for id in [a[0], a[2]] {
-        leases.get(&id, 1).unwrap();
+        leases.get_at(&id, 1, at(14)).unwrap();
     }
-    leases.get(&other, 2).unwrap();
+    leases.get_at(&other, 2, at(14)).unwrap();
     assert_eq!(leases.len(), 4);
     // In all: 4.
     let leases = tiny(60_000, 4, 100);
-    let ids: Vec<LeaseId> = (0..4)
-        .map(|c| {
-            std::thread::sleep(Duration::from_millis(1));
-            leases.insert(new(), c)
-        })
-        .collect();
-    leases.insert(new(), 9);
+    let ids: Vec<LeaseId> = (0..4).map(|c| leases.insert_at(new(), c, at(c))).collect();
+    leases.insert_at(new(), 9, at(5));
     assert_eq!(leases.len(), 4);
-    assert!(matches!(leases.get(&ids[0], 0), Err(Error::LeaseExpired)));
-    leases.get(&ids[1], 1).unwrap();
+    assert!(matches!(
+        leases.get_at(&ids[0], 0, at(6)),
+        Err(Error::LeaseExpired)
+    ));
+    leases.get_at(&ids[1], 1, at(6)).unwrap();
 }
 
 #[test]
