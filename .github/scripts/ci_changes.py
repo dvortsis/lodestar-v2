@@ -102,7 +102,7 @@ def fuzz_roots(target: str) -> set[str]:
 def main() -> None:
     event, base, head = sys.argv[1], sys.argv[2], sys.argv[3]
     try:
-        labels = set(json.loads(sys.argv[4]) or []) if len(sys.argv) > 4 else set()
+        labels = {str(l).lower() for l in json.loads(sys.argv[4]) or []} if len(sys.argv) > 4 else set()
     except (ValueError, TypeError):
         labels = set()
     out: dict[str, str] = {}
@@ -115,7 +115,8 @@ def main() -> None:
         return
 
     changed = subprocess.run(
-        ["git", "diff", "--name-only", f"{base}...{head}"],
+        # --no-renames: a file moved out of a crate must list its old path too.
+        ["git", "diff", "--no-renames", "--name-only", f"{base}...{head}"],
         cwd=ROOT,
         check=True,
         capture_output=True,

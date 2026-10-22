@@ -170,7 +170,7 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.sha }}
           FULL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
         run: |
-          if [ "$FULL" = "true" ] || git diff --name-only "$BASE...$HEAD" |
+          if [ "$FULL" = "true" ] || git diff --no-renames --name-only "$BASE...$HEAD" |
             grep -qE '^(packaging/docker/|Cargo\.lock$|Cargo\.toml$|rust-toolchain|\.dockerignore$|\.github/workflows/release\.yml$)'; then
             echo "build=true" >> "$GITHUB_OUTPUT"
           else
