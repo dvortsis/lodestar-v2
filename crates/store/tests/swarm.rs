@@ -183,6 +183,38 @@ fn unanswered_scrapes_keep_what_we_knew() {
 }
 
 #[test]
+fn unanswered_rounds_are_counted_until_an_answer() {
+    let mut store = mem();
+    let (id, _) = add(&mut store, "streak", false, 0);
+    let (fresh, _) = add(&mut store, "first", false, 0);
+    let mut suspect = update(id, T, 8);
+    suspect.flags = swarm_flags::SUSPECT;
+    apply(&mut store, &[suspect]);
+    let silent = |id, at| SwarmUpdate {
+        trackers_reporting: 0,
+        trackers_checked: 0,
+        dht: None,
+        seeders: 0,
+        leechers: 0,
+        completed: 0,
+        per_tracker: Vec::new(),
+        ..update(id, at, 0)
+    };
+    let flags = |store: &Store, id| store.swarm(id).unwrap().unwrap().flags;
+    apply(&mut store, &[silent(fresh, T)]);
+    assert_eq!(swarm_flags::unreached(flags(&store, fresh)), 1, "first row");
+    for round in 1..=20 {
+        apply(&mut store, &[silent(id, T + round)]);
+        let f = flags(&store, id);
+        assert_eq!(swarm_flags::unreached(f), round.min(15) as u8, "capped");
+        assert_eq!(f & swarm_flags::SUSPECT, swarm_flags::SUSPECT, "kept");
+    }
+    // An answer's flags replace the count.
+    apply(&mut store, &[update(id, T + 50, 3)]);
+    assert_eq!(flags(&store, id), 0);
+}
+
+#[test]
 fn lanes_skip_private_torrents() {
     let mut store = mem();
     let (a, ha) = add(&mut store, "a", false, 0);

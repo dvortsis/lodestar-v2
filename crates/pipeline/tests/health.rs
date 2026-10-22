@@ -13,9 +13,11 @@ use lodestar_sources::{
     BoxFuture, Consent, Found, Kind, Manifest, Network, PluginError, Priority, Risk, SourceCtx,
     SourcePlugin,
 };
-use lodestar_store::{Col, HotColumns, NEVER, NewTorrent, Store, StoreConfig};
-use lodestar_tracker_scrape::testing::udp_tracker;
-use lodestar_tracker_scrape::{Counts, TrackerUrl, UdpConfig};
+use lodestar_store::{
+    Col, HotColumns, NEVER, NewTorrent, Store, StoreConfig, SwarmUpdate, WriteBatch,
+};
+use lodestar_tracker_scrape::testing::{http_tracker, udp_tracker};
+use lodestar_tracker_scrape::{Counts, HttpConfig, TrackerUrl, UdpConfig};
 use tokio::sync::mpsc;
 
 const SWARM: Counts = Counts {
@@ -229,6 +231,91 @@ async fn scrapes_new_torrents_into_the_store_and_hot_columns() {
         requests.iter().any(|c| c.key == 0 && c.value >= 1),
         "{requests:?}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_http_tracker_answers_rounds_spanning_several_requests() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let names: Vec<String> = (0..40).map(|i| format!("multi {i}")).collect();
+    let t = seed(&db, &names.iter().map(String::as_str).collect::<Vec<_>>());
+    let tracker = http_tracker().await;
+    for &(_, hash) in &t {
+        tracker.state.set(hash, SWARM);
+    }
+    let mut setup = health(&db, vec![tracker.url(false)]);
+    // Two rounds of four requests each, back to back: the second must
+    // wait for the first's last slot rather than be skipped.
+    setup.config.round_size = 20;
+    setup.config.http = HttpConfig {
+        max_hashes: 5,
+        ..HttpConfig::default()
+    };
+    let hot = Arc::new(HotColumns::with_epoch_every(Duration::ZERO));
+    let store = Store::open(&db, StoreConfig::default()).unwrap();
+    let pipeline = Pipeline::start(config(&hot, setup), store, Vec::new())
+        .await
+        .unwrap();
+    until("every torrent scraped", || {
+        t.iter()
+            .all(|&(id, _)| hot.get(Col::Seeders, id as u64) == 12)
+    })
+    .await;
+    let h = pipeline.monitor().health().unwrap().clone();
+    let rounds = h.trackers()[0].rounds;
+    assert_eq!(
+        rounds,
+        [2, 0, 0, 0, 0],
+        "both rounds answered, none skipped"
+    );
+    pipeline.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_due_rescrape_keeps_the_dht_estimate_it_didnt_ask_for() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let t = seed(&db, &["due"]);
+    {
+        let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        let swarm = [SwarmUpdate {
+            torrent_id: t[0].0,
+            at: 1,
+            seeders: 5,
+            leechers: 9,
+            completed: 0,
+            trackers_reporting: 0,
+            trackers_checked: 1,
+            dht: Some((5, 9)),
+            per_tracker: Vec::new(),
+            next_scrape_at: 2,
+            flags: 0,
+            interest: false,
+        }];
+        store
+            .write(&WriteBatch {
+                swarm: &swarm,
+                ..WriteBatch::default()
+            })
+            .unwrap();
+    }
+    let tracker = udp_tracker().await;
+    tracker.state.set(t[0].1, SWARM);
+    let hot = Arc::new(HotColumns::with_epoch_every(Duration::ZERO));
+    let store = Store::open(&db, StoreConfig::default()).unwrap();
+    let pipeline = Pipeline::start(
+        config(&hot, health(&db, vec![tracker.url(true)])),
+        store,
+        Vec::new(),
+    )
+    .await
+    .unwrap();
+    until("rescraped", || hot.get(Col::Seeders, t[0].0 as u64) == 12).await;
+    let store = pipeline.shutdown().await.unwrap();
+    let row = store.swarm(t[0].0).unwrap().unwrap();
+    assert_eq!((row.seeders, row.trackers_reporting), (12, 1));
+    assert_eq!(row.dht, Some((5, 9)), "carried over");
+    assert_eq!(hot.get(Col::Dht, t[0].0 as u64), 14, "seeds + peers");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
