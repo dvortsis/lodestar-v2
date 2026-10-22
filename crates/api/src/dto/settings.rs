@@ -128,7 +128,9 @@ pub struct SectionValues {
 
 /// `PATCH /settings/{section}`: some of the section's fields and their
 /// new values, as its schema in `GET /settings` describes. Fields left
-/// out keep their values; an unknown field is refused.
+/// out keep their values; an unknown field is refused. `null` resets a
+/// field: its saved value is removed, and the `config.toml` value or the
+/// default applies again.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(transparent)]
 #[schema(value_type = Object, example = json!({ "intensity": "low", "timeout_secs": 12 }))]

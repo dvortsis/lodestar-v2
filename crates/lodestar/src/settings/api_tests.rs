@@ -294,4 +294,25 @@ async fn settings_endpoints() {
     )
     .await;
     assert_eq!(after, out);
+    // `null` resets: the file's timeout and the default intensity again.
+    let reset = golden(
+        &f,
+        "settings_patch_reset",
+        patch(
+            "/api/v1/settings/crawler",
+            c,
+            r#"{"intensity":null,"timeout_secs":null}"#,
+        ),
+    )
+    .await;
+    assert_eq!(reset["fields"]["timeout_secs"]["source"], json!("file"));
+    assert_eq!(reset["fields"]["intensity"]["source"], json!("default"));
+    assert_eq!(reset["restart_required"], json!([]));
+    // A cookie setting saved over plain HTTP would lock everyone out.
+    golden(
+        &f,
+        "settings_patch_secure_cookies",
+        patch("/api/v1/settings/network", c, r#"{"secure_cookies":true}"#),
+    )
+    .await;
 }

@@ -89,6 +89,7 @@ pub const ENV_VARS: &[&str] = &[
     "LODESTAR_DHT_PORT",
     "LODESTAR_INTENSITY",
     "LODESTAR_DHT_ENABLED",
+    "LODESTAR_SECURE_COOKIES",
 ];
 
 #[derive(Debug, Clone, Deserialize)]
@@ -367,6 +368,11 @@ impl Config {
         }
         if let Some(v) = env("LODESTAR_DHT_ENABLED") {
             config.dht.enabled = v.parse().map_err(|_| parse("LODESTAR_DHT_ENABLED", &v))?;
+        }
+        if let Some(v) = env("LODESTAR_SECURE_COOKIES") {
+            config.http.secure_cookies = v
+                .parse()
+                .map_err(|_| parse("LODESTAR_SECURE_COOKIES", &v))?;
         }
         Ok(config)
     }

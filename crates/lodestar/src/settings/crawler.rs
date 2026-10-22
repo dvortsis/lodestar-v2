@@ -46,9 +46,9 @@ pub struct Crawler {
     pub intensity: Intensity,
     #[schema(inline)]
     pub encryption: Encryption,
-    /// Concurrent metadata fetches; null follows the intensity (100,
-    /// 400, 1000).
-    pub max_sockets: Option<u32>,
+    /// Concurrent metadata fetches; 0 follows the intensity (100, 400,
+    /// 1000). Not null: in a patch, null resets a field.
+    pub max_sockets: u32,
     /// Seconds before a metadata fetch gives up.
     pub timeout_secs: u64,
     /// The largest info dict fetched, in MiB.
@@ -71,7 +71,7 @@ impl Section for Crawler {
         Field::new("max_sockets")
             .file("fetch.max_sockets")
             .restart()
-            .range(1, 4096),
+            .range(0, 4096),
         Field::new("timeout_secs")
             .file("fetch.timeout_secs")
             .restart()
@@ -97,22 +97,30 @@ impl Section for Crawler {
             max_sockets: config
                 .fetch
                 .max_sockets
-                .map(|n| u32::try_from(n).unwrap_or(u32::MAX)),
+                .map_or(0, |n| u32::try_from(n).unwrap_or(u32::MAX)),
             timeout_secs: config.fetch.timeout_secs,
             max_metadata_mib: config.fetch.max_metadata_mib as u64,
         }
     }
 
-    fn apply(&self, config: &mut Config) {
-        config.dht.intensity = self.intensity.into();
-        config.fetch.encryption = match self.encryption {
-            Encryption::Prefer => EncryptionName::Prefer,
-            Encryption::Require => EncryptionName::Require,
-            Encryption::Disable => EncryptionName::Disable,
-        };
-        config.fetch.max_sockets = self.max_sockets.map(|n| n as usize);
-        config.fetch.timeout_secs = self.timeout_secs;
-        config.fetch.max_metadata_mib = self.max_metadata_mib as usize;
+    fn apply(&self, field: &str, config: &mut Config) {
+        match field {
+            "intensity" => config.dht.intensity = self.intensity.into(),
+            "encryption" => {
+                config.fetch.encryption = match self.encryption {
+                    Encryption::Prefer => EncryptionName::Prefer,
+                    Encryption::Require => EncryptionName::Require,
+                    Encryption::Disable => EncryptionName::Disable,
+                }
+            }
+            "max_sockets" => {
+                config.fetch.max_sockets =
+                    (self.max_sockets > 0).then_some(self.max_sockets as usize)
+            }
+            "timeout_secs" => config.fetch.timeout_secs = self.timeout_secs,
+            "max_metadata_mib" => config.fetch.max_metadata_mib = self.max_metadata_mib as usize,
+            _ => {}
+        }
     }
 }
 

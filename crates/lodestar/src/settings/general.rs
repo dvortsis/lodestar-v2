@@ -44,9 +44,12 @@ impl Section for General {
         }
     }
 
-    fn apply(&self, config: &mut Config) {
-        // `data_dir` is never applied: nothing moves files at runtime.
-        config.log = self.log_level.clone();
+    fn apply(&self, field: &str, config: &mut Config) {
+        // `data_dir` is read-only, so never applied: nothing moves files
+        // at runtime.
+        if field == "log_level" {
+            config.log = self.log_level.clone();
+        }
     }
 
     fn check(&self, field: &str) -> Result<(), String> {

@@ -1457,7 +1457,9 @@ export interface components {
         /**
          * @description `PATCH /settings/{section}`: some of the section's fields and their
          *     new values, as its schema in `GET /settings` describes. Fields left
-         *     out keep their values; an unknown field is refused.
+         *     out keep their values; an unknown field is refused. `null` resets a
+         *     field: its saved value is removed, and the `config.toml` value or the
+         *     default applies again.
          */
         SettingsPatch: Record<string, never>;
         /** @description One section: its fields and the JSON schema of its values. */

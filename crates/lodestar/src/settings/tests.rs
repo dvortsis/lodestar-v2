@@ -222,7 +222,7 @@ fn the_file_and_defaults_are_told_apart() {
     );
     assert_eq!(
         field(&r, "network", "secure_cookies"),
-        (json!(false), SettingSource::Default, false)
+        (json!(false), SettingSource::Default, true)
     );
     // The data directory is never editable here, whatever its source.
     assert_eq!(
@@ -268,7 +268,7 @@ fn environment_fields_are_read_only_and_name_the_variable() {
             .is_empty()
     );
     // Other fields of the section stay editable.
-    r.patch("network", patch(json!({ "secure_cookies": true })))
+    r.patch("network", patch(json!({ "dht_enabled": false })))
         .unwrap();
 }
 
@@ -302,7 +302,7 @@ fn saved_values_survive_a_restart() {
         let out = r
             .patch(
                 "crawler",
-                patch(json!({ "intensity": "low", "timeout_secs": 20, "max_sockets": null })),
+                patch(json!({ "intensity": "low", "timeout_secs": 20, "max_sockets": 0 })),
             )
             .unwrap();
         assert_eq!(out.fields["intensity"].source, SettingSource::Db);
@@ -313,7 +313,7 @@ fn saved_values_survive_a_restart() {
     let crawler = r.get::<Crawler>();
     assert_eq!(crawler.intensity, Intensity::Low);
     assert_eq!(crawler.timeout_secs, 20);
-    assert_eq!(crawler.max_sockets, None);
+    assert_eq!(crawler.max_sockets, 0);
     assert_eq!(field(&r, "crawler", "max_sockets").1, SettingSource::Db);
     assert_eq!(
         field(&r, "transport", "utp"),
@@ -375,7 +375,7 @@ fn patches_are_validated_per_field() {
     // Bounds.
     invalid("crawler", json!({ "timeout_secs": 0 }), "timeout_secs");
     invalid("crawler", json!({ "timeout_secs": 121 }), "timeout_secs");
-    invalid("crawler", json!({ "max_sockets": 0 }), "max_sockets");
+    invalid("crawler", json!({ "max_sockets": 4097 }), "max_sockets");
     invalid("network", json!({ "dht_port": 0 }), "dht_port");
     invalid("search", json!({ "heap_mib": 8 }), "heap_mib");
     invalid("storage", json!({ "mmap_mib": -1 }), "mmap_mib");
@@ -383,7 +383,7 @@ fn patches_are_validated_per_field() {
     invalid("crawler", json!({ "timeout_secs": "10" }), "timeout_secs");
     invalid("crawler", json!({ "timeout_secs": 1.5 }), "timeout_secs");
     invalid("crawler", json!({ "intensity": "turbo" }), "intensity");
-    invalid("crawler", json!({ "encryption": null }), "encryption");
+    invalid("crawler", json!({ "encryption": 1 }), "encryption");
     invalid("network", json!({ "dht_enabled": "yes" }), "dht_enabled");
     invalid("network", json!({ "dht_port": 70000 }), "dht_port");
     // Socket addresses.
@@ -394,6 +394,7 @@ fn patches_are_validated_per_field() {
     );
     invalid("network", json!({ "http_bind": "0.0.0.0" }), "http_bind");
     invalid("network", json!({ "http_bind": 8090 }), "http_bind");
+    invalid("network", json!({ "http_bind": "0.0.0.0:0" }), "http_bind");
     // Log filters.
     invalid("general", json!({ "log_level": "info,=[" }), "log_level");
     invalid(
@@ -525,10 +526,10 @@ fn restart_only_changes_are_listed_until_restart() {
     let out = r
         .patch(
             "network",
-            patch(json!({ "http_bind": "127.0.0.1:9999", "secure_cookies": false })),
+            patch(json!({ "http_bind": "127.0.0.1:9999", "dht_enabled": true })),
         )
         .unwrap();
-    // `secure_cookies` didn't change, so it doesn't wait for anything.
+    // `dht_enabled` didn't change, so it doesn't wait for anything.
     assert_eq!(out.restart_required, ["http_bind"]);
     assert!(out.fields["http_bind"].restart_required);
     // Setting it back clears it.
@@ -740,9 +741,224 @@ fn the_default_sections_match_the_config_defaults() {
     assert_eq!(General::from_config(&c), General::default());
     assert_eq!(Crawler::from_config(&c), Crawler::default());
     let mut applied = Config::default();
-    Crawler::default().apply(&mut applied);
+    for f in Crawler::FIELDS {
+        Crawler::default().apply(f.name, &mut applied);
+    }
     assert_eq!(applied.fetch.max_sockets, c.fetch.max_sockets);
     assert_eq!(applied.dht.intensity, c.dht.intensity);
+    // 0 sockets is "follow the intensity".
+    Crawler {
+        max_sockets: 250,
+        ..Crawler::default()
+    }
+    .apply("max_sockets", &mut applied);
+    assert_eq!(applied.fetch.max_sockets, Some(250));
     assert!(!super::transport::Transport::default().utp);
     assert!(super::transport::Transport::default().fallback_to_tcp);
+}
+
+#[test]
+fn unsaved_values_reach_the_services_exactly_as_the_file_has_them() {
+    let dir = tempfile::tempdir().unwrap();
+    // Two DHT sockets on different ports: the section shows one port, but
+    // nothing saved means nothing rewritten.
+    let c = config(
+        dir.path(),
+        Some("[dht]\nbind = [\"0.0.0.0:6881\", \"[::]:6882\"]\n[fetch]\nmax_sockets = 300\n"),
+        &[],
+    );
+    let r = registry(dir.path(), &c);
+    let eff = r.effective_config(&c);
+    assert_eq!(eff.dht.bind, c.dht.bind);
+    assert_eq!(eff.fetch.max_sockets, Some(300));
+    // A saved field elsewhere in the section changes only itself.
+    r.patch("network", patch(json!({ "dht_enabled": false })))
+        .unwrap();
+    r.patch("crawler", patch(json!({ "timeout_secs": 9 })))
+        .unwrap();
+    let r = registry(dir.path(), &c);
+    let eff = r.effective_config(&c);
+    assert_eq!(eff.dht.bind, c.dht.bind);
+    assert!(!eff.dht.enabled);
+    assert_eq!(eff.fetch.timeout_secs, 9);
+    assert_eq!(eff.fetch.max_sockets, Some(300));
+    // A saved port moves every socket to it.
+    r.patch("network", patch(json!({ "dht_port": 7000 })))
+        .unwrap();
+    let eff = registry(dir.path(), &c).effective_config(&c);
+    assert!(eff.dht.bind.iter().all(|a| a.port() == 7000));
+    // An environment-set field keeps the environment's value.
+    let c = config(dir.path(), None, &[("LODESTAR_DHT_ENABLED", "true")]);
+    assert!(registry(dir.path(), &c).effective_config(&c).dht.enabled);
+}
+
+#[test]
+fn secure_cookies_come_only_from_the_file_or_environment() {
+    let dir = tempfile::tempdir().unwrap();
+    open(dir.path())
+        .lock()
+        .unwrap()
+        .set_settings_text(&[("settings.network.secure_cookies", "true")])
+        .unwrap();
+    let c = config(dir.path(), None, &[]);
+    let r = registry(dir.path(), &c);
+    // A saved value (from an earlier build) is ignored, never applied.
+    assert_eq!(
+        field(&r, "network", "secure_cookies"),
+        (json!(false), SettingSource::Default, true)
+    );
+    assert!(!r.effective_config(&c).http.secure_cookies);
+    for v in [json!(true), json!(null)] {
+        assert_eq!(
+            r.patch("network", patch(json!({ "secure_cookies": v }))),
+            Err(SettingsError::ReadOnly("secure_cookies".into()))
+        );
+    }
+    let c = config(dir.path(), Some("[http]\nsecure_cookies = true\n"), &[]);
+    let r = registry(dir.path(), &c);
+    assert_eq!(
+        field(&r, "network", "secure_cookies"),
+        (json!(true), SettingSource::File, true)
+    );
+    assert!(r.effective_config(&c).http.secure_cookies);
+    let c = config(dir.path(), None, &[("LODESTAR_SECURE_COOKIES", "true")]);
+    let r = registry(dir.path(), &c);
+    assert_eq!(
+        field(&r, "network", "secure_cookies"),
+        (json!(true), SettingSource::Env, true)
+    );
+    let index = r.index();
+    let network = index
+        .sections
+        .iter()
+        .find(|s| s.section == "network")
+        .unwrap();
+    assert_eq!(
+        network.schema["properties"]["secure_cookies"]["readOnly"],
+        json!(true)
+    );
+    assert!(
+        network.schema["properties"]["http_bind"]
+            .get("readOnly")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn null_resets_a_field_to_the_file_or_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = config(dir.path(), Some("[fetch]\ntimeout_secs = 30\n"), &[]);
+    let r = registry(dir.path(), &c);
+    let mut rx = r.subscribe::<Crawler>();
+    r.patch(
+        "crawler",
+        patch(json!({ "timeout_secs": 20, "intensity": "low" })),
+    )
+    .unwrap();
+    rx.borrow_and_update();
+    // Reset one and save another, together.
+    let out = r
+        .patch(
+            "crawler",
+            patch(json!({ "timeout_secs": null, "encryption": "require" })),
+        )
+        .unwrap();
+    assert_eq!(out.fields["timeout_secs"].value, json!(30));
+    assert_eq!(out.fields["timeout_secs"].source, SettingSource::File);
+    assert_eq!(out.fields["intensity"].source, SettingSource::Db);
+    assert!(rx.has_changed().unwrap());
+    assert_eq!(rx.borrow_and_update().timeout_secs, 30);
+    assert_eq!(
+        r.store
+            .lock()
+            .unwrap()
+            .settings_with_prefix(KEY_PREFIX)
+            .unwrap(),
+        vec![
+            (
+                "settings.crawler.encryption".to_string(),
+                "\"require\"".to_string()
+            ),
+            (
+                "settings.crawler.intensity".to_string(),
+                "\"low\"".to_string()
+            ),
+        ]
+    );
+    // A live field resets live; a field with no file value goes back to
+    // the default.
+    r.patch("crawler", patch(json!({ "intensity": null })))
+        .unwrap();
+    assert_eq!(rx.borrow_and_update().intensity, Intensity::Balanced);
+    assert_eq!(field(&r, "crawler", "intensity").1, SettingSource::Default);
+    // Resetting what isn't saved changes nothing and wakes nobody.
+    r.patch("crawler", patch(json!({ "max_sockets": null })))
+        .unwrap();
+    assert!(!rx.has_changed().unwrap());
+    // Restart-only: back to the running value, nothing pending.
+    let out = r
+        .patch("crawler", patch(json!({ "encryption": null })))
+        .unwrap();
+    assert!(out.restart_required.is_empty());
+    assert!(
+        r.store
+            .lock()
+            .unwrap()
+            .settings_with_prefix(KEY_PREFIX)
+            .unwrap()
+            .is_empty()
+    );
+    // It survives a restart as reset.
+    let r = registry(dir.path(), &c);
+    assert_eq!(field(&r, "crawler", "timeout_secs").1, SettingSource::File);
+    // Resets obey the same refusals as values.
+    assert_eq!(
+        r.patch("crawler", patch(json!({ "nope": null }))),
+        Err(SettingsError::UnknownField("nope".into()))
+    );
+    assert_eq!(
+        r.patch("general", patch(json!({ "data_dir": null }))),
+        Err(SettingsError::ReadOnly("data_dir".into()))
+    );
+    let c = config(dir.path(), None, &[("LODESTAR_INTENSITY", "low")]);
+    let r = registry(dir.path(), &c);
+    assert!(matches!(
+        r.patch("crawler", patch(json!({ "intensity": null }))),
+        Err(SettingsError::SetByEnv { .. })
+    ));
+}
+
+#[test]
+fn the_healthcheck_probes_the_bind_the_server_uses() {
+    let dir = tempfile::tempdir().unwrap();
+    let text = format!(
+        "data_dir = {:?}\n[http]\nbind = \"127.0.0.1:9000\"\n",
+        dir.path().display().to_string()
+    );
+    let c = config(dir.path(), Some(&text), &[]);
+    // No store yet: the file's.
+    assert_eq!(
+        network::effective_bind(&c),
+        "127.0.0.1:9000".parse().unwrap()
+    );
+    let store = Arc::new(Mutex::new(
+        Store::open(c.db_path(), StoreConfig::default()).unwrap(),
+    ));
+    let r = Registry::load(&c, store).unwrap();
+    r.patch("network", patch(json!({ "http_bind": "127.0.0.1:9100" })))
+        .unwrap();
+    assert_eq!(
+        network::effective_bind(&c),
+        "127.0.0.1:9100".parse().unwrap()
+    );
+    // The environment wins over a saved bind, as at start.
+    let c = config(
+        dir.path(),
+        Some(&text),
+        &[("LODESTAR_HTTP_BIND", "127.0.0.1:9200")],
+    );
+    assert_eq!(
+        network::effective_bind(&c),
+        "127.0.0.1:9200".parse().unwrap()
+    );
 }
