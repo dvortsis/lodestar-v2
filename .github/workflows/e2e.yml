@@ -1,0 +1,121 @@
+name: E2E
+
+# PR run: Riverstone light/dark × 7 breakpoints × 2 densities, the rotating 6 themes, reduced
+# motion and keyboard-only projects (axe and snapshots in each), then Lighthouse CI.
+# Nightly / manual: the `all-themes` project (axe on every route in all 48 themes).
+# Manual with `update_snapshots`: regenerates the Linux baselines and uploads them (web/e2e/README.md).
+
+on:
+  pull_request:
+    paths:
+      - 'web/**'
+      - 'brand/source/**'
+      - '.github/workflows/e2e.yml'
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      update_snapshots:
+        description: 'Regenerate Linux snapshot baselines and upload them as an artifact'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: web
+
+jobs:
+  e2e:
+    name: playwright (core, matrix, sample, motion, keyboard)
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.update_snapshots)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Playwright
+        # The web server (build + preview, cold `npm run assets` ~73 s) is started by the config.
+        run: npx playwright test ${{ inputs.update_snapshots && '--update-snapshots' || '' }}
+      - name: Upload regenerated baselines
+        if: inputs.update_snapshots
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: snapshot-baselines
+          path: web/e2e/**/*-snapshots/*-linux.png
+          if-no-files-found: error
+      - name: Upload report and diffs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-report
+          # test-results holds the expected/actual/diff images of every failed snapshot.
+          path: |
+            web/playwright-report
+            web/test-results
+          retention-days: 14
+
+  lighthouse:
+    name: lighthouse (mobile + desktop)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      # Lighthouse measures the production build (no VITE_DEV_ROUTES), served by `npm run preview`.
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - name: Lighthouse CI
+        run: |
+          export CHROME_PATH="$(node -e "console.log(require('@playwright/test').chromium.executablePath())")"
+          npm run lhci
+      - name: Upload Lighthouse reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: lighthouse-reports
+          path: web/.lighthouseci
+          retention-days: 14
+
+  all-themes:
+    name: playwright (all-themes axe)
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.update_snapshots)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e:all-themes
+      - name: Upload report
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-report-all-themes
+          path: |
+            web/playwright-report
+            web/test-results
+          retention-days: 14
