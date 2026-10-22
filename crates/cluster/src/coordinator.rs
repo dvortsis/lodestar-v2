@@ -480,23 +480,36 @@ impl Coordinator {
         if self.name_in_use(&name, now) {
             return Err(JoinError::NameInUse);
         }
-        let worker = WorkerId(self.next_worker);
-        let next = self.next_worker.checked_add(1).ok_or_else(corrupt)?;
         let spent = TokenRecord {
             used: true,
             name: name.clone(),
             ..*record
         };
-        let (fp, issued, grant) = self.issue_worker(worker, &name, public_key, now)?;
-        store
-            .set_settings_text(&[
-                (&token_key(&id), &token_value(&spent)),
-                (&cert_key(&issued.serial), &cert_value(&fp, &issued)),
-                (KEY_NEXT_WORKER, &next.to_string()),
-            ])
-            .map_err(ClusterError::from)?;
+        let unspent = token_value(record);
+        // The worker id is only in the record, not the certificate, so the
+        // certificate can be made before the transaction picks the id.
+        let (fp, mut issued, mut grant) = self.issue_worker(WorkerId(0), &name, public_key, now)?;
+        let taken = spend_token(
+            store,
+            &token_key(&id),
+            &unspent,
+            &token_value(&spent),
+            |w| {
+                let issued = Issued {
+                    worker: w,
+                    ..issued.clone()
+                };
+                (cert_key(&issued.serial), cert_value(&fp, &issued))
+            },
+        )?;
         self.tokens.insert(id, spent);
-        self.next_worker = next;
+        let Some(worker) = taken else {
+            // Another coordinator on the same database spent it first.
+            return Err(JoinError::AlreadyUsed);
+        };
+        issued.worker = worker;
+        grant.worker = worker;
+        self.next_worker = self.next_worker.max(worker.0.saturating_add(1));
         self.trust_mut().issued.insert(fp, issued);
         Ok(grant)
     }
@@ -510,18 +523,25 @@ impl Coordinator {
         public_key: &[u8; 32],
         now: i64,
     ) -> Result<JoinGrant, ClusterError> {
-        let live = self
+        // The identity comes from the record, not the caller's copy.
+        let current = self
             .shared
             .trust
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .issued
             .values()
-            .any(|i| i.serial == peer.serial && i.worker == peer.worker && !i.revoked);
-        if !live {
-            return Err(ClusterError::Revoked);
+            .find(|i| i.serial == peer.serial && i.worker == peer.worker)
+            .cloned();
+        let current = match current {
+            Some(i) if !i.revoked => i,
+            _ => return Err(ClusterError::Revoked),
+        };
+        if now > current.not_after {
+            return Err(ClusterError::Expired);
         }
-        let (fp, issued, grant) = self.issue_worker(peer.worker, &peer.name, public_key, now)?;
+        let (fp, issued, grant) =
+            self.issue_worker(current.worker, &current.name, public_key, now)?;
         store.set_settings_text(&[(&cert_key(&issued.serial), &cert_value(&fp, &issued))])?;
         self.trust_mut().issued.insert(fp, issued);
         Ok(grant)
@@ -729,6 +749,47 @@ impl Coordinator {
             .unwrap_or_else(PoisonError::into_inner) = Arc::new(key);
         Ok(())
     }
+}
+
+/// Spends a token and records its certificate in one transaction that
+/// re-reads the stored token row and the next worker id, so two
+/// coordinators on one database (`serve` and a CLI command, say) can't
+/// both spend it or hand out the same id. `None`: it was already spent.
+fn spend_token(
+    store: &mut Store,
+    key: &str,
+    unspent: &str,
+    spent: &str,
+    record: impl FnOnce(WorkerId) -> (String, String),
+) -> Result<Option<WorkerId>, ClusterError> {
+    use lodestar_store::rusqlite::params;
+    let tx = store.connection().unchecked_transaction()?;
+    // Takes the write lock first, so the read below can't go stale.
+    let changed = tx.execute(
+        "UPDATE settings SET value = ?3 WHERE key = ?1 AND value = ?2",
+        params![key, unspent, spent],
+    )?;
+    if changed != 1 {
+        return Ok(None);
+    }
+    let next: String = tx.query_row(
+        "SELECT value FROM settings WHERE key = ?1",
+        [KEY_NEXT_WORKER],
+        |r| r.get(0),
+    )?;
+    let worker: u32 = next.parse().map_err(|_| corrupt())?;
+    let after = worker.checked_add(1).ok_or_else(corrupt)?;
+    let (cert_key, cert_value) = record(WorkerId(worker));
+    tx.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)",
+        params![cert_key, cert_value],
+    )?;
+    tx.execute(
+        "UPDATE settings SET value = ?2 WHERE key = ?1",
+        params![KEY_NEXT_WORKER, after.to_string()],
+    )?;
+    tx.commit()?;
+    Ok(Some(WorkerId(worker)))
 }
 
 fn new_server_leaf(ca: &Authority, now: i64) -> Result<ServerLeaf, ClusterError> {

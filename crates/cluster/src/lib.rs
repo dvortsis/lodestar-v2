@@ -59,6 +59,8 @@ pub enum ClusterError {
     TooManyTokens,
     /// The certificate was revoked.
     Revoked,
+    /// The certificate has expired: the worker must join again.
+    Expired,
     /// A rotation is already under way.
     RotationInProgress,
     /// A join or renewal answer that doesn't match what was asked.
@@ -85,6 +87,7 @@ impl fmt::Display for ClusterError {
                 "{MAX_OPEN_TOKENS} join tokens are already open; wait for them to expire"
             ),
             ClusterError::Revoked => f.write_str("this worker's certificate was revoked"),
+            ClusterError::Expired => f.write_str("this worker's certificate has expired"),
             ClusterError::RotationInProgress => f.write_str("a CA rotation is already in progress"),
             ClusterError::BadGrant => f.write_str("the coordinator's answer doesn't match"),
         }
@@ -96,6 +99,12 @@ impl std::error::Error for ClusterError {}
 impl From<lodestar_store::Error> for ClusterError {
     fn from(e: lodestar_store::Error) -> Self {
         ClusterError::Store(e)
+    }
+}
+
+impl From<lodestar_store::rusqlite::Error> for ClusterError {
+    fn from(e: lodestar_store::rusqlite::Error) -> Self {
+        ClusterError::Store(e.into())
     }
 }
 

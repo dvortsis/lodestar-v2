@@ -132,7 +132,7 @@ pub(crate) fn random_serial() -> Result<[u8; 16], ClusterError> {
 
 /// The DER certificate for `spec`, signed by `issuer_key`.
 pub(crate) fn certificate(spec: &Spec<'_>, serial: &[u8; 16], issuer_key: &KeyPair) -> Vec<u8> {
-    let tbs = tbs_certificate(spec, serial);
+    let tbs = tbs_certificate(spec, serial, &issuer_key.public_key());
     let signature = issuer_key.sign(&tbs);
     seq(&[tbs, ed25519_algorithm(), bit_string(&signature)].concat())
 }
@@ -154,7 +154,7 @@ pub(crate) fn verify(public_key: &[u8; 32], message: &[u8], signature: &[u8]) ->
         .is_ok()
 }
 
-fn tbs_certificate(spec: &Spec<'_>, serial: &[u8; 16]) -> Vec<u8> {
+fn tbs_certificate(spec: &Spec<'_>, serial: &[u8; 16], issuer_public_key: &[u8; 32]) -> Vec<u8> {
     let version = tlv(0xa0, &tlv(0x02, &[2]));
     let validity = seq(&[time(spec.not_before), time(spec.not_after)].concat());
     seq(&[
@@ -165,7 +165,10 @@ fn tbs_certificate(spec: &Spec<'_>, serial: &[u8; 16]) -> Vec<u8> {
         validity,
         name(spec.subject),
         subject_public_key_info(spec.public_key),
-        tlv(0xa3, &seq(&extensions(spec.role).concat())),
+        tlv(
+            0xa3,
+            &seq(&extensions(spec.role, spec.public_key, issuer_public_key).concat()),
+        ),
     ]
     .concat())
 }
@@ -177,10 +180,29 @@ const OID_KEY_USAGE: &[u8] = &[0x55, 0x1d, 0x0f];
 const OID_SAN: &[u8] = &[0x55, 0x1d, 0x11];
 const OID_BASIC_CONSTRAINTS: &[u8] = &[0x55, 0x1d, 0x13];
 const OID_EKU: &[u8] = &[0x55, 0x1d, 0x25];
+const OID_SKI: &[u8] = &[0x55, 0x1d, 0x0e];
+const OID_AKI: &[u8] = &[0x55, 0x1d, 0x23];
 const OID_SERVER_AUTH: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01];
 const OID_CLIENT_AUTH: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x02];
 
-fn extensions(role: Role<'_>) -> Vec<Vec<u8>> {
+/// A key identifier (RFC 5280 §4.2.1.2, method 1 with SHA-256, truncated
+/// to 160 bits).
+fn key_id(public_key: &[u8; 32]) -> Vec<u8> {
+    ring::digest::digest(&ring::digest::SHA256, public_key).as_ref()[..20].to_vec()
+}
+
+fn extensions(role: Role<'_>, subject: &[u8; 32], issuer: &[u8; 32]) -> Vec<Vec<u8>> {
+    // Webpki ignores the key identifiers; strict verifiers (OpenSSL's
+    // -x509_strict) want SKI on the CA and AKI on everything it signs.
+    let mut ids = vec![extension(OID_SKI, false, &tlv(0x04, &key_id(subject)))];
+    if subject != issuer {
+        ids.push(extension(OID_AKI, false, &seq(&tlv(0x80, &key_id(issuer)))));
+    }
+    ids.extend(role_extensions(role));
+    ids
+}
+
+fn role_extensions(role: Role<'_>) -> Vec<Vec<u8>> {
     // keyUsage bits: digitalSignature is bit 0 (0x80, 7 unused bits);
     // keyCertSign and cRLSign are bits 5 and 6 (0x06, 1 unused bit).
     let leaf_usage = extension(OID_KEY_USAGE, true, &tlv(0x03, &[7, 0x80]));
@@ -336,7 +358,7 @@ mod tests {
         assert!(!certifies(&cert, &ca.public_key()));
         // The last 64 bytes are the signature over the TBS that follows the
         // outer header.
-        let tbs = tbs_certificate(&spec, &serial);
+        let tbs = tbs_certificate(&spec, &serial, &ca.public_key());
         let signature = &cert[cert.len() - 64..];
         assert!(verify(&ca.public_key(), &tbs, signature));
         assert!(!verify(&leaf.public_key(), &tbs, signature));
@@ -346,5 +368,96 @@ mod tests {
     fn key_pairs_never_print() {
         let key = KeyPair::generate().unwrap();
         assert_eq!(format!("{key:?}"), "KeyPair(***)");
+    }
+
+    fn pem(der: &[u8]) -> String {
+        const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut body = String::new();
+        for chunk in der.chunks(3) {
+            let n =
+                chunk.iter().fold(0u32, |n, &b| n << 8 | u32::from(b)) << (8 * (3 - chunk.len()));
+            for i in 0..4 {
+                body.push(if i <= chunk.len() {
+                    B64[(n >> (18 - 6 * i) & 63) as usize] as char
+                } else {
+                    '='
+                });
+            }
+        }
+        let lines: Vec<&str> = body
+            .as_bytes()
+            .chunks(64)
+            .map(|l| std::str::from_utf8(l).unwrap())
+            .collect();
+        format!(
+            "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
+            lines.join("\n")
+        )
+    }
+
+    /// OpenSSL's strict mode accepts the chain, when OpenSSL is installed
+    /// (it is on the Linux CI runners; elsewhere this checks nothing).
+    #[test]
+    fn openssl_strict_accepts_the_chain() {
+        let Ok(probe) = std::process::Command::new("openssl")
+            .arg("version")
+            .output()
+        else {
+            eprintln!("openssl not installed; skipping");
+            return;
+        };
+        assert!(probe.status.success());
+        let now = 1_800_000_000;
+        let ca = KeyPair::generate().unwrap();
+        let ca_cert = certificate(
+            &Spec {
+                role: Role::Ca,
+                subject: "ca",
+                issuer: "ca",
+                public_key: &ca.public_key(),
+                not_before: now - 60,
+                not_after: now + 86_400,
+            },
+            &random_serial().unwrap(),
+            &ca,
+        );
+        let dir = std::env::temp_dir().join(format!("lodestar-x509-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("ca.pem"), pem(&ca_cert)).unwrap();
+        for role in [Role::Coordinator, Role::Worker("w1")] {
+            let leaf = KeyPair::generate().unwrap();
+            let cert = certificate(
+                &Spec {
+                    role,
+                    subject: "leaf",
+                    issuer: "ca",
+                    public_key: &leaf.public_key(),
+                    not_before: now - 60,
+                    not_after: now + 86_400,
+                },
+                &random_serial().unwrap(),
+                &ca,
+            );
+            std::fs::write(dir.join("leaf.pem"), pem(&cert)).unwrap();
+            let out = std::process::Command::new("openssl")
+                .args([
+                    "verify",
+                    "-x509_strict",
+                    "-attime",
+                    &now.to_string(),
+                    "-CAfile",
+                ])
+                .arg(dir.join("ca.pem"))
+                .arg(dir.join("leaf.pem"))
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{role:?}: {}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
