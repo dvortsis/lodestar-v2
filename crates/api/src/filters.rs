@@ -28,6 +28,7 @@ use axum::{Json, Router};
 use lodestar_classify::ContentType;
 use lodestar_filter::lists::SharedIps;
 use lodestar_filter::load::{KIND_HASHES, KIND_KEYWORD, KIND_PAYLOAD, KIND_QUERY, encode_match};
+use lodestar_filter::reclassify::Refiling;
 use lodestar_filter::{
     Action, CoreRule, Doc, Engine, Exception, Facts, Fixture, Handle, HeldSet, Item,
     MAX_CLASS_RULES, Match, Origin, Override, Pack, PackRule, RuleRef, Sealer, Strength,
@@ -88,6 +89,9 @@ pub struct FiltersApi {
     /// Starts another background-enrichment pass in the pipeline.
     pub reenrich: Arc<AtomicBool>,
     pub jobs: PreviewJobs,
+    /// How long a quarantine lasts (§20.3), for a torrent a correction
+    /// relabels adult and filtering then holds back.
+    pub quarantine_secs: i64,
 }
 
 /// The replay window (§20.10).
@@ -2052,23 +2056,36 @@ impl FiltersApi {
         // the write; the check still guards the order (§20.9).
         let generation = store.class_gen().map_err(internal)?;
         let engine = self.engine.current();
-        let (enriched, c) = lodestar_filter::reclassify::enrich_row(
-            &row,
-            &files,
-            fix,
-            Some(&engine),
-            crate::unix_now(),
-        );
-        if store
-            .set_enrichments_at(generation, &[(id, enriched)])
-            .map_err(internal)?
-            .is_none()
-        {
+        let now = crate::unix_now();
+        // Relabelled adult, it's judged as adult too, as at ingest (§20.9).
+        let r = lodestar_filter::reclassify::reclassify_row(&row, &files, fix, Some(&engine), now);
+        let refiling = r
+            .as_adult
+            .as_ref()
+            .map(|d| Refiling::new(&row, d, self.sealer.as_deref()));
+        let refiled: Vec<_> = refiling
+            .iter()
+            .map(|f| f.refiled(now, now + self.quarantine_secs))
+            .collect();
+        let written = store
+            .set_enrichments_at(generation, &[(id, r.enriched)], &refiled)
+            .map_err(internal)?;
+        if written.is_none() {
             store.mark_unenriched(&[id]).map_err(internal)?;
             self.reenrich.store(true, Ordering::Release);
         }
+        let held_by = refiling
+            .filter(|f| written.is_some() && f.held.is_some())
+            .map(|f| {
+                for h in &f.hashes {
+                    self.held.insert(*h);
+                }
+                f.rule
+            });
+        let c = r.class;
         Ok(CorrectResponse {
             adult_kind: c.adult_kind.map(|k| k.as_str().to_string()),
+            held_by,
             junk: c.junk.score,
             content_type: c.content_type.as_str().to_string(),
         })
@@ -2197,6 +2214,9 @@ impl FiltersApi {
     fn rules_changed(&self, store: &mut Store) -> ApiResult<()> {
         self.reload(store)?;
         store.bump_class_gen().map_err(internal)?;
+        // A pass even without a search index: torrents a rejected batch
+        // left marked are picked up.
+        self.reenrich.store(true, Ordering::Release);
         Ok(())
     }
 

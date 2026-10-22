@@ -52,6 +52,7 @@ fn fixture_with(index: Option<SearchIndex>) -> Fixture {
         index: index.map(Into::into),
         reenrich: Arc::new(AtomicBool::new(false)),
         jobs: Default::default(),
+        quarantine_secs: 30 * 86_400,
     });
     let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
     let app = Router::new().nest(
@@ -1638,4 +1639,51 @@ async fn the_corrections_report_reads_in_chunks() {
     assert_eq!(body["detection"]["checked"], json!(520));
     assert_eq!(body["detection"]["disagree"], json!(520));
     assert_eq!(body["detection"]["examples"].as_array().unwrap().len(), 50);
+}
+
+#[tokio::test]
+async fn a_correction_relabelling_a_torrent_adult_meets_the_adult_only_core() {
+    use lodestar_filter::TermSet;
+    let f = fixture();
+    let c = logged_in(&f).await;
+    // Stand-in terms (`lexa` sexual, `rolea` child role), ten words apart:
+    // only the Adult-only CS-5a can catch them.
+    f.api.engine.update_engine(|e| {
+        *e = Engine::new(Core::new(
+            Lists {
+                sexual: TermSet::of(&["lexa"]),
+                child_roles: TermSet::of(&["rolea"]),
+                codes: TermSet::of(&["codex"]),
+            },
+            CsList::default(),
+            Switches::default(),
+        ))
+    });
+    let name = "Holiday Rolea one two three four five six seven eight nine Lexa.mp4";
+    let (id, hash) = store_torrent(&f, name, 900 << 20);
+    enrich_all(&mut f.api.store.lock().unwrap());
+    let (status, _, body) = call(
+        &f.app,
+        post(
+            "/api/v1/classify/correct",
+            Some(&c),
+            json!({ "hash": hash, "adult": true }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["type"], json!("adult"));
+    assert_eq!(body["held_by"], json!("CS-5a"));
+    let store = f.api.store.lock().unwrap();
+    assert!(store.torrent(id).unwrap().is_none(), "no longer stored");
+    let q = store.quarantined(10).unwrap();
+    assert_eq!(q.len(), 1);
+    assert_eq!(q[0].rule, "CS-5a");
+    assert!(q[0].sealed.is_some());
+    drop(store);
+    let mut raw = [0u8; 20];
+    for (i, b) in raw.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&hash[2 * i..2 * i + 2], 16).unwrap();
+    }
+    assert!(f.api.held.contains(&raw), "refused at intake");
 }

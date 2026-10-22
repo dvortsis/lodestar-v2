@@ -450,11 +450,27 @@ impl Store {
 
     /// Marks every stored torrent after id `after` for background
     /// enrichment: those the search index hasn't reached yet.
+    ///
+    /// In transactions of [`MARK_CHUNK`] ids, since an index that's new or
+    /// rebuilding can be far behind.
     pub fn mark_unenriched_after(&mut self, after: i64) -> Result<usize> {
-        Ok(self.conn.execute(
-            "UPDATE torrent_parsed SET parser_ver = 0 WHERE torrent_id > ?1",
-            [after],
-        )?)
+        let last: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(torrent_id), 0) FROM torrent_parsed",
+            [],
+            |r| r.get(0),
+        )?;
+        let mut n = 0;
+        let mut lo = after;
+        while lo < last {
+            let hi = lo.saturating_add(MARK_CHUNK as i64);
+            n += self.conn.execute(
+                "UPDATE torrent_parsed SET parser_ver = 0
+                 WHERE torrent_id > ?1 AND torrent_id <= ?2",
+                params![lo, hi],
+            )?;
+            lo = hi;
+        }
+        Ok(n)
     }
 
     /// The classification rules' generation (§20.9): bumped by every rule

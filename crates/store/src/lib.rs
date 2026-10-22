@@ -34,7 +34,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 pub use compress::{BlobCodec, Codec, Compressed};
 pub use filetree::{CodecError, FileTree};
-pub use filter::{FilterHit, FilterState, Filtered, Held, Quarantined, SHADOW};
+pub use filter::{FilterHit, FilterState, Filtered, Held, Quarantined, Refiled, SHADOW};
 pub use floor::{FloorSource, PendingFloor, Settled};
 pub use history::{History, trend};
 pub use hot::{Col, HotColumns, NEVER, SwarmHot};
@@ -576,16 +576,37 @@ impl Store {
     /// still at `generation` (§20.9). The check and the write are one
     /// transaction, so a rule change can't slip between them. `None` when
     /// the generation has moved on and nothing was written.
+    ///
+    /// `refiled` are stored torrents filtering judged again because they
+    /// were relabelled adult (§20.9), as ingest would record them: one
+    /// that's held back (dropped or quarantined) is deleted, its hashes
+    /// tombstoned or quarantined; any other decision sets its `flags`
+    /// marks. Either way the decision is a filter hit.
     pub fn set_enrichments_at(
         &mut self,
         generation: i64,
         batch: &[(i64, Enriched)],
+        refiled: &[Refiled<'_>],
     ) -> Result<Option<usize>> {
         let tx = self.conn.transaction()?;
         if rules::class_gen(&tx)? != generation {
             return Ok(None);
         }
         let done = enrich_rows(&tx, batch)?;
+        for r in refiled {
+            if r.filtered.held.is_some() {
+                tx.execute("DELETE FROM torrents WHERE id = ?1", [r.id])?;
+                tx.execute("INSERT INTO reindex_log (torrent_id) VALUES (?1)", [r.id])?;
+            } else if r.flags != 0 {
+                tx.execute(
+                    "UPDATE torrents SET flags = flags | ?2 WHERE id = ?1",
+                    params![r.id, r.flags],
+                )?;
+                tx.execute("INSERT INTO reindex_log (torrent_id) VALUES (?1)", [r.id])?;
+            }
+        }
+        let filtered: Vec<Filtered<'_>> = refiled.iter().map(|r| r.filtered).collect();
+        filter::write(&tx, &filtered)?;
         tx.commit()?;
         Ok(Some(done))
     }
@@ -1002,7 +1023,6 @@ fn commit_one(tx: &Connection, codec: &BlobCodec, t: &PreparedTorrent<'_>) -> Re
     Ok(Inserted::New(id))
 }
 
-/// Sets a torrent's enrichment columns and record.
 /// Writes enrichments of stored torrents and logs them for re-indexing;
 /// ids no longer stored are skipped.
 fn enrich_rows(tx: &Connection, batch: &[(i64, Enriched)]) -> Result<usize> {
@@ -1024,6 +1044,7 @@ fn enrich_rows(tx: &Connection, batch: &[(i64, Enriched)]) -> Result<usize> {
     Ok(done)
 }
 
+/// Sets a torrent's enrichment columns and record.
 fn write_enrichment(conn: &Connection, id: i64, e: &Enriched) -> Result<()> {
     conn.prepare_cached(
         "UPDATE torrents SET content_type = ?2, junk_score = ?3, comp = ?4 WHERE id = ?1",

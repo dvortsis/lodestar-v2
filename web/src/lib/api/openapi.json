@@ -2503,6 +2503,7 @@
         "description": "`POST /classify/correct`: the torrent classified again.",
         "required": [
           "adult_kind",
+          "held_by",
           "junk",
           "type"
         ],
@@ -2513,6 +2514,13 @@
               "null"
             ],
             "description": "Non-null only when `type` is `adult`."
+          },
+          "held_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When relabelling it adult made filtering hold it back (§20.9): the\nrule that did. It's then dropped or quarantined, no longer stored."
           },
           "junk": {
             "type": "integer",
