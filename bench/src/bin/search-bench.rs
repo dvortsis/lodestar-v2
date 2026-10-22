@@ -28,6 +28,7 @@ const BROWSE_P95: Duration = Duration::from_millis(50);
 
 const USAGE: &str = "\
 Usage: search-bench [--torrents N] [--queries N] [--dir PATH] [--seed S] [--no-hot] [--gate]
+                    [--only TEXT]
 
   --torrents N   corpus size (default 1000000)
   --queries N    queries per class (default 300)
@@ -35,7 +36,8 @@ Usage: search-bench [--torrents N] [--queries N] [--dir PATH] [--seed S] [--no-h
   --seed S       generator seed (default 1)
   --no-hot       search without hot columns (no swarm data, text-only
                  ranking, no swarm classes)
-  --gate         exit 1 if a p95 target is missed";
+  --gate         exit 1 if a p95 target is missed
+  --only TEXT    run only the classes whose name contains TEXT";
 
 struct Args {
     torrents: usize,
@@ -44,6 +46,7 @@ struct Args {
     seed: u64,
     hot: bool,
     gate: bool,
+    only: Option<String>,
 }
 
 fn args() -> Result<Args, String> {
@@ -54,6 +57,7 @@ fn args() -> Result<Args, String> {
         seed: 1,
         hot: true,
         gate: false,
+        only: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -67,6 +71,7 @@ fn args() -> Result<Args, String> {
             "--seed" => a.seed = value("--seed")?.parse().map_err(|_| "bad --seed")?,
             "--no-hot" => a.hot = false,
             "--gate" => a.gate = true,
+            "--only" => a.only = Some(value("--only")?),
             "-h" | "--help" => return Err(USAGE.into()),
             other => return Err(format!("unknown argument {other}\n\n{USAGE}")),
         }
@@ -481,7 +486,10 @@ fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
     );
 
     let mut ok = true;
-    for class in classes(a.seed, a.queries, a.hot) {
+    for class in classes(a.seed, a.queries, a.hot)
+        .into_iter()
+        .filter(|c| a.only.as_deref().is_none_or(|o| c.name.contains(o)))
+    {
         // Warm caches the way a running server would be.
         for q in class.queries.iter().take(20) {
             let ast = parse(q)?;
