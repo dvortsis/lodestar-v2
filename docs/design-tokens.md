@@ -14,7 +14,7 @@ disagree, the architecture document wins and this file is fixed.
   (`p-[13px]`, `text-[#fff]`, `w-[312px]`, `duration-[180ms]`). W0's lint
   rule enforces both.
 - **Use the Tailwind/daisyUI utility a token generates** (`bg-base-100`,
-  `text-muted-text`, `rounded-box`, `p-16`, `text-body`) where one exists.
+  `text-muted-text`, `rounded-box`, `p-4`, `text-body`) where one exists.
   Use `var(--token)` directly only where no utility exists (SVG `fill`/`stroke`
   in charts, `style:` bindings, keyframes).
 - **No token outside this file.** A new token is a change to this document,
@@ -59,7 +59,7 @@ utilities (`bg-primary`, `text-base-content`, `border-base-300`). Mapping from
 | `--color-secondary-content` | As above | = primary-content | = primary-content |
 | `--color-accent` | **Accent fill**: selected chips, tints. Never text or a boundary in light mode (2.65–2.89:1) | `#829F8A` | `#A0C3A7` |
 | `--color-accent-content` | Label on an accent fill: light uses `text`, dark uses `background` (≥ 4.5:1, or large/bold) | `#243C44` | `#141F25` |
-| `--color-neutral` | Neutral fill (the `#8C9BA7` family): neutral badges, Kbd background | `#8796A2` | `#8C9BA7` |
+| `--color-neutral` | Neutral fill (the `#8C9BA7` family): neutral badges, Kbd background. Dark is §10.18's `#8C9BA7`; **light is a C0 choice** (the light slate data variant, so it keeps ≥ 3:1 on surface) | `#8796A2` (C0 choice) | `#8C9BA7` |
 | `--color-neutral-content` | Label on neutral: whichever of `base-content`/`base-100` passes 4.5:1 on it (rule) | rule | rule |
 | `--color-info` | Info status: icon + text, always with a label. **= `primary-ink`** light, **= `primary`** dark | `#4A7789` | `#85AFC0` |
 | `--color-info-content` | Text on an info fill: the higher-contrast of surface/background (rule) | rule | rule |
@@ -143,30 +143,40 @@ can't be confused with Audio ochre or warnings.
 | `--brand-star` | The star | `#D49A4A` | `#E0A95F` |
 
 Non-Riverstone themes: `--brand-surface` = that theme's surface, `-primary`
-and `-accent` = that theme's brand primary/accent, `--brand-star` stays the
-Riverstone value (it's the logo).
+and `-accent` = that theme's brand primary/accent. **`--brand-star` keeps the
+Riverstone value in every theme** (`#D49A4A` in light mode, `#E0A95F` in dark
+mode), because it's the logo; the compiler never derives it.
 
 ---
 
 ## 5. Spacing (static)
 
-The `layout-spacing` ramp, §10.2. Tailwind v4's spacing namespace is
-**replaced** by exactly these tokens, named by their pixel value, so `p-16` is
-16 px and `gap-6` is 6 px. W2 resets the namespace (`--spacing-*: initial`
-and the bare `--spacing` multiplier) so no other step exists; if Tailwind
-can't drop the multiplier, the lint rule allows only these steps.
+The `layout-spacing` ramp, §10.2. **Tailwind v4's default spacing is kept:**
+`--spacing: 0.25rem` (4 px), so a utility step `n` is `n × 4px` and `p-4` is
+16 px, exactly as in standard Tailwind. No `--spacing-*` tokens are added and
+the scale isn't redefined, so a helper writing ordinary Tailwind gets the
+spacing it expects.
 
-| Token | Value | | Token | Value |
+**Only these steps are allowed.** The §10.2 ramp in px maps to these utility
+steps; any other step (`p-11`, `gap-15`, `m-3.5`, `p-16`, …) is off the ramp.
+W2 extends W0's ban check (hex literals and arbitrary values) to reject
+off-ramp steps in every spacing utility (`p*`, `m*`, `gap*`, `space-*`,
+`inset*`, `top/right/bottom/left`, `translate-*`, `scroll-m*`, `scroll-p*`).
+
+| px | Utility step | | px | Utility step |
 |---|---|---|---|---|
-| `--spacing-0` | 0 | | `--spacing-24` | 24px |
-| `--spacing-2` | 2px | | `--spacing-28` | 28px |
-| `--spacing-4` | 4px | | `--spacing-32` | 32px |
-| `--spacing-6` | 6px | | `--spacing-36` | 36px |
-| `--spacing-8` | 8px | | `--spacing-40` | 40px |
-| `--spacing-10` | 10px | | `--spacing-48` | 48px |
-| `--spacing-12` | 12px | | `--spacing-52` | 52px |
-| `--spacing-16` | 16px | | `--spacing-56` | 56px |
-| `--spacing-20` | 20px | | | |
+| 0 | `0` | | 24 | `6` |
+| 2 | `0.5` | | 28 | `7` |
+| 4 | `1` | | 32 | `8` |
+| 6 | `1.5` | | 36 | `9` |
+| 8 | `2` | | 40 | `10` |
+| 10 | `2.5` | | 48 | `12` |
+| 12 | `3` | | 52 | `13` |
+| 16 | `4` | | 56 | `14` |
+| 20 | `5` | | | |
+
+In CSS outside utilities, write `calc(var(--spacing) * n)` with an allowed
+`n`; never a raw px value.
 
 Usage (§10.2): inside a component 4–12; repeated patterns (row internals,
 facet groups) 8–16; between layout regions 24–48. 2, 6 and 10 are optical
@@ -207,8 +217,8 @@ No `rounded-full` on containers or primary buttons. Tailwind's default
 | `--target-min` | 44px | Minimum hit target under `@media (pointer: coarse)`: every target grows to ≥ 44 × 44. |
 | `--icon-size-row` | 16px | Icons in rows. |
 | `--icon-size-nav` | 20px | Icons in the toolbar and navigation. |
-| `--focus-ring-width` | 2px | Focus outline width (colour `--color-primary`, ≥ 3:1). |
-| `--focus-ring-offset` | 2px | Focus outline offset. |
+| `--focus-ring-width` | 2px | Focus outline width (colour `--color-primary`, ≥ 3:1). **C0 choice**; §10.2 gives no width. |
+| `--focus-ring-offset` | 2px | Focus outline offset. **C0 choice.** |
 
 ## 7. Density and layout (static)
 
@@ -254,7 +264,7 @@ token. Container queries (row, drawer) use these same values.
 
 | Token | Value |
 |---|---|
-| `--font-sans` | `"Atkinson Hyperlegible Next", system-ui, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif` |
+| `--font-sans` | `"Atkinson Hyperlegible Next", system-ui, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK", sans-serif` |
 | `--font-mono` | `"Atkinson Hyperlegible Mono", ui-monospace, monospace` |
 
 Mono is for hashes, file paths, query field tokens, the info-dict viewer and
@@ -305,8 +315,8 @@ crossfades).
 | `--duration-banner` | 200ms | "N new results" banner |
 | `--duration-stagger` | 80ms | Step between items in Discover's first-load reveal (at most 8 items) |
 | `--duration-reduced-fade` | 100ms | Maximum crossfade under reduced motion |
-| `--ease-out` | `cubic-bezier(0, 0, 0.2, 1)` | Entering (Tailwind v4 default value) |
-| `--ease-in` | `cubic-bezier(0.4, 0, 1, 1)` | Exiting (Tailwind v4 default value) |
+| `--ease-out` | `cubic-bezier(0, 0, 0.2, 1)` | Entering. §10.2 says "ease-out"; the curve is a **C0 choice** (Tailwind v4's default value) |
+| `--ease-in` | `cubic-bezier(0.4, 0, 1, 1)` | Exiting. §10.2 says "ease-in"; the curve is a **C0 choice** (Tailwind v4's default value) |
 | `--scale-press` | 0.98 | Press feedback (`transform: scale(...)`) |
 
 Results and facet updates swap instantly: no token applies. No ambient motion.

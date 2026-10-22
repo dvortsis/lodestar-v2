@@ -58,29 +58,37 @@ when the user's timezone isn't UTC. All API timestamps are **Unix seconds
 
 ## 3. Formatters
 
-All live in `web/src/lib/format/`; each is a pure function
+All live in `web/src/lib/format/`. Each is a pure function
 `(value, locale, opts?) => string`, plus a `…Parts` variant where a component
-needs the unit separately (axis labels). Separators: number and unit are
-joined with U+00A0 (no-break space).
+needs the unit separately (axis labels). A number and a unit symbol the
+formatter adds itself (bytes, `/h`) are joined with U+00A0 (no-break space);
+units from `Intl` keep the `Intl` spacing.
 
-| Formatter | Output examples (en) | Spec |
-|---|---|---|
-| `formatCount` | `0`, `1,284`, `84,210` | `Intl.NumberFormat(locale, { maximumFractionDigits: 0 })`. Exact integers with grouping. |
-| `formatCompact` | `950`, `1.2K`, `12.4M`, `2.4M` | `Intl.NumberFormat(locale, { notation: 'compact', compactDisplay: 'short', maximumFractionDigits: 1 })`. Values < 1,000 are exact. zh yields `1.2万` etc. Used only where this file says so (KPIs, stage strip, status pill, headline stats); tables and tooltips use `formatCount`. |
-| `formatBytes` | `512 B`, `4.37 GiB`, `38.2 MiB`, `912 KiB` | **IEC, base 1024**: B, KiB, MiB, GiB, TiB, PiB. Unit = the largest with value ≥ 1. Number via `Intl.NumberFormat(locale, { maximumFractionDigits: d, minimumFractionDigits: 0 })` with `d = 0` for B, otherwise `d = 2` if value < 10, `1` if < 100, else `0`. If rounding reaches 1024, step up a unit (`1.00 MiB`, never `1024 KiB`). Unit symbols are the same in every locale. Never SI (`kB`, `GB`). |
-| `formatPercent` | `82%`, `<1%`, `100%`, `37.4%` | Input is a **ratio 0–1** from the server. `Intl.NumberFormat(locale, { style: 'percent', maximumFractionDigits: f })`. `f = 0` for shares (composition, category mix); `f = 1` for rates (conversion, yield, zero-result rate, reply ratio). A non-zero value that would round to 0 shows `<1%` (`<0.1%` at `f = 1`); a value below 1 that would round to 100% shows `>99%` (`>99.9%`). |
-| `formatRate` | `1.2K/h`, `+2.1K/h`, `0/h` | `formatCompact(value) + '/h'` via the message `rate_per_hour` (zh TBD). Per-hour only; per-day uses `rate_per_day` (`/d`). Signed form (`+`) only in Δ and status-pill contexts. |
-| `formatDelta` | `+1,240`, `−3.2%`, `±0` | Signed with U+2212 minus: `Intl.NumberFormat(locale, { signDisplay: 'exceptZero', … })` over the metric's own formatter options. Always paired with an icon (up/down) and the period text ("vs previous 7 days"); never colour alone. |
-| `formatLatency` | `0.8 ms`, `12 ms`, `1.4 s` | Input milliseconds. < 1 ms: 1 decimal; < 1,000 ms: `Intl.NumberFormat(locale, { style: 'unit', unit: 'millisecond', unitDisplay: 'short', maximumFractionDigits: 0 })`; ≥ 1,000 ms: unit `second`, 1 decimal. Percentiles from histograms are **always ≈**. |
-| `formatSpan` | `45 s`, `12 min`, `5.2 h`, `3.1 d` | Durations (time to searchable, queue age, scrape age as a span). Input seconds. Unit: second < 60, minute < 3,600, hour < 172,800 (48 h), else day; `Intl.NumberFormat(locale, { style: 'unit', unit, unitDisplay: 'short', maximumFractionDigits: v < 10 ? 1 : 0 })`. |
-| `formatRelative` | `3 hours ago`, `yesterday`, `in 5 minutes` | Rows only. `Intl.RelativeTimeFormat(locale, { numeric: 'auto', style: 'long' })`, unit = the largest of second/minute/hour/day/week/month/year with `|Δ| ≥ 1`; below 45 s → "just now" (message). Re-rendered at most once a minute. Always paired with `formatDateTime` in a tooltip/`title` (RelativeTime primitive, §10.11). |
-| `formatDateTime` | `Oct 22, 2026, 14:05` | Drawer, tables, tooltips. `Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short', timeZone })`. |
-| `formatDateFull` | `Thu, Oct 22, 2026, 14:00 UTC` | Chart tooltip headers (§10.9.6). `Intl.DateTimeFormat(locale, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short', timeZone })`. Day buckets omit hour/minute. |
-| `formatDate` | `Oct 22, 2026` | Axis ticks for day buckets, date-only facts. `{ dateStyle: 'medium', timeZone }`. |
-| `formatScore` | `42` | 0–100 integer scores (junk, parser confidence as a percentage uses `formatPercent`). `formatCount`. |
+**Every example below is the exact output of the stated options in Node 22
+(ICU as shipped) for `en` and `zh`.** W8's unit tests are written from these
+rows; if an `Intl` upgrade changes an output, the test and this table change
+together. `timeZone` in the examples is `UTC`; the date is
+2026-10-22 14:05 UTC (a Thursday).
 
-Examples in the architecture text ("1.2k/h", "Seen 3 h ago") are
-illustrative; the `Intl` output for the locale wins (en compact is `1.2K`).
+| Formatter | Options | en | zh |
+|---|---|---|---|
+| `formatCount` | `Intl.NumberFormat(locale, { maximumFractionDigits: 0 })`. Exact integers with grouping. | `0`, `1,284`, `84,210` | `0`, `1,284`, `84,210` |
+| `formatCompact` | `Intl.NumberFormat(locale, { notation: 'compact', compactDisplay: 'short', maximumFractionDigits: 1 })`. Only where this file says so (KPIs, stage strip, status pill, headline stats, axis ticks); tables and tooltips use `formatCount`. zh compacts only from 万 (10⁴). | `950`, `1.2K`, `84.2K`, `2.4M`, `12.4M` | `950`, `1200`, `8.4万`, `240万`, `1240万` |
+| `formatBytes` | **IEC, base 1024**: B, KiB, MiB, GiB, TiB, PiB. Unit = the largest whose value is ≥ 1. Digits `d` = 0 for B; otherwise 2 if the value is < 10, 1 if < 100, else 0. Number via `Intl.NumberFormat(locale, { minimumFractionDigits: d, maximumFractionDigits: d })` (fixed digits, so tabular columns align), then U+00A0 and the unit symbol. If rounding reaches 1024, step up a unit. Unit symbols are the same in every locale. Never SI (`kB`, `GB`). | `512 B`, `4.37 GiB`, `38.2 MiB`, `912 KiB`, `1.00 MiB` (never `1024 KiB`) | same as en |
+| `formatPercent` | Input is a **ratio 0–1** from the server. `Intl.NumberFormat(locale, { style: 'percent', minimumFractionDigits: f, maximumFractionDigits: f })`, `f = 1` for rates (conversion, yield, zero-result rate, reply ratio, coverage), `f = 0` for distribution shares (category mix, loss-reason share). Edges: a non-zero value that would round to 0 shows `<` + the smallest step (`<0.1%`, `<1%`); a value < 1 that would round to 100% shows `>99.9%` / `>99%`. | `37.4%`, `82%`, `0.0%`, `<0.1%`, `>99.9%` | same as en |
+| `formatShare` | Composition only. Input is the server's **whole percent** (integer 0–100; any non-zero share is ≥ 1 and only a complete one is 100, `classify::Composition::pct_bytes`). `Intl.NumberFormat(locale, { style: 'percent', maximumFractionDigits: 0 }).format(pct / 100)`; the division is a unit change, not a computation. The dominant-share label is the message `dominant_share` ("{share} {group}"). | `82%`, `1%`, `100%`; label `82% video` | `82%`; label TBD |
+| `formatRate` | `formatCompact(value)` inside the message `rate_per_hour` = `{n}/h` (en; zh TBD). Per-day uses `rate_per_day` = `{n}/d`. | `1.2K/h`, `0/h` | TBD |
+| `formatDelta` | The metric's own number options plus `signDisplay: 'exceptZero'`, then every U+002D hyphen-minus in the result is replaced with U+2212 (minus). A value that rounds to zero prints unsigned. Always paired with an up/down icon and the period text ("vs previous 7 days"); never colour alone. | `+1,240`, `−3`, `0`; percent (f = 1): `−3.2%`, `0.0%` | same as en |
+| `formatLatency` | Input milliseconds. Below 1,000 ms: `Intl.NumberFormat(locale, { style: 'unit', unit: 'millisecond', unitDisplay: 'short', maximumFractionDigits: v < 1 ? 1 : 0 })`. From 1,000 ms: unit `second`, `maximumFractionDigits: 1`. Percentiles from histograms are **always ≈**. | `0.8 ms`, `12 ms`, `1.4 sec` | `0.8毫秒`, `12毫秒`, `1.4秒` |
+| `formatSpan` | Durations (time to searchable, queue age, index lag, days until full). Input seconds. Unit: `second` below 60 s, `minute` below 3,600 s, `hour` below 172,800 s (48 h), else `day`. `Intl.NumberFormat(locale, { style: 'unit', unit, unitDisplay: 'short', maximumFractionDigits: v < 10 ? 1 : 0 })` where `v` is the value in that unit. | `45 sec`, `12 min`, `5.2 hr`, `3.1 days` | `45秒`, `12分钟`, `5.2小时`, `3.1天` |
+| `formatRelative` | Rows only. `Intl.RelativeTimeFormat(locale, { numeric: 'auto', style: 'long' })`; unit = the largest of second/minute/hour/day/week/month/year with \|Δ\| ≥ 1, value truncated toward zero. \|Δ\| < 45 s → message `just_now`. Re-rendered at most once a minute. Always paired with `formatDateTime` in a tooltip (the RelativeTime primitive, §10.11). | `3 hours ago`, `yesterday`, `in 5 minutes` | `3小时前`, `昨天`, `5分钟后` |
+| `formatDateTime` | Drawer, tables, tooltips. `Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short', hourCycle: 'h23', timeZone })`. | `Oct 22, 2026, 14:05` | `2026年10月22日 14:05` |
+| `formatDateFull` | Chart tooltip headers (§10.9.6). `Intl.DateTimeFormat(locale, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short', timeZone })`. Day and week buckets drop `hour`, `minute` and `timeZoneName`. | `Thu, Oct 22, 2026, 14:05 UTC`; day: `Thu, Oct 22, 2026` | `2026年10月22日周四 UTC 14:05`; day: `2026年10月22日周四` |
+| `formatDate` | Axis ticks for day buckets, date-only facts. `Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeZone })`. | `Oct 22, 2026` | `2026年10月22日` |
+| `formatScore` | 0–100 integer scores (junk). Same options as `formatCount`. | `42` | `42` |
+
+The architecture's example strings ("1.2k/h", "Seen 3 h ago") are
+illustrative; the outputs above are the contract.
 
 ---
 
@@ -93,7 +101,7 @@ illustrative; the `Intl` output for the locale wins (en compact is `1.2K`).
 | **Seeders** | **Max across sources within the freshness window** (§10.12): the highest seeders count among the sources that answered within the window. *Pending in M4: the store keeps what the scheduler gives (PR #32), and the scheduler (slice 4) fixes the window's length and whether the BEP 33 estimate counts as a source.* | `formatCount` | **Null = never scraped → `—`** (and "Never scraped" in the drawer). 0 = scraped, nobody seeding → `0`. ≈ only if the server sets `seeders_approx` (the value came from the DHT estimate alone). | Per-torrent (`last_scrape_at`) |
 | **Leechers** | As seeders, for leechers | `formatCount` | As seeders | Per-torrent |
 | **Completed** | Max `completed` (downloaded) across reporting trackers; a coarse age hint (§6) | `formatCount` | Null = never scraped | Per-torrent |
-| **Trackers reporting** | Trackers whose last scrape had **s + l + c > 0** (opentracker rule, §15), **out of m checked** that round | `formatCount` for each; row `4 / 20`; drawer "Reported by 4 of 20 trackers checked" | Null = never scraped → `—`. `0 / 20` is a real zero. A round where no tracker answered doesn't change the last values (PR #32). | Per-torrent |
+| **Trackers reporting** | n of m: n = trackers whose answer had **s + l + c > 0** (opentracker rule, §15); **m = trackers that answered in the last answered round** (`SwarmUpdate.trackers_checked`, PR #32). Trackers that didn't answer are in neither number. | `formatCount` for each; row `4 / 20`; drawer "Reported by 4 of 20 trackers checked" | Null = never scraped → `—`. `0 / 20` is a real zero. A round where no tracker answered changes nothing, so n and m keep the last answered round's values. | Per-torrent |
 | **DHT estimate** | BEP 33 bloom-filter estimate of seeds and peers from up to 8 closest responders | `formatCount` | **Always ≈** ("≈ 1,225 seeds"; labelled "estimate"). Null = no estimate (no DHT answer, or no responder stores the hash: "unknown", not "dead") | Per-torrent |
 | **Scrape age** | `now − last_scrape_at` (time of the last *answered* round) | `formatRelative` (row focus/hover), `formatDateTime` (drawer) | Null = never scraped | Per-torrent |
 | **Swarm trend** | Least-squares slope of the last 7 daily seeders samples, seeders/day; needs ≥ 3 samples (PR #32) | `formatDelta` + "/day" (message) | Null = fewer than 3 samples → "Not enough history" | Per-torrent (daily ring) |
@@ -104,8 +112,8 @@ illustrative; the `Intl` output for the locale wins (en compact is `1.2K`).
 | **Metadata fetched** | `metadata_at` | `formatDateTime` | Never null | Per-torrent |
 | **Piece size** | `piece_len` bytes | `formatBytes` | Never null | — |
 | **Junk score** | 0–100, sum of reason weights, capped (§6, M3) | `formatScore` + reasons as text | Null = not classified yet → `—` | — |
-| **Composition share** | Share of the torrent's **bytes** per category group (§10.18 slots), computed server-side | `formatPercent` (f = 0); dominant share as "82% video" | A group with 0 bytes is omitted | — |
-| **Parser confidence** | 0–1 from the release parser / resolver | `formatPercent` (f = 0) | Null = not parsed | — |
+| **Composition share** | Share of the torrent's **non-padding** bytes (and, separately, non-padding files) per category group (§10.18 slots), computed server-side as a whole percent: any non-zero share is ≥ 1, only a complete one is 100 (`classify/src/composition.rs`). Padding files are in no group's share. | `formatShare`; dominant share as "82% video" | A group with no files is omitted. A padding-only torrent has an empty composition. | — |
+| **Parser confidence** | 0–1 from the release parser / resolver | `formatPercent` (f = 1) | Null = not parsed | — |
 
 ## 5. Search metrics
 
@@ -117,6 +125,16 @@ illustrative; the `Intl` output for the locale wins (en compact is `1.2K`).
 | **Per-clause recovery count** | Results if a clause were removed ("Removing `trackers:>=3` gives 1,240") | `formatCount` | ≈ under the same rule as result count | Snapshot |
 | **Took** | Server time for the request | `formatLatency` | — | — |
 | **Headline stats** | Total searchable torrents, + new in the last hour (empty state) | `formatCompact`, `formatCount` | — | Snapshot / event time |
+
+## 5a. Histograms (§10.12)
+
+- **Bins are explicit and come from the server** (`{lo, hi, count}`); the client never re-bins. Bins are half-open `[lo, hi)`; the last bin is closed.
+- **Size** uses **log bins** with labelled edges. Edges are powers of 2 in bytes, labelled with `formatBytes` (`1.00 GiB`, `4.00 GiB`); the bin label is "lo – hi" with an en dash.
+- **Discovered** uses time bins (hour, day or week by range), labelled with `formatDate` / `formatDateFull`; the backfill window is marked.
+- **Year** uses one bin per year.
+- **Zero baselines**; **empty bins are shown as empty** (present with `count: 0`), never dropped or interpolated.
+- Sampled histograms (above 1M matches) carry the panel's `≈` note.
+- The exact bin edges for size and the time-bin rule are fixed in B6 and recorded here then.
 
 ## 6. Insights metrics (§10.9)
 
@@ -157,7 +175,7 @@ The text-equivalent ordered list uses `formatCount`.
 |---|---|---|---|---|
 | **Stage count** | Hashes of the cohorts in range that reached each stage: Harvested → Peer found → Metadata fetched → Stored → Searchable | `formatCount` | Never increases from one stage to the next (reconciled). Harvested is exact *per cohort* (cohorts count first harvests) | Discovery cohort |
 | **Stage conversion** | count(stage n) ÷ count(stage n−1), server-computed | `formatPercent` (f = 1) | Null if the previous stage is 0 | Discovery cohort |
-| **Loss reason share** | Share of a stage's losses per reason; 100% stacked bar | `formatPercent` (f = 0), counts `formatCount` | Codes from `crates/sources/src/funnel.rs` `Loss`: `no_peers`, `timed_out`, `refused`, `encryption_failed`, `oversize`, `invalid`, `blocked`, `evicted`, `gave_up`, `unreachable` (code 10, §16 M2) | Discovery cohort |
+| **Loss reason share** | Share of a stage's losses per reason; 100% stacked bar | `formatPercent` (f = 0), counts `formatCount` | API names, derived from the `Loss` enum in `crates/sources/src/funnel.rs` (which stores numeric codes 1–10 only; the names match the Prometheus labels in `crates/lodestar/src/metrics.rs`): `no_peers`, `timed_out`, `refused`, `encryption_failed`, `oversize`, `invalid`, `blocked`, `evicted`, `gave_up`, `unreachable` (code 10, §16 M2) | Discovery cohort |
 | **In progress** | Harvested − Σ terminal outcomes, per cohort | `formatCount` | Shown only on incomplete cohorts | Discovery cohort |
 
 Category filters apply only from Understand onward; with the content filter
@@ -198,8 +216,8 @@ the metric they quote (e.g. "Index lag 42 s" → `formatSpan`; "Disk full in
 | DHT nodes, routing-table size | `formatCount` | Snapshot |
 | Reply ratio (NAT-saturation signal) | `formatPercent` (f = 1) | Event time |
 | BEP 51 sample yield | `formatPercent` (f = 1) | Event time |
-| Keyspace coverage | `formatPercent` (f = 0) | Snapshot |
-| Seen-filter load factor | `formatPercent` (f = 0) | Snapshot |
+| Keyspace coverage | `formatPercent` (f = 1) | Snapshot |
+| Seen-filter load factor | `formatPercent` (f = 1) | Snapshot |
 | Queue depth / queue age | `formatCount` / `formatSpan` | Snapshot |
 | Fetch outcome breakdown, TCP vs uTP, MSE vs plaintext | `formatCount`, `formatPercent` (f = 1) | Event time |
 | Fetch latency histogram | `formatLatency`; bins labelled with edges | Always ≈ percentiles |
@@ -234,6 +252,7 @@ M4 slice 6, still pending; **planned** = named here and in the build plan
 | `hash_v2` | string (64 hex) | yes | — | main |
 | `name` | string | no | Raw name (decoded) | main |
 | `title` | string | yes | Resolved title; null = not resolved | planned (M3 data, B1) |
+| `resolved_via` | string | yes: null = the name was informative (no resolution) | "resolved via …": `files`, `folder`, `structure` (`classify::ResolvedVia::as_str`); `plugin` arrives with §18 | planned (values: main) |
 | `size` | integer (bytes) | no | Size | main |
 | `files` | integer | no | Files | main |
 | `piece_len` | integer (bytes) | no | Piece size | main |
@@ -243,7 +262,7 @@ M4 slice 6, still pending; **planned** = named here and in the build plan
 | `flags` | string[] | no | `private`, `v2`, `hybrid`, `padding`, `symlinks`, `imported`, `backfill`, `files_partial`, `single_file`, `warnings` | main |
 | `content_type` | string | yes | `movie`, `tv`, `music`, `audiobook`, `ebook`, `comic`, `software`, `game`, `images`, `video`, `other`, `adult`; null = not classified | planned |
 | `adult_kind` | string | yes | `scene`, `movie`, `photos`, `comics`, `game`, `vr`, `audio`; non-null only when `content_type = "adult"` | planned |
-| `composition` | `{group, files, bytes, share}[]` | no (may be empty) | Composition; `group` ∈ `video`, `audio`, `software`, `documents`, `images`, `archives`, `other`; `share` 0–1 of bytes | planned |
+| `composition` | `{group, files, bytes, pct_bytes, pct_files}[]` | no (may be empty) | Composition; `group` ∈ `video`, `audio`, `software`, `documents`, `images`, `archives`, `other`; `files`/`bytes` exclude padding; `pct_*` are whole percents (0–100) of non-padding bytes/files, rounded as `Composition::pct_bytes` | planned |
 | `junk_score` | integer 0–100 | yes | Junk score | planned |
 | `junk_reasons` | string[] | no | Stable reason keys (§6 M3) | planned |
 | `hidden_by_filter` | boolean | no | Hidden by a §20 filter rule | planned |
@@ -251,17 +270,18 @@ M4 slice 6, still pending; **planned** = named here and in the build plan
 | `seeders` | integer | **yes: null = never scraped** | Seeders | #32 |
 | `leechers` | integer | yes (as seeders) | Leechers | #32 |
 | `completed` | integer | yes (as seeders) | Completed | #32 |
-| `seeders_approx` | boolean | no | True when the DHT estimate alone supplied the counts; always false if slice 4 keeps the DHT out of the max | planned |
+| `seeders_approx` | boolean | no | True when the DHT estimate alone supplied the counts; always false if slice 4 keeps the DHT out of the max | planned, **needs M4 sign-off** |
 | `trackers_reporting` | integer | yes (as seeders) | Trackers reporting (n) | #32 |
-| `trackers_checked` | integer | yes (as seeders) | Trackers checked (m) | #32 |
+| `trackers_checked` | integer | yes (as seeders) | Trackers checked (m): trackers that answered in the last answered round | #32 |
 | `last_scrape_at` | integer | yes (as seeders) | Scrape age | #32 |
-| `swarm_suspect` | boolean | no | Suspect swarm (`swarm_flags::SUSPECT`) | #32 |
+| `swarm_suspect` | boolean | no | Suspect swarm (`swarm_flags::SUSPECT`) | #32 (flag in the store; API name planned) |
 | `score` | number | no | Relevance (hits only) | main |
 | `matched_files` | integer[] | omitted unless the query has a file clause | Matched-file positions | main |
 
 "Never scraped" means: no `swarm` row, or a row with `trackers_checked = 0`
-and no DHT estimate (PR #32). All six swarm count fields are then `null`
-together.
+and no DHT estimate (PR #32). The six nullable swarm fields (`seeders`,
+`leechers`, `completed`, `trackers_reporting`, `trackers_checked`,
+`last_scrape_at`) are then all `null` together.
 
 ### 7.2 Detail-only (swarm section)
 
@@ -269,10 +289,10 @@ together.
 |---|---|---|---|---|
 | `dht_seeds` | integer | yes: null = no estimate | DHT estimate (always ≈) | #32 |
 | `dht_peers` | integer | yes (as `dht_seeds`) | DHT estimate | #32 |
-| `swarm_trend` | number (seeders/day) | yes: null = < 3 daily samples | Swarm trend | #32 (`history::trend`) |
+| `swarm_trend` | number (seeders/day) | yes: null = < 3 daily samples | Swarm trend | #32 (`history::trend`; API name planned) |
 | `swarm_trackers` | `{url, seeders, leechers, completed}[]` | no (may be empty) | Per-tracker table; reporting trackers only, from the last round | #32 (`Store::swarm_trackers`) |
 | `swarm_history` | `{daily: Sample[14], weekly: Sample[26]}` | yes: null = no ring kept | Swarm history; newest first | #32 (`Store::history`) |
-| `Sample` | `{at: integer, seeders: integer\|null, leechers: integer\|null}` | — | `at` = start of the UTC day/week; null counts = gap (`0xFFFF`) | #32 |
+| `Sample` | `{at: integer, seeders: integer\|null, leechers: integer\|null}` | — | `at` = start of the UTC day or week; null counts = gap (`0xFFFF`). Days are Unix epoch days (UTC); a week is epoch-day / 7, so **weeks start on Thursday 00:00 UTC**. Counts saturate at **65,534**: show 65,534 as `≥ 65,534` | #32 |
 | `file_list`, `file_list_total`, `magnet` | as today | no | — | main |
 
 ### 7.3 Search response
@@ -283,7 +303,7 @@ together.
 | `total_approx` | boolean | no | ≈ on the result count | planned (B5a) |
 | `took_ms` | number | no | Took | main |
 | `hidden_junk` | integer | no | Hidden count (junk) | planned |
-| `hidden_by_filters` | integer | no | Hidden count (filters) | planned |
+| `hidden_count` | integer | no | Hidden count (filters); distinct from the per-torrent `hidden_by_filter` | planned |
 | `canonical`, `stemmed`, `offset`, `limit`, `hits` | as today | no | — | main |
 
 ### 7.4 Facets response (B6)
@@ -314,6 +334,23 @@ together.
 | `funnel[]` | `{cohort: integer, final: boolean, stages: {harvested, peer_found, fetched, stored, searchable: integer}, losses: {<reason>: integer}, in_progress: integer}` | no | Funnel by cohort |
 | `serve` | `{searches: integer, zero_result_rate: number\|null, latency_p95_ms: number\|null, alerts_fired: integer, sends: integer}` | no | Serve |
 | `ingest_per_hour` | integer | no | Ingest rate |
+| `stale` | `{since: integer, reason: string}` | yes: null = fresh | Stale banner: > 2 min since the last rollup flush (§10.9.6) |
+| `segments` | object | no | Level 4; shape sketched below, **fields fixed in B11a/B11b** |
+| `exceptions[]` | `{kind: string, severity: "warning"\|"error", value: number\|null, unit: string\|null, since: integer, fix: {kind: "settings"\|"stage", target: string}}` | no (may be empty) | Level 5; `kind` ∈ `yield_below_baseline`, `nat_saturation`, `ephemeral_ports`, `port_unreachable`, `scrape_bans`, `index_lag`, `parser_confidence`, `disk_projection`, `cohort_stalled`, `network_path`; **names fixed in B11a/B11b** |
 
 Comparison-period fields mirror the current ones under `previous` (same
 shape), present only when `compare=1`.
+
+**`segments` sketch (deferred to B11a/B11b):**
+
+```
+segments: {
+  by_group:        {key: string, searchable: integer}[],   // event time
+  by_content_type: {key: string, searchable: integer}[],   // event time
+  by_strategy:     {key: "bep51"|"passive"|"active", harvested: integer, searchable: integer, yield: number|null}[],  // cohort, final only
+  by_ip_family:    {key: "v4"|"v6", harvested: integer, searchable: integer, yield: number|null}[],          // cohort, final only
+  resolved_by:     {key: "files"|"folder"|"structure"|"plugin", count: integer}[]                         // event time
+}
+```
+
+Rows are sorted by the server (descending value, then key).
