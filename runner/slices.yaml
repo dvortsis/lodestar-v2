@@ -5,8 +5,8 @@
 # two running slices never own overlapping paths.
 
 limits:
-  max_core: 4              # Opus code slices at once (disjoint crates only; raised 2026-10-22)
-  max_helpers: 8           # Sonnet/Haiku slices at once
+  max_core: 16             # Opus code slices at once (disjoint owned paths only; owner raised to 16, 2026-10-22)
+  max_helpers: 16          # Sonnet/Haiku slices at once (owner, 2026-10-22)
   max_launches_per_day: 40 # backstop against runaway loops, not a budget
   review_rounds_before_escalation: 2
 
