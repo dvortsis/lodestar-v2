@@ -1734,6 +1734,11 @@ export interface components {
             trackers_reporting: number | null;
         };
         /**
+         * @description A note on what a search left out.
+         * @enum {string}
+         */
+        SearchNotice: "adult_hidden";
+        /**
          * @description `POST /search`'s body, and `GET /search`'s parameters (where `ast` is
          *     refused: send an AST with POST).
          */
@@ -1793,6 +1798,13 @@ export interface components {
              *     256 characters, valid for 10 minutes after its last use.
              */
             next_cursor: string | null;
+            /**
+             * @description What the server left out of these results, for the UI to say:
+             *     `adult_hidden` when the query asks for Adult (`type:adult`,
+             *     `adult:…`) while "Show adult content" is off, so it matched
+             *     nothing adult (§20.9).
+             */
+            notices: components["schemas"]["SearchNotice"][];
             /** @description Hits before this page. */
             offset: number;
             /**
@@ -2964,6 +2976,15 @@ export interface operations {
                     "application/json": components["schemas"]["SectionValues"];
                 };
             };
+            /** @description `adult_confirmation_required`: a patch turning on an adult setting without `"confirm_adult": true`; nothing is saved. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -3014,6 +3035,15 @@ export interface operations {
                     "application/json": components["schemas"]["TorrentDetail"];
                 };
             };
+            /** @description `torrent_not_found`, or `adult_hidden`: an Adult torrent while "Show adult content" is off. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -3040,6 +3070,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FilesPage"];
+                };
+            };
+            /** @description `torrent_not_found`, or `adult_hidden`: an Adult torrent while "Show adult content" is off. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];

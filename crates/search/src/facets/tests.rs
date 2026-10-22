@@ -29,6 +29,10 @@ fn doc(i: u64) -> TorrentDoc {
     if i % 5 == 4 {
         tags.push(format!("adult:{}", ["scene", "vr"][(i % 2) as usize]));
     }
+    // A Not-adult correction keeps the kind the classifier gave (§20.9).
+    if i % 5 == 3 && i % 7 == 0 {
+        tags.push("adult:scene".into());
+    }
     if i % 4 != 3 {
         tags.push(format!("res:{}", RES[((i / 2) % 3) as usize]));
     }
@@ -106,6 +110,10 @@ fn doc(i: u64) -> TorrentDoc {
 
 /// The values torrent `d` has for facet `f`.
 fn values(f: Facet, d: &TorrentDoc) -> Vec<String> {
+    // The adult facet counts within the Adult class only.
+    if f == Facet::Adult && !d.enriched.tags.iter().any(|t| t == "type:adult") {
+        return Vec::new();
+    }
     match f.source() {
         Source::Tag(k) => {
             let prefix = format!("{}:", k.as_str());
@@ -193,6 +201,17 @@ fn total(index: &SearchIndex, node: &Node) -> usize {
 
 /// A query matching value `v` of facet `f`.
 fn leaf(f: Facet, v: &str) -> Node {
+    if f == Facet::Adult {
+        return Node::And {
+            of: vec![
+                Node::Tag {
+                    key: TagKey::Adult,
+                    any: vec![v.to_owned()],
+                },
+                adult_class(),
+            ],
+        };
+    }
     match f.source() {
         Source::Tag(key) => Node::Tag {
             key,
@@ -461,6 +480,60 @@ fn always_on_filters_hold_in_every_pass() {
             }
         }
         assert_eq!(got.matches as usize, l.total().value, "{q}");
+    }
+}
+
+#[test]
+fn adult_facet_follows_the_class() {
+    let docs = corpus(500);
+    let index = build(&docs, 2);
+    let stale = Node::And {
+        of: vec![
+            crate::parse("adult:scene").unwrap(),
+            Node::Not {
+                of: Box::new(adult_class()),
+            },
+        ],
+    };
+    assert!(
+        total(&index, &stale) > 0,
+        "the fixture has corrected torrents"
+    );
+    // Shown: only Adult-class torrents count, selected or not.
+    for q in ["", "common", "adult:scene", "type:adult,software"] {
+        let (node, _, got) = run(&index, q, &all_values());
+        let adult = got.term(Facet::Adult).unwrap();
+        let base = without_facet(&node, Facet::Adult).unwrap_or(node.clone());
+        for v in &adult.values {
+            let narrowed = Node::And {
+                of: vec![base.clone(), leaf(Facet::Adult, &v.value)],
+            };
+            assert_eq!(
+                v.count as usize,
+                total(&index, &narrowed),
+                "{q}: {}",
+                v.value
+            );
+        }
+        assert!(adult.values.iter().any(|v| v.count > 0), "{q}");
+    }
+    // A class without Adult torrents lists nothing, stale kinds or not.
+    let (_, _, got) = run(&index, "type:software", &all_values());
+    assert!(got.term(Facet::Adult).is_none());
+    // Hidden: never served, even when the query names a kind.
+    let hide = vec![crate::parse("-type:adult").unwrap()];
+    let params = FacetParams {
+        hide_adult: true,
+        ..all_values()
+    };
+    for q in ["", "type:movie", "adult:scene"] {
+        let node = crate::parse(q).unwrap();
+        let l = lease(&index, &with_filters(node.clone(), &hide));
+        let got = facets(&l, &node, &hide, &params, &CancelToken::new()).unwrap();
+        assert!(got.term(Facet::Adult).is_none(), "{q}");
+        assert!(!got.unavailable.contains(&"adult".to_owned()), "{q}");
+        let types = got.term(Facet::Type).unwrap();
+        assert!(types.values.iter().all(|v| v.value != "adult"), "{q}");
     }
 }
 

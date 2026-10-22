@@ -167,6 +167,7 @@ fn fixture(n: usize) -> Fixture {
             reader: Arc::new(Mutex::new(reader)),
             filters: None,
             settings: None,
+            adult: Default::default(),
         }),
     );
     let mut f = Fixture {
@@ -656,6 +657,7 @@ async fn search_disabled() {
             )),
             filters: None,
             settings: None,
+            adult: Default::default(),
         }),
     );
     let token = auth.setup_token().unwrap();
