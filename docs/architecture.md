@@ -2128,6 +2128,11 @@ docs/               architecture.md (this plan), query-language.md, operations.m
     - The cost is the same full scan that a cold browse by a plain field pays (54 ms): a cold miss must count every match exactly, which only a scan can do. The hot reads add about 6 ms.
     - Getting under 50 ms cold is therefore a general scan-speed question (or an approximate total, `total_approx`, planned in B5a), not an M4 one. That decision went to the runner with this table.
   - **Not M4's:** word + file clause runs 413 ms p95 at 10M even when warm (p50 86 ms). That's M3's file index, and it was reported separately.
+- **Soak (`scrape-soak`, 10 min on the 10M store):**
+  - 3 fake UDP trackers and 1 fake HTTP tracker, at a 10 ms interval;
+  - 3,000 rounds, 222,000 torrents scraped and written;
+  - resident memory at 460.5 MiB throughout, at most 460.7 (+0.0% over the second half; the gate is 5%).
+  - The rate (370 torrents/s) is set by the fake trackers' pacing, not by the scheduler.
 - **Fuzzing:** the `query` target ran 1.3M runs clean, seeded with the new syntax.
 
 ## 17. Verification (once built)
