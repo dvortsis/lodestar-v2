@@ -8,6 +8,7 @@ const AUTH_PATHS = new Set(['/login', '/setup', '/auth', '/logout']);
 const AUTH_PAGES = ['/login', '/setup'];
 
 export type ErrorBody = components['schemas']['ErrorBody'];
+type ErrorEnvelope = components['schemas']['ErrorEnvelope'];
 
 export class ApiError extends Error {
 	readonly status: number;
@@ -18,11 +19,16 @@ export class ApiError extends Error {
 	readonly end?: number;
 	/** Seconds to wait, from `Retry-After` (429/503). */
 	readonly retryAfter?: number;
+	/** On a 401: the instance still needs its first-run setup (envelope top level). */
+	readonly setupRequired?: boolean;
+	/** On a 428 from `POST /filters/apply`: the warning to show first (envelope top level). */
+	readonly assessment?: ErrorEnvelope['assessment'];
 	constructor(
 		status: number,
 		code: string,
 		message: string,
-		extra: Pick<ErrorBody, 'field' | 'start' | 'end'> & { retryAfter?: number } = {}
+		extra: Pick<ErrorBody, 'field' | 'start' | 'end'> &
+			Pick<ErrorEnvelope, 'setup_required' | 'assessment'> & { retryAfter?: number } = {}
 	) {
 		super(message);
 		this.name = 'ApiError';
@@ -32,6 +38,8 @@ export class ApiError extends Error {
 		this.start = extra.start;
 		this.end = extra.end;
 		this.retryAfter = extra.retryAfter;
+		this.setupRequired = extra.setup_required;
+		this.assessment = extra.assessment;
 	}
 }
 
@@ -49,11 +57,14 @@ export function mustRestartPaging(e: unknown): boolean {
 	return e instanceof ApiError && (e.code === 'cursor_expired' || e.code === 'bad_cursor');
 }
 
+const HTTP_DATE = /^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/;
+
 /** `Retry-After` in seconds: delta-seconds or an HTTP-date. Undefined when absent or invalid. */
 export function parseRetryAfter(value: string | null, now = Date.now()): number | undefined {
 	if (value === null) return undefined;
 	const v = value.trim();
 	if (/^\d+$/.test(v)) return Number(v);
+	if (!HTTP_DATE.test(v)) return undefined;
 	const at = Date.parse(v);
 	return Number.isNaN(at) ? undefined : Math.max(0, Math.ceil((at - now) / 1000));
 }
@@ -61,50 +72,68 @@ export function parseRetryAfter(value: string | null, now = Date.now()): number 
 /** Turns a non-2xx response into an `ApiError` (envelope, or `http_<status>` for other bodies). */
 export async function errorFromResponse(res: Response): Promise<ApiError> {
 	const retryAfter = parseRetryAfter(res.headers.get('Retry-After'));
-	let body: { error?: Partial<ErrorBody> } | undefined;
+	let body: Partial<Omit<ErrorEnvelope, 'error'>> & { error?: Partial<ErrorBody> } = {};
 	try {
-		body = await res.json();
-	} catch {
+		body = (await res.json()) ?? {};
+	} catch (x) {
+		if (isAbort(x)) throw abortError();
 		// not JSON: a proxy error page
 	}
-	const e = body?.error;
+	const e = body.error;
 	if (e && typeof e.code === 'string') {
 		return new ApiError(res.status, e.code, String(e.message ?? ''), {
 			field: e.field,
 			start: e.start,
 			end: e.end,
-			retryAfter
+			retryAfter,
+			setup_required: body.setup_required,
+			assessment: body.assessment
 		});
 	}
 	return new ApiError(res.status, `http_${res.status}`, res.statusText, { retryAfter });
 }
 
-type LoginHandler = (next: string) => void;
+type LoginHandler = (next: string, opts: { setupRequired: boolean }) => void;
 let loginHandler: LoginHandler | undefined;
 let loginPending = false;
 
-/** The shell registers where a 401 goes. `next` is the current path and query. */
+/**
+ * The shell registers where a 401 goes. `next` is the current path and query; `setupRequired`
+ * says the instance still needs its first-run setup (go to /setup, not /login).
+ */
 export function onLoginRequired(handler: LoginHandler | undefined): void {
 	loginHandler = handler;
 	loginPending = false;
 }
 
-function loginRequired(path: string): void {
+function loginRequired(path: string, setupRequired: boolean): void {
 	const loc = globalThis.location;
 	if (!loginHandler || loginPending || AUTH_PATHS.has(path)) return;
 	if (loc && AUTH_PAGES.some((p) => loc.pathname === p || loc.pathname.startsWith(p + '/'))) return;
 	loginPending = true;
-	loginHandler(loc ? loc.pathname + loc.search : '/');
+	loginHandler(loc ? loc.pathname + loc.search : '/', { setupRequired });
 }
 
 /** Called for every 401 `login_required` (the events client uses it too). */
 export function handleUnauthorized(e: unknown, path: string): void {
-	if (e instanceof ApiError && e.status === 401 && e.code === 'login_required') loginRequired(path);
+	if (e instanceof ApiError && e.status === 401 && e.code === 'login_required')
+		loginRequired(path, e.setupRequired === true);
 }
 
 /** Any successful response proves the session works, so a later 401 may redirect again. */
-export function sessionOk(): void {
+export function sessionOk(path = ''): void {
+	// A public GET /auth says nothing about the session; a login or setup does.
+	if (path === '/auth' || path === '/logout') return;
 	loginPending = false;
+	for (const f of [...sessionListeners]) f();
+}
+
+const sessionListeners = new Set<() => void>();
+
+/** Runs `f` after every request that shows the session works. Returns the unsubscribe. */
+export function onSessionOk(f: () => void): () => void {
+	sessionListeners.add(f);
+	return () => void sessionListeners.delete(f);
 }
 
 type Method = 'get' | 'post' | 'put' | 'patch' | 'delete';
@@ -112,21 +141,40 @@ type PathsWith<M extends Method> = {
 	[P in keyof paths]: paths[P][M] extends object ? P : never;
 }[keyof paths];
 type Op<P extends keyof paths, M extends Method> = paths[P][M];
-type QueryOf<O> = O extends { parameters: { query?: infer Q } } ? Exclude<Q, undefined> : never;
-type PathParamsOf<O> = O extends { parameters: { path?: infer Q } } ? Exclude<Q, undefined> : never;
-type BodyOf<O> = O extends { requestBody?: { content: { 'application/json': infer B } } }
-	? B
-	: never;
-type OkOf<O> = O extends { responses: { 200: { content: { 'application/json': infer R } } } }
-	? R
-	: void;
 
-export type RequestOptions<O> = {
-	query?: QueryOf<O>;
-	path?: PathParamsOf<O>;
-	body?: BodyOf<O>;
-	signal?: AbortSignal;
-};
+type Params<O, K extends 'path' | 'query'> = O extends { parameters: infer P }
+	? P extends { [k in K]?: infer T }
+		? Exclude<T, undefined>
+		: never
+	: never;
+/** `K` is required when the operation declares it required, optional when not, absent when never. */
+type Part<O, K extends 'path' | 'query'> = [Params<O, K>] extends [never]
+	? { [k in K]?: never }
+	: O extends { parameters: Record<K, object> }
+		? { [k in K]: Params<O, K> }
+		: { [k in K]?: Params<O, K> };
+type BodyPart<O, M extends Method> = M extends 'get'
+	? { body?: never }
+	: O extends { requestBody: { content: { 'application/json': infer B } } }
+		? { body: B }
+		: O extends { requestBody?: { content: { 'application/json': infer B } } }
+			? { body?: B }
+			: { body?: never };
+
+export type RequestOptions<O, M extends Method> = Part<O, 'path'> &
+	Part<O, 'query'> &
+	BodyPart<O, M> & { signal?: AbortSignal };
+type AnyRequired<T> = Record<string, never> extends T ? false : true;
+type Args<O, M extends Method> =
+	AnyRequired<RequestOptions<O, M>> extends true
+		? [options: RequestOptions<O, M>]
+		: [options?: RequestOptions<O, M>];
+
+type JsonBody<R> = R extends { content: { 'application/json': infer B } } ? B : void;
+type OkResponses<O> = O extends { responses: infer R }
+	? R[Extract<keyof R, 200 | 201 | 202>]
+	: never;
+type OkOf<O> = [OkResponses<O>] extends [never] ? void : JsonBody<OkResponses<O>>;
 
 function url(path: string, params?: object, query?: object): string {
 	let p = path;
@@ -167,7 +215,7 @@ async function request(
 		handleUnauthorized(err, path);
 		throw err;
 	}
-	sessionOk();
+	sessionOk(path);
 	if (res.status === 204) return undefined;
 	try {
 		return await res.json();
@@ -179,8 +227,8 @@ async function request(
 
 const call =
 	<M extends Method>(method: M) =>
-	<P extends PathsWith<M>>(path: P, o: RequestOptions<Op<P, M>> = {}) =>
-		request(method, path as string, o as object) as Promise<OkOf<Op<P, M>>>;
+	<P extends PathsWith<M>>(path: P, ...args: Args<Op<P, M>, M>): Promise<OkOf<Op<P, M>>> =>
+		request(method, path as string, ((args as unknown[])[0] ?? {}) as object) as never;
 
 export const api = {
 	get: call('get'),

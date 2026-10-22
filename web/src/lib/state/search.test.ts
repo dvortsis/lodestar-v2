@@ -166,6 +166,26 @@ describe('search state', () => {
 		expect(f.calls).toEqual([{ url: '/search?q=new&sort=-size', push: true }]);
 	});
 
+	it('setAst clears parsing on success and on error', async () => {
+		const f = fakeNav();
+		const s = createSearchState(f.nav);
+		await s.setAst(word('a'));
+		expect(s.parsing).toBe(false);
+		fetchMock.mockImplementationOnce(async () =>
+			json({ error: { code: 'bad_ast', message: 'x' } }, { status: 400 })
+		);
+		await expect(s.setAst(word('b'))).rejects.toMatchObject({ code: 'bad_ast' });
+		expect(s.parsing).toBe(false);
+	});
+
+	it('does not push a duplicate entry when the URL is unchanged', async () => {
+		const f = fakeNav('http://x/search?q=a');
+		const s = createSearchState(f.nav);
+		await s.setSort('relevance');
+		await s.setHidden(false);
+		expect(f.calls).toEqual([]);
+	});
+
 	it('back and forward restore the draft from the URL without navigating', async () => {
 		const f = fakeNav();
 		const s = createSearchState(f.nav);

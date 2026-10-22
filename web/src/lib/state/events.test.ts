@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { onLoginRequired } from '$lib/api/client';
+import { api, onLoginRequired } from '$lib/api/client';
 import {
 	BACKOFF_CAP_MS,
 	HEARTBEAT_TIMEOUT_MS,
@@ -426,5 +426,105 @@ describe('hidden tab', () => {
 		await tick();
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 		expect(urlOf(1)).toContain('topics=crawler');
+	});
+});
+
+describe('hidden at subscribe', () => {
+	it('takes no stream slot until the tab is shown', async () => {
+		visibility = 'hidden';
+		const ev = make();
+		fetchMock.mockImplementation(async () => stream().response());
+		ev.on('torrents', () => {});
+		await tick(60_000);
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(ev.status).toBe('stopped');
+		setVisibility('visible');
+		await tick();
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(ev.status).toBe('live');
+	});
+
+	it('keeps the backlog of a hidden tab small: latest crawler, folded torrents counts', async () => {
+		const ev = make();
+		const s = stream();
+		fetchMock.mockResolvedValue(s.response());
+		const log: string[] = [];
+		ev.on('torrents', (d) => log.push(`t${d.added}/${d.max_id}`));
+		ev.on('crawler', (d) => log.push(`c${d.torrents}`));
+		await tick();
+		setVisibility('hidden');
+		for (let i = 1; i <= 5; i++) {
+			s.push(frame('torrents', { added: i, max_id: 10 + i }, `a-${i}`));
+			s.push(frame('crawler', { torrents: i }, `b-${i}`));
+		}
+		await tick();
+		setVisibility('visible');
+		flushFrame();
+		expect(log).toEqual(['t15/15', 'c5']);
+	});
+});
+
+describe('after a 401', () => {
+	it('resumes once a request succeeds, without a reload', async () => {
+		onLoginRequired(vi.fn());
+		const ev = make();
+		let loggedIn = false;
+		fetchMock.mockImplementation(async (u: string) => {
+			if (u.startsWith('/api/v1/login')) return new Response('{}', { status: 200 });
+			return loggedIn ? stream().response() : err(401, 'login_required');
+		});
+		ev.on('torrents', () => {});
+		await tick();
+		expect(ev.status).toBe('stopped');
+		await tick(60_000);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		loggedIn = true;
+		await api.post('/login', { body: { password: 'x' } });
+		await tick();
+		expect(ev.status).toBe('live');
+	});
+});
+
+describe('details', () => {
+	it('floors the server retry: at 1 s', async () => {
+		const ev = make();
+		const a = stream();
+		fetchMock.mockResolvedValueOnce(a.response()).mockResolvedValue(stream().response());
+		ev.on('torrents', () => {});
+		await tick();
+		a.push('retry: 0\n\n');
+		await tick();
+		a.end();
+		await tick(999);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		await tick(1);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it('honours Retry-After on a 503', async () => {
+		const ev = make();
+		fetchMock
+			.mockResolvedValueOnce(err(503, 'events_unavailable', { 'Retry-After': '20' }))
+			.mockResolvedValue(stream().response());
+		ev.on('torrents', () => {});
+		await tick(19_999);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		await tick(1);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it('skips a consumer unsubscribed by an earlier handler in the same dispatch', async () => {
+		const ev = make();
+		const s = stream();
+		fetchMock.mockResolvedValue(s.response());
+		const second = vi.fn();
+		let off2 = () => {};
+		ev.on('torrents', () => off2());
+		off2 = ev.on('torrents', second);
+		await tick();
+		s.push(frame('torrents', { added: 1, max_id: 1 }, 'a-1'));
+		await tick();
+		flushFrame();
+		expect(second).not.toHaveBeenCalled();
 	});
 });
