@@ -89,13 +89,13 @@
    "notes": "merged after round 2"
   },
   "W1b": {
-   "status": "in_review",
+   "status": "merged",
    "model": "haiku",
    "session": "session_01B4Sk9GZoxWRASeUcVB2C9W",
    "pr": 58,
    "attempt": 0,
    "review_rounds": 1,
-   "notes": "round 1: no blocking; asked: merge main, catppuccin license, doc\u2194fixture test, stricter :430, size reason. Ownership extended to themes.test.ts, theme-files.test.ts, static/themes.json (forced by W1 tests)"
+   "notes": "merged 09:01 as 4d6ee4f (#58)"
   },
   "W3": {
    "status": "merged",
