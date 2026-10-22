@@ -137,12 +137,14 @@ pub(crate) fn certificate(spec: &Spec<'_>, serial: &[u8; 16], issuer_key: &KeyPa
     seq(&[tbs, ed25519_algorithm(), bit_string(&signature)].concat())
 }
 
-/// Whether `cert` (one Lodestar wrote) certifies `public_key`. Its
-/// SubjectPublicKeyInfo has one fixed encoding, so this is a byte search;
-/// the chain itself is checked by webpki.
+/// Whether `cert` certifies `public_key`: webpki parses it, and its
+/// SubjectPublicKeyInfo must be exactly the Ed25519 one for that key. The
+/// chain itself is checked separately.
 pub(crate) fn certifies(cert: &[u8], public_key: &[u8; 32]) -> bool {
-    let spki = subject_public_key_info(public_key);
-    cert.windows(spki.len()).any(|w| w == spki.as_slice())
+    let der = rustls::pki_types::CertificateDer::from(cert);
+    rustls::server::ParsedCertificate::try_from(&der).is_ok_and(|parsed| {
+        parsed.subject_public_key_info().as_ref() == subject_public_key_info(public_key)
+    })
 }
 
 /// Checks an Ed25519 signature (tests use it on certificates).
@@ -356,6 +358,13 @@ mod tests {
         let cert = certificate(&spec, &serial, &ca);
         assert!(certifies(&cert, &leaf.public_key()));
         assert!(!certifies(&cert, &ca.public_key()));
+        // Not a certificate, or a truncated one, certifies nothing, even if
+        // it holds the key's bytes.
+        assert!(!certifies(
+            &subject_public_key_info(&leaf.public_key()),
+            &leaf.public_key()
+        ));
+        assert!(!certifies(&cert[..cert.len() - 1], &leaf.public_key()));
         // The last 64 bytes are the signature over the TBS that follows the
         // outer header.
         let tbs = tbs_certificate(&spec, &serial, &ca.public_key());
@@ -370,6 +379,7 @@ mod tests {
         assert_eq!(format!("{key:?}"), "KeyPair(***)");
     }
 
+    #[cfg(target_os = "linux")]
     fn pem(der: &[u8]) -> String {
         const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         let mut body = String::new();
@@ -395,8 +405,10 @@ mod tests {
         )
     }
 
-    /// OpenSSL's strict mode accepts the chain, when OpenSSL is installed
-    /// (it is on the Linux CI runners; elsewhere this checks nothing).
+    /// OpenSSL's strict mode accepts the chain. Linux only: macOS ships
+    /// LibreSSL, which can't verify Ed25519, and OpenSSL on Windows runners
+    /// varies. It still skips when `openssl` is missing.
+    #[cfg(target_os = "linux")]
     #[test]
     fn openssl_strict_accepts_the_chain() {
         let Ok(probe) = std::process::Command::new("openssl")

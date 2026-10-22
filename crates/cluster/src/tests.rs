@@ -303,17 +303,19 @@ fn a_joined_worker_connects_with_mutual_tls() {
 fn tokens_are_single_use_and_expire() {
     let mut c = cluster(1);
 
-    // Reused: the replay is refused, and still is after a restart.
+    // Reused with another key: the replay is refused, and still is after
+    // a restart.
     let token = c.token("a", T0);
     let key = KeyPair::generate().unwrap().public_key();
+    let other = KeyPair::generate().unwrap().public_key();
     c.coord.redeem(&mut c.store, &token, &key, T0).unwrap();
     assert!(matches!(
-        c.coord.redeem(&mut c.store, &token, &key, T0 + 1),
+        c.coord.redeem(&mut c.store, &token, &other, T0 + 1),
         Err(JoinError::AlreadyUsed)
     ));
     let mut c = c.reopen(T0 + 2);
     assert!(matches!(
-        c.coord.redeem(&mut c.store, &token, &key, T0 + 3),
+        c.coord.redeem(&mut c.store, &token, &other, T0 + 3),
         Err(JoinError::AlreadyUsed)
     ));
     // Once the spent record is forgotten, it's simply unknown.
@@ -337,6 +339,47 @@ fn tokens_are_single_use_and_expire() {
     c.coord
         .redeem(&mut c.store, &late, &key, t1 + JOIN_TOKEN_TTL_SECS - 1)
         .unwrap();
+}
+
+/// The grant got lost (or the worker crashed before saving it): asking
+/// again with the same token and key gets the same certificate back, until
+/// the token expires or the certificate is revoked. Nothing else does.
+#[test]
+fn a_lost_grant_can_be_asked_for_again_with_the_same_key() {
+    let mut c = cluster(1);
+    let joining = Joining::new(c.token("nas", T0)).unwrap();
+    let first = c
+        .coord
+        .redeem(&mut c.store, joining.token(), &joining.public_key(), T0)
+        .unwrap();
+    // The same answer, across a restart too, and it works.
+    let mut c = c.reopen(T0 + 1);
+    let again = c
+        .coord
+        .redeem(&mut c.store, joining.token(), &joining.public_key(), T0 + 2)
+        .unwrap();
+    assert_eq!((again.worker, &again.cert), (first.worker, &first.cert));
+    assert_eq!(c.coord.certificates().len(), 1);
+    let token = JoinToken::parse(&joining.token().expose()).unwrap();
+    let key = joining.public_key();
+    let creds = joining.finish(again, T0 + 2).unwrap();
+    assert!(matches!(c.connect(&creds, T0 + 3), Outcome::Done(Some(_))));
+
+    // Not with another key, not after the token's expiry, not once revoked.
+    assert!(matches!(
+        c.coord.redeem(&mut c.store, &token, &[9; 32], T0 + 3),
+        Err(JoinError::AlreadyUsed)
+    ));
+    assert!(matches!(
+        c.coord
+            .redeem(&mut c.store, &token, &key, T0 + JOIN_TOKEN_TTL_SECS),
+        Err(JoinError::AlreadyUsed)
+    ));
+    c.coord.revoke(&mut c.store, creds.worker()).unwrap();
+    assert!(matches!(
+        c.coord.redeem(&mut c.store, &token, &key, T0 + 4),
+        Err(JoinError::AlreadyUsed)
+    ));
 }
 
 #[test]
@@ -417,22 +460,37 @@ fn the_join_channel_refuses_a_man_in_the_middle() {
         Some(CertificateError::UnknownIssuer)
     );
 
-    // An impostor that sends the real CA certificate (it's public) but
-    // signs its leaf with its own key.
+    // An impostor that sends the real CA certificate (it's public) and a
+    // leaf naming the real CA as its issuer, but signed with its own key.
     let real_ca = c.coord.ca_certificates()[0].clone();
-    let (ca_key, ca_name, _) = self_signed_ca(T0);
-    let (key, cert) = leaf(Role::Coordinator, &ca_name, &ca_key, T0);
+    let (ca_key, _, _) = self_signed_ca(T0);
+    let (key, cert) = leaf(Role::Coordinator, &c.coord.ca_name_for_test(), &ca_key, T0);
     let outcome = handshake_with(
         impostor(vec![cert, real_ca.clone()], &key, ALPN_JOIN),
         config.clone(),
     );
-    assert!(refused_cert(&outcome).is_some(), "{outcome:?}");
+    assert_eq!(
+        refused_cert(&outcome),
+        Some(CertificateError::BadSignature),
+        "{outcome:?}"
+    );
 
     // A worker's real certificate, from the real CA, can't pose as the
     // coordinator: it's only for client authentication.
     let (wkey, wcert) = c.coord.issue_for_test(Role::Worker("evil"), T0);
     let outcome = handshake_with(impostor(vec![wcert, real_ca], &wkey, ALPN_JOIN), config);
-    assert!(refused_cert(&outcome).is_some(), "{outcome:?}");
+    assert!(
+        matches!(
+            &outcome,
+            Outcome::Client(Error::InvalidCertificate(
+                CertificateError::InvalidPurposeContext {
+                    required: rustls::ExtendedKeyPurpose::ServerAuth,
+                    ..
+                }
+            ))
+        ),
+        "{outcome:?}"
+    );
 }
 
 #[test]
@@ -811,6 +869,15 @@ fn the_pki_survives_a_restart_and_needs_the_secrets_key() {
         Coordinator::open(&mut store, &SecretStore::from_key(&[1; 32]), T0 + 13),
         Err(ClusterError::Corrupt(_))
     ));
+    // A deleted CA isn't quietly replaced while other cluster rows remain:
+    // that would orphan every worker.
+    store
+        .update_settings_text(&[("cluster.next_worker", "2")], &["cluster.ca.current"])
+        .unwrap();
+    assert!(matches!(
+        Coordinator::open(&mut store, &SecretStore::from_key(&[1; 32]), T0 + 14),
+        Err(ClusterError::Corrupt(_))
+    ));
 }
 
 #[test]
@@ -821,7 +888,20 @@ fn credentials_round_trip_through_their_file() {
     let _ = std::fs::remove_dir_all(&dir);
     let secrets = SecretStore::from_key(&[42; 32]);
     assert!(Credentials::load(&dir, &secrets).unwrap().is_none());
+    // A leftover temporary file from a crash, readable by everyone.
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("credentials.tmp"), "junk").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            dir.join("credentials.tmp"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+    }
     creds.save(&dir, &secrets).unwrap();
+    assert!(!dir.join("credentials.tmp").exists());
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

@@ -12,7 +12,7 @@
 //! | `cluster.ca.previous` | `v1 <cert> <sealed key> <until>`, during a rotation |
 //! | `cluster.server` | `v1 <cert> <sealed key> <not_after> <issuer fingerprint>` |
 //! | `cluster.cert.<serial>` | `v1 <worker> <name> <fingerprint> <issuer> <not_after> <revoked 0/1>` |
-//! | `cluster.token.<id>` | `v1 <hash> <name> <expires_at> <used 0/1> <ca fingerprint>` |
+//! | `cluster.token.<id>` | `v1 <hash> <name> <expires_at> <used 0/1> <ca fingerprint>`, then once spent `<public key> <worker> <not_after> <cert>` |
 //! | `cluster.next_worker` | the next worker id |
 //!
 //! Private keys are sealed with the install's secrets key
@@ -180,12 +180,24 @@ struct ServerLeaf {
     issuer: Fingerprint,
 }
 
+#[derive(Clone)]
 struct TokenRecord {
     hash: [u8; 32],
     name: String,
     expires_at: i64,
     used: bool,
     ca: Fingerprint,
+    /// What the token was spent on, so a worker whose grant got lost can
+    /// ask again with the same key until the token expires.
+    redeemed: Option<Redeemed>,
+}
+
+#[derive(Clone)]
+struct Redeemed {
+    public_key: [u8; 32],
+    worker: WorkerId,
+    cert: CertificateDer<'static>,
+    not_after: i64,
 }
 
 impl TokenRecord {
@@ -229,6 +241,10 @@ impl Coordinator {
     ) -> Result<Coordinator, ClusterError> {
         let mut coordinator = match store.setting_text(KEY_CA)? {
             Some(_) => Coordinator::load(store, secrets)?,
+            // Other cluster rows without a CA: something deleted it, and a
+            // new CA would silently orphan every worker. Refuse, as `load`
+            // refuses any other inconsistency.
+            None if !store.settings_with_prefix(PREFIX)?.is_empty() => return Err(corrupt()),
             None => Coordinator::create(store, secrets, now)?,
         };
         coordinator.maintain(store, secrets, now)?;
@@ -296,9 +312,19 @@ impl Coordinator {
                         },
                     );
                 }
-                (k, ["v1", hash, name, expires_at, used, ca])
+                (k, ["v1", hash, name, expires_at, used, ca, rest @ ..])
                     if k.starts_with("cluster.token.") =>
                 {
+                    let redeemed = match rest {
+                        [] => None,
+                        [public_key, worker, not_after, cert] => Some(Redeemed {
+                            public_key: fingerprint(public_key)?.0,
+                            worker: WorkerId(worker.parse().map_err(|_| corrupt())?),
+                            not_after: int(not_after)?,
+                            cert: cert_from_hex(cert)?,
+                        }),
+                        _ => return Err(corrupt()),
+                    };
                     let id = hex::decode(&k["cluster.token.".len()..])
                         .and_then(|s| s.try_into().ok())
                         .ok_or_else(corrupt)?;
@@ -310,6 +336,7 @@ impl Coordinator {
                             expires_at: int(expires_at)?,
                             used: flag(used)?,
                             ca: fingerprint(ca)?,
+                            redeemed,
                         },
                     );
                 }
@@ -370,6 +397,11 @@ impl Coordinator {
     #[cfg(test)]
     pub(crate) fn server_fingerprint(&self) -> Fingerprint {
         Fingerprint::of(&self.server.cert)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn ca_name_for_test(&self) -> String {
+        ca_name(&self.current.key)
     }
 
     /// A certificate from the current CA that isn't on record.
@@ -449,6 +481,7 @@ impl Coordinator {
             expires_at: now + JOIN_TOKEN_TTL_SECS,
             used: false,
             ca: self.server.issuer,
+            redeemed: None,
         };
         store.set_settings_text(&[(&token_key(&id), &token_value(&record))])?;
         self.tokens.insert(id, record);
@@ -471,7 +504,7 @@ impl Coordinator {
             return Err(JoinError::Unknown);
         }
         if record.used {
-            return Err(JoinError::AlreadyUsed);
+            return self.redeem_again(record, public_key, now);
         }
         if now >= record.expires_at {
             return Err(JoinError::Expired);
@@ -480,38 +513,81 @@ impl Coordinator {
         if self.name_in_use(&name, now) {
             return Err(JoinError::NameInUse);
         }
-        let spent = TokenRecord {
-            used: true,
-            name: name.clone(),
-            ..*record
-        };
         let unspent = token_value(record);
-        // The worker id is only in the record, not the certificate, so the
+        let record = record.clone();
+        // The worker id is only in the records, not the certificate, so the
         // certificate can be made before the transaction picks the id.
         let (fp, mut issued, mut grant) = self.issue_worker(WorkerId(0), &name, public_key, now)?;
-        let taken = spend_token(
-            store,
-            &token_key(&id),
-            &unspent,
-            &token_value(&spent),
-            |w| {
-                let issued = Issued {
-                    worker: w,
-                    ..issued.clone()
-                };
-                (cert_key(&issued.serial), cert_value(&fp, &issued))
-            },
-        )?;
-        self.tokens.insert(id, spent);
+        let spent = |worker| TokenRecord {
+            used: true,
+            redeemed: Some(Redeemed {
+                public_key: *public_key,
+                worker,
+                cert: grant.cert.clone(),
+                not_after: grant.not_after,
+            }),
+            ..record.clone()
+        };
+        let taken = spend_token(store, &token_key(&id), &unspent, |w| {
+            let issued = Issued {
+                worker: w,
+                ..issued.clone()
+            };
+            [
+                (token_key(&id), token_value(&spent(w))),
+                (cert_key(&issued.serial), cert_value(&fp, &issued)),
+            ]
+        })?;
         let Some(worker) = taken else {
             // Another coordinator on the same database spent it first.
+            self.tokens.insert(
+                id,
+                TokenRecord {
+                    used: true,
+                    ..record
+                },
+            );
             return Err(JoinError::AlreadyUsed);
         };
+        self.tokens.insert(id, spent(worker));
         issued.worker = worker;
         grant.worker = worker;
         self.next_worker = self.next_worker.max(worker.0.saturating_add(1));
         self.trust_mut().issued.insert(fp, issued);
         Ok(grant)
+    }
+
+    /// A spent token presented again. With the same key, before it expires
+    /// and while its certificate stands, it gets the same grant: the first
+    /// answer may have been lost, and refusing would strand the name until
+    /// the certificate expired. Anything else is a replay.
+    fn redeem_again(
+        &self,
+        record: &TokenRecord,
+        public_key: &[u8; 32],
+        now: i64,
+    ) -> Result<JoinGrant, JoinError> {
+        let Some(r) = &record.redeemed else {
+            return Err(JoinError::AlreadyUsed);
+        };
+        let standing = self
+            .shared
+            .trust
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .issued
+            .get(&Fingerprint::of(&r.cert))
+            .is_some_and(|i| !i.revoked && now <= i.not_after);
+        if r.public_key != *public_key || now >= record.expires_at || !standing {
+            return Err(JoinError::AlreadyUsed);
+        }
+        Ok(JoinGrant {
+            worker: r.worker,
+            name: record.name.clone(),
+            cert: r.cert.clone(),
+            not_after: r.not_after,
+            cas: self.cas(),
+        })
     }
 
     /// A fresh certificate for a connected worker, over a key it may have
@@ -751,43 +827,45 @@ impl Coordinator {
     }
 }
 
-/// Spends a token and records its certificate in one transaction that
-/// re-reads the stored token row and the next worker id, so two
+/// Spends a token and records its certificate in one write transaction
+/// that first re-reads the stored token row and the next worker id, so two
 /// coordinators on one database (`serve` and a CLI command, say) can't
-/// both spend it or hand out the same id. `None`: it was already spent.
+/// both spend it or hand out the same id. `rows` gives the rows to write
+/// for the worker id taken. `None`: the token was already spent.
 fn spend_token(
     store: &mut Store,
     key: &str,
     unspent: &str,
-    spent: &str,
-    record: impl FnOnce(WorkerId) -> (String, String),
+    rows: impl FnOnce(WorkerId) -> [(String, String); 2],
 ) -> Result<Option<WorkerId>, ClusterError> {
-    use lodestar_store::rusqlite::params;
-    let tx = store.connection().unchecked_transaction()?;
-    // Takes the write lock first, so the read below can't go stale.
-    let changed = tx.execute(
-        "UPDATE settings SET value = ?3 WHERE key = ?1 AND value = ?2",
-        params![key, unspent, spent],
-    )?;
-    if changed != 1 {
+    use lodestar_store::rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
+    // IMMEDIATE takes the write lock before the reads, so they can't go
+    // stale before the writes.
+    let tx = Transaction::new_unchecked(store.connection(), TransactionBehavior::Immediate)?;
+    let read = |k: &str| -> Result<Option<String>, ClusterError> {
+        Ok(tx
+            .query_row("SELECT value FROM settings WHERE key = ?1", [k], |r| {
+                r.get(0)
+            })
+            .optional()?)
+    };
+    if read(key)?.as_deref() != Some(unspent) {
         return Ok(None);
     }
-    let next: String = tx.query_row(
-        "SELECT value FROM settings WHERE key = ?1",
-        [KEY_NEXT_WORKER],
-        |r| r.get(0),
-    )?;
-    let worker: u32 = next.parse().map_err(|_| corrupt())?;
+    let worker: u32 = read(KEY_NEXT_WORKER)?
+        .ok_or_else(corrupt)?
+        .parse()
+        .map_err(|_| corrupt())?;
     let after = worker.checked_add(1).ok_or_else(corrupt)?;
-    let (cert_key, cert_value) = record(WorkerId(worker));
-    tx.execute(
-        "INSERT INTO settings (key, value) VALUES (?1, ?2)",
-        params![cert_key, cert_value],
+    let mut upsert = tx.prepare(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
     )?;
-    tx.execute(
-        "UPDATE settings SET value = ?2 WHERE key = ?1",
-        params![KEY_NEXT_WORKER, after.to_string()],
-    )?;
+    for (k, v) in rows(WorkerId(worker)) {
+        upsert.execute(params![k, v])?;
+    }
+    upsert.execute(params![KEY_NEXT_WORKER, after.to_string()])?;
+    drop(upsert);
     tx.commit()?;
     Ok(Some(WorkerId(worker)))
 }
@@ -884,14 +962,24 @@ fn token_key(id: &[u8; 8]) -> String {
 }
 
 fn token_value(t: &TokenRecord) -> String {
-    format!(
+    let mut out = format!(
         "v1 {} {} {} {} {}",
         hex::encode(&t.hash),
         t.name,
         t.expires_at,
         u8::from(t.used),
         t.ca
-    )
+    );
+    if let Some(r) = &t.redeemed {
+        out.push_str(&format!(
+            " {} {} {} {}",
+            hex::encode(&r.public_key),
+            r.worker.0,
+            r.not_after,
+            hex::encode(&r.cert)
+        ));
+    }
+    out
 }
 
 fn cert_key(serial: &[u8; 16]) -> String {

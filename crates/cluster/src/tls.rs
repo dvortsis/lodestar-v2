@@ -37,7 +37,10 @@ pub const ALPN_CLUSTER: &[u8] = b"lodestar-cluster/1";
 pub const ALPN_JOIN: &[u8] = b"lodestar-join/1";
 
 pub(crate) fn provider() -> Arc<CryptoProvider> {
-    Arc::new(rustls::crypto::ring::default_provider())
+    static PROVIDER: std::sync::OnceLock<Arc<CryptoProvider>> = std::sync::OnceLock::new();
+    PROVIDER
+        .get_or_init(|| Arc::new(rustls::crypto::ring::default_provider()))
+        .clone()
 }
 
 fn algorithms() -> WebPkiSupportedAlgorithms {
