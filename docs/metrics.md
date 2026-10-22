@@ -29,7 +29,7 @@ document disagree, the architecture document wins and this file is fixed.
 | **Null** | Unknown: never measured (never scraped, not classified yet, no data for the period) | `—` (U+2014 em dash), with an accessible name from the metric ("Never scraped", "Not measured") | `null` |
 | **Zero** | Measured and really 0 | `0` (formatted like any other value) | `0` |
 | **Estimated** | The value itself is an estimate (DHT estimate, harvest uniqueness, histogram percentiles, `≈` totals) | `≈` + U+00A0 + value, e.g. `≈ 2.4M` | `{ value, approx: true }` |
-| **Sampled** | Computed on a uniform sample (facets above 1M matches) | `≈` + value, plus a note once per panel: "Counts are estimated from a sample" (glossary) | `{ value, approx: true }`; the panel reads `sampled` from the response |
+| **Sampled** | Computed on a uniform sample (facets above 1M matches, or above 300k when the index has a segment of more than 300k torrents) | `≈` + value, plus a note once per panel: "Counts are estimated from a sample" (glossary) | `{ value, approx: true }`; the panel reads `sampled` from the response |
 | **Gap** | A time bucket with no data (crawler paused, history ring gap) | A **gap** in lines; an empty bin in bars; `—` in tables. **Never drawn as 0.** | `null` in the series |
 | **Incomplete** | A discovery cohort that isn't final (§10.9.3) | Hatched mark + the word "incomplete"; excluded from the yield KPI | `final: false` on the cohort |
 

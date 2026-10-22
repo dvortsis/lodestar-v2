@@ -3465,7 +3465,7 @@
           },
           "sampled": {
             "type": "boolean",
-            "description": "Some group was computed on a sample (above 1,000,000 matches)."
+            "description": "Some group was computed on a sample (above 1,000,000 matches, or\n300,000 when a segment holds more than 300,000 torrents)."
           },
           "took_ms": {
             "type": "number",

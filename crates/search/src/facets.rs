@@ -32,9 +32,15 @@
 //!
 //! **Sampling.** A pass over more than [`SAMPLE_ABOVE`] matches (the
 //! search's count for the shared pass, the count estimate for a facet's
-//! own) visits only the slices `count.rs` samples, 1/16 of each segment
-//! above 65,536 documents, and scales each segment's counts by its
-//! documents over those visited. Its groups say `approx`.
+//! own), or over more than [`BIG_SEGMENT`] when the snapshot has a
+//! segment of more than [`BIG_SEGMENT`] documents, visits only the
+//! slices `count.rs` samples, 1/16 of each segment above 65,536
+//! documents, and scales each segment's counts by its documents over
+//! those visited. Its groups say `approx`. The second rule is for time:
+//! a pass counts each segment on one thread, so a big merged segment
+//! (a live index's merges make one of about 640k at a million torrents)
+//! costs what its matches cost, about 130 ns each per pass, not what
+//! the matches spread over parallel segments cost.
 //! **Error bound:** a count `c` from a sample of 1/16 has a standard
 //! deviation of about `sqrt(16 c) = 4 sqrt(c)` when its documents spread
 //! over the doc-id space (a binomial count scaled by 16): ±4,000 (0.4%)
@@ -66,6 +72,10 @@ use crate::query::{Node, ShareBy, TagKey};
 
 /// Above this many matches, a pass is computed on a sample (§8).
 pub const SAMPLE_ABOVE: usize = 1_000_000;
+/// And above this many when a segment holds more than this many
+/// documents: an exact pass over one such segment would be all on one
+/// thread (§3's 100 ms; see the module docs).
+pub const BIG_SEGMENT: usize = 300_000;
 /// Values listed per facet unless the request asks for more.
 pub const DEFAULT_LIMIT: usize = 8;
 /// The most values a request may ask for per facet.
@@ -413,11 +423,14 @@ impl FacetParams {
     }
 }
 
-/// When passes are sampled; tests lower both thresholds.
+/// When passes are sampled; tests lower the thresholds.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Policy {
     /// Matches above which a pass is sampled.
     pub sample_above: usize,
+    /// Matches above which a pass is sampled when the largest segment
+    /// holds more than this many documents.
+    pub big_segment: usize,
     /// Segments up to this size are visited whole even then.
     pub segment_sample_above: u32,
 }
@@ -426,8 +439,17 @@ impl Default for Policy {
     fn default() -> Self {
         Policy {
             sample_above: SAMPLE_ABOVE,
+            big_segment: BIG_SEGMENT,
             segment_sample_above: SEGMENT_SAMPLE_ABOVE,
         }
+    }
+}
+
+impl Policy {
+    /// Whether a pass over `matches` in a snapshot whose largest segment
+    /// holds `largest` documents is sampled.
+    fn samples(self, matches: usize, largest: usize) -> bool {
+        matches > self.sample_above || (largest > self.big_segment && matches > self.big_segment)
     }
 }
 
@@ -566,16 +588,25 @@ pub fn facets(
         histos,
         now: lease.now(),
     };
+    let largest = searcher
+        .segment_readers()
+        .iter()
+        .map(|r| r.max_doc() as usize)
+        .max()
+        .unwrap_or(0);
     let full = with_filters(node.clone(), filters);
     debug_assert_eq!(lease.node(), &full, "a lease for another query");
     let rebuilt;
     let (shared_query, base_sampled) = if lease.node() == &full {
-        (lease.compiled(), lease.total().value > policy.sample_above)
+        (
+            lease.compiled(),
+            policy.samples(lease.total().value, largest),
+        )
     } else {
         rebuilt = index.compile(&full, lease.now(), lease.stemmed());
         let estimate =
             count::estimate_with(searcher, &rebuilt, cancel, policy.segment_sample_above)?;
-        (&rebuilt, estimate.value > policy.sample_above)
+        (&rebuilt, policy.samples(estimate.value, largest))
     };
     let mut sample_rate = None;
     let shared_tally = pass(shared_query, searcher, &base, base_sampled, policy, cancel)?;
@@ -601,7 +632,7 @@ pub fn facets(
             &compiled,
             searcher,
             &want,
-            estimate.value > policy.sample_above,
+            policy.samples(estimate.value, largest),
             policy,
             cancel,
         )?;
