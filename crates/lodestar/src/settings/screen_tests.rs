@@ -663,7 +663,7 @@ fn vault(dir: &Path) -> Registry {
     let c = config(dir, None, &[]);
     let mut r = Registry::empty(open(dir));
     r.register::<super::crawler::Crawler>(&c).unwrap();
-    r.register::<Vault>(&c).unwrap();
+    r.register_with_secrets::<Vault>(&c).unwrap();
     r
 }
 
@@ -1034,4 +1034,90 @@ fn the_registry_reserves_route_names_and_patch_keys() {
         Registry::empty(store.clone()).register::<Export>(&c)
     }));
     assert!(refused.is_err());
+}
+
+#[test]
+fn a_section_with_a_secret_is_refused_until_secrets_are_sealed() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = config(dir.path(), None, &[]);
+    let store = open(dir.path());
+    let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        Registry::empty(store.clone()).register::<Vault>(&c)
+    }));
+    let message = *refused.unwrap_err().downcast::<String>().unwrap();
+    assert!(message.contains("sealed storage"), "{message}");
+}
+
+/// A section whose check compares two fields.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+struct Window {
+    low: u32,
+    high: u32,
+}
+
+impl Section for Window {
+    const SECTION: &'static str = "window";
+    const FIELDS: &'static [Field] = &[
+        Field::new("low").group("window"),
+        Field::new("high").group("window"),
+    ];
+
+    fn from_config(_: &Config) -> Self {
+        Window { low: 5, high: 10 }
+    }
+
+    fn apply(&self, _: &str, _: &mut Config) {}
+
+    fn check(&self, field: &str) -> Result<(), String> {
+        if self.low > self.high {
+            return Err(match field {
+                "low" => "Must be at most the high mark.",
+                _ => "Must be at least the low mark.",
+            }
+            .to_string());
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn checks_see_the_whole_patch() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = config(dir.path(), None, &[]);
+    let mut r = Registry::empty(open(dir.path()));
+    r.register::<Window>(&c).unwrap();
+    // Each value is fine beside the old other one; together they aren't.
+    let err = r
+        .patch("window", patch(json!({ "low": 8, "high": 6 })))
+        .unwrap_err();
+    assert_eq!(
+        err,
+        SettingsError::Invalid {
+            field: "low".into(),
+            message: "Must be at most the high mark.".into()
+        }
+    );
+    assert_eq!(
+        r.preview(batch(json!({ "window": { "low": 8, "high": 6 } })))
+            .unwrap_err()
+            .error,
+        err
+    );
+    // And the other way round: each is wrong beside the old other one,
+    // together they're fine.
+    r.patch("window", patch(json!({ "low": 20, "high": 30 })))
+        .unwrap();
+    assert_eq!(r.get::<Window>(), Window { low: 20, high: 30 });
+    // A reset is checked against the rest too: low back to 5 is fine,
+    // high back to 10 isn't (low is 20).
+    let err = r
+        .patch("window", patch(json!({ "high": null })))
+        .unwrap_err();
+    assert!(matches!(err, SettingsError::Invalid { ref field, .. } if field == "high"));
+    assert!(
+        saved(&r)
+            .iter()
+            .any(|(k, v)| k == "settings.window.high" && v == "30")
+    );
 }

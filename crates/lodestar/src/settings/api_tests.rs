@@ -6,6 +6,7 @@
 //! `LODESTAR_BLESS=1 cargo test -p lodestar settings::api_tests` rewrites
 //! the files; read the diff before committing it.
 
+use std::future::IntoFuture;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -29,6 +30,7 @@ struct Fixture {
     app: Router,
     auth: Arc<Auth>,
     hub: Arc<EventHub>,
+    registry: Arc<Registry>,
     _dir: tempfile::TempDir,
 }
 
@@ -54,7 +56,7 @@ fn fixture() -> Fixture {
                 index: None,
                 reader: Arc::new(Mutex::new(reader)),
                 filters: None,
-                settings: Some(registry),
+                settings: Some(registry.clone()),
                 adult: Default::default(),
             }),
         )
@@ -63,6 +65,7 @@ fn fixture() -> Fixture {
         app,
         auth,
         hub,
+        registry,
         _dir: dir,
     }
 }
@@ -822,4 +825,104 @@ async fn every_save_publishes_a_settings_event_without_values() {
     f.hub.settings_saved("marker", 0);
     let text = read_until(&mut body, "marker").await;
     assert!(text.contains(&format!("id: {id}-5\n")), "{text}");
+}
+
+#[tokio::test]
+async fn a_save_still_publishes_when_its_client_goes_away() {
+    let f = fixture();
+    let cookie = session(&f).await;
+    let c = Some(cookie.as_str());
+    let stream = f
+        .app
+        .clone()
+        .oneshot(get("/api/v1/events?topics=settings", c))
+        .await
+        .unwrap();
+    let mut body = stream.into_body();
+    read_until(&mut body, "retry:").await;
+    // Hold the registry's lock so the save waits inside its blocking task,
+    // then drop the request, as a client closing the tab does.
+    let held = f.registry.write.lock().unwrap();
+    let request = tokio::spawn(f.app.clone().oneshot(patch(
+        "/api/v1/settings/crawler",
+        c,
+        r#"{"intensity":"low"}"#,
+    )));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    request.abort();
+    assert!(request.await.unwrap_err().is_cancelled());
+    drop(held);
+    // The save went through, and its event with it.
+    read_until(&mut body, "data: {\"revision\":1,\"section\":\"crawler\"}").await;
+    let (_, text) = send(&f, get("/api/v1/settings/crawler", c)).await;
+    assert!(
+        text.contains("\"source\":\"db\",\"value\":\"low\""),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_connection_test_logs_no_address_or_password() {
+    #[derive(Clone, Default)]
+    struct Buf(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Buf {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let buf = Buf::default();
+    let writer = buf.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::TRACE)
+        .with_writer(move || writer.clone())
+        .finish();
+    // One thread, so every event of the request reaches this subscriber.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    tracing::subscriber::with_default(subscriber, || {
+        runtime.block_on(async {
+            let f = fixture();
+            let cookie = session(&f).await;
+            // Something that answers, but not as qBittorrent, and nothing.
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let open = listener.local_addr().unwrap();
+            tokio::spawn(axum::serve(listener, Router::new()).into_future());
+            let closed = std::net::TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap();
+            // Credentials in the URL are refused before any request; the
+            // others reach the network.
+            for url in [
+                format!("http://{open}/lspath-marker/"),
+                format!("http://{closed}/lspath-marker/"),
+                format!("http://lsuser:lspath-secret@{open}/lspath-marker/"),
+            ] {
+                let body = json!({
+                    "kind": "download_client",
+                    "client": "qbittorrent",
+                    "url": url,
+                    "username": "lsuser-marker",
+                    "password": "lspass-hunter2",
+                })
+                .to_string();
+                let (status, text) =
+                    send(&f, post("/api/v1/settings/test", Some(&cookie), &body)).await;
+                assert_eq!(status, 200, "{text}");
+                assert!(text.contains("\"ok\":false"), "{text}");
+            }
+        });
+    });
+    let logged = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+    assert!(!logged.is_empty(), "nothing was captured");
+    for secret in ["lspath", "lsuser", "lspass", "hunter2"] {
+        assert!(!logged.contains(secret), "{secret} in:\n{logged}");
+    }
 }

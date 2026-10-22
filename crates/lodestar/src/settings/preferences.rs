@@ -159,10 +159,60 @@ fn action_id(id: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'_' | b'.'))
 }
 
+/// The single-key shortcuts (§10.16) and the keys they have by default.
+/// A remap is checked against these, so two actions never share a key.
+pub const DEFAULT_SHORTCUTS: &[(&str, &str)] = &[
+    ("search.focus", "/"),
+    ("results.next", "j"),
+    ("results.previous", "k"),
+    ("detail.open_magnet", "o"),
+    ("detail.copy_magnet", "c"),
+    ("detail.send", "s"),
+    ("results.select", "x"),
+    ("help.shortcuts", "?"),
+];
+
+/// A character that draws nothing on its own: a format character
+/// (zero-width, bidirectional controls, the BOM, the soft hyphen) or a
+/// combining mark. Without a Unicode table, the blocks that hold them.
+fn invisible(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x00AD
+            | 0x034F
+            | 0x061C
+            | 0x115F..=0x1160
+            | 0x17B4..=0x17B5
+            | 0x180B..=0x180F
+            | 0x200B..=0x200F
+            | 0x202A..=0x202E
+            | 0x2060..=0x206F
+            | 0x3164
+            | 0xFE00..=0xFE0F
+            | 0xFEFF
+            | 0xFFA0
+            | 0xFFF0..=0xFFFB
+            | 0x0300..=0x036F
+            | 0x0483..=0x0489
+            | 0x0591..=0x05BD
+            | 0x0610..=0x061A
+            | 0x064B..=0x065F
+            | 0x1AB0..=0x1AFF
+            | 0x1DC0..=0x1DFF
+            | 0x20D0..=0x20FF
+            | 0xFE20..=0xFE2F
+            | 0xE0000..=0xE007F
+            | 0xE0100..=0xE01EF
+    )
+}
+
 /// A single-key shortcut: one visible character.
 fn shortcut_key(key: &str) -> bool {
     let mut chars = key.chars();
-    matches!((chars.next(), chars.next()), (Some(c), None) if !c.is_control() && !c.is_whitespace())
+    matches!(
+        (chars.next(), chars.next()),
+        (Some(c), None) if !c.is_control() && !c.is_whitespace() && !invisible(c)
+    )
 }
 
 impl Section for Preferences {
@@ -232,7 +282,6 @@ fn check_shortcuts(keys: &BTreeMap<String, String>) -> Result<(), String> {
             "At most {MAX_SHORTCUTS} shortcuts can be remapped."
         ));
     }
-    let mut taken: BTreeMap<&str, &str> = BTreeMap::new();
     for (action, key) in keys {
         if !action_id(action) {
             return Err("Each shortcut must name an action, such as results.next.".to_string());
@@ -240,6 +289,15 @@ fn check_shortcuts(keys: &BTreeMap<String, String>) -> Result<(), String> {
         if !shortcut_key(key) {
             return Err(format!("{action}: a shortcut is one key, such as j or /."));
         }
+    }
+    // Every action's key as it would be: its remap, else its default.
+    let mut taken: BTreeMap<&str, &str> = BTreeMap::new();
+    let defaults = DEFAULT_SHORTCUTS
+        .iter()
+        .filter(|(action, _)| !keys.contains_key(*action))
+        .map(|(a, k)| (*a, *k));
+    let remapped = keys.iter().map(|(a, k)| (a.as_str(), k.as_str()));
+    for (action, key) in defaults.chain(remapped) {
         if let Some(other) = taken.insert(key, action) {
             return Err(format!(
                 "{other} and {action} both use {key}; give each its own key."
@@ -307,6 +365,16 @@ mod tests {
         assert!(check_shortcuts(&map(&[("search.focus", "/"), ("x", "ü")])).is_ok());
         let conflict = check_shortcuts(&map(&[("a", "j"), ("b", "j")])).unwrap_err();
         assert!(conflict.contains("both use j"), "{conflict}");
+        // Against the defaults too: k is still results.previous's.
+        let conflict = check_shortcuts(&map(&[("results.next", "k")])).unwrap_err();
+        assert!(
+            conflict.contains("results.previous and results.next both use k"),
+            "{conflict}"
+        );
+        let conflict = check_shortcuts(&map(&[("custom.thing", "/")])).unwrap_err();
+        assert!(conflict.contains("search.focus"), "{conflict}");
+        // Swapping two defaults is fine.
+        assert!(check_shortcuts(&map(&[("results.next", "k"), ("results.previous", "j")])).is_ok());
         for (action, key) in [
             ("a", ""),
             ("a", "jk"),
@@ -314,6 +382,12 @@ mod tests {
             ("a", "\u{7}"),
             ("A", "j"),
             ("", "j"),
+            // Invisible: a zero-width space, a lone combining accent, a
+            // bidirectional override, the BOM.
+            ("a", "\u{200B}"),
+            ("a", "\u{0301}"),
+            ("a", "\u{202E}"),
+            ("a", "\u{FEFF}"),
         ] {
             assert!(
                 check_shortcuts(&map(&[(action, key)])).is_err(),

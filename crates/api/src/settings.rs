@@ -300,13 +300,27 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> 
     tokio::task::spawn_blocking(f).await.map_err(internal)
 }
 
-/// Tells `/events` subscribers which sections a save changed.
-fn announce(hub: Option<Extension<Arc<EventHub>>>, changed: &[(String, u64)]) {
-    if let Some(Extension(hub)) = hub {
+/// Tells `/events` subscribers which sections a save changed. It runs
+/// inside the blocking save, right after the commit, so a client that
+/// goes away mid-save can't lose the event: the blocking task finishes
+/// either way.
+fn announce(hub: Option<&EventHub>, changed: &[(String, u64)]) {
+    if let Some(hub) = hub {
         for (section, revision) in changed {
             hub.settings_saved(section, *revision);
         }
     }
+}
+
+/// [`SettingsApi::save`], then [`announce`], in one blocking step.
+fn save_and_announce(
+    api: &dyn SettingsApi,
+    hub: Option<&EventHub>,
+    batch: SettingsBatch,
+) -> Result<Saved, SettingsFailure> {
+    let saved = api.save(batch)?;
+    announce(hub, &saved.changed);
+    Ok(saved)
 }
 
 /// Why a settings route refused: the API's envelope (a session, a body,
@@ -384,7 +398,7 @@ pub(crate) async fn index(State(s): State<ApiState>) -> ApiResult<Json<SettingsI
     params(("section" = String, Path, description = "The section, as `GET /settings` names it.")),
     responses(
         (status = 200, body = SectionValues),
-        (status = 404, body = ErrorEnvelope, description = "`unknown_section`."),
+        (status = 404, body = SettingsErrorEnvelope, description = "`unknown_section`."),
     )
 )]
 pub(crate) async fn section(
@@ -426,8 +440,9 @@ pub(crate) async fn patch(
     same_origin_json(&headers)?;
     let api = settings(&s)?;
     let batch = SettingsBatch(BTreeMap::from([(name, body)]));
-    let mut saved = blocking(move || api.save(batch)).await??;
-    announce(hub, &saved.changed);
+    let hub = hub.map(|Extension(h)| h);
+    let mut saved =
+        blocking(move || save_and_announce(api.as_ref(), hub.as_deref(), batch)).await??;
     let values = saved
         .sections
         .pop()
@@ -462,8 +477,8 @@ pub(crate) async fn patch_many(
 ) -> SettingsResult<Json<SettingsBatchValues>> {
     same_origin_json(&headers)?;
     let api = settings(&s)?;
-    let saved = blocking(move || api.save(body)).await??;
-    announce(hub, &saved.changed);
+    let hub = hub.map(|Extension(h)| h);
+    let saved = blocking(move || save_and_announce(api.as_ref(), hub.as_deref(), body)).await??;
     Ok(Json(SettingsBatchValues {
         sections: saved
             .sections
@@ -504,8 +519,14 @@ pub(crate) async fn preview(
 /// The longest a connection test may take, its requests included.
 const TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The longest URL, user name and password a test takes.
+/// The longest URL, user name and password a test takes, in characters.
 const MAX_TEST_FIELD: usize = 2048;
+
+/// Connection tests running at once. Each can hold sockets for
+/// [`TEST_TIMEOUT`]; past this, a test is refused with `429 tests_busy`.
+pub const MAX_TESTS: usize = 4;
+
+static TESTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(MAX_TESTS);
 
 /// Tests a download client with the values on screen, before they're
 /// saved: logs in and asks its version. It goes through the integrations
@@ -520,7 +541,10 @@ const MAX_TEST_FIELD: usize = 2048;
     request_body = SettingsTest,
     responses(
         (status = 200, body = SettingsTestResult, description = "The test ran; `ok` says whether it passed."),
+        (status = 403, body = ErrorEnvelope, description = "`cross_origin`."),
+        (status = 415, body = ErrorEnvelope, description = "`unsupported_media_type`: not `application/json`."),
         (status = 422, body = ErrorEnvelope, description = "`bad_body`: not a test this endpoint runs."),
+        (status = 429, body = ErrorEnvelope, description = "`tests_busy`: four tests are running already; try again shortly."),
     )
 )]
 pub(crate) async fn test(
@@ -536,7 +560,7 @@ pub(crate) async fn test(
     ]
     .into_iter()
     .flatten()
-    .any(|v| v.len() > MAX_TEST_FIELD);
+    .any(|v| v.chars().count() > MAX_TEST_FIELD);
     if too_long {
         return Ok(Json(failed(
             "invalid",
@@ -545,6 +569,14 @@ pub(crate) async fn test(
             ),
         )));
     }
+    // Never waits: a full house is answered at once.
+    let _permit = TESTS.try_acquire().map_err(|_| {
+        ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "tests_busy",
+            "Other connection tests are still running; try again in a few seconds.",
+        )
+    })?;
     let run = async {
         let client = lodestar_integrations::clients::connect(client_config(draft))?;
         client.test().await
@@ -600,8 +632,12 @@ fn failed(code: &str, message: String) -> SettingsTestResult {
     }
 }
 
-/// A failed test, in words. [`ClientError`]'s text never carries a URL
-/// or credential (`crates/integrations/README.md`, rule 3).
+/// A failed test, in words. Nothing the server answered is repeated:
+/// the address may be any LAN or loopback service, and the test must not
+/// become a way to read it. A refusal shows at most its HTTP status. The
+/// other variants' text is the adapter's own (`&'static str` reasons) and
+/// never carries a URL or credential (`crates/integrations/README.md`,
+/// rule 3).
 fn test_failure(e: &ClientError) -> SettingsTestResult {
     let code = match e {
         ClientError::Auth(AuthFailure::BadCredentials) => "bad_credentials",
@@ -617,13 +653,37 @@ fn test_failure(e: &ClientError) -> SettingsTestResult {
         ClientError::InvalidRequest(_) => "invalid",
         ClientError::Protocol(_) | ClientError::Partial { .. } => "protocol",
     };
-    let text = e.to_string();
-    let mut chars = text.chars();
-    let message = match chars.next() {
-        Some(first) => format!("{}{}.", first.to_uppercase(), chars.as_str()),
-        None => "The test failed.".to_string(),
+    let message = match e {
+        ClientError::Rejected(why) => match http_status(why) {
+            Some(status) => {
+                format!("The address answered HTTP {status}: it isn't this client's API.")
+            }
+            None => "The client refused the request.".to_string(),
+        },
+        ClientError::Partial { .. } => {
+            "The client gave an answer Lodestar doesn't understand.".to_string()
+        }
+        _ => {
+            let text = e.to_string();
+            let mut chars = text.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}.", first.to_uppercase(), chars.as_str()),
+                None => "The test failed.".to_string(),
+            }
+        }
     };
     failed(code, message)
+}
+
+/// The status of an adapter's "HTTP 404: <body>" refusal, the body
+/// dropped.
+fn http_status(why: &str) -> Option<u16> {
+    let digits: String = why
+        .strip_prefix("HTTP ")?
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    digits.parse().ok().filter(|s| (100..1000).contains(s))
 }
 
 /// The saved settings as a TOML file to keep or move to another install,
@@ -697,8 +757,13 @@ pub(crate) async fn import(
         return Err(SettingsError::ImportTooLarge.into());
     }
     let dry_run = q.dry_run.unwrap_or(false);
-    let imported = blocking(move || api.import(body, dry_run)).await??;
-    announce(hub, &imported.changed);
+    let hub = hub.map(|Extension(h)| h);
+    let imported = blocking(move || {
+        let imported = api.import(body, dry_run)?;
+        announce(hub.as_deref(), &imported.changed);
+        Ok::<_, SettingsFailure>(imported)
+    })
+    .await??;
     Ok(Json(imported.report))
 }
 
@@ -841,6 +906,31 @@ mod tests {
         assert_eq!(
             test_failure(&ClientError::Timeout).error.unwrap().code,
             "timeout"
+        );
+        // A refusal never repeats what the server said.
+        for (why, want) in [
+            (
+                "HTTP 404: internal-marker",
+                "The address answered HTTP 404: it isn't this client's API.",
+            ),
+            ("internal-marker", "The client refused the request."),
+            ("HTTP x: internal-marker", "The client refused the request."),
+        ] {
+            let e = test_failure(&ClientError::Rejected(why.into()))
+                .error
+                .unwrap();
+            assert_eq!((e.code.as_str(), e.message.as_str()), ("rejected", want));
+        }
+        let partial = ClientError::Partial {
+            sent: 1,
+            cause: Box::new(ClientError::Rejected("internal-marker".into())),
+        };
+        assert!(
+            !test_failure(&partial)
+                .error
+                .unwrap()
+                .message
+                .contains("marker")
         );
     }
 }

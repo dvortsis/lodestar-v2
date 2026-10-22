@@ -34,7 +34,7 @@ Each section has a `tokio::sync::watch` channel (`Registry::subscribe::<T>()`), 
 ## Out of bounds
 
 - Filtering state (rules, the locked floor, packs, blocklist subscriptions) belongs to the filters API (§20.7, owner's decisions §2.7–2.9). No section exposes it, and the registry only ever reads and writes keys under `settings.`.
-- Credentials live in the integrations `SecretStore`, not here. A field marked `.secret()` (`writeOnly` in the schema) is the rule for any that does come: its value is never returned (`value: null`; `source` says whether one is set), exported, imported, previewed or quoted in an error or log line.
+- Credentials live in the integrations `SecretStore`, not here. `Registry::register` refuses a `.secret()` field until saved values can be sealed through the `SecretStore`; the redaction rules the first one will rely on are built and tested: its value is never returned (`value: null`; `source` says whether one is set), exported, imported, previewed or quoted in an error or log line.
 - No field moves files at runtime. `general.data_dir` is shown read-only.
 - `network.secure_cookies` is read-only too, set in `config.toml` or `LODESTAR_SECURE_COOKIES`. Turned on in the app over plain HTTP, browsers would drop the session cookie, and nobody could log in to turn it off.
 - Read-only fields have `readOnly: true` in their section's schema.
@@ -49,7 +49,7 @@ A later slice (Integrations, Notifications, Appearance, Insights & digest…) ad
    - **Form hints** (schema `x-…` keys, §10.10.9; the server checks everything regardless): `.group("id")` (required; the heading is the message `settings.group.<id>`), `.advanced()`, `.unit("seconds" | "mebibytes" | "connections")`, `.widget("radio" | "slider" | "theme" | "shortcuts" | "language" | "time-zone")`, `.format("socket-addr" | "log-filter")`, `.auto(Auto::Int(0))` for the "automatic" value, `.preview()` when `Section::preview` has estimates or warnings for it, `.keywords()` for search synonyms (the message `settings.<section>.<field>.keywords`), `.danger(Danger::…)` (§10.10.7) and `.secret()`. `x-order`, `x-config` and `x-env` come from the field's position, `.file` and `.env`. A test holds every field to this vocabulary.
    - `from_config` / `apply`: how it reads `Config`, and how one saved field is written back into it. A section no config key backs (like `transport`) returns its `Default` and applies nothing.
    - No field may be nullable: `null` in a patch means reset. Use a sentinel value instead (`max_sockets: 0`).
-   - `check`: any validation beyond type and bounds.
+   - `check`: any validation beyond type and bounds. It runs on the section the whole patch makes, so it may compare fields.
    - `CONFIRMATIONS` / `confirm`: patch keys that aren't fields but confirm a change (`content`'s `confirm_adult`), checked against the whole patch after the fields' own checks and never saved. `if_revision` is reserved in every section, and so are the section names `preview`, `test`, `export` and `import` (the API's own routes).
    - `preview`: estimates (`sockets`, `url`, `memory_mib`…) and warnings for the fields marked `.preview()`.
    - Mark enum fields `#[schema(inline)]` and leave them undocumented, so the schema has no `$ref` (forms can't follow one) and no `oneOf` wrapper.
