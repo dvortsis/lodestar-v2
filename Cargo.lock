@@ -1306,9 +1306,11 @@ dependencies = [
  "lodestar-pipeline",
  "lodestar-search",
  "lodestar-store",
+ "lodestar-tracker-scrape",
  "rand 0.10.3",
  "rand_chacha 0.10.0",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

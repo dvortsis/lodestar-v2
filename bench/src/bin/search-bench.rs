@@ -401,12 +401,34 @@ fn classes(seed: u64, per_class: usize, hot: bool) -> Vec<Class> {
             sort: Sort::Seeders { desc: true },
             queries: make(&mut |r| browse[r.random_range(0..browse.len())].to_string()),
         },
+        // A cache miss reads the hot column for every match: the path a
+        // fresh epoch takes after each scrape write, so it's gated too.
         Class {
             name: "by seeders (cold)",
-            target: None,
+            target: Some(BROWSE_P95),
             cold: true,
             sort: Sort::Seeders { desc: true },
             queries: make(&mut |r| browse[r.random_range(0..browse.len())].to_string()),
+        },
+        Class {
+            name: "by trackers (cold)",
+            target: Some(BROWSE_P95),
+            cold: true,
+            sort: Sort::Trackers { desc: true },
+            queries: make(&mut |r| browse[r.random_range(0..browse.len())].to_string()),
+        },
+        // Hot predicates under an OR can't be lifted: they run as a
+        // constant-score query checking each candidate (`CheckQuery`).
+        Class {
+            name: "word + OR'd swarm",
+            target: Some(KEYWORD_P95),
+            cold: false,
+            sort: Sort::Relevance,
+            queries: make(&mut |r| {
+                let a = swarm_filters[r.random_range(0..swarm_filters.len())];
+                let b = swarm_filters[r.random_range(0..swarm_filters.len())];
+                format!("{} ({a} | {b})", pick(r, common))
+            }),
         },
     ]);
     out
