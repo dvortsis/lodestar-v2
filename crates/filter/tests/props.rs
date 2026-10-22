@@ -277,7 +277,7 @@ fn calibrate(name: &str, files: &[FileInfo], common: &[u64]) -> usize {
 }
 
 /// [`calibrate`]'s time per torrent on the reference runner, in
-/// nanoseconds: the median of the CI runs §20.8 names.
+/// nanoseconds (§20.8 names the runs it comes from).
 const CALIB_REF_NS: f64 = 6_000.0;
 
 /// §20.8 and the owner's budget (§1.6.6): under 50 µs per torrent at
@@ -291,11 +291,12 @@ const CALIB_REF_NS: f64 = 6_000.0;
 /// the core, 1% and 10%; 25% is measured and reported, not held.
 ///
 /// The budget is in reference-runner microseconds (owner, 2026-10-22;
-/// §16). Hosted runners differ by about 2× in speed, so each timed pass
-/// follows a pass of [`calibrate`], and its time is divided by how much
-/// slower than [`CALIB_REF_NS`] that ran. The raw time and the runner's
-/// speed are printed beside it, so any machine, the build VM included,
-/// judges the same budget.
+/// `docs/decisions/2026-10-22-filter-budget.md`). Hosted runners differ
+/// by about 1.7× in speed, so the test times [`calibrate`] before any
+/// filter code runs and again once the engine is gone, and divides each
+/// case's time by how much slower than [`CALIB_REF_NS`] it ran. The
+/// calibration never runs beside filter state, so a regression can't slow
+/// it and hide itself. Raw times and the runner's speed are printed too.
 #[test]
 #[ignore]
 fn budget() {
@@ -359,63 +360,38 @@ fn budget() {
         (0..items.len()).for_each(f);
         start.elapsed().as_secs_f64() * 1e6 / items.len() as f64
     };
+    let show = |v: &[f64]| {
+        v.iter()
+            .map(|x| format!("{x:.1}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
     // A warm-up pass (the first judgment also builds the rule index),
-    // then seven passes over the set, each after a calibration pass so a
-    // busy spell on a shared runner slows both. Medians decide, so one
-    // noisy pass doesn't. Returns reference-runner µs.
-    let median = |mut v: Vec<f64>| {
-        v.sort_by(f64::total_cmp);
-        v[v.len() / 2]
-    };
+    // then seven passes over the set. The median decides, so one noisy
+    // pass on a shared runner doesn't.
     let time = |what: &str, f: &dyn Fn(usize)| {
-        pass(&calib);
         pass(f);
-        // (µs per torrent, the calibration's µs per torrent) per pass.
-        let passes: Vec<(f64, f64)> = (0..7)
-            .map(|_| {
-                let c = pass(&calib);
-                (pass(f), c)
-            })
-            .collect();
-        let show = |v: Vec<f64>| {
-            v.iter()
-                .map(|x| format!("{x:.1}"))
-                .collect::<Vec<_>>()
-                .join(" ")
-        };
-        println!(
-            "{what}: passes {} µs; calibration {} µs",
-            show(passes.iter().map(|p| p.0).collect()),
-            show(passes.iter().map(|p| p.1).collect()),
-        );
-        let raw = median(passes.iter().map(|p| p.0).collect());
-        // How many times the reference's time the runner takes.
-        let speed = median(passes.iter().map(|p| p.1 * 1e3 / CALIB_REF_NS).collect());
-        let normal = median(
-            passes
-                .iter()
-                .map(|(t, c)| t * CALIB_REF_NS / (c * 1e3))
-                .collect(),
-        );
-        println!(
-            "{what}: {normal:.1} µs per torrent on the reference runner \
-             ({raw:.1} µs here, at {speed:.2}× its time)"
-        );
-        assert!(
-            SPEED.contains(&speed),
-            "{what}: the runner took {speed:.2}× the reference's time to calibrate, \
-             outside {SPEED:?}; the measurement can't be trusted"
-        );
-        normal
+        let mut passes: Vec<f64> = (0..7).map(|_| pass(f)).collect();
+        println!("{what}: passes {} µs", show(&passes));
+        passes.sort_by(f64::total_cmp);
+        passes[3]
     };
+    let calibration = |when: &str| {
+        pass(&calib);
+        let passes: Vec<f64> = (0..7).map(|_| pass(&calib)).collect();
+        println!("calibration {when}: passes {} µs", show(&passes));
+        passes
+    };
+
+    let mut calibrated = calibration("before");
     let core = shipped();
-    let mut over = Vec::new();
-    let per = time("core", &|i| {
-        std::hint::black_box(core.verdict(std::hint::black_box(&items[i])));
-    });
-    if per >= BUDGET_US {
-        over.push(format!("core: {per:.1} µs"));
-    }
+    let mut cases = vec![(
+        "core".to_owned(),
+        time("core", &|i| {
+            std::hint::black_box(core.verdict(std::hint::black_box(&items[i])));
+        }),
+        true,
+    )];
 
     // The whole engine: the core, every pack, and 10,000 of your rules,
     // reading the classification as ingest does.
@@ -441,6 +417,29 @@ fn budget() {
                 "no rule of yours matches the set"
             );
         });
+        cases.push((what, per, held));
+    }
+    drop(engine);
+    calibrated.extend(calibration("after"));
+
+    calibrated.sort_by(f64::total_cmp);
+    let mid = calibrated.len() / 2;
+    let calib_us = (calibrated[mid - 1] + calibrated[mid]) / 2.0;
+    // How many times the reference's time this runner takes.
+    let speed = calib_us * 1e3 / CALIB_REF_NS;
+    println!(
+        "calibration: {calib_us:.2} µs per torrent, {speed:.2}× the reference's {:.2} µs",
+        CALIB_REF_NS / 1e3
+    );
+    assert!(
+        SPEED.contains(&speed),
+        "the runner took {speed:.2}× the reference's time to calibrate, outside \
+         {SPEED:?}: the measurement can't be trusted"
+    );
+    let mut over = Vec::new();
+    for (what, raw, held) in cases {
+        let per = raw / speed;
+        println!("{what}: {per:.1} µs per torrent on the reference runner ({raw:.1} µs here)");
         if per >= BUDGET_US {
             if held {
                 over.push(format!("{what}: {per:.1} µs"));
