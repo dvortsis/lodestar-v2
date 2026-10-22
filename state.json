@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-22T05:16:00Z",
+ "updated_at": "2026-10-22T05:22:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 9
@@ -13,8 +13,8 @@
    "session": "session_01A5BEzkYtiRur7VEKtby9FH",
    "pr": 38,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": ""
+   "review_rounds": 1,
+   "notes": "round 1: changes requested (status.html error envelope regression - ownership granted; \u00a716 placement; 405 envelope; offset overflow; extractor messages)"
   },
   "B5b": {
    "status": "running",
