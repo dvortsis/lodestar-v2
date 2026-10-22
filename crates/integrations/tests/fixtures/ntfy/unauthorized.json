@@ -1,0 +1,23 @@
+{
+  "recorded_from": "Built by hand from the ntfy publishing API documentation (docs.ntfy.sh/publish, server v2.x), not recorded: no ntfy server was available in the build session",
+  "note": "A protected topic with no or wrong credentials: 401, final",
+  "request": {
+    "method": "POST",
+    "path": "/lodestar-alerts",
+    "query": null
+  },
+  "response": {
+    "status": 401,
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "www-authenticate",
+        "Basic realm=\"ntfy\""
+      ]
+    ],
+    "body": "{\"code\":40101,\"http\":401,\"error\":\"unauthorized\",\"link\":\"https://ntfy.sh/docs/publish/#authentication\"}"
+  }
+}

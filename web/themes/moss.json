@@ -1,0 +1,21 @@
+{
+	"id": "moss",
+	"name": "Moss",
+	"group": "original",
+	"light": {
+		"background": "#F2F5F0",
+		"surface": "#FFFFFF",
+		"text": "#26362A",
+		"primary": "#4F7A55",
+		"accent": "#8A9A5B",
+		"categorical": ["#5A7F96", "#659560", "#977931", "#A26251", "#8C988A", "#9A86B4"]
+	},
+	"dark": {
+		"background": "#131A15",
+		"surface": "#1E2A21",
+		"text": "#E2EDE3",
+		"primary": "#93C29A",
+		"accent": "#C2C98D",
+		"categorical": ["#6E96AB", "#81B279", "#EDD18F", "#B77C6A", "#B3BFB0", "#B4A2CF"]
+	}
+}

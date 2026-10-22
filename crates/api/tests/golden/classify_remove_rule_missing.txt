@@ -1,0 +1,2 @@
+404
+{"error":{"code":"class_rule_not_found","message":"There's no such classification rule."}}

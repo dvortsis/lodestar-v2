@@ -1,0 +1,7 @@
+# Every request in this crate goes through `net::GuardedClient::send` or
+# `send_following`, which check literal-IP hosts before connecting. These
+# two would skip that check; `net.rs` allows its single checked call.
+disallowed-methods = [
+    { path = "reqwest::RequestBuilder::send", reason = "use GuardedClient::send or send_following (SSRF guard)" },
+    { path = "reqwest::Client::execute", reason = "use GuardedClient::send or send_following (SSRF guard)" },
+]

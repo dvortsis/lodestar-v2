@@ -13,9 +13,11 @@
 mod compress;
 pub mod filetree;
 mod filter;
+mod floor;
 pub mod history;
 pub mod hot;
 mod insights;
+mod rules;
 mod schema;
 mod sources;
 mod subscriptions;
@@ -32,10 +34,12 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 pub use compress::{BlobCodec, Codec, Compressed};
 pub use filetree::{CodecError, FileTree};
-pub use filter::{FilterHit, FilterState, Filtered, Held, Quarantined};
+pub use filter::{FilterHit, FilterState, Filtered, Held, Quarantined, SHADOW};
+pub use floor::{FloorSource, PendingFloor, Settled};
 pub use history::{History, trend};
 pub use hot::{Col, HotColumns, NEVER, SwarmHot};
 pub use insights::{CohortCount, Counter, Event};
+pub use rules::{ClassCorrection, ExceptionRow, OverrideRow, RuleRow, RuleSet};
 pub use rusqlite;
 pub use sources::{MAX_SOURCES, QueuedKey, SourceId, SourceRow, SourceState};
 pub use subscriptions::{NewSubscription, Refresh, Subscription};
@@ -65,6 +69,12 @@ pub mod flags {
     /// it: never sent to public DHT lookups, trackers or scrapes. A public
     /// sighting clears it; nothing sets it on a stored public torrent.
     pub const PRIVATE_SOURCE: i64 = 1 << 10;
+    /// A filter rule hides it from search (§20.3).
+    pub const HIDDEN: i64 = 1 << 11;
+    /// A filter rule demotes it in ranking.
+    pub const DEMOTED: i64 = 1 << 12;
+    /// A filter rule flagged it for review.
+    pub const FLAGGED: i64 = 1 << 13;
 }
 
 #[derive(Debug)]
@@ -1036,6 +1046,14 @@ fn upgrade_partial(conn: &Connection, id: i64, t: &PreparedTorrent<'_>) -> Resul
     }
     if let Some(e) = &p.enrichment {
         write_enrichment(conn, id, e)?;
+        // Classified without your correction: the next background
+        // enrichment classifies it again with it.
+        conn.prepare_cached(
+            "UPDATE torrent_parsed SET parser_ver = 0
+             WHERE torrent_id = ?1
+               AND EXISTS (SELECT 1 FROM class_corrections WHERE torrent_id = ?1)",
+        )?
+        .execute([id])?;
     }
     conn.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
         .execute([id])?;
@@ -1073,7 +1091,10 @@ const FIND_BY_HASH: &str = "SELECT id FROM torrents WHERE info_hash = ?1
      WHERE info_hash_v2 IS NOT NULL AND substr(info_hash_v2, 1, 20) = ?1
      LIMIT 1";
 
-fn find_any(conn: &Connection, hashes: impl Iterator<Item = InfoHash>) -> Result<Option<i64>> {
+pub(crate) fn find_any(
+    conn: &Connection,
+    hashes: impl Iterator<Item = InfoHash>,
+) -> Result<Option<i64>> {
     let mut stmt = conn.prepare_cached(FIND_BY_HASH)?;
     for h in hashes {
         if let Some(id) = stmt.query_row([&h.0[..]], |r| r.get(0)).optional()? {

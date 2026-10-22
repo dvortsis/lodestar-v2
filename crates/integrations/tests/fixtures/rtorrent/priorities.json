@@ -1,0 +1,31 @@
+{
+  "recorded_from": "rTorrent 0.9.8 / libtorrent 0.13.8, XML-RPC over SCGI behind nginx 1.24 at /RPC2 with basic auth",
+  "note": "system.multicall: f.priority.set 0 on file 1, in one system.multicall",
+  "request": {
+    "method": "POST",
+    "path": "/RPC2",
+    "query": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "server",
+        "nginx/1.24.0 (Ubuntu)"
+      ],
+      [
+        "content-type",
+        "text/xml"
+      ],
+      [
+        "content-length",
+        "234"
+      ],
+      [
+        "connection",
+        "keep-alive"
+      ]
+    ],
+    "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n<methodResponse>\r\n<params>\r\n<param><value><array><data>\r\n<value><array><data>\r\n<value><i4>0</i4></value>\r\n</data></array></value>\r\n</data></array></value></param>\r\n</params>\r\n</methodResponse>\r\n"
+  }
+}

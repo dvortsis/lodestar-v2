@@ -5,7 +5,7 @@ use std::fmt::Write;
 use std::sync::atomic::Ordering;
 
 use lodestar_dht::node::StatsSnapshot;
-use lodestar_peer_wire::FailureKind;
+use lodestar_peer_wire::{FailureKind, FetchStats};
 use lodestar_pipeline::Monitor;
 use lodestar_pipeline::health::{HealthHandle, trackers::Health};
 use lodestar_sources::Loss;
@@ -55,7 +55,7 @@ impl Out {
     }
 }
 
-pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>) -> String {
+pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> String {
     let mut o = Out(String::with_capacity(8192));
     let get = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
 
@@ -66,6 +66,13 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>) -> String {
         m.started_at(),
     );
     o.one("torrents", "gauge", "Torrents stored.", m.torrents());
+    o.one(
+        "floor_removals_kept_total",
+        "counter",
+        "Locked-floor entries a config file or a floor-marked list dropped, kept until \
+         removed in the app (counted at each start and list refresh).",
+        crate::floor::KEPT.load(Ordering::Relaxed),
+    );
 
     o.family(
         "source_up",
@@ -149,12 +156,11 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>) -> String {
         "Keys waiting for a lookup slot.",
         get(&p.lookup_backlog),
     );
-    o.one(
-        "fetch_success_total",
-        "counter",
-        "Info dictionaries fetched and verified.",
-        get(&p.fetched),
-    );
+    // Attempts and successes per transport; the success family replaces
+    // the pool's unlabelled count (see `write_prometheus` for how the two
+    // can differ). The uTP socket's own
+    // counters join once the DHT shares its port with uTP.
+    fetch.write_prometheus(None, &mut o.0);
     o.one(
         "fetch_duplicates_total",
         "counter",

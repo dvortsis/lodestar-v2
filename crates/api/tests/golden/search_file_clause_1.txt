@@ -1,0 +1,2 @@
+200
+{"canonical":"file:sample","hits":[{"discovered_at":1700000000,"files":3,"flags":["warnings"],"hash":"38a68a3bbc7cdb158e44c404c52c7d1ea6aa2cff","hash_v2":null,"id":1,"last_seen_at":1700000000,"matched_files":[2],"metadata_at":1700000001,"name":"The.Dark.Knight.2008.1080p.BluRay.x264-GRP","piece_len":65536,"score":1.0,"seeders_approx":false,"size":8631967632,"swarm_suspect":false}],"limit":50,"offset":0,"stemmed":false,"took_ms":0,"total":1}

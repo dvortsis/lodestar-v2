@@ -9,15 +9,18 @@ mod filter;
 mod index;
 mod live;
 pub mod query;
+mod rebuild;
 pub mod schema;
 mod sorted;
 mod stem;
 pub mod tokenizer;
 
 pub use doc::{DocEnrichment, TorrentDoc, extension, flag_names};
+pub use filter::{in_time, minute_of_day};
 pub use index::{
     Compiled, Error, Hit, Indexer, Penalty, RankWeights, Result, Results, STEM_FALLBACK_BELOW,
     ScoreParts, SearchIndex, Sort, index_dir,
 };
 pub use live::{IndexStats, LiveConfig, LiveIndexer};
 pub use query::{Node, ParseError, parse};
+pub use rebuild::{IndexVersion, Rebuild, RebuildPhase, RebuildProgress, Serving, ServingConfig};

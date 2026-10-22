@@ -1,5 +1,6 @@
-//! The M1 HTTP surface: a basic status page, its JSON, Prometheus metrics
-//! and a health check. All read-only; the real API and UI arrive later.
+//! The HTTP surface: the API, the status page (`/status`) and its JSON,
+//! Prometheus metrics, a health check, and the embedded UI for every other
+//! path (see `web.rs`).
 
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -25,6 +26,8 @@ const STATUS_PAGE: &str = include_str!("status.html");
 pub struct AppState {
     pub monitor: Monitor,
     pub dht: Option<Arc<Mutex<Option<StatsSnapshot>>>>,
+    /// Fetch outcomes per transport (TCP, uTP).
+    pub fetch: Arc<lodestar_peer_wire::FetchStats>,
     /// A read-only store connection for the funnel and recent torrents.
     pub reader: Arc<Mutex<Store>>,
     pub search: Option<SearchState>,
@@ -44,9 +47,9 @@ impl AppState {
     }
 }
 
-/// The page and health/metrics endpoints are open (the page asks for a
-/// login itself; metrics carry no torrent names). Status and the API need
-/// a session.
+/// The pages and health/metrics endpoints are open (the pages ask for a
+/// login themselves; metrics carry no torrent names). Status and the API
+/// need a session. The UI is the fallback, so it never shadows a route.
 pub fn router(state: AppState, api: ApiState) -> Router {
     let status_route = Router::new()
         .route("/api/status", get(status))
@@ -56,22 +59,32 @@ pub fn router(state: AppState, api: ApiState) -> Router {
         ))
         .with_state(state.clone());
     Router::new()
-        .route("/", get(page))
+        .route("/status", get(page))
         .route("/metrics", get(prometheus))
         .route("/healthz", get(healthz))
         .with_state(state)
         .merge(status_route)
         .nest("/api/v1", lodestar_api::router(api))
+        .fallback(crate::web::serve)
 }
+
+/// The status page keeps its own policy: it is one file with its script
+/// and styles inline, and renders peer-supplied names as text only.
+pub const STATUS_CSP: &str = "default-src 'self'; style-src 'unsafe-inline'; \
+    script-src 'unsafe-inline'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; \
+    form-action 'self'";
 
 async fn page() -> Response {
     (
         [
-            (
-                header::CONTENT_SECURITY_POLICY,
-                "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
-            ),
+            (header::CONTENT_SECURITY_POLICY, STATUS_CSP),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (header::REFERRER_POLICY, "no-referrer"),
+            (header::CACHE_CONTROL, "no-cache"),
+            (
+                header::HeaderName::from_static("permissions-policy"),
+                crate::web::PERMISSIONS,
+            ),
         ],
         Html(STATUS_PAGE),
     )
@@ -79,7 +92,7 @@ async fn page() -> Response {
 }
 
 async fn prometheus(State(s): State<AppState>) -> Response {
-    let mut body = metrics::render(&s.monitor, s.dht().as_ref());
+    let mut body = metrics::render(&s.monitor, s.dht().as_ref(), &s.fetch);
     if let Some(search) = &s.search {
         metrics::render_search(&mut body, search.index.num_docs(), &search.stats);
     }
@@ -272,4 +285,29 @@ fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::STATUS_PAGE;
+
+    /// The page reads errors through the API's envelope
+    /// (`{ "error": { "message", "start", "end" } }`), not as a string.
+    #[test]
+    fn the_status_page_reads_the_error_envelope() {
+        for read in [
+            "r.data.error?.message",
+            "err.message",
+            "err.start",
+            "err.end",
+        ] {
+            assert!(STATUS_PAGE.contains(read), "status.html should read {read}");
+        }
+        for stale in ["r.data.error ||", "data.error +", "data.start", "data.end"] {
+            assert!(
+                !STATUS_PAGE.contains(stale),
+                "status.html still reads {stale}"
+            );
+        }
+    }
 }

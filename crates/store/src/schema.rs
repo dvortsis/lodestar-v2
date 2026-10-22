@@ -10,8 +10,17 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::{Error, Result};
 
 /// `(version, sql)`, applied in order, each in its own transaction.
-pub(crate) const MIGRATIONS: &[(i64, &str)] =
-    &[(1, V1), (2, V2), (3, V3), (4, V4), (5, V5), (6, V6)];
+pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
+    (1, V1),
+    (2, V2),
+    (3, V3),
+    (4, V4),
+    (5, V5),
+    (6, V6),
+    (7, V7),
+    (8, V8),
+    (9, V9),
+];
 
 /// M0: the canonical torrent tables plus settings and zstd dictionaries.
 ///
@@ -310,6 +319,92 @@ CREATE TABLE subscription_data (
     data    BLOB NOT NULL,
     PRIMARY KEY (sub_id, pending)
 ) STRICT, WITHOUT ROWID;
+";
+
+/// Your rules, pack switches, the CSX-5 override list, exceptions and
+/// *Always allow* (§20.7). Each row holds only what filtering needs: no
+/// author, reason or history (§20.11). `rule_set_prev` keeps the one
+/// previous rule set for Undo.
+const V7: &str = "
+CREATE TABLE filter_rules (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    position     INTEGER NOT NULL,
+    query        TEXT NOT NULL,
+    action       INTEGER NOT NULL,
+    enabled      INTEGER NOT NULL DEFAULT 1,
+    shadow_until INTEGER,
+    unless_query TEXT
+) STRICT;
+
+-- Packs (by name) and pack rules (by id) whose switch was set.
+CREATE TABLE pack_switches (
+    id      TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL
+) STRICT, WITHOUT ROWID;
+
+-- kind: 0 exact torrents (20-byte hashes), 1 keyword, 2 query.
+-- strength: 0 override, 1 neutralize.
+CREATE TABLE override_list (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind         INTEGER NOT NULL,
+    value        BLOB NOT NULL,
+    strength     INTEGER NOT NULL,
+    scope        TEXT,
+    created_at   INTEGER NOT NULL,
+    expires_at   INTEGER,
+    shadow_until INTEGER,
+    hits         INTEGER NOT NULL DEFAULT 0
+) STRICT;
+
+-- kind: 0 exact torrents, 2 query, 3 payload signature (8 bytes).
+CREATE TABLE filter_exceptions (
+    id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    rule  TEXT NOT NULL,
+    kind  INTEGER NOT NULL,
+    value BLOB NOT NULL
+) STRICT;
+
+CREATE TABLE filter_allow (
+    id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    query TEXT NOT NULL
+) STRICT;
+
+-- Must-match (1) and must-not-match (0) examples as hashed tokens.
+CREATE TABLE filter_fixtures (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    rule       TEXT NOT NULL,
+    must_match INTEGER NOT NULL,
+    tokens     BLOB NOT NULL
+) STRICT;
+
+CREATE TABLE rule_set_prev (
+    id   INTEGER PRIMARY KEY CHECK (id = 1),
+    data BLOB NOT NULL
+) STRICT;
+";
+
+/// M4 add-on: your corrections to classification (§20.7, §20.9): Is
+/// adult / Not adult and Not junk, re-applied whenever the torrent is
+/// classified again.
+const V8: &str = "
+CREATE TABLE class_corrections (
+    torrent_id INTEGER PRIMARY KEY REFERENCES torrents (id) ON DELETE CASCADE,
+    -- 1 Is adult, 0 Not adult, NULL no correction.
+    adult      INTEGER CHECK (adult IN (0, 1)),
+    not_junk   INTEGER NOT NULL CHECK (not_junk IN (0, 1))
+) STRICT;
+";
+
+/// M4 add-on: classification rules (§20.9): corrections that apply to
+/// every torrent a query matches, the way a per-torrent correction applies
+/// to one.
+const V9: &str = "
+CREATE TABLE class_rules (
+    id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    query TEXT NOT NULL,
+    -- 1 Is adult, 0 Not adult.
+    adult INTEGER NOT NULL CHECK (adult IN (0, 1))
+) STRICT;
 ";
 
 /// Pragmas that persist in the file and can only be set before the first

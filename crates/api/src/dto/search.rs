@@ -1,0 +1,378 @@
+//! `/parse` and `/search` (§8, §9), and the query AST they carry.
+
+use lodestar_search::query::Node;
+use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
+
+/// `GET /parse?q=`.
+#[derive(Debug, Clone, Default, Deserialize, IntoParams)]
+#[serde(default)]
+#[into_params(parameter_in = Query)]
+pub struct ParseQuery {
+    /// The query text; empty matches everything.
+    pub q: String,
+}
+
+/// `GET /parse`: the AST and the canonical text it prints as.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ParseResponse {
+    #[serde(serialize_with = "super::sorted")]
+    #[schema(value_type = AstNode)]
+    pub ast: Node,
+    pub canonical: String,
+}
+
+/// `POST /search`'s body, and `GET /search`'s parameters (where `ast` is
+/// refused: send an AST with POST).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+#[serde(default)]
+pub struct SearchRequest {
+    /// The query text. Send `q` or `ast`, not both.
+    pub q: Option<String>,
+    /// A query AST, as `/parse` returns it; it must be one the parser
+    /// could produce.
+    #[schema(value_type = Option<AstNode>)]
+    pub ast: Option<Node>,
+    /// `relevance` (the default), or `discovered`, `size`, `files`,
+    /// `seeders`, `leechers`, `trackers` or `seen` with an optional `+`
+    /// (ascending) or `-` (descending, the default). Never-scraped
+    /// torrents sort last either way.
+    #[schema(example = "-discovered")]
+    pub sort: Option<String>,
+    /// Results per page: 1–200, 50 by default.
+    pub limit: Option<usize>,
+    /// `offset + limit` may not pass 10,000.
+    pub offset: Option<usize>,
+    /// Include torrents a filter rule hid (§20.3).
+    pub hidden: Option<bool>,
+    /// The user's zone for `time:`, in minutes east of UTC (−840 to 840);
+    /// 0 by default.
+    pub tz: Option<i32>,
+    /// Each relevance hit's score breakdown, in `explain` (§8). Runs the
+    /// exact query, without the plural fallback.
+    pub explain: Option<bool>,
+}
+
+/// `GET`/`POST /search`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct SearchResponse {
+    /// The query as the server understood it.
+    pub canonical: String,
+    pub hits: Vec<SearchHit>,
+    pub limit: usize,
+    pub offset: usize,
+    /// Few exact matches: plural forms in titles were included too (§8),
+    /// ranked after the exact ones.
+    pub stemmed: bool,
+    pub took_ms: f64,
+    /// Matches in all, not just this page.
+    pub total: usize,
+}
+
+/// One search result: the torrent summary (`docs/metrics.md` §7.1), its
+/// relevance and, for a query with a file clause, the files that matched.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct SearchHit {
+    /// Null = never scraped.
+    #[schema(required = true)]
+    pub completed: Option<u32>,
+    pub discovered_at: i64,
+    /// The score breakdown; present only with `explain`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub explain: Option<ScoreParts>,
+    pub files: u64,
+    #[schema(example = json!(["single_file"]))]
+    pub flags: Vec<String>,
+    /// 40 hex digits.
+    pub hash: String,
+    /// 64 hex digits; null for a v1-only torrent.
+    #[schema(required = true)]
+    pub hash_v2: Option<String>,
+    pub id: i64,
+    /// Null = never scraped.
+    #[schema(required = true)]
+    pub last_scrape_at: Option<i64>,
+    /// The latest DHT sighting.
+    pub last_seen_at: i64,
+    /// Null = never scraped.
+    #[schema(required = true)]
+    pub leechers: Option<u32>,
+    /// Positions in the torrent's file list; present only when the query
+    /// has a file clause.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub matched_files: Option<Vec<u64>>,
+    pub metadata_at: i64,
+    pub name: String,
+    pub piece_len: u64,
+    /// Relevance; 0 under any sort but `relevance`.
+    pub score: f64,
+    /// Null = never scraped.
+    #[schema(required = true)]
+    pub seeders: Option<u32>,
+    /// No tracker reported: the counts are the DHT's estimate (show ≈).
+    pub seeders_approx: bool,
+    pub size: u64,
+    /// One tracker reports a swarm nothing else sees (§8): fake seeding.
+    pub swarm_suspect: bool,
+    /// Trackers that answered in the last answered round; null = never
+    /// scraped.
+    #[schema(required = true)]
+    pub trackers_checked: Option<u32>,
+    /// Of those, trackers that reported anyone; null = never scraped.
+    #[schema(required = true)]
+    pub trackers_reporting: Option<u32>,
+}
+
+/// How a relevance hit's score was made (§8 phase 2): `text` times each
+/// multiplier gives `score`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ScoreParts {
+    pub freshness: f64,
+    pub junk: f64,
+    /// The swarm-consistency penalty (1 = none).
+    pub penalty: f64,
+    pub score: f64,
+    pub seeders: f64,
+    /// Phase 1 (BM25) plus the name and title boosts.
+    pub text: f64,
+    pub trackers: f64,
+}
+
+// The AST's schema. `Node` lives in `lodestar-search`, which knows
+// nothing of OpenAPI; these mirror its serde shape for the schema only,
+// and a test round-trips every kind of node through them.
+
+/// A parsed query (§8), tagged by `op`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum AstNode {
+    /// Matches everything (an empty query: browse).
+    All,
+    And {
+        #[schema(no_recursion)]
+        of: Vec<AstNode>,
+    },
+    Or {
+        #[schema(no_recursion)]
+        of: Vec<AstNode>,
+    },
+    Not {
+        #[schema(no_recursion)]
+        of: Box<AstNode>,
+    },
+    /// A word, tokenized when compiled.
+    Word {
+        field: AstTextField,
+        word: String,
+    },
+    Phrase {
+        field: AstTextField,
+        text: String,
+    },
+    Near {
+        field: AstTextField,
+        words: Vec<String>,
+        slop: u32,
+    },
+    Prefix {
+        field: AstTextField,
+        prefix: String,
+    },
+    Fuzzy {
+        field: AstTextField,
+        word: String,
+        distance: u8,
+    },
+    /// Inclusive bounds; null is open.
+    Range {
+        field: AstNumField,
+        #[schema(required = true)]
+        lo: Option<u64>,
+        #[schema(required = true)]
+        hi: Option<u64>,
+    },
+    /// Inclusive bounds; null is open.
+    Date {
+        field: AstDateField,
+        #[schema(required = true)]
+        from: Option<AstWhen>,
+        #[schema(required = true)]
+        to: Option<AstWhen>,
+    },
+    /// File extensions; matches any.
+    Ext {
+        any: Vec<String>,
+    },
+    Flag {
+        name: String,
+        value: bool,
+    },
+    /// 40 lowercase hex digits.
+    Hash {
+        hash: String,
+    },
+    /// A keyword facet; matches any of the values.
+    Tag {
+        key: AstTagKey,
+        any: Vec<String>,
+    },
+    /// Torrents with at least one file matching every clause of `of`.
+    File {
+        #[schema(no_recursion)]
+        of: Box<AstNode>,
+    },
+    /// A category's share of the files or bytes, inclusive percentages.
+    Share {
+        by: AstShareBy,
+        cat: String,
+        lo: u8,
+        hi: u8,
+    },
+    /// The time of day a torrent was discovered, in minutes after
+    /// midnight, inclusive; `from > to` wraps past midnight. The search's
+    /// `tz` applies.
+    TimeOfDay {
+        from: u16,
+        to: u16,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AstTextField {
+    Any,
+    Name,
+    Path,
+    Title,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AstNumField {
+    Size,
+    Files,
+    Largest,
+    Piece,
+    Year,
+    Season,
+    Episode,
+    Junk,
+    Seeders,
+    Leechers,
+    Trackers,
+    Dht,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AstTagKey {
+    Type,
+    Res,
+    Hdr,
+    Codec,
+    Audio,
+    Lang,
+    Group,
+    Has,
+    Resolved,
+    Adult,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AstShareBy {
+    Count,
+    Bytes,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AstDateField {
+    Discovered,
+    /// Last seen in the DHT.
+    Seen,
+}
+
+/// One end of a date range: seconds before the search (`ago`), or a Unix
+/// time (`at`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AstWhen {
+    Ago(i64),
+    At(i64),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lodestar_search::parse;
+    use serde_json::Value;
+
+    /// Every kind of node, nested.
+    const QUERIES: &[&str] = &[
+        "",
+        "(dark | knight) -cam \"dark knight\" dark NEAR/3 knight comput* ~knigth",
+        "name:dark path:sub title:\"dark knight\"",
+        "size:700MB..1.5GB files:>=10 largest:<1GB piece:16MB year:2019..2021 s:2 e:>5 junk:<20",
+        "discovered:<7d discovered:2026-01-01..2026-03-31",
+        "ext:mkv,mp4 private:no hidden:yes",
+        "38a68a3bbc7cdb158e44c404c52c7d1ea6aa2cff",
+        "type:movie,tv res:4K hdr:dv codec:x265 audio:DD+ lang:fr group:NTb has:nfo resolved:files adult:scene",
+        "file:(ext:flac size:>50MB) -file:sample",
+        "cat:video>=80% bytes:video=10..50",
+        "seeders:>=5 leechers:<10 trackers:3.. dht:>0 seen:<7d time:22:00..02:00",
+    ];
+
+    #[test]
+    fn the_ast_schema_mirrors_every_node() {
+        let mut ops = std::collections::BTreeSet::new();
+        for q in QUERIES {
+            let node = parse(q).unwrap_or_else(|e| panic!("{q}: {e:?}"));
+            let json = serde_json::to_value(&node).unwrap();
+            collect_ops(&json, &mut ops);
+            let mirror: AstNode =
+                serde_json::from_value(json.clone()).unwrap_or_else(|e| panic!("{q}: {e}\n{json}"));
+            assert_eq!(serde_json::to_value(&mirror).unwrap(), json, "{q}");
+            // And back into the real thing.
+            let again: Node =
+                serde_json::from_value(serde_json::to_value(&mirror).unwrap()).unwrap();
+            assert_eq!(again, node, "{q}");
+        }
+        let all = [
+            "all",
+            "and",
+            "date",
+            "ext",
+            "file",
+            "flag",
+            "fuzzy",
+            "hash",
+            "near",
+            "not",
+            "or",
+            "phrase",
+            "prefix",
+            "range",
+            "share",
+            "tag",
+            "time_of_day",
+            "word",
+        ];
+        assert_eq!(ops.into_iter().collect::<Vec<_>>(), all.map(String::from));
+    }
+
+    fn collect_ops(v: &Value, ops: &mut std::collections::BTreeSet<String>) {
+        match v {
+            Value::Object(m) => {
+                if let Some(Value::String(op)) = m.get("op") {
+                    ops.insert(op.clone());
+                }
+                m.values().for_each(|v| collect_ops(v, ops));
+            }
+            Value::Array(a) => a.iter().for_each(|v| collect_ops(v, ops)),
+            _ => {}
+        }
+    }
+}

@@ -46,6 +46,56 @@ describe('lint bans', () => {
 		expect(kinds("const u = 'https://example.com/a';")).toEqual([]);
 	});
 
+	it('rejects spacing steps that are off the ramp', () => {
+		expect(kinds('<div class="p-11">')).toEqual(['spacing']);
+		expect(kinds('<div class="md:-mt-15 gap-x-16">')).toEqual(['spacing']);
+		expect(kinds('<div class="m-3.5 w-64 h-96">')).toEqual(['spacing']);
+		expect(kinds("const c = cond ? 'space-y-11' : 'top-20';")).toEqual(['spacing']);
+		expect(kinds('<div class="!inset-x-15 size-11">')).toEqual(['spacing']);
+	});
+
+	it('accepts every step on the ramp', () => {
+		expect(kinds('<div class="p-12">')).toEqual([]);
+		expect(kinds('<div class="gap-0.5">')).toEqual([]);
+		for (const n of [
+			'0',
+			'0.5',
+			'1',
+			'1.5',
+			'2',
+			'2.5',
+			'3',
+			'4',
+			'5',
+			'6',
+			'7',
+			'8',
+			'9',
+			'10',
+			'12',
+			'13',
+			'14'
+		]) {
+			expect(kinds(`<div class="px-${n} -mt-${n} md:gap-y-${n} h-${n}">`)).toEqual([]);
+		}
+	});
+
+	it('leaves keywords, fractions, layout tokens and other utilities alone', () => {
+		expect(
+			kinds('<div class="w-full h-px w-1/2 top-1/2 max-w-(--manuscript-width) w-(--rail-width)">')
+		).toEqual([]);
+		expect(
+			kinds(
+				'<div class="bg-primary/50 text-body leading-5 z-50 opacity-95 duration-150 grid-cols-12 line-clamp-3">'
+			)
+		).toEqual([]);
+		expect(kinds('<div class="p-1.55">')).toEqual(['spacing']);
+	});
+
+	it('reports ban kinds independently', () => {
+		expect(kinds('<div class="p-11 w-[13px]">').sort()).toEqual(['arbitrary', 'spacing']);
+	});
+
 	it('exempts the theme module and generated files', () => {
 		expect(isExempt('src/lib/theme/riverstone.ts')).toBe(true);
 		expect(isExempt('src/lib/api/schema.d.ts')).toBe(true);

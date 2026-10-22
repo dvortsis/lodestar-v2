@@ -1,0 +1,39 @@
+{
+  "recorded_from": "Transmission 4.0.5 (rpc-version 17), transmission-daemon on Ubuntu 24.04",
+  "note": "torrent-get files of the .torrent fixture (three files)",
+  "request": {
+    "method": "POST",
+    "path": "/transmission/rpc",
+    "query": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "server",
+        "Transmission"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "content-security-policy",
+        "frame-ancestors 'self'"
+      ],
+      [
+        "access-control-allow-origin",
+        "*"
+      ],
+      [
+        "content-type",
+        "application/json; charset=UTF-8"
+      ],
+      [
+        "content-length",
+        "307"
+      ]
+    ],
+    "body": "{\"arguments\":{\"torrents\":[{\"files\":[{\"bytesCompleted\":0,\"length\":4000,\"name\":\"Lodestar Fixture Pack/Disc 1/track01.flac\"},{\"bytesCompleted\":0,\"length\":5000,\"name\":\"Lodestar Fixture Pack/Disc 1/track02.flac\"},{\"bytesCompleted\":0,\"length\":1000,\"name\":\"Lodestar Fixture Pack/cover.jpg\"}]}]},\"result\":\"success\"}"
+  }
+}

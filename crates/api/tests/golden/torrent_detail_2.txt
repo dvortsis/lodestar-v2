@@ -1,0 +1,2 @@
+200
+{"discovered_at":1700000000,"file_list":[{"attrs":[],"path":"Holiday.Clips.2023.Lexb.mp4","size":943718400}],"file_list_total":1,"files":1,"flags":["single_file","warnings"],"hash":"20a53772089bde22c92694231d87e8e30c50c8c7","hash_v2":null,"id":3,"last_seen_at":1700000000,"magnet":"magnet:?xt=urn:btih:20a53772089bde22c92694231d87e8e30c50c8c7&dn=Holiday.Clips.2023.Lexb.mp4","metadata_at":1700000001,"name":"Holiday.Clips.2023.Lexb.mp4","piece_len":65536,"seeders_approx":false,"size":943718400,"swarm_suspect":false,"swarm_trackers":[]}

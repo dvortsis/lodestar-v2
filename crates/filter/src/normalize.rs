@@ -136,6 +136,47 @@ fn leet(c: char) -> Option<char> {
     })
 }
 
+/// ASCII bytes that start a word ([`START`]: letters and digits) or only
+/// continue one (`@` and `$`).
+const WORD: [u8; 256] = {
+    let mut t = [0u8; 256];
+    let mut c = 0;
+    while c < 256 {
+        let b = c as u8;
+        t[c] = if b.is_ascii_alphanumeric() {
+            START
+        } else if b == b'@' || b == b'$' {
+            1
+        } else {
+            0
+        };
+        c += 1;
+    }
+    t
+};
+const START: u8 = 2;
+
+/// Plans cached per tokenizer.
+const PLANS: usize = 512;
+/// Words longer than this aren't planned ahead.
+const MAX_PLANNED_BYTES: usize = 64;
+
+/// One word's tokens, positions relative to its first, and whether each
+/// waits for room (the cap) when it's emitted.
+#[derive(Debug, Default)]
+struct Plan {
+    /// The word as it was written: the cache key.
+    key: String,
+    /// The word in lowercase.
+    word: String,
+    /// Nothing but `@` and `$`: no tokens, and spelled-out runs go on.
+    empty: bool,
+    tokens: Vec<(Token, bool)>,
+    advance: u32,
+    /// A single letter, which may be part of a spelled-out word.
+    letter: Option<char>,
+}
+
 /// Turns text into tokens, reusing its buffers across calls.
 #[derive(Debug, Default)]
 pub struct Tokenizer {
@@ -146,6 +187,9 @@ pub struct Tokenizer {
     spelled_at: u32,
     pos: u32,
     start: usize,
+    plans: Vec<Plan>,
+    /// The plan of a word too long to keep.
+    long: Plan,
 }
 
 impl Tokenizer {
@@ -200,8 +244,22 @@ impl Tokenizer {
 
     fn feed(&mut self, text: &str, out: &mut Vec<Token>) {
         if text.is_ascii() {
-            for b in text.bytes() {
-                self.push_char(char::from(b.to_ascii_lowercase()), out);
+            // A word starts at a letter or digit (the word is empty there,
+            // so `@` and `$` can't start one) and takes `@` and `$` after.
+            // Anything else ends it, as `push_char` does one char at a time.
+            let bytes = text.as_bytes();
+            let mut i = 0;
+            while i < bytes.len() {
+                if WORD[bytes[i] as usize] != START {
+                    i += 1;
+                    continue;
+                }
+                let mut j = i + 1;
+                while j < bytes.len() && WORD[bytes[j] as usize] != 0 {
+                    j += 1;
+                }
+                self.emit(&text[i..j], out);
+                i = j;
             }
         } else {
             for c in text.nfkd() {
@@ -235,82 +293,166 @@ impl Tokenizer {
     /// Emits the word's tokens: its parts, its whole form if it split,
     /// its letter-for-number reading, and joins spelled-out letters.
     fn end_word(&mut self, out: &mut Vec<Token>) {
-        if self.word.is_empty() || !self.room(out) {
-            self.word.clear();
+        let word = std::mem::take(&mut self.word);
+        self.emit(&word, out);
+        self.word = word;
+        self.word.clear();
+    }
+
+    /// [`Tokenizer::end_word`] for `word`, lowercase or ASCII in any case.
+    /// Words repeat across a torrent's file names, so each word's tokens
+    /// are planned once and replayed.
+    fn emit(&mut self, word: &str, out: &mut Vec<Token>) {
+        if word.is_empty() || !self.room(out) {
             return;
         }
-        let raw = std::mem::take(&mut self.word);
-        self.plain.clear();
-        self.plain
-            .extend(raw.chars().filter(|c| !matches!(c, '@' | '$')));
-        if self.plain.is_empty() {
-            self.word = raw;
-            self.word.clear();
+        if self.plans.len() < PLANS {
+            self.plans.resize_with(PLANS, Plan::default);
+        }
+        // Long words (hashes, junk) aren't kept.
+        let plan = if word.len() <= MAX_PLANNED_BYTES {
+            let plan = &mut self.plans[slot(word)];
+            if plan.key.as_bytes() != word.as_bytes() {
+                plan.key.clear();
+                plan.key.push_str(word);
+                plan.word.clear();
+                plan.word.push_str(word);
+                plan.word.make_ascii_lowercase();
+                make_plan(plan, &mut self.plain, &mut self.swapped);
+            }
+            plan
+        } else {
+            let plan = &mut self.long;
+            plan.word.clear();
+            plan.word.push_str(word);
+            plan.word.make_ascii_lowercase();
+            make_plan(plan, &mut self.plain, &mut self.swapped);
+            plan
+        };
+        if plan.empty {
             return;
         }
         let first = self.pos;
-        let long = self.plain.chars().count() > MAX_WORD_CHARS;
-        let mut split = 1;
-        if long {
-            out.push(Token::new(self.pos, &self.plain));
-            self.pos += 1;
-        } else {
-            // Parts at letter/digit boundaries.
-            let mut from = 0;
-            let mut prev: Option<bool> = None;
-            for (i, c) in self.plain.char_indices() {
-                let digit = c.is_ascii_digit();
-                if prev.is_some_and(|p| p != digit) {
-                    if self.room(out) {
-                        out.push(Token::new(self.pos, &self.plain[from..i]));
-                    }
-                    self.pos += 1;
-                    split += 1;
-                    from = i;
-                }
-                prev = Some(digit);
-            }
-            if self.room(out) {
-                out.push(Token::new(self.pos, &self.plain[from..]));
-            }
-            self.pos += 1;
-            if split > 1 && self.room(out) {
-                out.push(Token::new(first, &self.plain));
-            }
-            let has_letter = raw.chars().any(char::is_alphabetic);
-            let swappable = raw.chars().any(|c| leet(c).is_some());
-            if has_letter && swappable {
-                self.swapped.clear();
-                self.swapped
-                    .extend(raw.chars().map(|c| leet(c).unwrap_or(c)));
-                if self.swapped != self.plain
-                    && self.swapped.chars().all(char::is_alphabetic)
-                    && self.room(out)
-                {
-                    out.push(Token::new(first, &self.swapped));
-                }
+        for (t, guarded) in &plan.tokens {
+            if !guarded || out.len() - self.start < MAX_TOKENS {
+                out.push(Token {
+                    pos: first + t.pos,
+                    ..*t
+                });
             }
         }
-        let mut letters = self.plain.chars();
-        match (letters.next(), letters.next()) {
-            (Some(c), None) if c.is_alphabetic() => {
+        self.pos += plan.advance;
+        match plan.letter {
+            Some(c) => {
                 if self.spelled.is_empty() {
                     self.spelled_at = first;
                 }
                 self.spelled.push(c);
             }
-            _ => self.flush_spelled(out),
+            None => self.flush_spelled(out),
         }
-        self.word = raw;
-        self.word.clear();
     }
 
     fn flush_spelled(&mut self, out: &mut Vec<Token>) {
+        if self.spelled.is_empty() {
+            return;
+        }
         if self.spelled.chars().count() >= MIN_SPELLED && self.room(out) {
             out.push(Token::new(self.spelled_at, &self.spelled));
         }
         self.spelled.clear();
     }
+}
+
+/// Plans `plan.word`'s tokens, positions relative to its first. `plain`
+/// and `swapped` are scratch space.
+fn make_plan(plan: &mut Plan, plain: &mut String, swapped: &mut String) {
+    plan.tokens.clear();
+    plan.advance = 0;
+    plan.letter = None;
+    let raw = &plan.word;
+    // `@`, `$` and the letter-for-number digits are ASCII, so bytes
+    // find them in any text.
+    let special = raw.bytes().any(|b| matches!(b, b'@' | b'$'));
+    plain.clear();
+    if special {
+        plain.extend(raw.chars().filter(|c| !matches!(c, '@' | '$')));
+    } else {
+        plain.push_str(raw);
+    }
+    plan.empty = plain.is_empty();
+    if plan.empty {
+        return;
+    }
+    let long = plain.len() > MAX_WORD_CHARS
+        && (plain.is_ascii() || plain.chars().count() > MAX_WORD_CHARS);
+    let mut pos = 0;
+    if long {
+        plan.tokens.push((Token::new(pos, plain), false));
+        pos += 1;
+    } else {
+        // Parts at letter/digit boundaries. A digit is one byte and no
+        // other char's bytes look like one, so the boundaries fall on
+        // the same byte offsets either way.
+        let mut from = 0;
+        let mut prev: Option<bool> = None;
+        let mut split = 1;
+        for (i, b) in plain.bytes().enumerate() {
+            if !plain.is_char_boundary(i) {
+                continue;
+            }
+            let digit = b.is_ascii_digit();
+            if prev.is_some_and(|p| p != digit) {
+                plan.tokens.push((Token::new(pos, &plain[from..i]), true));
+                pos += 1;
+                split += 1;
+                from = i;
+            }
+            prev = Some(digit);
+        }
+        plan.tokens.push((Token::new(pos, &plain[from..]), true));
+        pos += 1;
+        if split > 1 {
+            plan.tokens.push((Token::new(0, plain), true));
+        }
+        let swappable = raw
+            .bytes()
+            .any(|b| matches!(b, b'0' | b'1' | b'3' | b'4' | b'5' | b'7' | b'@' | b'$'));
+        let has_letter = swappable
+            && if raw.is_ascii() {
+                raw.bytes().any(|b| b.is_ascii_alphabetic())
+            } else {
+                raw.chars().any(char::is_alphabetic)
+            };
+        if has_letter && swappable {
+            swapped.clear();
+            swapped.extend(raw.chars().map(|c| leet(c).unwrap_or(c)));
+            if *swapped != *plain && swapped.chars().all(char::is_alphabetic) {
+                plan.tokens.push((Token::new(0, swapped), true));
+            }
+        }
+    }
+    plan.advance = pos;
+    let mut letters = plain.chars();
+    if let (Some(c), None) = (letters.next(), letters.next()) {
+        if c.is_alphabetic() {
+            plan.letter = Some(c);
+        }
+    }
+}
+
+/// A word's slot in the plan cache: cheap, since a hit compares the
+/// whole word.
+fn slot(word: &str) -> usize {
+    let b = word.as_bytes();
+    let n = b.len();
+    let at = |i: usize| u64::from(b[i]);
+    let mix = (n as u64)
+        ^ (at(0) << 8)
+        ^ (at(n / 2) << 16)
+        ^ (at(n - 1) << 24)
+        ^ (at(n.saturating_sub(2)) << 32);
+    (crate::hash::fmix64(mix) as usize) % PLANS
 }
 
 /// Appends the tokens of `text` to `out`, positions starting at 0.

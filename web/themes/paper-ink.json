@@ -1,0 +1,21 @@
+{
+	"id": "paper-ink",
+	"name": "Paper & Ink",
+	"group": "accessibility",
+	"light": {
+		"background": "#F7F5F0",
+		"surface": "#FFFEFA",
+		"text": "#1C1C1C",
+		"primary": "#2F3B4C",
+		"accent": "#5E6B5A",
+		"categorical": ["#294663", "#496545", "#8A6D2F", "#803324", "#71757B", "#5F4F74"]
+	},
+	"dark": {
+		"background": "#161616",
+		"surface": "#202020",
+		"text": "#ECE9E2",
+		"primary": "#A9BCD0",
+		"accent": "#B3C4A8",
+		"categorical": ["#7790AB", "#B6D0AF", "#C9AE73", "#D08D7E", "#B6BAC0", "#AFA0C9"]
+	}
+}

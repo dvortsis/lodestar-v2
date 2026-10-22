@@ -1,0 +1,2 @@
+200
+{"decisions_30d":[{"action":"quarantine","count":3,"rule":"CS-3a","shadow":false}],"quarantine":[{"at":0,"expires_at":0,"hash":"4242424242424242424242424242424242424242","rule":"CS-3a","sealed":true},{"at":0,"expires_at":0,"hash":"4343434343434343434343434343434343434343","rule":"CS-3a","sealed":true},{"at":0,"expires_at":0,"hash":"4444444444444444444444444444444444444444","rule":"CS-3a","sealed":true}]}
