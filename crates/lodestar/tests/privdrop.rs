@@ -1,0 +1,241 @@
+//! PUID/PGID on the real binary (src/privdrop.rs). These need root, as in
+//! the container; run as anyone else they skip and say so.
+#![cfg(target_os = "linux")]
+
+use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+use std::path::Path;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+fn root() -> bool {
+    if rustix::process::geteuid().is_root() {
+        true
+    } else {
+        eprintln!(
+            "skipping: the PUID/PGID drop only happens when started as root; \
+             run `sudo -E cargo test -p lodestar --test privdrop` to cover it"
+        );
+        false
+    }
+}
+
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+fn lodestar(data: &Path, port: u16) -> Command {
+    let mut c = Command::new(env!("CARGO_BIN_EXE_lodestar"));
+    c.env_clear()
+        .env("LODESTAR_DATA_DIR", data)
+        .env("LODESTAR_HTTP_BIND", format!("127.0.0.1:{port}"))
+        .env("LODESTAR_DHT_PORT", "0")
+        .env("LODESTAR_LOG", "info");
+    c
+}
+
+fn owner(p: &Path) -> (u32, u32) {
+    let m = std::fs::symlink_metadata(p).unwrap();
+    (m.uid(), m.gid())
+}
+
+fn field<'a>(status: &'a str, key: &str) -> &'a str {
+    status
+        .lines()
+        .find_map(|l| l.strip_prefix(key)?.strip_prefix(':'))
+        .unwrap_or_else(|| panic!("no {key} in {status}"))
+        .trim()
+}
+
+/// Runs a command that should fail before serving; one that starts
+/// serving instead is killed, so the test fails rather than hangs.
+fn refused(mut c: Command) -> String {
+    let mut child = c
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let log = std::thread::spawn(move || std::io::read_to_string(stderr).unwrap_or_default());
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if start.elapsed() > Duration::from_secs(20) {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "expected a refusal, but it kept running: {}",
+                log.join().unwrap()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(!status.success());
+    log.join().unwrap()
+}
+
+#[test]
+fn drops_to_puid_and_pgid_before_anything_runs() {
+    if !root() {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("data");
+    std::fs::create_dir_all(data.join("index")).unwrap();
+    std::fs::write(data.join("index/old"), b"").unwrap();
+    let outside = tmp.path().join("outside");
+    std::fs::write(&outside, b"").unwrap();
+    symlink(&outside, data.join("link")).unwrap();
+    // The data directory sits under the tempdir, which must be traversable.
+    std::fs::set_permissions(tmp.path(), PermissionsExt::from_mode(0o755)).unwrap();
+
+    let port = free_port();
+    let mut child = lodestar(&data, port)
+        .env("PUID", "4242")
+        .env("PGID", "4343")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    let stderr = child.stderr.take().unwrap();
+    let log = std::thread::spawn(move || std::io::read_to_string(stderr).unwrap_or_default());
+
+    let start = Instant::now();
+    while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "server didn't come up"
+        );
+        assert!(child.try_wait().unwrap().is_none(), "lodestar exited");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    // Every thread, the runtime's included, runs as 4242:4343 with no
+    // groups or capabilities, so setuid(0) can't succeed.
+    let tasks: Vec<_> = std::fs::read_dir(format!("/proc/{pid}/task"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert!(tasks.len() > 1, "expected the runtime's threads");
+    for task in &tasks {
+        let status = std::fs::read_to_string(task.join("status")).unwrap();
+        assert_eq!(field(&status, "Uid"), "4242\t4242\t4242\t4242", "{task:?}");
+        assert_eq!(field(&status, "Gid"), "4343\t4343\t4343\t4343", "{task:?}");
+        assert_eq!(field(&status, "Groups"), "", "{task:?}");
+        assert_eq!(field(&status, "NoNewPrivs"), "1", "{task:?}");
+        for cap in ["CapPrm", "CapEff", "CapAmb"] {
+            assert!(
+                field(&status, cap).bytes().all(|b| b == b'0'),
+                "{task:?} {cap}"
+            );
+        }
+    }
+
+    // The data directory and what was in it are the new account's; the
+    // file behind the symlink isn't.
+    for p in ["", "index", "index/old", "link", "lodestar.db"] {
+        assert_eq!(owner(&data.join(p)), (4242, 4343), "{p}");
+    }
+    assert_eq!(owner(&outside), (0, 0));
+
+    // The health check drops too, and doesn't need to write anything.
+    let check = lodestar(&data, port)
+        .env("PUID", "4242")
+        .env("PGID", "4343")
+        .arg("healthcheck")
+        .status()
+        .unwrap();
+    assert!(check.success());
+
+    assert!(
+        Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let status = child.wait().unwrap();
+    let log = log.join().unwrap();
+    assert!(status.success(), "{log}");
+    assert!(log.contains("dropped root: running as 4242:4343"), "{log}");
+    assert!(log.contains("was owned by 0:0"), "{log}");
+}
+
+#[test]
+fn bad_ids_and_symlinked_data_dirs_stop_start_up() {
+    if !root() {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("data");
+    let port = free_port();
+    for (puid, pgid, says) in [
+        ("0", "100", "LODESTAR_ALLOW_ROOT=1"),
+        ("99", "0", "LODESTAR_ALLOW_ROOT=1"),
+        ("nobody", "100", "not a number"),
+        ("-1", "100", "not a number"),
+        ("4294967295", "100", "reserved"),
+    ] {
+        let mut c = lodestar(&data, port);
+        c.env("PUID", puid).env("PGID", pgid);
+        let e = refused(c);
+        assert!(e.contains(says), "{puid}:{pgid}: {e}");
+        // Nothing was created or changed before the refusal.
+        assert!(!data.exists());
+    }
+
+    // A folder of someone else's that isn't Lodestar's is left alone.
+    let foreign = tmp.path().join("foreign");
+    std::fs::create_dir(&foreign).unwrap();
+    std::fs::write(foreign.join("keep"), b"").unwrap();
+    let e = refused(lodestar(&foreign, port));
+    assert!(e.contains("doesn't look like Lodestar's"), "{e}");
+    assert_eq!(owner(&foreign.join("keep")), (0, 0));
+
+    // The new account can't get through a 0700 root-owned parent.
+    let locked = tmp.path().join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::set_permissions(&locked, PermissionsExt::from_mode(0o700)).unwrap();
+    let e = refused(lodestar(&locked.join("data"), port));
+    assert!(e.contains("a parent folder doesn't let it in"), "{e}");
+
+    let real = tmp.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    symlink(&real, &data).unwrap();
+    let e = refused(lodestar(&data, port));
+    assert!(e.contains("symlink"), "{e}");
+    assert_eq!(owner(&real), (0, 0));
+}
+
+/// Root without CAP_SETUID/CAP_SETGID (compose `cap_drop: ALL`): refused
+/// before anything is changed, with what to do instead.
+#[test]
+fn root_without_setuid_stops_before_any_change() {
+    if !root() {
+        return;
+    }
+    if Command::new("setpriv").arg("--version").output().is_err() {
+        eprintln!("skipping: needs setpriv (util-linux) to drop capabilities");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("data");
+    std::fs::create_dir(&data).unwrap();
+    let mut c = Command::new("setpriv");
+    c.args(["--bounding-set", "-setuid,-setgid", "--inh-caps", "-all"])
+        .arg(env!("CARGO_BIN_EXE_lodestar"))
+        .env_clear()
+        .env("LODESTAR_DATA_DIR", &data)
+        .env("LODESTAR_HTTP_BIND", format!("127.0.0.1:{}", free_port()))
+        .env("LODESTAR_DHT_PORT", "0");
+    let e = refused(c);
+    assert!(e.contains("without the SETUID/SETGID capabilities"), "{e}");
+    assert!(e.contains("--user"), "{e}");
+    assert_eq!(owner(&data), (0, 0));
+}
