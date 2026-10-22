@@ -1,0 +1,21 @@
+{
+	"id": "sepia",
+	"name": "Sepia",
+	"group": "original",
+	"light": {
+		"background": "#F4ECD8",
+		"surface": "#FBF5E6",
+		"text": "#3E2F1E",
+		"primary": "#7A5230",
+		"accent": "#6F7A3E",
+		"categorical": ["#385769", "#809050", "#9B6E1D", "#8F4127", "#776954", "#906A86"]
+	},
+	"dark": {
+		"background": "#1E1A14",
+		"surface": "#2A241B",
+		"text": "#E8DCC4",
+		"primary": "#D2A877",
+		"accent": "#B6BC85",
+		"categorical": ["#778E97", "#C2CF97", "#CFA864", "#D48B6E", "#C6B79E", "#B596AC"]
+	}
+}

@@ -1,0 +1,21 @@
+{
+	"id": "lavender-field",
+	"name": "Lavender Field",
+	"group": "original",
+	"light": {
+		"background": "#F5F3F8",
+		"surface": "#FFFFFF",
+		"text": "#352E45",
+		"primary": "#6E5C9A",
+		"accent": "#7E9A86",
+		"categorical": ["#5D7FA0", "#75967D", "#B09051", "#A56661", "#9590A6", "#765897"]
+	},
+	"dark": {
+		"background": "#18151F",
+		"surface": "#25202F",
+		"text": "#ECE7F3",
+		"primary": "#B7A6E0",
+		"accent": "#A9C6B0",
+		"categorical": ["#7697B8", "#B7DABF", "#D7BA7A", "#D6948D", "#C0BBD2", "#B79BD9"]
+	}
+}

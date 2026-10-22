@@ -30,9 +30,27 @@ toml = { version = "0.9", default-features = false, features = ["parse", "serde"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
 
+[features]
+default = ["web"]
+# Embed web/build (the Svelte UI) when it exists; without it, a stub page.
+web = []
+
+[build-dependencies]
+base64 = "0.22.1"
+brotli = "9.0.0"
+flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
+sha2 = "0.11.0"
+
 [lints]
 workspace = true
 
 [dev-dependencies]
+# The build script's bundler, included by the tests (src/web_build.rs).
+base64 = "0.22.1"
+brotli = "9.0.0"
+flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
+proptest = "1.11.0"
+sha2 = "0.11.0"
+tower = { version = "0.5.3", features = ["util"] }
 lodestar-classify.workspace = true
 tempfile = "3.27.0"
