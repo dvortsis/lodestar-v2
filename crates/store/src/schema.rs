@@ -10,7 +10,8 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::{Error, Result};
 
 /// `(version, sql)`, applied in order, each in its own transaction.
-pub(crate) const MIGRATIONS: &[(i64, &str)] = &[(1, V1), (2, V2), (3, V3), (4, V4), (5, V5)];
+pub(crate) const MIGRATIONS: &[(i64, &str)] =
+    &[(1, V1), (2, V2), (3, V3), (4, V4), (5, V5), (6, V6)];
 
 /// M0: the canonical torrent tables plus settings and zstd dictionaries.
 ///
@@ -226,10 +227,59 @@ CREATE TABLE filter_hits (
 CREATE INDEX filter_hits_at ON filter_hits (at);
 ";
 
+/// M4: swarm health (architecture §7, §16 M4).
+///
+/// - `trackers` is the scrape list. Ids are `AUTOINCREMENT` within u16 and
+///   never reused, because `swarm_trackers` packs them: a reused id would
+///   credit old counts to a new tracker.
+/// - `swarm` has one row per scraped torrent; a torrent with no row has
+///   never been scraped. `dht_*` are NULL without a DHT estimate.
+///   `next_scrape_at` is indexed for the scheduler's "due" lane.
+/// - `swarm_trackers` holds per-tracker counts, only for trackers that
+///   report the hash (s+l+c > 0).
+/// - `swarm_history` is a fixed-size ring (`history` module), kept only
+///   for swarms that were ever non-zero or that a user looked at.
+const V5: &str = "
+CREATE TABLE trackers (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT CHECK (id BETWEEN 1 AND 65535),
+    url      TEXT NOT NULL UNIQUE,
+    added_at INTEGER NOT NULL,
+    enabled  INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    state    INTEGER NOT NULL DEFAULT 0,
+    state_at INTEGER,
+    message  TEXT
+) STRICT;
+
+CREATE TABLE swarm (
+    torrent_id         INTEGER PRIMARY KEY REFERENCES torrents (id) ON DELETE CASCADE,
+    seeders            INTEGER NOT NULL,
+    leechers           INTEGER NOT NULL,
+    completed          INTEGER NOT NULL,
+    trackers_reporting INTEGER NOT NULL,
+    trackers_checked   INTEGER NOT NULL,
+    dht_seeds          INTEGER,
+    dht_peers          INTEGER,
+    last_scrape_at     INTEGER NOT NULL,
+    next_scrape_at     INTEGER NOT NULL,
+    flags              INTEGER NOT NULL
+) STRICT;
+CREATE INDEX swarm_due ON swarm (next_scrape_at);
+
+CREATE TABLE swarm_trackers (
+    torrent_id INTEGER PRIMARY KEY REFERENCES torrents (id) ON DELETE CASCADE,
+    data       BLOB NOT NULL
+) STRICT;
+
+CREATE TABLE swarm_history (
+    torrent_id INTEGER PRIMARY KEY REFERENCES torrents (id) ON DELETE CASCADE,
+    data       BLOB NOT NULL
+) STRICT;
+";
+
 /// Blocklist subscriptions (§20.13): what to fetch, how it went, and the
 /// parsed list (hashes, 20 bytes each, or encoded IP ranges). A version
 /// held back by the sanity gates waits as `pending = 1`.
-const V5: &str = "
+const V6: &str = "
 CREATE TABLE subscriptions (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     url           TEXT NOT NULL UNIQUE,
@@ -388,6 +438,15 @@ mod tests {
 
     /// The id sequence starts after every id torrents has ever used,
     /// including deleted ones.
+    /// Migrations apply above the newest recorded one, so a gap (a
+    /// number merged out of order) would be skipped forever.
+    #[test]
+    fn versions_are_contiguous() {
+        for (i, (v, _)) in MIGRATIONS.iter().enumerate() {
+            assert_eq!(*v, i as i64 + 1);
+        }
+    }
+
     #[test]
     fn v2_seeds_the_id_sequence_from_existing_ids() {
         let mut conn = Connection::open_in_memory().unwrap();

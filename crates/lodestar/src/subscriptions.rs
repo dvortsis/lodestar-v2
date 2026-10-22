@@ -205,19 +205,23 @@ pub fn apply(store: &Store, filter: &Handle, ips: &SharedIps) -> Result<(), Stri
     Ok(())
 }
 
-fn agent(limits: &Limits) -> ureq::Agent {
-    let config = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(300)))
-        .timeout_connect(Some(Duration::from_secs(20)))
+/// The HTTP client (§16: reqwest on rustls with ring, as the tracker
+/// scraper uses).
+fn client(limits: &Limits) -> reqwest::Client {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let builder = reqwest::Client::builder()
+        .timeout(Duration::from_secs(300))
+        .connect_timeout(Duration::from_secs(20))
         .user_agent(concat!("Lodestar/", env!("CARGO_PKG_VERSION")))
-        .http_status_as_error(false)
-        .proxy(if limits.proxy_from_env {
-            ureq::Proxy::try_from_env()
-        } else {
-            None
-        })
-        .build();
-    ureq::Agent::new_with_config(config)
+        .redirect(reqwest::redirect::Policy::limited(5));
+    let builder = if limits.proxy_from_env {
+        builder
+    } else {
+        builder.no_proxy()
+    };
+    builder
+        .build()
+        .expect("an HTTP client with a crypto provider")
 }
 
 /// A parsed list, encoded for the store.
@@ -287,23 +291,37 @@ enum Fetched {
     Failed(String),
 }
 
-/// Downloads and parses one list (blocking).
-fn fetch(agent: &ureq::Agent, limits: &Limits, sub: &Subscription) -> Fetched {
-    let mut req = agent.get(&sub.url);
+/// A download: the body and its validators, or "not modified".
+enum Download {
+    NotModified,
+    Body {
+        body: Vec<u8>,
+        etag: Option<String>,
+        last_modified: Option<String>,
+    },
+}
+
+/// Downloads one list with a conditional request, capped in size.
+async fn download(
+    client: &reqwest::Client,
+    limits: &Limits,
+    sub: &Subscription,
+) -> Result<Download, String> {
+    let mut req = client.get(&sub.url);
     if let Some(e) = &sub.etag {
         req = req.header("If-None-Match", e);
     }
     if let Some(m) = &sub.last_modified {
         req = req.header("If-Modified-Since", m);
     }
-    let mut resp = match req.call() {
-        Ok(r) => r,
-        Err(e) => return Fetched::Failed(format!("download failed: {e}")),
-    };
+    let mut resp = req
+        .send()
+        .await
+        .map_err(|e| format!("download failed: {e}"))?;
     match resp.status().as_u16() {
-        304 => return Fetched::Unchanged,
+        304 => return Ok(Download::NotModified),
         200 => {}
-        code => return Fetched::Failed(format!("the server answered HTTP {code}")),
+        code => return Err(format!("the server answered HTTP {code}")),
     }
     let header = |name: &str| {
         resp.headers()
@@ -312,14 +330,33 @@ fn fetch(agent: &ureq::Agent, limits: &Limits, sub: &Subscription) -> Fetched {
             .map(str::to_owned)
     };
     let (etag, last_modified) = (header("etag"), header("last-modified"));
-    let body = match resp
-        .body_mut()
-        .with_config()
-        .limit(limits.max_download as u64)
-        .read_to_vec()
+    let mut body = Vec::new();
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|e| format!("download failed: {e}"))?
     {
-        Ok(b) => b,
-        Err(e) => return Fetched::Failed(format!("download failed: {e}")),
+        if body.len() + chunk.len() > limits.max_download {
+            return Err("the list is larger than the download limit".into());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(Download::Body {
+        body,
+        etag,
+        last_modified,
+    })
+}
+
+/// Decodes and parses a downloaded list (CPU-bound).
+fn parse_download(sub: &Subscription, limits: &Limits, download: Download) -> Fetched {
+    let (body, etag, last_modified) = match download {
+        Download::NotModified => return Fetched::Unchanged,
+        Download::Body {
+            body,
+            etag,
+            last_modified,
+        } => (body, etag, last_modified),
     };
     let text = match lists::decode(&body, limits.max_expanded) {
         Ok(t) => t,
@@ -387,33 +424,49 @@ fn due(s: &Subscription, now: i64) -> bool {
     s.enabled && s.checked_at.is_none_or(|t| now - t >= s.interval_secs)
 }
 
+fn lock(store: &Mutex<Store>) -> std::sync::MutexGuard<'_, Store> {
+    store.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Refreshes every due subscription, then re-applies if anything changed.
-/// Returns how many were refreshed (blocking).
-pub fn refresh_due(
-    store: &Mutex<Store>,
-    agent: &ureq::Agent,
+/// Returns how many were refreshed. Downloads are async; parsing and the
+/// store run on the blocking pool.
+pub async fn refresh_due(
+    store: &Arc<Mutex<Store>>,
+    client: &reqwest::Client,
     limits: &Limits,
-    filter: &Handle,
-    ips: &SharedIps,
+    filter: &Arc<Handle>,
+    ips: &Arc<SharedIps>,
     now: i64,
 ) -> usize {
-    let lock = || store.lock().unwrap_or_else(|e| e.into_inner());
-    let subs = match lock().subscriptions() {
-        Ok(s) => s,
-        Err(e) => {
+    let st = store.clone();
+    let subs = match tokio::task::spawn_blocking(move || lock(&st).subscriptions()).await {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => {
             tracing::warn!("reading subscriptions failed: {e}");
             return 0;
         }
+        Err(_) => return 0,
     };
-    let due: Vec<&Subscription> = subs.iter().filter(|s| due(s, now)).collect();
+    let due: Vec<Subscription> = subs.into_iter().filter(|s| due(s, now)).collect();
     let mut changed = false;
-    for s in &due {
-        // The download happens outside the lock; only the record takes it.
-        let fetched = fetch(agent, limits, s);
-        changed |= record(&mut lock(), s, fetched, now);
+    for sub in &due {
+        let download = download(client, limits, sub).await;
+        let (st, sub, limits) = (store.clone(), sub.clone(), limits.clone());
+        let recorded = tokio::task::spawn_blocking(move || {
+            let fetched = match download {
+                Ok(d) => parse_download(&sub, &limits, d),
+                Err(e) => Fetched::Failed(e),
+            };
+            record(&mut lock(&st), &sub, fetched, now)
+        })
+        .await;
+        changed |= recorded.unwrap_or(false);
     }
     if changed {
-        if let Err(e) = apply(&lock(), filter, ips) {
+        let (st, filter, ips) = (store.clone(), filter.clone(), ips.clone());
+        let applied = tokio::task::spawn_blocking(move || apply(&lock(&st), &filter, &ips)).await;
+        if let Ok(Err(e)) = applied {
             tracing::warn!("applying subscriptions failed: {e}");
         }
     }
@@ -428,26 +481,12 @@ pub async fn run(
     ips: Arc<SharedIps>,
     mut shutdown: watch::Receiver<bool>,
 ) {
-    let agent = agent(&limits);
+    let client = client(&limits);
     loop {
-        let (store, agent2, limits2, filter2, ips2) = (
-            store.clone(),
-            agent.clone(),
-            limits.clone(),
-            filter.clone(),
-            ips.clone(),
-        );
-        let _ = tokio::task::spawn_blocking(move || {
-            refresh_due(
-                &store,
-                &agent2,
-                &limits2,
-                &filter2,
-                &ips2,
-                crate::unix_now(),
-            )
-        })
-        .await;
+        tokio::select! {
+            _ = refresh_due(&store, &client, &limits, &filter, &ips, crate::unix_now()) => {}
+            _ = shutdown.changed() => return,
+        }
         tokio::select! {
             _ = tokio::time::sleep(TICK) => {}
             _ = shutdown.changed() => return,
@@ -519,7 +558,10 @@ mod tests {
         (url, handle)
     }
 
-    fn setup(lists: Vec<SubscribedList>) -> (Mutex<Store>, Handle, SharedIps, Limits) {
+    #[allow(clippy::type_complexity)]
+    fn setup(
+        lists: Vec<SubscribedList>,
+    ) -> (Arc<Mutex<Store>>, Arc<Handle>, Arc<SharedIps>, Limits) {
         let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
         let config = Subscriptions {
             lists,
@@ -531,9 +573,9 @@ mod tests {
             ..Limits::from_config(&config)
         };
         (
-            Mutex::new(store),
-            lodestar_pipeline::default_filter(),
-            SharedIps::default(),
+            Arc::new(Mutex::new(store)),
+            Arc::new(lodestar_pipeline::default_filter()),
+            Arc::new(SharedIps::default()),
             limits,
         )
     }
@@ -554,34 +596,34 @@ mod tests {
         s.parse().unwrap()
     }
 
-    #[test]
-    fn ip_lists_refresh_conditionally_and_hold_suspicious_versions() {
+    #[tokio::test]
+    async fn ip_lists_refresh_conditionally_and_hold_suspicious_versions() {
         let v1 = b"# test\n10.0.0.0/8\n172.16.0.0/12\n192.168.0.0/16\n".to_vec();
         let shrunk = b"10.0.0.0/8\n".to_vec();
         let (url, server) = serve(vec![(200, v1), (304, Vec::new()), (200, shrunk)]);
         let (store, filter, ips, limits) = setup(vec![list(&url, ListKind::Ip, false)]);
-        let agent = agent(&limits);
+        let agent = client(&limits);
         assert_eq!(
-            refresh_due(&store, &agent, &limits, &filter, &ips, 1_000),
+            refresh_due(&store, &agent, &limits, &filter, &ips, 1_000).await,
             1
         );
         assert!(ips.contains(ip("10.1.2.3")) && ips.contains(ip("192.168.4.5")));
         assert!(!ips.contains(ip("11.0.0.1")));
         // Not due again until the interval passes.
         assert_eq!(
-            refresh_due(&store, &agent, &limits, &filter, &ips, 2_000),
+            refresh_due(&store, &agent, &limits, &filter, &ips, 2_000).await,
             0
         );
         let later = 1_000 + 86_400;
         assert_eq!(
-            refresh_due(&store, &agent, &limits, &filter, &ips, later),
+            refresh_due(&store, &agent, &limits, &filter, &ips, later).await,
             1
         );
         let sub = store.lock().unwrap().subscriptions().unwrap().remove(0);
         assert_eq!(sub.status, "unchanged");
         // Two thirds of the list vanished: held, and the applied version
         // stays.
-        refresh_due(&store, &agent, &limits, &filter, &ips, later + 86_400);
+        refresh_due(&store, &agent, &limits, &filter, &ips, later + 86_400).await;
         let sub = store.lock().unwrap().subscriptions().unwrap().remove(0);
         assert_eq!(sub.status, "held");
         assert!(sub.error.unwrap().contains("shrank by 67%"));
@@ -594,8 +636,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn content_lists_drop_or_join_the_floor() {
+    #[tokio::test]
+    async fn content_lists_drop_or_join_the_floor() {
         let a = [0xaa; 20];
         let b = [0xbb; 20];
         let body = |h: [u8; 20]| {
@@ -608,8 +650,11 @@ mod tests {
             list(&url_a, ListKind::Content, false),
             list(&url_b, ListKind::Content, true),
         ]);
-        let agent = agent(&limits);
-        assert_eq!(refresh_due(&store, &agent, &limits, &filter, &ips, 5), 2);
+        let agent = client(&limits);
+        assert_eq!(
+            refresh_due(&store, &agent, &limits, &filter, &ips, 5).await,
+            2
+        );
         sa.join().unwrap();
         sb.join().unwrap();
         let e: Arc<Engine> = filter.current();
@@ -637,16 +682,16 @@ mod tests {
         assert!(e.blocked_hash(&[[0xbb; 20]]).is_none());
     }
 
-    #[test]
-    fn failures_are_recorded_not_applied() {
+    #[tokio::test]
+    async fn failures_are_recorded_not_applied() {
         let (url, server) = serve(vec![(404, Vec::new()), (200, b"\0\0binary".to_vec())]);
         let (store, filter, ips, limits) = setup(vec![list(&url, ListKind::Ip, false)]);
-        let agent = agent(&limits);
-        refresh_due(&store, &agent, &limits, &filter, &ips, 10);
+        let agent = client(&limits);
+        refresh_due(&store, &agent, &limits, &filter, &ips, 10).await;
         let sub = store.lock().unwrap().subscriptions().unwrap().remove(0);
         assert_eq!(sub.status, "error");
         assert!(sub.error.unwrap().contains("404"));
-        refresh_due(&store, &agent, &limits, &filter, &ips, 10 + 86_400);
+        refresh_due(&store, &agent, &limits, &filter, &ips, 10 + 86_400).await;
         let sub = store.lock().unwrap().subscriptions().unwrap().remove(0);
         assert!(sub.error.unwrap().contains("isn't text"));
         server.join().unwrap();
