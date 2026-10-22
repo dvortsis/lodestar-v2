@@ -10,6 +10,9 @@ repository.workspace = true
 [dependencies]
 chacha20poly1305 = "0.10.1"
 getrandom = "0.3.4"
+# SMTP for the email channel. rustls on ring, verifying with the same
+# platform verifier reqwest uses; no aws-lc, OpenSSL or native-tls.
+lettre = { version = "=0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls", "ring", "rustls-platform-verifier"] }
 # rustls on ring, as tracker-scrape and the subscriptions fetcher use it
 # (§16): aws-lc, reqwest's default provider, is a C/CMake build.
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "multipart", "form", "query"] }
@@ -27,5 +30,8 @@ workspace = true
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
 proptest = "1.11.0"
 tempfile = "3.27.0"
-tokio = { version = "1.54.0", features = ["rt", "rt-multi-thread", "macros", "net", "sync", "time"] }
+tokio = { version = "1.54.0", features = ["rt", "rt-multi-thread", "macros", "net", "sync", "time", "io-util"] }
+# The TLS side of the email tests' SMTP server. Already in the tree (reqwest
+# and lettre use it); no default features, so no aws-lc.
+tokio-rustls = { version = "=0.26.6", default-features = false, features = ["tls12"] }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt"] }
