@@ -18,12 +18,14 @@
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 
+use lodestar_classify::ContentType;
+
 use crate::core::{Action, Core, CoreRule, Evidence, Hit, Item};
 use crate::hash::TermSet;
 use crate::matcher::{Doc, Facts};
 use crate::packs::{self, PackRule, PackSwitches};
 use crate::prefilter::RuleList;
-use crate::rules::{self, Allow, ClassRule, Exception, Match, Override, Strength};
+use crate::rules::{self, Allow, ClassRules, Exception, Match, Override, Strength};
 
 /// Which rule decided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -122,8 +124,9 @@ pub struct Engine {
     pub overrides: Vec<Override>,
     pub exceptions: Vec<Exception>,
     pub allow: Vec<Allow>,
-    /// Classification rules, oldest first; not part of filtering.
-    pub class_rules: Vec<ClassRule>,
+    /// Classification rules (§20.9): they decide what's stored, and an
+    /// Is adult one adds the Adult-only core checks.
+    pub class_rules: ClassRules,
     pub version: u64,
 }
 
@@ -138,7 +141,7 @@ impl Engine {
             overrides: Vec::new(),
             exceptions: Vec::new(),
             allow: Vec::new(),
-            class_rules: Vec::new(),
+            class_rules: ClassRules::default(),
             version: 1,
         }
     }
@@ -149,12 +152,50 @@ impl Engine {
         if self.class_rules.is_empty() {
             return None;
         }
+        self.class_rules.decide(&Doc::new(item, facts))
+    }
+
+    /// [`Engine::judge`] plus your classification rules (§20.9), sharing
+    /// one prepared torrent. Returns the verdict and what the rules say.
+    ///
+    /// The verdict is on detection's classification, so a Not adult rule
+    /// never takes a torrent out of the Adult-only core checks. When an Is
+    /// adult rule makes a torrent adult that detection didn't, it's judged
+    /// as adult too and the stricter verdict is kept: a torrent stored as
+    /// adult has always met the Adult-only checks.
+    pub fn judge_classified(
+        &self,
+        item: &Item,
+        facts: Option<&Facts>,
+        now: i64,
+    ) -> (Verdict, Option<bool>) {
+        if let Some(hit) = self.core.floor_hit(item) {
+            let v = Verdict {
+                decision: Some(hit.into()),
+                shadow: Vec::new(),
+            };
+            return (v, None);
+        }
         let doc = Doc::new(item, facts);
-        self.class_rules
-            .iter()
-            .rev()
-            .find(|r| doc.matches(&r.query, &[]))
-            .map(|r| r.adult)
+        let correction = self.class_rules.decide(&doc);
+        let v = self.judge_doc(item, facts, &doc, now);
+        if correction != Some(true) || item.content_type == ContentType::Adult {
+            return (v, correction);
+        }
+        let adult_item = Item {
+            content_type: ContentType::Adult,
+            ..*item
+        };
+        let adult_class = facts.map(|f| {
+            let mut c = f.class.clone();
+            c.content_type = ContentType::Adult;
+            c
+        });
+        let adult_facts = facts
+            .zip(adult_class.as_ref())
+            .map(|(f, class)| Facts { class, ..*f });
+        let as_adult = self.judge(&adult_item, adult_facts.as_ref(), now);
+        (stricter(v, as_adult), correction)
     }
 
     /// The decision for one torrent. `facts` (classification and the
@@ -162,18 +203,24 @@ impl Engine {
     /// and files; `now` resolves shadow periods, expiries and relative
     /// dates.
     pub fn judge(&self, item: &Item, facts: Option<&Facts>, now: i64) -> Verdict {
-        let mut v = Verdict::default();
         if let Some(hit) = self.core.floor_hit(item) {
-            v.decision = Some(hit.into());
-            return v;
+            return Verdict {
+                decision: Some(hit.into()),
+                shadow: Vec::new(),
+            };
         }
-        let doc = Doc::new(item, facts);
+        self.judge_doc(item, facts, &Doc::new(item, facts), now)
+    }
+
+    /// [`Engine::judge`] past the floor, on a prepared torrent.
+    fn judge_doc(&self, item: &Item, facts: Option<&Facts>, doc: &Doc, now: i64) -> Verdict {
+        let mut v = Verdict::default();
         let mut neutral = Vec::new();
         let mut shadow_overrides = Vec::new();
         let mut overridden = false;
         for o in &self.overrides {
             if o.expires_at.is_some_and(|t| t <= now)
-                || !rules::matches(&o.what, item, &doc)
+                || !rules::matches(&o.what, item, doc)
                 || o.scope.as_ref().is_some_and(|q| !doc.matches(q, &[]))
             {
                 continue;
@@ -192,7 +239,7 @@ impl Engine {
             v.decision = self.below_overrides(
                 item,
                 facts,
-                &doc,
+                doc,
                 &neutral_set,
                 &neutral_words,
                 now,
@@ -335,6 +382,22 @@ impl Engine {
             self.lists.push(l);
         }
     }
+}
+
+/// The stricter of two verdicts: the stronger decision (the first on a
+/// tie), and every shadow decision either logged.
+fn stricter(a: Verdict, b: Verdict) -> Verdict {
+    let decision = match (a.decision, b.decision) {
+        (Some(x), Some(y)) => Some(if y.action > x.action { y } else { x }),
+        (x, y) => x.or(y),
+    };
+    let mut shadow = a.shadow;
+    for d in b.shadow {
+        if !shadow.contains(&d) {
+            shadow.push(d);
+        }
+    }
+    Verdict { decision, shadow }
 }
 
 /// The current engine, shared by intake, prepare, commit and the API.

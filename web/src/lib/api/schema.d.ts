@@ -72,7 +72,8 @@ export interface paths {
         put?: never;
         /**
          * Adds a classification rule; the stored torrents it matches are
-         *     classified again.
+         *     classified again. At most 1,000 rules: past that, 422
+         *     `too_many_class_rules`.
          */
         post: operations["addClassRule"];
         delete?: never;
@@ -861,6 +862,11 @@ export interface components {
              *     search index (only torrents arriving later are affected).
              */
             queued: number | null;
+            /**
+             * @description More stored torrents matched than are queued at once (1,000,000):
+             *     the rest are classified again when next re-enriched.
+             */
+            truncated: boolean;
         };
         /** @description `POST /classify/rules`. */
         ClassRuleBody: {
@@ -872,6 +878,8 @@ export interface components {
         ClassRuleRemoved: {
             /** @description As [`ClassRuleAdded::queued`]. */
             queued: number | null;
+            /** @description As [`ClassRuleAdded::truncated`]. */
+            truncated: boolean;
         };
         /**
          * @description `GET /classify`: your classification rules, and how detection
@@ -932,6 +940,11 @@ export interface components {
         CorrectResponse: {
             /** @description Non-null only when `type` is `adult`. */
             adult_kind: string | null;
+            /**
+             * @description When relabelling it adult made filtering hold it back (§20.9): the
+             *     rule that did. It's then dropped or quarantined, no longer stored.
+             */
+            held_by: string | null;
             /**
              * Format: int32
              * @description Junk score, 0–100.
@@ -1195,7 +1208,7 @@ export interface components {
             job: number;
         };
         /** @enum {string} */
-        JobState: "running" | "done" | "failed";
+        JobState: "running" | "done" | "failed" | "cancelled";
         /**
          * @description `GET /filters/preview/jobs/{id}`: progress while it runs, then the
          *     assessment or the error.

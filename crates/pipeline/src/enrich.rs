@@ -5,7 +5,8 @@
 //! torrents stored before M3, records from an older parser).
 
 use lodestar_classify::{Classification, Correction, ENRICHMENT_VERSION, FileInfo};
-use lodestar_filter::Engine;
+use lodestar_filter::reclassify::{Refiling, reclassify_row};
+use lodestar_filter::{Handle, Sealer};
 use lodestar_metainfo::{File, TextEncoding};
 use lodestar_store::{Enriched, Store};
 
@@ -33,17 +34,57 @@ pub fn enrich_stored(
     after: i64,
     limit: usize,
 ) -> Result<Option<(i64, usize)>, lodestar_store::Error> {
-    enrich_stored_with(store, after, limit, None)
+    loop {
+        match enrich_stored_with(store, after, limit, &Backfill::default())? {
+            None => return Ok(None),
+            // The rules changed under the batch: do it again.
+            Some(b) if b.rejected => continue,
+            Some(b) => return Ok(Some((b.last, b.enriched))),
+        }
+    }
 }
 
-/// [`enrich_stored`], applying your classification rules from `engine`
-/// too. A torrent's own correction wins over a rule.
+/// What background enrichment applies besides detection (§20.9).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Backfill<'a> {
+    /// Your classification rules, and the filter that judges a torrent
+    /// they (or its own correction) relabel adult.
+    pub filter: Option<&'a Handle>,
+    /// Seals the name of a torrent that judgement quarantines.
+    pub sealer: Option<&'a Sealer>,
+    /// How long such a quarantine lasts.
+    pub quarantine_secs: i64,
+}
+
+/// One batch of background enrichment.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Backfilled {
+    /// The last id looked at: the next batch starts after it.
+    pub last: i64,
+    pub enriched: usize,
+    /// Swarm hashes of torrents relabelled adult and then held back
+    /// (dropped or quarantined): intake must refuse them now.
+    pub held: Vec<[u8; 20]>,
+    /// The classification rules changed during the batch, so nothing was
+    /// written: run it again from the same id.
+    pub rejected: bool,
+}
+
+/// [`enrich_stored`] with your classification rules and corrections. A
+/// torrent's own correction wins over a rule. A torrent they relabel
+/// adult is judged as adult too, and its decision applied as at ingest,
+/// in the same transaction (§20.9). Nothing is written if the rules
+/// changed during the batch.
 pub fn enrich_stored_with(
     store: &mut Store,
     after: i64,
     limit: usize,
-    engine: Option<&Engine>,
-) -> Result<Option<(i64, usize)>, lodestar_store::Error> {
+    ctx: &Backfill<'_>,
+) -> Result<Option<Backfilled>, lodestar_store::Error> {
+    // The generation first, then the rules: rules read after a change
+    // are never older than the generation they're written under.
+    let generation = store.class_gen()?;
+    let engine = ctx.filter.map(Handle::current);
     let ids = store.unenriched(after, ENRICHMENT_VERSION, limit)?;
     let Some(&last) = ids.last() else {
         return Ok(None);
@@ -52,15 +93,56 @@ pub fn enrich_stored_with(
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64);
     let mut batch = Vec::with_capacity(ids.len());
+    let mut refilings = Vec::new();
     for id in ids {
         if let (Some(row), Some(tree)) = (store.torrent(id)?, store.files(id)?) {
             let own = store.correction(id)?.map(correction).unwrap_or_default();
             let files = file_infos(&tree.files, tree.encoding);
-            batch.push((id, enrich_row(&row, &files, own, engine, now).0));
+            let r = reclassify_row(&row, &files, own, engine.as_deref(), now);
+            if let Some(d) = &r.as_adult {
+                refilings.push(Refiling::new(&row, d, ctx.sealer));
+            }
+            batch.push((id, r.enriched));
         }
     }
-    let n = store.set_enrichments(&batch)?;
-    Ok(Some((last, n)))
+    let refiled: Vec<_> = refilings
+        .iter()
+        .map(|r| r.refiled(now, now + ctx.quarantine_secs))
+        .collect();
+    let Some(enriched) = store.set_enrichments_at(generation, &batch, &refiled)? else {
+        return Ok(Some(Backfilled {
+            last: after,
+            rejected: true,
+            ..Backfilled::default()
+        }));
+    };
+    let held = refilings
+        .iter()
+        .filter(|r| r.held.is_some())
+        .flat_map(|r| r.hashes.iter().copied())
+        .collect();
+    Ok(Some(Backfilled {
+        last,
+        enriched,
+        held,
+        rejected: false,
+    }))
+}
+
+/// What a classification rule's say changes: Is adult (`true`) or Not
+/// adult (`false`) where it differs from detection, else nothing.
+pub fn rule_fix(says: Option<bool>, class: &Classification) -> Option<bool> {
+    says.filter(|adult| *adult != (class.content_type == lodestar_classify::ContentType::Adult))
+}
+
+/// The stored enrichment with a classification rule's fix (or detection's
+/// own when `None`).
+pub fn enrich_with_rule(name: &str, files: &[FileInfo], fix: Option<bool>) -> Enriched {
+    let c = Correction {
+        adult: fix,
+        not_junk: false,
+    };
+    enrich_corrected(name, files, c).0
 }
 
 /// A stored correction as the classifier takes it.

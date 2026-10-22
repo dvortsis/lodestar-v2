@@ -1,2 +1,2 @@
 200
-{"id":1,"queued":1}
+{"id":1,"queued":1,"truncated":false}

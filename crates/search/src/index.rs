@@ -545,6 +545,13 @@ impl SearchIndex {
         sort_field(sort).is_none_or(|(field, _)| !self.missing.iter().any(|m| m == field))
     }
 
+    /// Makes everything committed so far visible to this handle's
+    /// searches (the live indexer does this after each commit).
+    pub fn refresh(&self) -> Result<()> {
+        self.reader.reload()?;
+        Ok(())
+    }
+
     /// The highest torrent id indexed (0 for a new index).
     pub fn watermark(&self) -> Result<i64> {
         Ok(watermarks_of(&self.index)?.0)
@@ -812,15 +819,20 @@ impl SearchIndex {
     /// The ids of every torrent `compiled` matches, at most `limit`, in no
     /// particular order: for jobs over a query's whole result set (a
     /// classification rule's torrents, §20.9), not for display.
-    pub fn matching_ids(&self, compiled: &Compiled, limit: usize) -> Result<Vec<u64>> {
+    /// `true` with them when more matched than `limit`.
+    pub fn matching_ids(&self, compiled: &Compiled, limit: usize) -> Result<(Vec<u64>, bool)> {
         let searcher = self.reader.searcher();
+        let left = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(limit));
+        let over = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let collector = PostFilter {
             ranges: &compiled.filters,
-            inner: IdsCollector { limit },
+            inner: IdsCollector {
+                left: left.clone(),
+                over: over.clone(),
+            },
         };
-        let mut ids = searcher.search(compiled.query.as_ref(), &collector)?;
-        ids.truncate(limit);
-        Ok(ids)
+        let ids = searcher.search(compiled.query.as_ref(), &collector)?;
+        Ok((ids, over.load(std::sync::atomic::Ordering::Relaxed)))
     }
 
     /// The positions (in the torrent's file list) of the files of torrent
@@ -1091,16 +1103,18 @@ impl Indexer {
     }
 }
 
-/// Collects torrent ids from the `id` fast field, at most `limit` per
-/// segment (the merge truncates the total).
+/// Collects torrent ids from the `id` fast field: at most `left` across
+/// all segments, setting `over` when a match had to be left out.
 struct IdsCollector {
-    limit: usize,
+    left: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    over: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 struct IdsSegment {
     col: tantivy::columnar::Column<u64>,
     ids: Vec<u64>,
-    limit: usize,
+    left: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    over: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl tantivy::collector::Collector for IdsCollector {
@@ -1115,7 +1129,8 @@ impl tantivy::collector::Collector for IdsCollector {
         Ok(IdsSegment {
             col: reader.fast_fields().u64("id")?,
             ids: Vec::new(),
-            limit: self.limit,
+            left: self.left.clone(),
+            over: self.over.clone(),
         })
     }
 
@@ -1132,10 +1147,27 @@ impl tantivy::collector::SegmentCollector for IdsSegment {
     type Fruit = Vec<u64>;
 
     fn collect(&mut self, doc: tantivy::DocId, _: tantivy::Score) {
-        if self.ids.len() < self.limit {
-            if let Some(id) = self.col.first(doc) {
-                self.ids.push(id);
+        use std::sync::atomic::Ordering::Relaxed;
+        let Some(id) = self.col.first(doc) else {
+            return;
+        };
+        let mut left = self.left.load(Relaxed);
+        let taken = loop {
+            if left == 0 {
+                break false;
             }
+            match self
+                .left
+                .compare_exchange_weak(left, left - 1, Relaxed, Relaxed)
+            {
+                Ok(_) => break true,
+                Err(now) => left = now,
+            }
+        };
+        if taken {
+            self.ids.push(id);
+        } else {
+            self.over.store(true, Relaxed);
         }
     }
 

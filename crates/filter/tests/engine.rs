@@ -240,3 +240,104 @@ fn a_fresh_store_loads_with_no_pack_on() {
     assert_eq!(e.packs, PackSwitches::default());
     assert!(PackRule::ALL.iter().all(|r| !e.packs.is_on(*r)));
 }
+
+/// `judge_classified` on a single-file torrent.
+fn classified(
+    e: &Engine,
+    name: &str,
+    size: u64,
+) -> (lodestar_filter::Verdict, Option<bool>, ContentType) {
+    let f = vec![FileInfo::new(vec![format!("{name}.mp4")], size)];
+    let class = classify(name, &f);
+    let facts = Facts {
+        class: &class,
+        size,
+        piece_len: 1 << 20,
+        flags: 0,
+        discovered_at: 1000,
+        now: 1000,
+    };
+    let item = Item {
+        hashes: &[H],
+        name,
+        files: &f,
+        content_type: class.content_type,
+    };
+    let (v, c) = e.judge_classified(&item, Some(&facts), 1000);
+    (v, c, class.content_type)
+}
+
+/// A child-role and a sexual stand-in ten words apart: beyond the general
+/// window (CS-4a, 8) and within the Adult-only one (CS-5a, 12).
+const SPREAD: &str = "Rolea one two three four five six seven eight nine Lexa";
+
+#[test]
+fn an_is_adult_rule_adds_the_adult_only_core() {
+    let mut e = engine();
+    e.packs = PackSwitches::default();
+    let name = format!("Studiox {SPREAD}");
+    let (v, c, detected) = classified(&e, &name, 900 << 20);
+    assert_ne!(
+        detected,
+        ContentType::Adult,
+        "detection doesn't call it adult"
+    );
+    assert_eq!(v.decision, None, "and the general core misses it");
+    assert_eq!(c, None);
+
+    e.load_class_rules(&[(1, "studiox".into(), true)]);
+    let (v, c, _) = classified(&e, &name, 900 << 20);
+    assert_eq!(c, Some(true));
+    let d = v.decision.expect("judged as adult too");
+    assert_eq!(d.rule, RuleRef::Core(CoreRule::Cs5a));
+    assert_eq!(d.action, Action::Quarantine);
+    // Plain `judge` stays on detection's classification.
+    assert_eq!(
+        judge(&e, &name, &[(&format!("{name}.mp4"), 900 << 20)], 1000).decision,
+        None
+    );
+}
+
+#[test]
+fn a_not_adult_rule_keeps_the_adult_only_core() {
+    let mut e = engine();
+    e.packs = PackSwitches::default();
+    let name = format!("Some.Title.XXX {SPREAD}");
+    e.load_class_rules(&[(1, "rolea".into(), false)]);
+    let (v, c, detected) = classified(&e, &name, 900 << 20);
+    assert_eq!(detected, ContentType::Adult);
+    assert_eq!(c, Some(false));
+    assert_eq!(
+        v.decision.map(|d| d.rule),
+        Some(RuleRef::Core(CoreRule::Cs5a))
+    );
+}
+
+#[test]
+fn the_stricter_verdict_wins_and_the_newest_class_rule_decides() {
+    let mut e = engine();
+    e.packs = PackSwitches::default();
+    // Your rule hides adult torrents; an Is adult rule brings it in.
+    e.rules = vec![UserRule {
+        id: 1,
+        query: parse("type:adult").unwrap(),
+        action: Action::Hide,
+        enabled: true,
+        shadow_until: None,
+        unless: None,
+    }]
+    .into();
+    e.load_class_rules(&[(1, "studiox".into(), true)]);
+    let (v, _, _) = classified(&e, "Studiox Holiday Film", 900 << 20);
+    assert_eq!(
+        v.decision.map(|d| (d.rule, d.action)),
+        Some((RuleRef::User(1), Action::Hide))
+    );
+    // Newest wins: a later Not adult rule for the same word.
+    e.load_class_rules(&[(1, "studiox".into(), true), (2, "studiox".into(), false)]);
+    let (v, c, _) = classified(&e, "Studiox Holiday Film", 900 << 20);
+    assert_eq!(c, Some(false));
+    assert_eq!(v.decision, None);
+    // Rules nothing matches never decide.
+    assert_eq!(classified(&e, "Other Holiday Film", 900 << 20).1, None);
+}
