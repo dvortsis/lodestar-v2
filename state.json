@@ -347,7 +347,7 @@
    "pr": 77,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "launched 15:59 (owner asked to start more work); no crates/search edits | PR #77; reviewer started 16:45 | 17:10 r1 MERGE-ish: fix compare lock scope + conditional test, then merge. 18:45 R2 MERGE at 29caca3 pending main merge (B4 trivial conflicts) + B17 base_query switch after #72 lands."
+   "notes": "launched 15:59 (owner asked to start more work); no crates/search edits | PR #77; reviewer started 16:45 | 17:10 r1 MERGE-ish: fix compare lock scope + conditional test, then merge. 18:45 R2 MERGE at 29caca3 pending main merge (B4 trivial conflicts) + B17 base_query switch after #72 lands. 19:38 bbc17ee (main+B17 switch) verified by runner -> APPROVED, merge on green."
   },
   "B14": {
    "status": "running",
