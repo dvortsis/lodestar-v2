@@ -1519,6 +1519,12 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Size:** `title_stem` costs about 3 B per torrent (words only, no norms). The torrent index is 408 B per torrent at 100k (budget 512). Schema v4.
 - **Name patterns** moved into the §20 rule engine with #27 (an M4 add-on), so M3 doesn't build them.
 
+**W3 brand pipeline decisions (§10.19):**
+- **AVIF is the format; WebP is only the fallback.** Scenes get AVIF at 360/540/724 (quality 32, effort 4) and WebP at 540w only (quality 28, effort 6, smart subsample). Logos get AVIF (quality 40) and WebP (quality 50) at 1x and 2x.
+- **The gate is 45,000 B for AVIF 540w.** The largest is about 22 KB, so quality has headroom. The 45 KB ceiling guards the pack, not the encoder setting.
+- **Logo display widths:** wordmark 240, horizontal 320, stacked 200 px (§10.19 fixes only the wordmark).
+- **Size:** `web/static/brand/` is about 1.5 MiB (scenes 1.1 MB, logos 0.3 MB, favicons 0.13 MB). An earlier setting with three WebP widths came to 3.05 MiB.
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.
