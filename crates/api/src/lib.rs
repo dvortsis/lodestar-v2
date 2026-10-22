@@ -34,7 +34,7 @@ mod torrents;
 use std::sync::{Arc, Mutex};
 
 use axum::{Extension, Router};
-use lodestar_search::SearchIndex;
+use lodestar_search::SearchHandle;
 use lodestar_store::Store;
 
 pub use auth::{Auth, require_session};
@@ -46,8 +46,9 @@ pub use search::{MATCHED_FILES, MAX_LIMIT, MAX_WINDOW};
 #[derive(Clone, Debug)]
 pub struct ApiState {
     pub auth: Arc<Auth>,
-    /// `None` when search is turned off.
-    pub index: Option<SearchIndex>,
+    /// `None` when search is turned off. Searches take its index once per
+    /// request, so they follow an index swap (§8).
+    pub index: Option<SearchHandle>,
     /// A read-only connection for detail and enrichment.
     pub reader: Arc<Mutex<Store>>,
     /// `None` when the filters API isn't served (tests, tools).
