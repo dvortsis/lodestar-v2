@@ -18,6 +18,9 @@ use tokio::task::JoinHandle;
 
 use crate::Counts;
 
+/// Counts for a hash the fake wasn't told about.
+pub type Answer = fn(&InfoHash) -> Counts;
+
 /// What a fake tracker knows and how it misbehaves. Shared with the test.
 #[derive(Debug, Default)]
 pub struct FakeState {
@@ -45,7 +48,7 @@ pub struct FakeState {
     /// The last HTTP request path, without the query.
     pub last_path: Mutex<String>,
     /// Counts for hashes not [`FakeState::set`]; zeros without it.
-    pub answer: Mutex<Option<fn(&InfoHash) -> Counts>>,
+    pub answer: Mutex<Option<Answer>>,
 }
 
 impl FakeState {

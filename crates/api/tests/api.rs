@@ -136,11 +136,12 @@ fn fixture() -> Fixture {
         "/api/v1",
         router(ApiState {
             auth: auth.clone(),
-            index: Some(index),
+            index: Some(index.into()),
             reader: Arc::new(Mutex::new(reader)),
             hot: Some(hot),
             events: Some(events.clone()),
             filters: None,
+            settings: None,
         }),
     );
     let hashes = infos
@@ -475,6 +476,16 @@ async fn errors_share_one_envelope() {
         Request::delete("/api/v1/password")
             .body(Body::empty())
             .unwrap(),
+        get("/api/v1/settings", None),
+        get("/api/v1/settings/crawler", None),
+        get("/api/v1/settings/nope", None),
+        Request::patch("/api/v1/settings/crawler")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"intensity":"low"}"#))
+            .unwrap(),
+        Request::delete("/api/v1/settings/crawler")
+            .body(Body::empty())
+            .unwrap(),
     ] {
         let (status, _, body) = call(&f.app, req).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -519,6 +530,10 @@ async fn errors_share_one_envelope() {
     let (status, _, body) = call(&f.app, get("/api/v1/nope", c)).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"]["code"], json!("no_route"));
+    // 503: no settings registry behind this router.
+    let (status, _, body) = call(&f.app, get("/api/v1/settings/crawler", c)).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["error"]["code"], json!("settings_unavailable"));
 
     // 405: a known path with the wrong method (with a session, for a
     // protected one).
@@ -620,6 +635,7 @@ async fn protected_routes_fail_closed_outside_the_router() {
         filters: None,
         hot: None,
         events: None,
+        settings: None,
     });
     let (status, _, body) = call(&stray, get("/x", Some(&cookie))).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);

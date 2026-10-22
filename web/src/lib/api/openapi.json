@@ -109,7 +109,7 @@
         "tags": [
           "classify"
         ],
-        "summary": "Adds a classification rule; the stored torrents it matches are\nclassified again.",
+        "summary": "Adds a classification rule; the stored torrents it matches are\nclassified again. At most 1,000 rules: past that, 422\n`too_many_class_rules`.",
         "operationId": "addClassRule",
         "requestBody": {
           "content": {
@@ -797,7 +797,7 @@
           {
             "name": "offset",
             "in": "query",
-            "description": "`offset + limit` may not pass 10,000.",
+            "description": "`offset + limit` may not pass 10,000. Not with `cursor`.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -827,6 +827,24 @@
             "name": "explain",
             "in": "query",
             "description": "Each relevance hit's score breakdown, in `explain` (§8). Runs the exact query, without the plural fallback.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The previous page's `next_cursor`; send the same `q`, `sort` and `hidden` with it. An expired one is a 410 `cursor_expired`, a tampered one a 400 `bad_cursor`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "exact",
+            "in": "query",
+            "description": "`1` or `true`: count every match exactly, within a time budget.",
             "required": false,
             "schema": {
               "type": "boolean"
@@ -877,6 +895,123 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/settings": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Every settings section, with the fields and JSON schema its form is\ngenerated from.",
+        "operationId": "listSettings",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsIndex"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/settings/{section}": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "One section's effective values, where each comes from, and which\ncan't be changed here or wait for a restart.",
+        "operationId": "getSettings",
+        "parameters": [
+          {
+            "name": "section",
+            "in": "path",
+            "description": "The section, as `GET /settings` names it.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SectionValues"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Changes some of a section's settings. Every field is checked first,\nthen all are saved together; live ones apply at once, and the rest\nare listed in `restart_required`. A field an environment variable\nsets is refused, naming the variable.",
+        "operationId": "patchSettings",
+        "parameters": [
+          {
+            "name": "section",
+            "in": "path",
+            "description": "The section, as `GET /settings` names it.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SectionValues"
                 }
               }
             }
@@ -2359,7 +2494,8 @@
         "description": "`POST /classify/rules`: the new rule.",
         "required": [
           "id",
-          "queued"
+          "queued",
+          "truncated"
         ],
         "properties": {
           "id": {
@@ -2373,6 +2509,10 @@
             ],
             "description": "Stored torrents queued to be classified again; null without a\nsearch index (only torrents arriving later are affected).",
             "minimum": 0
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "More stored torrents matched than are queued at once (1,000,000):\nthe rest are classified again when next re-enriched."
           }
         }
       },
@@ -2397,7 +2537,8 @@
         "type": "object",
         "description": "`POST /classify/rules/remove`.",
         "required": [
-          "queued"
+          "queued",
+          "truncated"
         ],
         "properties": {
           "queued": {
@@ -2407,6 +2548,10 @@
             ],
             "description": "As [`ClassRuleAdded::queued`].",
             "minimum": 0
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "As [`ClassRuleAdded::truncated`]."
           }
         }
       },
@@ -2431,6 +2576,47 @@
             "items": {
               "$ref": "#/components/schemas/ClassRule"
             }
+          }
+        }
+      },
+      "CompositionShare": {
+        "type": "object",
+        "description": "One colour group's share of a torrent (`docs/metrics.md` §4, §7.1).",
+        "required": [
+          "bytes",
+          "files",
+          "group",
+          "pct_bytes",
+          "pct_files"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes in the group, padding excluded.",
+            "minimum": 0
+          },
+          "files": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Files in the group, padding excluded.",
+            "minimum": 0
+          },
+          "group": {
+            "type": "string",
+            "description": "`video`, `audio`, `images`, `documents`, `archives`, `software` or\n`other`."
+          },
+          "pct_bytes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Whole percent of the non-padding bytes: any non-zero share is at\nleast 1, and only a complete one is 100.",
+            "minimum": 0
+          },
+          "pct_files": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The same, of the non-padding files.",
+            "minimum": 0
           }
         }
       },
@@ -2485,6 +2671,7 @@
         "description": "`POST /classify/correct`: the torrent classified again.",
         "required": [
           "adult_kind",
+          "held_by",
           "junk",
           "type"
         ],
@@ -2495,6 +2682,13 @@
               "null"
             ],
             "description": "Non-null only when `type` is `adult`."
+          },
+          "held_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When relabelling it adult made filtering hold it back (§20.9): the\nrule that did. It's then dropped or quarantined, no longer stored."
           },
           "junk": {
             "type": "integer",
@@ -2838,7 +3032,8 @@
         "enum": [
           "running",
           "done",
-          "failed"
+          "failed",
+          "cancelled"
         ]
       },
       "JobStatus": {
@@ -3439,28 +3634,42 @@
         "type": "object",
         "description": "One search result: the torrent summary (`docs/metrics.md` §7.1), its\nrelevance and, for a query with a file clause, the files that matched.",
         "required": [
+          "adult_kind",
           "completed",
+          "composition",
+          "content_type",
           "discovered_at",
           "files",
           "flags",
           "hash",
           "hash_v2",
           "id",
+          "junk_reasons",
+          "junk_score",
           "last_scrape_at",
           "last_seen_at",
           "leechers",
           "metadata_at",
           "name",
           "piece_len",
+          "resolved_via",
           "score",
           "seeders",
           "seeders_approx",
           "size",
           "swarm_suspect",
+          "title",
           "trackers_checked",
           "trackers_reporting"
         ],
         "properties": {
+          "adult_kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`scene`, `movie`, `photos`, `comics`, `game`, `vr` or `audio`;\nset only when `content_type` is `adult`."
+          },
           "completed": {
             "type": [
               "integer",
@@ -3469,6 +3678,20 @@
             "format": "int32",
             "description": "Null = never scraped.",
             "minimum": 0
+          },
+          "composition": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CompositionShare"
+            },
+            "description": "What the torrent is made of, by colour group, in the composition\nbar's order; groups without files are left out, and it's empty\nbefore classification."
+          },
+          "content_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`movie`, `tv`, `music`, `audiobook`, `ebook`, `comic`, `software`,\n`game`, `images`, `video`, `other` or `adult`; null = not\nclassified."
           },
           "discovered_at": {
             "type": "integer",
@@ -3506,6 +3729,25 @@
           "id": {
             "type": "integer",
             "format": "int64"
+          },
+          "junk_reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Stable reason keys (`docs/metrics.md` §7.1); empty when there are\nnone or before classification.",
+            "example": [
+              "double-extension"
+            ]
+          },
+          "junk_score": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "0–100; null = not classified.",
+            "minimum": 0
           },
           "last_scrape_at": {
             "type": [
@@ -3550,6 +3792,13 @@
             "format": "int64",
             "minimum": 0
           },
+          "resolved_via": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How the title was found when the name wasn't informative:\n`files`, `folder` or `structure`; null = from the name itself, or\nnot classified."
+          },
           "score": {
             "type": "number",
             "format": "double",
@@ -3576,6 +3825,13 @@
           "swarm_suspect": {
             "type": "boolean",
             "description": "One tracker reports a swarm nothing else sees (§8): fake seeding."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The resolved title; null = not resolved."
           },
           "trackers_checked": {
             "type": [
@@ -3613,12 +3869,28 @@
             ],
             "default": null
           },
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The previous page's `next_cursor`, to read the next page from the\nsame index snapshot. Send the same `q` (or `ast`), `sort` and\n`hidden` with it.",
+            "default": null
+          },
+          "exact": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Count every match exactly, even above 100,000 (within a time\nbudget; `total_approx` says whether it made it). `1` or `true`.",
+            "default": null
+          },
           "explain": {
             "type": [
               "boolean",
               "null"
             ],
-            "description": "Each relevance hit's score breakdown, in `explain` (§8). Runs the\nexact query, without the plural fallback.",
+            "description": "Each relevance hit's score breakdown, in `explain` (§8). `1` or\n`true`.",
             "default": null
           },
           "hidden": {
@@ -3643,7 +3915,7 @@
               "integer",
               "null"
             ],
-            "description": "`offset + limit` may not pass 10,000.",
+            "description": "`offset + limit` may not pass 10,000. Not with `cursor`.",
             "default": null,
             "minimum": 0
           },
@@ -3682,10 +3954,12 @@
           "canonical",
           "hits",
           "limit",
+          "next_cursor",
           "offset",
           "stemmed",
           "took_ms",
-          "total"
+          "total",
+          "total_approx"
         ],
         "properties": {
           "canonical": {
@@ -3702,8 +3976,16 @@
             "type": "integer",
             "minimum": 0
           },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page, read from the same index\nsnapshot (§8); null on the last page. Opaque, URL-safe, at most\n256 characters, valid for 10 minutes after its last use."
+          },
           "offset": {
             "type": "integer",
+            "description": "Hits before this page.",
             "minimum": 0
           },
           "stemmed": {
@@ -3718,6 +4000,230 @@
             "type": "integer",
             "description": "Matches in all, not just this page.",
             "minimum": 0
+          },
+          "total_approx": {
+            "type": "boolean",
+            "description": "`total` is an estimate (above 100,000 matches; shown with \"≈\");\nask with `exact` for the exact count."
+          }
+        }
+      },
+      "SectionValues": {
+        "type": "object",
+        "description": "`GET /settings/{section}` and `PATCH /settings/{section}`: the\nsection's effective values.",
+        "required": [
+          "fields",
+          "restart_required",
+          "section"
+        ],
+        "properties": {
+          "fields": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SettingValue"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "restart_required": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields whose saved value differs from the running one: they take\neffect at the next restart."
+          },
+          "section": {
+            "type": "string"
+          }
+        },
+        "example": {
+          "fields": {
+            "intensity": {
+              "env": null,
+              "read_only": false,
+              "restart_required": false,
+              "source": "db",
+              "value": "low"
+            },
+            "timeout_secs": {
+              "env": null,
+              "read_only": false,
+              "restart_required": true,
+              "source": "db",
+              "value": 12
+            }
+          },
+          "restart_required": [
+            "timeout_secs"
+          ],
+          "section": "crawler"
+        }
+      },
+      "SettingField": {
+        "type": "object",
+        "description": "One field of a section, for its form.",
+        "required": [
+          "env",
+          "help_key",
+          "label_key",
+          "name",
+          "read_only",
+          "restart_required"
+        ],
+        "properties": {
+          "env": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The environment variable that overrides it; null when none does."
+          },
+          "help_key": {
+            "type": "string",
+            "description": "Message key of the help text beside the field."
+          },
+          "label_key": {
+            "type": "string",
+            "description": "Message key of the field's label."
+          },
+          "name": {
+            "type": "string"
+          },
+          "read_only": {
+            "type": "boolean",
+            "description": "Never editable in the app (e.g. the data directory)."
+          },
+          "restart_required": {
+            "type": "boolean",
+            "description": "A change takes effect at the next restart."
+          }
+        }
+      },
+      "SettingSource": {
+        "type": "string",
+        "description": "Where a setting's effective value comes from, lowest to highest:\nthe built-in default, `config.toml`, a change saved in the app, or a\n`LODESTAR_*` environment variable.",
+        "enum": [
+          "default",
+          "file",
+          "db",
+          "env"
+        ]
+      },
+      "SettingValue": {
+        "type": "object",
+        "description": "One field's effective value.",
+        "required": [
+          "env",
+          "read_only",
+          "restart_required",
+          "source",
+          "value"
+        ],
+        "properties": {
+          "env": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The variable that set it when `source` is `env`; null otherwise."
+          },
+          "read_only": {
+            "type": "boolean",
+            "description": "Can't be changed in the app: set by the environment, or never\neditable here."
+          },
+          "restart_required": {
+            "type": "boolean",
+            "description": "A change takes effect at the next restart."
+          },
+          "source": {
+            "$ref": "#/components/schemas/SettingSource"
+          },
+          "value": {
+            "description": "Any JSON value, of the type the section's schema gives the field."
+          }
+        }
+      },
+      "SettingsIndex": {
+        "type": "object",
+        "description": "`GET /settings`: every section, in display order.",
+        "required": [
+          "sections"
+        ],
+        "properties": {
+          "sections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SettingsSection"
+            }
+          }
+        },
+        "example": {
+          "sections": [
+            {
+              "fields": [
+                {
+                  "env": "LODESTAR_INTENSITY",
+                  "help_key": "settings.crawler.intensity.help",
+                  "label_key": "settings.crawler.intensity.label",
+                  "name": "intensity",
+                  "read_only": false,
+                  "restart_required": false
+                }
+              ],
+              "help_key": "settings.crawler.help",
+              "label_key": "settings.crawler.label",
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "intensity": {
+                    "enum": [
+                      "low",
+                      "balanced",
+                      "aggressive"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "section": "crawler"
+            }
+          ]
+        }
+      },
+      "SettingsPatch": {
+        "type": "object",
+        "description": "`PATCH /settings/{section}`: some of the section's fields and their\nnew values, as its schema in `GET /settings` describes. Fields left\nout keep their values; an unknown field is refused. `null` resets a\nfield: its saved value is removed, and the `config.toml` value or the\ndefault applies again."
+      },
+      "SettingsSection": {
+        "type": "object",
+        "description": "One section: its fields and the JSON schema of its values.",
+        "required": [
+          "fields",
+          "help_key",
+          "label_key",
+          "schema",
+          "section"
+        ],
+        "properties": {
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SettingField"
+            }
+          },
+          "help_key": {
+            "type": "string"
+          },
+          "label_key": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "object",
+            "description": "A JSON Schema (2020-12) object for the section's values, with\neach number field's bounds as `minimum`/`maximum`."
+          },
+          "section": {
+            "type": "string"
           }
         }
       },
@@ -4405,6 +4911,10 @@
     {
       "name": "classify",
       "description": "Classification rules and corrections (§20.9)."
+    },
+    {
+      "name": "settings",
+      "description": "The runtime settings registry (§10.10, §11)."
     },
     {
       "name": "meta",

@@ -20,6 +20,10 @@ use serde::Deserialize;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    /// Which values `config.toml` and the environment set, for the
+    /// settings registry's sources (`settings`). Not a config key.
+    #[serde(skip)]
+    pub layers: Layers,
     /// Holds `lodestar.db`, `dht-state.bin` and (by default) the config.
     pub data_dir: PathBuf,
     /// `error`, `warn`, `info`, `debug` or a `tracing` filter.
@@ -38,6 +42,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
+            layers: Layers::default(),
             data_dir: PathBuf::from("data"),
             log: "info".into(),
             http: Http::default(),
@@ -52,6 +57,47 @@ impl Default for Config {
         }
     }
 }
+
+/// What set a [`Config`]'s values beyond the defaults.
+#[derive(Debug, Clone, Default)]
+pub struct Layers {
+    /// `config.toml` as written (empty without a file).
+    pub file: toml::Table,
+    /// The `LODESTAR_*` variables that were set, from [`ENV_VARS`].
+    pub env: Vec<&'static str>,
+}
+
+impl Layers {
+    /// Whether the file sets the key at a dotted `path` (`dht.bind`).
+    pub fn in_file(&self, path: &str) -> bool {
+        let mut table = &self.file;
+        let mut parts = path.split('.').peekable();
+        while let Some(part) = parts.next() {
+            match table.get(part) {
+                None => return false,
+                Some(_) if parts.peek().is_none() => return true,
+                Some(toml::Value::Table(t)) => table = t,
+                Some(_) => return false,
+            }
+        }
+        false
+    }
+
+    pub fn in_env(&self, var: &str) -> bool {
+        self.env.contains(&var)
+    }
+}
+
+/// Every environment variable [`Config::load`] reads.
+pub const ENV_VARS: &[&str] = &[
+    "LODESTAR_DATA_DIR",
+    "LODESTAR_LOG",
+    "LODESTAR_HTTP_BIND",
+    "LODESTAR_DHT_PORT",
+    "LODESTAR_INTENSITY",
+    "LODESTAR_DHT_ENABLED",
+    "LODESTAR_SECURE_COOKIES",
+];
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -134,7 +180,7 @@ pub enum EncryptionName {
 #[serde(default, deny_unknown_fields)]
 pub struct Fetch {
     pub encryption: EncryptionName,
-    /// Concurrent metadata fetches; unset follows the DHT intensity.
+    /// Concurrent metadata fetches; unset or 0 follows the DHT intensity.
     pub max_sockets: Option<usize>,
     pub timeout_secs: u64,
     pub max_metadata_mib: usize,
@@ -385,13 +431,24 @@ impl Config {
                 p.exists().then_some(p)
             }
         };
-        let mut config = match file {
+        let mut file_table = toml::Table::new();
+        let mut config: Config = match file {
             Some(p) => {
                 let text = std::fs::read_to_string(&p)
                     .map_err(|e| ConfigError(format!("reading {}: {e}", p.display())))?;
+                file_table = toml::from_str(&text)
+                    .map_err(|e| ConfigError(format!("{}: {e}", p.display())))?;
                 toml::from_str(&text).map_err(|e| ConfigError(format!("{}: {e}", p.display())))?
             }
             None => Config::default(),
+        };
+        config.layers = Layers {
+            file: file_table,
+            env: ENV_VARS
+                .iter()
+                .copied()
+                .filter(|k| env(k).is_some())
+                .collect(),
         };
         if let Some(dir) = data_dir {
             config.data_dir = dir;
@@ -421,6 +478,11 @@ impl Config {
             config.scrape.enabled = v
                 .parse()
                 .map_err(|_| parse("LODESTAR_SCRAPE_ENABLED", &v))?;
+        }
+        if let Some(v) = env("LODESTAR_SECURE_COOKIES") {
+            config.http.secure_cookies = v
+                .parse()
+                .map_err(|_| parse("LODESTAR_SECURE_COOKIES", &v))?;
         }
         Ok(config)
     }
@@ -458,12 +520,17 @@ impl Config {
     }
 
     pub fn pipeline_config(&self) -> Result<PipelineConfig, ConfigError> {
-        // §6: 400 sockets at Balanced; the presets scale with it.
-        let sockets = self.fetch.max_sockets.unwrap_or(match self.dht.intensity {
-            IntensityName::Low => 100,
-            IntensityName::Balanced => 400,
-            IntensityName::Aggressive => 1000,
-        });
+        // §6: 400 sockets at Balanced; the presets scale with it. 0, as
+        // unset, follows the intensity (as the settings registry shows it).
+        let sockets =
+            self.fetch
+                .max_sockets
+                .filter(|&n| n > 0)
+                .unwrap_or(match self.dht.intensity {
+                    IntensityName::Low => 100,
+                    IntensityName::Balanced => 400,
+                    IntensityName::Aggressive => 1000,
+                });
         let fetch = FetchOptions {
             timeout: Duration::from_secs(self.fetch.timeout_secs.max(1)),
             max_metadata: self.fetch.max_metadata_mib << 20,
@@ -652,6 +719,59 @@ mod tests {
     }
 
     #[test]
+    fn layers_record_what_the_file_and_environment_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "log = \"debug\"\n[dht]\nintensity = \"low\"\n").unwrap();
+        let env = |k: &str| (k == "LODESTAR_HTTP_BIND").then(|| "127.0.0.1:1".to_string());
+        let c = Config::load(Some(&path), env).unwrap();
+        assert!(c.layers.in_file("log"));
+        assert!(c.layers.in_file("dht.intensity"));
+        assert!(!c.layers.in_file("dht.bind"));
+        assert!(!c.layers.in_file("log.level"));
+        assert!(!c.layers.in_file("http.bind"));
+        assert_eq!(c.layers.env, ["LODESTAR_HTTP_BIND"]);
+        assert!(c.layers.in_env("LODESTAR_HTTP_BIND"));
+        let c = Config::load(None, no_env).unwrap();
+        assert!(c.layers.file.is_empty() && c.layers.env.is_empty());
+    }
+
+    #[test]
+    fn zero_sockets_follow_the_intensity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[fetch]\nmax_sockets = 0\n[dht]\nintensity = \"low\"\n",
+        )
+        .unwrap();
+        let c = Config::load(Some(&path), no_env).unwrap();
+        assert_eq!(c.pipeline_config().unwrap().pool.max_sockets, 100);
+    }
+
+    #[test]
+    fn typos_and_bad_values_are_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[dht]\nintensty = \"low\"\n").unwrap();
+        assert!(Config::load(Some(&path), no_env).is_err());
+        let bad = |k: &str| (k == "LODESTAR_INTENSITY").then(|| "turbo".to_string());
+        assert!(Config::load(None, bad).is_err());
+        assert!(Config::load(Some(&dir.path().join("missing.toml")), no_env).is_err());
+    }
+
+    #[test]
+    fn blocklists_parse_hex_lines() {
+        let mut set = HashSet::new();
+        let text = "# comment\n\nABCDEF0123456789abcdef0123456789abcdef01  # trailing\n";
+        parse_blocklist(text, &mut set).unwrap();
+        assert_eq!(set.len(), 1);
+        assert!(set.contains(&parse_hex20("abcdef0123456789abcdef0123456789abcdef01").unwrap()));
+        assert_eq!(parse_blocklist("zz\n", &mut set), Err(1));
+        assert_eq!(parse_blocklist("\n\nabcd", &mut set), Err(3));
+    }
+
+    #[test]
     fn scrape_settings() {
         let c = Config::load(None, no_env).unwrap();
         let (h, trackers) = c.health_config().unwrap().unwrap();
@@ -709,27 +829,5 @@ mod tests {
         assert_eq!(w.freshness_floor, 1.0, "clamped");
         std::fs::write(&path, "[ranking]\nseeder = 0.5\n").unwrap();
         assert!(Config::load(Some(&path), no_env).is_err());
-    }
-
-    #[test]
-    fn typos_and_bad_values_are_errors() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.toml");
-        std::fs::write(&path, "[dht]\nintensty = \"low\"\n").unwrap();
-        assert!(Config::load(Some(&path), no_env).is_err());
-        let bad = |k: &str| (k == "LODESTAR_INTENSITY").then(|| "turbo".to_string());
-        assert!(Config::load(None, bad).is_err());
-        assert!(Config::load(Some(&dir.path().join("missing.toml")), no_env).is_err());
-    }
-
-    #[test]
-    fn blocklists_parse_hex_lines() {
-        let mut set = HashSet::new();
-        let text = "# comment\n\nABCDEF0123456789abcdef0123456789abcdef01  # trailing\n";
-        parse_blocklist(text, &mut set).unwrap();
-        assert_eq!(set.len(), 1);
-        assert!(set.contains(&parse_hex20("abcdef0123456789abcdef0123456789abcdef01").unwrap()));
-        assert_eq!(parse_blocklist("zz\n", &mut set), Err(1));
-        assert_eq!(parse_blocklist("\n\nabcd", &mut set), Err(3));
     }
 }
