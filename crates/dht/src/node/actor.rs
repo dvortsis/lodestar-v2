@@ -66,10 +66,12 @@ const SCRAPE_DEADLINE: Duration = Duration::from_secs(30);
 const LOW_FRONTIER: usize = 64;
 /// Backoff for a sample query that timed out (may be transient).
 const SAMPLE_TIMEOUT_BACKOFF: Duration = Duration::from_secs(30 * 60);
-/// IPs we queried, remembered so a query from them isn't counted as
-/// unsolicited: one generation lasts at least ~3 minutes at Aggressive,
-/// about the longest a home router keeps a UDP mapping open.
-const CONTACTED_CAPACITY: usize = 200_000;
+/// IPs we sent to (queries, replies, errors), remembered so a query from
+/// them isn't counted as unsolicited. One generation lasts at least ~3
+/// minutes at Aggressive even if every packet went to a new IP (1000
+/// queries plus 2000 replies a second), about the longest a home router
+/// keeps a UDP mapping open; ~1.4 MB for both generations.
+const CONTACTED_CAPACITY: usize = 600_000;
 /// Distinct networks (/24 or /64) whose last unsolicited query is kept,
 /// newest first; the reachability check needs only a few.
 const UNSOLICITED_SOURCES: usize = 64;
@@ -190,7 +192,9 @@ impl ExternalIp {
     /// Records a report; returns the new address when the majority changes.
     fn vote(&mut self, reporter: IpAddr, reported: SocketAddr) -> Option<IpAddr> {
         let reporter = network(reporter);
-        let votes = if reported.ip().to_canonical().is_ipv4() {
+        // `::ffff:a.b.c.d` is `a.b.c.d`: one address, one count.
+        let reported = SocketAddr::new(reported.ip().to_canonical(), reported.port());
+        let votes = if reported.is_ipv4() {
             &mut self.v4
         } else {
             &mut self.v6
@@ -340,7 +344,7 @@ struct Actor {
     /// Scrape lookups that ran out of query budget, to drive next tick.
     stalled: Vec<u32>,
     last_prune: Instant,
-    /// IPs we've queried lately, to tell unsolicited queries apart.
+    /// IPs we've sent to lately, to tell unsolicited queries apart.
     contacted: SeenFilter,
     unsolicited_from: UnsolicitedFrom,
     /// The crawler's pause: no sampling, lookups, scrapes or harvests.
@@ -624,6 +628,11 @@ impl Actor {
         match sockets[family].send_to(&self.out, to) {
             Ok(_) => {
                 Stats::inc(&self.stats.packets_out);
+                // Every packet we send (query, reply or error) opens or
+                // keeps open a NAT mapping to `to`, so its queries stop
+                // proving anything about our port. Renewed each time: a
+                // node we talk to all the time never ages out.
+                self.contacted.remember(&contact_key(to.ip()));
                 true
             }
             Err(_) => {
@@ -685,10 +694,6 @@ impl Actor {
             return Sent::Failed;
         }
         Stats::inc(&self.stats.queries_out);
-        // Renewed on every query: a neighbour we talk to all the time must
-        // never age out, or its queries (which a NAT lets through, since
-        // we just talked to it) would read as unsolicited.
-        self.contacted.remember(&contact_key(to.ip()));
         *self.pending_addrs.entry(to).or_default() += 1;
         self.pending.insert(
             tid,
@@ -1576,6 +1581,20 @@ mod tests {
             only6.vote(IpAddr::from([0x2001, 0xdb8, i, 0, 0, 0, 0, 1]), me6);
         }
         assert_eq!(only6.tally().ip, Some(me6.ip()));
+        // A v4-mapped report is the IPv4 address it maps.
+        let mut mapped = ExternalIp::default();
+        for i in 1..=5u8 {
+            let at = if i % 2 == 0 {
+                "[::ffff:203.0.113.9]:6881"
+            } else {
+                "203.0.113.9:6881"
+            };
+            mapped.vote(IpAddr::from([8, 8, i, 1]), at.parse().unwrap());
+        }
+        assert_eq!(
+            (mapped.tally().ip, mapped.tally().agreeing),
+            (Some(me4.ip()), 5)
+        );
         // A v4-mapped reporter counts as its IPv4 network.
         assert_eq!(
             network("::ffff:1.2.3.4".parse().unwrap()),

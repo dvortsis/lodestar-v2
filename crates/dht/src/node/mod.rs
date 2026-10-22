@@ -182,7 +182,7 @@ pub struct Stats {
     pub packets_out: AtomicU64,
     pub malformed_in: AtomicU64,
     pub queries_in: AtomicU64,
-    /// Queries from an IP we hadn't queried recently: proof that
+    /// Queries from an IP we hadn't sent anything to recently: proof that
     /// unsolicited inbound packets reach the DHT port (the network check).
     pub queries_in_unsolicited: AtomicU64,
     pub responses_in: AtomicU64,

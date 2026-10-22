@@ -1594,7 +1594,7 @@ export interface components {
             reason: "dht_off" | "bootstrapping" | "measuring" | "unsolicited_queries" | "few_unsolicited_sources" | "no_unsolicited_queries";
             /**
              * Format: int64
-             * @description Of `inbound_queries`, the ones from nodes we never queried.
+             * @description Of `inbound_queries`, the ones from nodes we hadn't sent anything to lately.
              */
             unsolicited_queries: number | null;
             /**

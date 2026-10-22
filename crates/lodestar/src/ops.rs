@@ -88,13 +88,12 @@ impl Ops {
         }
     }
 
-    /// Everything but `data_bytes`, which [`OpsApi::stats`] measures off
-    /// the async runtime.
+    /// Everything but `data_bytes` and `index_lag_s`, which
+    /// [`OpsApi::stats`] reads off the async runtime.
     fn stats_now(&self) -> StatsResponse {
         let now = crate::unix_now();
         let get = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
         let (harvested, fetched) = self.control.rates();
-        let last_stored = get(&self.monitor.writer_stats().last_stored);
         StatsResponse {
             data_bytes: None,
             // std can't ask for a volume's free space; the crate that can
@@ -102,10 +101,7 @@ impl Ops {
             disk_free_bytes: None,
             fetched_per_hour: fetched,
             harvested_per_hour: harvested,
-            index_lag_s: self
-                .search
-                .as_ref()
-                .and_then(|s| index_lag(last_stored, s.stats.last_commit.load(Ordering::Relaxed))),
+            index_lag_s: None,
             paused: self.control.status().paused,
             queue_depth: get(&self.monitor.pool_stats().pending),
             searchable_torrents: self.search.as_ref().map(|s| s.index.index().num_docs()),
@@ -116,15 +112,18 @@ impl Ops {
     }
 }
 
-/// Seconds the index's last commit trails the store's last commit of
-/// new torrents: 0 once the index has caught up (it commits only when it
-/// has something new), and 0 when nothing new was stored since the
-/// start. `None` when torrents wait but the index hasn't committed yet.
-fn index_lag(last_stored: u64, index_commit: u64) -> Option<u64> {
-    match (last_stored, index_commit) {
-        (0, _) => Some(0),
-        (_, 0) => None,
-        (s, i) => Some(s.saturating_sub(i)),
+/// How far the index trails the store: 0 when everything stored is
+/// searchable (`watermark` ≥ `max_id`); while it's behind, the seconds
+/// since the index last committed, so a stalled index shows a growing
+/// lag. `None` when it's behind and hasn't committed since the start
+/// (say, a backlog being indexed after a restart).
+fn index_lag(now: u64, max_id: i64, watermark: i64, index_commit: u64) -> Option<u64> {
+    if watermark >= max_id {
+        Some(0)
+    } else if index_commit == 0 {
+        None
+    } else {
+        Some(now.saturating_sub(index_commit))
     }
 }
 
@@ -273,8 +272,27 @@ impl OpsApi for Ops {
                 .await
                 .ok()
                 .flatten();
+            let index_lag_s = match &self.search {
+                Some(s) => {
+                    let control = self.control.clone();
+                    let max_id = tokio::task::spawn_blocking(move || control.max_torrent_id())
+                        .await
+                        .ok()
+                        .and_then(Result::ok);
+                    max_id.and_then(|max_id| {
+                        index_lag(
+                            crate::unix_now().max(0) as u64,
+                            max_id,
+                            s.stats.watermark.load(Ordering::Relaxed),
+                            s.stats.last_commit.load(Ordering::Relaxed),
+                        )
+                    })
+                }
+                None => None,
+            };
             StatsResponse {
                 data_bytes,
+                index_lag_s,
                 ..self.stats_now()
             }
         })
