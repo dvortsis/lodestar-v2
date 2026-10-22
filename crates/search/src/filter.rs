@@ -6,7 +6,11 @@
 //! from the column is several times cheaper, so top-level ranges are
 //! lifted out of the query and checked here.
 
+use std::sync::Arc;
+
 use tantivy::collector::{Collector, SegmentCollector};
+
+use crate::files::IdSet;
 use tantivy::columnar::Column;
 use tantivy::{DocId, Score, SegmentOrdinal, SegmentReader};
 
@@ -26,6 +30,8 @@ pub(crate) enum FastRange {
         lo: i64,
         hi: i64,
     },
+    /// The torrent id is one of these (sorted): a `file:(…)` clause.
+    Ids { ids: Arc<IdSet> },
 }
 
 /// Wraps a collector, passing on only documents inside every range.
@@ -38,6 +44,7 @@ pub(crate) enum Check {
     /// No column: no document in the segment has the field.
     U64(Option<Column<u64>>, u64, u64, Option<u64>),
     I64(Column<i64>, i64, i64),
+    Ids(Column<u64>, Arc<IdSet>),
 }
 
 impl Check {
@@ -49,6 +56,7 @@ impl Check {
                 .or(*missing)
                 .is_some_and(|v| *lo <= v && v <= *hi),
             Check::I64(col, lo, hi) => col.first(doc).is_some_and(|v| *lo <= v && v <= *hi),
+            Check::Ids(col, ids) => col.first(doc).is_some_and(|id| ids.contains(id)),
         }
     }
 }
@@ -67,6 +75,7 @@ pub(crate) fn checks(ranges: &[FastRange], reader: &SegmentReader) -> tantivy::R
                     missing,
                 } => Check::U64(fast.column_opt(field)?, *lo, *hi, *missing),
                 FastRange::I64 { field, lo, hi } => Check::I64(fast.i64(field)?, *lo, *hi),
+                FastRange::Ids { ids } => Check::Ids(fast.u64("id")?, ids.clone()),
             })
         })
         .collect()

@@ -33,6 +33,8 @@ pub const MAX_LIMIT: usize = 200;
 /// How deep offset paging may go; past this, narrow the query (stable
 /// cursors arrive with searcher leases, §8).
 pub const MAX_WINDOW: usize = 10_000;
+/// Matched files listed per hit for a query with `file:(…)`.
+pub const MATCHED_FILES: usize = 20;
 
 #[derive(Clone, Debug)]
 pub struct ApiState {
@@ -376,6 +378,14 @@ async fn run_search(s: ApiState, p: SearchParams) -> ApiResult<Json<Value>> {
             if let Some(row) = store.torrent(h.id as i64).map_err(internal)? {
                 let mut v = torrents::summary(&row);
                 v["score"] = json!(h.score);
+                if ast.has_file_clause() {
+                    // Positions in the torrent's file list (§8).
+                    v["matched_files"] = json!(
+                        index
+                            .matched_files(&ast, h.id, MATCHED_FILES)
+                            .map_err(internal)?
+                    );
+                }
                 hits.push(v);
             }
         }

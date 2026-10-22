@@ -21,6 +21,8 @@ use lodestar_store::{NewTorrent, Store, StoreConfig, filetree};
 const STORE_BUDGET: f64 = 1024.0;
 const BLOB_BUDGET: f64 = 600.0;
 const INDEX_BUDGET: f64 = 512.0;
+/// The file index in smart mode (§3).
+const FILE_INDEX_BUDGET: f64 = 800.0;
 
 const USAGE: &str = "usage: size-report [--torrents N] [--seed S] [--train N] \
 [--dict-size BYTES] [--level L] [--db PATH] [--gate]
@@ -181,6 +183,7 @@ fn run(args: &Args) -> Result<bool, Box<dyn std::error::Error>> {
     indexer.finish()?;
     let index_time = t2.elapsed();
     let index_bytes = dir_size(&index_path)? as f64;
+    let file_index_bytes = dir_size(&index_path.join("files"))? as f64;
 
     let n = args.torrents as f64;
     let conn = store.connection();
@@ -232,8 +235,23 @@ fn run(args: &Args) -> Result<bool, Box<dyn std::error::Error>> {
         index.segments()
     );
 
+    println!(
+        "  file index          {:.1} MB = {:.0} B per torrent ({} files, {:.0} B each)",
+        file_index_bytes / 1e6,
+        file_index_bytes / n,
+        group(index.num_files()),
+        file_index_bytes / index.num_files().max(1) as f64
+    );
+
     println!("\n  torrent index by part (bytes per torrent)");
     for (part, bytes) in index.space_by_field()? {
+        if bytes as f64 / n >= 0.5 {
+            println!("    {part:<28} {:>7.1}", bytes as f64 / n);
+        }
+    }
+
+    println!("\n  file index by part (bytes per torrent)");
+    for (part, bytes) in index.files_space_by_field()? {
         if bytes as f64 / n >= 0.5 {
             println!("    {part:<28} {:>7.1}", bytes as f64 / n);
         }
@@ -292,6 +310,11 @@ fn run(args: &Args) -> Result<bool, Box<dyn std::error::Error>> {
         ("file-tree blob mean", blob_bytes / n, BLOB_BUDGET),
         ("canonical store", file_bytes / n, STORE_BUDGET),
         ("torrent index", index_bytes / n, INDEX_BUDGET),
+        (
+            "file index (smart)",
+            file_index_bytes / n,
+            FILE_INDEX_BUDGET,
+        ),
     ];
     println!("\n  budgets (bytes per torrent)");
     let mut ok = true;

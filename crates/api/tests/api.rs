@@ -244,6 +244,13 @@ async fn search_parse_and_detail() {
     assert_eq!(body["hits"][0]["hash"], json!(f.hashes[0]));
     assert_eq!(body["hits"][0]["files"], json!(2));
 
+    // A file clause lists the matching files of each hit.
+    let (_, _, body) = call(&f.app, get("/api/v1/search?q=file:(ext:srt)", c)).await;
+    assert_eq!(body["total"], json!(1));
+    assert_eq!(body["hits"][0]["matched_files"], json!([1]));
+    let (_, _, body) = call(&f.app, get("/api/v1/search?q=dark", c)).await;
+    assert!(body["hits"][0].get("matched_files").is_none());
+
     let (_, _, body) = call(&f.app, get("/api/v1/search?q=mkv&sort=%2Bsize&limit=1", c)).await;
     assert_eq!(
         (
