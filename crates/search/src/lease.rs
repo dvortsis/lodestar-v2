@@ -177,6 +177,12 @@ impl Lease {
         }
     }
 
+    /// The sampled estimate alone, as an index too large to count would
+    /// show it, for checking its error (the search bench).
+    pub fn sampled_estimate(&self, cancel: &CancelToken) -> Result<Total> {
+        count::estimate_with(&self.searcher, &self.compiled, cancel, count::SAMPLE_ABOVE)
+    }
+
     fn mode(&self) -> Mode {
         let desc = match self.sort {
             Sort::Relevance => false,

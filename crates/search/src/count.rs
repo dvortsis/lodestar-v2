@@ -5,8 +5,9 @@
 //! Counting is apart from ranking, so its cost is bounded whatever the
 //! ranking does:
 //!
-//! 1. Every segment is sampled: [`STRATA`] evenly spaced slices of its
-//!    doc-id space, each 1/[`SHARE`] of its stratum, are counted, and the
+//! 1. Every segment is sampled: one slice in each of [`STRATA`] equal
+//!    strata of its doc-id space, at a fixed pseudo-random point in it
+//!    and 1/[`SHARE`] of its size, is counted, and the
 //!    segment's count is the sample's scaled by the slots it covered.
 //!    Segments of at most [`SAMPLE_ABOVE`] documents are counted whole.
 //!    Doc ids follow discovery order, so slices spread over the whole
@@ -19,11 +20,12 @@
 //!
 //! **Tolerance:** the sample is 1/16 of every large segment. For a query
 //! whose matches spread over the doc-id space, the estimate's relative
-//! error is about `1 / sqrt(matches / 16)`: under 1% above 200,000
-//! matches. Matches packed into a narrow doc-id range (a recent date
-//! range on an old segment) can be off by up to one slice per edge of
-//! the range, which on a 1M-document segment is about 1,000 documents.
-//! The search bench gates the estimate at 5% on every class it estimates
+//! error has a standard deviation of about `1 / sqrt(matches / 16)`: 0.9%
+//! at 200,000 matches, the least ever reported as estimated. Matches
+//! packed into a narrow doc-id range (a recent date range on an old
+//! segment) can be off by up to one slice per edge of the range, about
+//! 250 documents on a 1M-document segment. The search bench checks every
+//! query of at least 20,000 matches against four standard deviations
 //! (`bench/src/bin/search-bench.rs`).
 
 use tantivy::query::{EnableScoring, Weight};
@@ -36,7 +38,7 @@ use crate::index::{Compiled, Result};
 /// Counts up to this many matches are always exact (§8).
 pub const EXACT_UP_TO: usize = 100_000;
 /// Slices per sampled segment.
-pub(crate) const STRATA: u32 = 64;
+pub(crate) const STRATA: u32 = 256;
 /// Each slice covers 1/`SHARE` of its stratum.
 pub(crate) const SHARE: u32 = 16;
 /// Segments up to this size are counted whole rather than sampled.
@@ -84,11 +86,10 @@ pub(crate) fn total_with(
     cancel: &CancelToken,
     policy: Policy,
 ) -> Result<Total> {
-    let parts = per_segment(searcher, compiled, cancel, |w, r| {
-        segment_estimate(w, r, compiled, cancel, policy.sample_above)
-    })?;
-    let sampled = parts.iter().any(|p| p.1);
-    let estimate = parts.iter().map(|p| p.0).sum::<f64>().round() as usize;
+    let Total {
+        value: estimate,
+        approx: sampled,
+    } = estimate_with(searcher, compiled, cancel, policy.sample_above)?;
     if !sampled {
         return Ok(Total {
             value: estimate,
@@ -104,6 +105,23 @@ pub(crate) fn total_with(
     Ok(Total {
         value: estimate,
         approx: true,
+    })
+}
+
+/// Step 1 alone: the sampled sum, `approx` when any segment was sampled
+/// (whatever the threshold would decide).
+pub(crate) fn estimate_with(
+    searcher: &Searcher,
+    compiled: &Compiled,
+    cancel: &CancelToken,
+    sample_above: u32,
+) -> Result<Total> {
+    let parts = per_segment(searcher, compiled, cancel, |w, r| {
+        segment_estimate(w, r, compiled, cancel, sample_above)
+    })?;
+    Ok(Total {
+        value: parts.iter().map(|p| p.0).sum::<f64>().round() as usize,
+        approx: parts.iter().any(|p| p.1),
     })
 }
 
@@ -161,7 +179,15 @@ fn segment_estimate(
     let chunk = stratum.div_ceil(SHARE).max(1);
     let (mut found, mut covered) = (0u64, 0u64);
     for s in 0..STRATA {
-        let start = s * stratum;
+        let base = s * stratum;
+        if base >= max {
+            break;
+        }
+        // Each slice sits at a fixed pseudo-random point of its stratum,
+        // so a pattern repeating with the doc ids can't line up with
+        // every slice (aliasing); the same segment always samples alike.
+        let room = stratum.saturating_sub(chunk);
+        let start = base + if room == 0 { 0 } else { jitter(s) % room };
         if start >= max {
             break;
         }
@@ -171,6 +197,14 @@ fn segment_estimate(
         covered += u64::from(end - start);
     }
     Ok((found as f64 * f64::from(max) / covered as f64, true))
+}
+
+/// A fixed scramble of a slice number (SplitMix64's finalizer).
+fn jitter(s: u32) -> u32 {
+    let mut z = u64::from(s).wrapping_add(0x9e37_79b9_7f4a_7c15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    (z ^ (z >> 31)) as u32
 }
 
 /// Walks one segment's matches, applying the deletes and the collector

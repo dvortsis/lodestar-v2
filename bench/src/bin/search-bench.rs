@@ -8,9 +8,10 @@
 //!
 //! A second table runs the same classes the way `/search` does since
 //! B5a: a searcher lease (snapshot, count, stem tier) and its first page,
-//! then a page deep into the results through cursors. A third checks the
-//! count estimate (`total_approx`) against the exact count, gated at
-//! [`ESTIMATE_TOLERANCE`].
+//! then a page deep into the results through cursors. It also checks
+//! the sampled count estimate (what `total_approx` reports at scale)
+//! against the exact count on every query of at least
+//! [`ESTIMATE_FROM`] matches, gated at [`estimate_tolerance`].
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -32,9 +33,16 @@ const KEYWORD_P95: Duration = Duration::from_millis(30);
 const BROWSE_P95: Duration = Duration::from_millis(50);
 /// The deep-cursor class reads this many pages of 50 before timing one.
 const DEEP_PAGES: usize = 20;
-/// Largest relative error allowed of an estimated count
-/// (`lodestar_search` `count.rs`).
-const ESTIMATE_TOLERANCE: f64 = 0.05;
+/// The estimate samples a sixteenth of the documents, so its relative
+/// error has a standard deviation of about `1 / sqrt(matches / 16)`
+/// (`lodestar_search` `count.rs`). Each query is gated at four of them:
+/// 11% at 20,000 matches, 3.6% at 200,000 (the least the API reports as
+/// estimated), 1.1% at 2M.
+fn estimate_tolerance(exact: usize) -> f64 {
+    4.0 / (exact as f64 / 16.0).sqrt()
+}
+/// Counts checked: smaller ones are always counted exactly.
+const ESTIMATE_FROM: usize = 20_000;
 
 const USAGE: &str = "\
 Usage: search-bench [--torrents N] [--queries N] [--dir PATH] [--seed S] [--gate]
@@ -442,10 +450,13 @@ fn api_path(
     );
     println!(
         "  {:<24} {:>8} {:>8} {:>8} {:>10} {:>10}  target",
-        "class", "p50", "p95", "max", "deep p95", "estimated"
+        "class", "p50", "p95", "max", "deep p95", "checked"
     );
     let mut ok = true;
+    // The worst error as a share of its query's tolerance, and the
+    // worst error itself.
     let mut worst: f64 = 0.0;
+    let mut worst_err: f64 = 0.0;
     for class in classes(a.seed, a.queries) {
         let mut times = Vec::with_capacity(class.queries.len());
         let mut deep = Vec::new();
@@ -462,12 +473,17 @@ fn api_path(
                 reader.torrent(h.id as i64)?;
             }
             times.push(started.elapsed());
-            let total = lease.total();
-            if total.approx {
-                estimated += 1;
-                let exact = lease.exact_total(&cancel)?;
-                let err = (total.value as f64 - exact.value as f64).abs() / exact.value as f64;
-                worst = worst.max(err);
+            // The estimate's error, wherever it sampled and enough match
+            // for the count to be one an index would estimate at scale.
+            let sampled = lease.sampled_estimate(&cancel)?;
+            if sampled.approx {
+                let exact = lease.exact_total(&cancel)?.value;
+                if exact >= ESTIMATE_FROM {
+                    estimated += 1;
+                    let err = (sampled.value as f64 - exact as f64).abs() / exact as f64;
+                    worst = worst.max(err / estimate_tolerance(exact));
+                    worst_err = worst_err.max(err);
+                }
             }
             // Deep pages for a sample: each cursor page scans the
             // matches again, so they cost about a first page each.
@@ -514,11 +530,11 @@ fn api_path(
             }
         );
     }
-    let pass = worst <= ESTIMATE_TOLERANCE;
+    let pass = worst <= 1.0;
     println!(
-        "  count estimates: worst error {:.2}% (< {:.0}% {})",
+        "  count estimates: worst error {:.2}%, {:.0}% of its query's tolerance (4σ) {}",
+        worst_err * 100.0,
         worst * 100.0,
-        ESTIMATE_TOLERANCE * 100.0,
         if pass { "PASS" } else { "FAIL" }
     );
     Ok(ok && pass)
