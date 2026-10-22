@@ -28,6 +28,7 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET", "/torrents/{hash}/files"),
     ("GET", "/filters"),
     ("GET", "/filters/queue"),
+    ("GET", "/filters/tombstones"),
     ("GET", "/filters/fixtures"),
     ("POST", "/filters/test"),
     ("POST", "/filters/strictness"),
@@ -43,6 +44,7 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET", "/settings"),
     ("GET", "/settings/{section}"),
     ("PATCH", "/settings/{section}"),
+    ("GET", "/events"),
     ("GET", "/openapi.json"),
 ];
 const OPEN: [&str; 5] = ["/auth", "/setup", "/login", "/logout", "/openapi.json"];
@@ -186,6 +188,7 @@ fn app() -> (tempfile::TempDir, Router) {
             reader: Arc::new(Mutex::new(reader)),
             filters: None,
             settings: None,
+            adult: Default::default(),
         }),
     );
     (dir, app)
