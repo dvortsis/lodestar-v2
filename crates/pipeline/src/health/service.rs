@@ -23,7 +23,7 @@ use lodestar_metainfo::InfoHash;
 use lodestar_sources::Shutdown;
 use lodestar_store::{Store, SwarmUpdate, TrackerCounts, flags, swarm_flags};
 use lodestar_tracker_scrape::{
-    Counts, HttpConfig, Tracker, TrackerUrl, UdpConfig, UdpTracker, http, udp,
+    Counts, Deny, HttpConfig, Tracker, TrackerUrl, UdpConfig, UdpTracker, http, udp,
 };
 use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinHandle;
@@ -59,6 +59,9 @@ pub struct HealthConfig {
     pub http: HttpConfig,
     /// How often the new and due lanes are topped up from the store.
     pub refill_every: Duration,
+    /// Blocklisted addresses (§20.13): no tracker on them is contacted.
+    /// Overrides `udp.deny` and `http.deny`.
+    pub deny: Option<Deny>,
 }
 
 impl Default for HealthConfig {
@@ -76,6 +79,7 @@ impl Default for HealthConfig {
             udp: UdpConfig::default(),
             http: HttpConfig::default(),
             refill_every: Duration::from_secs(5),
+            deny: None,
         }
     }
 }
@@ -167,14 +171,16 @@ pub(crate) struct Setup {
 
 /// Starts the scheduler and one task per tracker. The returned task ends
 /// at shutdown, handing back the reader.
-pub(crate) fn spawn(s: Setup) -> (HealthHandle, JoinHandle<Store>) {
+pub(crate) fn spawn(mut s: Setup) -> (HealthHandle, JoinHandle<Store>) {
     let (interest_tx, interest_rx) = mpsc::channel(1024);
     let (redisc_tx, redisc_rx) = mpsc::channel(4096);
     let (done_tx, done_rx) = mpsc::channel(256);
     let (dht_tx, dht_rx) = mpsc::channel(256);
     let stats = Arc::new(HealthStats::default());
     let clock = Clock::new();
-    let client = match http::client(s.cfg.udp.bind.map(|a| a.ip())) {
+    s.cfg.udp.deny = s.cfg.deny.clone();
+    s.cfg.http.deny = s.cfg.deny.clone();
+    let client = match http::client(s.cfg.udp.bind.map(|a| a.ip()), s.cfg.deny.as_ref()) {
         Ok(c) => Some(c),
         Err(e) => {
             tracing::error!("HTTP trackers disabled: {e}");

@@ -224,7 +224,7 @@ async fn serve(config: Config) -> Result<(), BoxError> {
     pipeline_config.sealer = Some(Arc::new(Sealer::new(&key)));
     let health = config.health_config()?;
     // Subscribed IP lists (§20.13): one shared set, consulted by the fetch
-    // pool and the DHT before talking to anyone.
+    // pool, the DHT and the tracker scraper before talking to anyone.
     let ips = Arc::new(SharedIps::default());
     let denied = {
         let ips = ips.clone();
@@ -310,7 +310,10 @@ async fn serve(config: Config) -> Result<(), BoxError> {
     }
     pipeline_config.hot = Some(hot.clone());
     pipeline_config.health = health.map(|(cfg, trackers)| HealthSetup {
-        config: cfg,
+        config: lodestar_pipeline::health::HealthConfig {
+            deny: Some(lodestar_tracker_scrape::Deny(denied.clone())),
+            ..cfg
+        },
         trackers,
         db: db.clone(),
         store: store_config.clone(),
