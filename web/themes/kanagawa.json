@@ -1,0 +1,23 @@
+{
+	"id": "kanagawa",
+	"name": "Kanagawa",
+	"group": "community",
+	"license": "MIT (© 2021 Tommaso Laurenzi)",
+	"source": "https://github.com/rebelot/kanagawa.nvim",
+	"light": {
+		"background": "#E5DDB0",
+		"surface": "#F2ECBC",
+		"text": "#545464",
+		"primary": "#4D699B",
+		"accent": "#6F894E",
+		"categorical": ["#4D699B", "#6F894E", "#DE9800", "#C84053", "#597B75", "#624C83"]
+	},
+	"dark": {
+		"background": "#1F1F28",
+		"surface": "#2A2A37",
+		"text": "#DCD7BA",
+		"primary": "#7E9CD8",
+		"accent": "#98BB6C",
+		"categorical": ["#7E9CD8", "#98BB6C", "#E6C384", "#E46876", "#7AA89F", "#957FB8"]
+	}
+}
