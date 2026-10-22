@@ -1,0 +1,21 @@
+{
+	"id": "ember",
+	"name": "Ember",
+	"group": "original",
+	"light": {
+		"background": "#F7F2EF",
+		"surface": "#FFFFFF",
+		"text": "#3A2621",
+		"primary": "#A0522D",
+		"accent": "#7F8A4F",
+		"categorical": ["#406277", "#798F60", "#A87B2C", "#B5523A", "#A0928C", "#9B6E8F"]
+	},
+	"dark": {
+		"background": "#1D1513",
+		"surface": "#2B1F1C",
+		"text": "#F2E6E1",
+		"primary": "#E39A72",
+		"accent": "#B9C28A",
+		"categorical": ["#99BED4", "#A4BD8A", "#D3A75D", "#C56E53", "#9E8F89", "#BE94B4"]
+	}
+}

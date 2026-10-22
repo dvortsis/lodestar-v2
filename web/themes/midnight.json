@@ -1,0 +1,21 @@
+{
+	"id": "midnight",
+	"name": "Midnight OLED / Daylight",
+	"group": "original",
+	"light": {
+		"background": "#F4F5F7",
+		"surface": "#FFFFFF",
+		"text": "#111215",
+		"primary": "#1F5FBF",
+		"accent": "#1E7D4F",
+		"categorical": ["#2D7BDF", "#4AA46E", "#A87808", "#B62821", "#55606D", "#6436A9"]
+	},
+	"dark": {
+		"background": "#000000",
+		"surface": "#0E0E10",
+		"text": "#E8E8EA",
+		"primary": "#7FB0FF",
+		"accent": "#7FD1A8",
+		"categorical": ["#568FE4", "#7CE0A6", "#F0C05A", "#E37162", "#9CA4AD", "#D3BAFE"]
+	}
+}

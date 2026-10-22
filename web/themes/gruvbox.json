@@ -1,0 +1,23 @@
+{
+	"id": "gruvbox",
+	"name": "Gruvbox",
+	"group": "community",
+	"license": "MIT/X11 (© Pavel Pertsev, morhetz)",
+	"source": "https://github.com/morhetz/gruvbox",
+	"light": {
+		"background": "#FBF1C7",
+		"surface": "#F9F5D7",
+		"text": "#3C3836",
+		"primary": "#076678",
+		"accent": "#79740E",
+		"categorical": ["#076678", "#79740E", "#B57614", "#9D0006", "#427B58", "#8F3F71"]
+	},
+	"dark": {
+		"background": "#282828",
+		"surface": "#3C3836",
+		"text": "#EBDBB2",
+		"primary": "#83A598",
+		"accent": "#B8BB26",
+		"categorical": ["#83A598", "#B8BB26", "#FABD2F", "#FB4934", "#FE8019", "#D3869B"]
+	}
+}
