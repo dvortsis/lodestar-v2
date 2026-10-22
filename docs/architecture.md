@@ -2095,6 +2095,39 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 
   - The priors cost nothing measurable: the two columns differ by run-to-run noise.
   - A cold seeders sort visits every match through the id column and the hot array at about 20 ns per document. At 10M with 4 parallel segments, a cold whole-corpus sort is about 50 ms. The cache, keyed by epoch, serves repeats; the 10M run records the real figure.
+- **Measured at 10M (the M4 exit, §14).** Setup:
+  - 10M synthetic torrents in 8 index segments;
+  - 4 cores and 15 GB of RAM, against about 18 GB of index and store;
+  - 300 queries per class, top 50, rows loaded from SQLite.
+
+  **The first run, straight after indexing, read cold from disk.** One common word came in at 464 ms p95 and two words at 168 ms, while their p50s were 3.5 and 6.9 ms. The re-run on the same corpus, with a warm page cache, is the table below.
+
+  The run found two M4 paths over budget, both fixed:
+  - **An OR of swarm clauses** (`word (seeders:>=5 | trackers:>=3)`) went from 363 ms to 26.6 ms p95.
+    - It ran as `CheckQuery`, which reads every document of every segment.
+    - An OR or AND made only of hot, `seen:` and `time:` clauses is now one check (`FastRange::Any`/`All`). It's lifted like a plain swarm filter and runs on the word's candidates.
+  - **Cold hot-column sorts** went from 81 ms to 61 ms p95.
+    - Segments were one per thread, and merged segments are uneven. Cold top-k now splits segments into 512k-document pieces that run in parallel (70 ms).
+    - The values are also read 64 documents at a time, so the reads overlap (61 ms).
+
+  | Class (p95 ms) | 10M | Target |
+  |---|---|---|
+  | Word + swarm filter | 27.2 | 30 |
+  | Word + OR'd swarm clauses | 26.6 | 30 |
+  | Word by seeders | 7.3 | 30 |
+  | `trackers:>=3` browse | 1.1 | 50 |
+  | Browse by seeders, cached | 1.0 | 50 |
+  | By seeders, cold | 60.8 | 50 (gate asked for in review) |
+  | By trackers, cold | 59.5 | 50 (gate asked for in review) |
+  | Browse by discovered, cold (not gated since M2) | 54.1 | — |
+  | One common word / two words / three words | 7.0 / 13.4 / 13.7 | 30 |
+  | Phrase / word + filter / word + facets | 28.0 / 25.8 / 17.7 | 30 |
+
+  - **Every swarm filter and sort meets §3 on the cached path that §3 defines.** The hot epoch keys the cache, so a given page goes cold at most once a minute while the scraper writes.
+  - **Cold hot sorts miss 50 ms by about a fifth.**
+    - The cost is the same full scan that a cold browse by a plain field pays (54 ms): a cold miss must count every match exactly, which only a scan can do. The hot reads add about 6 ms.
+    - Getting under 50 ms cold is therefore a general scan-speed question (or an approximate total, `total_approx`, planned in B5a), not an M4 one. That decision went to the runner with this table.
+  - **Not M4's:** word + file clause runs 413 ms p95 at 10M even when warm (p50 86 ms). That's M3's file index, and it was reported separately.
 - **Fuzzing:** the `query` target ran 1.3M runs clean, seeded with the new syntax.
 
 ## 17. Verification (once built)
