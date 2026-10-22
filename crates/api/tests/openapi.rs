@@ -28,6 +28,7 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET", "/torrents/{hash}/files"),
     ("GET", "/filters"),
     ("GET", "/filters/queue"),
+    ("GET", "/filters/tombstones"),
     ("GET", "/filters/fixtures"),
     ("POST", "/filters/test"),
     ("POST", "/filters/strictness"),
@@ -187,6 +188,7 @@ fn app() -> (tempfile::TempDir, Router) {
             reader: Arc::new(Mutex::new(reader)),
             filters: None,
             settings: None,
+            adult: Default::default(),
         }),
     );
     (dir, app)

@@ -581,6 +581,28 @@
         ],
         "summary": "The review queue: quarantine (never with names) and the last 30 days'\ndecisions per rule.",
         "operationId": "getFilterQueue",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The previous page's `next_cursor`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Quarantine rows per page: 1–1000, 1000 by default.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 1
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "",
@@ -666,6 +688,66 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TestResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/filters/tombstones": {
+      "get": {
+        "tags": [
+          "filters"
+        ],
+        "summary": "Tombstones (dropped torrents) by hash and rule, never with names, in\npages; `adult=true` lists only adult holds.",
+        "operationId": "getFilterTombstones",
+        "parameters": [
+          {
+            "name": "adult",
+            "in": "query",
+            "description": "Only adult holds: torrents held because you relabelled them adult,\nwhich the 30-day purge left as tombstones.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The previous page's `next_cursor`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Tombstones per page: 1–1000, 1000 by default.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tombstones"
                 }
               }
             }
@@ -1119,6 +1201,16 @@
               }
             }
           },
+          "422": {
+            "description": "`adult_confirmation_required`: a patch turning on an adult setting without `\"confirm_adult\": true`; nothing is saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -1202,6 +1294,16 @@
               }
             }
           },
+          "404": {
+            "description": "`torrent_not_found`, or `adult_hidden`: an Adult torrent while \"Show adult content\" is off.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -1258,6 +1360,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FilesPage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`torrent_not_found`, or `adult_hidden`: an Adult torrent while \"Show adult content\" is off.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -3792,6 +3904,7 @@
       "QuarantineEntry": {
         "type": "object",
         "required": [
+          "adult_hold",
           "at",
           "expires_at",
           "hash",
@@ -3799,13 +3912,18 @@
           "sealed"
         ],
         "properties": {
+          "adult_hold": {
+            "type": "boolean",
+            "description": "Held only because you relabelled it adult (a correction or a\nclassification rule) and the Adult-only core caught it: at\n`expires_at` it becomes a tombstone rather than being released."
+          },
           "at": {
             "type": "integer",
             "format": "int64"
           },
           "expires_at": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "When its sealed name is deleted and its quarantine ends."
           },
           "hash": {
             "type": "string"
@@ -3824,6 +3942,7 @@
         "description": "`GET /filters/queue`: quarantine (never with names) and the replay\nwindow's decisions per rule.",
         "required": [
           "decisions_30d",
+          "next_cursor",
           "quarantine"
         ],
         "properties": {
@@ -3832,6 +3951,13 @@
             "items": {
               "$ref": "#/components/schemas/DecisionCount"
             }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The next page of quarantine, if there is one: pass as `cursor`."
           },
           "quarantine": {
             "type": "array",
@@ -4227,6 +4353,13 @@
           }
         }
       },
+      "SearchNotice": {
+        "type": "string",
+        "description": "A note on what a search left out.",
+        "enum": [
+          "adult_hidden"
+        ]
+      },
       "SearchRequest": {
         "type": "object",
         "description": "`POST /search`'s body, and `GET /search`'s parameters (where `ast` is\nrefused: send an AST with POST).",
@@ -4312,6 +4445,7 @@
           "hits",
           "limit",
           "next_cursor",
+          "notices",
           "offset",
           "stemmed",
           "took_ms",
@@ -4339,6 +4473,13 @@
               "null"
             ],
             "description": "Pass as `cursor` for the next page, read from the same index\nsnapshot (§8); null on the last page. Opaque, URL-safe, at most\n256 characters, valid for 10 minutes after its last use."
+          },
+          "notices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchNotice"
+            },
+            "description": "What the server left out of these results, for the UI to say:\n`adult_hidden` when the query asks for Adult (`type:adult`,\n`adult:…`) while \"Show adult content\" is off, so it matched\nnothing adult (§20.9)."
           },
           "offset": {
             "type": "integer",
@@ -4980,6 +5121,54 @@
               "type": "string"
             },
             "description": "Rules in shadow mode that would have decided."
+          }
+        }
+      },
+      "TombstoneEntry": {
+        "type": "object",
+        "required": [
+          "adult_hold",
+          "at",
+          "hash",
+          "rule"
+        ],
+        "properties": {
+          "adult_hold": {
+            "type": "boolean",
+            "description": "Left by an adult hold's quarantine at the 30-day purge."
+          },
+          "at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          }
+        }
+      },
+      "Tombstones": {
+        "type": "object",
+        "description": "`GET /filters/tombstones`: dropped torrents, by hash and rule (no\nnames), so one can be found and released.",
+        "required": [
+          "next_cursor",
+          "tombstones"
+        ],
+        "properties": {
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The next page, if there is one: pass as `cursor`."
+          },
+          "tombstones": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TombstoneEntry"
+            }
           }
         }
       },
