@@ -64,7 +64,7 @@ To protect the critical path, **the main session writes almost no Svelte.** Its 
 ### 1.2 How a helper runs
 - **Launch:** Agent tool with `isolation: "worktree"`, `run_in_background: true` and the model above. Each helper branches from the latest merged foundations (tag `web-foundations-v1` once it exists).
 - **Brief:** every helper gets one, using the template in §7.
-- **Cap: at most 4 helpers at once**, alongside the main session's own Rust track. *(Superseded for the build runner: `runner/slices.yaml` `limits` allow 8 core and 8 helper slices, owner 2026-10-22; the same applies to the "at most 4" waves below.)* Review bandwidth is the bottleneck, not how many agents can be spawned. The main track pauses when reviews queue up.
+- **Cap: at most 4 helpers at once**, alongside the main session's own Rust track. *(Superseded for the build runner: `runner/slices.yaml` `limits` allow 16 core and 16 helper slices, owner 2026-10-22; the same applies to the "at most 4" waves below.)* Review bandwidth is the bottleneck, not how many agents can be spawned. The main track pauses when reviews queue up.
 - **Review gate** (main session, for every helper result):
   - read the whole diff;
   - run `npm run check`, `npx vitest run`, `npx size-limit` and the affected Playwright specs;
