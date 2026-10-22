@@ -187,8 +187,12 @@ fn the_watermark_survives_restarts_and_crashes() {
     assert_eq!(w.catch_up(&mut store, 10).unwrap(), 0);
 }
 
+/// That the indexer follows the store, not how fast: a busy CI runner can
+/// starve its thread for seconds. The §3 budget (new torrent → searchable
+/// in 5 s) is measured by `search-bench --gate`, on a quiet machine with
+/// the production settings.
 #[test]
-fn the_live_indexer_follows_the_store_within_seconds() {
+fn the_live_indexer_follows_the_store() {
     use lodestar_search::{LiveConfig, LiveIndexer};
     use std::time::{Duration, Instant};
     let dir = tempfile::tempdir().unwrap();
@@ -208,10 +212,11 @@ fn the_live_indexer_follows_the_store_within_seconds() {
         },
     )
     .unwrap();
+    // The deadline only stops a hang.
     let wait = |n: u64| {
         let start = Instant::now();
         while index.num_docs() < n {
-            assert!(start.elapsed() < Duration::from_secs(5), "NRT budget");
+            assert!(start.elapsed() < Duration::from_secs(60), "{n} indexed");
             std::thread::sleep(Duration::from_millis(10));
         }
     };

@@ -86,8 +86,17 @@ async fn fetches_plaintext_and_encrypted_over_utp() {
     ];
     let opts = |mode| utp_opts(utp.clone(), mode);
     let stats = opts(Encryption::Prefer).stats;
-    for (accept, mode, encrypted) in cases {
+    // One peer per mode, reused across its cases: a dropped peer's UDP
+    // socket stays open while its connections linger (5 s), so a peer
+    // per case held seven sockets of two handles each at once, and
+    // Windows CI failed a bind with WSAENOBUFS.
+    let mut peers: Vec<(Accept, FakePeer)> = Vec::new();
+    for accept in [Accept::Both, Accept::EncryptedOnly, Accept::PlaintextOnly] {
         let peer = FakePeer::spawn_utp(vec![seed.clone()], accept, Behavior::Honest, vec![]).await;
+        peers.push((accept, peer));
+    }
+    for (accept, mode, encrypted) in cases {
+        let peer = &peers.iter().find(|(a, _)| *a == accept).expect("a peer").1;
         let o = FetchOptions {
             stats: stats.clone(),
             ..opts(mode)

@@ -1267,7 +1267,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **The watermark lives in the Tantivy commit payload,** atomically with the documents it covers, rather than in SQLite. With one index, that's strictly safer: a crash can lose work but never skip or duplicate a torrent.
   - When the file index arrives (M3), the cross-index watermark goes to SQLite as §8 describes.
   - Indexing follows `Store::ids_after` in id order. That works because the single writer commits ids in order.
-- **Near-real-time indexing:** a `LiveIndexer` thread reads through its own read-only SQLite connection. It polls every 500 ms and commits every 2 s or 5k documents. The test asserts a new torrent is searchable within the 5 s budget.
+- **Near-real-time indexing:** a `LiveIndexer` thread reads through its own read-only SQLite connection. It polls every 500 ms and commits every 2 s or 5k documents. `search-bench --gate` checks that a new torrent is searchable within the 5 s budget (X-flakes, below).
   - The index directory is `data/index/v{schema}-t{tokenizer}`, so a schema or tokenizer bump builds a fresh index.
   - `index_watermark_hour` (searchable time per hour, §7) comes with the API slice, where the writer can record it.
 - **Measured** on 50k synthetic torrents: indexing runs at about 6,200 torrents per second.
@@ -2013,6 +2013,14 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Visibility follows the effective class:** the index's `type:adult` term comes from the stored classification, your Is adult / Not adult correction and classification rules included (§20.7). A correction rewrites the stored enrichment and logs the torrent in `reindex_log`, so the live indexer picks it up at its next commit (about 2 s); **no rebuild is needed**. Until then, search hits and detail also check the stored class, so a torrent just corrected to Is adult doesn't show; one just corrected to Not adult appears at that commit. Two lags remain: when the class generation has moved, a correction's re-enrichment can wait for the backfill, and classification rules apply only once a torrent is re-enriched. **Known gap:** a torrent that isn't enriched yet (fresh imports, backfill still running) has no `type:` term and no stored class, so it isn't hidden until it's enriched.
 - **Unchanged:** the filter engine, the floor, CS-5/CSX-5 (they judge detection's own class), the corrections, the crawler and the store. Adult torrents are still stored and indexed; this is display only.
 - **Left for later slices:** Alerts (B9), Insights segments (B11a) and Discover (B13) read the same `content.show_adult` when they land and leave Adult out entirely, not as placeholders (§20.9). Torznab, Stremio and export wire their own reserved fields.
+
+**X-flakes decisions (timing-sensitive tests):**
+- **The NRT budget is a bench gate, not a unit test.** §3's "new torrent → searchable < 5 s" was asserted in `crates/search/tests/index.rs` with a 5 s deadline, which Windows CI missed whenever parallel tests starved the indexer. The test is now `the_live_indexer_follows_the_store`: it checks only that the indexer follows the store, with a deadline that only stops a hang. `search-bench` measures the budget: after the latency tables it runs a live indexer at its production settings (`LiveConfig::default()`, poll 500 ms, commit 2 s) over the whole corpus. It stores 10 torrents one at a time, times each until the index counts it, and `--gate` fails when the slowest takes over 5 s. CI's `search latency (§3)` job runs it at 200k torrents. A reused `--dir` grows by those 10 torrents per run.
+- **Rebuild waits fail on a stall, not a deadline.** `crates/search/tests/rebuild.rs` waits for a swap by watching `Serving::progress()`. It fails at once on `Failed` (with the error), when the progress hasn't changed for 60 s, or after 10 minutes in all. A fixed 30 s wait was a time budget: Windows CI runs that suite in 40–70 s.
+- **Two test hooks in production code, no behaviour change:**
+  - `ServingConfig::hold_before_start` (doc-hidden, like `hold_before_finish`): a rebuild holds before its first step, so a test reads the progress it resumed from before the thread can add a step.
+  - `rename` is `rename_with(.., std::thread::sleep)`: the unit test passes its own wait, clears the blocker during the first retry's wait on the same thread, and checks the backoff without sleeping.
+- **The fake uTP peer's sockets linger.** A dropped `FakePeer` keeps its UDP socket (two handles: the receive socket and its `try_clone` for sending) open while its connections linger (`Config::linger`, 5 s). Tests reuse one peer per configuration rather than binding one per case.
 
 ## 17. Verification (once built)
 

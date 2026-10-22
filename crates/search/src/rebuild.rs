@@ -140,6 +140,12 @@ const RENAME_ATTEMPTS: u32 = 10;
 /// failure there is usually transient. Retrying keeps such a moment from
 /// failing a whole rebuild (§11).
 fn rename(from: &Path, to: &Path) -> Result<()> {
+    rename_with(from, to, std::thread::sleep)
+}
+
+/// [`rename`], waiting between attempts with `sleep`, which tests pass
+/// to act between attempts.
+fn rename_with(from: &Path, to: &Path, mut sleep: impl FnMut(Duration)) -> Result<()> {
     let mut wait = Duration::from_millis(25);
     let mut attempt = 1;
     loop {
@@ -150,7 +156,7 @@ fn rename(from: &Path, to: &Path) -> Result<()> {
                     "index: renaming {} (attempt {attempt}): {e}",
                     from.display()
                 );
-                std::thread::sleep(wait);
+                sleep(wait);
                 wait = (wait * 2).min(Duration::from_secs(4));
                 attempt += 1;
             }
@@ -359,6 +365,10 @@ pub struct ServingConfig {
     /// finishing, so a test can act at that point.
     #[doc(hidden)]
     pub hold_before_finish: Option<Arc<AtomicBool>>,
+    /// Tests only: while set, a rebuild waits before its first step, so
+    /// a test can read the progress it resumed from.
+    #[doc(hidden)]
+    pub hold_before_start: Option<Arc<AtomicBool>>,
     /// Tests only: the new index's live indexer fails to start at the
     /// swap.
     #[cfg(test)]
@@ -374,6 +384,7 @@ impl Default for ServingConfig {
             version: IndexVersion::CURRENT,
             leases: LeaseConfig::default(),
             hold_before_finish: None,
+            hold_before_start: None,
             #[cfg(test)]
             fail_live_at_swap: false,
         }
@@ -764,6 +775,9 @@ fn rebuild_and_swap(
     store_path: &Path,
     config: &ServingConfig,
 ) -> Result<Option<Weak<()>>> {
+    if let Some(hold) = &config.hold_before_start {
+        while hold.load(Ordering::Relaxed) && shared.pause(Duration::from_millis(5)) {}
+    }
     let mut wait = config.live.poll;
     while !builder.reached(max_id, reindex_head) {
         if shared.stopping() {
@@ -1011,26 +1025,40 @@ mod tests {
     #[test]
     fn a_rename_blocked_for_a_moment_is_retried() {
         // Stands in for a file held open by a scanner on Windows: the
-        // target is in the way (a non-empty directory) until a moment
-        // later, which fails the rename on every platform.
+        // target is in the way (a non-empty directory) until the first
+        // retry's wait, which fails the rename on every platform. It's
+        // cleared there, on this thread: cleared from another thread, a
+        // retry could land between `remove_dir_all` emptying the target
+        // and removing it, rename onto the empty directory (POSIX allows
+        // that), and leave the removal facing a full one.
         let tmp = tempfile::tempdir().unwrap();
         let (from, to) = (tmp.path().join("v2-t1.building"), tmp.path().join("v2-t1"));
         std::fs::create_dir_all(&from).unwrap();
         std::fs::write(from.join("meta.json"), b"{}").unwrap();
         std::fs::create_dir_all(&to).unwrap();
         std::fs::write(to.join("busy"), b"").unwrap();
-        let blocker = to.clone();
-        let unblock = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(100));
-            std::fs::remove_dir_all(blocker).unwrap();
-        });
-        rename(&from, &to).unwrap();
-        unblock.join().unwrap();
+        let mut waits = Vec::new();
+        rename_with(&from, &to, |d| {
+            if waits.is_empty() {
+                std::fs::remove_dir_all(&to).unwrap();
+            }
+            waits.push(d);
+        })
+        .unwrap();
+        assert_eq!(waits, [Duration::from_millis(25)], "one retry");
         assert!(to.join("meta.json").exists() && !from.exists());
         // A missing source isn't transient: it fails at once.
-        let start = std::time::Instant::now();
-        assert!(rename(&from, &tmp.path().join("x")).is_err());
-        assert!(start.elapsed() < Duration::from_secs(1));
+        let mut waited = false;
+        assert!(rename_with(&from, &tmp.path().join("x"), |_| waited = true).is_err());
+        assert!(!waited);
+        // Something that stays in the way fails after every attempt,
+        // backing off up to 4 s.
+        std::fs::create_dir_all(from.join("d")).unwrap();
+        let mut waits = Vec::new();
+        assert!(rename_with(&from, &to, |d| waits.push(d)).is_err());
+        assert_eq!(waits.len() as u32, RENAME_ATTEMPTS - 1);
+        assert_eq!(waits[..3], [25, 50, 100].map(Duration::from_millis));
+        assert_eq!(waits.last(), Some(&Duration::from_secs(4)));
     }
 
     #[test]
