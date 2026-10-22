@@ -2,8 +2,8 @@
 //!
 //! A new intensity reaches the running DHT node at once (its query and
 //! reply rates and its cap on outstanding queries). The fetch pool's
-//! socket count, which follows the intensity when `max_sockets` is
-//! unset, takes it at the next start.
+//! socket count, which follows the intensity when `max_sockets` is 0
+//! (or unset in `config.toml`), takes it at the next start.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

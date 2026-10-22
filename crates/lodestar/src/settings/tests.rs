@@ -802,7 +802,7 @@ fn secure_cookies_come_only_from_the_file_or_environment() {
         .unwrap();
     let c = config(dir.path(), None, &[]);
     let r = registry(dir.path(), &c);
-    // A saved value (from an earlier build) is ignored, never applied.
+    // A saved value (from an earlier build) is never applied.
     assert_eq!(
         field(&r, "network", "secure_cookies"),
         (json!(false), SettingSource::Default, true)
@@ -936,11 +936,12 @@ fn the_healthcheck_probes_the_bind_the_server_uses() {
         dir.path().display().to_string()
     );
     let c = config(dir.path(), Some(&text), &[]);
-    // No store yet: the file's.
+    // No store yet: the file's, and probing creates none.
     assert_eq!(
         network::effective_bind(&c),
         "127.0.0.1:9000".parse().unwrap()
     );
+    assert!(!c.db_path().exists());
     let store = Arc::new(Mutex::new(
         Store::open(c.db_path(), StoreConfig::default()).unwrap(),
     ));
@@ -961,4 +962,94 @@ fn the_healthcheck_probes_the_bind_the_server_uses() {
         network::effective_bind(&c),
         "127.0.0.1:9200".parse().unwrap()
     );
+}
+
+/// Runs `f` with a subscriber that records what it logs, and returns that.
+fn logs(f: impl FnOnce()) -> String {
+    #[derive(Clone, Default)]
+    struct Buf(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Buf {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let buf = Buf::default();
+    let writer = buf.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .without_time()
+        .with_max_level(tracing::Level::INFO)
+        .with_writer(move || writer.clone())
+        .finish();
+    tracing::subscriber::with_default(subscriber, f);
+    String::from_utf8(buf.0.lock().unwrap().clone()).unwrap()
+}
+
+#[test]
+fn saved_values_of_now_read_only_fields_are_removed_once() {
+    let dir = tempfile::tempdir().unwrap();
+    open(dir.path())
+        .lock()
+        .unwrap()
+        .set_settings_text(&[
+            ("settings.network.secure_cookies", "true"),
+            ("settings.general.data_dir", "\"/elsewhere\""),
+            ("settings.network.dht_enabled", "false"),
+        ])
+        .unwrap();
+    let c = config(dir.path(), None, &[]);
+    let out = logs(|| drop(registry(dir.path(), &c)));
+    assert!(
+        out.contains("removed saved network.secure_cookies"),
+        "{out}"
+    );
+    assert!(out.contains("removed saved general.data_dir"), "{out}");
+    assert!(!out.contains("/elsewhere"), "{out}");
+    // Only the retired rows went; the next start has nothing to say.
+    let r = registry(dir.path(), &c);
+    assert_eq!(
+        r.store
+            .lock()
+            .unwrap()
+            .settings_with_prefix(KEY_PREFIX)
+            .unwrap(),
+        vec![(
+            "settings.network.dht_enabled".to_string(),
+            "false".to_string()
+        )]
+    );
+    drop(r);
+    let out = logs(|| drop(registry(dir.path(), &c)));
+    assert!(!out.contains("removed saved"), "{out}");
+}
+
+#[test]
+fn a_saved_value_over_the_file_is_noted_without_its_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = config(
+        dir.path(),
+        Some("[fetch]\ntimeout_secs = 30\nmax_metadata_mib = 16\n"),
+        &[],
+    );
+    open(dir.path())
+        .lock()
+        .unwrap()
+        .set_settings_text(&[
+            ("settings.crawler.timeout_secs", "47"),
+            // The same as the file: nothing to note.
+            ("settings.crawler.max_metadata_mib", "16"),
+            // Over a default, not the file: nothing to note either.
+            ("settings.crawler.intensity", "\"low\""),
+        ])
+        .unwrap();
+    let out = logs(|| drop(registry(dir.path(), &c)));
+    assert!(out.contains("crawler.timeout_secs"), "{out}");
+    assert!(out.contains("set it to null in the app to reset"), "{out}");
+    assert!(!out.contains("47"), "{out}");
+    assert!(!out.contains("crawler.max_metadata_mib"), "{out}");
+    assert!(!out.contains("crawler.intensity"), "{out}");
 }

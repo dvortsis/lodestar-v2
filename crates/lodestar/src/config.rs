@@ -173,7 +173,7 @@ pub enum EncryptionName {
 #[serde(default, deny_unknown_fields)]
 pub struct Fetch {
     pub encryption: EncryptionName,
-    /// Concurrent metadata fetches; unset follows the DHT intensity.
+    /// Concurrent metadata fetches; unset or 0 follows the DHT intensity.
     pub max_sockets: Option<usize>,
     pub timeout_secs: u64,
     pub max_metadata_mib: usize,
@@ -410,12 +410,17 @@ impl Config {
     }
 
     pub fn pipeline_config(&self) -> Result<PipelineConfig, ConfigError> {
-        // §6: 400 sockets at Balanced; the presets scale with it.
-        let sockets = self.fetch.max_sockets.unwrap_or(match self.dht.intensity {
-            IntensityName::Low => 100,
-            IntensityName::Balanced => 400,
-            IntensityName::Aggressive => 1000,
-        });
+        // §6: 400 sockets at Balanced; the presets scale with it. 0, as
+        // unset, follows the intensity (as the settings registry shows it).
+        let sockets =
+            self.fetch
+                .max_sockets
+                .filter(|&n| n > 0)
+                .unwrap_or(match self.dht.intensity {
+                    IntensityName::Low => 100,
+                    IntensityName::Balanced => 400,
+                    IntensityName::Aggressive => 1000,
+                });
         let fetch = FetchOptions {
             timeout: Duration::from_secs(self.fetch.timeout_secs.max(1)),
             max_metadata: self.fetch.max_metadata_mib << 20,
@@ -562,6 +567,19 @@ mod tests {
         assert!(c.layers.in_env("LODESTAR_HTTP_BIND"));
         let c = Config::load(None, no_env).unwrap();
         assert!(c.layers.file.is_empty() && c.layers.env.is_empty());
+    }
+
+    #[test]
+    fn zero_sockets_follow_the_intensity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[fetch]\nmax_sockets = 0\n[dht]\nintensity = \"low\"\n",
+        )
+        .unwrap();
+        let c = Config::load(Some(&path), no_env).unwrap();
+        assert_eq!(c.pipeline_config().unwrap().pool.max_sockets, 100);
     }
 
     #[test]
