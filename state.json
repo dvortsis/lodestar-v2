@@ -1,9 +1,9 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-22T06:06:00Z",
+ "updated_at": "2026-10-22T06:15:00Z",
  "launches": {
   "date": "2026-10-22",
-  "count": 12
+  "count": 13
  },
  "tags": {},
  "slices": {
@@ -80,13 +80,13 @@
    "notes": ""
   },
   "W1": {
-   "status": "in_review",
+   "status": "merged",
    "model": "sonnet",
    "session": "session_013n3VVF4K4QtH4YeGKjACBY",
    "pr": 43,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "round 1 changes: merge conflict \u00a716, full 36-key golden, prepaint fallback, PR description"
+   "notes": "merged after round 2"
   },
   "W1b": {
    "status": "pending",
@@ -125,11 +125,11 @@
    "notes": ""
   },
   "W2": {
-   "status": "pending",
+   "status": "running",
    "model": "sonnet",
-   "session": null,
+   "session": "session_01EFumqKZRWcv8y4PCvuGEV4",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
    "notes": ""
   },
@@ -720,7 +720,9 @@
   "2026-10-22 owner: Riverstone is the default/official palette and keeps plum #9381B6 in categorical slot 6 (seafoam stays retired); the theme collection is 24 families x light/dark including Rosewood as the 24th. Log both in architecture \u00a716 with the next runner docs PR.",
   "2026-10-22 owner (audit follow-up): floor add-by-file/remove-in-app; packs per \u00a720.6; subscriptions off by default, user-chosen in wizard/settings with strictness-based warning; Riverstone unchanged, \u00a710.18 CVD claim corrected. Recorded in owner-decisions.md \u00a72.7-2.10 (PR #39)."
  ],
- "open_issues": [],
+ "open_issues": [
+  "Filter session self-merged #42 against owner decision (packs on by default) + budget env; follow-up fix requested. Suggest owner consider branch protection."
+ ],
  "runner_prs": {
   "34": "merged",
   "39": "open (standards)"
@@ -740,7 +742,7 @@
  "m4_prs": {
   "32": "merged 05:36 by M4 session",
   "33": "merged 05:51 by filter session (owner decisions follow-up requested)",
-  "42": "open, filter rules V7",
+  "42": "MERGED 06:07 by the filter session despite the runner's request; packs on by default (contradicts owner \u00a72.8) and LODESTAR_BUDGET_US kept. Follow-up fix PR requested 06:14; owner told.",
   "47": "open, filters API (B15)"
  },
  "heartbeats": 1
