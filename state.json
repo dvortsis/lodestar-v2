@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-10-22T13:44Z",
+  "updated_at": "2026-10-22T14:41Z",
   "launches": {
     "date": "2026-10-22",
     "count": 17
@@ -888,7 +888,7 @@
     "F1b #66: sign-off on calibrated filter budget (50us at reference runner speed, scale up to 1.6x on slower runners)"
   ],
   "launches_today": 8,
-  "last_heartbeat": "2026-10-22T13:44Z",
+  "last_heartbeat": "2026-10-22T14:41Z",
   "owner_questions": [
     "F1 budget scope: gate covers cheaply-rejectable rule shapes (10% = 40.8 us on runner). Shapes the cheap check cannot decide cost more at 10% of rules (VM: NEAR/1 ~450-500, negation ~140, fuzzy ~125, prefix ~110 us; runner ~1.4x faster). Should those shapes be gated at 50 us too?",
     "Filter budget hardware: 50 us has no reference machine; gate now calibrated to the runner F1 measured on (10%=40.8 us), slower runners scale up to 1.6x. Confirm or set a reference machine."
