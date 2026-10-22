@@ -220,8 +220,8 @@
    "session": "session_01KbNDuqr2bBED88auAfEkNp",
    "pr": 74,
    "attempt": 1,
-   "review_rounds": 1,
-   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #74; reviewer started 16:45 | 17:10 r1 FIX: token classes (runner shared fix), dup groups, brush, null delta, dates, int axes."
+   "review_rounds": 2,
+   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #74; reviewer started 16:45 | 17:10 r1 FIX: token classes (runner shared fix), dup groups, brush, null delta, dates, int axes. R2 FIX 17:55: computed-style test missing, x-axis tick overlap, showcase in prod (+1.83 kB; move to dev-routes after #76)."
   },
   "W9": {
    "status": "pending",
@@ -873,7 +873,6 @@
   "72": "B17 round 2 (3e4d7b6)",
   "77": "B13 round 2 (29caca3)",
   "79": "B14 round 1 + security (e96480b)",
-  "74": "W7e round 2 (98689ba)",
   "80+81": "runner PRs, fresh reviewer"
  },
  "carry_forward": {
@@ -918,7 +917,8 @@
   "reviewer_shared_target": "Do not share CARGO_TARGET_DIR across reviewer worktrees: test fixture paths (CARGO_MANIFEST_DIR) and workspace artifacts collide. One target per reviewer; clean up after.",
   "token_gap_toast": "W7ab: no toast width/duration token; local props from --row-height-comfortable and --duration-banner. Record in \u00a716 token gaps.",
   "pr80_baselines": "#80 pushed web/e2e/.update-snapshots (ea3718c); import regenerated tokens-{light,dark} PNGs from the E2E artifact, remove marker, then merge.",
-  "sse_adult_count": "B17 found: B4's `torrents` SSE event counts every added torrent incl. Adult; with show_adult off, the 'N new' badge counts hidden Adult (\u00a720.9 'leave Adult out entirely'). Follow-up slice B4b after #72 merges: commit hook reports a non-adult count (class from the indexed doc), events.rs publishes the visible count per the live content.show_adult watch; test both settings. W5 needs no change (it shows the server count)."
+  "sse_adult_count": "B17 found: B4's `torrents` SSE event counts every added torrent incl. Adult; with show_adult off, the 'N new' badge counts hidden Adult (\u00a720.9 'leave Adult out entirely'). Follow-up slice B4b after #72 merges: commit hook reports a non-adult count (class from the indexed doc), events.rs publishes the visible count per the live content.show_adult watch; test both settings. W5 needs no change (it shows the server count).",
+  "pw_port": "playwright.config.ts hard-codes port 4173 + reuseExistingServer outside CI; parallel worktrees cross-talk. Small follow-up (W6 owner area): read the port from an env var (e.g. PW_PORT) and add --strictPort."
  },
  "blocked_on_owner": [
   "Modern DHT crawler architecture: waiting on an AskUserQuestion",
