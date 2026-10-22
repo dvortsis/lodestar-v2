@@ -142,7 +142,7 @@
 			"group": "community",
 			"mode": "light",
 			"contrast": "AA",
-			"license": "MIT (© 2021 Catppuccin)",
+			"license": "MIT (© 2021 Catppuccin (Pocco81 and contributors))",
 			"source": "https://github.com/catppuccin/palette",
 			"values": [
 				"#eff1f5",
@@ -190,7 +190,7 @@
 			"group": "community",
 			"mode": "dark",
 			"contrast": "AA",
-			"license": "MIT (© 2021 Catppuccin)",
+			"license": "MIT (© 2021 Catppuccin (Pocco81 and contributors))",
 			"source": "https://github.com/catppuccin/palette",
 			"values": [
 				"#313244",
