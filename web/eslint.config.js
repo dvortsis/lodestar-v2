@@ -44,7 +44,8 @@ export default ts.config(
 			'.svelte-kit/',
 			'node_modules/',
 			'src/lib/api/schema.d.ts',
-			'**/*.generated.*'
+			'**/*.generated.*',
+			'src/lib/paraglide/'
 		]
 	},
 	js.configs.recommended,
