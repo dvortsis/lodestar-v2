@@ -38,7 +38,7 @@ use tantivy::{
     TERMINATED, TantivyDocument, Term,
 };
 
-use crate::compile::{folded_word, parts_query, regex_escape, units, word_query};
+use crate::compile::{ABSENT, folded_word, parts_query, regex_escape, units, word_query};
 use crate::doc::extension;
 use crate::query::{Node, NumField, TextField};
 use crate::tokenizer::{self, NAME_TOKENIZER};
@@ -232,7 +232,14 @@ fn targets(field: TextField, f: &FileFields, phrase: bool) -> Vec<(Field, bool)>
 fn any_of(targets: Vec<(Field, bool)>, build: impl Fn(Field, bool) -> Q) -> Q {
     let mut clauses: Vec<(Occur, Q)> = targets
         .into_iter()
-        .map(|(fld, positions)| (Occur::Should, build(fld, positions)))
+        .map(|(fld, positions)| {
+            let q = if fld == ABSENT {
+                Box::new(EmptyQuery)
+            } else {
+                build(fld, positions)
+            };
+            (Occur::Should, q)
+        })
         .collect();
     if clauses.len() == 1 {
         return clauses.pop().expect("one").1;
@@ -341,6 +348,9 @@ pub fn compile(node: &Node, f: &FileFields) -> Option<Q> {
                 ))
             })
         }
+        // A field an older index lacks (`compile::ABSENT`) matches nothing.
+        Node::Ext { .. } if f.ext == ABSENT => Box::new(EmptyQuery),
+        Node::Range { .. } if f.size == ABSENT => Box::new(EmptyQuery),
         Node::Ext { any } => Box::new(BooleanQuery::new(
             any.iter()
                 .map(|e| {
