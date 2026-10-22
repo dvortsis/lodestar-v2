@@ -97,3 +97,10 @@
 	outline: var(--focus-ring-width) solid var(--color-primary);
 	outline-offset: var(--focus-ring-offset);
 }
+
+/* A highlighted menu item gets the focus ring, inset so the panel doesn't clip it; the hover
+   tint alone is far below 3:1 against the panel (§10.13). */
+.ls-menu-item[data-highlighted] {
+	outline: var(--focus-ring-width) solid var(--color-primary);
+	outline-offset: calc(var(--focus-ring-width) * -1);
+}

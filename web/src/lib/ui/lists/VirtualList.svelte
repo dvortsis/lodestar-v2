@@ -5,7 +5,7 @@
 	// `preventDefault()` there skips the built-ins; the shortcut registry itself belongs to W9.
 	import { createVirtualizer, type VirtualItem } from '@tanstack/svelte-virtual';
 	import { untrack, type Snippet } from 'svelte';
-	import { tokenPx } from '../overlays/motion';
+	import { defaultRowHeight } from '../overlays/motion';
 	import './lists.css';
 
 	type Role = 'listbox' | 'grid' | 'tree' | 'treegrid';
@@ -25,7 +25,7 @@
 		/** Accessible name of the list. */
 		label: string;
 		role?: Role;
-		/** Row height in px (fixed per density, §10.1). Defaults to `--row-height-compact`. */
+		/** Row height in px (fixed per density, §10.1). Defaults to `--row-height-compact`, or `--target-min` under a coarse pointer. */
 		estimateSize?: number;
 		/** Opt in to measuring each row (a ResizeObserver per row) when heights vary. */
 		measureRows?: boolean;
@@ -46,7 +46,12 @@
 		onKey?: (event: KeyboardEvent, ctx: { index: number; item: T; onRow: boolean }) => void;
 		/** Enables typeahead: the text a row is matched by. */
 		getText?: (item: T) => string;
-		/** Cursor paging: rendering the sentinel row calls `onLoadMore` once per `items.length`. */
+		/**
+		 * Cursor paging: rendering the sentinel row calls `onLoadMore` once per `items.length`.
+		 * A load that ends (`loadingMore` true→false) without new rows is requested again at once, so
+		 * on an error the feature must clear `hasMore` (and show its error); otherwise a failing
+		 * fetch is retried in a tight loop.
+		 */
 		hasMore?: boolean;
 		loadingMore?: boolean;
 		onLoadMore?: () => void;
@@ -81,7 +86,7 @@
 		class: className = ''
 	}: Props = $props();
 
-	const estimateSize = $derived(estimateProp ?? tokenPx('--row-height-compact', 36));
+	const estimateSize = $derived(estimateProp ?? defaultRowHeight());
 	let scroller = $state<HTMLElement>();
 	let headerHeight = $state(0);
 	const isGrid = $derived(role === 'grid' || role === 'treegrid');

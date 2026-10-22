@@ -158,26 +158,64 @@ test('VirtualList: rows prepended above keep the viewport and the active row in 
 
 test.describe('coarse pointer', () => {
 	test.use({ hasTouch: true, isMobile: true });
-	test('Table and Tree checkboxes are at least 44 × 44', async ({ page, go }) => {
-		await go(PATH);
-		await expect(page.getByRole('grid').getByRole('row').nth(1)).toBeVisible();
-		await expect(page.getByRole('tree').getByRole('treeitem').first()).toBeVisible();
-		const sizes = await page.evaluate(() =>
-			[
-				...document.querySelectorAll<HTMLElement>(
-					'[role="grid"] input[type="checkbox"], [role="tree"] input[type="checkbox"]'
-				)
-			]
-				.slice(0, 12)
-				.map((e) => {
-					const r = e.getBoundingClientRect();
-					return [Math.round(r.width), Math.round(r.height)];
-				})
-		);
-		expect(sizes.length).toBeGreaterThan(2);
-		for (const [w, h] of sizes) {
-			expect(w).toBeGreaterThanOrEqual(44);
-			expect(h).toBeGreaterThanOrEqual(44);
-		}
-	});
+
+	// Rows, checkboxes and the Table's checkbox column are all at least --target-min (44 px), so
+	// adjacent targets never overlap and a tap lands on the box that was aimed at.
+	for (const kind of ['grid', 'tree'] as const) {
+		test(`${kind}: checkbox targets are 44 px, disjoint and inside their row/column`, async ({
+			page,
+			go
+		}) => {
+			await go(PATH);
+			const rowRole = kind === 'grid' ? 'row' : 'treeitem';
+			const rows = page.getByRole(kind).getByRole(rowRole);
+			await expect(rows.nth(3)).toBeVisible();
+			const m = await page.evaluate(
+				([k, role]) => {
+					const root = document.querySelector(`[role="${k}"]`)!;
+					const list = [
+						...root.querySelectorAll<HTMLElement>(`[role="${role}"][data-index]`)
+					].slice(0, 6);
+					list[0]!.scrollIntoView({ block: 'center' });
+					return list.slice(0, 4).map((row) => {
+						const r = row.getBoundingClientRect();
+						const input = row.querySelector('input')!;
+						const b = input.getBoundingClientRect();
+						// What is under each corner (inset 2 px) and the centre of the box.
+						const hits = [
+							[b.left + 2, b.top + 2],
+							[b.right - 2, b.top + 2],
+							[b.left + 2, b.bottom - 2],
+							[b.right - 2, b.bottom - 2],
+							[b.left + b.width / 2, b.top + b.height / 2]
+						].map(([x, y]) => document.elementFromPoint(x!, y!) === input);
+						const next = row.querySelector('[role="gridcell"]:nth-child(2)') as HTMLElement | null;
+						return {
+							row: [r.top, r.bottom, r.height],
+							box: [b.left, b.top, b.right, b.bottom, b.width, b.height],
+							rowLeft: r.left,
+							hits,
+							nextLeft: next?.getBoundingClientRect().left ?? null
+						};
+					});
+				},
+				[kind, rowRole]
+			);
+			expect(m.length).toBeGreaterThan(3);
+			m.forEach((x, i) => {
+				expect(x.row[2]).toBeGreaterThanOrEqual(44);
+				expect(x.box[4]).toBeGreaterThanOrEqual(44);
+				expect(x.box[5]).toBeGreaterThanOrEqual(44);
+				// Inside its own row...
+				expect(x.box[1]).toBeGreaterThanOrEqual(x.row[0]! - 0.5);
+				expect(x.box[3]).toBeLessThanOrEqual(x.row[1]! + 0.5);
+				// ...never reaching the next row's box...
+				if (i > 0) expect(m[i - 1]!.box[3]).toBeLessThanOrEqual(x.box[1]! + 0.5);
+				// ...and every probe point hits this row's own checkbox.
+				expect(x.hits).toEqual([true, true, true, true, true]);
+				// The Table's box stays inside its column (the Name cell starts after it).
+				if (x.nextLeft !== null) expect(x.box[2]).toBeLessThanOrEqual(x.nextLeft + 0.5);
+			});
+		});
+	}
 });

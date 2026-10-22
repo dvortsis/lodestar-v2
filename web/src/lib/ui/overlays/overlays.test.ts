@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { stubLayout } from '../lists/testing/layout';
 import { configure, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import DialogHarness from './testing/DialogHarness.svelte';
 import OverlayHarness from './testing/OverlayHarness.svelte';
@@ -165,6 +166,22 @@ describe('Drawer Esc and nested overlays', () => {
 		await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
 		expect(screen.queryByRole('complementary')).not.toBeNull();
 		await key(copy, 'Escape');
+		await waitFor(() => expect(screen.queryByRole('complementary')).toBeNull());
+	});
+});
+
+describe('Drawer Esc with an expanded tree row', () => {
+	beforeAll(() => stubLayout());
+	it('closes the drawer: aria-expanded on a row is not an open popup', async () => {
+		render(DrawerHarness);
+		const row = screen.getByTestId('row');
+		row.focus();
+		await fireEvent.click(row);
+		await screen.findByRole('heading', { name: 'Ubuntu 24.04' });
+		const folder = screen.getByRole('treeitem', { name: /Season 1/ });
+		expect(folder.getAttribute('aria-expanded')).toBe('true');
+		folder.focus();
+		await key(folder, 'Escape');
 		await waitFor(() => expect(screen.queryByRole('complementary')).toBeNull());
 	});
 });

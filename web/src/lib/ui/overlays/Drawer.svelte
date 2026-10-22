@@ -69,7 +69,13 @@
 		if (event.key === 'Escape' && !event.defaultPrevented) {
 			// Esc belongs to a tooltip, menu or popover opened from inside the drawer first.
 			const target = event.target as Element;
-			if (target.closest('[data-state$="open"], [aria-expanded="true"]')) return;
+			// Only when the target itself is the trigger of an open popup (not any expanded row).
+			if (
+				target.matches(
+					'[aria-haspopup][aria-expanded="true"], [data-tooltip-trigger][data-state$="open"]'
+				)
+			)
+				return;
 			event.preventDefault();
 			close();
 		}

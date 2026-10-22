@@ -48,13 +48,13 @@
 				<DropdownMenu.Item
 					disabled={item.disabled}
 					onSelect={() => onSelect(item.id)}
-					class="flex min-h-(--control-height-dense) cursor-default items-center gap-2 rounded-selector px-2 text-body outline-none data-highlighted:bg-hover data-disabled:text-muted-text pointer-coarse:min-h-(--target-min) {item.danger
+					class="ls-menu-item flex min-h-(--control-height-dense) cursor-default items-center gap-2 rounded-selector px-2 text-body outline-none data-highlighted:bg-hover data-disabled:text-muted-text pointer-coarse:min-h-(--target-min) {item.danger
 						? 'text-error'
 						: ''}"
 				>
 					{#if item.icon}
 						{@const Icon = item.icon}
-						<Icon class="size-4 shrink-0" aria-hidden="true" />
+						<Icon class="size-(--icon-size-row) shrink-0" aria-hidden="true" />
 					{/if}
 					{item.label}
 				</DropdownMenu.Item>
