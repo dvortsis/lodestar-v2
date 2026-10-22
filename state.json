@@ -23,7 +23,7 @@
    "pr": 46,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "round 2 APPROVE at e578d70; only blocker = \u00a716 conflict with main; sent 09:24"
+   "notes": "merged main 8d9b795; waiting CI then merge"
   },
   "C0": {
    "status": "merged",
@@ -835,8 +835,10 @@
    "SearchHit/TorrentDetail M3 enrichment fields (title, resolved_via, content_type, adult_kind, composition, junk_*) and hidden_junk have no slice: assign at next API brief (B5a or B6), per \u00a716 B1 entry"
   ],
   "B5a": [
-   "B5b: if new live indexer fails to start during swap, old one already stopped -> old index serves but stops ingesting until restart",
-   "B5b: field present in old index with same type but not FAST can still fail a query (absent-field handling covers only missing fields)"
+   "B5b: if new live indexer fails to start during swap, old one already stopped -> old index serves but stops ingesting until restart (fix: pass store_path+StoreConfig into rebuild thread and reopen to restart old indexer)"
+  ],
+  "B6": [
+   "B5b: fields present-but-not-fast: resolve fast-column needs per use (sorts/lifted ranges skip, term queries still use field)"
   ]
  },
  "blocked_on_owner": [
