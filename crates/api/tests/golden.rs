@@ -5,7 +5,9 @@
 //! typed DTOs (`src/dto/`) replaced them, so these tests prove the DTOs
 //! serialize byte for byte as the old code did: same keys, same order,
 //! same null and absent fields. The one intended difference is the swarm
-//! fields of `docs/metrics.md` §7.1/§7.2, added as `null` (never scraped).
+//! fields of `docs/metrics.md` §7.1/§7.2, added as `null` (never scraped):
+//! each test checks they're all there and null on every hit and detail,
+//! then strips them, and the rest must match the old bytes exactly.
 //!
 //! Values that move between runs (times, `took_ms`) are zeroed before the
 //! comparison. `LODESTAR_BLESS=1 cargo test -p lodestar-api --test golden`
@@ -44,6 +46,54 @@ const VOLATILE: [&str; 6] = [
     "checked_at",
     "updated_at",
 ];
+
+/// Swarm fields added to every search hit and detail (§7.1), null until
+/// swarm health is served.
+const SUMMARY_SWARM: [&str; 6] = [
+    "completed",
+    "last_scrape_at",
+    "leechers",
+    "seeders",
+    "trackers_checked",
+    "trackers_reporting",
+];
+/// And to the detail view only (§7.2).
+const DETAIL_SWARM: [&str; 4] = ["dht_peers", "dht_seeds", "swarm_history", "swarm_trend"];
+
+/// Checks the added swarm fields are all present and null, and removes
+/// them from `body`'s bytes.
+fn strip_swarm(body: &str) -> String {
+    let Ok(v) = serde_json::from_str::<Value>(body) else {
+        return body.to_string();
+    };
+    let mut keys: Vec<&str> = Vec::new();
+    let check = |t: &Value, names: &[&str]| {
+        for k in names {
+            assert_eq!(t.get(*k), Some(&Value::Null), "{k} should be null in {t}");
+        }
+    };
+    if let Some(hits) = v.get("hits").and_then(Value::as_array) {
+        hits.iter().for_each(|h| check(h, &SUMMARY_SWARM));
+        if !hits.is_empty() {
+            keys.extend(SUMMARY_SWARM);
+        }
+    }
+    if v.get("magnet").is_some() {
+        check(&v, &SUMMARY_SWARM);
+        check(&v, &DETAIL_SWARM);
+        keys.extend(SUMMARY_SWARM);
+        keys.extend(DETAIL_SWARM);
+    }
+    let mut out = body.to_string();
+    for k in keys {
+        // Never alone in an object: drop it with the comma before it, or
+        // after it when it's first.
+        out = out
+            .replace(&format!(",\"{k}\":null"), "")
+            .replace(&format!("\"{k}\":null,"), "");
+    }
+    out
+}
 
 struct Fixture {
     app: Router,
@@ -228,7 +278,7 @@ async fn golden(f: &Fixture, name: &str, mut req: Request<Body>) -> Value {
         .await
         .unwrap();
     let body = String::from_utf8(bytes.to_vec()).unwrap();
-    let got = format!("{status}\n{}\n", normalize(&body));
+    let got = format!("{status}\n{}\n", normalize(&strip_swarm(&body)));
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/golden")
         .join(format!("{name}.txt"));
@@ -238,6 +288,8 @@ async fn golden(f: &Fixture, name: &str, mut req: Request<Body>) -> Value {
     } else {
         let want = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("{}: {e} (bless with LODESTAR_BLESS=1)", path.display()));
+        // A Windows checkout may have converted the line ends.
+        let want = want.replace("\r\n", "\n");
         assert_eq!(got, want, "{name}: the response bytes changed");
     }
     serde_json::from_str(&body).unwrap_or(Value::Null)
