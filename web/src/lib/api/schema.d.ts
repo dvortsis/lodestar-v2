@@ -454,7 +454,10 @@ export interface paths {
         /** Searches with query text. To search with an AST, POST it. */
         get: operations["searchGet"];
         put?: never;
-        /** Searches with query text or a query AST. */
+        /**
+         * Searches with query text or a query AST. The body also takes
+         *     `"explain": true` (as `GET`'s `explain`).
+         */
         post: operations["searchPost"];
         delete?: never;
         options?: never;
@@ -1905,13 +1908,6 @@ export interface components {
              * @default null
              */
             exact: boolean | null;
-            /**
-             * @description Explain how each hit was scored (`explain` in the response): the
-             *     first page only (no `offset` or `cursor`), and at most 100 hits,
-             *     so `limit` is capped at 100. `1` or `true`.
-             * @default null
-             */
-            explain: boolean | null;
             /**
              * @description Include torrents a filter rule hid (§20.3).
              * @default null

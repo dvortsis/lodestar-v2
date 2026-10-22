@@ -55,8 +55,13 @@ pub struct SearchRequest {
     /// Explain how each hit was scored (`explain` in the response): the
     /// first page only (no `offset` or `cursor`), and at most 100 hits,
     /// so `limit` is capped at 100. `1` or `true`.
+    ///
+    /// Left out of the schema: every other field has a default, which
+    /// makes the generated client types require it, and an optional
+    /// debugging flag shouldn't make every caller send it. `GET` lists it
+    /// as a parameter; `POST` accepts it the same way.
     #[serde(deserialize_with = "flag")]
-    #[schema(value_type = Option<bool>)]
+    #[schema(ignore)]
     pub explain: Option<bool>,
 }
 

@@ -1184,7 +1184,7 @@
         "tags": [
           "search"
         ],
-        "summary": "Searches with query text or a query AST.",
+        "summary": "Searches with query text or a query AST. The body also takes\n`\"explain\": true` (as `GET`'s `explain`).",
         "operationId": "searchPost",
         "requestBody": {
           "content": {
@@ -4963,14 +4963,6 @@
               "null"
             ],
             "description": "Count every match exactly, even above 100,000 (within a time\nbudget; `total_approx` says whether it made it). `1` or `true`.",
-            "default": null
-          },
-          "explain": {
-            "type": [
-              "boolean",
-              "null"
-            ],
-            "description": "Explain how each hit was scored (`explain` in the response): the\nfirst page only (no `offset` or `cursor`), and at most 100 hits,\nso `limit` is capped at 100. `1` or `true`.",
             "default": null
           },
           "hidden": {
