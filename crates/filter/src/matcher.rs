@@ -91,10 +91,12 @@ pub(crate) enum Compiled {
     Prefix {
         field: TextField,
         prefix: Box<str>,
+        /// Its first characters' key ([`prefilter::start_key`]).
+        start: Option<u64>,
     },
     Fuzzy {
         field: TextField,
-        word: Box<str>,
+        word: Spelled,
         distance: u8,
     },
     Range {
@@ -112,6 +114,47 @@ pub(crate) enum Compiled {
     File(Box<Compiled>),
     /// Dates, flags, hashes and shares, read as they are.
     Leaf(Box<Node>),
+}
+
+/// A word for fuzzy matching, with what rules most tokens out before an
+/// edit distance: its length and the characters it has.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Spelled {
+    chars: Vec<char>,
+    has: u64,
+}
+
+impl Spelled {
+    fn new(text: &str) -> Spelled {
+        Spelled {
+            chars: text.chars().collect(),
+            has: prefilter::char_set(text),
+        }
+    }
+
+    /// Whether `text` is within `distance` edits.
+    fn near(&self, text: &str, distance: u8) -> bool {
+        self.near_counted(
+            text,
+            text.chars().count(),
+            prefilter::char_set(text),
+            distance,
+        )
+    }
+
+    /// [`Spelled::near`] for a text of `chars` characters with these
+    /// characters present ([`prefilter::char_set`]). Each edit changes
+    /// the length by at most one and the characters present by at most
+    /// two (one gone, one new; folding characters onto shared bits only
+    /// merges them), so texts further off on either count are ruled out
+    /// without computing the distance.
+    #[inline]
+    fn near_counted(&self, text: &str, chars: usize, has: u64, distance: u8) -> bool {
+        let d = usize::from(distance);
+        chars.abs_diff(self.chars.len()) <= d
+            && (has ^ self.has).count_ones() as usize <= 2 * d
+            && edit_distance(text, &self.chars) <= d
+    }
 }
 
 /// Every token text of a query word, joined.
@@ -179,17 +222,21 @@ pub(crate) fn compile(node: &Node) -> Compiled {
             words: words.iter().map(|w| Term::new(&folded(w))).collect(),
             slop: *slop,
         },
-        Node::Prefix { field, prefix } => Compiled::Prefix {
-            field: *field,
-            prefix: folded(prefix).into(),
-        },
+        Node::Prefix { field, prefix } => {
+            let prefix = folded(prefix);
+            Compiled::Prefix {
+                field: *field,
+                start: prefilter::start_key(&prefix),
+                prefix: prefix.into(),
+            }
+        }
         Node::Fuzzy {
             field,
             word,
             distance,
         } => Compiled::Fuzzy {
             field: *field,
-            word: folded(word).into(),
+            word: Spelled::new(&folded(word)),
             distance: *distance,
         },
         Node::Range { field, lo, hi } => Compiled::Range {
@@ -505,6 +552,11 @@ impl<'a> Doc<'a> {
                     Tri::Maybe
                 }
             }
+            Compiled::Prefix {
+                field,
+                start: Some(k),
+                ..
+            } if keyed(field) && !self.keys().could_start(*k) => Tri::No,
             Compiled::Near { field, words, .. } if keyed(field) => {
                 if words.iter().all(|t| self.has_key(t)) {
                     Tri::Maybe
@@ -594,21 +646,29 @@ impl<'a> Doc<'a> {
                 !neutral_word(fold) && texts(*field, &|t| sequence(t, parts))
             }
             Compiled::Near { field, words, slop } => texts(*field, &|t| has_near(t, words, *slop)),
-            Compiled::Prefix { field, prefix } => {
+            // Prefixes and fuzzy words read each distinct token once.
+            Compiled::Prefix { field, prefix, .. } => {
+                let starts = |t: &str| t.starts_with(&**prefix);
                 !prefix.is_empty()
-                    && texts(*field, &|t| {
-                        t.toks.iter().any(|x| t.text(x).starts_with(&**prefix))
-                    })
+                    && match (field, file) {
+                        (TextField::Any, None) => self.keys().vocabulary().any(starts),
+                        _ => texts(*field, &|t| t.toks.iter().any(|x| starts(t.text(x)))),
+                    }
             }
             Compiled::Fuzzy {
                 field,
                 word,
                 distance,
-            } => texts(*field, &|t| {
-                t.toks
-                    .iter()
-                    .any(|x| edit_distance(t.text(x), word) <= usize::from(*distance))
-            }),
+            } => {
+                let near = |t: &str| word.near(t, *distance);
+                match (field, file) {
+                    (TextField::Any, None) => self
+                        .keys()
+                        .vocabulary_near(word.chars.len(), word.has, usize::from(*distance))
+                        .any(|t| edit_distance(t, &word.chars) <= usize::from(*distance)),
+                    _ => texts(*field, &|t| t.toks.iter().any(|x| near(t.text(x)))),
+                }
+            }
             Compiled::Range { field, lo, hi } => {
                 let inside = |v: u64| lo.is_none_or(|l| v >= l) && hi.is_none_or(|h| v <= h);
                 self.any_number(*field, file, inside)
@@ -783,9 +843,19 @@ fn has_near(field: &Text, words: &[Term], slop: u32) -> bool {
     })
 }
 
-fn edit_distance(a: &str, b: &str) -> usize {
-    let b: Vec<char> = b.chars().collect();
-    let mut row: Vec<usize> = (0..=b.len()).collect();
+fn edit_distance(a: &str, b: &[char]) -> usize {
+    // Token texts are at most 64 bytes, so a row fits on the stack.
+    let mut stack = [0usize; 66];
+    let mut heap = Vec::new();
+    let row: &mut [usize] = if b.len() < stack.len() {
+        &mut stack[..=b.len()]
+    } else {
+        heap.resize(b.len() + 1, 0);
+        &mut heap
+    };
+    for (j, r) in row.iter_mut().enumerate() {
+        *r = j;
+    }
     for (i, ca) in a.chars().enumerate() {
         let mut prev = row[0];
         row[0] = i + 1;
@@ -935,9 +1005,29 @@ mod tests {
 
     #[test]
     fn distance() {
-        assert_eq!(edit_distance("matrix", "matirx"), 2);
-        assert_eq!(edit_distance("", "ab"), 2);
-        assert_eq!(edit_distance("abc", "abc"), 0);
+        let d = |a: &str, b: &str| edit_distance(a, &b.chars().collect::<Vec<_>>());
+        assert_eq!(d("matrix", "matirx"), 2);
+        assert_eq!(d("", "ab"), 2);
+        assert_eq!(d("abc", "abc"), 0);
+        assert_eq!(
+            d(&"a".repeat(70), &"a".repeat(68)),
+            2,
+            "longer than the stack row"
+        );
+    }
+
+    proptest! {
+        /// The length and character bounds never rule out a word within
+        /// the distance.
+        #[test]
+        fn fuzzy_bounds_are_sound(
+            a in "[a-c0-1]{0,8}|\\PC{0,6}",
+            b in "[a-c0-1]{0,8}|\\PC{0,6}",
+            distance in 0u8..4,
+        ) {
+            let exact = edit_distance(&a, &b.chars().collect::<Vec<_>>()) <= usize::from(distance);
+            prop_assert_eq!(Spelled::new(&b).near(&a, distance), exact);
+        }
     }
 
     /// Words a query is built from: the names' own words and others.
