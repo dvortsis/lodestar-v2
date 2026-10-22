@@ -1,5 +1,6 @@
-//! The M1 HTTP surface: a basic status page, its JSON, Prometheus metrics
-//! and a health check. All read-only; the real API and UI arrive later.
+//! The HTTP surface: the API, the status page (`/status`) and its JSON,
+//! Prometheus metrics, a health check, and the embedded UI for every other
+//! path (see `web.rs`).
 
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -44,9 +45,9 @@ impl AppState {
     }
 }
 
-/// The page and health/metrics endpoints are open (the page asks for a
-/// login itself; metrics carry no torrent names). Status and the API need
-/// a session.
+/// The pages and health/metrics endpoints are open (the pages ask for a
+/// login themselves; metrics carry no torrent names). Status and the API
+/// need a session. The UI is the fallback, so it never shadows a route.
 pub fn router(state: AppState, api: ApiState) -> Router {
     let status_route = Router::new()
         .route("/api/status", get(status))
@@ -56,22 +57,32 @@ pub fn router(state: AppState, api: ApiState) -> Router {
         ))
         .with_state(state.clone());
     Router::new()
-        .route("/", get(page))
+        .route("/status", get(page))
         .route("/metrics", get(prometheus))
         .route("/healthz", get(healthz))
         .with_state(state)
         .merge(status_route)
         .nest("/api/v1", lodestar_api::router(api))
+        .fallback(crate::web::serve)
 }
+
+/// The status page keeps its own policy: it is one file with its script
+/// and styles inline, and renders peer-supplied names as text only.
+pub const STATUS_CSP: &str = "default-src 'self'; style-src 'unsafe-inline'; \
+    script-src 'unsafe-inline'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; \
+    form-action 'self'";
 
 async fn page() -> Response {
     (
         [
-            (
-                header::CONTENT_SECURITY_POLICY,
-                "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
-            ),
+            (header::CONTENT_SECURITY_POLICY, STATUS_CSP),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (header::REFERRER_POLICY, "no-referrer"),
+            (header::CACHE_CONTROL, "no-cache"),
+            (
+                header::HeaderName::from_static("permissions-policy"),
+                crate::web::PERMISSIONS,
+            ),
         ],
         Html(STATUS_PAGE),
     )
