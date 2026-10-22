@@ -202,8 +202,8 @@
    "session": "session_01PZaAbtPHeB2SiUMG9VFpth",
    "pr": 76,
    "attempt": 1,
-   "review_rounds": 1,
-   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #76; reviewer started 16:45 | 17:10 r1 FIX: exclude dev routes from prod build (scope exception), toast timer, ticker 60s, + a11y items."
+   "review_rounds": 2,
+   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #76; reviewer started 16:45 | 17:10 r1 FIX: exclude dev routes from prod build (scope exception), toast timer, ticker 60s, + a11y items. R2 FIX 18:15: PR size reason; toast dismiss drops focus. Approved tokens --toast-width/--listbox-max-height in tokens.css."
   },
   "W7cd": {
    "status": "changes_requested",
@@ -211,8 +211,8 @@
    "session": "session_016RoHWZ8Vbbs5moJ2c2fHqS",
    "pr": 78,
    "attempt": 1,
-   "review_rounds": 1,
-   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #78; reviewer started 16:45 | 16:58 round 1 FIX: load-more stuck, shift anchor by index, touch targets, .ls-focus dup; + measure opt-in, tokens, tree index prop, 100k expand perf, dup names, roving on click, Esc in drawer, tests, PR size."
+   "review_rounds": 2,
+   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #78; reviewer started 16:45 | 16:58 round 1 FIX: load-more stuck, shift anchor by index, touch targets, .ls-focus dup; + measure opt-in, tokens, tree index prop, 100k expand perf, dup names, roving on click, Esc in drawer, tests, PR size. R2 FIX 18:20: coarse targets overlap; Drawer Esc swallowed by aria-expanded; Menu focus invisible; popover test race (Bits rAF autofocus)."
   },
   "W7e": {
    "status": "changes_requested",
@@ -872,8 +872,7 @@
   "70": "round 3 (f7fddd8)",
   "72": "B17 round 2 (3e4d7b6)",
   "77": "B13 round 2 (29caca3)",
-  "79": "B14 round 1 + security (e96480b)",
-  "80+81": "runner PRs, fresh reviewer"
+  "79": "B14 round 1 + security (e96480b)"
  },
  "carry_forward": {
   "next-bans-touch": [
@@ -916,7 +915,7 @@
   "w7cd_s16": "Runner to add \u00a716 entries suggested in PR #78 (W7cd) after merge.",
   "reviewer_shared_target": "Do not share CARGO_TARGET_DIR across reviewer worktrees: test fixture paths (CARGO_MANIFEST_DIR) and workspace artifacts collide. One target per reviewer; clean up after.",
   "token_gap_toast": "W7ab: no toast width/duration token; local props from --row-height-comfortable and --duration-banner. Record in \u00a716 token gaps.",
-  "pr80_baselines": "#80 pushed web/e2e/.update-snapshots (ea3718c); import regenerated tokens-{light,dark} PNGs from the E2E artifact, remove marker, then merge.",
+  "pr80_baselines": "#80: artifact host blocked by proxy (blob.core.windows.net 403). Workflow commit-back job was denied by the auto-mode classifier (write token in CI). Needs owner: import tokens-{light,dark}-linux.png from run 39824206645 artifact 'snapshot-baselines' + delete marker, or approve the commit-back job. DO NOT merge #80 with the marker (it disables visual regression repo-wide).",
   "sse_adult_count": "B17 found: B4's `torrents` SSE event counts every added torrent incl. Adult; with show_adult off, the 'N new' badge counts hidden Adult (\u00a720.9 'leave Adult out entirely'). Follow-up slice B4b after #72 merges: commit hook reports a non-adult count (class from the indexed doc), events.rs publishes the visible count per the live content.show_adult watch; test both settings. W5 needs no change (it shows the server count).",
   "pw_port": "playwright.config.ts hard-codes port 4173 + reuseExistingServer outside CI; parallel worktrees cross-talk. Small follow-up (W6 owner area): read the port from an env var (e.g. PW_PORT) and add --strictPort.",
   "ping_on_merge": {
@@ -934,7 +933,10 @@
     "B13 (use B17 base query)",
     "launch B4b"
    ]
-  }
+  },
+  "pr81_fix": "#81 review FIX: (1) test must distinguish ON from FAST: >16KB value (overflow pages) deleted, assert gone from DB file; (2) WAL keeps insert-time frames until TRUNCATE (prod TRUNCATE only at shutdown): call store.checkpoint() (TRUNCATE) after purge_filter / release / delete_torrents / #70's release_rules when they deleted rows; drive test through those APIs. Do it after #70 merges (filter.rs conflict).",
+  "tantivy_deleted_names": "Deleted torrents' names stay in Tantivy segment files until merge. Follow-up after B6: on delete_torrents, force-merge segments holding deleted docs (rare path). In the spirit of owner decision 'deleted data is overwritten' (\u00a72.17).",
+  "w7ab_css_growth": "Record in \u00a716: daisyUI component CSS for the primitives adds ~5.6 KB gz to first-load CSS (11.89 -> 17.48 KB); accepted by runner (one global Tailwind sheet; screens need it). CSS headroom ~2.2 KB: watch W7cd/W7e/screens."
  },
  "blocked_on_owner": [
   "Modern DHT crawler architecture: waiting on an AskUserQuestion",
@@ -944,7 +946,8 @@
  "last_heartbeat": "2026-10-22T17:46Z",
  "owner_questions": [
   "F1 budget scope: gate covers cheaply-rejectable rule shapes (10% = 40.8 us on runner). Shapes the cheap check cannot decide cost more at 10% of rules (VM: NEAR/1 ~450-500, negation ~140, fuzzy ~125, prefix ~110 us; runner ~1.4x faster). Should those shapes be gated at 50 us too?",
-  "Filter budget hardware: 50 us has no reference machine; gate now calibrated to the runner F1 measured on (10%=40.8 us), slower runners scale up to 1.6x. Confirm or set a reference machine."
+  "Filter budget hardware: 50 us has no reference machine; gate now calibrated to the runner F1 measured on (10%=40.8 us), slower runners scale up to 1.6x. Confirm or set a reference machine.",
+  "Migration snapshots (<db>.pre-vN.db, VACUUM INTO before each migration, kept forever) retain quarantine names purged later, defeating 'deleted data is overwritten'. Recommend: run the same expiry purge on snapshots and delete them after 90 days (rollback window)."
  ],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)"
 }
