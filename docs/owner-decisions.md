@@ -281,9 +281,13 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **Never automatic:** releases that need manual steps.
     - **Every update** is signed and verified, waits for an install window, is health-checked afterwards, and is rolled back automatically on failure.
     - **"No telemetry, ever"** still holds: checking sends nothing about the installation.
+    - **Signing keys** (created by the owner, 2026-10-22):
+      - a **release key** (`02910813433E81E0`), stored as the `RELEASE_SIGNING_KEY` secret of the GitHub `release` environment;
+      - an offline, password-protected **recovery key** (`67922DDF005FD310`) that only signs key changes.
+
+      The public keys are in `packaging/keys/`.
 
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.
 - **Repository visibility.** The repo is public. The owner created it that way and hasn't commented since.
-- **Release signing key.** Auto-update (§2.13) needs an Ed25519 release key pair. The owner creates it and stores the private key as a GitHub Actions secret; it never enters the repository. Until then, update checks can notify but nothing installs automatically.

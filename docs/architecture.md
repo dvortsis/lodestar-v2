@@ -1449,9 +1449,12 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
 - **Verification. Nothing runs that isn't signed:**
   - The **manifest** is signed with the project's release key (Ed25519, minisign format). The public key is built into the binary.
   - Each **artifact** (binary, MSI) is pinned in the manifest by SHA-256 and size, and checked after download. Windows artifacts are also Authenticode-signed (M6), and that signature is checked too.
-  - **Key rotation:** a new key is announced in a manifest signed by the old key. Lodestar never accepts a key it can't chain back to the built-in one.
+  - **Two built-in keys** (`packaging/keys/`, embedded at build):
+    - the **release key** (`02910813433E81E0`) signs manifests;
+    - the **recovery key** (`67922DDF005FD310`) is kept offline by the owner and signs nothing but key changes.
+  - **Key rotation:** a new release key is accepted only through a key-change statement signed by the recovery key, or by the current release key. That lets a lost or leaked release key be replaced without reinstalling anything. Lodestar never accepts a key it can't chain back to one of the built-in keys.
   - A **downgrade** or a **replayed old manifest** is refused: versions only go up, and manifests carry a timestamp and an expiry.
-  - Release engineering (M6 `release.yml`) signs with a key the owner holds as a CI secret. The private key never enters the repository. *Owner action: create the key pair.*
+  - **Release engineering** (M6 `release.yml`) signs with `RELEASE_SIGNING_KEY`. That's a secret of the GitHub Actions environment `release`, which only `v*` tags and `main` may use, so a workflow edited on a feature branch can't read it. The private keys never enter the repository. The owner created both key pairs on 2026-10-22.
 - **Before installing:**
   - **Where the installation can update itself:** `noexec` data volumes, a read-only binary location with no data-directory fallback, and package-managed installs fall back to Check and notify, with the reason.
   - **Free space:** enough for the store snapshot, the new binary, and the manifest's reindex estimate.
@@ -2626,7 +2629,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - the update engine (`B-update`, Opus, `/security-review`);
   - the Windows paths and the signed manifest in `release.yml` (with M6);
   - the screen (`S-updates`, Sonnet).
-- **Owner action:** create the release signing key pair and store the private key as a CI secret.
+- **Keys:** the owner created a release key and an offline recovery key (2026-10-22). Their public halves are in `packaging/keys/`, and the recovery key authorises key changes.
 
 ## 17. Verification (once built)
 
