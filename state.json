@@ -779,7 +779,7 @@
    "pr": 84,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "R1 MERGE-quality 19:25; asked to fold in: chown only empty/marker dir, compose+operations docs, CAP hint, NO_NEW_PRIVS, CI root test step. Runner verifies delta."
+   "notes": "R1 MERGE-quality 19:25; asked to fold in: chown only empty/marker dir, compose+operations docs, CAP hint, NO_NEW_PRIVS, CI root test step. Runner verifies delta. 19:48 hardening 19e6397 + main 87dabac verified by runner -> APPROVED, merge on green (filter budget = known flake; one rerun then main-merge)."
   },
   "Q-docs": {
    "status": "running",
