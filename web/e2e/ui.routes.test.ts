@@ -5,6 +5,12 @@ import { expectNoA11yViolations } from './a11y';
 import { expect, test } from './support/test';
 
 const GROUPS = ['controls', 'fields', 'labels', 'feedback'] as const;
+const TITLES = {
+	controls: 'Controls',
+	fields: 'Fields',
+	labels: 'Labels',
+	feedback: 'Feedback'
+};
 
 for (const mode of ['light', 'dark'] as const) {
 	test.describe(`Riverstone ${mode}`, () => {
@@ -12,7 +18,7 @@ for (const mode of ['light', 'dark'] as const) {
 		for (const group of GROUPS) {
 			test(`ui/${group} has no axe violations`, async ({ page, go }) => {
 				await go(`/dev/ui/${group}`);
-				await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+				await expect(page.getByRole('heading', { level: 1, name: TITLES[group] })).toBeVisible();
 				if (group === 'fields') {
 					// Surface the inline error, the invalid range and the open combobox too.
 					await page.getByRole('combobox', { name: 'Tracker' }).focus();
@@ -87,6 +93,20 @@ test('toasts do not steal focus and dismiss from the keyboard', async ({ page, g
 	await page.getByRole('button', { name: 'Dismiss' }).focus();
 	await page.keyboard.press('Enter');
 	await expect(page.getByTestId('toast')).toHaveCount(0);
+	// Focus must not drop to <body>: with no toast left it returns to where it came from.
+	await expect(trigger).toBeFocused();
+});
+
+test('dismissing a focused toast moves focus to the neighbouring toast', async ({ page, go }) => {
+	await go('/dev/ui/feedback');
+	await page.getByRole('button', { name: 'Toast info' }).click();
+	await page.getByRole('button', { name: 'Toast success' }).click();
+	await expect(page.getByTestId('toast')).toHaveCount(2);
+	const dismiss = page.getByRole('button', { name: 'Dismiss' });
+	await dismiss.first().focus();
+	await page.keyboard.press('Enter');
+	await expect(page.getByTestId('toast')).toHaveCount(1);
+	await expect(dismiss).toBeFocused();
 });
 
 test('toasts fit a 320 px viewport', async ({ page, go }) => {
