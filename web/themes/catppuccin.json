@@ -1,0 +1,23 @@
+{
+	"id": "catppuccin",
+	"name": "Catppuccin",
+	"group": "community",
+	"license": "MIT (© 2021 Catppuccin (Pocco81 and contributors))",
+	"source": "https://github.com/catppuccin/palette",
+	"light": {
+		"background": "#E6E9EF",
+		"surface": "#EFF1F5",
+		"text": "#4C4F69",
+		"primary": "#1E66F5",
+		"accent": "#40A02B",
+		"categorical": ["#1E66F5", "#40A02B", "#DF8E1D", "#D20F39", "#179299", "#8839EF"]
+	},
+	"dark": {
+		"background": "#1E1E2E",
+		"surface": "#313244",
+		"text": "#CDD6F4",
+		"primary": "#89B4FA",
+		"accent": "#A6E3A1",
+		"categorical": ["#89B4FA", "#A6E3A1", "#F9E2AF", "#F38BA8", "#FAB387", "#CBA6F7"]
+	}
+}

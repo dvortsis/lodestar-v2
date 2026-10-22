@@ -1,0 +1,23 @@
+{
+	"id": "tokyo-night",
+	"name": "Tokyo Night",
+	"group": "community",
+	"license": "MIT (Night, © 2018-present Enkia); Apache-2.0 (Day, © Folke Lemaitre)",
+	"source": "https://github.com/enkia/tokyo-night-vscode-theme; https://github.com/folke/tokyonight.nvim",
+	"light": {
+		"background": "#D0D5E3",
+		"surface": "#E1E2E7",
+		"text": "#2F57B6",
+		"primary": "#2E7DE9",
+		"accent": "#587539",
+		"categorical": ["#2E7DE9", "#587539", "#8C6C3E", "#F52A65", "#007197", "#9854F1"]
+	},
+	"dark": {
+		"background": "#1A1B26",
+		"surface": "#292E42",
+		"text": "#C0CAF5",
+		"primary": "#7AA2F7",
+		"accent": "#9ECE6A",
+		"categorical": ["#7AA2F7", "#9ECE6A", "#E0AF68", "#F7768E", "#7DCFFF", "#BB9AF7"]
+	}
+}

@@ -1,0 +1,21 @@
+{
+	"id": "tidewater",
+	"name": "Tidewater",
+	"group": "original",
+	"light": {
+		"background": "#F2F5F8",
+		"surface": "#FFFFFF",
+		"text": "#1F3447",
+		"primary": "#3D6E99",
+		"accent": "#5E9AA6",
+		"categorical": ["#265780", "#789C8D", "#B1904D", "#A56354", "#6E7E90", "#988BC2"]
+	},
+	"dark": {
+		"background": "#101A24",
+		"surface": "#1B2836",
+		"text": "#E3ECF3",
+		"primary": "#8AB4D9",
+		"accent": "#8CC3C9",
+		"categorical": ["#6791BA", "#88AE9C", "#D2B678", "#BA7B6C", "#B5C4D7", "#AE9ED6"]
+	}
+}
