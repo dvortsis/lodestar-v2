@@ -1,0 +1,3923 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Lodestar API",
+    "description": "Every node is a new discovery. The JSON API under `/api/v1` (architecture §9): errors are always the `Error` envelope, and every path but the auth ones and this document needs the session cookie.",
+    "license": {
+      "name": ""
+    },
+    "version": "0.0.0"
+  },
+  "servers": [
+    {
+      "url": "/api/v1"
+    }
+  ],
+  "paths": {
+    "/auth": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Whether the instance is set up and the caller logged in.",
+        "operationId": "auth_status",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": []
+      }
+    },
+    "/classify": {
+      "get": {
+        "tags": [
+          "classify"
+        ],
+        "summary": "Your classification rules, and how detection compares with your\ncorrections.",
+        "operationId": "classes",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Classes"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/classify/correct": {
+      "post": {
+        "tags": [
+          "classify"
+        ],
+        "summary": "Your classification correction for one stored torrent; it's\nclassified again at once.",
+        "operationId": "correct",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorrectBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CorrectResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/classify/rules": {
+      "post": {
+        "tags": [
+          "classify"
+        ],
+        "summary": "Adds a classification rule; the stored torrents it matches are\nclassified again.",
+        "operationId": "add_class_rule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClassRuleBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassRuleAdded"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/classify/rules/remove": {
+      "post": {
+        "tags": [
+          "classify"
+        ],
+        "summary": "Removes a classification rule; the torrents it matched are classified\nagain without it.",
+        "operationId": "remove_class_rule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IdBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassRuleRemoved"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/filters": {
+      "get": {
+        "tags": [
+          "filters"
+        ],
+        "summary": "The rule set, switches and lists.",
+        "operationId": "overview",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Overview"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/filters/apply": {
+      "post": {
+        "tags": [
+          "filters"
+        ],
+        "summary": "Applies a change. A change that weakens filtering is refused with 428\n(`confirm_required`, the assessment beside the error) until it's sent\nagain with the admin password, every time (§20.11).",
+        "operationId": "apply",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplyResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/filters/fixtures": {
+      "get": {
+        "tags": [
+          "filters"
+        ],
+        "summary": "The core rules' hashed examples, run against the rules as they are.",
+        "operationId": "fixtures",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Fixtures"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/filters/preview": {
+      "post": {
+        "tags": [
+          "filters"
+        ],
+        "summary": "What a change would do, without applying it or asking for the\npassword.",
+        "operationId": "preview",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Assessment"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/filters/preview/jobs": {
+      "post": {
+        "tags": [
+          "filters"
+        ],
+        "summary": "Starts a preview in the background; poll it by its id.",
+        "operationId": "start_preview",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStarted"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/filters/preview/jobs/{id}": {
+      "get": {
+        "tags": [
+          "filters"
+        ],
+        "summary": "A preview job: progress while it runs, then the assessment (or the\nerror) once it's done.",
+        "operationId": "preview_job",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The job's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/filters/preview/jobs/{id}/cancel": {
+      "post": {
+        "tags": [
+          "filters"
+        ],
+        "summary": "Cancels a preview job; it stops at its next step.",
+        "operationId": "cancel_preview",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The job's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Any JSON, such as `{}`.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/filters/queue": {
+      "get": {
+        "tags": [
+          "filters"
+        ],
+        "summary": "The review queue: quarantine (never with names) and the last 30 days'\ndecisions per rule.",
+        "operationId": "queue",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Queue"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/filters/test": {
+      "post": {
+        "tags": [
+          "filters"
+        ],
+        "summary": "Tries a draft rule and the current rules on example torrents. Nothing\nis stored or logged.",
+        "operationId": "test",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Logs in; rate-limited per address.",
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Logged in; the session cookie is set.",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The session cookie."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": []
+      }
+    },
+    "/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Clears the session cookie. The body is ignored but must be JSON.",
+        "operationId": "logout",
+        "requestBody": {
+          "description": "Any JSON, such as `{}`.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Clears the session cookie."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": []
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "tags": [
+          "meta"
+        ],
+        "summary": "This document.",
+        "operationId": "openapi_json",
+        "responses": {
+          "200": {
+            "description": "The OpenAPI 3.1 document.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": []
+      }
+    },
+    "/parse": {
+      "get": {
+        "tags": [
+          "search"
+        ],
+        "summary": "Parses a query: the AST and its canonical text, or a `query_syntax`\nerror whose `start`/`end` span the UI highlights.",
+        "operationId": "parse_query",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "The query text; empty matches everything.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ParseResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/password": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Changes the password and ends every other session.",
+        "operationId": "change_password",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Changed; a new session cookie is set.",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The new session cookie."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/search": {
+      "get": {
+        "tags": [
+          "search"
+        ],
+        "summary": "Searches with query text. To search with an AST, POST it.",
+        "operationId": "search_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "The query text; empty browses everything.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "`relevance` (the default), or `discovered`, `size` or `files` with an optional `+` (ascending) or `-` (descending, the default).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Results per page: 1–200, 50 by default.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "`offset + limit` may not pass 10,000.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "hidden",
+            "in": "query",
+            "description": "Include torrents a filter rule hid (§20.3).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "search"
+        ],
+        "summary": "Searches with query text or a query AST.",
+        "operationId": "search_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/setup": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Claims a fresh instance with the setup token from the logs and a new\npassword; logs in.",
+        "operationId": "setup",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Set up; the session cookie is set.",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The session cookie."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": []
+      }
+    },
+    "/torrents/{hash}": {
+      "get": {
+        "tags": [
+          "torrents"
+        ],
+        "summary": "One torrent by any of its swarm hashes.",
+        "operationId": "detail",
+        "parameters": [
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "A 40-character hex info hash.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TorrentDetail"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/torrents/{hash}/files": {
+      "get": {
+        "tags": [
+          "torrents"
+        ],
+        "summary": "A page of a torrent's file list.",
+        "operationId": "files",
+        "parameters": [
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "A 40-character hex info hash.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Files to skip.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Files per page: 1–1000, 1000 by default.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FilesPage"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AllowEntry": {
+        "type": "object",
+        "required": [
+          "id",
+          "query"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "query": {
+            "type": "string"
+          }
+        }
+      },
+      "ApplyResponse": {
+        "type": "object",
+        "description": "`POST /filters/apply`: the change took effect.",
+        "required": [
+          "applied",
+          "assessment",
+          "version"
+        ],
+        "properties": {
+          "applied": {
+            "type": "boolean",
+            "description": "Always `true`."
+          },
+          "assessment": {
+            "$ref": "#/components/schemas/Assessment"
+          },
+          "deleted": {
+            "type": "integer",
+            "description": "`report_abuse`, `confirm`: stored torrents deleted.",
+            "minimum": 0
+          },
+          "exception": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`false_positive`: the exception's id."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`add_rule`, `add_override`, `add_exception`, `add_allow`,\n`subscribe`: the new entry's id."
+          },
+          "name": {
+            "type": "string",
+            "description": "`reveal_name`: the sealed name."
+          },
+          "released": {
+            "type": "integer",
+            "description": "`core_switch` off: quarantined items released.",
+            "minimum": 0
+          },
+          "removed": {
+            "type": "integer",
+            "description": "`remove_cs1`: hashes removed.",
+            "minimum": 0
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The rule set's version after the change.",
+            "minimum": 0
+          }
+        }
+      },
+      "Assessment": {
+        "type": "object",
+        "description": "A change's assessment (§20.10, §20.11). Field order: see [`Preview`].",
+        "required": [
+          "weakening",
+          "confirm",
+          "warning",
+          "preview",
+          "neutralize"
+        ],
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "The password is needed (every weakening change, and marking a list\nas part of the locked floor)."
+          },
+          "neutralize": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Preview",
+                "description": "For a keyword override: the same entry as *Neutralize term*."
+              }
+            ]
+          },
+          "preview": {
+            "$ref": "#/components/schemas/Preview"
+          },
+          "warning": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The plain-language effect warning; null for a strengthening change."
+          },
+          "weakening": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AstDateField": {
+        "type": "string",
+        "enum": [
+          "discovered"
+        ]
+      },
+      "AstNode": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Matches everything (an empty query: browse).",
+            "required": [
+              "op"
+            ],
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "all"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "of",
+              "op"
+            ],
+            "properties": {
+              "of": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AstNode"
+                }
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "and"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "of",
+              "op"
+            ],
+            "properties": {
+              "of": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AstNode"
+                }
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "or"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "of",
+              "op"
+            ],
+            "properties": {
+              "of": {
+                "$ref": "#/components/schemas/AstNode"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "not"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A word, tokenized when compiled.",
+            "required": [
+              "field",
+              "word",
+              "op"
+            ],
+            "properties": {
+              "field": {
+                "$ref": "#/components/schemas/AstTextField"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "word"
+                ]
+              },
+              "word": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "field",
+              "text",
+              "op"
+            ],
+            "properties": {
+              "field": {
+                "$ref": "#/components/schemas/AstTextField"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "phrase"
+                ]
+              },
+              "text": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "field",
+              "words",
+              "slop",
+              "op"
+            ],
+            "properties": {
+              "field": {
+                "$ref": "#/components/schemas/AstTextField"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "near"
+                ]
+              },
+              "slop": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "words": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "field",
+              "prefix",
+              "op"
+            ],
+            "properties": {
+              "field": {
+                "$ref": "#/components/schemas/AstTextField"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "prefix"
+                ]
+              },
+              "prefix": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "field",
+              "word",
+              "distance",
+              "op"
+            ],
+            "properties": {
+              "distance": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "field": {
+                "$ref": "#/components/schemas/AstTextField"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "fuzzy"
+                ]
+              },
+              "word": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Inclusive bounds; null is open.",
+            "required": [
+              "field",
+              "lo",
+              "hi",
+              "op"
+            ],
+            "properties": {
+              "field": {
+                "$ref": "#/components/schemas/AstNumField"
+              },
+              "hi": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "minimum": 0
+              },
+              "lo": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "minimum": 0
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "range"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Inclusive bounds; null is open.",
+            "required": [
+              "field",
+              "from",
+              "to",
+              "op"
+            ],
+            "properties": {
+              "field": {
+                "$ref": "#/components/schemas/AstDateField"
+              },
+              "from": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/AstWhen"
+                  }
+                ]
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "date"
+                ]
+              },
+              "to": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/AstWhen"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "File extensions; matches any.",
+            "required": [
+              "any",
+              "op"
+            ],
+            "properties": {
+              "any": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "ext"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "value",
+              "op"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "flag"
+                ]
+              },
+              "value": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "40 lowercase hex digits.",
+            "required": [
+              "hash",
+              "op"
+            ],
+            "properties": {
+              "hash": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "hash"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A keyword facet; matches any of the values.",
+            "required": [
+              "key",
+              "any",
+              "op"
+            ],
+            "properties": {
+              "any": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "key": {
+                "$ref": "#/components/schemas/AstTagKey"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "tag"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Torrents with at least one file matching every clause of `of`.",
+            "required": [
+              "of",
+              "op"
+            ],
+            "properties": {
+              "of": {
+                "$ref": "#/components/schemas/AstNode"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "file"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A category's share of the files or bytes, inclusive percentages.",
+            "required": [
+              "by",
+              "cat",
+              "lo",
+              "hi",
+              "op"
+            ],
+            "properties": {
+              "by": {
+                "$ref": "#/components/schemas/AstShareBy"
+              },
+              "cat": {
+                "type": "string"
+              },
+              "hi": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "lo": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "share"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A parsed query (§8), tagged by `op`."
+      },
+      "AstNumField": {
+        "type": "string",
+        "enum": [
+          "size",
+          "files",
+          "largest",
+          "piece",
+          "year",
+          "season",
+          "episode",
+          "junk"
+        ]
+      },
+      "AstShareBy": {
+        "type": "string",
+        "enum": [
+          "count",
+          "bytes"
+        ]
+      },
+      "AstTagKey": {
+        "type": "string",
+        "enum": [
+          "type",
+          "res",
+          "hdr",
+          "codec",
+          "audio",
+          "lang",
+          "group",
+          "has",
+          "resolved",
+          "adult"
+        ]
+      },
+      "AstTextField": {
+        "type": "string",
+        "enum": [
+          "any",
+          "name",
+          "path",
+          "title"
+        ]
+      },
+      "AstWhen": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "ago"
+            ],
+            "properties": {
+              "ago": {
+                "type": "integer",
+                "format": "int64"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "at"
+            ],
+            "properties": {
+              "at": {
+                "type": "integer",
+                "format": "int64"
+              }
+            }
+          }
+        ],
+        "description": "One end of a date range: seconds before the search (`ago`), or a Unix\ntime (`at`)."
+      },
+      "AuthStatus": {
+        "type": "object",
+        "description": "`GET /auth`.",
+        "required": [
+          "logged_in",
+          "setup_required"
+        ],
+        "properties": {
+          "logged_in": {
+            "type": "boolean"
+          },
+          "setup_required": {
+            "type": "boolean",
+            "description": "No password yet: claim the instance with the setup token from the\nlogs."
+          }
+        }
+      },
+      "Change": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "rule",
+              "on",
+              "op"
+            ],
+            "properties": {
+              "on": {
+                "type": "boolean"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "core_switch"
+                ]
+              },
+              "rule": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A pack (`malware`) or one pack rule (`MW-2`).",
+            "required": [
+              "id",
+              "on",
+              "op"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "on": {
+                "type": "boolean"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "pack_switch"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "query",
+              "action",
+              "op"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "description": "`flag`, `demote`, `hide`, `quarantine` or `drop`."
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "add_rule"
+                ]
+              },
+              "query": {
+                "type": "string"
+              },
+              "shadow_days": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int32",
+                "minimum": 0
+              },
+              "unless": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "op"
+            ],
+            "properties": {
+              "action": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "enabled": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "update_rule"
+                ]
+              },
+              "query": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "shadow_days": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int32",
+                "minimum": 0
+              },
+              "unless": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "An empty string removes the clause."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "op"
+            ],
+            "properties": {
+              "id": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "remove_rule"
+                ]
+              }
+            }
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MatchInput"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "expires_days": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "format": "int32",
+                    "minimum": 0
+                  },
+                  "neutralize": {
+                    "type": "boolean"
+                  },
+                  "scope": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "shadow_days": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "required": [
+                  "op"
+                ],
+                "properties": {
+                  "op": {
+                    "type": "string",
+                    "enum": [
+                      "add_override"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "op"
+            ],
+            "properties": {
+              "id": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "remove_override"
+                ]
+              }
+            }
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MatchInput"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "rule"
+                ],
+                "properties": {
+                  "rule": {
+                    "type": "string"
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "required": [
+                  "op"
+                ],
+                "properties": {
+                  "op": {
+                    "type": "string",
+                    "enum": [
+                      "add_exception"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "op"
+            ],
+            "properties": {
+              "id": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "remove_exception"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "query",
+              "op"
+            ],
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "add_allow"
+                ]
+              },
+              "query": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "op"
+            ],
+            "properties": {
+              "id": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "remove_allow"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Report torrents as child-abuse material (§20.5.2).",
+            "required": [
+              "hashes",
+              "op"
+            ],
+            "properties": {
+              "hashes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "report_abuse"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "hashes",
+              "op"
+            ],
+            "properties": {
+              "hashes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "remove_cs1"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A quarantined torrent a rule caught wrongly (§20.12): an exception\nfor that torrent and that rule only, a hashed must-not-match\nfixture for a core rule, and a release.",
+            "required": [
+              "hash",
+              "op"
+            ],
+            "properties": {
+              "hash": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "false_positive"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Releases a quarantined or dropped torrent: fetched and processed\nnormally next time it's seen.",
+            "required": [
+              "hash",
+              "op"
+            ],
+            "properties": {
+              "hash": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "release"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Confirms a quarantined torrent as abuse material: into CS-1, sealed\nname deleted.",
+            "required": [
+              "hash",
+              "op"
+            ],
+            "properties": {
+              "hash": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "confirm"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "hash",
+              "op"
+            ],
+            "properties": {
+              "hash": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "reveal_name"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "url",
+              "kind",
+              "op"
+            ],
+            "properties": {
+              "action": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "`drop` (the default) or `quarantine`."
+              },
+              "floor": {
+                "type": "boolean"
+              },
+              "format": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "`hashes`, `p2p`, `dat` or `cidr`."
+              },
+              "kind": {
+                "type": "string",
+                "description": "`content` or `ip`."
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "subscribe"
+                ]
+              },
+              "refresh_hours": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int32",
+                "minimum": 0
+              },
+              "url": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "op"
+            ],
+            "properties": {
+              "id": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "unsubscribe"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "enabled",
+              "op"
+            ],
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "id": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "pause_subscription"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Accepts or discards a version the sanity gates held back.",
+            "required": [
+              "id",
+              "accept",
+              "op"
+            ],
+            "properties": {
+              "accept": {
+                "type": "boolean"
+              },
+              "id": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "resolve_held"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "op"
+            ],
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "undo"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "One change to filtering (§20.7), tagged by `op`."
+      },
+      "ChangeBody": {
+        "type": "object",
+        "description": "`POST /filters/preview`, `/filters/preview/jobs` and `/filters/apply`.",
+        "required": [
+          "change"
+        ],
+        "properties": {
+          "change": {
+            "$ref": "#/components/schemas/Change"
+          },
+          "password": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The admin password, for a change that weakens filtering (§20.11);\nignored by previews."
+          }
+        }
+      },
+      "ClassRule": {
+        "type": "object",
+        "required": [
+          "adult",
+          "id",
+          "query"
+        ],
+        "properties": {
+          "adult": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "query": {
+            "type": "string"
+          }
+        }
+      },
+      "ClassRuleAdded": {
+        "type": "object",
+        "description": "`POST /classify/rules`: the new rule.",
+        "required": [
+          "id",
+          "queued"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "queued": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Stored torrents queued to be classified again; null without a\nsearch index (only torrents arriving later are affected).",
+            "minimum": 0
+          }
+        }
+      },
+      "ClassRuleBody": {
+        "type": "object",
+        "description": "`POST /classify/rules`.",
+        "required": [
+          "query",
+          "adult"
+        ],
+        "properties": {
+          "adult": {
+            "type": "boolean"
+          },
+          "query": {
+            "type": "string",
+            "description": "Can't test `type:` or `adult:`: the rule decides them."
+          }
+        }
+      },
+      "ClassRuleRemoved": {
+        "type": "object",
+        "description": "`POST /classify/rules/remove`.",
+        "required": [
+          "queued"
+        ],
+        "properties": {
+          "queued": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "As [`ClassRuleAdded::queued`].",
+            "minimum": 0
+          }
+        }
+      },
+      "Classes": {
+        "type": "object",
+        "description": "`GET /classify`: your classification rules, and how detection\ncompares with your per-torrent corrections (§20.9).",
+        "required": [
+          "corrections",
+          "detection",
+          "rules"
+        ],
+        "properties": {
+          "corrections": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "detection": {
+            "$ref": "#/components/schemas/Detection"
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClassRule"
+            }
+          }
+        }
+      },
+      "CoreRuleState": {
+        "type": "object",
+        "required": [
+          "action",
+          "floor",
+          "id",
+          "on"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "floor": {
+            "type": "boolean",
+            "description": "Part of the locked floor: can't be switched off."
+          },
+          "id": {
+            "type": "string",
+            "example": "CS-3a"
+          },
+          "on": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CorrectBody": {
+        "type": "object",
+        "description": "`POST /classify/correct`: your correction to one stored torrent,\nreplacing any earlier one. `adult: null` and `not_junk: false` clear it.",
+        "required": [
+          "hash"
+        ],
+        "properties": {
+          "adult": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "hash": {
+            "type": "string"
+          },
+          "not_junk": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CorrectResponse": {
+        "type": "object",
+        "description": "`POST /classify/correct`: the torrent classified again.",
+        "required": [
+          "adult_kind",
+          "junk",
+          "type"
+        ],
+        "properties": {
+          "adult_kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Non-null only when `type` is `adult`."
+          },
+          "junk": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Junk score, 0–100.",
+            "minimum": 0
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "Decision": {
+        "type": "object",
+        "required": [
+          "action",
+          "rule"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          }
+        }
+      },
+      "DecisionCount": {
+        "type": "object",
+        "required": [
+          "action",
+          "count",
+          "rule",
+          "shadow"
+        ],
+        "properties": {
+          "action": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "rule": {
+            "type": "string"
+          },
+          "shadow": {
+            "type": "boolean",
+            "description": "Decided in shadow mode: recorded, not acted on."
+          }
+        }
+      },
+      "Detection": {
+        "type": "object",
+        "required": [
+          "checked",
+          "disagree",
+          "examples"
+        ],
+        "properties": {
+          "checked": {
+            "type": "integer",
+            "description": "Corrections that say adult or not.",
+            "minimum": 0
+          },
+          "disagree": {
+            "type": "integer",
+            "description": "Of those, ones detection gets wrong.",
+            "minimum": 0
+          },
+          "examples": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DetectionExample"
+            },
+            "description": "Up to 50 of them."
+          }
+        }
+      },
+      "DetectionExample": {
+        "type": "object",
+        "required": [
+          "adult",
+          "hash"
+        ],
+        "properties": {
+          "adult": {
+            "type": "boolean",
+            "description": "What your correction says."
+          },
+          "hash": {
+            "type": "string"
+          }
+        }
+      },
+      "ErrorBody": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "A stable snake_case identifier to branch on.",
+            "example": "unknown_sort"
+          },
+          "end": {
+            "type": "integer",
+            "description": "The end of the fault's byte span within `field` (query syntax\nerrors).",
+            "minimum": 0
+          },
+          "field": {
+            "type": "string",
+            "description": "The request parameter or body field at fault (`sort`, `ast.field`)."
+          },
+          "message": {
+            "type": "string",
+            "description": "A sentence for people."
+          },
+          "start": {
+            "type": "integer",
+            "description": "The start of the fault's byte span within `field`.",
+            "minimum": 0
+          }
+        }
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "description": "`{ \"error\": { … } }`, plus the rare top-level key a client needs to\nrecover.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "assessment": {
+            "$ref": "#/components/schemas/Assessment",
+            "description": "On a 428 from `POST /filters/apply`: the warning to show before\nasking for the password."
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody"
+          },
+          "setup_required": {
+            "type": "boolean",
+            "description": "On a 401: whether the instance still needs its first-run setup."
+          }
+        }
+      },
+      "ExceptionEntry": {
+        "type": "object",
+        "required": [
+          "id",
+          "rule"
+        ],
+        "properties": {
+          "hashes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "keyword": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string",
+            "description": "The rule it releases from."
+          }
+        }
+      },
+      "FileEntry": {
+        "type": "object",
+        "description": "One file of a torrent.",
+        "required": [
+          "attrs",
+          "path",
+          "size"
+        ],
+        "properties": {
+          "attrs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Any of `padding`, `hidden`, `executable`, `symlink`."
+          },
+          "path": {
+            "type": "string",
+            "description": "`/`-separated, decoded."
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "FilesPage": {
+        "type": "object",
+        "description": "`GET /torrents/{hash}/files`: a page of the file list.",
+        "required": [
+          "files",
+          "offset",
+          "total"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FileEntry"
+            }
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "description": "Files in all.",
+            "minimum": 0
+          }
+        }
+      },
+      "FixtureCounts": {
+        "type": "object",
+        "required": [
+          "failing",
+          "must_match",
+          "must_not_match",
+          "rule"
+        ],
+        "properties": {
+          "failing": {
+            "type": "integer",
+            "description": "Examples the rule now gets wrong.",
+            "minimum": 0
+          },
+          "must_match": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "must_not_match": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rule": {
+            "type": "string"
+          }
+        }
+      },
+      "Fixtures": {
+        "type": "object",
+        "description": "`GET /filters/fixtures`: the core rules' hashed examples, run against\nthe rules as they are (§20.8).",
+        "required": [
+          "core"
+        ],
+        "properties": {
+          "core": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FixtureCounts"
+            }
+          }
+        }
+      },
+      "IdBody": {
+        "type": "object",
+        "description": "`POST /classify/rules/remove`.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "JobPhase": {
+        "type": "string",
+        "enum": [
+          "reading",
+          "quarantine",
+          "tombstones",
+          "done"
+        ]
+      },
+      "JobProgress": {
+        "type": "object",
+        "required": [
+          "done",
+          "phase",
+          "total"
+        ],
+        "properties": {
+          "done": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Items of this phase done.",
+            "minimum": 0
+          },
+          "phase": {
+            "$ref": "#/components/schemas/JobPhase"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Items in this phase.",
+            "minimum": 0
+          }
+        }
+      },
+      "JobStarted": {
+        "type": "object",
+        "description": "`POST /filters/preview/jobs`.",
+        "required": [
+          "job"
+        ],
+        "properties": {
+          "job": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "JobState": {
+        "type": "string",
+        "enum": [
+          "running",
+          "done",
+          "failed"
+        ]
+      },
+      "JobStatus": {
+        "type": "object",
+        "description": "`GET /filters/preview/jobs/{id}`: progress while it runs, then the\nassessment or the error.",
+        "required": [
+          "progress",
+          "state"
+        ],
+        "properties": {
+          "assessment": {
+            "$ref": "#/components/schemas/Assessment",
+            "description": "Once `done`."
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody",
+            "description": "Once `failed`: the error the preview would have returned."
+          },
+          "progress": {
+            "$ref": "#/components/schemas/JobProgress"
+          },
+          "state": {
+            "$ref": "#/components/schemas/JobState"
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Once `failed`: the HTTP status of `error`.",
+            "minimum": 0
+          }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "description": "`POST /login`.",
+        "required": [
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "MatchInput": {
+        "type": "object",
+        "description": "What an override, exception or allow entry matches, as sent: exactly\none of the four.",
+        "properties": {
+          "hashes": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Info hashes, 40 hex digits each."
+          },
+          "keyword": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "payload": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A payload signature, 16 hex digits."
+          },
+          "query": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "OkResponse": {
+        "type": "object",
+        "description": "The body of a write that has nothing else to say.",
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "description": "Always `true`."
+          }
+        }
+      },
+      "OverrideEntry": {
+        "type": "object",
+        "required": [
+          "expires_at",
+          "id",
+          "scope",
+          "shadow_until",
+          "strength"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "hashes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "keyword": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Applies only to what this query matches; null = everything."
+          },
+          "shadow_until": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "strength": {
+            "type": "string",
+            "description": "`override` or `neutralize`."
+          }
+        }
+      },
+      "Overview": {
+        "type": "object",
+        "description": "`GET /filters`: the rule set, switches and lists, as the Filters &\nSafety screens show them.",
+        "required": [
+          "allow",
+          "core",
+          "cs1_entries",
+          "exceptions",
+          "ip_ranges",
+          "overrides",
+          "packs",
+          "quarantine",
+          "rules",
+          "subscriptions",
+          "version"
+        ],
+        "properties": {
+          "allow": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AllowEntry"
+            }
+          },
+          "core": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CoreRuleState"
+            }
+          },
+          "cs1_entries": {
+            "type": "integer",
+            "description": "Hashes in the child-abuse list.",
+            "minimum": 0
+          },
+          "exceptions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExceptionEntry"
+            }
+          },
+          "ip_ranges": {
+            "type": "integer",
+            "description": "Ranges in the IP lists.",
+            "minimum": 0
+          },
+          "overrides": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OverrideEntry"
+            }
+          },
+          "packs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PackState"
+            }
+          },
+          "quarantine": {
+            "type": "integer",
+            "description": "Items in quarantine.",
+            "minimum": 0
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RuleEntry"
+            }
+          },
+          "subscriptions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubscriptionEntry"
+            }
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "PackRuleState": {
+        "type": "object",
+        "required": [
+          "action",
+          "id",
+          "on"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "example": "MW-2"
+          },
+          "on": {
+            "type": "boolean"
+          }
+        }
+      },
+      "PackState": {
+        "type": "object",
+        "required": [
+          "id",
+          "on",
+          "rules"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "malware"
+          },
+          "on": {
+            "type": "boolean"
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PackRuleState"
+            }
+          }
+        }
+      },
+      "ParseResponse": {
+        "type": "object",
+        "description": "`GET /parse`: the AST and the canonical text it prints as.",
+        "required": [
+          "ast",
+          "canonical"
+        ],
+        "properties": {
+          "ast": {
+            "$ref": "#/components/schemas/AstNode"
+          },
+          "canonical": {
+            "type": "string"
+          }
+        }
+      },
+      "PasswordRequest": {
+        "type": "object",
+        "description": "`POST /password`: ends every other session.",
+        "required": [
+          "old",
+          "new"
+        ],
+        "properties": {
+          "new": {
+            "type": "string",
+            "description": "At least 10 characters."
+          },
+          "old": {
+            "type": "string"
+          }
+        }
+      },
+      "Preview": {
+        "type": "object",
+        "description": "What a change would do (§20.10). Counts come from the review queue,\nthe tombstones, the filter hits of the replay window and the index.\n\nFields are in the order `POST /filters/preview` has always sent them;\nwhere an assessment is nested in another body, its keys are sorted.",
+        "required": [
+          "quarantine",
+          "tombstones",
+          "stored",
+          "caught_30d",
+          "core_caught_30d",
+          "per_day",
+          "estimate"
+        ],
+        "properties": {
+          "caught_30d": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Decisions in the replay window by the rules it affects."
+          },
+          "core_caught_30d": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Of those, by the child-safety core."
+          },
+          "estimate": {
+            "type": "boolean",
+            "description": "Counts from names only (sealed names, no file lists), so files'\nevidence isn't re-checked: treat as an estimate."
+          },
+          "per_day": {
+            "type": "number",
+            "format": "double"
+          },
+          "quarantine": {
+            "type": "integer",
+            "description": "Quarantined items it would release now.",
+            "minimum": 0
+          },
+          "stored": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Stored items whose hide, demote or flag mark it would clear.",
+            "minimum": 0
+          },
+          "tombstones": {
+            "type": "integer",
+            "description": "Dropped items it would let be fetched again.",
+            "minimum": 0
+          }
+        }
+      },
+      "QuarantineEntry": {
+        "type": "object",
+        "required": [
+          "at",
+          "expires_at",
+          "hash",
+          "rule",
+          "sealed"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          },
+          "sealed": {
+            "type": "boolean",
+            "description": "A sealed name is kept (see `reveal_name`)."
+          }
+        }
+      },
+      "Queue": {
+        "type": "object",
+        "description": "`GET /filters/queue`: quarantine (never with names) and the replay\nwindow's decisions per rule.",
+        "required": [
+          "decisions_30d",
+          "quarantine"
+        ],
+        "properties": {
+          "decisions_30d": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DecisionCount"
+            }
+          },
+          "quarantine": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuarantineEntry"
+            }
+          }
+        }
+      },
+      "RuleEntry": {
+        "type": "object",
+        "description": "One of your rules.",
+        "required": [
+          "action",
+          "enabled",
+          "id",
+          "query",
+          "shadow_until",
+          "unless"
+        ],
+        "properties": {
+          "action": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Null for an action code this server doesn't know."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "query": {
+            "type": "string"
+          },
+          "shadow_until": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Shadow mode ends then: until then it only records what it would do."
+          },
+          "unless": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Sample": {
+        "type": "object",
+        "description": "One example torrent for `POST /filters/test`, never stored or logged.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SampleFile"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A content type (`movie`, `adult`, …), replacing the classifier's."
+          }
+        }
+      },
+      "SampleFile": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "required": [
+              "path",
+              "size"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "size": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              }
+            }
+          }
+        ],
+        "description": "A sample's file: a path, or a path and its size."
+      },
+      "SearchHit": {
+        "type": "object",
+        "description": "One search result: the torrent summary (`docs/metrics.md` §7.1), its\nrelevance and, for a query with a file clause, the files that matched.",
+        "required": [
+          "completed",
+          "discovered_at",
+          "files",
+          "flags",
+          "hash",
+          "hash_v2",
+          "id",
+          "last_scrape_at",
+          "leechers",
+          "metadata_at",
+          "name",
+          "piece_len",
+          "score",
+          "seeders",
+          "size",
+          "trackers_checked",
+          "trackers_reporting"
+        ],
+        "properties": {
+          "completed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Null = never scraped.",
+            "minimum": 0
+          },
+          "discovered_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "files": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "flags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "example": [
+              "single_file"
+            ]
+          },
+          "hash": {
+            "type": "string",
+            "description": "40 hex digits."
+          },
+          "hash_v2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "64 hex digits; null for a v1-only torrent."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "last_scrape_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Null = never scraped."
+          },
+          "leechers": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Null = never scraped.",
+            "minimum": 0
+          },
+          "matched_files": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "description": "Positions in the torrent's file list; present only when the query\nhas a file clause."
+          },
+          "metadata_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "piece_len": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "score": {
+            "type": "number",
+            "format": "double",
+            "description": "Relevance; 0 under any sort but `relevance`."
+          },
+          "seeders": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Null = never scraped.",
+            "minimum": 0
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "trackers_checked": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Trackers that answered in the last answered round; null = never\nscraped.",
+            "minimum": 0
+          },
+          "trackers_reporting": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Of those, trackers that reported anyone; null = never scraped.",
+            "minimum": 0
+          }
+        }
+      },
+      "SearchRequest": {
+        "type": "object",
+        "description": "`POST /search`'s body, and `GET /search`'s parameters (where `ast` is\nrefused: send an AST with POST).",
+        "properties": {
+          "ast": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AstNode",
+                "description": "A query AST, as `/parse` returns it; it must be one the parser\ncould produce."
+              }
+            ],
+            "default": null
+          },
+          "hidden": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Include torrents a filter rule hid (§20.3).",
+            "default": null
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Results per page: 1–200, 50 by default.",
+            "default": null,
+            "minimum": 0
+          },
+          "offset": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "`offset + limit` may not pass 10,000.",
+            "default": null,
+            "minimum": 0
+          },
+          "q": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The query text. Send `q` or `ast`, not both.",
+            "default": null
+          },
+          "sort": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`relevance` (the default), or `discovered`, `size` or `files` with\nan optional `+` (ascending) or `-` (descending, the default).",
+            "default": null,
+            "example": "-discovered"
+          }
+        }
+      },
+      "SearchResponse": {
+        "type": "object",
+        "description": "`GET`/`POST /search`.",
+        "required": [
+          "canonical",
+          "hits",
+          "limit",
+          "offset",
+          "stemmed",
+          "took_ms",
+          "total"
+        ],
+        "properties": {
+          "canonical": {
+            "type": "string",
+            "description": "The query as the server understood it."
+          },
+          "hits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchHit"
+            }
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "stemmed": {
+            "type": "boolean",
+            "description": "Few exact matches: plural forms in titles were included too (§8),\nranked after the exact ones."
+          },
+          "took_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "total": {
+            "type": "integer",
+            "description": "Matches in all, not just this page.",
+            "minimum": 0
+          }
+        }
+      },
+      "SetupRequest": {
+        "type": "object",
+        "description": "`POST /setup`: claims the instance.",
+        "required": [
+          "token",
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "At least 10 characters."
+          },
+          "token": {
+            "type": "string",
+            "description": "The one-time token printed to the logs (`XXXX-XXXX-XXXX-XXXX`, any\ncase)."
+          }
+        }
+      },
+      "SubscriptionEntry": {
+        "type": "object",
+        "description": "A list subscription (§20.6).",
+        "required": [
+          "action",
+          "checked_at",
+          "enabled",
+          "entries",
+          "error",
+          "floor",
+          "format",
+          "id",
+          "kind",
+          "name",
+          "status",
+          "updated_at",
+          "url"
+        ],
+        "properties": {
+          "action": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "checked_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "entries": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "floor": {
+            "type": "boolean"
+          },
+          "format": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`content` or `ip`."
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "`new`, `ok`, `unchanged`, `held` or `error`."
+          },
+          "updated_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "SwarmHistory": {
+        "type": "object",
+        "description": "A torrent's swarm history (`docs/metrics.md` §7.2).",
+        "required": [
+          "daily",
+          "weekly"
+        ],
+        "properties": {
+          "daily": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SwarmSample"
+            }
+          },
+          "weekly": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SwarmSample"
+            }
+          }
+        }
+      },
+      "SwarmSample": {
+        "type": "object",
+        "description": "One day or week of swarm history. Counts saturate at 65,534; null is\na gap.",
+        "required": [
+          "at",
+          "leechers",
+          "seeders"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The start of the UTC day, or of the week (epoch day / 7: weeks\nstart on Thursday)."
+          },
+          "leechers": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "seeders": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "TestBody": {
+        "type": "object",
+        "description": "`POST /filters/test`: a draft rule and examples to try it on.",
+        "required": [
+          "samples"
+        ],
+        "properties": {
+          "query": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "samples": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Sample"
+            },
+            "description": "At most 50."
+          },
+          "unless": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "TestResponse": {
+        "type": "object",
+        "description": "`POST /filters/test`: per sample, in order.",
+        "required": [
+          "results"
+        ],
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TestResult"
+            }
+          }
+        }
+      },
+      "TestResult": {
+        "type": "object",
+        "required": [
+          "decision",
+          "draft",
+          "shadow"
+        ],
+        "properties": {
+          "decision": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Decision",
+                "description": "What the current rules decide; null = nothing."
+              }
+            ]
+          },
+          "draft": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the draft matches; null without a draft."
+          },
+          "shadow": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Rules in shadow mode that would have decided."
+          }
+        }
+      },
+      "TorrentDetail": {
+        "type": "object",
+        "description": "`GET /torrents/{hash}`: the torrent summary (`docs/metrics.md` §7.1),\nits swarm section (§7.2) and the first 500 files.\n\nThe swarm fields are `null` until swarm health is served (M4): null is\n\"never scraped\", never 0.",
+        "required": [
+          "completed",
+          "dht_peers",
+          "dht_seeds",
+          "discovered_at",
+          "file_list",
+          "file_list_total",
+          "files",
+          "flags",
+          "hash",
+          "hash_v2",
+          "id",
+          "last_scrape_at",
+          "leechers",
+          "magnet",
+          "metadata_at",
+          "name",
+          "piece_len",
+          "seeders",
+          "size",
+          "swarm_history",
+          "swarm_trend",
+          "trackers_checked",
+          "trackers_reporting"
+        ],
+        "properties": {
+          "completed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Null = never scraped.",
+            "minimum": 0
+          },
+          "dht_peers": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "BEP 33 estimate of peers (always approximate); null = no estimate.",
+            "minimum": 0
+          },
+          "dht_seeds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "BEP 33 estimate of seeds (always approximate); null = no estimate.",
+            "minimum": 0
+          },
+          "discovered_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "file_list": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FileEntry"
+            },
+            "description": "The first files, in the torrent's order; the rest via `/files`."
+          },
+          "file_list_total": {
+            "type": "integer",
+            "description": "Files in all.",
+            "minimum": 0
+          },
+          "files": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "flags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "hash": {
+            "type": "string",
+            "description": "40 hex digits."
+          },
+          "hash_v2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "64 hex digits; null for a v1-only torrent."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "last_scrape_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Null = never scraped."
+          },
+          "leechers": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Null = never scraped.",
+            "minimum": 0
+          },
+          "magnet": {
+            "type": "string"
+          },
+          "metadata_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "piece_len": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "seeders": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Null = never scraped.",
+            "minimum": 0
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "swarm_history": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SwarmHistory",
+                "description": "14 daily and 26 weekly samples, newest first; null = no history\nkept."
+              }
+            ]
+          },
+          "swarm_trend": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Seeders per day over the last week; null = fewer than 3 daily\nsamples."
+          },
+          "trackers_checked": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Trackers that answered in the last answered round; null = never\nscraped.",
+            "minimum": 0
+          },
+          "trackers_reporting": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Of those, trackers that reported anyone; null = never scraped.",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "Any failure: the error envelope. `error.code` is stable; branch on it.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "session": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "lodestar_session",
+        "description": "The session cookie `/setup`, `/login` and `/password` set. HttpOnly, SameSite=Strict."
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "auth",
+      "description": "First-run setup, login and sessions (§12)."
+    },
+    {
+      "name": "search",
+      "description": "The query language and search (§8)."
+    },
+    {
+      "name": "torrents",
+      "description": "One torrent's details and files."
+    },
+    {
+      "name": "filters",
+      "description": "Filtering and safety (§20)."
+    },
+    {
+      "name": "classify",
+      "description": "Classification rules and corrections (§20.9)."
+    },
+    {
+      "name": "meta",
+      "description": "This document."
+    }
+  ]
+}
