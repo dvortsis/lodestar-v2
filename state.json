@@ -152,13 +152,13 @@
       "notes": "round 1: no blocking in code; asked: de-flake cancellation timing tests, revert index_root rename (B2 owns config.rs), tolerance wording, periodic lease sweep, PR description; optional seal-key HMAC. Scope exceptions accepted. | 13:42: fixes at b05bd31; only filter budget red (51.5us, runner variance, base red) -> one re-run spent; round-2 verifier started. | 13:43 all 23 checks green (budget passed on re-run); awaiting verifier. | merged 14:12 as e2702bc. Polish carry: exact-count test still wall-clock (cancelled_after_30ms); sweep test upgrade() race window; sweeper spawn-failure join."
     },
     "B4": {
-      "status": "in_review",
+      "status": "changes_requested",
       "model": "opus",
       "session": "session_01VDuBzguUByMRWK2Af6LkX3",
       "pr": 69,
       "attempt": 1,
-      "review_rounds": 0,
-      "notes": "launched 14:14 after B5a merged | PR #69 opened; reviewer (+security) started 15:40"
+      "review_rounds": 1,
+      "notes": "launched 14:14 after B5a merged | PR #69 opened; reviewer (+security) started 15:40 | 16:35 round 1 FIX: stale max_id race; futures-core approved by runner; session re-verify per heartbeat; lodestar composition test; topics dup field; W5 429 note."
     },
     "B8": {
       "status": "pending",
@@ -875,7 +875,8 @@
     ],
     "posthoc_52_54": "Reviewed 14:00: FOLLOW-UP. Blocking: Is-adult class rule skips CS-5 core (worker.rs prepare_one). Also preview job slot leak/cap, requeue lock+chunking, class-rule race, /classify lock, class-rule cost cap, \u00a716. Sent to filter session session_01N83eB81W8xkqJgXiD7JLM3 for PR on fix/m4-class-rules (runner merges). Bench addition after F1b. | 14:26 fix PR #68 (fix/m4-class-rules) opened; reviewer started (incl. stored-torrent Is-adult re-filter gap). | 14:50 #68 round 1 FIX: stored-torrent Is-adult relabel skips CS-5 (confirmed) + clippy fetch_update; chunk mark_unenriched_after; no-index stale rows. | 15:18 #68 round 2 MERGE (verifier); budget re-run spent; merge if green else hold for F1b. Follow-up PR fix/m4-adult-followups requested (parser re-derive relabel, correction lost on quarantine expiry, polish). | 15:29 #68 MERGED as d35f8ee (budget passed on re-run). Follow-up fix/m4-adult-followups started. | 15:45 follow-up PR #70 opened; reviewer started (check non-expiring correction holds vs owner decisions). | 16:25 #70 review: OWNER -> owner chose (b) tombstone at purge; rework sent (qualifying holds only, release warning, queue paging, rule-removal release, tests, \u00a720.3/\u00a720.5.6).",
     "settings_form_patch_changed_only": "S-settings-1 brief: settings forms must PATCH only changed fields (re-saving dht_port moves every DHT bind to it).",
-    "b5a_polish": "B5a polish: replace cancelled_after_30ms in exact-count test with tripwire; wait_for in expired_leases_are_swept test; join rebuild thread if sweeper spawn fails. Fold into B5c (B6 brief did not include it) (crates/search owners)."
+    "b5a_polish": "B5a polish: replace cancelled_after_30ms in exact-count test with tripwire; wait_for in expired_leases_are_swept test; join rebuild thread if sweeper spawn fails. Fold into B5c (B6 brief did not include it) (crates/search owners).",
+    "w5_brief": "W5 brief: EventSource dies on non-200; handle 429 Retry-After; per-session cap 4 streams."
   },
   "blocked_on_owner": [
     "M4 continuation: waiting on ExitPlanMode approval (plan mode) \u2014 can't act on #48 review",
