@@ -595,6 +595,13 @@ name = "lodestar-bencode"
 version = "0.0.0"
 
 [[package]]
+name = "lodestar-classify"
+version = "0.0.0"
+dependencies = [
+ "lodestar-release-parser",
+]
+
+[[package]]
 name = "lodestar-dht"
 version = "0.0.0"
 dependencies = [
@@ -638,7 +645,9 @@ version = "0.0.0"
 name = "lodestar-search"
 version = "0.0.0"
 dependencies = [
+ "lodestar-classify",
  "lodestar-metainfo",
+ "lodestar-release-parser",
  "lodestar-store",
  "serde",
  "tantivy",
@@ -1218,6 +1227,7 @@ dependencies = [
  "unwrap-infallible",
  "uuid",
  "winapi",
+ "zstd",
 ]
 
 [[package]]
