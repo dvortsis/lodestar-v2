@@ -1731,11 +1731,17 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Pre-paint storage contract:** `localStorage["lodestar.theme"]` holds `{ mode: "system"|"light"|"dark", light: { id, vars? }, dark: { id, vars? } }`. `vars` is the cached custom-property map of a non-Riverstone theme. The script sets `data-theme`, `color-scheme` and `vars` on `<html>` and falls back to Riverstone for the resolved mode.
 - **`themes.json`** is `{ v: 1, keys: [...], themes: [{ id, name, family, group, mode, contrast: "AA"|"AAA", license?, source?, values: [...] }] }`, with `values` in `keys` order.
 - **Dark `info` uses `primary-ink`**, which equals `primary` for Riverstone but may differ for other themes (a dark `primary` that is too dim is lightened).
+- **Labels and tints pass by construction (W1c).** A `*-content` label is the best of its preferred colours (primary/status fills: surface or background; neutral: text or surface) when that reaches 4.5:1. Otherwise it is the theme's own text colour moved in lightness only (hue and chroma kept, gamut permitting: a theme such as Tokyo Night Light loses a little chroma to the sRGB gamut), in whichever direction reaches the target with the smaller change, and finally pure black or white. High Contrast aims for 7:1 where the fill allows. The hover and selected tints start from the surface/primary mix and move toward the background's lightness until text on them reaches 4.5:1. If that leaves them within ΔE_ok 2 of each other (Solarized Dark), the selected tint mixes in more primary and is re-shifted until they differ by at least 2, so a hovered row never looks selected (a warn-level gate backs this up). The accent label stays the one warning (large/bold allowed). Riverstone's values are unchanged. All 24 families of `docs/themes.md` compile with zero gate failures (tested against a JSON copy in `web/scripts/fixtures/`).
 
 **B0 decisions (API router split, error envelope):**
 - **One module per API domain** in `crates/api` (`auth`, `search`, `torrents`), each with `routes() -> Router<ApiState>`; `api::router` only merges them, one line per module. Session-protected routes are wrapped in `auth::protected`, whose guard reads its `Auth` from a request extension that only `api::router` installs, so a protected route mounted any other way fails closed (500), never open.
 - **One error envelope** for every `/api/v1` failure: `{ "error": { "code", "message", "field"?, "start"?, "end"? } }`. `code` is stable snake_case for clients to branch on, `message` a sentence for people, `field` the parameter at fault, `start`/`end` the byte span of a query syntax error. Extractor rejections (bad JSON, query or path; `field` is the serde path to the bad value) and unknown `/api/v1` paths (404) or methods (405) use it too, with house-style messages rather than serde's text. Status codes didn't change. The 401 keeps `setup_required` beside `error`, so the login screen needs no second request.
 - **`crates/lodestar/src/services.rs`** builds and wires every service of `serve` and owns the ordered shutdown (the blocklist refresher, then the pipeline, then the live indexer); `main.rs` keeps only the CLI.
+**W3 brand pipeline decisions (§10.19):**
+- **AVIF is the format; WebP is only the fallback.** Scenes get AVIF at 360/540/724 (quality 32, effort 4) and WebP at 540w only (quality 28, effort 6, smart subsample). Logos get AVIF (quality 40) and WebP (quality 50) at 1x and 2x.
+- **The gate is 45,000 B for AVIF 540w.** The largest is about 22 KB, so quality has headroom. The 45 KB ceiling guards the pack, not the encoder setting.
+- **Logo display widths:** wordmark 240, horizontal 320, stacked 200 px (§10.19 fixes only the wordmark).
+- **Size:** `web/static/brand/` is about 1.5 MiB (scenes 1.1 MB, logos 0.3 MB, favicons 0.13 MB). An earlier setting with three WebP widths came to 3.05 MiB.
 
 **M5 decisions (build process and UI conventions):**
 - **Spacing uses Tailwind's default scale** (`p-4` = 16 px), restricted to the steps that match the §10.2 ramp: 0, 0.5, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14 (= 0–56 px).
@@ -1754,6 +1760,47 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **The build runs as parallel slices** (`docs/build-plan.md`, `runner/`).
   - One bar for every slice and review: `runner/standards.md`.
   - Merges happen only with green CI and no blocking findings from a fresh Opus reviewer.
+
+**B3 decisions (embedded UI serving, CSP):**
+- **Embedding:** `crates/lodestar/build.rs` bundles `web/build/` (or `$LODESTAR_WEB_BUILD`) when the default-on `web` feature is set. Every text file is precompressed at build time with brotli (q11) and gzip (level 9), each kept only if smaller; fonts and raster images are stored once. With no build (or `--no-default-features`), a stub page says "UI not built: run `npm run build` in web/", so `cargo test` needs no Node. No embed crate: `include_bytes!` from `OUT_DIR`. New direct dependencies of `crates/lodestar`: `brotli` 9.0.0 (build and dev; the only crate new to the tree), and `flate2`, `sha2` and `base64` (build and dev), `tower` and `proptest` (dev), all already in `Cargo.lock`. The bundle adds about 285 KiB to the stripped binary (raw 184 KiB + br 40 KiB + gz 46 KiB).
+- **Serving** is the router's fallback, so declared routes (`/api/**`, `/metrics`, `/healthz`, `/status`) always win. Unknown `/api/**` paths, including percent-encoded ones, get the API's `no_route` envelope. Other unknown GET paths get `index.html`, except under `/_app/`, `/fonts/`, `/brand/` and `/themes.json`, which 404 so a stale chunk fails loudly. Lookups go to a compile-time table, never the filesystem; dot segments, empty segments, backslashes and control characters, raw or percent-encoded, are 404s.
+- **Caching classes:**
+
+  | Paths | `Cache-Control` |
+  |---|---|
+  | `/_app/immutable/**` (content-hashed) | `public, max-age=31536000, immutable` |
+  | HTML (`/`, the SPA fallback) and `/_app/version.json` (SvelteKit's update probe) | `no-cache` |
+  | everything else: `/brand/**`, `/fonts/**`, `/themes.json` (stable names) | `public, max-age=3600` |
+
+  Every file has a strong ETag (SHA-256 prefix, with `-br`/`-gzip` per encoding) and answers `If-None-Match` with 304. The encoding is the client's highest-q of brotli and gzip (brotli on a tie), with `Vary: Accept-Encoding`.
+- **CSP on every HTML response**, computed at build time from the built page:
+  `default-src 'self'; script-src 'self' 'sha256-…'; style-src 'self'; style-src-attr 'unsafe-hashes' 'sha256-…'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`.
+  - `script-src` hashes each inline script: the theme pre-paint script and SvelteKit's bootstrap, whose text changes every build.
+  - `style-src` stays `'self'`: Tailwind and daisyUI are one stylesheet, the fonts are files, and Svelte sets dynamic styles through the CSSOM, which CSP doesn't govern. Static `style="…"` attributes are another matter: SvelteKit emits two (`<div style="display: contents">` in the page, and its visually hidden route announcer in a component template), so `style-src-attr` allows exactly the static values in the build, by hash. Interpolated values aren't hashed; they go through the CSSOM.
+  - Browsers without CSP3 `style-src-attr` (Chrome < 75, Firefox < 108, Safari < 15.4) fall back to `style-src 'self'` and block the two attributes, which only affects the route announcer's hiding and the wrapper's `display: contents`.
+  - `img-src data:` is for daisyUI's data-URI SVG icons. A page with an inline event handler fails the build instead of being allowed.
+  - Also on HTML: `X-Content-Type-Options: nosniff` (on every file), `Referrer-Policy: no-referrer`, and a `Permissions-Policy` that denies accelerometer, camera, display capture, geolocation, gyroscope, magnetometer, microphone, MIDI, payment and USB.
+- **The M1 status page moved from `/` to `/status`.** It stays open (it asks for a login itself, and `/api/status` needs a session) and keeps its own `'unsafe-inline'` policy, now with `object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`, plus `no-referrer`, the same `Permissions-Policy` and `no-cache`.
+
+**Integrations crate decisions (download clients, notifications, secrets, SSRF guard):**
+- **HTTP stack:** the workspace's: reqwest 0.13 with `rustls-no-provider` and the `ring` provider, the same build and trust store as the tracker scraper and the subscriptions fetcher. System proxies are off for integrations: a proxy resolves names itself, which would bypass the guard.
+  - The raw client doesn't leave `GuardedClient`.
+  - `crates/integrations/clippy.toml` forbids `RequestBuilder::send` and `Client::execute`, so every request in the crate passes the literal-IP check.
+- **SSRF policy (§12):**
+  - Link-local, metadata (`169.254.169.254`, `fd00:ec2::254`, `100.100.100.200`) and reserved addresses are never reachable.
+  - Notification endpoints never reach loopback, even with the per-channel private-range opt-in. Download clients may reach loopback, because companions bind to localhost (§18.10).
+  - Carrier-grade NAT (`100.64.0.0/10`, Tailscale) counts as private.
+  - IPv4 embedded in IPv6 (mapped, compatible, NAT64, 6to4) is classified by its IPv4 address. Local-use NAT64 (`64:ff9b:1::/48`) counts only in the /96 layout; any other layout is reserved.
+  - The IPv6 special-purpose blocks `2001:2::/48`, `2001:10::/28`, `3fff::/20` and `5f00::/16` are reserved.
+  - A name with any disallowed answer is refused whole. Every new connection re-resolves and re-checks, which catches rebinding.
+  - Only 307/308 redirects are followed, each hop checked; credentials headers are dropped across origins, and `https` → `http` is refused. Other 3xx responses would turn a POST into a GET and report a lost payload as delivered.
+- **Secrets at rest (§18.10):**
+  - The per-install key lives in `secrets.key` in the data directory, outside the database.
+  - Each secret is sealed with XChaCha20-Poly1305 under a random nonce, with the record's name as associated data, so a sealed value can't be moved between records.
+  - On Windows the key file's ACL is replaced through `icacls` (by its absolute path), because the workspace forbids `unsafe` Win32 calls. It's applied before the key is written and re-applied on every read.
+  - **Rotation:** the key file holds several keys, each identified by an id, and every sealed value records its key's id. `rotate` adds a primary key, callers re-seal their records in their own transaction, and `retire_old_keys` drops the rest. The file always holds every key a stored record may use, so a crash mid-rotation loses nothing.
+- **qBittorrent "Send selected files":** the torrent is added paused, unselected files get priority 0 once the client has the metadata, and then the torrent starts. If a magnet's metadata doesn't arrive within 30 s, the torrent stays paused and the UI says the selection is pending, so nothing unwanted downloads.
+- **Webhook payload:** `lodestar.notification`, `schema_version` 1, with an `id` that stays the same across retries for deduplication. Private-source items are left out, and only their count is sent (§18.7).
 
 **M5 decisions (index rebuild):**
 - **The directory name is the proof of completeness.** Under `data/index`, `v{schema}-t{tokenizer}` is complete, `….building` is in progress and `….trash` is being deleted. A build becomes complete only by an atomic rename, after its final commit and a `COMPLETE` marker. A crash between the marker and the rename just needs the rename at the next start. Directories from before this change already have the complete form, so upgrading doesn't rebuild.

@@ -1,0 +1,51 @@
+{
+  "recorded_from": "qBittorrent v4.6.3 (WebUI API 2.9.3)",
+  "note": "magnet whose metadata hasn't arrived",
+  "request": {
+    "method": "GET",
+    "path": "/api/v2/torrents/files",
+    "query": "hash=c9e15763f722f23e98a29decdfae341b98d53056"
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "connection",
+        "keep-alive"
+      ],
+      [
+        "content-length",
+        "2"
+      ],
+      [
+        "content-security-policy",
+        "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self' 'unsafe-inline'; object-src 'none'; form-action 'self'; frame-ancestors 'self';"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "referrer-policy",
+        "same-origin"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "x-xss-protection",
+        "1; mode=block"
+      ]
+    ],
+    "body": "[]"
+  }
+}

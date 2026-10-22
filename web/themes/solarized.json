@@ -1,0 +1,23 @@
+{
+	"id": "solarized",
+	"name": "Solarized",
+	"group": "community",
+	"license": "MIT (© 2011 Ethan Schoonover)",
+	"source": "https://github.com/altercation/solarized",
+	"light": {
+		"background": "#EEE8D5",
+		"surface": "#FDF6E3",
+		"text": "#073642",
+		"primary": "#268BD2",
+		"accent": "#859900",
+		"categorical": ["#268BD2", "#859900", "#B58900", "#DC322F", "#2AA198", "#6C71C4"]
+	},
+	"dark": {
+		"background": "#002B36",
+		"surface": "#073642",
+		"text": "#93A1A1",
+		"primary": "#268BD2",
+		"accent": "#859900",
+		"categorical": ["#268BD2", "#859900", "#B58900", "#DC322F", "#2AA198", "#6C71C4"]
+	}
+}
