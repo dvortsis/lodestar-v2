@@ -9,14 +9,17 @@ use std::time::Duration;
 use lodestar_integrations::clients::rtorrent::RTorrent;
 use lodestar_integrations::clients::{BasicAuth, ClientConfig, connect};
 use lodestar_integrations::{
-    AddOptions, AuthFailure, Category, ClientError, ClientKind, DownloadClient, Magnet, Secret,
-    Selection, TorrentFile,
+    AddOptions, AuthFailure, Category, ClientError, ClientKind, DownloadClient, Feature, Magnet,
+    Secret, Selection, TorrentFile,
 };
 use support::{Fixture, Received, ReplayServer, fixture, fixture_bytes};
 
 const PASSWORD: &str = "correct-horse-battery";
 const FIXTURE_HASH: &str = "F16304349815C2941FE00ABABB5FE4E9098E0EE4";
 const MAGNET_HASH: &str = "C9E15763F722F23E98A29DECDFAE341B98D53056";
+
+/// A token in the configured URL's query: dropped, never printed.
+const QUERY_TOKEN: &str = "query-token-8c1f";
 
 fn f(name: &str) -> Fixture {
     fixture("rtorrent", name)
@@ -320,24 +323,22 @@ async fn selecting_every_file_sets_nothing_and_paused_stays_stopped() {
 }
 
 #[tokio::test]
-async fn a_magnet_without_metadata_in_time_is_left_stopped() {
-    let server = ReplayServer::start(script(&[
-        "hash_missing",
-        "load_start_magnet",
-        "hash_present",
-        "is_meta_true",
-    ]))
-    .await;
-    let rt = RTorrent::new(&format!("{}RPC2", server.url()), auth())
-        .unwrap()
-        .with_metadata_wait(Duration::ZERO, Duration::from_millis(1));
+async fn a_magnets_files_cant_be_selected() {
+    // A paused magnet fetches no metadata, so nothing could be selected
+    // before it downloads: refused before any request.
+    let server = ReplayServer::start(vec![]).await;
     let opts = AddOptions {
         selected_files: Some(vec![0]),
         ..AddOptions::default()
     };
-    let out = rt.add_magnet(&magnet(), &opts).await.unwrap();
-    assert_eq!(out.selection, Selection::Pending);
-    assert_eq!(call(&server.finish()[1]).0, "load.normal");
+    assert_eq!(
+        client(&server)
+            .add_magnet(&magnet(), &opts)
+            .await
+            .unwrap_err(),
+        ClientError::Unsupported(Feature::MagnetFileSelection)
+    );
+    assert!(server.finish().is_empty());
 }
 
 #[tokio::test]
@@ -506,6 +507,55 @@ async fn nothing_listening_is_unreachable() {
     assert_eq!(rt.test().await.unwrap_err(), ClientError::Unreachable);
 }
 
+#[tokio::test]
+async fn a_hostile_file_count_is_refused() {
+    for count in ["20000000", "9223372036854775807", "-1"] {
+        let mut size = f("size_files");
+        size.response.body = size
+            .response
+            .body
+            .replace("<i8>3</i8>", &format!("<i8>{count}</i8>"));
+        let mut fixtures = script(&["hash_missing", "load_raw", "hash_present", "is_meta_false"]);
+        fixtures.push(size);
+        let server = ReplayServer::start(fixtures).await;
+        let opts = AddOptions {
+            selected_files: Some(vec![0]),
+            ..AddOptions::default()
+        };
+        assert!(
+            matches!(
+                client(&server).add_torrent_file(&torrent(), &opts).await,
+                Err(ClientError::Protocol(_))
+            ),
+            "{count}"
+        );
+        server.finish();
+    }
+}
+
+#[tokio::test]
+async fn a_bulk_send_that_fails_part_way_says_how_many_went_in() {
+    let other = Magnet::parse(&format!("magnet:?xt=urn:btih:{}", "1".repeat(40))).unwrap();
+    let mut fault = f("unknown_method");
+    fault.request.path = "/RPC2".into();
+    let mut fixtures = script(&["hash_missing", "load_start_magnet", "hash_present"]);
+    fixtures.push(fault);
+    let server = ReplayServer::start(fixtures).await;
+    assert_eq!(
+        client(&server)
+            .add_magnets(&[magnet(), other], &AddOptions::default())
+            .await
+            .unwrap_err(),
+        ClientError::Partial {
+            sent: 1,
+            cause: Box::new(ClientError::Rejected(
+                "Method 'd.frobnicate' not defined".into()
+            )),
+        }
+    );
+    server.finish();
+}
+
 /// Captures every log line, at every level, from every crate, for the whole
 /// test binary (see `tests/qbittorrent.rs`).
 fn capture_logs() -> Arc<Mutex<Vec<u8>>> {
@@ -561,7 +611,7 @@ async fn no_password_in_logs_debug_or_errors() {
     let bad = client(&failed).test().await.unwrap_err();
 
     let config = ClientConfig::RTorrent {
-        url: server.url(),
+        url: format!("{}?token={QUERY_TOKEN}", server.url()),
         auth: auth(),
     };
     let boxed = connect(config.clone()).unwrap();
@@ -575,6 +625,7 @@ async fn no_password_in_logs_debug_or_errors() {
         format!("{err} {err:?}"),
         format!("{bad} {bad:?}"),
     ] {
+        assert!(!text.contains(QUERY_TOKEN), "query token leaked: {text}");
         assert!(!text.contains(PASSWORD), "password leaked: {text}");
         assert!(
             !text.contains("Y29ycmVjdC1ob3Jz"),

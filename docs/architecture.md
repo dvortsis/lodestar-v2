@@ -1818,7 +1818,13 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **All four:**
   - **Bulk send:** none of the four has a batch add that reports per torrent, so each adapter adds the torrents one at a time.
   - **Duplicates:** a single torrent that's already in the client is `Rejected` ("already in the client"). In a bulk send a duplicate counts as sent, because it's already where the user wants it; the send is refused only when every torrent was a duplicate.
-  - **"Send selected files"** waits for metadata as qBittorrent does: up to 30 s, polling every 500 ms. It's applied the same way except in Aria2 (below).
+  - **A bulk send that fails part-way** returns `ClientError::Partial { sent, cause }`, so the caller can still count the torrents that went in (`sends`, `docs/metrics.md` §6.7) and doesn't retry them. qBittorrent sends a bulk add as one request, so it never returns `Partial`.
+  - **"Send selected files" works for a `.torrent` file in all four, but for a magnet only in Aria2.** Transmission, Deluge and rTorrent fetch a paused (or stopped) magnet's metadata only once it's started, so nothing could be selected before files start downloading. Checked live: every magnet selection was still pending after 30 s.
+    - `Capabilities::magnet_file_selection` says whether a client can do it. Where it can't, `check_magnets` refuses a magnet with a selection as `Unsupported(MagnetFileSelection)` before any request, and the UI offers "send all files" or the `.torrent` instead.
+    - A metadata-only start, without downloading payload, couldn't be verified here, because the session had no outbound peer network. It's left unsupported rather than guessed.
+    - For a `.torrent`, the adapter still waits up to 30 s (polling every 500 ms) for the client to register it, as qBittorrent does.
+  - **Hostile answers:** a file count above `MAX_FILES` (1,000,000) is a `Protocol` error before anything is sized from it. The check is in each adapter and in the shared `skipped_files`. JSON answers parse into typed structs; file lists are counted and never stored.
+  - **`ClientConfig`'s `Debug`** shows only the URL's scheme, host and port, so a token in the configured URL's query is never printed. The adapters drop the query anyway.
   - **New auth failure:** Transmission answers an `rpc-whitelist` refusal and a brute-force ban with the same bare 403, so `AuthFailure::AddressRefused` says "check the client's IP allow-list, or whether it banned this address". rTorrent's web server uses it for 403 too.
 - **rTorrent: XML-RPC at the web server's `/RPC2`, not ruTorrent's `httprpc` plugin.**
   - **Why:** every rTorrent install can expose `/RPC2`, and ruTorrent itself needs it (or SCGI). `httprpc` exists only where ruTorrent and PHP are installed, and its action set differs between ruTorrent versions. XML-RPC is typed and documented, with real fault answers.

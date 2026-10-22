@@ -19,6 +19,9 @@ const PASSWORD: &str = "correct-horse-battery";
 const FIXTURE_HASH: &str = "f16304349815c2941fe00ababb5fe4e9098e0ee4";
 const MAGNET_HASH: &str = "c9e15763f722f23e98a29decdfae341b98d53056";
 
+/// A token in the configured URL's query: dropped, never printed.
+const QUERY_TOKEN: &str = "query-token-8c1f";
+
 fn f(name: &str) -> Fixture {
     fixture("transmission", name)
 }
@@ -361,25 +364,22 @@ async fn selecting_every_file_sets_nothing_and_paused_stays_paused() {
 }
 
 #[tokio::test]
-async fn a_magnet_without_metadata_in_time_is_left_paused() {
-    let server = ReplayServer::start(vec![
-        f("session_conflict"),
-        f("torrent_add_magnet"),
-        f("files_magnet_no_metadata"),
-    ])
-    .await;
-    let tr = Transmission::new(&server.url(), auth())
-        .unwrap()
-        .with_metadata_wait(Duration::ZERO, Duration::from_millis(1));
+async fn a_magnets_files_cant_be_selected() {
+    // A paused magnet fetches no metadata, so nothing could be selected
+    // before it downloads: refused before any request.
+    let server = ReplayServer::start(vec![]).await;
     let opts = AddOptions {
         selected_files: Some(vec![0]),
         ..AddOptions::default()
     };
-    let out = tr.add_magnet(&magnet(), &opts).await.unwrap();
-    assert_eq!(out.selection, Selection::Pending);
-    let reqs = server.finish();
-    assert_eq!(body(&reqs[1])["arguments"]["paused"], true);
-    assert_eq!(body(&reqs[2])["arguments"]["ids"], json!([MAGNET_HASH]));
+    assert_eq!(
+        client(&server)
+            .add_magnet(&magnet(), &opts)
+            .await
+            .unwrap_err(),
+        ClientError::Unsupported(Feature::MagnetFileSelection)
+    );
+    assert!(server.finish().is_empty());
 }
 
 #[tokio::test]
@@ -488,6 +488,69 @@ async fn nothing_listening_is_unreachable() {
     assert_eq!(tr.test().await.unwrap_err(), ClientError::Unreachable);
 }
 
+#[tokio::test]
+async fn a_hostile_file_count_is_refused() {
+    let mut files = f("files");
+    let list = format!("[{}{{}}]", "{},".repeat(1_000_001));
+    files.response.body =
+        format!(r#"{{"arguments":{{"torrents":[{{"files":{list}}}]}},"result":"success"}}"#);
+    let server = ReplayServer::start(vec![
+        f("session_conflict"),
+        f("torrent_add_file_paused"),
+        files,
+    ])
+    .await;
+    let opts = AddOptions {
+        selected_files: Some(vec![0]),
+        ..AddOptions::default()
+    };
+    assert!(matches!(
+        client(&server).add_torrent_file(&torrent(), &opts).await,
+        Err(ClientError::Protocol(_))
+    ));
+    server.finish();
+}
+
+#[tokio::test]
+async fn a_bulk_send_that_fails_part_way_says_how_many_went_in() {
+    let other = Magnet::parse(&format!("magnet:?xt=urn:btih:{FIXTURE_HASH}")).unwrap();
+    let server = ReplayServer::start(vec![
+        f("session_conflict"),
+        f("torrent_add_magnet"),
+        f("torrent_add_invalid"),
+    ])
+    .await;
+    assert_eq!(
+        client(&server)
+            .add_magnets(&[magnet(), other], &AddOptions::default())
+            .await
+            .unwrap_err(),
+        ClientError::Partial {
+            sent: 1,
+            cause: Box::new(ClientError::Rejected("unrecognized info".into())),
+        }
+    );
+    server.finish();
+}
+
+#[tokio::test]
+async fn a_refused_label_on_rpc_16_keeps_the_added_torrent() {
+    let server = ReplayServer::start(vec![
+        f("session_conflict"),
+        f("session_get_rpc16"),
+        f("torrent_add_magnet"),
+        f("unknown_method"),
+    ])
+    .await;
+    let opts = AddOptions {
+        category: Some("Movies".into()),
+        ..AddOptions::default()
+    };
+    let out = client(&server).add_magnet(&magnet(), &opts).await.unwrap();
+    assert_eq!(out.sent, 1);
+    server.finish();
+}
+
 /// Captures every log line, at every level, from every crate, for the whole
 /// test binary (see `tests/qbittorrent.rs`).
 fn capture_logs() -> Arc<Mutex<Vec<u8>>> {
@@ -539,7 +602,7 @@ async fn no_password_or_session_id_in_logs_debug_or_errors() {
     let refused = client(&refused).test().await.unwrap_err();
 
     let config = ClientConfig::Transmission {
-        url: server.url(),
+        url: format!("{}?token={QUERY_TOKEN}", server.url()),
         auth: auth(),
     };
     let boxed = connect(config.clone()).unwrap();
@@ -554,6 +617,7 @@ async fn no_password_or_session_id_in_logs_debug_or_errors() {
         format!("{bad} {bad:?}"),
         format!("{refused} {refused:?}"),
     ] {
+        assert!(!text.contains(QUERY_TOKEN), "query token leaked: {text}");
         assert!(!text.contains(PASSWORD), "password leaked: {text}");
         assert!(
             !text.contains("Y29ycmVjdC1ob3Jz"),

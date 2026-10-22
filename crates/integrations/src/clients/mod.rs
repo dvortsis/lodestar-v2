@@ -19,8 +19,11 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
+use serde::Deserialize;
+use serde::de::{Deserializer, IgnoredAny, SeqAccess, Visitor};
+
 use crate::BoxFuture;
-use crate::net::{AddrClass, NetError};
+use crate::net::{AddrClass, NetError, redact};
 use crate::secret::Secret;
 
 pub use magnet::{Magnet, MagnetError};
@@ -59,6 +62,10 @@ pub struct Capabilities {
     pub paused: bool,
     /// Downloading only some of a torrent's files.
     pub file_selection: bool,
+    /// File selection for a magnet too. A client that fetches a paused
+    /// magnet's metadata only once it's started can't select before
+    /// anything downloads; there, only a `.torrent` can be selected.
+    pub magnet_file_selection: bool,
     /// Adding from `.torrent` bytes, not only magnets.
     pub torrent_file: bool,
     /// Several magnets in one request (adapters without it loop).
@@ -72,6 +79,8 @@ pub enum Feature {
     SavePath,
     Paused,
     FileSelection,
+    /// File selection for a magnet (a `.torrent` still can be).
+    MagnetFileSelection,
     TorrentFile,
 }
 
@@ -82,6 +91,9 @@ impl Feature {
             Feature::SavePath => "a save path",
             Feature::Paused => "adding paused",
             Feature::FileSelection => "selecting files",
+            Feature::MagnetFileSelection => {
+                "selecting a magnet's files; send all files, or the .torrent file"
+            }
             Feature::TorrentFile => "adding .torrent files",
         }
     }
@@ -204,6 +216,13 @@ pub enum ClientError {
     InvalidRequest(&'static str),
     /// The client answered with something this adapter doesn't understand.
     Protocol(&'static str),
+    /// A bulk send failed part-way: the client took the first `sent`
+    /// torrents (counted as for [`AddOutcome::sent`]), then `cause`
+    /// stopped the rest. Retrying all of them would send those again.
+    Partial {
+        sent: usize,
+        cause: Box<ClientError>,
+    },
 }
 
 /// Why authentication failed.
@@ -256,6 +275,9 @@ impl fmt::Display for ClientError {
             ),
             ClientError::InvalidRequest(why) => write!(f, "invalid request: {why}"),
             ClientError::Protocol(why) => write!(f, "unexpected answer from the client: {why}"),
+            ClientError::Partial { sent, cause } => {
+                write!(f, "the client took the first {sent}, then: {cause}")
+            }
         }
     }
 }
@@ -338,6 +360,20 @@ pub fn check_request(
     Ok(Some(selected))
 }
 
+/// [`check_request`] for magnets: also refuses a selection where the
+/// client can't select a magnet's files.
+pub fn check_magnets(
+    caps: Capabilities,
+    opts: &AddOptions,
+    magnets: usize,
+) -> Result<Option<Vec<u32>>, ClientError> {
+    let selection = check_request(caps, opts, magnets)?;
+    if selection.is_some() && !caps.magnet_file_selection {
+        return Err(ClientError::Unsupported(Feature::MagnetFileSelection));
+    }
+    Ok(selection)
+}
+
 fn check_text(value: &str) -> Result<(), ClientError> {
     if value.trim().is_empty() || value.len() > 4096 || value.chars().any(char::is_control) {
         return Err(ClientError::InvalidRequest(
@@ -393,8 +429,9 @@ pub struct BasicAuth {
 }
 
 /// A configured client, as Settings → Integrations stores it (credentials
-/// already opened from the [`SecretStore`](crate::SecretStore)).
-#[derive(Debug, Clone)]
+/// already opened from the [`SecretStore`](crate::SecretStore)). Its
+/// `Debug` shows each URL's scheme, host and port only.
+#[derive(Clone)]
 pub enum ClientConfig {
     QBittorrent {
         url: String,
@@ -416,6 +453,26 @@ pub enum ClientConfig {
     /// The RPC address (`http://host:6800/jsonrpc`); `secret` is
     /// `--rpc-secret`.
     Aria2 { url: String, secret: Option<Secret> },
+}
+
+impl fmt::Debug for ClientConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (kind, url) = match self {
+            ClientConfig::QBittorrent { url, .. } => (ClientKind::QBittorrent, url),
+            ClientConfig::Transmission { url, .. } => (ClientKind::Transmission, url),
+            ClientConfig::Deluge { url, .. } => (ClientKind::Deluge, url),
+            ClientConfig::RTorrent { url, .. } => (ClientKind::RTorrent, url),
+            ClientConfig::Aria2 { url, .. } => (ClientKind::Aria2, url),
+        };
+        let url = match reqwest::Url::parse(url) {
+            Ok(u) => redact(&u),
+            Err(_) => "(not a URL)".to_owned(),
+        };
+        f.debug_struct("ClientConfig")
+            .field("kind", &kind)
+            .field("url", &url)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The default timeout for one client request.
@@ -479,6 +536,7 @@ where
 /// index past the last file is refused; the caller has left the torrent
 /// paused by then.
 pub(crate) fn skipped_files(selected: &[u32], count: usize) -> Result<Vec<u32>, ClientError> {
+    check_file_count(count)?;
     if selected.last().is_some_and(|&last| last as usize >= count) {
         return Err(ClientError::InvalidRequest(
             "a selected file isn't in the torrent; it was added paused",
@@ -512,6 +570,106 @@ pub(crate) fn base64(bytes: &[u8]) -> String {
     out
 }
 
+/// The most files a torrent is believed to have. A client reporting more is
+/// broken or hostile, and the count would otherwise size allocations.
+pub(crate) const MAX_FILES: usize = 1_000_000;
+
+/// Refuses a file count past [`MAX_FILES`].
+pub(crate) fn check_file_count(count: usize) -> Result<usize, ClientError> {
+    if count > MAX_FILES {
+        return Err(ClientError::Protocol(
+            "the client reported more files than a torrent has",
+        ));
+    }
+    Ok(count)
+}
+
+/// A JSON list read only for its length, refused past [`MAX_FILES`]
+/// entries without storing them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FileCount(pub(crate) usize);
+
+impl<'de> Deserialize<'de> for FileCount {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<FileCount, D::Error> {
+        struct Counter;
+        impl<'de> Visitor<'de> for Counter {
+            type Value = FileCount;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a file list")
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<FileCount, A::Error> {
+                let mut n = 0;
+                while seq.next_element::<IgnoredAny>()?.is_some() {
+                    n += 1;
+                    if n > MAX_FILES {
+                        return Err(serde::de::Error::custom("too many files"));
+                    }
+                }
+                Ok(FileCount(n))
+            }
+        }
+        d.deserialize_seq(Counter)
+    }
+}
+
+/// A JSON list of file priorities, at most [`MAX_FILES`] long; an entry
+/// that isn't a non-negative integer is `None`, keeping later entries in
+/// place.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Priorities(pub(crate) Vec<Option<u64>>);
+
+impl<'de> Deserialize<'de> for Priorities {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Priorities, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Entry {
+            Number(u64),
+            Other(IgnoredAny),
+        }
+        struct Collector;
+        impl<'de> Visitor<'de> for Collector {
+            type Value = Priorities;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a priority list")
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Priorities, A::Error> {
+                let mut out = Vec::new();
+                while let Some(entry) = seq.next_element::<Entry>()? {
+                    if out.len() == MAX_FILES {
+                        return Err(serde::de::Error::custom("too many files"));
+                    }
+                    out.push(match entry {
+                        Entry::Number(n) => Some(n),
+                        Entry::Other(_) => None,
+                    });
+                }
+                Ok(Priorities(out))
+            }
+        }
+        d.deserialize_seq(Collector)
+    }
+}
+
+/// A category or label name from the client: control characters dropped,
+/// trimmed, at most 256 characters; `None` when nothing is left.
+pub(crate) fn category_name(raw: &str) -> Option<String> {
+    let name: String = raw.chars().filter(|c| !c.is_control()).take(256).collect();
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_owned())
+}
+
+/// The error for a bulk send that failed after `sent` torrents went in.
+pub(crate) fn partial(sent: usize, cause: ClientError) -> ClientError {
+    if sent == 0 {
+        cause
+    } else {
+        ClientError::Partial {
+            sent,
+            cause: Box::new(cause),
+        }
+    }
+}
+
 /// The answer to an add that found every torrent already in the client.
 pub(crate) fn already_there() -> ClientError {
     ClientError::Rejected("the torrent is already in the client".into())
@@ -531,6 +689,7 @@ mod tests {
         save_path: true,
         paused: true,
         file_selection: true,
+        magnet_file_selection: false,
         torrent_file: true,
         batch: true,
     };
@@ -623,6 +782,81 @@ mod tests {
             (&[0xff, 0xfe, 0x00], "//4A"),
         ] {
             assert_eq!(base64(raw), enc);
+        }
+    }
+
+    #[test]
+    fn hostile_file_counts_are_refused_without_allocating() {
+        assert!(matches!(
+            skipped_files(&[0], 20_000_000),
+            Err(ClientError::Protocol(_))
+        ));
+        assert!(matches!(
+            skipped_files(&[0], usize::MAX),
+            Err(ClientError::Protocol(_))
+        ));
+        assert_eq!(
+            skipped_files(&[0], MAX_FILES).map(|v| v.len()),
+            Ok(MAX_FILES - 1)
+        );
+        let count = |json: &str| serde_json::from_str::<FileCount>(json);
+        assert_eq!(count("[1, {}, []]").unwrap(), FileCount(3));
+        let many = format!("[{}0]", "0,".repeat(MAX_FILES));
+        assert!(count(&many).is_err());
+        assert!(serde_json::from_str::<Priorities>(&many).is_err());
+        assert_eq!(
+            serde_json::from_str::<Priorities>("[4, \"x\", -1, 7]").unwrap(),
+            Priorities(vec![Some(4), None, None, Some(7)])
+        );
+    }
+
+    #[test]
+    fn magnet_selection_needs_its_own_capability() {
+        let select = AddOptions {
+            selected_files: Some(vec![0]),
+            ..AddOptions::default()
+        };
+        assert_eq!(
+            check_magnets(ALL, &select, 1),
+            Err(ClientError::Unsupported(Feature::MagnetFileSelection))
+        );
+        let caps = Capabilities {
+            magnet_file_selection: true,
+            ..ALL
+        };
+        assert_eq!(check_magnets(caps, &select, 1), Ok(Some(vec![0])));
+        assert_eq!(check_request(ALL, &select, 1), Ok(Some(vec![0])));
+    }
+
+    #[test]
+    fn partial_sends_and_category_names() {
+        assert_eq!(partial(0, ClientError::Timeout), ClientError::Timeout);
+        let e = partial(2, ClientError::Timeout);
+        assert_eq!(
+            e.to_string(),
+            "the client took the first 2, then: the client didn't answer in time"
+        );
+        assert_eq!(
+            category_name(" TV\u{1b}[31m\nShows "),
+            Some("TV[31mShows".into())
+        );
+        assert_eq!(category_name("\u{0}\t "), None);
+        assert_eq!(category_name(&"x".repeat(300)).map(|n| n.len()), Some(256));
+    }
+
+    #[test]
+    fn config_debug_shows_only_scheme_host_and_port() {
+        let config = ClientConfig::Aria2 {
+            url: "http://user:pw@nas:6800/jsonrpc?token=hunter2".into(),
+            secret: Some(Secret::new("s3cret")),
+        };
+        let debug = format!("{config:?}");
+        assert!(
+            debug.contains("nas:6800") && debug.contains("Aria2"),
+            "{debug}"
+        );
+        for secret in ["hunter2", "pw", "s3cret", "jsonrpc"] {
+            assert!(!debug.contains(secret), "{debug}");
         }
     }
 

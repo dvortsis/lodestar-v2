@@ -18,12 +18,16 @@
 //!   plugin (`core.get_enabled_plugins`). Its labels are lowercase, so the
 //!   requested one is lowercased, created if missing (`label.add`) before
 //!   the add, and set with `label.set_torrent` after it.
-//! - **Selected files:** added paused; `core.get_torrent_status` polls
-//!   `files` and `file_priorities` until the metadata is there,
-//!   `core.set_torrent_options` sets `file_priorities` (0 for skipped files,
-//!   the existing priority for the rest), and `core.resume_torrent` starts
-//!   it unless the user asked for paused. Otherwise it stays paused and the
-//!   outcome is [`Selection::Pending`].
+//! - **Selected files** (a `.torrent` only): added paused;
+//!   `core.get_torrent_status` polls `files` and `file_priorities` until the
+//!   torrent is registered, `core.set_torrent_options` sets
+//!   `file_priorities` (0 for skipped files, the existing priority for the
+//!   rest), and `core.resume_torrent` starts it unless the user asked for
+//!   paused. A paused magnet fetches no metadata, so a magnet's files can't
+//!   be selected before it starts: refused as
+//!   [`Feature::MagnetFileSelection`] before any request.
+//! - **Answers** are typed; file lists are counted, never stored, and refused
+//!   past [`MAX_FILES`](super::MAX_FILES).
 //!
 //! Recorded against Deluge 2.1.2 (libtorrent 2.0.10); the fixtures are in
 //! `tests/fixtures/deluge/`.
@@ -35,15 +39,18 @@ use std::time::Duration;
 use reqwest::header::{ACCEPT, CONTENT_TYPE, COOKIE, HeaderValue, SET_COOKIE};
 use reqwest::{Method, Url};
 use serde::Deserialize;
+use serde::de::{DeserializeOwned, Deserializer, IgnoredAny, SeqAccess, Visitor};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
 use super::qbittorrent::session_cookie;
+use super::qbittorrent::upload_timeout;
 use super::{
     AddOptions, AddOutcome, AuthFailure, CLIENT_TIMEOUT, Capabilities, Category, ClientError,
-    ClientInfo, ClientKind, DownloadClient, Feature, METADATA_WAIT, Magnet, POLL_INTERVAL,
-    Selection, TorrentFile, already_there, base64, check_request, client_reason, poll,
-    rejected_status, skipped_files,
+    ClientInfo, ClientKind, DownloadClient, Feature, FileCount, METADATA_WAIT, Magnet,
+    POLL_INTERVAL, Priorities, Selection, TorrentFile, already_there, base64, category_name,
+    check_file_count, check_magnets, check_request, client_reason, partial, poll, rejected_status,
+    skipped_files,
 };
 use crate::BoxFuture;
 use crate::net::{GuardedClient, NetPolicy, parse_url, read_limited, redact};
@@ -54,6 +61,9 @@ const CAPABILITIES: Capabilities = Capabilities {
     save_path: true,
     paused: true,
     file_selection: true,
+    // A paused magnet fetches no metadata, so its files can't be selected
+    // before it starts (§16).
+    magnet_file_selection: false,
     torrent_file: true,
     batch: false,
 };
@@ -86,13 +96,48 @@ impl fmt::Debug for Deluge {
 }
 
 #[derive(Deserialize)]
-struct Answer {
-    #[serde(default)]
-    result: Value,
+struct Answer<T> {
+    #[serde(default = "none")]
+    result: Option<T>,
     #[serde(default)]
     error: Option<RpcError>,
     #[serde(default)]
-    id: Value,
+    id: Option<u64>,
+}
+
+fn none<T>() -> Option<T> {
+    None
+}
+
+/// `core.get_torrent_status` for `files` and `file_priorities`; an unknown
+/// torrent is an empty object.
+#[derive(Deserialize)]
+struct TorrentStatus {
+    files: Option<FileCount>,
+    file_priorities: Option<Priorities>,
+}
+
+/// A `web.get_hosts` row: the host id, then details this adapter skips.
+struct HostId(String);
+
+impl<'de> Deserialize<'de> for HostId {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<HostId, D::Error> {
+        struct Row;
+        impl<'de> Visitor<'de> for Row {
+            type Value = HostId;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a host row")
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<HostId, A::Error> {
+                let id: String = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::custom("an empty host row"))?;
+                while seq.next_element::<IgnoredAny>()?.is_some() {}
+                Ok(HostId(id))
+            }
+        }
+        d.deserialize_seq(Row)
+    }
 }
 
 #[derive(Deserialize)]
@@ -102,9 +147,9 @@ struct RpcError {
     message: String,
 }
 
-/// One call's outcome before session handling.
-enum Reply {
-    Ok(Value),
+/// One call's outcome before session handling: `None` for a JSON null.
+enum Reply<T> {
+    Ok(Option<T>),
     NotAuthenticated,
 }
 
@@ -154,13 +199,14 @@ impl Deluge {
     }
 
     /// Sends one request; returns the answer and any session cookie set.
-    async fn once(
+    async fn once<T: DeserializeOwned>(
         &self,
         method: &str,
         params: &Value,
         cookie: Option<&Secret>,
         limit: usize,
-    ) -> Result<(Reply, Option<Secret>), ClientError> {
+        timeout: Duration,
+    ) -> Result<(Reply<T>, Option<Secret>), ClientError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let body = serde_json::to_vec(&json!({ "method": method, "params": params, "id": id }))
             .map_err(|_| ClientError::Protocol("couldn't build the request"))?;
@@ -169,7 +215,7 @@ impl Deluge {
             .request(Method::POST, self.endpoint.clone())
             .header(CONTENT_TYPE, "application/json")
             .header(ACCEPT, "application/json")
-            .timeout(self.timeout)
+            .timeout(timeout)
             .body(body);
         if let Some(cookie) = cookie {
             let mut value = HeaderValue::from_str(cookie.expose())
@@ -193,7 +239,7 @@ impl Deluge {
         if status != 200 {
             return Err(rejected_status(status, &bytes));
         }
-        let answer: Answer = serde_json::from_slice(&bytes)
+        let answer: Answer<T> = serde_json::from_slice(&bytes)
             .map_err(|_| ClientError::Protocol("the answer isn't Deluge's JSON"))?;
         if let Some(error) = answer.error {
             // Code 5 answers a request the Web UI couldn't read, with id
@@ -201,7 +247,7 @@ impl Deluge {
             if error.code == 5 {
                 return Err(ClientError::Protocol("Deluge couldn't read the request"));
             }
-            if answer.id != json!(id) {
+            if answer.id != Some(id) {
                 return Err(ClientError::Protocol("the answer is for another request"));
             }
             return match error.code {
@@ -213,7 +259,7 @@ impl Deluge {
                 _ => Err(ClientError::Rejected(deluge_reason(&error.message))),
             };
         }
-        if answer.id != json!(id) {
+        if answer.id != Some(id) {
             return Err(ClientError::Protocol("the answer is for another request"));
         }
         Ok((Reply::Ok(answer.result), set_cookie))
@@ -222,28 +268,31 @@ impl Deluge {
     /// Logs in and makes sure the Web UI is connected to a daemon.
     async fn login(&self) -> Result<Secret, ClientError> {
         let params = json!([self.password.expose()]);
-        let (reply, cookie) = self.once("auth.login", &params, None, MAX_RESPONSE).await?;
+        let (reply, cookie) = self
+            .once::<bool>("auth.login", &params, None, MAX_RESPONSE, self.timeout)
+            .await?;
         match reply {
-            Reply::Ok(Value::Bool(true)) => {}
-            Reply::Ok(Value::Bool(false)) => {
+            Reply::Ok(Some(true)) => {}
+            Reply::Ok(Some(false)) => {
                 return Err(ClientError::Auth(AuthFailure::BadCredentials));
             }
             _ => return Err(ClientError::Protocol("the login answer")),
         }
         let cookie = cookie.ok_or(ClientError::Protocol("the login set no session cookie"))?;
         if !self.connected(&cookie).await? {
-            let hosts = self.logged_in(&cookie, "web.get_hosts", json!([])).await?;
+            let hosts: Vec<HostId> = self
+                .logged_in(&cookie, "web.get_hosts", json!([]))
+                .await?
+                .unwrap_or_default();
             let host = hosts
-                .as_array()
-                .and_then(|h| h.first())
-                .and_then(|h| h.get(0))
-                .and_then(Value::as_str)
+                .into_iter()
+                .next()
+                .map(|h| h.0)
                 .filter(|id| id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric()))
                 .ok_or(ClientError::Rejected(
                     "Deluge's Web UI has no daemon to connect to".into(),
-                ))?
-                .to_owned();
-            self.logged_in(&cookie, "web.connect", json!([host]))
+                ))?;
+            self.logged_in::<IgnoredAny>(&cookie, "web.connect", json!([host]))
                 .await?;
             if !self.connected(&cookie).await? {
                 return Err(ClientError::Rejected(
@@ -257,20 +306,19 @@ impl Deluge {
     async fn connected(&self, cookie: &Secret) -> Result<bool, ClientError> {
         self.logged_in(cookie, "web.connected", json!([]))
             .await?
-            .as_bool()
             .ok_or(ClientError::Protocol("web.connected isn't true or false"))
     }
 
     /// A call during login, where "not authenticated" can't be a stale
     /// session.
-    async fn logged_in(
+    async fn logged_in<T: DeserializeOwned>(
         &self,
         cookie: &Secret,
         method: &str,
         params: Value,
-    ) -> Result<Value, ClientError> {
+    ) -> Result<Option<T>, ClientError> {
         match self
-            .once(method, &params, Some(cookie), MAX_RESPONSE)
+            .once(method, &params, Some(cookie), MAX_RESPONSE, self.timeout)
             .await?
             .0
         {
@@ -306,40 +354,65 @@ impl Deluge {
     }
 
     /// One call with the session, logging in again once if it expired.
-    async fn call(&self, method: &str, params: Value, limit: usize) -> Result<Value, ClientError> {
+    /// `None` is a JSON null result.
+    async fn call<T: DeserializeOwned>(
+        &self,
+        method: &str,
+        params: Value,
+        limit: usize,
+    ) -> Result<Option<T>, ClientError> {
+        self.call_timeout(method, params, limit, self.timeout).await
+    }
+
+    /// [`call`](Self::call) with its own timeout (uploads get more).
+    async fn call_timeout<T: DeserializeOwned>(
+        &self,
+        method: &str,
+        params: Value,
+        limit: usize,
+        timeout: Duration,
+    ) -> Result<Option<T>, ClientError> {
         let cookie = self.session().await?;
-        if let Reply::Ok(v) = self.once(method, &params, Some(&cookie), limit).await?.0 {
+        if let Reply::Ok(v) = self
+            .once(method, &params, Some(&cookie), limit, timeout)
+            .await?
+            .0
+        {
             return Ok(v);
         }
         let cookie = self.relogin(&cookie).await?;
-        match self.once(method, &params, Some(&cookie), limit).await?.0 {
+        match self
+            .once(method, &params, Some(&cookie), limit, timeout)
+            .await?
+            .0
+        {
             Reply::Ok(v) => Ok(v),
             Reply::NotAuthenticated => Err(ClientError::Auth(AuthFailure::SessionRefused)),
         }
     }
 
+    /// A call whose result must not be null.
+    async fn value<T: DeserializeOwned>(
+        &self,
+        method: &str,
+        params: Value,
+        what: &'static str,
+    ) -> Result<T, ClientError> {
+        self.call(method, params, MAX_RESPONSE)
+            .await?
+            .ok_or(ClientError::Protocol(what))
+    }
+
     async fn label_plugin(&self) -> Result<bool, ClientError> {
-        let plugins = self
-            .call("core.get_enabled_plugins", json!([]), MAX_RESPONSE)
+        let plugins: Vec<String> = self
+            .value("core.get_enabled_plugins", json!([]), "the plugin list")
             .await?;
-        let plugins = plugins
-            .as_array()
-            .ok_or(ClientError::Protocol("the plugin list"))?;
-        Ok(plugins.iter().any(|p| p.as_str() == Some("Label")))
+        Ok(plugins.iter().any(|p| p == "Label"))
     }
 
     async fn labels(&self) -> Result<Vec<String>, ClientError> {
-        let labels = self
-            .call("label.get_labels", json!([]), MAX_RESPONSE)
-            .await?;
-        let labels = labels
-            .as_array()
-            .ok_or(ClientError::Protocol("the label list"))?;
-        Ok(labels
-            .iter()
-            .filter_map(Value::as_str)
-            .map(str::to_owned)
-            .collect())
+        self.value("label.get_labels", json!([]), "the label list")
+            .await
     }
 
     /// The label to set, created if it doesn't exist; before the add, so a
@@ -353,7 +426,8 @@ impl Deluge {
         }
         let label = label.to_lowercase();
         if !self.labels().await?.contains(&label) {
-            self.call("label.add", json!([label]), MAX_RESPONSE).await?;
+            self.call::<IgnoredAny>("label.add", json!([label]), MAX_RESPONSE)
+                .await?;
         }
         Ok(Some(label))
     }
@@ -366,6 +440,7 @@ impl Deluge {
         label: Option<&str>,
         opts: &AddOptions,
         selecting: bool,
+        timeout: Duration,
     ) -> Result<Option<String>, ClientError> {
         let mut options = serde_json::Map::new();
         if opts.paused || selecting {
@@ -375,7 +450,10 @@ impl Deluge {
             options.insert("download_location".into(), path.as_str().into());
         }
         params.push(Value::Object(options));
-        let id = match self.call(method, Value::Array(params), MAX_RESPONSE).await {
+        let id: Option<String> = match self
+            .call_timeout(method, Value::Array(params), MAX_RESPONSE, timeout)
+            .await
+        {
             Ok(v) => v,
             Err(ClientError::Rejected(why)) if why.contains("already in session") => {
                 return Ok(None);
@@ -383,20 +461,21 @@ impl Deluge {
             Err(e) => return Err(e),
         };
         let id = id
-            .as_str()
             .filter(|h| h.len() == 40 && h.bytes().all(|b| b.is_ascii_hexdigit()))
             .ok_or(ClientError::Rejected("Deluge didn't add it".into()))?
             .to_ascii_lowercase();
         if let Some(label) = label {
-            self.call("label.set_torrent", json!([id, label]), MAX_RESPONSE)
+            self.call::<IgnoredAny>("label.set_torrent", json!([id, label]), MAX_RESPONSE)
                 .await?;
         }
         Ok(Some(id))
     }
 
-    /// The torrent's file priorities, once its metadata is there.
+    /// The priorities to keep for each file, once the torrent is
+    /// registered: the existing one, or libtorrent's default where it's
+    /// missing, zero or not a number.
     async fn priorities(&self, id: &str) -> Result<Option<Vec<u64>>, ClientError> {
-        let status = self
+        let status: Option<TorrentStatus> = self
             .call(
                 "core.get_torrent_status",
                 json!([id, ["files", "file_priorities"]]),
@@ -404,25 +483,22 @@ impl Deluge {
             )
             .await?;
         // An unknown torrent is an empty object: not registered yet.
-        let Some(files) = status.get("files") else {
+        let Some(TorrentStatus {
+            files: Some(files),
+            file_priorities,
+        }) = status
+        else {
             return Ok(None);
         };
-        let count = files
-            .as_array()
-            .ok_or(ClientError::Protocol("the file list"))?
-            .len();
+        let count = check_file_count(files.0)?;
         if count == 0 {
             return Ok(None);
         }
-        let current: Vec<u64> = status
-            .get("file_priorities")
-            .and_then(Value::as_array)
-            .map(|p| p.iter().filter_map(Value::as_u64).collect())
-            .unwrap_or_default();
+        let current = file_priorities.unwrap_or_default().0;
         Ok(Some(
             (0..count)
                 .map(|i| match current.get(i) {
-                    Some(&p) if p > 0 => p,
+                    Some(&Some(p)) if p > 0 => p,
                     _ => NORMAL_PRIORITY,
                 })
                 .collect(),
@@ -440,7 +516,7 @@ impl Deluge {
         })
         .await?
         else {
-            tracing::debug!("Deluge metadata didn't arrive; left paused");
+            tracing::debug!("Deluge didn't register the torrent in time; left paused");
             return Ok(Selection::Pending);
         };
         let skipped = skipped_files(selected, priorities.len())?;
@@ -448,7 +524,7 @@ impl Deluge {
             for i in skipped {
                 priorities[i as usize] = 0;
             }
-            self.call(
+            self.call::<IgnoredAny>(
                 "core.set_torrent_options",
                 json!([[id], { "file_priorities": priorities }]),
                 MAX_RESPONSE,
@@ -456,7 +532,7 @@ impl Deluge {
             .await?;
         }
         if start {
-            self.call("core.resume_torrent", json!([[id]]), MAX_RESPONSE)
+            self.call::<IgnoredAny>("core.resume_torrent", json!([[id]]), MAX_RESPONSE)
                 .await?;
         }
         Ok(Selection::Applied)
@@ -490,12 +566,14 @@ impl DownloadClient for Deluge {
 
     fn test(&self) -> BoxFuture<'_, Result<ClientInfo, ClientError>> {
         Box::pin(async move {
-            let version = self
-                .call("daemon.get_version", json!([]), MAX_RESPONSE)
+            let version: String = self
+                .value(
+                    "daemon.get_version",
+                    json!([]),
+                    "the version isn't a version",
+                )
                 .await?;
-            let version = version
-                .as_str()
-                .map(str::trim)
+            let version = Some(version.trim())
                 .filter(|v| !v.is_empty() && v.len() <= 64 && !v.chars().any(char::is_control))
                 .ok_or(ClientError::Protocol("the version isn't a version"))?;
             Ok(ClientInfo {
@@ -512,7 +590,7 @@ impl DownloadClient for Deluge {
         opts: &'a AddOptions,
     ) -> BoxFuture<'a, Result<AddOutcome, ClientError>> {
         Box::pin(async move {
-            let selection = check_request(CAPABILITIES, opts, magnets.len())?;
+            let selection = check_magnets(CAPABILITIES, opts, magnets.len())?;
             let label = self.prepare_label(opts).await?;
             let selecting = selection.is_some();
             if let [magnet] = magnets {
@@ -523,14 +601,16 @@ impl DownloadClient for Deluge {
                         label.as_deref(),
                         opts,
                         selecting,
+                        self.timeout,
                     )
                     .await?;
                 return self.finish(id, selection, opts).await;
             }
             // Bulk: one add each. A duplicate is already where the user
-            // wants it; only all-duplicates is refused.
+            // wants it; only all-duplicates is refused. A failure part-way
+            // says how many went in.
             let mut new = 0;
-            for magnet in magnets {
+            for (done, magnet) in magnets.iter().enumerate() {
                 let id = self
                     .add_one(
                         "core.add_torrent_magnet",
@@ -538,8 +618,10 @@ impl DownloadClient for Deluge {
                         label.as_deref(),
                         opts,
                         false,
+                        self.timeout,
                     )
-                    .await?;
+                    .await
+                    .map_err(|e| partial(done, e))?;
                 new += usize::from(id.is_some());
             }
             if new == 0 {
@@ -567,6 +649,7 @@ impl DownloadClient for Deluge {
                     label.as_deref(),
                     opts,
                     selection.is_some(),
+                    upload_timeout(self.timeout, file.bytes.len()),
                 )
                 .await?;
             self.finish(id, selection, opts).await
@@ -578,12 +661,16 @@ impl DownloadClient for Deluge {
             if !self.label_plugin().await? {
                 return Err(ClientError::Unsupported(Feature::Category));
             }
-            let mut labels = self.labels().await?;
+            let mut labels: Vec<String> = self
+                .labels()
+                .await?
+                .iter()
+                .filter_map(|l| category_name(l))
+                .collect();
             labels.sort();
             labels.dedup();
             Ok(labels
                 .into_iter()
-                .filter(|l| !l.is_empty())
                 .map(|name| Category {
                     name,
                     save_path: None,

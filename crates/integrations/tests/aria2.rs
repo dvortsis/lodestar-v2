@@ -21,6 +21,9 @@ const SECRET: &str = "correct-horse-battery";
 const FIXTURE_HASH: &str = "f16304349815c2941fe00ababb5fe4e9098e0ee4";
 const MAGNET_HASH: &str = "c9e15763f722f23e98a29decdfae341b98d53056";
 
+/// A token in the configured URL's query: dropped, never printed.
+const QUERY_TOKEN: &str = "query-token-8c1f";
+
 fn f(name: &str) -> Fixture {
     fixture("aria2", name)
 }
@@ -388,6 +391,43 @@ async fn nothing_listening_is_unreachable() {
     assert_eq!(a2.test().await.unwrap_err(), ClientError::Unreachable);
 }
 
+#[tokio::test]
+async fn a_hostile_file_count_is_refused() {
+    let mut files = with_id(f("files"), json!("2"));
+    let list = format!("[{}{{}}]", "{},".repeat(1_000_001));
+    files.response.body = format!(r#"{{"id":"2","jsonrpc":"2.0","result":{list}}}"#);
+    let mut fixtures = script(&["add_torrent_paused"]);
+    fixtures.push(files);
+    let server = ReplayServer::start(fixtures).await;
+    let opts = AddOptions {
+        selected_files: Some(vec![0]),
+        ..AddOptions::default()
+    };
+    assert!(matches!(
+        client(&server).add_torrent_file(&torrent(), &opts).await,
+        Err(ClientError::Protocol(_))
+    ));
+    server.finish();
+}
+
+#[tokio::test]
+async fn a_bulk_send_that_fails_part_way_says_how_many_went_in() {
+    let other = Magnet::parse(&format!("magnet:?xt=urn:btih:{FIXTURE_HASH}")).unwrap();
+    let server =
+        ReplayServer::start(script(&["add_uri", "status_active", "add_torrent_invalid"])).await;
+    assert_eq!(
+        client(&server)
+            .add_magnets(&[magnet(), other], &AddOptions::default())
+            .await
+            .unwrap_err(),
+        ClientError::Partial {
+            sent: 1,
+            cause: Box::new(ClientError::Rejected("Bencode decoding failed".into())),
+        }
+    );
+    server.finish();
+}
+
 /// Captures every log line, at every level, from every crate, for the whole
 /// test binary (see `tests/qbittorrent.rs`).
 fn capture_logs() -> Arc<Mutex<Vec<u8>>> {
@@ -442,7 +482,7 @@ async fn no_token_in_logs_debug_or_errors() {
     let bad = client(&failed).test().await.unwrap_err();
 
     let config = ClientConfig::Aria2 {
-        url: server.url(),
+        url: format!("{}?token={QUERY_TOKEN}", server.url()),
         secret: Some(Secret::new(SECRET)),
     };
     let boxed = connect(config.clone()).unwrap();
@@ -456,6 +496,7 @@ async fn no_token_in_logs_debug_or_errors() {
         format!("{err} {err:?}"),
         format!("{bad} {bad:?}"),
     ] {
+        assert!(!text.contains(QUERY_TOKEN), "query token leaked: {text}");
         assert!(!text.contains(SECRET), "token leaked: {text}");
     }
 }

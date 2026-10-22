@@ -20,12 +20,14 @@
 //!   file, or a magnet without trackers while DHT is off, is dropped in
 //!   rTorrent's log only). So `d.hash` is asked before (an existing torrent
 //!   is a duplicate) and polled after (the torrent must appear).
-//! - **Selected files:** loaded without starting; `d.is_meta` is polled
-//!   until a magnet's metadata is there, `d.size_files` gives the count,
-//!   one `system.multicall` of `f.priority.set` 0 skips the rest,
-//!   `d.update_priorities` applies it, and `d.start` starts it unless the
-//!   user asked for paused. Otherwise it stays stopped and the outcome is
-//!   [`Selection::Pending`].
+//! - **Selected files** (a `.torrent` only): loaded without starting;
+//!   `d.is_meta` and `d.size_files` give the file count (refused past
+//!   [`MAX_FILES`](super::MAX_FILES)), one `system.multicall` of
+//!   `f.priority.set` 0 skips the rest, `d.update_priorities` applies it,
+//!   and `d.start` starts it unless the user asked for paused. A stopped
+//!   magnet fetches no metadata, so a magnet's files can't be selected
+//!   before it starts: refused as [`Feature::MagnetFileSelection`] before
+//!   any request.
 //! - **Categories** are the labels in use (`d.custom1` of every download).
 //!
 //! Recorded against rTorrent 0.9.8 behind nginx 1.24; the fixtures are in
@@ -38,12 +40,13 @@ use std::time::Duration;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::{Method, Url};
 
+use super::qbittorrent::upload_timeout;
 use super::xmlrpc::{self, Call, Param, Response, Value};
 use super::{
     AddOptions, AddOutcome, AuthFailure, BasicAuth, CLIENT_TIMEOUT, Capabilities, Category,
     ClientError, ClientInfo, ClientKind, DownloadClient, METADATA_WAIT, Magnet, POLL_INTERVAL,
-    Selection, TorrentFile, already_there, check_request, client_reason, poll, rejected_status,
-    skipped_files,
+    Selection, TorrentFile, already_there, category_name, check_file_count, check_magnets,
+    check_request, client_reason, partial, poll, rejected_status, skipped_files,
 };
 use crate::BoxFuture;
 use crate::net::{GuardedClient, NetPolicy, parse_url, read_limited, redact};
@@ -53,6 +56,9 @@ const CAPABILITIES: Capabilities = Capabilities {
     save_path: true,
     paused: true,
     file_selection: true,
+    // A stopped magnet fetches no metadata, so its files can't be selected
+    // before it starts (§16).
+    magnet_file_selection: false,
     torrent_file: true,
     batch: false,
 };
@@ -60,7 +66,7 @@ const CAPABILITIES: Capabilities = Capabilities {
 /// Most answers are a few hundred bytes.
 const MAX_RESPONSE: usize = 1 << 20;
 /// Every download's label.
-const MAX_LIST: usize = 64 << 20;
+const MAX_LIST: usize = 16 << 20;
 /// File priorities are set this many files per `system.multicall`.
 const PRIORITY_BATCH: usize = 1000;
 /// rTorrent's fault for a target it doesn't have.
@@ -138,12 +144,18 @@ impl RTorrent {
     }
 
     /// Sends one XML-RPC document; the parsed answer.
-    async fn send(&self, name: &str, body: String, limit: usize) -> Result<Response, ClientError> {
+    async fn send(
+        &self,
+        name: &str,
+        body: String,
+        limit: usize,
+        timeout: Duration,
+    ) -> Result<Response, ClientError> {
         let mut rb = self
             .http
             .request(Method::POST, self.endpoint.clone())
             .header(CONTENT_TYPE, "text/xml")
-            .timeout(self.timeout)
+            .timeout(timeout)
             .body(body);
         if let Some(auth) = &self.auth {
             rb = rb.basic_auth(&auth.username, Some(auth.password.expose()));
@@ -185,8 +197,19 @@ impl RTorrent {
         params: &[Param<'_>],
         limit: usize,
     ) -> Result<Response, ClientError> {
+        self.call_timeout(method, params, limit, self.timeout).await
+    }
+
+    /// [`call_raw`](Self::call_raw) with its own timeout (uploads get more).
+    async fn call_timeout(
+        &self,
+        method: &str,
+        params: &[Param<'_>],
+        limit: usize,
+        timeout: Duration,
+    ) -> Result<Response, ClientError> {
         let body = xmlrpc::method_call(method, params).map_err(ClientError::InvalidRequest)?;
-        self.send(method, body, limit).await
+        self.send(method, body, limit, timeout).await
     }
 
     async fn int(&self, method: &str, hash: &str) -> Result<i64, ClientError> {
@@ -236,9 +259,18 @@ impl RTorrent {
             (Source::File(bytes), true) => ("load.raw_start", Param::Base64(bytes)),
             (Source::File(bytes), false) => ("load.raw", Param::Base64(bytes)),
         };
+        let timeout = match source {
+            Source::File(bytes) => upload_timeout(self.timeout, bytes.len()),
+            Source::Magnet(_) => self.timeout,
+        };
         let mut params = vec![Param::Str(""), data];
         params.extend(commands.iter().map(|c| Param::Str(c)));
-        self.call(method, &params, MAX_RESPONSE).await?;
+        if let Response::Fault(f) = self
+            .call_timeout(method, &params, MAX_RESPONSE, timeout)
+            .await?
+        {
+            return Err(fault_error(&f));
+        }
         let wait = self.metadata_wait.min(LOAD_WAIT);
         let appeared = poll(wait, self.poll_interval, || async {
             Ok(self.exists(hash).await?.then_some(()))
@@ -259,11 +291,11 @@ impl RTorrent {
             return Ok(None);
         }
         let count = self.int("d.size_files", hash).await?;
-        usize::try_from(count)
+        let count = usize::try_from(count)
             .ok()
             .filter(|&n| n > 0)
-            .map(Some)
-            .ok_or(ClientError::Protocol("a torrent without files"))
+            .ok_or(ClientError::Protocol("a torrent without files"))?;
+        check_file_count(count).map(Some)
     }
 
     async fn select_files(
@@ -289,7 +321,10 @@ impl RTorrent {
                     .map(|t| ("f.priority.set", vec![Param::Str(t), Param::Int(0)]))
                     .collect();
                 let body = xmlrpc::multicall(&calls).map_err(ClientError::InvalidRequest)?;
-                let results = match self.send("system.multicall", body, MAX_RESPONSE).await? {
+                let results = match self
+                    .send("system.multicall", body, MAX_RESPONSE, self.timeout)
+                    .await?
+                {
                     Response::Value(v) => v,
                     Response::Fault(f) => return Err(fault_error(&f)),
                 };
@@ -317,7 +352,10 @@ impl RTorrent {
         id: &str,
         opts: &AddOptions,
     ) -> Result<AddOutcome, ClientError> {
-        let selection = check_request(CAPABILITIES, opts, 1)?;
+        let selection = match source {
+            Source::Magnet(_) => check_magnets(CAPABILITIES, opts, 1)?,
+            Source::File(_) => check_request(CAPABILITIES, opts, 1)?,
+        };
         let hash = id.to_ascii_uppercase();
         let start = !opts.paused && selection.is_none();
         if !self.add_one(source, &hash, opts, start).await? {
@@ -363,15 +401,17 @@ impl DownloadClient for RTorrent {
                     .add_single(Source::Magnet(magnet.as_str()), magnet.torrent_id(), opts)
                     .await;
             }
-            check_request(CAPABILITIES, opts, magnets.len())?;
+            check_magnets(CAPABILITIES, opts, magnets.len())?;
             // Bulk: one load each. A duplicate is already where the user
-            // wants it; only all-duplicates is refused.
+            // wants it; only all-duplicates is refused. A failure part-way
+            // says how many went in.
             let mut new = 0;
-            for magnet in magnets {
+            for (done, magnet) in magnets.iter().enumerate() {
                 let hash = magnet.torrent_id().to_ascii_uppercase();
                 let added = self
                     .add_one(Source::Magnet(magnet.as_str()), &hash, opts, !opts.paused)
-                    .await?;
+                    .await
+                    .map_err(|e| partial(done, e))?;
                 new += usize::from(added);
             }
             if new == 0 {
@@ -413,8 +453,7 @@ impl DownloadClient for RTorrent {
                     .as_array()
                     .and_then(|r| r.first())
                     .and_then(Value::as_str)
-                    .map(percent_decode)
-                    .filter(|l| !l.trim().is_empty())
+                    .and_then(|l| category_name(&percent_decode(l)))
                 {
                     labels.insert(label);
                 }
