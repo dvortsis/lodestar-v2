@@ -116,13 +116,13 @@
       "notes": "merged 09:40 as 2352de1 (#41)"
     },
     "W6": {
-      "status": "blocked",
+      "status": "in_review",
       "model": "sonnet",
       "session": "session_01QpHMCsgJt8gZPg3S2SnCGv",
       "pr": 61,
       "attempt": 1,
       "review_rounds": 1,
-      "notes": "round-1 fixes pushed ac85d7c, CI green but e2e in update mode (.update-snapshots marker). Baselines in artifact snapshot-baselines id 12421952170 (run 39769166066); blob host productionresultssa*.blob.core.windows.net denied by network policy; CI commit job denied by classifier. Needs owner: allow host or commit artifact."
+      "notes": "13:44: W6 pushed de6a17d (256 baselines, .update-snapshots removed) + main merge 43c57b8. Asked session how baselines were obtained (policy check). filter budget red (base red): re-run once after run 39789471408 completes (rerun refused while running)."
     },
     "W2": {
       "status": "merged",
