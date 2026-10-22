@@ -3,6 +3,7 @@ name = "lodestar"
 description = "Lodestar: a DHT crawler and torrent-metadata search engine"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true
