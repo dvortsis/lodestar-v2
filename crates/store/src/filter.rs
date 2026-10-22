@@ -35,7 +35,8 @@ pub struct Filtered<'a> {
     /// Every swarm hash of the torrent.
     pub hashes: &'a [[u8; 20]],
     pub rule: &'a str,
-    /// The engine's action code, for `filter_hits`.
+    /// The engine's action code, for `filter_hits`, plus [`SHADOW`] for
+    /// what a rule in shadow mode would have done.
     pub action: u8,
     pub held: Option<Held>,
     /// The sealed name, for quarantine.
@@ -56,6 +57,9 @@ pub struct FilterHit {
     pub at: i64,
     pub evidence: Vec<u8>,
 }
+
+/// Marks a filter hit as shadow mode: logged, not applied (§20.3).
+pub const SHADOW: u8 = 0x80;
 
 /// One quarantined torrent, as the review queue lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
