@@ -33,7 +33,7 @@ pub use index::{
     ScoreParts, SearchIndex, Sort, index_dir,
 };
 pub use lease::{EXACT_BUDGET, Lease, LeaseConfig, Leases, Page, Start};
-pub use live::{IndexStats, LiveConfig, LiveIndexer};
+pub use live::{CommitHook, Committed, IndexStats, LiveConfig, LiveIndexer};
 pub use query::{Node, ParseError, parse};
 pub use rebuild::{
     IndexVersion, Ranking, Rebuild, RebuildPhase, RebuildProgress, Serving, ServingConfig,

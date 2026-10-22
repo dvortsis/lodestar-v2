@@ -28,7 +28,7 @@ use tantivy::directory::{Directory, DirectoryLock, Lock, MmapDirectory};
 
 use crate::index::{Compat, Error, Indexer, Result, SearchIndex};
 use crate::lease::{LeaseConfig, Leases};
-use crate::live::{IndexStats, LiveConfig, LiveIndexer};
+use crate::live::{CommitHook, Committed, IndexStats, LiveConfig, LiveIndexer};
 use crate::schema::{SCHEMA_VERSION, TOKENIZER_VERSION};
 
 const BUILDING: &str = ".building";
@@ -425,6 +425,8 @@ struct Shared {
     progress: Mutex<Option<RebuildProgress>>,
     live: Mutex<Option<LiveIndexer>>,
     stats: Arc<IndexStats>,
+    /// Every live indexer reports its commits here, across swaps (B4).
+    hook: Arc<CommitHook>,
     leases: Arc<Leases>,
     stop: AtomicBool,
 }
@@ -576,12 +578,14 @@ impl Serving {
             None => None,
         };
         let stats = Arc::new(IndexStats::default());
+        let hook = Arc::new(CommitHook::default());
         let live = if writable {
             Some(LiveIndexer::spawn_with_stats(
                 serving.clone(),
                 open_reader()?,
                 config.live.clone(),
                 stats.clone(),
+                hook.clone(),
             )?)
         } else {
             None
@@ -591,6 +595,7 @@ impl Serving {
             progress: Mutex::new(None),
             live: Mutex::new(live),
             stats,
+            hook,
             leases: Arc::new(Leases::new(config.leases.clone())),
             stop: AtomicBool::new(false),
         });
@@ -657,6 +662,13 @@ impl Serving {
     /// The live indexer's counters, kept across the swap.
     pub fn stats(&self) -> Arc<IndexStats> {
         self.shared.stats.clone()
+    }
+
+    /// Where the live indexer reports its commits; it keeps reporting
+    /// there after a swap. Set its sink once the listener exists: commits
+    /// before that report nothing.
+    pub fn commit_hook(&self) -> &Arc<CommitHook> {
+        &self.shared.hook
     }
 
     /// The searcher leases taken on the indexes this handle serves.
@@ -845,11 +857,22 @@ fn rebuild_and_swap(
     {
         tracing::warn!("index: stopping the old indexer: {e}");
     }
+    // What readers can find now; torrents past it are new to them at the
+    // swap, and no live indexer reported them.
+    let visible = lock(&shared.current).watermark();
+    let mut fresh = None;
     let started = (|| {
         let mut w = new.writer(config.live.heap_bytes)?;
         while w.catch_up(&mut store, config.live.batch)? > 0 {}
         w.commit()?;
+        let last = w.last_id();
         w.finish()?;
+        // A count that fails only leaves those torrents unannounced.
+        if let Ok(visible) = visible {
+            fresh = stored_between(&store, visible, last)
+                .ok()
+                .map(|n| (n, last));
+        }
         #[cfg(test)]
         if config.fail_live_at_swap {
             return Err(Error::Corrupt("test: the new live indexer didn't start"));
@@ -859,6 +882,7 @@ fn rebuild_and_swap(
             store,
             config.live.clone(),
             shared.stats.clone(),
+            shared.hook.clone(),
         )
     })();
     let live = match started {
@@ -876,8 +900,27 @@ fn rebuild_and_swap(
     *lock(&shared.live) = Some(live);
     let old = std::mem::replace(&mut *lock(&shared.current), Arc::new(new));
     *lock(&shared.progress) = None;
+    if let Some((docs_added, max_torrent_id)) = fresh.filter(|f| f.0 > 0) {
+        shared.hook.publish(Committed {
+            docs_added,
+            max_torrent_id,
+            at: unix_now(),
+        });
+    }
     tracing::info!("index: swapped to the rebuilt index");
     Ok(Some(old.holders()))
+}
+
+/// Torrents stored with ids in `(after, upto]`.
+fn stored_between(store: &Store, mut after: i64, upto: i64) -> Result<u64> {
+    let mut n = 0;
+    while after < upto {
+        let ids = store.ids_after(after, 10_000)?;
+        let Some(&last) = ids.last() else { break };
+        n += ids.iter().filter(|&&id| id <= upto).count() as u64;
+        after = last;
+    }
+    Ok(n)
 }
 
 /// Starts a live indexer on the index serving now, through a new store
@@ -888,7 +931,13 @@ fn restart_old(shared: &Shared, store_path: &Path, config: &ServingConfig) {
     let started = Store::open_reader(store_path, config.store.clone())
         .map_err(Error::from)
         .and_then(|store| {
-            LiveIndexer::spawn_with_stats(old, store, config.live.clone(), shared.stats.clone())
+            LiveIndexer::spawn_with_stats(
+                old,
+                store,
+                config.live.clone(),
+                shared.stats.clone(),
+                shared.hook.clone(),
+            )
         });
     match started {
         Ok(live) => *lock(&shared.live) = Some(live),
