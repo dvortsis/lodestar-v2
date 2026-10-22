@@ -1,9 +1,9 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-22T05:12:00Z",
+ "updated_at": "2026-10-22T05:09:00Z",
  "launches": {
   "date": "2026-10-22",
-  "count": 5
+  "count": 9
  },
  "tags": {},
  "slices": {
@@ -40,17 +40,17 @@
    "session": "session_01NSdirPw4xiTrGseUFMRd8U",
    "pr": 37,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": ""
+   "review_rounds": 1,
+   "notes": "round 1: changes requested (categorical order to Riverstone order; Rosewood pending owner; CVD both models; Rose Pine accent)"
   },
   "W0": {
-   "status": "in_review",
+   "status": "merged",
    "model": "sonnet",
    "session": "session_01G472Ud4a5RmEjGnhwpwTQw",
    "pr": 35,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "round 2 approved; waiting on windows CI"
+   "notes": "merged after round 2"
   },
   "B1": {
    "status": "pending",
@@ -80,11 +80,11 @@
    "notes": ""
   },
   "W1": {
-   "status": "pending",
+   "status": "running",
    "model": "sonnet",
-   "session": null,
+   "session": "session_013n3VVF4K4QtH4YeGKjACBY",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
    "notes": ""
   },
@@ -98,20 +98,20 @@
    "notes": ""
   },
   "W3": {
-   "status": "pending",
+   "status": "running",
    "model": "sonnet",
-   "session": null,
+   "session": "session_01PtZR2UWvbfVrwEjd3TsbrG",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
    "notes": ""
   },
   "W4": {
-   "status": "pending",
+   "status": "running",
    "model": "sonnet",
-   "session": null,
+   "session": "session_01Xz6N6pccu7mmGoppsJH6w1",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
    "notes": ""
   },
@@ -134,11 +134,11 @@
    "notes": ""
   },
   "W8": {
-   "status": "pending",
+   "status": "running",
    "model": "sonnet",
-   "session": null,
+   "session": "session_0121PwTE5wgafTpKrc4nNuuz",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
    "notes": ""
   },
@@ -655,7 +655,9 @@
   "2026-10-22 owner: the design decided in the 'Modern DHT crawler architecture' session (recorded in docs/architecture.md) is the primary design strategy; ui-design-skills only fills gaps. Encoded in runner/standards.md (PR #39)."
  ],
  "open_issues": [
-  "Migration clash: PR #32 (swarm) and PR #33 (subscriptions) both add V5; both sessions told to agree an order (05:10Z)"
+  "Migration clash: PR #32 (swarm) and PR #33 (subscriptions) both add V5; both sessions told to agree an order (05:10Z)",
+  "Owner decision needed: 24th theme family (Rosewood proposed by C1; \u00a710.18 lists 23)",
+  "\u00a710.18 CVD claim (>=5.5 deutan/protan) doesn't hold under C1's model; log correction in \u00a716 after C1"
  ],
  "runner_prs": {
   "34": "merged",
