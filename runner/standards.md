@@ -97,7 +97,7 @@ Every UI slice reads the skills listed in its brief, so it fills gaps consistent
    - Run a `design-review` pass on each finished screen.
    - Never "fix" an architecture decision to match a skill default. If the two genuinely conflict, raise it to the owner.
 7. **Security:** for anything touching auth, credentials, untrusted input, filters, the cluster or companions, run `/security-review` as well.
-8. **User docs:** re-run the documentation gates (`lint_docs.py docs/user --strict`, `docs_tool.py sync --check`), then read the pages as the reader `user-docs` describes.
+8. **User docs:** re-run the documentation gates from the repository root (`python3 "$GD/scripts/docs_tool.py" sync docs/user --check` and `python3 "$GD/scripts/lint_docs.py" docs/user --strict`, with `$GD` the `github-docs` skill folder as `user-docs` §1 finds it), then read the pages as the reader `user-docs` describes.
    - **Blocking:** a step that needs knowledge the page doesn't give, a risky step without a warning and an undo, a choice without its safe recommendation, an unsafe shortcut taught, a UI label that doesn't match the app, or personal data or real torrent names in a screenshot.
    - **Important:** a missing screenshot or diagram the skill calls for.
 

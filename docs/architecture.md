@@ -807,10 +807,10 @@ Generated screens render from the schema with no screen-specific code beyond gro
 - **Multi-section `PATCH /settings`** (`{section: {field: value}}`): one transaction, one lock, then each section's `watch` channel publishes. Errors carry `section` and `field`.
 - **`POST /settings/preview`** takes the same body. It runs exactly the same validation as `PATCH` without saving, and returns per field: live or restart, warnings, and estimates (size, resource use, the new URL). A property test holds that preview accepts exactly what `PATCH` accepts.
 - **`POST /settings/test`** runs connection tests for integration drafts.
-- **`preferences` section** per account: theme, mode, density, motion, illustrations, shortcuts, language, time zone. It's validated like any other section.
-- **A `settings` SSE event** (`{section, revision}`) after every save. It carries no values; clients fetch them.
+- **`preferences` section** per account: theme, mode, density, motion, illustrations, shortcuts, language, time zone, and **Show adult content** (B17). Show adult content is the one preference that doesn't apply instantly: turning it on asks for the 18+ confirmation first, and applies only once that's confirmed (§20.9). It's validated like any other section.
+- **A `settings` topic on the `/events` hub (B4)** (`{section, revision}`) after every save. It carries no values; clients fetch them. With `settings` and `updates` (§12.2), the hub has 7 topics, and its `u8` topic bitset has room for one more before it must widen. The live log doesn't use the hub (§12.1).
 - **`GET /settings/export`** and **`POST /settings/import`** (`dry_run=true` returns the diff).
-- **`GET /system`** reports the version, restart capability and pending restart fields, plus everything About shows (§10.10.13): build details (commit, date, target, Rust version, UI build id, channel), data-format versions, deployment, OS and resources, uptime, data-directory sizes, and what Lodestar connects to. **`POST /system/update-check`** makes one request to GitHub's releases API through the egress settings, and caches the answer for 6 hours. **`POST /system/restart`** restarts. The HTTP-address keep-or-revert timer lives here as well.
+- **`GET /system`** reports the version, restart capability and pending restart fields, plus everything About shows (§10.10.13): build details (commit, date, target, Rust version, UI build id, channel), data-format versions, deployment, OS and resources, uptime, data-directory sizes, and what Lodestar connects to. About's update status comes from the update engine's signed check (`GET /updates`, `POST /updates/check`, §12.2), never from a separate request. **`POST /system/restart`** restarts. The HTTP-address keep-or-revert timer lives here as well.
 - **Server-side tests:**
   - secrets never appear in `GET`, export or diagnostics;
   - export never includes §20 state;
@@ -911,7 +911,7 @@ Stepped progress, with one primary action per step:
 - **Danger zone:** **Delete log files** (all, or only those with torrent details), with the count and size in the dialog.
 
 **The live log (`/logs`):**
-- **On opening,** it shows the ring buffer's recent lines at once, then follows new ones over the `logs` SSE topic, batched per animation frame (§10.1).
+- **On opening,** it shows the ring buffer's recent lines at once, then follows new ones over `GET /logs/stream` (§12.1; not the `/events` hub), batched per animation frame (§10.1). The toolbar's filters are sent with the stream request, so the server filters for this client.
 - **The list:**
   - Virtualized (TanStack Virtual), with fixed-height one-line rows in Atkinson Hyperlegible Mono.
   - Each row shows the time, level (icon + text), component and message. A click or `Enter` expands the row's fields.
@@ -983,7 +983,7 @@ It needs a signed-in session, like the rest of Settings. Version details aren't 
 - **Updates:**
   - **Status:**
     - the update setting (Off, Check and notify, Install automatically), or the last check's result;
-    - **Check now**, which says first that it makes **one request to GitHub's releases API** through your egress settings (§5) and sends nothing about you;
+    - **Check now**, which runs the update engine's signed check (§12.2: one request for the channel's signed manifest, through your egress settings, sending nothing about you);
     - the result: "You're up to date", or "0.5.3 is available · What's new".
   - **How to update, for this installation:**
     - Docker: the `docker pull` and recreate commands;
@@ -1016,8 +1016,11 @@ It needs a signed-in session, like the rest of Settings. Version details aren't 
 - **Licences and credits:**
   - **Lodestar's own licence**, with its full text. It's **AGPL-3.0-or-later** (owner's decision §2.12). The brand artwork has its own notice (`brand/LICENSE.md`).
   - **Open-source components:** every Rust crate and npm package in the shipped build, with its version, licence and full licence text.
-    - The list is searchable and loads lazily: a content-hashed `licenses.json` generated at build time from `cargo metadata` and `package-lock.json`, with no new dependency.
-    - CI fails the build if a shipped component has a missing licence, or one outside the allowlist.
+    - The list is searchable and loads lazily: a content-hashed `licenses.json` generated at build time with no new dependency:
+      - Rust: `cargo metadata --filter-platform <target>` for each shipped target, so platform-only crates drop out (for example `webpki-root-certs`, CDLA-Permissive-2.0, which only wasm targets use);
+      - npm: `package-lock.json`, limited to the packages bundled into the UI build.
+    - Packages with no licence field go in a reviewed overrides file (`licenses.overrides.json`) that records the licence file they ship. For example, `svelte-toolbelt` (through bits-ui) ships an MIT LICENSE.
+    - CI fails the build if a **shipped** component has no licence, or one outside the allowlist (owner's decision §2.12). Dev-only and build-only tools aren't checked.
   - **Fonts:** Atkinson Hyperlegible Next and Mono, © Braille Institute, SIL Open Font License (the licence travels with the font files, as the OFL requires).
   - **Icons:** Phosphor (MIT).
   - **Brand artwork:** credited per the brand pack.
@@ -1038,14 +1041,17 @@ It needs a signed-in session, like the rest of Settings. Version details aren't 
   After a rollback, the card says what failed, what was restored, and what to do next.
 - **How to update:** a radio group with one line of consequence each:
   - **Off:** Lodestar never contacts GitHub. Check now still works when you press it.
-  - **Check and notify:** "You'll be told about new releases. Nothing installs without you."
+  - **Check and notify:** "You'll be told about new releases. Nothing installs without you, unless you turn on Always install security fixes."
   - **Install automatically.** On Docker and Unraid there's a fourth choice, **Container image updates**: "Use this if Unraid's auto-update or Watchtower updates the image".
 
   Choosing automatic opens the level choice directly under it:
   - **Fixes only** (recommended): "Bug and security fixes. No data migrations."
   - **Fixes and features:** "May migrate data, with a snapshot first, or rebuild the search index in the background."
   - **All releases:** "Includes major releases. Releases that need manual steps still wait for you."
-- **Always install security fixes:** a toggle, on by default, with its consequence.
+- **Always install security fixes:** a toggle with its consequence.
+  - Under **Install automatically**, it's on by default.
+  - Under **Check and notify**, it's off by default, and its label says it installs security releases without asking.
+  - It's hidden under Container image updates and Off.
 - **Advanced** (closed by default): channel (Stable / Beta / Nightly; changing it opens a dialog), wait after a release, install window, allow index rebuilds, and what to be notified about.
 - **Release notes:** each available release with its level badges (Fix, Feature, Major, Security, Manual steps), its date and its notes. "Read on GitHub" opens in a new tab.
 - **History:** the last updates as a table (version, level, date, result: installed / rolled back / skipped, with the reason).
@@ -1351,7 +1357,7 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
     - **Verbosity is a preset over events:** Errors only / Warnings / **Normal** (info, the default) / Detailed (debug) / Everything (trace). It turns on every event at or above that level. Changing any single event makes the preset "Custom", and "Reset to preset" undoes that.
     - **Per-component levels** remain as a middle step: DHT, Fetch, Pipeline, Search, API, Sources, Filters, Integrations, Workers, Companions, Auth, and Libraries (third-party crates).
     - The **raw `tracing` filter string** stays as the expert option. It only reaches Libraries, because first-party lines are all catalogued events.
-    - **A few events are required** and can't be turned off: start and stop, crashes, the setup token (§12), settings saved and restarts, disk-full and log-rotation failures, and the switch that turns data kinds on or off. Without them, a log can't explain itself. They carry no torrent data.
+    - **A few events are required** and can't be turned off: start and stop, crashes, the setup token (§12), settings saved (field names only, never values) and restarts, disk-full and log-rotation failures, and the switch that turns data kinds on or off. Without them, a log can't explain itself. They carry no torrent data.
   - **Data kinds: what a line may contain.** Each kind is its own switch:
 
     | Kind | Default |
@@ -1397,9 +1403,16 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
     - Each wrapper renders according to its kind's switch for that output.
     - Each wrapper marks its field with its kind in the structured record.
   - Third-party crates (HTTP, TLS, Tantivy) are capped at warnings by default. URLs in their messages have query strings and passkeys removed.
-  - **A canary test** runs the pipeline over fixtures with every event on and the **Private** preset. It fails if any fixture's hash (hex or base32), name, path, tracker passkey or peer address appears in any output: console, file, ring buffer or live stream. A second run turns on one kind at a time and checks that only that kind appears. A third run checks the two opt-ins:
-    - peer-with-torrent and filter-change detail appear only while their opt-in is on, and only in the file and live log;
-    - they're gone from every output once the opt-in's time runs out.
+  - **A canary test** runs the pipeline over fixtures with every event on and the **Private** preset. It fails if any fixture's hash (hex or base32), name, path, tracker passkey or peer address appears in any output: console, file, ring buffer, live stream or download.
+    - **A second run** turns on one kind at a time and checks that only that kind appears.
+    - **A third run checks the two opt-ins:**
+      - peer-with-torrent and filter-change detail appear only while their opt-in is on, and only in the file and live log;
+      - they're gone from every output once the opt-in's time runs out.
+    - **A fourth run** turns on **Full plus both opt-ins**. It fails if any fixture secret (password, API key, feed token, cookie, tracker passkey, setup token after setup) or any sealed name appears in any output.
+  - **The CI check also refuses:**
+    - `#[instrument]` without `skip_all` or an explicit field list, because it would log every argument;
+    - untyped error fields (`error = %e`, `?e`) from error types that can embed names or paths. Those errors log through a typed wrapper or their error kind.
+  - **Turning an identifying kind or an opt-in off** (by hand, or when its time runs out) also purges or redacts the records in the ring buffer that carry it, so the live log stops showing them at once.
 - **Where logs go:**
   - **Console (stderr):** always on, so `docker logs`, the systemd journal and Unraid's log viewer work. Text by default, JSON as an option. **The console stays on the Private data kinds even when the file has more turned on**, unless you choose "same as the file". Lodestar can't delete what the container runtime or journal keeps.
   - **Log file:** on by default, at `<data>/logs/lodestar.jsonl`, as structured JSON lines with sensitive fields marked.
@@ -1407,12 +1420,16 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
     - All of these are settings. The folder is configurable, and applies after a restart.
     - A disk-full condition stops file logging with a console warning, rather than stopping Lodestar.
   - **Windows service:** the file is the main log. Errors also go to the Windows Event Log (on by default for the service).
-  - **In-memory ring buffer:** the last 5,000 records (at most 4 MiB). It feeds the live log the moment it opens.
+  - **In-memory ring buffer:** the last 5,000 records (at most 4 MiB). It feeds the live log (`GET /logs/stream`) the moment it opens.
 - **Floods:** a burst of repeated lines (same target, level and message) is folded into one "repeated 1,204 times in 10 s" line in every output. A noisy failure can't fill the disk or swamp the live stream.
 - **Metrics:** `lodestar_log_records_total{level}`. The Settings Overview uses it for "12 errors in the last hour · View" (§10.10.3).
 - **API** (admin session only; API keys and feed tokens can't read logs):
   - **`GET /logs`:** history, newest first, with a cursor. Filters: level, component, text, time range. It reads the ring buffer, then the files.
-  - **`logs` SSE topic** (B4): live records, filtered on the server by level and component, so debug lines travel only when the viewer asks for them.
+  - **`GET /logs/stream`:** the live log, separate from the `/events` hub (B4).
+    - B4's hub shares one 512-event replay ring and one 256-event lag buffer across all topics, renders each frame once for every client, and admits any session. At 200 lines/s, logs would flush the other topics' replay in seconds and force resyncs.
+    - The log stream instead has its own cursor over the 5,000-record ring (`Last-Event-ID`, resuming without gaps while the record is still in the ring).
+    - It applies **per-client filters** on the server (minimum level, components, text), so filtered-out lines never travel.
+    - It sits behind the **admin guard** and reuses B4's conventions: heartbeats, ending with the session, the per-session stream cap, and closing on shutdown.
   - **`GET /logs/catalog`:** every event (id, component, level, label and help keys, default, current, data kinds, required, rate per hour) and every data kind with its current switch per output. The Logging screen renders from it, so a new event appears with no UI change.
   - **`GET /logs/files`:** name, size, time range, and whether the file contains torrent details.
   - **`GET /logs/files/{name}?format=text|jsonl&redact=true|false`** and **`GET /logs/archive.zip`**. `redact=true` strips the fields marked as sensitive, so a log written with identifying kinds on can still be shared safely. It's the default whenever a file contains details.
@@ -1434,7 +1451,7 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
   |---|---|---|
   | Updates | **Off** · **Check and notify** · **Install automatically** | Off; the first-run wizard asks (§10.10.10) |
   | Install automatically | **Fixes only** · **Fixes and features** · **All releases** | Fixes only |
-  | Always install security fixes | on / off: installs a security release even when the level above or "Check and notify" wouldn't | on (once updates aren't Off) |
+  | Always install security fixes | on / off. Under **Install automatically** it installs a security release even when the chosen level wouldn't, without the wait. Under **Check and notify** it's the one thing that can install without you, and its label says so. It never applies under **Container image updates** or Off. | **on** under Install automatically; **off** under Check and notify |
   | Channel | Stable · Beta · Nightly | Stable |
   | Wait after a release | 0–14 days before auto-installing, so a bad release can be withdrawn first; doesn't apply to security fixes | 3 days |
   | Install window | a daily time range, local time | 03:00–05:00 |
@@ -1444,46 +1461,67 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
   Releases that need manual steps are **never** auto-installed, at any level. They're announced with their notes and a guided **Install now**.
 - **Checking:**
   - at most every 6 hours, at a random minute;
-  - one request for the signed manifest of the chosen channel, from GitHub Releases, through the egress settings (§5) and the SSRF guard;
+  - one request for the signed manifest of the chosen channel, from GitHub Releases, through the egress settings (§5) and the SSRF guard, with a fixed `User-Agent: Lodestar-Updater` that carries no version;
   - **no identifier, version or other data about you is sent** beyond what any download reveals (your IP, to GitHub). The "No telemetry, ever" promise (§12, About) stands.
+  - **This is the only update check.** About's **Check now**, the Overview and the status pill all use it (`POST /updates/check`). Nothing reads GitHub's unsigned releases API, so two checks can never disagree.
 - **Verification. Nothing runs that isn't signed:**
-  - The **manifest** is signed with the project's release key (Ed25519, minisign format). The public key is built into the binary.
+  - The **manifest** is signed with the project's release key (Ed25519, minisign format).
+    - The public key is built into the binary.
+    - The manifest names its **channel** inside the signed body, and a manifest for a different channel than the one chosen is refused.
   - Each **artifact** (binary, MSI) is pinned in the manifest by SHA-256 and size, and checked after download. Windows artifacts are also Authenticode-signed (M6), and that signature is checked too.
   - **Two built-in keys** (`packaging/keys/`, embedded at build):
     - the **release key** (`02910813433E81E0`) signs manifests;
     - the **recovery key** (`67922DDF005FD310`) is kept offline by the owner and signs nothing but key changes.
-  - **Key rotation:** a new release key is accepted only through a key-change statement signed by the recovery key, or by the current release key. That lets a lost or leaked release key be replaced without reinstalling anything. Lodestar never accepts a key it can't chain back to one of the built-in keys.
-  - A **downgrade** or a **replayed old manifest** is refused: versions only go up, and manifests carry a timestamp and an expiry.
-  - **Release engineering** (M6 `release.yml`) signs with `RELEASE_SIGNING_KEY`. That's a secret of the GitHub Actions environment `release`, which only `v*` tags and `main` may use, so a workflow edited on a feature branch can't read it. The private keys never enter the repository. The owner created both key pairs on 2026-10-22.
+  - **Key changes need the recovery key:**
+    - A key-change statement names the new release key and carries a **sequence number**. It's accepted only with a valid **recovery-key signature**. The current release key may co-sign, but its signature alone is never enough.
+    - Accepting a statement **revokes the previous release key** for manifests.
+    - A statement whose sequence number isn't higher than the last one accepted is refused.
+    - So a leaked release key can sign manifests until the owner rotates it, but it can never rotate to an attacker's key, and the rotation shuts it out.
+    - Lodestar never accepts a key it can't chain back to the built-in recovery key.
+  - **Replay and rollback protection:**
+    - versions only go up;
+    - manifests carry a timestamp and an expiry, and expired manifests are refused for new installs;
+    - Lodestar stores the **highest manifest timestamp it has accepted** (in `settings`) and refuses any older manifest, even one with a valid signature.
+  - **Re-signing:** manifests expire after 30 days. The release workflow re-signs every channel's current manifest on a weekly schedule, so an installation that checks always finds a valid one without a new release. A lapsed manifest only blocks new installs; it never stops an installed version from starting (below).
+  - **Release engineering** (M6 `release.yml`) signs with `RELEASE_SIGNING_KEY`. That's a secret of the GitHub Actions environment `release`, which only `v*` tags and `main` may use, so a workflow edited on a feature branch can't read it. The private keys never enter the repository. The owner created both key pairs on 2026-10-22. Further hardening is recommended to the owner in `packaging/keys/README.md`: a required reviewer on the environment, and a separate nightly key.
 - **Before installing:**
   - **Where the installation can update itself:** `noexec` data volumes, a read-only binary location with no data-directory fallback, and package-managed installs fall back to Check and notify, with the reason.
   - **Free space:** enough for the store snapshot, the new binary, and the manifest's reindex estimate.
   - **Not busy:** no background rebuild, import or backup running. Otherwise it defers to the next window.
   - **The upgrade path:** if the installed version is older than the release's oldest supported version, Lodestar installs the intermediate releases in order.
 - **How it installs, per deployment:**
-  - **Docker and Unraid (in-container update):**
-    - The verified binary goes to `<data>/bin/lodestar-<version>`.
-    - At start, the image's binary checks `<data>/bin/` for a **newer, verified** version and `exec`s it, so the container's PID 1 survives. The signature is checked again at every start.
-    - A newer **image** always wins: when you pull an image newer than the overlay, the overlay is removed.
+  - **Docker, Unraid, and the Linux tarball or systemd unit (an overlay with a supervisor):**
+    - The verified binary goes to `<data>/bin/lodestar-<version>`, with its manifest entry beside it. `<data>/bin/active` names the version to run.
+    - **The installed binary (the image's, or the unit's `ExecStart`) is the supervisor.** It starts as PID 1 in a container, or as the unit's process, and acts as a minimal init: it forwards signals and reaps processes. It reads `active` and runs that version as its **child**.
+      - With no `active`, or one older than itself, it runs its own code, so a newer image wins, and it removes the older overlays.
+      - An overlay never replaces the supervisor. The supervisor changes only with the image or package, and costs a few MB of memory.
+    - **Before starting an overlay,** the supervisor checks its signature and SHA-256 against the stored manifest entry. **It doesn't check the manifest's expiry.** An installed version must keep starting offline, above all after it has migrated the store, which the image's older binary may not be able to open.
     - About shows "Image 0.5.2 · running 0.5.3 (updated in place)".
-    - If you'd rather update the image yourself (Unraid's auto-update plugin, Watchtower, a pinned tag), choose **Container image updates**. Lodestar then only notifies, so two updaters don't fight. Setting `LODESTAR_UPDATES=notify` in the template locks this.
-  - **Linux tarball or systemd:** the same overlay in the data directory. The unit's `ExecStart` is the stable path, and that binary hands over at start. Lodestar never writes to `/usr/local/bin` or anywhere outside the data directory.
-  - **Windows service (MSI):** a small detached helper (`lodestar update-helper`) verifies the MSI, runs `msiexec` quietly, and watches the service come back. Windows Installer handles files, the service and the firewall rules.
-  - **Windows portable:** the running `.exe` is renamed aside, the new one is put in place, and Lodestar restarts.
+    - If you'd rather update the image yourself (Unraid's auto-update plugin, Watchtower, a pinned tag), choose **Container image updates**. Lodestar then only notifies, so two updaters don't fight, and **Always install security fixes** doesn't apply. Setting `LODESTAR_UPDATES=notify` in the template locks this.
+    - Lodestar never writes to `/usr/local/bin` or anywhere outside the data directory.
+  - **Windows service (MSI):** a small detached helper (`lodestar update-helper`) verifies the MSI, runs `msiexec` quietly, and supervises the restarted service through the probation below.
+    - Windows Installer handles files, the service and the firewall rules.
+    - **For rollback,** the previous MSI is kept in `<data>\updates\`, and the WiX package allows the downgrade that reinstalls it. *(M6 note: cache the MSI and allow that downgrade in WiX.)*
+  - **Windows portable:** the running `.exe` is renamed aside and the new one put in place. The same helper supervises probation, and renames the old `.exe` back on rollback.
   - **Workers (v0.6):** the coordinator updates first, then offers each worker the same signed release over the cluster channel (§19.6). Workers drain, update and rejoin one at a time, within the protocol's version window.
-- **After installing: health check and automatic rollback:**
-  - The new version must pass a **self-test within 5 minutes**:
-    - the store opens and its migrations are complete;
-    - the search index answers a query;
-    - the HTTP and DHT ports are bound;
-    - `/healthz` is green.
-  - **If it fails**, Lodestar rolls back on its own:
-    1. it restores the pre-update store snapshot if a migration ran;
-    2. it starts the previous binary (the last one is always kept);
-    3. it marks the version as **skipped**;
-    4. it notifies you with the reason.
+- **After installing: probation and automatic rollback, run by the supervisor (or the Windows helper), not by the new version:**
+  - **Probation:**
+    - Before starting a new version, the supervisor writes a `pending` record: the version, an attempt count and the start time.
+    - The new version clears it only after passing its **self-test**:
+      - the store opens and its migrations are complete;
+      - the search index answers a query;
+      - the HTTP port is bound, and the DHT port too unless the DHT is turned off;
+      - `/healthz` is green.
+  - **Failure:**
+    - If the child exits, or hasn't cleared `pending` within 5 minutes, the supervisor restarts it, up to **3 attempts**.
+    - Then it rolls back by itself:
+      1. it points `active` back at the previous version (the last one is always kept);
+      2. it restores the pre-update store snapshot if the failed version ran a migration;
+      3. it deletes the failed overlay;
+      4. it adds the version to `<data>/bin/skipped`, which both the supervisor and the updater read, so it's never chosen again;
+      5. it starts the previous version, which notifies you with the reason.
 
-    Torrents ingested during those few minutes are lost in a store restore. The notification says how many.
+    Because the supervisor does this, a binary that crashes or hangs on start still rolls back. Torrents ingested during probation are lost in a store restore; the notification says how many.
   - **A withdrawn release** (the manifest says so) is never installed. If it's already running, Lodestar offers **Roll back to 0.5.2**. It doesn't roll back silently, because the data may have moved on.
   - Manual rollback is always there: **Roll back** in Settings → Updates (the previous version, while its snapshot is kept), and `lodestar rollback` (§12).
 - **Update history:** the last 20 updates (version, level, when, result, and any rollback with its reason), kept in `settings`. This is about software, not torrents, so the owner's no-audit-log decisions don't apply. **Clear history** is there anyway.
@@ -1499,7 +1537,13 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
 - **Tests:**
   - a fake release server with signed fixture manifests: good, bad signature, wrong hash, downgrade, replay, expired, withdrawn, needs-manual, a skipped-version chain;
   - per-deployment installs in CI: the Docker overlay, Linux, and the Windows MSI on the Windows runner;
-  - a forced self-test failure that must restore the snapshot and the previous binary;
+  - key changes:
+    - a statement with the recovery signature is accepted, and the old key's manifests are refused afterwards;
+    - a release-key-only statement is refused;
+    - a lower sequence number is refused;
+  - an older but validly signed manifest is refused, and a manifest for another channel is refused;
+  - the supervisor: a binary that crashes on start, one that hangs without confirming, and one that fails its self-test must each end with the snapshot and the previous version restored, the overlay deleted and the version skipped;
+  - an installed overlay keeps starting with no network after its manifest has expired;
   - a `noexec` volume that must fall back to notify;
   - an install window that holds while a rebuild runs.
 
@@ -2564,7 +2608,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **The serving pointer is a `Mutex<Arc<SearchIndex>>`, held only to clone or replace the `Arc`,** in place of an `RwLock`. A swap then waits behind at most one clone, whatever the platform's reader/writer policy (Windows SRW locks promise none).
 
 **Settings screen plan (2026-10-22, §10.10):** the owner asked for a very robust and user-friendly settings screen. §10.10 previously gave only the section list, the manuscript layout and per-section Save. It is now a full specification. Changes to the approved plan:
-- **Narrow screens use list → detail instead of a select.** With 19 screens and status badges, a select can't show which screen needs attention.
+- **Narrow screens use list → detail instead of a select.** With 21 screens (20 in the navigation, plus the Overview) and status badges, a select can't show which screen needs attention.
 - **Two save models.** Preferences apply instantly with Undo, as §10.18 already did for themes. Server settings are staged and saved atomically per screen, even across API sections, through a new multi-section `PATCH /settings`. This sharpens "per-section Save" rather than replacing it.
 - **New screens:**
   - **Overview** (`/settings`), with Needs attention and Changed from default;
@@ -2607,7 +2651,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - a rotating, gzip-compressed JSON-lines file with a total cap;
   - a ring buffer for the live view;
   - the Windows Event Log for service errors.
-- **UI:** Settings → Logging (System group), plus a full-width live log at `/logs` (SSE topic `logs`, filtered on the server). It's linked from the overflow menu, the Overview, About and error toasts. Log files can be downloaded with sensitive fields removed. `general.log_level` moves into the new `logging` section.
+- **UI:** Settings → Logging (System group), plus a full-width live log at `/logs`. It streams from its own admin-only `GET /logs/stream` with per-client filters, not from the `/events` hub (review of PR #86). It's linked from the overflow menu, the Overview, About and error toasts. Log files can be downloaded with sensitive fields removed. `general.log_level` moves into the new `logging` section.
 - **Slices:** the logging core is **Opus** in two PRs, because it's privacy-critical and concurrent:
   - `B-log1`: wrappers and sweep, file sink, `logging` section, canary;
   - `B-log2`: ring buffer, SSE, history and file API.
@@ -2619,19 +2663,19 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Stale-tab check:** a mismatch between the UI and the server build is caught on every page load, not only on About.
 - **Embedded release notes** for the running version.
 - **Data formats and this installation:** schema and index versions, deployment, data sizes.
-- **Updates:** a manual **Check now**, update steps for each deployment, and a link to Settings → Updates. Auto-update came the same day (§12.2).
+- **Updates:** **Check now** (the update engine's signed check; there's no separate GitHub API check), update steps for each deployment, and a link to Settings → Updates. Auto-update came the same day (§12.2).
 - **Help and community links:** built from `Cargo.toml`'s `repository`. Report a problem shows what it will prefill before anything leaves.
 - **"No telemetry, ever"**, with a list of everything Lodestar connects to.
 - **Diagnostics.**
 - **Licences and credits:** generated at build from `cargo metadata` and `package-lock.json`, with a CI licence allowlist.
 - **About needs sign-in**, so the version isn't disclosed to anyone else.
 - **Licence:** the owner chose **AGPL-3.0-or-later** (owner's decision §2.12), applied in this PR, with the brand assets kept outside it. The licence allowlist in CI follows from it.
-- **Slices:** the screen is a Sonnet slice, `S-about`. The build metadata, the update check and the licence generation sit with B2c, which owns `/system`; the update check goes through the network stack and the SSRF guard.
+- **Slices:** the screen is a Sonnet slice, `S-about`. B2c owns `/system` (the build metadata) and the licence generation. The update check belongs to the update engine (`B-update`).
 
 **Auto-update (owner, 2026-10-22, §12.2, §10.10.14):** the owner asked for "easy auto update capability", optional at various release levels. This replaces "Lodestar never updates itself" and the optional update check (owner's decision §2.13).
 - **Off until chosen**, because checking contacts GitHub (offline by default, §1.2.3). The choices are **Check and notify** and **Install automatically**.
 - **Levels:** Fixes only (the recommended choice), Fixes and features, All releases.
-  - **Always install security fixes** is on by default.
+  - **Always install security fixes** is on by default under Install automatically. Under Check and notify it's off by default. It never applies to Container image updates.
   - Releases that need manual steps never auto-install.
   - Levels come from the signed manifest, not from version numbers.
 - **Channels:** Stable, Beta, Nightly.
@@ -2644,7 +2688,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - a self-test within 5 minutes, with automatic rollback (snapshot and previous binary);
   - withdrawn releases never installed.
 - **Per deployment:**
-  - **Docker, Unraid and Linux** get a verified binary overlay in the data directory, `exec`'d at start. A newer image wins.
+  - **Docker, Unraid and Linux** get a verified binary overlay in the data directory, run as a child of the installed binary, which supervises probation and rollback. A newer image wins.
   - **"Container image updates"** defers to Unraid's or Watchtower's image updates.
   - **The Windows MSI** goes through a detached helper. Portable Windows uses rename-and-replace.
   - **Workers** update after the coordinator.
@@ -2691,6 +2735,24 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Visibility follows the effective class:** the index's `type:adult` term comes from the stored classification, your Is adult / Not adult correction and classification rules included (§20.7). A correction rewrites the stored enrichment and logs the torrent in `reindex_log`, so the live indexer picks it up at its next commit (about 2 s); **no rebuild is needed**. Until then, search hits and detail also check the stored class, so a torrent just corrected to Is adult doesn't show; one just corrected to Not adult appears at that commit. Two lags remain: when the class generation has moved, a correction's re-enrichment can wait for the backfill, and classification rules apply only once a torrent is re-enriched. **Known gap:** a torrent that isn't enriched yet (fresh imports, backfill still running) has no `type:` term and no stored class, so it isn't hidden until it's enriched.
 - **Unchanged:** the filter engine, the floor, CS-5/CSX-5 (they judge detection's own class), the corrections, the crawler and the store. Adult torrents are still stored and indexed; this is display only.
 - **Left for later slices:** Alerts (B9), Insights segments (B11a) and Discover (B13) read the same `content.show_adult` when they land and leave Adult out entirely, not as placeholders (§20.9). Torznab, Stremio and export wire their own reserved fields.
+
+**Review fixes (runner review of PR #86, 2026-10-22):** the review found design gaps in this session's plan, all fixed in the plan text:
+- **Key changes need the recovery key.** The release key alone can't rotate. Accepting a change revokes the old key. Key statements carry a monotonic sequence number.
+- **Manifest hygiene:**
+  - the manifest signs its channel;
+  - the highest accepted timestamp is stored, so an older signed manifest is refused;
+  - manifests are re-signed weekly before their 30-day expiry;
+  - the check sends a fixed User-Agent with no version.
+- **One update check.** About uses the signed manifest; B2c no longer calls GitHub's releases API.
+- **Rollback is run by a supervisor:**
+  - the installed binary runs the selected version as a child, with an `active` pointer, a `pending` probation record and 3 attempts;
+  - a crash or a hang rolls back without the new version's help;
+  - the start-time check verifies the signature and hash, but not manifest expiry.
+  - The Windows helper does the same, with the previous MSI cached.
+- **Security fixes:** on by default only under Install automatically, off by default under Check and notify, and never with Container image updates.
+- **The live log** gets its own admin-only `GET /logs/stream`. B4's shared ring and lag buffer would be flushed by log traffic, and B4 admits any session.
+- **The logging canary** gains a Full-plus-opt-ins run for secrets and sealed names. The CI check refuses argument-capturing `#[instrument]` and untyped error fields. Turning a kind off purges the ring.
+- **Licences** are generated per shipped target, with a reviewed overrides file. The allowlist covers shipped components only.
 
 ## 17. Verification (once built)
 

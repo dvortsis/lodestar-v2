@@ -247,11 +247,11 @@ Each item is one PR of about 1,500 changed lines or fewer. **[M]** = main sessio
   - **[M] M-settings-form:** the form engine every screen and the wizard use (draft store, validation and server-error mapping, atomic save, conflict merge, leave guard, drafts, Undo, the `SettingField` and widget registry).
   - **[S] S-settings-1:** the shell (grouped navigation, Overview, list → detail, settings search and palette entries, restart banner, Show changed only, View as config.toml) and the generated screens: General, Crawler, Network & VPN, Storage & retention, Search & ranking.
   - **[S] S-settings-2:** Integrations, Notifications, Trackers, Insights & digest, Language & region.
-  - **[M] B-update:** the update engine (§12.2): signed manifest, levels and channels, overlay install, self-test and automatic rollback. `/security-review` required. The Windows MSI path and manifest signing in `release.yml` come with M6.
+  - **[M] B-update:** the update engine (§12.2): the signed manifest and key chain (key changes need the recovery key), levels and channels, the single update check, the overlay supervisor with probation, and automatic rollback. `/security-review` required. The Windows MSI path and manifest signing in `release.yml` come with M6.
   - **[S] S-updates:** Settings → Updates and the wizard's Updates step (§10.10.14).
-  - **[S] S-about:** Settings → About (§10.10.13). B2c provides `/system`, the update check and `licenses.json`.
+  - **[S] S-about:** Settings → About (§10.10.13). B2c provides `/system` and `licenses.json`; Check now uses B-update's signed check.
   - **[M] M-security-settings:** the Security screen (password, sessions, API keys, proxy auth).
-  - **[M] B-log1, B-log2:** the logging core (§12.1): the event catalogue (`log_event!`) with per-event switches and counters, and per-kind data switches per output (Private by default), enforced by typed wrappers, a CI check and a canary test; the rotating log file; then the ring buffer, the `logs` SSE topic and the file API.
+  - **[M] B-log1, B-log2:** the logging core (§12.1): the event catalogue (`log_event!`) with per-event switches and counters, and per-kind data switches per output (Private by default), enforced by typed wrappers, a CI check and a canary test; the rotating log file; then the ring buffer, the admin-only `GET /logs/stream` (not the `/events` hub) and the file API.
   - **[S] S-logs:** Settings → Logging and the live log at `/logs` (§10.10.12).
   - the first-run wizard, reusing the same fields;
   - Appearance: theme picker and custom-theme editor with a live contrast report.
