@@ -102,7 +102,7 @@ One process, one binary (`lodestar`), with one data directory. Internally it's a
  └──────────────────────────────┘
 ```
 
-Data dir layout: `data/lodestar.db` (SQLite), `data/index/torrents/`, `data/index/files/`, `data/hot/*.col` (mmap'd stats columns), `data/dht/state.bin` (routing table + node IDs), `config.toml`.
+Data dir layout: `data/lodestar.db` (SQLite), `data/index/torrents/`, `data/index/files/`, `data/hot/*.col` (hot-column snapshots), `data/dht/state.bin` (routing table + node IDs), `config.toml`.
 
 ## 5. DHT crawler
 
@@ -191,7 +191,7 @@ Text extracted from NFOs is indexed into an `nfo_text` field (boost ~2).
 - **Content filtering (§20.7):** `filter_rules`, `filter_overrides`, `filter_fixtures`, `filter_hits`, `tombstones`, `quarantine` (sealed names). There's no audit log of filtering changes (§20.11). These replace the M1 `blocklist` config files.
 - `trackers`, `saved_searches`, `alerts`, `user_items` (fav/hidden/labels/notes), `collections`, `settings`, `zstd_dicts`, `schema_migrations`.
 
-**Hot columns:** `data/hot/{seeders,leechers,trackers,last_seen,user_flags}.col` are mmap'd `u32` arrays indexed by torrent id, read and written as atomics so there are no locks between the scraper and searchers. Seeders/trackers use a sentinel for **"never scraped"**, so the UI shows "—" rather than a misleading 0. Swarm stats change constantly; putting them in Tantivy would force delete+reinsert of whole documents. Instead, search collectors read these arrays (a nanosecond lookup) for filtering, sorting and ranking. SQLite stays authoritative, and the arrays are rebuilt on startup if they are inconsistent.
+**Hot columns:** seeders, leechers, trackers, DHT estimate, last seen and (from M5) user flags are in-memory atomic arrays indexed by torrent id, so there are no locks between the scraper and searchers. They're snapshotted to `data/hot/*.col` on a clean shutdown (§16, M4 plan: not mmap'd, because the workspace forbids `unsafe`). Seeders/trackers use a sentinel for **"never scraped"**, so the UI shows "—" rather than a misleading 0. Swarm stats change constantly; putting them in Tantivy would force delete+reinsert of whole documents. Instead, search collectors read these arrays (a nanosecond lookup) for filtering, sorting and ranking. SQLite stays authoritative, and the arrays are rebuilt on startup if they are inconsistent.
 
 **Insights rollups (reporting without touching raw data):** every number on Insights (§10.9) comes from small pre-aggregated tables. They're maintained incrementally by the pipeline, so reports never scan `torrents` or the search index.
 - **Tables:**
@@ -1519,6 +1519,219 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Size:** `title_stem` costs about 3 B per torrent (words only, no norms). The torrent index is 408 B per torrent at 100k (budget 512). Schema v4.
 - **Name patterns** belong to the §20 rule engine (an M4 add-on), so M3 doesn't build them.
 
+**M4 plan (swarm health; approved by the owner):**
+- **Owner decisions:**
+  - **Hot columns are safe in-memory atomic arrays, not mmap'd files.** The workspace forbids `unsafe`, and mapping a file needs it.
+    - They're snapshotted to `data/hot/*.col` with a stamp on a clean shutdown. A start without a matching stamp rebuilds them from SQLite.
+    - The cost is about 20 B per torrent of RAM (about 200 MB at 10M) counted against the 1 GB RSS budget. Narrower trackers and DHT columns (u8, u16) can win back about 50 MB later.
+  - **reqwest with rustls** is the HTTP client. It serves BEP 48 scrapes now and becomes the shared per-host client for the §18 HTTP plugins.
+- **What exists:**
+  - KRPC already encodes and parses BEP 33 (`scrape`, `BFsd`, `BFpe`), but lookups never ask for it.
+  - The query parser already recognises `seeders:`, `trackers:`, `dht:`, `seen:` and `time:`.
+  - Rediscoveries don't update `last_seen_at` yet. M4 fixes that.
+- **Slices (one PR each):**
+  1. **`tracker-scrape`:** a pure protocol crate.
+     - BEP 15 UDP scrape: up to 74 hashes a packet, connection ids cached for 60 s, and replies checked for transaction id and exact length.
+     - BEP 48 HTTP scrape, multi-hash.
+     - Fuzz targets and property tests on both parsers, plus in-process fake trackers for tests.
+  2. **DHT BEP 33:**
+     - `Node::scrape(hash)` runs a get_peers lookup with `scrape=1`. It ORs the K closest responders' filters and estimates with `ln(c/m) / (k·ln(1−1/m))`, where m = 2048 and k = 2.
+     - Only the counts are kept, never the filters (§18.7).
+     - Scrape lookups get a capped share of the query budget (about 10%), so they serve new, viewed and rediscovered torrents, not decay sweeps.
+     - The node also answers `scrape=1` queries from its own peer store.
+  3. **Store migration v5 and hot columns** (the content filter took v4 first):
+     - `trackers`, `swarm` (indexed on `next_scrape_at`), `swarm_trackers` and `swarm_history`.
+     - The history ring holds 14 daily and 26 weekly samples, as u16 seeders and leechers with `0xFFFF` for gaps.
+     - Hot columns use a "never scraped" sentinel.
+     - `last_seen_at` is written through to SQLite at most hourly per torrent.
+     - The size report counts the swarm rows.
+  4. **Health service** (the scrape scheduler, in `pipeline`):
+     - **Lanes, served by DRR:** interest (detail views, top search hits), new (ids past a scrape watermark, so ingest writes no swarm row), rediscovered (a bounded set) and due.
+     - **Decay:**
+       - alive torrents every 6 h, doubling up to 3 d while nothing changes;
+       - dead torrents every 2 d, doubling up to 30 d;
+       - a viewed torrent is refreshed when its data is older than 30 min.
+     - **Per tracker:**
+       - a token bucket (UDP: one request every 2 s at Balanced, 5 s at Low, 1 s at Aggressive; HTTP slower);
+       - a backoff, down and banned state machine;
+       - the opentracker rule: a tracker counts as reporting only when s+l+c > 0 (§15).
+     - **Never scraped:** `private` and `private_source` torrents, because a public scrape would leak the hash.
+     - **The swarm-consistency check** (§8) sets a suspect flag in `swarm`. It's a ranking penalty and a displayed reason, not part of the stored junk score, because swarms change.
+     - **Write path:** results go through the single writer as part of `WriteBatch`, and hot columns change after the commit.
+     - **Scrape rollups:** requests by tracker and outcome, and hashes by tracker, split into reporting and zero.
+  5. **Search on hot columns:**
+     - **Filters:** `seeders:`, `trackers:`, `dht:`, `seen:` and `time:`.
+       - At the top level they're checked in the collector.
+       - Under `|` or `-`, a small custom query handles them.
+       - Never-scraped torrents match no range.
+     - **Sorts:** seeders, leechers, trackers and seen. The browse cache key adds a 60 s "hot epoch".
+     - **The M4 re-ranker** multiplies the 200-candidate window by:
+       - `log(1+seeders)`;
+       - freshness;
+       - a trackers nudge;
+       - the suspect penalty;
+       - the junk penalty, once stored.
+       
+       Never-scraped torrents get a neutral prior. Weights live in config, with `?explain=1`.
+     - **`search-bench`** gains swarm-filter and swarm-sort classes.
+  6. **API, binary and Serve rollups:**
+     - `[scrape]` config with a default public tracker list.
+     - A swarm section in the detail view: seeders, leechers and completed, "n of m trackers", scrape age, the DHT estimate, per tracker, and history with trend.
+     - Hits carry swarm data, and views and top hits feed the interest lane.
+     - Serve rollups: searches, latency log buckets and zero results.
+     - Metrics, the status page and `operations.md`.
+- **Order against M3:**
+  - Slices 1–3 don't touch M3 code.
+  - Slice 4 changes the writer, so it follows M3's worker boundary.
+  - Slice 5 is measured after M3's index changes, so the 10M gate reflects the final schema.
+- **Deferred:** the BEP 48 full-scrape discovery source (§18.3, v0.6) gets its own PR after M4, reusing slice 1's HTTP client.
+- **Exit:**
+  - Seeders and trackers filters and sorts meet §3 at 10M: keyword p95 < 30 ms, browse < 50 ms.
+  - Scheduler property tests and the fake-tracker end-to-end test pass.
+  - Memory stays flat in a soak run.
+
+**M4 implementation decisions (tracker scrape, `lodestar-tracker-scrape`):**
+- **One call is one request to one tracker.** `Tracker::scrape(hashes)` returns counts in request order, with `None` where the tracker gave no entry. Choosing hashes, rate limits, backoff and bans belong to the scheduler (slice 4).
+- **UDP (BEP 15):**
+  - Each tracker gets its own socket, connected to the tracker. The kernel then drops anyone else's datagrams, and each tracker is one NAT flow. A reply must also carry our random transaction id; anything else is skipped until the deadline.
+  - A connection id is reused for 60 s. If a scrape with a cached id is refused, the client reconnects once before believing the refusal, because trackers expire ids on their own schedule.
+  - The defaults are a 5 s wait and one retry, not BEP 15's 15 s × 2ⁿ: a scrape can always wait for the next round.
+  - At most 74 hashes go in a packet, so a reply fits in 900 bytes. Hosts are re-resolved hourly, and the socket binds the crawler's address (§5), so scrapes leave through the same VPN.
+- **HTTP (BEP 48):**
+  - The scrape URL follows the convention: the last path segment must start with `announce`. A tracker whose URL doesn't is treated as not supporting scrapes.
+  - reqwest runs on rustls with the `ring` provider. reqwest's default, aws-lc, is a C/CMake build that complicates the Windows and musl targets.
+  - The client ignores `HTTP(S)_PROXY`, because crawler traffic leaves through the bound interface like the DHT does. It follows at most 2 redirects, caps bodies at 64 KiB before reading them, sends 32 hashes per request by default (74 at most), and honours `min_request_interval` up to a day.
+  - Errors never include the URL, which may hold a passkey.
+- **Reading replies:**
+  - A missing count reads as 0, a negative one as 0, and one too large for u32 as `u32::MAX`. An entry with a non-integer count is dropped.
+  - A UDP reply with fewer entries than asked leaves gaps. One with more is a protocol error.
+  - Error text is cut to 200 printable characters.
+  - `Counts::is_reporting` is the opentracker rule: s+l+c > 0.
+- **Identity:** a tracker's canonical URL is `udp://host:port` (BEP 41 paths dropped) or the normalised announce URL without its fragment. It's the key the `trackers` table will use.
+- **Tests:** in-process fake UDP and HTTP trackers (feature `testing`) model opentracker and inject faults: lost and stray packets, refusals, expired connection ids, truncated replies, HTTP errors and oversized bodies. The parsers are property-tested and fuzzed (`fuzz/tracker_scrape`: 5.0M runs clean on first add).
+
+**M4 implementation decisions (hot columns, process):**
+- **Hot columns** (`store::hot`):
+  - Five u32 columns: seeders, leechers, trackers reporting, DHT estimate (seeds + peers) and last seen.
+  - Relaxed atomics in chunks of 64k ids, allocated on first write and never freed. Readers never wait, and memory follows the highest id written: 20 B per id, about 200 MB at 10M. Ids from 2³⁰ on have no slot.
+  - `u32::MAX` is "never scraped" (or "unknown" for last seen), and real counts are capped below it. Last seen only moves forward.
+  - One torrent's columns are written one after another, so a racing reader may briefly mix old and new values of one torrent. That's harmless for display and ranking.
+  - **Epoch:** it advances at most once a minute while values change, and never otherwise. Search caches that read hot columns key on it.
+  - **Snapshots:** one file per column (`data/hot/*.col`), with magic, format, column, stamp, length and an FNV-1a checksum. They're written beside the final name and renamed. Anything missing, from another stamp, truncated or corrupt loads as `None`, and the caller rebuilds from SQLite.
+- **How M4 was built (owner decision):** the core slices (DHT scrape, the swarm store, search on hot columns) were built in parallel by sub-agents on the same model and effort as the main session, each in its own worktree, against interfaces fixed first (`HotColumns`, `SwarmUpdate`, `NodeHandle`). This is an explicit exception to CLAUDE.md's "never delegate" list. Every result was reviewed, fixed where needed and tested in the main session before merge. Docs and the status page went to a smaller helper.
+
+**M4 implementation decisions (DHT scrape, BEP 33):**
+- **The filters follow the BEP exactly:**
+  - 256 bytes, m = 2048 and k = 2.
+  - Each IP is hashed with SHA-1 over its raw 4 or 16 bytes. Bytes 0–1 and 2–3, read little-endian, give two indexes mod 2048, and bit `i % 8` of byte `i / 8` is set.
+  - The estimate is `ln(c/m) / (k·ln(1−1/m))`. An empty filter is 0, and a full one saturates at about 7,800.
+  - The BEP's test vector (192.0.2.0–255 plus 2001:db8::–::3e7, estimate 1224.93) is a unit test, within ±0.01, so a wrong bit or byte order can't slip through.
+- **Answering scrapes:**
+  - The peer store keeps each announce's `seed` flag.
+  - A `get_peers` with `scrape=1` gets `BFsd` (seeds) and `BFpe` (other peers) over the live peers of both address families, but only for a hash we store. A node without the hash sends no filters, as libtorrent does.
+  - `noseed` leaves seeds out of `values`.
+  - Read-only nodes still answer nothing (BEP 43).
+- **Scrape lookups are their own kind:** a get_peers lookup with `scrape=1`. It has its own queue (1,024 requests, then refused), at most 16 at once, and its own completion: it never emits a `Lookup` harvest, so scrapes don't feed the fetch pool.
+- **Budget:**
+  - Scrapes get 10% of the query rate, paid when a lookup starts, at 20 queries a lookup. That's 1 lookup a second at Balanced, 0.25 at Low and 5 at Aggressive. The bucket always holds at least one token, so Low still scrapes.
+  - A scrape query refused by the global limiter puts its node back to "fresh" and resumes the lookup next tick. Failing it would end scrapes early with few filters, because throttled sends count as failures for other lookups.
+  - A scrape still running after 30 s answers with what it has.
+- **Merging:**
+  - The estimate ORs the filters of the K = 8 closest responders that sent any, and `responders` says how many that was.
+  - Responders without filters give up their slot to the next node, for the first K of them. A scrape therefore asks at most about 2K nodes, and nodes that don't store the hash can't crowd out the ones that do.
+  - `responders = 0` means no node near the hash stores it: "unknown", not "dead".
+- **Only counts leave the actor (§18.7):** `NodeHandle::scrape(hash) -> Option<DhtEstimate { seeds, peers, responders }>`. Peers learned by a scrape lookup are dropped with it.
+  - `None` means the queue was full or the node stopped.
+  - `Node::handle()` gives a cloneable handle. `DhtSource::node_handle()` publishes it while the node runs, for the scrape scheduler.
+- **Lookup bookkeeping:**
+  - Maintenance lookups are counted as all lookups minus get_peers and scrapes.
+  - The thin-table re-bootstrap waits only on non-scrape lookups, so steady scraping can't starve it.
+- **Metrics:** `scrapes_requested`, `scrapes_completed`, `scrapes_dropped` and `scrapes_with_responders` (in `Stats`; exported with slice 6).
+- **Tests:**
+  - unit tests for the filters (test vector, union, accuracy from 10 to 2,000 addresses);
+  - the peer store's seed handling;
+  - the lookup's merge and slot rules;
+  - the low-rate budget;
+  - a raw-client test of the answers (`scrape` off: no filters; on: correct filters; `noseed`; an unknown hash);
+  - an in-process network test. Four seeds and seven leechers on distinct loopback IPs announce to six nodes, and a crawler's `scrape` returns exactly 4 and 7. An unknown hash returns zero responders. It was stable over 8 repeated runs.
+
+**M4 implementation decisions (store: swarm tables, history, last seen):**
+- **Migration v5** adds four tables (the content filter's tables took v4):
+  - `trackers`: the scrape list.
+    - Ids are `AUTOINCREMENT` within u16 and never reused, because `swarm_trackers` packs them. A reused id would credit old counts to a new tracker.
+    - The canonical URL is unique.
+    - `state` records health: ok, backoff, down or banned.
+  - `swarm`: one row per scraped torrent. A torrent without a row has never been scraped.
+    - The DHT estimate columns are NULL when there's no estimate.
+    - `next_scrape_at` is indexed for the scheduler's due lane. A test pins that the due query walks the index without a sort.
+  - `swarm_trackers`: per-tracker counts, only for trackers that report the hash (s+l+c > 0).
+  - `swarm_history`: the ring buffer.
+  
+  All four cascade when a torrent is deleted.
+- **One scrape round is one `SwarmUpdate`,** applied in the writer's transaction (`WriteBatch.swarm`):
+  - The store keeps what it's given. Which number counts as "seeders" is the scheduler's rule.
+  - An update for a deleted torrent is skipped and reported as `false` in `Written.swarm`, rather than failing the batch.
+  - Per-tracker detail is replaced each round and deleted when nothing reports.
+  - **An unanswered round** (no tracker answered, no DHT estimate) changes only `next_scrape_at`. A tracker outage isn't a dead swarm: the counts, history and per-tracker rows stay, `last_scrape_at` stays the time of the last answer, and `SwarmUpdate::hot()` is `None`, so the hot columns keep their values. A torrent's first scrape still gets a row, so it leaves the new lane. With nothing checked and no DHT estimate, it reads as never scraped.
+- **Per-tracker blob, format 1:**
+  - Layout: a version byte, the scrape time as a varint, then per tracker its id (u16), seeders, leechers and completed as varints.
+  - Every entry comes from the same round, so the time is stored once.
+  - Decoding is strict: only canonical varints, and anything the encoder wouldn't write is an error.
+- **History ring, format 1:**
+  - Layout: 169 bytes. A version byte, the newest day and week numbers, then 14 daily and 26 weekly (seeders, leechers) u16 samples, newest first.
+  - `0xFFFF` is a gap and counts saturate below it. A day or week keeps its latest sample, and samples older than the ring are dropped.
+  - It's kept only for swarms that were ever live, or that someone looked at (`interest`). Once kept, it follows the swarm down to zero, because "this died" is the point of a history.
+  - A corrupt ring is replaced rather than failing the batch: it's derived data.
+  - `trend` is the least-squares slope of the last 7 daily seeders samples, in seeders per day. It needs 3 or more samples.
+  - Property-tested: round trips, arbitrary bytes, and gaps staying gaps.
+- **Last seen:**
+  - Rediscoveries now carry their time.
+  - `torrents.last_seen_at` is written through only when it moves forward by an hour or more (`LAST_SEEN_WRITE_EVERY`). The hot column holds the exact value.
+  - So SQLite is at most an hour behind after a crash, and busy torrents cost one write per hour, not one per sighting.
+- **Rebuilding hot columns:** `Store::load_hot` reads `swarm` and then `torrents.last_seen_at` in id-ordered chunks of 10,000, one short statement each. A rebuild therefore never pins the WAL. A torrent without a DHT estimate keeps "never" in that column.
+- **`flags::PRIVATE_SOURCE` (bit 10):**
+  - It's set when only private sources reported a key. It's carried from the fetch pool (`FetchedKey.private_source`) through the worker's `Results` to the commit.
+  - The scheduler's lanes (`due_for_scrape`, `unscraped_after`) skip it and `flags::PRIVATE`, so neither ever reaches a public scrape.
+  - **A public sighting makes it public.** The store clears the bit on a public rediscovery (`Touch.public`), and on a public commit of a stored torrent.
+  - Nothing sets it on a stored public torrent. A partial-import upgrade keeps it only when both the stored row and the new commit are private-source.
+- **Scheduler lanes:**
+  - `unscraped_after(id)` is the new lane: torrents with no `swarm` row, past a watermark, so ingest writes no swarm row. When it finds none, the scheduler moves the watermark to `max_id()` (one index probe), so it doesn't walk the same scraped ids again.
+  - `due_for_scrape(now)` is the decay lane, most overdue first.
+- **Size** (the 50k synthetic size report, with every torrent scraped once and 40% of swarms live):
+  - Swarm health costs **132 B per torrent**:
+    - history 73 B;
+    - `swarm` 30 B;
+    - its due index 14 B;
+    - per-tracker 14 B.
+  - The whole store is **926 B** against the 1,024 B gate, so it still passes, with 98 B left. A history row costs about 180 B with page overhead, so the share of live swarms drives the total.
+- **W8 formatters (`web/src/lib/format/`), choices that clarify `docs/metrics.md` §3:**
+  - Estimated and sampled values share one input, `{ value, approx: true }`, and print `≈` + U+00A0 + value. The panel reads `sampled` from the response and shows the `sampled_note` message once; the formatter has no `sampled` flag.
+  - `formatRate` wraps `{n}/h` and `{n}/d` itself, and `formatRelative` takes the translated `just_now` string in `opts.justNow` (small en/zh fallback). W4 replaces both with messages.
+  - Rounding that would reach the next unit steps up (`1023.9 KiB` → `1.00 MiB`, `59.6 s` → `1 min`, `47.96 hr` → `2 days`, `999.6 ms` → `1 sec`). Bytes pick their digit count from the rounded value, so `9.996 GiB` prints `10.0 GiB` and `99.96 MiB` prints `100 MiB`, which keeps the fixed-digit alignment.
+  - Bytes, percent, share, rate, latency and span treat negative input as invalid (`—`). Count, compact and score keep plain `Intl` output; only `formatDelta` uses U+2212.
+  - `formatDelta` takes `kind` (`count`, `compact`, `percent`) plus percent digits; `formatDateFull` takes a `bucket` (`hour`, `day`, `week`); `formatRelative` uses month = 30 d and year = 365 d.
+  - An unknown or empty `timeZone` falls back to the browser's zone instead of throwing. Percent `<`/`>` edges are detected from the `Intl` output itself, so they match the displayed digits.
+  - Size histograms: `sizeBinEdges(fromExp, toExp)` labels power-of-2 edges with `formatBytes`; `sizeBinLabel` joins two edges with a no-break space and an en dash. Labelling only; the server owns the bins.
+
+
+**Theme compiler (W1):** decisions that clarify §10.18.
+- **Derivation constants are fitted once.** Each rule is a lightness shift (or a mix toward `primary`/`accent` for dividers and tints). The constants are tuned so Riverstone lands within ΔE_ok ≤ 0.5 of the §10.18 table, and every theme inherits them. Light and dark have separate constants. **Riverstone's published values (`docs/design-tokens.md` §1–4) are a contract, so the compiler pins them byte for byte** (`PINS` in `themes.ts`); a test checks the rules alone stay within ΔE_ok 0.5 of each pin.
+- **`neutral-content` is derived to reach 4.5:1** on the neutral fill: the better of text/surface, shifted in lightness only if neither passes (Riverstone light: `#193038`, 4.55:1).
+- **File layout:** one file per family, `web/themes/<family-id>.json`, with `id`, `name`, `group` (`official`/`accessibility`/`community`/`original`), optional `license`/`source`, and `light`/`dark` palettes (the `docs/themes.md` layout). The compiler expands it into `<id>-light` and `<id>-dark`.
+- **Gates beyond the §10.18 list**, so the contract in `docs/design-tokens.md` holds in every theme:
+  - `muted-text`, `warning` and `error` ≥ 4.5:1 on both grounds;
+  - each `*-content` ≥ 4.5:1 on its fill (the accent fill only warns, since design-tokens allows large/bold labels there);
+  - text on the hover and selected tints ≥ 4.5:1.
+- **Riverstone is grandfathered on categorical ΔE_ok only**, never on text contrast. The accent-fill label (4.03:1, large/bold allowed) stays a reported warning.
+- **ΔE_ok and the CVD report run on the data marks** (the colours actually drawn), not the raw categorical inputs, and both Machado 2009 (severity 1.0) and Viénot 1999 are reported side by side.
+- **Pre-paint storage contract:** `localStorage["lodestar.theme"]` holds `{ mode: "system"|"light"|"dark", light: { id, vars? }, dark: { id, vars? } }`. `vars` is the cached custom-property map of a non-Riverstone theme. The script sets `data-theme`, `color-scheme` and `vars` on `<html>` and falls back to Riverstone for the resolved mode.
+- **`themes.json`** is `{ v: 1, keys: [...], themes: [{ id, name, family, group, mode, contrast: "AA"|"AAA", license?, source?, values: [...] }] }`, with `values` in `keys` order.
+- **Dark `info` uses `primary-ink`**, which equals `primary` for Riverstone but may differ for other themes (a dark `primary` that is too dim is lightened).
+
+**B0 decisions (API router split, error envelope):**
+- **One module per API domain** in `crates/api` (`auth`, `search`, `torrents`), each with `routes() -> Router<ApiState>`; `api::router` only merges them, one line per module. Session-protected routes are wrapped in `auth::protected`, whose guard reads its `Auth` from a request extension that only `api::router` installs, so a protected route mounted any other way fails closed (500), never open.
+- **One error envelope** for every `/api/v1` failure: `{ "error": { "code", "message", "field"?, "start"?, "end"? } }`. `code` is stable snake_case for clients to branch on, `message` a sentence for people, `field` the parameter at fault, `start`/`end` the byte span of a query syntax error. Extractor rejections (bad JSON, query or path; `field` is the serde path to the bad value) and unknown `/api/v1` paths (404) or methods (405) use it too, with house-style messages rather than serde's text. Status codes didn't change. The 401 keeps `setup_required` beside `error`, so the login screen needs no second request.
+- **`crates/lodestar/src/services.rs`** builds and wires every service of `serve` and owns the ordered shutdown (the blocklist refresher, then the pipeline, then the live indexer); `main.rs` keeps only the CLI.
 **W3 brand pipeline decisions (§10.19):**
 - **AVIF is the format; WebP is only the fallback.** Scenes get AVIF at 360/540/724 (quality 32, effort 4) and WebP at 540w only (quality 28, effort 6, smart subsample). Logos get AVIF (quality 40) and WebP (quality 50) at 1x and 2x.
 - **The gate is 45,000 B for AVIF 540w.** The largest is about 22 KB, so quality has headroom. The 45 KB ceiling guards the pack, not the encoder setting.
@@ -2184,6 +2397,24 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
 | SC-1 | "Free premium / crack / activator" for **online services** (streaming and music premium APKs, "free Robux/V-Bucks", crypto "wallet recovery", "Bitcoin generator") | hide | offline software cracks aren't covered (a preference, not a scam) |
 | SC-2 | "Generator / hack" for online-game currencies or accounts | hide | single-player trainers and mods excluded |
 
+**As built (store migration V7, `lodestar_filter` rules, packs and engine):**
+- **Engine layers:** precedence follows §20.1. Within the pack layer (packs and subscribed lists) the strongest action wins.
+- **Your rules:** a query, an action, an optional `unless`, and shadow mode. They're evaluated in memory with the search tokenizer, so a rule matches what the same search finds.
+- **CSX-5:**
+  - entries are exact torrents, keywords (normalized the same way the core normalizes, so evasion doesn't help) or queries, with an optional scope, an expiry and a shadow period;
+  - *Neutralize term* takes one word. It removes that word's evidence from the core and from query rules.
+- **Exceptions** are per rule, by exact torrents, payload or query. The floor takes none. *Always allow* skips your rules and the packs.
+- **Packs:** MW-1–5, LU-1–4, FK-1/2/4/5, SP-1/2 and SC-1 are built, reading the junk reasons and structure fingerprints. Every pack is on by default, standing in for the wizard's pre-checked boxes. Not yet built:
+  - FK-3, which needs TMDB release dates;
+  - SP-3, which needs per-publisher rates;
+  - SP-4, which needs a signature index of hidden items.
+- **Actions on stored torrents:**
+  - *Hide*, *demote* and *flag* set flag bits 11–13. They're queryable as `hidden:`, `demoted:` and `flagged:`.
+  - The API leaves hidden torrents out of search unless `hidden=true`.
+  - Demotion's ranking penalty arrives with the M4 phase-2 re-rank.
+  - Shadow decisions are logged as filter hits with action bit `0x80`, and nothing is applied.
+- **Speed** (an ignored test; set `LODESTAR_BUDGET_US` to raise the bound on slower machines): the full engine with every pack on costs the core plus about 10%. The core measured 45 µs for a 30-file torrent on the reference VM, and 60–75 µs on a slower one, where `main` measured the same.
+
 **Your rules (layer 3)** start empty. The wizard offers presets, all **off**: *Hide CAM/TS/TC*, *Hide sample-only*, *Hide password-protected archives*, *Prefer my languages* (demote others).
 
 ### 20.7 Storage, API and UI
@@ -2201,6 +2432,8 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
 | `override_list` | CSX-5 entries: kind (hash / keyword / pattern), query, strength, scope, created, expiry/review date, shadow_until, hit count |
 | `rule_set_prev` | the previous rule set only, for one-step Undo |
 | `cs_hashes` | CS-1 entries (all hash forms) + CS-8 payload signatures, with origin (confirmed / reported / imported) |
+| `class_corrections` | Is adult / Not adult and Not junk, per torrent (V8) |
+| `class_rules` | classification rules: query → Is adult / Not adult (V9) |
 
 - **As built (store migration V4, pipeline):**
   - V4 adds `cs_hashes`, `cs_sigs`, `core_membership` (switches), `tombstones`, `quarantine` and `filter_hits`.
@@ -2212,6 +2445,24 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
   - **Purge:** expired quarantine and filter hits past retention are purged hourly, and expired keys become fetchable again.
   - **Old config blocklists:** the M1 `blocklist.files` load as imported CS-1b entries.
 - **API:** `filters` (rules CRUD, preview, warning, test, shadow, packs, review queue, release; password-gated for weakening changes) and `classify` corrections (Not adult / Is adult, Not junk).
+- **As built (`lodestar_api::filters`, behind the session):**
+  - **Routes:** `GET /filters` (core switches, packs, your rules, CSX-5 entries, exceptions, Always allow, list subscriptions, counts), `GET /filters/queue` (quarantine by hash and rule, never with names, plus the 30-day decisions per rule), `POST /filters/preview` and `POST /filters/apply`.
+  - **One change per request,** tagged by `op`: core and pack switches, your rules (add / update / remove), CSX-5 entries, exceptions, Always allow, report abuse, remove CS-1 entries, release, confirm, reveal a sealed name, list subscriptions (subscribe / unsubscribe / pause / resolve a held version) and Undo.
+  - **Protocol (§20.11):** `preview` returns `{weakening, confirm, warning, preview, neutralize}` and never applies or asks for the password. `apply` runs the same assessment on the server; a change that needs confirming is refused with **428** and the assessment until the request carries the admin password, checked like a login (rate-limited per IP) and never remembered. Marking a list as part of the floor needs the password too.
+  - **Guardrails hold server-side:** the floor can't be switched off (409), floor rules take no exceptions, overrides and exceptions are validated by the engine, and list actions must be protective.
+  - **Preview numbers:** whole-rule changes count from the review queue, tombstones and `filter_hits` rollups. Entry-level changes (CSX-5, exceptions, Always allow) re-judge quarantined items from their sealed names and tombstones by hash, and are marked as estimates because file lists aren't kept. The 30-day figures are the upper bound for the rules the change can bypass. Previews also run as background jobs with progress (§20.10).
+  - **Undo:** the rule layers and switches are snapshotted into `rule_set_prev` only after a change to them succeeds, so a refused change never replaces the Undo step. Undo swaps the two sets, so a second Undo redoes. It can weaken, so it asks for the password.
+  - **Releases** clear the store row and the in-memory held set together, so intake fetches the torrent the next time it's seen.
+  - **Shadow:** rules and CSX-5 entries take `shadow_days`.
+  - **False positive** (`op: false_positive`, from the review queue): an exception for that torrent and the rule that held it, a release, and for a core rule a **must-not-match fixture** made from its sealed name as hashed tokens only (`Fixture::encode`: version, content type, then per text the token positions, hashes and small numbers; no text). It's a weakening change, so it warns and asks for the password.
+  - **Fixtures:** `GET /filters/fixtures` runs every core rule's stored fixtures against the rules as they are and reports how many each has and how many disagree.
+  - **Rule tests:** `POST /filters/test` tries a draft rule (`query`, `unless`) and the current rule set on up to 50 example torrents (name, files with optional sizes, optional type), classified as ingest would. Nothing about the examples is stored or logged.
+  - **Report abuse and Confirm** also delete any stored torrent with those hashes (store and, through `reindex_log`, the index).
+- **As built (store migration V8, `classify` corrections):** `POST /classify/correct {hash, adult: true|false|null, not_junk}` keeps one correction per torrent in `class_corrections` and classifies the torrent again with it at once (`classify_corrected`). **Is adult** gives the nearest adult kind at confidence 100, including Ebook (as Comics) and Other (as Scene), which detection leaves alone; **Not adult** skips adult detection; **Not junk** clears the score and its reasons. Background enrichment applies the correction whenever it classifies the torrent again (a newer parser), and an upgraded partial import with a correction is queued for that. Corrections are classification, not filtering, so they don't ask for the password.
+- **As built (store migration V9, classification rules):** corrections feed back as **rules** and **fixtures** (§20.9).
+  - **Rules:** `POST /classify/rules {query, adult}` saves a query plus Is adult / Not adult (`class_rules`); `POST /classify/rules/remove {id}`. The newest matching rule applies at ingest (prepare) and whenever a stored torrent is classified again; a torrent's own correction wins over any rule. Adding or removing a rule marks the stored torrents its query matches in the search index for re-classification (`SearchIndex::matching_ids`, up to 1M) and starts another background-enrichment pass; without search, only new and re-enriched torrents are affected. A rule's query can't test `type:` or `adult:`, because it decides them.
+  - **Filtering never sees corrections:** rules and corrections change what's stored and searched. The engine judges detection's own classification, so a Not adult rule can't take a torrent out of the Adult-only core checks (CS-5a/5b), and a `type:adult` rule of yours keeps acting on what detection found.
+  - **Fixtures:** `GET /classify` lists the rules and treats every per-torrent correction as a fixture for adult detection: it runs detection on each corrected torrent (up to 10,000) and reports how many disagree, with up to 50 examples, so a rule can cover their kind.
 - **UI: Settings → Filters & Safety:**
   - **Rules:** layer, action, status (active / shadow / modified), hits over 7 days, false-positive reports.
   - **Editor:** builder or text, live preview, fixtures, shadow toggle, diff against base for core and pack rules.
@@ -2269,7 +2520,7 @@ There are **two taxonomies**:
     - Supporting: each distinct adult term 35, and `Site.YY.MM.DD` scene naming 30, capped at 70; strong plus supporting adds 10.
     - Counter: a documentary, educational or medical word cancels the supporting score and takes 40 off the strong one. Season or episode numbers cancel the supporting score.
     - A torrent is adult at **≥ 60**. The kind follows the type it would otherwise have (TV and Video → Scene; Movie → Movie, or Scene with scene naming; Images → Photos; Comic → Comics; Game and Software → Game; Music and Audiobook → Audio), and VR words turn Scene or Movie into VR.
-    - **Ebook and Other keep their type** because no adult kind fits them. Source categories, enrichment matches and corrections arrive with the filter engine and plugins, and adjust this score.
+    - **Ebook and Other keep their type** because no adult kind fits them. Source categories and enrichment matches arrive with plugins and adjust this score. Your corrections and classification rules override the outcome rather than the score (§20.7, V8/V9): Is adult gives the nearest kind (Ebook as Comics, Other as Scene) at confidence 100.
 - **Visibility is a preference, not a legal tier:**
   - "Show adult content" is **off by default** and turned on with an **18+ confirmation**.
   - It applies to Search, Discover, Alerts and Insights segments. Outputs (Torznab, Stremio, export) each have their own adult setting, also off by default.
@@ -2294,6 +2545,7 @@ Every change to filtering shows its impact **before** it takes effect. That cove
 - **Exposure summary at the top:** "This change would release 37 items (2 caught by the core), and about 4 per day going forward."
 - **Then choose:** **Apply**, **Shadow for N days** (log what it would do, change nothing, and compare later in the same view), or **Cancel**. Changes that weaken protection show their effect warning (§20.11) and need your password before Apply or Shadow.
 - **After applying:** a "What changed" report matches the preview against what actually happened (they're reconciled in tests, §20.8). An **Undo** restores the previous rule set (hidden items return; re-fetched items are re-evaluated).
+- **As built:** `POST /filters/preview/jobs {change}` starts the preview in the background (202, a job id). `GET /filters/preview/jobs/{id}` returns the phase (`reading`, `quarantine`, `tombstones`, `done`) with items done and total, then the assessment or the error, kept for 10 minutes. `POST /filters/preview/jobs/{id}/cancel` stops it at its next step. At most 4 run at once. The store is locked only while the snapshot is read, so previews never hold up other changes. `POST /filters/preview` still answers inline for small changes, with the same result.
 - **Performance:** the preview runs as a background job over rollups, `filter_hits` and index queries. The target is under 5 seconds for a typical rule at 10M torrents, with progress shown. It never blocks crawling or search (§3 overhead budget).
 
 ### 20.11 Effect warnings and password confirmation (instead of an audit log)
@@ -2370,3 +2622,16 @@ Exceptions are how you correct false positives without switching rules off. Like
 - **Weakening changes:** unsubscribing, pausing or narrowing a list releases what it blocked. As with disabling a pack (§20.11), that shows the impact preview and effect warning and needs your password. Subscribing and refreshing need neither.
 - **Storage:** a `subscriptions` table (URL, kind, format, action, scope, schedule, ETag, last fetch, entry count, status) and `subscription_entries` (hashes and signatures; IP ranges are kept as a compact blob per list). Like everything in §20, no history of who changed what is kept.
 - **Verification:** golden parsers for every format, plus fuzz targets (they parse untrusted input); a fake list server in tests for conditional GETs, the size caps and the sanity gates; and a check that an IP-listed peer or node is never contacted by the DHT, the fetch pool or the scraper.
+- **As built (store migration V6, `lodestar_filter::lists`, `lodestar` subscriptions):**
+  - **Formats:** hash lists (hex, base32, magnets), `.p2p`, eMule `.dat` (access level ≥ 128 allows) and CIDR/netset. Bodies are gzip or plain, capped at 64 MB downloaded and 256 MB expanded.
+  - **Storage:** content lists are stored as packed 20-byte hashes. IP lists are stored as merged ranges.
+  - **Enforcement:** the DHT drops packets to and from listed addresses (`dht_denied_total`), and the fetch pool never connects to them (`Error::Denied`). The tracker scraper will use the same check when it lands in M4.
+  - **Content-list actions:** drop or quarantine only. A `hide` action needs search to honour it, so it arrives with your rules.
+  - **Catalog** (`lodestar lists`; checked live when added):
+    - FireHOL level 1 and level 2 netsets;
+    - Naunter's BT_BlockLists.
+  - **Measured on the real lists:**
+    - FireHOL level 1: about 19k ranges.
+    - BT_BlockLists: 689k ranges, 394k after merging, 3.5 MB stored. It parses in about 0.5 s and costs about 110 ns per lookup.
+    - **BT_BlockLists covered about 49% of IPv4,** because it blocks whole provider allocations. The catalog says so. Lodestar warns whenever the combined lists cover more than 10%, because the crawler loses that share of the DHT.
+  - **Configuration for now:** subscriptions come from `[subscriptions]` in `config.toml`, as catalog keys and `[[subscriptions.lists]]`. They're added to the store at start, never removed from it. The filters API (next) adds connecting, removing and *Accept anyway* / *Keep previous* for held versions.

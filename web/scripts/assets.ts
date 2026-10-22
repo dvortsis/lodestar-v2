@@ -23,8 +23,6 @@ export const WEBP_SCENE_WIDTHS = [540] as const;
 export const SCENE_AVIF = { quality: 32, effort: 4 } as const;
 export const SCENE_WEBP = { quality: 28, effort: 6, smartSubsample: true } as const;
 export const AVIF_540_LIMIT_BYTES = 45_000;
-/** Intrinsic size of every scene PNG; srcset variants keep this aspect ratio. */
-const SCENE_SOURCE = { width: 724, height: 1086 };
 
 /** Logo display widths in CSS px (1x); the 2x variant doubles them. §10.19 fixes only the wordmark. */
 export const LOGO_DISPLAY_WIDTH = { wordmark: 240, horizontal: 320, stacked: 200 } as const;
@@ -42,6 +40,8 @@ export interface Paths {
 	libOut: string;
 	/** packaging/icons */
 	packagingOut: string;
+	/** web/themes/riverstone.json: the compass fallbacks come from here */
+	riverstone: string;
 	/** where the input-hash stamp lives */
 	cacheDir: string;
 }
@@ -51,6 +51,7 @@ export const defaultPaths = (): Paths => ({
 	staticOut: resolve(here, '../static/brand'),
 	libOut: resolve(here, '../src/lib/brand'),
 	packagingOut: resolve(here, '../../packaging/icons'),
+	riverstone: resolve(here, '../themes/riverstone.json'),
 	cacheDir: resolve(here, '../node_modules/.cache/lodestar-assets')
 });
 
@@ -129,22 +130,47 @@ const srcsetFor = (base: string, ext: 'avif' | 'webp') =>
 		.map((w) => `/brand/scenes/${base}-${w}.${ext} ${w}w`)
 		.join(', ');
 
+export interface Size {
+	width: number;
+	height: number;
+}
+
+/**
+ * §10.17 gate: every scene source must share one size and be at least as wide as the largest
+ * variant, so the width/height attributes match every srcset candidate's aspect ratio.
+ */
+export function assertSceneSizes(sizes: Map<string, Size>): void {
+	const widest = Math.max(...SCENE_WIDTHS);
+	const [[firstName, first] = []] = sizes;
+	const bad = [...sizes].filter(
+		([, s]) => s.width !== first?.width || s.height !== first?.height || s.width < widest
+	);
+	if (!first || bad.length) {
+		const rows = [...sizes].map(([n, s]) => `  ${s.width}x${s.height}  ${n}`);
+		throw new Error(
+			`Scene sources must all share one size of at least ${widest}px wide (first: ${firstName}):\n${rows.join('\n')}`
+		);
+	}
+}
+
 interface StateManifest {
 	stateAssets: Record<string, Record<Mode, string>>;
 }
 
 /** One entry per state id and mode, aliases included (they point at the same files). */
-export function sceneEntries(manifest: StateManifest): SceneEntry[] {
+export function sceneEntries(manifest: StateManifest, sizes: Map<string, Size>): SceneEntry[] {
 	const entries: SceneEntry[] = [];
 	for (const [id, modes] of Object.entries(manifest.stateAssets)) {
 		for (const mode of ['light', 'dark'] as const) {
 			const base = /([^/]+)\.png$/.exec(modes[mode])?.[1];
 			if (!base) throw new Error(`Bad scene path for ${id}/${mode}: ${modes[mode]}`);
+			const size = sizes.get(base);
+			if (!size) throw new Error(`No measured size for scene ${base}`);
 			entries.push({
 				id,
 				mode,
-				width: SCENE_SOURCE.width,
-				height: SCENE_SOURCE.height,
+				width: size.width,
+				height: size.height,
 				srcset: { avif: srcsetFor(base, 'avif'), webp: srcsetFor(base, 'webp') }
 			});
 		}
@@ -154,7 +180,10 @@ export function sceneEntries(manifest: StateManifest): SceneEntry[] {
 
 type Output = { path: string; data: Buffer | string };
 
-async function buildScenes(p: Paths, manifest: StateManifest): Promise<Output[]> {
+async function buildScenes(
+	p: Paths,
+	manifest: StateManifest
+): Promise<{ outputs: Output[]; sizes: Map<string, Size> }> {
 	const sources = new Set<string>();
 	for (const modes of Object.values(manifest.stateAssets)) {
 		sources.add(modes.light);
@@ -162,10 +191,13 @@ async function buildScenes(p: Paths, manifest: StateManifest): Promise<Output[]>
 	}
 	const outputs: Output[] = [];
 	const budget: SceneFile[] = [];
+	const sizes = new Map<string, Size>();
 	await Promise.all(
 		[...sources].map(async (rel) => {
 			const base = /([^/]+)\.png$/.exec(rel)![1]!;
 			const input = readFileSync(join(p.source, rel));
+			const meta = await sharp(input).metadata();
+			sizes.set(base, { width: meta.width ?? 0, height: meta.height ?? 0 });
 			for (const width of SCENE_WIDTHS) {
 				const resized = () => sharp(input).resize({ width });
 				const avif = await resized().avif(SCENE_AVIF).toBuffer();
@@ -178,8 +210,9 @@ async function buildScenes(p: Paths, manifest: StateManifest): Promise<Output[]>
 			}
 		})
 	);
+	assertSceneSizes(sizes);
 	assertSceneBudget(budget);
-	return outputs;
+	return { outputs, sizes };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -279,17 +312,35 @@ function geometry(svg: string): string {
  * Minify the light compass and rewrite its colours to `var(--brand-<role>, <light value>)`.
  * Refuses when the dark file differs in anything but colour, since one mark must serve both modes.
  */
-export function buildCompass(lightSvg: string, darkSvg: string): string {
+export function buildCompass(
+	lightSvg: string,
+	darkSvg: string,
+	fallbacks: Partial<CompassPalette> = {}
+): string {
 	if (geometry(lightSvg) !== geometry(darkSvg)) {
 		throw new Error('compass_light.svg and compass_dark.svg differ in more than colour');
 	}
-	const palette = compassPalette(lightSvg);
+	const palette = { ...compassPalette(lightSvg), ...fallbacks };
 	return minifySvg(lightSvg).replace(ELEMENT, (el, tag: string, attrs: string) =>
 		el.replace(COLOUR_ATTR, (_m, attr: string) => {
 			const role = roleOf(tag, attrs);
 			return `${attr}="var(--brand-${role},${palette[role]})"`;
 		})
 	);
+}
+
+/**
+ * Fallbacks for the compass vars: Riverstone light from the theme file (design-tokens.md §4), so
+ * they cannot drift from the tokens. The star is not a theme colour; it stays the logo's own.
+ */
+export function compassFallbacks(riverstoneJson: string): Partial<CompassPalette> {
+	const light = (JSON.parse(riverstoneJson) as { light: Record<string, string> }).light;
+	const pick = (key: string) => {
+		const value = light[key];
+		if (!value) throw new Error(`riverstone.json has no light.${key}`);
+		return value.toUpperCase();
+	};
+	return { surface: pick('surface'), primary: pick('primary'), accent: pick('accent') };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -374,11 +425,15 @@ async function generatedModule(
 	scenes: SceneEntry[],
 	logos: LogoEntry[]
 ): Promise<string> {
+	const sceneIds = [...new Set(scenes.map((s) => s.id))].map((id) => `\t| '${id}'`).join('\n');
 	const source = `// Generated by scripts/assets.ts from brand/source/. Do not edit.
 export type SceneMode = 'light' | 'dark';
 
+export type SceneId =
+${sceneIds};
+
 export interface Scene {
-	id: string;
+	id: SceneId;
 	mode: SceneMode;
 	/** Intrinsic size of the largest variant; set as width/height attributes so nothing shifts. */
 	width: number;
@@ -423,6 +478,7 @@ export async function runAssets(p: Paths = defaultPaths()): Promise<Report> {
 	const stamp = sha256(
 		JSON.stringify({
 			sums: [...sums],
+			riverstone: sha256(readFileSync(p.riverstone)),
 			script: sha256(readFileSync(fileURLToPath(import.meta.url))),
 			sharp: sharp.versions.sharp
 		})
@@ -450,12 +506,10 @@ export async function runAssets(p: Paths = defaultPaths()): Promise<Report> {
 
 	const lightSvg = read('icons/compass_light.svg');
 	const darkSvg = read('icons/compass_dark.svg');
-	const outputs: Output[] = [...scenes, ...logos.outputs];
+	const outputs: Output[] = [...scenes.outputs, ...logos.outputs];
 
 	const favicons = join(p.staticOut, 'favicons');
-	// The outputs are build products, not sources: keep them out of git (the folder ignores itself).
 	outputs.push(
-		{ path: join(p.staticOut, '.gitignore'), data: '*\n' },
 		{ path: join(favicons, 'favicon.svg'), data: buildFaviconSvg(lightSvg, darkSvg) },
 		{
 			path: join(favicons, 'site.webmanifest'),
@@ -478,10 +532,13 @@ export async function runAssets(p: Paths = defaultPaths()): Promise<Report> {
 	const compassPath = join(p.libOut, 'compass.svg');
 	const modulePath = join(p.libOut, 'scenes.generated.ts');
 	outputs.push(
-		{ path: compassPath, data: buildCompass(lightSvg, darkSvg) },
+		{
+			path: compassPath,
+			data: buildCompass(lightSvg, darkSvg, compassFallbacks(readFileSync(p.riverstone, 'utf8')))
+		},
 		{
 			path: modulePath,
-			data: await generatedModule(modulePath, sceneEntries(manifest), logos.entries)
+			data: await generatedModule(modulePath, sceneEntries(manifest, scenes.sizes), logos.entries)
 		}
 	);
 

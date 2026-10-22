@@ -1,6 +1,7 @@
 //! Fetching an info dictionary from one peer (BEP 9).
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 use std::time::Duration;
 
 use lodestar_metainfo::InfoHash;
@@ -41,6 +42,24 @@ pub struct FetchOptions {
     pub max_metadata: usize,
     pub encryption: Encryption,
     pub peer_id: [u8; 20],
+    /// Addresses never connected to: subscribed IP blocklists (§20.13).
+    pub deny: Option<Deny>,
+}
+
+/// A live address check, shared with whoever keeps the lists current.
+#[derive(Clone)]
+pub struct Deny(pub Arc<dyn Fn(IpAddr) -> bool + Send + Sync>);
+
+impl Deny {
+    pub fn denies(&self, ip: IpAddr) -> bool {
+        (self.0)(ip)
+    }
+}
+
+impl std::fmt::Debug for Deny {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Deny")
+    }
 }
 
 impl Default for FetchOptions {
@@ -57,6 +76,7 @@ impl Default for FetchOptions {
             max_metadata: 16 << 20,
             encryption: Encryption::default(),
             peer_id,
+            deny: None,
         }
     }
 }
@@ -90,6 +110,9 @@ pub async fn fetch(
     info_hash: InfoHash,
     opts: &FetchOptions,
 ) -> Result<Fetched, Error> {
+    if opts.deny.as_ref().is_some_and(|d| d.denies(addr.ip())) {
+        return Err(Error::Denied);
+    }
     let deadline = Instant::now() + opts.timeout;
     let run = |encrypted: bool| async move {
         timeout_at(deadline, attempt(addr, &info_hash, opts, encrypted))

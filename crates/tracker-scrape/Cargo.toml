@@ -1,0 +1,33 @@
+[package]
+name = "lodestar-tracker-scrape"
+description = "Tracker scrape clients: UDP (BEP 15) and HTTP (BEP 48), with bounded parsers for their replies"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[features]
+# In-process fake UDP and HTTP trackers, for this crate's tests and the
+# scheduler's.
+testing = ["tokio/io-util"]
+
+[dependencies]
+lodestar-bencode.workspace = true
+lodestar-metainfo.workspace = true
+rand = "0.10"
+# HTTP scrapes. rustls runs on ring: aws-lc (reqwest's default provider)
+# is a C/CMake build that complicates the Windows and musl targets.
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio = { version = "1.54.0", features = ["net", "time", "rt", "macros"] }
+url = "2.5"
+
+[dev-dependencies]
+lodestar-tracker-scrape = { path = ".", features = ["testing"] }
+lodestar-bencode.workspace = true
+proptest = "1.11.0"
+tokio = { version = "1.54.0", features = ["net", "time", "rt", "rt-multi-thread", "macros", "io-util"] }
+
+[lints]
+workspace = true
