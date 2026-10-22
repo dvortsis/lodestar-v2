@@ -770,7 +770,7 @@
    "pr": 85,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "R1 FIX 19:30: hostile-name NEAR DoS (places*tokens^2); safety claim wrong (CSX-5 overrides/exceptions/allow/unless match more). Owner Q on re-preview of stored CSX-5 entries. 19:58 DoS fix e6f6e72; R2 review in flight. 20:25 R2 MERGE; asked main merge + threshold test; runner verifies then merges."
+   "notes": "R1 FIX 19:30: hostile-name NEAR DoS (places*tokens^2); safety claim wrong (CSX-5 overrides/exceptions/allow/unless match more). Owner Q on re-preview of stored CSX-5 entries. 19:58 DoS fix e6f6e72; R2 review in flight. 20:25 R2 MERGE; asked main merge + threshold test; runner verifies then merges. 20:36 4c6de89 (main + threshold test ba5cdcb) verified by runner -> APPROVED, merge on green. Pre-release: CSX-5 re-preview question stays with owner (follow-up only if owner wants it)."
   },
   "D-puid": {
    "status": "review",
