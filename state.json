@@ -348,7 +348,7 @@
    "pr": 77,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "launched 15:59 (owner asked to start more work); no crates/search edits | PR #77; reviewer started 16:45 | 17:10 r1 MERGE-ish: fix compare lock scope + conditional test, then merge. 18:45 R2 MERGE at 29caca3 pending main merge (B4 trivial conflicts) + B17 base_query switch after #72 lands. 19:38 bbc17ee (main+B17 switch) verified by runner -> APPROVED, merge on green. 20:27 eaa3a0e main merge; merge on green."
+   "notes": "launched 15:59 (owner asked to start more work); no crates/search edits | PR #77; reviewer started 16:45 | 17:10 r1 MERGE-ish: fix compare lock scope + conditional test, then merge. 18:45 R2 MERGE at 29caca3 pending main merge (B4 trivial conflicts) + B17 base_query switch after #72 lands. 19:38 bbc17ee (main+B17 switch) verified by runner -> APPROVED, merge on green. 20:27 eaa3a0e main merge; merge on green. | 22:42 green at 98fa046 but \u00a716 conflict after #84; runner merged main be54fd4 (union16). Merge on green."
   },
   "B14": {
    "status": "running",
@@ -357,7 +357,7 @@
    "pr": null,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "launched 15:59; includes first-run log address polish 18:46 R1 FIX: main merge semantic break (ops field), NAT false-reachable (SeenFilter refresh + threshold), pause race, index_lag, ring clear, dht_off, BEP42 per-/24. 19:23 R1 fixes eabd33a + main merges 3378ef5; R2 review in flight. 20:08 R2 FIX: replies must renew contacted (NAT false reachable); failed event-write test; PR body. Runner verifies R3 delta. 20:17 3b61a52 verified by runner -> APPROVED, merge on green. 20:39 macOS rebuild flake + budget red on 3b61a52 -> one rerun after run completes (21:00 sweep)."
+   "notes": "launched 15:59; includes first-run log address polish 18:46 R1 FIX: main merge semantic break (ops field), NAT false-reachable (SeenFilter refresh + threshold), pause race, index_lag, ring clear, dht_off, BEP42 per-/24. 19:23 R1 fixes eabd33a + main merges 3378ef5; R2 review in flight. 20:08 R2 FIX: replies must renew contacted (NAT false reachable); failed event-write test; PR body. Runner verifies R3 delta. 20:17 3b61a52 verified by runner -> APPROVED, merge on green. 20:39 macOS rebuild flake + budget red on 3b61a52 -> one rerun after run completes (21:00 sweep). | 22:42 green at dca8ed4 but main.rs conflict with D-puid; asked session to merge main."
   },
   "B11b": {
    "status": "pending",
@@ -762,7 +762,7 @@
    "pr": 73,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "launched 15:59; carry-forwards runner-pr, runner-docs-pr, metrics-contract, contract-docs, themes table, integrations-readme (if X-email merged), unraid --user | PR #73; owner-file edits moved to runner PR #75 20:28 main (#86) merged; merge on green."
+   "notes": "launched 15:59; carry-forwards runner-pr, runner-docs-pr, metrics-contract, contract-docs, themes table, integrations-readme (if X-email merged), unraid --user | PR #73; owner-file edits moved to runner PR #75 20:28 main (#86) merged; merge on green. | 22:42 conflicts (unraid xml from D-puid, \u00a716); asked session to merge main. Filter budget red = rule 2.18."
   },
   "F-near": {
    "status": "review",
