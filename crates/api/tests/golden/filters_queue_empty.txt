@@ -1,2 +1,2 @@
 200
-{"decisions_30d":[],"quarantine":[]}
+{"decisions_30d":[],"next_cursor":null,"quarantine":[]}

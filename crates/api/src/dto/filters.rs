@@ -3,7 +3,7 @@
 //! live test, and classification rules and corrections.
 
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 
 use super::REDACTED;
 use super::error::ErrorBody;
@@ -532,11 +532,25 @@ pub struct SubscriptionEntry {
     pub url: String,
 }
 
+/// `GET /filters/queue`: one page of the quarantine, newest first.
+#[derive(Debug, Clone, Default, Deserialize, IntoParams)]
+#[serde(default)]
+#[into_params(parameter_in = Query)]
+pub struct QueueQuery {
+    /// The previous page's `next_cursor`.
+    pub cursor: Option<String>,
+    /// Quarantine rows per page: 1–1000, 1000 by default.
+    pub limit: Option<usize>,
+}
+
 /// `GET /filters/queue`: quarantine (never with names) and the replay
 /// window's decisions per rule.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Queue {
     pub decisions_30d: Vec<DecisionCount>,
+    /// The next page of quarantine, if there is one: pass as `cursor`.
+    #[schema(required = true)]
+    pub next_cursor: Option<String>,
     pub quarantine: Vec<QuarantineEntry>,
 }
 
@@ -552,9 +566,12 @@ pub struct DecisionCount {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct QuarantineEntry {
+    /// Held only because you relabelled it adult (a correction or a
+    /// classification rule) and the Adult-only core caught it: at
+    /// `expires_at` it becomes a tombstone rather than being released.
+    pub adult_hold: bool,
     pub at: i64,
-    /// When it's released for refetching; 2^53 − 1 when it's held until you
-    /// release it (held because of your own Is adult correction).
+    /// When its sealed name is deleted and its quarantine ends.
     pub expires_at: i64,
     pub hash: String,
     pub rule: String,

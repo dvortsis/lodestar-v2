@@ -5,7 +5,7 @@
 //! small integers. Their meaning belongs to the filter engine.
 
 use lodestar_metainfo::InfoHash;
-use rusqlite::{Transaction, params};
+use rusqlite::{OptionalExtension, Transaction, params};
 
 use crate::{Error, Result, Store};
 
@@ -47,6 +47,10 @@ pub struct Filtered<'a> {
     pub at: i64,
     /// Quarantine expiry.
     pub expires_at: i64,
+    /// Held only because your correction or classification rule made it
+    /// adult: when its quarantine expires, it becomes a tombstone (hash
+    /// and rule, no name) instead of being released (§20.9).
+    pub adult_hold: bool,
 }
 
 /// A stored torrent filtering judged again (§20.9), for
@@ -72,11 +76,30 @@ pub struct FilterHit {
 /// Marks a filter hit as shadow mode: logged, not applied (§20.3).
 pub const SHADOW: u8 = 0x80;
 
-/// The `expires_at` of a quarantine that doesn't expire: one held because
-/// of your own correction, which a refetch wouldn't know (§20.9). It's
-/// held until you release it. The largest integer JSON clients read
-/// exactly.
-pub const HELD_UNTIL_RELEASED: i64 = (1 << 53) - 1;
+/// Appended to the stored rule id of an adult hold
+/// ([`Filtered::adult_hold`]) in `quarantine` and `tombstones`. Reads
+/// strip it, so callers see plain rule ids.
+const ADULT_HOLD: &str = "+adult";
+
+/// The stored rule id of a held hash.
+fn held_rule(rule: &str, adult_hold: bool) -> String {
+    if adult_hold {
+        format!("{rule}{ADULT_HOLD}")
+    } else {
+        rule.to_owned()
+    }
+}
+
+/// A stored rule id as the rule and whether it's an adult hold.
+fn split_rule(mut stored: String) -> (String, bool) {
+    match stored.strip_suffix(ADULT_HOLD).map(str::len) {
+        Some(n) => {
+            stored.truncate(n);
+            (stored, true)
+        }
+        None => (stored, false),
+    }
+}
 
 /// One quarantined torrent, as the review queue lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,6 +109,18 @@ pub struct Quarantined {
     pub sealed: Option<Vec<u8>>,
     pub at: i64,
     pub expires_at: i64,
+    /// It becomes a tombstone at `expires_at` ([`Filtered::adult_hold`]).
+    pub adult_hold: bool,
+}
+
+/// One tombstone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tombstone {
+    pub hash: [u8; 20],
+    pub rule: String,
+    pub at: i64,
+    /// Left by an adult hold's quarantine ([`Filtered::adult_hold`]).
+    pub adult_hold: bool,
 }
 
 fn hash20(v: Vec<u8>) -> Result<[u8; 20]> {
@@ -111,13 +146,14 @@ pub(crate) fn write(tx: &Transaction<'_>, filtered: &[Filtered<'_>]) -> Result<(
             continue;
         };
         hit.execute(params![&first[..], f.rule, f.action, f.at, f.evidence])?;
+        let rule = held_rule(f.rule, f.adult_hold);
         for h in f.hashes {
             match f.held {
                 Some(Held::Tombstone) => {
-                    tomb.execute(params![&h[..], f.rule, f.at])?;
+                    tomb.execute(params![&h[..], rule, f.at])?;
                 }
                 Some(Held::Quarantine) => {
-                    quarantine.execute(params![&h[..], f.rule, f.sealed, f.at, f.expires_at])?;
+                    quarantine.execute(params![&h[..], rule, f.sealed, f.at, f.expires_at])?;
                 }
                 None => {}
             }
@@ -244,11 +280,23 @@ impl Store {
 
     /// The quarantine, newest first.
     pub fn quarantined(&self, limit: usize) -> Result<Vec<Quarantined>> {
+        self.quarantined_before(None, limit)
+    }
+
+    /// The quarantine, newest first, after the row at `before`
+    /// (`(at, hash)`, exclusive): one page of the review queue.
+    pub fn quarantined_before(
+        &self,
+        before: Option<(i64, [u8; 20])>,
+        limit: usize,
+    ) -> Result<Vec<Quarantined>> {
+        let (at, hash) = before.map_or((i64::MAX, None), |(at, h)| (at, Some(h.to_vec())));
         let mut stmt = self.conn.prepare_cached(
             "SELECT hash, rule, sealed, at, expires_at FROM quarantine
-             ORDER BY at DESC, hash LIMIT ?1",
+             WHERE ?1 IS NULL OR at < ?2 OR (at = ?2 AND hash > ?1)
+             ORDER BY at DESC, hash LIMIT ?3",
         )?;
-        let rows = stmt.query_map([limit as i64], |r| {
+        let rows = stmt.query_map(params![hash, at, limit as i64], |r| {
             Ok((
                 r.get::<_, Vec<u8>>(0)?,
                 r.get(1)?,
@@ -260,33 +308,68 @@ impl Store {
         let mut out = Vec::new();
         for row in rows {
             let (hash, rule, sealed, at, expires_at) = row?;
+            let (rule, adult_hold) = split_rule(rule);
             out.push(Quarantined {
                 hash: hash20(hash)?,
                 rule,
                 sealed,
                 at,
                 expires_at,
+                adult_hold,
             });
         }
         Ok(out)
     }
 
-    /// Removes expired quarantine rows and filter hits older than
-    /// `hits_before`. Returns the expired hashes, which become fetchable
-    /// again, and how many hits were removed.
+    /// Ends expired quarantine and removes filter hits older than
+    /// `hits_before`. An expired quarantine is released (its hash becomes
+    /// fetchable again), except an adult hold, which becomes a tombstone:
+    /// its sealed name goes, its hash stays refused (§20.9). Returns the
+    /// released hashes and how many hits were removed.
     pub fn purge_filter(&mut self, now: i64, hits_before: i64) -> Result<(Vec<[u8; 20]>, usize)> {
         let tx = self.conn.transaction()?;
         let mut expired = Vec::new();
         {
-            let mut stmt = tx.prepare("SELECT hash FROM quarantine WHERE expires_at <= ?1")?;
-            for row in stmt.query_map([now], |r| r.get::<_, Vec<u8>>(0))? {
+            let mut stmt = tx.prepare(
+                "SELECT hash FROM quarantine WHERE expires_at <= ?1 AND rule NOT LIKE ?2",
+            )?;
+            let adult = format!("%{ADULT_HOLD}");
+            for row in stmt.query_map(params![now, adult], |r| r.get::<_, Vec<u8>>(0))? {
                 expired.push(hash20(row?)?);
             }
+            tx.execute(
+                "INSERT OR REPLACE INTO tombstones (hash, rule, at)
+                 SELECT hash, rule, at FROM quarantine WHERE expires_at <= ?1 AND rule LIKE ?2",
+                params![now, adult],
+            )?;
         }
         tx.execute("DELETE FROM quarantine WHERE expires_at <= ?1", [now])?;
         let hits = tx.execute("DELETE FROM filter_hits WHERE at < ?1", [hits_before])?;
         tx.commit()?;
         Ok((expired, hits))
+    }
+
+    /// Releases everything `rules` hold (quarantine and tombstones), so it
+    /// can be fetched again: the rules stopped applying. Returns the
+    /// released hashes.
+    pub fn release_rules(&mut self, rules: &[String]) -> Result<Vec<[u8; 20]>> {
+        let tx = self.conn.transaction()?;
+        let mut out = Vec::new();
+        for rule in rules {
+            for table in ["quarantine", "tombstones"] {
+                let mut stmt = tx.prepare(&format!(
+                    "DELETE FROM {table} WHERE rule = ?1 OR rule = ?2 RETURNING hash"
+                ))?;
+                let rows = stmt.query_map(params![rule, held_rule(rule, true)], |r| {
+                    r.get::<_, Vec<u8>>(0)
+                })?;
+                for h in rows {
+                    out.push(hash20(h?)?);
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(out)
     }
 
     /// Filter decisions since `since`, per rule and action code.
@@ -299,8 +382,8 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Tombstones, newest first: `(hash, rule, at)`.
-    pub fn tombstones(&self, limit: usize) -> Result<Vec<([u8; 20], String, i64)>> {
+    /// Tombstones, newest first.
+    pub fn tombstones(&self, limit: usize) -> Result<Vec<Tombstone>> {
         let mut stmt = self.conn.prepare_cached(
             "SELECT hash, rule, at FROM tombstones ORDER BY at DESC, hash LIMIT ?1",
         )?;
@@ -310,9 +393,29 @@ impl Store {
         let mut out = Vec::new();
         for row in rows {
             let (h, rule, at) = row?;
-            out.push((hash20(h)?, rule, at));
+            let (rule, adult_hold) = split_rule(rule);
+            out.push(Tombstone {
+                hash: hash20(h)?,
+                rule,
+                at,
+                adult_hold,
+            });
         }
         Ok(out)
+    }
+
+    /// Whether `hash` is held (quarantined or tombstoned) as an adult hold.
+    pub fn adult_hold(&self, hash: &[u8; 20]) -> Result<bool> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT 1 FROM quarantine WHERE hash = ?1 AND rule LIKE ?2
+                 UNION ALL SELECT 1 FROM tombstones WHERE hash = ?1 AND rule LIKE ?2",
+                params![&hash[..], format!("%{ADULT_HOLD}")],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
     }
 
     /// Filter hits since `since`, oldest first.

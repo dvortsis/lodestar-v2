@@ -459,6 +459,27 @@
         ],
         "summary": "The review queue: quarantine (never with names) and the last 30 days'\ndecisions per rule.",
         "operationId": "getFilterQueue",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The previous page's `next_cursor`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Quarantine rows per page: 1–1000, 1000 by default.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "",
@@ -3390,6 +3411,7 @@
       "QuarantineEntry": {
         "type": "object",
         "required": [
+          "adult_hold",
           "at",
           "expires_at",
           "hash",
@@ -3397,6 +3419,10 @@
           "sealed"
         ],
         "properties": {
+          "adult_hold": {
+            "type": "boolean",
+            "description": "Held only because you relabelled it adult (a correction or a\nclassification rule) and the Adult-only core caught it: at\n`expires_at` it becomes a tombstone rather than being released."
+          },
           "at": {
             "type": "integer",
             "format": "int64"
@@ -3404,7 +3430,7 @@
           "expires_at": {
             "type": "integer",
             "format": "int64",
-            "description": "When it's released for refetching; 2^53 − 1 when it's held until you\nrelease it (held because of your own Is adult correction)."
+            "description": "When its sealed name is deleted and its quarantine ends."
           },
           "hash": {
             "type": "string"
@@ -3423,6 +3449,7 @@
         "description": "`GET /filters/queue`: quarantine (never with names) and the replay\nwindow's decisions per rule.",
         "required": [
           "decisions_30d",
+          "next_cursor",
           "quarantine"
         ],
         "properties": {
@@ -3431,6 +3458,13 @@
             "items": {
               "$ref": "#/components/schemas/DecisionCount"
             }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The next page of quarantine, if there is one: pass as `cursor`."
           },
           "quarantine": {
             "type": "array",

@@ -369,6 +369,7 @@ async fn quarantine_review_never_shows_names_unasked() {
                 evidence: &[],
                 at: lodestar_api_now(),
                 expires_at: lodestar_api_now() + 86_400,
+                adult_hold: false,
             }],
             ..WriteBatch::default()
         })
@@ -525,6 +526,7 @@ async fn false_positives_become_exceptions_and_hashed_fixtures() {
                 evidence: &[],
                 at: lodestar_api_now(),
                 expires_at: lodestar_api_now() + 86_400,
+                adult_hold: false,
             }],
             ..WriteBatch::default()
         })
@@ -986,6 +988,7 @@ fn quarantine(f: &Fixture, n: u8) {
             evidence: &[],
             at: lodestar_api_now(),
             expires_at: lodestar_api_now() + 86_400,
+            adult_hold: false,
         })
         .collect();
     f.api
@@ -1675,18 +1678,193 @@ async fn a_correction_relabelling_a_torrent_adult_meets_the_adult_only_core() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["type"], json!("adult"));
     assert_eq!(body["held_by"], json!("CS-5a"));
-    let store = f.api.store.lock().unwrap();
-    assert!(store.torrent(id).unwrap().is_none(), "no longer stored");
-    let q = store.quarantined(10).unwrap();
-    assert_eq!(q.len(), 1);
-    assert_eq!(q[0].rule, "CS-5a");
-    assert!(q[0].sealed.is_some());
-    drop(store);
+    {
+        let store = f.api.store.lock().unwrap();
+        assert!(store.torrent(id).unwrap().is_none(), "no longer stored");
+        let q = store.quarantined(10).unwrap();
+        assert_eq!(q.len(), 1);
+        assert_eq!(q[0].rule, "CS-5a");
+        assert!(q[0].sealed.is_some());
+    }
     let mut raw = [0u8; 20];
     for (i, b) in raw.iter_mut().enumerate() {
         *b = u8::from_str_radix(&hash[2 * i..2 * i + 2], 16).unwrap();
     }
     assert!(f.api.held.contains(&raw), "refused at intake");
+
+    // An adult hold: held by the Adult-only core only because you said
+    // it's adult.
+    let (_, _, q) = call(&f.app, get("/api/v1/filters/queue", &c)).await;
+    assert_eq!(q["quarantine"][0]["adult_hold"], json!(true), "{q}");
+
+    // The 30-day purge deletes its name and leaves a tombstone, so the
+    // hash stays refused and is never fetched again (owner, 2026-10-22).
+    let released = {
+        let mut store = f.api.store.lock().unwrap();
+        let (released, _) = store.purge_filter(4_000_000_000, 0).unwrap();
+        assert!(store.quarantined(10).unwrap().is_empty(), "no name kept");
+        let t = store.tombstones(10).unwrap();
+        assert_eq!(t.len(), 1);
+        assert_eq!((t[0].hash, t[0].rule.as_str()), (raw, "CS-5a"));
+        assert!(t[0].adult_hold);
+        let state = store.filter_state().unwrap();
+        assert!(state.held.contains(&(raw, Held::Tombstone)));
+        released
+    };
+    assert!(released.is_empty());
+    assert!(f.api.held.contains(&raw), "still refused at intake");
+
+    // Releasing it says plainly that the Adult-only checks won't see it
+    // again, and needs the password.
+    let release = json!({ "op": "release", "hash": hash });
+    let (_, _, a) = call(
+        &f.app,
+        post(
+            "/api/v1/filters/preview",
+            Some(&c),
+            json!({ "change": release.clone() }),
+        ),
+    )
+    .await;
+    let warning = a["warning"].as_str().unwrap();
+    assert!(
+        warning.contains("That mark was deleted with it"),
+        "{warning}"
+    );
+    assert!(
+        warning.contains("the Adult-only checks won't look at it again"),
+        "{warning}"
+    );
+    assert_eq!(a["preview"]["tombstones"], json!(1));
+    let (status, _) = apply(&f, &c, release.clone(), None).await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED);
+    let (status, body) = apply(&f, &c, release, Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!f.api.held.contains(&raw));
+    assert!(
+        f.api
+            .store
+            .lock()
+            .unwrap()
+            .tombstones(10)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// Holds `hash` under `rule`, as a quarantine or a tombstone.
+fn hold(f: &Fixture, hash: [u8; 20], rule: &str, held: Held, at: i64) {
+    f.api
+        .store
+        .lock()
+        .unwrap()
+        .write(&WriteBatch {
+            filtered: &[Filtered {
+                hashes: &[hash],
+                rule,
+                action: if held == Held::Quarantine {
+                    Action::Quarantine.code()
+                } else {
+                    Action::Drop.code()
+                },
+                held: Some(held),
+                sealed: None,
+                evidence: &[],
+                at,
+                expires_at: at + 86_400,
+                adult_hold: false,
+            }],
+            ..WriteBatch::default()
+        })
+        .unwrap();
+    f.api.held.insert(hash);
+}
+
+#[tokio::test]
+async fn the_review_queue_pages() {
+    let f = fixture();
+    let c = logged_in(&f).await;
+    let now = lodestar_api_now();
+    // Two share a time: the hash orders them.
+    for (i, at) in [now, now, now - 10, now - 20, now - 30]
+        .into_iter()
+        .enumerate()
+    {
+        hold(&f, [i as u8 + 1; 20], "CS-3a", Held::Quarantine, at);
+    }
+    let mut seen = Vec::new();
+    let mut uri = "/api/v1/filters/queue?limit=2".to_owned();
+    let mut pages = 0;
+    loop {
+        let (status, _, q) = call(&f.app, get(&uri, &c)).await;
+        assert_eq!(status, StatusCode::OK, "{q}");
+        pages += 1;
+        for e in q["quarantine"].as_array().unwrap() {
+            seen.push(e["hash"].as_str().unwrap().to_owned());
+        }
+        match q["next_cursor"].as_str() {
+            Some(next) => uri = format!("/api/v1/filters/queue?limit=2&cursor={next}"),
+            None => break,
+        }
+    }
+    assert_eq!(pages, 3);
+    let want: Vec<String> = [1u8, 2, 3, 4, 5]
+        .iter()
+        .map(|b| format!("{b:02x}").repeat(20))
+        .collect();
+    assert_eq!(seen, want, "newest first, each once");
+
+    for bad in ["?limit=0", "?limit=1001", "?cursor=nope", "?cursor=5.zz"] {
+        let (status, _, body) = call(&f.app, get(&format!("/api/v1/filters/queue{bad}"), &c)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn removing_a_rule_or_a_pack_releases_what_it_holds() {
+    let f = fixture();
+    let c = logged_in(&f).await;
+    let now = lodestar_api_now();
+    let (status, body) = apply(
+        &f,
+        &c,
+        json!({ "op": "add_rule", "query": "ext:scr", "action": "quarantine" }),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let id = body["id"].as_i64().unwrap();
+    hold(&f, [0x11; 20], &format!("U-{id}"), Held::Quarantine, now);
+    hold(&f, [0x12; 20], &format!("U-{id}"), Held::Tombstone, now);
+    hold(&f, [0x13; 20], "FK-4", Held::Tombstone, now);
+    hold(&f, [0x14; 20], "CS-3a", Held::Quarantine, now);
+
+    let (status, body) = apply(
+        &f,
+        &c,
+        json!({ "op": "remove_rule", "id": id }),
+        Some(PASSWORD),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["released"], json!(2));
+    for h in [[0x11; 20], [0x12; 20]] {
+        assert!(!f.api.held.contains(&h));
+    }
+
+    let pack = |on: bool| json!({ "op": "pack_switch", "id": "fakes", "on": on });
+    let (status, body) = apply(&f, &c, pack(true), Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = apply(&f, &c, pack(false), Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["released"], json!(1));
+    assert!(!f.api.held.contains(&[0x13; 20]));
+    // Another rule's hold stays.
+    assert!(f.api.held.contains(&[0x14; 20]));
+    assert_eq!(
+        f.api.store.lock().unwrap().quarantined(10).unwrap().len(),
+        1
+    );
 }
 
 /// End to end (§20.9): an Is adult rule is added, the torrents it matches

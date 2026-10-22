@@ -99,9 +99,7 @@ pub fn enrich_stored_with(
     for id in ids {
         if let (Some(row), Some(tree)) = (store.torrent(id)?, store.files(id)?) {
             let own = store.correction(id)?.map(correction).unwrap_or_default();
-            let was_adult = store
-                .enrichment(id)?
-                .is_some_and(|e| e.content_type == ContentType::Adult.code());
+            let was_adult = store.content_type(id)? == Some(ContentType::Adult.code());
             let files = file_infos(&tree.files, tree.encoding);
             let r = reclassify_row(&row, &files, own, was_adult, engine.as_deref(), now);
             refilings.extend(r.refilings(&row, ctx.sealer));
