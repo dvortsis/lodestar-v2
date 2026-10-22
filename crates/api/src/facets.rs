@@ -209,15 +209,25 @@ async fn run_facets(
             .setting_i64(FIRST_RUN)
             .map_err(internal)?;
         let params = FacetParams::new(limits, first_run);
-        let got =
-            facets(&lease, &shown, &params, &cancel.with_budget(BUDGET)).map_err(|e| match e {
-                SearchError::OutOfTime => ApiError::new(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "facets_timeout",
-                    "Counting the facets took too long; narrow the search.",
-                ),
-                e => search_error(e),
-            })?;
+        // TODO(B17): pass its always-on visibility clauses here, apart from
+        // the user's query, so no facet's disjunction removes them. The
+        // hidden-torrent clause in `shown` belongs to no facet.
+        let filters: &[lodestar_search::Node] = &[];
+        let got = facets(
+            &lease,
+            &shown,
+            filters,
+            &params,
+            &cancel.with_budget(BUDGET),
+        )
+        .map_err(|e| match e {
+            SearchError::OutOfTime => ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "facets_timeout",
+                "Counting the facets took too long; narrow the search.",
+            ),
+            e => search_error(e),
+        })?;
         let total = lease.total();
         Ok(axum::Json(response(
             &got,
