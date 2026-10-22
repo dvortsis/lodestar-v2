@@ -1,0 +1,39 @@
+{
+  "recorded_from": "Transmission 4.0.5 (rpc-version 17), transmission-daemon on Ubuntu 24.04",
+  "note": "an RPC method the daemon doesn't know",
+  "request": {
+    "method": "POST",
+    "path": "/transmission/rpc",
+    "query": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "server",
+        "Transmission"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "content-security-policy",
+        "frame-ancestors 'self'"
+      ],
+      [
+        "access-control-allow-origin",
+        "*"
+      ],
+      [
+        "content-type",
+        "application/json; charset=UTF-8"
+      ],
+      [
+        "content-length",
+        "54"
+      ]
+    ],
+    "body": "{\"arguments\":{},\"result\":\"method name not recognized\"}"
+  }
+}

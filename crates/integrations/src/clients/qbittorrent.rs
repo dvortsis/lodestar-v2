@@ -39,8 +39,8 @@ use tokio::time::Instant;
 
 use super::{
     AddOptions, AddOutcome, AuthFailure, CLIENT_TIMEOUT, Capabilities, Category, ClientError,
-    ClientInfo, ClientKind, DownloadClient, Magnet, Selection, TorrentFile, check_request,
-    client_reason,
+    ClientInfo, ClientKind, DownloadClient, Magnet, Selection, TorrentFile, category_name,
+    check_request, client_reason,
 };
 use crate::BoxFuture;
 use crate::net::{GuardedClient, NetPolicy, parse_url, read_limited, redact};
@@ -51,6 +51,7 @@ const CAPABILITIES: Capabilities = Capabilities {
     save_path: true,
     paused: true,
     file_selection: true,
+    magnet_file_selection: true,
     torrent_file: true,
     batch: true,
 };
@@ -536,9 +537,11 @@ impl DownloadClient for QBittorrent {
                 .map_err(|_| ClientError::Protocol("the category list"))?;
             Ok(map
                 .into_iter()
-                .map(|(name, entry)| Category {
-                    name,
-                    save_path: entry.save_path.filter(|p| !p.is_empty()),
+                .filter_map(|(name, entry)| {
+                    Some(Category {
+                        name: category_name(&name)?,
+                        save_path: entry.save_path.filter(|p| !p.is_empty()),
+                    })
                 })
                 .collect())
         })
@@ -571,13 +574,13 @@ const UPLOAD_FLOOR_BYTES_PER_SEC: usize = 256 * 1024;
 
 /// The request timeout plus a second per 256 KiB of upload, so a 16 MiB
 /// `.torrent` over a slow link gets about a minute more.
-fn upload_timeout(base: Duration, bytes: usize) -> Duration {
+pub(super) fn upload_timeout(base: Duration, bytes: usize) -> Duration {
     base + Duration::from_secs((bytes / UPLOAD_FLOOR_BYTES_PER_SEC) as u64)
 }
 
 /// The `name=value` part of a `Set-Cookie` header, when it's a plausible
 /// session cookie.
-fn session_cookie(header: &str) -> Option<Secret> {
+pub(super) fn session_cookie(header: &str) -> Option<Secret> {
     let pair = header.split(';').next()?.trim();
     let (name, value) = pair.split_once('=')?;
     let token = |s: &str, extra: &[u8]| {

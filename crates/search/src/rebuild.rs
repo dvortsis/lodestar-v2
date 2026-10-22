@@ -19,7 +19,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -130,8 +130,32 @@ fn sync_dir(dir: &Path) {
     let _ = dir;
 }
 
+/// Tries a rename this many times before failing (about 10 s in all).
+const RENAME_ATTEMPTS: u32 = 10;
+
+/// Renames a directory, retrying with backoff. Windows refuses to rename
+/// a directory while any file in it is open, and an antivirus or search
+/// indexer opens freshly written segment files for a moment, so a
+/// failure there is usually transient. Retrying keeps such a moment from
+/// failing a whole rebuild (§11).
 fn rename(from: &Path, to: &Path) -> Result<()> {
-    std::fs::rename(from, to).map_err(Error::Io)?;
+    let mut wait = Duration::from_millis(25);
+    let mut attempt = 1;
+    loop {
+        match std::fs::rename(from, to) {
+            Ok(()) => break,
+            Err(e) if attempt < RENAME_ATTEMPTS && e.kind() != std::io::ErrorKind::NotFound => {
+                tracing::warn!(
+                    "index: renaming {} (attempt {attempt}): {e}",
+                    from.display()
+                );
+                std::thread::sleep(wait);
+                wait = (wait * 2).min(Duration::from_secs(4));
+                attempt += 1;
+            }
+            Err(e) => return Err(Error::Io(e)),
+        }
+    }
     if let Some(parent) = to.parent() {
         sync_dir(parent);
     }
@@ -162,6 +186,8 @@ pub struct RebuildProgress {
     /// Fields of this build the serving index lacks: clauses on them
     /// match nothing until the swap ([`SearchIndex::missing_fields`]).
     pub unavailable: Vec<String>,
+    /// Why the rebuild stopped, once [`RebuildPhase::Failed`].
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -346,7 +372,10 @@ impl Default for ServingConfig {
 
 /// State shared with the background thread.
 struct Shared {
-    current: RwLock<Arc<SearchIndex>>,
+    /// The serving index. A mutex held only to clone or replace the
+    /// `Arc`, so a swap waits behind at most one clone: no stream of
+    /// readers can hold it off, whatever the platform's lock policy.
+    current: Mutex<Arc<SearchIndex>>,
     progress: Mutex<Option<RebuildProgress>>,
     live: Mutex<Option<LiveIndexer>>,
     stats: Arc<IndexStats>,
@@ -489,6 +518,7 @@ impl Serving {
                     from,
                     to: want,
                     unavailable: serving.missing_fields().to_vec(),
+                    error: None,
                 };
                 Some((store, builder, snapshot, progress))
             }
@@ -506,7 +536,7 @@ impl Serving {
             None
         };
         let shared = Arc::new(Shared {
-            current: RwLock::new(Arc::new(serving)),
+            current: Mutex::new(Arc::new(serving)),
             progress: Mutex::new(None),
             live: Mutex::new(live),
             stats,
@@ -526,7 +556,10 @@ impl Serving {
                         Ok(false) => {}
                         Err(e) => {
                             tracing::error!("index: rebuilding {want} failed: {e}");
-                            sh.set_phase(RebuildPhase::Failed);
+                            sh.update(|p| {
+                                p.phase = RebuildPhase::Failed;
+                                p.error = Some(e.to_string());
+                            });
                         }
                     }
                 })
@@ -544,11 +577,7 @@ impl Serving {
 
     /// The index to run the next query on.
     pub fn index(&self) -> Arc<SearchIndex> {
-        self.shared
-            .current
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        lock(&self.shared.current).clone()
     }
 
     /// The rebuild under way, or `None` when this build's index serves.
@@ -716,12 +745,7 @@ fn rebuild_and_swap(
     if let Err(e) = caught_up {
         // The old index keeps serving, so it keeps following the store.
         if old_followed {
-            let old = (*shared
-                .current
-                .read()
-                .unwrap_or_else(PoisonError::into_inner))
-            .as_ref()
-            .clone();
+            let old = lock(&shared.current).as_ref().clone();
             match LiveIndexer::spawn_with_stats(
                 old,
                 store,
@@ -741,10 +765,7 @@ fn rebuild_and_swap(
         shared.stats.clone(),
     )?;
     *lock(&shared.live) = Some(live);
-    *shared
-        .current
-        .write()
-        .unwrap_or_else(PoisonError::into_inner) = Arc::new(new);
+    *lock(&shared.current) = Arc::new(new);
     *lock(&shared.progress) = None;
     tracing::info!("index: swapped to the rebuilt index");
     Ok(true)
@@ -819,6 +840,31 @@ mod tests {
     use crate::schema::Fields;
     use crate::{LiveConfig, TorrentDoc};
     use tantivy::TantivyDocument;
+
+    #[test]
+    fn a_rename_blocked_for_a_moment_is_retried() {
+        // Stands in for a file held open by a scanner on Windows: the
+        // target is in the way (a non-empty directory) until a moment
+        // later, which fails the rename on every platform.
+        let tmp = tempfile::tempdir().unwrap();
+        let (from, to) = (tmp.path().join("v2-t1.building"), tmp.path().join("v2-t1"));
+        std::fs::create_dir_all(&from).unwrap();
+        std::fs::write(from.join("meta.json"), b"{}").unwrap();
+        std::fs::create_dir_all(&to).unwrap();
+        std::fs::write(to.join("busy"), b"").unwrap();
+        let blocker = to.clone();
+        let unblock = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            std::fs::remove_dir_all(blocker).unwrap();
+        });
+        rename(&from, &to).unwrap();
+        unblock.join().unwrap();
+        assert!(to.join("meta.json").exists() && !from.exists());
+        // A missing source isn't transient: it fails at once.
+        let start = std::time::Instant::now();
+        assert!(rename(&from, &tmp.path().join("x")).is_err());
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
 
     #[test]
     fn names_parse_by_kind() {
