@@ -1,0 +1,2 @@
+200
+{"fields":{"export_adult":{"env":null,"read_only":false,"restart_required":false,"source":"default","value":false},"show_adult":{"env":null,"read_only":false,"restart_required":false,"source":"default","value":false},"stremio_adult":{"env":null,"read_only":false,"restart_required":false,"source":"default","value":false},"torznab_adult":{"env":null,"read_only":false,"restart_required":false,"source":"default","value":false}},"restart_required":[],"section":"content"}
