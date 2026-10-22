@@ -355,8 +355,8 @@
    "session": "session_01Sd8GqCEZSAxKFSwHKrXyHt",
    "pr": null,
    "attempt": 1,
-   "review_rounds": 1,
-   "notes": "launched 15:59; includes first-run log address polish 18:46 R1 FIX: main merge semantic break (ops field), NAT false-reachable (SeenFilter refresh + threshold), pause race, index_lag, ring clear, dht_off, BEP42 per-/24. 19:23 R1 fixes eabd33a + main merges 3378ef5; R2 review in flight."
+   "review_rounds": 2,
+   "notes": "launched 15:59; includes first-run log address polish 18:46 R1 FIX: main merge semantic break (ops field), NAT false-reachable (SeenFilter refresh + threshold), pause race, index_lag, ring clear, dht_off, BEP42 per-/24. 19:23 R1 fixes eabd33a + main merges 3378ef5; R2 review in flight. 20:08 R2 FIX: replies must renew contacted (NAT false reachable); failed event-write test; PR body. Runner verifies R3 delta."
   },
   "B11b": {
    "status": "pending",
@@ -770,7 +770,7 @@
    "pr": 85,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "R1 FIX 19:30: hostile-name NEAR DoS (places*tokens^2); safety claim wrong (CSX-5 overrides/exceptions/allow/unless match more). Owner Q on re-preview of stored CSX-5 entries."
+   "notes": "R1 FIX 19:30: hostile-name NEAR DoS (places*tokens^2); safety claim wrong (CSX-5 overrides/exceptions/allow/unless match more). Owner Q on re-preview of stored CSX-5 entries. 19:58 DoS fix e6f6e72; R2 review in flight."
   },
   "D-puid": {
    "status": "review",
@@ -895,8 +895,8 @@
  },
  "heartbeats": 4,
  "reviews_in_flight": {
-  "79": "B14 R2 (3378ef5)",
-  "71": "B6 R3 delta (3dd0eaf)"
+  "71": "B6 R3 delta (3dd0eaf)",
+  "85": "F-near R2 (e6f6e72)"
  },
  "carry_forward": {
   "next-bans-touch": [
