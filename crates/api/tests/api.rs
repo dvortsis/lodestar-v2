@@ -265,7 +265,7 @@ async fn search_parse_and_detail() {
     let (status, _, body) = call(&f.app, get("/api/v1/search?q=sise:1", c)).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(
-        (body["start"].clone(), body["end"].clone()),
+        (body["error"]["start"].clone(), body["error"]["end"].clone()),
         (json!(0), json!(5))
     );
     let (status, _, _) = call(&f.app, get("/api/v1/search?q=x&sort=seeders", c)).await;
@@ -314,4 +314,93 @@ async fn search_parse_and_detail() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     let (status, _, _) = call(&f.app, get("/api/v1/torrents/xyz", c)).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn errors_share_one_envelope() {
+    let f = fixture();
+    // 401 before login, with the hint the login screen needs.
+    let (status, _, body) = call(&f.app, get("/api/v1/search?q=x", None)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["error"]["code"], json!("login_required"));
+    assert!(body["error"]["message"].is_string());
+    assert_eq!(body["setup_required"], json!(true));
+
+    let c = logged_in(&f).await;
+    let c = Some(c.as_str());
+    // 400: a parse error keeps its span.
+    let (status, _, body) = call(&f.app, get("/api/v1/parse?q=sise:1", c)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let e = &body["error"];
+    assert_eq!(
+        (&e["code"], &e["field"], &e["start"], &e["end"]),
+        (&json!("query_syntax"), &json!("q"), &json!(0), &json!(5))
+    );
+    assert!(e["message"].as_str().is_some_and(|m| !m.is_empty()));
+    let (_, _, body) = call(&f.app, get("/api/v1/search?q=x&sort=seeders", c)).await;
+    assert_eq!(
+        body,
+        json!({ "error": {
+            "code": "unknown_sort",
+            "message": body["error"]["message"],
+            "field": "sort",
+        } })
+    );
+
+    // 404: an unknown torrent, and an unknown endpoint.
+    let (status, _, body) = call(
+        &f.app,
+        get(&format!("/api/v1/torrents/{}", "0".repeat(40)), c),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["code"], json!("torrent_not_found"));
+    let (status, _, body) = call(&f.app, get("/api/v1/nope", c)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["code"], json!("no_route"));
+
+    // Rejected bodies and wrong passwords use it too, with their field.
+    let form = Request::post("/api/v1/login")
+        .header(header::CONTENT_TYPE, "text/plain")
+        .body(Body::from("x"))
+        .unwrap();
+    let (status, _, body) = call(&f.app, form).await;
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert_eq!(body["error"]["code"], json!("unsupported_media_type"));
+    let (status, _, body) = call(&f.app, post("/api/v1/login", None, json!({}))).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"]["code"], json!("bad_body"));
+    let (status, _, body) = call(
+        &f.app,
+        post(
+            "/api/v1/password",
+            c,
+            json!({ "old": "not the password", "new": "whatever whatever" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        (&body["error"]["code"], &body["error"]["field"]),
+        (&json!("bad_password"), &json!("old"))
+    );
+}
+
+#[tokio::test]
+async fn protected_routes_fail_closed_outside_the_router() {
+    let f = fixture();
+    let cookie = logged_in(&f).await;
+    let reader = Store::open_reader(f._dir.path().join("t.db"), StoreConfig::default()).unwrap();
+    // Mounted without `router`, the guard has nothing to check against.
+    let stray = lodestar_api::auth::protected(
+        Router::new().route("/x", axum::routing::get(|| async { "secret" })),
+    )
+    .with_state(ApiState {
+        auth: f.auth.clone(),
+        index: None,
+        reader: Arc::new(Mutex::new(reader)),
+    });
+    let (status, _, body) = call(&stray, get("/x", Some(&cookie))).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(body["error"]["code"], json!("internal"));
 }
