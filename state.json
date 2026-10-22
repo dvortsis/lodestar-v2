@@ -670,8 +670,8 @@
    "session": "session_01JVt8W2aGJyEFgv7HYwQJUF",
    "pr": 60,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": "PR #60 opened 09:35; reviewer (incl. security) running"
+   "review_rounds": 1,
+   "notes": "round 1 FIX: truncation drops withheld-private note; important: RSS description HTML, private flag, Discord autolink claim, ntfy http-credentials rule"
   },
   "B17": {
    "status": "pending",
@@ -844,6 +844,13 @@
   ],
   "polish": [
    "first-run log says \"open http://0.0.0.0:8090/\": print a reachable address or \"this host\" (lodestar services.rs)"
+  ],
+  "runner-docs-pr": [
+   "\u00a716: X-notify decisions (Discord send without redirects; ntfy requires JSON with id on 2xx; ntfy credentials over http only to private hosts)",
+   "\u00a716/D-docker: STRIP/DEBUG override in image; \u00a74 data layout differs from code"
+  ],
+  "notify-followup": [
+   "move ntfy.rs pub(crate) text helpers to notify/text.rs, drop duplicate web_link in rss.rs (next slice owning notify/mod.rs, e.g. X-email)"
   ]
  },
  "blocked_on_owner": [
