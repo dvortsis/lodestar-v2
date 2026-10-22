@@ -1214,6 +1214,7 @@ version = "0.0.0"
 dependencies = [
  "argon2",
  "axum",
+ "form_urlencoded",
  "hmac",
  "lodestar-bencode",
  "lodestar-classify",
@@ -1224,6 +1225,8 @@ dependencies = [
  "rand 0.10.3",
  "serde",
  "serde_json",
+ "serde_path_to_error",
+ "serde_urlencoded",
  "sha2",
  "tempfile",
  "tokio",

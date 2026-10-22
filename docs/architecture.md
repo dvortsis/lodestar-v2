@@ -1728,6 +1728,10 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **`themes.json`** is `{ v: 1, keys: [...], themes: [{ id, name, family, group, mode, contrast: "AA"|"AAA", license?, source?, values: [...] }] }`, with `values` in `keys` order.
 - **Dark `info` uses `primary-ink`**, which equals `primary` for Riverstone but may differ for other themes (a dark `primary` that is too dim is lightened).
 
+**B0 decisions (API router split, error envelope):**
+- **One module per API domain** in `crates/api` (`auth`, `search`, `torrents`), each with `routes() -> Router<ApiState>`; `api::router` only merges them, one line per module. Session-protected routes are wrapped in `auth::protected`, whose guard reads its `Auth` from a request extension that only `api::router` installs, so a protected route mounted any other way fails closed (500), never open.
+- **One error envelope** for every `/api/v1` failure: `{ "error": { "code", "message", "field"?, "start"?, "end"? } }`. `code` is stable snake_case for clients to branch on, `message` a sentence for people, `field` the parameter at fault, `start`/`end` the byte span of a query syntax error. Extractor rejections (bad JSON, query or path; `field` is the serde path to the bad value) and unknown `/api/v1` paths (404) or methods (405) use it too, with house-style messages rather than serde's text. Status codes didn't change. The 401 keeps `setup_required` beside `error`, so the login screen needs no second request.
+- **`crates/lodestar/src/services.rs`** builds and wires every service of `serve` and owns the ordered shutdown (the blocklist refresher, then the pipeline, then the live indexer); `main.rs` keeps only the CLI.
 
 ## 17. Verification (once built)
 
