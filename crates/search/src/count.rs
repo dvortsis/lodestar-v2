@@ -32,6 +32,8 @@
 //! query of at least 20,000 matches against four standard deviations
 //! (`bench/src/bin/search-bench.rs`).
 
+use std::ops::Range;
+
 use tantivy::query::{EnableScoring, Weight};
 use tantivy::{COLLECT_BLOCK_BUFFER_LEN, DocId, DocSet, Searcher, SegmentReader, TERMINATED};
 
@@ -144,7 +146,7 @@ pub(crate) fn exact(
 }
 
 /// Runs `f` on every segment through the index's executor.
-fn per_segment<R: Send>(
+pub(crate) fn per_segment<R: Send>(
     searcher: &Searcher,
     compiled: &Compiled,
     cancel: &CancelToken,
@@ -176,12 +178,27 @@ fn segment_estimate(
 ) -> tantivy::Result<(f64, bool)> {
     let max = reader.max_doc();
     let mut m = Matcher::new(weight, reader, compiled, cancel)?;
-    if max <= sample_above {
+    let Some(plan) = slices(max, sample_above) else {
         return Ok((m.count_until(TERMINATED)? as f64, false));
+    };
+    let mut found = 0u64;
+    for slice in &plan {
+        m.seek(slice.start);
+        found += m.count_until(slice.end)? as u64;
+    }
+    Ok((found as f64 * scale(max, &plan), true))
+}
+
+/// The doc-id ranges a segment of `max` documents is sampled in, one per
+/// stratum (step 1 of the module docs), or `None` when it's counted
+/// whole. The same segment always gets the same slices.
+pub(crate) fn slices(max: u32, sample_above: u32) -> Option<Vec<Range<DocId>>> {
+    if max <= sample_above {
+        return None;
     }
     let stratum = max.div_ceil(STRATA);
     let chunk = stratum.div_ceil(SHARE).max(1);
-    let (mut found, mut covered) = (0u64, 0u64);
+    let mut out = Vec::with_capacity(STRATA as usize);
     for s in 0..STRATA {
         let base = s * stratum;
         if base >= max {
@@ -195,12 +212,16 @@ fn segment_estimate(
         if start >= max {
             break;
         }
-        let end = (start + chunk).min(max);
-        m.seek(start);
-        found += m.count_until(end)? as u64;
-        covered += u64::from(end - start);
+        out.push(start..(start + chunk).min(max));
     }
-    Ok((found as f64 * f64::from(max) / covered as f64, true))
+    Some(out)
+}
+
+/// What a count over `plan`'s slices is multiplied by to stand for the
+/// whole segment: the documents in it over the documents covered.
+pub(crate) fn scale(max: u32, plan: &[Range<DocId>]) -> f64 {
+    let covered: u64 = plan.iter().map(|r| u64::from(r.end - r.start)).sum();
+    f64::from(max) / covered.max(1) as f64
 }
 
 /// A fixed scramble of a slice number (SplitMix64's finalizer).
@@ -213,7 +234,7 @@ fn jitter(s: u32) -> u32 {
 
 /// Walks one segment's matches, applying the deletes and the collector
 /// ranges ([`filter`]), checking the token as it goes.
-struct Matcher<'a> {
+pub(crate) struct Matcher<'a> {
     docs: Box<dyn tantivy::query::Scorer>,
     checks: Vec<filter::Check>,
     alive: Option<&'a tantivy::fastfield::AliveBitSet>,
@@ -222,7 +243,7 @@ struct Matcher<'a> {
 }
 
 impl<'a> Matcher<'a> {
-    fn new(
+    pub(crate) fn new(
         weight: &dyn Weight,
         reader: &'a SegmentReader,
         compiled: &Compiled,
@@ -241,7 +262,7 @@ impl<'a> Matcher<'a> {
         self.alive.is_none_or(|a| a.is_alive(doc)) && self.checks.iter().all(|c| c.passes(doc))
     }
 
-    fn seek(&mut self, target: DocId) {
+    pub(crate) fn seek(&mut self, target: DocId) {
         if self.docs.doc() < target {
             self.docs.seek(target);
         }
@@ -282,6 +303,57 @@ impl<'a> Matcher<'a> {
             doc = self.docs.advance();
         }
         Ok(n)
+    }
+}
+
+impl Matcher<'_> {
+    /// Hands the matches from the current document up to (not including)
+    /// `end` to `f`, a block of up to [`COLLECT_BLOCK_BUFFER_LEN`] at a
+    /// time, and returns how many there were.
+    pub(crate) fn visit_until(
+        &mut self,
+        end: DocId,
+        f: &mut impl FnMut(&[DocId]),
+    ) -> tantivy::Result<usize> {
+        let mut block = [0; COLLECT_BLOCK_BUFFER_LEN];
+        let mut n = 0;
+        let mut total = 0;
+        if end == TERMINATED {
+            // The whole rest, a block at a time.
+            let mut buf = [0; COLLECT_BLOCK_BUFFER_LEN];
+            loop {
+                let got = self.docs.fill_buffer(&mut buf);
+                n = 0;
+                for &d in &buf[..got] {
+                    if self.passes(d) {
+                        block[n] = d;
+                        n += 1;
+                    }
+                }
+                f(&block[..n]);
+                total += n;
+                self.tick(got as u32)?;
+                if got < buf.len() {
+                    return Ok(total);
+                }
+            }
+        }
+        let mut doc = self.docs.doc();
+        while doc < end {
+            if self.passes(doc) {
+                block[n] = doc;
+                n += 1;
+                if n == block.len() {
+                    f(&block);
+                    total += n;
+                    n = 0;
+                }
+            }
+            self.tick(1)?;
+            doc = self.docs.advance();
+        }
+        f(&block[..n]);
+        Ok(total + n)
     }
 }
 
