@@ -58,6 +58,7 @@ pub fn document() -> Doc {
     // Add a module, add one line.
     doc.merge(crate::auth::ApiDoc::openapi());
     doc.merge(crate::search::ApiDoc::openapi());
+    doc.merge(crate::facets::ApiDoc::openapi());
     doc.merge(crate::torrents::ApiDoc::openapi());
     doc.merge(crate::filters::ApiDoc::openapi());
     doc.merge(crate::settings::ApiDoc::openapi());

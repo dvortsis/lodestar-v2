@@ -46,6 +46,8 @@ pub struct Lease {
     stemmed: bool,
     sort: Sort,
     total: Mutex<Total>,
+    /// The time relative dates were resolved against.
+    now: i64,
 }
 
 impl std::fmt::Debug for Lease {
@@ -125,7 +127,38 @@ impl Lease {
             stemmed,
             sort,
             total: Mutex::new(total),
+            now,
         })
+    }
+
+    /// A lease over `index`'s current snapshot that runs `compiled` as is
+    /// (tests: slow or tripwire queries).
+    #[cfg(test)]
+    pub(crate) fn raw(index: Arc<SearchIndex>, compiled: Compiled, total: Total) -> Lease {
+        Lease {
+            searcher: index.searcher(),
+            index,
+            compiled,
+            stemmed: false,
+            sort: Sort::Relevance,
+            total: Mutex::new(total),
+            now: 0,
+        }
+    }
+
+    /// The snapshot, for facets over the same documents (`facets.rs`).
+    pub(crate) fn searcher(&self) -> &Searcher {
+        &self.searcher
+    }
+
+    pub(crate) fn compiled(&self) -> &Compiled {
+        &self.compiled
+    }
+
+    /// The time the query's relative dates resolved against: facets
+    /// compile their variants of it at the same instant.
+    pub fn now(&self) -> i64 {
+        self.now
     }
 
     /// The index the snapshot belongs to (for matched files).

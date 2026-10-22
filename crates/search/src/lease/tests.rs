@@ -188,6 +188,7 @@ fn slow_lease(index: &Arc<SearchIndex>, sort: Sort, delay: Duration) -> Lease {
             value: 0,
             approx: true,
         }),
+        now: 0,
     }
 }
 
