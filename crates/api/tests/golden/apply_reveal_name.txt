@@ -1,0 +1,2 @@
+200
+{"applied":true,"assessment":{"confirm":true,"neutralize":null,"preview":{"caught_30d":0,"core_caught_30d":0,"estimate":false,"per_day":0.0,"quarantine":0,"stored":0,"tombstones":0},"warning":"This shows the name of a torrent a filter held back. Nothing about it is stored.","weakening":true},"name":"Held.Name.0","version":11}
