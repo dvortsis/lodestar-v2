@@ -483,3 +483,54 @@ fn adult() {
     }
     assert!(failures.is_empty(), "\n{}", failures.join("\n"));
 }
+
+#[test]
+fn corrections_override_adult_detection_and_junk() {
+    use lodestar_classify::{Correction, classify_corrected};
+    let adult = "Some.Title.XXX.1080p.MP4-GRP";
+    let files = [file("Some.Title.XXX.1080p.mp4", "1.2G")];
+    assert_eq!(classify(adult, &files).content_type, ContentType::Adult);
+    // Not adult: the type it would otherwise have.
+    let fix = Correction {
+        adult: Some(false),
+        not_junk: false,
+    };
+    let c = classify_corrected(adult, &files, fix);
+    assert_ne!(c.content_type, ContentType::Adult);
+    assert_eq!(c.adult_kind, None);
+
+    // Is adult: the nearest kind, at full confidence.
+    let movie = "The.Matrix.1999.1080p.BluRay.x264-GRP";
+    let files = [file("The.Matrix.1999.1080p.BluRay.x264-GRP.mkv", "8G")];
+    assert_eq!(classify(movie, &files).content_type, ContentType::Movie);
+    let fix = Correction {
+        adult: Some(true),
+        not_junk: false,
+    };
+    let c = classify_corrected(movie, &files, fix);
+    assert_eq!(c.content_type, ContentType::Adult);
+    assert_eq!(c.adult_kind, Some(AdultKind::Movie));
+    assert_eq!(c.confidence, 100);
+    // Ebook and Other, which detection leaves alone, get a kind too.
+    let book = classify_corrected("Some Book", &[file("Some Book.epub", "2M")], fix);
+    assert_eq!(book.adult_kind, Some(AdultKind::Comics));
+
+    // Not junk clears the score and its reasons.
+    let lure = "Movie.2024.1080p";
+    let lure_files = [
+        file("Movie.2024.1080p.mkv", "2G"),
+        file("password.txt", "1K"),
+        file("setup.exe", "3M"),
+    ];
+    assert!(classify(lure, &lure_files).junk.score > 0);
+    let c = classify_corrected(
+        lure,
+        &lure_files,
+        Correction {
+            adult: None,
+            not_junk: true,
+        },
+    );
+    assert_eq!(c.junk.score, 0);
+    assert!(c.junk.reasons.is_empty());
+}

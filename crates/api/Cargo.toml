@@ -11,6 +11,8 @@ repository.workspace = true
 argon2 = { version = "0.6.0", default-features = false, features = ["alloc"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query"] }
 hmac = "0.13.0"
+lodestar-classify.workspace = true
+lodestar-filter.workspace = true
 lodestar-metainfo.workspace = true
 lodestar-search.workspace = true
 lodestar-store.workspace = true
