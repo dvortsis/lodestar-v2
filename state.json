@@ -143,13 +143,13 @@
    "notes": "merged after round 2"
   },
   "B5a": {
-   "status": "running",
+   "status": "in_review",
    "model": "opus",
    "session": "session_01Uk4thMoRJwF3Rzg9SUrxUQ",
-   "pr": null,
+   "pr": 64,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "launched 10:00 (briefs/B5a.md); also wires Serving, swap-failure fix, deferred hit fields"
+   "notes": "PR #64 (no swapfix yet; separate PR requested); reviewer started 11:41"
   },
   "B4": {
    "status": "ready",
@@ -728,13 +728,13 @@
    "notes": "merged 07:50"
   },
   "X-email": {
-   "status": "running",
+   "status": "in_review",
    "model": "opus",
    "session": "session_01XTY2bFUF4NSdqoD8YDJjpA",
-   "pr": null,
+   "pr": 63,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "launched 10:19 (briefs/X-email.md); lettre approved; moves text helpers to notify/text.rs"
+   "notes": "PR #63; reviewer (incl. security) started 11:41"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -862,7 +862,7 @@
   "W6 baselines: allow *.blob.core.windows.net (GitHub Actions artifact storage) in environment network, or owner commits artifact 12421952170 into web/e2e/ and removes web/e2e/.update-snapshots on slice/W6"
  ],
  "launches_today": 6,
- "last_heartbeat": "2026-10-22T10:38Z",
+ "last_heartbeat": "2026-10-22T11:40Z",
  "owner_questions": [
   "F1 budget scope: gate covers cheaply-rejectable rule shapes (10% = 40.8 us on runner). Shapes the cheap check cannot decide cost more at 10% of rules (VM: NEAR/1 ~450-500, negation ~140, fuzzy ~125, prefix ~110 us; runner ~1.4x faster). Should those shapes be gated at 50 us too?"
  ]
