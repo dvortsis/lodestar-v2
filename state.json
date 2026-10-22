@@ -232,7 +232,7 @@
    "pr": 103,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": "launched 22:38; deps W7ab,W7cd,W5,W3 merged"
+   "notes": "launched 22:38; deps W7ab,W7cd,W5,W3 merged | 23:40 review FIX: .update-snapshots marker must not merge (commit CI baselines), size reason; SSE-only reachability lockout, Enter hijack, metrics.md cite, safeNext control chars; polish."
   },
   "M-auth": {
    "status": "running",
@@ -1113,7 +1113,6 @@
  "heartbeats": 4,
  "reviews_in_flight": [
   "88",
-  103,
   104
  ],
  "carry_forward": {
@@ -1190,7 +1189,10 @@
   "classify_adult_other": "R-relevance: XXX name with no year not classified Adult (detect returns None for base Other?) - reviewer of #94 checking on main",
   "cli_missing_apis": "M6-cli: reindex refuses (exit 3) while server runs; needs API rebuild endpoint + search 'rebuild this version while old serves' call",
   "V6-cluster2": "From #96 design review: before-auth handshake timeout + concurrent/per-IP connection caps (Acceptor reads ClientHello pre-auth); rate-limit renew (each adds 72h cluster.cert.* row); no .await under coordinator mutex (redeem/renew sync SQLite); maintain hourly (coordinator leaf expires 72h otherwise); re-seal cluster keys on SecretStore rotation; close open connections on revocation within one heartbeat (\u00a719.8); token via stdin/file not --token/LODESTAR_TOKEN; zero-overlap compromise CA rotation + CA expiry check in maintain; store compare_and_set helper (store-owned); consider small secrets crate (integrations pulls reqwest/lettre/tokio). Also from #96 security re-review: revocation, issued list and name-in-use live per-process in Coordinator memory, so a CLI revoke isn't seen by a running serve and two coordinators can redeem different tokens for one name; single PKI owner (CLI via server) or reload from DB.",
-  "events_filter_hidden": "B4 'N new' counts filter-hidden torrents (flags::HIDDEN); design question: count visible-by-default only? (from #87 review)"
+  "events_filter_hidden": "B4 'N new' counts filter-hidden torrents (flags::HIDDEN); design question: count visible-by-default only? (from #87 review)",
+  "crawler_rate": "CrawlerEvent needs a server-computed ingest rate for the status pill (metrics.md:169) \u2014 from W9 review",
+  "icons_weight": "Phosphor icons are regular weight but \u00a710.2 says Bold (predates W9; W7 primitives) \u2014 next UI slice touching icons",
+  "skip_link": "Search slice: skip link label 'Skip to results' (\u00a710.13)"
  },
  "blocked_on_owner": [
   "Modern DHT crawler architecture: waiting on an AskUserQuestion",
