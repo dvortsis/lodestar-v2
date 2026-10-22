@@ -20,6 +20,7 @@
 pub mod auth;
 pub mod error;
 pub mod extract;
+pub mod filters;
 mod search;
 mod torrents;
 
@@ -32,6 +33,7 @@ use lodestar_store::Store;
 pub use auth::{Auth, require_session};
 pub use error::{ApiError, ApiResult};
 pub use extract::ClientIp;
+pub(crate) use search::unix_now;
 pub use search::{MATCHED_FILES, MAX_LIMIT, MAX_WINDOW};
 
 #[derive(Clone, Debug)]
@@ -41,6 +43,8 @@ pub struct ApiState {
     pub index: Option<SearchIndex>,
     /// A read-only connection for detail and enrichment.
     pub reader: Arc<Mutex<Store>>,
+    /// `None` when the filters API isn't served (tests, tools).
+    pub filters: Option<Arc<filters::FiltersApi>>,
 }
 
 /// The `/api/v1` routes. The server must be run with
@@ -51,6 +55,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(auth::routes())
         .merge(search::routes())
         .merge(torrents::routes())
+        .merge(filters::routes())
         // What `auth::protected` checks sessions against.
         .layer(Extension(auth::SessionAuth(state.auth.clone())))
         // For open routes; `auth::protected` sets its own behind the

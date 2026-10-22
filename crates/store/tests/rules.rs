@@ -43,3 +43,16 @@ fn rule_set_round_trips() {
     s.save_previous(b"v2").unwrap();
     assert_eq!(s.previous().unwrap().as_deref(), Some(&b"v2"[..]));
 }
+
+#[test]
+fn a_rule_set_can_be_put_back() {
+    let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+    s.add_rule("cam", 2, None, None).unwrap();
+    s.add_allow("group:x").unwrap();
+    let before = s.rule_set().unwrap();
+    s.add_rule("ts", 1, None, None).unwrap();
+    s.add_override(0, &[1; 20], 0, None, 1, None, None).unwrap();
+    s.set_pack_switch("spam", false).unwrap();
+    s.replace_rule_set(&before).unwrap();
+    assert_eq!(s.rule_set().unwrap(), before);
+}

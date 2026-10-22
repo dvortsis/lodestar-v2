@@ -84,6 +84,7 @@ fn fixture() -> Fixture {
             auth: auth.clone(),
             index: Some(index),
             reader: Arc::new(Mutex::new(reader)),
+            filters: None,
         }),
     );
     let hashes = infos
@@ -470,6 +471,7 @@ async fn protected_routes_fail_closed_outside_the_router() {
         auth: f.auth.clone(),
         index: None,
         reader: Arc::new(Mutex::new(reader)),
+        filters: None,
     });
     let (status, _, body) = call(&stray, get("/x", Some(&cookie))).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);

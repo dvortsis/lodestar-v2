@@ -380,7 +380,7 @@ fn migrates_a_v4_database_with_data() {
             .execute_batch(
                 "DROP TABLE filter_rules; DROP TABLE pack_switches; DROP TABLE override_list;
                  DROP TABLE filter_exceptions; DROP TABLE filter_allow; DROP TABLE filter_fixtures;
-                 DROP TABLE rule_set_prev;
+                 DROP TABLE rule_set_prev; DROP TABLE class_corrections;
                  DROP TABLE subscription_data; DROP TABLE subscriptions;
                  DROP TABLE swarm_history; DROP TABLE swarm_trackers; DROP TABLE swarm;
                  DROP TABLE trackers; DELETE FROM schema_migrations WHERE version >= 5;",
@@ -397,4 +397,55 @@ fn migrates_a_v4_database_with_data() {
     assert_eq!(store.unscraped_after(0, 10).unwrap().len(), 1);
     apply(&mut store, &[update(id, T, 3)]);
     assert_eq!(store.swarm(id).unwrap().unwrap().seeders, 3);
+}
+
+#[test]
+fn deleted_torrents_leave_every_table_and_are_logged_for_the_indexer() {
+    let mut s = mem();
+    let (a, ha) = add(&mut s, "a", false, 0);
+    let (b, _) = add(&mut s, "b", false, 0);
+    s.write(&WriteBatch {
+        swarm: &[update(a, T, 5)],
+        ..WriteBatch::default()
+    })
+    .unwrap();
+    let head = s.reindex_head().unwrap();
+    // Unknown hashes are ignored; a hash given twice deletes once.
+    let gone = s.delete_torrents(&[ha.0, ha.0, [0xee; 20]]).unwrap();
+    assert_eq!(gone, vec![a]);
+    assert!(s.torrent(a).unwrap().is_none());
+    assert!(s.find(&ha).unwrap().is_none());
+    assert!(s.torrent(b).unwrap().is_some());
+    assert_eq!(s.reindex_after(head, 10).unwrap(), vec![(head + 1, a)]);
+    // A new torrent never takes the deleted id.
+    let (c, _) = add(&mut s, "c", false, 0);
+    assert!(c > b);
+}
+
+#[test]
+fn class_corrections_are_kept_per_torrent_and_go_with_it() {
+    use lodestar_store::ClassCorrection;
+    let mut s = mem();
+    let (a, ha) = add(&mut s, "a", false, 0);
+    assert_eq!(s.correction(a).unwrap(), None);
+    let fix = ClassCorrection {
+        adult: Some(false),
+        not_junk: true,
+    };
+    assert!(s.set_correction(a, fix).unwrap());
+    assert_eq!(s.correction(a).unwrap(), Some(fix));
+    let fix = ClassCorrection {
+        adult: Some(true),
+        not_junk: false,
+    };
+    assert!(s.set_correction(a, fix).unwrap());
+    assert_eq!(s.correction(a).unwrap(), Some(fix));
+    // Clearing removes the row; an unknown torrent is refused.
+    assert!(s.set_correction(a, ClassCorrection::default()).unwrap());
+    assert_eq!(s.correction(a).unwrap(), None);
+    assert!(!s.set_correction(a + 100, fix).unwrap());
+    // Deleting the torrent deletes its correction.
+    s.set_correction(a, fix).unwrap();
+    s.delete_torrents(&[ha.0]).unwrap();
+    assert_eq!(s.correction(a).unwrap(), None);
 }

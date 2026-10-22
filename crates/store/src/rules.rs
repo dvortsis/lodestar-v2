@@ -241,6 +241,74 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Replaces every rule-layer table with `set` (one-step Undo).
+    pub fn replace_rule_set(&mut self, set: &RuleSet) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        for table in [
+            "filter_rules",
+            "pack_switches",
+            "override_list",
+            "filter_exceptions",
+            "filter_allow",
+        ] {
+            tx.execute(&format!("DELETE FROM {table}"), [])?;
+        }
+        for (i, r) in set.rules.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO filter_rules
+                     (id, position, query, action, enabled, shadow_until, unless_query)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    r.id,
+                    i as i64 + 1,
+                    r.query,
+                    r.action,
+                    r.enabled,
+                    r.shadow_until,
+                    r.unless_query
+                ],
+            )?;
+        }
+        for (id, on) in &set.pack_switches {
+            tx.execute(
+                "INSERT INTO pack_switches (id, enabled) VALUES (?1, ?2)",
+                params![id, on],
+            )?;
+        }
+        for o in &set.overrides {
+            tx.execute(
+                "INSERT INTO override_list (id, kind, value, strength, scope, created_at,
+                     expires_at, shadow_until, hits)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    o.id,
+                    o.kind,
+                    o.value,
+                    o.strength,
+                    o.scope,
+                    o.created_at,
+                    o.expires_at,
+                    o.shadow_until,
+                    o.hits
+                ],
+            )?;
+        }
+        for e in &set.exceptions {
+            tx.execute(
+                "INSERT INTO filter_exceptions (id, rule, kind, value) VALUES (?1, ?2, ?3, ?4)",
+                params![e.id, e.rule, e.kind, e.value],
+            )?;
+        }
+        for (id, q) in &set.allow {
+            tx.execute(
+                "INSERT INTO filter_allow (id, query) VALUES (?1, ?2)",
+                params![id, q],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Keeps a snapshot of the rule set for one-step Undo, replacing the
     /// last one.
     pub fn save_previous(&mut self, data: &[u8]) -> Result<()> {
@@ -256,6 +324,55 @@ impl Store {
             .conn
             .query_row("SELECT data FROM rule_set_prev WHERE id = 1", [], |r| {
                 r.get(0)
+            })
+            .optional()?)
+    }
+}
+
+/// Your correction to one torrent's classification (§20.9).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ClassCorrection {
+    /// `Some(true)`: Is adult. `Some(false)`: Not adult.
+    pub adult: Option<bool>,
+    pub not_junk: bool,
+}
+
+impl Store {
+    /// Sets or clears (`ClassCorrection::default()`) a torrent's
+    /// correction. Returns false when the torrent isn't stored. The caller
+    /// re-enriches the torrent, which logs it for re-indexing.
+    pub fn set_correction(&mut self, id: i64, c: ClassCorrection) -> Result<bool> {
+        let tx = self.conn.transaction()?;
+        let exists = tx
+            .query_row("SELECT 1 FROM torrents WHERE id = ?1", [id], |_| Ok(()))
+            .optional()?
+            .is_some();
+        if exists {
+            if c == ClassCorrection::default() {
+                tx.execute("DELETE FROM class_corrections WHERE torrent_id = ?1", [id])?;
+            } else {
+                tx.execute(
+                    "INSERT INTO class_corrections (torrent_id, adult, not_junk)
+                     VALUES (?1, ?2, ?3)
+                     ON CONFLICT (torrent_id) DO UPDATE
+                     SET adult = excluded.adult, not_junk = excluded.not_junk",
+                    params![id, c.adult, c.not_junk],
+                )?;
+            }
+        }
+        tx.commit()?;
+        Ok(exists)
+    }
+
+    pub fn correction(&self, id: i64) -> Result<Option<ClassCorrection>> {
+        Ok(self
+            .conn
+            .prepare_cached("SELECT adult, not_junk FROM class_corrections WHERE torrent_id = ?1")?
+            .query_row([id], |r| {
+                Ok(ClassCorrection {
+                    adult: r.get(0)?,
+                    not_junk: r.get(1)?,
+                })
             })
             .optional()?)
     }

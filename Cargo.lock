@@ -1217,6 +1217,8 @@ dependencies = [
  "form_urlencoded",
  "hmac",
  "lodestar-bencode",
+ "lodestar-classify",
+ "lodestar-filter",
  "lodestar-metainfo",
  "lodestar-search",
  "lodestar-store",
@@ -1258,6 +1260,7 @@ dependencies = [
 name = "lodestar-classify"
 version = "0.0.0"
 dependencies = [
+ "lodestar-metainfo",
  "lodestar-release-parser",
  "proptest",
 ]
@@ -1295,6 +1298,7 @@ dependencies = [
  "lodestar-search",
  "lodestar-store",
  "proptest",
+ "tracing",
  "unicode-normalization",
 ]
 

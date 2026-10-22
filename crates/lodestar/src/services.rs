@@ -1,6 +1,6 @@
 //! Builds and wires every long-running service of `lodestar serve`: the
 //! store and its readers, the blocklist subscriptions, the pipeline, the
-//! live indexer, the API state and the HTTP server. `main.rs` parses the command line and calls
+//! live indexer, the filters API, the API state and the HTTP server. `main.rs` parses the command line and calls
 //! [`Services::start`]; [`Services::run`] serves until a signal, then
 //! shuts down in order.
 //!
@@ -122,11 +122,20 @@ impl Services {
             );
         }
         let filter = pipeline_config.filter.clone();
+        let held = pipeline_config.held.clone();
+        let sealer = pipeline_config.sealer.clone();
         let pipeline = Pipeline::start(pipeline_config, store, plugins).await?;
         let control = Arc::new(Mutex::new(control));
+        let filters = Arc::new(lodestar_api::filters::FiltersApi {
+            store: control.clone(),
+            engine: filter.clone(),
+            held,
+            sealer,
+            ips: ips.clone(),
+        });
         let (stop_subscriptions, subscriptions_stopped) = watch::channel(false);
         let refresher = tokio::spawn(subscriptions::run(
-            control,
+            control.clone(),
             subscriptions::Limits::from_config(&config.subscriptions),
             filter,
             ips,
@@ -137,6 +146,7 @@ impl Services {
             auth,
             index: live.as_ref().map(|(index, _)| index.clone()),
             reader: reader.clone(),
+            filters: Some(filters),
         };
         let http = http::AppState {
             monitor: pipeline.monitor(),
