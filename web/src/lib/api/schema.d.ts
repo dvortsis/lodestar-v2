@@ -12,7 +12,7 @@ export interface paths {
             cookie?: never;
         };
         /** Whether the instance is set up and the caller logged in. */
-        get: operations["auth_status"];
+        get: operations["getAuthStatus"];
         put?: never;
         post?: never;
         delete?: never;
@@ -32,7 +32,7 @@ export interface paths {
          * Your classification rules, and how detection compares with your
          *     corrections.
          */
-        get: operations["classes"];
+        get: operations["getClassify"];
         put?: never;
         post?: never;
         delete?: never;
@@ -54,7 +54,7 @@ export interface paths {
          * Your classification correction for one stored torrent; it's
          *     classified again at once.
          */
-        post: operations["correct"];
+        post: operations["correctClassification"];
         delete?: never;
         options?: never;
         head?: never;
@@ -74,7 +74,7 @@ export interface paths {
          * Adds a classification rule; the stored torrents it matches are
          *     classified again.
          */
-        post: operations["add_class_rule"];
+        post: operations["addClassRule"];
         delete?: never;
         options?: never;
         head?: never;
@@ -94,7 +94,7 @@ export interface paths {
          * Removes a classification rule; the torrents it matched are classified
          *     again without it.
          */
-        post: operations["remove_class_rule"];
+        post: operations["removeClassRule"];
         delete?: never;
         options?: never;
         head?: never;
@@ -109,7 +109,7 @@ export interface paths {
             cookie?: never;
         };
         /** The rule set, switches and lists. */
-        get: operations["overview"];
+        get: operations["getFilters"];
         put?: never;
         post?: never;
         delete?: never;
@@ -132,7 +132,7 @@ export interface paths {
          *     (`confirm_required`, the assessment beside the error) until it's sent
          *     again with the admin password, every time (§20.11).
          */
-        post: operations["apply"];
+        post: operations["applyFilterChange"];
         delete?: never;
         options?: never;
         head?: never;
@@ -147,7 +147,7 @@ export interface paths {
             cookie?: never;
         };
         /** The core rules' hashed examples, run against the rules as they are. */
-        get: operations["fixtures"];
+        get: operations["getFilterFixtures"];
         put?: never;
         post?: never;
         delete?: never;
@@ -169,7 +169,7 @@ export interface paths {
          * What a change would do, without applying it or asking for the
          *     password.
          */
-        post: operations["preview"];
+        post: operations["previewFilterChange"];
         delete?: never;
         options?: never;
         head?: never;
@@ -186,7 +186,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Starts a preview in the background; poll it by its id. */
-        post: operations["start_preview"];
+        post: operations["startFilterPreviewJob"];
         delete?: never;
         options?: never;
         head?: never;
@@ -204,7 +204,7 @@ export interface paths {
          * A preview job: progress while it runs, then the assessment (or the
          *     error) once it's done.
          */
-        get: operations["preview_job"];
+        get: operations["getFilterPreviewJob"];
         put?: never;
         post?: never;
         delete?: never;
@@ -223,7 +223,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Cancels a preview job; it stops at its next step. */
-        post: operations["cancel_preview"];
+        post: operations["cancelFilterPreviewJob"];
         delete?: never;
         options?: never;
         head?: never;
@@ -241,7 +241,7 @@ export interface paths {
          * The review queue: quarantine (never with names) and the last 30 days'
          *     decisions per rule.
          */
-        get: operations["queue"];
+        get: operations["getFilterQueue"];
         put?: never;
         post?: never;
         delete?: never;
@@ -263,7 +263,7 @@ export interface paths {
          * Tries a draft rule and the current rules on example torrents. Nothing
          *     is stored or logged.
          */
-        post: operations["test"];
+        post: operations["testFilterRule"];
         delete?: never;
         options?: never;
         head?: never;
@@ -312,7 +312,7 @@ export interface paths {
             cookie?: never;
         };
         /** This document. */
-        get: operations["openapi_json"];
+        get: operations["getOpenApi"];
         put?: never;
         post?: never;
         delete?: never;
@@ -332,7 +332,7 @@ export interface paths {
          * Parses a query: the AST and its canonical text, or a `query_syntax`
          *     error whose `start`/`end` span the UI highlights.
          */
-        get: operations["parse_query"];
+        get: operations["parseQuery"];
         put?: never;
         post?: never;
         delete?: never;
@@ -351,7 +351,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Changes the password and ends every other session. */
-        post: operations["change_password"];
+        post: operations["changePassword"];
         delete?: never;
         options?: never;
         head?: never;
@@ -366,10 +366,10 @@ export interface paths {
             cookie?: never;
         };
         /** Searches with query text. To search with an AST, POST it. */
-        get: operations["search_get"];
+        get: operations["searchGet"];
         put?: never;
         /** Searches with query text or a query AST. */
-        post: operations["search_post"];
+        post: operations["searchPost"];
         delete?: never;
         options?: never;
         head?: never;
@@ -404,7 +404,7 @@ export interface paths {
             cookie?: never;
         };
         /** One torrent by any of its swarm hashes. */
-        get: operations["detail"];
+        get: operations["getTorrent"];
         put?: never;
         post?: never;
         delete?: never;
@@ -421,7 +421,7 @@ export interface paths {
             cookie?: never;
         };
         /** A page of a torrent's file list. */
-        get: operations["files"];
+        get: operations["listTorrentFiles"];
         put?: never;
         post?: never;
         delete?: never;
@@ -733,7 +733,10 @@ export interface components {
             /** @enum {string} */
             op: "undo";
         };
-        /** @description `POST /filters/preview`, `/filters/preview/jobs` and `/filters/apply`. */
+        /**
+         * @description `POST /filters/preview`, `/filters/preview/jobs` and `/filters/apply`.
+         *     `Debug` shows whether a password was sent, never the password.
+         */
         ChangeBody: {
             change: components["schemas"]["Change"];
             /**
@@ -947,7 +950,10 @@ export interface components {
              */
             status?: number;
         };
-        /** @description `POST /login`. */
+        /**
+         * @description `POST /login`.
+         *     `Debug` redacts the secrets.
+         */
         LoginRequest: {
             password: string;
         };
@@ -1022,7 +1028,10 @@ export interface components {
             ast: components["schemas"]["AstNode"];
             canonical: string;
         };
-        /** @description `POST /password`: ends every other session. */
+        /**
+         * @description `POST /password`: ends every other session.
+         *     `Debug` redacts the secrets.
+         */
         PasswordRequest: {
             /** @description At least 10 characters. */
             new: string;
@@ -1231,7 +1240,10 @@ export interface components {
             /** @description Matches in all, not just this page. */
             total: number;
         };
-        /** @description `POST /setup`: claims the instance. */
+        /**
+         * @description `POST /setup`: claims the instance.
+         *     `Debug` redacts the secrets.
+         */
         SetupRequest: {
             /** @description At least 10 characters. */
             password: string;
@@ -1401,7 +1413,7 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    auth_status: {
+    getAuthStatus: {
         parameters: {
             query?: never;
             header?: never;
@@ -1421,7 +1433,7 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    classes: {
+    getClassify: {
         parameters: {
             query?: never;
             header?: never;
@@ -1441,7 +1453,7 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    correct: {
+    correctClassification: {
         parameters: {
             query?: never;
             header?: never;
@@ -1465,7 +1477,7 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    add_class_rule: {
+    addClassRule: {
         parameters: {
             query?: never;
             header?: never;
@@ -1489,7 +1501,7 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    remove_class_rule: {
+    removeClassRule: {
         parameters: {
             query?: never;
             header?: never;
@@ -1513,7 +1525,7 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    overview: {
+    getFilters: {
         parameters: {
             query?: never;
             header?: never;
@@ -1533,7 +1545,7 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    apply: {
+    applyFilterChange: {
         parameters: {
             query?: never;
             header?: never;
@@ -1557,7 +1569,7 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    fixtures: {
+    getFilterFixtures: {
         parameters: {
             query?: never;
             header?: never;
@@ -1577,7 +1589,7 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    preview: {
+    previewFilterChange: {
         parameters: {
             query?: never;
             header?: never;
@@ -1601,7 +1613,7 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    start_preview: {
+    startFilterPreviewJob: {
         parameters: {
             query?: never;
             header?: never;
@@ -1625,7 +1637,7 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    preview_job: {
+    getFilterPreviewJob: {
         parameters: {
             query?: never;
             header?: never;
@@ -1648,7 +1660,7 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    cancel_preview: {
+    cancelFilterPreviewJob: {
         parameters: {
             query?: never;
             header?: never;
@@ -1676,7 +1688,7 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    queue: {
+    getFilterQueue: {
         parameters: {
             query?: never;
             header?: never;
@@ -1696,7 +1708,7 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    test: {
+    testFilterRule: {
         parameters: {
             query?: never;
             header?: never;
@@ -1774,7 +1786,7 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    openapi_json: {
+    getOpenApi: {
         parameters: {
             query?: never;
             header?: never;
@@ -1795,7 +1807,7 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    parse_query: {
+    parseQuery: {
         parameters: {
             query?: {
                 /** @description The query text; empty matches everything. */
@@ -1818,7 +1830,7 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    change_password: {
+    changePassword: {
         parameters: {
             query?: never;
             header?: never;
@@ -1845,7 +1857,7 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    search_get: {
+    searchGet: {
         parameters: {
             query?: {
                 /** @description The query text; empty browses everything. */
@@ -1876,7 +1888,7 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    search_post: {
+    searchPost: {
         parameters: {
             query?: never;
             header?: never;
@@ -1927,7 +1939,7 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    detail: {
+    getTorrent: {
         parameters: {
             query?: never;
             header?: never;
@@ -1950,7 +1962,7 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    files: {
+    listTorrentFiles: {
         parameters: {
             query?: {
                 /** @description Files to skip. */

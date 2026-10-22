@@ -1929,7 +1929,8 @@ fn filters(s: &ApiState) -> ApiResult<Arc<FiltersApi>> {
 }
 
 /// The rule set, switches and lists.
-#[utoipa::path(get, path = "/filters", tag = "filters", responses((status = 200, body = Overview)))]
+#[utoipa::path(
+    operation_id = "getFilters",get, path = "/filters", tag = "filters", responses((status = 200, body = Overview)))]
 pub(crate) async fn overview(State(s): State<ApiState>) -> ApiResult<Json<Overview>> {
     let f = filters(&s)?;
     tokio::task::spawn_blocking(move || f.overview().map(Json))
@@ -1939,7 +1940,8 @@ pub(crate) async fn overview(State(s): State<ApiState>) -> ApiResult<Json<Overvi
 
 /// The review queue: quarantine (never with names) and the last 30 days'
 /// decisions per rule.
-#[utoipa::path(get, path = "/filters/queue", tag = "filters", responses((status = 200, body = Queue)))]
+#[utoipa::path(
+    operation_id = "getFilterQueue",get, path = "/filters/queue", tag = "filters", responses((status = 200, body = Queue)))]
 pub(crate) async fn queue(State(s): State<ApiState>) -> ApiResult<Json<Queue>> {
     let f = filters(&s)?;
     tokio::task::spawn_blocking(move || f.queue(crate::unix_now()).map(Json))
@@ -1949,6 +1951,7 @@ pub(crate) async fn queue(State(s): State<ApiState>) -> ApiResult<Json<Queue>> {
 
 /// The core rules' hashed examples, run against the rules as they are.
 #[utoipa::path(
+    operation_id = "getFilterFixtures",
     get,
     path = "/filters/fixtures",
     tag = "filters",
@@ -1964,6 +1967,7 @@ pub(crate) async fn fixtures(State(s): State<ApiState>) -> ApiResult<Json<Fixtur
 /// Tries a draft rule and the current rules on example torrents. Nothing
 /// is stored or logged.
 #[utoipa::path(
+    operation_id = "testFilterRule",
     post,
     path = "/filters/test",
     tag = "filters",
@@ -1985,6 +1989,7 @@ pub(crate) async fn test(
 /// Your classification correction for one stored torrent; it's
 /// classified again at once.
 #[utoipa::path(
+    operation_id = "correctClassification",
     post,
     path = "/classify/correct",
     tag = "classify",
@@ -2005,7 +2010,8 @@ pub(crate) async fn correct(
 
 /// Your classification rules, and how detection compares with your
 /// corrections.
-#[utoipa::path(get, path = "/classify", tag = "classify", responses((status = 200, body = Classes)))]
+#[utoipa::path(
+    operation_id = "getClassify",get, path = "/classify", tag = "classify", responses((status = 200, body = Classes)))]
 pub(crate) async fn classes(State(s): State<ApiState>) -> ApiResult<Json<Classes>> {
     let f = filters(&s)?;
     tokio::task::spawn_blocking(move || f.classes().map(Json))
@@ -2016,6 +2022,7 @@ pub(crate) async fn classes(State(s): State<ApiState>) -> ApiResult<Json<Classes
 /// Adds a classification rule; the stored torrents it matches are
 /// classified again.
 #[utoipa::path(
+    operation_id = "addClassRule",
     post,
     path = "/classify/rules",
     tag = "classify",
@@ -2037,6 +2044,7 @@ pub(crate) async fn add_class_rule(
 /// Removes a classification rule; the torrents it matched are classified
 /// again without it.
 #[utoipa::path(
+    operation_id = "removeClassRule",
     post,
     path = "/classify/rules/remove",
     tag = "classify",
@@ -2057,6 +2065,7 @@ pub(crate) async fn remove_class_rule(
 
 /// Starts a preview in the background; poll it by its id.
 #[utoipa::path(
+    operation_id = "startFilterPreviewJob",
     post,
     path = "/filters/preview/jobs",
     tag = "filters",
@@ -2083,6 +2092,7 @@ pub(crate) async fn start_preview(
 /// A preview job: progress while it runs, then the assessment (or the
 /// error) once it's done.
 #[utoipa::path(
+    operation_id = "getFilterPreviewJob",
     get,
     path = "/filters/preview/jobs/{id}",
     tag = "filters",
@@ -2112,6 +2122,7 @@ pub(crate) async fn preview_job(
 
 /// Cancels a preview job; it stops at its next step.
 #[utoipa::path(
+    operation_id = "cancelFilterPreviewJob",
     post,
     path = "/filters/preview/jobs/{id}/cancel",
     tag = "filters",
@@ -2133,6 +2144,7 @@ pub(crate) async fn cancel_preview(
 /// What a change would do, without applying it or asking for the
 /// password.
 #[utoipa::path(
+    operation_id = "previewFilterChange",
     post,
     path = "/filters/preview",
     tag = "filters",
@@ -2155,6 +2167,7 @@ pub(crate) async fn preview(
 /// (`confirm_required`, the assessment beside the error) until it's sent
 /// again with the admin password, every time (§20.11).
 #[utoipa::path(
+    operation_id = "applyFilterChange",
     post,
     path = "/filters/apply",
     tag = "filters",

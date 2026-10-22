@@ -19,6 +19,10 @@ pub mod filters;
 pub mod search;
 pub mod torrents;
 
+/// What a secret (a password, the setup token) shows as in `Debug`
+/// output, so one never reaches a log.
+pub(crate) const REDACTED: &str = "<redacted>";
+
 /// Serializes through [`serde_json::Value`], so a type whose own field
 /// order isn't alphabetical (the query AST) keeps the sorted keys it had
 /// inside a `json!` body.

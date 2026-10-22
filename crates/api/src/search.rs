@@ -46,6 +46,7 @@ fn parse_error(e: ParseError) -> ApiError {
 /// Parses a query: the AST and its canonical text, or a `query_syntax`
 /// error whose `start`/`end` span the UI highlights.
 #[utoipa::path(
+    operation_id = "parseQuery",
     get,
     path = "/parse",
     tag = "search",
@@ -83,6 +84,7 @@ fn sort_param(s: Option<&str>) -> ApiResult<Sort> {
 
 /// Searches with query text. To search with an AST, POST it.
 #[utoipa::path(
+    operation_id = "searchGet",
     get,
     path = "/search",
     tag = "search",
@@ -107,6 +109,7 @@ pub(crate) async fn search_get(
 
 /// Searches with query text or a query AST.
 #[utoipa::path(
+    operation_id = "searchPost",
     post,
     path = "/search",
     tag = "search",

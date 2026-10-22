@@ -3,9 +3,6 @@
   "info": {
     "title": "Lodestar API",
     "description": "Every node is a new discovery. The JSON API under `/api/v1` (architecture §9): errors are always the `Error` envelope, and every path but the auth ones and this document needs the session cookie.",
-    "license": {
-      "name": ""
-    },
     "version": "0.0.0"
   },
   "servers": [
@@ -20,7 +17,7 @@
           "auth"
         ],
         "summary": "Whether the instance is set up and the caller logged in.",
-        "operationId": "auth_status",
+        "operationId": "getAuthStatus",
         "responses": {
           "200": {
             "description": "",
@@ -45,7 +42,7 @@
           "classify"
         ],
         "summary": "Your classification rules, and how detection compares with your\ncorrections.",
-        "operationId": "classes",
+        "operationId": "getClassify",
         "responses": {
           "200": {
             "description": "",
@@ -74,7 +71,7 @@
           "classify"
         ],
         "summary": "Your classification correction for one stored torrent; it's\nclassified again at once.",
-        "operationId": "correct",
+        "operationId": "correctClassification",
         "requestBody": {
           "content": {
             "application/json": {
@@ -113,7 +110,7 @@
           "classify"
         ],
         "summary": "Adds a classification rule; the stored torrents it matches are\nclassified again.",
-        "operationId": "add_class_rule",
+        "operationId": "addClassRule",
         "requestBody": {
           "content": {
             "application/json": {
@@ -152,7 +149,7 @@
           "classify"
         ],
         "summary": "Removes a classification rule; the torrents it matched are classified\nagain without it.",
-        "operationId": "remove_class_rule",
+        "operationId": "removeClassRule",
         "requestBody": {
           "content": {
             "application/json": {
@@ -191,7 +188,7 @@
           "filters"
         ],
         "summary": "The rule set, switches and lists.",
-        "operationId": "overview",
+        "operationId": "getFilters",
         "responses": {
           "200": {
             "description": "",
@@ -220,7 +217,7 @@
           "filters"
         ],
         "summary": "Applies a change. A change that weakens filtering is refused with 428\n(`confirm_required`, the assessment beside the error) until it's sent\nagain with the admin password, every time (§20.11).",
-        "operationId": "apply",
+        "operationId": "applyFilterChange",
         "requestBody": {
           "content": {
             "application/json": {
@@ -259,7 +256,7 @@
           "filters"
         ],
         "summary": "The core rules' hashed examples, run against the rules as they are.",
-        "operationId": "fixtures",
+        "operationId": "getFilterFixtures",
         "responses": {
           "200": {
             "description": "",
@@ -288,7 +285,7 @@
           "filters"
         ],
         "summary": "What a change would do, without applying it or asking for the\npassword.",
-        "operationId": "preview",
+        "operationId": "previewFilterChange",
         "requestBody": {
           "content": {
             "application/json": {
@@ -327,7 +324,7 @@
           "filters"
         ],
         "summary": "Starts a preview in the background; poll it by its id.",
-        "operationId": "start_preview",
+        "operationId": "startFilterPreviewJob",
         "requestBody": {
           "content": {
             "application/json": {
@@ -366,7 +363,7 @@
           "filters"
         ],
         "summary": "A preview job: progress while it runs, then the assessment (or the\nerror) once it's done.",
-        "operationId": "preview_job",
+        "operationId": "getFilterPreviewJob",
         "parameters": [
           {
             "name": "id",
@@ -408,7 +405,7 @@
           "filters"
         ],
         "summary": "Cancels a preview job; it stops at its next step.",
-        "operationId": "cancel_preview",
+        "operationId": "cancelFilterPreviewJob",
         "parameters": [
           {
             "name": "id",
@@ -461,7 +458,7 @@
           "filters"
         ],
         "summary": "The review queue: quarantine (never with names) and the last 30 days'\ndecisions per rule.",
-        "operationId": "queue",
+        "operationId": "getFilterQueue",
         "responses": {
           "200": {
             "description": "",
@@ -490,7 +487,7 @@
           "filters"
         ],
         "summary": "Tries a draft rule and the current rules on example torrents. Nothing\nis stored or logged.",
-        "operationId": "test",
+        "operationId": "testFilterRule",
         "requestBody": {
           "content": {
             "application/json": {
@@ -616,7 +613,7 @@
           "meta"
         ],
         "summary": "This document.",
-        "operationId": "openapi_json",
+        "operationId": "getOpenApi",
         "responses": {
           "200": {
             "description": "The OpenAPI 3.1 document.",
@@ -641,7 +638,7 @@
           "search"
         ],
         "summary": "Parses a query: the AST and its canonical text, or a `query_syntax`\nerror whose `start`/`end` span the UI highlights.",
-        "operationId": "parse_query",
+        "operationId": "parseQuery",
         "parameters": [
           {
             "name": "q",
@@ -681,7 +678,7 @@
           "auth"
         ],
         "summary": "Changes the password and ends every other session.",
-        "operationId": "change_password",
+        "operationId": "changePassword",
         "requestBody": {
           "content": {
             "application/json": {
@@ -728,7 +725,7 @@
           "search"
         ],
         "summary": "Searches with query text. To search with an AST, POST it.",
-        "operationId": "search_get",
+        "operationId": "searchGet",
         "parameters": [
           {
             "name": "q",
@@ -804,7 +801,7 @@
           "search"
         ],
         "summary": "Searches with query text or a query AST.",
-        "operationId": "search_post",
+        "operationId": "searchPost",
         "requestBody": {
           "content": {
             "application/json": {
@@ -886,7 +883,7 @@
           "torrents"
         ],
         "summary": "One torrent by any of its swarm hashes.",
-        "operationId": "detail",
+        "operationId": "getTorrent",
         "parameters": [
           {
             "name": "hash",
@@ -926,7 +923,7 @@
           "torrents"
         ],
         "summary": "A page of a torrent's file list.",
-        "operationId": "files",
+        "operationId": "listTorrentFiles",
         "parameters": [
           {
             "name": "hash",
@@ -2186,7 +2183,7 @@
       },
       "ChangeBody": {
         "type": "object",
-        "description": "`POST /filters/preview`, `/filters/preview/jobs` and `/filters/apply`.",
+        "description": "`POST /filters/preview`, `/filters/preview/jobs` and `/filters/apply`.\n`Debug` shows whether a password was sent, never the password.",
         "required": [
           "change"
         ],
@@ -2742,7 +2739,7 @@
       },
       "LoginRequest": {
         "type": "object",
-        "description": "`POST /login`.",
+        "description": "`POST /login`.\n`Debug` redacts the secrets.",
         "required": [
           "password"
         ],
@@ -2998,7 +2995,7 @@
       },
       "PasswordRequest": {
         "type": "object",
-        "description": "`POST /password`: ends every other session.",
+        "description": "`POST /password`: ends every other session.\n`Debug` redacts the secrets.",
         "required": [
           "old",
           "new"
@@ -3460,7 +3457,7 @@
       },
       "SetupRequest": {
         "type": "object",
-        "description": "`POST /setup`: claims the instance.",
+        "description": "`POST /setup`: claims the instance.\n`Debug` redacts the secrets.",
         "required": [
           "token",
           "password"

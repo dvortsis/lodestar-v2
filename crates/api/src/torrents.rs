@@ -170,6 +170,7 @@ fn detail_of(row: &TorrentRow, tree: &FileTree) -> TorrentDetail {
 
 /// One torrent by any of its swarm hashes.
 #[utoipa::path(
+    operation_id = "getTorrent",
     get,
     path = "/torrents/{hash}",
     tag = "torrents",
@@ -190,6 +191,7 @@ pub(crate) async fn detail(
 
 /// A page of a torrent's file list.
 #[utoipa::path(
+    operation_id = "listTorrentFiles",
     get,
     path = "/torrents/{hash}/files",
     tag = "torrents",
