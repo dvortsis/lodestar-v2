@@ -85,7 +85,7 @@ fn logged_in(auth: &Auth, headers: &HeaderMap) -> bool {
 }
 
 /// `password` names the request field a password error is about.
-fn auth_error(e: AuthError, password: &'static str) -> ApiError {
+pub(crate) fn auth_error(e: AuthError, password: &'static str) -> ApiError {
     match e {
         AuthError::SetupDone => ApiError::new(
             StatusCode::CONFLICT,

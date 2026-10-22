@@ -193,7 +193,7 @@ async fn run_search(s: ApiState, p: SearchParams) -> ApiResult<axum::Json<Value>
     .map_err(internal)?
 }
 
-fn unix_now() -> i64 {
+pub(crate) fn unix_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64)
