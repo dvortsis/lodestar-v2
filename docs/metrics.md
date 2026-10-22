@@ -251,8 +251,8 @@ M4 slice 6, still pending; **planned** = named here and in the build plan
 | `hash` | string (40 hex) | no | — | main |
 | `hash_v2` | string (64 hex) | yes | — | main |
 | `name` | string | no | Raw name (decoded) | main |
-| `title` | string | yes | Resolved title; null = not resolved | planned (M3 data; not served by B1, see architecture §16) |
-| `resolved_via` | string | yes: null = the name was informative (no resolution) | "resolved via …": `files`, `folder`, `structure` (`classify::ResolvedVia::as_str`); `plugin` arrives with §18 | planned (values: main) |
+| `title` | string | yes | Resolved title; null = not resolved | main on search hits (B5a); planned on detail |
+| `resolved_via` | string | yes: null = the name was informative (no resolution) | "resolved via …": `files`, `folder`, `structure` (`classify::ResolvedVia::as_str`); `plugin` arrives with §18 | main on search hits (B5a); planned on detail |
 | `size` | integer (bytes) | no | Size | main |
 | `files` | integer | no | Files | main |
 | `piece_len` | integer (bytes) | no | Piece size | main |
@@ -260,11 +260,11 @@ M4 slice 6, still pending; **planned** = named here and in the build plan
 | `metadata_at` | integer | no | Metadata fetched | main |
 | `last_seen_at` | integer | no | Last seen | planned (store: main; written through by #32) |
 | `flags` | string[] | no | `private`, `v2`, `hybrid`, `padding`, `symlinks`, `imported`, `backfill`, `files_partial`, `single_file`, `warnings` | main |
-| `content_type` | string | yes | `movie`, `tv`, `music`, `audiobook`, `ebook`, `comic`, `software`, `game`, `images`, `video`, `other`, `adult`; null = not classified | planned |
-| `adult_kind` | string | yes | `scene`, `movie`, `photos`, `comics`, `game`, `vr`, `audio`; non-null only when `content_type = "adult"` | planned |
-| `composition` | `{group, files, bytes, pct_bytes, pct_files}[]` | no (may be empty) | Composition; `group` ∈ `video`, `audio`, `software`, `documents`, `images`, `archives`, `other`; `files`/`bytes` exclude padding; `pct_*` are whole percents (0–100) of non-padding bytes/files, rounded as `Composition::pct_bytes` | planned |
-| `junk_score` | integer 0–100 | yes | Junk score | planned |
-| `junk_reasons` | string[] | no | Stable reason keys (§6 M3) | planned |
+| `content_type` | string | yes | `movie`, `tv`, `music`, `audiobook`, `ebook`, `comic`, `software`, `game`, `images`, `video`, `other`, `adult`; null = not classified | main on search hits (B5a); planned on detail |
+| `adult_kind` | string | yes | `scene`, `movie`, `photos`, `comics`, `game`, `vr`, `audio`; non-null only when `content_type = "adult"` | main on search hits (B5a); planned on detail |
+| `composition` | `{group, files, bytes, pct_bytes, pct_files}[]` | no (may be empty) | Composition; `group` ∈ `video`, `audio`, `software`, `documents`, `images`, `archives`, `other`; `files`/`bytes` exclude padding; `pct_*` are whole percents (0–100) of non-padding bytes/files, rounded as `Composition::pct_bytes`; groups in the bar's order (§10.18), groups with no files left out | main on search hits (B5a); planned on detail |
+| `junk_score` | integer 0–100 | yes: null = not classified | Junk score | main on search hits (B5a); planned on detail |
+| `junk_reasons` | string[] | no | Stable reason keys (§6 M3) | main on search hits (B5a); planned on detail |
 | `hidden_by_filter` | boolean | no | Hidden by a §20 filter rule | planned |
 | `why` | string[] | no | Filter reason keys; empty unless hidden | planned |
 | `seeders` | integer | **yes: null = never scraped** | Seeders | #32 |
@@ -300,10 +300,11 @@ and no DHT estimate (PR #32). The six nullable swarm fields (`seeders`,
 | Field | Type | Nullable | Metric | Status |
 |---|---|---|---|---|
 | `total` | integer | no | Result count | main |
-| `total_approx` | boolean | no | ≈ on the result count | planned (B5a) |
+| `total_approx` | boolean | no | ≈ on the result count: set only when `total` was estimated (above 100,000 matches, architecture §16 "B5a"); `exact=1` asks for the exact count | main (B5a) |
 | `took_ms` | number | no | Took | main |
-| `hidden_junk` | integer | no | Hidden count (junk) | planned |
+| `hidden_junk` | integer | no | Hidden count (junk) | planned (needs the default junk threshold, §16 "B5a") |
 | `hidden_count` | integer | no | Hidden count (filters); distinct from the per-torrent `hidden_by_filter` | planned |
+| `next_cursor` | string | yes: null = last page | — (the next page, from the same snapshot) | main (B5a) |
 | `canonical`, `stemmed`, `offset`, `limit`, `hits` | as today | no | — | main |
 
 ### 7.4 Facets response (B6)

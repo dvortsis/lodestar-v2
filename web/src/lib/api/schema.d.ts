@@ -818,6 +818,35 @@ export interface components {
             detection: components["schemas"]["Detection"];
             rules: components["schemas"]["ClassRule"][];
         };
+        /** @description One colour group's share of a torrent (`docs/metrics.md` §4, §7.1). */
+        CompositionShare: {
+            /**
+             * Format: int64
+             * @description Bytes in the group, padding excluded.
+             */
+            bytes: number;
+            /**
+             * Format: int32
+             * @description Files in the group, padding excluded.
+             */
+            files: number;
+            /**
+             * @description `video`, `audio`, `images`, `documents`, `archives`, `software` or
+             *     `other`.
+             */
+            group: string;
+            /**
+             * Format: int32
+             * @description Whole percent of the non-padding bytes: any non-zero share is at
+             *     least 1, and only a complete one is 100.
+             */
+            pct_bytes: number;
+            /**
+             * Format: int32
+             * @description The same, of the non-padding files.
+             */
+            pct_files: number;
+        };
         CoreRuleState: {
             action: string;
             /** @description Part of the locked floor: can't be switched off. */
@@ -1180,10 +1209,27 @@ export interface components {
          */
         SearchHit: {
             /**
+             * @description `scene`, `movie`, `photos`, `comics`, `game`, `vr` or `audio`;
+             *     set only when `content_type` is `adult`.
+             */
+            adult_kind: string | null;
+            /**
              * Format: int32
              * @description Null = never scraped.
              */
             completed: number | null;
+            /**
+             * @description What the torrent is made of, by colour group, in the composition
+             *     bar's order; groups without files are left out, and it's empty
+             *     before classification.
+             */
+            composition: components["schemas"]["CompositionShare"][];
+            /**
+             * @description `movie`, `tv`, `music`, `audiobook`, `ebook`, `comic`, `software`,
+             *     `game`, `images`, `video`, `other` or `adult`; null = not
+             *     classified.
+             */
+            content_type: string | null;
             /** Format: int64 */
             discovered_at: number;
             /** Format: int64 */
@@ -1200,6 +1246,19 @@ export interface components {
             hash_v2: string | null;
             /** Format: int64 */
             id: number;
+            /**
+             * @description Stable reason keys (`docs/metrics.md` §7.1); empty when there are
+             *     none or before classification.
+             * @example [
+             *       "double-extension"
+             *     ]
+             */
+            junk_reasons: string[];
+            /**
+             * Format: int32
+             * @description 0–100; null = not classified.
+             */
+            junk_score: number | null;
             /**
              * Format: int64
              * @description Null = never scraped.
@@ -1221,6 +1280,12 @@ export interface components {
             /** Format: int64 */
             piece_len: number;
             /**
+             * @description How the title was found when the name wasn't informative:
+             *     `files`, `folder` or `structure`; null = from the name itself, or
+             *     not classified.
+             */
+            resolved_via: string | null;
+            /**
              * Format: double
              * @description Relevance; 0 under any sort but `relevance`.
              */
@@ -1232,6 +1297,8 @@ export interface components {
             seeders: number | null;
             /** Format: int64 */
             size: number;
+            /** @description The resolved title; null = not resolved. */
+            title: string | null;
             /**
              * Format: int32
              * @description Trackers that answered in the last answered round; null = never
@@ -1252,6 +1319,19 @@ export interface components {
             /** @default null */
             ast: null | components["schemas"]["AstNode"];
             /**
+             * @description The previous page's `next_cursor`, to read the next page from the
+             *     same index snapshot. Send the same `q` (or `ast`), `sort` and
+             *     `hidden` with it.
+             * @default null
+             */
+            cursor: string | null;
+            /**
+             * @description Count every match exactly, even above 100,000 (within a time
+             *     budget; `total_approx` says whether it made it). `1` or `true`.
+             * @default null
+             */
+            exact: boolean | null;
+            /**
              * @description Include torrents a filter rule hid (§20.3).
              * @default null
              */
@@ -1262,7 +1342,7 @@ export interface components {
              */
             limit: number | null;
             /**
-             * @description `offset + limit` may not pass 10,000.
+             * @description `offset + limit` may not pass 10,000. Not with `cursor`.
              * @default null
              */
             offset: number | null;
@@ -1285,6 +1365,13 @@ export interface components {
             canonical: string;
             hits: components["schemas"]["SearchHit"][];
             limit: number;
+            /**
+             * @description Pass as `cursor` for the next page, read from the same index
+             *     snapshot (§8); null on the last page. Opaque, URL-safe, at most
+             *     256 characters, valid for 10 minutes after its last use.
+             */
+            next_cursor: string | null;
+            /** @description Hits before this page. */
             offset: number;
             /**
              * @description Few exact matches: plural forms in titles were included too (§8),
@@ -1295,6 +1382,11 @@ export interface components {
             took_ms: number;
             /** @description Matches in all, not just this page. */
             total: number;
+            /**
+             * @description `total` is an estimate (above 100,000 matches; shown with "≈");
+             *     ask with `exact` for the exact count.
+             */
+            total_approx: boolean;
         };
         /**
          * @description `POST /setup`: claims the instance.
@@ -2018,10 +2110,14 @@ export interface operations {
                 sort?: string;
                 /** @description Results per page: 1–200, 50 by default. */
                 limit?: number;
-                /** @description `offset + limit` may not pass 10,000. */
+                /** @description `offset + limit` may not pass 10,000. Not with `cursor`. */
                 offset?: number;
                 /** @description Include torrents a filter rule hid (§20.3). */
                 hidden?: boolean;
+                /** @description The previous page's `next_cursor`; send the same `q`, `sort` and `hidden` with it. An expired one is a 410 `cursor_expired`, a tampered one a 400 `bad_cursor`. */
+                cursor?: string;
+                /** @description `1` or `true`: count every match exactly, within a time budget. */
+                exact?: boolean;
             };
             header?: never;
             path?: never;

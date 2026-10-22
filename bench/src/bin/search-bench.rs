@@ -5,15 +5,23 @@
 //! query class, end to end: parse, compile, search a page of 50 and load
 //! the hits' rows from SQLite, as the API does. With `--gate` it exits
 //! non-zero when a p95 target is missed.
+//!
+//! A second table runs the same classes the way `/search` does since
+//! B5a: a searcher lease (snapshot, count, stem tier) and its first page,
+//! then a page deep into the results through cursors. It also checks
+//! the sampled count estimate (what `total_approx` reports at scale)
+//! against the exact count on every query of at least
+//! [`ESTIMATE_FROM`] matches, gated at [`estimate_tolerance`].
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use lodestar_bench::synth::Generator;
 use lodestar_metainfo::Info;
-use lodestar_search::{SearchIndex, Sort, index_dir, parse};
+use lodestar_search::{CancelToken, Lease, SearchIndex, Sort, Start, index_dir, parse};
 use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig};
 use rand::seq::IndexedRandom;
 use rand::{RngExt, SeedableRng};
@@ -23,6 +31,18 @@ use rand_chacha::ChaCha8Rng;
 const KEYWORD_P95: Duration = Duration::from_millis(30);
 /// §3: filter-only browse over the whole corpus, p95.
 const BROWSE_P95: Duration = Duration::from_millis(50);
+/// The deep-cursor class reads this many pages of 50 before timing one.
+const DEEP_PAGES: usize = 20;
+/// The estimate samples a sixteenth of the documents, so its relative
+/// error has a standard deviation of about `1 / sqrt(matches / 16)`
+/// (`lodestar_search` `count.rs`). Each query is gated at four of them:
+/// 11% at 20,000 matches, 3.6% at 200,000 (the least the API reports as
+/// estimated), 1.1% at 2M.
+fn estimate_tolerance(exact: usize) -> f64 {
+    4.0 / (exact as f64 / 16.0).sqrt()
+}
+/// Counts checked: smaller ones are always counted exactly.
+const ESTIMATE_FROM: usize = 20_000;
 
 const USAGE: &str = "\
 Usage: search-bench [--torrents N] [--queries N] [--dir PATH] [--seed S] [--gate]
@@ -409,7 +429,115 @@ fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
             println!("  {:<24} {fallbacks} widened by the stem tier", "");
         }
     }
+    ok &= api_path(a, &index, &reader, now)?;
     Ok(ok)
+}
+
+/// The classes as `/search` runs them: a lease and its first page (gated
+/// like the table above), a page [`DEEP_PAGES`] deep through cursors
+/// (reported), and the count estimates against exact counts (gated).
+fn api_path(
+    a: &Args,
+    index: &SearchIndex,
+    reader: &Store,
+    now: i64,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let index = Arc::new(index.clone());
+    let cancel = CancelToken::new();
+    let ms = |d: Duration| format!("{:.2}", d.as_secs_f64() * 1000.0);
+    println!(
+        "\n  as /search runs them: a searcher lease and its first page; then page {DEEP_PAGES} through cursors"
+    );
+    println!(
+        "  {:<24} {:>8} {:>8} {:>8} {:>10} {:>10}  target",
+        "class", "p50", "p95", "max", "deep p95", "checked"
+    );
+    let mut ok = true;
+    // The worst error as a share of its query's tolerance, and the
+    // worst error itself.
+    let mut worst: f64 = 0.0;
+    let mut worst_err: f64 = 0.0;
+    for class in classes(a.seed, a.queries) {
+        let mut times = Vec::with_capacity(class.queries.len());
+        let mut deep = Vec::new();
+        let mut estimated = 0usize;
+        for (n, q) in class.queries.iter().enumerate() {
+            if class.cold {
+                index.clear_cache();
+            }
+            let started = Instant::now();
+            let ast = parse(q)?.without_hidden();
+            let lease = Lease::new(index.clone(), &ast, now, class.sort, &cancel)?;
+            let page = lease.page(Start::Offset(0), 50, &cancel)?;
+            for h in &page.hits {
+                reader.torrent(h.id as i64)?;
+            }
+            times.push(started.elapsed());
+            // The estimate's error, wherever it sampled and enough match
+            // for the count to be one an index would estimate at scale.
+            let sampled = lease.sampled_estimate(&cancel)?;
+            if sampled.approx {
+                let exact = lease.exact_total(&cancel)?.value;
+                if exact >= ESTIMATE_FROM {
+                    estimated += 1;
+                    let err = (sampled.value as f64 - exact as f64).abs() / exact as f64;
+                    worst = worst.max(err / estimate_tolerance(exact));
+                    worst_err = worst_err.max(err);
+                }
+            }
+            // Deep pages for a sample: each cursor page scans the
+            // matches again, so they cost about a first page each.
+            if n % 10 == 0 {
+                let mut next = page.next;
+                for _ in 1..DEEP_PAGES {
+                    let Some(p) = next else { break };
+                    next = lease.page(Start::After(p), 50, &cancel)?.next;
+                }
+                if let Some(p) = next {
+                    let started = Instant::now();
+                    let page = lease.page(Start::After(p), 50, &cancel)?;
+                    for h in &page.hits {
+                        reader.torrent(h.id as i64)?;
+                    }
+                    deep.push(started.elapsed());
+                }
+            }
+        }
+        times.sort();
+        deep.sort();
+        let p95 = pct(&times, 0.95);
+        let pass = class.target.is_none_or(|t| p95 <= t);
+        ok &= pass;
+        println!(
+            "  {:<24} {:>8} {:>8} {:>8} {:>10} {:>10}  {}",
+            class.name,
+            ms(pct(&times, 0.5)),
+            ms(p95),
+            ms(*times.last().expect("queries")),
+            if deep.is_empty() {
+                "—".to_string()
+            } else {
+                ms(pct(&deep, 0.95))
+            },
+            estimated,
+            match class.target {
+                Some(t) => format!(
+                    "p95 < {} ms {}",
+                    t.as_millis(),
+                    if pass { "PASS" } else { "FAIL" }
+                ),
+                None => "(not gated)".to_string(),
+            }
+        );
+    }
+    let pass = worst <= 1.0;
+    println!(
+        "  count estimates: worst error {:.2}%, {:.0}% of its query's tolerance (4σ) {}",
+        worst_err * 100.0,
+        worst * 100.0,
+        if pass { "PASS" } else { "FAIL" }
+    );
+    Ok(ok && pass)
 }
 
 fn main() -> ExitCode {
