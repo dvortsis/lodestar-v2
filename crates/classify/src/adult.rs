@@ -235,20 +235,31 @@ pub(crate) fn detect(
     }
     let kind = match base {
         ContentType::Movie if s.scene_date => AdultKind::Scene,
-        ContentType::Movie => AdultKind::Movie,
-        ContentType::Tv | ContentType::Video => AdultKind::Scene,
-        ContentType::Images => AdultKind::Photos,
-        ContentType::Comic => AdultKind::Comics,
-        ContentType::Game | ContentType::Software => AdultKind::Game,
-        ContentType::Music | ContentType::Audiobook => AdultKind::Audio,
         // No adult kind fits: the torrent keeps its type.
         ContentType::Ebook | ContentType::Other | ContentType::Adult => return None,
+        _ => forced_kind(base),
     };
     let kind = match kind {
         AdultKind::Scene | AdultKind::Movie if s.vr => AdultKind::Vr,
         k => k,
     };
     Some((kind, score))
+}
+
+/// The adult kind for a torrent of type `base`. When you say a torrent is
+/// adult, the types detection leaves alone get the nearest kind too:
+/// Ebook as Comics, Other as Scene.
+pub(crate) fn forced_kind(base: ContentType) -> AdultKind {
+    match base {
+        ContentType::Movie => AdultKind::Movie,
+        ContentType::Tv | ContentType::Video | ContentType::Other | ContentType::Adult => {
+            AdultKind::Scene
+        }
+        ContentType::Images => AdultKind::Photos,
+        ContentType::Comic | ContentType::Ebook => AdultKind::Comics,
+        ContentType::Game | ContentType::Software => AdultKind::Game,
+        ContentType::Music | ContentType::Audiobook => AdultKind::Audio,
+    }
 }
 
 #[cfg(test)]

@@ -1704,6 +1704,34 @@ docs/               architecture.md (this plan), query-language.md, operations.m
     - its due index 14 B;
     - per-tracker 14 B.
   - The whole store is **926 B** against the 1,024 B gate, so it still passes, with 98 B left. A history row costs about 180 B with page overhead, so the share of live swarms drives the total.
+- **W8 formatters (`web/src/lib/format/`), choices that clarify `docs/metrics.md` §3:**
+  - Estimated and sampled values share one input, `{ value, approx: true }`, and print `≈` + U+00A0 + value. The panel reads `sampled` from the response and shows the `sampled_note` message once; the formatter has no `sampled` flag.
+  - `formatRate` wraps `{n}/h` and `{n}/d` itself, and `formatRelative` takes the translated `just_now` string in `opts.justNow` (small en/zh fallback). W4 replaces both with messages.
+  - Rounding that would reach the next unit steps up (`1023.9 KiB` → `1.00 MiB`, `59.6 s` → `1 min`, `47.96 hr` → `2 days`, `999.6 ms` → `1 sec`). Bytes pick their digit count from the rounded value, so `9.996 GiB` prints `10.0 GiB` and `99.96 MiB` prints `100 MiB`, which keeps the fixed-digit alignment.
+  - Bytes, percent, share, rate, latency and span treat negative input as invalid (`—`). Count, compact and score keep plain `Intl` output; only `formatDelta` uses U+2212.
+  - `formatDelta` takes `kind` (`count`, `compact`, `percent`) plus percent digits; `formatDateFull` takes a `bucket` (`hour`, `day`, `week`); `formatRelative` uses month = 30 d and year = 365 d.
+  - An unknown or empty `timeZone` falls back to the browser's zone instead of throwing. Percent `<`/`>` edges are detected from the `Intl` output itself, so they match the displayed digits.
+  - Size histograms: `sizeBinEdges(fromExp, toExp)` labels power-of-2 edges with `formatBytes`; `sizeBinLabel` joins two edges with a no-break space and an en dash. Labelling only; the server owns the bins.
+
+
+**Theme compiler (W1):** decisions that clarify §10.18.
+- **Derivation constants are fitted once.** Each rule is a lightness shift (or a mix toward `primary`/`accent` for dividers and tints). The constants are tuned so Riverstone lands within ΔE_ok ≤ 0.5 of the §10.18 table, and every theme inherits them. Light and dark have separate constants. **Riverstone's published values (`docs/design-tokens.md` §1–4) are a contract, so the compiler pins them byte for byte** (`PINS` in `themes.ts`); a test checks the rules alone stay within ΔE_ok 0.5 of each pin.
+- **`neutral-content` is derived to reach 4.5:1** on the neutral fill: the better of text/surface, shifted in lightness only if neither passes (Riverstone light: `#193038`, 4.55:1).
+- **File layout:** one file per family, `web/themes/<family-id>.json`, with `id`, `name`, `group` (`official`/`accessibility`/`community`/`original`), optional `license`/`source`, and `light`/`dark` palettes (the `docs/themes.md` layout). The compiler expands it into `<id>-light` and `<id>-dark`.
+- **Gates beyond the §10.18 list**, so the contract in `docs/design-tokens.md` holds in every theme:
+  - `muted-text`, `warning` and `error` ≥ 4.5:1 on both grounds;
+  - each `*-content` ≥ 4.5:1 on its fill (the accent fill only warns, since design-tokens allows large/bold labels there);
+  - text on the hover and selected tints ≥ 4.5:1.
+- **Riverstone is grandfathered on categorical ΔE_ok only**, never on text contrast. The accent-fill label (4.03:1, large/bold allowed) stays a reported warning.
+- **ΔE_ok and the CVD report run on the data marks** (the colours actually drawn), not the raw categorical inputs, and both Machado 2009 (severity 1.0) and Viénot 1999 are reported side by side.
+- **Pre-paint storage contract:** `localStorage["lodestar.theme"]` holds `{ mode: "system"|"light"|"dark", light: { id, vars? }, dark: { id, vars? } }`. `vars` is the cached custom-property map of a non-Riverstone theme. The script sets `data-theme`, `color-scheme` and `vars` on `<html>` and falls back to Riverstone for the resolved mode.
+- **`themes.json`** is `{ v: 1, keys: [...], themes: [{ id, name, family, group, mode, contrast: "AA"|"AAA", license?, source?, values: [...] }] }`, with `values` in `keys` order.
+- **Dark `info` uses `primary-ink`**, which equals `primary` for Riverstone but may differ for other themes (a dark `primary` that is too dim is lightened).
+
+**B0 decisions (API router split, error envelope):**
+- **One module per API domain** in `crates/api` (`auth`, `search`, `torrents`), each with `routes() -> Router<ApiState>`; `api::router` only merges them, one line per module. Session-protected routes are wrapped in `auth::protected`, whose guard reads its `Auth` from a request extension that only `api::router` installs, so a protected route mounted any other way fails closed (500), never open.
+- **One error envelope** for every `/api/v1` failure: `{ "error": { "code", "message", "field"?, "start"?, "end"? } }`. `code` is stable snake_case for clients to branch on, `message` a sentence for people, `field` the parameter at fault, `start`/`end` the byte span of a query syntax error. Extractor rejections (bad JSON, query or path; `field` is the serde path to the bad value) and unknown `/api/v1` paths (404) or methods (405) use it too, with house-style messages rather than serde's text. Status codes didn't change. The 401 keeps `setup_required` beside `error`, so the login screen needs no second request.
+- **`crates/lodestar/src/services.rs`** builds and wires every service of `serve` and owns the ordered shutdown (the blocklist refresher, then the pipeline, then the live indexer); `main.rs` keeps only the CLI.
 
 **X-utp implementation decisions (uTP, `lodestar-utp`, behind a flag):**
 - **Our own crate, not a dependency.** The maintained candidates were measured against the §15 criteria (MIT/Apache, tokio-native, LEDBAT, bounded memory, no `unsafe` on our side, fuzzable parsing, active):
@@ -2419,6 +2447,8 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
 | `override_list` | CSX-5 entries: kind (hash / keyword / pattern), query, strength, scope, created, expiry/review date, shadow_until, hit count |
 | `rule_set_prev` | the previous rule set only, for one-step Undo |
 | `cs_hashes` | CS-1 entries (all hash forms) + CS-8 payload signatures, with origin (confirmed / reported / imported) |
+| `class_corrections` | Is adult / Not adult and Not junk, per torrent (V8) |
+| `class_rules` | classification rules: query → Is adult / Not adult (V9) |
 
 - **As built (store migration V4, pipeline):**
   - V4 adds `cs_hashes`, `cs_sigs`, `core_membership` (switches), `tombstones`, `quarantine` and `filter_hits`.
@@ -2430,6 +2460,24 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
   - **Purge:** expired quarantine and filter hits past retention are purged hourly, and expired keys become fetchable again.
   - **Old config blocklists:** the M1 `blocklist.files` load as imported CS-1b entries.
 - **API:** `filters` (rules CRUD, preview, warning, test, shadow, packs, review queue, release; password-gated for weakening changes) and `classify` corrections (Not adult / Is adult, Not junk).
+- **As built (`lodestar_api::filters`, behind the session):**
+  - **Routes:** `GET /filters` (core switches, packs, your rules, CSX-5 entries, exceptions, Always allow, list subscriptions, counts), `GET /filters/queue` (quarantine by hash and rule, never with names, plus the 30-day decisions per rule), `POST /filters/preview` and `POST /filters/apply`.
+  - **One change per request,** tagged by `op`: core and pack switches, your rules (add / update / remove), CSX-5 entries, exceptions, Always allow, report abuse, remove CS-1 entries, release, confirm, reveal a sealed name, list subscriptions (subscribe / unsubscribe / pause / resolve a held version) and Undo.
+  - **Protocol (§20.11):** `preview` returns `{weakening, confirm, warning, preview, neutralize}` and never applies or asks for the password. `apply` runs the same assessment on the server; a change that needs confirming is refused with **428** and the assessment until the request carries the admin password, checked like a login (rate-limited per IP) and never remembered. Marking a list as part of the floor needs the password too.
+  - **Guardrails hold server-side:** the floor can't be switched off (409), floor rules take no exceptions, overrides and exceptions are validated by the engine, and list actions must be protective.
+  - **Preview numbers:** whole-rule changes count from the review queue, tombstones and `filter_hits` rollups. Entry-level changes (CSX-5, exceptions, Always allow) re-judge quarantined items from their sealed names and tombstones by hash, and are marked as estimates because file lists aren't kept. The 30-day figures are the upper bound for the rules the change can bypass. Previews also run as background jobs with progress (§20.10).
+  - **Undo:** the rule layers and switches are snapshotted into `rule_set_prev` only after a change to them succeeds, so a refused change never replaces the Undo step. Undo swaps the two sets, so a second Undo redoes. It can weaken, so it asks for the password.
+  - **Releases** clear the store row and the in-memory held set together, so intake fetches the torrent the next time it's seen.
+  - **Shadow:** rules and CSX-5 entries take `shadow_days`.
+  - **False positive** (`op: false_positive`, from the review queue): an exception for that torrent and the rule that held it, a release, and for a core rule a **must-not-match fixture** made from its sealed name as hashed tokens only (`Fixture::encode`: version, content type, then per text the token positions, hashes and small numbers; no text). It's a weakening change, so it warns and asks for the password.
+  - **Fixtures:** `GET /filters/fixtures` runs every core rule's stored fixtures against the rules as they are and reports how many each has and how many disagree.
+  - **Rule tests:** `POST /filters/test` tries a draft rule (`query`, `unless`) and the current rule set on up to 50 example torrents (name, files with optional sizes, optional type), classified as ingest would. Nothing about the examples is stored or logged.
+  - **Report abuse and Confirm** also delete any stored torrent with those hashes (store and, through `reindex_log`, the index).
+- **As built (store migration V8, `classify` corrections):** `POST /classify/correct {hash, adult: true|false|null, not_junk}` keeps one correction per torrent in `class_corrections` and classifies the torrent again with it at once (`classify_corrected`). **Is adult** gives the nearest adult kind at confidence 100, including Ebook (as Comics) and Other (as Scene), which detection leaves alone; **Not adult** skips adult detection; **Not junk** clears the score and its reasons. Background enrichment applies the correction whenever it classifies the torrent again (a newer parser), and an upgraded partial import with a correction is queued for that. Corrections are classification, not filtering, so they don't ask for the password.
+- **As built (store migration V9, classification rules):** corrections feed back as **rules** and **fixtures** (§20.9).
+  - **Rules:** `POST /classify/rules {query, adult}` saves a query plus Is adult / Not adult (`class_rules`); `POST /classify/rules/remove {id}`. The newest matching rule applies at ingest (prepare) and whenever a stored torrent is classified again; a torrent's own correction wins over any rule. Adding or removing a rule marks the stored torrents its query matches in the search index for re-classification (`SearchIndex::matching_ids`, up to 1M) and starts another background-enrichment pass; without search, only new and re-enriched torrents are affected. A rule's query can't test `type:` or `adult:`, because it decides them.
+  - **Filtering never sees corrections:** rules and corrections change what's stored and searched. The engine judges detection's own classification, so a Not adult rule can't take a torrent out of the Adult-only core checks (CS-5a/5b), and a `type:adult` rule of yours keeps acting on what detection found.
+  - **Fixtures:** `GET /classify` lists the rules and treats every per-torrent correction as a fixture for adult detection: it runs detection on each corrected torrent (up to 10,000) and reports how many disagree, with up to 50 examples, so a rule can cover their kind.
 - **UI: Settings → Filters & Safety:**
   - **Rules:** layer, action, status (active / shadow / modified), hits over 7 days, false-positive reports.
   - **Editor:** builder or text, live preview, fixtures, shadow toggle, diff against base for core and pack rules.
@@ -2487,7 +2535,7 @@ There are **two taxonomies**:
     - Supporting: each distinct adult term 35, and `Site.YY.MM.DD` scene naming 30, capped at 70; strong plus supporting adds 10.
     - Counter: a documentary, educational or medical word cancels the supporting score and takes 40 off the strong one. Season or episode numbers cancel the supporting score.
     - A torrent is adult at **≥ 60**. The kind follows the type it would otherwise have (TV and Video → Scene; Movie → Movie, or Scene with scene naming; Images → Photos; Comic → Comics; Game and Software → Game; Music and Audiobook → Audio), and VR words turn Scene or Movie into VR.
-    - **Ebook and Other keep their type** because no adult kind fits them. Source categories, enrichment matches and corrections arrive with the filter engine and plugins, and adjust this score.
+    - **Ebook and Other keep their type** because no adult kind fits them. Source categories and enrichment matches arrive with plugins and adjust this score. Your corrections and classification rules override the outcome rather than the score (§20.7, V8/V9): Is adult gives the nearest kind (Ebook as Comics, Other as Scene) at confidence 100.
 - **Visibility is a preference, not a legal tier:**
   - "Show adult content" is **off by default** and turned on with an **18+ confirmation**.
   - It applies to Search, Discover, Alerts and Insights segments. Outputs (Torznab, Stremio, export) each have their own adult setting, also off by default.
@@ -2512,6 +2560,7 @@ Every change to filtering shows its impact **before** it takes effect. That cove
 - **Exposure summary at the top:** "This change would release 37 items (2 caught by the core), and about 4 per day going forward."
 - **Then choose:** **Apply**, **Shadow for N days** (log what it would do, change nothing, and compare later in the same view), or **Cancel**. Changes that weaken protection show their effect warning (§20.11) and need your password before Apply or Shadow.
 - **After applying:** a "What changed" report matches the preview against what actually happened (they're reconciled in tests, §20.8). An **Undo** restores the previous rule set (hidden items return; re-fetched items are re-evaluated).
+- **As built:** `POST /filters/preview/jobs {change}` starts the preview in the background (202, a job id). `GET /filters/preview/jobs/{id}` returns the phase (`reading`, `quarantine`, `tombstones`, `done`) with items done and total, then the assessment or the error, kept for 10 minutes. `POST /filters/preview/jobs/{id}/cancel` stops it at its next step. At most 4 run at once. The store is locked only while the snapshot is read, so previews never hold up other changes. `POST /filters/preview` still answers inline for small changes, with the same result.
 - **Performance:** the preview runs as a background job over rollups, `filter_hits` and index queries. The target is under 5 seconds for a typical rule at 10M torrents, with progress shown. It never blocks crawling or search (§3 overhead budget).
 
 ### 20.11 Effect warnings and password confirmation (instead of an audit log)

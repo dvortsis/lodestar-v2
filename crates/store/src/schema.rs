@@ -18,6 +18,8 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
     (5, V5),
     (6, V6),
     (7, V7),
+    (8, V8),
+    (9, V9),
 ];
 
 /// M0: the canonical torrent tables plus settings and zstd dictionaries.
@@ -378,6 +380,30 @@ CREATE TABLE filter_fixtures (
 CREATE TABLE rule_set_prev (
     id   INTEGER PRIMARY KEY CHECK (id = 1),
     data BLOB NOT NULL
+) STRICT;
+";
+
+/// M4 add-on: your corrections to classification (§20.7, §20.9): Is
+/// adult / Not adult and Not junk, re-applied whenever the torrent is
+/// classified again.
+const V8: &str = "
+CREATE TABLE class_corrections (
+    torrent_id INTEGER PRIMARY KEY REFERENCES torrents (id) ON DELETE CASCADE,
+    -- 1 Is adult, 0 Not adult, NULL no correction.
+    adult      INTEGER CHECK (adult IN (0, 1)),
+    not_junk   INTEGER NOT NULL CHECK (not_junk IN (0, 1))
+) STRICT;
+";
+
+/// M4 add-on: classification rules (§20.9): corrections that apply to
+/// every torrent a query matches, the way a per-torrent correction applies
+/// to one.
+const V9: &str = "
+CREATE TABLE class_rules (
+    id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    query TEXT NOT NULL,
+    -- 1 Is adult, 0 Not adult.
+    adult INTEGER NOT NULL CHECK (adult IN (0, 1))
 ) STRICT;
 ";
 

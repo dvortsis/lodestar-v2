@@ -4,32 +4,14 @@
 //! coordinator runs it for torrents that arrive without it (imports,
 //! torrents stored before M3, records from an older parser).
 
-use lodestar_classify::{Classification, ENRICHMENT_VERSION, FileInfo, Record, classify};
-use lodestar_metainfo::{File, Text, TextEncoding};
+use lodestar_classify::{Classification, Correction, ENRICHMENT_VERSION, FileInfo};
+use lodestar_filter::Engine;
+use lodestar_metainfo::{File, TextEncoding};
 use lodestar_store::{Enriched, Store};
 
-/// The file list with decoded paths, as classification takes it.
-pub fn file_infos(files: &[File], encoding: TextEncoding) -> Vec<FileInfo> {
-    files
-        .iter()
-        .map(|f| FileInfo {
-            path: f
-                .path
-                .iter()
-                .map(|seg| {
-                    Text {
-                        raw: seg.clone(),
-                        encoding,
-                    }
-                    .decode()
-                    .into_owned()
-                })
-                .collect(),
-            size: f.size,
-            padding: f.is_padding(),
-        })
-        .collect()
-}
+pub use lodestar_filter::reclassify::{enrich_corrected, enrich_row};
+
+pub use lodestar_classify::file_infos;
 
 /// The enrichment of a torrent with this name and file list.
 pub fn enrich(name: &str, files: &[File], encoding: TextEncoding) -> Enriched {
@@ -39,15 +21,7 @@ pub fn enrich(name: &str, files: &[File], encoding: TextEncoding) -> Enriched {
 /// The enrichment of a torrent from its decoded file list, and the
 /// classification it came from (for the filter).
 pub fn enrich_infos(name: &str, files: &[FileInfo]) -> (Enriched, Classification) {
-    let c = classify(name, files);
-    let enriched = Enriched {
-        version: ENRICHMENT_VERSION,
-        content_type: c.content_type.code(),
-        junk_score: c.junk.score,
-        comp: c.composition.encode(),
-        data: Record::new(&c).encode(),
-    };
-    (enriched, c)
+    enrich_corrected(name, files, Correction::default())
 }
 
 /// Enriches up to `limit` stored torrents after `after` (by id) whose
@@ -59,24 +33,48 @@ pub fn enrich_stored(
     after: i64,
     limit: usize,
 ) -> Result<Option<(i64, usize)>, lodestar_store::Error> {
+    enrich_stored_with(store, after, limit, None)
+}
+
+/// [`enrich_stored`], applying your classification rules from `engine`
+/// too. A torrent's own correction wins over a rule.
+pub fn enrich_stored_with(
+    store: &mut Store,
+    after: i64,
+    limit: usize,
+    engine: Option<&Engine>,
+) -> Result<Option<(i64, usize)>, lodestar_store::Error> {
     let ids = store.unenriched(after, ENRICHMENT_VERSION, limit)?;
     let Some(&last) = ids.last() else {
         return Ok(None);
     };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
     let mut batch = Vec::with_capacity(ids.len());
     for id in ids {
         if let (Some(row), Some(tree)) = (store.torrent(id)?, store.files(id)?) {
-            batch.push((id, enrich(&row.name, &tree.files, tree.encoding)));
+            let own = store.correction(id)?.map(correction).unwrap_or_default();
+            let files = file_infos(&tree.files, tree.encoding);
+            batch.push((id, enrich_row(&row, &files, own, engine, now).0));
         }
     }
     let n = store.set_enrichments(&batch)?;
     Ok(Some((last, n)))
 }
 
+/// A stored correction as the classifier takes it.
+pub fn correction(c: lodestar_store::ClassCorrection) -> Correction {
+    Correction {
+        adult: c.adult,
+        not_junk: c.not_junk,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lodestar_classify::ContentType;
+    use lodestar_classify::{ContentType, Record};
     use lodestar_metainfo::FileAttrs;
 
     fn file(path: &[&[u8]], size: u64) -> File {

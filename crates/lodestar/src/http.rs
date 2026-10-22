@@ -238,3 +238,28 @@ fn unix_now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::STATUS_PAGE;
+
+    /// The page reads errors through the API's envelope
+    /// (`{ "error": { "message", "start", "end" } }`), not as a string.
+    #[test]
+    fn the_status_page_reads_the_error_envelope() {
+        for read in [
+            "r.data.error?.message",
+            "err.message",
+            "err.start",
+            "err.end",
+        ] {
+            assert!(STATUS_PAGE.contains(read), "status.html should read {read}");
+        }
+        for stale in ["r.data.error ||", "data.error +", "data.start", "data.end"] {
+            assert!(
+                !STATUS_PAGE.contains(stale),
+                "status.html still reads {stale}"
+            );
+        }
+    }
+}
