@@ -93,11 +93,12 @@ pub async fn detail(State(s): State<ApiState>, Path(hash): Path<String>) -> ApiR
             e.interest(row.id);
         }
         let mut v = summary(&row);
-        v["swarm"] = {
+        {
             let store = s.reader.lock().expect("reader lock");
-            crate::swarm::detail(&store, s.hot.as_deref(), row.id, row.last_seen_at)
-                .map_err(internal)?
-        };
+            let swarm =
+                crate::swarm::summary(&store, s.hot.as_deref(), &row, &mut v).map_err(internal)?;
+            crate::swarm::detail(&store, swarm.as_ref(), row.id, &mut v).map_err(internal)?;
+        }
         let shown: Vec<Value> = tree
             .files
             .iter()
