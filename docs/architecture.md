@@ -1836,6 +1836,13 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Metrics:** `lodestar_fetch_{attempts,success,connect_timeouts}_total{transport}`, `lodestar_utp_retransmits_total` and `lodestar_utp_connection_timeouts_total`. The labelled success counter replaces the unlabelled one. It counts every verified info dict, so it can run slightly ahead of the pool's `fetched`, which drops a result whose key left the pool mid-fetch. Counting in the pool instead would need `Fetched` to carry its transport.
 - **Windows (§11):** all uTP connections share one UDP port, so they avoid TCP's ephemeral-port and TIME_WAIT exhaustion. The receive loop ignores per-datagram errors such as the `ConnectionReset` Windows reports for an ICMP "port unreachable". `UtpSocket::bind` on an IPv6 address is dual-stack on every OS: it clears `IPV6_V6ONLY` explicitly, because Windows sets it by default and Linux and macOS don't. (The DHT does the opposite, binding IPv6-only so its two sockets share a port; a shared-port uTP socket uses the DHT's sockets through `DualSink`.)
 
+**W4 implementation decisions (i18n):**
+- **Messages are merged, not committed.** `web/scripts/messages.ts` merges `features/<feature>/messages/{en,zh}.json` and the shared `i18n/messages/` into `web/messages/{en,zh}.json` (generated, gitignored), which Paraglide compiles into `src/lib/paraglide/` (also gitignored). Feature keys start with `<feature>_`; shared keys are the `docs/ui-glossary.md` key column as is (`torrent`, `seeders`, `video`, …) plus `common_*`.
+- **Strategy is `globalVariable` + base locale.** No URL or cookie strategy: the locale is a client setting, resolved as settings, then `navigator.languages`, then en (`web/src/lib/i18n/locale.svelte.ts`). The runtime adds about 1.3 KB gzipped to search-route JS; messages are tree-shaken per call site.
+- **Paraglide's JSON plugin is the pinned devDependency `@inlang/plugin-message-format` 4.5.5**, loaded from `node_modules` by `project.inlang/settings.json` instead of from jsDelivr, so compiles are offline and reproducible.
+- **The browser only auto-selects a locale whose catalogue covers at least 95% of en** (computed by the merge script into the generated `coverage.generated.ts`), so a zh-CN browser gets English text with `lang="en"` until zh is translated (WCAG 3.1.1). An explicit language setting always applies.
+- **Missing zh is a warning, not an error**; a zh key with no en key, a duplicate key or an invalid or mismatched placeholder fails the build. Messages use plain `{name}` placeholders, no ICU plural/select.
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.
