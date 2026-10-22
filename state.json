@@ -944,10 +944,10 @@
    "notes": "Launched 21:38 (\"run as many feature sessions as possible\")."
   },
   "R-relevance": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01HedMy8BMpmR1uFHZkW2HsR",
-   "pr": null,
+   "pr": 94,
    "attempt": 1,
    "review_rounds": 0,
    "notes": "Launched 21:38 (\"run as many feature sessions as possible\")."
@@ -1073,7 +1073,8 @@
  "reviews_in_flight": [
   "89",
   "88",
-  "87"
+  "87",
+  94
  ],
  "carry_forward": {
   "next-bans-touch": [
@@ -1145,7 +1146,8 @@
   "word_file_clause_1M": "search-bench 'word + file clause' misses 30 ms target at 1M (45 ms/5 seg, 108 ms/1 seg); gated at 200k. Track for M8 10M perf gates / B5c cache.",
   "filter_quadratic": "F-perf follow-up (security): prefilter.rs Scan::other at_pos quadratic on non-ASCII; matcher.rs sequence() quadratic (phrases, multi-part words); NEAR per-place window scan -> precompute per-word place lists + binary search; cache sorted tokens per text. Launch after F-near merges.",
   "b6_polish": "B6 polish deferred: lease.rs now() doc on node(); adult_kind stale-tag wording (unreachable today); Hours 2^16 cap test with real column; bin_of i64 clamp at import; golden note (BM25 avg length).",
-  "tailwind_scans_dev_routes": "Tailwind scans src/dev-routes, so showcase-only classes (grid-cols-2, self-start) land in production CSS. Project-wide follow-up: exclude src/dev-routes from the production Tailwind source set (@source not)."
+  "tailwind_scans_dev_routes": "Tailwind scans src/dev-routes, so showcase-only classes (grid-cols-2, self-start) land in production CSS. Project-wide follow-up: exclude src/dev-routes from the production Tailwind source set (@source not).",
+  "classify_adult_other": "R-relevance: XXX name with no year not classified Adult (detect returns None for base Other?) - reviewer of #94 checking on main"
  },
  "blocked_on_owner": [
   "Modern DHT crawler architecture: waiting on an AskUserQuestion",
@@ -1169,6 +1171,7 @@
  },
  "pull_forward": "After #90 merges: M6 packaging (WiX MSI, tarball, systemd, release matrix; sonnet). After B6: B5c, B7, tantivy delete force-merge. After F-near: F-perf. Relevance set (M8) any time. Install guide (docs/user) after UI unless owner wants earlier.",
  "notes": [
-  "22:08 #81 r4 FIX (IMMEDIATE txn in Store::write, tests, doc placement); fix agent running. X-flakes c243217 delta reviewed OK by runner; asked to add live.rs stall-wait fix. filter budget red on main c5f9b74 too (66us) - base failure; F-perf is the fix. Re-ran filter budget on #82 run 39849416788 and #78 run 39852640547."
+  "22:08 #81 r4 FIX (IMMEDIATE txn in Store::write, tests, doc placement); fix agent running. X-flakes c243217 delta reviewed OK by runner; asked to add live.rs stall-wait fix. filter budget red on main c5f9b74 too (66us) - base failure; F-perf is the fix. Re-ran filter budget on #82 run 39849416788 and #78 run 39852640547.",
+  "22:07 next sweep trig_01DUR7GNqzGb2kyFrBFJMsQh at 22:32"
  ]
 }
