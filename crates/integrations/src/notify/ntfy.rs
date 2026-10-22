@@ -42,7 +42,7 @@ pub const MAX_MESSAGE_BYTES: usize = 4096;
 const MAX_TITLE_CHARS: usize = 120;
 
 /// Items listed in the message before "and N more".
-const MAX_LISTED_ITEMS: usize = 20;
+pub(crate) const MAX_LISTED_ITEMS: usize = 20;
 
 /// How much of an answer is read. ntfy's are a few hundred bytes.
 const MAX_ANSWER_BYTES: usize = 64 * 1024;
@@ -128,11 +128,6 @@ impl Ntfy {
                 "the URL must not have a query or fragment",
             ));
         }
-        if !url.username().is_empty() || url.password().is_some() {
-            return Err(DeliveryError::InvalidEndpoint(
-                "put credentials in the login settings, not the URL",
-            ));
-        }
         match &config.auth {
             NtfyAuth::None => {}
             NtfyAuth::Bearer(token) => check_credential(token, "invalid access token")?,
@@ -144,10 +139,12 @@ impl Ntfy {
                 }
             }
         }
-        if !matches!(config.auth, NtfyAuth::None) && url.scheme() == "http" && !config.allow_private
+        if !matches!(config.auth, NtfyAuth::None)
+            && url.scheme() == "http"
+            && !(config.allow_private && is_local_host(&url))
         {
             return Err(DeliveryError::InvalidEndpoint(
-                "credentials need https unless the server is on the private network",
+                "credentials need https unless the server is a private-network address or a local name",
             ));
         }
         if config.priority.is_some_and(|p| !(1..=5).contains(&p)) {
@@ -179,44 +176,13 @@ impl Ntfy {
 
     /// The message text for `n`: private items left out, their count said.
     pub fn message(n: &Notification) -> String {
-        let mut text = clean_text(&n.body);
-        let mut listed = 0;
-        let mut more = 0;
-        for item in n.shareable_items() {
-            if listed == MAX_LISTED_ITEMS {
-                more += 1;
-                continue;
-            }
-            if listed == 0 && !text.is_empty() {
-                text.push_str("\n\n");
-            } else if listed > 0 {
-                text.push('\n');
-            }
-            text.push_str("• ");
-            text.push_str(&clean_line(&item.name));
-            if let Some(size) = item.size_bytes {
-                text.push_str(" (");
-                text.push_str(&format_bytes(size));
-                text.push(')');
-            }
-            listed += 1;
-        }
-        let mut notes = Vec::new();
-        if more > 0 {
-            notes.push(format!("…and {more} more"));
-        }
-        match n.withheld() {
-            0 => {}
-            1 => notes.push("1 result from a private source isn't included.".to_owned()),
-            w => notes.push(format!("{w} results from private sources aren't included.")),
-        }
-        for note in notes {
-            if !text.is_empty() {
-                text.push_str("\n\n");
-            }
-            text.push_str(&note);
-        }
-        truncate_bytes(&text, MAX_MESSAGE_BYTES)
+        compose(
+            n,
+            |s| s.to_owned(),
+            MAX_MESSAGE_BYTES,
+            str::len,
+            truncate_bytes,
+        )
     }
 
     fn title_header(n: &Notification) -> Option<HeaderValue> {
@@ -227,6 +193,23 @@ impl Ntfy {
         }
         HeaderValue::from_str(&encode_header_text(&title)).ok()
     }
+}
+
+/// Whether `url`'s host is plainly on the local network: a private IP
+/// literal, a single-label name, or a `.lan`, `.local` or `.home.arpa`
+/// name. Credentials may cross plain `http` only to such a host, so
+/// `http://ntfy.example.com` with a token is refused even when the channel
+/// may reach private addresses.
+fn is_local_host(url: &Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let literal = host.trim_start_matches('[').trim_end_matches(']');
+    if let Ok(ip) = literal.parse::<std::net::IpAddr>() {
+        return crate::net::classify(ip) == crate::AddrClass::Private;
+    }
+    let d = host.trim_end_matches('.').to_ascii_lowercase();
+    !d.contains('.') || d.ends_with(".lan") || d.ends_with(".local") || d.ends_with(".home.arpa")
 }
 
 fn check_credential(secret: &Secret, why: &'static str) -> Result<(), DeliveryError> {
@@ -293,6 +276,63 @@ impl Notifier for Ntfy {
                 )))
             }
         })
+    }
+}
+
+/// The body, the shareable items and the closing notes of `n`, within
+/// `budget` as `len` measures it. The notes (how many items were left out
+/// as private, and how many more there were) are never cut: when the text
+/// is too long, only the body and the list are truncated, with `truncate`.
+/// `escape` is applied to every piece of untrusted text.
+pub(crate) fn compose(
+    n: &Notification,
+    escape: fn(&str) -> String,
+    budget: usize,
+    len: fn(&str) -> usize,
+    truncate: fn(&str, usize) -> String,
+) -> String {
+    let mut text = escape(&clean_text(&n.body));
+    let mut listed = 0;
+    let mut more = 0;
+    for item in n.shareable_items() {
+        if listed == MAX_LISTED_ITEMS {
+            more += 1;
+            continue;
+        }
+        if listed == 0 && !text.is_empty() {
+            text.push_str("\n\n");
+        } else if listed > 0 {
+            text.push('\n');
+        }
+        text.push_str("• ");
+        text.push_str(&escape(&clean_line(&item.name)));
+        if let Some(size) = item.size_bytes {
+            text.push_str(" (");
+            text.push_str(&format_bytes(size));
+            text.push(')');
+        }
+        listed += 1;
+    }
+    let mut notes = Vec::new();
+    if more > 0 {
+        notes.push(format!("…and {more} more"));
+    }
+    match n.withheld() {
+        0 => {}
+        1 => notes.push("1 result from a private source isn't included.".to_owned()),
+        w => notes.push(format!("{w} results from private sources aren't included.")),
+    }
+    let notes = notes.join("\n\n");
+    if notes.is_empty() {
+        return truncate(&text, budget);
+    }
+    // Reserve room for the notes (and the blank line before them) first.
+    let reserved = len(&notes) + len("\n\n");
+    let text = truncate(&text, budget.saturating_sub(reserved));
+    if text.is_empty() {
+        notes
+    } else {
+        format!("{text}\n\n{notes}")
     }
 }
 
@@ -400,7 +440,9 @@ pub(crate) fn format_bytes(bytes: u64) -> String {
 /// A header value for `s`: as it is when ASCII, else RFC 2047 encoded-words
 /// (`=?UTF-8?B?…?=`), which ntfy decodes.
 fn encode_header_text(s: &str) -> String {
-    if s.bytes().all(|b| (0x20..=0x7e).contains(&b)) {
+    // A plain title that itself contains `=?` would be decoded by ntfy as an
+    // encoded-word, so it is encoded too.
+    if s.bytes().all(|b| (0x20..=0x7e).contains(&b)) && !s.contains("=?") {
         return s.to_owned();
     }
     // Each word stays within 75 characters: 45 bytes of text encode to 60.
@@ -548,6 +590,7 @@ mod tests {
     fn client() -> GuardedClient {
         let r = ScriptedResolver::new(&[
             ("ntfy.test", &[&["127.0.0.1"]]),
+            ("ntfy.lan", &[&["127.0.0.1"]]),
             ("metadata.test", &[&["169.254.169.254"]]),
         ]);
         GuardedClient::with_resolver(NetPolicy::loopback_for_tests(), NTFY_TIMEOUT, r).unwrap()
@@ -555,7 +598,7 @@ mod tests {
 
     fn config(port: u16) -> NtfyConfig {
         NtfyConfig::new(Secret::new(format!(
-            "http://ntfy.test:{port}/lodestar-alerts"
+            "http://ntfy.lan:{port}/lodestar-alerts"
         )))
     }
 
@@ -659,6 +702,44 @@ mod tests {
         ));
         cfg.topic_url = Secret::new("https://ntfy.test/lodestar-alerts");
         assert!(Ntfy::with_client(&cfg, client()).is_ok());
+    }
+
+    #[test]
+    fn credentials_over_http_need_a_local_host_even_when_private_is_allowed() {
+        let saved = |url: &str, private: bool| {
+            let mut cfg = NtfyConfig::new(Secret::new(url));
+            cfg.auth = NtfyAuth::Bearer(Secret::new("tk_abc123"));
+            cfg.allow_private = private;
+            let http = GuardedClient::with_resolver(
+                NetPolicy::notification(private),
+                NTFY_TIMEOUT,
+                ScriptedResolver::new(&[]),
+            )
+            .unwrap();
+            Ntfy::with_client(&cfg, http).is_ok()
+        };
+        for local in [
+            "http://192.168.1.5/t",
+            "http://10.0.0.2:8080/t",
+            "http://ntfy/t",
+            "http://ntfy.lan/t",
+            "http://NTFY.Local/t",
+            "http://ntfy.home.arpa/t",
+        ] {
+            assert!(saved(local, true), "{local}");
+            assert!(!saved(local, false), "{local} without allow_private");
+        }
+        for remote in [
+            "http://ntfy.example.com/t",
+            "http://ntfy.test/t",
+            "http://ntfy.lan.example.com/t",
+            "http://93.184.216.34/t",
+            "http://x.example/a.lan",
+        ] {
+            assert!(!saved(remote, true), "{remote}");
+        }
+        // https is always fine.
+        assert!(saved("https://ntfy.example.com/t", false));
     }
 
     #[test]
@@ -820,7 +901,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let r = ScriptedResolver::new(&[
-            ("ntfy.test", &[&["127.0.0.1"]]),
+            ("ntfy.lan", &[&["127.0.0.1"]]),
             ("other.test", &[&["127.0.0.1"]]),
         ]);
         let http =
@@ -853,6 +934,46 @@ mod tests {
         assert_eq!(truncate_bytes("abcdef", 6), "abcdef");
         assert_eq!(truncate_bytes("abcdefg", 6), "abc…");
         assert_eq!(truncate_bytes("日本語日本語", 10), "日本…");
+    }
+
+    #[test]
+    fn the_private_count_survives_an_overflowing_message() {
+        // 21 shareable items with long names, and two private ones.
+        let mut n = Notification::new(NotificationKind::Alert, "t", "b".repeat(500));
+        n.items = (0..23)
+            .map(|i| NotificationItem {
+                name: format!("{i:02} {}", "é".repeat(250)),
+                info_hash: format!("{i:040x}"),
+                size_bytes: Some(1 << 30),
+                private_source: i >= 21,
+            })
+            .collect();
+        let m = Ntfy::message(&n);
+        assert!(m.len() <= MAX_MESSAGE_BYTES, "{}", m.len());
+        assert!(
+            m.ends_with("\n\n2 results from private sources aren't included."),
+            "{m}"
+        );
+        assert!(m.contains('…'), "the list part was cut");
+        // Also with the "more" note, and with a tiny budget.
+        n.items.extend((100..130).map(|i| NotificationItem {
+            name: "x".repeat(300),
+            info_hash: format!("{i:040x}"),
+            size_bytes: None,
+            private_source: false,
+        }));
+        let m = Ntfy::message(&n);
+        assert!(m.len() <= MAX_MESSAGE_BYTES);
+        assert!(
+            m.contains("…and ") && m.ends_with("aren't included."),
+            "{m}"
+        );
+        assert_eq!(
+            compose(&n, |s| s.to_owned(), 60, str::len, truncate_bytes)
+                .matches("aren't included.")
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -904,6 +1025,9 @@ mod tests {
     fn non_ascii_titles_use_rfc_2047() {
         assert_eq!(encode_header_text("plain title"), "plain title");
         assert_eq!(encode_header_text("é"), "=?UTF-8?B?w6k=?=");
+        // Plain ASCII that looks like an encoded-word is encoded too.
+        let looks = encode_header_text("=?UTF-8?B?aGk=?=");
+        assert!(looks.starts_with("=?UTF-8?B?") && looks != "=?UTF-8?B?aGk=?=");
         let long = encode_header_text(&"日本語".repeat(20));
         for word in long.split(' ') {
             assert!(word.len() <= 75 && word.starts_with("=?UTF-8?B?"), "{word}");
@@ -966,7 +1090,7 @@ mod tests {
                 password: Secret::new(PASS),
             },
         ] {
-            let mut cfg = NtfyConfig::new(Secret::new(format!("http://ntfy.test:{port}/{TOPIC}")));
+            let mut cfg = NtfyConfig::new(Secret::new(format!("http://ntfy.lan:{port}/{TOPIC}")));
             cfg.allow_private = true;
             cfg.auth = auth;
             let sender = Ntfy::with_client(&cfg, client()).unwrap();
@@ -996,6 +1120,6 @@ mod tests {
             assert!(!texts.contains(s), "{s} in debug or error text: {texts}");
             assert!(!logged.contains(s), "{s} in the logs: {logged}");
         }
-        assert!(texts.contains("http://ntfy.test:"), "{texts}");
+        assert!(texts.contains("http://ntfy.lan:"), "{texts}");
     }
 }
