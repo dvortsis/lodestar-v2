@@ -27,9 +27,12 @@ use std::time::Duration;
 use reqwest::header::{CONTENT_TYPE, HeaderName, HeaderValue};
 use reqwest::{Method, Url};
 
+#[cfg(test)]
+use super::text::{MAX_LISTED_ITEMS, format_bytes};
+use super::text::{clean_line, compose, truncate_bytes, truncate_chars, web_link};
 use super::{AttemptError, Channel, DeliveryError, Notification, Notifier, check_status};
 use crate::BoxFuture;
-use crate::net::{GuardedClient, NetPolicy, parse_url, read_limited, redact};
+use crate::net::{GuardedClient, NetPolicy, is_local_host, parse_url, read_limited, redact};
 use crate::secret::Secret;
 
 /// The timeout for one attempt.
@@ -40,9 +43,6 @@ pub const MAX_MESSAGE_BYTES: usize = 4096;
 
 /// The longest title sent, in characters.
 const MAX_TITLE_CHARS: usize = 120;
-
-/// Items listed in the message before "and N more".
-pub(crate) const MAX_LISTED_ITEMS: usize = 20;
 
 /// How much of an answer is read. ntfy's are a few hundred bytes.
 const MAX_ANSWER_BYTES: usize = 64 * 1024;
@@ -195,23 +195,6 @@ impl Ntfy {
     }
 }
 
-/// Whether `url`'s host is plainly on the local network: a private IP
-/// literal, a single-label name, or a `.lan`, `.local` or `.home.arpa`
-/// name. Credentials may cross plain `http` only to such a host, so
-/// `http://ntfy.example.com` with a token is refused even when the channel
-/// may reach private addresses.
-fn is_local_host(url: &Url) -> bool {
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    let literal = host.trim_start_matches('[').trim_end_matches(']');
-    if let Ok(ip) = literal.parse::<std::net::IpAddr>() {
-        return crate::net::classify(ip) == crate::AddrClass::Private;
-    }
-    let d = host.trim_end_matches('.').to_ascii_lowercase();
-    !d.contains('.') || d.ends_with(".lan") || d.ends_with(".local") || d.ends_with(".home.arpa")
-}
-
 fn check_credential(secret: &Secret, why: &'static str) -> Result<(), DeliveryError> {
     let v = secret.expose();
     // Visible ASCII, so it is a valid header value and can't smuggle a
@@ -276,164 +259,6 @@ impl Notifier for Ntfy {
                 )))
             }
         })
-    }
-}
-
-/// The body, the shareable items and the closing notes of `n`, within
-/// `budget` as `len` measures it. The notes (how many items were left out
-/// as private, and how many more there were) are never cut: when the text
-/// is too long, only the body and the list are truncated, with `truncate`.
-/// `escape` is applied to every piece of untrusted text.
-pub(crate) fn compose(
-    n: &Notification,
-    escape: fn(&str) -> String,
-    budget: usize,
-    len: fn(&str) -> usize,
-    truncate: fn(&str, usize) -> String,
-) -> String {
-    let mut text = escape(&clean_text(&n.body));
-    let mut listed = 0;
-    let mut more = 0;
-    for item in n.shareable_items() {
-        if listed == MAX_LISTED_ITEMS {
-            more += 1;
-            continue;
-        }
-        if listed == 0 && !text.is_empty() {
-            text.push_str("\n\n");
-        } else if listed > 0 {
-            text.push('\n');
-        }
-        text.push_str("• ");
-        text.push_str(&escape(&clean_line(&item.name)));
-        if let Some(size) = item.size_bytes {
-            text.push_str(" (");
-            text.push_str(&format_bytes(size));
-            text.push(')');
-        }
-        listed += 1;
-    }
-    let mut notes = Vec::new();
-    if more > 0 {
-        notes.push(format!("…and {more} more"));
-    }
-    match n.withheld() {
-        0 => {}
-        1 => notes.push("1 result from a private source isn't included.".to_owned()),
-        w => notes.push(format!("{w} results from private sources aren't included.")),
-    }
-    let notes = notes.join("\n\n");
-    if notes.is_empty() {
-        return truncate(&text, budget);
-    }
-    // Reserve room for the notes (and the blank line before them) first.
-    let reserved = len(&notes) + len("\n\n");
-    let text = truncate(&text, budget.saturating_sub(reserved));
-    if text.is_empty() {
-        notes
-    } else {
-        format!("{text}\n\n{notes}")
-    }
-}
-
-/// `link` as an absolute `http(s)` URL, or `None`: a `Click` header opens
-/// whatever it holds, so `javascript:` and the like are never passed on.
-pub(crate) fn web_link(link: &str) -> Option<String> {
-    let url = Url::parse(link.trim()).ok()?;
-    let web = matches!(url.scheme(), "http" | "https") && url.host_str().is_some();
-    web.then(|| url.to_string())
-}
-
-/// `s` on one line: control characters become spaces, and the bidirectional
-/// overrides that could disguise a name are dropped.
-pub(crate) fn clean_line(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        if is_bidi_control(c) {
-            continue;
-        }
-        out.push(if c.is_control() { ' ' } else { c });
-    }
-    out.trim().to_owned()
-}
-
-/// `s` with newlines kept and every other control character dropped.
-pub(crate) fn clean_text(s: &str) -> String {
-    let s = s.replace("\r\n", "\n");
-    let cleaned: String = s
-        .chars()
-        .filter(|&c| c == '\n' || !(c.is_control() || is_bidi_control(c)))
-        .collect();
-    cleaned.trim().to_owned()
-}
-
-fn is_bidi_control(c: char) -> bool {
-    matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
-}
-
-/// At most `max` bytes, cut at a character boundary, ending in `…` when
-/// anything was cut.
-pub(crate) fn truncate_bytes(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        return s.to_owned();
-    }
-    let mut end = max.saturating_sub('…'.len_utf8());
-    while !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &s[..end])
-}
-
-/// At most `max` characters, ending in `…` when anything was cut.
-pub(crate) fn truncate_chars(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_owned();
-    }
-    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
-    out.push('…');
-    out
-}
-
-/// Sizes the way `docs/metrics.md` writes them: IEC units, two digits under
-/// 10, one under 100, none from 100, joined to the unit by U+00A0.
-pub(crate) fn format_bytes(bytes: u64) -> String {
-    const UNITS: [&str; 6] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
-    if bytes < 1024 {
-        return format!("{bytes}\u{a0}B");
-    }
-    let mut unit = 1;
-    while unit < 5 && bytes >= 1u64 << (10 * (unit + 1)) {
-        unit += 1;
-    }
-    loop {
-        let div = 1u128 << (10 * unit);
-        let b = u128::from(bytes);
-        let digits: u32 = if b < 10 * div {
-            2
-        } else if b < 100 * div {
-            1
-        } else {
-            0
-        };
-        let scale = 10u128.pow(digits);
-        // Round half up, in integers, so ties don't depend on float
-        // representation.
-        let scaled = (b * scale * 2 + div) / (div * 2);
-        if scaled >= 1024 * scale && unit < 5 {
-            unit += 1;
-            continue;
-        }
-        let whole = scaled / scale;
-        return if digits == 0 {
-            format!("{whole}\u{a0}{}", UNITS[unit])
-        } else {
-            let frac = scaled % scale;
-            format!(
-                "{whole}.{frac:0width$}\u{a0}{}",
-                UNITS[unit],
-                width = digits as usize
-            )
-        };
     }
 }
 
