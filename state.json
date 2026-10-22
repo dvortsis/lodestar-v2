@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-22T05:03:00Z",
+ "updated_at": "2026-10-22T05:12:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 5
@@ -8,10 +8,10 @@
  "tags": {},
  "slices": {
   "B0": {
-   "status": "running",
+   "status": "in_review",
    "model": "opus",
    "session": "session_01A5BEzkYtiRur7VEKtby9FH",
-   "pr": null,
+   "pr": 38,
    "attempt": 1,
    "review_rounds": 0,
    "notes": ""
@@ -26,7 +26,7 @@
    "notes": ""
   },
   "C0": {
-   "status": "in_review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01F4G5nVWxS91JsSEEC2mka5",
    "pr": 36,
@@ -35,10 +35,10 @@
    "notes": "round 1: changes requested (trackers_checked meaning; Intl examples; stale/segments/exceptions fields; keep Tailwind default spacing, restrict to ramp steps)"
   },
   "C1": {
-   "status": "running",
+   "status": "in_review",
    "model": "opus",
    "session": "session_01NSdirPw4xiTrGseUFMRd8U",
-   "pr": null,
+   "pr": 37,
    "attempt": 1,
    "review_rounds": 0,
    "notes": ""
@@ -50,7 +50,7 @@
    "pr": 35,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "round 1: changes requested (axe main landmark; playwright browser pin; size-limit scoping; ban regex holes)"
+   "notes": "round 2 approved; waiting on windows CI"
   },
   "B1": {
    "status": "pending",
@@ -651,6 +651,14 @@
  "watch_policy": "Owner asked the runner to keep an eye on and manage these sessions: each heartbeat check status; report a pending permission prompt to the owner (runner cannot approve); nudge an idle session with remaining work; flag conflicts with slice ownership and migration order.",
  "migration_order": "V4 filter (merged), V5 M4 swarm, V6 filter rules; M5 (B8) takes the next number after M4 settles",
  "decisions": [
-  "2026-10-22 spacing: keep Tailwind v4 default --spacing (p-4=16px); only utility steps matching the \u00a710.2 ramp are allowed; W2 extends the ban check to off-ramp steps"
- ]
+  "2026-10-22 spacing: keep Tailwind v4 default --spacing (p-4=16px); only utility steps matching the \u00a710.2 ramp are allowed; W2 extends the ban check to off-ramp steps",
+  "2026-10-22 owner: the design decided in the 'Modern DHT crawler architecture' session (recorded in docs/architecture.md) is the primary design strategy; ui-design-skills only fills gaps. Encoded in runner/standards.md (PR #39)."
+ ],
+ "open_issues": [
+  "Migration clash: PR #32 (swarm) and PR #33 (subscriptions) both add V5; both sessions told to agree an order (05:10Z)"
+ ],
+ "runner_prs": {
+  "34": "merged",
+  "39": "open (standards)"
+ }
 }
