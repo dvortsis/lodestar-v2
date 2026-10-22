@@ -357,7 +357,7 @@
    "pr": null,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "launched 15:59; includes first-run log address polish 18:46 R1 FIX: main merge semantic break (ops field), NAT false-reachable (SeenFilter refresh + threshold), pause race, index_lag, ring clear, dht_off, BEP42 per-/24. 19:23 R1 fixes eabd33a + main merges 3378ef5; R2 review in flight. 20:08 R2 FIX: replies must renew contacted (NAT false reachable); failed event-write test; PR body. Runner verifies R3 delta. 20:17 3b61a52 verified by runner -> APPROVED, merge on green. 20:39 macOS rebuild flake + budget red on 3b61a52 -> one rerun after run completes (21:00 sweep). | 22:42 green at dca8ed4 but main.rs conflict with D-puid; asked session to merge main."
+   "notes": "launched 15:59; includes first-run log address polish 18:46 R1 FIX: main merge semantic break (ops field), NAT false-reachable (SeenFilter refresh + threshold), pause race, index_lag, ring clear, dht_off, BEP42 per-/24. 19:23 R1 fixes eabd33a + main merges 3378ef5; R2 review in flight. 20:08 R2 FIX: replies must renew contacted (NAT false reachable); failed event-write test; PR body. Runner verifies R3 delta. 20:17 3b61a52 verified by runner -> APPROVED, merge on green. 20:39 macOS rebuild flake + budget red on 3b61a52 -> one rerun after run completes (21:00 sweep). | 22:42 green at dca8ed4 but main.rs conflict with D-puid; asked session to merge main. | 22:48 head c0c6334 main merged"
   },
   "B11b": {
    "status": "pending",
@@ -935,7 +935,7 @@
    "pr": 95,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:38 (\"run as many feature sessions as possible\")."
+   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 22:53 head bd40bcb (main+D-puid merged, drop scopes per subcommand)"
   },
   "M6-win": {
    "status": "running",
@@ -962,7 +962,7 @@
    "pr": 96,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 22:36 security review FIX: TLS1.3 resumption skips client verify (revocation/expiry) + 3 low; sent to session. Design reviewer still running."
+   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 22:36 security review FIX: TLS1.3 resumption skips client verify (revocation/expiry) + 3 low; sent to session. Design reviewer still running. | 22:48 head 473b125 security fixes; sec reviewer re-verifying delta"
   },
   "DOC-install": {
    "status": "running",
@@ -1168,7 +1168,8 @@
   "b6_polish": "B6 polish deferred: lease.rs now() doc on node(); adult_kind stale-tag wording (unreachable today); Hours 2^16 cap test with real column; bin_of i64 clamp at import; golden note (BM25 avg length).",
   "tailwind_scans_dev_routes": "Tailwind scans src/dev-routes, so showcase-only classes (grid-cols-2, self-start) land in production CSS. Project-wide follow-up: exclude src/dev-routes from the production Tailwind source set (@source not).",
   "classify_adult_other": "R-relevance: XXX name with no year not classified Adult (detect returns None for base Other?) - reviewer of #94 checking on main",
-  "cli_missing_apis": "M6-cli: reindex refuses (exit 3) while server runs; needs API rebuild endpoint + search 'rebuild this version while old serves' call"
+  "cli_missing_apis": "M6-cli: reindex refuses (exit 3) while server runs; needs API rebuild endpoint + search 'rebuild this version while old serves' call",
+  "privdrop_doc": "privdrop.rs Scope::DataDir doc comment lists only serve/import-bitmagnet; M6-cli adds backup/rollback/vacuum/reindex (next slice touching privdrop.rs)"
  },
  "blocked_on_owner": [
   "Modern DHT crawler architecture: waiting on an AskUserQuestion",
