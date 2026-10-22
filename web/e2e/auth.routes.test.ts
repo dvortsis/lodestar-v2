@@ -187,11 +187,7 @@ test('a 429 counts down from Retry-After and unlocks', async ({ page, go, mock }
 	await expect(page).toHaveURL(/\/search/);
 });
 
-test('a session that expires mid-use goes to /login?next=… and back', async ({
-	page,
-	go,
-	mock
-}) => {
+test('a session that expires mid-use goes to /login?next=… and back', async ({ page, mock }) => {
 	let session = false;
 	mock.on('getAuthStatus', () => ({
 		status: 200,

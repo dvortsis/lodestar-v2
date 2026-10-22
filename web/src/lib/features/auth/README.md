@@ -6,12 +6,12 @@ First-run setup (`/setup`), sign-in (`/login`), sign-out and the session-expiry 
 
 Import from `session.svelte.ts`. It pulls in no components or brand assets, so it's safe on the first-load path.
 
-| Export | Use |
-|---|---|
-| `installAuthHandlers(): () => void` | Call once from the root layout (`onMount(installAuthHandlers)`; it returns the uninstall). Any 401 `login_required` then goes to `/login?next=<current path and query>`, or to `/setup` when the server says `setup_required`. Uses W5's `onLoginRequired` / `onSessionOk`. |
-| `currentSession(): 'unknown' \| 'signed_in' \| 'signed_out' \| 'setup_required'` | Reactive. Hide the top bar's account menu unless `signed_in`, for example. |
-| `logout(): Promise<void>` | `POST /logout`, then `/login`. Rejects (and stays put) if the server can't be reached. |
-| `LogoutButton.svelte` | "Sign out" with the busy state and an error toast; props `variant` (`quiet` default, `secondary`) and `dense`. Needs the shell's `<Toaster>`. |
+| Export                                                                           | Use                                                                                                                                                                                                                                                                         |
+| -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `installAuthHandlers(): () => void`                                              | Call once from the root layout (`onMount(installAuthHandlers)`; it returns the uninstall). Any 401 `login_required` then goes to `/login?next=<current path and query>`, or to `/setup` when the server says `setup_required`. Uses W5's `onLoginRequired` / `onSessionOk`. |
+| `currentSession(): 'unknown' \| 'signed_in' \| 'signed_out' \| 'setup_required'` | Reactive. Hide the top bar's account menu unless `signed_in`, for example.                                                                                                                                                                                                  |
+| `logout(): Promise<void>`                                                        | `POST /logout`, then `/login`. Rejects (and stays put) if the server can't be reached.                                                                                                                                                                                      |
+| `LogoutButton.svelte`                                                            | "Sign out" with the busy state and an error toast; props `variant` (`quiet` default, `secondary`) and `dense`. Needs the shell's `<Toaster>`.                                                                                                                               |
 
 The sign-in and setup pages are full-page: the shell should render them without the top bar (`page.url.pathname` is `/login` or `/setup`).
 
