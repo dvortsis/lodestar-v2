@@ -220,6 +220,7 @@ fn fixture() -> Fixture {
             index: Some(index),
             reader: Arc::new(Mutex::new(reader)),
             filters: Some(api.clone()),
+            settings: None,
         }),
     );
     let hashes = infos
@@ -1142,6 +1143,7 @@ async fn filters_without_an_index_or_filters() {
                     Store::open_reader(&db, StoreConfig::default()).unwrap(),
                 )),
                 filters,
+                settings: None,
             }),
         )
     };

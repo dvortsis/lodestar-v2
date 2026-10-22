@@ -17,6 +17,10 @@ use serde::Deserialize;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    /// Which values `config.toml` and the environment set, for the
+    /// settings registry's sources (`settings`). Not a config key.
+    #[serde(skip)]
+    pub layers: Layers,
     /// Holds `lodestar.db`, `dht-state.bin` and (by default) the config.
     pub data_dir: PathBuf,
     /// `error`, `warn`, `info`, `debug` or a `tracing` filter.
@@ -33,6 +37,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
+            layers: Layers::default(),
             data_dir: PathBuf::from("data"),
             log: "info".into(),
             http: Http::default(),
@@ -45,6 +50,46 @@ impl Default for Config {
         }
     }
 }
+
+/// What set a [`Config`]'s values beyond the defaults.
+#[derive(Debug, Clone, Default)]
+pub struct Layers {
+    /// `config.toml` as written (empty without a file).
+    pub file: toml::Table,
+    /// The `LODESTAR_*` variables that were set, from [`ENV_VARS`].
+    pub env: Vec<&'static str>,
+}
+
+impl Layers {
+    /// Whether the file sets the key at a dotted `path` (`dht.bind`).
+    pub fn in_file(&self, path: &str) -> bool {
+        let mut table = &self.file;
+        let mut parts = path.split('.').peekable();
+        while let Some(part) = parts.next() {
+            match table.get(part) {
+                None => return false,
+                Some(_) if parts.peek().is_none() => return true,
+                Some(toml::Value::Table(t)) => table = t,
+                Some(_) => return false,
+            }
+        }
+        false
+    }
+
+    pub fn in_env(&self, var: &str) -> bool {
+        self.env.contains(&var)
+    }
+}
+
+/// Every environment variable [`Config::load`] reads.
+pub const ENV_VARS: &[&str] = &[
+    "LODESTAR_DATA_DIR",
+    "LODESTAR_LOG",
+    "LODESTAR_HTTP_BIND",
+    "LODESTAR_DHT_PORT",
+    "LODESTAR_INTENSITY",
+    "LODESTAR_DHT_ENABLED",
+];
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -280,13 +325,24 @@ impl Config {
                 p.exists().then_some(p)
             }
         };
-        let mut config = match file {
+        let mut file_table = toml::Table::new();
+        let mut config: Config = match file {
             Some(p) => {
                 let text = std::fs::read_to_string(&p)
                     .map_err(|e| ConfigError(format!("reading {}: {e}", p.display())))?;
+                file_table = toml::from_str(&text)
+                    .map_err(|e| ConfigError(format!("{}: {e}", p.display())))?;
                 toml::from_str(&text).map_err(|e| ConfigError(format!("{}: {e}", p.display())))?
             }
             None => Config::default(),
+        };
+        config.layers = Layers {
+            file: file_table,
+            env: ENV_VARS
+                .iter()
+                .copied()
+                .filter(|k| env(k).is_some())
+                .collect(),
         };
         if let Some(dir) = data_dir {
             config.data_dir = dir;
@@ -482,6 +538,24 @@ mod tests {
             c.pipeline_config().unwrap().fetch.encryption,
             Encryption::Require
         );
+    }
+
+    #[test]
+    fn layers_record_what_the_file_and_environment_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "log = \"debug\"\n[dht]\nintensity = \"low\"\n").unwrap();
+        let env = |k: &str| (k == "LODESTAR_HTTP_BIND").then(|| "127.0.0.1:1".to_string());
+        let c = Config::load(Some(&path), env).unwrap();
+        assert!(c.layers.in_file("log"));
+        assert!(c.layers.in_file("dht.intensity"));
+        assert!(!c.layers.in_file("dht.bind"));
+        assert!(!c.layers.in_file("log.level"));
+        assert!(!c.layers.in_file("http.bind"));
+        assert_eq!(c.layers.env, ["LODESTAR_HTTP_BIND"]);
+        assert!(c.layers.in_env("LODESTAR_HTTP_BIND"));
+        let c = Config::load(None, no_env).unwrap();
+        assert!(c.layers.file.is_empty() && c.layers.env.is_empty());
     }
 
     #[test]
