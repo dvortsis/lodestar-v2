@@ -101,3 +101,5 @@ There's a **daily summary** on the first wake after 07:00 in the owner's time zo
 - **`max_launches_per_day`** is a backstop against runaway loops. Hitting it stops launches and notifies the owner.
 
 **Green means every check run on the head finished `success`, `skipped` or `neutral`.** Since #90, CI skips the jobs a PR's files don't need, so a docs-only PR shows skipped Rust jobs; those count as passing.
+
+**A red check that isn't the PR's doesn't block** (owner, 2026-10-22, `docs/owner-decisions.md` §2.18). That means a check that's also red on `main`, or a known flake with a fix PR open, failing in code the PR doesn't touch. The runner merges anyway and comments on the PR, naming the check, the evidence (the same check red on `main`'s run, or the fix PR) and the fix. Anything else red is the PR's to fix, and a re-run is still limited to once per head.
