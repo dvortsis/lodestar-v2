@@ -18,7 +18,8 @@
     - uninstall keeps the data unless run with REMOVE_DATA=1
 -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
-     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension"
+     xmlns:fire="http://schemas.microsoft.com/wix/FirewallExtension">
 
   <Product Id="*"
            Name="Lodestar"
@@ -108,11 +109,11 @@
       <Component Id="FirewallRules" Guid="2D5B2E5C-6B34-4F0F-9D54-3D1A3F8E9A04" Win64="yes">
         <RegistryValue Root="HKLM" Key="Software\Lodestar" Name="FirewallRules" Type="integer" Value="1" KeyPath="yes" />
         <!-- Web UI: private networks only, never the public profile. -->
-        <util:FirewallException Id="FwWeb" Name="Lodestar web UI (8090/tcp, private networks)"
+        <fire:FirewallException Id="FwWeb" Name="Lodestar web UI (8090/tcp, private networks)"
                                 Protocol="tcp" Port="8090" Profile="private" Scope="any"
                                 Program="[#LodestarExe]" IgnoreFailure="yes" />
         <!-- DHT: UDP, any network, so other nodes can answer. -->
-        <util:FirewallException Id="FwDht" Name="Lodestar DHT (6881/udp)"
+        <fire:FirewallException Id="FwDht" Name="Lodestar DHT (6881/udp)"
                                 Protocol="udp" Port="6881" Profile="all" Scope="any"
                                 Program="[#LodestarExe]" IgnoreFailure="yes" />
       </Component>
