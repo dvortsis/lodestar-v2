@@ -17,6 +17,7 @@ pub mod auth;
 pub mod compare;
 pub mod discover;
 pub mod error;
+pub mod events;
 pub mod filters;
 pub mod search;
 pub mod settings;
