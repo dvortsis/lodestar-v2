@@ -212,7 +212,7 @@
    "pr": 78,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #78; reviewer started 16:45 | 16:58 round 1 FIX: load-more stuck, shift anchor by index, touch targets, .ls-focus dup; + measure opt-in, tokens, tree index prop, 100k expand perf, dup names, roving on click, Esc in drawer, tests, PR size. R2 FIX 18:20: coarse targets overlap; Drawer Esc swallowed by aria-expanded; Menu focus invisible; popover test race (Bits rAF autofocus). 18:23 R2 fixes pushed 44fdd31; R3 review held until #76 merges (dev-routes move + search JS 37.5 vs 32.4 kB)."
+   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #78; reviewer started 16:45 | 16:58 round 1 FIX: load-more stuck, shift anchor by index, touch targets, .ls-focus dup; + measure opt-in, tokens, tree index prop, 100k expand perf, dup names, roving on click, Esc in drawer, tests, PR size. R2 FIX 18:20: coarse targets overlap; Drawer Esc swallowed by aria-expanded; Menu focus invisible; popover test race (Bits rAF autofocus). 18:23 R2 fixes pushed 44fdd31; R3 review held until #76 merges (dev-routes move + search JS 37.5 vs 32.4 kB). 20:20 dev-routes moved + main merged; R3 review in flight. CSS 20.32 kB vs 20 budget?"
   },
   "W7e": {
    "status": "changes_requested",
@@ -221,7 +221,7 @@
    "pr": 74,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #74; reviewer started 16:45 | 17:10 r1 FIX: token classes (runner shared fix), dup groups, brush, null delta, dates, int axes. R2 FIX 17:55: computed-style test missing, x-axis tick overlap, showcase in prod (+1.83 kB; move to dev-routes after #76). 18:04 R2 fixes pushed 219eed7; waits on #80 and #76."
+   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #74; reviewer started 16:45 | 17:10 r1 FIX: token classes (runner shared fix), dup groups, brush, null delta, dates, int axes. R2 FIX 17:55: computed-style test missing, x-axis tick overlap, showcase in prod (+1.83 kB; move to dev-routes after #76). 18:04 R2 fixes pushed 219eed7; waits on #80 and #76. 20:20 6ad522d dev-routes moved; computed-style tests red until #80 (owner baselines). Blocked on #80."
   },
   "W9": {
    "status": "pending",
@@ -347,7 +347,7 @@
    "pr": 77,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "launched 15:59 (owner asked to start more work); no crates/search edits | PR #77; reviewer started 16:45 | 17:10 r1 MERGE-ish: fix compare lock scope + conditional test, then merge. 18:45 R2 MERGE at 29caca3 pending main merge (B4 trivial conflicts) + B17 base_query switch after #72 lands. 19:38 bbc17ee (main+B17 switch) verified by runner -> APPROVED, merge on green."
+   "notes": "launched 15:59 (owner asked to start more work); no crates/search edits | PR #77; reviewer started 16:45 | 17:10 r1 MERGE-ish: fix compare lock scope + conditional test, then merge. 18:45 R2 MERGE at 29caca3 pending main merge (B4 trivial conflicts) + B17 base_query switch after #72 lands. 19:38 bbc17ee (main+B17 switch) verified by runner -> APPROVED, merge on green. 20:27 eaa3a0e main merge; merge on green."
   },
   "B14": {
    "status": "running",
@@ -761,7 +761,7 @@
    "pr": 73,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "launched 15:59; carry-forwards runner-pr, runner-docs-pr, metrics-contract, contract-docs, themes table, integrations-readme (if X-email merged), unraid --user | PR #73; owner-file edits moved to runner PR #75"
+   "notes": "launched 15:59; carry-forwards runner-pr, runner-docs-pr, metrics-contract, contract-docs, themes table, integrations-readme (if X-email merged), unraid --user | PR #73; owner-file edits moved to runner PR #75 20:28 main (#86) merged; merge on green."
   },
   "F-near": {
    "status": "review",
@@ -1003,7 +1003,8 @@
  },
  "heartbeats": 4,
  "reviews_in_flight": {
-  "81": "runner secure-delete R2 (f5d1085)"
+  "81": "runner secure-delete R2 (f5d1085)",
+  "78": "W7cd R3"
  },
  "carry_forward": {
   "next-bans-touch": [
