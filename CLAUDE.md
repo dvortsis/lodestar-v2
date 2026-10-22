@@ -4,12 +4,12 @@ A from-scratch DHT crawler and torrent-metadata search engine: one Rust binary w
 
 ## Order of authority
 1. **`docs/owner-decisions.md`: the owner's own instructions and decisions.** These are the primary rules.
-2. **`docs/architecture.md`:** the approved plan built from them. It covers architecture, scope, milestones (§14), budgets (§3, §10.1) and every decision so far (logged in §16).
+2. **`docs/architecture.md`:** the approved plan built from them. It covers architecture, scope, milestones (§14), budgets (§3, §10.1) and every decision recorded before 2026-10-22 (§16). Later decisions are in `docs/decisions/`, one file per PR.
 3. **The contract docs:** `docs/design-tokens.md`, `docs/metrics.md`, `docs/ui-glossary.md`.
 4. **`ui-design-skills`:** only for what 1–3 leave open (see UI rules).
 5. **The task's brief.**
 
-Read the relevant sections before starting any task. If work changes a decision, update `docs/architecture.md` (§16) in the same PR. If it touches one of the owner's decisions, stop and ask the owner. Builds run through `docs/build-plan.md` and `runner/`; **`runner/standards.md` is the bar for every slice and review.**
+Read the relevant sections before starting any task. If work changes a decision, add a file under `docs/decisions/` in the same PR (see its README); don't append to §16 any more. If it touches one of the owner's decisions, stop and ask the owner. Builds run through `docs/build-plan.md` and `runner/`; **`runner/standards.md` is the bar for every slice and review.**
 
 ## Working conventions
 - **Branches:** one feature branch per milestone or coherent slice (`m0-foundations`, `m2-search-core`, …), merged into `main` by pull request. Nothing goes directly to `main` except trivial docs fixes. Keep PRs reviewable (≲ 1,500 changed lines where practical); split large milestones into several PRs. A larger PR needs a stated reason in its description.

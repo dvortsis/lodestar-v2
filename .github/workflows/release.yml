@@ -13,6 +13,7 @@ on:
     - cron: "17 3 * * *"
   workflow_dispatch:
   pull_request:
+    types: [opened, synchronize, reopened]
     paths:
       - "packaging/docker/**"
       - "docker-compose.yml"
@@ -30,6 +31,7 @@ permissions:
 
 # One run per ref. A newer pull-request push supersedes the older one; a
 # release or nightly run in progress is never cancelled halfway through a push.
+# Labels are read on the next push (see ci.yml for why `labeled` isn't a trigger).
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -150,10 +152,38 @@ jobs:
           docker logs lodestar-smoke || true
           docker logs lodestar-volume || true
 
-  # Cross-compiled (no emulation); checks that the arm64 build works on every
-  # trigger. The binary can't run on the amd64 runner, so this is build-only.
+  # Whether a pull request touches what the arm64 build depends on beyond the
+  # Rust code (the smoke job already builds the same code for amd64).
+  arm64-needed:
+    name: arm64 needed
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.c.outputs.build }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - id: c
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          FULL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+        run: |
+          if [ "$FULL" = "true" ] || git diff --no-renames --name-only "$BASE...$HEAD" |
+            grep -qE '^(packaging/docker/|Cargo\.lock$|Cargo\.toml$|rust-toolchain|\.dockerignore$|\.github/workflows/release\.yml$)'; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Cross-compiled (no emulation); checks that the arm64 build works. On a pull
+  # request only when the packaging, lockfile or toolchain changed (or the PR
+  # has the `full-ci` label); tags, the nightly and manual runs always build it.
   build-arm64:
     name: build (linux/arm64)
+    needs: arm64-needed
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.arm64-needed.outputs.build == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -177,8 +207,12 @@ jobs:
   publish:
     name: publish (amd64 + arm64)
     needs: [smoke, build-arm64]
-    # Tags, and the nightly from main (schedule, or a manual run on main).
+    # Tags, and the nightly from main (schedule, or a manual run on main). The
+    # results are checked explicitly: build-arm64 depends on a job that's skipped
+    # outside pull requests, and a skip mustn't hide or fake a success here.
     if: >-
+      !cancelled() &&
+      needs.smoke.result == 'success' && needs.build-arm64.result == 'success' &&
       github.event_name != 'pull_request' &&
       (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest

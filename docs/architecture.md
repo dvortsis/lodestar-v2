@@ -1717,6 +1717,8 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 
 ## 16. Self-review log (issues found in draft 1, now folded in above)
 
+> **New decisions go in [`docs/decisions/`](decisions/README.md), one file per PR** (from 2026-10-22). This section keeps everything recorded before then; read both together.
+
 | Sev | Area | Issue in draft 1 | Resolution |
 |---|---|---|---|
 | High | Perf | Claimed exact counts + facets "in one pass" **and** "cost grows with the page size, not the hit count". These contradict each other; a broad query (e.g. `1080p`, 5M hits) would blow the 30 ms budget. | Counts capped/estimated, facets in a separate cancellable request, sampled at > 1M hits, result cache (§8) |
