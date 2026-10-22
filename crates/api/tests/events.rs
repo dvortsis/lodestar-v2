@@ -565,7 +565,12 @@ async fn the_torrents_count_leaves_out_adult_while_it_is_hidden() {
     let adult = lodestar_api::AdultVisibility::follow(move || *rx.borrow());
     let hook = Arc::new(CommitHook::default());
     let hub = EventHub::start(
-        config(),
+        // Three streams from one session: the live one and two
+        // reconnects.
+        EventsConfig {
+            max_per_session: 4,
+            ..config()
+        },
         EventSources {
             commits: Some(hook.clone()),
             adult: adult.clone(),
@@ -649,6 +654,61 @@ async fn the_torrents_count_leaves_out_adult_while_it_is_hidden() {
     run(&["Fourth.Movie.2016.1080p.mkv"], &mut store);
     c.until("data: {\"added\":1,\"max_id\":13}\n\n", SOON).await;
     assert!(!c.text.contains("\"max_id\":12"), "{}", c.text);
-    assert_eq!(c.text.matches("event: torrents").count(), 3, "{}", c.text);
+    // B4b-r2: while hidden, `max_id` stops at the newest id that isn't
+    // Adult (14), not the newest overall (15).
+    run(
+        &["Fifth.Movie.2015.1080p.mkv", "Fifth.Clip.XXX.1080p.mp4"],
+        &mut store,
+    );
+    c.until("data: {\"added\":1,\"max_id\":14}\n\n", SOON).await;
+    assert!(!c.text.contains("\"max_id\":15"), "{}", c.text);
+    assert_eq!(c.text.matches("event: torrents").count(), 4, "{}", c.text);
+
+    // A tab that reconnects from the first event after Adult was turned
+    // off gets a `resync` in place of the event that counted Adult (the
+    // second), then the rest as they were.
+    let ids = c.ids();
+    assert_eq!(ids.len(), 4, "{}", c.text);
+    let mut back = Conn::open(
+        addr,
+        "/api/v1/events?topics=torrents",
+        &[("Cookie", &cookie), ("Last-Event-ID", &ids[0])],
+    )
+    .await;
+    back.until("data: {\"added\":1,\"max_id\":14}\n\n", SOON)
+        .await;
+    // The frames after `retry:`, without the chunked encoding's sizes.
+    let replayed: String = back
+        .text
+        .split("retry: 5000\n\n")
+        .nth(1)
+        .unwrap()
+        .split("\r\n")
+        .filter(|part| !part.bytes().all(|b| b.is_ascii_hexdigit()))
+        .collect();
+    assert_eq!(
+        replayed,
+        format!(
+            "event: resync\ndata: {{\"reason\":\"visibility\"}}\n\n\
+             id: {}\nevent: torrents\ndata: {{\"added\":1,\"max_id\":13}}\n\n\
+             id: {}\nevent: torrents\ndata: {{\"added\":1,\"max_id\":14}}\n\n",
+            ids[2], ids[3]
+        )
+    );
+    // Shown again, the same reconnect replays it as it was.
+    show.send_replace(true);
+    let mut shown = Conn::open(
+        addr,
+        "/api/v1/events?topics=torrents",
+        &[("Cookie", &cookie), ("Last-Event-ID", &ids[0])],
+    )
+    .await;
+    shown.until("\"max_id\":14}\n\n", SOON).await;
+    assert!(
+        shown.text.contains("data: {\"added\":5,\"max_id\":10}"),
+        "{}",
+        shown.text
+    );
+    assert!(!shown.text.contains("resync"), "{}", shown.text);
     hub.close();
 }

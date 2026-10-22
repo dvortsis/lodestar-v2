@@ -4409,7 +4409,8 @@
           "restarted",
           "expired",
           "malformed",
-          "lagged"
+          "lagged",
+          "visibility"
         ]
       },
       "RuleEntry": {
@@ -5805,7 +5806,7 @@
           "max_id": {
             "type": "integer",
             "format": "int64",
-            "description": "The highest torrent id searchable now, of any class: searches\nstill apply the Adult visibility."
+            "description": "The highest torrent id searchable now. While Adult is hidden,\nthe highest that isn't Adult, so it can be lower than one sent\nwhile Adult was shown."
           }
         },
         "example": {

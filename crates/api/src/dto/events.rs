@@ -76,8 +76,9 @@ pub struct TorrentsEvent {
     /// Torrents new to the index since the previous `torrents` event,
     /// leaving out Adult while it's hidden; at least 1.
     pub added: u64,
-    /// The highest torrent id searchable now, of any class: searches
-    /// still apply the Adult visibility.
+    /// The highest torrent id searchable now. While Adult is hidden,
+    /// the highest that isn't Adult, so it can be lower than one sent
+    /// while Adult was shown.
     pub max_id: i64,
 }
 
@@ -186,6 +187,9 @@ pub enum ResyncReason {
     Malformed,
     /// The client fell behind and events were skipped.
     Lagged,
+    /// "Show adult content" was turned off after events that counted
+    /// Adult were sent; they're withheld rather than replayed.
+    Visibility,
 }
 
 /// `event: resync`: events were missed; refetch what the page shows, then
