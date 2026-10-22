@@ -1,5 +1,5 @@
-//! Top-k by a fast field, with a per-segment result cache (architecture
-//! §8: browse is "cached per index generation").
+//! Top-k by a fast field or a hot column, with a per-segment result cache
+//! (architecture §8: browse is "cached per index generation").
 //!
 //! A filter-only browse visits every match, which at 10M torrents costs
 //! far more than its budget. Segments never change once written apart
@@ -7,11 +7,17 @@
 //! stay valid until its deletions change. Caching per segment rather than
 //! per searcher means a near-real-time commit, which adds a small
 //! segment, only costs a search of that segment.
+//!
+//! Hot columns (§7) change without the segment changing, so a query or
+//! order that reads them carries the hot columns' epoch in its key: its
+//! cached tops last until the epoch moves, at most a minute after the
+//! scraper writes.
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
 use std::sync::{Arc, Mutex};
 
+use lodestar_store::{Col, HotColumns, NEVER};
 use tantivy::index::SegmentId;
 use tantivy::query::EnableScoring;
 use tantivy::{DocAddress, DocId, Searcher, SegmentReader};
@@ -24,11 +30,21 @@ const CACHE_ENTRIES: usize = 4096;
 /// Deeper pages than this aren't cached.
 const CACHE_MAX_K: usize = 1000;
 
-/// A fast field to order by.
+/// Where an order's values come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum By {
+    Fast {
+        field: &'static str,
+        signed: bool,
+    },
+    /// A hot column, read through the document's torrent id; "never
+    /// scraped" has no value.
+    Hot(Col),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct Order {
-    pub field: &'static str,
-    pub signed: bool,
+    pub by: By,
     pub desc: bool,
 }
 
@@ -63,17 +79,20 @@ fn sortable(v: u64, signed: bool) -> u64 {
     if signed { v ^ (1 << 63) } else { v }
 }
 
-/// The page `offset..offset + limit` of `query` ordered by `order`, and
-/// the number of matches.
+/// The `page` (result positions) of `query` ordered by `order`, and the
+/// number of matches. `key` identifies the query for the cache, including
+/// anything outside the segment it depends on.
 pub(crate) fn search(
     searcher: &Searcher,
     cache: &SegmentCache,
+    key: &str,
     query: &Compiled,
     order: Order,
-    limit: usize,
-    offset: usize,
+    hot: Option<&Arc<HotColumns>>,
+    page: std::ops::Range<usize>,
 ) -> Result<(Vec<DocAddress>, usize)> {
-    let k = offset + limit;
+    let (offset, k) = (page.start, page.end);
+    let limit = k.saturating_sub(offset);
     let weight = query
         .query
         .weight(EnableScoring::disabled_from_searcher(searcher))?;
@@ -81,7 +100,7 @@ pub(crate) fn search(
     let tops = searcher.index().search_executor().map(
         |(ord, reader): (usize, &SegmentReader)| {
             let key = (
-                query.key.clone(),
+                key.to_owned(),
                 order,
                 k,
                 reader.segment_id(),
@@ -91,7 +110,7 @@ pub(crate) fn search(
             let top = match cached {
                 Some(top) => top,
                 None => {
-                    let top = Arc::new(segment_top(weight.as_ref(), reader, query, order, k)?);
+                    let top = Arc::new(segment_top(weight.as_ref(), reader, query, order, hot, k)?);
                     if k <= CACHE_MAX_K {
                         let mut map = cache.map.lock().expect("cache lock");
                         if map.len() >= CACHE_ENTRIES {
@@ -131,17 +150,37 @@ fn segment_top(
     reader: &SegmentReader,
     query: &Compiled,
     order: Order,
+    hot: Option<&Arc<HotColumns>>,
     k: usize,
 ) -> tantivy::Result<SegmentTop> {
     let fast = reader.fast_fields();
-    let value: Box<dyn Fn(DocId) -> Option<u64>> = if order.signed {
-        let col = fast.i64(order.field)?;
-        Box::new(move |doc| col.first(doc).map(|v| v as u64))
-    } else {
-        let col = fast.u64(order.field)?;
-        Box::new(move |doc| col.first(doc))
+    let value: Box<dyn Fn(DocId) -> Option<u64>> = match order.by {
+        By::Fast {
+            field,
+            signed: true,
+        } => {
+            let col = fast.i64(field)?;
+            Box::new(move |doc| col.first(doc).map(|v| v as u64))
+        }
+        By::Fast {
+            field,
+            signed: false,
+        } => {
+            let col = fast.u64(field)?;
+            Box::new(move |doc| col.first(doc))
+        }
+        By::Hot(c) => {
+            let ids = fast.u64("id")?;
+            let hot = hot.cloned();
+            Box::new(move |doc| {
+                let hot = hot.as_ref()?;
+                let v = hot.get(c, ids.first(doc)?);
+                (v != NEVER).then_some(u64::from(v))
+            })
+        }
     };
-    let checks = filter::checks(&query.filters, reader)?;
+    let signed = matches!(order.by, By::Fast { signed: true, .. });
+    let checks = filter::checks(&query.filters, reader, hot)?;
     let alive = reader.alive_bitset();
     let mut heap: BinaryHeap<Reverse<Rank>> = BinaryHeap::with_capacity(k + 1);
     let mut count = 0;
@@ -155,7 +194,7 @@ fn segment_top(
                 continue;
             }
             let v = value(doc);
-            let mut key = v.map_or(0, |v| sortable(v, order.signed));
+            let mut key = v.map_or(0, |v| sortable(v, signed));
             if !order.desc {
                 key = !key;
             }

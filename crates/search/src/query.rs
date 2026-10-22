@@ -15,12 +15,14 @@
 //! group:ntb  has:nfo  resolved:files  ambiguous:yes
 //! year:2019..2021  s:2  e:5  junk:<20  cat:video>=80%  bytes:video>90%
 //! file:(ext:flac size:>50MB)  file:"dark knight"   one file matching all
+//! seeders:>=5  leechers:>0  trackers:>=3  dht:>100  seen:<24h
+//! time:22:00..02:00    discovered at that time of day (user's zone)
 //! ```
 //!
 //! Keyword values are normalised as the release parser reads them
 //! (`codec:x265` is `codec:h265`, `res:4k` is `res:2160p`), so the AST
 //! holds what the index holds. Fields that need later milestones
-//! (`seeders:`, `regex`, …) parse to a clear "not available yet" error
+//! (`sig:`, …) parse to a clear "not available yet" error
 //! rather than being ignored.
 //! Input is untrusted: length, clause count and nesting are bounded.
 
@@ -64,6 +66,14 @@ pub enum NumField {
     Episode,
     /// Junk score, 0–100.
     Junk,
+    /// Swarm health (§7 hot columns): seeders, the most any reporting
+    /// tracker gave (or the DHT estimate when none reports).
+    Seeders,
+    Leechers,
+    /// Trackers reporting the hash when scraped.
+    Trackers,
+    /// The DHT swarm estimate (BEP 33).
+    Dht,
 }
 
 impl NumField {
@@ -71,7 +81,16 @@ impl NumField {
     /// range on it can be checked in the collector. Years, seasons and
     /// episodes are multi-valued and live in the inverted index.
     pub(crate) fn is_fast(self) -> bool {
-        !matches!(self, NumField::Year | NumField::Season | NumField::Episode)
+        !matches!(self, NumField::Year | NumField::Season | NumField::Episode) && !self.is_hot()
+    }
+
+    /// Whether the field is a hot column (§7): swarm stats that change
+    /// without re-indexing, read by torrent id.
+    pub(crate) fn is_hot(self) -> bool {
+        matches!(
+            self,
+            NumField::Seeders | NumField::Leechers | NumField::Trackers | NumField::Dht
+        )
     }
 
     /// Counted in plain numbers rather than bytes.
@@ -129,6 +148,17 @@ pub enum ShareBy {
 #[serde(rename_all = "snake_case")]
 pub enum DateField {
     Discovered,
+    /// Last DHT activity (a hot column).
+    Seen,
+}
+
+impl DateField {
+    fn name(self) -> &'static str {
+        match self {
+            DateField::Discovered => "discovered",
+            DateField::Seen => "seen",
+        }
+    }
 }
 
 /// One end of a date range.
@@ -222,6 +252,13 @@ pub enum Node {
         lo: u8,
         hi: u8,
     },
+    /// The time of day a torrent was discovered, in minutes after
+    /// midnight, inclusive; `from > to` wraps past midnight (`22:00..02:00`).
+    /// The AST has no time zone: the search applies the user's offset.
+    TimeOfDay {
+        from: u16,
+        to: u16,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -262,6 +299,7 @@ enum FieldKind {
     Tag(TagKey),
     Share(ShareBy),
     File,
+    TimeOfDay,
     /// Known, but needs a later milestone.
     Later(&'static str),
 }
@@ -304,11 +342,12 @@ const FIELDS: &[(&str, FieldKind)] = &[
     ("bytes", FieldKind::Share(ShareBy::Bytes)),
     ("file", FieldKind::File),
     ("sig", FieldKind::Later("grouping keys (M7)")),
-    ("seeders", FieldKind::Later("swarm health (M4)")),
-    ("trackers", FieldKind::Later("swarm health (M4)")),
-    ("dht", FieldKind::Later("swarm health (M4)")),
-    ("seen", FieldKind::Later("swarm health (M4)")),
-    ("time", FieldKind::Later("swarm health (M4)")),
+    ("seeders", FieldKind::Num(NumField::Seeders)),
+    ("leechers", FieldKind::Num(NumField::Leechers)),
+    ("trackers", FieldKind::Num(NumField::Trackers)),
+    ("dht", FieldKind::Num(NumField::Dht)),
+    ("seen", FieldKind::Date(DateField::Seen)),
+    ("time", FieldKind::TimeOfDay),
 ];
 
 fn field(name: &str) -> Option<FieldKind> {
@@ -827,6 +866,14 @@ fn field_value(
         }
         FieldKind::Share(by) => share(by, name, value, start, end),
         FieldKind::File => file(word(TextField::Any, value, start, end)?, start, end),
+        FieldKind::TimeOfDay => {
+            let (from, to) = time_range(value).ok_or_else(|| ParseError {
+                message: format!("{name}: expects a time of day or range like 22:00..02:00"),
+                start,
+                end,
+            })?;
+            Ok(Node::TimeOfDay { from, to })
+        }
         FieldKind::Later(what) => err(format!("{name}: arrives with {what}"), start, end),
     }
 }
@@ -1080,6 +1127,33 @@ fn date_range(
     Ok((Some(When::At(day)), Some(When::At(day + 86_399))))
 }
 
+/// `22:00..02:00` (wrapping past midnight), `9..17` (whole hours: 09:00
+/// to 17:59), `22:30` (that minute), in minutes after midnight.
+fn time_range(value: &str) -> Option<(u16, u16)> {
+    let digits = |s: &str| !s.is_empty() && s.len() <= 2 && s.bytes().all(|b| b.is_ascii_digit());
+    let point = |s: &str, last: bool| -> Option<u16> {
+        let (h, m) = match s.split_once(':') {
+            Some((h, m)) => (h, Some(m)),
+            None => (s, None),
+        };
+        if !digits(h) {
+            return None;
+        }
+        let h: u16 = h.parse().ok().filter(|h| *h < 24)?;
+        let m: u16 = match m {
+            Some(m) if m.len() == 2 && digits(m) => m.parse().ok().filter(|m| *m < 60)?,
+            Some(_) => return None,
+            None if last => 59,
+            None => 0,
+        };
+        Some(h * 60 + m)
+    };
+    match value.split_once("..") {
+        Some((a, b)) => Some((point(a, false)?, point(b, true)?)),
+        None => Some((point(value, false)?, point(value, true)?)),
+    }
+}
+
 /// `30m`, `6h`, `7d`, `2w`, `3mo`, `1y` in seconds.
 fn duration(s: &str) -> Option<i64> {
     let split = s.find(|c: char| !c.is_ascii_digit())?;
@@ -1262,6 +1336,10 @@ impl Node {
                     NumField::Season => "s",
                     NumField::Episode => "e",
                     NumField::Junk => "junk",
+                    NumField::Seeders => "seeders",
+                    NumField::Leechers => "leechers",
+                    NumField::Trackers => "trackers",
+                    NumField::Dht => "dht",
                 };
                 let count = field.is_count();
                 let v = |n: u64| if count { n.to_string() } else { bytes_text(n) };
@@ -1273,25 +1351,26 @@ impl Node {
                     (None, None) => write!(out, "{name}:0.."),
                 };
             }
-            Node::Date { from, to, .. } => {
+            Node::Date { field, from, to } => {
+                let name = field.name();
                 let day = |t: &i64| date_text(*t);
                 let _ = match (from, to) {
-                    (Some(When::Ago(s)), None) => write!(out, "discovered:<{}", ago_text(*s)),
-                    (None, Some(When::Ago(s))) => write!(out, "discovered:>{}", ago_text(*s)),
+                    (Some(When::Ago(s)), None) => write!(out, "{name}:<{}", ago_text(*s)),
+                    (None, Some(When::Ago(s))) => write!(out, "{name}:>{}", ago_text(*s)),
                     (Some(When::At(f)), Some(When::At(t)))
                         if t - f == 86_399 && f % 86_400 == 0 =>
                     {
-                        write!(out, "discovered:{}", day(f))
+                        write!(out, "{name}:{}", day(f))
                     }
                     (Some(When::At(f)), None) if f % 86_400 == 0 => {
-                        write!(out, "discovered:>{}", day(&(f - 86_400)))
+                        write!(out, "{name}:>{}", day(&(f - 86_400)))
                     }
                     (f, t) => {
                         let end = |w: &Option<When>, last: bool| match w {
                             Some(When::At(t)) => day(&(if last { t - 86_399 } else { *t })),
                             _ => String::new(),
                         };
-                        write!(out, "discovered:{}..{}", end(f, false), end(t, true))
+                        write!(out, "{name}:{}..{}", end(f, false), end(t, true))
                     }
                 };
             }
@@ -1348,6 +1427,16 @@ impl Node {
                     (0, h) => write!(out, "{name}:{cat}<={h}"),
                     (l, h) => write!(out, "{name}:{cat}={l}..{h}"),
                 };
+            }
+            Node::TimeOfDay { from, to } => {
+                let _ = write!(
+                    out,
+                    "time:{:02}:{:02}..{:02}:{:02}",
+                    from / 60,
+                    from % 60,
+                    to / 60,
+                    to % 60
+                );
             }
         }
     }
@@ -1550,7 +1639,17 @@ mod tests {
         assert!(e("cat:vid>1").contains("expects a category"));
         assert!(e("cat:video>100").contains("0–100%"));
         assert_eq!(e("codec:a$b"), "codec: can't read \"a$b\"");
-        assert_eq!(e("seeders:>5"), "seeders: arrives with swarm health (M4)");
+        assert_eq!(e("sig:7a9f3c12"), "sig: arrives with grouping keys (M7)");
+        assert!(e("seeders:lots").contains("can't read"));
+        assert!(
+            e("seeders:5GB").contains("can't read"),
+            "a count, not bytes"
+        );
+        assert!(e("time:25:00").starts_with("time: expects a time of day"));
+        assert!(e("time:9:5").starts_with("time: expects"));
+        assert!(e("time:..02:00").starts_with("time: expects"));
+        assert!(e("time:+1").starts_with("time: expects"));
+        assert!(e("seen:soon").contains("can't read"));
         assert!(e("size:huge").contains("can't read"));
         assert!(e("(a b").contains("missing ')'"));
         assert!(e("a b)").contains("unexpected ')'"));
@@ -1563,6 +1662,41 @@ mod tests {
         assert!(e("/S0[1-9]/").contains("regex"));
         let err = parse("x sise:1").unwrap_err();
         assert_eq!((err.start, err.end), (2, 7));
+    }
+
+    #[test]
+    fn swarm_fields() {
+        let range = |field, lo, hi| Node::Range { field, lo, hi };
+        assert_eq!(
+            parse("seeders:>=5").unwrap(),
+            range(NumField::Seeders, Some(5), None)
+        );
+        assert_eq!(
+            parse("trackers:>2").unwrap(),
+            range(NumField::Trackers, Some(3), None)
+        );
+        assert_eq!(
+            parse("dht:..100").unwrap(),
+            range(NumField::Dht, None, Some(100))
+        );
+        assert_eq!(
+            parse("leechers:0").unwrap(),
+            range(NumField::Leechers, Some(0), Some(0))
+        );
+        assert_eq!(
+            parse("seen:<24h").unwrap(),
+            Node::Date {
+                field: DateField::Seen,
+                from: Some(When::Ago(86_400)),
+                to: None,
+            }
+        );
+        let time = |from, to| Node::TimeOfDay { from, to };
+        assert_eq!(parse("time:22:00..02:00").unwrap(), time(1320, 120));
+        assert_eq!(parse("time:9..17").unwrap(), time(540, 17 * 60 + 59));
+        assert_eq!(parse("time:22:30").unwrap(), time(1350, 1350));
+        assert_eq!(parse("time:7").unwrap(), time(420, 479));
+        assert_eq!(time(1320, 179).to_query(), "time:22:00..02:59");
     }
 
     #[test]
@@ -1774,6 +1908,9 @@ mod tests {
             "cat:video cat:software=0 bytes:video>=91 cat:audio<=40 bytes:image=10..50",
             "file:(ext:flac size:>50MB) -file:sample file:(\"a b\" | name:co* path:extras)",
             "(x | file:(a -b)) file:(dark NEAR/2 knight)",
+            "seeders:>=5 leechers:0 trackers:3..20 dht:<=100 -seeders:0",
+            "seen:<24h seen:>2w seen:2026-01-01..2026-03-31 seen:2026-02-02",
+            "time:22:00..02:00 time:9..17 time:22:30 (x | time:00:00..00:59)",
             // Found by fuzzing: phrase words that look like syntax, a
             // lone `!` before `)`, and a negated NEAR.
             "\"a\" NEAR \"NEAR $*\" NEAR \"x|y\"",

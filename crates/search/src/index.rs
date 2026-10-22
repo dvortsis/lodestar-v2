@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use lodestar_classify::{Composition, Record};
 use lodestar_metainfo::InfoHash;
-use lodestar_store::Store;
+use lodestar_store::{Col, HotColumns, NEVER, Store};
 use tantivy::collector::{Count, TopDocs};
 use tantivy::directory::MmapDirectory;
 use tantivy::query::{BooleanQuery, EnableScoring, Occur, Query, TermQuery};
@@ -30,7 +30,7 @@ use crate::files::{self, FileFields};
 use crate::filter::{FastRange, PostFilter};
 use crate::query::{Node, When};
 use crate::schema::{self, Fields, SCHEMA_VERSION, TOKENIZER_VERSION};
-use crate::sorted::{self, SegmentCache};
+use crate::sorted::{self, By, SegmentCache};
 use crate::tokenizer::{NAME_TOKENIZER, NameTokenizer};
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -95,6 +95,71 @@ pub struct SearchIndex {
     fields: Fields,
     cache: Arc<SegmentCache>,
     files: FileIndex,
+    /// Swarm stats and last seen (§7), for filters, sorts and ranking.
+    /// Without them, hot-column clauses match nothing and relevance is
+    /// text only.
+    hot: Option<Arc<HotColumns>>,
+    weights: RankWeights,
+    penalty: Option<Penalty>,
+}
+
+/// A per-torrent ranking multiplier in `0..=1`, by torrent id: the hook
+/// for penalties computed outside the index, such as the scraper's
+/// swarm-consistency check (§8: one tracker claiming a huge swarm that
+/// nothing else sees).
+pub type Penalty = Arc<dyn Fn(u64) -> f32 + Send + Sync>;
+
+/// The phase-2 ranking priors (§8). Each multiplies the text score; the
+/// defaults keep text relevance first and let swarm health and freshness
+/// order near-ties.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RankWeights {
+    /// `1 + seeders · ln(1 + s)`.
+    pub seeders: f32,
+    /// Seeders assumed for a torrent never scraped: neutral, between a
+    /// dead swarm (0) and a live one, so new torrents aren't buried
+    /// before their first scrape.
+    pub unscraped_seeders: u32,
+    /// `floor + (1 − floor) · ½^(age / half-life)` on the time since the
+    /// torrent was last seen in the DHT.
+    pub freshness_floor: f32,
+    pub freshness_half_life_days: f32,
+    /// `1 + trackers · min(t, cap) / cap`: a nudge for trackers reporting.
+    pub trackers: f32,
+    pub trackers_cap: u32,
+    /// Trackers assumed for a torrent never scraped.
+    pub unscraped_trackers: u32,
+    /// `1 − junk · score / 100` (the junk score, 0–100).
+    pub junk: f32,
+}
+
+impl Default for RankWeights {
+    fn default() -> Self {
+        RankWeights {
+            seeders: 0.2,
+            unscraped_seeders: 1,
+            freshness_floor: 0.75,
+            freshness_half_life_days: 30.0,
+            trackers: 0.1,
+            trackers_cap: 5,
+            unscraped_trackers: 1,
+            junk: 0.5,
+        }
+    }
+}
+
+/// How one hit's score was made (`?explain=1`): the text score times each
+/// prior gives `score`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScoreParts {
+    /// Phase 1 (BM25) plus the name and title boosts.
+    pub text: f32,
+    pub seeders: f32,
+    pub freshness: f32,
+    pub trackers: f32,
+    pub junk: f32,
+    pub penalty: f32,
+    pub score: f32,
 }
 
 /// The file index (§8, [`crate::files`]), in the `files` directory
@@ -181,8 +246,9 @@ pub struct Hit {
     pub score: f32,
 }
 
-/// Result order. Relevance is phase-1 BM25 for now; the re-ranker with
-/// swarm and freshness priors arrives with swarm health (§8, M4).
+/// Result order. Relevance is phase-1 BM25, re-ranked in phase 2 with the
+/// name boosts and, with hot columns, the swarm and freshness priors (§8).
+/// Never-scraped torrents sort after every scraped one, either way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Sort {
     #[default]
@@ -196,6 +262,19 @@ pub enum Sort {
     Files {
         desc: bool,
     },
+    Seeders {
+        desc: bool,
+    },
+    Leechers {
+        desc: bool,
+    },
+    Trackers {
+        desc: bool,
+    },
+    /// Last seen in the DHT.
+    Seen {
+        desc: bool,
+    },
 }
 
 /// A query ready to run: the Tantivy query, plus top-level ranges that
@@ -207,6 +286,10 @@ pub struct Compiled {
     pub(crate) boosts: Option<Box<dyn Query>>,
     /// Identifies the query for the segment cache.
     pub(crate) key: String,
+    /// The search time (unix seconds), for freshness.
+    pub(crate) now: i64,
+    /// The query reads hot columns, so cached results expire with them.
+    pub(crate) reads_hot: bool,
 }
 
 impl std::fmt::Debug for Compiled {
@@ -224,6 +307,9 @@ pub struct Results {
     pub hits: Vec<Hit>,
     /// Exact number of matches.
     pub total: usize,
+    /// One per hit when asked for ([`SearchIndex::search_page_explained`])
+    /// and the order is relevance; empty otherwise.
+    pub explain: Vec<ScoreParts>,
 }
 
 /// Whether `node` has a date relative to now.
@@ -241,30 +327,101 @@ fn relative(node: &Node) -> bool {
 /// quarter of the keyword budget in top-k upkeep alone (§16).
 const RERANK_WINDOW: usize = 200;
 
-/// Adds each candidate's score under `boosts` and sorts best first,
-/// ties by address.
+/// The swarm and freshness priors for phase 2.
+struct Priors<'a> {
+    hot: &'a HotColumns,
+    weights: &'a RankWeights,
+    now: i64,
+    penalty: Option<&'a Penalty>,
+}
+
+impl Priors<'_> {
+    /// The multipliers for torrent `id` with junk score `junk`, into
+    /// `parts` (whose `text` is already set).
+    fn apply(&self, id: u64, junk: Option<u64>, parts: &mut ScoreParts) {
+        let w = self.weights;
+        let hot = |c| Some(self.hot.get(c, id)).filter(|v| *v != NEVER);
+        let s = hot(Col::Seeders).unwrap_or(w.unscraped_seeders);
+        parts.seeders = 1.0 + w.seeders * (1.0 + s as f32).ln();
+        // Unknown last seen counts as one half-life ago.
+        let age_days = hot(Col::LastSeen).map_or(w.freshness_half_life_days, |t| {
+            (self.now - i64::from(t)).max(0) as f32 / 86_400.0
+        });
+        let decay = 0.5f32.powf(age_days / w.freshness_half_life_days.max(f32::MIN_POSITIVE));
+        parts.freshness = w.freshness_floor + (1.0 - w.freshness_floor) * decay;
+        let t = hot(Col::Trackers).unwrap_or(w.unscraped_trackers);
+        let cap = w.trackers_cap.max(1);
+        parts.trackers = 1.0 + w.trackers * t.min(cap) as f32 / cap as f32;
+        parts.junk = 1.0 - w.junk * junk.unwrap_or(0).min(100) as f32 / 100.0;
+        parts.penalty = self.penalty.map_or(1.0, |p| p(id).clamp(0.0, 1.0));
+        parts.score = parts.text
+            * parts.seeders
+            * parts.freshness
+            * parts.trackers
+            * parts.junk
+            * parts.penalty;
+    }
+}
+
+/// Phase 2 (§8): adds each candidate's score under `boosts`, multiplies
+/// in the `priors`, and sorts best first, ties by address.
 fn rerank(
     searcher: &Searcher,
-    boosts: &dyn Query,
-    mut hits: Vec<(f32, DocAddress)>,
-) -> Result<Vec<(f32, DocAddress)>> {
-    let weight = boosts.weight(EnableScoring::enabled_from_searcher(searcher))?;
-    hits.sort_unstable_by_key(|(_, a)| *a);
+    boosts: Option<&dyn Query>,
+    priors: Option<&Priors<'_>>,
+    hits: Vec<(f32, DocAddress)>,
+) -> Result<Vec<(DocAddress, ScoreParts)>> {
+    let weight = boosts
+        .map(|b| b.weight(EnableScoring::enabled_from_searcher(searcher)))
+        .transpose()?;
+    let mut hits: Vec<(DocAddress, ScoreParts)> = hits
+        .into_iter()
+        .map(|(score, addr)| {
+            let parts = ScoreParts {
+                text: score,
+                seeders: 1.0,
+                freshness: 1.0,
+                trackers: 1.0,
+                junk: 1.0,
+                penalty: 1.0,
+                score,
+            };
+            (addr, parts)
+        })
+        .collect();
+    hits.sort_unstable_by_key(|(a, _)| *a);
     let mut i = 0;
     while i < hits.len() {
-        let seg = hits[i].1.segment_ord;
-        let mut scorer = weight.scorer(searcher.segment_reader(seg), 1.0)?;
-        while let Some((score, addr)) = hits.get_mut(i).filter(|(_, a)| a.segment_ord == seg) {
-            if scorer.doc() < addr.doc_id {
-                scorer.seek(addr.doc_id);
+        let seg = hits[i].0.segment_ord;
+        let reader = searcher.segment_reader(seg);
+        let mut scorer = weight.as_ref().map(|w| w.scorer(reader, 1.0)).transpose()?;
+        let columns = match priors {
+            Some(_) => {
+                let fast = reader.fast_fields();
+                Some((fast.u64("id")?, fast.u64("junk").ok()))
             }
-            if scorer.doc() == addr.doc_id {
-                *score += scorer.score();
+            None => None,
+        };
+        while let Some((addr, parts)) = hits.get_mut(i).filter(|(a, _)| a.segment_ord == seg) {
+            if let Some(scorer) = &mut scorer {
+                if scorer.doc() < addr.doc_id {
+                    scorer.seek(addr.doc_id);
+                }
+                if scorer.doc() == addr.doc_id {
+                    parts.text += scorer.score();
+                }
+            }
+            parts.score = parts.text;
+            if let (Some(p), Some((ids, junk))) = (priors, &columns) {
+                if let Some(id) = ids.first(addr.doc_id) {
+                    let junk = junk.as_ref().and_then(|j| j.first(addr.doc_id));
+                    p.apply(id, junk, parts);
+                }
             }
             i += 1;
         }
     }
-    hits.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+    hits.sort_by(|a, b| b.1.score.total_cmp(&a.1.score).then(a.0.cmp(&b.0)));
     Ok(hits)
 }
 
@@ -320,7 +477,43 @@ impl SearchIndex {
                 fields: file_fields,
                 cache: Arc::default(),
             },
+            hot: None,
+            weights: RankWeights::default(),
+            penalty: None,
         })
+    }
+
+    /// Searches with these hot columns (§7). Set it before cloning the
+    /// index for other threads.
+    pub fn with_hot(mut self, hot: Arc<HotColumns>) -> SearchIndex {
+        self.hot = Some(hot);
+        self
+    }
+
+    pub fn hot(&self) -> Option<&Arc<HotColumns>> {
+        self.hot.as_ref()
+    }
+
+    pub fn with_rank_weights(mut self, weights: RankWeights) -> SearchIndex {
+        self.weights = weights;
+        self
+    }
+
+    pub fn rank_weights(&self) -> &RankWeights {
+        &self.weights
+    }
+
+    /// Ranks every torrent by this multiplier as well (see [`Penalty`]).
+    /// Ranking priors other than the defaults (config, §8: "all weights
+    /// live in config").
+    pub fn with_weights(mut self, weights: RankWeights) -> SearchIndex {
+        self.weights = weights;
+        self
+    }
+
+    pub fn with_penalty(mut self, penalty: Penalty) -> SearchIndex {
+        self.penalty = Some(penalty);
+        self
     }
 
     pub fn fields(&self) -> &Fields {
@@ -402,23 +595,29 @@ impl SearchIndex {
     }
 
     /// Compiles a parsed query; `now` (unix seconds) resolves relative
-    /// dates.
+    /// dates. Times of day are UTC; see [`SearchIndex::query_at`].
     pub fn query(&self, node: &Node, now: i64) -> Compiled {
-        self.compile(node, now, false)
+        self.query_at(node, now, 0)
+    }
+
+    /// Compiles a parsed query for a user whose zone is `utc_offset`
+    /// seconds east of UTC (it only affects `time:`).
+    pub fn query_at(&self, node: &Node, now: i64, utc_offset: i32) -> Compiled {
+        self.compile(node, now, utc_offset, false)
     }
 
     /// The same query with the stem tier: each stemmable word also
     /// matches by its light stem in the title (§8). `None` when no word
     /// has a stem alternative, so it would match the same torrents.
-    pub fn query_stemmed(&self, node: &Node, now: i64) -> Option<Compiled> {
-        compile::has_stem_alternative(node).then(|| self.compile(node, now, true))
+    pub fn query_stemmed(&self, node: &Node, now: i64, utc_offset: i32) -> Option<Compiled> {
+        compile::has_stem_alternative(node).then(|| self.compile(node, now, utc_offset, true))
     }
 
     /// One page of results, falling back to the stem tier when the exact
     /// query finds fewer than [`STEM_FALLBACK_BELOW`] torrents and the
     /// tier finds more. The flag says whether it did. Stem-only matches
     /// rank after exact ones, and a query's total decides, so every page
-    /// of it takes the same branch.
+    /// of it takes the same branch. Times of day are UTC.
     pub fn search_with_fallback(
         &self,
         node: &Node,
@@ -427,11 +626,25 @@ impl SearchIndex {
         limit: usize,
         offset: usize,
     ) -> Result<(Results, bool)> {
-        let exact = self.search_page(&self.query(node, now), sort, limit, offset)?;
+        self.search_with_fallback_at(node, now, 0, sort, limit, offset)
+    }
+
+    /// [`SearchIndex::search_with_fallback`] for a user `utc_offset`
+    /// seconds east of UTC.
+    pub fn search_with_fallback_at(
+        &self,
+        node: &Node,
+        now: i64,
+        utc_offset: i32,
+        sort: Sort,
+        limit: usize,
+        offset: usize,
+    ) -> Result<(Results, bool)> {
+        let exact = self.search_page(&self.query_at(node, now, utc_offset), sort, limit, offset)?;
         if exact.total >= STEM_FALLBACK_BELOW {
             return Ok((exact, false));
         }
-        let Some(stemmed) = self.query_stemmed(node, now) else {
+        let Some(stemmed) = self.query_stemmed(node, now, utc_offset) else {
             return Ok((exact, false));
         };
         let wider = self.search_page(&stemmed, sort, limit, offset)?;
@@ -442,7 +655,7 @@ impl SearchIndex {
         })
     }
 
-    fn compile(&self, node: &Node, now: i64, stems: bool) -> Compiled {
+    fn compile(&self, node: &Node, now: i64, utc_offset: i32, stems: bool) -> Compiled {
         // `file:(…)` clauses run on the file index first.
         let mut clauses = Vec::new();
         compile::file_clauses(node, &mut clauses);
@@ -464,6 +677,8 @@ impl SearchIndex {
             fields: &self.fields,
             files: &sets,
             stems,
+            hot: self.hot.as_ref(),
+            utc_offset,
         };
         let compile::Parts {
             query,
@@ -485,11 +700,16 @@ impl SearchIndex {
                 files_searcher.generation().generation_id()
             ));
         }
+        if compile::has_time_of_day(node) {
+            key.push_str(&format!("@tz{utc_offset}"));
+        }
         Compiled {
             query,
             filters,
             boosts,
             key,
+            now,
+            reads_hot: compile::reads_hot(node),
         }
     }
 
@@ -510,6 +730,8 @@ impl SearchIndex {
             filters: Vec::new(),
             boosts: None,
             key: String::new(),
+            now: 0,
+            reads_hot: false,
         };
         Ok(self.search(&q, 1)?.hits.first().map(|h| h.id))
     }
@@ -526,40 +748,110 @@ impl SearchIndex {
         limit: usize,
         offset: usize,
     ) -> Result<Results> {
+        self.page(compiled, sort, limit, offset, false)
+    }
+
+    /// [`SearchIndex::search_page`] with each relevance hit's score parts
+    /// in [`Results::explain`] (`?explain=1`).
+    pub fn search_page_explained(
+        &self,
+        compiled: &Compiled,
+        sort: Sort,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Results> {
+        self.page(compiled, sort, limit, offset, true)
+    }
+
+    fn page(
+        &self,
+        compiled: &Compiled,
+        sort: Sort,
+        limit: usize,
+        offset: usize,
+        explain: bool,
+    ) -> Result<Results> {
         let searcher = self.reader.searcher();
         let query = compiled.query.as_ref();
         let ranges = &compiled.filters;
+        let hot = self.hot.as_ref();
         let top = TopDocs::with_limit(limit.max(1)).and_offset(offset);
+        let mut parts = Vec::new();
         let (scored, total): (Vec<(f32, DocAddress)>, usize) = match sort {
-            Sort::Relevance => match &compiled.boosts {
-                None => {
+            Sort::Relevance => {
+                let priors = self.hot.as_deref().map(|hot| Priors {
+                    hot,
+                    weights: &self.weights,
+                    now: compiled.now,
+                    penalty: self.penalty.as_ref(),
+                });
+                if compiled.boosts.is_none() && priors.is_none() && !explain {
                     let inner = (top.order_by_score(), Count);
-                    searcher.search(query, &PostFilter { ranges, inner })?
-                }
-                Some(boosts) => {
+                    searcher.search(query, &PostFilter { ranges, hot, inner })?
+                } else {
                     // Two-phase (§8): the best candidates by phase-1
-                    // score, re-ranked with the name boosts. Order is
-                    // exact within the window.
+                    // score, re-ranked with the name boosts and the
+                    // priors. Order is exact within the window.
                     let window = (offset + limit).max(RERANK_WINDOW);
                     let inner = (TopDocs::with_limit(window).order_by_score(), Count);
-                    let (candidates, n) = searcher.search(query, &PostFilter { ranges, inner })?;
-                    let ranked = rerank(&searcher, boosts.as_ref(), candidates)?;
-                    (ranked.into_iter().skip(offset).take(limit).collect(), n)
+                    let (candidates, n) =
+                        searcher.search(query, &PostFilter { ranges, hot, inner })?;
+                    let ranked = rerank(
+                        &searcher,
+                        compiled.boosts.as_deref(),
+                        priors.as_ref(),
+                        candidates,
+                    )?;
+                    let page: Vec<_> = ranked.into_iter().skip(offset).take(limit).collect();
+                    if explain {
+                        parts = page.iter().map(|(_, p)| *p).collect();
+                    }
+                    (page.into_iter().map(|(a, p)| (p.score, a)).collect(), n)
                 }
-            },
-            Sort::Discovered { desc } | Sort::Size { desc } | Sort::Files { desc } => {
-                let (field, signed) = match sort {
-                    Sort::Discovered { .. } => ("discovered", true),
-                    Sort::Size { .. } => ("size", false),
-                    _ => ("files", false),
+            }
+            Sort::Discovered { desc }
+            | Sort::Size { desc }
+            | Sort::Files { desc }
+            | Sort::Seeders { desc }
+            | Sort::Leechers { desc }
+            | Sort::Trackers { desc }
+            | Sort::Seen { desc } => {
+                let by = match sort {
+                    Sort::Discovered { .. } => By::Fast {
+                        field: "discovered",
+                        signed: true,
+                    },
+                    Sort::Size { .. } => By::Fast {
+                        field: "size",
+                        signed: false,
+                    },
+                    Sort::Files { .. } => By::Fast {
+                        field: "files",
+                        signed: false,
+                    },
+                    Sort::Seeders { .. } => By::Hot(Col::Seeders),
+                    Sort::Leechers { .. } => By::Hot(Col::Leechers),
+                    Sort::Trackers { .. } => By::Hot(Col::Trackers),
+                    _ => By::Hot(Col::LastSeen),
                 };
-                let order = sorted::Order {
-                    field,
-                    signed,
-                    desc,
+                let order = sorted::Order { by, desc };
+                // Hot values change under an unchanged segment: their
+                // epoch keeps cached tops honest.
+                let key = match hot {
+                    Some(h) if compiled.reads_hot || matches!(by, By::Hot(_)) => {
+                        format!("{}@hot{}", compiled.key, h.epoch())
+                    }
+                    _ => compiled.key.clone(),
                 };
-                let (page, n) =
-                    sorted::search(&searcher, &self.cache, compiled, order, limit, offset)?;
+                let (page, n) = sorted::search(
+                    &searcher,
+                    &self.cache,
+                    &key,
+                    compiled,
+                    order,
+                    hot,
+                    offset..offset + limit,
+                )?;
                 (page.into_iter().map(|a| (0.0, a)).collect(), n)
             }
         };
@@ -581,7 +873,11 @@ impl SearchIndex {
                 .ok_or(Error::Corrupt("document without an id"))?;
             hits.push(Hit { id, score });
         }
-        Ok(Results { hits, total })
+        Ok(Results {
+            hits,
+            total,
+            explain: parts,
+        })
     }
 
     /// The positions (in the torrent's file list) of the files of torrent
