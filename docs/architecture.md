@@ -764,7 +764,7 @@ Graded by consequence, so a confirmation always means something:
 | Kind | Examples | What the UI does |
 |---|---|---|
 | Safe | log verbosity, intensity, timeouts | Staged, saved, Undo |
-| Privacy | torrent details in logs (Hashes, Full) | A dialog says what will be recorded and where, and asks for a duration (default 1 hour). A banner shows while it's on (§10.10.12). |
+| Privacy | turning on a log data kind that identifies torrents or people (hashes, names, paths, URLs, queries, peer addresses) | A dialog says what will be recorded and where, and asks for a duration (default 1 hour). A banner shows while it's on (§10.10.12). |
 | Disruptive | HTTP address, DHT port, disabling the DHT or search | Save opens a dialog that names the effect ("Lodestar will be at http://192.168.1.5:8191 after a restart"; "Search stops until you turn it back on") |
 | Destructive, not undoable | Purge a source's data, clear usage data, revoke a worker, reset all settings, Remove a secret | A **Danger zone** action, run on its own (not part of Save). A confirmation dialog shows the exact count and size, and the button names the action ("Delete 1,204,331 torrents found only by Nyaa"). Focus starts on Cancel. |
 | Weakens content protection | §20.11's list | §20.11's effect warning and **password, every time**, unchanged (M-filters-dialogs) |
@@ -794,7 +794,7 @@ Generated screens render from the schema with no screen-specific code beyond gro
 | Notifications | channels (ntfy, Discord, email, webhook), each with **Send test**, and which events go where | integrations API | S-settings-2 |
 | Insights & digest | digest schedule and channels with a preview (§10.9.7), query logging and retention, clear usage data | `insights`, digest API | S-settings-2 (digest preview: S-insights-3) |
 | General | update check (off by default), backup schedule, Backup & portability (§10.10.6), Reset all | `general`, `/system` | S-settings-1 |
-| Logging | verbosity (simple, per component, raw), torrent details (Off by default; time-limited), outputs and rotation with a size preview, log files with download, delete (§10.10.12, §12.1) | `logging`, logs API | S-logs |
+| Logging | events (Verbosity preset, each event on/off with its rate), data kinds (Private preset by default; identifying kinds time-limited), outputs (level and data kinds per output), a live preview with volume estimate, and rotation with a size preview, log files with download, delete (§10.10.12, §12.1) | `logging`, logs API | S-logs |
 | Security | password, sessions, API keys and feed tokens, trusted-proxy auth, secure cookies (read-only) | auth API (B12) | M-security-settings |
 | About | version, build, licences, data directory and sizes, a copyable diagnostics block (versions, OS, settings sources; no secrets, no torrent names), **Download diagnostics** (that block plus the last 24 h of logs, always with torrent details removed), links | `/system` | S-settings-2 |
 
@@ -876,13 +876,26 @@ Stepped progress, with one primary action per step:
 - error toasts ("View in log").
 
 **Settings → Logging:**
-- **Verbosity:** a SegmentedControl, with each option named in plain words plus its technical term ("Normal (info)").
-  - **Advanced:** a table of components, each with its own level.
-  - **Expert:** the raw filter string. B2's `general.log_level` moves into this `logging` section in B2b. Editing the raw string updates the table, and a string the table can't show switches it to "Custom".
-- **Torrent details:** Off / Hashes / Full, each with a one-line consequence.
-  - Hashes and Full open a dialog that says exactly what will be recorded and where ("Torrent and file names will be written to the log file for 1 hour. The console and `docker logs` stay without them."). The dialog asks for a duration (1 hour, 24 hours, until I turn it off).
-  - While details are on, a **banner with the time remaining** shows on this screen, on `/logs` and on the Overview, with a **Turn off now** button.
-  - Turning details off offers to delete the files written meanwhile (§12.1).
+- **Events: what gets a line.** It starts with the **Verbosity** preset, a SegmentedControl with plain words plus the technical term ("Normal (info)"), then the event list:
+  - Events are grouped by component, each group collapsible with a count ("Fetch · 4 of 11 on").
+  - Each row has:
+    - a toggle;
+    - a plain name ("Each torrent stored", "Each failed metadata fetch", "Each API request");
+    - its level (icon + text);
+    - its **current rate** ("≈ 1,200 lines/h", from the counters);
+    - **badges for the data kinds it can carry** ("hash · name");
+    - one line of help.
+  - Required events show a lock and the reason.
+  - The list has its own search and a **Show changed only** filter. **Reset to preset** puts every event back.
+  - **Per-component levels** sit under Advanced. The raw filter string, which reaches only Libraries, sits under Expert. B2's `general.log_level` moves into this `logging` section in B2b.
+- **Data kinds: what a line may contain.**
+  - A preset SegmentedControl: **Private** (default) / Hashes / Full / Custom.
+  - Below it, one toggle per kind (§12.1). Each one says which of your enabled events would carry it ("Torrent names would appear in 3 events you've turned on: Each torrent stored, …").
+  - Turning on an identifying kind opens a dialog. It says exactly what will be recorded and where ("Torrent and file names will be written to the log file for 1 hour. The console and `docker logs` stay without them."), and asks for a duration (1 hour, 24 hours, until I turn it off).
+  - While any identifying kind is on, a **banner with the time remaining** shows on this screen, on `/logs` and on the Overview, with **Turn off now**.
+  - Turning the kinds off offers to delete the files written meanwhile (§12.1).
+- **Preview:** a panel beside the choices, under them on narrow screens. It shows **example lines** for the staged events and kinds, rendered from sample data, and the **estimated volume per day** for each output. It updates as you change things, before you save.
+- **Never logged:** a short, fixed list (§12.1), each item with its reason, so it's clear what no setting can turn on.
 - **Outputs:**
   - console format (text or JSON);
   - console detail (off, or the same as the file);
@@ -911,7 +924,7 @@ Stepped progress, with one primary action per step:
   - **Copy visible** and **Download visible**;
   - **Open full log**, which opens Settings → Logging → Log files.
 - **When the level hides what you need:** if the viewer's minimum level is below what's being recorded, it says "Debug lines aren't being recorded" and offers **Record detailed logs for 30 minutes**.
-- **Torrent details status:** a status chip shows the current setting ("Torrent details: Off"). While details are on, it becomes the time-remaining banner.
+- **Logging status:** a status chip shows the current presets ("Normal · Private", or "Custom · Custom"), linking to Settings → Logging. While an identifying data kind is on, the chip becomes the time-remaining banner.
 - **States:**
   - **Connecting** and **Reconnecting** (with backoff; no lines are lost, since the cursor resumes);
   - **Stream ended** (server restarting; it reconnects on its own);
@@ -1204,29 +1217,57 @@ With the plum swap, all six colours are distinct under normal vision. Under colo
 - Graceful shutdown flushes batches, commits the index and persists the DHT state. Crash-safe: SQLite is the source of truth, and the index catches up on startup from a `last_indexed_id` watermark.
 
 ### 12.1 Logging
-Logs exist to diagnose Lodestar, not to record what it found. **By default they contain no torrent specifics.** Full detail is a deliberate, time-limited choice. Logs leave the machine only when you download them.
+Logs exist to diagnose Lodestar, not to record what it found. **You decide what gets logged, event by event and kind of data by kind of data. By default, logs contain no torrent specifics.** Identifying detail is a deliberate, time-limited choice. Logs leave the machine only when you download them.
 
-- **Two independent settings:**
-  - **Verbosity**, how much is logged: Errors only / Warnings / **Normal** (info, the default) / Detailed (debug) / Everything (trace). Advanced settings add a level per component (DHT, Fetch, Pipeline, Search, API, Sources, Filters, Integrations, Workers, Companions). Expert settings take a raw `tracing` filter string.
-  - **Torrent details**, what a line may say about content:
-    - **Off** (default): no info hashes, torrent or file names, paths, tracker URLs, peer addresses or search queries.
-    - **Hashes:** info hashes, but no names, paths or peer addresses.
-    - **Full:** everything except what's never logged (below).
-- **References, not identifiers.** With details Off, a line names a torrent as `ref:7f3a2c9e`. That's a keyed hash of its info hash under a random key made at each start and never written down. Lines from one run can be followed together, but a reference can't be turned back into a hash or matched against a public hash list. A restart starts new references.
+- **You control what's logged at three levels.** Each is a preset you can refine:
+  - **Events: what happens that gets a line.** Every line Lodestar writes is a **catalogued event** with a stable id (`dht.key_harvested`, `fetch.failed`, `api.request`, `auth.sign_in_failed`, `filters.rule_set_updated`, and so on). Each event has:
+    - a component and a level;
+    - a label and help (message keys);
+    - whether it's on by default;
+    - **the kinds of data it can carry** (below).
+
+    Each event can be turned on or off.
+    - **Verbosity is a preset over events:** Errors only / Warnings / **Normal** (info, the default) / Detailed (debug) / Everything (trace). It turns on every event at or above that level. Changing any single event makes the preset "Custom", and "Reset to preset" undoes that.
+    - **Per-component levels** remain as a middle step: DHT, Fetch, Pipeline, Search, API, Sources, Filters, Integrations, Workers, Companions, Auth, and Libraries (third-party crates).
+    - The **raw `tracing` filter string** stays as the expert option. It only reaches Libraries, because first-party lines are all catalogued events.
+    - **A few events are required** and can't be turned off: start and stop, crashes, the setup token (§12), settings saved and restarts, disk-full and log-rotation failures, and the switch that turns data kinds on or off. Without them, a log can't explain itself. They carry no torrent data.
+  - **Data kinds: what a line may contain.** Each kind is its own switch:
+
+    | Kind | Default |
+    |---|---|
+    | info hashes | off |
+    | torrent names | off |
+    | file names and paths | off |
+    | tracker and source URLs (passkeys always removed) | off |
+    | search queries | off |
+    | sign-in and API client addresses | **on**, since these are the admin's own and are useful for security |
+    | peer addresses (connection-level only) | off |
+    | sizes and counts | on, since they aren't identifying |
+
+    - **Presets set the switches:** **Private** (the default: only the two kinds marked on), **Hashes** (adds info hashes), **Full** (everything), and **Custom**.
+    - A kind that's off is never written. Torrents appear as references (below), and other kinds as `[hidden]`.
+  - **Outputs: where each line may go.** Each output (console, file, live log, Windows Event Log) has its own minimum level and its own data kinds, chosen as "Private" or "same as the file".
+- **Turning on a kind that identifies torrents or people is time-limited.** That's hashes, names, paths, URLs, queries and peer addresses. You choose how long: **1 hour** (default), 24 hours, or until turned off. When the time runs out, those kinds turn off again and a required event records the switch. Temporary verbosity works the same way: "Detailed for 30 minutes" is the one-click choice in the live log (§10.10.12).
+  - Turning the kinds off again offers **"Also delete log files that contain torrent details"**. Lodestar tracks which files were written while any identifying kind was on.
+- **You can see the effect before saving.** The Logging screen shows **example lines** rendered from sample data (never real torrents) for the staged choices. It also shows an **estimated volume** ("≈ 40 MiB a day at today's rate"), from per-event counters that count even events that are off. The counters are atomics, so this costs nothing.
+- **References, not identifiers.** With info hashes off, a line names a torrent as `ref:7f3a2c9e`. That's a keyed hash of its info hash under a random key made at each start and never written down. Lines from one run can be followed together, but a reference can't be turned back into a hash or matched against a public hash list. A restart starts new references.
 - **Never logged, at any setting:**
   - **Passwords, API keys, feed tokens, cookies, secrets and sealed values.** The setup token is the one exception: it's printed at start until setup completes, and stops working after that (§12).
-  - **A peer address together with any torrent identifier.** This is "No profiles of people" (§18.7). At Full, a connection-level line may show an address, but never with what that peer has.
+  - **A peer address together with any torrent identifier.** This is "No profiles of people" (§18.7). With peer addresses on, a connection-level line may show an address, but never with what that peer has.
   - **The names or paths of quarantined, dropped or hash-listed items.** Lines carry the rule id and a reference only.
   - **What a filtering change did.** Lines say only "filters: rule set updated (revision 42)", never which rule, term, exception or item was involved. This follows the owner's no-audit-log decisions (§1.8.8, §1.8.9).
 - **Enforced where the line is written, not scrubbed afterwards:**
-  - Torrent hashes, names, paths, peer addresses, URLs and queries are passed to `tracing` only through typed wrappers (`log::Torrent`, `log::Name`, `log::Path`, `log::Peer`, `log::Url`, `log::Query`). Each wrapper renders according to the current detail setting, and marks its field as sensitive in the structured record.
-  - A CI check refuses `tracing` fields with those names or types that bypass the wrappers.
+  - First-party code logs only through `log_event!(EVENT_ID, …)`.
+    - Each crate declares its events in a static catalogue. The binary gathers the catalogues; there's no registry dependency.
+    - Before formatting anything, an event checks one atomic bitset (its on/off) and bumps its counter. An event that's off costs a load and an increment.
+    - A CI check refuses plain `tracing` macros outside tests in first-party crates, and refuses events that use fields they didn't declare.
+  - Torrent hashes, names, paths, peer addresses, URLs and queries reach an event only through typed wrappers (`log::Torrent`, `log::Name`, `log::Path`, `log::Peer`, `log::Url`, `log::Query`).
+    - Each wrapper renders according to its kind's switch for that output.
+    - Each wrapper marks its field with its kind in the structured record.
   - Third-party crates (HTTP, TLS, Tantivy) are capped at warnings by default. URLs in their messages have query strings and passkeys removed.
-  - **A canary test** runs the pipeline over fixtures at every verbosity, with details Off. It fails if any fixture's hash (hex or base32), name, path, tracker passkey or peer address appears in any output: console, file, ring buffer or live stream.
-- **Full is time-limited.** Turning on Hashes or Full asks for how long: **1 hour** (default), 24 hours, or until turned off. When the time runs out, details go back to Off and an info line records the switch. The same applies to temporary verbosity: "Detailed for 30 minutes" is the one-click choice the live log offers (§10.10.12).
-  - Turning detail back to Off offers **"Also delete log files that contain torrent details"**. Lodestar tracks which files were written while detail was on.
+  - **A canary test** runs the pipeline over fixtures with every event on and the **Private** preset. It fails if any fixture's hash (hex or base32), name, path, tracker passkey or peer address appears in any output: console, file, ring buffer or live stream. A second run turns on one kind at a time and checks that only that kind appears.
 - **Where logs go:**
-  - **Console (stderr):** always on, so `docker logs`, the systemd journal and Unraid's log viewer work. Text by default, JSON as an option. **The console stays at details Off even when the file is at Full**, unless you choose "file and console". Lodestar can't delete what the container runtime or journal keeps.
+  - **Console (stderr):** always on, so `docker logs`, the systemd journal and Unraid's log viewer work. Text by default, JSON as an option. **The console stays on the Private data kinds even when the file has more turned on**, unless you choose "same as the file". Lodestar can't delete what the container runtime or journal keeps.
   - **Log file:** on by default, at `<data>/logs/lodestar.jsonl`, as structured JSON lines with sensitive fields marked.
     - Rotation by size: 16 MiB per file by default. Rotated files are gzip-compressed. Lodestar keeps 7 of them, for at most 14 days, and the logs folder never goes over a total cap (default 256 MiB).
     - All of these are settings. The folder is configurable, and applies after a restart.
@@ -1238,8 +1279,9 @@ Logs exist to diagnose Lodestar, not to record what it found. **By default they 
 - **API** (admin session only; API keys and feed tokens can't read logs):
   - **`GET /logs`:** history, newest first, with a cursor. Filters: level, component, text, time range. It reads the ring buffer, then the files.
   - **`logs` SSE topic** (B4): live records, filtered on the server by level and component, so debug lines travel only when the viewer asks for them.
+  - **`GET /logs/catalog`:** every event (id, component, level, label and help keys, default, current, data kinds, required, rate per hour) and every data kind with its current switch per output. The Logging screen renders from it, so a new event appears with no UI change.
   - **`GET /logs/files`:** name, size, time range, and whether the file contains torrent details.
-  - **`GET /logs/files/{name}?format=text|jsonl&redact=true|false`** and **`GET /logs/archive.zip`**. `redact=true` strips the fields marked as sensitive, so a log written at Full can still be shared safely. It's the default whenever a file contains details.
+  - **`GET /logs/files/{name}?format=text|jsonl&redact=true|false`** and **`GET /logs/archive.zip`**. `redact=true` strips the fields marked as sensitive, so a log written with identifying kinds on can still be shared safely. It's the default whenever a file contains details.
   - **`DELETE /logs/files`:** delete log files, all of them or only those containing details.
 
 ## 13. Repo layout (Cargo workspace)
@@ -2271,12 +2313,19 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 
 **Logging plan (owner, 2026-10-22, §12.1, §10.10.12):** the owner asked for robust logging options that **don't capture torrent specifics by default**, a way to **see the live, ongoing log**, and a **link to the full log**. Until now, logs went only to stderr, and nothing stopped a line from carrying a hash, a name or a peer address.
 - **Torrent details are a separate setting from verbosity:** Off (default) / Hashes / Full. Hashes and Full are time-limited (default 1 hour). With details Off, lines use per-run keyed references (`ref:…`) that can't be reversed.
+  - **Refined the same day (owner: "Allow user control over what is actually logged"):** both settings became presets over finer controls.
+    - Every first-party line is a **catalogued event** (`log_event!`), and each event can be turned on or off, with its rate shown. A few required events carry no torrent data and can't be turned off.
+    - Off/Hashes/Full became **per-kind data switches**: hashes, names, paths, URLs, queries, client addresses, peer addresses, sizes. The presets are Private (default), Hashes, Full and Custom.
+    - Each output has its own level and data kinds.
+    - A preview shows example lines and the estimated volume before you save.
+    - Plain `tracing` macros are refused in first-party crates, so the catalogue covers every line, and `GET /logs/catalog` serves it.
+    - The never-logged list (below) is unchanged and isn't user-controllable.
 - **Never logged, at any setting:**
   - a peer address with a torrent identifier ("No profiles of people", §18.7);
   - secrets;
   - names of quarantined or dropped items;
   - what a filtering change did. This extends the no-audit-log decisions (§1.8.8–9) to the log.
-- **Enforced at the source.** Typed wrappers handle every sensitive field, a CI check catches bypasses, and a canary test asserts that no fixture identifier reaches any output with details Off.
+- **Enforced at the source.** Typed wrappers handle every sensitive field, a CI check catches bypasses, and a canary test asserts that no fixture identifier reaches any output under the Private preset.
 - **Outputs:**
   - the console stays without details unless you choose otherwise, because Lodestar can't delete what `docker logs` keeps;
   - a rotating, gzip-compressed JSON-lines file with a total cap;

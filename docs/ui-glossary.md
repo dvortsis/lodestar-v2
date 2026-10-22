@@ -99,7 +99,9 @@ Category labels (facets, file tree) and the group each colours as
 | `setting_restart` | Applies after restart | Saved, but the running server uses the old value until it restarts. | 重启后生效 (TBD) |
 | `setting_changed` | Changed from default | Any value other than the default, whatever its source. | 已更改 (TBD) |
 | `setting_automatic` | Automatic | The value follows another setting; the effective value is shown next to it ("Automatic · 400 at Balanced"). | 自动 (TBD) |
-| `torrent_details` | Torrent details | Whether log lines may name torrents: Off, Hashes or Full. Off by default. | 种子详情 (TBD) |
+| `log_event` | Log event | One kind of thing that can be written to the log ("Each failed metadata fetch"), which you can turn on or off. | 日志事件 (TBD) |
+| `log_data_kind` | Data in log lines | One kind of information a log line may contain (info hashes, torrent names, file names and paths…), switched per output. | 日志内容 (TBD) |
+| `log_private` | Private | The default data preset: no torrent or peer identifiers in any line. | 私密 (TBD) |
 | `live_log` | Live log | The page that follows new log lines as they're written (`/logs`). | 实时日志 (TBD) |
 | `full_log` | Log files | The log files on disk, listed in Settings → Logging, for download. | 日志文件 (TBD) |
 | `needs_attention` | Needs attention | The Overview's list of problems, each with one action that fixes it. | 需要注意 (TBD) |
