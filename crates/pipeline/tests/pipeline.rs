@@ -479,9 +479,11 @@ async fn each_key_is_leased_and_counted_once() {
         pipeline.pool_stats().lost_count(Loss::NoPeers) == 1
     })
     .await;
+    // The pool counts a loss just before it ends the lease, so the lease
+    // may close a moment after the counter moves.
+    until("every lease ended", || stat(|s| &s.outstanding) == 0).await;
     assert_eq!(stat(|s| &s.granted), 2);
     assert_eq!(stat(|s| &s.held), 2);
-    assert_eq!(stat(|s| &s.outstanding), 0, "every lease ended");
     assert_eq!(stat(|s| &s.stale), 0);
     assert_eq!(pipeline.pool_stats().fetched.load(Ordering::Relaxed), 1);
 
