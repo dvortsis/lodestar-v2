@@ -15,7 +15,7 @@ use lodestar_integrations::{
     Selection, TorrentFile,
 };
 use serde_json::{Value, json};
-use support::{Fixture, ReplayServer, Received, fixture, fixture_bytes};
+use support::{Fixture, Received, ReplayServer, fixture, fixture_bytes};
 
 const SECRET: &str = "correct-horse-battery";
 const FIXTURE_HASH: &str = "f16304349815c2941fe00ababb5fe4e9098e0ee4";
@@ -42,7 +42,11 @@ fn with_id(mut fx: Fixture, id: Value) -> Fixture {
 }
 
 fn client(server: &ReplayServer) -> Aria2 {
-    Aria2::new(&format!("{}jsonrpc", server.url()), Some(Secret::new(SECRET))).unwrap()
+    Aria2::new(
+        &format!("{}jsonrpc", server.url()),
+        Some(Secret::new(SECRET)),
+    )
+    .unwrap()
 }
 
 fn magnet() -> Magnet {
@@ -69,7 +73,10 @@ fn gid(name: &str) -> String {
 fn call(req: &Received) -> (String, Value) {
     let b: Value = serde_json::from_slice(&req.body).unwrap();
     assert_eq!(b["jsonrpc"], "2.0");
-    (b["method"].as_str().unwrap().to_owned(), b["params"].clone())
+    (
+        b["method"].as_str().unwrap().to_owned(),
+        b["params"].clone(),
+    )
 }
 
 fn token() -> String {
@@ -87,7 +94,10 @@ async fn test_sends_the_token_and_reports_the_version() {
     assert_eq!(info.api_version, None);
     let reqs = server.finish();
     assert_eq!(reqs[0].path, "/jsonrpc");
-    assert_eq!(call(&reqs[0]), ("aria2.getVersion".into(), json!([token()])));
+    assert_eq!(
+        call(&reqs[0]),
+        ("aria2.getVersion".into(), json!([token()]))
+    );
     let id: Value = serde_json::from_slice::<Value>(&reqs[0].body).unwrap()["id"].clone();
     assert_eq!(id, "1");
 
@@ -127,7 +137,10 @@ async fn adds_a_magnet_and_checks_it_started() {
     );
     assert_eq!(
         call(&reqs[1]),
-        ("aria2.tellStatus".into(), json!([token(), gid("add_uri"), STATUS_KEYS]))
+        (
+            "aria2.tellStatus".into(),
+            json!([token(), gid("add_uri"), STATUS_KEYS])
+        )
     );
 }
 
@@ -192,7 +205,10 @@ async fn selected_files_of_a_torrent_file_are_checked_then_started() {
         selected_files: Some(vec![2, 0]),
         ..AddOptions::default()
     };
-    let out = client(&server).add_torrent_file(&file, &opts).await.unwrap();
+    let out = client(&server)
+        .add_torrent_file(&file, &opts)
+        .await
+        .unwrap();
     assert_eq!(out.selection, Selection::Applied);
     let reqs = server.finish();
     let (method, params) = call(&reqs[0]);
@@ -206,11 +222,17 @@ async fn selected_files_of_a_torrent_file_are_checked_then_started() {
     assert_eq!(params[3], json!({ "pause": "true", "select-file": "1,3" }));
     assert_eq!(
         call(&reqs[1]),
-        ("aria2.getFiles".into(), json!([token(), gid("add_torrent_paused")]))
+        (
+            "aria2.getFiles".into(),
+            json!([token(), gid("add_torrent_paused")])
+        )
     );
     assert_eq!(
         call(&reqs[2]),
-        ("aria2.unpause".into(), json!([token(), gid("add_torrent_paused")]))
+        (
+            "aria2.unpause".into(),
+            json!([token(), gid("add_torrent_paused")])
+        )
     );
     assert_eq!(call(&reqs[3]).0, "aria2.tellStatus");
 }
@@ -271,11 +293,10 @@ async fn refusals_carry_aria2s_reason() {
     assert_eq!(call(&server.finish()[0]).1[1], "Z2FyYmFnZQ==");
 
     let mut failed = f("status_duplicate");
-    failed.response.body = failed
-        .response
-        .body
-        .replace("\"12\"", "\"9\"")
-        .replace("InfoHash f16304349815c2941fe00ababb5fe4e9098e0ee4 is already registered.", "No space left on device");
+    failed.response.body = failed.response.body.replace("\"12\"", "\"9\"").replace(
+        "InfoHash f16304349815c2941fe00ababb5fe4e9098e0ee4 is already registered.",
+        "No space left on device",
+    );
     let mut fixtures = script(&["add_torrent"]);
     fixtures.push(with_id(failed, json!("2")));
     let server = ReplayServer::start(fixtures).await;
@@ -446,7 +467,9 @@ async fn no_token_in_logs_debug_or_errors() {
 #[ignore = "needs a running aria2"]
 async fn live() {
     let url = std::env::var("LODESTAR_LIVE_ARIA2").unwrap();
-    let secret = std::env::var("LODESTAR_LIVE_PASSWORD").ok().map(Secret::new);
+    let secret = std::env::var("LODESTAR_LIVE_PASSWORD")
+        .ok()
+        .map(Secret::new);
     let a2 = Aria2::new(&url, secret).unwrap();
     println!("test: {:?}", a2.test().await);
     let opts = AddOptions {
@@ -458,11 +481,26 @@ async fn live() {
         selected_files: Some(vec![0, 2]),
         ..AddOptions::default()
     };
-    println!("add file, files 0 and 2: {:?}", a2.add_torrent_file(&torrent(), &select).await);
-    println!("add file again: {:?}", a2.add_torrent_file(&torrent(), &AddOptions::default()).await);
+    println!(
+        "add file, files 0 and 2: {:?}",
+        a2.add_torrent_file(&torrent(), &select).await
+    );
+    println!(
+        "add file again: {:?}",
+        a2.add_torrent_file(&torrent(), &AddOptions::default())
+            .await
+    );
     println!(
         "past the last file: {:?}",
-        a2.add_torrent_file(&torrent(), &AddOptions { selected_files: Some(vec![5]), paused: true, ..AddOptions::default() }).await
+        a2.add_torrent_file(
+            &torrent(),
+            &AddOptions {
+                selected_files: Some(vec![5]),
+                paused: true,
+                ..AddOptions::default()
+            }
+        )
+        .await
     );
     println!("categories: {:?}", a2.categories().await);
 }

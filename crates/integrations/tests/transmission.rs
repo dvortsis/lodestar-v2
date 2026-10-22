@@ -13,7 +13,7 @@ use lodestar_integrations::{
     Secret, Selection, TorrentFile,
 };
 use serde_json::{Value, json};
-use support::{Fixture, ReplayServer, Received, fixture, fixture_bytes};
+use support::{Fixture, Received, ReplayServer, fixture, fixture_bytes};
 
 const PASSWORD: &str = "correct-horse-battery";
 const FIXTURE_HASH: &str = "f16304349815c2941fe00ababb5fe4e9098e0ee4";
@@ -224,8 +224,7 @@ async fn labels_go_through_torrent_set_on_rpc_16_and_are_dropped_before() {
 
 #[tokio::test]
 async fn a_duplicate_is_rejected_and_bulk_adds_one_at_a_time() {
-    let server =
-        ReplayServer::start(vec![f("session_conflict"), f("torrent_add_duplicate")]).await;
+    let server = ReplayServer::start(vec![f("session_conflict"), f("torrent_add_duplicate")]).await;
     assert_eq!(
         client(&server)
             .add_magnet(&magnet(), &AddOptions::default())
@@ -311,7 +310,10 @@ async fn selected_files_of_a_torrent_file() {
         selected_files: Some(vec![2, 0]),
         ..AddOptions::default()
     };
-    let out = client(&server).add_torrent_file(&file, &opts).await.unwrap();
+    let out = client(&server)
+        .add_torrent_file(&file, &opts)
+        .await
+        .unwrap();
     assert_eq!(out.selection, Selection::Applied);
     let reqs = server.finish();
     let add = body(&reqs[1]);
@@ -553,7 +555,10 @@ async fn no_password_or_session_id_in_logs_debug_or_errors() {
         format!("{refused} {refused:?}"),
     ] {
         assert!(!text.contains(PASSWORD), "password leaked: {text}");
-        assert!(!text.contains("Y29ycmVjdC1ob3Jz"), "basic auth leaked: {text}");
+        assert!(
+            !text.contains("Y29ycmVjdC1ob3Jz"),
+            "basic auth leaked: {text}"
+        );
         for id in ["session_conflict", "session_expired"] {
             assert!(!text.contains(&session_id(id)), "session id leaked: {text}");
         }
@@ -587,11 +592,21 @@ async fn live() {
         selected_files: Some(vec![0, 2]),
         ..AddOptions::default()
     };
-    println!("add file, files 0 and 2: {:?}", tr.add_torrent_file(&torrent(), &select).await);
+    println!(
+        "add file, files 0 and 2: {:?}",
+        tr.add_torrent_file(&torrent(), &select).await
+    );
     let other = Magnet::parse(&format!("magnet:?xt=urn:btih:{}", "1".repeat(40))).unwrap();
     println!(
         "magnet with a selection: {:?}",
-        tr.add_magnet(&other, &AddOptions { selected_files: Some(vec![0]), ..AddOptions::default() }).await
+        tr.add_magnet(
+            &other,
+            &AddOptions {
+                selected_files: Some(vec![0]),
+                ..AddOptions::default()
+            }
+        )
+        .await
     );
     println!("categories: {:?}", tr.categories().await);
 }

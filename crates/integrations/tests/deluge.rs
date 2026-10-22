@@ -16,7 +16,7 @@ use lodestar_integrations::{
     Secret, Selection, TorrentFile,
 };
 use serde_json::{Value, json};
-use support::{Fixture, ReplayServer, Received, fixture, fixture_bytes};
+use support::{Fixture, Received, ReplayServer, fixture, fixture_bytes};
 
 const PASSWORD: &str = "correct-horse-battery";
 const FIXTURE_HASH: &str = "f16304349815c2941fe00ababb5fe4e9098e0ee4";
@@ -79,7 +79,10 @@ fn body(req: &Received) -> Value {
 
 fn call(req: &Received) -> (String, Value) {
     let b = body(req);
-    (b["method"].as_str().unwrap().to_owned(), b["params"].clone())
+    (
+        b["method"].as_str().unwrap().to_owned(),
+        b["params"].clone(),
+    )
 }
 
 fn cookie() -> String {
@@ -116,7 +119,10 @@ async fn test_logs_in_connects_the_web_ui_and_reports_the_version() {
     assert_eq!(reqs[0].header("cookie"), None);
     assert_eq!(
         call(&reqs[3]),
-        ("web.connect".into(), json!(["aeb5867e480141ceabae6294403ecd6c"]))
+        (
+            "web.connect".into(),
+            json!(["aeb5867e480141ceabae6294403ecd6c"])
+        )
     );
     for (i, req) in reqs.iter().enumerate() {
         assert_eq!(body(req)["id"], json!(i + 1));
@@ -306,8 +312,7 @@ async fn a_duplicate_is_rejected_and_bulk_adds_one_at_a_time() {
     server.finish();
 
     let other = Magnet::parse(&format!("magnet:?xt=urn:btih:{FIXTURE_HASH}")).unwrap();
-    let server =
-        ReplayServer::start(with_login(&["add_magnet_ok", "add_magnet_duplicate"])).await;
+    let server = ReplayServer::start(with_login(&["add_magnet_ok", "add_magnet_duplicate"])).await;
     let opts = AddOptions {
         paused: true,
         ..AddOptions::default()
@@ -647,11 +652,21 @@ async fn live() {
         selected_files: Some(vec![0, 2]),
         ..AddOptions::default()
     };
-    println!("add file, files 0 and 2: {:?}", dl.add_torrent_file(&torrent(), &select).await);
+    println!(
+        "add file, files 0 and 2: {:?}",
+        dl.add_torrent_file(&torrent(), &select).await
+    );
     let other = Magnet::parse(&format!("magnet:?xt=urn:btih:{}", "1".repeat(40))).unwrap();
     println!(
         "magnet with a selection: {:?}",
-        dl.add_magnet(&other, &AddOptions { selected_files: Some(vec![0]), ..AddOptions::default() }).await
+        dl.add_magnet(
+            &other,
+            &AddOptions {
+                selected_files: Some(vec![0]),
+                ..AddOptions::default()
+            }
+        )
+        .await
     );
     println!("categories: {:?}", dl.categories().await);
 }
