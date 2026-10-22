@@ -1150,10 +1150,19 @@ impl tantivy::collector::SegmentCollector for IdsSegment {
         let Some(id) = self.col.first(doc) else {
             return;
         };
-        let taken = self
-            .left
-            .fetch_update(Relaxed, Relaxed, |n| n.checked_sub(1))
-            .is_ok();
+        let mut left = self.left.load(Relaxed);
+        let taken = loop {
+            if left == 0 {
+                break false;
+            }
+            match self
+                .left
+                .compare_exchange_weak(left, left - 1, Relaxed, Relaxed)
+            {
+                Ok(_) => break true,
+                Err(now) => left = now,
+            }
+        };
         if taken {
             self.ids.push(id);
         } else {
