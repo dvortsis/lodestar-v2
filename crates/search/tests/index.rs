@@ -3,7 +3,7 @@
 
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::{Info, InfoHash};
-use lodestar_search::{SearchIndex, index_dir};
+use lodestar_search::{SearchIndex, Sort, index_dir};
 use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig};
 
 fn d(entries: Vec<(&str, OwnedValue)>) -> OwnedValue {
@@ -588,16 +588,12 @@ fn an_index_left_behind_catches_up_alone() {
 }
 
 #[test]
-fn plurals_match_through_the_title_stem() {
+fn plurals_match_through_the_title_stem_as_a_fallback() {
+    let tdk = "The.Dark.Knight.2008.1080p.BluRay.x264-GRP";
+    let kotz = "Knights.of.the.Zodiac.2023.1080p.WEB-DL.x264-GRP";
     let mut store = store_with(&[
-        sized(
-            "The.Dark.Knight.2008.1080p.BluRay.x264-GRP",
-            &[("tdk.mkv", 10 * GB)],
-        ),
-        sized(
-            "Knights.of.the.Zodiac.2023.1080p.WEB-DL.x264-GRP",
-            &[("kotz.mkv", 3 * GB)],
-        ),
+        sized(tdk, &[("tdk.mkv", 10 * GB)]),
+        sized(kotz, &[("kotz.mkv", 3 * GB)]),
         sized(
             "Toy.Story.1995.1080p.BluRay.x264-GRP",
             &[("ts.mkv", 4 * GB)],
@@ -617,34 +613,48 @@ fn plurals_match_through_the_title_stem() {
     w.catch_up(&mut store, 100).unwrap();
     w.commit().unwrap();
     let ranked = |q: &str| {
-        let hits = index
-            .search(&index.query(&lodestar_search::parse(q).unwrap(), NOW), 50)
-            .unwrap()
-            .hits;
-        index.names(&hits).unwrap()
+        let node = lodestar_search::parse(q).unwrap();
+        let (r, stemmed) = index
+            .search_with_fallback(&node, NOW, Sort::Relevance, 50, 0)
+            .unwrap();
+        (index.names(&r.hits).unwrap(), stemmed)
     };
-    let tdk = "The.Dark.Knight.2008.1080p.BluRay.x264-GRP";
-    let kotz = "Knights.of.the.Zodiac.2023.1080p.WEB-DL.x264-GRP";
 
-    // Plural ↔ singular, both ways; exact matches rank first.
-    assert_eq!(ranked("knights"), [kotz, tdk]);
-    assert_eq!(ranked("knight"), [tdk, "Misc Stuff", kotz]);
-    let stories = ranked("stories");
+    // The plain query is exact.
+    assert_eq!(names(&index, "knights"), [kotz]);
+    // Few exact matches: plural ↔ singular, both ways, exact first.
+    assert_eq!(ranked("knights"), (vec![kotz.into(), tdk.into()], true));
+    assert_eq!(
+        ranked("knight"),
+        (vec![tdk.into(), "Misc Stuff".into(), kotz.into()], true)
+    );
+    let (stories, _) = ranked("stories");
     assert_eq!(stories.len(), 2);
     assert!(stories[0].starts_with("Ghost.Stories"));
     // Every word must still match: by its exact form anywhere, or by
     // its stem in the title.
-    assert_eq!(ranked("knights 2008"), [tdk]);
-    assert_eq!(ranked("dark knights"), [tdk]);
-    assert!(ranked("knights 1995").is_empty());
-    // title: takes stems too; phrases, prefixes and other fields don't.
-    assert_eq!(names(&index, "title:knights").len(), 2);
-    assert!(names(&index, "\"dark knights\"").is_empty());
-    assert_eq!(names(&index, "name:knights"), [kotz]);
-    // Nested and negated words mean the same set.
-    assert_eq!(names(&index, "zzzz | knights").len(), 2);
-    assert_eq!(
-        names(&index, "1080p -knights"),
-        ["Toy.Story.1995.1080p.BluRay.x264-GRP"]
-    );
+    assert_eq!(ranked("dark knights"), (vec![tdk.into()], true));
+    assert_eq!(ranked("knights 1995"), (vec![], false));
+    // title: takes stems too; phrases and other fields don't, and a
+    // tier that finds nothing more isn't used.
+    assert_eq!(ranked("title:knights").0.len(), 2);
+    assert_eq!(ranked("\"dark knights\""), (vec![], false));
+    assert_eq!(ranked("name:knights"), (vec![kotz.into()], false));
+    assert_eq!(ranked("zzzz | knights").0.len(), 2);
+    // Negated words stay exact: the tier widens, never excludes more.
+    assert_eq!(ranked("1080p -knights").0.len(), 2);
+
+    // With enough exact matches there's no fallback.
+    let more: Vec<Vec<u8>> = (0..lodestar_search::STEM_FALLBACK_BELOW)
+        .map(|i| sized(&format!("Knights.Collection.Part.{i}"), &[("k.mkv", GB)]))
+        .collect();
+    add(&mut store, &more);
+    lodestar_pipeline::enrich::enrich_stored(&mut store, 0, 100)
+        .unwrap()
+        .unwrap();
+    w.catch_up(&mut store, 100).unwrap();
+    w.commit().unwrap();
+    let (hits, stemmed) = ranked("knights");
+    assert!(!stemmed);
+    assert!(!hits.contains(&tdk.to_string()));
 }

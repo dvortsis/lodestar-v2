@@ -24,11 +24,14 @@ type Q = Box<dyn Query>;
 /// them on the file index first.
 pub(crate) type FileSets = std::collections::HashMap<String, Arc<IdSet>>;
 
-/// What compiling needs: the torrent index's fields (it derefs to them)
-/// and the `file:(…)` results.
+/// What compiling needs: the torrent index's fields (it derefs to them),
+/// the `file:(…)` results, and whether words may also match by their
+/// stem in the title (the fallback tier, §8).
+#[derive(Clone, Copy)]
 pub(crate) struct Cx<'a> {
     pub fields: &'a Fields,
     pub files: &'a FileSets,
+    pub stems: bool,
 }
 
 impl std::ops::Deref for Cx<'_> {
@@ -40,6 +43,15 @@ impl std::ops::Deref for Cx<'_> {
 }
 
 impl Cx<'_> {
+    /// Negated clauses match exactly: the stem tier widens what a query
+    /// finds, never what it excludes.
+    fn exact(&self) -> Self {
+        Cx {
+            stems: false,
+            ..*self
+        }
+    }
+
     fn ids(&self, of: &Node) -> Arc<IdSet> {
         self.files
             .get(&format!("{of:?}"))
@@ -106,7 +118,7 @@ pub(crate) fn compile(node: &Node, f: &Cx<'_>, now: i64) -> Parts {
     for n in rest {
         match n {
             Node::Not { of } => {
-                if let Some(q) = compile_opt(of, f, now) {
+                if let Some(q) = compile_opt(of, &f.exact(), now) {
                     clauses.push((Occur::MustNot, q));
                 }
             }
@@ -151,7 +163,7 @@ fn conjunction(mut clauses: Vec<(Occur, Q)>) -> Q {
 
 /// An unfielded word: required on `text` (or by its stem in the title),
 /// plus its boosts on `name` and `title`.
-fn any_word(word: &str, f: &Fields) -> Option<(Q, Q)> {
+fn any_word(word: &str, f: &Cx<'_>) -> Option<(Q, Q)> {
     let toks = tokenizer::tokenize(word);
     if toks.is_empty() {
         return None;
@@ -175,10 +187,14 @@ fn any_word(word: &str, f: &Fields) -> Option<(Q, Q)> {
     ))
 }
 
-/// `exact`, or the word's light stem in `title_stem` when it's a single
-/// stemmable word: the "plurals and suffixes" tier (§8), scored as a
-/// constant below exact matches.
-fn with_stem(exact: Q, toks: &[Tok], f: &Fields) -> Q {
+/// In the fallback tier (`f.stems`): `exact`, or the word's light stem
+/// in `title_stem` when it's a single stemmable word. This is §8's
+/// "plurals and suffixes" tier, scored as a constant below exact
+/// matches. Otherwise just `exact`.
+fn with_stem(exact: Q, toks: &[Tok], f: &Cx<'_>) -> Q {
+    if !f.stems {
+        return exact;
+    }
     let units = units(toks);
     let [one] = units.as_slice() else {
         return exact;
@@ -282,7 +298,7 @@ fn compile_opt(node: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
             for n in of {
                 match n {
                     Node::Not { of } => {
-                        if let Some(q) = compile_opt(of, f, now) {
+                        if let Some(q) = compile_opt(of, &f.exact(), now) {
                             clauses.push((Occur::MustNot, q));
                         }
                     }
@@ -307,7 +323,7 @@ fn compile_opt(node: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
             Box::new(BooleanQuery::new(clauses))
         }
         Node::Not { of } => {
-            let q = compile_opt(of, f, now)?;
+            let q = compile_opt(of, &f.exact(), now)?;
             Box::new(BooleanQuery::new(vec![
                 (Occur::Must, Box::new(AllQuery) as Q),
                 (Occur::MustNot, q),
@@ -652,4 +668,20 @@ fn hex20(s: &str) -> Option<[u8; 20]> {
         out[i] = (hi * 16 + lo) as u8;
     }
     Some(out)
+}
+
+/// Whether the stem tier could change what `node` matches: it has a
+/// positive single-word clause (unfielded or `title:`) with a light stem.
+pub(crate) fn has_stem_alternative(node: &Node) -> bool {
+    match node {
+        Node::And { of } | Node::Or { of } => of.iter().any(has_stem_alternative),
+        Node::Word {
+            field: TextField::Any | TextField::Title,
+            word,
+        } => matches!(
+            units(&tokenizer::tokenize(word)).as_slice(),
+            [one] if crate::stem::light_stem(&one.text).is_some()
+        ),
+        _ => false,
+    }
 }
