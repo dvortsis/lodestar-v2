@@ -1,0 +1,5 @@
+/* Rows take an inset ring: the scroller clips an outset one. Same width and colour as .ls-focus. */
+.ls-row-focus:focus-visible {
+	outline: var(--focus-ring-width) solid var(--color-primary);
+	outline-offset: calc(var(--focus-ring-width) * -1);
+}
