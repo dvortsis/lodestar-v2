@@ -18,6 +18,7 @@
 //!
 //! See `README.md` for how a later slice adds a section.
 
+pub mod content;
 pub mod crawler;
 pub mod general;
 pub mod log;
@@ -138,6 +139,15 @@ pub trait Section:
     /// Checks of `field` beyond its type and bounds; the message is for
     /// people.
     fn check(&self, _field: &str) -> Result<(), String> {
+        Ok(())
+    }
+    /// Keys a patch may carry beside the fields: confirmations that
+    /// [`Section::confirm`] checks and that are never saved.
+    const CONFIRMATIONS: &'static [&'static str] = &[];
+    /// Checks a whole patch for the confirmations it needs (turning on
+    /// adult content needs `confirm_adult`, [`content`]), after its fields
+    /// passed their own checks. A refusal changes nothing.
+    fn confirm(_patch: &Map<String, Value>) -> Result<(), SettingsError> {
         Ok(())
     }
 }
@@ -304,6 +314,9 @@ impl<T: Section> Entry<T> {
         let mut next = saved.clone();
         let mut fields = Vec::new();
         for (name, value) in patch {
+            if T::CONFIRMATIONS.contains(&name.as_str()) {
+                continue;
+            }
             let Some(field) = T::FIELDS.iter().find(|f| f.name == name) else {
                 return Err(SettingsError::UnknownField(name.clone()));
             };
@@ -331,6 +344,7 @@ impl<T: Section> Entry<T> {
             })?;
             next.insert(name.clone(), value.clone());
         }
+        T::confirm(patch)?;
         let merged = self.effective_map(&next);
         let section: T = from_object(&merged).map_err(|e| SettingsError::Invalid {
             field: patch.keys().next().cloned().unwrap_or_default(),
@@ -509,6 +523,7 @@ impl Registry {
         registry.register::<transport::Transport>(config)?;
         registry.register::<storage::Storage>(config)?;
         registry.register::<search::Search>(config)?;
+        registry.register::<content::Content>(config)?;
         Ok(registry)
     }
 
