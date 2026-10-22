@@ -65,10 +65,6 @@ pub struct Committed {
     pub adult_added: u64,
     /// The highest torrent id searchable after it.
     pub max_torrent_id: i64,
-    /// The highest id among this commit's new torrents that isn't Adult;
-    /// 0 when all of them are. While Adult is hidden, it's the newest id
-    /// a client can be told about.
-    pub max_visible_id: i64,
     /// Unix seconds.
     pub at: u64,
 }
@@ -176,7 +172,6 @@ impl LiveIndexer {
                             docs_added: c.added as u64,
                             adult_added: c.adult_added as u64,
                             max_torrent_id: indexer.last_id(),
-                            max_visible_id: c.max_visible_id,
                             at: now,
                         });
                     }
@@ -187,7 +182,6 @@ impl LiveIndexer {
                         Ok(c) => {
                             new_docs.added += c.added;
                             new_docs.adult_added += c.adult_added;
-                            new_docs.max_visible_id = new_docs.max_visible_id.max(c.max_visible_id);
                             c.added + c.replayed
                         }
                         Err(e) => {
@@ -427,16 +421,12 @@ mod tests {
         live.stop().unwrap();
         assert_eq!(got.len(), 1, "{got:?}");
         assert_eq!((got[0].docs_added, got[0].adult_added), (5, 2));
-        assert_eq!(got[0].max_visible_id, 5);
-        // The swap counts the same way, from the index itself: (Adult,
-        // highest id that isn't).
-        assert_eq!(index.adult_between(0, 5).unwrap(), (2, 5));
-        assert_eq!(index.adult_between(2, 5).unwrap(), (1, 5));
-        assert_eq!(index.adult_between(0, 1).unwrap(), (0, 1));
-        assert_eq!(index.adult_between(4, 5).unwrap(), (0, 5));
-        // Only Adult in the window: nothing visible.
-        assert_eq!(index.adult_between(1, 2).unwrap(), (1, 0));
-        assert_eq!(index.adult_between(3, 4).unwrap(), (1, 0));
+        // The swap counts the same way, from the index itself.
+        assert_eq!(index.adult_between(0, 5).unwrap(), 2);
+        assert_eq!(index.adult_between(2, 5).unwrap(), 1);
+        assert_eq!(index.adult_between(0, 1).unwrap(), 0);
+        assert_eq!(index.adult_between(1, 2).unwrap(), 1);
+        assert_eq!(index.adult_between(4, 5).unwrap(), 0);
     }
 
     /// An index of this build's version under `root`, filled from
@@ -552,8 +542,7 @@ mod tests {
     }
 
     /// B4b-r2: torrents only the swap makes visible (stored after the old
-    /// indexer stopped) are reported by the swap, with their Adult count
-    /// and the highest id that isn't Adult.
+    /// indexer stopped) are reported by the swap, with their Adult count.
     #[test]
     fn the_swap_reports_its_adult_torrents() {
         let tmp = tempfile::tempdir().unwrap();
@@ -601,15 +590,7 @@ mod tests {
         let got = seen.lock().unwrap().clone();
         assert_eq!(got.len(), 1, "{got:?}");
         let c = got[0];
-        assert_eq!(
-            (
-                c.docs_added,
-                c.adult_added,
-                c.max_torrent_id,
-                c.max_visible_id
-            ),
-            (3, 2, 23, 22)
-        );
+        assert_eq!((c.docs_added, c.adult_added, c.max_torrent_id), (3, 2, 23));
         serving.shutdown().unwrap();
     }
 }

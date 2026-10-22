@@ -5804,9 +5804,12 @@
             "minimum": 0
           },
           "max_id": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64",
-            "description": "The highest torrent id searchable now. While Adult is hidden,\nthe highest that isn't Adult, so it can be lower than one sent\nwhile Adult was shown."
+            "description": "The highest torrent id searchable now, while Adult is shown.\n**Null while Adult is hidden:** ids are sequential, so any real id\nsent beside an exact `added` would show, in its gap from the last\none, how many hidden torrents arrived. To find what's new, use the\nnewest id among your own results (or a cursor), not this."
           }
         },
         "example": {

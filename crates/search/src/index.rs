@@ -577,37 +577,24 @@ impl SearchIndex {
         Ok(total)
     }
 
-    /// What an index swap made visible in ids `(after, upto]`, in the
-    /// current searcher: how many of those documents are Adult
-    /// (`type:adult`), and the highest id that isn't (0 when none is).
-    pub(crate) fn adult_between(&self, after: i64, upto: i64) -> Result<(u64, i64)> {
+    /// Adult documents (`type:adult`) with ids in `(after, upto]`, in
+    /// the current searcher: what an index swap made visible that's
+    /// hidden while Adult is.
+    pub(crate) fn adult_between(&self, after: i64, upto: i64) -> Result<u64> {
         let f = &self.fields;
         // Torrent ids come from SQLite's rowid sequence and start at 1;
         // a watermark is 0 at the lowest, so `max(0)` never changes one.
         let id = |v: i64| Term::from_field_u64(f.id, v.max(0) as u64);
-        let adult = || -> Box<dyn Query> {
-            Box::new(TermQuery::new(
-                Term::from_field_text(f.tag, &adult_tag()),
-                IndexRecordOption::Basic,
-            ))
-        };
-        let range = || -> Box<dyn Query> {
-            Box::new(tantivy::query::RangeQuery::new(
-                std::ops::Bound::Excluded(id(after)),
-                std::ops::Bound::Included(id(upto)),
-            ))
-        };
-        let searcher = self.searcher();
-        let adults = BooleanQuery::new(vec![(Occur::Must, adult()), (Occur::Must, range())]);
-        let count = searcher.search(&adults, &Count)? as u64;
-        let others = BooleanQuery::new(vec![(Occur::Must, range()), (Occur::MustNot, adult())]);
-        let top = TopDocs::with_limit(1).order_by_u64_field("id", tantivy::Order::Desc);
-        let max_visible = searcher
-            .search(&others, &top)?
-            .first()
-            .and_then(|(id, _)| *id)
-            .map_or(0, |id| id as i64);
-        Ok((count, max_visible))
+        let adult: Box<dyn Query> = Box::new(TermQuery::new(
+            Term::from_field_text(f.tag, &adult_tag()),
+            IndexRecordOption::Basic,
+        ));
+        let range: Box<dyn Query> = Box::new(tantivy::query::RangeQuery::new(
+            std::ops::Bound::Excluded(id(after)),
+            std::ops::Bound::Included(id(upto)),
+        ));
+        let q = BooleanQuery::new(vec![(Occur::Must, adult), (Occur::Must, range)]);
+        Ok(self.searcher().search(&q, &Count)? as u64)
     }
 
     /// Documents in the current searcher.
@@ -1021,8 +1008,6 @@ pub struct CatchUp {
     /// the visibility clause `-type:adult` excludes, so the count and
     /// search agree (§20.9).
     pub adult_added: usize,
-    /// The highest id among `added` that isn't Adult; 0 when none is.
-    pub max_visible_id: i64,
     /// `reindex_log` entries replayed.
     pub replayed: usize,
 }
@@ -1162,12 +1147,7 @@ impl Indexer {
                     // Only the file index was behind.
                     None => stored_adult(store, id)?,
                 };
-                if adult {
-                    c.adult_added += 1;
-                } else {
-                    // Ids come in ascending order.
-                    c.max_visible_id = id;
-                }
+                c.adult_added += usize::from(adult);
             }
         }
         Ok(c)

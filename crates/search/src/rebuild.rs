@@ -879,14 +879,11 @@ fn rebuild_and_swap(
     *lock(&shared.live) = Some(live);
     let old = std::mem::replace(&mut *lock(&shared.current), Arc::new(new));
     *lock(&shared.progress) = None;
-    if let Some(((docs_added, (adult_added, max_visible_id)), max_torrent_id)) =
-        fresh.filter(|f| f.0.0 > 0)
-    {
+    if let Some(((docs_added, adult_added), max_torrent_id)) = fresh.filter(|f| f.0.0 > 0) {
         shared.hook.publish(Committed {
             docs_added,
             adult_added,
             max_torrent_id,
-            max_visible_id,
             at: unix_now(),
         });
     }
