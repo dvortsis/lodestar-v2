@@ -26,6 +26,8 @@ struct T<'a> {
     files: Vec<(String, i64)>,
     adult: bool,
     flags: i64,
+    /// Classified as the pipeline would; false leaves it unenriched.
+    enriched: bool,
 }
 
 fn t<'a>(name: &'a str, files: &[(&str, i64)]) -> T<'a> {
@@ -34,6 +36,7 @@ fn t<'a>(name: &'a str, files: &[(&str, i64)]) -> T<'a> {
         files: files.iter().map(|(p, l)| (p.to_string(), *l)).collect(),
         adult: false,
         flags: 0,
+        enriched: true,
     }
 }
 
@@ -109,7 +112,7 @@ fn fixture(torrents: &[T<'_>], search: bool) -> Fixture {
     // Classified, as the pipeline would have; `adult` as an Is adult
     // correction would.
     let mut enriched = Vec::new();
-    for (id, t) in ids.iter().zip(torrents) {
+    for (id, t) in ids.iter().zip(torrents).filter(|(_, t)| t.enriched) {
         let row = store.torrent(*id).unwrap().unwrap();
         let tree = store.files(*id).unwrap().unwrap();
         let files = lodestar_classify::file_infos(&tree.files, tree.encoding);
@@ -415,9 +418,11 @@ async fn siblings_respect_hidden_and_adult() {
 
 #[tokio::test]
 async fn siblings_without_a_title_or_search() {
+    let mut unclassified = t("The.Dark.Knight.2008.1080p", &[("", 1000)]);
+    unclassified.enriched = false;
     let all = vec![
         t("Batman.Begins.2005.720p", &[("Batman.Begins.mkv", 4 * GB)]),
-        t("x", &[("", 1000)]),
+        unclassified,
     ];
     let f = fixture(&all, false);
     let c = session(&f).await;
@@ -439,10 +444,12 @@ async fn siblings_without_a_title_or_search() {
         ),
     )
     .await;
-    if body["identity"].is_null() {
-        assert_eq!(body["other_versions"]["reason"], "no_title");
-        assert_eq!(body["other_versions"]["status"], "unavailable");
-    }
+    // Not classified yet: no parsed title to match on.
+    assert_eq!(body["identity"], Value::Null);
+    assert_eq!(
+        body["other_versions"],
+        json!({ "hits": [], "reason": "no_title", "status": "unavailable", "truncated": false })
+    );
 }
 
 fn compare(f: &Fixture, idx: &[usize], c: Option<&str>) -> Request<Body> {
@@ -588,24 +595,28 @@ async fn the_file_diff_is_bounded() {
             files: big,
             adult: false,
             flags: 0,
+            enriched: true,
         },
         T {
             name: "Small Pack",
             files: small,
             adult: false,
             flags: 0,
+            enriched: true,
         },
         T {
             name: "Resized Pack",
             files: resized,
             adult: false,
             flags: 0,
+            enriched: true,
         },
         T {
             name: "Huge Pack",
             files: huge,
             adult: false,
             flags: 0,
+            enriched: true,
         },
     ];
     let f = fixture(&all, true);
