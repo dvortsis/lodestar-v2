@@ -87,3 +87,27 @@ Category labels (facets, file tree) and the group each colours as
 | duplicate (for an identical payload) | clone |
 | title (when it's the raw name) | raw name |
 | 0 (when never scraped) | — / Never scraped |
+
+## 5. Settings labels (§10.10)
+
+| Key | en label | Definition | zh (proposed, TBD) |
+|---|---|---|---|
+| `setting_default` | Default | The value Lodestar ships with; nothing overrides it. | 默认 (TBD) |
+| `setting_file` | From config.toml | Set in `config.toml`; a value saved in the app overrides it. | 来自 config.toml (TBD) |
+| `setting_saved` | Saved in app | Saved from Settings. Reset to default removes it. | 已在应用中保存 (TBD) |
+| `setting_env` | Set by {variable} | Set by a `LODESTAR_*` environment variable. It wins over everything, so the field is locked. | 由 {variable} 设置 (TBD) |
+| `setting_restart` | Applies after restart | Saved, but the running server uses the old value until it restarts. | 重启后生效 (TBD) |
+| `setting_changed` | Changed from default | Any value other than the default, whatever its source. | 已更改 (TBD) |
+| `setting_automatic` | Automatic | The value follows another setting; the effective value is shown next to it ("Automatic · 400 at Balanced"). | 自动 (TBD) |
+| `log_event` | Log event | One kind of thing that can be written to the log ("Each failed metadata fetch"), which you can turn on or off. | 日志事件 (TBD) |
+| `log_data_kind` | Data in log lines | One kind of information a log line may contain (info hashes, torrent names, file names and paths…), switched per output. | 日志内容 (TBD) |
+| `log_private` | Private | The default data preset: no torrent or peer identifiers in any line. | 私密 (TBD) |
+| `live_log` | Live log | The page that follows new log lines as they're written (`/logs`). | 实时日志 (TBD) |
+| `full_log` | Log files | The log files on disk, listed in Settings → Logging, for download. | 日志文件 (TBD) |
+| `update_fix` | Fix | A release with bug and security fixes only: no data migration, no reindex, no config change. | 修复 (TBD) |
+| `update_feature` | Feature | A release that may migrate data (after a snapshot) or rebuild the search index in the background. | 功能 (TBD) |
+| `update_major` | Major | A release that may change config or behaviour; read its notes first. | 重大 (TBD) |
+| `update_rolled_back` | Rolled back | An update that failed its health check and was undone automatically. | 已回滚 (TBD) |
+| `needs_attention` | Needs attention | The Overview's list of problems, each with one action that fixes it. | 需要注意 (TBD) |
+
+Don't write "env", "override", "custom" or "dirty" in these labels.
