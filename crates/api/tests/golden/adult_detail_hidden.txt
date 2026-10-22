@@ -1,0 +1,2 @@
+404
+{"error":{"code":"adult_hidden","message":"This torrent is Adult, which is hidden: turn on Show adult content in Settings to see it."}}
