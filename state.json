@@ -815,7 +815,8 @@
   "session_01N83eB81W8xkqJgXiD7JLM3": {
    "title": "Modern DHT crawler architecture",
    "work": "content filter rule persistence and writer judging, migration V6"
-  }
+  },
+  "session_01NpcZEgW1eEWwKES8bNP3Cd": "Owner's own 'In-application settings screen' session (not runner-launched). Branch claude/brave-newton-53jgly, no PR. Adds owner-decisions \u00a72.11-14 (logging control, AGPL-3.0-or-later, auto-update, user-docs audience), LICENSE, runner/standards \u00a74b, slices.yaml. Runner #75 renumbered to \u00a72.15-17. Asked owner whether to PR/review/merge it."
  },
  "watch_policy": "Owner asked the runner to keep an eye on and manage these sessions: each heartbeat check status; report a pending permission prompt to the owner (runner cannot approve); nudge an idle session with remaining work; flag conflicts with slice ownership and migration order.",
  "migration_order": "V4 filter, V5 swarm, V6 subscriptions, V7 filter rules, V8 class_corrections (all merged), V9 class_rules (#52 open), V10 reserved M4 PR2, V11 next free (F1 if needed, then M5 B8). Runner assigns.",
@@ -829,7 +830,11 @@
   "15:59 owner asked to start more work: launched B13, B14 (core, above max_core 4 while B4 is in review) and R-docs (helper).",
   "16:25 OWNER: correction-driven Adult holds keep the 30-day name purge and become tombstones (hash+rule, no name) at purge; deliberate release with warning+password. (Option b for #70.) Record in owner-decisions.md \u00a72 via R-docs or #70.",
   "17:05 OWNER: SQLite secure_delete ON (overwrite deleted rows). Runner implements in crates/store; record in owner-decisions \u00a72 item 13 via #75.",
-  "17:10 runner: dev showcase routes must not ship in production builds (W7ab changes shared build config). Accent fill deviation in W7ab accepted (accent-content 4.03:1 at 13px) -> \u00a716."
+  "17:10 runner: dev showcase routes must not ship in production builds (W7ab changes shared build config). Accent fill deviation in W7ab accepted (accent-content 4.03:1 at 13px) -> \u00a716.",
+  {
+   "at": "2026-10-22T17:45Z",
+   "what": "LICENSE answered by the owner in the settings session: AGPL-3.0-or-later (owner-decisions \u00a72.12 on claude/brave-newton-53jgly)."
+  }
  ],
  "open_issues": [
   "Filter session self-merged #42 against owner decision (packs on by default) + budget env; follow-up fix requested. Suggest owner consider branch protection.",
@@ -915,16 +920,14 @@
   "pr80_baselines": "#80 pushed web/e2e/.update-snapshots (ea3718c); import regenerated tokens-{light,dark} PNGs from the E2E artifact, remove marker, then merge."
  },
  "blocked_on_owner": [
-  "M4 continuation: waiting on ExitPlanMode approval (plan mode) \u2014 can't act on #48 review",
   "Modern DHT crawler architecture: waiting on an AskUserQuestion",
   "F1b #66: sign-off on calibrated filter budget (50us at reference runner speed, scale up to 1.6x on slower runners)"
  ],
  "launches_today": 8,
- "last_heartbeat": "2026-10-22T16:45Z",
+ "last_heartbeat": "2026-10-22T17:46Z",
  "owner_questions": [
   "F1 budget scope: gate covers cheaply-rejectable rule shapes (10% = 40.8 us on runner). Shapes the cheap check cannot decide cost more at 10% of rules (VM: NEAR/1 ~450-500, negation ~140, fuzzy ~125, prefix ~110 us; runner ~1.4x faster). Should those shapes be gated at 50 us too?",
-  "Filter budget hardware: 50 us has no reference machine; gate now calibrated to the runner F1 measured on (10%=40.8 us), slower runners scale up to 1.6x. Confirm or set a reference machine.",
-  "SQLite secure_delete: deleted sealed names / torrent names may remain in DB free pages (seal.key in data dir). Enable PRAGMA secure_delete (write cost) or VACUUM on purge? Raised 17:00."
+  "Filter budget hardware: 50 us has no reference machine; gate now calibrated to the runner F1 measured on (10%=40.8 us), slower runners scale up to 1.6x. Confirm or set a reference machine."
  ],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)"
 }
