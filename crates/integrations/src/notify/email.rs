@@ -21,8 +21,9 @@
 //! - **Credentials** are [`Secret`]s and are sent only over TLS, or in
 //!   plaintext to a host that is plainly local (a private IP literal, a
 //!   single-label name, `.lan`, `.local` or `.home.arpa`) when the channel
-//!   may reach private addresses. AUTH PLAIN or LOGIN, whichever the server
-//!   offers. A refused login is final and says to check the username and
+//!   may reach private addresses, and only when the address actually
+//!   connected to is private too. AUTH PLAIN or LOGIN, whichever the server
+//!   offers. A 535 at login is final and says to check the username and
 //!   password, never what they were.
 //! - **The message** is `multipart/alternative`: plain text and simple HTML
 //!   (§10.9.7: no images, no remote resources, no scripts), both built with
@@ -31,16 +32,18 @@
 //!   one. Both parts are base64, so the whole message stays under
 //!   [`MAX_MESSAGE_BYTES`] whatever the text.
 //! - **Headers:** the Subject comes from the notification title (names
-//!   included) with CR, LF and other controls removed; lettre encodes
-//!   non-ASCII (RFC 2047). Addresses are lettre [`Address`]es parsed when
+//!   included) with CR, LF and other controls removed, and `=?` broken up so
+//!   a name can't smuggle in an encoded-word; lettre encodes non-ASCII
+//!   (RFC 2047). Addresses are lettre [`Address`]es parsed when
 //!   the channel is saved, never free-form text, and the envelope comes
 //!   from them alone, so nothing in a name can add a recipient.
 //! - **Idempotency:** the `Message-ID` is derived from
 //!   [`Notification::id`], so every retry of one notification carries the
 //!   same ID and a receiving system can drop the duplicate.
-//! - **Delivery classes:** a 4xx reply, a connection failure or a timeout is
-//!   retryable through [`deliver`]; a 5xx reply, a refused login or a
-//!   certificate that doesn't verify is final.
+//! - **Delivery classes:** a 4xx reply, a connection failure, a connection
+//!   dropped mid-session or a timeout is retryable through [`deliver`]; a
+//!   5xx reply, a refused login or a certificate that doesn't verify is
+//!   final.
 //!
 //! [`deliver`]: super::deliver
 
@@ -48,6 +51,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
+use lettre::address::Envelope;
 use lettre::message::header::{ContentTransferEncoding, ContentType};
 use lettre::message::{Body, Mailbox, MultiPart, SinglePart};
 use lettre::transport::smtp::Error as SmtpError;
@@ -61,7 +65,8 @@ use super::text::{clean_line, compose, truncate_bytes, truncate_chars, web_link}
 use super::{AttemptError, Channel, DeliveryError, Notification, Notifier};
 use crate::BoxFuture;
 use crate::net::{
-    NetPolicy, Resolve, SystemResolver, check_host, connect_tcp_with, is_local_host, resolve_tcp,
+    AddrClass, NetPolicy, Resolve, SystemResolver, check_host, classify as classify_addr,
+    connect_tcp_with, is_local_host, resolve_tcp,
 };
 use crate::secret::Secret;
 
@@ -291,10 +296,11 @@ impl Email {
     /// The whole message for `n`, as it goes on the wire (useful for a
     /// preview, and for tests).
     pub fn message(&self, n: &Notification) -> Result<Vec<u8>, DeliveryError> {
-        Ok(self.build_message(n)?.formatted())
+        Ok(self.build_message(n)?.1)
     }
 
-    fn build_message(&self, n: &Notification) -> Result<Message, DeliveryError> {
+    /// The message and its wire form, formatted once.
+    fn build_message(&self, n: &Notification) -> Result<(Message, Vec<u8>), DeliveryError> {
         let failed = |_| DeliveryError::Failed("couldn't build the message");
         let part = |content_type: ContentType, text: String| {
             let body = Body::new_with_encoding(text, ContentTransferEncoding::Base64)
@@ -312,10 +318,11 @@ impl Email {
             .singlepart(part(ContentType::TEXT_PLAIN, text_part(n))?)
             .singlepart(part(ContentType::TEXT_HTML, html_part(n))?);
         let message = builder.multipart(body).map_err(failed)?;
-        if message.formatted().len() > MAX_MESSAGE_BYTES {
+        let bytes = message.formatted();
+        if bytes.len() > MAX_MESSAGE_BYTES {
             return Err(DeliveryError::Failed("the message is too large"));
         }
-        Ok(message)
+        Ok((message, bytes))
     }
 
     fn tls(&self) -> Result<TlsParameters, AttemptError> {
@@ -333,12 +340,15 @@ impl Email {
     }
 
     /// One SMTP session: connect, secure, log in, send, quit.
-    async fn session(&self, message: &Message) -> Result<(), AttemptError> {
+    async fn session(&self, envelope: &Envelope, bytes: &[u8]) -> Result<(), AttemptError> {
         let hello = ClientId::default();
         let host = self.host_name();
         let mut conn = match self.security {
             SmtpSecurity::Tls => {
-                let addrs = resolve_tcp(&*self.resolver, host, self.port, self.policy).await?;
+                let resolve = resolve_tcp(&*self.resolver, host, self.port, self.policy);
+                let addrs = tokio::time::timeout(CONNECT_TIMEOUT, resolve)
+                    .await
+                    .map_err(|_| AttemptError::transient(DeliveryError::Timeout))??;
                 AsyncSmtpConnection::connect_tokio1(
                     addrs.as_slice(),
                     Some(CONNECT_TIMEOUT),
@@ -358,6 +368,20 @@ impl Email {
                     CONNECT_TIMEOUT,
                 )
                 .await?;
+                // A local-looking name can still resolve to a public
+                // address (a search domain, a `.local` name served by
+                // DNS): a plaintext login also needs the connected address
+                // itself to be private.
+                if self.security == SmtpSecurity::None
+                    && self.credentials.is_some()
+                    && !tcp
+                        .peer_addr()
+                        .is_ok_and(|a| classify_addr(a.ip()) == AddrClass::Private)
+                {
+                    return Err(AttemptError::fatal(DeliveryError::Failed(
+                        "a login without TLS needs the mail server on a private-network address",
+                    )));
+                }
                 let mut conn = AsyncSmtpConnection::connect_with_transport(Box::new(tcp), &hello)
                     .await
                     .map_err(|e| classify(Step::Connect, &e))?;
@@ -395,8 +419,7 @@ impl Email {
                 return Err(classify(Step::Login, &e));
             }
         }
-        let bytes = message.formatted();
-        conn.send(message.envelope(), &bytes)
+        conn.send(envelope, bytes)
             .await
             .map_err(|e| classify(Step::Send, &e))?;
         // The message is accepted; a failed goodbye doesn't change that.
@@ -418,7 +441,8 @@ fn check_credential(secret: &Secret, why: &'static str) -> Result<(), DeliveryEr
 fn classify(step: Step, e: &SmtpError) -> AttemptError {
     if let Some(code) = e.status() {
         let code = u16::from(code);
-        if step == Step::Login && code >= 500 {
+        // 535: authentication credentials invalid (RFC 4954).
+        if step == Step::Login && code == 535 {
             return AttemptError::fatal(DeliveryError::Failed(
                 "the mail server refused the login; check the username and password",
             ));
@@ -445,11 +469,10 @@ fn classify(step: Step, e: &SmtpError) -> AttemptError {
             Step::Connect | Step::Send => "the mail server can't take this message",
         }));
     }
-    if e.is_response() {
-        return AttemptError::fatal(DeliveryError::Failed(
-            "the server didn't answer like a mail server",
-        ));
-    }
+    // Everything else, a truncated or malformed reply included (lettre
+    // reports a connection closed mid-session as an "incomplete response"),
+    // is a connection problem worth retrying; the stable Message-ID lets
+    // the receiver drop a duplicate if the message did get through.
     AttemptError::transient(DeliveryError::Unreachable)
 }
 
@@ -477,8 +500,12 @@ fn is_certificate_error(e: &SmtpError) -> bool {
 }
 
 /// The Subject: the title on one line, without controls, or "Lodestar".
+/// `=?` is broken up, so text from a name can't be an RFC 2047
+/// encoded-word that a mail reader decodes into a bidi override or a line
+/// break after the cleaning.
 fn subject(n: &Notification) -> String {
-    let title = truncate_chars(&clean_line(&n.title), MAX_SUBJECT_CHARS);
+    let title = clean_line(&n.title).replace("=?", "= ?");
+    let title = truncate_chars(&title, MAX_SUBJECT_CHARS);
     if title.is_empty() {
         FROM_NAME.to_owned()
     } else {
@@ -573,8 +600,9 @@ impl Notifier for Email {
 
     fn attempt<'a>(&'a self, n: &'a Notification) -> BoxFuture<'a, Result<(), AttemptError>> {
         Box::pin(async move {
-            let message = self.build_message(n).map_err(AttemptError::fatal)?;
-            let result = tokio::time::timeout(EMAIL_TIMEOUT, self.session(&message))
+            let (message, bytes) = self.build_message(n).map_err(AttemptError::fatal)?;
+            let session = self.session(message.envelope(), &bytes);
+            let result = tokio::time::timeout(EMAIL_TIMEOUT, session)
                 .await
                 .unwrap_or(Err(AttemptError::transient(DeliveryError::Timeout)));
             tracing::debug!(
@@ -620,6 +648,18 @@ mod tests {
         accept_login: bool,
         mail_reply: &'static str,
         data_reply: &'static str,
+        /// The reply to AUTH PLAIN in place of the credential check.
+        auth_reply: Option<&'static str>,
+        /// Close the connection at this point without a reply.
+        drop: Drop,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Drop {
+        Never,
+        BeforeGreeting,
+        AfterEhlo,
+        AfterData,
     }
 
     impl Default for Script {
@@ -631,6 +671,8 @@ mod tests {
                 accept_login: true,
                 mail_reply: "250 2.1.0 OK",
                 data_reply: "250 2.0.0 queued",
+                auth_reply: None,
+                drop: Drop::Never,
             }
         }
     }
@@ -695,7 +737,9 @@ mod tests {
                 let sessions = Arc::clone(&sessions);
                 tokio::spawn(async move {
                     let mut session = Session::default();
-                    if script.implicit_tls {
+                    if script.drop == Drop::BeforeGreeting {
+                        drop(tcp);
+                    } else if script.implicit_tls {
                         if let Ok(tls) = acceptor.accept(tcp).await {
                             let mut io = BufReader::new(tls);
                             if greet(&mut io).await {
@@ -747,6 +791,9 @@ mod tests {
             session.commands.push(cmd.clone());
             session.encrypted.push(tls);
             let upper = cmd.to_ascii_uppercase();
+            if script.drop == Drop::AfterEhlo && upper.starts_with("EHLO") {
+                return false;
+            }
             let ok = if upper.starts_with("EHLO") {
                 let mut lines = vec!["250-mail.test".to_owned()];
                 if script.starttls && !tls {
@@ -759,6 +806,8 @@ mod tests {
                 reply(io, &lines.join("\r\n")).await
             } else if upper == "STARTTLS" {
                 return reply(io, "220 2.0.0 go ahead").await;
+            } else if let (Some(text), true) = (script.auth_reply, upper.starts_with("AUTH")) {
+                reply(io, text).await
             } else if let Some(given) = cmd.strip_prefix("AUTH PLAIN ") {
                 let good = script.accept_login && given == PLAIN;
                 reply(
@@ -805,6 +854,9 @@ mod tests {
                     }
                     session.data.push_str(&l);
                     session.data.push('\n');
+                }
+                if script.drop == Drop::AfterData {
+                    return false;
                 }
                 reply(io, script.data_reply).await
             } else if upper == "QUIT" {
@@ -1252,6 +1304,151 @@ mod tests {
             assert_eq!(out.result, Err(DeliveryError::Blocked(AddrClass::Loopback)));
         }
         assert!(log.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_dropped_connection_is_retried() {
+        for point in [Drop::BeforeGreeting, Drop::AfterEhlo, Drop::AfterData] {
+            let (port, log) = smtp_server(vec![
+                Script {
+                    drop: point,
+                    ..Script::default()
+                },
+                Script::default(),
+            ])
+            .await;
+            let n = alert();
+            let out = deliver(&email(&config(port, SmtpSecurity::StartTls)), &n, &FAST).await;
+            assert_eq!(out.result, Ok(()), "{point:?}");
+            assert_eq!(out.attempts, 2, "{point:?}");
+            let sessions = log.lock().unwrap().clone();
+            let id = format!("Message-ID: <{}.lodestar@example.com>", n.id());
+            assert!(sessions[1].data.contains(&id), "{point:?}");
+            if point == Drop::AfterData {
+                // The retry carries the same ID, so a receiver that did
+                // take the first copy can drop the second.
+                assert!(sessions[0].data.contains(&id));
+            }
+        }
+        // Every attempt dropped: retried to the limit, then unreachable.
+        let (port, _) = smtp_server(vec![Script {
+            drop: Drop::AfterEhlo,
+            ..Script::default()
+        }])
+        .await;
+        let out = deliver(
+            &email(&config(port, SmtpSecurity::StartTls)),
+            &alert(),
+            &FAST,
+        )
+        .await;
+        assert_eq!(out.result, Err(DeliveryError::Unreachable));
+        assert_eq!(out.attempts, 3);
+    }
+
+    #[tokio::test]
+    async fn encoded_words_in_a_title_stay_text() {
+        let (port, log) = smtp_server(vec![Script::default()]).await;
+        let mut n = alert();
+        for title in [
+            "Movie =?utf-8?b?4oCu?=vkm.exe",
+            "x =?utf-8?b?DQpCY2M6IGF0dGFja2VyQGV4YW1wbGUuY29t?=",
+            "=?UTF-8?Q?=E2=80=AE?=",
+        ] {
+            n.title = title.into();
+            assert!(!subject(&n).contains("=?"), "{title}");
+            let out = deliver(&email(&config(port, SmtpSecurity::StartTls)), &n, &FAST).await;
+            assert_eq!(out.result, Ok(()));
+        }
+        assert_eq!(subject(&n), "= ?UTF-8?Q?=E2=80=AE?=");
+        for s in log.lock().unwrap().iter() {
+            let (headers, _) = decode_parts(&s.data);
+            let subject = headers
+                .lines()
+                .skip_while(|l| !l.starts_with("Subject:"))
+                .take_while(|l| l.starts_with("Subject:") || l.starts_with(' '))
+                .collect::<String>();
+            assert!(!subject.contains("=?utf-8?b?4oCu"), "{subject}");
+            assert!(!subject.contains("=?utf-8?b?DQpC"), "{subject}");
+            assert!(!subject.contains("=?UTF-8?Q?=E2"), "{subject}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_plaintext_login_needs_a_private_peer() {
+        // `relay.lan` looks local but resolves elsewhere (here loopback,
+        // the only address a test can reach): no AUTH is sent.
+        let (port, log) = smtp_server(vec![Script {
+            starttls: false,
+            ..Script::default()
+        }])
+        .await;
+        let mut cfg = config(port, SmtpSecurity::None);
+        cfg.host = "relay.lan".into();
+        cfg.allow_private = true;
+        let r = ScriptedResolver::new(&[("relay.lan", &[&["127.0.0.1"]])]);
+        let sender = Email::build(&cfg, NetPolicy::loopback_for_tests(), r).unwrap();
+        let out = deliver(&sender, &alert(), &FAST).await;
+        assert_eq!(
+            out.result,
+            Err(DeliveryError::Failed(
+                "a login without TLS needs the mail server on a private-network address"
+            ))
+        );
+        assert_eq!(out.attempts, 1);
+        for s in log.lock().unwrap().iter() {
+            assert!(!s.verbs().iter().any(|v| v == "AUTH"), "{s:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn only_a_535_blames_the_credentials() {
+        for (text, want) in [
+            (
+                "535 5.7.8 bad credentials",
+                DeliveryError::Failed(
+                    "the mail server refused the login; check the username and password",
+                ),
+            ),
+            (
+                "530 5.7.0 must issue STARTTLS first",
+                DeliveryError::SmtpRejected { code: 530 },
+            ),
+            (
+                "534 5.7.9 mechanism too weak",
+                DeliveryError::SmtpRejected { code: 534 },
+            ),
+        ] {
+            let (port, _) = smtp_server(vec![Script {
+                auth_reply: Some(text),
+                ..Script::default()
+            }])
+            .await;
+            let out = deliver(
+                &email(&config(port, SmtpSecurity::StartTls)),
+                &alert(),
+                &FAST,
+            )
+            .await;
+            assert_eq!(out.result, Err(want), "{text}");
+            assert_eq!(out.attempts, 1, "{text}");
+        }
+        let (port, _) = smtp_server(vec![
+            Script {
+                auth_reply: Some("454 4.7.0 temporary failure"),
+                ..Script::default()
+            },
+            Script::default(),
+        ])
+        .await;
+        let out = deliver(
+            &email(&config(port, SmtpSecurity::StartTls)),
+            &alert(),
+            &FAST,
+        )
+        .await;
+        assert_eq!(out.result, Ok(()));
+        assert_eq!(out.attempts, 2);
     }
 
     #[test]
