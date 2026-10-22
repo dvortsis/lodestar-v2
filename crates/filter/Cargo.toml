@@ -1,0 +1,18 @@
+[package]
+name = "lodestar-filter"
+description = "Content filtering: normalization, hashed term lists, the child-safety core and its exceptions"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+lodestar-classify.workspace = true
+unicode-normalization = "0.1.24"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+proptest = "1.11.0"

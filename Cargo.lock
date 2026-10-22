@@ -942,6 +942,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lodestar-filter"
+version = "0.0.0"
+dependencies = [
+ "lodestar-classify",
+ "proptest",
+ "unicode-normalization",
+]
+
+[[package]]
 name = "lodestar-metainfo"
 version = "0.0.0"
 dependencies = [
