@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-22T07:44:00Z",
+ "updated_at": "2026-10-22T07:51:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 16
@@ -95,7 +95,7 @@
    "pr": null,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": ""
+   "notes": "ready once C1 (#37) merges (doc-only fix pending)"
   },
   "W3": {
    "status": "in_review",
@@ -719,13 +719,13 @@
    "notes": "built by the filter session in #52"
   },
   "W1c": {
-   "status": "in_review",
+   "status": "merged",
    "model": "sonnet",
    "session": "session_013n3VVF4K4QtH4YeGKjACBY",
    "pr": 53,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "approved; small hover/selected \u0394E fix requested before merge"
+   "notes": "merged 07:50"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
