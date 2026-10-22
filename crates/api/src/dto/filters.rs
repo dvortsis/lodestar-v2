@@ -295,6 +295,8 @@ pub enum JobState {
     Running,
     Done,
     Failed,
+    /// Stopped by `POST /filters/preview/jobs/{id}/cancel`.
+    Cancelled,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -642,6 +644,10 @@ pub struct CorrectResponse {
     /// Non-null only when `type` is `adult`.
     #[schema(required = true)]
     pub adult_kind: Option<String>,
+    /// When relabelling it adult made filtering hold it back (§20.9): the
+    /// rule that did. It's then dropped or quarantined, no longer stored.
+    #[schema(required = true)]
+    pub held_by: Option<String>,
     /// Junk score, 0–100.
     pub junk: u8,
     #[serde(rename = "type")]
@@ -697,6 +703,9 @@ pub struct ClassRuleAdded {
     /// search index (only torrents arriving later are affected).
     #[schema(required = true)]
     pub queued: Option<usize>,
+    /// More stored torrents matched than are queued at once (1,000,000):
+    /// the rest are classified again when next re-enriched.
+    pub truncated: bool,
 }
 
 /// `POST /classify/rules/remove`.
@@ -711,6 +720,8 @@ pub struct ClassRuleRemoved {
     /// As [`ClassRuleAdded::queued`].
     #[schema(required = true)]
     pub queued: Option<usize>,
+    /// As [`ClassRuleAdded::truncated`].
+    pub truncated: bool,
 }
 
 #[cfg(test)]

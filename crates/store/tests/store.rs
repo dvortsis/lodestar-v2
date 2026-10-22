@@ -421,6 +421,7 @@ fn counters_add_up_inside_writes() {
             events: &events,
             filtered: &[],
             swarm: &[],
+            class_gen: None,
         })
         .unwrap();
     // A counters-only transaction (nothing to ingest).
