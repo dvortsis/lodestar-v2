@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use lodestar_cluster::{Lease, WorkerId};
-use lodestar_filter::{Action, Handle, Hit, Item, Sealer};
+use lodestar_filter::{Action, Decision, Handle, Item, Sealer};
 use lodestar_metainfo::InfoHash;
 use lodestar_sources::{Discovery, Funnel, FunnelCounts, Loss, Stage};
 use lodestar_store::{
@@ -107,7 +107,7 @@ struct Committing {
     lease: Lease,
     /// The authoritative filter verdict, and the sealed name for a
     /// quarantine.
-    verdict: Option<Hit>,
+    verdict: Option<Decision>,
     sealed: Option<Vec<u8>>,
 }
 
@@ -474,7 +474,17 @@ fn transaction(
             committing[i]
                 .verdict
                 .as_ref()
-                .map(Hit::evidence_codes)
+                .map(Decision::evidence_codes)
+                .unwrap_or_default()
+        })
+        .collect();
+    let rules: Vec<String> = blocked
+        .iter()
+        .map(|&i| {
+            committing[i]
+                .verdict
+                .as_ref()
+                .map(|d| d.rule.id())
                 .unwrap_or_default()
         })
         .collect();
@@ -482,12 +492,13 @@ fn transaction(
         .iter()
         .zip(&filtered_hashes)
         .zip(&evidence)
-        .filter_map(|((&i, hashes), evidence)| {
+        .zip(&rules)
+        .filter_map(|(((&i, hashes), evidence), rule)| {
             let c = &committing[i];
             let hit = c.verdict.as_ref()?;
             Some(Filtered {
                 hashes,
-                rule: hit.rule.id(),
+                rule,
                 action: hit.action.code(),
                 held: held(c),
                 sealed: c.sealed.as_deref(),
@@ -505,8 +516,12 @@ fn transaction(
                 torrent: &results.torrent,
                 discovered_at: lease.discovered_at,
                 metadata_at: results.metadata_at,
-                extra_flags: if lease.discovered_at < backfill_until {
+                extra_flags: (if lease.discovered_at < backfill_until {
                     flags::BACKFILL
+                } else {
+                    0
+                }) | if results.private_source {
+                    flags::PRIVATE_SOURCE
                 } else {
                     0
                 },
@@ -522,18 +537,25 @@ fn transaction(
         .map(|&i| &committing[i])
         .map(|c| {
             (
-                c.results.key,
+                &c.results,
                 c.lease.sources | c.results.sources,
                 c.lease.source,
             )
         })
         .filter(|&(_, sources, first)| sources != bit(first))
-        .map(|(hash, sources, _)| Touch { hash, sources })
+        .map(|(r, sources, _)| Touch {
+            hash: r.key,
+            sources,
+            at: r.metadata_at,
+            public: !r.private_source,
+        })
         .collect();
     let extra = all_touches.len();
     all_touches.extend(touches.iter().map(|d| Touch {
         hash: d.found.key,
         sources: bit(d.source),
+        at: d.at,
+        public: !d.found.private_source,
     }));
     let written = store.write(&WriteBatch {
         prepared: &prepared,
