@@ -11,7 +11,7 @@ use rand::{RngExt, SeedableRng};
 use std::net::UdpSocket as StdUdpSocket;
 
 use tokio::net::UdpSocket;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use lodestar_metainfo::InfoHash;
 
@@ -20,7 +20,7 @@ use super::peers::PeerStore;
 use super::sampler::{self, Sampler};
 use super::seen::SeenFilter;
 use super::tokens::Tokens;
-use super::{Command, Config, Harvest, Snapshot, Source, Stats};
+use super::{Command, Config, DhtEstimate, Harvest, Snapshot, Source, Stats};
 use crate::compact::{self, CompactNodes, NodeId, NodeInfo};
 use crate::krpc::{self, Body, ErrorBody, Message, Method, Query, Response, Want, error_code};
 use crate::routing::{Contact, Inserted, RoutingTable, Status};
@@ -49,6 +49,17 @@ const MAX_GET_PEERS_QUEUE: usize = 10_000;
 /// Share of the query budget spent on BEP 51 sampling; the rest stays
 /// free for routing maintenance and lookups.
 const SAMPLE_SHARE: f64 = 0.5;
+/// Share of the query budget BEP 33 scrapes may use. It's spent when a
+/// scrape lookup starts, at [`QUERIES_PER_SCRAPE`] each, never by failing
+/// queries mid-lookup.
+const SCRAPE_SHARE: f64 = 0.1;
+/// What a scrape lookup costs at most: 2K answers plus a few that time out.
+const QUERIES_PER_SCRAPE: f64 = 20.0;
+/// Concurrent scrape lookups, and how many requests may wait.
+const MAX_SCRAPES: usize = 16;
+const MAX_SCRAPE_QUEUE: usize = 1024;
+/// A scrape lookup still running after this answers with what it has.
+const SCRAPE_DEADLINE: Duration = Duration::from_secs(30);
 /// Below this frontier size, refill it and explore a random region.
 const LOW_FRONTIER: usize = 64;
 /// Backoff for a sample query that timed out (may be transient).
@@ -70,17 +81,36 @@ struct Pending {
     purpose: Purpose,
 }
 
+/// What happened to a query.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Sent {
+    Yes,
+    /// Over the rate limit or the outstanding cap: try again later.
+    Throttled,
+    /// The socket refused it.
+    Failed,
+}
+
 struct TokenBucket {
     rate: f64,
+    burst: f64,
     tokens: f64,
     last: Instant,
 }
 
 impl TokenBucket {
     fn new(per_sec: u32, now: Instant) -> TokenBucket {
+        let rate = f64::from(per_sec);
+        TokenBucket::with_burst(rate, rate, now)
+    }
+
+    /// A bucket holding up to `burst` tokens (at least one), full at start.
+    fn with_burst(rate: f64, burst: f64, now: Instant) -> TokenBucket {
+        let burst = burst.max(1.0);
         TokenBucket {
-            rate: f64::from(per_sec),
-            tokens: f64::from(per_sec),
+            rate,
+            burst,
+            tokens: burst,
             last: now,
         }
     }
@@ -88,7 +118,7 @@ impl TokenBucket {
     fn try_take(&mut self, now: Instant) -> bool {
         let elapsed = now.duration_since(self.last).as_secs_f64();
         self.last = now;
-        self.tokens = (self.tokens + elapsed * self.rate).min(self.rate);
+        self.tokens = (self.tokens + elapsed * self.rate).min(self.burst);
         if self.tokens >= 1.0 {
             self.tokens -= 1.0;
             true
@@ -163,6 +193,13 @@ struct Actor {
     recent: VecDeque<InfoHash>,
     get_peers_queue: VecDeque<InfoHash>,
     active_get_peers: usize,
+    scrape_queue: VecDeque<(InfoHash, oneshot::Sender<Option<DhtEstimate>>)>,
+    active_scrapes: usize,
+    /// Who's waiting for each running scrape lookup.
+    scrape_waiters: HashMap<u32, oneshot::Sender<Option<DhtEstimate>>>,
+    scrape_rate: TokenBucket,
+    /// Scrape lookups that ran out of query budget, to drive next tick.
+    stalled: Vec<u32>,
     last_prune: Instant,
 }
 
@@ -225,6 +262,15 @@ pub(crate) async fn run(
         recent: VecDeque::with_capacity(RECENT_SAMPLES),
         get_peers_queue: VecDeque::new(),
         active_get_peers: 0,
+        scrape_queue: VecDeque::new(),
+        active_scrapes: 0,
+        scrape_waiters: HashMap::new(),
+        scrape_rate: {
+            let qps = f64::from(cfg.intensity.queries_per_sec());
+            let per_sec = qps * SCRAPE_SHARE / QUERIES_PER_SCRAPE;
+            TokenBucket::with_burst(per_sec, per_sec, now)
+        },
+        stalled: Vec::new(),
         last_prune: now,
         cfg,
     };
@@ -348,6 +394,15 @@ impl Actor {
                     self.get_peers_queue.push_back(hash);
                 }
             }
+            Command::Scrape(hash, reply) => {
+                Stats::inc(&self.stats.scrapes_requested);
+                if self.scrape_queue.len() < MAX_SCRAPE_QUEUE {
+                    self.scrape_queue.push_back((hash, reply));
+                } else {
+                    Stats::inc(&self.stats.scrapes_dropped);
+                    let _ = reply.send(None);
+                }
+            }
         }
     }
 
@@ -412,12 +467,25 @@ impl Actor {
         method: Method<'_>,
         purpose: Purpose,
     ) -> bool {
+        self.try_query(sockets, family, to, node, method, purpose) == Sent::Yes
+    }
+
+    /// [`Actor::query`], telling a throttled query from a failed send.
+    fn try_query(
+        &mut self,
+        sockets: &[StdUdpSocket],
+        family: usize,
+        to: SocketAddr,
+        node: Option<NodeId>,
+        method: Method<'_>,
+        purpose: Purpose,
+    ) -> Sent {
         let now = Instant::now();
         if self.pending.len() >= self.cfg.intensity.max_outstanding()
             || !self.query_rate.try_take(now)
         {
             Stats::inc(&self.stats.throttled);
-            return false;
+            return Sent::Throttled;
         }
         let tid = loop {
             self.next_tid = self.next_tid.wrapping_add(1);
@@ -438,7 +506,7 @@ impl Actor {
             body: Body::Query(Query { id, method }),
         };
         if !self.send(sockets, family, to, &msg) {
-            return false;
+            return Sent::Failed;
         }
         Stats::inc(&self.stats.queries_out);
         *self.pending_addrs.entry(to).or_default() += 1;
@@ -452,7 +520,7 @@ impl Actor {
                 purpose,
             },
         );
-        true
+        Sent::Yes
     }
 
     fn take_pending(&mut self, tid: u16) -> Pending {
@@ -567,11 +635,21 @@ impl Actor {
         let token;
         let now_i = Instant::now();
         let values = match &q.method {
-            Method::GetPeers { info_hash, .. } => {
-                self.peer_store
-                    .peers(info_hash, self.families[family].ipv6, now_i)
-            }
+            Method::GetPeers {
+                info_hash, noseed, ..
+            } => self
+                .peer_store
+                .peers(info_hash, self.families[family].ipv6, *noseed, now_i),
             _ => Vec::new(),
+        };
+        // BEP 33: filters only when asked, and only for a hash we store.
+        let blooms = match &q.method {
+            Method::GetPeers {
+                info_hash,
+                scrape: true,
+                ..
+            } => self.peer_store.blooms(info_hash, now_i),
+            _ => None,
         };
         let samples: Vec<u8> = match &q.method {
             Method::SampleInfohashes { .. } => self.recent.iter().flat_map(|h| h.0).collect(),
@@ -596,6 +674,8 @@ impl Actor {
                     nodes6: CompactNodes::v6(&v6).unwrap_or_default(),
                     token: Some(&token),
                     values: values.clone(),
+                    seeds_bloom: blooms.as_ref().map(|(sd, _)| &sd.0),
+                    peers_bloom: blooms.as_ref().map(|(_, pe)| &pe.0),
                     ..Response::default()
                 })
             }
@@ -645,12 +725,13 @@ impl Actor {
                 info_hash,
                 port,
                 implied_port,
+                seed,
                 ..
             } if announced => {
                 let port = if *implied_port { from.port() } else { *port };
                 if port != 0 {
                     let peer = SocketAddr::new(from.ip(), port);
-                    self.peer_store.announce(*info_hash, peer, now_i);
+                    self.peer_store.announce(*info_hash, peer, *seed, now_i);
                     if self.cfg.harvest.passive {
                         self.harvest_hash(*info_hash, Source::Announce, vec![peer]);
                     }
@@ -773,6 +854,9 @@ impl Actor {
                 let others = nodes.iter().filter(|n| !Actor::is_self(ids, local, n));
                 match pending.id {
                     Some(id) => {
+                        if lookup.scrape {
+                            lookup.record_blooms(&id, r.seeds_bloom, r.peers_bloom);
+                        }
                         lookup.on_response(&id, others, &r.values);
                     }
                     None => {
@@ -816,6 +900,45 @@ impl Actor {
         self.start_lookup(sockets, 0, NodeId(hash.0), &[], &[], Some(hash));
     }
 
+    /// Starts a BEP 33 scrape lookup; `reply` gets the estimate when it
+    /// finishes.
+    fn start_scrape(
+        &mut self,
+        sockets: &[StdUdpSocket],
+        hash: InfoHash,
+        reply: oneshot::Sender<Option<DhtEstimate>>,
+    ) {
+        self.active_scrapes += 1;
+        // A hash-bearing lookup always starts, under the next id; the
+        // waiter is in place before the first drive, which may finish it.
+        self.scrape_waiters.insert(self.next_lookup, reply);
+        self.start_lookup_as(sockets, 0, NodeId(hash.0), &[], &[], Some(hash), true);
+    }
+
+    /// Answers a finished (or timed-out) scrape lookup with its counts.
+    fn finish_scrape(&mut self, lid: u32, lookup: &Lookup) {
+        self.active_scrapes -= 1;
+        let (seeds, peers, responders) = lookup.scrape_blooms();
+        Stats::inc(&self.stats.scrapes_completed);
+        if responders > 0 {
+            Stats::inc(&self.stats.scrapes_with_responders);
+        }
+        if let Some(reply) = self.scrape_waiters.remove(&lid) {
+            let _ = reply.send(Some(DhtEstimate {
+                seeds: seeds.count(),
+                peers: peers.count(),
+                responders,
+            }));
+        }
+    }
+
+    /// Lookups that aren't for a hash: bootstrap, refresh, exploration.
+    fn maintenance_lookups(&self) -> usize {
+        self.lookups
+            .len()
+            .saturating_sub(self.active_get_peers + self.active_scrapes)
+    }
+
     /// Starts a lookup (find_node, or get_peers when `info_hash` is set)
     /// seeded from the routing table, `known` nodes, and `seeds`
     /// (addresses whose ids we don't know yet).
@@ -828,14 +951,28 @@ impl Actor {
         seeds: &[SocketAddr],
         info_hash: Option<InfoHash>,
     ) {
-        let maintenance = self.lookups.len() - self.active_get_peers.min(self.lookups.len());
-        if info_hash.is_none() && maintenance >= MAX_LOOKUPS {
+        self.start_lookup_as(sockets, family, target, known, seeds, info_hash, false);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start_lookup_as(
+        &mut self,
+        sockets: &[StdUdpSocket],
+        family: usize,
+        target: NodeId,
+        known: &[NodeInfo],
+        seeds: &[SocketAddr],
+        info_hash: Option<InfoHash>,
+        scrape: bool,
+    ) {
+        if info_hash.is_none() && self.maintenance_lookups() >= MAX_LOOKUPS {
             return;
         }
         let lid = self.next_lookup;
         self.next_lookup = self.next_lookup.wrapping_add(1);
         let mut lookup = Lookup::new(target, family);
         lookup.info_hash = info_hash;
+        lookup.scrape = scrape;
         for n in self.families[family]
             .table
             .closest(&target, 16, self.now_secs())
@@ -873,14 +1010,27 @@ impl Actor {
         let Some(lookup) = self.lookups.get_mut(&lid) else {
             return;
         };
-        let (family, target, info_hash) = (lookup.family, lookup.target, lookup.info_hash);
+        let (family, target, info_hash, scrape) = (
+            lookup.family,
+            lookup.target,
+            lookup.info_hash,
+            lookup.scrape,
+        );
         let next = lookup.next();
+        let mut throttled = false;
         for n in next {
+            if throttled {
+                // The rest of this batch waits too.
+                if let Some(l) = self.lookups.get_mut(&lid) {
+                    l.retry_later(&n.id);
+                }
+                continue;
+            }
             let method = match info_hash {
                 Some(info_hash) => Method::GetPeers {
                     info_hash,
                     want: Want::default(),
-                    scrape: false,
+                    scrape,
                     noseed: false,
                 },
                 None => Method::FindNode {
@@ -888,7 +1038,7 @@ impl Actor {
                     want: Want::default(),
                 },
             };
-            let sent = self.query(
+            let sent = self.try_query(
                 sockets,
                 family,
                 n.addr,
@@ -896,15 +1046,28 @@ impl Actor {
                 method,
                 Purpose::Lookup(lid),
             );
-            if !sent {
-                if let Some(l) = self.lookups.get_mut(&lid) {
-                    l.on_failure(&n.id);
+            let Some(l) = self.lookups.get_mut(&lid) else {
+                continue;
+            };
+            match sent {
+                Sent::Yes => {}
+                // A scrape's budget was paid when it started, so running
+                // short of queries delays it rather than spoiling it.
+                Sent::Throttled if scrape => {
+                    l.retry_later(&n.id);
+                    throttled = true;
+                    if !self.stalled.contains(&lid) {
+                        self.stalled.push(lid);
+                    }
                 }
+                Sent::Throttled | Sent::Failed => l.on_failure(&n.id),
             }
         }
         if self.lookups.get(&lid).is_some_and(Lookup::is_done) {
             let done = self.lookups.remove(&lid).expect("checked above");
-            if let Some(hash) = done.info_hash {
+            if done.scrape {
+                self.finish_scrape(lid, &done);
+            } else if let Some(hash) = done.info_hash {
                 self.active_get_peers -= 1;
                 let mut peers: Vec<SocketAddr> = done.peers.into_iter().collect();
                 peers.sort_unstable();
@@ -1008,6 +1171,7 @@ impl Actor {
             };
             self.start_get_peers(sockets, hash);
         }
+        self.scrape_tick(sockets, now_i);
         if self.cfg.harvest.sample {
             self.sample_tick(sockets, now_i);
         }
@@ -1016,7 +1180,8 @@ impl Actor {
         let due = self
             .last_bootstrap
             .is_none_or(|t| now_i.duration_since(t) >= self.cfg.tick * REBOOTSTRAP_TICKS);
-        if thin && due && self.lookups.is_empty() {
+        // Scrapes run all the time; only the other lookups hold this back.
+        if thin && due && self.lookups.len() == self.active_scrapes {
             self.start_bootstrap(sockets, Vec::new());
         }
 
@@ -1034,6 +1199,40 @@ impl Actor {
         self.stats
             .outstanding
             .store(self.pending.len() as u64, Ordering::Relaxed);
+    }
+
+    /// One tick of BEP 33 scraping: resume lookups that ran short of
+    /// queries, answer the ones past their deadline with what they have,
+    /// and start queued scrapes as the budget allows.
+    fn scrape_tick(&mut self, sockets: &[StdUdpSocket], now_i: Instant) {
+        for lid in std::mem::take(&mut self.stalled) {
+            self.drive_lookup(sockets, lid);
+        }
+        let late: Vec<u32> = self
+            .lookups
+            .iter()
+            .filter(|(_, l)| l.scrape && now_i.duration_since(l.started) >= SCRAPE_DEADLINE)
+            .map(|(lid, _)| *lid)
+            .collect();
+        for lid in late {
+            let lookup = self.lookups.remove(&lid).expect("listed above");
+            self.finish_scrape(lid, &lookup);
+        }
+        while self.active_scrapes < MAX_SCRAPES {
+            // A caller that stopped waiting doesn't cost a lookup.
+            while self
+                .scrape_queue
+                .front()
+                .is_some_and(|(_, reply)| reply.is_closed())
+            {
+                self.scrape_queue.pop_front();
+            }
+            if self.scrape_queue.is_empty() || !self.scrape_rate.try_take(now_i) {
+                break;
+            }
+            let (hash, reply) = self.scrape_queue.pop_front().expect("checked above");
+            self.start_scrape(sockets, hash, reply);
+        }
     }
 
     /// One tick of BEP 51 traversal: send this tick's share of
@@ -1137,5 +1336,17 @@ mod tests {
         assert_eq!(taken, 10, "starts full at one second's worth");
         assert!(!b.try_take(t0));
         assert!(b.try_take(t0 + Duration::from_millis(150)));
+    }
+
+    /// At Low, scrapes get 50 × 10% / 20 = 0.25 lookups a second: the
+    /// bucket must still hold a whole token, or no scrape would ever start.
+    #[test]
+    fn slow_scrape_budget_still_starts_lookups() {
+        let t0 = Instant::now();
+        let per_sec = 50.0 * SCRAPE_SHARE / QUERIES_PER_SCRAPE;
+        let mut b = TokenBucket::with_burst(per_sec, per_sec, t0);
+        assert!(b.try_take(t0));
+        assert!(!b.try_take(t0 + Duration::from_secs(3)));
+        assert!(b.try_take(t0 + Duration::from_secs(4)));
     }
 }
