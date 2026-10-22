@@ -993,7 +993,7 @@ It needs a signed-in session, like the rest of Settings. Version details aren't 
   - **Turn on automatic checks** links to Settings → General.
 - **Help and community:** each link opens in a new tab, with an external-link icon and "(opens in a new tab)" for screen readers, and `rel="noopener noreferrer"`. The URLs come from the build's `repository` field (`Cargo.toml`), so a fork points to its own repository:
   - **GitHub repository**
-  - **Source code for this version:** the exact tag, or the commit for a nightly or a fork. This is the AGPL's offer of source to network users, once the licence is confirmed (`owner-decisions.md` §3).
+  - **Source code for this version:** the exact tag, or the commit for a nightly or a fork. This is the AGPL's offer of source to network users (`owner-decisions.md` §2.12).
   - **Documentation** (`docs/` in the repository, and the Syntax guide in the app)
   - **Releases and changelog**
   - **Report a problem** opens a dialog first. It shows exactly what will be prefilled into a new GitHub issue: the version info and the diagnostics block, with no secrets and no torrent names (§12.1). It's sent only if you submit it on GitHub. Text too long for a URL is copied to the clipboard instead, with a note to paste it.
@@ -1013,7 +1013,7 @@ It needs a signed-in session, like the rest of Settings. Version details aren't 
   - the copyable diagnostics block: versions, OS, deployment, settings sources and which settings were changed (names only, never values of secrets), the logging presets, and recent error counts;
   - **Download diagnostics** (that block plus the last 24 h of logs, with torrent details and the opt-in kinds always removed; §12.1).
 - **Licences and credits:**
-  - **Lodestar's own licence**, with its full text. The recommendation is **AGPL-3.0-or-later**, waiting for the owner's confirmation (`docs/owner-decisions.md` §3). The brand artwork has its own notice.
+  - **Lodestar's own licence**, with its full text. It's **AGPL-3.0-or-later** (owner's decision §2.12). The brand artwork has its own notice (`brand/LICENSE.md`).
   - **Open-source components:** every Rust crate and npm package in the shipped build, with its version, licence and full licence text.
     - The list is searchable and loads lazily: a content-hashed `licenses.json` generated at build time from `cargo metadata` and `package-lock.json`, with no new dependency.
     - CI fails the build if a shipped component has a missing licence, or one outside the allowlist.
@@ -2453,7 +2453,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Diagnostics.**
 - **Licences and credits:** generated at build from `cargo metadata` and `package-lock.json`, with a CI licence allowlist.
 - **About needs sign-in**, so the version isn't disclosed to anyone else.
-- **Licence:** the owner said Lodestar will stay open source. The recommendation is AGPL-3.0-or-later; see `owner-decisions.md` §3 until it's confirmed.
+- **Licence:** the owner chose **AGPL-3.0-or-later** (owner's decision §2.12), applied in this PR, with the brand assets kept outside it. The licence allowlist in CI follows from it.
 - **Slices:** the screen is a Sonnet slice, `S-about`. The build metadata, the update check and the licence generation sit with B2c, which owns `/system`; the update check goes through the network stack and the SSRF guard.
 
 ## 17. Verification (once built)

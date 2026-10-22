@@ -3,6 +3,7 @@ name = "lodestar-classify"
 description = "Extension registry, composition, structural fingerprints, effective title, content type and junk score"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true

@@ -260,23 +260,20 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
       - they're written only to the local log file and live log.
     - This narrows "No profiles of people" (§1.9.7) and the no-audit-log decisions (§1.8.8, §1.8.9) for the log only, while the user has opted in. Outside that, they stand unchanged.
     - **Secrets are never logged.** The names of sealed (quarantined or dropped) items stay unloggable as well; they weren't part of the question, and revealing one keeps §20.11's warning and password.
+12. **Lodestar's licence is AGPL-3.0-or-later** (owner, 2026-10-22, settings session). The owner said "This app will stay open source" and asked for the most appropriate licence. The owner chose the recommended **AGPL-3.0** over GPL-3.0, MPL-2.0 and MIT/Apache-2.0.
+    - **Why:** Lodestar is a self-hosted network service. The AGPL makes anyone who runs a modified version for others over a network offer them its source, so every fork stays open; plain GPL doesn't cover hosted forks. The same choice is made by comparable self-hosted apps (Immich, Mastodon, Nextcloud, Grafana).
+    - **Applied:**
+      - `LICENSE` holds the full text;
+      - `license = "AGPL-3.0-or-later"` is set in `[workspace.package]` (every crate inherits it), in `fuzz/` and in `web/package.json`;
+      - the README has a licence section.
+    - **The About screen's "Source code for this version" link** is the offer of source the AGPL requires (architecture §10.10.13).
+    - **Brand assets** (the name as a product name, the logos, the mascot, the scenes and the icons) are outside the AGPL: all rights reserved, usable unmodified to refer to Lodestar (`brand/LICENSE.md`).
+    - **Dependency allowlist (CI, with B2c's licence generation):**
+      - **Allowed:** MIT, Apache-2.0, BSD-2/3-Clause, ISC, Zlib, 0BSD, BSL-1.0, Unicode-3.0, MPL-2.0, CC0-1.0, OFL-1.1 (fonts, shipped as separate files) and the GPL-3.0/AGPL-3.0 family.
+      - **Refused:** GPL-2.0-only, SSPL, non-commercial and proprietary licences.
+      - Companions such as qBittorrent run as separate programs and aren't affected.
 
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.
 - **Repository visibility.** The repo is public. The owner created it that way and hasn't commented since.
-- **Lodestar's own licence.** The owner said **"This app will stay open source"** and asked for the most appropriate licence (2026-10-22, settings session). The repository is public but has no `LICENSE` file and no `license` field in `Cargo.toml`, so until a licence is added nobody else may legally use, copy or modify it.
-  - **Recommendation: GNU AGPL-3.0-or-later** for the code.
-    - Lodestar is a self-hosted network service. The AGPL is the copyleft licence written for that case: anyone who runs a **modified** Lodestar for other people over a network must offer them its source. Plain GPL only covers handing out copies, so a hosted fork could stay closed.
-    - The same choice is made by comparable self-hosted apps (Immich, Mastodon, Nextcloud, Grafana).
-    - About's **Source code** link satisfies the AGPL's offer of source for every build.
-  - **Brand assets** (`brand/source/`: the name, logo and mascot) stay outside the code licence: all rights reserved, with permission to use them unmodified to refer to Lodestar. A fork can then share the code but can't pass itself off as Lodestar.
-  - **Dependencies:**
-    - The CI allowlist admits AGPL-3.0-compatible licences: MIT, Apache-2.0, BSD-2/3-Clause, ISC, Zlib, 0BSD, BSL-1.0, Unicode-3.0, MPL-2.0, CC0-1.0, OFL-1.1 (fonts, shipped as separate files) and the GPL-3.0/AGPL-3.0 family.
-    - It refuses GPL-2.0-only, SSPL, non-commercial and proprietary licences.
-    - Companions such as qBittorrent run as separate programs and aren't affected.
-  - **Alternatives:**
-    - **GPL-3.0** doesn't cover hosted forks.
-    - **MPL-2.0** is weaker, file-level copyleft.
-    - **MIT or Apache-2.0** would let anyone ship a closed fork.
-  - **Not yet applied:** waiting for the owner to confirm. Applying it means a `LICENSE` file with the full text, `license = "AGPL-3.0-or-later"` in `[workspace.package]` and `web/package.json`, a `brand/LICENSE` notice, and a README line.
