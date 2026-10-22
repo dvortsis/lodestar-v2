@@ -322,6 +322,24 @@ pub fn flag_names(bits: i64) -> impl Iterator<Item = &'static str> {
         .map(|(_, n)| *n)
 }
 
+/// The distinct light stems of the titles' words, in first-seen order.
+fn title_stems(titles: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for t in titles {
+        for tok in crate::tokenizer::tokenize(t) {
+            if tok.kind == crate::tokenizer::TokKind::Compound {
+                continue;
+            }
+            if let Some(stem) = crate::stem::light_stem(&tok.text)
+                && !out.contains(&stem)
+            {
+                out.push(stem);
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -355,22 +373,4 @@ mod tests {
         let names: Vec<_> = flag_names(flags::PRIVATE | flags::BACKFILL).collect();
         assert_eq!(names, ["private", "backfill"]);
     }
-}
-
-/// The distinct light stems of the titles' words, in first-seen order.
-fn title_stems(titles: &[String]) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for t in titles {
-        for tok in crate::tokenizer::tokenize(t) {
-            if tok.kind == crate::tokenizer::TokKind::Compound {
-                continue;
-            }
-            if let Some(stem) = crate::stem::light_stem(&tok.text)
-                && !out.contains(&stem)
-            {
-                out.push(stem);
-            }
-        }
-    }
-    out
 }
