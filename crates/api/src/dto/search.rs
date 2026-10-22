@@ -52,6 +52,12 @@ pub struct SearchRequest {
     #[serde(deserialize_with = "flag")]
     #[schema(value_type = Option<bool>)]
     pub exact: Option<bool>,
+    /// Explain how each hit was scored (`explain` in the response): the
+    /// first page only (no `offset` or `cursor`), and at most 100 hits,
+    /// so `limit` is capped at 100. `1` or `true`.
+    #[serde(deserialize_with = "flag")]
+    #[schema(value_type = Option<bool>)]
+    pub explain: Option<bool>,
 }
 
 /// A boolean that a query string may also spell `1` or `0`.
@@ -96,6 +102,10 @@ fn flag<'de, D: Deserializer<'de>>(d: D) -> Result<Option<bool>, D::Error> {
 pub struct SearchResponse {
     /// The query as the server understood it.
     pub canonical: String,
+    /// Present only when asked for with `explain`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub explain: Option<SearchExplain>,
     pub hits: Vec<SearchHit>,
     pub limit: usize,
     /// Pass as `cursor` for the next page, read from the same index
@@ -202,6 +212,91 @@ pub struct SearchHit {
     /// Of those, trackers that reported anyone; null = never scraped.
     #[schema(required = true)]
     pub trackers_reporting: Option<u32>,
+}
+
+/// How a first page was ranked (`?explain=1`, architecture §8). Field
+/// names are stable. Relevance is `phase1 + phase2.name + phase2.title`
+/// (to float rounding); the other features and the priors aren't part of
+/// ranking yet and are null.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct SearchExplain {
+    /// One per hit, in the hits' order.
+    pub hits: Vec<ExplainHit>,
+    /// `relevance`, or the field the hits are sorted by (`discovered`,
+    /// `size`, `files`), when no hit has relevance parts.
+    pub ranked_by: String,
+    /// Whether phase 2 re-ranked the phase-1 candidates: the query has
+    /// unfielded words.
+    pub two_phase: bool,
+    pub weights: ExplainWeights,
+}
+
+/// The ranking's weights, as this server runs them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ExplainWeights {
+    /// Boost of a word found in the name, in phase 1 (on the combined
+    /// field) and phase 2.
+    pub name: f64,
+    /// Boost of a word found in a file or folder name, in phase 1.
+    pub path: f64,
+    /// Phase-1 candidates re-ranked together.
+    pub rerank_window: usize,
+    /// Phase-1 score of a word matched only by its stem in the title
+    /// (the plurals fallback, when `stemmed`).
+    pub stem_score: f64,
+    /// Phase-2 boost of a word found in the parsed title.
+    pub title: f64,
+}
+
+/// One hit's score in parts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ExplainHit {
+    pub id: i64,
+    /// BM25 over the name and paths (`text`), fielded words and
+    /// filters; null under a field sort.
+    #[schema(required = true)]
+    pub phase1: Option<f64>,
+    /// Null under a field sort.
+    #[schema(required = true)]
+    pub phase2: Option<ExplainPhase2>,
+    pub priors: ExplainPriors,
+    /// The score the hit was ranked by, as in `hits[].score`.
+    pub score: f64,
+}
+
+/// Phase 2's features (§8).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ExplainPhase2 {
+    /// Exact-name bonus: not ranked yet, always null.
+    #[schema(required = true)]
+    pub exact_name: Option<f64>,
+    /// The cap on file-only matches' contribution: not ranked yet,
+    /// always null.
+    #[schema(required = true)]
+    pub file_cap: Option<f64>,
+    /// The unfielded words' name boosts, summed (0 without phase 2).
+    pub name: f64,
+    /// Phrase and proximity bonus: not ranked yet, always null.
+    #[schema(required = true)]
+    pub phrase: Option<f64>,
+    /// The unfielded words' parsed-title boosts, summed.
+    pub title: f64,
+}
+
+/// The quality priors (§8), multiplied onto relevance once ranking has
+/// them (with swarm health, M4); until then each is null.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ExplainPriors {
+    #[schema(required = true)]
+    pub freshness: Option<f64>,
+    #[schema(required = true)]
+    pub junk: Option<f64>,
+    #[schema(required = true)]
+    pub seeders: Option<f64>,
+    #[schema(required = true)]
+    pub swarm_consistency: Option<f64>,
+    #[schema(required = true)]
+    pub trackers: Option<f64>,
 }
 
 /// One colour group's share of a torrent (`docs/metrics.md` §4, §7.1).
