@@ -88,6 +88,9 @@ Use `create_session` with these settings:
 > - If you're blocked, comment on the PR (or open a draft PR) saying exactly what's missing, then stop.
 > - No model identifiers in commits, PRs or code.
 
+## Conflicts in `docs/architecture.md` §16
+When a PR conflicts with `main` only in `docs/architecture.md` §16, the runner (or the slice) resolves it by merging `main` and keeping both blocks, main's first. A semantic conflict, such as a new required struct field, is fixed in the same merge commit and the checks re-run.
+
 ## Notifying the owner
 Send a push notification only for:
 - a parked slice;

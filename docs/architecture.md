@@ -2898,6 +2898,21 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Other Unix (macOS, BSD):** no safe per-thread calls, so root is refused unless `LODESTAR_ALLOW_ROOT=1`. **Windows:** a no-op.
 - **Checks:** the root-only integration test (`tests/privdrop.rs`, run under `sudo` by CI's Linux test job) reads every thread's `/proc/<pid>/task/*/status`; the Docker smoke job does the same from the host (`packaging/docker/check-ids.sh`) for a default container, a `--user` one and one with `PUID=99 PGID=100` on a root-owned bind mount.
 
+**Runner-recorded decisions (2026-10-22):**
+- **X-notify:**
+  - Discord sends without following redirects, so a webhook URL can't be bounced to another host.
+  - ntfy needs a JSON body with an `id` on a 2xx answer. Anything else (a captive portal or a proxy's HTML page) is a failed delivery.
+  - ntfy credentials travel over plain `http` only when the channel's `allow_private` is on **and** the host is local: a private IP literal or a local name (single-label, `.lan`, `.local`, `.home.arpa`). A public DNS name that resolves to a private address is refused, and every other host needs `https`.
+- **D-docker:**
+  - **Build overrides:** the image builds with `CARGO_PROFILE_RELEASE_STRIP=symbols` and `CARGO_PROFILE_RELEASE_DEBUG=false`. The release profile in `Cargo.toml` keeps line tables, and the image drops them (about 100 MB).
+  - **§4 data layout as built:** the text of §4 (line 105) stays as planned. What the code writes under `/data` today is `lodestar.db`, `index/`, `dht-state.bin`, `auth.json`, `seal.key`, an optional `config.toml` and `import-bitmagnet.cursor` (`crates/lodestar/src/config.rs` for the paths; `auth.json` and `seal.key` from `crates/lodestar/src/services.rs`; `import-bitmagnet.cursor` from `crates/lodestar/src/main.rs`; `packaging/docker/README.md`). There is no `data/hot/` or `data/cold/` yet, no `index/torrents/` and `index/files/` split (the index lives in one `index/` directory), and no separate hot-path or cold-path mounts. The Unraid template's hot and cold paths are marked "planned, not used yet".
+  - **`/data` is the image's only volume,** and it ships empty and owned by `nonroot` (65532), the default `PUID`/`PGID`. The image starts as root and the binary drops to `PUID`/`PGID` (D-puid, above).
+- **W6 snapshot policy:**
+  - Snapshots cover key screens only.
+  - The theme set is the shared 46-theme set (23 families, two modes), at breakpoint 1366.
+  - Compact density is snapshotted only on routes that are density-aware.
+  - Baselines are generated in the pinned Playwright container, never on a developer machine. They're updated through the `.update-snapshots` marker file or a `workflow_dispatch` run, and the owner imports them by hand when the artifact host is blocked.
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.
