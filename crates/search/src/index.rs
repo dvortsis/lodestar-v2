@@ -52,6 +52,12 @@ pub enum Error {
     },
     /// An older index kept serving during a rebuild takes no writes.
     ReadOnly,
+    /// The search's [`CancelToken`](crate::CancelToken) was cancelled.
+    Cancelled,
+    /// The search ran out of its time budget.
+    OutOfTime,
+    /// The searcher lease a cursor names expired or never existed.
+    LeaseExpired,
 }
 
 impl std::fmt::Display for Error {
@@ -68,6 +74,9 @@ impl std::fmt::Display for Error {
                 root.display()
             ),
             Error::ReadOnly => write!(f, "this index is read-only while it's rebuilt"),
+            Error::Cancelled => write!(f, "the search was cancelled"),
+            Error::OutOfTime => write!(f, "the search ran out of time"),
+            Error::LeaseExpired => write!(f, "the searcher lease expired"),
         }
     }
 }
@@ -118,6 +127,9 @@ pub struct SearchIndex {
     read_only: bool,
     /// The fields of [`SearchIndex::missing_fields`].
     missing: Arc<[String]>,
+    /// Held by every clone, so [`SearchIndex::holders`] tells when the
+    /// last one (a lease's included) is gone.
+    holders: Arc<()>,
 }
 
 /// How an existing index can serve this build ([`SearchIndex::open_existing`]).
@@ -342,11 +354,11 @@ fn relative(node: &Node) -> bool {
 /// Phase-1 candidates re-ranked for a relevance page: four pages of 50.
 /// §8 sketched ~1,000; at 10M torrents a window that size costs about a
 /// quarter of the keyword budget in top-k upkeep alone (§16).
-const RERANK_WINDOW: usize = 200;
+pub(crate) const RERANK_WINDOW: usize = 200;
 
 /// Adds each candidate's score under `boosts` and sorts best first,
 /// ties by address.
-fn rerank(
+pub(crate) fn rerank(
     searcher: &Searcher,
     boosts: &dyn Query,
     mut hits: Vec<(f32, DocAddress)>,
@@ -372,7 +384,7 @@ fn rerank(
 }
 
 /// The fast field a sort orders by, and whether it's signed.
-fn sort_field(sort: Sort) -> Option<(&'static str, bool)> {
+pub(crate) fn sort_field(sort: Sort) -> Option<(&'static str, bool)> {
     match sort {
         Sort::Relevance => None,
         Sort::Discovered { .. } => Some(("discovered", true)),
@@ -446,6 +458,13 @@ impl SearchIndex {
         Ok(Some((s, compat)))
     }
 
+    /// The torrent index and its reader, for tests that write raw
+    /// documents.
+    #[cfg(test)]
+    pub(crate) fn raw(&self) -> (&Index, &IndexReader) {
+        (&self.index, &self.reader)
+    }
+
     /// The file index's fields, for tests.
     #[cfg(test)]
     pub(crate) fn file_fields(&self) -> &FileFields {
@@ -488,11 +507,27 @@ impl SearchIndex {
             },
             read_only: false,
             missing: Arc::new([]),
+            holders: Arc::default(),
         })
     }
 
     pub fn fields(&self) -> &Fields {
         &self.fields
+    }
+
+    /// Alive while any clone of this index is: a retired index's
+    /// directory is deleted only after that (leases, `lease.rs`).
+    pub(crate) fn holders(&self) -> std::sync::Weak<()> {
+        Arc::downgrade(&self.holders)
+    }
+
+    /// The current snapshot, which a lease pins.
+    pub(crate) fn searcher(&self) -> Searcher {
+        self.reader.searcher()
+    }
+
+    pub(crate) fn segment_cache(&self) -> &SegmentCache {
+        &self.cache
     }
 
     /// Fields of this build's schema this index lacks: an older index

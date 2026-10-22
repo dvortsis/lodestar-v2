@@ -82,7 +82,7 @@ fn fixture() -> Fixture {
         "/api/v1",
         router(ApiState {
             auth: auth.clone(),
-            index: Some(index),
+            index: Some(index.into()),
             reader: Arc::new(Mutex::new(reader)),
             filters: None,
             settings: None,
