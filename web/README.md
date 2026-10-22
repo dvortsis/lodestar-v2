@@ -43,10 +43,10 @@ Compile-time i18n with Paraglide 2 (`en` base, `zh`), tree-shaken: a component b
 3. Import and call it: `import { m } from '$lib/paraglide/messages.js'`, then `{m.search_results_count({ count })}`. Numbers and dates go through `src/lib/format` first; pass the formatted string.
 4. Run `npm run messages` (also part of `npm run check` and `prebuild`). It writes the merged `messages/{en,zh}.json` and compiles `src/lib/paraglide/`; both are generated and gitignored. Dev, build and vitest also merge on start.
 
-**Shared strings** (`src/lib/i18n/messages/`) use `common_*` and `glossary_*` keys; the glossary seed is `glossary_<key>` for each term in `docs/ui-glossary.md` (file categories: `glossary_category_<key>`). Glossary zh labels stay out of `zh.json` until the glossary marks them settled.
+**Shared strings** (`src/lib/i18n/messages/`) are the glossary terms, keyed exactly as the key column of `docs/ui-glossary.md` (`torrent`, `seeders`, `video`, …), plus `common_*` for other cross-feature strings. Glossary zh labels stay out of `zh.json` until the glossary marks them settled.
 
 `scripts/messages.ts` fails on a duplicate key, a key outside the feature's namespace, a zh key with no en key, an invalid placeholder, or zh placeholders that differ from en. Missing zh keys are only listed as a warning.
 
 **Locale:** `src/lib/i18n/locale.svelte.ts` picks the settings value, then `navigator.languages`, then en. `initLocale(setting)` applies it to Paraglide and `<html lang>`; `currentLocale()` is what `Intl` formatters (`src/lib/format`) use. After a language change, re-render with `{#key currentLocale()}` since messages are plain function calls.
 
-Paraglide's JSON plugin is vendored in `vendor/inlang-plugin-message-format/` so the compile never needs the network.
+Paraglide's JSON plugin is the pinned devDependency `@inlang/plugin-message-format`, loaded from `node_modules` (not jsDelivr), so the compile never needs the network.

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { discover, merge, mergeMessages, placeholders } from './messages.ts';
+import { discover, merge, mergeMessages, placeholders } from './messages';
 
 let root: string;
 beforeEach(() => {
@@ -82,8 +82,12 @@ describe('merge', () => {
 		put(feature('search'), 'en', { count: 'bare', search_Bad: 'x', other_key: 'y' });
 		const r = run();
 		expect(r.errors).toHaveLength(3);
-		put(shared, 'en', { search_x: 'x' });
-		expect(run().errors.some((e) => e.includes('"common_" or "glossary_"'))).toBe(true);
+		// Shared keys are bare glossary terms; a feature may not redefine one.
+		put(shared, 'en', { torrent: 'Torrent', search_x: 'x' });
+		put(feature('search'), 'en', { search_x: 'y' });
+		const shared_ = run().errors;
+		expect(shared_).toHaveLength(1);
+		expect(shared_[0]).toMatch(/search_x.*duplicate key/);
 	});
 
 	it('rejects non-string messages and bad JSON', () => {

@@ -37,8 +37,7 @@ export default ts.config(
 			'node_modules/',
 			'src/lib/api/schema.d.ts',
 			'**/*.generated.*',
-			'src/lib/paraglide/',
-			'vendor/'
+			'src/lib/paraglide/'
 		]
 	},
 	js.configs.recommended,

@@ -5,4 +5,4 @@
 </script>
 
 <p data-testid="probe-language">{m.common_language_name()}</p>
-<p data-testid="probe-age">{m.glossary_scrape_age({ relative })}</p>
+<p data-testid="probe-age">{m.scrape_age({ relative })}</p>
