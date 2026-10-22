@@ -272,8 +272,18 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
       - **Allowed:** MIT, Apache-2.0, BSD-2/3-Clause, ISC, Zlib, 0BSD, BSL-1.0, Unicode-3.0, MPL-2.0, CC0-1.0, OFL-1.1 (fonts, shipped as separate files) and the GPL-3.0/AGPL-3.0 family.
       - **Refused:** GPL-2.0-only, SSPL, non-commercial and proprietary licences.
       - Companions such as qBittorrent run as separate programs and aren't affected.
+13. **Easy auto-update, optional at each release level** (owner, 2026-10-22, settings session: "Can we build in easy auto capability and make it optional at various release levels?", meaning auto-update). Architecture §12.2 has the details. This supersedes "Lodestar never updates itself" and the check-only design.
+    - **Off until the user chooses it.** Checking contacts GitHub, and the system is offline by default (§1.2.3). The first-run wizard asks.
+    - **The choices:**
+      - **Check and notify**, or **Install automatically** at one of three levels: **Fixes only** (recommended), **Fixes and features**, or **All releases**;
+      - **Always install security fixes**;
+      - a channel: **Stable**, **Beta** or **Nightly**.
+    - **Never automatic:** releases that need manual steps.
+    - **Every update** is signed and verified, waits for an install window, is health-checked afterwards, and is rolled back automatically on failure.
+    - **"No telemetry, ever"** still holds: checking sends nothing about the installation.
 
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.
 - **Repository visibility.** The repo is public. The owner created it that way and hasn't commented since.
+- **Release signing key.** Auto-update (§2.13) needs an Ed25519 release key pair. The owner creates it and stores the private key as a GitHub Actions secret; it never enters the repository. Until then, update checks can notify but nothing installs automatically.
