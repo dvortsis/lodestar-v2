@@ -27,6 +27,7 @@ mod payload;
 pub mod reclassify;
 mod rules;
 mod seal;
+pub mod strictness;
 
 pub use crate::core::{
     Action, Core, CoreRule, CsList, Evidence, Field, Fixture, Hit, Item, Lists, Locked, MAX_FILES,
