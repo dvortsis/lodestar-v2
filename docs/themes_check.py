@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
 """Check the palette table in docs/themes.md (stdlib only).
 
+Run: python3 docs/themes_check.py [docs/themes.md] [--markdown]
+
 Reads every fenced ```yaml block, then prints per family and mode:
 text contrast on background and surface, the weakest raw categorical
 contrast on surface, and the minimum pairwise ΔE_ok (OKLab distance x 100)
 for the raw categorical set, its estimated data variants (OKLCH lightness
 shifted until >= 3:1 on surface, as the compiler does) and the data
-variants under simulated deuteranopia and protanopia (Machado 2009, full
-severity). Exits 1 if a hex is malformed or a text gate fails.
-
-    python3 docs/themes_check.py [docs/themes.md] [--markdown]
+variants under simulated deuteranopia and protanopia, with two models:
+Machado et al. 2009 (severity 1.0) and Viénot, Brettel & Mollon 1999.
+Pairs are named by categorical role (design-tokens.md §3 order). Exits 1
+if a hex is malformed or a text gate fails.
 """
 import math
 import re
 import sys
 
 HEX = re.compile(r'^#[0-9A-F]{6}$')
+ROLES = ['blue', 'sage', 'ochre', 'terracotta', 'slate', 'plum']
 KEYS = ['background', 'surface', 'text', 'primary', 'accent', 'categorical']
 
 
@@ -110,6 +113,9 @@ def data_variant(h, surface):
 
 PROTAN = [[0.152286, 1.052583, -0.204868], [0.114503, 0.786281, 0.099216], [-0.003882, -0.048116, 1.051998]]
 DEUTAN = [[0.367322, 0.860646, -0.227968], [0.280085, 0.672501, 0.047413], [-0.011820, 0.042940, 0.968881]]
+V_PROTAN = [[0.11238, 0.88762, 0.0], [0.11238, 0.88762, 0.0], [0.00401, -0.00401, 1.0]]
+V_DEUTAN = [[0.29275, 0.70725, 0.0], [0.29275, 0.70725, 0.0], [-0.02234, 0.02234, 1.0]]
+MODELS = [('deu_m', DEUTAN), ('pro_m', PROTAN), ('deu_v', V_DEUTAN), ('pro_v', V_PROTAN)]
 
 
 def simulate(h, mat):
@@ -152,39 +158,43 @@ def check(fams):
                 id=fid, mode=mode, need=need, tb=cb, ts=cs,
                 cmin=min(contrast(c, t['surface']) for c in cat),
                 raw=min_de(cat), data=min_de(data),
-                deu=min_de(data, lambda h: simulate(h, DEUTAN)),
-                pro=min_de(data, lambda h: simulate(h, PROTAN)),
+                **{k: min_de(data, lambda h, m=m: simulate(h, m)) for k, m in MODELS},
                 variants=[d for c, d in zip(cat, data) if c != d]))
     return rows, errors
 
 
 def fmt(d):
-    return f'{d[0]:.1f} ({d[1][0]}–{d[1][1]})'
+    return f'{d[0]:.1f} {ROLES[d[1][0] - 1]}–{ROLES[d[1][1] - 1]}'
+
+
+CVD = ['deu_m', 'pro_m', 'deu_v', 'pro_v']
 
 
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    md = '--markdown' in sys.argv
     rows, errors = check(parse(args[0] if args else 'docs/themes.md'))
-    if '--markdown' in sys.argv:
-        print('| Theme | Text/bg | Text/surface | Min cat. on surface | ΔE raw | ΔE data | ΔE deutan | ΔE protan | Flags |')
-        print('|---|---|---|---|---|---|---|---|---|')
+    if md:
+        print('| Theme | Text/bg | Text/surface | Min cat. on surface | ΔE raw | ΔE data '
+              '| Deutan (Machado 2009) | Protan (Machado 2009) | Deutan (Viénot 1999) | Protan (Viénot 1999) | Flags |')
+        print('|---|---|---|---|---|---|---|---|---|---|---|')
     for r in rows:
         flags = []
         if min(r['tb'], r['ts']) < r['need']:
             flags.append(f"**FAIL text < {r['need']:g}:1**")
         if r['data'][0] < 5:
             flags.append('warn ΔE < 5')
-        if min(r['deu'][0], r['pro'][0]) < 5:
+        if min(r[k][0] for k in CVD) < 5:
             flags.append('CVD < 5')
         if r['cmin'] < 3:
             flags.append(f"{len(r['variants'])} data variant(s)")
-        if '--markdown' in sys.argv:
+        cells = [fmt(r[k]) for k in ['raw', 'data'] + CVD]
+        if md:
             print(f"| {r['id']} {r['mode']} | {r['tb']:.2f} | {r['ts']:.2f} | {r['cmin']:.2f} | "
-                  f"{fmt(r['raw'])} | {fmt(r['data'])} | {fmt(r['deu'])} | {fmt(r['pro'])} | {'; '.join(flags) or 'ok'} |")
+                  + ' | '.join(cells) + f" | {'; '.join(flags) or 'ok'} |")
         else:
-            print(f"{r['id']:16} {r['mode']:5} text {r['tb']:5.2f}/{r['ts']:5.2f}  cat>={r['cmin']:4.2f}  "
-                  f"dE raw {fmt(r['raw']):12} data {fmt(r['data']):12} deu {fmt(r['deu']):12} pro {fmt(r['pro']):12} "
-                  f"{' '.join(r['variants'])}  {'; '.join(flags)}")
+            print(f"{r['id']:15} {r['mode']:5} text {r['tb']:5.2f}/{r['ts']:5.2f} cat>={r['cmin']:4.2f} "
+                  + ' | '.join(cells) + f"  {' '.join(r['variants'])}  {'; '.join(flags)}")
     for e in errors:
         print('ERROR', e, file=sys.stderr)
     sys.exit(1 if errors else 0)
