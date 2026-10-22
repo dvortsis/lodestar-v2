@@ -407,11 +407,11 @@ CREATE TABLE class_rules (
 ) STRICT;
 ";
 
-/// Pragmas that persist in the file and can only be set before the first
-/// table exists, then the per-connection ones.
 /// How long a connection waits for a lock another connection holds.
 pub(crate) const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// Pragmas that persist in the file and can only be set before the first
+/// table exists, then the per-connection ones.
 pub(crate) fn configure(conn: &Connection, mmap_size: u64) -> Result<()> {
     let page_count: i64 = conn.pragma_query_value(None, "page_count", |r| r.get(0))?;
     if page_count == 0 {
