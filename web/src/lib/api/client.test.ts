@@ -125,6 +125,26 @@ describe('errors', () => {
 		expect(await api.get('/parse').catch((x) => x)).toMatchObject({ status: 429, retryAfter: 7 });
 	});
 
+	it('rejects Retry-After values that are neither seconds nor an HTTP date', () => {
+		expect(parseRetryAfter('-1')).toBeUndefined();
+		expect(parseRetryAfter('1.5')).toBeUndefined();
+	});
+
+	it('keeps the envelope extras on the error', async () => {
+		fetchMock.mockImplementation(async () =>
+			json(
+				{
+					error: { code: 'login_required', message: 'x' },
+					setup_required: true,
+					assessment: { a: 1 }
+				},
+				{ status: 401 }
+			)
+		);
+		const e = await api.get('/parse').catch((x) => x);
+		expect(e).toMatchObject({ setupRequired: true, assessment: { a: 1 } });
+	});
+
 	it('parses Retry-After as seconds or HTTP date', () => {
 		const now = Date.parse('2026-10-22T10:00:00Z');
 		expect(parseRetryAfter('120', now)).toBe(120);
@@ -156,13 +176,40 @@ describe('401 handling', () => {
 		]);
 		expect(rs.every((r) => r.status === 'rejected')).toBe(true);
 		expect(handler).toHaveBeenCalledTimes(1);
-		expect(handler).toHaveBeenCalledWith(location.pathname + location.search);
+		expect(handler).toHaveBeenCalledWith(location.pathname + location.search, {
+			setupRequired: false
+		});
 
 		fetchMock.mockImplementation(async () => json({}));
 		await api.get('/settings');
 		fetchMock.mockImplementation(async () => unauth());
 		await api.get('/parse').catch(() => {});
 		expect(handler).toHaveBeenCalledTimes(2);
+	});
+
+	it('tells the handler when setup is required', async () => {
+		const handler = vi.fn();
+		onLoginRequired(handler);
+		fetchMock.mockImplementation(async () =>
+			json(
+				{ error: { code: 'login_required', message: 'x' }, setup_required: true },
+				{ status: 401 }
+			)
+		);
+		await api.get('/parse').catch(() => {});
+		expect(handler).toHaveBeenCalledWith(expect.any(String), { setupRequired: true });
+	});
+
+	it('a successful public /auth does not reset the de-duplication', async () => {
+		const handler = vi.fn();
+		onLoginRequired(handler);
+		fetchMock.mockImplementation(async () => unauth());
+		await api.get('/parse').catch(() => {});
+		fetchMock.mockImplementation(async () => json({}));
+		await api.get('/auth');
+		fetchMock.mockImplementation(async () => unauth());
+		await api.get('/parse').catch(() => {});
+		expect(handler).toHaveBeenCalledTimes(1);
 	});
 
 	it('does not redirect for the auth endpoints themselves', async () => {

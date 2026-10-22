@@ -11,7 +11,10 @@ import { ApiError, api, isAbort, latest } from '$lib/api/client';
 import type { components } from '$lib/api/schema';
 
 export type Ast = components['schemas']['AstNode'];
-export type ParseError = { code: string; message: string; start?: number; end?: number };
+export type ParseError = Pick<
+	components['schemas']['ErrorBody'],
+	'code' | 'message' | 'start' | 'end'
+>;
 
 export const DEFAULT_SORT = 'relevance';
 export const PARSE_DEBOUNCE_MS = 200;
@@ -94,7 +97,10 @@ export function createSearchState(nav: Nav = kitNav) {
 
 	async function commit(q: string, push: boolean, over: Partial<UrlState> = {}) {
 		written = q;
-		await nav.go(writeUrl(nav.url(), { ...url(), ...over, q }), push);
+		const target = writeUrl(nav.url(), { ...url(), ...over, q });
+		const here = nav.url();
+		if (target === here.pathname + here.search + here.hash) return; // no duplicate history entry
+		await nav.go(target, push);
 	}
 
 	return {
@@ -147,6 +153,7 @@ export function createSearchState(nav: Nav = kitNav) {
 		/** A structured edit (a removed chip, the Builder): the server prints it back as text. */
 		async setAst(next: Ast) {
 			clearTimeout(timer);
+			parsing = true; // supersedes any parse in flight, so this call owns the flag
 			try {
 				const r = await slot.run((signal) =>
 					// `limit: 1`: only the canonical text is wanted; the page fetches the results.
@@ -166,10 +173,13 @@ export function createSearchState(nav: Nav = kitNav) {
 				);
 				ast = next;
 				parseError = null;
+				parsing = false;
 				text = r.canonical;
 				await commit(r.canonical, true);
 			} catch (e) {
-				if (!isAbort(e)) throw e;
+				if (isAbort(e)) return; // a newer run owns `parsing`
+				parsing = false;
+				throw e;
 			}
 		},
 

@@ -12,7 +12,13 @@
 // (2 x the 15 s heartbeat + slack) reconnects. 401 stops; 429 waits `Retry-After` and shows
 // `busy`. A tab hidden for 10 s closes its stream (the server allows 4 per session) and
 // reopens when visible again.
-import { ApiError, errorFromResponse, handleUnauthorized, isAbort } from '$lib/api/client';
+import {
+	ApiError,
+	errorFromResponse,
+	handleUnauthorized,
+	isAbort,
+	onSessionOk
+} from '$lib/api/client';
 import type { components } from '$lib/api/schema';
 import { SseParser } from './sse';
 
@@ -25,6 +31,7 @@ export const HIDDEN_CLOSE_MS = 10_000;
 export const HEARTBEAT_TIMEOUT_MS = 35_000;
 export const BACKOFF_CAP_MS = 30_000;
 const DEFAULT_RETRY_MS = 5_000;
+const MIN_RETRY_MS = 1_000;
 const URL_PATH = '/api/v1/events';
 
 type Handler = (data: never) => void;
@@ -55,12 +62,13 @@ export function createEvents(deps: Partial<EventsDeps> = {}) {
 	let retryMs = DEFAULT_RETRY_MS;
 	let failures = 0;
 	let retryTimer: ReturnType<typeof setTimeout> | undefined;
-	let silenceTimer: ReturnType<typeof setTimeout> | undefined;
 	let hiddenTimer: ReturnType<typeof setTimeout> | undefined;
 	let suspended = false; // closed because the tab was hidden
-	let halted = false; // 401 or a request the server will never accept: no retry
+	let unauthorized = false; // 401: stays down until a request succeeds (a login, say)
+	let rejected = false; // a request the server will never accept (unknown topic): no retry
 	let refreshQueued = false;
 	let listening = false;
+	let offSession: (() => void) | undefined;
 
 	const topicsParam = () => {
 		const topics: Topic[] = [];
@@ -73,7 +81,6 @@ export function createEvents(deps: Partial<EventsDeps> = {}) {
 		ctl?.abort();
 		ctl = undefined;
 		clearTimeout(retryTimer);
-		clearTimeout(silenceTimer);
 		retryTimer = undefined;
 	}
 
@@ -86,6 +93,7 @@ export function createEvents(deps: Partial<EventsDeps> = {}) {
 		for (const [i, q] of batch.entries()) {
 			if (q.event === 'crawler' && i !== lastCrawler) continue;
 			for (const c of [...consumers]) {
+				if (!consumers.has(c)) continue; // unsubscribed by an earlier handler of this dispatch
 				try {
 					if (q.event === 'resync') c.onResync?.();
 					else if (c.topic === q.event) c.handler(q.data as never);
@@ -97,6 +105,22 @@ export function createEvents(deps: Partial<EventsDeps> = {}) {
 	}
 
 	function enqueue(item: Queued) {
+		if (isHidden()) {
+			// rAF doesn't run in a hidden tab, so keep the backlog small: a snapshot supersedes the
+			// previous one, and `torrents` counts fold into one event.
+			const same = (q: Queued) => q.event === item.event;
+			if (item.event === 'crawler' || item.event === 'rebuild' || item.event === 'insights') {
+				queue = queue.filter((q) => !same(q));
+			} else if (item.event === 'torrents') {
+				const prev = queue.findLast(same);
+				if (prev) {
+					const a = prev.data as EventData<'torrents'>;
+					const b = item.data as EventData<'torrents'>;
+					prev.data = { added: a.added + b.added, max_id: Math.max(a.max_id, b.max_id) };
+					return;
+				}
+			}
+		}
 		queue.push(item);
 		if (!frameScheduled) {
 			frameScheduled = true;
@@ -106,7 +130,6 @@ export function createEvents(deps: Partial<EventsDeps> = {}) {
 
 	function scheduleReconnect(wait: number, next: EventsStatus) {
 		status = next;
-		clearTimeout(silenceTimer);
 		clearTimeout(retryTimer);
 		retryTimer = setTimeout(() => {
 			retryTimer = undefined;
@@ -122,7 +145,7 @@ export function createEvents(deps: Partial<EventsDeps> = {}) {
 
 	async function connect() {
 		close();
-		if (!consumers.size || suspended || halted) return;
+		if (!consumers.size || suspended || unauthorized || rejected) return;
 		const c = (ctl = new AbortController());
 		let timedOut = false;
 		connectedTopics = topicsParam();
@@ -141,13 +164,15 @@ export function createEvents(deps: Partial<EventsDeps> = {}) {
 				error = e;
 				if (e.status === 401) {
 					handleUnauthorized(e, '/events');
-					halted = true;
+					unauthorized = true;
 					status = 'stopped';
 				} else if (e.status === 429) {
 					scheduleReconnect((e.retryAfter ?? Math.ceil(backoff() / 1000)) * 1000, 'busy');
 				} else if (e.status >= 400 && e.status < 500 && e.status !== 408) {
-					halted = true; // e.g. unknown_topic: retrying can't help
+					rejected = true; // e.g. unknown_topic: retrying can't help
 					status = 'stopped';
+				} else if (e.status === 503 && e.retryAfter !== undefined) {
+					scheduleReconnect(e.retryAfter * 1000, 'offline');
 				} else {
 					scheduleReconnect(backoff(), 'offline');
 				}
@@ -162,7 +187,7 @@ export function createEvents(deps: Partial<EventsDeps> = {}) {
 			if (c.signal.aborted && !timedOut) return;
 			scheduleReconnect(backoff(), 'offline'); // clean close, or silence
 		} catch (e) {
-			if ((c.signal.aborted && !timedOut) || (isAbort(e) && !timedOut)) return;
+			if (!timedOut && (c.signal.aborted || isAbort(e))) return;
 			error = new ApiError(0, 'network', e instanceof Error ? e.message : 'network error');
 			scheduleReconnect(backoff(), 'offline');
 		}
@@ -172,25 +197,36 @@ export function createEvents(deps: Partial<EventsDeps> = {}) {
 		const reader = body.getReader();
 		const decoder = new TextDecoder();
 		const parser = new SseParser();
-		c.signal.addEventListener('abort', () => void reader.cancel().catch(() => {}), { once: true });
+		let silence: ReturnType<typeof setTimeout> | undefined;
 		const arm = () => {
-			clearTimeout(silenceTimer);
-			silenceTimer = setTimeout(onSilence, HEARTBEAT_TIMEOUT_MS);
+			clearTimeout(silence);
+			silence = setTimeout(onSilence, HEARTBEAT_TIMEOUT_MS);
 		};
+		c.signal.addEventListener(
+			'abort',
+			() => {
+				clearTimeout(silence);
+				void reader.cancel().catch(() => {});
+			},
+			{ once: true }
+		);
 		arm();
 		let gotBytes = false;
-		for (;;) {
-			const { done, value } = await reader.read();
-			if (done) return;
-			arm();
-			if (!gotBytes) {
-				gotBytes = true;
-				failures = 0;
-			}
-			for (const item of parser.push(decoder.decode(value, { stream: true }))) {
-				if (item.type === 'retry') {
-					retryMs = item.ms;
-				} else {
+		try {
+			for (;;) {
+				const { done, value } = await reader.read();
+				// A superseded connection must not queue events or move `lastId`.
+				if (done || c.signal.aborted) return;
+				arm();
+				if (!gotBytes) {
+					gotBytes = true;
+					failures = 0;
+				}
+				for (const item of parser.push(decoder.decode(value, { stream: true }))) {
+					if (item.type === 'retry') {
+						retryMs = Math.max(MIN_RETRY_MS, item.ms);
+						continue;
+					}
 					if (item.id) lastId = item.id;
 					if (item.event === 'resync') {
 						enqueue({ event: 'resync', data: undefined });
@@ -203,6 +239,8 @@ export function createEvents(deps: Partial<EventsDeps> = {}) {
 					}
 				}
 			}
+		} finally {
+			clearTimeout(silence);
 		}
 	}
 
@@ -214,13 +252,19 @@ export function createEvents(deps: Partial<EventsDeps> = {}) {
 			if (!consumers.size) {
 				close();
 				lastId = undefined;
-				halted = false;
+				unauthorized = false;
+				rejected = false;
 				suspended = false;
 				status = 'stopped';
 				return;
 			}
-			if (suspended) return;
-			if (halted) return;
+			if (suspended || unauthorized || rejected) return;
+			if (isHidden() && !ctl) {
+				// Opened in a background tab: take no slot until it's shown.
+				suspended = true;
+				status = 'stopped';
+				return;
+			}
 			if (retryTimer) return; // waiting out a backoff or Retry-After: connect() reads the topics then
 			if (!ctl || topicsParam() !== connectedTopics) {
 				failures = 0;
@@ -244,18 +288,27 @@ export function createEvents(deps: Partial<EventsDeps> = {}) {
 			suspended = false;
 			failures = 0;
 			void connect();
-		} else if (queue.length && !frameScheduled) {
-			frameScheduled = true;
-			raf(deliver);
 		}
+	}
+
+	/** A request succeeded (a login, say): a stream that stopped on a 401 may start again. */
+	function onSession() {
+		if (!unauthorized) return;
+		unauthorized = false;
+		failures = 0;
+		close(); // forget the failed attempt so refresh() opens a new stream
+		refresh();
 	}
 
 	function listen(on: boolean) {
 		if (typeof document === 'undefined' || on === listening) return;
 		listening = on;
-		if (on) document.addEventListener('visibilitychange', onVisibility);
-		else {
+		if (on) {
+			document.addEventListener('visibilitychange', onVisibility);
+			offSession = onSessionOk(onSession);
+		} else {
 			document.removeEventListener('visibilitychange', onVisibility);
+			offSession?.();
 			clearTimeout(hiddenTimer);
 			hiddenTimer = undefined;
 		}
