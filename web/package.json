@@ -8,6 +8,8 @@
 	},
 	"scripts": {
 		"dev": "vite dev",
+		"assets": "node --experimental-strip-types scripts/assets.ts",
+		"prebuild": "npm run assets",
 		"build": "vite build",
 		"preview": "vite preview",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json && eslint . && prettier --check . && node scripts/check-bans.mjs",
@@ -45,6 +47,7 @@
 		"openapi-typescript": "7.13.0",
 		"prettier": "3.9.10",
 		"prettier-plugin-svelte": "4.1.1",
+		"sharp": "0.35.5",
 		"size-limit": "14.2.0",
 		"svelte": "5.57.2",
 		"svelte-check": "4.7.7",
