@@ -46,7 +46,7 @@ use reqwest::header::{CONTENT_TYPE, HeaderMap, RETRY_AFTER};
 use reqwest::{Method, StatusCode, Url};
 use serde_json::{Value, json};
 
-use super::ntfy::{clean_line, compose, web_link};
+use super::text::{clean_line, compose, web_link};
 use super::{AttemptError, Channel, DeliveryError, Notification, Notifier, check_status};
 use crate::BoxFuture;
 use crate::net::{GuardedClient, NetPolicy, parse_url, read_limited, redact};
