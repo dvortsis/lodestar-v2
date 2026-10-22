@@ -662,7 +662,7 @@
    "pr": 62,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "round 1 FIX: rTorrent d.size_files unbounded alloc; important: typed JSON (IgnoredAny), magnet selection unsupported on 3 clients (honest caps), partial bulk count, ClientConfig Debug"
+   "notes": "round 1 fixes pushed e115ef2 (MAX_FILES cap, typed JSON, magnet selection caps, Partial errors, redacted config Debug); runner verified cap; merge on CI green"
   },
   "X-notify": {
    "status": "merged",
