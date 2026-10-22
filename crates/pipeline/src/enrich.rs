@@ -4,11 +4,12 @@
 //! coordinator runs it for torrents that arrive without it (imports,
 //! torrents stored before M3, records from an older parser).
 
-use lodestar_classify::{
-    Classification, Correction, ENRICHMENT_VERSION, FileInfo, Record, classify_corrected,
-};
+use lodestar_classify::{Classification, Correction, ENRICHMENT_VERSION, FileInfo};
+use lodestar_filter::Engine;
 use lodestar_metainfo::{File, TextEncoding};
 use lodestar_store::{Enriched, Store};
+
+pub use lodestar_filter::reclassify::{enrich_corrected, enrich_row};
 
 pub use lodestar_classify::file_infos;
 
@@ -23,23 +24,6 @@ pub fn enrich_infos(name: &str, files: &[FileInfo]) -> (Enriched, Classification
     enrich_corrected(name, files, Correction::default())
 }
 
-/// [`enrich_infos`] with your correction to the torrent applied.
-pub fn enrich_corrected(
-    name: &str,
-    files: &[FileInfo],
-    fix: Correction,
-) -> (Enriched, Classification) {
-    let c = classify_corrected(name, files, fix);
-    let enriched = Enriched {
-        version: ENRICHMENT_VERSION,
-        content_type: c.content_type.code(),
-        junk_score: c.junk.score,
-        comp: c.composition.encode(),
-        data: Record::new(&c).encode(),
-    };
-    (enriched, c)
-}
-
 /// Enriches up to `limit` stored torrents after `after` (by id) whose
 /// enrichment is missing or outdated, and logs them for re-indexing.
 /// Returns the last id looked at and how many were enriched, or `None`
@@ -49,16 +33,30 @@ pub fn enrich_stored(
     after: i64,
     limit: usize,
 ) -> Result<Option<(i64, usize)>, lodestar_store::Error> {
+    enrich_stored_with(store, after, limit, None)
+}
+
+/// [`enrich_stored`], applying your classification rules from `engine`
+/// too. A torrent's own correction wins over a rule.
+pub fn enrich_stored_with(
+    store: &mut Store,
+    after: i64,
+    limit: usize,
+    engine: Option<&Engine>,
+) -> Result<Option<(i64, usize)>, lodestar_store::Error> {
     let ids = store.unenriched(after, ENRICHMENT_VERSION, limit)?;
     let Some(&last) = ids.last() else {
         return Ok(None);
     };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
     let mut batch = Vec::with_capacity(ids.len());
     for id in ids {
         if let (Some(row), Some(tree)) = (store.torrent(id)?, store.files(id)?) {
-            let fix = store.correction(id)?.map(correction).unwrap_or_default();
+            let own = store.correction(id)?.map(correction).unwrap_or_default();
             let files = file_infos(&tree.files, tree.encoding);
-            batch.push((id, enrich_corrected(&row.name, &files, fix).0));
+            batch.push((id, enrich_row(&row, &files, own, engine, now).0));
         }
     }
     let n = store.set_enrichments(&batch)?;
@@ -76,7 +74,7 @@ pub fn correction(c: lodestar_store::ClassCorrection) -> Correction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lodestar_classify::ContentType;
+    use lodestar_classify::{ContentType, Record};
     use lodestar_metainfo::FileAttrs;
 
     fn file(path: &[&[u8]], size: u64) -> File {
