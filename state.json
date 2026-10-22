@@ -821,7 +821,7 @@
    "pr": 89,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 20:29 after #86 merged. | 23:25 review: no blocking; asked I1 (test endpoint echoes body: partial-read SSRF), I2 semaphore, I3 event on drop, I4 secret sealing/refuse, I5 merged check + polish; files outside owns accepted."
+   "notes": "Launched 20:29 after #86 merged. | 23:25 review: no blocking; asked I1 (test endpoint echoes body: partial-read SSRF), I2 semaphore, I3 event on drop, I4 secret sealing/refuse, I5 merged check + polish; files outside owns accepted. | 23:48 e28de2f fixes pushed; runner verified I1 (Rejected -> status only; other variants static text). Approved; merge on green. Then launch B2c + B-log1."
   },
   "B2c": {
    "status": "pending",
