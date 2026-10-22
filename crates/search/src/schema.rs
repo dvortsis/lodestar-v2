@@ -1,6 +1,8 @@
 //! The torrent index schema (architecture §8). The trigram field arrives
 //! with regex search, the swarm fields with M4.
 //!
+//! v5 (B6, facets): `release_year`, the year histogram's fast column.
+//!
 //! Only `id` and `name` are stored; everything shown comes from SQLite.
 
 use lodestar_classify::Category;
@@ -13,7 +15,7 @@ use crate::tokenizer::NAME_TOKENIZER;
 
 /// Bump on any schema change: a new version is a new index directory,
 /// built in the background while the old one serves (§8).
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 /// Bump on any tokenizer change, for the same reason.
 pub const TOKENIZER_VERSION: u32 = 1;
 
@@ -70,6 +72,10 @@ pub struct Fields {
     pub year: Field,
     pub season: Field,
     pub episode: Field,
+    /// The release's first (lowest) year, one value per torrent in a
+    /// fast column, for the year histogram (B6). `year` holds every
+    /// year of a span and has no column.
+    pub release_year: Field,
     pub junk: Field,
     /// Per-category share of the files and of the bytes, 0–100, in
     /// [`Category::ALL`] order. Only non-zero shares are written.
@@ -144,6 +150,7 @@ pub fn build() -> (Schema, Fields) {
         year: b.add_u64_field("year", multi()),
         season: b.add_u64_field("season", multi()),
         episode: b.add_u64_field("episode", multi()),
+        release_year: b.add_u64_field("release_year", num()),
         junk: b.add_u64_field("junk", num()),
         cat_count,
         cat_bytes,
