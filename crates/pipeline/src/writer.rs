@@ -9,11 +9,11 @@
 //! that waits on it.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use lodestar_cluster::{Lease, WorkerId};
-use lodestar_filter::{Action, Decision, Facts, Handle, Item, Sealer};
+use lodestar_filter::{Action, Decision, Facts, Handle, HeldSet, Item, Sealer};
 use lodestar_metainfo::InfoHash;
 use lodestar_sources::{Discovery, Funnel, FunnelCounts, Loss, Stage};
 use lodestar_store::{
@@ -27,7 +27,7 @@ use crate::coordinator::Coordinator;
 use crate::have::{Bloom, Have, capacity_for};
 use crate::rollups::{Rollups, metric};
 use crate::worker::{Results, collect};
-use crate::{HeldSet, event, unix_now};
+use crate::{event, unix_now};
 
 #[derive(Debug, Clone)]
 pub(crate) struct WriterConfig {
@@ -88,6 +88,8 @@ pub(crate) struct Writer {
     /// it has found nothing left to do.
     pub backfill_after: i64,
     pub backfill_done: bool,
+    /// Starts another background-enrichment pass (see `PipelineConfig`).
+    pub reenrich: Arc<AtomicBool>,
     pub cfg: WriterConfig,
     pub have: Arc<Have>,
     pub funnel: Arc<FunnelCounts>,
@@ -154,6 +156,10 @@ impl Writer {
                 // fair share between ingest batches.
                 () = std::future::ready(()), if !self.backfill_done => self.backfill().await,
                 _ = flush.tick() => {
+                    if self.reenrich.swap(false, Ordering::AcqRel) {
+                        self.backfill_after = 0;
+                        self.backfill_done = false;
+                    }
                     self.commit(Vec::new(), Vec::new(), Vec::new(), &io.retry).await;
                     if unix_now() - self.last_purge >= PURGE_EVERY {
                         self.purge().await;
@@ -384,9 +390,11 @@ impl Writer {
     async fn backfill(&mut self) {
         let store = self.store.take().expect("store");
         let after = self.backfill_after;
+        let engine = self.filter.current();
         let (store, result) = tokio::task::spawn_blocking(move || {
             let mut store = store;
-            let result = crate::enrich::enrich_stored(&mut store, after, BACKFILL_BATCH);
+            let result =
+                crate::enrich::enrich_stored_with(&mut store, after, BACKFILL_BATCH, Some(&engine));
             (store, result)
         })
         .await

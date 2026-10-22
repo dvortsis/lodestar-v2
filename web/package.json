@@ -8,6 +8,9 @@
 	},
 	"scripts": {
 		"dev": "vite dev",
+		"fonts": "node scripts/fonts.mjs",
+		"themes": "node --experimental-strip-types scripts/themes.ts",
+		"prebuild": "npm run themes",
 		"build": "vite build",
 		"preview": "vite preview",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json && eslint . && prettier --check . && node scripts/check-bans.mjs",
@@ -46,6 +49,7 @@
 		"prettier": "3.9.10",
 		"prettier-plugin-svelte": "4.1.1",
 		"size-limit": "14.2.0",
+		"subset-font": "2.9.0",
 		"svelte": "5.57.2",
 		"svelte-check": "4.7.7",
 		"tailwindcss": "4.3.3",
