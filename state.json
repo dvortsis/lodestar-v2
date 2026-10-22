@@ -965,7 +965,7 @@
    "pr": 96,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 22:36 security review FIX: TLS1.3 resumption skips client verify (revocation/expiry) + 3 low; sent to session. Design reviewer still running. | 22:48 head 473b125 security fixes; sec reviewer re-verifying delta | 23:10 design review: no blocking code; Windows red = rebuild.rs known flake (#88) -> \u00a72.18. Asked important 1-3 + polish. | 23:12 security re-review MERGE at 473b125. Waiting on design-review important fixes."
+   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 22:36 security review FIX: TLS1.3 resumption skips client verify (revocation/expiry) + 3 low; sent to session. Design reviewer still running. | 22:48 head 473b125 security fixes; sec reviewer re-verifying delta | 23:10 design review: no blocking code; Windows red = rebuild.rs known flake (#88) -> \u00a72.18. Asked important 1-3 + polish. | 23:12 security re-review MERGE at 473b125. Waiting on design-review important fixes. | 23:19 eeb9704 design items done; runner reviewed redeem_again delta (needs secret match first, returns cert only, same key + unexpired + unrevoked): OK. Merge on green (Windows rebuild.rs flake = \u00a72.18)."
   },
   "DOC-install": {
    "status": "running",
@@ -1108,8 +1108,7 @@
   "89",
   "88",
   94,
-  95,
-  96
+  95
  ],
  "carry_forward": {
   "next-bans-touch": [
