@@ -1519,6 +1519,15 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Size:** `title_stem` costs about 3 B per torrent (words only, no norms). The torrent index is 408 B per torrent at 100k (budget 512). Schema v4.
 - **Name patterns** moved into the §20 rule engine with #27 (an M4 add-on), so M3 doesn't build them.
 
+**M5 decisions (build process and UI conventions):**
+- **Spacing uses Tailwind's default scale** (`p-4` = 16 px), restricted to the steps that match the §10.2 ramp: 0, 0.5, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14 (= 0–56 px).
+  - Redefining the scale so that `p-4` = 4 px was considered and rejected. Standard Tailwind written against it would be silently wrong, and no lint can catch that.
+  - The ban check rejects off-ramp steps (W2).
+  - `docs/design-tokens.md` §5 holds the table.
+- **The build runs as parallel slices** (`docs/build-plan.md`, `runner/`).
+  - One bar for every slice and review: `runner/standards.md`.
+  - Merges happen only with green CI and no blocking findings from a fresh Opus reviewer.
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.
