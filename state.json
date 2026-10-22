@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-22T04:46:00Z",
+ "updated_at": "2026-10-22T04:51:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 5
@@ -26,10 +26,10 @@
    "notes": ""
   },
   "C0": {
-   "status": "running",
+   "status": "in_review",
    "model": "opus",
    "session": "session_01F4G5nVWxS91JsSEEC2mka5",
-   "pr": null,
+   "pr": 36,
    "attempt": 1,
    "review_rounds": 0,
    "notes": ""
@@ -44,10 +44,10 @@
    "notes": ""
   },
   "W0": {
-   "status": "running",
+   "status": "in_review",
    "model": "sonnet",
    "session": "session_01G472Ud4a5RmEjGnhwpwTQw",
-   "pr": null,
+   "pr": 35,
    "attempt": 1,
    "review_rounds": 0,
    "notes": ""
