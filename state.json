@@ -734,7 +734,7 @@
    "pr": 63,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "round 1 FIX: dropped connection not retried; encoded-word Subject passthrough; important: peer IP check for plaintext auth, resolve timeout. Implicit TLS deviation accepted"
+   "notes": "round 1 fixes pushed af0a35e (transient drops, =? broken, private peer for plaintext auth, resolve timeout); merge on CI green (filter gate pending F1b)"
   },
   "B5a-swapfix": {
    "status": "in_review",
