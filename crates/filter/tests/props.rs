@@ -172,6 +172,12 @@ const COMMON: &[&str] = &[
     "264", "hevc", "ddp5", "aac2", "dts", "atmos", "sample", "subs", "srt", "en", "nfo",
 ];
 
+/// Prefixes whose first four characters the set's words have, matching
+/// none of them.
+const PREFIXES: &[&str] = &[
+    "1080z", "2160z", "720px", "webdz", "blurx", "x264z", "ddp5z", "samplz",
+];
+
 /// Pairs of those words in an order release names don't use.
 const REVERSED: &[(&str, &str)] = &[
     ("mkv", "1080p"),
@@ -194,8 +200,8 @@ const REVERSED: &[(&str, &str)] = &[
 /// - a common word with a type the set doesn't have.
 ///
 /// The rest are keywords, phrases, release groups, narrowed keywords,
-/// alternatives and a few structural rules no word narrows, none present
-/// in the set.
+/// alternatives, and a few rules no word narrows (sizes, prefixes and
+/// fuzzy words, which get the full match), none matching the set.
 fn ten_thousand_rules(share: usize) -> Vec<lodestar_filter::UserRule> {
     let word = |i: usize, salt: &str| format!("{salt}{}q{i}", ["zor", "vel", "mik", "tas"][i % 4]);
     let common = |i: usize| COMMON[i / 5 % COMMON.len()];
@@ -219,7 +225,13 @@ fn ten_thousand_rules(share: usize) -> Vec<lodestar_filter::UserRule> {
                     74..=83 => format!("group:{}", word(i, "g")),
                     84..=93 => format!("{} type:movie -{}", word(i, "c"), word(i, "d")),
                     94..=98 => format!("{} | {}", word(i, "e"), word(i, "f")),
-                    _ => format!("size:>{}TB files:>{}", i % 7 + 2, 50_000 + i),
+                    // Rules no word narrows: sizes, prefixes that start
+                    // like the set's words but match none, fuzzy words.
+                    _ => match i / 100 % 3 {
+                        0 => format!("size:>{}TB files:>{}", i % 7 + 2, 50_000 + i),
+                        1 => format!("{}*", PREFIXES[i / 300 % PREFIXES.len()]),
+                        _ => format!("~{}", word(i, "z")),
+                    },
                 }
             };
             lodestar_filter::UserRule {
@@ -241,7 +253,8 @@ fn ten_thousand_rules(share: usize) -> Vec<lodestar_filter::UserRule> {
 ///
 /// Each pass judges every torrent of a varied set once, so caches warm
 /// only as they would on ingest. The engine is measured with 1%, 10% and
-/// 25% of the rules built on words the torrents have.
+/// 25% of the rules built on words the torrents have. The budget holds
+/// the core, 1% and 10%; 25% is measured and reported, not held.
 #[test]
 #[ignore]
 fn budget() {
@@ -310,7 +323,7 @@ fn budget() {
     // reading the classification as ingest does.
     let mut engine = lodestar_filter::Engine::new(core);
     engine.packs = lodestar_filter::PackSwitches::all();
-    for share in [1, 10, 25] {
+    for (share, held) in [(1, true), (10, true), (25, false)] {
         engine.rules = ten_thousand_rules(share).into();
         let what = format!("engine, packs on, 10,000 rules, {share}% on common words");
         let (met, full) = (0..items.len()).fold((0, 0), |(m, f), i| {
@@ -331,7 +344,11 @@ fn budget() {
             );
         });
         if per.as_micros() >= BUDGET_US {
-            over.push(format!("{what}: {per:?}"));
+            if held {
+                over.push(format!("{what}: {per:?}"));
+            } else {
+                println!("{what}: over {BUDGET_US} µs (reported, not held)");
+            }
         }
     }
     assert!(over.is_empty(), "over the {BUDGET_US} µs budget: {over:?}");

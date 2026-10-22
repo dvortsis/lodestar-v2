@@ -214,23 +214,29 @@ fn need_in(node: &Node, in_file: bool) -> Result<Option<Keyed>, ()> {
 /// which.
 #[derive(Debug, Default)]
 pub(crate) struct DocKeys {
-    text: IdSet,
+    /// Each token text's hash, with the vocabulary entry of its text.
+    text: IdMap<u32>,
     pairs: Bloom,
+    /// The first two, three and four characters of every token text.
+    starts: Bloom,
+    /// Each distinct token text, for prefixes and fuzzy words.
+    vocabulary: Vocabulary,
 }
 
 impl DocKeys {
     pub(crate) fn new(name: &str, files: &[FileInfo]) -> DocKeys {
+        let bytes = name.len()
+            + files
+                .iter()
+                .take(crate::MAX_FILES)
+                .flat_map(|f| &f.path)
+                .map(|s| s.len() + 1)
+                .sum::<usize>();
         let mut scan = Scan {
-            out: IdSet::with_capacity_and_hasher(256, Default::default()),
-            pairs: Bloom::for_text(
-                name.len()
-                    + files
-                        .iter()
-                        .take(crate::MAX_FILES)
-                        .flat_map(|f| &f.path)
-                        .map(|s| s.len() + 1)
-                        .sum::<usize>(),
-            ),
+            out: IdMap::with_capacity_and_hasher(256, Default::default()),
+            pairs: Bloom::for_text(bytes),
+            starts: Bloom::for_text(bytes),
+            vocabulary: Vocabulary::default(),
             seen: [const { None }; SEEN],
             at: At::default(),
         };
@@ -258,7 +264,40 @@ impl DocKeys {
         DocKeys {
             text: scan.out,
             pairs: scan.pairs,
+            starts: scan.starts,
+            vocabulary: scan.vocabulary,
         }
+    }
+
+    /// Each distinct token text of the name and the paths.
+    pub(crate) fn vocabulary(&self) -> impl Iterator<Item = &str> {
+        let v = &self.vocabulary;
+        v.words.iter().map(|w| v.text(w))
+    }
+
+    /// The distinct token texts within `distance` characters of `chars`
+    /// long and within `2 × distance` bits of [`char_set`] `has`: those
+    /// an edit distance could put within `distance`.
+    pub(crate) fn vocabulary_near(
+        &self,
+        chars: usize,
+        has: u64,
+        distance: usize,
+    ) -> impl Iterator<Item = &str> {
+        let v = &self.vocabulary;
+        v.words
+            .iter()
+            .filter(move |w| {
+                (w.chars as usize).abs_diff(chars) <= distance
+                    && ((w.has ^ has).count_ones() as usize) <= 2 * distance
+            })
+            .map(|w| v.text(w))
+    }
+
+    /// Whether some token text could start with the text [`start_key`]
+    /// was given.
+    pub(crate) fn could_start(&self, key: u64) -> bool {
+        self.starts.contains(key)
     }
 
     /// Whether token `b` could follow token `a` in the name or a path.
@@ -268,12 +307,12 @@ impl DocKeys {
 
     #[cfg(test)]
     fn has(&self, key: u64, tags: &IdSet) -> bool {
-        self.text.contains(&key) || tags.contains(&key)
+        self.text.contains_key(&key) || tags.contains(&key)
     }
 
     /// Whether a token text with this hash is in the name or a path.
     pub(crate) fn has_text(&self, key: u64) -> bool {
-        self.text.contains(&key)
+        self.text.contains_key(&key)
     }
 
     /// Whether a query with this need could match.
@@ -335,6 +374,103 @@ impl Bloom {
     }
 }
 
+/// The key of a text's first two, three or four characters, as
+/// [`DocKeys::could_start`] asks it: the text's own first `min(4, len)`
+/// characters, or `None` for a text of fewer than two.
+pub(crate) fn start_key(text: &str) -> Option<u64> {
+    let n = text.chars().count().min(4);
+    (n >= 2).then(|| {
+        let end = text.char_indices().nth(n).map_or(text.len(), |(i, _)| i);
+        starts_hash(text[..end].bytes())
+    })
+}
+
+fn starts_hash(bytes: impl Iterator<Item = u8>) -> u64 {
+    fmix64(bytes.fold(fnv_start() ^ 0x5354_4152_5453, fnv_byte))
+}
+
+/// The characters a text has, as bits: one per letter and digit, and
+/// others folded onto the rest.
+pub(crate) fn char_set(text: &str) -> u64 {
+    text.chars().fold(0, |m, c| m | char_bit(c))
+}
+
+fn char_bit(c: char) -> u64 {
+    let bit = match c {
+        'a'..='z' => c as u32 - 'a' as u32,
+        '0'..='9' => 26 + c as u32 - '0' as u32,
+        _ => 36 + c as u32 % 28,
+    };
+    1 << bit
+}
+
+/// Distinct token texts, compared byte for byte, so two texts whose hashes
+/// collide are both kept.
+#[derive(Debug, Default)]
+struct Vocabulary {
+    buf: String,
+    words: Vec<Entry>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Entry {
+    hash: u64,
+    start: u32,
+    end: u32,
+    chars: u32,
+    has: u64,
+}
+
+impl Vocabulary {
+    fn text(&self, w: &Entry) -> &str {
+        &self.buf[w.start as usize..w.end as usize]
+    }
+
+    fn push(&mut self, hash: u64, text: &str) -> u32 {
+        let start = self.buf.len();
+        self.buf.push_str(text);
+        self.words.push(Entry {
+            hash,
+            start: start as u32,
+            end: self.buf.len() as u32,
+            chars: text.chars().count() as u32,
+            has: char_set(text),
+        });
+        (self.words.len() - 1) as u32
+    }
+
+    /// Whether `text`, whose hash is `hash`, is entry `i`'s text or that
+    /// of another entry with that hash.
+    fn has(&self, i: u32, hash: u64, text: &str) -> bool {
+        self.text(&self.words[i as usize]) == text
+            || self
+                .words
+                .iter()
+                .any(|w| w.hash == hash && self.text(w) == text)
+    }
+}
+
+/// Adds a token's first two, three and four characters, from its
+/// lowercase ASCII bytes.
+fn add_starts(out: &mut Bloom, text: impl Iterator<Item = u8>) {
+    let mut h = fnv_start() ^ 0x5354_4152_5453;
+    for (n, b) in text.take(4).enumerate() {
+        h = fnv_byte(h, b);
+        if n >= 1 {
+            out.insert(fmix64(h));
+        }
+    }
+}
+
+/// [`add_starts`] for any token text, by characters.
+fn add_starts_str(out: &mut Bloom, text: &str) {
+    let chars = text.chars().count();
+    for n in 2..=chars.min(4) {
+        let end = text.char_indices().nth(n).map_or(text.len(), |(i, _)| i);
+        out.insert(starts_hash(text[..end].bytes()));
+    }
+}
+
 /// The key of token `b` at the position after token `a`.
 pub(crate) fn pair(a: u64, b: u64) -> u64 {
     fmix64(a.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ b)
@@ -389,8 +525,10 @@ struct At {
 /// words already split (compared byte for byte, so it can't be fooled)
 /// skips splitting them again.
 struct Scan<'a> {
-    out: IdSet,
+    out: IdMap<u32>,
     pairs: Bloom,
+    starts: Bloom,
+    vocabulary: Vocabulary,
     seen: [Option<(&'a [u8], Word)>; SEEN],
     at: At,
 }
@@ -404,6 +542,37 @@ fn pairs(out: &mut Bloom, a: &[u64], b: &[u64]) {
 }
 
 impl<'a> Scan<'a> {
+    /// Adds one token of ASCII text, at most [`MAX_TOKEN_BYTES`] long, from
+    /// its pieces: its key, its starts, and its text.
+    fn token(&mut self, hash: u64, pieces: &[&[u8]]) {
+        let mut low = [0u8; MAX_TOKEN_BYTES];
+        let mut n = 0;
+        for c in pieces.iter().flat_map(|p| p.iter()) {
+            low[n] = c.to_ascii_lowercase();
+            n += 1;
+        }
+        let low = &low[..n];
+        add_starts(&mut self.starts, low.iter().copied());
+        self.add_text(hash, std::str::from_utf8(low).expect("ASCII"));
+    }
+
+    /// A token text's key, and its text when it's new.
+    fn add_text(&mut self, hash: u64, text: &str) {
+        use std::collections::hash_map::Entry as Slot;
+        match self.out.entry(hash) {
+            Slot::Vacant(v) => {
+                v.insert(self.vocabulary.push(hash, text));
+            }
+            // Almost always the same text again; a different one whose
+            // hash collides is kept as well.
+            Slot::Occupied(o) => {
+                if !self.vocabulary.has(*o.get(), hash, text) {
+                    self.vocabulary.push(hash, text);
+                }
+            }
+        }
+    }
+
     /// Adds the token texts [`tokenize`] produces for `text`, which
     /// continues the text before it at the next position (a path's next
     /// segment) unless [`Scan::at`] was reset.
@@ -443,7 +612,7 @@ impl<'a> Scan<'a> {
                     // way. Its own pairs are added once.
                     let full = fmix64(hash(fnv_start(), word));
                     if fits(word.len()) {
-                        self.out.insert(full);
+                        self.token(full, &[word]);
                     }
                     let mut split = None;
                     if word.len() <= MAX_SPLIT_CHARS && cuts(word).next().is_some() {
@@ -452,7 +621,7 @@ impl<'a> Scan<'a> {
                         for (n, cut) in cuts(word).chain(std::iter::once(word.len())).enumerate() {
                             let h = fmix64(hash(fnv_start(), &word[from..cut]));
                             if fits(cut - from) {
-                                self.out.insert(h);
+                                self.token(h, &[&word[from..cut]]);
                             }
                             match n {
                                 0 => first = h,
@@ -487,7 +656,7 @@ impl<'a> Scan<'a> {
                 if pluses <= 2 {
                     let plus = fmix64(hash(hash(fnv_start(), word), &b[e..e + pluses]));
                     if fits(word.len() + pluses) {
-                        self.out.insert(plus);
+                        self.token(plus, &[word, &b[e..e + pluses]]);
                     }
                     first.push(plus);
                     if let Some((_, p1, _)) = w.split {
@@ -509,7 +678,7 @@ impl<'a> Scan<'a> {
                 {
                     let joined = fmix64(hash(hash(fnv_start(), &b[ps..pe]), word));
                     if fits(pe - ps + word.len()) {
-                        self.out.insert(joined);
+                        self.token(joined, &[&b[ps..pe], word]);
                     }
                     pairs(&mut self.pairs, self.at.before.get(), &[joined]);
                     match self.at.second {
@@ -539,12 +708,16 @@ impl<'a> Scan<'a> {
 
     /// Text with other than ASCII, through the tokenizer.
     fn other(&mut self, text: &str) {
-        let mut by_pos: Vec<(usize, u64)> = tokenize(text)
+        let toks = tokenize(text);
+        for t in &toks {
+            add_starts_str(&mut self.starts, &t.text);
+            self.add_text(term_hash(&t.text), &t.text);
+        }
+        let mut by_pos: Vec<(usize, u64)> = toks
             .iter()
             .map(|t| (t.position, term_hash(&t.text)))
             .collect();
         by_pos.sort_unstable();
-        self.out.extend(by_pos.iter().map(|t| t.1));
         let Some(&(lo, _)) = by_pos.first() else {
             return;
         };
@@ -705,7 +878,7 @@ impl RuleList {
         };
         ix.always.iter().for_each(|&i| mark(i));
         if !ix.by_key.is_empty() {
-            for k in keys.text.iter().chain(tags()) {
+            for k in keys.text.keys().chain(tags()) {
                 if let Some(rules) = ix.by_key.get(k) {
                     rules.iter().for_each(|&i| mark(i));
                 }
@@ -766,7 +939,7 @@ mod tests {
     }
 
     fn scan_keys(text: &str) -> IdSet {
-        DocKeys::new(text, &[]).text
+        DocKeys::new(text, &[]).text.keys().copied().collect()
     }
 
     proptest! {
@@ -790,8 +963,9 @@ mod tests {
         }
 
         /// Every pair of tokens at neighbouring positions, in the name and
-        /// in each whole path, is among the scanned pairs, whatever the
-        /// text and however files share folders.
+        /// in each whole path, is among the scanned pairs, and every
+        /// token's start among the starts, whatever the text and however
+        /// files share folders.
         #[test]
         fn pairs_cover_the_tokenizers(
             name in "\\PC{0,60}|[ -~]{0,80}",
@@ -814,8 +988,30 @@ mod tests {
             let keys = DocKeys::new(&name, &files);
             let texts = std::iter::once(name.clone())
                 .chain(files.iter().map(|f| f.path.join("/")));
+            // The vocabulary is exactly the token texts, each once.
+            let all: std::collections::BTreeSet<String> = texts
+                .clone()
+                .flat_map(|t| tokenize(&t).into_iter().map(|t| t.text))
+                .collect();
+            let vocabulary: Vec<&str> = keys.vocabulary().collect();
+            prop_assert_eq!(vocabulary.len(), all.len());
+            prop_assert!(vocabulary.iter().all(|t| all.contains(*t)));
+            for w in &keys.vocabulary.words {
+                let t = keys.vocabulary.text(w);
+                prop_assert_eq!(w.chars as usize, t.chars().count());
+                prop_assert_eq!(w.has, char_set(t));
+            }
             for text in texts {
                 let toks = tokenize(&text);
+                // Every token's start, for prefixes.
+                for t in &toks {
+                    for n in 2..=t.text.chars().count() {
+                        let start: String = t.text.chars().take(n).collect();
+                        if let Some(k) = start_key(&start) {
+                            prop_assert!(keys.could_start(k), "{:?} of {:?} in {:?}", start, t.text, text);
+                        }
+                    }
+                }
                 for a in &toks {
                     for b in toks.iter().filter(|b| b.position == a.position + 1) {
                         prop_assert!(
@@ -883,7 +1079,8 @@ mod tests {
             1,
         );
         let keys = DocKeys::new("", std::slice::from_ref(&f));
-        assert_eq!(keys.text, tokenizer_keys(&f.path.join("/")));
+        let keys: IdSet = keys.text.keys().copied().collect();
+        assert_eq!(keys, tokenizer_keys(&f.path.join("/")));
     }
 
     #[test]
