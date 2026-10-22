@@ -1,10 +1,14 @@
 # Build standards
 
-These are the single bar for every slice session and every review. Briefs add slice-specific checks on top; they never lower these. The sources of truth, in order:
-1. `CLAUDE.md`
-2. `docs/architecture.md`
-3. the contract docs: `docs/design-tokens.md`, `docs/metrics.md`, `docs/ui-glossary.md`
-4. `ui-design-skills`, in its own precedence order with the owner's choices on top (§3), applied by spirit for Svelte
+These are the single bar for every slice session and every review. Briefs add slice-specific checks on top; they never lower these.
+
+**Design authority (owner's decision, 2026-10-22):** the design decided with the owner in the "Modern DHT crawler architecture" session is the **primary design strategy**. That session wrote `docs/architecture.md`, including all of §10 and §20, and it is the record of those decisions. `ui-design-skills` **fills the gaps** the architecture doesn't decide; it never overrides it.
+
+The sources of truth, in order:
+1. the owner's explicit instructions and `CLAUDE.md`
+2. `docs/architecture.md`, the primary design strategy
+3. the contract docs derived from it: `docs/design-tokens.md`, `docs/metrics.md`, `docs/ui-glossary.md`
+4. `ui-design-skills`, only for what 1–3 leave open, in its own precedence order and applied by spirit for Svelte (§3)
 5. the slice brief
 
 ## 1. Checks before every push
@@ -37,10 +41,12 @@ These are the single bar for every slice session and every review. Briefs add sl
 - **Commits and PRs:** an imperative subject of 72 characters or fewer, and a body that says why. No model identifiers anywhere.
 
 ## 3. UI design skills (`dvortsis/skills`, `ui-design-skills/skills/<name>/SKILL.md`)
-**The skills are the authority for UI decisions** (CLAUDE.md, §10.0). Every UI slice reads the skills listed in its brief before writing code, and every UI review checks against them. The repo is public: `git clone --depth 1 https://github.com/dvortsis/skills`.
+**The skills fill gaps.** Where `docs/architecture.md` (§10 especially) or a contract doc decides something, that decision stands, even if a skill default differs. Where they're silent, the owning skill decides.
 
-- **Precedence** (the skills' own order, with the owner's choices on top):
-  1. the owner's explicit choices: Svelte 5, smallest and fastest first, `minimalist-visual-style`, Atkinson Hyperlegible Next/Mono, Riverstone with plum `#9381B6`, 24 theme families × light/dark, brand assets per §10.19;
+Every UI slice reads the skills listed in its brief, so it fills gaps consistently. Every UI review checks gap decisions against them. §10.0 already applies the skills to many subjects, and those applications are part of the architecture. The repo is public: `git clone --depth 1 https://github.com/dvortsis/skills`.
+
+- **Precedence inside the gaps** (the skills' own order):
+  1. the owner's explicit choices, as recorded in CLAUDE.md and §10.0: Svelte 5, smallest and fastest first, `minimalist-visual-style`, Atkinson Hyperlegible Next/Mono, Riverstone with plum `#9381B6`, 24 theme families × light/dark, brand assets per §10.19;
   2. accessibility and functional correctness;
   3. Lodestar's existing product language where no skill owns the decision (the composition bar, dense expandable rows);
   4. skill defaults;
@@ -80,7 +86,11 @@ These are the single bar for every slice session and every review. Briefs add sl
 3. **Checks:** the reviewer re-runs §1 itself and doesn't trust the PR text.
 4. **Tests:** they cover the behaviour, including edge cases and failure paths, not only the happy path.
 5. **Standards:** §2 and §4 above.
-6. **UI slices: the design skills (§3).** Check each subject against its owning skill: spacing against `layout-spacing`, states and forms against `application-interface-design`, charts against `analytics-chart-selection`, and so on. Run a `design-review` pass on each finished screen. A skill violation is blocking unless one of the owner's explicit choices overrides it.
+6. **UI slices: the design.**
+   - First check against `docs/architecture.md` §10 and the contract docs. A deviation from them is blocking.
+   - Then check decisions they leave open against the owning skill: spacing against `layout-spacing`, states and forms against `application-interface-design`, charts against `analytics-chart-selection`, and so on. A gap filled against its skill is important; it's blocking if it hurts accessibility or correctness.
+   - Run a `design-review` pass on each finished screen.
+   - Never "fix" an architecture decision to match a skill default. If the two genuinely conflict, raise it to the owner.
 7. **Security:** for anything touching auth, credentials, untrusted input, filters, the cluster or companions, run `/security-review` as well.
 
 **Severity:**
