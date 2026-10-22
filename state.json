@@ -1,9 +1,9 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-22T07:51:00Z",
+ "updated_at": "2026-10-22T08:46:00Z",
  "launches": {
   "date": "2026-10-22",
-  "count": 16
+  "count": 17
  },
  "tags": {},
  "slices": {
@@ -35,13 +35,13 @@
    "notes": "round 1: changes requested (trackers_checked meaning; Intl examples; stale/segments/exceptions fields; keep Tailwind default spacing, restrict to ramp steps)"
   },
   "C1": {
-   "status": "in_review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01NSdirPw4xiTrGseUFMRd8U",
    "pr": 37,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "round 2: doc-only fix (list 9 compiler gate failures); palettes unchanged by decision"
+   "notes": "merged 08:44 after round 2"
   },
   "W0": {
    "status": "merged",
@@ -53,10 +53,10 @@
    "notes": "merged after round 2"
   },
   "B1": {
-   "status": "running",
+   "status": "in_review",
    "model": "opus",
    "session": "session_01UxCJe2QQNeBEaCZrmcDRJi",
-   "pr": null,
+   "pr": 57,
    "attempt": 1,
    "review_rounds": 0,
    "notes": ""
@@ -71,13 +71,13 @@
    "notes": "waits for B1 (both edit crates/api)"
   },
   "B3": {
-   "status": "running",
+   "status": "in_review",
    "model": "opus",
    "session": "session_01R8S4Q4PGSjv2tZYtdKuZu3",
-   "pr": null,
+   "pr": 56,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": ""
+   "review_rounds": 1,
+   "notes": "round 1: proptests for key/pick/qvalue; deps listed"
   },
   "W1": {
    "status": "merged",
@@ -692,10 +692,10 @@
    "notes": ""
   },
   "F1": {
-   "status": "running",
+   "status": "in_review",
    "model": "opus",
    "session": "session_01V5sNo28tD6bZx3CNFdYjWY",
-   "pr": null,
+   "pr": 55,
    "attempt": 1,
    "review_rounds": 0,
    "notes": "owner filtering decisions on main: packs off, budget gate, floor add-only, subscription strictness"
@@ -785,7 +785,7 @@
   "48": "review round 1: merge main (B0 layout), 10M exit evidence, scheduler fixes",
   "52": "MERGED by the filter session (self-merge again), conflicts with B0"
  },
- "heartbeats": 2,
+ "heartbeats": 3,
  "reviews_in_flight": [],
  "carry_forward": {
   "D-docker": [
@@ -812,5 +812,9 @@
   "web.yml": [
    "add brand/source/** to path filters"
   ]
- }
+ },
+ "blocked_on_owner": [
+  "M4 continuation: waiting on ExitPlanMode approval (plan mode) \u2014 can't act on #48 review",
+  "Modern DHT crawler architecture: waiting on an AskUserQuestion"
+ ]
 }
