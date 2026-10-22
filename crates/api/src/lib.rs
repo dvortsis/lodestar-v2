@@ -367,9 +367,8 @@ async fn run_search(s: ApiState, p: SearchParams) -> ApiResult<Json<Value>> {
     let reader = s.reader.clone();
     tokio::task::spawn_blocking(move || {
         let started = Instant::now();
-        let query = index.query(&ast, unix_now());
-        let results = index
-            .search_page(&query, sort, limit, offset)
+        let (results, stemmed) = index
+            .search_with_fallback(&ast, unix_now(), sort, limit, offset)
             .map_err(internal)?;
         let store = reader.lock().expect("reader lock");
         let mut hits = Vec::with_capacity(results.hits.len());
@@ -395,6 +394,9 @@ async fn run_search(s: ApiState, p: SearchParams) -> ApiResult<Json<Value>> {
             "limit": limit,
             "took_ms": started.elapsed().as_secs_f64() * 1000.0,
             "canonical": ast.to_query(),
+            // Few exact matches: plural forms in titles were included too
+            // (§8), ranked after the exact ones.
+            "stemmed": stemmed,
             "hits": hits,
         })))
     })

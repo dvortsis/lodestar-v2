@@ -13,7 +13,7 @@ use crate::tokenizer::NAME_TOKENIZER;
 
 /// Bump on any schema change: a new version is a new index directory,
 /// built in the background while the old one serves (§8).
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 /// Bump on any tokenizer change, for the same reason.
 pub const TOKENIZER_VERSION: u32 = 1;
 
@@ -24,6 +24,10 @@ pub const PATH_BOOST: f32 = 1.0;
 /// torrent whose files say it's the thing outranks one that only
 /// mentions it in a path (§8).
 pub const TITLE_BOOST: f32 = 2.0;
+/// The phase-1 score of a word matched only by its stem in the title
+/// (§8's "plurals and suffixes" tier): a constant, well under a typical
+/// exact match's BM25, so exact matches rank first.
+pub const STEM_SCORE: f32 = 0.25;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Fields {
@@ -54,6 +58,10 @@ pub struct Fields {
     /// The effective title and each alternative title (§6), with
     /// positions for `title:"…"`.
     pub title: Field,
+    /// Light stems ([`crate::stem`]) of the title words, each once,
+    /// words only. A query word matches here as an alternative to its
+    /// exact form.
+    pub title_stem: Field,
     /// Keyword facets as `key:value` (`res:2160p`, `type:movie`,
     /// `has:nfo`); see [`TagKey`](crate::query::TagKey).
     pub tag: Field,
@@ -123,6 +131,15 @@ pub fn build() -> (Schema, Fields) {
         discovered: b.add_i64_field("discovered", num()),
         metadata: b.add_i64_field("metadata", num()),
         title: b.add_text_field("title", text(false, true)),
+        title_stem: b.add_text_field(
+            "title_stem",
+            TextOptions::default().set_indexing_options(
+                TextFieldIndexing::default()
+                    .set_tokenizer("whitespace")
+                    .set_index_option(IndexRecordOption::Basic)
+                    .set_fieldnorms(false),
+            ),
+        ),
         tag: b.add_text_field("tag", keyword.clone()),
         year: b.add_u64_field("year", multi()),
         season: b.add_u64_field("season", multi()),

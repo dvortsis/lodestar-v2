@@ -243,6 +243,7 @@ async fn search_parse_and_detail() {
     assert_eq!(body["hits"][0]["name"], json!("The.Dark.Knight.2008.1080p"));
     assert_eq!(body["hits"][0]["hash"], json!(f.hashes[0]));
     assert_eq!(body["hits"][0]["files"], json!(2));
+    assert_eq!(body["stemmed"], json!(false));
 
     // A file clause lists the matching files of each hit.
     let (_, _, body) = call(&f.app, get("/api/v1/search?q=file:(ext:srt)", c)).await;

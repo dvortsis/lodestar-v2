@@ -77,6 +77,11 @@ impl From<tantivy::directory::error::OpenDirectoryError> for Error {
 
 const PAYLOAD_PREFIX: &str = "lodestar-watermark:";
 
+/// Below this many exact matches, a search also tries the stem tier
+/// ([`SearchIndex::search_with_fallback`]). The second pass roughly
+/// doubles the cost of only these queries; broad ones never pay for it.
+pub const STEM_FALLBACK_BELOW: usize = 10;
+
 /// The index directory for this build's schema and tokenizer, under
 /// `root` (e.g. `data/index`).
 pub fn index_dir(root: &Path) -> PathBuf {
@@ -399,6 +404,45 @@ impl SearchIndex {
     /// Compiles a parsed query; `now` (unix seconds) resolves relative
     /// dates.
     pub fn query(&self, node: &Node, now: i64) -> Compiled {
+        self.compile(node, now, false)
+    }
+
+    /// The same query with the stem tier: each stemmable word also
+    /// matches by its light stem in the title (§8). `None` when no word
+    /// has a stem alternative, so it would match the same torrents.
+    pub fn query_stemmed(&self, node: &Node, now: i64) -> Option<Compiled> {
+        compile::has_stem_alternative(node).then(|| self.compile(node, now, true))
+    }
+
+    /// One page of results, falling back to the stem tier when the exact
+    /// query finds fewer than [`STEM_FALLBACK_BELOW`] torrents and the
+    /// tier finds more. The flag says whether it did. Stem-only matches
+    /// rank after exact ones, and a query's total decides, so every page
+    /// of it takes the same branch.
+    pub fn search_with_fallback(
+        &self,
+        node: &Node,
+        now: i64,
+        sort: Sort,
+        limit: usize,
+        offset: usize,
+    ) -> Result<(Results, bool)> {
+        let exact = self.search_page(&self.query(node, now), sort, limit, offset)?;
+        if exact.total >= STEM_FALLBACK_BELOW {
+            return Ok((exact, false));
+        }
+        let Some(stemmed) = self.query_stemmed(node, now) else {
+            return Ok((exact, false));
+        };
+        let wider = self.search_page(&stemmed, sort, limit, offset)?;
+        Ok(if wider.total > exact.total {
+            (wider, true)
+        } else {
+            (exact, false)
+        })
+    }
+
+    fn compile(&self, node: &Node, now: i64, stems: bool) -> Compiled {
         // `file:(…)` clauses run on the file index first.
         let mut clauses = Vec::new();
         compile::file_clauses(node, &mut clauses);
@@ -419,6 +463,7 @@ impl SearchIndex {
         let cx = compile::Cx {
             fields: &self.fields,
             files: &sets,
+            stems,
         };
         let compile::Parts {
             query,
@@ -428,6 +473,9 @@ impl SearchIndex {
         // Relative dates resolve against `now`, so they're part of the key,
         // and file clauses against the file index's generation.
         let mut key = format!("{node:?}");
+        if stems {
+            key.push_str("@stems");
+        }
         if relative(node) {
             key.push_str(&format!("@{now}"));
         }

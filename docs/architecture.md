@@ -218,7 +218,7 @@ Text extracted from NFOs is indexed into an `nfo_text` field (boost ~2).
 ## 8. Search engine (Tantivy)
 
 **Torrent index** (one doc per torrent; only `id` and `name` are stored, and all other display data comes from SQLite by id):
-- Text: `name` (positions, boost 3, also **stored** in the compressed docstore for regex verification and snippets without SQLite round-trips), `title` (the effective title and each alternative title, positions; a word found there adds a boost of 2 on top of the name's 3 in phase 2), `path_tokens` (each distinct directory name once, then every file name; **words only, without positions**, boost 1. Phrase/NEAR within one file name runs on the file index, whose `name` keeps positions. Positions here measured 372 B per torrent, over the whole index budget; see §16), `name_trigram` (for substring/infix and the regex prefilter; turned off in low-resource mode).
+- Text: `name` (positions, boost 3, also **stored** in the compressed docstore for regex verification and snippets without SQLite round-trips), `title` (the effective title and each alternative title, positions; a word found there adds a boost of 2 on top of the name's 3 in phase 2), `title_stem` (light stems of the title words, each once, words only, for the plurals fallback), `path_tokens` (each distinct directory name once, then every file name; **words only, without positions**, boost 1. Phrase/NEAR within one file name runs on the file index, whose `name` keeps positions. Positions here measured 372 B per torrent, over the whole index budget; see §16), `name_trigram` (for substring/infix and the regex prefilter; turned off in low-resource mode).
 - Keyword/fast fields: `ext[]`, `flag[]`, and `tag[]`, one field of `key:value` terms for `type`, `res`, `hdr`, `codec`, `audio`, `lang`, `group`, `has` and `resolved` (§16).
 - Multi-valued numbers in the inverted index: `year`, `season`, `episode` (every number of a span, so `s:2` finds an `S01-S03` pack).
 - Numeric fast fields: `size`, `file_count`, `largest_file`, `piece_len`, `junk`, `cat_{count,bytes}_{video,audio,image,document,ebook,archive,disc,software,subtitle,other}` (percentages, written only when non-zero), and later `depth` and `group_key`.
@@ -227,7 +227,7 @@ Text extracted from NFOs is indexed into an `nfo_text` field (boost ~2).
 
 **File index** (one doc per file; modes: *off* / **smart (default)** / *all*. Smart indexes every file in torrents with ≤ 1,000 files, plus files ≥ 5 MB or in a non-"other" category in larger packs. Padding, `.nfo`/`.txt`/thumbs junk in big packs, and BEP 47 hidden files are skipped. Torrent-level `path_tokens` still covers everything that's skipped.) `torrent_id` (indexed, fast), `index` (the file's position, fast), `name` (positions), `dir_tokens`, `ext`, `size` (fast); `category` and `pieces_root` arrive with "same file" (M7). A file-level clause (`file:(…)`) runs here and produces the set of torrent ids with a matching file, cached per segment, which filters the torrent query. Each hit returns **"matched files"** for the UI. The off and all modes arrive with the settings UI; M3 builds smart (§16).
 
-**Tokenizer chain** (the most important quality lever): split on whitespace, `. _ - [ ] ( ) { } + ,` and camelCase/digit boundaries while **also emitting compound tokens** (`S01E02`, `x265`, `5.1`, `DD+`, `WEB-DL`, `24-96`). Then lowercase → ASCII/diacritic folding → CJK segmentation (Lindera/jieba, matching Lodestar's zh support). There's no stemming on names; a light English stemmer runs on a parallel `title_stem` field for "plurals and suffixes" matching (Lodestar's tier 2).
+**Tokenizer chain** (the most important quality lever): split on whitespace, `. _ - [ ] ( ) { } + ,` and camelCase/digit boundaries while **also emitting compound tokens** (`S01E02`, `x265`, `5.1`, `DD+`, `WEB-DL`, `24-96`). Then lowercase → ASCII/diacritic folding → CJK segmentation (Lindera/jieba, matching Lodestar's zh support). There's no stemming on names; a light English stemmer (plurals and possessives, §16) runs on a parallel `title_stem` field for "plurals and suffixes" matching (Lodestar's tier 2). It's a **fallback**: when a query finds fewer than 10 torrents, each word may also match by its stem in the title, and stem-only matches rank after exact ones.
 
 **Query language** (hand-written parser → AST → Tantivy query; the AST JSON is shared with the UI builder for lossless round-tripping):
 ```
@@ -1218,7 +1218,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **The writer owns the store.** Each transaction runs on the blocking pool with the store moved in and back out. Batches are up to 256 dicts or 250 ms.
   - Funnel and rollup counters are drained into every transaction, or into a counters-only one every 5 s when they're dirty (§7).
   - The fetch queue is saved every 5 minutes by a helper task that asks the pool. The writer never waits on the pool, so they can't deadlock.
-- **The blocklist runs in the writer, before storage,** on the key and on every swarm hash of the parsed dict, so a v2 alias can't slip past (§18.7). M1 has hash entries only. Name patterns come with classification (M3).
+- **The blocklist runs in the writer, before storage,** on the key and on every swarm hash of the parsed dict, so a v2 alias can't slip past (§18.7). M1 has hash entries only. Name patterns arrive with the §20 rule engine (an M4 add-on), which replaces this blocklist.
 - **A dict that hashes to its key but doesn't parse as metainfo** is lost as `invalid`.
 - **The peer wire grows the metadata buffer as pieces arrive, never up front.** A peer that claims 16 MiB costs nothing until it sends the bytes. Pre-allocating would have let hostile peers pin 400 × 16 MiB.
 - **Shutdown order:** plugins (15 s each, then aborted; the DHT saves `state.bin`), then intake, then the pool (returns its queue), then the writer. The writer drains, records a `stop` event, saves the queue and checkpoints the WAL.
@@ -1501,6 +1501,21 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - A broad clause's first evaluation is linear in its matching files, about 20 ns each (13–25 ms for `ext:mkv size:>1GB` at 200k). After that it comes from the cache in about 0.01 ms. A broad clause alone then searches in about 3 ms.
   - At 10M, a first broad evaluation would take on the order of a second. The fix, when the 10M measurement asks for it, is to evaluate the clause only against the torrent query's candidates when they're fewer than its matching files.
 - **Indexing throughput** falls from about 4k to 2.8k torrents/s with the file index. That's far above any crawl rate, and it only matters for rebuilds.
+
+**M3 implementation decisions (`title_stem`, the plurals fallback):**
+- **The stem tier is a fallback, not part of every query** (owner's decision). Matching each word by its exact form *or* its title stem would make every word a union, and unions cost 2–3× inside intersections at 10M (see "latency at 10M" above), for a small gain: most queries already match exactly, and `knight*` or `~knigth` cover the rest.
+  - `search_with_fallback` runs the exact query first. If it finds fewer than 10 torrents and some word has a stem, it runs again with each such word matching its exact form anywhere **or** its light stem in `title_stem`, and keeps that result when it finds more.
+  - The total decides, so every page of a query takes the same branch. The API returns `"stemmed": true` when it did, for the UI to say plural forms were included.
+  - A stem-only match scores a constant 0.25, under a typical exact BM25 score, so exact matches rank first.
+  - Negated words stay exact: the tier widens what a query finds, never what it excludes. Phrases, prefixes, fuzzy words and `name:`/`path:` don't stem; `title:` does.
+  - Broad queries never pay for it. At 200k every latency class kept its p95 within noise, and 9 of 2,700 benchmark queries took the fallback, all in narrow filtered classes. `search-bench` now searches the way the API does, so the gate covers it.
+- **The stemmer is light: plurals only** (`-s`, `-es`, `-ies`; possessives are already split off by the tokenizer). A stem match still counts in totals, so wrong conflations matter.
+  - Porter2 conflates unrelated titles (`organization`/`organ`, `university`/`universe`, `general`/`generous`).
+  - `-ing`/`-ed` rules without a dictionary break short words (`king`, `red`, `bed`).
+  - Words under 3 letters aren't candidates. Words under 4 keep their `s` (`bus`, `gas`, `yes`), and a short list of non-plurals stays as is (`news`, `series`, `species`, `does`…).
+  - Only titles are stemmed: names keep exact matching (§8).
+- **Size:** `title_stem` costs about 3 B per torrent (words only, no norms). The torrent index is 408 B per torrent at 100k (budget 512). Schema v4.
+- **Name patterns** moved into the §20 rule engine with #27 (an M4 add-on), so M3 doesn't build them.
 
 ## 17. Verification (once built)
 
@@ -1871,7 +1886,7 @@ One Lodestar instance is the **coordinator**: it owns the database, the search i
 ### 19.4 Processing on workers ("prepare, then commit")
 - The current writer path splits in two:
   - **Prepare (worker):** verify the info-dict hash (already done during the fetch), parse, run the blocklist pre-check, build the file-tree blob with the shared zstd dictionary, derive fields (composition, payload signature, structural fingerprints), and, from M3, release-name parsing, classification, junk score and DAT/srrDB matching.
-  - **Commit (coordinator):** the authoritative blocklist check on the key and every swarm hash plus name patterns, id allocation (`id_seq`), insert, rollups and indexing.
+  - **Commit (coordinator):** the authoritative blocklist check on the key and every swarm hash, plus name patterns once the §20 rule engine lands, id allocation (`id_seq`), insert, rollups and indexing.
 - **What a `Results` record carries:** key and swarm hashes (v1 + truncated v2), the derived row, the compressed file-tree blob, `torrent_extra`, parsed/classified fields, provenance (sources bitset, first source, worker id) and the fencing token. **`pieces` is never sent** (§3), which keeps records to roughly 1–3 KB per torrent instead of 10–60 KB.
 - **Trust but verify:**
   - Workers are your machines, authenticated with mTLS.
