@@ -709,16 +709,17 @@ fn the_first_run_log_names_a_reachable_address() {
 }
 
 #[test]
-fn index_lag_is_zero_when_level() {
-    // Nothing new stored: the index has nothing to catch up with.
-    assert_eq!(index_lag(0, 0), Some(0));
-    assert_eq!(index_lag(0, 100), Some(0));
-    // New torrents, no index commit yet: unknown.
-    assert_eq!(index_lag(100, 0), None);
-    assert_eq!(index_lag(105, 100), Some(5));
-    // The index committed after the last new torrent: level, however
-    // long ago that was (rediscoveries don't move `last_stored`).
-    assert_eq!(index_lag(100, 105), Some(0));
+fn index_lag_is_zero_when_level_and_grows_while_stalled() {
+    // Everything stored is searchable: level, however long ago the
+    // index last committed (or if it never did, on an empty store).
+    assert_eq!(index_lag(1000, 50, 50, 10), Some(0));
+    assert_eq!(index_lag(1000, 0, 0, 0), Some(0));
+    // Behind, and no commit since the start (a backlog after a
+    // restart): unknown, not 0.
+    assert_eq!(index_lag(1000, 50, 20, 0), None);
+    // Behind: the time since the last commit, growing while it stalls.
+    assert_eq!(index_lag(1000, 50, 20, 995), Some(5));
+    assert_eq!(index_lag(1600, 50, 20, 995), Some(605));
 }
 
 #[test]

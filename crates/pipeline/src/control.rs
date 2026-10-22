@@ -16,10 +16,11 @@
 //! - **Rates and reachability** come from one sampler task reading the
 //!   same counters `/metrics` shows, every [`SAMPLE_EVERY`]; nothing is
 //!   counted twice.
-//! - **Reachable** means queries are arriving from nodes we never queried
-//!   (`Stats::queries_in_unsolicited`), which only a port open to
-//!   unsolicited inbound packets allows. Every probe is the DHT's own
-//!   traffic (§18.7); no outside service is asked.
+//! - **Reachable** means queries are arriving, from at least
+//!   [`MIN_UNSOLICITED_SOURCES`] networks, from nodes we hadn't sent
+//!   anything to lately (`Stats::queries_in_unsolicited`), which only a
+//!   port open to unsolicited inbound packets allows. Every probe is the
+//!   DHT's own traffic (§18.7); no outside service is asked.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, Weak};
@@ -148,6 +149,9 @@ struct Samples {
     /// When (sample time) each recent network last reached us
     /// unsolicited, from the node's snapshot.
     unsolicited_at: Vec<u64>,
+    /// Rates look no further back than this (the last resume), so the
+    /// paused stretch doesn't drag them down.
+    rates_from: u64,
 }
 
 impl Samples {
@@ -161,11 +165,12 @@ impl Samples {
         }
     }
 
-    /// The change in `f` per hour over the last [`RATE_WINDOW_SECS`];
-    /// `None` until [`RATE_MIN_SECS`] are covered.
+    /// The change in `f` per hour over the last [`RATE_WINDOW_SECS`]
+    /// (since the last resume, if later); `None` until [`RATE_MIN_SECS`]
+    /// are covered.
     fn per_hour(&self, f: impl Fn(&Sample) -> u64) -> Option<f64> {
         let head = self.ring.back()?;
-        let from = head.t.saturating_sub(RATE_WINDOW_SECS);
+        let from = head.t.saturating_sub(RATE_WINDOW_SECS).max(self.rates_from);
         let base = self.ring.iter().find(|s| s.t >= from)?;
         let span = head.t - base.t;
         if span < RATE_MIN_SECS {
@@ -250,7 +255,7 @@ pub struct Reachability {
     pub reason: ReachReason,
     /// Queries received in the window; `None` when not measuring.
     pub inbound: Option<u64>,
-    /// Of those, from nodes we never queried.
+    /// Of those, from nodes we hadn't sent anything to lately.
     pub unsolicited: Option<u64>,
     /// Distinct networks (/24 or /64) those came from.
     pub sources: Option<u64>,
@@ -484,6 +489,10 @@ impl Control {
             st.paused = paused;
             st.since = unix_now();
         }
+        if !paused {
+            let now = self.now_t();
+            self.inner.samples.lock().expect("samples lock").rates_from = now;
+        }
         tracing::info!("crawler {}", if paused { "paused" } else { "resumed" });
         let kind = if paused { event::PAUSE } else { event::RESUME };
         // The pause is applied either way; a lost event costs Insights a
@@ -599,6 +608,11 @@ impl Control {
     /// Reads the counters into the ring.
     fn sample_now(&self) {
         sample(&self.inner);
+    }
+
+    /// The highest torrent id stored (blocking: one index probe).
+    pub fn max_torrent_id(&self) -> Result<i64, Error> {
+        Ok(self.inner.store.lock().expect("store lock").max_id()?)
     }
 
     /// Every source of this build with its stored state, priority and
@@ -780,6 +794,19 @@ mod tests {
         assert_eq!(ring.per_hour(|x| x.received), Some(3600.0));
         assert_eq!(ring.per_hour(|x| x.fetched), Some(1800.0));
         assert!(ring.ring.len() <= KEEP, "the ring is bounded");
+
+        // After a resume the window starts there: no rate for a minute,
+        // then one that the paused stretch doesn't drag down.
+        let mut r = Samples::default();
+        for t in (0..=300).step_by(10) {
+            r.push(s(t, 100, None));
+        }
+        r.rates_from = 300;
+        assert_eq!(r.per_hour(|x| x.received), None);
+        for t in (310..=360).step_by(10) {
+            r.push(s(t, 100 + (t - 300), None));
+        }
+        assert_eq!(r.per_hour(|x| x.received), Some(3600.0));
     }
 
     #[test]

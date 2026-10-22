@@ -202,3 +202,61 @@ async fn sources_that_arent_enabled_dont_run_and_consent_gates_enabling() {
     assert_eq!(held.priority, Priority::Max, "the saved priority");
     pipeline.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn a_failed_event_write_still_applies_the_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let (on, _) = probe_with("on", Consent::None, true);
+    let pipeline = Pipeline::start_with(
+        PipelineConfig::default(),
+        Store::open(&db, StoreConfig::default()).unwrap(),
+        vec![on],
+        Arc::new(NoFetch),
+    )
+    .await
+    .unwrap();
+    let control_store = Arc::new(Mutex::new(
+        Store::open(&db, StoreConfig::default()).unwrap(),
+    ));
+    let control = Control::start(
+        pipeline.monitor(),
+        None,
+        control_store.clone(),
+        false,
+        Intensity::Balanced,
+    )
+    .await
+    .unwrap();
+    // Every events write now fails.
+    control_store
+        .lock()
+        .unwrap()
+        .connection()
+        .execute_batch(
+            "CREATE TEMP TRIGGER no_events BEFORE INSERT ON main.events \
+             BEGIN SELECT RAISE(ABORT, 'events refused'); END;",
+        )
+        .unwrap();
+
+    assert!(control.set_paused(true).await, "applied despite the error");
+    assert!(control.status().paused);
+    assert_eq!(control.rates(), (None, None), "paused: a gap");
+    assert!(control.note_intensity(Intensity::Aggressive).await);
+    // Nothing was recorded, and a repeat is still a no-op.
+    assert!(!control.set_paused(true).await);
+    assert!(!control.note_intensity(Intensity::Aggressive).await);
+    use lodestar_pipeline::event::{INTENSITY, PAUSE, RESUME};
+    let recorded = |kinds: &[u32]| control_store.lock().unwrap().last_event(kinds).unwrap();
+    assert_eq!(recorded(&[PAUSE, RESUME, INTENSITY]), None);
+    // Once writes work again, the next change is recorded as usual.
+    control_store
+        .lock()
+        .unwrap()
+        .connection()
+        .execute_batch("DROP TRIGGER temp.no_events;")
+        .unwrap();
+    assert!(control.set_paused(false).await);
+    assert_eq!(recorded(&[PAUSE, RESUME]).map(|e| e.kind), Some(RESUME));
+    pipeline.shutdown().await.unwrap();
+}

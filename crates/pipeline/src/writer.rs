@@ -66,10 +66,6 @@ pub struct WriterStats {
     pub filter_rebuilds: AtomicU64,
     /// Unix seconds of the last commit.
     pub last_commit: AtomicU64,
-    /// Unix seconds of the last commit that stored a new torrent: what
-    /// the index has to catch up with (a commit of rediscoveries alone
-    /// gives it nothing to do).
-    pub last_stored: AtomicU64,
     /// Stored torrents enriched in the background (imports, older rows,
     /// records from an older parser).
     pub enriched: AtomicU64,
@@ -327,9 +323,6 @@ impl Writer {
             .last_commit
             .store(unix_now() as u64, Ordering::Relaxed);
         let now = unix_now();
-        if outcome.stored.iter().any(|(_, new, _)| *new) {
-            self.stats.last_stored.store(now as u64, Ordering::Relaxed);
-        }
         // The have-filter learns the keys before their leases end, so a
         // rediscovery in between is held, never claimed and fetched again.
         for (_, _, hashes) in &outcome.stored {

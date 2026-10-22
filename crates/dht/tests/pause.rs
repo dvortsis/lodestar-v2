@@ -159,5 +159,12 @@ async fn only_queries_from_nodes_we_never_asked_count_as_unsolicited() {
     assert!(ping(&stranger, addr, 2).await);
     let s = node.stats();
     assert_eq!((s.queries_in, s.queries_in_unsolicited), (2, 1));
+    // We answered it, which opens a NAT mapping to it: its next queries
+    // prove nothing about our port, so they aren't unsolicited.
+    for tid in 3..6 {
+        assert!(ping(&stranger, addr, tid).await);
+    }
+    let s = node.stats();
+    assert_eq!((s.queries_in, s.queries_in_unsolicited), (5, 1));
     node.shutdown().await.unwrap();
 }

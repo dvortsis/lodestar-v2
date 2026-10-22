@@ -396,7 +396,7 @@ pub struct NetworkCheck {
     pub reachable: Option<bool>,
     #[schema(inline)]
     pub reason: ReachReason,
-    /// Of `inbound_queries`, the ones from nodes we never queried.
+    /// Of `inbound_queries`, the ones from nodes we hadn't sent anything to lately.
     #[schema(required = true)]
     pub unsolicited_queries: Option<u64>,
     /// The distinct networks (/24 or /64) those came from, counting at
