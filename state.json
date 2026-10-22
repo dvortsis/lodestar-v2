@@ -278,13 +278,13 @@
    "notes": ""
   },
   "D-docker": {
-   "status": "in_review",
+   "status": "merged",
    "model": "sonnet",
    "session": "session_019VGYFBetAiATAi4KbpB7JZ",
    "pr": 59,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "round 1 FIX: image build fails (brand/source missing in web stage); CI red; path filters, frontend pin, TZ claim"
+   "notes": "merged 09:58 as 2773dd2 (#59); image 22 MiB, smoke healthy/SPA/clean stop on CI"
   },
   "G-v05": {
    "status": "pending",
@@ -841,6 +841,9 @@
   "D-docker-followups": [
    "packaging/unraid/lodestar.xml ExtraParams --user 99:100 (X-pack-static owner)",
    "No LICENSE file: owner to choose a licence (image label NOASSERTION)"
+  ],
+  "polish": [
+   "first-run log says \"open http://0.0.0.0:8090/\": print a reachable address or \"this host\" (lodestar services.rs)"
   ]
  },
  "blocked_on_owner": [
