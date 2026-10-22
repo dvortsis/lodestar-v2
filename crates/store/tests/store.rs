@@ -419,6 +419,7 @@ fn counters_add_up_inside_writes() {
             counters: &[c(5), Counter { key: 4, ..c(1) }],
             cohorts: &[cohort(7)],
             events: &events,
+            filtered: &[],
         })
         .unwrap();
     // A counters-only transaction (nothing to ingest).

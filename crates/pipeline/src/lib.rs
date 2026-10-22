@@ -27,18 +27,19 @@ mod worker;
 mod writer;
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use lodestar_cluster::{Claim, Claimed, RestoredLease, WorkerId};
+use lodestar_filter::{Core, CoreRule, CsList, Engine, Handle, Lists, Origin, Sealer, Switches};
 use lodestar_peer_wire::FetchOptions;
 use lodestar_sources::pool::{self, PeerWireFetcher};
 use lodestar_sources::{
-    Discovery, Emitter, Fetcher, FunnelCounts, Kind, PluginError, PoolConfig, PoolHandle, PoolIo,
-    PoolStats, Priority, Shutdown, SourceCtx, SourcePlugin,
+    Discovery, Emitter, Fetcher, FunnelCounts, Kind, Loss, PluginError, PoolConfig, PoolHandle,
+    PoolIo, PoolStats, Priority, Shutdown, SourceCtx, SourcePlugin,
 };
-use lodestar_store::{Event, QueuedKey, SourceId, Store, WriteBatch};
+use lodestar_store::{Event, FilterState, QueuedKey, SourceId, Store, WriteBatch};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
@@ -72,8 +73,16 @@ pub struct PipelineConfig {
     pub fetch: FetchOptions,
     /// Per-plugin priority overrides, by manifest id.
     pub priorities: HashMap<String, Priority>,
-    /// Info hashes never stored, whatever finds them (§18.7).
-    pub blocklist: HashSet<[u8; 20]>,
+    /// The content filter (§20), shared with the API so rule changes
+    /// apply live. The store's CS-1 entries and switches are added at
+    /// start.
+    pub filter: Arc<Handle>,
+    /// Seals quarantined names (§20.3); without it none are kept.
+    pub sealer: Option<Arc<Sealer>>,
+    /// How long quarantine holds a torrent before purging it.
+    pub quarantine: Duration,
+    /// How long filter hits are kept (0–30 days, §20.11).
+    pub filter_hits: Duration,
     /// The crawler warm-up window: torrents found this soon after the
     /// first run are flagged `BACKFILL` (§6).
     pub backfill: Duration,
@@ -90,7 +99,10 @@ impl Default for PipelineConfig {
             pool: PoolConfig::default(),
             fetch: FetchOptions::default(),
             priorities: HashMap::new(),
-            blocklist: HashSet::new(),
+            filter: Arc::new(default_filter()),
+            sealer: None,
+            quarantine: Duration::from_secs(30 * 86_400),
+            filter_hits: Duration::from_secs(30 * 86_400),
             backfill: Duration::from_secs(30 * 86_400),
             flush_every: Duration::from_secs(5),
             save_queue_every: Duration::from_secs(300),
@@ -99,6 +111,74 @@ impl Default for PipelineConfig {
             intake_capacity: 16_384,
         }
     }
+}
+
+/// The shipped child-safety core with nothing added.
+pub fn default_filter() -> Handle {
+    let lists = Lists::shipped().expect("shipped term lists parse");
+    Handle::new(Engine::new(Core::new(
+        lists,
+        CsList::default(),
+        Switches::default(),
+    )))
+}
+
+/// Tombstoned and quarantined keys (§20.3): intake refuses them, so a
+/// dropped torrent isn't fetched again and again.
+#[derive(Debug, Default)]
+pub struct HeldSet(RwLock<HashSet<[u8; 20]>>);
+
+impl HeldSet {
+    pub fn contains(&self, hash: &[u8; 20]) -> bool {
+        self.0
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(hash)
+    }
+
+    pub fn insert(&self, hash: [u8; 20]) {
+        self.0
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(hash);
+    }
+
+    pub fn remove(&self, hash: &[u8; 20]) {
+        self.0
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(hash);
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.read().unwrap_or_else(|e| e.into_inner()).len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// Adds the store's filter state to the engine: CS-1 entries, CS-8
+/// signatures and your switches.
+fn load_filter(filter: &Handle, state: &FilterState) {
+    filter.update(|core| {
+        for (hash, origin) in &state.cs_hashes {
+            let origin = Origin::from_code(*origin).unwrap_or_else(|| {
+                tracing::warn!(origin, "unknown CS-1 origin; kept as imported");
+                Origin::Imported
+            });
+            core.cs.add_hash(*hash, origin);
+        }
+        for sig in &state.cs_sigs {
+            core.cs.add_sig(*sig);
+        }
+        for (rule, on) in &state.switches {
+            if let Some(r) = CoreRule::from_id(rule) {
+                let _ = core.switches.set(r, *on);
+            }
+        }
+    });
 }
 
 #[derive(Debug)]
@@ -134,6 +214,8 @@ pub struct IntakeStats {
     pub to_pool: AtomicU64,
     /// Rediscoveries dropped because the writer was behind.
     pub dropped: AtomicU64,
+    /// Keys refused before fetching: CS-1 hashes, tombstones, quarantine.
+    pub refused: AtomicU64,
 }
 
 /// One running plugin.
@@ -276,7 +358,7 @@ impl Pipeline {
             })
             .collect();
         let backfill = config.backfill.as_secs() as i64;
-        let (store, ids, queue, have, backfill_until, stored_at_start) =
+        let (store, ids, queue, have, backfill_until, stored_at_start, filter_state) =
             tokio::task::spawn_blocking(move || prepare(store, &manifests, backfill))
                 .await
                 .map_err(Error::Join)??;
@@ -286,6 +368,11 @@ impl Pipeline {
             "pipeline starting"
         );
         let have = Arc::new(have);
+        load_filter(&config.filter, &filter_state);
+        let held = Arc::new(HeldSet::default());
+        for (h, _) in &filter_state.held {
+            held.insert(*h);
+        }
         let funnel = Arc::new(FunnelCounts::default());
         let rollups = Arc::new(Rollups::default());
         let started_at = unix_now();
@@ -408,6 +495,8 @@ impl Pipeline {
                 touches: touch_tx,
                 rollups: rollups.clone(),
                 stats: intake_stats.clone(),
+                filter: config.filter.clone(),
+                held: held.clone(),
             },
             intake_shutdown,
         ));
@@ -416,7 +505,7 @@ impl Pipeline {
         let prepare = tokio::spawn(
             PrepareStage {
                 preparer,
-                blocklist: Arc::new(config.blocklist.clone()),
+                filter: config.filter.clone(),
                 coordinator: coordinator.clone(),
                 leases: leases.clone(),
                 stats: writer_stats.clone(),
@@ -467,11 +556,16 @@ impl Pipeline {
                 batch_max: config.batch_max,
                 batch_wait: config.batch_wait,
                 backfill_until,
+                quarantine_secs: config.quarantine.as_secs() as i64,
+                hits_secs: config.filter_hits.as_secs() as i64,
             },
             have: have.clone(),
             funnel,
             rollups,
-            blocklist: Arc::new(config.blocklist.clone()),
+            filter: config.filter.clone(),
+            sealer: config.sealer.clone(),
+            held: held.clone(),
+            last_purge: 0,
             coordinator,
             stats: writer_stats.clone(),
         };
@@ -574,7 +668,18 @@ fn prepare(
     mut store: Store,
     manifests: &[(&'static str, &'static str, bool)],
     backfill: i64,
-) -> Result<(Store, Vec<SourceId>, Vec<QueuedKey>, Have, i64, u64), Error> {
+) -> Result<
+    (
+        Store,
+        Vec<SourceId>,
+        Vec<QueuedKey>,
+        Have,
+        i64,
+        u64,
+        FilterState,
+    ),
+    Error,
+> {
     let now = unix_now();
     let ids = manifests
         .iter()
@@ -622,7 +727,16 @@ fn prepare(
         }],
         ..WriteBatch::default()
     })?;
-    Ok((store, ids, queue, have, first_run + backfill, stored))
+    let filter = store.filter_state()?;
+    Ok((
+        store,
+        ids,
+        queue,
+        have,
+        first_run + backfill,
+        stored,
+        filter,
+    ))
 }
 
 struct Intake {
@@ -636,6 +750,8 @@ struct Intake {
     touches: mpsc::Sender<Discovery>,
     rollups: Arc<Rollups>,
     stats: Arc<IntakeStats>,
+    filter: Arc<Handle>,
+    held: Arc<HeldSet>,
 }
 
 /// The worker's intake: known keys go to the writer as rediscoveries; new
@@ -679,7 +795,17 @@ async fn intake(mut io: Intake, mut shutdown: Shutdown) {
             strategy: d.found.strategy,
             at: d.at,
         };
+        // Known-bad keys are claimed (so the harvest is counted once) and
+        // lost straight away, never fetched (§20.3, §20.5.2).
+        let key = d.found.key.0;
+        let refuse =
+            io.held.contains(&key) || io.filter.current().core.blocked_hash(&[key]).is_some();
         match io.coordinator.claim(WorkerId::LOCAL, claim, unix_now()) {
+            Claimed::Granted(token) if refuse => {
+                io.stats.refused.fetch_add(1, Ordering::Relaxed);
+                io.coordinator.lost(&d.found.key, token, Loss::Blocked);
+                continue;
+            }
             Claimed::Granted(token) => {
                 io.leases.insert(d.found.key, token);
                 io.stats.to_pool.fetch_add(1, Ordering::Relaxed);

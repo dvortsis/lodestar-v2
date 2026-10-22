@@ -10,7 +10,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::{Error, Result};
 
 /// `(version, sql)`, applied in order, each in its own transaction.
-pub(crate) const MIGRATIONS: &[(i64, &str)] = &[(1, V1), (2, V2), (3, V3)];
+pub(crate) const MIGRATIONS: &[(i64, &str)] = &[(1, V1), (2, V2), (3, V3), (4, V4)];
 
 /// M0: the canonical torrent tables plus settings and zstd dictionaries.
 ///
@@ -170,6 +170,60 @@ CREATE TABLE reindex_log (
     seq        INTEGER PRIMARY KEY AUTOINCREMENT,
     torrent_id INTEGER NOT NULL
 ) STRICT;
+";
+
+/// M4 add-on: content filtering (§20.7). Only what filtering needs to work
+/// is kept: no table records who changed a filter, when, or why (§20.11).
+const V4: &str = "
+-- CS-1 entries (§20.5.2), every hash form. origin: 0 confirmed,
+-- 1 reported, 2 imported.
+CREATE TABLE cs_hashes (
+    hash     BLOB PRIMARY KEY CHECK (length(hash) = 20),
+    origin   INTEGER NOT NULL,
+    added_at INTEGER NOT NULL
+) STRICT, WITHOUT ROWID;
+
+-- CS-8 payload signatures.
+CREATE TABLE cs_sigs (
+    sig      INTEGER PRIMARY KEY,
+    added_at INTEGER NOT NULL
+) STRICT;
+
+-- Core rules you switched off. Every rule is on unless listed here; the
+-- floor is never listed (§20.5.3).
+CREATE TABLE core_membership (
+    rule    TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL
+) STRICT, WITHOUT ROWID;
+
+-- Dropped torrents, so they aren't fetched again (§20.3).
+CREATE TABLE tombstones (
+    hash BLOB PRIMARY KEY CHECK (length(hash) = 20),
+    rule TEXT NOT NULL,
+    at   INTEGER NOT NULL
+) STRICT, WITHOUT ROWID;
+
+-- Held torrents: hash, rule and a sealed name only (§20.3).
+CREATE TABLE quarantine (
+    hash       BLOB PRIMARY KEY CHECK (length(hash) = 20),
+    rule       TEXT NOT NULL,
+    sealed     BLOB,
+    at         INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+) STRICT, WITHOUT ROWID;
+CREATE INDEX quarantine_expiry ON quarantine (expires_at);
+
+-- Filter decisions for the review queue and the 30-day replay: no names
+-- (§20.11).
+CREATE TABLE filter_hits (
+    id       INTEGER PRIMARY KEY,
+    hash     BLOB NOT NULL,
+    rule     TEXT NOT NULL,
+    action   INTEGER NOT NULL,
+    at       INTEGER NOT NULL,
+    evidence BLOB NOT NULL
+) STRICT;
+CREATE INDEX filter_hits_at ON filter_hits (at);
 ";
 
 /// Pragmas that persist in the file and can only be set before the first

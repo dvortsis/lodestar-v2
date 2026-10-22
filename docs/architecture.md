@@ -2179,6 +2179,15 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
 | `rule_set_prev` | the previous rule set only, for one-step Undo |
 | `cs_hashes` | CS-1 entries (all hash forms) + CS-8 payload signatures, with origin (confirmed / reported / imported) |
 
+- **As built (store migration V4, pipeline):**
+  - V4 adds `cs_hashes`, `cs_sigs`, `core_membership` (switches), `tombstones`, `quarantine` and `filter_hits`.
+  - **Where the checks run:**
+    - **Intake** refuses CS-1 keys and tombstoned or quarantined keys before any peer lookup or fetch. The key is claimed and then lost as `Blocked`, so the funnel still balances.
+    - **Prepare** refuses a CS-1 key before parsing, then judges the parsed torrent and stamps the verdict with the rule-set version.
+    - **The writer** trusts a built-in worker's verdict at the current version and judges everything else again. It writes tombstones, quarantine rows and filter hits in the same transaction as the batch.
+  - **Sealed names:** XChaCha20-Poly1305, keyed by `seal.key` in the data directory. The key isn't stored in the database, so a database copy alone reveals no names.
+  - **Purge:** expired quarantine and filter hits past retention are purged hourly, and expired keys become fetchable again.
+  - **Old config blocklists:** the M1 `blocklist.files` load as imported CS-1b entries.
 - **API:** `filters` (rules CRUD, preview, warning, test, shadow, packs, review queue, release; password-gated for weakening changes) and `classify` corrections (Not adult / Is adult, Not junk).
 - **UI: Settings → Filters & Safety:**
   - **Rules:** layer, action, status (active / shadow / modified), hits over 7 days, false-positive reports.

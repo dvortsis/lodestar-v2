@@ -7,16 +7,18 @@
 //!   keeps the lease's token here.
 //! - The fetch pool reports its losses through [`WorkerFunnel`], which
 //!   hands them to the coordinator under that token.
-//! - The prepare stage parses each fetched info dict, runs the blocklist
-//!   pre-check, builds the row and blob and enriches it (release parse,
-//!   classification) into [`Results`], so the writer only commits.
+//! - The prepare stage parses each fetched info dict, builds the row and
+//!   blob, enriches it (release parse, classification) and runs the
+//!   content filter (§20.4) into [`Results`], so the writer only commits.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use lodestar_classify::{ContentType, FileInfo};
 use lodestar_cluster::{Token, WorkerId};
+use lodestar_filter::{Engine, Handle, Hit, Item};
 use lodestar_metainfo::{Info, InfoHash};
 use lodestar_sources::{FetchedKey, Funnel, FunnelCounts, Loss, Stage};
 use lodestar_store::{Prepared, Preparer, SourceId};
@@ -84,11 +86,17 @@ pub(crate) struct Results {
     /// Sources the worker saw for the key (peer finders included).
     pub sources: u64,
     pub metadata_at: i64,
+    /// What the filter needs to judge again at commit.
+    pub files: Vec<FileInfo>,
+    pub content_type: ContentType,
+    /// The worker's filter verdict, and the rule-set version it used.
+    pub verdict: Option<Hit>,
+    pub version: u64,
 }
 
 pub(crate) struct PrepareStage {
     pub preparer: Preparer,
-    pub blocklist: Arc<HashSet<[u8; 20]>>,
+    pub filter: Arc<Handle>,
     pub coordinator: Arc<Coordinator>,
     pub leases: Arc<WorkerLeases>,
     pub stats: Arc<WriterStats>,
@@ -107,13 +115,13 @@ impl PrepareStage {
         while let Some(first) = fetched.recv().await {
             let batch = collect(first, &mut fetched, self.batch_max, self.batch_wait).await;
             let preparer = self.preparer;
-            let blocklist = self.blocklist.clone();
+            let engine = self.filter.current();
             let (preparer, done) = tokio::task::spawn_blocking(move || {
                 let mut preparer = preparer;
                 let done: Vec<_> = batch
                     .into_iter()
                     .map(|fk| {
-                        let r = prepare_one(&mut preparer, &blocklist, &fk);
+                        let r = prepare_one(&mut preparer, &engine, &fk);
                         (fk, r)
                     })
                     .collect();
@@ -128,14 +136,18 @@ impl PrepareStage {
                     continue;
                 };
                 match result {
-                    Ok(torrent) => {
+                    Ok(done) => {
                         let r = Results {
                             key: fk.key,
                             token,
                             worker: WorkerId::LOCAL,
-                            torrent,
+                            torrent: done.torrent,
                             sources: fk.sources,
                             metadata_at: unix_now(),
+                            files: done.files,
+                            content_type: done.content_type,
+                            verdict: done.verdict,
+                            version: done.version,
                         };
                         if out.send(r).await.is_err() {
                             return;
@@ -155,22 +167,24 @@ impl PrepareStage {
     }
 }
 
-/// Parses and prepares one fetched info dict. The blocklist runs here as
-/// a pre-check; the coordinator's check at commit is the authoritative one
-/// (§19.4).
-fn prepare_one(
-    preparer: &mut Preparer,
-    blocklist: &HashSet<[u8; 20]>,
-    fk: &FetchedKey,
-) -> Result<Prepared, Loss> {
-    if blocklist.contains(&fk.key.0) {
+/// A prepared torrent with what the filter made of it.
+struct Done {
+    torrent: Prepared,
+    files: Vec<FileInfo>,
+    content_type: ContentType,
+    verdict: Option<Hit>,
+    version: u64,
+}
+
+/// Parses, prepares, enriches and judges one fetched info dict. A key in
+/// the floor's hash list is refused before parsing; every other verdict
+/// goes to the writer, which records it and re-checks it (§19.4).
+fn prepare_one(preparer: &mut Preparer, engine: &Engine, fk: &FetchedKey) -> Result<Done, Loss> {
+    if engine.core.blocked_hash(&[fk.key.0]).is_some() {
         return Err(Loss::Blocked);
     }
     // Hashes to the key but isn't usable metainfo: invalid.
     let info = Info::parse(&fk.fetched.info).map_err(|_| Loss::Invalid)?;
-    if info.swarm_hashes().any(|h| blocklist.contains(&h.0)) {
-        return Err(Loss::Blocked);
-    }
     let mut prepared = preparer
         .prepare(&info, Some(&fk.fetched.info))
         .map_err(|e| {
@@ -178,12 +192,23 @@ fn prepare_one(
             Loss::Invalid
         })?;
     // Enrichment runs here, on the worker side (§19.4).
-    prepared.enrichment = Some(crate::enrich::enrich(
-        &prepared.name,
-        &info.files,
-        info.path_encoding,
-    ));
-    Ok(prepared)
+    let files = crate::enrich::file_infos(&info.files, info.path_encoding);
+    let (enriched, content_type) = crate::enrich::enrich_infos(&prepared.name, &files);
+    prepared.enrichment = Some(enriched);
+    let hashes: Vec<[u8; 20]> = prepared.swarm_hashes().map(|h| h.0).collect();
+    let verdict = engine.judge(&Item {
+        hashes: &hashes,
+        name: &prepared.name,
+        files: &files,
+        content_type,
+    });
+    Ok(Done {
+        torrent: prepared,
+        files,
+        content_type,
+        verdict,
+        version: engine.version,
+    })
 }
 
 /// Gathers more items for the same batch, briefly.
