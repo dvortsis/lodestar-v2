@@ -115,6 +115,7 @@ Some trackers inflate their counts. Lodestar checks swarms against each other:
 ### Routing, proxies and VPNs
 
 - Scrapes leave from the same bind address as the DHT (`dht.bind`). If the crawler runs through a VPN, so do the scrapes.
+- Subscribed IP blocklists cover trackers as well. A tracker whose every address is listed is never contacted, and the status page shows it backing off.
 - HTTP scrapes ignore `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY`. They go out the bound interface like everything else the crawler does.
 - Trackers see the IP the scrape leaves from. On a home connection that's your own address, and public trackers may log it. A VPN is advised, and in Docker `network_mode: service:gluetun` covers the scraper too.
 - If the status page shows trackers as banned, lengthen `interval_secs`.

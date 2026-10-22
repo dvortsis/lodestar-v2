@@ -1772,6 +1772,10 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - `[scrape]` holds `enabled`, `trackers` (ten long-lived public UDP trackers by default), `dht`, `interval_secs` and `http_interval_secs`. `LODESTAR_SCRAPE_ENABLED` overrides `enabled`.
   - Tracker URLs are canonicalised. The same tracker listed twice counts once, and one that can't be scraped (`wss://`, an HTTP URL without a BEP 48 scrape URL) is a startup error. Errors name the list entry by position, never the URL, which can carry a passkey.
   - Scrapes bind the DHT's IPv4 address when it's specific, so they leave through the same interface or VPN (§5).
+  - **Subscribed IP blocklists (§20.13) apply to trackers too.** This uses the same `SharedIps` check as the DHT and the fetch pool.
+    - A UDP tracker uses the first allowed address its name resolves to. Its address is checked again before every request, so a list update applies at once.
+    - HTTP trackers resolve through a filtering resolver, and a literal-IP URL or redirect target is checked directly.
+    - A tracker with no allowed address fails with `Denied` and backs off like any failing tracker. It's never contacted.
   - `[ranking]` sets every `RankWeights` field plus the suspect multiplier.
 - **Search API:**
   - Sorts gain `seeders`, `leechers`, `trackers` and `seen`.
