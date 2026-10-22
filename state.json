@@ -671,7 +671,7 @@
    "pr": 60,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "round 1 FIX: truncation drops withheld-private note; important: RSS description HTML, private flag, Discord autolink claim, ntfy http-credentials rule"
+   "notes": "round 1 fixes pushed fbfbd6d; runner verified compose() + is_local_host; merge on CI green"
   },
   "B17": {
    "status": "pending",
