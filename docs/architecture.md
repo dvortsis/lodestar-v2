@@ -1519,6 +1519,18 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Size:** `title_stem` costs about 3 B per torrent (words only, no norms). The torrent index is 408 B per torrent at 100k (budget 512). Schema v4.
 - **Name patterns** belong to the §20 rule engine (an M4 add-on), so M3 doesn't build them.
 
+**Theme compiler (W1):** decisions that clarify §10.18.
+- **Derivation constants are fitted once.** Each rule is a lightness shift (or a mix toward `primary`/`accent` for dividers and tints). The constants are tuned so Riverstone reproduces the §10.18 table (exact, or within ΔE_ok ≤ 0.5), and every theme inherits them. Light and dark have separate constants.
+- **`field-border` and `neutral` come from the theme's slate** (`categorical[4]`), shifted to ≥ 3:1 on the surface. The schema has no neutral input, so slate is the neutral family by convention. `error` is the theme's terracotta (`categorical[3]`) turned 12° redder with more chroma, and `warning` is its ochre (`categorical[2]`).
+- **Gates beyond the §10.18 list**, so the contract in `docs/design-tokens.md` holds in every theme:
+  - `muted-text`, `warning` and `error` ≥ 4.5:1 on both grounds;
+  - each `*-content` ≥ 4.5:1 on its fill (accent and neutral fills only warn, since design-tokens allows large/bold labels there);
+  - text on the hover and selected tints ≥ 4.5:1.
+- **Riverstone's warnings are grandfathered.** Its categorical ΔE_ok warning, and the accent/neutral label warnings, are recorded as passing and reported as such.
+- **ΔE_ok and the CVD report run on the data marks** (the colours actually drawn), not the raw categorical inputs, and both Machado 2009 (severity 1.0) and Viénot 1999 are reported side by side.
+- **Pre-paint storage contract:** `localStorage["lodestar.theme"]` holds `{ mode: "system"|"light"|"dark", light: { id, vars? }, dark: { id, vars? } }`. `vars` is the cached custom-property map of a non-Riverstone theme. The script sets `data-theme`, `color-scheme` and `vars` on `<html>` and falls back to Riverstone for the resolved mode.
+- **`themes.json`** is `{ v: 1, keys: [...], themes: [{ id, name, family, group, mode, contrast: "AA"|"AAA", license?, source?, values: [...] }] }`, with `values` in `keys` order.
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.
