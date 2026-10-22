@@ -7,8 +7,10 @@ name: CI
 # `full-ci`, which also runs everything else. Main and nightly always run it all.
 # Labels are read on the next push; `labeled` isn't a trigger, because a run
 # whose jobs all skip would replace the head's failed checks with skipped ones.
-# To run everything now, add `full-ci` and start CI by hand on the branch
-# (workflow_dispatch runs everything).
+# To run everything now, add `full-ci` and start CI (and Release) by hand on
+# the branch (workflow_dispatch runs everything). A manual run tests the branch
+# head without main merged in, so if the PR run is red, push or merge main
+# instead: a passing manual run would replace the failed checks.
 # Skipped jobs show as skipped; a skipped matrix job keeps its unexpanded name
 # (`test (${{ matrix.os }})`), so if branch protection is ever added, require an
 # aggregate job rather than individual matrix entries.
