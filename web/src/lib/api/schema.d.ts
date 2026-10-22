@@ -1632,7 +1632,7 @@ export interface components {
          * @description Why a `resync` was sent.
          * @enum {string}
          */
-        ResyncReason: "restarted" | "expired" | "malformed" | "lagged";
+        ResyncReason: "restarted" | "expired" | "malformed" | "lagged" | "visibility";
         /** @description One of your rules. */
         RuleEntry: {
             /** @description Null for an action code this server doesn't know. */
@@ -2287,8 +2287,9 @@ export interface components {
             added: number;
             /**
              * Format: int64
-             * @description The highest torrent id searchable now, of any class: searches
-             *     still apply the Adult visibility.
+             * @description The highest torrent id searchable now. While Adult is hidden,
+             *     the highest that isn't Adult, so it can be lower than one sent
+             *     while Adult was shown.
              */
             max_id: number;
         };
