@@ -1216,6 +1216,11 @@ impl Node {
                 let _ = write!(out, "{}\"{text}\"", text_field(*field));
             }
             Node::Near { field, words, slop } => {
+                // Negated, it needs brackets: `-a NEAR b` reads as NEAR
+                // applied to `-a`.
+                if nested {
+                    out.push('(');
+                }
                 for (i, w) in words.iter().enumerate() {
                     if i > 0 {
                         let _ = write!(out, " NEAR/{slop} ");
@@ -1227,6 +1232,9 @@ impl Node {
                     } else {
                         let _ = write!(out, "{}\"{w}\"", text_field(*field));
                     }
+                }
+                if nested {
+                    out.push(')');
                 }
             }
             Node::Prefix { field, prefix } => {
@@ -1294,11 +1302,31 @@ impl Node {
             Node::Tag { key, any } => {
                 let _ = write!(out, "{}:{}", key.as_str(), any.join(","));
             }
-            Node::File { of } => {
-                out.push_str("file:(");
-                of.render(out, false);
-                out.push(')');
-            }
+            Node::File { of } => match **of {
+                // A single word keeps the `file:word` form: in brackets,
+                // `file:res:x`'s word would read as a field, and
+                // `file:-x`'s as a negation.
+                Node::Word {
+                    field: TextField::Any,
+                    ..
+                }
+                | Node::Prefix {
+                    field: TextField::Any,
+                    ..
+                }
+                | Node::Fuzzy {
+                    field: TextField::Any,
+                    ..
+                } => {
+                    out.push_str("file:");
+                    of.render(out, false);
+                }
+                _ => {
+                    out.push_str("file:(");
+                    of.render(out, false);
+                    out.push(')');
+                }
+            },
             Node::Share { by, cat, lo, hi } => {
                 let name = match by {
                     ShareBy::Count => "cat",
@@ -1726,9 +1754,11 @@ mod tests {
             "cat:video cat:software=0 bytes:video>=91 cat:audio<=40 bytes:image=10..50",
             "file:(ext:flac size:>50MB) -file:sample file:(\"a b\" | name:co* path:extras)",
             "(x | file:(a -b)) file:(dark NEAR/2 knight)",
-            // Found by fuzzing: phrase words that look like syntax, and a
-            // lone `!` before `)`.
+            // Found by fuzzing: phrase words that look like syntax, a
+            // lone `!` before `)`, and a negated NEAR.
             "\"a\" NEAR \"NEAR $*\" NEAR \"x|y\"",
+            "!(\"?\"NEAR\n\0m){A",
+            "file:res:x file:-y file:NEAR file:~abcd file:res:x* file:(a)",
             "(a ,$!\r!\r) b",
         ] {
             let ast = parse(q).unwrap();
