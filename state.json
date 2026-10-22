@@ -193,8 +193,8 @@
    "session": "session_01RL3YBaUPYXgdgK3wY2DRpG",
    "pr": 83,
    "attempt": 1,
-   "review_rounds": 1,
-   "notes": "R1 FIX 19:05: hidden-at-subscribe stream never closes (slot hog, queue growth); parsing stuck; typed wrapper gaps (202, required path/body, GET body); 401 halt; envelope extras (setup_required)."
+   "review_rounds": 2,
+   "notes": "R1 FIX 19:05: hidden-at-subscribe stream never closes (slot hog, queue growth); parsing stuck; typed wrapper gaps (202, required path/body, GET body); 401 halt; envelope extras (setup_required). 19:18 R2 FIX: PR body; aborted-conn test (given); abort-body test; superseded parse writes history; Retry-After 0 floor."
   },
   "W7ab": {
    "status": "changes_requested",
@@ -789,6 +789,15 @@
    "attempt": 1,
    "review_rounds": 1,
    "notes": "R1 FIX 18:30: test must extract examples from the page itself; planned UI marked; ranking step 1; table pipe. 18:44 R2 fixes aa0eaaf verified by runner (test reads page; 134 examples pass). Merge on green; Adult paragraph says (planned) -> update after B17 merges."
+  },
+  "B4b": {
+   "status": "running",
+   "model": "opus",
+   "session": "session_01SK5Ci2FahQUSGQuDVozi28",
+   "pr": null,
+   "attempt": 1,
+   "review_rounds": 0,
+   "notes": "Launched 19:18 after B17 merged."
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -919,7 +928,6 @@
   "reviewer_shared_target": "Do not share CARGO_TARGET_DIR across reviewer worktrees: test fixture paths (CARGO_MANIFEST_DIR) and workspace artifacts collide. One target per reviewer; clean up after.",
   "token_gap_toast": "W7ab: no toast width/duration token; local props from --row-height-comfortable and --duration-banner. Record in \u00a716 token gaps.",
   "pr80_baselines": "#80: artifact host blocked by proxy (blob.core.windows.net 403). Workflow commit-back job was denied by the auto-mode classifier (write token in CI). Needs owner: import tokens-{light,dark}-linux.png from run 39824206645 artifact 'snapshot-baselines' + delete marker, or approve the commit-back job. DO NOT merge #80 with the marker (it disables visual regression repo-wide).",
-  "sse_adult_count": "B17 found: B4's `torrents` SSE event counts every added torrent incl. Adult; with show_adult off, the 'N new' badge counts hidden Adult (\u00a720.9 'leave Adult out entirely'). Follow-up slice B4b after #72 merges: commit hook reports a non-adult count (class from the indexed doc), events.rs publishes the visible count per the live content.show_adult watch; test both settings. W5 needs no change (it shows the server count).",
   "pw_port": "playwright.config.ts hard-codes port 4173 + reuseExistingServer outside CI; parallel worktrees cross-talk. Small follow-up (W6 owner area): read the port from an env var (e.g. PW_PORT) and add --strictPort.",
   "ping_on_merge": {
    "#80": [
