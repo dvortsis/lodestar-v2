@@ -50,6 +50,11 @@ impl Action {
     pub fn protective(self) -> bool {
         matches!(self, Action::Quarantine | Action::Drop)
     }
+
+    /// The stored code (`filter_hits.action`). Fixed forever.
+    pub fn code(self) -> u8 {
+        self as u8
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -129,6 +134,19 @@ impl std::error::Error for Locked {}
 pub struct Switches(BTreeSet<CoreRule>);
 
 impl Switches {
+    /// Switches as stored: `(rule id, enabled)`. Unknown ids (rules a
+    /// newer version added and this one doesn't have) and the floor are
+    /// ignored.
+    pub fn from_stored<'a>(entries: impl IntoIterator<Item = (&'a str, bool)>) -> Switches {
+        let mut s = Switches::default();
+        for (id, on) in entries {
+            if let Some(rule) = CoreRule::from_id(id) {
+                let _ = s.set(rule, on);
+            }
+        }
+        s
+    }
+
     pub fn is_on(&self, rule: CoreRule) -> bool {
         rule.floor() || !self.0.contains(&rule)
     }
@@ -162,6 +180,24 @@ pub enum Origin {
 }
 
 impl Origin {
+    /// The stored code (`cs_hashes.origin`). Fixed forever.
+    pub fn code(self) -> u8 {
+        match self {
+            Origin::Confirmed => 0,
+            Origin::Reported => 1,
+            Origin::Imported => 2,
+        }
+    }
+
+    pub fn from_code(code: u8) -> Option<Origin> {
+        Some(match code {
+            0 => Origin::Confirmed,
+            1 => Origin::Reported,
+            2 => Origin::Imported,
+            _ => return None,
+        })
+    }
+
     fn rule(self) -> CoreRule {
         match self {
             Origin::Confirmed | Origin::Reported => CoreRule::Cs1a,
@@ -197,6 +233,10 @@ impl CsList {
 
     pub fn remove_sig(&mut self, sig: u64) -> bool {
         self.sigs.remove(&sig)
+    }
+
+    pub fn has_sig(&self, sig: u64) -> bool {
+        self.sigs.contains(&sig)
     }
 
     pub fn hash(&self, hash: &[u8; 20]) -> Option<Origin> {
@@ -249,6 +289,34 @@ pub enum Evidence {
     Code { field: Field, pos: u32 },
 }
 
+impl Evidence {
+    /// Appends a compact code for `filter_hits.evidence`: what fired and
+    /// where, never any text.
+    pub fn encode(&self, out: &mut Vec<u8>) {
+        let (tag, place) = match *self {
+            Evidence::Hash(o) => {
+                out.extend([0, o.code()]);
+                return;
+            }
+            Evidence::Payload => {
+                out.push(1);
+                return;
+            }
+            Evidence::MinorAge { field, pos } => (2, (field, pos)),
+            Evidence::Sexual { field, pos } => (3, (field, pos)),
+            Evidence::ChildRole { field, pos } => (4, (field, pos)),
+            Evidence::Code { field, pos } => (5, (field, pos)),
+        };
+        out.push(tag);
+        let file = match place.0 {
+            Field::Name => u32::MAX,
+            Field::File(i) => i,
+        };
+        out.extend(file.to_le_bytes());
+        out.extend(place.1.to_le_bytes());
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hit {
     pub rule: CoreRule,
@@ -256,6 +324,16 @@ pub struct Hit {
     /// The rule is switched on. Off rules still report hits for previews.
     pub on: bool,
     pub evidence: Vec<Evidence>,
+}
+
+impl Hit {
+    pub fn evidence_codes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        for e in &self.evidence {
+            e.encode(&mut out);
+        }
+        out
+    }
 }
 
 /// The parts of a torrent the core reads.
@@ -399,7 +477,7 @@ impl Fixture {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Core {
     lists: Lists,
     lexicon: IdMap<u16>,
@@ -441,6 +519,16 @@ impl Core {
             return Some(hit);
         }
         self.patterns(item).into_iter().find(|h| h.on)
+    }
+
+    /// The floor's verdict on bare hashes, before anything is fetched.
+    pub fn blocked_hash(&self, hashes: &[[u8; 20]]) -> Option<Hit> {
+        self.floor(&Item {
+            hashes,
+            name: "",
+            files: &[],
+            content_type: ContentType::Other,
+        })
     }
 
     /// Every rule's hit, switched on or not (for previews and the review

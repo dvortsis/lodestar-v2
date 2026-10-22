@@ -13,6 +13,7 @@ use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use lodestar_filter::Sealer;
 use lodestar_pipeline::{DhtSource, Pipeline};
 use lodestar_search::{LiveConfig, LiveIndexer, SearchIndex};
 use lodestar_sources::SourcePlugin;
@@ -198,7 +199,9 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 async fn serve(config: Config) -> Result<(), BoxError> {
     std::fs::create_dir_all(&config.data_dir)
         .map_err(|e| format!("creating {}: {e}", config.data_dir.display()))?;
-    let pipeline_config = config.pipeline_config()?;
+    let mut pipeline_config = config.pipeline_config()?;
+    let key = seal_key(&config.data_dir.join("seal.key"))?;
+    pipeline_config.sealer = Some(Arc::new(Sealer::new(&key)));
     let db = config.db_path();
     let store_config = config.store_config();
     let search = config.search.enabled;
@@ -319,6 +322,32 @@ async fn import_bitmagnet(config: Config, url: &str, limit: Option<u64>) -> Resu
         report.read, report.new, report.existing, report.skipped, report.partial
     );
     Ok(())
+}
+
+/// The key that seals quarantined names (§20.3), created on first use.
+/// It lives beside the database, not in it, so a copy of the database
+/// alone doesn't reveal names; on Unix only the owner can read it.
+fn seal_key(path: &std::path::Path) -> Result<[u8; 32], BoxError> {
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            return bytes
+                .try_into()
+                .map_err(|_| format!("{}: not a 32-byte key", path.display()).into());
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("reading {}: {e}", path.display()).into()),
+    }
+    let key = Sealer::generate_key()?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options
+        .open(path)
+        .map_err(|e| format!("creating {}: {e}", path.display()))?;
+    file.write_all(&key)?;
+    file.sync_all()?;
+    Ok(key)
 }
 
 fn unix_now() -> i64 {

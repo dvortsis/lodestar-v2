@@ -4,7 +4,7 @@
 //! coordinator runs it for torrents that arrive without it (imports,
 //! torrents stored before M3, records from an older parser).
 
-use lodestar_classify::{ENRICHMENT_VERSION, FileInfo, Record, classify};
+use lodestar_classify::{ContentType, ENRICHMENT_VERSION, FileInfo, Record, classify};
 use lodestar_metainfo::{File, Text, TextEncoding};
 use lodestar_store::{Enriched, Store};
 
@@ -33,15 +33,21 @@ pub fn file_infos(files: &[File], encoding: TextEncoding) -> Vec<FileInfo> {
 
 /// The enrichment of a torrent with this name and file list.
 pub fn enrich(name: &str, files: &[File], encoding: TextEncoding) -> Enriched {
-    let files = file_infos(files, encoding);
-    let c = classify(name, &files);
-    Enriched {
+    enrich_infos(name, &file_infos(files, encoding)).0
+}
+
+/// The enrichment of a torrent from its decoded file list, and its
+/// content type (for the filter).
+pub fn enrich_infos(name: &str, files: &[FileInfo]) -> (Enriched, ContentType) {
+    let c = classify(name, files);
+    let enriched = Enriched {
         version: ENRICHMENT_VERSION,
         content_type: c.content_type.code(),
         junk_score: c.junk.score,
         comp: c.composition.encode(),
         data: Record::new(&c).encode(),
-    }
+    };
+    (enriched, c.content_type)
 }
 
 /// Enriches up to `limit` stored torrents after `after` (by id) whose

@@ -4,9 +4,11 @@
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use lodestar_dht::node::{self as dht, HarvestConfig, Intensity};
+use lodestar_filter::Origin;
 use lodestar_peer_wire::{Encryption, FetchOptions};
 use lodestar_pipeline::PipelineConfig;
 use lodestar_sources::PoolConfig;
@@ -180,6 +182,8 @@ impl Default for Search {
 #[serde(default, deny_unknown_fields)]
 pub struct Blocklist {
     /// Files of hex info hashes, one per line (`#` starts a comment).
+    /// Their hashes join the child-safety floor as imported CS-1b entries
+    /// (§20.5.2); a hash removed from a file is no longer blocked.
     pub files: Vec<PathBuf>,
 }
 
@@ -303,13 +307,19 @@ impl Config {
                 ConfigError(format!("blocklist {}: bad line {line}", path.display()))
             })?;
         }
+        let filter = lodestar_pipeline::default_filter();
+        filter.update(|core| {
+            for hash in blocklist {
+                core.cs.add_hash(hash, Origin::Imported);
+            }
+        });
         Ok(PipelineConfig {
             pool: PoolConfig {
                 max_sockets: sockets,
                 ..PoolConfig::default()
             },
             fetch,
-            blocklist,
+            filter: Arc::new(filter),
             ..PipelineConfig::default()
         })
     }
