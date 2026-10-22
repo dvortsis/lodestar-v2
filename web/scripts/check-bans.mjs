@@ -1,4 +1,4 @@
-// Fails on hex colour literals and Tailwind arbitrary values in src/**/*.{svelte,ts}.
+// Fails on hex colour literals, Tailwind arbitrary values and off-ramp spacing steps in src/**/*.{svelte,ts}.
 // Exempt: src/lib/theme/** and generated files (see bans.mjs).
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
@@ -17,7 +17,9 @@ function* walk(dir) {
 
 const messages = {
 	hex: 'hex colour literal; use a token',
-	arbitrary: 'Tailwind arbitrary value; use a token or scale value'
+	arbitrary: 'Tailwind arbitrary value; use a token or scale value',
+	spacing:
+		'spacing step is off the ramp (design-tokens.md §5); use an allowed step or a layout token'
 };
 
 const failures = [];

@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it } from 'vitest';
+import { AUTO_LOCALE_COVERAGE, coverage } from './coverage.generated';
 import {
 	applyLocale,
 	currentLocale,
@@ -16,9 +17,21 @@ describe('resolveLocale', () => {
 		expect(resolveLocale('zh', ['en-US'])).toBe('zh');
 	});
 	it('falls back to navigator languages by primary subtag, then en', () => {
-		expect(resolveLocale(null, ['fr-FR', 'zh-CN'])).toBe('zh');
+		expect(resolveLocale(null, ['fr-FR', 'en-GB'])).toBe('en');
 		expect(resolveLocale('xx', ['fr-FR'])).toBe('en');
 		expect(resolveLocale(undefined, [])).toBe('en');
+	});
+	it('does not auto-select zh from the browser while its catalogue is mostly untranslated', () => {
+		// The glossary zh labels are TBD, so zh coverage is far under the auto-select bar.
+		expect(coverage['zh']).toBeLessThan(AUTO_LOCALE_COVERAGE);
+		expect(resolveLocale(null, ['zh-CN'])).toBe('en');
+		expect(resolveLocale(null, ['zh-CN', 'en-US'])).toBe('en');
+		// An explicit choice still applies.
+		expect(resolveLocale('zh', ['zh-CN'])).toBe('zh');
+	});
+	it('auto-selects a locale the covered() check accepts', () => {
+		expect(matchLocale(['zh-CN'], () => true)).toBe('zh');
+		expect(matchLocale(['zh-CN', 'en-US'], (l) => l === 'en')).toBe('en');
 	});
 	it('matches tags case-insensitively', () => {
 		expect(matchLocale(['ZH-Hans-CN'])).toBe('zh');

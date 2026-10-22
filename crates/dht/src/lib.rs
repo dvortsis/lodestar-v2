@@ -5,6 +5,7 @@
 //! ([`secure_id`]) and warm-restart state ([`state`]), then the harvesting
 //! node.
 
+pub mod bep33;
 pub mod compact;
 pub mod krpc;
 pub mod node;

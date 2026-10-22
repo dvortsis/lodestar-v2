@@ -8,3 +8,4 @@ playwright-report
 # generated
 /messages
 /src/lib/paraglide
+src/lib/i18n/coverage.generated.ts

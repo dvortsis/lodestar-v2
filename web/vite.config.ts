@@ -3,7 +3,7 @@ import tailwindcss from '@tailwindcss/vite';
 import Icons from 'unplugin-icons/vite';
 import { paraglideVitePlugin } from '@inlang/paraglide-js';
 import { defineConfig } from 'vitest/config';
-import { mergeMessages } from './scripts/messages';
+import { mergeMessages } from './scripts/messages.ts';
 
 // Dev, build and test all need messages/*.json; the merge is idempotent and cheap.
 const merged = mergeMessages(import.meta.dirname);
