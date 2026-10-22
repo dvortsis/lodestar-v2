@@ -62,13 +62,13 @@
       "notes": "merged 09:27 as a569b51 (#57)"
     },
     "B2": {
-      "status": "changes_requested",
+      "status": "in_review",
       "model": "opus",
       "session": "session_01QHUDtvte2DFAiHz6swmiU8",
       "pr": 67,
       "attempt": 1,
       "review_rounds": 1,
-      "notes": "PR #67 round 1 FIX (13:20): DHT bind ports rewritten w/o saved value; secure_cookies lockout -> read-only; plus null-reset, http_bind port 0, shadow log, healthcheck. Out-of-own edits ratified."
+      "notes": "PR #67 round-1 fixes pushed (8c89bf7, 13:30); round-2 verifier started 13:31"
     },
     "B3": {
       "status": "merged",
