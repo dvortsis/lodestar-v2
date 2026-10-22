@@ -1,6 +1,6 @@
 // One shared clock for every RelativeTime: a single interval runs while at least one instance is
 // mounted, instead of a timer per instance. `now` is Unix seconds and re-renders subscribers.
-const INTERVAL_MS = 30_000;
+const INTERVAL_MS = 60_000;
 
 let subscribers = 0;
 let timer: ReturnType<typeof setInterval> | undefined;

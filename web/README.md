@@ -26,6 +26,7 @@ Before pushing: `npm run check && npx vitest run && npm run build && npx size-li
 ## Conventions
 
 - **Layout** (`src/lib`, each folder has a README): `ui` (primitives), `features` (compositions), `charts`, `api`, `state`, `format`, `util`, `theme`, `shell`, `keys`. Dependencies point one way: `ui` → `features`, never the reverse.
+- **Dev-only routes** (UI showcases for Playwright and axe) live in `src/dev-routes/`, **outside** `src/routes`, so production builds never contain them (they would otherwise grow the shared chunk the search route loads). `scripts/dev-routes.mjs`, called from `svelte.config.js`, links the folder in as `src/routes/dev` (gitignored) for `vite dev` and for any run with `VITE_DEV_ROUTES=1` (Playwright's web server sets it), and removes the link otherwise. Put a showcase at `src/dev-routes/ui/<group>/+page.svelte` (+ a `+page.ts` that 404s without `import.meta.env.DEV`/`VITE_DEV_ROUTES`); it is served at `/dev/ui/<group>`. Never import from `dev-routes` in app code.
 - **SPA only:** `ssr = false`, `prerender = false` in the root `+layout.ts`.
 - **Lint bans:** no hex colour literals and no Tailwind arbitrary values (`bg-[#fff]`, `w-[13px]`) in `src/**/*.svelte` and `src/**/*.ts`. Enforced by an ESLint rule and by `scripts/check-bans.mjs` (logic shared in `scripts/bans.mjs`, tested in `scripts/bans.test.ts`). Comments and `href="#x"`-style fragment values are ignored. Exempt: `src/lib/theme/**` and generated files.
 - **Pinned dependencies:** exact versions, no `^`. Adding one needs main-session approval.

@@ -37,11 +37,21 @@
 		{max}
 		{step}
 		aria-valuetext={text}
-		class="range range-primary flex-1 {FOCUS_RING}"
+		class="slider range range-primary flex-1 {FOCUS_RING}"
 		{...rest}
 	/>
 	<output
-		class="min-w-(--compbar-min-width) text-right text-body tabular-nums"
+		aria-hidden="true"
+		class="min-w-14 text-right text-body tabular-nums"
 		data-testid="slider-value">{text}</output
 	>
 </div>
+
+<style>
+	/* 44 px thumb under a coarse pointer (design-tokens.md §6 --target-min). */
+	@media (pointer: coarse) {
+		.slider {
+			--range-thumb-size: var(--target-min);
+		}
+	}
+</style>

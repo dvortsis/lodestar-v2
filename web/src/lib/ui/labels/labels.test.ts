@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/svelte';
-import { flushSync } from 'svelte';
+import { flushSync, mount, tick, unmount } from 'svelte';
 import { text } from '../testing';
 import Badge from './Badge.svelte';
 import Chip from './Chip.svelte';
@@ -49,6 +49,44 @@ describe('Chip', () => {
 		expect(onremove).toHaveBeenCalledTimes(2);
 	});
 
+	it('returns focus to the next chip, then the previous, then the fallback', async () => {
+		const host = document.createElement('div');
+		document.body.append(host);
+		const fallback = document.createElement('input');
+		document.body.append(fallback);
+		const names = ['a', 'b', 'c'];
+		const live = new Set(names);
+		const mounted = names.map((n) => {
+			return mount(Chip, {
+				target: host,
+				props: {
+					children: text(n),
+					removeLabel: `Remove ${n}`,
+					fallbackFocus: () => fallback,
+					onremove: () => {
+						live.delete(n);
+						unmount(mounted[names.indexOf(n)]!);
+					}
+				}
+			});
+		});
+		flushSync(); // mount() leaves bind:this effects pending
+		const press = async (n: string) => {
+			const b = host.querySelector(`[aria-label="Remove ${n}"]`) as HTMLElement;
+			b.focus();
+			await fireEvent.keyDown(b, { key: 'Delete' });
+			await new Promise((r) => setTimeout(r, 0));
+		};
+		await press('b');
+		expect(document.activeElement!.getAttribute('aria-label')).toBe('Remove c');
+		await press('c');
+		expect(document.activeElement!.getAttribute('aria-label')).toBe('Remove a');
+		await press('a');
+		expect(document.activeElement).toBe(fallback);
+		host.remove();
+		fallback.remove();
+	});
+
 	it('falls back to the shared remove label', () => {
 		render(Chip, { children: text('video'), onremove: () => {} });
 		expect(screen.getByRole('button', { name: 'Remove' })).toBeTruthy();
@@ -89,6 +127,7 @@ describe('RelativeTime', () => {
 		const time = container.querySelector('time')!;
 		expect(time.textContent!.trim()).toBe('—');
 		expect(time.getAttribute('datetime')).toBeNull();
+		expect(time.getAttribute('title')).toBeNull();
 	});
 
 	it('uses the shared just-now message', () => {
@@ -105,7 +144,10 @@ describe('RelativeTime', () => {
 		expect(tickerSubscribers()).toBe(3);
 		expect(spy).toHaveBeenCalledTimes(1);
 		expect(a.container.textContent).toContain('50 seconds ago');
-		vi.advanceTimersByTime(60_000);
+		vi.advanceTimersByTime(30_000);
+		flushSync();
+		expect(a.container.textContent).toContain('50 seconds ago');
+		vi.advanceTimersByTime(30_000);
 		flushSync();
 		expect(a.container.textContent).toContain('1 minute ago');
 		a.unmount();

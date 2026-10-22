@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { formatDateTime, formatRelative } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
-	import { m } from '$lib/paraglide/messages.js';
 	import { subscribeTicker, ticker } from './ticker.svelte';
 
 	interface Props {
@@ -17,9 +16,7 @@
 	$effect(() => subscribeTicker());
 
 	const locale = $derived(currentLocale());
-	const relative = $derived(
-		formatRelative(seconds, locale, { now: ticker.now, justNow: m.common_just_now() })
-	);
+	const relative = $derived(formatRelative(seconds, locale, { now: ticker.now }));
 	const absolute = $derived(formatDateTime(seconds, locale, { timeZone }));
 	const iso = $derived(
 		typeof seconds === 'number' && Number.isFinite(seconds)
@@ -29,7 +26,7 @@
 </script>
 
 <!-- title is the sighted tooltip; the sr-only absolute time is the accessible text (not hover-only). -->
-<time datetime={iso} title={absolute} class="tabular-nums {className}">
+<time datetime={iso} title={iso ? absolute : undefined} class="tabular-nums {className}">
 	{relative}
 	{#if iso}<span class="sr-only">({absolute})</span>{/if}
 </time>

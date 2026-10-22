@@ -122,6 +122,26 @@ describe('Toaster', () => {
 		expect(screen.queryByText('Broken')).not.toBeNull();
 	});
 
+	it('stays while focus is inside, even after hover enters and leaves', async () => {
+		render(Toaster, { dismissLabel: 'Close' });
+		toast.push({ text: 'Held', timeout: 1000 });
+		flushSync();
+		const el = screen.getByText('Held').closest('[data-testid="toast"]')!;
+		const close = screen.getByRole('button', { name: 'Close' });
+		close.focus();
+		await fireEvent.focusIn(close);
+		await fireEvent.pointerEnter(el);
+		await fireEvent.pointerLeave(el);
+		vi.advanceTimersByTime(10_000);
+		flushSync();
+		expect(screen.queryByText('Held')).not.toBeNull();
+		await fireEvent.focusOut(close);
+		vi.advanceTimersByTime(1000);
+		flushSync();
+		expect(screen.queryByText('Held')).toBeNull();
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
 	it('caps the queue, dropping the oldest non-error first', () => {
 		toast.push({ text: 'err', kind: 'error' });
 		for (let i = 0; i < 5; i++) toast.push({ text: `t${i}` });

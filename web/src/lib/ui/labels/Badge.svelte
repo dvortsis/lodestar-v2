@@ -11,7 +11,7 @@
 
 	interface Props {
 		variant?: BadgeVariant;
-		/** Hide the status icon (only for neutral/accent, which carry no status). */
+		/** Label text. Status variants add their own icon; neutral and accent are plain. */
 		children: Snippet;
 		class?: string;
 	}
