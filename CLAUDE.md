@@ -12,7 +12,7 @@ A from-scratch DHT crawler and torrent-metadata search engine: one Rust binary w
 Read the relevant sections before starting any task. If work changes a decision, update `docs/architecture.md` (§16) in the same PR. If it touches one of the owner's decisions, stop and ask the owner. Builds run through `docs/build-plan.md` and `runner/`; **`runner/standards.md` is the bar for every slice and review.**
 
 ## Working conventions
-- **Branches:** one feature branch per milestone or coherent slice (`m0-foundations`, `m2-search-core`, …), merged into `main` by pull request. Nothing goes directly to `main` except trivial docs fixes. Keep PRs reviewable (≲ 1,500 changed lines where practical); split large milestones into several PRs.
+- **Branches:** one feature branch per milestone or coherent slice (`m0-foundations`, `m2-search-core`, …), merged into `main` by pull request. Nothing goes directly to `main` except trivial docs fixes. Keep PRs reviewable (≲ 1,500 changed lines where practical); split large milestones into several PRs. A larger PR needs a stated reason in its description.
 - **Before pushing:**
   - Rust: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`.
   - In `web/`: `npm run check` (svelte-check, eslint, prettier, the hex and arbitrary-value bans), `npx vitest run`, `npm run build`, `npx size-limit`, and `npx playwright test` for anything with an e2e spec. Chromium is at `/opt/pw-browsers`; never run `playwright install`.
@@ -25,7 +25,8 @@ Read the relevant sections before starting any task. If work changes a decision,
 - **Main session (Opus 5.5, high effort):** core and correctness-critical work, which means bencode/KRPC/metainfo, storage format and schema, the DHT crawler, the peer protocol (BEP 3/9/10, MSE), search (tokenizer, query language, ranking, counts, pagination), concurrency and anything that parses untrusted input. Also all reviews.
 - **Sonnet 5.5 helper agents:** well-specified, pattern-following work. Svelte components and screens per §10, theme JSON and the theme compiler, packaging (Docker, Unraid, WiX), CI workflows, docs, and test scaffolding that follows an existing pattern.
 - **Haiku 5.5 helper agents:** mechanical edits only, such as generating theme files from the spec, renames and formatting.
-- **Never delegate:** security-sensitive code, untrusted-input parsers, on-disk formats, or concurrency-heavy code.
+- **Never delegate to Sonnet or Haiku:** security-sensitive code, untrusted-input parsers, on-disk formats, or concurrency-heavy code.
+- **Opus sub-agents and sessions may build core slices** (owner-approved exception, `docs/owner-decisions.md` §1b.3), with every result reviewed by a fresh Opus reviewer before merge.
 - **Every helper result is reviewed and tested in the main session before merge.** Weak output is redone on Opus. Helpers that edit the same files never run at the same time.
 
 ## UI rules
