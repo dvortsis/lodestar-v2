@@ -6,6 +6,8 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true
+# `openapi` is a dev tool beside the server.
+default-run = "lodestar"
 
 [dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json"] }
