@@ -49,7 +49,7 @@ fn fixture_with(index: Option<SearchIndex>) -> Fixture {
         held: Arc::new(HeldSet::default()),
         sealer: Some(Arc::new(Sealer::new(&[7; 32]))),
         ips: Arc::new(SharedIps::default()),
-        index,
+        index: index.map(Into::into),
         reenrich: Arc::new(AtomicBool::new(false)),
         jobs: Default::default(),
     });
@@ -871,7 +871,7 @@ async fn classification_rules_requeue_matching_torrents_and_corrections_are_fixt
     {
         let mut store = f.api.store.lock().unwrap();
         enrich_all(&mut store);
-        let index = f.api.index.as_ref().unwrap();
+        let index = f.api.index.as_ref().unwrap().index();
         let mut w = index.writer(15 << 20).unwrap();
         w.catch_up(&mut store, 10).unwrap();
         w.commit().unwrap();
