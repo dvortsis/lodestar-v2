@@ -1332,6 +1332,7 @@ dependencies = [
  "lodestar-bencode",
  "lodestar-classify",
  "lodestar-filter",
+ "lodestar-integrations",
  "lodestar-metainfo",
  "lodestar-pipeline",
  "lodestar-search",
