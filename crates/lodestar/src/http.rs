@@ -13,7 +13,7 @@ use axum::routing::get;
 use lodestar_api::{ApiState, require_session};
 use lodestar_dht::node::StatsSnapshot;
 use lodestar_pipeline::Monitor;
-use lodestar_search::{IndexStats, SearchIndex};
+use lodestar_search::{IndexStats, SearchHandle};
 use lodestar_sources::Stage;
 use lodestar_store::Store;
 use serde_json::{Value, json};
@@ -35,7 +35,10 @@ pub struct AppState {
 
 #[derive(Clone)]
 pub struct SearchState {
-    pub index: SearchIndex,
+    /// The index serving now. TODO(B14): show its rebuild progress
+    /// (`SearchHandle::progress`: phase, done/total, unavailable fields)
+    /// on the status surface.
+    pub index: SearchHandle,
     pub stats: Arc<IndexStats>,
 }
 
@@ -94,7 +97,7 @@ async fn page() -> Response {
 async fn prometheus(State(s): State<AppState>) -> Response {
     let mut body = metrics::render(&s.monitor, s.dht().as_ref(), &s.fetch);
     if let Some(search) = &s.search {
-        metrics::render_search(&mut body, search.index.num_docs(), &search.stats);
+        metrics::render_search(&mut body, search.index.index().num_docs(), &search.stats);
     }
     ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], body).into_response()
 }
@@ -235,7 +238,7 @@ async fn status(State(s): State<AppState>) -> Response {
         },
         "dht": dht,
         "search": s.search.as_ref().map(|x| json!({
-            "docs": x.index.num_docs(),
+            "docs": x.index.index().num_docs(),
             "watermark": x.stats.watermark.load(Ordering::Relaxed),
             "last_commit": x.stats.last_commit.load(Ordering::Relaxed),
             "errors": x.stats.errors.load(Ordering::Relaxed),
