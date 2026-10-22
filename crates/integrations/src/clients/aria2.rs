@@ -29,12 +29,15 @@ use std::time::Duration;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::{Method, Url};
 use serde::Deserialize;
+use serde::de::{DeserializeOwned, IgnoredAny};
 use serde_json::{Value, json};
 
+use super::qbittorrent::upload_timeout;
 use super::{
     AddOptions, AddOutcome, AuthFailure, CLIENT_TIMEOUT, Capabilities, Category, ClientError,
-    ClientInfo, ClientKind, DownloadClient, Feature, Magnet, Selection, TorrentFile, already_there,
-    base64, check_request, client_reason, rejected_status,
+    ClientInfo, ClientKind, DownloadClient, Feature, FileCount, Magnet, Selection, TorrentFile,
+    already_there, base64, check_file_count, check_magnets, check_request, client_reason, partial,
+    rejected_status,
 };
 use crate::BoxFuture;
 use crate::net::{GuardedClient, NetPolicy, parse_url, read_limited, redact};
@@ -45,6 +48,8 @@ const CAPABILITIES: Capabilities = Capabilities {
     save_path: true,
     paused: true,
     file_selection: true,
+    // aria2 applies `select-file` itself once a magnet's metadata arrives.
+    magnet_file_selection: true,
     torrent_file: true,
     batch: false,
 };
@@ -73,13 +78,31 @@ impl fmt::Debug for Aria2 {
 }
 
 #[derive(Deserialize)]
-struct Answer {
+struct Answer<T> {
     #[serde(default)]
-    id: Value,
-    #[serde(default)]
-    result: Value,
+    id: Option<String>,
+    #[serde(default = "none")]
+    result: Option<T>,
     #[serde(default)]
     error: Option<RpcError>,
+}
+
+fn none<T>() -> Option<T> {
+    None
+}
+
+#[derive(Deserialize)]
+struct Version {
+    version: String,
+}
+
+#[derive(Deserialize)]
+struct Status {
+    status: String,
+    #[serde(rename = "errorCode")]
+    error_code: Option<String>,
+    #[serde(rename = "errorMessage")]
+    error_message: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -123,12 +146,23 @@ impl Aria2 {
         self
     }
 
-    async fn call(
+    async fn call<T: DeserializeOwned>(
         &self,
         method: &str,
         params: Vec<Value>,
         limit: usize,
-    ) -> Result<Value, ClientError> {
+    ) -> Result<T, ClientError> {
+        self.call_timeout(method, params, limit, self.timeout).await
+    }
+
+    /// [`call`](Self::call) with its own timeout (uploads get more).
+    async fn call_timeout<T: DeserializeOwned>(
+        &self,
+        method: &str,
+        params: Vec<Value>,
+        limit: usize,
+        timeout: Duration,
+    ) -> Result<T, ClientError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed).to_string();
         let mut all = Vec::with_capacity(params.len() + 1);
         if let Some(secret) = &self.secret {
@@ -147,7 +181,7 @@ impl Aria2 {
             .http
             .request(Method::POST, self.endpoint.clone())
             .header(CONTENT_TYPE, "application/json")
-            .timeout(self.timeout)
+            .timeout(timeout)
             .body(body)
             .build()
             .map_err(|_| ClientError::Protocol("couldn't build the request"))?;
@@ -158,9 +192,9 @@ impl Aria2 {
         if !matches!(status, 200 | 400) {
             return Err(rejected_status(status, &bytes));
         }
-        let answer: Answer = serde_json::from_slice(&bytes)
+        let answer: Answer<T> = serde_json::from_slice(&bytes)
             .map_err(|_| ClientError::Protocol("the answer isn't aria2's JSON"))?;
-        if answer.id != Value::String(id) {
+        if answer.id.as_deref() != Some(id.as_str()) {
             return Err(ClientError::Protocol("the answer is for another request"));
         }
         match answer.error {
@@ -168,38 +202,36 @@ impl Aria2 {
                 Err(ClientError::Auth(AuthFailure::BadCredentials))
             }
             Some(e) => Err(ClientError::Rejected(client_reason(e.message.as_bytes()))),
-            None if status == 200 => Ok(answer.result),
+            None if status == 200 => answer
+                .result
+                .ok_or(ClientError::Protocol("the answer has no result")),
             None => Err(rejected_status(status, &bytes)),
         }
     }
 
     /// A new download's id: 16 hex digits.
-    fn gid(v: Value) -> Result<String, ClientError> {
-        v.as_str()
+    fn gid(v: String) -> Result<String, ClientError> {
+        Some(v)
             .filter(|g| g.len() == 16 && g.bytes().all(|b| b.is_ascii_hexdigit()))
-            .map(str::to_owned)
             .ok_or(ClientError::Protocol("the add didn't answer a download id"))
     }
 
     /// `Ok(false)` when the started download failed as a duplicate.
     async fn started(&self, gid: &str) -> Result<bool, ClientError> {
-        let status = self
+        let status: Status = self
             .call(
                 "aria2.tellStatus",
                 vec![gid.into(), json!(["status", "errorCode", "errorMessage"])],
                 MAX_RESPONSE,
             )
             .await?;
-        if status.get("status").and_then(Value::as_str) != Some("error") {
+        if status.status != "error" {
             return Ok(true);
         }
-        if status.get("errorCode").and_then(Value::as_str) == Some(DUPLICATE) {
+        if status.error_code.as_deref() == Some(DUPLICATE) {
             return Ok(false);
         }
-        let why = status
-            .get("errorMessage")
-            .and_then(Value::as_str)
-            .unwrap_or("");
+        let why = status.error_message.unwrap_or_default();
         Err(ClientError::Rejected(client_reason(why.as_bytes())))
     }
 
@@ -227,13 +259,10 @@ impl Aria2 {
 
     /// How many files a download has.
     async fn file_count(&self, gid: &str) -> Result<usize, ClientError> {
-        let files = self
+        let files: FileCount = self
             .call("aria2.getFiles", vec![gid.into()], MAX_LIST)
             .await?;
-        files
-            .as_array()
-            .map(Vec::len)
-            .ok_or(ClientError::Protocol("the file list"))
+        check_file_count(files.0)
     }
 }
 
@@ -267,11 +296,8 @@ impl DownloadClient for Aria2 {
 
     fn test(&self) -> BoxFuture<'_, Result<ClientInfo, ClientError>> {
         Box::pin(async move {
-            let info = self.call("aria2.getVersion", vec![], MAX_RESPONSE).await?;
-            let version = info
-                .get("version")
-                .and_then(Value::as_str)
-                .map(str::trim)
+            let info: Version = self.call("aria2.getVersion", vec![], MAX_RESPONSE).await?;
+            let version = Some(info.version.trim())
                 .filter(|v| !v.is_empty() && v.len() <= 64 && !v.chars().any(char::is_control))
                 .ok_or(ClientError::Protocol("the version isn't a version"))?;
             Ok(ClientInfo {
@@ -288,14 +314,16 @@ impl DownloadClient for Aria2 {
         opts: &'a AddOptions,
     ) -> BoxFuture<'a, Result<AddOutcome, ClientError>> {
         Box::pin(async move {
-            let selection = check_request(CAPABILITIES, opts, magnets.len())?;
+            let selection = check_magnets(CAPABILITIES, opts, magnets.len())?;
             // One add each. A duplicate is already where the user wants it;
-            // only all-duplicates is refused.
+            // only all-duplicates is refused. A failure part-way says how
+            // many went in.
             let mut new = 0;
-            for magnet in magnets {
+            for (done, magnet) in magnets.iter().enumerate() {
                 new += usize::from(
                     self.add_magnet_one(magnet, opts, selection.as_deref())
-                        .await?,
+                        .await
+                        .map_err(|e| partial(done, e))?,
                 );
             }
             if new == 0 {
@@ -323,10 +351,11 @@ impl DownloadClient for Aria2 {
             let pause = opts.paused || selection.is_some();
             let options = options(opts, pause, selection.as_deref());
             let gid = Self::gid(
-                self.call(
+                self.call_timeout(
                     "aria2.addTorrent",
                     vec![base64(&file.bytes).into(), json!([]), options],
                     MAX_RESPONSE,
+                    upload_timeout(self.timeout, file.bytes.len()),
                 )
                 .await?,
             )?;
@@ -338,8 +367,12 @@ impl DownloadClient for Aria2 {
                     ));
                 }
                 if !opts.paused {
-                    self.call("aria2.unpause", vec![gid.as_str().into()], MAX_RESPONSE)
-                        .await?;
+                    self.call::<IgnoredAny>(
+                        "aria2.unpause",
+                        vec![gid.as_str().into()],
+                        MAX_RESPONSE,
+                    )
+                    .await?;
                 }
             }
             if !opts.paused && !self.started(&gid).await? {
@@ -385,11 +418,11 @@ mod tests {
     #[test]
     fn gids() {
         assert_eq!(
-            Aria2::gid(json!("2089b05ecca3d829")).unwrap(),
+            Aria2::gid("2089b05ecca3d829".into()).unwrap(),
             "2089b05ecca3d829"
         );
-        assert!(Aria2::gid(json!("short")).is_err());
-        assert!(Aria2::gid(json!(12)).is_err());
+        assert!(Aria2::gid("short".into()).is_err());
+        assert!(Aria2::gid("2089b05ecca3d82z".into()).is_err());
     }
 
     #[test]

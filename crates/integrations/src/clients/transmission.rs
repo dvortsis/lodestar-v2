@@ -15,11 +15,13 @@
 //!   `torrent-add` from RPC 17 (4.0) and through `torrent-set` on RPC 16
 //!   (3.00); older daemons have no labels, so the add goes ahead without
 //!   one. `torrent-duplicate` means the torrent was already there.
-//! - **Selected files:** added paused; `torrent-get` polls the file list
-//!   until the metadata is there, `torrent-set` marks the rest
-//!   `files-unwanted`, and `torrent-start` starts it unless the user asked
-//!   for paused. Otherwise it stays paused and the outcome is
-//!   [`Selection::Pending`].
+//! - **Selected files** (a `.torrent` only): added paused; `torrent-get`
+//!   polls the file list until the torrent is registered, `torrent-set`
+//!   marks the rest `files-unwanted`, and `torrent-start` starts it unless
+//!   the user asked for paused. A paused magnet fetches no metadata, so a
+//!   magnet's files can't be selected before it starts: refused as
+//!   [`Feature::MagnetFileSelection`] before any request. File counts past
+//!   [`MAX_FILES`](super::MAX_FILES) are refused.
 //! - **Categories** are the labels in use on the daemon's torrents: it keeps
 //!   no list of its own. Before RPC 16 there are none, so `Unsupported`.
 //!
@@ -33,14 +35,16 @@ use std::time::Duration;
 use reqwest::header::{CONTENT_TYPE, HeaderValue};
 use reqwest::{Method, Url};
 use serde::Deserialize;
+use serde::de::{DeserializeOwned, IgnoredAny};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
+use super::qbittorrent::upload_timeout;
 use super::{
     AddOptions, AddOutcome, AuthFailure, BasicAuth, CLIENT_TIMEOUT, Capabilities, Category,
-    ClientError, ClientInfo, ClientKind, DownloadClient, Feature, METADATA_WAIT, Magnet,
-    POLL_INTERVAL, Selection, TorrentFile, already_there, base64, check_request, client_reason,
-    poll, rejected_status, skipped_files,
+    ClientError, ClientInfo, ClientKind, DownloadClient, Feature, FileCount, METADATA_WAIT, Magnet,
+    POLL_INTERVAL, Selection, TorrentFile, already_there, base64, category_name, check_file_count,
+    check_magnets, check_request, client_reason, partial, poll, rejected_status, skipped_files,
 };
 use crate::BoxFuture;
 use crate::net::{GuardedClient, NetPolicy, parse_url, read_limited, redact};
@@ -51,6 +55,9 @@ const CAPABILITIES: Capabilities = Capabilities {
     save_path: true,
     paused: true,
     file_selection: true,
+    // A paused magnet fetches no metadata, so its files can't be selected
+    // before it starts (§16).
+    magnet_file_selection: false,
     torrent_file: true,
     batch: false,
 };
@@ -58,8 +65,10 @@ const CAPABILITIES: Capabilities = Capabilities {
 const SESSION_HEADER: &str = "x-transmission-session-id";
 /// Most answers are a few hundred bytes.
 const MAX_RESPONSE: usize = 1 << 20;
-/// A file list, or every torrent's labels.
+/// A file list.
 const MAX_LIST: usize = 64 << 20;
+/// Every torrent's labels.
+const MAX_LABELS: usize = 16 << 20;
 /// The first RPC version with labels (`torrent-set`), and the first that
 /// takes them in `torrent-add`.
 const LABELS_SET: u32 = 16;
@@ -86,11 +95,46 @@ impl fmt::Debug for Transmission {
     }
 }
 
+/// An answer's `result`, read first; the arguments are skipped.
 #[derive(Deserialize)]
-struct Answer {
+struct Status {
     result: String,
+}
+
+/// A successful answer's arguments.
+#[derive(Deserialize)]
+struct Answer<T> {
+    arguments: T,
+}
+
+#[derive(Deserialize)]
+struct AddAnswer {
+    #[serde(rename = "torrent-added")]
+    added: Option<Hashed>,
+    #[serde(rename = "torrent-duplicate")]
+    duplicate: Option<IgnoredAny>,
+}
+
+#[derive(Deserialize)]
+struct Hashed {
+    #[serde(rename = "hashString")]
+    hash: String,
+}
+
+#[derive(Deserialize)]
+struct Torrents<T> {
+    torrents: Vec<T>,
+}
+
+#[derive(Deserialize)]
+struct FilesOf {
+    files: FileCount,
+}
+
+#[derive(Deserialize)]
+struct LabelsOf {
     #[serde(default)]
-    arguments: Value,
+    labels: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -156,12 +200,24 @@ impl Transmission {
 
     /// One RPC call: `arguments` of a `success`, the daemon's `result` text
     /// as a rejection otherwise.
-    async fn call(
+    async fn call<T: DeserializeOwned>(
         &self,
         method: &str,
         arguments: Value,
         limit: usize,
-    ) -> Result<Value, ClientError> {
+    ) -> Result<T, ClientError> {
+        self.call_timeout(method, arguments, limit, self.timeout)
+            .await
+    }
+
+    /// [`call`](Self::call) with its own timeout (uploads get more).
+    async fn call_timeout<T: DeserializeOwned>(
+        &self,
+        method: &str,
+        arguments: Value,
+        limit: usize,
+        timeout: Duration,
+    ) -> Result<T, ClientError> {
         let body = serde_json::to_vec(&json!({ "method": method, "arguments": arguments }))
             .map_err(|_| ClientError::Protocol("couldn't build the request"))?;
         let mut retried = false;
@@ -171,7 +227,7 @@ impl Transmission {
                 .http
                 .request(Method::POST, self.endpoint.clone())
                 .header(CONTENT_TYPE, "application/json")
-                .timeout(self.timeout)
+                .timeout(timeout)
                 .body(body.clone());
             if let Some(auth) = &self.auth {
                 rb = rb.basic_auth(&auth.username, Some(auth.password.expose()));
@@ -212,27 +268,27 @@ impl Transmission {
             if status != 200 {
                 return Err(rejected_status(status, &bytes));
             }
-            let answer: Answer = serde_json::from_slice(&bytes)
+            let status: Status = serde_json::from_slice(&bytes)
                 .map_err(|_| ClientError::Protocol("the answer isn't Transmission's JSON"))?;
-            if answer.result != "success" {
+            if status.result != "success" {
                 return Err(ClientError::Rejected(client_reason(
-                    answer.result.as_bytes(),
+                    status.result.as_bytes(),
                 )));
             }
+            let answer: Answer<T> = serde_json::from_slice(&bytes)
+                .map_err(|_| ClientError::Protocol("the answer's arguments"))?;
             return Ok(answer.arguments);
         }
     }
 
     async fn session_info(&self) -> Result<SessionInfo, ClientError> {
-        let args = self
+        let info: SessionInfo = self
             .call(
                 "session-get",
                 json!({ "fields": ["version", "rpc-version"] }),
                 MAX_RESPONSE,
             )
             .await?;
-        let info: SessionInfo = serde_json::from_value(args)
-            .map_err(|_| ClientError::Protocol("session-get has no version"))?;
         *self.rpc_version.lock().await = Some(info.rpc_version);
         Ok(info)
     }
@@ -251,6 +307,10 @@ impl Transmission {
         opts: &AddOptions,
         selecting: bool,
     ) -> Result<Added, ClientError> {
+        let timeout = match source.0 {
+            "metainfo" => upload_timeout(self.timeout, source.1.len()),
+            _ => self.timeout,
+        };
         let mut args = serde_json::Map::new();
         args.insert(source.0.into(), source.1.into());
         if opts.paused || selecting {
@@ -274,53 +334,50 @@ impl Transmission {
             }
             None => None,
         };
-        let answer = self
-            .call("torrent-add", Value::Object(args), MAX_RESPONSE)
+        let answer: AddAnswer = self
+            .call_timeout("torrent-add", Value::Object(args), MAX_RESPONSE, timeout)
             .await?;
-        if answer.get("torrent-duplicate").is_some() {
+        if answer.duplicate.is_some() {
             return Ok(Added::Duplicate);
         }
         let hash = answer
-            .get("torrent-added")
-            .and_then(|t| t.get("hashString"))
-            .and_then(Value::as_str)
+            .added
+            .map(|t| t.hash)
             .filter(|h| h.len() == 40 && h.bytes().all(|b| b.is_ascii_hexdigit()))
             .ok_or(ClientError::Protocol(
                 "torrent-add didn't say what it added",
             ))?
             .to_ascii_lowercase();
         if let Some(label) = label_later {
-            self.call(
-                "torrent-set",
-                json!({ "ids": [hash], "labels": [label] }),
-                MAX_RESPONSE,
-            )
-            .await?;
+            // The torrent is in; a refused label doesn't undo that.
+            let set: Result<IgnoredAny, _> = self
+                .call(
+                    "torrent-set",
+                    json!({ "ids": [hash], "labels": [label] }),
+                    MAX_RESPONSE,
+                )
+                .await;
+            if let Err(e) = set {
+                tracing::debug!(error = %e, "Transmission added the torrent but not its label");
+            }
         }
         Ok(Added::New(hash))
     }
 
     /// How many files the torrent has, once its metadata is there.
     async fn file_count(&self, hash: &str) -> Result<Option<usize>, ClientError> {
-        let args = self
+        let answer: Torrents<FilesOf> = self
             .call(
                 "torrent-get",
                 json!({ "ids": [hash], "fields": ["files"] }),
                 MAX_LIST,
             )
             .await?;
-        let torrents = args
-            .get("torrents")
-            .and_then(Value::as_array)
-            .ok_or(ClientError::Protocol("torrent-get has no torrent list"))?;
-        let Some(torrent) = torrents.first() else {
+        let Some(torrent) = answer.torrents.first() else {
             return Ok(None);
         };
-        let files = torrent
-            .get("files")
-            .and_then(Value::as_array)
-            .ok_or(ClientError::Protocol("torrent-get has no file list"))?;
-        Ok((!files.is_empty()).then_some(files.len()))
+        let count = check_file_count(torrent.files.0)?;
+        Ok((count > 0).then_some(count))
     }
 
     /// Applies a file selection to `hash`, which was added paused.
@@ -340,7 +397,7 @@ impl Transmission {
         };
         let skipped = skipped_files(selected, count)?;
         if !skipped.is_empty() {
-            self.call(
+            self.call::<IgnoredAny>(
                 "torrent-set",
                 json!({ "ids": [hash], "files-unwanted": skipped }),
                 MAX_RESPONSE,
@@ -348,7 +405,7 @@ impl Transmission {
             .await?;
         }
         if start {
-            self.call("torrent-start", json!({ "ids": [hash] }), MAX_RESPONSE)
+            self.call::<IgnoredAny>("torrent-start", json!({ "ids": [hash] }), MAX_RESPONSE)
                 .await?;
         }
         Ok(Selection::Applied)
@@ -397,7 +454,7 @@ impl DownloadClient for Transmission {
         opts: &'a AddOptions,
     ) -> BoxFuture<'a, Result<AddOutcome, ClientError>> {
         Box::pin(async move {
-            let selection = check_request(CAPABILITIES, opts, magnets.len())?;
+            let selection = check_magnets(CAPABILITIES, opts, magnets.len())?;
             if let [magnet] = magnets {
                 let added = self
                     .add_one(
@@ -409,14 +466,17 @@ impl DownloadClient for Transmission {
                 return self.finish(added, selection, opts).await;
             }
             // Bulk: no batch call, so one add each. A duplicate is already
-            // where the user wants it; only all-duplicates is refused.
+            // where the user wants it; only all-duplicates is refused. A
+            // failure part-way says how many went in.
             let mut new = 0;
-            for magnet in magnets {
-                if let Added::New(_) = self
+            for (done, magnet) in magnets.iter().enumerate() {
+                match self
                     .add_one(("filename", magnet.as_str().to_owned()), opts, false)
-                    .await?
+                    .await
                 {
-                    new += 1;
+                    Ok(Added::New(_)) => new += 1,
+                    Ok(Added::Duplicate) => {}
+                    Err(e) => return Err(partial(done, e)),
                 }
             }
             if new == 0 {
@@ -448,27 +508,19 @@ impl DownloadClient for Transmission {
             if self.rpc_version().await? < LABELS_SET {
                 return Err(ClientError::Unsupported(Feature::Category));
             }
-            let args = self
-                .call("torrent-get", json!({ "fields": ["labels"] }), MAX_LIST)
+            let answer: Torrents<LabelsOf> = self
+                .call("torrent-get", json!({ "fields": ["labels"] }), MAX_LABELS)
                 .await?;
-            let torrents = args
-                .get("torrents")
-                .and_then(Value::as_array)
-                .ok_or(ClientError::Protocol("torrent-get has no torrent list"))?;
-            let mut labels = BTreeSet::new();
-            for torrent in torrents {
-                if let Some(list) = torrent.get("labels").and_then(Value::as_array) {
-                    labels.extend(
-                        list.iter()
-                            .filter_map(Value::as_str)
-                            .filter(|l| !l.is_empty()),
-                    );
-                }
-            }
+            let labels: BTreeSet<String> = answer
+                .torrents
+                .iter()
+                .flat_map(|t| &t.labels)
+                .filter_map(|l| category_name(l))
+                .collect();
             Ok(labels
                 .into_iter()
                 .map(|name| Category {
-                    name: name.to_owned(),
+                    name,
                     save_path: None,
                 })
                 .collect())
