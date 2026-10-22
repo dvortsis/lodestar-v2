@@ -191,13 +191,17 @@ impl HotColumns {
             return;
         };
         let at = at.min(NEVER - 1);
-        let moved = v
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
-                (cur == NEVER || at > cur).then_some(at)
-            })
-            .is_ok();
-        if moved {
-            self.changed();
+        // A compare-exchange loop: `fetch_update` is deprecated and its
+        // replacement is newer than the MSRV.
+        let mut cur = v.load(Ordering::Relaxed);
+        while cur == NEVER || at > cur {
+            match v.compare_exchange_weak(cur, at, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => {
+                    self.changed();
+                    return;
+                }
+                Err(now) => cur = now,
+            }
         }
     }
 

@@ -67,9 +67,19 @@ impl FakeState {
     }
 
     fn take_drop(&self) -> bool {
-        self.drop_next
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
-            .is_ok()
+        let mut n = self.drop_next.load(Ordering::Relaxed);
+        while n > 0 {
+            match self.drop_next.compare_exchange_weak(
+                n,
+                n - 1,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(now) => n = now,
+            }
+        }
+        false
     }
 }
 

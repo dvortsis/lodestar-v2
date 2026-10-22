@@ -27,6 +27,19 @@ fn config(bootstrap: Vec<String>) -> Config {
     }
 }
 
+/// Whether this OS lets us use loopback addresses beyond 127.0.0.1.
+/// Linux and Windows route all of 127.0.0.0/8; macOS only configures
+/// 127.0.0.1 unless an alias is added (`ifconfig lo0 alias 127.0.0.2`).
+fn extra_loopback() -> bool {
+    match std::net::UdpSocket::bind((Ipv4Addr::new(127, 0, 0, 2), 0)) {
+        Ok(_) => true,
+        Err(e) => {
+            eprintln!("skipped: no extra loopback addresses here ({e})");
+            false
+        }
+    }
+}
+
 /// A bare KRPC client on its own loopback address.
 struct Client {
     socket: UdpSocket,
@@ -115,6 +128,9 @@ fn hash(i: u8) -> InfoHash {
 
 #[tokio::test]
 async fn answers_scrapes_only_when_asked_and_only_for_stored_hashes() {
+    if !extra_loopback() {
+        return;
+    }
     let node = Node::start(config(vec![]), None).await.unwrap();
     let addr = node.local_addrs()[0];
     let h = hash(1);
@@ -153,6 +169,9 @@ async fn answers_scrapes_only_when_asked_and_only_for_stored_hashes() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn scrape_lookup_estimates_the_swarm() {
+    if !extra_loopback() {
+        return;
+    }
     let seed_node = Node::start(config(vec![]), None).await.unwrap();
     let seed_addr = seed_node.local_addrs()[0].to_string();
     let mut others = Vec::new();
