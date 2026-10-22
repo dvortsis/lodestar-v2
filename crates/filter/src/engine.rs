@@ -22,7 +22,8 @@ use crate::core::{Action, Core, CoreRule, Evidence, Hit, Item};
 use crate::hash::TermSet;
 use crate::matcher::{Doc, Facts};
 use crate::packs::{self, PackRule, PackSwitches};
-use crate::rules::{self, Allow, ClassRule, Exception, Match, Override, Strength, UserRule};
+use crate::prefilter::RuleList;
+use crate::rules::{self, Allow, ClassRule, Exception, Match, Override, Strength};
 
 /// Which rule decided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -116,7 +117,8 @@ pub struct Engine {
     pub core: Core,
     pub lists: Vec<ListLayer>,
     pub packs: PackSwitches,
-    pub rules: Vec<UserRule>,
+    /// Your rules, indexed so a torrent only meets those that could match.
+    pub rules: RuleList,
     pub overrides: Vec<Override>,
     pub exceptions: Vec<Exception>,
     pub allow: Vec<Allow>,
@@ -132,7 +134,7 @@ impl Engine {
             core,
             lists: Vec::new(),
             packs: PackSwitches::default(),
-            rules: Vec::new(),
+            rules: RuleList::default(),
             overrides: Vec::new(),
             exceptions: Vec::new(),
             allow: Vec::new(),
@@ -232,8 +234,12 @@ impl Engine {
         {
             return None;
         }
-        for r in self.rules.iter().filter(|r| r.enabled) {
-            if !doc.matches(&r.query, neutral_words)
+        for r in doc
+            .candidates(&self.rules)
+            .into_iter()
+            .filter(|r| r.enabled)
+        {
+            if !doc.matches_candidate(&r.query, neutral_words)
                 || r.unless.as_ref().is_some_and(|u| doc.matches(u, &[]))
                 || self.excepted(RuleRef::User(r.id), item, doc)
             {
