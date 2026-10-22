@@ -1,0 +1,2 @@
+# @cs/codes (§20.5.1): hashed abuse code terms. Ships empty. Terms come
+# only from lists you deliberately import, never from this repository.
