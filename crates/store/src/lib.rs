@@ -39,7 +39,7 @@ pub use floor::{FloorSource, PendingFloor, Settled};
 pub use history::{History, trend};
 pub use hot::{Col, HotColumns, NEVER, SwarmHot};
 pub use insights::{CohortCount, Counter, Event};
-pub use rules::{ClassCorrection, ExceptionRow, OverrideRow, RuleRow, RuleSet};
+pub use rules::{ClassCorrection, ExceptionRow, MARK_CHUNK, OverrideRow, RuleRow, RuleSet};
 pub use rusqlite;
 pub use sources::{MAX_SOURCES, QueuedKey, SourceId, SourceRow, SourceState};
 pub use subscriptions::{NewSubscription, Refresh, Subscription};
@@ -279,6 +279,10 @@ pub struct WriteBatch<'a> {
     pub filtered: &'a [Filtered<'a>],
     /// Scrape results, applied after the touches.
     pub swarm: &'a [SwarmUpdate],
+    /// The classification-rules generation the batch's enrichment was
+    /// made under (§20.9). If it has changed since, the torrents are
+    /// written but marked for enriching again ([`Written::stale_class`]).
+    pub class_gen: Option<i64>,
 }
 
 /// A stored torrent seen again: its swarm hash, the sources (a bitset)
@@ -308,6 +312,9 @@ pub struct Written {
     pub touched: Vec<Option<i64>>,
     /// One per swarm update: `false` when the torrent was deleted.
     pub swarm: Vec<bool>,
+    /// The classification rules changed since the batch was enriched: its
+    /// torrents are marked for background enrichment.
+    pub stale_class: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -500,12 +507,25 @@ impl Store {
             .collect::<Result<_>>()?;
         insights::write(&tx, batch.counters, batch.cohorts, batch.events)?;
         filter::write(&tx, batch.filtered)?;
+        let stale_class = match batch.class_gen {
+            Some(g) if rules::class_gen(&tx)? != g => {
+                let mut stmt = tx.prepare_cached(
+                    "UPDATE torrent_parsed SET parser_ver = 0 WHERE torrent_id = ?1",
+                )?;
+                for ins in out.iter().chain(&prepared) {
+                    stmt.execute([ins.id()])?;
+                }
+                true
+            }
+            _ => false,
+        };
         tx.commit()?;
         Ok(Written {
             torrents: out,
             prepared,
             touched,
             swarm,
+            stale_class,
         })
     }
 
@@ -547,23 +567,27 @@ impl Store {
     /// queues them for re-indexing. Ids no longer stored are skipped.
     pub fn set_enrichments(&mut self, batch: &[(i64, Enriched)]) -> Result<usize> {
         let tx = self.conn.transaction()?;
-        let mut done = 0;
-        for (id, e) in batch {
-            let exists = tx
-                .prepare_cached("SELECT 1 FROM torrents WHERE id = ?1")?
-                .query_row([id], |_| Ok(()))
-                .optional()?
-                .is_some();
-            if !exists {
-                continue;
-            }
-            write_enrichment(&tx, *id, e)?;
-            tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
-                .execute([id])?;
-            done += 1;
-        }
+        let done = enrich_rows(&tx, batch)?;
         tx.commit()?;
         Ok(done)
+    }
+
+    /// [`Store::set_enrichments`], only if the classification rules are
+    /// still at `generation` (§20.9). The check and the write are one
+    /// transaction, so a rule change can't slip between them. `None` when
+    /// the generation has moved on and nothing was written.
+    pub fn set_enrichments_at(
+        &mut self,
+        generation: i64,
+        batch: &[(i64, Enriched)],
+    ) -> Result<Option<usize>> {
+        let tx = self.conn.transaction()?;
+        if rules::class_gen(&tx)? != generation {
+            return Ok(None);
+        }
+        let done = enrich_rows(&tx, batch)?;
+        tx.commit()?;
+        Ok(Some(done))
     }
 
     /// Calls `f` with every 20-byte swarm hash stored: the primary hash of
@@ -979,6 +1003,27 @@ fn commit_one(tx: &Connection, codec: &BlobCodec, t: &PreparedTorrent<'_>) -> Re
 }
 
 /// Sets a torrent's enrichment columns and record.
+/// Writes enrichments of stored torrents and logs them for re-indexing;
+/// ids no longer stored are skipped.
+fn enrich_rows(tx: &Connection, batch: &[(i64, Enriched)]) -> Result<usize> {
+    let mut done = 0;
+    for (id, e) in batch {
+        let exists = tx
+            .prepare_cached("SELECT 1 FROM torrents WHERE id = ?1")?
+            .query_row([id], |_| Ok(()))
+            .optional()?
+            .is_some();
+        if !exists {
+            continue;
+        }
+        write_enrichment(tx, *id, e)?;
+        tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
+            .execute([id])?;
+        done += 1;
+    }
+    Ok(done)
+}
+
 fn write_enrichment(conn: &Connection, id: i64, e: &Enriched) -> Result<()> {
     conn.prepare_cached(
         "UPDATE torrents SET content_type = ?2, junk_score = ?3, comp = ?4 WHERE id = ?1",

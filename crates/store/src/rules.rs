@@ -428,17 +428,90 @@ impl Store {
 
     /// Marks stored torrents' enrichment as outdated, so background
     /// enrichment classifies them again. Returns how many were marked.
+    ///
+    /// Written in transactions of [`MARK_CHUNK`] rows, so the ingest
+    /// writer never waits long for the database.
     pub fn mark_unenriched(&mut self, ids: &[i64]) -> Result<usize> {
-        let tx = self.conn.transaction()?;
         let mut n = 0;
-        {
-            let mut stmt = tx
-                .prepare_cached("UPDATE torrent_parsed SET parser_ver = 0 WHERE torrent_id = ?1")?;
-            for id in ids {
-                n += stmt.execute([id])?;
+        for chunk in ids.chunks(MARK_CHUNK) {
+            let tx = self.conn.transaction()?;
+            {
+                let mut stmt = tx.prepare_cached(
+                    "UPDATE torrent_parsed SET parser_ver = 0 WHERE torrent_id = ?1",
+                )?;
+                for id in chunk {
+                    n += stmt.execute([id])?;
+                }
             }
+            tx.commit()?;
         }
-        tx.commit()?;
         Ok(n)
     }
+
+    /// Marks every stored torrent after id `after` for background
+    /// enrichment: those the search index hasn't reached yet.
+    pub fn mark_unenriched_after(&mut self, after: i64) -> Result<usize> {
+        Ok(self.conn.execute(
+            "UPDATE torrent_parsed SET parser_ver = 0 WHERE torrent_id > ?1",
+            [after],
+        )?)
+    }
+
+    /// The classification rules' generation (§20.9): bumped by every rule
+    /// change, checked by every enrichment write.
+    pub fn class_gen(&self) -> Result<i64> {
+        class_gen(&self.conn)
+    }
+
+    /// Moves the classification rules to a new generation, so enrichment
+    /// made under the old rules is no longer written. Returns it.
+    pub fn bump_class_gen(&mut self) -> Result<i64> {
+        let tx = self.conn.transaction()?;
+        let next = class_gen(&tx)? + 1;
+        tx.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            params![CLASS_GEN, next],
+        )?;
+        tx.commit()?;
+        Ok(next)
+    }
+
+    /// Your corrections after torrent id `after`, at most `limit`.
+    pub fn corrections_after(
+        &self,
+        after: i64,
+        limit: usize,
+    ) -> Result<Vec<(i64, ClassCorrection)>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT torrent_id, adult, not_junk FROM class_corrections
+             WHERE torrent_id > ?1 ORDER BY torrent_id LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![after, limit as i64], |r| {
+            Ok((
+                r.get(0)?,
+                ClassCorrection {
+                    adult: r.get(1)?,
+                    not_junk: r.get(2)?,
+                },
+            ))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+}
+
+/// Rows marked per transaction by [`Store::mark_unenriched`].
+pub const MARK_CHUNK: usize = 10_000;
+
+const CLASS_GEN: &str = "class_rules_gen";
+
+pub(crate) fn class_gen(conn: &rusqlite::Connection) -> Result<i64> {
+    Ok(conn
+        .query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            [CLASS_GEN],
+            |r| r.get(0),
+        )
+        .optional()?
+        .unwrap_or(0))
 }

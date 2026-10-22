@@ -73,7 +73,7 @@ fn background_enrichment_applies_corrections() {
 
 #[test]
 fn classification_rules_apply_in_the_background_and_own_corrections_win() {
-    use lodestar_filter::{Core, CsList, Engine, Lists, Switches};
+    use lodestar_filter::{Core, CsList, Engine, Handle, Lists, Switches};
     use lodestar_pipeline::enrich::enrich_stored_with;
     let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
     let a = add(&mut store, "Holiday.Clips.2023.Lexb.mp4", 900 << 20);
@@ -88,13 +88,13 @@ fn classification_rules_apply_in_the_background_and_own_corrections_win() {
             },
         )
         .unwrap();
-    let mut engine = Engine::new(Core::new(
+    let filter = Handle::new(Engine::new(Core::new(
         Lists::shipped().unwrap(),
         CsList::default(),
         Switches::default(),
-    ));
-    engine.load_class_rules(&[(1, "lexb".into(), true)]);
-    enrich_stored_with(&mut store, 0, 10, Some(&engine)).unwrap();
+    )));
+    filter.update_engine(|e| e.load_class_rules(&[(1, "lexb".into(), true)]));
+    enrich_stored_with(&mut store, 0, 10, Some(&filter)).unwrap();
     let kind = |store: &Store, id| {
         ContentType::from_code(store.enrichment(id).unwrap().unwrap().content_type)
     };
@@ -107,8 +107,10 @@ fn classification_rules_apply_in_the_background_and_own_corrections_win() {
     assert_ne!(kind(&store, c), Some(ContentType::Adult), "not matched");
 
     // A newer rule wins over an older one.
-    engine.load_class_rules(&[(1, "lexb".into(), true), (2, "2023".into(), false)]);
+    filter.update_engine(|e| {
+        e.load_class_rules(&[(1, "lexb".into(), true), (2, "2023".into(), false)])
+    });
     store.mark_unenriched(&[a]).unwrap();
-    enrich_stored_with(&mut store, 0, 10, Some(&engine)).unwrap();
+    enrich_stored_with(&mut store, 0, 10, Some(&filter)).unwrap();
     assert_ne!(kind(&store, a), Some(ContentType::Adult));
 }

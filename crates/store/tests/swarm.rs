@@ -449,3 +449,85 @@ fn class_corrections_are_kept_per_torrent_and_go_with_it() {
     s.delete_torrents(&[ha.0]).unwrap();
     assert_eq!(s.correction(a).unwrap(), None);
 }
+
+#[test]
+fn enrichment_written_under_old_classification_rules_is_refused_or_marked() {
+    use lodestar_store::Enriched;
+    let mut s = mem();
+    let (a, ha) = add(&mut s, "a", false, 0);
+    let e = Enriched {
+        version: 99,
+        content_type: 3,
+        junk_score: 0,
+        comp: Vec::new(),
+        data: Vec::new(),
+    };
+    let g = s.class_gen().unwrap();
+    assert_eq!(g, 0);
+    // At the current generation: written.
+    assert_eq!(s.set_enrichments_at(g, &[(a, e.clone())]).unwrap(), Some(1));
+    assert!(s.unenriched(0, 99, 10).unwrap().is_empty());
+    // A rule change moves the generation: a batch from before is refused.
+    let next = s.bump_class_gen().unwrap();
+    assert_eq!(next, g + 1);
+    s.mark_unenriched(&[a]).unwrap();
+    assert_eq!(s.set_enrichments_at(g, &[(a, e.clone())]).unwrap(), None);
+    assert_eq!(s.unenriched(0, 99, 10).unwrap(), vec![a], "still marked");
+    assert_eq!(s.set_enrichments_at(next, &[(a, e)]).unwrap(), Some(1));
+
+    // A batch write under an old generation stores but marks.
+    let raw = dict("b", false);
+    let info = Info::parse(&raw).unwrap();
+    let mut prepared = s.preparer().prepare(&info, Some(&raw)).unwrap();
+    prepared.enrichment = Some(Enriched {
+        version: 99,
+        content_type: 3,
+        junk_score: 0,
+        comp: Vec::new(),
+        data: Vec::new(),
+    });
+    let pt = lodestar_store::PreparedTorrent {
+        torrent: &prepared,
+        discovered_at: T,
+        metadata_at: T,
+        extra_flags: 0,
+        source: DHT,
+        verified: true,
+    };
+    let w = s
+        .write(&WriteBatch {
+            prepared: &[pt],
+            class_gen: Some(g),
+            ..WriteBatch::default()
+        })
+        .unwrap();
+    assert!(w.stale_class);
+    let b = w.prepared[0].id();
+    assert!(s.unenriched(0, 99, 10).unwrap().contains(&b));
+    assert!(s.find(&ha).unwrap().is_some());
+}
+
+#[test]
+fn corrections_page_by_torrent_id() {
+    use lodestar_store::ClassCorrection;
+    let mut s = mem();
+    let ids: Vec<i64> = (0..5)
+        .map(|i| add(&mut s, &format!("t{i}"), false, 0).0)
+        .collect();
+    // Unenriched rows have nothing to mark; the count is of rows changed.
+    assert_eq!(s.mark_unenriched(&ids).unwrap(), 0);
+    for id in &ids {
+        s.set_correction(
+            *id,
+            ClassCorrection {
+                adult: Some(true),
+                not_junk: false,
+            },
+        )
+        .unwrap();
+    }
+    let page = s.corrections_after(0, 2).unwrap();
+    assert_eq!(page.iter().map(|p| p.0).collect::<Vec<_>>(), ids[..2]);
+    let rest = s.corrections_after(ids[1], 10).unwrap();
+    assert_eq!(rest.len(), 3);
+}

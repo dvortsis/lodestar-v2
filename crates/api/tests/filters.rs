@@ -1564,3 +1564,78 @@ async fn strictness_of_candidate_lists() {
     let (status, _, _) = assess(json!({ "subscriptions": [999] })).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn class_rules_are_capped_and_unindexed_torrents_are_requeued() {
+    let f = fixture_with(Some(SearchIndex::in_memory().unwrap()));
+    let c = logged_in(&f).await;
+    let (indexed, _) = store_torrent(&f, "Indexed.Clip.mp4", 900 << 20);
+    {
+        let mut store = f.api.store.lock().unwrap();
+        enrich_all(&mut store);
+        let index = f.api.index.as_ref().unwrap();
+        let mut w = index.writer(15 << 20).unwrap();
+        w.catch_up(&mut store, 10).unwrap();
+        w.commit().unwrap();
+    }
+    // Stored after the index's last commit: not searchable yet.
+    let (late, _) = store_torrent(&f, "Late.Clip.mp4", 900 << 20);
+    enrich_all(&mut f.api.store.lock().unwrap());
+    let rules = |body: Value| post("/api/v1/classify/rules", Some(&c), body);
+    let (status, _, body) = call(&f.app, rules(json!({ "query": "nomatch", "adult": true }))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["queued"], json!(1), "only the unindexed one");
+    assert_eq!(body["truncated"], json!(false));
+    let unenriched = f
+        .api
+        .store
+        .lock()
+        .unwrap()
+        .unenriched(0, lodestar_classify::ENRICHMENT_VERSION, 10)
+        .unwrap();
+    assert_eq!(unenriched, vec![late]);
+    assert!(!unenriched.contains(&indexed));
+    let generation = f.api.store.lock().unwrap().class_gen().unwrap();
+    assert_eq!(generation, 1, "a rule change moves the generation");
+
+    // At most 1,000 rules.
+    {
+        let mut store = f.api.store.lock().unwrap();
+        for i in 1..lodestar_filter::MAX_CLASS_RULES {
+            store.add_class_rule(&format!("word{i}"), true).unwrap();
+        }
+    }
+    let (status, _, body) = call(&f.app, rules(json!({ "query": "more", "adult": true }))).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["error"]["code"], json!("too_many_class_rules"));
+}
+
+#[tokio::test]
+async fn the_corrections_report_reads_in_chunks() {
+    let f = fixture();
+    let c = logged_in(&f).await;
+    // More than one chunk (500) of corrections, all Is adult on a movie.
+    {
+        for i in 0..520 {
+            let (id, _) = store_torrent(&f, &format!("Some.Film.{i}.1999.1080p.mkv"), 2 << 30);
+            f.api
+                .store
+                .lock()
+                .unwrap()
+                .set_correction(
+                    id,
+                    lodestar_store::ClassCorrection {
+                        adult: Some(true),
+                        not_junk: false,
+                    },
+                )
+                .unwrap();
+        }
+    }
+    let (status, _, body) = call(&f.app, get("/api/v1/classify", &c)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["corrections"], json!(520));
+    assert_eq!(body["detection"]["checked"], json!(520));
+    assert_eq!(body["detection"]["disagree"], json!(520));
+    assert_eq!(body["detection"]["examples"].as_array().unwrap().len(), 50);
+}
