@@ -3,7 +3,7 @@
  "updated_at": "2026-10-22T21:45Z",
  "launches": {
   "date": "2026-10-22",
-  "count": 27
+  "count": 28
  },
  "tags": {},
  "slices": {
@@ -996,9 +996,10 @@
    "merge": "55d90af"
   },
   "C-adult-other": {
-   "status": "launching",
+   "status": "running",
    "model": "opus",
-   "notes": "from #94 review: detect returns None for Other/Ebook at full score (content safety false negative)"
+   "notes": "from #94 review: detect returns None for Other/Ebook at full score (content safety false negative)",
+   "session": "session_01KNC8PugVKjddvhH6vT8qXN"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
