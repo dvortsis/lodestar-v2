@@ -8,6 +8,10 @@ The plan lives in [`docs/architecture.md`](docs/architecture.md). The brand asse
 
 Status: milestone M0 (foundations) is in review: Cargo workspace, CI, `bencode`, `metainfo`, `store` and the synthetic-data size benchmark (`cargo run --release -p lodestar-bench --bin size-report`).
 
+## Documentation
+
+Setup and safety guide for Unraid and Docker: [`docs/user/`](docs/user/README.md). It covers installing, first run, keeping Lodestar private and backups. Windows and Linux chapters are planned.
+
 ## Licence
 
 Lodestar is free software. It's licensed under the [GNU Affero General Public License, version 3 or later](LICENSE) (`AGPL-3.0-or-later`).
