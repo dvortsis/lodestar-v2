@@ -873,7 +873,6 @@
  },
  "heartbeats": 4,
  "reviews_in_flight": {
-  "70": "round 3 (f7fddd8)",
   "71": "B6 round 2 (ee81535)",
   "83": "W5 R1 line-by-line",
   "84": "D-puid R1 + security",
@@ -946,7 +945,8 @@
   "runtime_chunk_growth": "W7cd measured: showcase pages using transitions/bind:offsetHeight/snippets grow the shared Svelte runtime chunk 16.8->21.7 kB gz that search loads. Screens using these primitives will do the same: budget JS 45 kB has ~12 kB headroom; watch in W9/search screens, keep transitions lazy where possible.",
   "b6_from_b17_review": "B17 reviewer: B6 must AND visibility onto every own-clause variant (filters param), test Adult hidden + type:movie selection -> no adult in type facet, and check the lease fingerprint/visibility when a cursor lease is passed (no pre-toggle lease). Also Not-adult with leftover adult_kind tag matches adult:<kind> - B6 adult facet aware.",
   "unenriched_adult_gap": "Unenriched imports/backfill aren't hidden by B17 (no type tag). Put in importer/backfill brief; consider raising with owner.",
-  "sse_crawler_paused": "B4 SSE crawler event lacks `paused` (B14 asked to add if cheap)."
+  "sse_crawler_paused": "B4 SSE crawler event lacks `paused` (B14 asked to add if cheap).",
+  "pr70_r3": "#70 R3 FIX 18:58: core switch off w/o password via race (assess unlocked vs apply) -> 409 changed_since_preview; ResolveHeld same; reload before release; purge INSERT OR IGNORE; merge main."
  },
  "blocked_on_owner": [
   "Modern DHT crawler architecture: waiting on an AskUserQuestion",
