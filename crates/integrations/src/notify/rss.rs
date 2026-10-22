@@ -25,10 +25,8 @@
 
 use std::fmt::Write;
 
-use reqwest::Url;
-
 use super::Notification;
-use super::ntfy::{clean_line, format_bytes};
+use super::text::{clean_line, format_bytes, web_link};
 
 /// What the renderer can't repair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -173,12 +171,6 @@ pub fn escape_into(out: &mut String, s: &str) {
             _ => {}
         }
     }
-}
-
-fn web_link(link: &str) -> Option<String> {
-    let url = Url::parse(link.trim()).ok()?;
-    let web = matches!(url.scheme(), "http" | "https") && url.host_str().is_some();
-    web.then(|| url.to_string())
 }
 
 /// `Thu, 01 Jan 1970 00:00:00 GMT` for Unix seconds.
