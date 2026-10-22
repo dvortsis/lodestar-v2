@@ -816,7 +816,7 @@
    "title": "Modern DHT crawler architecture",
    "work": "content filter rule persistence and writer judging, migration V6"
   },
-  "session_01NpcZEgW1eEWwKES8bNP3Cd": "Owner's own 'In-application settings screen' session (not runner-launched). Branch claude/brave-newton-53jgly, no PR. Adds owner-decisions \u00a72.11-14 (logging control, AGPL-3.0-or-later, auto-update, user-docs audience), LICENSE, runner/standards \u00a74b, slices.yaml. Runner #75 renumbered to \u00a72.15-17. Asked owner whether to PR/review/merge it."
+  "session_01NpcZEgW1eEWwKES8bNP3Cd": "Owner's 'In-application settings screen' session \u2014 owner 18:59: runner now manages it. Branch claude/brave-newton-53jgly (planning \u00a710.10 Settings, \u00a712.1 logging, \u00a712.2 auto-update, About, AGPL LICENSE, packaging/keys, user-docs skill + documentation-skills, brand/brand.json, slices B2b/B2c/M-settings-form/S-settings-1/2/M-security-settings/B-log1/2/S-logs/S-about/B-update/S-updates/S-doc-shots). Asked it (19:00) for status of owner requests/open questions, merge main, open PR. Runner reviews + merges."
  },
  "watch_policy": "Owner asked the runner to keep an eye on and manage these sessions: each heartbeat check status; report a pending permission prompt to the owner (runner cannot approve); nudge an idle session with remaining work; flag conflicts with slice ownership and migration order.",
  "migration_order": "V4 filter, V5 swarm, V6 subscriptions, V7 filter rules, V8 class_corrections (all merged), V9 class_rules (#52 open), V10 reserved M4 PR2, V11 next free (F1 if needed, then M5 B8). Runner assigns.",
