@@ -48,7 +48,7 @@ The owner's reader: someone who can install an app from the Unraid app store but
   - For behaviour, read the settings registry (`crates/lodestar/src/settings/`) and `docs/architecture.md`.
   - **Never document planned behaviour as built.** Leave it out, or mark it **(planned)**.
 - **Brand:** use `brand/brand.json`, which holds the Atkinson Hyperlegible fonts and Riverstone with the §10.18 primary-ink. **Don't regenerate it with `brand.py detect`**, which reads a theme name ("Ayu") as the font.
-- **Labels and terms** come from the app itself (`web/src/lib/i18n/messages/en.json`) and `docs/ui-glossary.md`. The guide's glossary uses the same words.
+- **Labels and terms** come from the app itself: each feature's `web/src/lib/features/<feature>/messages/en.json`, plus the shared `web/src/lib/i18n/messages/en.json` and `docs/ui-glossary.md`. The guide's glossary uses the same words.
 - **Project facts beat the skills' examples.** For instance, Unraid appdata goes on the cache pool (`/mnt/cache/appdata/lodestar`), not `/mnt/user`, as the templates say.
 
 ## 4. Screenshots
