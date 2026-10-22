@@ -5,11 +5,19 @@
 //! [`DownloadClient`]. [`qbittorrent`] is the reference; the README lists
 //! what a new adapter must do and test.
 
+pub mod aria2;
+pub mod deluge;
 pub mod magnet;
 pub mod qbittorrent;
+pub mod rtorrent;
+pub mod transmission;
+mod xmlrpc;
 
 use std::fmt;
+use std::future::Future;
 use std::time::Duration;
+
+use tokio::time::Instant;
 
 use crate::BoxFuture;
 use crate::net::{AddrClass, NetError};
@@ -211,6 +219,10 @@ pub enum AuthFailure {
     OriginRefused,
     /// The session was refused again straight after logging in.
     SessionRefused,
+    /// The client refuses this address: it isn't on the client's IP
+    /// allow-list, or the client banned it after failed logins. Some
+    /// clients (Transmission) answer both the same way.
+    AddressRefused,
 }
 
 impl fmt::Display for ClientError {
@@ -228,6 +240,9 @@ impl fmt::Display for ClientError {
             ClientError::Auth(AuthFailure::SessionRefused) => {
                 f.write_str("the client refused the session after logging in")
             }
+            ClientError::Auth(AuthFailure::AddressRefused) => f.write_str(
+                "the client refuses this address; check its IP allow-list, or whether it banned this address after failed logins",
+            ),
             ClientError::Unreachable => f.write_str("couldn't reach the client"),
             ClientError::Rejected(why) => write!(f, "the client refused: {why}"),
             ClientError::Unsupported(feature) => {
@@ -369,6 +384,14 @@ pub trait DownloadClient: Send + Sync + fmt::Debug {
     fn categories(&self) -> BoxFuture<'_, Result<Vec<Category>, ClientError>>;
 }
 
+/// HTTP basic authentication: Transmission's RPC password, or the web
+/// server in front of rTorrent's XML-RPC.
+#[derive(Debug, Clone)]
+pub struct BasicAuth {
+    pub username: String,
+    pub password: Secret,
+}
+
 /// A configured client, as Settings → Integrations stores it (credentials
 /// already opened from the [`SecretStore`](crate::SecretStore)).
 #[derive(Debug, Clone)]
@@ -378,6 +401,21 @@ pub enum ClientConfig {
         username: String,
         password: Secret,
     },
+    /// The daemon's address (`http://host:9091/`), or the full RPC URL.
+    Transmission {
+        url: String,
+        auth: Option<BasicAuth>,
+    },
+    /// The Web UI's address (`http://host:8112/`).
+    Deluge { url: String, password: Secret },
+    /// The XML-RPC endpoint a web server exposes (`http://host/RPC2`).
+    RTorrent {
+        url: String,
+        auth: Option<BasicAuth>,
+    },
+    /// The RPC address (`http://host:6800/jsonrpc`); `secret` is
+    /// `--rpc-secret`.
+    Aria2 { url: String, secret: Option<Secret> },
 }
 
 /// The default timeout for one client request.
@@ -394,7 +432,94 @@ pub fn connect(config: ClientConfig) -> Result<Box<dyn DownloadClient>, ClientEr
         } => Ok(Box::new(qbittorrent::QBittorrent::new(
             &url, username, password,
         )?)),
+        ClientConfig::Transmission { url, auth } => {
+            Ok(Box::new(transmission::Transmission::new(&url, auth)?))
+        }
+        ClientConfig::Deluge { url, password } => {
+            Ok(Box::new(deluge::Deluge::new(&url, password)?))
+        }
+        ClientConfig::RTorrent { url, auth } => Ok(Box::new(rtorrent::RTorrent::new(&url, auth)?)),
+        ClientConfig::Aria2 { url, secret } => Ok(Box::new(aria2::Aria2::new(&url, secret)?)),
     }
+}
+
+/// How long an adapter waits for a magnet's metadata before leaving a file
+/// selection [`Selection::Pending`] (§16).
+pub const METADATA_WAIT: Duration = Duration::from_secs(30);
+
+/// How often an adapter looks while it waits.
+pub const POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Calls `look` until it returns `Some`, and returns that; `None` once
+/// `wait` has passed. It always looks at least once, and never sleeps past
+/// the deadline.
+pub(crate) async fn poll<T, F, Fut>(
+    wait: Duration,
+    every: Duration,
+    mut look: F,
+) -> Result<Option<T>, ClientError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<Option<T>, ClientError>>,
+{
+    let deadline = Instant::now() + wait;
+    loop {
+        if let Some(found) = look().await? {
+            return Ok(Some(found));
+        }
+        if Instant::now() + every > deadline {
+            return Ok(None);
+        }
+        tokio::time::sleep(every).await;
+    }
+}
+
+/// The zero-based indices a selection skips, given the torrent's file
+/// count. `selected` is sorted and de-duplicated ([`check_request`]). An
+/// index past the last file is refused; the caller has left the torrent
+/// paused by then.
+pub(crate) fn skipped_files(selected: &[u32], count: usize) -> Result<Vec<u32>, ClientError> {
+    if selected.last().is_some_and(|&last| last as usize >= count) {
+        return Err(ClientError::InvalidRequest(
+            "a selected file isn't in the torrent; it was added paused",
+        ));
+    }
+    Ok((0..count as u32)
+        .filter(|i| selected.binary_search(i).is_err())
+        .collect())
+}
+
+/// Standard base64 with padding, for `.torrent` bytes in JSON and XML-RPC
+/// bodies.
+pub(crate) fn base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = u32::from(b[0]) << 16 | u32::from(b[1]) << 8 | u32::from(b[2]);
+        for (i, shift) in [18, 12, 6, 0].into_iter().enumerate() {
+            if i <= chunk.len() {
+                out.push(TABLE[(n >> shift & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// The answer to an add that found every torrent already in the client.
+pub(crate) fn already_there() -> ClientError {
+    ClientError::Rejected("the torrent is already in the client".into())
+}
+
+/// The error for an HTTP status an adapter has no meaning for.
+pub(crate) fn rejected_status(status: u16, body: &[u8]) -> ClientError {
+    ClientError::Rejected(format!("HTTP {status}: {}", client_reason(body)))
 }
 
 #[cfg(test)]
@@ -483,6 +608,54 @@ mod tests {
         let f = TorrentFile::new(b"d4:infod3:key5:valueee".to_vec(), &"A".repeat(40)).unwrap();
         assert_eq!(f.info_hash, "a".repeat(40));
         assert!(!format!("{f:?}").contains("value"));
+    }
+
+    #[test]
+    fn base64_matches_rfc_4648() {
+        for (raw, enc) in [
+            (&b""[..], ""),
+            (b"f", "Zg=="),
+            (b"fo", "Zm8="),
+            (b"foo", "Zm9v"),
+            (b"foob", "Zm9vYg=="),
+            (b"fooba", "Zm9vYmE="),
+            (b"foobar", "Zm9vYmFy"),
+            (&[0xff, 0xfe, 0x00], "//4A"),
+        ] {
+            assert_eq!(base64(raw), enc);
+        }
+    }
+
+    #[test]
+    fn skipped_files_and_range() {
+        assert_eq!(skipped_files(&[0, 2], 3), Ok(vec![1]));
+        assert_eq!(skipped_files(&[0, 1, 2], 3), Ok(vec![]));
+        assert_eq!(skipped_files(&[1], 4), Ok(vec![0, 2, 3]));
+        assert!(matches!(
+            skipped_files(&[0, 3], 3),
+            Err(ClientError::InvalidRequest(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn poll_looks_once_with_no_wait_and_stops_when_found() {
+        let mut looks = 0;
+        let found: Option<()> = poll(Duration::ZERO, Duration::from_millis(1), || {
+            looks += 1;
+            async { Ok(None) }
+        })
+        .await
+        .unwrap();
+        assert_eq!((found, looks), (None, 1));
+        let mut looks = 0;
+        let found = poll(Duration::from_secs(5), Duration::from_millis(1), || {
+            looks += 1;
+            let n = looks;
+            async move { Ok((n == 3).then_some(n)) }
+        })
+        .await
+        .unwrap();
+        assert_eq!(found, Some(3));
     }
 
     #[test]

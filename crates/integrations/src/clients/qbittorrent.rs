@@ -577,7 +577,7 @@ fn upload_timeout(base: Duration, bytes: usize) -> Duration {
 
 /// The `name=value` part of a `Set-Cookie` header, when it's a plausible
 /// session cookie.
-fn session_cookie(header: &str) -> Option<Secret> {
+pub(super) fn session_cookie(header: &str) -> Option<Secret> {
     let pair = header.split(';').next()?.trim();
     let (name, value) = pair.split_once('=')?;
     let token = |s: &str, extra: &[u8]| {
