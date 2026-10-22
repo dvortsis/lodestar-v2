@@ -3,6 +3,7 @@ name = "lodestar-filter"
 description = "Content filtering: normalization, hashed term lists, the child-safety core and its exceptions"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true
