@@ -476,7 +476,8 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "minimum": 0
+              "maximum": 1000,
+              "minimum": 1
             }
           }
         ],
@@ -565,6 +566,66 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TestResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/filters/tombstones": {
+      "get": {
+        "tags": [
+          "filters"
+        ],
+        "summary": "Tombstones (dropped torrents) by hash and rule, never with names, in\npages; `adult=true` lists only adult holds.",
+        "operationId": "getFilterTombstones",
+        "parameters": [
+          {
+            "name": "adult",
+            "in": "query",
+            "description": "Only adult holds: torrents held because you relabelled them adult,\nwhich the 30-day purge left as tombstones.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The previous page's `next_cursor`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Tombstones per page: 1–1000, 1000 by default.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tombstones"
                 }
               }
             }
@@ -4525,6 +4586,54 @@
               "type": "string"
             },
             "description": "Rules in shadow mode that would have decided."
+          }
+        }
+      },
+      "TombstoneEntry": {
+        "type": "object",
+        "required": [
+          "adult_hold",
+          "at",
+          "hash",
+          "rule"
+        ],
+        "properties": {
+          "adult_hold": {
+            "type": "boolean",
+            "description": "Left by an adult hold's quarantine at the 30-day purge."
+          },
+          "at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          }
+        }
+      },
+      "Tombstones": {
+        "type": "object",
+        "description": "`GET /filters/tombstones`: dropped torrents, by hash and rule (no\nnames), so one can be found and released.",
+        "required": [
+          "next_cursor",
+          "tombstones"
+        ],
+        "properties": {
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The next page, if there is one: pass as `cursor`."
+          },
+          "tombstones": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TombstoneEntry"
+            }
           }
         }
       },

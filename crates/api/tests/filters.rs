@@ -1727,14 +1727,14 @@ async fn a_correction_relabelling_a_torrent_adult_meets_the_adult_only_core() {
     )
     .await;
     let warning = a["warning"].as_str().unwrap();
-    assert!(
-        warning.contains("That mark was deleted with it"),
-        "{warning}"
-    );
-    assert!(
-        warning.contains("the Adult-only checks won't look at it again"),
-        "{warning}"
-    );
+    for part in [
+        "your correction or an Is adult classification rule made it adult",
+        "A correction is deleted with the torrent",
+        "if no Is adult rule matches it when it's next seen",
+        "the Adult-only child-safety checks won't look at it",
+    ] {
+        assert!(warning.contains(part), "{part}: {warning}");
+    }
     assert_eq!(a["preview"]["tombstones"], json!(1));
     let (status, _) = apply(&f, &c, release.clone(), None).await;
     assert_eq!(status, StatusCode::PRECONDITION_REQUIRED);
@@ -1754,6 +1754,11 @@ async fn a_correction_relabelling_a_torrent_adult_meets_the_adult_only_core() {
 
 /// Holds `hash` under `rule`, as a quarantine or a tombstone.
 fn hold(f: &Fixture, hash: [u8; 20], rule: &str, held: Held, at: i64) {
+    hold_as(f, hash, rule, held, at, false);
+}
+
+/// [`hold`], as an adult hold when `adult_hold`.
+fn hold_as(f: &Fixture, hash: [u8; 20], rule: &str, held: Held, at: i64, adult_hold: bool) {
     f.api
         .store
         .lock()
@@ -1772,7 +1777,7 @@ fn hold(f: &Fixture, hash: [u8; 20], rule: &str, held: Held, at: i64) {
                 evidence: &[],
                 at,
                 expires_at: at + 86_400,
-                adult_hold: false,
+                adult_hold,
             }],
             ..WriteBatch::default()
         })
@@ -1838,6 +1843,9 @@ async fn removing_a_rule_or_a_pack_releases_what_it_holds() {
     hold(&f, [0x12; 20], &format!("U-{id}"), Held::Tombstone, now);
     hold(&f, [0x13; 20], "FK-4", Held::Tombstone, now);
     hold(&f, [0x14; 20], "CS-3a", Held::Quarantine, now);
+    // Held by the rule and, as a tombstone, by the pack.
+    hold(&f, [0x15; 20], &format!("U-{id}"), Held::Quarantine, now);
+    hold(&f, [0x15; 20], "FK-4", Held::Tombstone, now);
 
     let (status, body) = apply(
         &f,
@@ -1851,14 +1859,16 @@ async fn removing_a_rule_or_a_pack_releases_what_it_holds() {
     for h in [[0x11; 20], [0x12; 20]] {
         assert!(!f.api.held.contains(&h));
     }
+    assert!(f.api.held.contains(&[0x15; 20]), "the pack still holds it");
 
     let pack = |on: bool| json!({ "op": "pack_switch", "id": "fakes", "on": on });
     let (status, body) = apply(&f, &c, pack(true), Some(PASSWORD)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let (status, body) = apply(&f, &c, pack(false), Some(PASSWORD)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["released"], json!(1));
+    assert_eq!(body["released"], json!(2));
     assert!(!f.api.held.contains(&[0x13; 20]));
+    assert!(!f.api.held.contains(&[0x15; 20]));
     // Another rule's hold stays.
     assert!(f.api.held.contains(&[0x14; 20]));
     assert_eq!(
@@ -1949,4 +1959,113 @@ async fn an_is_adult_rule_takes_a_held_torrent_out_of_search() {
     }
     assert!(found("rolea").is_empty(), "held, so not found");
     assert_eq!(found("holiday"), vec!["Holiday Postcards.mp4".to_string()]);
+}
+
+#[tokio::test]
+async fn switching_a_core_rule_off_releases_what_it_holds() {
+    let f = fixture();
+    let c = logged_in(&f).await;
+    let now = lodestar_api_now();
+    hold_as(&f, [0x21; 20], "CS-5a", Held::Tombstone, now, true);
+    hold_as(&f, [0x22; 20], "CS-5a", Held::Quarantine, now, true);
+    hold(&f, [0x23; 20], "CS-5a", Held::Quarantine, now);
+    hold(&f, [0x24; 20], "CS-1a", Held::Tombstone, now);
+    hold(&f, [0x25; 20], "CS-3a", Held::Quarantine, now);
+    let off = json!({ "op": "core_switch", "rule": "CS-5a", "on": false });
+
+    // The preview counts every hold of the rule, adult or not.
+    let (_, _, a) = call(
+        &f.app,
+        post(
+            "/api/v1/filters/preview",
+            Some(&c),
+            json!({ "change": off.clone() }),
+        ),
+    )
+    .await;
+    assert_eq!(a["preview"]["quarantine"], json!(2), "{a}");
+    assert_eq!(a["preview"]["tombstones"], json!(1), "{a}");
+
+    let (status, _) = apply(&f, &c, off.clone(), None).await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED);
+    let (status, body) = apply(&f, &c, off.clone(), Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["released"], json!(3));
+    for h in [[0x21; 20], [0x22; 20], [0x23; 20]] {
+        assert!(!f.api.held.contains(&h));
+    }
+    // The floor and other rules keep theirs.
+    for h in [[0x24; 20], [0x25; 20]] {
+        assert!(f.api.held.contains(&h));
+    }
+    {
+        let store = f.api.store.lock().unwrap();
+        assert_eq!(store.tombstones(10).unwrap().len(), 1);
+        assert_eq!(store.quarantined(10).unwrap().len(), 1);
+    }
+
+    // Already off: nothing more is released.
+    hold(&f, [0x26; 20], "CS-5a", Held::Quarantine, now);
+    let (status, body) = apply(&f, &c, off, Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["released"], Value::Null);
+    assert!(f.api.held.contains(&[0x26; 20]));
+}
+
+#[tokio::test]
+async fn adult_tombstones_can_be_listed_and_released() {
+    let f = fixture();
+    let c = logged_in(&f).await;
+    let now = lodestar_api_now();
+    for i in 0..3u8 {
+        hold_as(
+            &f,
+            [0x31 + i; 20],
+            "CS-5a",
+            Held::Tombstone,
+            now - i64::from(i),
+            true,
+        );
+    }
+    hold(&f, [0x3f; 20], "CS-3a", Held::Tombstone, now);
+    hold_as(&f, [0x40; 20], "CS-5b", Held::Quarantine, now, true);
+
+    let (status, _, all) = call(&f.app, get("/api/v1/filters/tombstones", &c)).await;
+    assert_eq!(status, StatusCode::OK, "{all}");
+    assert_eq!(all["tombstones"].as_array().unwrap().len(), 4);
+    let mut seen = Vec::new();
+    let mut uri = "/api/v1/filters/tombstones?adult=true&limit=2".to_owned();
+    loop {
+        let (status, _, page) = call(&f.app, get(&uri, &c)).await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        for t in page["tombstones"].as_array().unwrap() {
+            assert_eq!(t["adult_hold"], json!(true));
+            assert_eq!(t["rule"], json!("CS-5a"));
+            seen.push(t["hash"].as_str().unwrap().to_owned());
+        }
+        match page["next_cursor"].as_str() {
+            Some(n) => uri = format!("/api/v1/filters/tombstones?adult=true&limit=2&cursor={n}"),
+            None => break,
+        }
+    }
+    assert_eq!(seen, ["31", "32", "33"].map(|b| b.repeat(20)));
+
+    // Reporting a false positive on an adult hold carries the same note.
+    let fp = json!({ "op": "false_positive", "hash": "40".repeat(20) });
+    let (_, _, a) = call(
+        &f.app,
+        post("/api/v1/filters/preview", Some(&c), json!({ "change": fp })),
+    )
+    .await;
+    let warning = a["warning"].as_str().unwrap();
+    assert!(
+        warning.contains("A correction is deleted with the torrent"),
+        "{warning}"
+    );
+
+    // Released through the usual flow.
+    let release = json!({ "op": "release", "hash": seen[0] });
+    let (status, body) = apply(&f, &c, release, Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!f.api.held.contains(&[0x31; 20]));
 }

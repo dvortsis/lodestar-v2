@@ -28,6 +28,7 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET", "/torrents/{hash}/files"),
     ("GET", "/filters"),
     ("GET", "/filters/queue"),
+    ("GET", "/filters/tombstones"),
     ("GET", "/filters/fixtures"),
     ("POST", "/filters/test"),
     ("POST", "/filters/strictness"),
