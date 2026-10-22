@@ -3,6 +3,7 @@ name = "lodestar-bencode"
 description = "Zero-copy bencode decoder and canonical encoder with hostile-input limits"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 repository.workspace = true

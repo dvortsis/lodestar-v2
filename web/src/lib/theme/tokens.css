@@ -109,6 +109,8 @@
 	--compbar-min-width: 64px;
 	--compbar-max-width: 120px;
 	--compbar-gap: 2px;
+	--toast-width: 384px;
+	--listbox-max-height: calc(var(--row-height-comfortable) * 5);
 	--art-height-large: 240px;
 	--art-height-small: 160px;
 
