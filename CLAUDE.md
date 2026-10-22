@@ -54,7 +54,10 @@ Read the relevant sections before starting any task. If work changes a decision,
   - Guide them to a safe setup: plainly, matter-of-fact, not wordy.
   - Define terms and recommend the safe choice.
   - Show screenshots and diagrams wherever you can.
-- The project skill **`user-docs`** (`.claude/skills/user-docs/SKILL.md`) holds the rules and the checklist. Use it for the README, `docs/user/`, `docs/operations.md`, release notes and in-app help.
+- **Use the owner's `documentation-skills`** (`dvortsis/skills/documentation-skills`) to guide the documentation process:
+  - `github-docs` for the guide in `docs/user/`;
+  - `material-composer` for release notes and any other material.
+- The project skill **`user-docs`** (`.claude/skills/user-docs/SKILL.md`) adds Lodestar's specifics on top of them: the folder, facts, screenshots, safe choices and gates. Use it for the README, `docs/user/`, `docs/operations.md`, release notes and in-app help.
 - Developer and contract docs (`architecture.md`, `build-plan.md`, the contract docs, `runner/`) are exempt.
 
 ## Repository layout

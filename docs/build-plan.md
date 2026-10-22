@@ -277,7 +277,7 @@ Each item is one PR of about 1,500 changed lines or fewer. **[M]** = main sessio
   - WiX MSI via cargo-wix: service, firewall rules, opt-in Defender exclusion, Start-menu shortcut. Plus a portable zip.
   - A systemd unit, tarballs and the full `release.yml` matrix.
   - Smoke jobs: Docker; Windows MSI → service → `/healthz`; Linux tarball.
-  - **The user guide** (`docs/user/`, per the `user-docs` skill and owner's decision §2.14). Get started for Unraid, Docker, Windows and Linux, the common how-tos, and the explanations, with screenshots from `S-doc-shots` and Mermaid diagrams. `docs/operations.md` is rewritten for the same reader, or folded into the guide. It's written today for readers who already know Docker, ports and environment variables. The guide also gets a **Keep Lodestar safe** page that gathers the security guidance from the skill's §2b.
+  - **The user guide** (`docs/user/`, written with `github-docs` and the `user-docs` layer, owner's decision §2.14). github-docs' outline: Before you start, Install Lodestar (Unraid, Docker, Windows, Linux), Set up Lodestar, Keep Lodestar safe, Everyday use (updates, backups), Troubleshooting, then the answers, settings reference, glossary, revisions and index. Screenshots come from `S-doc-shots`, and diagrams are Mermaid. `docs/operations.md` is rewritten for the same reader, or folded into the guide. It's written today for readers who already know Docker, ports and environment variables. The guide's required **Keep Lodestar safe** chapter (github-docs) carries `user-docs` §6.
 - **Owner actions:** a code-signing certificate and the Unraid CA submission.
 
 ### P4: v0.6 (overlaps P3)
