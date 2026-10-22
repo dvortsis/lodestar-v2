@@ -9,7 +9,9 @@
 //   and `insights` event are kept and `torrents` counts fold into one event.
 // - `resync` goes through the same queue, so it keeps its place in the order, and calls every
 //   consumer's `onResync`. A resync for an expired, unknown or restarted id also forgets
-//   `Last-Event-ID`, so the next reconnect doesn't trigger another one.
+//   `Last-Event-ID`, so the next reconnect doesn't trigger another one. A `lagged` or `visibility`
+//   resync (events withheld after "Show adult content" was turned off) keeps it: the stream
+//   carries on after it, and a reconnect resumes from the last event received.
 // - An aborted connection delivers nothing and doesn't move `Last-Event-ID`.
 // Reconnect: `Last-Event-ID`, the server's `retry:` (at least 1 s) as the base, doubled per
 // consecutive failure with jitter (50-100 %), capped at 30 s. A clean close, a network error,
@@ -248,7 +250,7 @@ export function createEvents(deps: Partial<EventsDeps> = {}) {
 					}
 					if (item.id) lastId = item.id;
 					if (item.event === 'resync') {
-						if (!/"reason"\s*:\s*"lagged"/.test(item.data)) lastId = undefined;
+						if (!/"reason"\s*:\s*"(lagged|visibility)"/.test(item.data)) lastId = undefined;
 						enqueue({ event: 'resync', data: undefined });
 						continue;
 					}

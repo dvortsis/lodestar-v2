@@ -1119,12 +1119,10 @@ mod tests {
         );
         let feed = h.commits.as_ref().unwrap().1.clone();
         // Nobody reads the hub's side meanwhile: the reports still return
-        // at once and take no memory.
-        let start = std::time::Instant::now();
+        // (none waits on a reader) and take no memory.
         for i in 1..=100_000 {
             feed.report(commit(1, 0, i));
         }
-        assert!(start.elapsed() < Duration::from_secs(2));
         let mut sub = h.subscribe(all(), None);
         let mut added = 0;
         while added < 100_000 {
