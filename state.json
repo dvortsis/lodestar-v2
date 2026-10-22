@@ -62,13 +62,13 @@
    "notes": "merged 09:27 as a569b51 (#57)"
   },
   "B2": {
-   "status": "ready",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01QHUDtvte2DFAiHz6swmiU8",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
-   "notes": "ready; held until F1 #55 merges (F1 edits crates/lodestar/src/config.rs, services.rs, store/lib.rs)"
+   "notes": "launched 11:44 (briefs/B2.md); includes utp transport setting (unwired)"
   },
   "B3": {
    "status": "merged",
@@ -692,13 +692,13 @@
    "notes": ""
   },
   "F1": {
-   "status": "in_review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01V5sNo28tD6bZx3CNFdYjWY",
    "pr": 55,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "round 2 fixes pushed (Settled{settled,unblocked}, desc rewritten, HashSets+cap, hashes required on password remove, NEAR 2x faster); merge on CI green"
+   "notes": "merged 11:43 as df5cb91 (#55)"
   },
   "F2": {
    "status": "done_elsewhere",
@@ -861,7 +861,7 @@
   "Modern DHT crawler architecture: waiting on an AskUserQuestion",
   "W6 baselines: allow *.blob.core.windows.net (GitHub Actions artifact storage) in environment network, or owner commits artifact 12421952170 into web/e2e/ and removes web/e2e/.update-snapshots on slice/W6"
  ],
- "launches_today": 6,
+ "launches_today": 7,
  "last_heartbeat": "2026-10-22T11:40Z",
  "owner_questions": [
   "F1 budget scope: gate covers cheaply-rejectable rule shapes (10% = 40.8 us on runner). Shapes the cheap check cannot decide cost more at 10% of rules (VM: NEAR/1 ~450-500, negation ~140, fuzzy ~125, prefix ~110 us; runner ~1.4x faster). Should those shapes be gated at 50 us too?"
