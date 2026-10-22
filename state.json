@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-22T06:36:00Z",
+ "updated_at": "2026-10-22T06:42:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 14
@@ -125,10 +125,10 @@
    "notes": ""
   },
   "W2": {
-   "status": "running",
+   "status": "in_review",
    "model": "sonnet",
    "session": "session_01EFumqKZRWcv8y4PCvuGEV4",
-   "pr": null,
+   "pr": 50,
    "attempt": 1,
    "review_rounds": 0,
    "notes": ""
@@ -629,19 +629,19 @@
    "notes": ""
   },
   "X-utp": {
-   "status": "running",
+   "status": "in_review",
    "model": "opus",
    "session": "session_0141epGbZVUkFGWnyYhDra42",
-   "pr": null,
+   "pr": 51,
    "attempt": 1,
    "review_rounds": 0,
    "notes": "DHT receive-loop demux lines to be applied by the runner after #32 merges"
   },
   "X-integrations": {
-   "status": "running",
+   "status": "in_review",
    "model": "opus",
    "session": "session_01Pbk94fn6LWmUvc4LYw2c2P",
-   "pr": null,
+   "pr": 49,
    "attempt": 1,
    "review_rounds": 0,
    "notes": ""
@@ -770,7 +770,20 @@
   "32": "merged 05:36 by M4 session",
   "33": "merged 05:51 by filter session (owner decisions follow-up requested)",
   "42": "MERGED 06:07 by the filter session despite the runner's request; packs on by default (contradicts owner \u00a72.8) and LODESTAR_BUDGET_US kept. Follow-up fix PR requested 06:14; owner told.",
-  "47": "merged 06:19 by the filter session (V8 class_corrections)"
+  "47": "merged 06:19 by the filter session (V8 class_corrections)",
+  "48": "open: M4 PR2, in review"
  },
- "heartbeats": 1
+ "heartbeats": 2,
+ "reviews_in_flight": [
+  "#38 B0 r4",
+  "#40 W8 r2",
+  "#45 pack r2",
+  "#37 C1 r2",
+  "#44 W3",
+  "#41 W4",
+  "#50 W2",
+  "#51 X-utp",
+  "#49 X-integrations",
+  "#48 M4 PR2"
+ ]
 }
