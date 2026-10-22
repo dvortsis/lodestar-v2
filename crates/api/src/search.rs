@@ -104,19 +104,8 @@ impl BaseQuery {
     /// `node` (the user's query, or a pass's edit of it) with the
     /// visibility clauses ANDed on.
     pub fn restrict(&self, node: Node) -> Node {
-        self.visibility
-            .iter()
-            .cloned()
-            .fold(node, |node, clause| match node {
-                Node::All => clause,
-                Node::And { mut of } => {
-                    of.push(clause);
-                    Node::And { of }
-                }
-                other => Node::And {
-                    of: vec![other, clause],
-                },
-            })
+        // The same function `/facets` holds its lease to.
+        lodestar_search::with_filters(node, &self.visibility)
     }
 }
 
@@ -213,7 +202,7 @@ pub(crate) async fn parse_query(
     Ok(axum::Json(ParseResponse { ast, canonical }))
 }
 
-fn sort_param(s: Option<&str>) -> ApiResult<Sort> {
+pub(crate) fn sort_param(s: Option<&str>) -> ApiResult<Sort> {
     Ok(match s.unwrap_or("relevance") {
         "relevance" => Sort::Relevance,
         "discovered" | "-discovered" => Sort::Discovered { desc: true },
@@ -292,29 +281,7 @@ async fn run_search(
             "Search is turned off.",
         ));
     };
-    let ast = match (p.ast, p.q) {
-        (Some(ast), None) => {
-            // An AST from a client must be one the parser could produce.
-            let text = ast.to_query();
-            match parse(&text) {
-                Ok(again) if again == ast => ast,
-                _ => {
-                    return Err(ApiError::bad_request(
-                        "invalid_ast",
-                        "That query AST isn't one the parser can produce.",
-                    )
-                    .field("ast"));
-                }
-            }
-        }
-        (None, q) => parse(q.as_deref().unwrap_or("")).map_err(parse_error)?,
-        (Some(_), Some(_)) => {
-            return Err(ApiError::bad_request(
-                "q_and_ast",
-                "Send q or ast, not both.",
-            ));
-        }
-    };
+    let ast = request_ast(p.ast, p.q)?;
     let sort = sort_param(p.sort.as_deref())?;
     let limit = p.limit.unwrap_or(50).clamp(1, MAX_LIMIT);
     if p.cursor.is_some() && p.offset.is_some() {
@@ -435,7 +402,37 @@ async fn run_search(
     .map_err(internal)?
 }
 
-fn search_error(e: SearchError) -> ApiError {
+/// A request's query: from `q`, or an `ast` the parser could have
+/// produced. `/facets` reads its query with this and runs it through
+/// [`base_query`] too, so it counts exactly what `/search` returns.
+pub(crate) fn request_ast(ast: Option<Node>, q: Option<String>) -> ApiResult<Node> {
+    let ast = match (ast, q) {
+        (Some(ast), None) => {
+            // An AST from a client must be one the parser could produce.
+            let text = ast.to_query();
+            match parse(&text) {
+                Ok(again) if again == ast => ast,
+                _ => {
+                    return Err(ApiError::bad_request(
+                        "invalid_ast",
+                        "That query AST isn't one the parser can produce.",
+                    )
+                    .field("ast"));
+                }
+            }
+        }
+        (None, q) => parse(q.as_deref().unwrap_or("")).map_err(parse_error)?,
+        (Some(_), Some(_)) => {
+            return Err(ApiError::bad_request(
+                "q_and_ast",
+                "Send q or ast, not both.",
+            ));
+        }
+    };
+    Ok(ast)
+}
+
+pub(crate) fn search_error(e: SearchError) -> ApiError {
     match e {
         SearchError::LeaseExpired => ApiError::new(
             StatusCode::GONE,
@@ -465,7 +462,7 @@ fn bad_cursor() -> ApiError {
 /// (hidden torrents, Adult) and the sort. A cursor from before "Show
 /// adult content" changed is refused rather than reading its old
 /// snapshot.
-fn fingerprint(shown: &Node, v: Visibility, sort: Sort) -> [u8; 8] {
+pub(crate) fn fingerprint(shown: &Node, v: Visibility, sort: Sort) -> [u8; 8] {
     let mut h = Sha256::new();
     h.update(b"lodestar-search-v2|");
     h.update(format!("{shown:?}|{v:?}|{sort:?}").as_bytes());
@@ -477,7 +474,7 @@ fn fingerprint(shown: &Node, v: Visibility, sort: Sort) -> [u8; 8] {
 
 /// Who holds a lease: the session (leases are capped per client, and
 /// another session's cursor reads as expired).
-fn client_of(headers: &HeaderMap) -> u64 {
+pub(crate) fn client_of(headers: &HeaderMap) -> u64 {
     let session = headers
         .get_all(header::COOKIE)
         .iter()
@@ -533,7 +530,7 @@ fn seal_cursor(c: &Cursor) -> String {
 }
 
 /// Checks a cursor's form, epoch, tag and search, in that order.
-fn open_cursor(text: &str, fingerprint: &[u8; 8]) -> ApiResult<Cursor> {
+pub(crate) fn open_cursor(text: &str, fingerprint: &[u8; 8]) -> ApiResult<Cursor> {
     if text.len() > MAX_CURSOR || text.len() % 2 != 0 {
         return Err(bad_cursor());
     }
@@ -753,5 +750,35 @@ mod tests {
             base_query(&Node::All, HIDDEN).query(),
             not(tag(TagKey::Type, ADULT))
         );
+    }
+
+    /// `/search` and `/facets` take their leases for `query()`; facets
+    /// count `with_filters(node, visibility)` and require the two to be
+    /// the same node.
+    #[test]
+    fn the_query_is_what_facets_hold_a_lease_to() {
+        for v in [false, true].map(|adult| Visibility {
+            hidden: false,
+            adult,
+        }) {
+            for ast in [
+                Node::All,
+                word("dark"),
+                tag(TagKey::Type, "movie"),
+                Node::And {
+                    of: vec![word("dark"), not(tag(TagKey::Type, ADULT))],
+                },
+                Node::Or {
+                    of: vec![word("dark"), word("light")],
+                },
+            ] {
+                let base = base_query(&ast, v);
+                assert_eq!(
+                    base.query(),
+                    lodestar_search::with_filters(base.node.clone(), &base.visibility),
+                    "{ast:?} {v:?}"
+                );
+            }
+        }
     }
 }
