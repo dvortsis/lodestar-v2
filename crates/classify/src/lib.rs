@@ -83,6 +83,21 @@ pub struct Classification {
     pub distinct_extensions: u16,
 }
 
+impl Classification {
+    /// This classification relabelled adult, as an Is adult correction
+    /// makes it ([`classify_corrected`]): detection's adult kind if it found
+    /// one, else the nearest kind for the content type.
+    pub fn as_adult(&self) -> Classification {
+        let mut c = self.clone();
+        if c.adult_kind.is_none() {
+            c.adult_kind = Some(adult::forced_kind(c.content_type));
+            c.confidence = 100;
+        }
+        c.content_type = ContentType::Adult;
+        c
+    }
+}
+
 /// A correction you made to one torrent's classification (§20.7, §20.9).
 /// It's kept with the torrent and applied every time it's classified
 /// again, so a newer parser doesn't undo it.

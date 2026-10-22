@@ -1,2 +1,2 @@
 200
-{"applied":true,"assessment":{"confirm":true,"neutralize":null,"preview":{"caught_30d":0,"core_caught_30d":0,"estimate":true,"per_day":0.0,"quarantine":0,"removed_from_floor":0,"stored":0,"tombstones":0},"warning":"Undo puts back the previous rule set: changes made since are reverted, including any that strengthened filtering.","weakening":true},"version":20}
+{"applied":true,"assessment":{"confirm":true,"neutralize":null,"preview":{"caught_30d":0,"core_caught_30d":0,"estimate":true,"per_day":0.0,"quarantine":0,"removed_from_floor":0,"stored":0,"tombstones":0},"warning":"Undo puts back the previous rule set: changes made since are reverted, including any that strengthened filtering.","weakening":true},"version":21}

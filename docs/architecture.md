@@ -396,7 +396,7 @@ Magnet links can **append the best-scoring trackers** from scrape data (toggle),
 - **Five stable top-level destinations:** **Search** (home), **Discover**, **Alerts**, **Insights**, **Settings**.
   - The top bar holds the wordmark, navigation, a global status pill ("Crawling · 1.2k/h", icon + text, linking to Insights) and the command-palette trigger.
   - The current location is marked with an underline and `aria-current`.
-  - An overflow menu holds Import, Backup, Syntax guide and About.
+  - An overflow menu holds Import, Backup, Logs (§10.10.12), Syntax guide and About.
 - **The URL is the state:**
   - `/search?q=…&sort=…&density=…&group=…`
   - `/t/{hash}` opens the detail as a drawer when coming from Search, or as a full page from a direct link.
@@ -622,20 +622,450 @@ Each detail page follows the same pattern: three to four KPIs, one primary trend
 - Plain-text plus simple HTML, with no images. It follows the copy rules (§10.14).
 
 ### 10.10 Settings and onboarding
-- **Settings:**
-  - A manuscript layout (max 720 px). Section navigation sits on the left at x-large and becomes a select on narrow screens.
-  - Forms have visible labels, help text next to each field, inline validation, and per-section Save with a "Saved" confirmation.
-  - Sections: General, Crawler, Network & VPN, Storage & retention (with size-projection previews), Search & ranking, **Sources** (§18.8: every discovery, importer, enrichment, network and output plugin, with priority, agents, schedule, egress, consent and purge; Auto-balance), **Companions** (§18.10: installed and detected companions, health, versions, logs, updates, Set up / Remove), **Workers** (§19.7: add/join, status, placement, budgets, drain, revoke, purge-by-worker), **Filters & Safety** (§20.7: rules, editor with preview and fixtures, review queue, packs, override list), Trackers, Integrations, Notifications, **Insights & digest** (digest schedule and channels, query logging on/off and retention, clear usage data), Security, Appearance (theme, density, motion, shortcut settings, **Show adult content** with 18+ confirmation), About.
-- **First-run wizard** (stepped progress, one primary action per step):
-  1. Setup token
-  2. Admin password
-  3. Network check (live port-reachability test)
-  4. Intensity
-  5. Storage & retention
-  6. Import from bitmagnet (optional)
-  7. Download client (optional; recommended: qBittorrent, installed or detected by the companion manager, §18.10)
-  8. Done
+Settings is where an owner fixes things at 2 a.m. without reading docs. It needs to be **hard to break, easy to recover, and quick to search**. The first-run wizard (§10.10.10) uses the same field components, so a setting behaves the same everywhere.
+
+#### 10.10.1 Principles
+- **Two save models, never mixed on one screen:**
+  - **Preferences** (Appearance, Keyboard, Language & region) change only how the UI looks and behaves. They **apply instantly with Undo** (§10.18), are saved per account and follow you across devices.
+  - **Everything else changes how the server runs.** Edits are **staged** and saved together with **Save changes**. Nothing reaches the server until you save.
+- **Always say where a value comes from and when it takes effect.** Every field shows its source (default, `config.toml`, saved in the app, or the environment) and whether it applies now or after a restart. These are B2's `source` and `restart_required`.
+- **Every change can be undone, and every saved value can be reset.** Undo right after saving, Reset to default per field (B2's `null` patch), and a recovery path that works even when the UI can't be reached (§10.10.6).
+- **Show the consequence before the change.** Size projections, predicted resource use, the new address after a port change, and how many items a purge removes are all shown before you commit (§10.10.7).
+- **Essentials first.** Each screen shows the settings most people need, with an **Advanced** disclosure below them. Search always finds advanced settings.
+- **The schema is the single source.** Generated screens render from B2's runtime JSON Schema, and search, the command palette, `config.toml` snippets and the wizard all read from it. A new server setting shows up everywhere with no UI change, as long as it has its two message keys.
+
+#### 10.10.2 Navigation and layout
+- **Screens, grouped in the navigation** (the §10.10.8 table lists what's on each):
+  - **Preferences:** Appearance, Keyboard, Language & region
+  - **Crawling:** Crawler, Network & VPN, Sources, Workers, Companions
+  - **Library:** Storage & retention, Search & ranking, Trackers, Filters & Safety
+  - **Connections:** Integrations, Notifications, Insights & digest
+  - **System:** General, Updates, Logging, Security, About
+
+  Screens whose features haven't shipped yet (Workers, Companions, and Sources before v0.6) don't appear in the navigation. They are never shown as empty placeholders.
+- **`/settings` is the Overview** (§10.10.3). `/settings/{screen}` opens a screen, and `#field` deep-links to one setting. Copy link appears in every field's menu.
+- **x-large and wider (≥ 1024 px):** two panes. On the left is a sticky navigation (search box, then the groups). On the right is the manuscript column (max 720 px).
+- **Below 1024 px:** list, then detail. `/settings` shows the search box and the grouped list, with status badges. A screen opens full width with a Back link to the list. This **replaces "becomes a select on narrow screens"**, because a select can't show status badges, and 21 screens are too many to scan in one.
+- **Navigation items** have an icon and a label. An item that needs attention gets an icon + text badge ("1 problem", "Restart needed"), and its accessible name says so ("Network & VPN, 1 problem"). The current screen is marked with `aria-current`. Navigation entries are links, not tabs.
+- **Inside a screen:**
+  - The heading and a one-sentence purpose come first.
+  - Groups follow, each with a heading. Group order and field order come from the schema.
+  - **Advanced** is a closed disclosure with a count ("Advanced (5)"). Its open/closed state is remembered per screen in `localStorage`.
+  - A **Danger zone** sits last (§10.10.7).
+  - **Show changed only** filters the screen to non-default values.
+  - **View as config.toml** shows the screen's saved values as a `config.toml` snippet, next to their `LODESTAR_*` names, ready to copy into a compose file or Unraid template.
+
+#### 10.10.3 Overview and finding a setting
+- **The Overview (`/settings`) answers "is anything wrong, and what did I change?":**
+  - **Needs attention:** one row per problem, each with one action that goes to the fix, highest severity first. Examples:
+    - "Port 6881 isn't reachable from the internet" (network check, B14)
+    - "3 changes wait for a restart · Restart now"
+    - "A saved value hides your `config.toml` value for `crawler.intensity`" (B2 logs this; the Overview shows it with Reset)
+    - an integration failing its last test
+    - a source in error, a worker offline
+    - errors logged in the last hour ("12 errors in the last hour · View", opening `/logs` filtered to errors)
+    - torrent details turned on in the logs, with the time remaining and Turn off now (§12.1)
+    - no backup in 14 days
+    - an update available, installing tonight, failed or rolled back (§12.2)
+  - **Changed from default:** a count per screen, linking to that screen with Show changed only turned on.
+  - When nothing needs attention, it says so in one line and shows the changed-settings summary. There's no illustration here; this is a working surface.
+- **Settings search** (the box at the top of the navigation; `/` focuses it while on a Settings page):
+  - It matches each setting's label, help text, group, `config.toml` key, `LODESTAR_*` name and synonyms (`x-keywords`, e.g. "port" finds HTTP address and DHT port). Matching is case- and accent-insensitive and works on prefixes and words, in the current locale.
+  - **Results show a breadcrumb** ("Crawling › Crawler › Advanced"), the current value and its source badge.
+  - Choosing a result opens the screen, expands Advanced if needed, scrolls to the field, focuses it and highlights it briefly (an opacity change, or a static outline under reduced motion).
+  - The index covers generated fields from the schema, plus a static registry for the hand-built screens (Appearance, Keyboard, Sources, Filters & Safety and others), so everything is findable. A CI test checks that every schema field and every registry entry can be reached by search.
+  - Search is in-house (no dependency). Its index is built the first time the box is focused.
+  - With no match, it says "No setting matches '…'" and offers to search the help pages for it.
+- **Command palette:** the same index gives `⌘K` "Settings: …" entries that jump to the field. Toggle and enum preferences can also be changed directly from the palette ("Change theme", "Turn off single-key shortcuts").
+
+#### 10.10.4 The field
+One `SettingField` composition wraps every primitive (§10.11), so every setting looks and behaves the same:
+- **Label** (always visible), with the **unit** as a suffix inside the control ("MiB", "seconds", "per hour"), never only in the help.
+- **Help text** under the control: one or two sentences saying what changes for you, not how it works internally. A "Learn more" link goes to the docs when the topic needs more.
+- **Status line**, icon + text, only when it applies:
+  - **Applies after restart.**
+  - **Set by `LODESTAR_X`:** the field is locked. The text says to change it in the container template or environment, and the variable name can be copied.
+  - **Read-only:** the value can be copied (for example the data directory).
+  - **From config.toml.**
+- **A modified marker** (a small dot with an accessible name of "Changed from default") appears on any value that isn't the default.
+- **Field menu (⋯):**
+  - Reset to default, showing the default value.
+  - Copy link to this setting.
+  - Show `config.toml` key and environment variable.
+- **Automatic values:** fields with an `x-auto` sentinel (such as `crawler.max_sockets` = 0) show an **Automatic** switch plus the effective value ("Automatic · 400 at Balanced"). Turning it off reveals the number field, pre-filled with the effective value.
+- **Inline preview** for fields with `x-preview`: a one-line consequence under the field, refreshed 300 ms after the last change. Examples: "≈ +18 GiB over a year", "≈ 3 Mbit/s up, 400 sockets".
+- **Secrets** (`writeOnly`) are never sent back by the server. The field shows **Set · Replace · Remove**. Replace opens an empty input. Remove asks for confirmation (§10.10.7).
+- **Widgets are chosen from the schema by a single registry:**
+
+  | Schema | Widget |
+  |---|---|
+  | boolean | Toggle |
+  | enum, ≤ 4 values | SegmentedControl (or a Radio group when each value needs a description) |
+  | enum, > 4 values | Select |
+  | integer/number with bounds | RangeInput with units, or a Slider + input when `x-widget: slider` |
+  | `format: socket-addr`, `host`, `url`, `duration`, `log-filter` | Input with format validation; log filters and addresses in mono |
+  | array of strings | a chip list with Add |
+  | `writeOnly` | the secret field above |
+
+  A schema shape the registry doesn't know falls back to a plain JSON input, and a dev-mode warning names the field, so a new server setting is never invisible.
+
+#### 10.10.5 Saving, validation and conflicts
+- **A save bar** is pinned to the bottom of the manuscript column and appears only when something is unsaved: "2 unsaved changes · Discard · **Save changes**". `⌘/Ctrl+S` saves. The bar never covers the focused field; the column gets bottom padding while the bar is shown.
+- **One save is atomic across the screen.** A screen can show fields from several API sections (Crawler shows `crawler` and `transport`). Save sends one multi-section `PATCH /settings` (§10.10.9). Either everything is saved or nothing is, and "partly saved" never happens.
+- **Validation:**
+  - **On the client** from the schema (type, bounds, enum, format) when a field loses focus, and for the whole screen on Save.
+  - **On the server**, which has the final say. B2's `422 invalid_setting` and `field` map to the field, with the server's message.
+  - **Errors go inline under the field** ("Must be between 1 and 120 seconds"). On a failed Save, an **error summary** at the top of the column lists every error as a link and takes focus. Then focus moves to the first field with an error.
+  - **Save is never disabled.** Clicking it with errors shows the summary.
+  - Each error says what's wrong and what to do (§10.14).
+- **After saving:**
+  - The bar shows "Saved" with **Undo** for 10 s, announced politely. Undo sends the previous values back in one patch, restoring a field to default where it wasn't saved before.
+  - Fields that apply after a restart show "Saved · applies after restart", and the restart banner appears (§10.10.6).
+- **Unsaved work is never lost silently:**
+  - **Leaving a screen** with unsaved changes (another screen, another destination, Back) opens a dialog: **Save**, **Discard** or **Keep editing**. Closing or reloading the tab triggers the browser's `beforeunload` prompt.
+  - **Drafts are kept in `sessionStorage`** per screen, never secrets. After a reload or crash: "You have unsaved changes from earlier · Restore · Discard".
+  - **If the network fails,** the draft stays. A banner says "Couldn't reach Lodestar. Your changes are kept." with Retry.
+- **Concurrent edits** (another tab, another device, or an API client):
+  - Every section has a **revision**. Save sends the revisions it started from.
+  - If a section changed in the meantime, the server answers `409 stale_revision` with the current values, and the client merges:
+    - fields you didn't touch take the new values silently;
+    - fields only you changed keep your edit;
+    - fields both changed show a per-field conflict, "Changed elsewhere to Aggressive · Keep mine · Use theirs", and Save waits until each one is resolved.
+  - A `settings` SSE event (§10.10.9) refreshes screens without unsaved edits in place, and shows a quiet "Updated elsewhere" note.
+- **Save only sends changed fields.** A field set back to its saved value no longer counts as a change, and "2 unsaved changes" is always accurate.
+
+#### 10.10.6 Restart, recovery and portability
+- **Restart banner:** when any saved value waits for a restart (B2's `restart_required`), every Settings screen and the Overview show "3 changes apply after a restart · Review · **Restart now**".
+  - The status pill (§10.3) gets a "Restart needed" state.
+  - Review lists each field with its running and saved values.
+- **Restart now** appears only when the server says it can restart itself (`GET /system`):
+  - on Linux and macOS it re-execs in place after a graceful shutdown, so the container's PID 1 survives;
+  - as a Windows service it exits for the Service Control Manager's recovery action, which the MSI configures (M6);
+  - portable on Windows it starts a new copy, then exits.
+
+  When the server can't restart itself, the banner says how ("Restart the container") and the button isn't shown.
+- **The restart flow:** a confirmation dialog warns that crawling pauses for about N seconds. Then a full-page "Restarting…" state polls `/healthz` with backoff, reloads, and checks that `restart_required` is empty. If it isn't back within 2 minutes, it says what to check (container logs, `lodestar healthcheck`).
+- **Lockout protection for the HTTP address** (`network.http_bind`, and trusted-proxy auth when B12 adds it):
+  - Before saving, the dialog shows the exact new URL.
+  - After the restart, the UI redirects there and asks **"Keep this address?"**. If nobody confirms from the new address within 5 minutes, Lodestar goes back to the previous value by itself, the way display-resolution changes work.
+  - The confirmation is per change and needs a signed-in session on the new address.
+- **Recovery without the UI:**
+  - `LODESTAR_*` variables always win over saved values (B2).
+  - `lodestar settings get|set|reset <section.field>` works on the stopped store (with M6's clap CLI). `lodestar settings reset --all` clears every saved value and leaves `config.toml` and the environment untouched.
+  - Both are in `docs/operations.md` under "I can't reach the UI".
+- **Export and import** (General → Backup & portability):
+  - **Export** downloads saved settings as TOML in `config.toml` layout, with preferences included as an option. It **never includes secrets** or filter, floor, pack or subscription state; those belong to §20's own tools.
+  - **Import** takes such a file, shows a **diff** ("7 changes · 2 unknown keys skipped · 1 set by the environment, ignored"), then applies it as one atomic patch, with Undo.
+- **No settings history.** Like filtering (§1.8.8), Settings keep no audit log: Undo, Reset, export and the Overview's "Changed from default" cover recovery without keeping a record.
+
+#### 10.10.7 Risky and destructive changes
+Graded by consequence, so a confirmation always means something:
+
+| Kind | Examples | What the UI does |
+|---|---|---|
+| Safe | log verbosity, intensity, timeouts | Staged, saved, Undo |
+| Privacy | turning on a log data kind that identifies torrents or people (hashes, names, paths, URLs, queries, peer addresses) | A dialog says what will be recorded and where, and asks for a duration (default 1 hour). A banner shows while it's on (§10.10.12). |
+| Disruptive | HTTP address, DHT port, disabling the DHT or search | Save opens a dialog that names the effect ("Lodestar will be at http://192.168.1.5:8191 after a restart"; "Search stops until you turn it back on") |
+| Destructive, not undoable | Purge a source's data, clear usage data, revoke a worker, reset all settings, Remove a secret | A **Danger zone** action, run on its own (not part of Save). A confirmation dialog shows the exact count and size, and the button names the action ("Delete 1,204,331 torrents found only by Nyaa"). Focus starts on Cancel. |
+| Weakens content protection | §20.11's list | §20.11's effect warning and **password, every time**, unchanged (M-filters-dialogs) |
+| Security | change password, auth mode, trusted-proxy header, reveal or regenerate an API key, sign out other sessions | **Re-enter your password** in the dialog (B12's confirmation). Changing the password needs the current one. |
+
+There are no typed confirmations ("type DELETE"); plain-language warnings and the password (§1.8.8, §20.11) are used instead.
+
+#### 10.10.8 Screens
+Generated screens render from the schema with no screen-specific code beyond grouping and order. Hand-built screens embed generated groups where they can.
+
+| Screen | Contents | API sections | Built by |
+|---|---|---|---|
+| Overview | Needs attention; changed from default | `/system`, `/stats`, network check | S-settings-1 |
+| Appearance | theme, mode, density, motion, illustrations (per account); **Show adult content** (`content.show_adult`, a server-wide setting from B17, with the 18+ confirmation) | `preferences`, `content` | S-appearance |
+| Keyboard | single-key shortcuts on/off, remapping with conflict detection, reset | `preferences` | S-keys |
+| Language & region | language, time zone (§10.12; the digest uses it too), first day of week | `preferences` | S-settings-2 |
+| Crawler | intensity with a predicted-resource preview, encryption, fetch limits, transport (uTP) | `crawler`, `transport` | S-settings-1 |
+| Network & VPN | HTTP address, DHT port and on/off with a **live reachability check**, egress interface or proxy, kill switch, current external IP | `network` (+ egress, §5) | S-settings-1 |
+| Sources | §18.8 | `/sources` | v0.6 (E-v06-sources) |
+| Workers | §19.7 | cluster API | v0.6 (E-v06-workers) |
+| Companions | §18.10 | companion API | v0.6 (E-v06-companions) |
+| Storage & retention | data directory (read-only), hot/cold paths, mmap, raw archive, retention policies with **size projection** (§7) | `storage` | S-settings-1 |
+| Search & ranking | search on/off, index heap, file-index mode with projected size (§8), ranking priors | `search` | S-settings-1 |
+| Trackers | tracker list, scrape on/off and cadence, health per tracker | `trackers` | S-settings-2 |
+| Filters & Safety | §20.7 | filters API | S-filters, S-blocklists |
+| Integrations | download clients, Torznab/*arr, each with **Test connection** run on the unsaved values | integrations API | S-settings-2 |
+| Notifications | channels (ntfy, Discord, email, webhook), each with **Send test**, and which events go where | integrations API | S-settings-2 |
+| Insights & digest | digest schedule and channels with a preview (§10.9.7), query logging and retention, clear usage data | `insights`, digest API | S-settings-2 (digest preview: S-insights-3) |
+| General | backup schedule, Backup & portability (§10.10.6), Reset all | `general`, `/system` | S-settings-1 |
+| Updates | status and Check now, Off / Check and notify / Install automatically (Fixes only, Fixes and features, All releases), always install security fixes, channel, wait, window, release notes, history, pause, roll back (§10.10.14, §12.2) | `updates`, updates API | S-updates |
+| Logging | events (Verbosity preset, each event on/off with its rate), data kinds (Private preset by default; identifying kinds time-limited), outputs (level and data kinds per output), a live preview with volume estimate, and rotation with a size preview, log files with download, delete (§10.10.12, §12.1) | `logging`, logs API | S-logs |
+| Security | password, sessions, API keys and feed tokens, trusted-proxy auth, secure cookies (read-only) | auth API (B12) | M-security-settings |
+| About | version and build, data formats, this installation, updates (Check now), help and community links, "No telemetry, ever" with everything Lodestar connects to, diagnostics, licences and credits (§10.10.13) | `/system` | S-about |
+
+**Test connection** and **Send test** run on the server with the values on screen (`POST /settings/test`), through the SSRF guard. They save nothing, and the result appears inline ("Connected to qBittorrent 5.0.2" or "Refused: wrong password").
+
+#### 10.10.9 API additions (B2b and B2c, on top of B2)
+- **Schema hints** on each field: `x-group`, `x-order`, `x-advanced`, `x-unit`, `x-widget`, `x-auto`, `x-preview`, `x-keywords` (a message key), `x-danger`; the `config.toml` key and `LODESTAR_*` name; `writeOnly` for secrets. These are hints only, and the server still validates everything.
+- **`revision` per section** in `GET`. `PATCH` accepts `if_revision` and answers `409 stale_revision` with the current values. It's stored as a `settings.` key, so no migration is needed.
+- **Multi-section `PATCH /settings`** (`{section: {field: value}}`): one transaction, one lock, then each section's `watch` channel publishes. Errors carry `section` and `field`.
+- **`POST /settings/preview`** takes the same body. It runs exactly the same validation as `PATCH` without saving, and returns per field: live or restart, warnings, and estimates (size, resource use, the new URL). A property test holds that preview accepts exactly what `PATCH` accepts.
+- **`POST /settings/test`** runs connection tests for integration drafts.
+- **`preferences` section** per account: theme, mode, density, motion, illustrations, shortcuts, language, time zone. **Show adult content isn't one of them:** B17 built it as the server-wide `content` section (`content.show_adult`). Appearance shows it, and turning it on asks for the 18+ confirmation before it's saved (§20.9). It's validated like any other section.
+- **A `settings` topic on the `/events` hub (B4)** (`{section, revision}`) after every save. It carries no values; clients fetch them. With `settings` and `updates` (§12.2), the hub has 7 topics, and its `u8` topic bitset has room for one more before it must widen. The live log doesn't use the hub (§12.1).
+- **`GET /settings/export`** and **`POST /settings/import`** (`dry_run=true` returns the diff).
+- **`GET /system`** reports the version, restart capability and pending restart fields, plus everything About shows (§10.10.13): build details (commit, date, target, Rust version, UI build id, channel), data-format versions, deployment, OS and resources, uptime, data-directory sizes, and what Lodestar connects to. About's update status comes from the update engine's signed check (`GET /updates`, `POST /updates/check`, §12.2), never from a separate request. **`POST /system/restart`** restarts. The HTTP-address keep-or-revert timer lives here as well.
+- **Server-side tests:**
+  - secrets never appear in `GET`, export or diagnostics;
+  - export never includes §20 state;
+  - import of an exported file round-trips;
+  - a multi-section patch with one bad field saves nothing;
+  - a stale revision is refused;
+  - the HTTP-address timer reverts when nobody confirms.
+
+#### 10.10.10 First-run wizard
+Stepped progress, with one primary action per step:
+1. Setup token
+2. Admin password
+3. Network check (live port-reachability test)
+4. Intensity
+5. Storage & retention
+6. Import from bitmagnet (optional)
+7. Download client (optional; recommended: qBittorrent, installed or detected by the companion manager, §18.10)
+8. Updates: Off / Check and notify / Install automatically (Fixes only is labelled recommended). Nothing is preselected beyond Off, because checking contacts GitHub (§12.2).
+9. Done
+
+- The **Intensity**, **Storage & retention** and **Download client** steps render the same `SettingField`s, previews and **Test connection** as Settings, from the same schema. Each step saves through the multi-section patch, so validation can't drift.
 - One **"How it works"** step uses a static SVG sequence (DHT → metadata → index → search) in the spirit of `infographic-design`, with no AntV dependency and a text equivalent.
+- **Done** links to Settings for everything the wizard skipped.
+
+#### 10.10.11 Accessibility, performance and tests
+- **Accessibility:**
+  - Every control has a visible `<label>`. Help and errors are linked with `aria-describedby`, and errors also set `aria-invalid`.
+  - The error summary takes focus. Save results and conflicts are announced in a polite live region.
+  - Opening a screen moves focus to its heading.
+  - Status is icon + text throughout. Targets are ≥ 44 px under coarse pointers. Layouts hold at 200% zoom.
+  - `/` and `⌘/Ctrl+S` follow §10.13's rule: single-key shortcuts never fire inside inputs, and can be turned off.
+- **Performance:**
+  - The Settings route chunk (shell, form engine, generated screens) is **≤ 20 KB gzipped**, gated by `size-limit`.
+  - Hand-built heavy screens (Filters & Safety editor, theme editor, Workers, Sources) load lazily, each with its own budget.
+  - `themes.json` loads only when Appearance opens (§10.18). The search index builds on first use.
+  - A Save round trip shows its result within 100 ms on a LAN (INP < 100 ms).
+- **Tests:**
+  - **Unit (vitest):**
+    - the form store: dirty tracking, diffing, reset, Undo, the three-way merge on conflict, draft restore;
+    - the widget registry for every schema shape, including the fallback;
+    - the search matcher;
+    - the Overview's attention ordering.
+  - **Contract (CI):**
+    - every schema field has en and zh message keys, a widget and a search entry;
+    - the UI's fixtures match B2's golden responses.
+  - **Playwright:**
+    - edit, save and Undo;
+    - client and server validation with the error summary;
+    - the leave guard and draft restore;
+    - an environment-locked field;
+    - the restart banner and a mocked restart;
+    - a two-context conflict;
+    - search jumping to an Advanced field;
+    - narrow list → detail;
+    - keyboard-only flows;
+    - axe on every screen in Riverstone light/dark plus the rotating theme sample (§10.17);
+    - the live log: follow, pause, Jump to latest, filters, Load earlier, reconnect, and a time-limited details banner that ends on time.
+
+#### 10.10.12 Logs: the Logging screen and the live log
+**Settings → Logging** (System group) holds the options. **The live log is its own page, `/logs`**, because log lines need the full width rather than the 720 px manuscript column. It's not a sixth destination; it's linked from:
+- the overflow menu ("Logs");
+- Settings → Logging ("Open live log");
+- the Overview's error row;
+- About;
+- error toasts ("View in log").
+
+**Settings → Logging:**
+- **Events: what gets a line.** It starts with the **Verbosity** preset, a SegmentedControl with plain words plus the technical term ("Normal (info)"), then the event list:
+  - Events are grouped by component, each group collapsible with a count ("Fetch · 4 of 11 on").
+  - Each row has:
+    - a toggle;
+    - a plain name ("Each torrent stored", "Each failed metadata fetch", "Each API request");
+    - its level (icon + text);
+    - its **current rate** ("≈ 1,200 lines/h", from the counters);
+    - **badges for the data kinds it can carry** ("hash · name");
+    - one line of help.
+  - Required events show a lock and the reason.
+  - The list has its own search and a **Show changed only** filter. **Reset to preset** puts every event back.
+  - **Per-component levels** sit under Advanced. The raw filter string, which reaches only Libraries, sits under Expert. B2's `general.log_level` moves into this `logging` section in B2b.
+- **Data kinds: what a line may contain.**
+  - A preset SegmentedControl: **Private** (default) / Hashes / Full / Custom.
+  - Below it, one toggle per kind (§12.1). Each one says which of your enabled events would carry it ("Torrent names would appear in 3 events you've turned on: Each torrent stored, …").
+  - Turning on an identifying kind opens a dialog. It says exactly what will be recorded and where ("Torrent and file names will be written to the log file for 1 hour. The console and `docker logs` stay without them."), and asks for a duration (1 hour, 24 hours, until I turn it off).
+  - While any identifying kind is on, a **banner with the time remaining** shows on this screen, on `/logs` and on the Overview, with **Turn off now**.
+  - Turning the kinds off offers to delete the files written meanwhile (§12.1).
+- **Preview:** a panel beside the choices, under them on narrow screens. It shows **example lines** for the staged events and kinds, rendered from sample data, and the **estimated volume per day** for each output. It updates as you change things, before you save.
+- **Opt-in only:** a separate group under the data kinds holds **Peer activity** and **Filter change details** (§12.1, owner's decision §2.11).
+  - Each is off, and turning it on opens its warning with a 1-hour or 24-hour duration.
+  - Presets never touch them; "Full" leaves them off.
+  - While one is on, its own banner shows, separate from the identifying-kinds banner, with Turn off now.
+- **Never logged:** a short, fixed list (secrets, and sealed item names), each with its reason, so it's clear what no setting can turn on.
+- **Outputs:**
+  - console format (text or JSON);
+  - console detail (off, or the same as the file);
+  - log file on/off, folder (restart), file size, files kept, maximum age, total cap, each with a **size preview** ("≈ 130 MiB at today's rate");
+  - Windows Event Log (Windows service only).
+- **Log files:** a list with name, size, time range and a "Contains torrent details" badge. Each file has **Download** (text or JSON lines; "Remove torrent details" is on by default when the file has them). The list also has **Download all (zip)**, and shows the folder path with Copy. On Docker, there's a hint that the console log is also in `docker logs <container>`.
+- **Danger zone:** **Delete log files** (all, or only those with torrent details), with the count and size in the dialog.
+
+**The live log (`/logs`):**
+- **On opening,** it shows the ring buffer's recent lines at once, then follows new ones over `GET /logs/stream` (§12.1; not the `/events` hub), batched per animation frame (§10.1). The toolbar's filters are sent with the stream request, so the server filters for this client.
+- **The list:**
+  - Virtualized (TanStack Virtual), with fixed-height one-line rows in Atkinson Hyperlegible Mono.
+  - Each row shows the time, level (icon + text), component and message. A click or `Enter` expands the row's fields.
+  - The client keeps at most 10,000 lines; older ones are dropped, with a note.
+- **Following:**
+  - **Following** is on while you're at the bottom. Scrolling up pauses it, and a "214 new lines · Jump to latest" button appears.
+  - **Pause** (`Space`) freezes the view while lines keep arriving.
+  - The stream is suspended while the tab is hidden, and catches up from the cursor when you return.
+- **Toolbar:**
+  - minimum level;
+  - component chips;
+  - text filter (`/`), applied on the server to the stream and to history, so filtered-out debug lines never travel;
+  - time in local or UTC;
+  - wrap lines;
+  - **Load earlier** (pages back into the files through `GET /logs`);
+  - **Copy visible** and **Download visible**;
+  - **Open full log**, which opens Settings → Logging → Log files.
+- **When the level hides what you need:** if the viewer's minimum level is below what's being recorded, it says "Debug lines aren't being recorded" and offers **Record detailed logs for 30 minutes**.
+- **Logging status:** a status chip shows the current presets ("Normal · Private", or "Custom · Custom"), linking to Settings → Logging. While an identifying data kind is on, the chip becomes the time-remaining banner.
+- **States:**
+  - **Connecting** and **Reconnecting** (with backoff; no lines are lost, since the cursor resumes);
+  - **Stream ended** (server restarting; it reconnects on its own);
+  - **No lines match** (with "Clear filters");
+  - **File logging is off** (Load earlier only reaches the ring buffer).
+- **Accessibility:**
+  - The list is `role="log"`, with announcements **off by default**, because a live stream read aloud is unusable. An option announces only new errors.
+  - Every control is reachable by keyboard: `Space`, `/`, `End` (jump to latest), `Home`.
+  - Level is shown as icon + text.
+- **Performance:** a separate lazy chunk of at most 12 KB gzipped. Holding 10,000 lines and taking 200 lines/s must keep INP under 100 ms.
+
+#### 10.10.13 About
+**Settings → About** (`/settings/about`, System group) is also linked from the overflow menu (§10.3). It answers four questions:
+- **What am I running?**
+- **Is there a newer version?**
+- **Where do I get help?**
+- **What does Lodestar connect to?**
+
+It needs a signed-in session, like the rest of Settings. Version details aren't shown to signed-out visitors, and `/healthz` doesn't carry them.
+
+- **Header** (§10.19):
+  - the horizontal lockup, light or dark to match the theme;
+  - the tagline, "Every node is a new discovery";
+  - one sentence on what Lodestar is, from the brand board's description edited to §10.14.
+
+  This is one of the few places the lockup appears. It's never decorative chrome elsewhere.
+- **Version:**
+  - **"Lodestar 0.5.2"** at display size, with the **channel** (stable or nightly) and the **release date**.
+  - **Build details** in mono:
+    - the commit (short hash, linked to that commit on GitHub);
+    - the build date and target (`x86_64-unknown-linux-musl`);
+    - the Rust version;
+    - the UI build id.
+  - **Copy version info** puts all of the above on the clipboard as plain text.
+  - **Interface mismatch:** if the UI loaded in this tab came from a different build than the server is running (a tab left open across an upgrade), a banner says "This page is from an older version of Lodestar · **Reload**". The same check runs on every page load, not only on About, because a stale UI against a newer API is a common source of confusing bugs.
+  - **What's new in this version:** the running release's notes, embedded in the binary at build time from `CHANGELOG.md`, so they read offline. **All release notes** links to GitHub Releases.
+- **Data formats:**
+  - the store schema version (the last migration applied);
+  - the search index schema and tokenizer versions (`v{schema}-t{tokenizer}`);
+  - whether a background rebuild is running, with its progress (§8).
+
+  These are the numbers a bug report needs, and the reason an upgrade might reindex.
+- **This installation:**
+  - how it's deployed: Docker (image tag and digest when the image sets them), Unraid, Windows service, Windows portable, Linux tarball or systemd;
+  - the OS, CPU cores, memory and time zone;
+  - when it started, and the uptime;
+  - the **data directory** (copyable), with sizes for the database, indexes, cold store and logs, and the free space left.
+  - A FUSE or network filesystem warning (§11) also shows here.
+  - From v0.6: each worker's and companion's version, flagging any that don't match the coordinator.
+- **Updates:**
+  - **Status:**
+    - the update setting (Off, Check and notify, Install automatically), or the last check's result;
+    - **Check now**, which runs the update engine's signed check (§12.2: one request for the channel's signed manifest, through your egress settings, sending nothing about you);
+    - the result: "You're up to date", or "0.5.3 is available · What's new".
+  - **How to update, for this installation:**
+    - Docker: the `docker pull` and recreate commands;
+    - Unraid: "Apply update" on the Docker tab;
+    - Windows: the MSI download link;
+    - tarball: the download link and the `systemctl restart` line.
+
+    When automatic updates are on, About shows when the next install is due. **Update settings** links to Settings → Updates (§10.10.14, §12.2).
+- **Help and community:** each link opens in a new tab, with an external-link icon and "(opens in a new tab)" for screen readers, and `rel="noopener noreferrer"`. The URLs come from the build's `repository` field (`Cargo.toml`), so a fork points to its own repository:
+  - **GitHub repository**
+  - **Source code for this version:** the exact tag, or the commit for a nightly or a fork. This is the AGPL's offer of source to network users (`owner-decisions.md` §2.12).
+  - **Documentation** (`docs/` in the repository, and the Syntax guide in the app)
+  - **Releases and changelog**
+  - **Report a problem** opens a dialog first. It shows exactly what will be prefilled into a new GitHub issue: the version info and the diagnostics block, with no secrets and no torrent names (§12.1). It's sent only if you submit it on GitHub. Text too long for a URL is copied to the clipboard instead, with a note to paste it.
+  - **Request a feature** and **Discussions**
+  - **Report a security issue**, which links to the repository's private vulnerability reporting, not to public issues.
+- **Privacy: "No telemetry, ever."** Below that, a short list of **everything Lodestar connects to**, each with its current state and a link to its setting:
+  - the DHT and peers (on);
+  - updates (off, check and notify, or install automatically, and when it last checked);
+  - enabled sources and plugins (§18);
+  - blocklist subscriptions (§20.13);
+  - integrations and notification channels;
+  - the companion catalogue (§18.10);
+  - workers (§19).
+
+  Each row reads like "Blocklist subscriptions: 2 lists, refreshed daily from their publishers". Nothing on the list runs without your choice except the DHT, which is what Lodestar is.
+- **Diagnostics:**
+  - the copyable diagnostics block: versions, OS, deployment, settings sources and which settings were changed (names only, never values of secrets), the logging presets, and recent error counts;
+  - **Download diagnostics** (that block plus the last 24 h of logs, with torrent details and the opt-in kinds always removed; §12.1).
+- **Licences and credits:**
+  - **Lodestar's own licence**, with its full text. It's **AGPL-3.0-or-later** (owner's decision §2.12). The brand artwork has its own notice (`brand/LICENSE.md`).
+  - **Open-source components:** every Rust crate and npm package in the shipped build, with its version, licence and full licence text.
+    - The list is searchable and loads lazily: a content-hashed `licenses.json` generated at build time with no new dependency:
+      - Rust: `cargo metadata --filter-platform <target>` for each shipped target, so platform-only crates drop out (for example `webpki-root-certs`, CDLA-Permissive-2.0, which only wasm targets use);
+      - npm: the packages bundled into the UI build, taken from the Vite/Rollup build's module graph (a small build plugin that writes the bundled package list), and their licences read from `package-lock.json` and each package's files.
+    - Packages with no licence field go in a reviewed overrides file (`licenses.overrides.json`) that records the licence file they ship. For example, `svelte-toolbelt` (through bits-ui) ships an MIT LICENSE.
+    - CI fails the build if a **shipped** component has no licence, or one outside the allowlist (owner's decision §2.12). Dev-only and build-only tools aren't checked.
+  - **Fonts:** Atkinson Hyperlegible Next and Mono, © Braille Institute, SIL Open Font License (the licence travels with the font files, as the OFL requires).
+  - **Icons:** Phosphor (MIT).
+  - **Brand artwork:** credited per the brand pack.
+- **States:**
+  - **Loading:** a skeleton of the version block. Everything else on the screen comes from the same single `GET /system`.
+  - **If the update check fails,** the error says why ("GitHub didn't answer within 10 s") and how to retry. The rest of the screen stays usable.
+  - **If the server is unreachable,** About still shows the UI's own build id and version from the bundle, so you can tell what you're looking at.
+- **Performance:** About is part of the Settings chunk. `licenses.json` and the release notes load only when their sections are opened.
+
+#### 10.10.14 Updates
+**Settings → Updates** (`/settings/updates`, System group) sets how Lodestar updates itself (§12.2). About shows the version and links here.
+
+- **Status card, at the top:**
+  - "Lodestar 0.5.2 · up to date · checked 2 h ago", with **Check now**;
+  - or "0.5.3 available (Fix, security) · installs tonight at 03:00 · **Install now** · Skip this version";
+  - or an install in progress, with its steps (downloading → verifying → installing → restarting → checking health) from the `updates` SSE topic.
+
+  After a rollback, the card says what failed, what was restored, and what to do next.
+- **How to update:** a radio group with one line of consequence each:
+  - **Off:** Lodestar never contacts GitHub. Check now still works when you press it.
+  - **Check and notify:** "You'll be told about new releases. Nothing installs without you, unless you turn on Always install security fixes."
+  - **Install automatically.** On Docker and Unraid there's a fourth choice, **Container image updates**: "Use this if Unraid's auto-update or Watchtower updates the image".
+
+  Choosing automatic opens the level choice directly under it:
+  - **Fixes only** (recommended): "Bug and security fixes. No data migrations."
+  - **Fixes and features:** "May migrate data, with a snapshot first, or rebuild the search index in the background."
+  - **All releases:** "Includes major releases. Releases that need manual steps still wait for you."
+- **Always install security fixes:** a toggle with its consequence.
+  - Under **Install automatically**, it's on by default.
+  - Under **Check and notify**, it's off by default, and its label says it installs security releases without asking.
+  - It's hidden under Container image updates and Off.
+- **Advanced** (closed by default): channel (Stable / Beta / Nightly; changing it opens a dialog), wait after a release, install window, allow index rebuilds, and what to be notified about.
+- **Release notes:** each available release with its level badges (Fix, Feature, Major, Security, Manual steps), its date and its notes. "Read on GitHub" opens in a new tab.
+- **History:** the last updates as a table (version, level, date, result: installed / rolled back / skipped, with the reason).
+- **Roll back to 0.5.2** sits in the Danger zone (§10.10.7), with what it restores and how many torrents would be lost.
+- **Notices** at the top of the screen, also shown in the Overview's Needs attention:
+  - **"Installed under a revoked signing key"**, with Install now;
+  - **"Your system clock looks wrong"**, saying in which direction, because update checks depend on it;
+  - **"Update trust data is damaged"**, which blocks new installs until it's fixed (§12.2).
+- **Pause automatic updates** for 1, 7 or 30 days. While paused, a status line shows with Resume.
+- **When this installation can't update itself** (a `noexec` volume, a read-only install, or a package manager), the automatic options are disabled. The reason is shown in text next to them ("Your data volume is mounted noexec"), with the fix.
+- **Elsewhere:**
+  - the Overview's Needs attention shows available, failed and rolled-back updates, plus a pending install with its time;
+  - the status pill shows "Updating…" during an install;
+  - the restart overlay (§10.10.6) is reused for the restart step.
 
 ### 10.11 Component inventory (one canonical primitive per role)
 - **Controls and fields:** Button (primary / secondary / quiet / danger × dense / default, with a loading state), IconButton, Field (Input, Select, Combobox, Textarea, Checkbox, Radio, Toggle, Slider, RangeInput with units), SegmentedControl.
@@ -910,12 +1340,287 @@ With the plum swap, all six colours are distinct under normal vision. Under colo
 ## 12. Security & operations
 
 - First-run setup requires a **one-time setup token printed to the logs/console** (the Jupyter/Portainer pattern), so nobody else on the LAN can claim a fresh headless instance. It then creates an admin password (argon2). Session cookies. API keys for Torznab and integrations. Optional trusted reverse-proxy header auth. CSP and security headers. Rate limiting on the API.
-- **Upgrades:** an automatic SQLite snapshot before any schema migration, with `lodestar rollback`. Docker tags: `x.y.z`, `x.y`, `latest`, `nightly`. Optional in-app "update available" check (no telemetry, ever).
+- **Upgrades:** an automatic SQLite snapshot before any schema migration, with `lodestar rollback`. Docker tags: `x.y.z`, `x.y`, `latest`, `nightly`. Updates are off until you choose Check and notify or Install automatically. Automatic installs are graded by release level, signed, health-checked and rolled back on failure (§12.2). No telemetry, ever.
 - **Cluster security** (§19.6): mutual TLS with a cluster CA created on first use; one-time join tokens (15-minute expiry); per-worker certificates with immediate revocation; workers receive only the have-filter, assignments, sealed credentials and leases; 0.5% re-verification sampling with quarantine and purge-by-worker.
 - **Companion supply chain** (§18.10): a signed catalogue pinned per release, with SHA-256 and upstream signatures verified before anything runs. Every install needs confirmation; companions run with the least privilege, bound to localhost or the internal network; credentials are random and encrypted at rest.
 - **Content safety (§20):** the child-safety core is **always on**, on every source, network and worker. Its **locked floor** (CS-1a/1b, CS-8a: torrents you confirmed or imported, plus their exact reposts) can't be removed. Every other core rule is **editable and can be switched off** behind guardrails: intent fixtures, protective-only actions, overrides over signed base rules, and, for any change that weakens protection, a plain-language effect warning (§20.11) and your password. No audit log is kept. Your **CSX-5 override list** can override everything except the floor, always after a mandatory **impact preview**. Hash-list matches are dropped; pattern matches are quarantined (hash + sealed name) for review. Nothing else is stored or indexed.
-- Observability: `tracing` structured logs, Prometheus metrics for every pipeline stage, and the built-in dashboard.
+- Observability: `tracing` structured logs with torrent details off by default, a log file, a live log in the UI (§12.1), Prometheus metrics for every pipeline stage, and the built-in dashboard.
 - Graceful shutdown flushes batches, commits the index and persists the DHT state. Crash-safe: SQLite is the source of truth, and the index catches up on startup from a `last_indexed_id` watermark.
+
+### 12.1 Logging
+Logs exist to diagnose Lodestar, not to record what it found. **You decide what gets logged, event by event and kind of data by kind of data. By default, logs contain no torrent specifics.** Identifying detail is a deliberate, time-limited choice. Logs leave the machine only when you download them.
+
+- **You control what's logged at three levels.** Each is a preset you can refine:
+  - **Events: what happens that gets a line.** Every line Lodestar writes is a **catalogued event** with a stable id (`dht.key_harvested`, `fetch.failed`, `api.request`, `auth.sign_in_failed`, `filters.rule_set_updated`, and so on). Each event has:
+    - a component and a level;
+    - a label and help (message keys);
+    - whether it's on by default;
+    - **the kinds of data it can carry** (below).
+
+    Each event can be turned on or off.
+    - **Verbosity is a preset over events:** Errors only / Warnings / **Normal** (info, the default) / Detailed (debug) / Everything (trace). It turns on every event at or above that level. Changing any single event makes the preset "Custom", and "Reset to preset" undoes that.
+    - **Per-component levels** remain as a middle step: DHT, Fetch, Pipeline, Search, API, Sources, Filters, Integrations, Workers, Companions, Auth, and Libraries (third-party crates).
+    - The **raw `tracing` filter string** stays as the expert option. It only reaches Libraries, because first-party lines are all catalogued events.
+    - **A few events are required** and can't be turned off: start and stop, crashes, the setup token (§12), settings saved (field names only, never values) and restarts, disk-full and log-rotation failures, and the switch that turns data kinds on or off. Without them, a log can't explain itself. They carry no torrent data.
+  - **Data kinds: what a line may contain.** Each kind is its own switch:
+
+    | Kind | Default |
+    |---|---|
+    | info hashes | off |
+    | torrent names | off |
+    | file names and paths | off |
+    | tracker and source URLs (passkeys always removed) | off |
+    | search queries | off |
+    | sign-in and API client addresses | **on**, since these are the admin's own and are useful for security |
+    | peer addresses (connection-level only) | off |
+    | sizes and counts | on, since they aren't identifying |
+    | **peer activity** (a peer address with a torrent) | off; **opt-in only**, never set by a preset (below) |
+
+    - **Presets set the switches:** **Private** (the default: only the two kinds marked on), **Hashes** (adds info hashes), **Full** (everything), and **Custom**.
+    - A kind that's off is never written. Torrents appear as references (below), and other kinds as `[hidden]`.
+  - **Outputs: where each line may go.** Each output (console, file, live log, Windows Event Log) has its own minimum level and its own data kinds, chosen as "Private" or "same as the file".
+- **Turning on a kind that identifies torrents or people is time-limited.** That's hashes, names, paths, URLs, queries and peer addresses. You choose how long: **1 hour** (default), 24 hours, or until turned off. When the time runs out, those kinds turn off again and a required event records the switch. Temporary verbosity works the same way: "Detailed for 30 minutes" is the one-click choice in the live log (§10.10.12).
+  - Turning the kinds off again offers **"Also delete log files that contain torrent details"**. Lodestar tracks which files were written while any identifying kind was on.
+- **You can see the effect before saving.** The Logging screen shows **example lines** rendered from sample data (never real torrents) for the staged choices. It also shows an **estimated volume** ("≈ 40 MiB a day at today's rate"), from per-event counters that count even events that are off. The counters are atomics, so this costs nothing.
+- **References, not identifiers.** With info hashes off, a line names a torrent as `ref:7f3a2c9e`. That's a keyed hash of its info hash under a random key made at each start and never written down. Lines from one run can be followed together, but a reference can't be turned back into a hash or matched against a public hash list. A restart starts new references.
+- **Never logged, at any setting:**
+  - **Passwords, API keys, feed tokens, cookies, secrets and sealed values.** The setup token is the one exception: it's printed at start until setup completes, and stops working after that (§12).
+  - **The names or paths of quarantined, dropped or hash-listed items.** They stay sealed (§20.11: revealing one takes the warning and the password). Lines carry the rule id and a reference only.
+- **Logged only when you opt in** (owner's decision §2.11): two things are off by default and stay out of the log unless you turn them on. They're stricter than the other data kinds:
+  - **Peer activity:** a data kind that lets a line pair a peer address with a torrent ("peer 203.0.113.7:51413 had 7f3a… · fetch failed"). With it off, "No profiles of people" (§18.7) holds in the log as everywhere else, and connection-level lines may show an address only if peer addresses are on, never with what that peer has.
+  - **Filter change details:** an event, `filters.change_detail`, that records which rule, term, exception, pack or list changed, and how (before and after). With it off, lines say only "filters: rule set updated (revision 42)", following the no-audit-log decisions (§1.8.8, §1.8.9). Even with it on, the items a change released are never named, because they're sealed (above).
+  - **Both are opt-in for a limited time only:**
+    - they're off by default in every preset, Full included;
+    - turning one on shows a plain-language warning (below) and a duration of 1 hour (default) or 24 hours. There's no "until I turn it off";
+    - a banner shows while either is on, with **Turn off now**.
+  - **The warnings:**
+    - **Peer activity:** "Lodestar normally never keeps which peer had which torrent. For the next hour, the log file will record it: a list of people's addresses next to what they share."
+    - **Filter change details:** "Lodestar normally keeps no record of filtering changes. For the next hour, the log file will record each change you make to rules, terms, exceptions and lists."
+  - **Where they go:** only the log file and the live log. They never go to the console, the journal or the Windows Event Log, because Lodestar can't delete those. A worker's peer activity stays in that worker's own log (§19: peer addresses never leave a worker).
+  - **Files that contain them** carry a badge. **Download diagnostics** never includes them, and `redact=true` strips them like any identifying kind. Turning one off offers to delete the files written meanwhile.
+- **Enforced where the line is written, not scrubbed afterwards:**
+  - First-party code logs only through `log_event!(EVENT_ID, …)`.
+    - Each crate declares its events in a static catalogue. The binary gathers the catalogues; there's no registry dependency.
+    - Before formatting anything, an event checks one atomic bitset (its on/off) and bumps its counter. An event that's off costs a load and an increment.
+    - A CI check refuses plain `tracing` macros outside tests in first-party crates, and refuses events that use fields they didn't declare.
+  - Torrent hashes, names, paths, peer addresses, URLs and queries reach an event only through typed wrappers (`log::Torrent`, `log::Name`, `log::Path`, `log::Peer`, `log::Url`, `log::Query`).
+    - Each wrapper renders according to its kind's switch for that output.
+    - Each wrapper marks its field with its kind in the structured record.
+  - Third-party crates (HTTP, TLS, Tantivy) are capped at warnings by default. URLs in their messages have query strings and passkeys removed.
+  - **A canary test** runs the pipeline over fixtures with every event on and the **Private** preset. It fails if any fixture's hash (hex or base32), name, path, tracker passkey or peer address appears in any output: console, file, ring buffer, live stream or download.
+    - **A second run** turns on one kind at a time and checks that only that kind appears.
+    - **A third run checks the two opt-ins:**
+      - peer-with-torrent and filter-change detail appear only while their opt-in is on, and only in the file and live log;
+      - they're gone from every output once the opt-in's time runs out.
+    - **A fourth run** turns on **Full plus both opt-ins**. It fails if any fixture secret (password, API key, feed token, cookie, tracker passkey, setup token after setup) or any sealed name appears in any output.
+  - **The CI check also refuses:**
+    - `#[instrument]` without `skip_all`, or a `skip(..)` that names every argument. `fields(x)` alone still records every argument;
+    - **every** `%e` or `?e` field, checked by syntax, whatever the error type. Errors reach a log line only through the typed error wrapper (`log::Error`), which renders the error kind, and the message only when the error type is marked as free of names and paths.
+  - **Turning an identifying kind or an opt-in off** (by hand, or when its time runs out) also purges or redacts the records in the ring buffer that carry it, so the live log stops showing them at once.
+- **Where logs go:**
+  - **Console (stderr):** always on, so `docker logs`, the systemd journal and Unraid's log viewer work. Text by default, JSON as an option. **The console stays on the Private data kinds even when the file has more turned on**, unless you choose "same as the file". Lodestar can't delete what the container runtime or journal keeps.
+  - **Log file:** on by default, at `<data>/logs/lodestar.jsonl`, as structured JSON lines with sensitive fields marked.
+    - Rotation by size: 16 MiB per file by default. Rotated files are gzip-compressed. Lodestar keeps 7 of them, for at most 14 days, and the logs folder never goes over a total cap (default 256 MiB).
+    - All of these are settings. The folder is configurable, and applies after a restart.
+    - A disk-full condition stops file logging with a console warning, rather than stopping Lodestar.
+  - **Windows service:** the file is the main log. Errors also go to the Windows Event Log (on by default for the service).
+  - **In-memory ring buffer:** the last 5,000 records (at most 4 MiB). It feeds the live log (`GET /logs/stream`) the moment it opens.
+- **Floods:** a burst of repeated lines (same target, level and message) is folded into one "repeated 1,204 times in 10 s" line in every output. A noisy failure can't fill the disk or swamp the live stream.
+- **Metrics:** `lodestar_log_records_total{level}`. The Settings Overview uses it for "12 errors in the last hour · View" (§10.10.3).
+- **API** (admin session only; API keys and feed tokens can't read logs):
+  - **`GET /logs`:** history, newest first, with a cursor. Filters: level, component, text, time range. It reads the ring buffer, then the files.
+  - **`GET /logs/stream`:** the live log, separate from the `/events` hub (B4).
+    - B4's hub shares one 512-event replay ring and one 256-event lag buffer across all topics, renders each frame once for every client, and admits any session. At 200 lines/s, logs would flush the other topics' replay in seconds and force resyncs.
+    - The log stream instead has its own cursor over the 5,000-record ring (`Last-Event-ID`, resuming without gaps while the record is still in the ring).
+    - It applies **per-client filters** on the server (minimum level, components, text), so filtered-out lines never travel.
+    - It sits behind the **admin guard** and reuses B4's conventions: heartbeats, ending with the session, and closing on shutdown.
+    - **Its caps are its own:** at most 2 log streams per session and 8 in all, separate from B4's 4 and 64, so an open log viewer never uses up the hub's slots.
+    - **Each client has a bounded queue of 256 records.** A client that falls behind gets one `resync` marker, "N lines skipped, reload to catch up", like B4's `resync`. Then it continues from the newest records, while the skipped ones stay readable through `GET /logs`.
+  - **`GET /logs/catalog`:** every event (id, component, level, label and help keys, default, current, data kinds, required, rate per hour) and every data kind with its current switch per output. The Logging screen renders from it, so a new event appears with no UI change.
+  - **`GET /logs/files`:** name, size, time range, and whether the file contains torrent details.
+  - **`GET /logs/files/{name}?format=text|jsonl&redact=true|false`** and **`GET /logs/archive.zip`**. `redact=true` strips the fields marked as sensitive, so a log written with identifying kinds on can still be shared safely. It's the default whenever a file contains details.
+  - **`DELETE /logs/files`:** delete log files, all of them or only those containing details.
+
+### 12.2 Updates and auto-update
+**The owner's decision (§2.13): updating should be easy, automatic if you want it, and optional at each release level.** Auto-update is **off until you choose it**, because Lodestar is offline by default (§1.2.3) and checking for updates contacts GitHub. Once on, an update must never leave you worse off. Every artifact is verified before it runs. Every install is checked afterwards, and rolled back on its own if it fails.
+
+- **Release levels.** Every release's signed manifest (below) declares its level. The level is set by the release process, not guessed from the version number, so 0.x releases are graded honestly too:
+  - **Fix:** bug and security fixes. No schema migration, no reindex, no config change.
+  - **Feature:** may migrate the store (with the automatic snapshot, §12) or start a background reindex (§8; search keeps serving). Never needs manual steps.
+  - **Major:** may change config or behaviour in ways you should read about first.
+
+  The manifest also says whether a release is a **security** release, whether it needs **manual steps**, the **oldest version it upgrades from**, and whether it has been **withdrawn**.
+- **Channels:** **Stable** (version tags, the default), **Beta** (`-beta.N` pre-releases, which also receive stable releases), **Nightly** (built every day from `main`; for testing only). Moving to a less stable channel warns that it may need a restore from snapshot. Moving back waits for the next release on the chosen channel; it never downgrades.
+- **Your choices** (Settings → Updates, §10.10.14). Each is a setting, and a `LODESTAR_UPDATES_*` variable can lock it:
+
+  | Setting | Options | Default |
+  |---|---|---|
+  | Updates | **Off** · **Check and notify** · **Install automatically** · **Container image updates** (Docker and Unraid: notify only, for Unraid's auto-update or Watchtower) | Off; the first-run wizard asks (§10.10.10). `LODESTAR_UPDATES` = `off`, `notify`, `auto` or `image` locks it. |
+  | Install automatically | **Fixes only** · **Fixes and features** · **All releases** | Fixes only |
+  | Always install security fixes | on / off. Under **Install automatically** it installs a security release even when the chosen level wouldn't, without the wait. Under **Check and notify** it's the one thing that can install without you, and its label says so. It never applies under **Container image updates** or Off. | **on** under Install automatically; **off** under Check and notify |
+  | Channel | Stable · Beta · Nightly | Stable |
+  | Wait after a release | 0–14 days before auto-installing, so a bad release can be withdrawn first; doesn't apply to security fixes | 3 days |
+  | Install window | a daily time range, local time | 03:00–05:00 |
+  | Allow updates that rebuild the search index | on / off | on |
+  | Notify me | before an install, after it, and on failure, through any notification channel (§10.10.8) | after and on failure |
+
+  Releases that need manual steps are **never** auto-installed, at any level. They're announced with their notes and a guided **Install now**.
+- **Checking:**
+  - at most every 6 hours, at a random minute;
+  - one request for the signed manifest of the chosen channel, from GitHub Releases, through the egress settings (§5) and the SSRF guard, with a fixed `User-Agent: Lodestar-Updater` that carries no version;
+  - **no identifier, version or other data about you is sent** beyond what any download reveals (your IP, to GitHub). The "No telemetry, ever" promise (§12, About) stands.
+  - **This is the only update check.** About's **Check now**, the Overview and the status pill all use it (`POST /updates/check`). Nothing reads GitHub's unsigned releases API, so two checks can never disagree.
+- **Verification. Nothing runs that isn't signed:**
+  - The **manifest** is signed with the current release key (Ed25519, minisign format).
+    - It names its **channel** inside the signed body, and a manifest for a different channel than the one chosen is refused.
+    - **Every manifest published after a key rotation carries the key statements** that chain its key back to the recovery key, the weekly re-signs included. A client that was offline across the rotation can still verify.
+  - Each **artifact** (binary, MSI) is pinned in the manifest by SHA-256 and size, and checked after download. Windows artifacts are also Authenticode-signed (M6), and that signature is checked too.
+  - **Two built-in keys** (`packaging/keys/`, embedded at build):
+    - the **release key** (`02910813433E81E0`), the first key generation, signs manifests;
+    - the **recovery key** (`67922DDF005FD310`) is kept offline by the owner and signs nothing but key changes.
+  - **Key changes need the recovery key:**
+    - A key-change statement names the new release key and carries a **sequence number** one higher than the last one published.
+    - It's accepted only with a valid **recovery-key signature**. The current release key may co-sign, but its signature alone is never enough.
+    - Accepting a statement **revokes the previous release key** for new installs.
+    - A statement whose sequence number isn't higher than the last one accepted is refused.
+    - So a leaked release key can sign manifests until the owner rotates it, but it can never rotate to an attacker's key, and the rotation shuts it out.
+  - **The recovery key itself is an accepted risk.** It's offline and password-protected, and there's no protocol to rotate it.
+    - If it's ever lost or compromised, the remedy is a new build with a new embedded key, which users install **by hand** once.
+    - Whether to add a recovery-key rotation statement is the owner's call. It isn't designed here.
+  - **Time limits on manifests:**
+    - Versions only go up.
+    - A manifest whose timestamp is more than **1 day ahead** of the local clock is refused.
+    - A manifest's expiry may be at most **30 days** after its timestamp. Expired manifests are refused for new installs.
+    - The **high-water mark** (the newest manifest timestamp accepted) belongs to the current key generation, and older manifests are refused. Accepting a key statement resets the mark to the statement's date. A leaked key that signs a manifest dated 2099 is therefore refused as being in the future; and anything it got accepted before the rotation stops counting once the rotation lands.
+    - **If the local clock looks wrong in either direction,** the Updates screen says so instead of failing silently. That's when genuine manifests keep arriving from more than a day in the future, or when the clock is past the newest manifest's expiry while checks still succeed.
+  - **Trust state lives outside the store.** `<data>/bin/trust.json` holds:
+    - the accepted key statements (in full, with their signatures);
+    - the current sequence number;
+    - the revoked keys;
+    - the high-water mark.
+
+    It's written by temporary file, fsync, rename, and an fsync of the directory. It's in no store snapshot or backup, so **no rollback can undo a revocation.**
+    - **"Forward only"** means the pair (sequence number, high-water mark) never decreases. A new state replaces the old only if its sequence number is higher, or equal with a later high-water mark.
+  - **The trust floor: what deleting `trust.json` can't undo.**
+    - **Each build embeds the key statements known when it was built.** The floor is the newest of:
+      - those embedded statements;
+      - `trust.json`;
+      - the statements inside any verified overlay.
+    - **A missing `trust.json`** is rebuilt from that floor. Its high-water mark is the timestamp of the newest verified overlay manifest.
+    - **A corrupt `trust.json`** blocks new installs. The running version keeps running, and a notice says so.
+  - **Key statements get the same time check:** a statement dated more than 1 day ahead of the local clock is refused.
+  - **Re-signing:** the release workflow re-signs every channel's current manifest weekly, with a fresh timestamp and an expiry within 30 days. An installation that checks always finds a valid one without a new release. A lapsed manifest only blocks new installs; it never stops an installed version from starting (below).
+  - **Release engineering** (M6 `release.yml`) signs with `RELEASE_SIGNING_KEY`. That's a secret of the GitHub Actions environment `release`, which only `v*` tags and `main` may use, so a workflow edited on a feature branch can't read it. The private keys never enter the repository. The owner created both key pairs on 2026-10-22. Further hardening is recommended to the owner in `packaging/keys/README.md`: a required reviewer on the environment, and a separate nightly key.
+- **Before installing:**
+  - **Where the installation can update itself:** `noexec` data volumes, a read-only binary location with no data-directory fallback, and package-managed installs fall back to Check and notify, with the reason.
+  - **Free space:** enough for the store snapshot, the new binary, and the manifest's reindex estimate.
+  - **Not busy:** no background rebuild, import or backup running. Otherwise it defers to the next window.
+  - **The upgrade path:** if the installed version is older than the release's oldest supported version, Lodestar installs the intermediate releases in order.
+- **How it installs, per deployment:**
+  - **Docker, Unraid, and the Linux tarball or systemd unit (an overlay with a supervisor):**
+    - **Each overlay is self-contained.** The binary goes to `<data>/bin/<version>/lodestar`, beside the **full signed manifest** and the **key statements** that chain its key to the recovery key. `<data>/bin/active` names the version to run. It's written by temporary file, fsync, rename, and an fsync of the directory.
+    - **At install time,** the downloaded artifact is verified again against the current trust state, just before it's moved into place.
+    - **`lodestar serve` (the image's binary, or the unit's `ExecStart`) is the supervisor.** It starts as PID 1 in a container, or as the unit's process, and acts as a minimal init: it forwards signals and reaps processes. It reads `active` and runs that version as its **child**.
+      - With no `active`, or one older than itself, it runs its own code, so a newer image wins, and it removes the older overlays.
+      - An overlay never replaces the supervisor. The supervisor changes only with the image or package, and costs a few MB of memory.
+    - **Before starting an overlay,** the supervisor verifies it **from the built-in recovery key alone**: the key statements, then the manifest's signature, then the binary's SHA-256 and size. It never reads the store for this, so an older supervisor can start an overlay signed by a newer key.
+      - **It doesn't check the manifest's expiry.** An installed version must keep starting offline, above all after it has migrated the store, which the image's older binary may not be able to open.
+      - **An overlay signed by a key that the supervisor's own embedded statements revoke is refused,** and the supervisor runs its own code instead.
+      - **An overlay installed under a key revoked later, as learnt from `trust.json`,** keeps starting, because refusing it could strand a migrated store. It starts with a notice in the Overview and on the Updates screen: "Installed under a revoked signing key. Install the current release." Its **Install now** skips the level and wait rules.
+      - **Residual risk, accepted like the recovery key's:** with an image built before a rotation, someone who can write to `<data>` and holds the leaked, rotated key can plant an overlay that runs. Writing to `<data>` already means full control of the installation's data, and a current image closes the gap.
+    - **Outside probation,** when the child exits, the supervisor exits with the child's status. Docker's or systemd's restart policy then decides what happens, as it would without the supervisor.
+    - About shows "Image 0.5.2 · running 0.5.3 (updated in place)".
+    - **If you'd rather update the image yourself** (Unraid's auto-update plugin, Watchtower, a pinned tag), choose **Container image updates**. Lodestar then only notifies, so two updaters don't fight, and **Always install security fixes** doesn't apply. `LODESTAR_UPDATES=image` in the template locks this mode. It's distinct from `notify` (Check and notify), where the security-fix option still exists.
+    - Lodestar never writes to `/usr/local/bin` or anywhere outside the data directory.
+  - **Windows service (MSI):** a small detached helper (`lodestar update-helper`) verifies the MSI the same way, runs `msiexec` quietly, and supervises the restarted service through the probation below.
+    - Windows Installer handles files, the service and the firewall rules.
+    - **For rollback,** the previous MSI is kept in `<data>\updates\`, and the WiX package allows the downgrade that reinstalls it. *(M6 note: cache the MSI and allow that downgrade in WiX.)*
+    - **Probation survives a reboot or a helper crash.** The `pending` and `rollback` files drive it. The service's recovery action, and a one-shot `lodestar update-helper --resume` run at boot, pick it up again. The helper stops the service before any restore.
+  - **Windows portable:** the running `.exe` is renamed aside and the new one put in place. The same helper supervises probation, and renames the old `.exe` back on rollback.
+  - **Workers (v0.6):** the coordinator updates first, then offers each worker the same signed release over the cluster channel (§19.6). Workers drain, update and rejoin one at a time, within the protocol's version window.
+- **After installing: probation and automatic rollback.** The supervisor (or the Windows helper) runs both, not the new version.
+  - **Probation:**
+    - **Before starting a new version,** the supervisor writes `<data>/bin/pending`: the version, an attempt count and the start time. If `pending` can't be written (a full disk, for example), the new version isn't started, and the current one keeps running with a notice.
+    - **The new version clears `pending`** only after passing its self-test:
+      - the store opens and its migrations are complete;
+      - the search index answers a query;
+      - the HTTP port is bound, and the DHT port too unless the DHT is turned off;
+      - `/healthz` is green.
+    - **The 5-minute timer starts once migrations finish.** While a migration runs, the new version reports its progress. Probation fails only if that progress stalls for 5 minutes.
+    - **Restarts aren't failures.** A child that exits after a stop signal the supervisor forwarded (`docker restart`, an Unraid backup stopping containers, a reboot) uses no attempt. Probation resumes from `pending` at the next start, with the same attempt count.
+  - **Failure:** if the child exits on its own, or hasn't cleared `pending` in time, the supervisor restarts it, up to **3 attempts**. Then it rolls back, **at most one level, and once per failed version**.
+  - **The rollback is journaled and crash-safe.** Each step is idempotent. At every start, the supervisor first completes any rollback journal it finds, before it runs anything.
+    - **No process opens the store mid-rollback.** Every process that would (`serve`, every CLI subcommand) refuses while `<data>/bin/rollback.json` exists, and exits with a message saying a rollback is in progress.
+    - **On Windows,** the helper sets the service's start type to manual for the rollback, and restores it as its last step. A reboot mid-rollback then can't start the failed version against the restored store.
+    1. **Stop the child:** SIGTERM, a 30-second grace period, then SIGKILL, then wait for it to exit.
+    2. **Write the journal** `<data>/bin/rollback.json`: the failed and previous versions, the snapshot, and the steps done so far. It's fsynced, and updated after each step.
+    3. **Record the outcome outside the store**, in `<data>/bin/history.json` (below): the reason, and how many torrents the restore will lose (stored since the snapshot, counted before restoring). A snapshot restore erases `settings`, so nothing here may live in the store.
+    4. **Restore the store** if the failed version ran a migration, **by renaming, not copying**, so a restore needs no free space:
+       - The pre-update snapshot is written in the store's own directory, so the rename is atomic. The journal records its SHA-256 before the step starts.
+       - Delete `-wal` and `-shm`, rename the snapshot over `lodestar.db`, then fsync the directory.
+       - Deleting the WAL first is safe because no process holds the store during a rollback (above). It ensures a stale WAL is never applied to the restored file.
+       - **On a repeat,** a snapshot that's already gone is checked against the recorded SHA-256. If the store matches it, the step counts as done.
+       - **If the restore fails,** the partial state is cleaned up and the journal stays. Neither version starts, and a console error says what failed and where the snapshot is.
+    5. **Remove the failed version's newer-format search index directories** (§8: `index/v{schema}-t{tokenizer}`). The new version keeps the previous version's index directory until probation passes, so the previous version finds its own index intact. If that index is ever missing, the previous version rebuilds it in the background while serving from the store.
+    6. **Repoint `active`** at the previous version, and add the failed version to `<data>/bin/skipped`, which the supervisor and the updater both read.
+    7. **Delete the failed overlay**, then the journal.
+    8. **Start the previous version.** It shows the rollback notice from `history.json`.
+
+    If the previous version then also fails to start, the supervisor **stops** with a clear console error naming both versions and pointing to the recovery steps in `docs/operations.md`. It doesn't roll back further.
+  - **A withdrawn release** (the manifest says so) is never installed. If it's already running, Lodestar offers **Roll back to 0.5.2**. It doesn't roll back silently, because the data may have moved on.
+  - **Manual rollback** is always there: **Roll back** in Settings → Updates (the previous version, while its snapshot is kept), and `lodestar rollback` (§12). Both go through the same journal.
+- **Update history:** the last 20 updates (version, level, when, result, and any rollback with its reason and loss count).
+  - It's kept in `<data>/bin/history.json`, outside the store, so a restore can't erase it.
+  - This is about software, not torrents, so the owner's no-audit-log decisions don't apply. **Clear history** is there anyway.
+- **API:**
+  - `GET /updates`: status, available releases with notes and levels, the next window, and history;
+  - `POST /updates/check`;
+  - `POST /updates/install {version}`: now, or at the next window;
+  - `POST /updates/skip {version}`;
+  - `POST /updates/pause {days}`;
+  - `POST /updates/rollback`.
+
+  An `updates` SSE topic carries progress (downloading, verifying, waiting for the window, installing, restarting, checking health, done or rolled back).
+- **B-update must resolve** (design questions left to the slice and its `/security-review`, one line each):
+  - a control channel between child and supervisor (an inherited fd or a reserved exit code) for switch, rollback and restart;
+  - which process writes `active`, and when;
+  - an exclusive lock on `<data>/bin` held by the supervisor or helper, and by the updater while it installs;
+  - `serve --child` as a distinct run mode, so a child never supervises;
+  - the lost-torrent count recorded by the child before the restore, or "unknown" when it can't be;
+  - the snapshot integrity sequence:
+    - write to a temporary file, fsync, rename;
+    - set a "migrating" marker;
+    - then migrate;
+    - restore only when the marker exists and the snapshot verifies;
+  - attempt accounting:
+    - charge an attempt before each start, and refund it only for a recorded forwarded stop;
+    - a cumulative probation deadline;
+    - an overall cap on migration time;
+  - a stop signal during a rollback leaves the journal in place and never starts the previous version. Note that Docker's default stop timeout is 10 s, against the 30 s grace;
+  - overlay retention: keep the active and previous overlays, and say what happens when the active one fails verification at start.
+- **Tests:**
+  - a fake release server with signed fixture manifests: good, bad signature, wrong hash, downgrade, replay, expired, withdrawn, needs-manual, a skipped-version chain;
+  - per-deployment installs in CI: the Docker overlay, Linux, and the Windows MSI on the Windows runner;
+  - key changes:
+    - a statement with the recovery signature is accepted, and the old key's manifests are refused afterwards;
+    - a release-key-only statement is refused;
+    - a lower sequence number is refused;
+  - an older but validly signed manifest is refused, and a manifest for another channel is refused;
+  - the supervisor: a binary that crashes on start, one that hangs without confirming, and one that fails its self-test must each end with the snapshot and the previous version restored, the overlay deleted and the version skipped;
+  - an installed overlay keeps starting with no network after its manifest has expired;
+  - trust state survives a rollback: after a rotation shipped in a release that fails probation, the restored store doesn't bring back the revoked key, and the high-water mark stays;
+  - a manifest dated more than a day ahead is refused, and so is an expiry more than 30 days after its timestamp; a key statement resets the high-water mark;
+  - an older supervisor starts an overlay signed by a newer key from its stored manifest and statements alone;
+  - crash-safety: a kill at every rollback step, followed by a restart, must finish the rollback with the store intact and the WAL never applied to the wrong file;
+  - a restart during probation (a forwarded stop) doesn't use an attempt, and a migration longer than 5 minutes that keeps progressing passes;
+  - a full disk prevents `pending`, so the new version doesn't start;
+  - with `trust.json` deleted, the floor (embedded statements, then verified overlays) still refuses a revoked key; and a corrupt `trust.json` blocks installs;
+  - while `rollback.json` exists, `serve` and every CLI subcommand refuse to open the store;
+  - the previous version also failing stops with the console error instead of looping;
+  - a `noexec` volume that must fall back to notify;
+  - an install window that holds while a rebuild runs.
+
+  The supply-chain path gets `/security-review`.
 
 ## 13. Repo layout (Cargo workspace)
 
@@ -1717,7 +2422,6 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - An unknown or empty `timeZone` falls back to the browser's zone instead of throwing. Percent `<`/`>` edges are detected from the `Intl` output itself, so they match the displayed digits.
   - Size histograms: `sizeBinEdges(fromExp, toExp)` labels power-of-2 edges with `formatBytes`; `sizeBinLabel` joins two edges with a no-break space and an en dash. Labelling only; the server owns the bins.
 
-
 **Theme compiler (W1):** decisions that clarify §10.18.
 - **Derivation constants are fitted once.** Each rule is a lightness shift (or a mix toward `primary`/`accent` for dividers and tints). The constants are tuned so Riverstone lands within ΔE_ok ≤ 0.5 of the §10.18 table, and every theme inherits them. Light and dark have separate constants. **Riverstone's published values (`docs/design-tokens.md` §1–4) are a contract, so the compiler pins them byte for byte** (`PINS` in `themes.ts`); a test checks the rules alone stay within ΔE_ok 0.5 of each pin.
 - **`neutral-content` is derived to reach 4.5:1** on the neutral fill: the better of text/surface, shifted in lightness only if neither passes (Riverstone light: `#193038`, 4.55:1).
@@ -1786,9 +2490,20 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Subscriptions are off by default (§2.9).** The strictness assessment grades on the share of **public** IPv4, because FireHOL level 1's 14% of IPv4 is almost all reserved space. BT_BlockLists comes out severe.
 
 **Classification rules and preview jobs (#52, reviewed after merge):**
-- **Filtering ignores corrections, except to be stricter.** Corrections and classification rules change what's stored and searched; the engine judges detection's own classification, so a Not adult rule never takes a torrent out of the Adult-only core (CS-5a/5b). When an **Is adult** rule or correction makes a torrent adult that detection didn't, it's also judged as adult and the stricter verdict is kept, so anything stored as adult has met the Adult-only checks, and a `type:adult` rule of yours acts on it. Strengthening only, so no password.
+- **Filtering ignores corrections, except to be stricter.** Corrections and classification rules change what's stored and searched; the engine judges detection's own classification, so a Not adult rule never takes a torrent out of the Adult-only core (CS-5a/5b). When an **Is adult** rule or correction makes a torrent adult that detection didn't, it's also judged as adult and the stricter verdict is kept. So does any stored torrent that **becomes** adult, whatever the cause. Anything stored as adult has therefore met the Adult-only checks, and a `type:adult` rule of yours acts on it. Strengthening only, so no password.
   - **At ingest:** prepare and the writer's re-judge (`Engine::judge_classified`); the writer re-applies the rules when the rule set changed since prepare.
-  - **Stored torrents** relabelled by a new rule (re-queued, then background enrichment) or by `POST /classify/correct` go through `reclassify_row`, which judges them as adult. The decision is applied as at ingest, in the same transaction as the generation check: a torrent held back is deleted (and so leaves the index), quarantined with a sealed name or tombstoned, and its hashes refused at intake; one that's kept gets its hide, demote or flag mark. Each is a filter hit.
+  - **Stored torrents** go through `reclassify_row` whenever they're classified again: re-queued by a rule change, re-derived by a newer parser (`ENRICHMENT_VERSION`), or corrected by `POST /classify/correct`. It compares the result with the content type the torrent is stored with. A torrent becoming adult (stored as anything else, or never classified because it was stored before enrichment) is judged as adult, whether a rule, a correction or the parser made it adult. One already stored as adult isn't judged again: it was judged as adult when it became adult. The decision is applied as at ingest, in the same transaction as the generation check:
+    - a torrent held back is deleted (and so leaves the index), quarantined with a sealed name or tombstoned, and its hashes are refused at intake;
+    - one that's kept gets its hide, demote or flag mark;
+    - each decision is a filter hit, and so is what a rule in shadow mode would have done. A mark the torrent already has is the same verdict again, so it isn't written twice.
+  - **Without a filter** (tools and tests that enrich with detection alone), Is adult corrections and rules don't apply, so no path stores a torrent as adult unjudged.
+  - **Adult holds become tombstones at the purge (owner's decision, 2026-10-22: "keep the hash, drop the name").** A correction belongs to the stored torrent (`class_corrections`, deleted with it), so once its quarantine ended, a refetch would come back as detection's not-adult and skip the Adult-only core.
+    - **What qualifies:** a hold by the Adult-only core (CS-5a/5b) of a torrent your correction or an Is adult classification rule made adult. This applies when it's relabelled in storage and, for a rule, at ingest. A hold by any other rule would happen as not-adult too, so it purges normally, and so does a hold of a torrent detection itself calls adult (a refetch is detected adult again).
+    - **At the 30-day purge** the sealed name is deleted as for any quarantine, and the hash and rule id stay as a tombstone. Intake keeps refusing the hash, so the torrent is never refetched or stored again. No migration: the hold is marked by a suffix on its stored rule id.
+    - **If the hash already has a tombstone,** the adult hold replaces it, since filtering couldn't rebuild the adult mark, unless it's the floor's (CS-1a/1b, CS-8a). A floor tombstone is kept, so switching off CS-5a never releases what the floor holds.
+    - **Releasing one** (from quarantine or as a tombstone), or reporting it as a false positive, is weakening: effect warning plus password. The warning says that it was held because a correction or an Is adult rule made it adult. A correction is deleted with the torrent, so if no Is adult rule matches it when it's next seen, it's judged as detection classifies it, and if that isn't adult, the Adult-only checks won't look at it.
+    - **Finding one after the purge:** `GET /filters/tombstones?adult=true` lists adult-hold tombstones by hash and rule (no names), in pages, so one can be released deliberately.
+    - Switching off CS-5a/5b releases its adult holds with the rest of what it holds.
 - **The newest matching rule wins;** a torrent's own correction wins over any rule. Rules are indexed like your rules (§20.8), so a torrent meets only those its words could match, and share one prepared torrent with judging. At most **1,000** rules (422 past that).
 - **A rule's query can't test `type:` or `adult:`**, because it decides them.
 - **Rule changes and enrichment can't race.** Each change reloads the engine, then moves a **generation** in `settings`, and starts an enrichment pass. Every enrichment write checks the generation in its own transaction: background enrichment reads it before its rules and, if it moved, writes nothing and runs the same batch again; an ingest batch made under an older generation is stored but marked for enrichment, and starts another pass. Then the change marks what its query matches in the index (up to **1,000,000**, reported as `truncated` past that) plus everything the index hasn't reached, in transactions of 10,000 rows (or ids), with the search outside the API's store lock.
@@ -1976,6 +2691,97 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **`RebuildProgress` gains `error`**, the failure's message, so the banner, Insights and tests can say why.
 - **The serving pointer is a `Mutex<Arc<SearchIndex>>`, held only to clone or replace the `Arc`,** in place of an `RwLock`. A swap then waits behind at most one clone, whatever the platform's reader/writer policy (Windows SRW locks promise none).
 
+**Settings screen plan (2026-10-22, §10.10):** the owner asked for a very robust and user-friendly settings screen. §10.10 previously gave only the section list, the manuscript layout and per-section Save. It is now a full specification. Changes to the approved plan:
+- **Narrow screens use list → detail instead of a select.** With 21 screens (20 in the navigation, plus the Overview) and status badges, a select can't show which screen needs attention.
+- **Two save models.** Preferences apply instantly with Undo, as §10.18 already did for themes. Server settings are staged and saved atomically per screen, even across API sections, through a new multi-section `PATCH /settings`. This sharpens "per-section Save" rather than replacing it.
+- **New screens:**
+  - **Overview** (`/settings`), with Needs attention and Changed from default;
+  - **Keyboard**, split out of Appearance because remapping (S-keys) is a screen of its own;
+  - **Language & region** (language, time zone).
+
+  Screens for features that haven't shipped are hidden.
+- **Robustness additions:**
+  - per-section revisions with a three-way merge on conflict;
+  - drafts kept in `sessionStorage`;
+  - a leave guard;
+  - Undo after save;
+  - Reset to default per field;
+  - a restart banner with Restart now where the server can restart itself;
+  - a keep-or-revert timer for the HTTP address;
+  - `lodestar settings get|set|reset` for recovery without the UI;
+  - TOML export and import with a diff.
+- **No settings history**, matching the no-audit-log rule for filtering (§1.8.8). Recovery comes from Undo, Reset and export.
+- **Risk grading (§10.10.7).** Destructive actions get an exact-count confirmation and no typed confirmation. Security changes reuse B12's password confirmation. Weakening filter changes keep §20.11 unchanged.
+- **Delegation.** The form engine (draft store, validation mapping, atomic save, conflicts, leave guard) is an **Opus** slice, `M-settings-form`: every screen and the wizard depend on it, and its failure modes lose user data. The Security screen is Opus as well (`M-security-settings`). Screens and the shell stay with Sonnet helpers, per policy. The API additions are B2b (schema hints, revisions, batch patch, preview, test, preferences, SSE, export/import) and B2c (`/system`, restart, the address timer).
+
+**Logging plan (owner, 2026-10-22, §12.1, §10.10.12):** the owner asked for robust logging options that **don't capture torrent specifics by default**, a way to **see the live, ongoing log**, and a **link to the full log**. Until now, logs went only to stderr, and nothing stopped a line from carrying a hash, a name or a peer address.
+- **Torrent details are a separate setting from verbosity:** Off (default) / Hashes / Full. Hashes and Full are time-limited (default 1 hour). With details Off, lines use per-run keyed references (`ref:…`) that can't be reversed.
+  - **Refined the same day (owner: "Allow user control over what is actually logged"):** both settings became presets over finer controls.
+    - Every first-party line is a **catalogued event** (`log_event!`), and each event can be turned on or off, with its rate shown. A few required events carry no torrent data and can't be turned off.
+    - Off/Hashes/Full became **per-kind data switches**: hashes, names, paths, URLs, queries, client addresses, peer addresses, sizes. The presets are Private (default), Hashes, Full and Custom.
+    - Each output has its own level and data kinds.
+    - A preview shows example lines and the estimated volume before you save.
+    - Plain `tracing` macros are refused in first-party crates, so the catalogue covers every line, and `GET /logs/catalog` serves it.
+    - Secrets and sealed item names stay unloggable. Peer activity and filter change details became opt-ins (next bullet).
+- **Never logged, at any setting:** secrets, and the names of quarantined or dropped items.
+- **Logged only by opt-in (owner's decision §2.11, the same day):** **Peer activity** (a peer address with a torrent) and **Filter change details** (which rule, term or exception changed).
+  - Both are off by default in every preset.
+  - Turning one on needs a plain-language warning and is time-limited (1 hour or 24 hours).
+  - They're written only to the file and the live log, never to the console, journal or Event Log, and never included in diagnostics.
+  - Outside these opt-ins, "No profiles of people" (§18.7) and the no-audit-log decisions (§1.8.8–9) hold in the log too.
+- **Enforced at the source.** Typed wrappers handle every sensitive field, a CI check catches bypasses, and a canary test asserts that no fixture identifier reaches any output under the Private preset.
+- **Outputs:**
+  - the console stays without details unless you choose otherwise, because Lodestar can't delete what `docker logs` keeps;
+  - a rotating, gzip-compressed JSON-lines file with a total cap;
+  - a ring buffer for the live view;
+  - the Windows Event Log for service errors.
+- **UI:** Settings → Logging (System group), plus a full-width live log at `/logs`. It streams from its own admin-only `GET /logs/stream` with per-client filters, not from the `/events` hub (review of PR #86). It's linked from the overflow menu, the Overview, About and error toasts. Log files can be downloaded with sensitive fields removed. `general.log_level` moves into the new `logging` section.
+- **Slices:** the logging core is **Opus** in two PRs, because it's privacy-critical and concurrent:
+  - `B-log1`: wrappers and sweep, file sink, `logging` section, canary;
+  - `B-log2`: ring buffer, SSE, history and file API.
+
+  The screens are a Sonnet slice, `S-logs`.
+
+**About screen (owner, 2026-10-22, §10.10.13):** the owner asked for an About screen with version information and links to GitHub. The earlier one-row entry is now a full specification:
+- **Version and build:** version, channel and release date; commit, build date, target, Rust and UI build id; Copy version info.
+- **Stale-tab check:** a mismatch between the UI and the server build is caught on every page load, not only on About.
+- **Embedded release notes** for the running version.
+- **Data formats and this installation:** schema and index versions, deployment, data sizes.
+- **Updates:** **Check now** (the update engine's signed check; there's no separate GitHub API check), update steps for each deployment, and a link to Settings → Updates. Auto-update came the same day (§12.2).
+- **Help and community links:** built from `Cargo.toml`'s `repository`. Report a problem shows what it will prefill before anything leaves.
+- **"No telemetry, ever"**, with a list of everything Lodestar connects to.
+- **Diagnostics.**
+- **Licences and credits:** generated at build from `cargo metadata` and `package-lock.json`, with a CI licence allowlist.
+- **About needs sign-in**, so the version isn't disclosed to anyone else.
+- **Licence:** the owner chose **AGPL-3.0-or-later** (owner's decision §2.12), applied in this PR, with the brand assets kept outside it. The licence allowlist in CI follows from it.
+- **Slices:** the screen is a Sonnet slice, `S-about`. B2c owns `/system` (the build metadata) and the licence generation. The update check belongs to the update engine (`B-update`).
+
+**Auto-update (owner, 2026-10-22, §12.2, §10.10.14):** the owner asked for "easy auto update capability", optional at various release levels. This replaces "Lodestar never updates itself" and the optional update check (owner's decision §2.13).
+- **Off until chosen**, because checking contacts GitHub (offline by default, §1.2.3). The choices are **Check and notify** and **Install automatically**.
+- **Levels:** Fixes only (the recommended choice), Fixes and features, All releases.
+  - **Always install security fixes** is on by default under Install automatically. Under Check and notify it's off by default. It never applies to Container image updates.
+  - Releases that need manual steps never auto-install.
+  - Levels come from the signed manifest, not from version numbers.
+- **Channels:** Stable, Beta, Nightly.
+- **Safety:**
+  - a 3-day wait after release, except for security fixes;
+  - an install window;
+  - Ed25519 signatures on the manifest, SHA-256 pins for artifacts, Authenticode on Windows;
+  - downgrade and replay refused;
+  - pre-flight checks;
+  - a self-test within 5 minutes, with automatic rollback (snapshot and previous binary);
+  - withdrawn releases never installed.
+- **Per deployment:**
+  - **Docker, Unraid and Linux** get a verified binary overlay in the data directory, run as a child of the installed binary, which supervises probation and rollback. A newer image wins.
+  - **"Container image updates"** defers to Unraid's or Watchtower's image updates.
+  - **The Windows MSI** goes through a detached helper. Portable Windows uses rename-and-replace.
+  - **Workers** update after the coordinator.
+- **Slices:**
+  - the update engine (`B-update`, Opus, `/security-review`);
+  - the Windows paths and the signed manifest in `release.yml` (with M6);
+  - the screen (`S-updates`, Sonnet).
+- **Keys:** the owner created a release key and an offline recovery key (2026-10-22). Their public halves are in `packaging/keys/`, and the recovery key authorises key changes.
+
 **X-email decisions (email channel, guarded TCP):**
 - **SMTP goes through the SSRF guard.** `net::connect_tcp` resolves a host once through the same `Resolve`, refuses the name if any answer is disallowed, and connects only to a checked address; literal hosts are normalised the way `Url` normalises an `http` host (`0x7f.1`, `2130706433`, bare IPv6) and checked without DNS. Plain and STARTTLS sessions run over its stream (`AsyncSmtpConnection::connect_with_transport`). An implicit-TLS session gives lettre the checked socket addresses (`net::resolve_tcp`) instead, because lettre starts TLS before the greeting only on a stream it connected itself; it connects to exactly those addresses and resolves nothing (accepted in the X-email review). Both steps are bounded by the 10 s connect timeout.
 - **`lettre` 0.11.23** (`default-features = false`; `builder`, `smtp-transport`, `tokio1`, `tokio1-rustls`, `ring`, `rustls-platform-verifier`). Certificates are checked by the platform verifier reqwest already uses; no aws-lc, OpenSSL or native-tls.
@@ -2014,12 +2820,61 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Unchanged:** the filter engine, the floor, CS-5/CSX-5 (they judge detection's own class), the corrections, the crawler and the store. Adult torrents are still stored and indexed; this is display only.
 - **Left for later slices:** Alerts (B9), Insights segments (B11a) and Discover (B13) read the same `content.show_adult` when they land and leave Adult out entirely, not as placeholders (§20.9). Torznab, Stremio and export wire their own reserved fields.
 
-**B4b decisions (the SSE `torrents` count leaves out hidden Adult):**
-- **Counted at indexing, from the indexed term.** `Indexer::catch_up_counted` returns `(added, adult_added, replayed)`: a new torrent counts as Adult when its document carries `type:adult`, the exact term B17's `-type:adult` clause excludes, so the count and search agree by construction. Re-indexed torrents count in neither (unchanged), so a torrent indexed before it was enriched is announced as non-Adult, matching B17's known gap (it isn't hidden in search until it's enriched either). `Committed` gains `adult_added`. The swap's own report counts `type:adult` documents with ids in `(visible, last]` in the new index (one term-and-range count, no store reads); if that count fails, the swap announces nothing, as when its total fails.
-- **The hub counts under the visibility at `take`.** `EventSources` gains `adult: AdultVisibility`, wired in `services.rs` to a clone of `ApiState::adult` (the same reader over the settings channel, not a copy of the setting); the default hides Adult. Each `torrents` event's `added` is the pending total, minus the pending Adult while it's hidden, read once per event. Hidden Adult is dropped at that take, not held, so turning the setting on later doesn't announce torrents from before.
-- **An event with nothing visible isn't sent.** When everything new since the last event is hidden Adult, no `torrents` event goes out; `max_id` moves on with the next event, which always carries the newest watermark. `max_id` never needs to move on its own: the web client doesn't read it yet (only the generated types mention it), and a client that used it for "new since" would run a search, which applies B17's clause anyway, so a later `max_id` that also covers hidden Adult ids shows nothing hidden. Sending `{added: 0}` would only tell a client when hidden Adult arrived and make it react for nothing. `added` is now always at least 1.
-- **The feed takes one small lock in place of B4's two atomics.** The Adult count must be read with its total, or a take could subtract Adult whose total it hadn't seen yet. The sink holds a `Mutex` for three additions (never across a wait or an allocation) and wakes the hub as before, so it still never waits on a client. This replaces B4's "two atomics" and "a watermark that moved alone goes out as `{added: 0, max_id}`": with one lock a take never sees a watermark without its count.
-- **The public event keeps its shape** (`{added, max_id}`); there's no `adult_added` field, so nothing about hidden Adult leaves through it. Only the descriptions changed in `openapi.json` and `schema.d.ts`.
+**Review fixes (runner review of PR #86, 2026-10-22):** the review found design gaps in this session's plan, all fixed in the plan text:
+- **Key changes need the recovery key.** The release key alone can't rotate. Accepting a change revokes the old key. Key statements carry a monotonic sequence number.
+- **Manifest hygiene:**
+  - the manifest signs its channel;
+  - the highest accepted timestamp is stored, so an older signed manifest is refused;
+  - manifests are re-signed weekly before their 30-day expiry;
+  - the check sends a fixed User-Agent with no version.
+- **One update check.** About uses the signed manifest; B2c no longer calls GitHub's releases API.
+- **Rollback is run by a supervisor:**
+  - the installed binary runs the selected version as a child, with an `active` pointer, a `pending` probation record and 3 attempts;
+  - a crash or a hang rolls back without the new version's help;
+  - the start-time check verifies the signature and hash, but not manifest expiry.
+  - The Windows helper does the same, with the previous MSI cached.
+- **Security fixes:** on by default only under Install automatically, off by default under Check and notify, and never with Container image updates.
+- **The live log** gets its own admin-only `GET /logs/stream`. B4's shared ring and lag buffer would be flushed by log traffic, and B4 admits any session.
+- **The logging canary** gains a Full-plus-opt-ins run for secrets and sealed names. The CI check refuses `#[instrument]` without `skip_all` (or a `skip` naming every argument), and every `%e`/`?e` field. Turning a kind off purges the ring.
+- **Licences** are generated per shipped target, with a reviewed overrides file. The allowlist covers shipped components only, and adds MIT-0 and BlueOak-1.0.0 (both permissive and AGPL-compatible). That allowlist detail is this session's, not the owner's.
+
+**Review fixes, round 2 (runner, PR #86):**
+- **Update trust state lives outside the store** (`<data>/bin/trust.json`: key statements, sequence number, revoked keys, high-water mark), so a snapshot restore can't undo a revocation.
+- **Each overlay carries its full signed manifest and key chain,** so the supervisor verifies from the built-in recovery key alone.
+- **Revoked keys:** an overlay installed under a key revoked later keeps starting, with a notice.
+- **A leaked key can't freeze updates:**
+  - manifests more than a day ahead of the local clock are refused;
+  - expiry is capped at 30 days;
+  - the high-water mark belongs to the key generation and resets with a key statement.
+- **Rollback is journaled and crash-safe:**
+  - the child is stopped first;
+  - the store is restored before `active` is repointed, with the WAL removed before the rename;
+  - it rolls back at most one level, and stops with a console error after that;
+  - outside probation, the supervisor exits with the child's status;
+  - no `pending` record means no start;
+  - history and rollback notices live in `<data>/bin/history.json`;
+  - newer-format index directories are removed.
+- **Probation:**
+  - forwarded stops don't count as attempts;
+  - the timer starts after migrations;
+  - Windows probation survives reboots.
+- **The recovery key is an accepted risk.** Its rotation is the owner's call.
+- **Post-rotation manifests carry the key statements.**
+- **`LODESTAR_UPDATES=image`** locks Container image updates.
+- **Show adult content** is B17's server-wide `content.show_adult`, not a preference.
+- **The live log's caps and queue are its own:** 2 streams per session, 8 in all, a 256-record queue with a resync marker.
+
+**Review fixes, round 3 (runner, PR #86):**
+- **No process opens the store while a rollback journal exists.** On Windows, the service's start type is manual during a rollback.
+- **The store is restored by renaming the snapshot** from the same directory, so a restore needs no free space. A failed restore keeps the journal and starts neither version.
+- **A trust floor:** each build embeds the key statements it knew of, so deleting `trust.json` can't erase a revocation. The supervisor refuses overlays signed by keys that its own statements revoke.
+- **Residual risk, stated:** a pre-rotation image, plus write access to `<data>`, plus the leaked key.
+- **Clock and durability:**
+  - clock notices in both directions;
+  - the 1-day-ahead check also applies to statements;
+  - "forward only" means the (sequence, high-water) pair;
+  - directory fsyncs, and re-verification at install time.
+- **A "B-update must resolve" checklist** in §12.2 hands the remaining edge cases to the slice and its security review.
 
 ## 17. Verification (once built)
 
@@ -2264,7 +3119,7 @@ Every item has a `network` field: `bt` (clearnet BitTorrent), `bt-i2p`, `ed2k`, 
 | Restricted | Anna's Archive/LibGen and other High-risk content sources; tracker-announce peer finding (it lists our IP in swarms) | a consent screen explaining the legal exposure; VPN strongly advised |
 | Overlay | I2P, eD2k/Kad, IPFS | a consent screen + VPN recommendation; isolated tier; one-click purge |
 
-- **No profiles of people.** Peer IPs and IDs are used only briefly, to fetch metadata or count a swarm, and are **never stored alongside what they share**.
+- **No profiles of people.** Peer IPs and IDs are used only briefly, to fetch metadata or count a swarm, and are **never stored alongside what they share**. The one exception is the opt-in, time-limited **Peer activity** log kind (§12.1, owner's decision §2.11), which writes only to the local log file and live log.
   - The index holds facts about content, never "this IP has these files". Swarm statistics stay aggregate counts.
   - That keeps Lodestar from becoming a surveillance tool, matters legally (IP addresses are personal data under GDPR and similar laws), and limits the damage if an instance's data leaks.
   - It applies to every network, including eD2k shared-file browsing.
@@ -2499,7 +3354,7 @@ Filtering must **block exactly what it's meant to block** and **avoid false posi
 | `flag` | badge + review queue | instantly |
 | `demote` | ranking penalty | instantly |
 | `hide` | stored but hidden from search; "N hidden by filters · Show" with the reason | instantly |
-| `quarantine` | the item is held out of the index; only the hash, rule id and a **sealed** (encrypted-at-rest) name are kept, auto-purged after 30 days unless released | release re-fetches and processes it normally |
+| `quarantine` | the item is held out of the index; only the hash, rule id and a **sealed** (encrypted-at-rest) name are kept, auto-purged after 30 days unless released. An **adult hold** (held by the Adult-only core only because your correction or classification rule made it Adult, §20.9) becomes a **tombstone** at the purge: the name goes, the hash and rule id stay, and the hash is still refused (owner, 2026-10-22) | release re-fetches and processes it normally; releasing an adult hold warns that the refetch is judged as detection classifies it, so the Adult-only checks may not see it again |
 | `drop` | never stored; a **tombstone** (hash + rule id) prevents re-fetch loops | removing or narrowing the rule **re-queues its tombstones** for fetching |
 
 - **Shadow mode:** a new rule can log matches only, for a chosen number of days, before it acts.
@@ -2628,7 +3483,7 @@ Plain-text must-not-match fixtures ship with them: *Sex Education S02E03 – The
 6. **Overrides over signed base rules,** with a diff against the base and rebasing on update. Conflicts are flagged, never dropped.
 7. **No audit log** (owner's decision). Undo keeps only the previous rule set, one step back, not a history.
 
-**Default actions:** hash rules drop; pattern rules quarantine (hash + rule id + a **sealed** name, revealed only on an explicit action with your password; no file lists; auto-purged after 30 days unless released or confirmed). **Upstream improvement (opt-in):** "Report false positive" sends the rule id, your override diff and hashed tokens, never names.
+**Default actions:** hash rules drop; pattern rules quarantine (hash + rule id + a **sealed** name, revealed only on an explicit action with your password; no file lists; auto-purged after 30 days unless released or confirmed). An adult hold by CS-5a/5b keeps the 30-day purge of its name but then stays as a tombstone (§20.3, owner, 2026-10-22). **Upstream improvement (opt-in):** "Report false positive" sends the rule id, your override diff and hashed tokens, never names.
 
 **Precision in the curated base:** single ambiguous words never trigger on their own (e.g. "teen", common in legal adult marketing for 18–19-year-olds). Rules need multiple independent indicators, with stricter thresholds inside Adult (§20.9).
 
@@ -2725,7 +3580,14 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
     - **Prepare** refuses a CS-1 key before parsing, then judges the parsed torrent and stamps the verdict with the rule-set version.
     - **The writer** trusts a built-in worker's verdict at the current version and judges everything else again. It writes tombstones, quarantine rows and filter hits in the same transaction as the batch.
   - **Sealed names:** XChaCha20-Poly1305, keyed by `seal.key` in the data directory. The key isn't stored in the database, so a database copy alone reveals no names.
-  - **Purge:** expired quarantine and filter hits past retention are purged hourly, and expired keys become fetchable again.
+  - **Purge:** expired quarantine and filter hits past retention are purged hourly, and expired keys become fetchable again. An adult hold's quarantine becomes a tombstone instead (hash and rule id; no name), so its key stays refused (§20.3). Adult holds are marked by a `+adult` suffix on the stored rule id in `quarantine` and `tombstones`, which the store strips on read, so no migration was needed.
+  - **Releasing what a rule holds:** switching off a core rule (that was on) or a pack, or removing your rule, releases its quarantine and tombstones, all of them rather than a capped page. It runs behind the same effect warning and password as the change itself.
+    - It deletes in transactions of 10,000 rows, so ingest isn't kept waiting. A hash another rule still holds stays refused.
+    - The preview counts every hold per rule in SQL, so its numbers match what's released.
+    - The engine stops applying the rule (or list) before anything is released, so a hash released early isn't held again by it. Unsubscribing from or pausing a list releases its quarantine as well as its tombstones, the same way.
+    - **No weakening without the password, even after a race:** a core switch or a held list version previewed while it didn't weaken filtering (so no password was asked), which weakens it by the time it's applied, is refused with 409 `changed_since_preview`, and the client previews again. Whether a core switch is on is read from the store, in the preview and under the lock in apply, because the engine can lag the store after an apply that failed part-way.
+    - `quarantine` and `tombstones` have no index on `rule`, so this is a scan per rule. An index is noted for B8's migration.
+  - **Tombstones:** `GET /filters/tombstones` (`adult`, `cursor`, `limit`) lists them newest first by hash and rule, with `adult_hold` marked.
   - **Config blocklists only add (owner's decision §2.7):**
     - The M1 `blocklist.files` add their hashes to `cs_hashes` at start as imported CS-1b entries.
     - An entry a file no longer lists, or one added by a file that left the config, stays in the floor. It waits in that file's *pending floor removals*, is reported once per start ("N floor entries were removed from <file>; remove them in the app to unblock") and counted in `lodestar_floor_removals_kept_total`.
@@ -2733,7 +3595,7 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
     - Your own confirmations and reports are never a file's to drop.
 - **API:** `filters` (rules CRUD, preview, warning, test, shadow, packs, review queue, release; password-gated for weakening changes) and `classify` corrections (Not adult / Is adult, Not junk).
 - **As built (`lodestar_api::filters`, behind the session):**
-  - **Routes:** `GET /filters` (core switches, packs, your rules, CSX-5 entries, exceptions, Always allow, list subscriptions, counts), `GET /filters/queue` (quarantine by hash and rule, never with names, plus the 30-day decisions per rule), `POST /filters/preview` and `POST /filters/apply`.
+  - **Routes:** `GET /filters` (core switches, packs, your rules, CSX-5 entries, exceptions, Always allow, list subscriptions, counts), `GET /filters/queue` (quarantine by hash and rule, never with names, newest first in pages of up to 1,000 with a `next_cursor`, each marked `adult_hold` when it is one, plus the 30-day decisions per rule), `POST /filters/preview` and `POST /filters/apply`.
   - **One change per request,** tagged by `op`: core and pack switches, your rules (add / update / remove), CSX-5 entries, exceptions, Always allow, report abuse, remove CS-1 entries, release, confirm, reveal a sealed name, list subscriptions (subscribe / unsubscribe / pause / resolve a held version), pending floor removals (`resolve_floor_removal`) and Undo.
   - **Pending floor removals (§2.7):**
     - `GET /filters` lists them by source (`file:<path>` or `list:<id>`), with up to 1,000 hashes each.
@@ -2756,7 +3618,7 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
 - **As built (store migration V8, `classify` corrections):** `POST /classify/correct {hash, adult: true|false|null, not_junk}` keeps one correction per torrent in `class_corrections` and classifies the torrent again with it at once (`classify_corrected`). **Is adult** gives the nearest adult kind at confidence 100, including Ebook (as Comics) and Other (as Scene), which detection leaves alone; **Not adult** skips adult detection; **Not junk** clears the score and its reasons. Background enrichment applies the correction whenever it classifies the torrent again (a newer parser), and an upgraded partial import with a correction is queued for that. Corrections are classification, not filtering, so they don't ask for the password.
 - **As built (store migration V9, classification rules):** corrections feed back as **rules** and **fixtures** (§20.9).
   - **Rules:** `POST /classify/rules {query, adult}` saves a query plus Is adult / Not adult (`class_rules`, at most 1,000); `POST /classify/rules/remove {id}`. The newest matching rule applies at ingest (prepare and the writer's re-judge) and whenever a stored torrent is classified again; a torrent's own correction wins over any rule. Adding or removing a rule marks the stored torrents its query matches in the search index (`SearchIndex::matching_ids`, up to 1M, `truncated` past that) and everything the index hasn't reached, then starts another background-enrichment pass; without search, only new and re-enriched torrents are affected. A rule's query can't test `type:` or `adult:`, because it decides them. A generation number keeps rule changes and enrichment from racing (§16).
-  - **Filtering ignores corrections, except to be stricter:** the engine judges detection's own classification, so a Not adult rule can't take a torrent out of the Adult-only core checks (CS-5a/5b). An Is adult rule or correction that makes a torrent adult also has it judged as adult, at ingest and when a stored torrent is relabelled, and the stricter decision is applied (§16). `POST /classify/correct` reports `held_by` when that holds the torrent back.
+  - **Filtering ignores corrections, except to be stricter:** the engine judges detection's own classification, so a Not adult rule can't take a torrent out of the Adult-only core checks (CS-5a/5b). An Is adult rule or correction that makes a torrent adult also has it judged as adult at ingest, and so does any stored torrent that becomes adult (a rule, a correction or a newer parser); the stricter decision is applied (§16). An adult hold (held by CS-5a/5b only because of the relabel) becomes a tombstone when its 30-day quarantine ends (§20.3). `POST /classify/correct` reports `held_by` when that holds the torrent back.
   - **Fixtures:** `GET /classify` lists the rules and treats every per-torrent correction as a fixture for adult detection: it runs detection on each corrected torrent (up to 10,000, read in chunks of 500 and classified outside the store lock) and reports how many disagree, with up to 50 examples, so a rule can cover their kind.
 - **UI: Settings → Filters & Safety:**
   - **Rules:** layer, action, status (active / shadow / modified), hits over 7 days, false-positive reports.
@@ -2878,7 +3740,7 @@ Every change to filtering shows its impact **before** it takes effect. That cove
   - revealing a sealed name;
   - disabling a pack or pack rule;
   - deleting or narrowing your own drop/quarantine rules.
-- **No record is kept of any of these,** exceptions included: no author, reason, timestamp history or before/after.
+- **No record is kept of any of these,** exceptions included: no author, reason, timestamp history or before/after. The one exception is the opt-in, time-limited **Filter change details** log event (§12.1, owner's decision §2.11). It records what changed, never the items released.
 - **What a warning says** (generated from the change and its impact preview, §20.10):
   1. **What the change does, concretely,** in one or two sentences, naming the protections it bypasses.
   2. **What else it lets through:** the non-obvious side effect, stated honestly.
@@ -2920,7 +3782,6 @@ Exceptions are how you correct false positives without switching rules off. Like
   - no table stores an exception's author, reason, prompting torrent name or history;
   - fixtures created from false positives are hashed;
   - removing or narrowing an exception needs no password and re-applies filtering.
-
 
 ### 20.13 List subscriptions: popular blocklists, kept up to date
 **Owner's request:** connecting to popular blocklists should be easy, and Lodestar keeps them updated. A subscription is a list Lodestar fetches on a schedule and applies as a **pack-layer source** (§20.1).
