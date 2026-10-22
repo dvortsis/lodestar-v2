@@ -176,7 +176,7 @@
    "pr": 71,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "launched 14:40; not live.rs/compile.rs (B4/B17) | PR #71; reviewer started 16:45 | 17:15 r1 FIX: visibility via base(without_facet(user_ast)), merge main, category ranges, near-1M perf. 18:24 R1 all in (ee81535); R2 review in flight. 19:18 R2 MERGE at ee81535; must add B17 wiring + I1 lease precondition, I2 1M single-segment perf, I3 share selection, P2 bin cap before merge. 19:56 B17 wiring + I1/I2/I3/P2 pushed 3dd0eaf; R3 delta review in flight. 20:20 R3 MERGE at 3dd0eaf (polish deferred: lease.rs doc swap, adult_kind wording, Hours cap test, bin_of clamp, golden note). Merge on green."
+   "notes": "launched 14:40; not live.rs/compile.rs (B4/B17) | PR #71; reviewer started 16:45 | 17:15 r1 FIX: visibility via base(without_facet(user_ast)), merge main, category ranges, near-1M perf. 18:24 R1 all in (ee81535); R2 review in flight. 19:18 R2 MERGE at ee81535; must add B17 wiring + I1 lease precondition, I2 1M single-segment perf, I3 share selection, P2 bin cap before merge. 19:56 B17 wiring + I1/I2/I3/P2 pushed 3dd0eaf; R3 delta review in flight. 20:20 R3 MERGE at 3dd0eaf (polish deferred: lease.rs doc swap, adult_kind wording, Hours cap test, bin_of clamp, golden note). Merge on green. 20:45 243443a main merge only; merge on green."
   },
   "B16": {
    "status": "pending",
@@ -212,7 +212,7 @@
    "pr": 78,
    "attempt": 1,
    "review_rounds": 3,
-   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #78; reviewer started 16:45 | 16:58 round 1 FIX: load-more stuck, shift anchor by index, touch targets, .ls-focus dup; + measure opt-in, tokens, tree index prop, 100k expand perf, dup names, roving on click, Esc in drawer, tests, PR size. R2 FIX 18:20: coarse targets overlap; Drawer Esc swallowed by aria-expanded; Menu focus invisible; popover test race (Bits rAF autofocus). 18:23 R2 fixes pushed 44fdd31; R3 review held until #76 merges (dev-routes move + search JS 37.5 vs 32.4 kB). 20:20 dev-routes moved + main merged; R3 review in flight. CSS 20.32 kB vs 20 budget? 20:52 R3 FIX: CSS 20.32/20 (daisyUI exclude menu/modal/drawer/footer approved in app.css); popover must close on Tab-out."
+   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #78; reviewer started 16:45 | 16:58 round 1 FIX: load-more stuck, shift anchor by index, touch targets, .ls-focus dup; + measure opt-in, tokens, tree index prop, 100k expand perf, dup names, roving on click, Esc in drawer, tests, PR size. R2 FIX 18:20: coarse targets overlap; Drawer Esc swallowed by aria-expanded; Menu focus invisible; popover test race (Bits rAF autofocus). 18:23 R2 fixes pushed 44fdd31; R3 review held until #76 merges (dev-routes move + search JS 37.5 vs 32.4 kB). 20:20 dev-routes moved + main merged; R3 review in flight. CSS 20.32 kB vs 20 budget? 20:52 R3 FIX: CSS 20.32/20 (daisyUI exclude menu/modal/drawer/footer approved in app.css); popover must close on Tab-out. 20:56 dac5aa0 verified by runner -> APPROVED, merge on green."
   },
   "W7e": {
    "status": "changes_requested",
@@ -221,7 +221,7 @@
    "pr": 74,
    "attempt": 1,
    "review_rounds": 3,
-   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #74; reviewer started 16:45 | 17:10 r1 FIX: token classes (runner shared fix), dup groups, brush, null delta, dates, int axes. R2 FIX 17:55: computed-style test missing, x-axis tick overlap, showcase in prod (+1.83 kB; move to dev-routes after #76). 18:04 R2 fixes pushed 219eed7; waits on #80 and #76. 20:20 6ad522d dev-routes moved; computed-style tests red until #80 (owner baselines). Blocked on #80. 20:50 R3 FIX: brush external-selection commit, measured tick spacing, PR body. Verified all 6 specs pass with #80."
+   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #74; reviewer started 16:45 | 17:10 r1 FIX: token classes (runner shared fix), dup groups, brush, null delta, dates, int axes. R2 FIX 17:55: computed-style test missing, x-axis tick overlap, showcase in prod (+1.83 kB; move to dev-routes after #76). 18:04 R2 fixes pushed 219eed7; waits on #80 and #76. 20:20 6ad522d dev-routes moved; computed-style tests red until #80 (owner baselines). Blocked on #80. 20:50 R3 FIX: brush external-selection commit, measured tick spacing, PR body. Verified all 6 specs pass with #80. 20:56 b6fc4b1 verified by runner -> APPROVED, merge after #80 lands (computed-style tests)."
   },
   "W9": {
    "status": "pending",
