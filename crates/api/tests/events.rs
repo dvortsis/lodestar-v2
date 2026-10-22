@@ -51,6 +51,8 @@ fn fixture(config: EventsConfig) -> Fixture {
                 reader: Arc::new(Mutex::new(reader)),
                 filters: None,
                 settings: None,
+                hot: None,
+                events: None,
             }),
         )
         .layer(Extension(hub.clone()));
@@ -489,6 +491,8 @@ async fn without_a_hub_it_is_unavailable() {
             reader: Arc::new(Mutex::new(reader)),
             filters: None,
             settings: None,
+            hot: None,
+            events: None,
         }),
     );
     let cookie = session(&auth);
