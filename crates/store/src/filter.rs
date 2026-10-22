@@ -79,6 +79,10 @@ pub const SHADOW: u8 = 0x80;
 /// The locked floor's rule ids (the filter's `CoreRule::floor`; a filter
 /// test keeps them equal). An adult hold's purge never replaces their
 /// tombstones.
+/// How long a WAL scrub's TRUNCATE checkpoint may wait for readers and
+/// writers on other connections (see [`Store::scrub_wal`]).
+const SCRUB_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
+
 pub const FLOOR_RULES: [&str; 3] = ["CS-1a", "CS-1b", "CS-8a"];
 
 /// Appended to the stored rule id of an adult hold
@@ -375,12 +379,13 @@ impl Store {
                 params![now, adult, FLOOR_RULES[0], FLOOR_RULES[1], FLOOR_RULES[2]],
             )?;
         }
-        let purged = tx.execute("DELETE FROM quarantine WHERE expires_at <= ?1", [now])?;
+        tx.execute("DELETE FROM quarantine WHERE expires_at <= ?1", [now])?;
         let hits = tx.execute("DELETE FROM filter_hits WHERE at < ?1", [hits_before])?;
         tx.commit()?;
-        if purged > 0 || self.scrub_pending {
-            self.scrub_wal();
-        }
+        // Every purge scrubs (hourly on the writer), not only one that
+        // deleted something: it retries a scrub that was busy on any
+        // connection, since they share the WAL.
+        self.scrub_wal();
         Ok((expired, hits))
     }
 
@@ -449,19 +454,32 @@ impl Store {
     /// written when the rows went in, until it's checkpointed and
     /// truncated (owner decision: deleted data is overwritten).
     ///
-    /// Best effort, and it never fails the delete that already committed:
-    /// a reader holding an old snapshot keeps the WAL from being truncated
-    /// (SQLite waits out the busy timeout, then gives up), and so does an
-    /// I/O error. Either way `scrub_pending` is set, and the next delete or
-    /// the next purge (which runs on a timer) tries again; the shutdown
-    /// checkpoint truncates it too. A no-op for an in-memory store.
+    /// A PASSIVE checkpoint first copies the frames back without taking
+    /// the write lock. The TRUNCATE that follows needs that lock and every
+    /// reader to be done with the WAL, so it waits at most
+    /// [`SCRUB_WAIT`] instead of the store's 5 s busy timeout: another
+    /// connection's write (an ingest batch) gets SQLITE_BUSY at once while
+    /// the lock is held, and mustn't be made to fail by a long wait.
+    ///
+    /// Best effort, and it never fails the delete that already committed.
+    /// A busy reader, a writer on another connection or an I/O error sets
+    /// `scrub_pending`, and the next delete on this connection tries again.
+    /// So does the writer's hourly [`purge_filter`](Store::purge_filter),
+    /// which scrubs every time: the WAL is shared, so that covers deletes
+    /// made on any connection. The shutdown checkpoint truncates it too.
+    /// A no-op for an in-memory store.
     pub(crate) fn scrub_wal(&mut self) {
+        let _ = self
+            .conn
+            .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()));
+        let _ = self.conn.busy_timeout(SCRUB_WAIT);
         let done = self
             .conn
             .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
                 r.get::<_, i64>(0)
             })
             .is_ok_and(|busy| busy == 0);
+        let _ = self.conn.busy_timeout(crate::schema::BUSY_TIMEOUT);
         self.scrub_pending = !done;
     }
 
@@ -668,7 +686,7 @@ mod tests {
         sealed.extend_from_slice(marker);
         let contains = |hay: &[u8]| hay.windows(marker.len()).any(|w| w == marker);
         type Delete = fn(&mut Store, [u8; 20]);
-        let paths: [(&str, Delete); 3] = [
+        let paths: [(&str, Delete); 4] = [
             ("purge", |s, _| {
                 s.purge_filter(100, 0).unwrap();
             }),
@@ -677,6 +695,9 @@ mod tests {
             }),
             ("release_rules", |s, _| {
                 assert_eq!(s.release_rules(&["U-1".into()], |_| {}).unwrap(), 1);
+            }),
+            ("release_many", |s, h| {
+                assert_eq!(s.release_many(&[h, [0; 20]]).unwrap(), vec![true, false]);
             }),
         ];
         for (name, delete) in paths {
