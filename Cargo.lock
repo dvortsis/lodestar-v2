@@ -1179,6 +1179,7 @@ dependencies = [
  "lodestar-sources",
  "lodestar-sources-importers",
  "lodestar-store",
+ "lodestar-tracker-scrape",
  "mimalloc",
  "serde",
  "serde_json",

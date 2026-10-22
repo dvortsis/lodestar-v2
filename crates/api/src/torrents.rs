@@ -89,7 +89,15 @@ fn load(s: &ApiState, hash: &str) -> ApiResult<(TorrentRow, FileTree)> {
 pub async fn detail(State(s): State<ApiState>, Path(hash): Path<String>) -> ApiResult<Json<Value>> {
     tokio::task::spawn_blocking(move || {
         let (row, tree) = load(&s, &hash)?;
+        if let Some(e) = &s.events {
+            e.interest(row.id);
+        }
         let mut v = summary(&row);
+        v["swarm"] = {
+            let store = s.reader.lock().expect("reader lock");
+            crate::swarm::detail(&store, s.hot.as_deref(), row.id, row.last_seen_at)
+                .map_err(internal)?
+        };
         let shown: Vec<Value> = tree
             .files
             .iter()
