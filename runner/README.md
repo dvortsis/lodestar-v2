@@ -6,7 +6,9 @@ The runner is one long-lived **Opus session**. It works through `docs/build-plan
 - it merges what passes;
 - it moves on.
 
-The owner approved this on 2026-10-22. Merging green, reviewed PRs and creating branches as needed are both allowed.
+The owner approved this on 2026-10-22. Merging green, reviewed PRs and creating branches as needed are both allowed. If a direct merge is refused, the runner turns on GitHub auto-merge instead, still only after green CI and a passing review.
+
+**`runner/standards.md` is the single bar** for every slice and every review: the checks, the code and UI rules, and the review checklist with severities. Every brief and every reviewer prompt points to it.
 
 If the runner session is lost, start a new Opus session (Auto mode) with the prompt *"Act as the Lodestar build runner: follow runner/README.md."*. Everything it needs is in this directory and on the `runner-state` branch.
 
@@ -18,6 +20,15 @@ If the runner session is lost, start a new Opus session (Auto mode) with the pro
 | `state.json` on branch **`runner-state`** | each slice's status, session id, PR number, review rounds, attempts, and today's launch count | pushed directly by the runner after every change |
 
 Slice status moves through `pending → ready → running → in_review → merged`. The two exits are `parked`, which needs the owner, and `blocked`, which is waiting on something outside the runner.
+
+## Other sessions the runner watches
+The owner asked the runner to keep an eye on the M4 sessions ("M4 continuation" and the content-filter session titled "Modern DHT crawler architecture"). On every heartbeat the runner:
+- checks their status;
+- tells the owner about any pending permission prompt, which it can't answer;
+- nudges an idle session that still has work left;
+- flags conflicts with slice ownership or migration order (V4 filter, V5 swarm, V6 filter rules; M5 comes after).
+
+The list lives in `state.json` under `watched_sessions`.
 
 ## When the runner wakes
 1. **GitHub events** on every slice PR it subscribes to (CI results, reviews, merges, conflicts).
@@ -32,7 +43,7 @@ Slice status moves through `pending → ready → running → in_review → merg
    - **Failed session or turn:** send the session one message to resume. If it fails a second time, mark the slice `attempt+1` and relaunch it as below.
    - **PR open and the session idle:** move the slice to `in_review`.
 3. **Review every `in_review` slice whose CI is green on its head:**
-   - Spawn a **fresh Opus reviewer**: an `Agent` subagent, Opus, in the background. It gets only the diff, the brief and the spec sections, never the runner's own opinion.
+   - Spawn a **fresh Opus reviewer**: an `Agent` subagent, Opus, in the background. It gets only the diff, the brief, the spec sections and `runner/standards.md` §4, never the runner's own opinion.
    - It reports blocking, important and polish findings.
    - **Anything touching auth, credentials, filters, the cluster or companions** also gets `/security-review`.
    - **Blocking findings:** send them to the slice session, with the exact items, to fix and push. Then review again.
@@ -68,7 +79,7 @@ Use `create_session` with these settings:
 
 **Standing instructions for every slice session:**
 > You are building one slice of Lodestar for an automated runner.
-> - Read CLAUDE.md and the brief's spec sections first.
+> - Read CLAUDE.md, `runner/standards.md` and the brief's spec sections first.
 > - Work only on branch `slice/<id>`, and edit only the paths the brief lets you own. If a shared file needs a change, say so in the PR description instead of making it.
 > - Before pushing, run every check in the brief's "Done when" line, plus CLAUDE.md's checks. Don't push red.
 > - When done, open a PR to `main` titled `<id>: <title>`. Its description should cover what changed, the checks you ran with their results, the shared-file edits needed, any missing contract fields, and any deviations from the spec and why.
