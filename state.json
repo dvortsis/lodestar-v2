@@ -974,7 +974,9 @@
    "status": "running",
    "session": "session_01MRKeGCGmpz4LUQE5LbEXsz",
    "owner_started": true,
-   "notes": "owner 22:20: 'You can modify the filter budget/ gate if there is something more efficient to our tech stack' -> no further sign-off needed. Recommended: cachegrind instruction-count PR gate (Ir(2N)-Ir(N))/N vs committed baseline +10%; wall-clock 50us reported, held on main/nightly. Supersedes #66."
+   "notes": "owner chose 'Normalise' in-session (per-pass calibration, scale [0.4,3.0], ref-runner us). PR #97 draft; temp sample workflow to be removed; supersedes #66 (close on merge).",
+   "pr": 97,
+   "branch": "claude/affectionate-hawking-uhztfw"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
