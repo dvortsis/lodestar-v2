@@ -1216,6 +1216,8 @@ dependencies = [
  "axum",
  "hmac",
  "lodestar-bencode",
+ "lodestar-classify",
+ "lodestar-filter",
  "lodestar-metainfo",
  "lodestar-search",
  "lodestar-store",
@@ -1292,6 +1294,7 @@ dependencies = [
  "lodestar-search",
  "lodestar-store",
  "proptest",
+ "tracing",
  "unicode-normalization",
 ]
 

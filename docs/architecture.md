@@ -2410,6 +2410,15 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
   - **Purge:** expired quarantine and filter hits past retention are purged hourly, and expired keys become fetchable again.
   - **Old config blocklists:** the M1 `blocklist.files` load as imported CS-1b entries.
 - **API:** `filters` (rules CRUD, preview, warning, test, shadow, packs, review queue, release; password-gated for weakening changes) and `classify` corrections (Not adult / Is adult, Not junk).
+- **As built (`lodestar_api::filters`, behind the session):**
+  - **Routes:** `GET /filters` (core switches, packs, your rules, CSX-5 entries, exceptions, Always allow, list subscriptions, counts), `GET /filters/queue` (quarantine by hash and rule, never with names, plus the 30-day decisions per rule), `POST /filters/preview` and `POST /filters/apply`.
+  - **One change per request,** tagged by `op`: core and pack switches, your rules (add / update / remove), CSX-5 entries, exceptions, Always allow, report abuse, remove CS-1 entries, release, confirm, reveal a sealed name, list subscriptions (subscribe / unsubscribe / pause / resolve a held version) and Undo.
+  - **Protocol (§20.11):** `preview` returns `{weakening, confirm, warning, preview, neutralize}` and never applies or asks for the password. `apply` runs the same assessment on the server; a change that needs confirming is refused with **428** and the assessment until the request carries the admin password, checked like a login (rate-limited per IP) and never remembered. Marking a list as part of the floor needs the password too.
+  - **Guardrails hold server-side:** the floor can't be switched off (409), floor rules take no exceptions, overrides and exceptions are validated by the engine, and list actions must be protective.
+  - **Preview numbers:** whole-rule changes count from the review queue, tombstones and `filter_hits` rollups. Entry-level changes (CSX-5, exceptions, Always allow) re-judge quarantined items from their sealed names and tombstones by hash, and are marked as estimates because file lists aren't kept. The 30-day figures are the upper bound for the rules the change can bypass. Running this as a background job with progress (§20.10) arrives with the UI.
+  - **Undo:** the rule layers and switches are snapshotted into `rule_set_prev` only after a change to them succeeds, so a refused change never replaces the Undo step. Undo swaps the two sets, so a second Undo redoes. It can weaken, so it asks for the password.
+  - **Releases** clear the store row and the in-memory held set together, so intake fetches the torrent the next time it's seen.
+  - **Shadow:** rules and CSX-5 entries take `shadow_days`. Rule tests against fixtures and the `classify` corrections are still to come.
 - **UI: Settings → Filters & Safety:**
   - **Rules:** layer, action, status (active / shadow / modified), hits over 7 days, false-positive reports.
   - **Editor:** builder or text, live preview, fixtures, shadow toggle, diff against base for core and pack rules.

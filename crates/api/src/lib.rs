@@ -8,6 +8,7 @@
 //! `Origin` must match `Host`.
 
 pub mod auth;
+pub mod filters;
 mod torrents;
 
 use std::net::{IpAddr, SocketAddr};
@@ -43,6 +44,8 @@ pub struct ApiState {
     pub index: Option<SearchIndex>,
     /// A read-only connection for detail and enrichment.
     pub reader: Arc<Mutex<Store>>,
+    /// `None` when the filters API isn't served (tests, tools).
+    pub filters: Option<Arc<filters::FiltersApi>>,
 }
 
 /// An API error: a status and a JSON body.
@@ -83,6 +86,10 @@ pub fn router(state: ApiState) -> Router {
         .route("/torrents/{hash}", get(torrents::detail))
         .route("/torrents/{hash}/files", get(torrents::files))
         .route("/password", post(change_password))
+        .route("/filters", get(filters::overview))
+        .route("/filters/queue", get(filters::queue))
+        .route("/filters/preview", post(filters::preview))
+        .route("/filters/apply", post(filters::apply))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_session,

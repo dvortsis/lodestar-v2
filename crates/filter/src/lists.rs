@@ -13,9 +13,15 @@
 //! `#` and `//` start comment lines. Compressed downloads are gunzipped
 //! with a cap on the expanded size.
 
+use std::collections::HashSet;
 use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::{Arc, RwLock};
+
+use lodestar_store::Store;
+
+use crate::core::Action;
+use crate::engine::{Handle, ListLayer};
 
 /// Entries kept per list.
 pub const MAX_ENTRIES: usize = 4_000_000;
@@ -425,6 +431,72 @@ impl SharedIps {
     pub fn current(&self) -> Arc<IpSet> {
         self.0.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
+}
+
+/// `subscriptions.kind` for IP lists (0 is content).
+pub const KIND_IP: u8 = 1;
+
+/// IP lists covering more than this share of IPv4 get a warning.
+const BROAD: f64 = 0.10;
+
+/// Rebuilds the filter's list layers and the shared IP set from every
+/// enabled subscription's applied version.
+pub fn apply(store: &Store, filter: &Handle, ips: &SharedIps) -> Result<(), String> {
+    let subs = store.subscriptions().map_err(|e| e.to_string())?;
+    let mut ip_sets = Vec::new();
+    let mut content = Vec::new();
+    for s in &subs {
+        let data = if s.enabled {
+            store
+                .subscription_data(s.id, false)
+                .map_err(|e| e.to_string())?
+        } else {
+            None
+        };
+        match s.kind {
+            KIND_IP => {
+                if let Some(set) = data.as_deref().and_then(IpSet::decode) {
+                    ip_sets.push(set);
+                }
+            }
+            _ => {
+                let hashes = data.map(|d| {
+                    Arc::new(
+                        d.chunks_exact(20)
+                            .map(|c| <[u8; 20]>::try_from(c).expect("20 bytes"))
+                            .collect::<HashSet<_>>(),
+                    )
+                });
+                content.push((s, hashes));
+            }
+        }
+    }
+    let set = IpSet::union(&ip_sets);
+    let coverage = set.v4_coverage();
+    if coverage > BROAD {
+        tracing::warn!(
+            "subscribed IP lists block {:.0}% of IPv4 addresses; the crawler will see \
+             correspondingly less of the DHT",
+            coverage * 100.0
+        );
+    }
+    ips.replace(set);
+    filter.update_engine(|e| {
+        for (s, hashes) in content {
+            let id = s.id as u32;
+            if s.floor {
+                e.core.cs.set_list(id, hashes);
+                e.set_list(None, id);
+            } else {
+                let action = Action::from_code(s.action)
+                    .filter(|a| a.protective())
+                    .unwrap_or(Action::Drop);
+                e.set_list(hashes.map(|hashes| ListLayer { id, action, hashes }), id);
+                e.core.cs.set_list(id, None);
+            }
+        }
+    });
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
