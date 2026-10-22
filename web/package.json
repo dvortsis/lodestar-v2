@@ -8,6 +8,8 @@
 	},
 	"scripts": {
 		"dev": "vite dev",
+		"themes": "node --experimental-strip-types scripts/themes.ts",
+		"prebuild": "npm run themes",
 		"build": "vite build",
 		"preview": "vite preview",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json && eslint . && prettier --check . && node scripts/check-bans.mjs",

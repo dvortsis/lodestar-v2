@@ -12,7 +12,9 @@ use std::time::Instant;
 
 use lodestar_bench::synth::Generator;
 use lodestar_metainfo::Info;
-use lodestar_store::{NewTorrent, Store, StoreConfig, filetree};
+use lodestar_store::{
+    NewTorrent, Store, StoreConfig, SwarmUpdate, TrackerCounts, WriteBatch, filetree,
+};
 
 /// Budgets in bytes per torrent at a ~30-file average. §3 allows 1.5 KB for
 /// the canonical store plus the torrent index; M0 reserves 0.5 KB of that
@@ -169,6 +171,11 @@ fn run(args: &Args) -> Result<bool, Box<dyn std::error::Error>> {
         after = last;
     }
     let enrich_time = t3.elapsed();
+    // Swarm health (§7): every torrent scraped once, as the scheduler
+    // leaves the store after its first pass.
+    let t4 = Instant::now();
+    scrape_all(&mut store, args.seed)?;
+    let scrape_time = t4.elapsed();
     store.checkpoint()?;
 
     // The torrent index (§8), built by the same catch-up path the server
@@ -268,6 +275,24 @@ fn run(args: &Args) -> Result<bool, Box<dyn std::error::Error>> {
         }
     }
 
+    let swarm_bytes: f64 = conn.query_row(
+        "SELECT total(pgsize) FROM dbstat WHERE name IN \
+         ('swarm', 'swarm_due', 'swarm_trackers', 'swarm_history', 'trackers')",
+        [],
+        |r| r.get(0),
+    )?;
+    let (live, with_history): (f64, f64) = conn.query_row(
+        "SELECT (SELECT count(*) FROM swarm_trackers), (SELECT count(*) FROM swarm_history)",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    println!(
+        "\n  swarm health        {:.0} B per torrent ({:.0}% reporting, {:.0}% with history)",
+        swarm_bytes / n,
+        100.0 * live / n,
+        100.0 * with_history / n
+    );
+
     println!("\n  by file count       torrents   stored blob mean");
     let mut stmt = conn.prepare(
         "SELECT CASE WHEN t.file_count <= 1 THEN 0 WHEN t.file_count <= 10 THEN 1
@@ -297,13 +322,15 @@ fn run(args: &Args) -> Result<bool, Box<dyn std::error::Error>> {
 
     println!(
         "\n  throughput          generate+parse {:.0}/s, store {:.0}/s; \
-         training + recompressing {} blobs took {:.1} s; enriching {:.0}/s; indexing {:.0}/s",
+         training + recompressing {} blobs took {:.1} s; enriching {:.0}/s; indexing {:.0}/s; \
+         swarm updates {:.0}/s",
         n / totals.generate_parse.as_secs_f64(),
         n / totals.store.as_secs_f64(),
         group(recompressed),
         train_time.as_secs_f64(),
         n / enrich_time.as_secs_f64(),
-        n / index_time.as_secs_f64()
+        n / index_time.as_secs_f64(),
+        n / scrape_time.as_secs_f64()
     );
 
     let checks = [
@@ -327,6 +354,79 @@ fn run(args: &Args) -> Result<bool, Box<dyn std::error::Error>> {
         );
     }
     Ok(ok)
+}
+
+/// Trackers in the synthetic scrape list, about a real default list.
+const TRACKERS: usize = 20;
+const SCRAPED_AT: i64 = 1_760_000_000;
+
+/// Writes one scrape result per stored torrent: about 40% of swarms are
+/// live (a heavy tail of seeders, one to six of the 20 trackers reporting,
+/// and history); the rest are dead.
+fn scrape_all(store: &mut Store, seed: u64) -> Result<(), Box<dyn std::error::Error>> {
+    let trackers = (0..TRACKERS)
+        .map(|i| store.upsert_tracker(&format!("udp://tracker{i}.example:6969"), SCRAPED_AT))
+        .collect::<Result<Vec<u16>, _>>()?;
+    let mut after = 0;
+    loop {
+        let ids = store.ids_after(after, 5000)?;
+        let Some(&last) = ids.last() else {
+            return Ok(());
+        };
+        after = last;
+        let updates: Vec<SwarmUpdate> = ids
+            .iter()
+            .map(|&id| synth_swarm(id, seed, &trackers))
+            .collect();
+        store.write(&WriteBatch {
+            swarm: &updates,
+            ..WriteBatch::default()
+        })?;
+    }
+}
+
+fn synth_swarm(id: i64, seed: u64, trackers: &[u16]) -> SwarmUpdate {
+    // splitmix64: a cheap, well-mixed draw per torrent.
+    let mut x = (id as u64 ^ seed).wrapping_add(0x9e37_79b9_7f4a_7c15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^= x >> 31;
+    let live = x % 100 < 40;
+    let mut u = SwarmUpdate {
+        torrent_id: id,
+        at: SCRAPED_AT,
+        seeders: 0,
+        leechers: 0,
+        completed: 0,
+        trackers_reporting: 0,
+        trackers_checked: trackers.len() as u16,
+        dht: ((x >> 40) % 10 < 7).then_some((0, 0)),
+        per_tracker: Vec::new(),
+        next_scrape_at: SCRAPED_AT + 2 * 86_400,
+        flags: 0,
+        interest: false,
+    };
+    if live {
+        // 70% of live swarms under 10 seeders, 25% under 100, 5% under 1,000.
+        let scale = [10, 100, 1_000][((x >> 8) % 100 / 70 + (x >> 8) % 100 / 95) as usize];
+        u.seeders = ((x >> 16) % scale) as u32;
+        u.leechers = u.seeders / 3 + ((x >> 24) % 7) as u32;
+        u.completed = u.seeders * 20 + ((x >> 32) % 100) as u32;
+        let reporting = 1 + (x >> 44) % 6;
+        let first = (x >> 50) as usize;
+        u.per_tracker = (0..reporting as usize)
+            .map(|k| TrackerCounts {
+                tracker: trackers[(first + k * 7) % trackers.len()],
+                seeders: u.seeders,
+                leechers: u.leechers,
+                completed: u.completed,
+            })
+            .collect();
+        u.trackers_reporting = reporting as u16;
+        u.dht = u.dht.map(|_| (u.seeders / 2, u.leechers / 2));
+        u.next_scrape_at = SCRAPED_AT + 6 * 3600;
+    }
+    u
 }
 
 fn dir_size(dir: &std::path::Path) -> std::io::Result<u64> {

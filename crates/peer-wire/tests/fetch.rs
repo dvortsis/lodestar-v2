@@ -1,12 +1,13 @@
 //! End-to-end metadata fetches against the fake peer over real TCP.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::{Info, InfoHash};
 use lodestar_peer_wire::testing::{Accept, Behavior, FakePeer, Seed};
-use lodestar_peer_wire::{Encryption, Error, FetchOptions, fetch};
+use lodestar_peer_wire::{Deny, Encryption, Error, FetchOptions, fetch};
 use sha2::{Digest, Sha256};
 
 /// A realistic info dict of roughly `size` bytes (grown via file entries).
@@ -192,4 +193,17 @@ async fn unknown_hash_and_unreachable_peer() {
         fetch(closed, InfoHash([9; 20]), &opts(Encryption::Disable)).await,
         Err(Error::Connect(_))
     ));
+}
+
+#[tokio::test]
+async fn denied_addresses_are_never_connected_to() {
+    let seed = Seed::v1(info_dict(100));
+    let hash = InfoHash(seed.info_hash);
+    let peer = FakePeer::spawn(vec![seed], Accept::Both, Behavior::Honest, vec![]).await;
+    let mut o = opts(Encryption::Prefer);
+    o.deny = Some(Deny(Arc::new(|ip| ip.is_loopback())));
+    let err = fetch(peer.addr(), hash, &o).await.unwrap_err();
+    assert!(matches!(err, Error::Denied), "{err}");
+    o.deny = Some(Deny(Arc::new(|_| false)));
+    assert!(fetch(peer.addr(), hash, &o).await.is_ok());
 }
