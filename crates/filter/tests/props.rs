@@ -277,8 +277,11 @@ fn calibrate(name: &str, files: &[FileInfo], common: &[u64]) -> usize {
 }
 
 /// [`calibrate`]'s time per torrent on the reference runner, in
-/// nanoseconds (§20.8 names the runs it comes from).
-const CALIB_REF_NS: f64 = 6_000.0;
+/// nanoseconds: the fastest hosted runners seen, a Xeon 6973P-C (7.42 µs,
+/// job 120136592071) and an EPYC 9V45 (7.3-7.6 µs, job 120123205000). On
+/// those the gate reads what it did before calibration; across the four
+/// CPU types seen, the scaled 10% case reads 31.7-36.0 µs (§20.8).
+const CALIB_REF_NS: f64 = 7_400.0;
 
 /// §20.8 and the owner's budget (§1.6.6): under 50 µs per torrent at
 /// 10,000 rules. Ignored in debug test runs; CI runs it in release (the
@@ -292,7 +295,7 @@ const CALIB_REF_NS: f64 = 6_000.0;
 ///
 /// The budget is in reference-runner microseconds (owner, 2026-10-22;
 /// `docs/decisions/2026-10-22-filter-budget.md`). Hosted runners differ
-/// by about 1.7× in speed, so the test times [`calibrate`] before any
+/// by about 1.5× in speed, so the test times [`calibrate`] before any
 /// filter code runs and again once the engine is gone, and divides each
 /// case's time by how much slower than [`CALIB_REF_NS`] it ran. The
 /// calibration never runs beside filter state, so a regression can't slow
@@ -302,7 +305,7 @@ const CALIB_REF_NS: f64 = 6_000.0;
 fn budget() {
     const BUDGET_US: f64 = 50.0;
     // Outside this, the measurement is wrong rather than the runner slow.
-    const SPEED: std::ops::RangeInclusive<f64> = 0.1..=10.0;
+    const SPEED: std::ops::RangeInclusive<f64> = 0.4..=3.0;
     let set = torrents(512);
     let classes: Vec<_> = set
         .iter()
