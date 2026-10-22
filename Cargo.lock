@@ -1266,6 +1266,7 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
+ "utoipa",
 ]
 
 [[package]]
