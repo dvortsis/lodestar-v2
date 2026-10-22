@@ -113,6 +113,10 @@ test('popover is non-modal: Tab from its last control continues after the trigge
 	// and a focus trap would cycle back to the checkbox.
 	await kbd.press('Tab');
 	await expect(page.getByRole('button', { name: 'Actions' })).toBeFocused();
+	// Focus moved on, so the panel closes instead of lingering over the page (WCAG 2.4.11).
+	await expect(page.getByRole('dialog', { name: 'Columns' })).toBeHidden();
+	await kbd.press('Tab');
+	await expect(page.getByRole('dialog', { name: 'Columns' })).toHaveCount(0);
 });
 
 test('popover is non-modal: Shift+Tab from its first control returns to the trigger', async ({

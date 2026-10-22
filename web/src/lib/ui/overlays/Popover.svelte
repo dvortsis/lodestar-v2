@@ -30,7 +30,36 @@
 		align = 'start'
 	}: Props = $props();
 
+	/** Tabbable and actually rendered: hidden inputs and `display: none` would trap Tab. */
+	const tabbables = (root: ParentNode) =>
+		[...root.querySelectorAll<HTMLElement>(TABBABLE)].filter(
+			(el) =>
+				!(el instanceof HTMLInputElement && el.type === 'hidden') && el.getClientRects().length > 0
+		);
+
 	let triggerEl = $state<HTMLElement | null>(null);
+	let hadTrigger = false;
+
+	// A trigger that unmounts while the panel is open takes its anchor with it: close.
+	$effect(() => {
+		if (triggerEl) hadTrigger = true;
+		else if (hadTrigger && open) setOpen(false);
+	});
+
+	function setOpen(next: boolean) {
+		open = next;
+		onOpenChange?.(next);
+	}
+
+	/** Focus leaving the panel for anything but the trigger closes it, so a panel never lingers
+	    over the content focus moved on to (WCAG 2.4.11) or pulls Tab back into it. */
+	function onContentFocusout(event: FocusEvent) {
+		const to = event.relatedTarget as Node | null;
+		if (!to) return; // the window lost focus, or a click on non-focusable panel content
+		const panel = event.currentTarget as HTMLElement;
+		if (panel.contains(to) || triggerEl?.contains(to)) return;
+		setOpen(false);
+	}
 
 	// Closing from inside the panel (Esc) unmounts the focused element: hand focus back to the
 	// trigger. If focus already moved somewhere real (a click elsewhere), leave it.
@@ -40,7 +69,8 @@
 		if (wasOpen && !isOpen) {
 			queueMicrotask(() => {
 				const a = document.activeElement;
-				if (!a || a === document.body || a.closest('[data-popover-content]')) triggerEl?.focus();
+				if (!a || a === document.body || a.closest('[data-popover-content]'))
+					triggerEl?.focus({ preventScroll: true });
 			});
 		}
 		wasOpen = isOpen;
@@ -55,7 +85,7 @@
 	function onContentKeydown(event: KeyboardEvent) {
 		if (event.key !== 'Tab' || event.defaultPrevented || !triggerEl) return;
 		const panel = event.currentTarget as HTMLElement;
-		const inside = [...panel.querySelectorAll<HTMLElement>(TABBABLE)];
+		const inside = tabbables(panel);
 		const active = document.activeElement;
 		if (event.shiftKey) {
 			if (active === panel || active === inside[0]) {
@@ -63,7 +93,7 @@
 				triggerEl.focus();
 			}
 		} else if (active === inside.at(-1) || (active === panel && !inside.length)) {
-			const after = [...document.querySelectorAll<HTMLElement>(TABBABLE)].find(
+			const after = tabbables(document).find(
 				(el) =>
 					!panel.contains(el) &&
 					!!(triggerEl!.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)
@@ -90,6 +120,7 @@
 			trapFocus={false}
 			role="dialog"
 			onkeydown={onContentKeydown}
+			onfocusout={onContentFocusout}
 			onOpenAutoFocus={(e) => e.preventDefault()}
 			onCloseAutoFocus={(e) => e.preventDefault()}
 			aria-label={label}

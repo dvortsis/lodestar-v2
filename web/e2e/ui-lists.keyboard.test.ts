@@ -88,7 +88,8 @@ test('Table: sort by keyboard, select with Space, column chooser', async ({ page
 	// Column chooser hides a column.
 	await kbd.tabTo(page.getByTestId('column-chooser'));
 	await kbd.press('Enter');
-	await kbd.tabTo(page.getByLabel('Size', { exact: true }));
+	// Opening moves focus to the first enabled control (Name is required, so it is disabled).
+	await expect(page.getByLabel('Size', { exact: true })).toBeFocused();
 	await kbd.press('Space');
 	await expect(grid.getByRole('columnheader', { name: 'Size' })).toHaveCount(0);
 });
@@ -142,18 +143,27 @@ test('VirtualList: rows prepended above keep the viewport and the active row in 
 	await go(PATH);
 	const list = page.getByRole('listbox', { name: 'Results' });
 	await kbd.tabTo(list.getByRole('option').first());
-	for (let i = 0; i < 4; i++) await kbd.press('PageDown');
-	const probe = list.getByRole('option', { name: /^Result \d+$/ }).nth(3);
+	// Page down a few times, waiting for each move to land so the scroll has settled.
+	let at = 0;
+	for (let i = 0; i < 4; i++) {
+		await kbd.press('PageDown');
+		await page.waitForFunction(
+			(prev) => Number((document.activeElement as HTMLElement | null)?.dataset.index) > prev,
+			at
+		);
+		at = Number(await page.evaluate(() => (document.activeElement as HTMLElement).dataset.index));
+	}
+	// The active row stays mounted, so it is a stable probe.
+	const probe = list.locator('[tabindex="0"]');
 	const name = (await probe.textContent())!.trim();
-	const top = () =>
-		list.getByRole('option', { name, exact: true }).evaluate((e) => e.getBoundingClientRect().top);
+	const top = () => probe.evaluate((e) => e.getBoundingClientRect().top);
 	const before = await top();
-	await kbd.tabTo(page.getByRole('button', { name: 'Prepend 3 results' }), 5).catch(async () => {
-		await page.getByRole('button', { name: 'Prepend 3 results' }).focus();
-	});
+	await kbd.press('Shift+Tab'); // the button just before the list
+	const prepend = page.getByRole('button', { name: 'Prepend 3 results' });
+	await expect(prepend).toBeFocused();
 	await kbd.press('Enter');
 	await expect(list.getByRole('option', { name, exact: true })).toBeVisible();
-	expect(Math.abs((await top()) - before)).toBeLessThan(2);
+	await expect.poll(async () => Math.abs((await top()) - before)).toBeLessThan(2);
 });
 
 test.describe('coarse pointer', () => {
