@@ -1777,13 +1777,16 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - Sorts gain `seeders`, `leechers`, `trackers` and `seen`.
   - `tz` is minutes east of UTC (±14 h), for `time:`.
   - `explain=1` returns each hit's score parts. It runs the exact query, without the stem fallback.
-  - Every hit carries `swarm`: seeders, leechers, trackers, the DHT estimate and last seen, with `null` for unknown (§10.12: null ≠ zero).
-- **Detail API:** a `swarm` section with:
-  - counts, "reporting of checked", scrape time and the next scrape;
-  - the DHT estimate (labelled as one) and the suspect flag;
-  - per-tracker rows with URLs;
-  - daily and weekly history, with gaps as `null`;
-  - the 7-day trend and the exact last-seen.
+  - **Field names follow the UI contract** (`docs/metrics.md` §7), as flat fields of the torrent summary, not a nested object. The contract was merged while this PR was in review.
+  - Every hit and the detail view carry `seeders`, `leechers`, `completed`, `trackers_reporting`, `trackers_checked` and `last_scrape_at`, which are `null` together when the torrent was never scraped (§10.12: null ≠ zero). They also carry `seeders_approx`, `swarm_suspect` and `last_seen_at`.
+    - They're read from the stored swarm row: one primary-key read per hit. The hot columns don't hold `completed`, `trackers_checked` or the scrape time, and the row is never behind them.
+    - `last_seen_at` is the later of the row and the hot column, which moves on every sighting.
+  - **`seeders_approx`** (signed off for M4) is true when no tracker reported and the DHT estimate stood in for the counts. The "freshness window" for the max is the last answered round. The DHT is never part of the max: it only stands in.
+- **The detail view** adds:
+  - `dht_seeds` and `dht_peers`;
+  - `swarm_trackers`, the per-tracker rows with URLs and the time of each answer (`at`);
+  - `swarm_history`, daily and weekly samples. Each sample's `at` is the start of its UTC day or week, and gaps are `null`;
+  - `swarm_trend`, the 7-day trend.
   
   A first scrape nobody answered reads as never scraped.
 - **Interest and Serve counters:** the API reports through an `ApiEvents` hook the binary implements, so the API crate doesn't depend on the pipeline.

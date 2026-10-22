@@ -427,7 +427,7 @@ async fn run_search(s: ApiState, p: SearchParams) -> ApiResult<Json<Value>> {
             if let Some(row) = store.torrent(h.id as i64).map_err(internal)? {
                 let mut v = torrents::summary(&row);
                 v["score"] = json!(h.score);
-                v["swarm"] = swarm::hit(hot.as_deref(), row.id);
+                swarm::summary(&store, hot.as_deref(), &row, &mut v).map_err(internal)?;
                 if let Some(p) = results.explain.get(i) {
                     v["explain"] = json!({
                         "text": p.text,

@@ -383,11 +383,31 @@ async fn swarm_health_in_search_and_detail() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let hits = body["hits"].as_array().unwrap();
     assert_eq!(hits.len(), 2);
-    assert_eq!(hits[0]["swarm"]["seeders"], 12, "scraped first: {body}");
-    assert_eq!(hits[0]["swarm"]["trackers"], 1);
-    assert_eq!(hits[0]["swarm"]["dht"], 14);
-    // Never scraped: unknown, not zero.
-    assert_eq!(hits[1]["swarm"]["seeders"], Value::Null);
+    let h = &hits[0];
+    assert_eq!(h["seeders"], 12, "scraped first: {body}");
+    assert_eq!(
+        (&h["trackers_reporting"], &h["trackers_checked"]),
+        (&json!(1), &json!(2))
+    );
+    assert_eq!(h["last_scrape_at"], 1_700_000_100);
+    assert_eq!(
+        (&h["seeders_approx"], &h["swarm_suspect"]),
+        (&json!(false), &json!(false))
+    );
+    assert!(h.get("dht_seeds").is_none(), "detail only");
+    // Never scraped: unknown, not zero, all six together.
+    for k in [
+        "seeders",
+        "leechers",
+        "completed",
+        "trackers_reporting",
+        "trackers_checked",
+        "last_scrape_at",
+    ] {
+        assert_eq!(hits[1][k], Value::Null, "{k}");
+    }
+    assert_eq!(hits[1]["seeders_approx"], false);
+    assert!(hits[1]["last_seen_at"].is_i64());
     assert_eq!(*f.events.searches.lock().unwrap(), [Some(2)]);
     assert_eq!(f.events.interest.lock().unwrap().len(), 2, "top hits");
 
@@ -408,15 +428,25 @@ async fn swarm_health_in_search_and_detail() {
     let (status, _, body) =
         call(&f.app, get(&format!("/api/v1/torrents/{}", f.hashes[0]), c)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    let s = &body["swarm"];
-    assert_eq!(s["seeders"], 12);
-    assert_eq!(s["trackers_reporting"], 1);
-    assert_eq!(s["trackers_checked"], 2);
-    assert_eq!(s["dht_estimate"], json!({"seeds": 10, "peers": 4}));
-    assert_eq!(s["scraped_at"], 1_700_000_100);
-    assert_eq!(s["trackers"][0]["url"], "udp://t.example:1337");
-    assert_eq!(s["history"]["daily"][0]["seeders"], 12);
-    assert_eq!(s["suspect"], false);
+    assert_eq!(body["seeders"], 12);
+    assert_eq!(body["trackers_reporting"], 1);
+    assert_eq!(body["trackers_checked"], 2);
+    assert_eq!(
+        (&body["dht_seeds"], &body["dht_peers"]),
+        (&json!(10), &json!(4))
+    );
+    assert_eq!(body["last_scrape_at"], 1_700_000_100);
+    assert_eq!(body["swarm_trackers"][0]["url"], "udp://t.example:1337");
+    let day = &body["swarm_history"]["daily"][0];
+    assert_eq!(day["seeders"], 12);
+    assert_eq!(
+        day["at"],
+        1_700_000_100 / 86_400 * 86_400,
+        "start of the UTC day"
+    );
+    let week = &body["swarm_history"]["weekly"][0];
+    assert_eq!(week["at"].as_i64().unwrap() % (7 * 86_400), 0);
+    assert_eq!(body["swarm_suspect"], false);
     assert_eq!(
         f.events.interest.lock().unwrap().len(),
         1,
@@ -424,8 +454,10 @@ async fn swarm_health_in_search_and_detail() {
     );
 
     let (_, _, body) = call(&f.app, get(&format!("/api/v1/torrents/{}", f.hashes[1]), c)).await;
-    let s = &body["swarm"];
-    assert_eq!(s["seeders"], Value::Null, "never scraped");
-    assert_eq!(s["scraped_at"], Value::Null);
-    assert_eq!(s["history"], Value::Null);
+    assert_eq!(body["seeders"], Value::Null, "never scraped");
+    assert_eq!(body["last_scrape_at"], Value::Null);
+    assert_eq!(body["dht_seeds"], Value::Null);
+    assert_eq!(body["swarm_history"], Value::Null);
+    assert_eq!(body["swarm_trend"], Value::Null);
+    assert_eq!(body["swarm_trackers"], json!([]));
 }
