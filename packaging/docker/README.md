@@ -70,10 +70,12 @@ compose project a network with `enable_ipv6: true` and an IPv6 subnet. With
 | `LODESTAR_DHT_ENABLED` | `true`            | `false` turns the DHT off.                 |
 | `LODESTAR_INTENSITY`   | `balanced`        | `low`, `balanced` or `aggressive`.         |
 | `LODESTAR_LOG`         | `info`            | Log filter (`error`, `warn`, `info`, `debug`). |
-| `TZ`                   |                   | Time zone for log timestamps.              |
+| `TZ`                   |                   | Accepted, but log timestamps are UTC today. |
 
-`lodestar --help` lists the rest. Settings can also go in
-`/data/config.toml`; environment variables override it.
+Settings can also go in `/data/config.toml`; environment variables override
+it. Because the image sets `LODESTAR_HTTP_BIND`, it overrides `[http] bind` in
+`config.toml`: change the web port with the variable (and the port mapping),
+not in the file.
 
 ## Volume, user and permissions
 
@@ -112,8 +114,13 @@ What the code writes under `/data` today:
 | `auth.json`      | The admin credentials (hashed).                            |
 | `seal.key`       | The key that seals stored secrets. Back it up with the rest. |
 | `config.toml`    | Optional settings (you create it).                         |
+| `import-bitmagnet.cursor` | Resume point of `lodestar import-bitmagnet`.      |
 
 Back up the whole directory while the container is stopped.
+
+The compose file sets `stop_grace_period: 60s`: shutdown flushes the index and
+database, which can take longer than Docker's default 10 s. Keep that (or
+`docker stop --time 60`) if you run it another way.
 
 ## Health check
 

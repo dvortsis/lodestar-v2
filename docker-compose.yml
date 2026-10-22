@@ -7,6 +7,9 @@ services:
     image: ghcr.io/dvortsis/lodestar-v2:latest
     container_name: lodestar
     restart: unless-stopped
+    # Shutdown flushes the index and database (architecture §12); give it
+    # more than Docker's default 10 s.
+    stop_grace_period: 60s
 
     # The account the process runs as. The image has no shell, so it can't
     # switch users itself yet (PUID/PGID are not supported): pick the
@@ -18,7 +21,8 @@ services:
     user: "65532:65532"
 
     environment:
-      TZ: Etc/UTC # log timestamps, e.g. Europe/Berlin
+      # Accepted, but log timestamps are UTC today (the tracing timer is UTC).
+      TZ: Etc/UTC
       # LODESTAR_INTENSITY: balanced   # low | balanced | aggressive
       # LODESTAR_LOG: info             # error | warn | info | debug
 
@@ -46,7 +50,7 @@ services:
     # network_mode: host
 
     # IPv6: Docker's default bridge is IPv4-only. To use IPv6 in bridge mode,
-    # enable it on the daemon (`"ipv6": true` and an `fixed-cidr-v6` in
+    # enable it on the daemon (`"ipv6": true` and a `fixed-cidr-v6` in
     # daemon.json) or on a user-defined network (`enable_ipv6: true`, with an
     # IPv6 subnet), and publish the ports as usual. With `network_mode: host`
     # the container uses the host's IPv6 addresses as they are.

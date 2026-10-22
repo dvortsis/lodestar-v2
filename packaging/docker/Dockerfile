@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1.18
-#
 # Lodestar image (architecture §11): a static musl `lodestar` on distroless.
 # Build context is the repository root:
 #
@@ -12,9 +10,12 @@
 
 # ---- 1. Web UI -------------------------------------------------------------
 # Node 22 (web/package.json: engines >= 22). The binary embeds web/build at
-# compile time (crates/lodestar/build.rs), so this stage runs first.
+# compile time (crates/lodestar/build.rs), so this stage runs first. The
+# build's `assets` step reads ../brand/source and writes ../packaging/icons,
+# so web/ sits at the same depth as in the repository.
 FROM --platform=$BUILDPLATFORM node:22-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS web
-WORKDIR /web
+WORKDIR /src/web
+COPY brand/source /src/brand/source
 COPY web/package.json web/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --no-audit --no-fund
@@ -65,7 +66,7 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
 COPY bench ./bench
-COPY --from=web /web/build ./web/build
+COPY --from=web /src/web/build ./web/build
 
 # The target dir is a cache mount, so the binary is copied out in the same RUN.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
@@ -76,7 +77,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
       arm64) triple=aarch64-unknown-linux-musl ;; \
       *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
     esac \
-    && cargo zigbuild --locked --release -p lodestar --target "$triple" \
+    && cargo zigbuild --locked --release -p lodestar --bin lodestar --target "$triple" \
     && install -D "target/$triple/release/lodestar" /out/lodestar \
     && mkdir -p /out/data
 
