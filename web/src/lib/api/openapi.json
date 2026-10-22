@@ -109,7 +109,7 @@
         "tags": [
           "classify"
         ],
-        "summary": "Adds a classification rule; the stored torrents it matches are\nclassified again.",
+        "summary": "Adds a classification rule; the stored torrents it matches are\nclassified again. At most 1,000 rules: past that, 422\n`too_many_class_rules`.",
         "operationId": "addClassRule",
         "requestBody": {
           "content": {
@@ -2598,7 +2598,8 @@
         "description": "`POST /classify/rules`: the new rule.",
         "required": [
           "id",
-          "queued"
+          "queued",
+          "truncated"
         ],
         "properties": {
           "id": {
@@ -2612,6 +2613,10 @@
             ],
             "description": "Stored torrents queued to be classified again; null without a\nsearch index (only torrents arriving later are affected).",
             "minimum": 0
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "More stored torrents matched than are queued at once (1,000,000):\nthe rest are classified again when next re-enriched."
           }
         }
       },
@@ -2636,7 +2641,8 @@
         "type": "object",
         "description": "`POST /classify/rules/remove`.",
         "required": [
-          "queued"
+          "queued",
+          "truncated"
         ],
         "properties": {
           "queued": {
@@ -2646,6 +2652,10 @@
             ],
             "description": "As [`ClassRuleAdded::queued`].",
             "minimum": 0
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "As [`ClassRuleAdded::truncated`]."
           }
         }
       },
@@ -2765,6 +2775,7 @@
         "description": "`POST /classify/correct`: the torrent classified again.",
         "required": [
           "adult_kind",
+          "held_by",
           "junk",
           "type"
         ],
@@ -2775,6 +2786,13 @@
               "null"
             ],
             "description": "Non-null only when `type` is `adult`."
+          },
+          "held_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When relabelling it adult made filtering hold it back (§20.9): the\nrule that did. It's then dropped or quarantined, no longer stored."
           },
           "junk": {
             "type": "integer",
@@ -3365,7 +3383,8 @@
         "enum": [
           "running",
           "done",
-          "failed"
+          "failed",
+          "cancelled"
         ]
       },
       "JobStatus": {

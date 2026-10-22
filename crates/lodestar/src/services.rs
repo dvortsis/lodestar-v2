@@ -160,6 +160,7 @@ impl Services {
         let held = pipeline_config.held.clone();
         let sealer = pipeline_config.sealer.clone();
         let reenrich = pipeline_config.reenrich.clone();
+        let quarantine_secs = pipeline_config.quarantine.as_secs() as i64;
         let pipeline = Pipeline::start(pipeline_config, store, plugins).await?;
         let control = Arc::new(Mutex::new(control));
         let search = serving.clone().map(SearchHandle::serving);
@@ -172,6 +173,7 @@ impl Services {
             index: search.clone(),
             reenrich,
             jobs: Default::default(),
+            quarantine_secs,
         });
         let (stop_subscriptions, subscriptions_stopped) = watch::channel(false);
         let refresher = tokio::spawn(subscriptions::run(
