@@ -23,7 +23,7 @@
    "pr": 46,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "merged main 8d9b795; waiting CI then merge"
+   "notes": "runner merging main (\u00a716) locally; checks running; then push + merge on CI green"
   },
   "C0": {
    "status": "merged",
@@ -113,7 +113,7 @@
    "pr": 41,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "round 2: only blocking = merge main (\u00a716 conflict); sent 08:52"
+   "notes": "runner merged main into slice/W4 (c11de2a, \u00a716 resolved; web checks green locally); merge when CI green"
   },
   "W6": {
    "status": "running",
@@ -278,13 +278,13 @@
    "notes": ""
   },
   "D-docker": {
-   "status": "running",
+   "status": "in_review",
    "model": "sonnet",
    "session": "session_019VGYFBetAiATAi4KbpB7JZ",
-   "pr": null,
+   "pr": 59,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "launched 08:46 with briefs/D-docker.md"
+   "notes": "PR #59 opened 09:15; reviewer running"
   },
   "G-v05": {
    "status": "pending",
@@ -629,13 +629,13 @@
    "notes": ""
   },
   "X-utp": {
-   "status": "in_review",
+   "status": "merged",
    "model": "opus",
    "session": "session_0141epGbZVUkFGWnyYhDra42",
    "pr": 51,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "round 2 fixes pushed c6fd27f (socket2 set_only_v6(false), merged main); merge when windows CI green"
+   "notes": "merged 09:29 as cedc5cd (#51)"
   },
   "X-integrations": {
    "status": "merged",
@@ -813,7 +813,8 @@
    "docs/themes.md derived-token gates table still says 9 pending (W1c): all 48 pass now",
    "slices.yaml: add X-email (opus, deps X-notify); narrow X-notify owns to notify/{ntfy,discord,rss}.rs + tests",
    "slices.yaml: X-clients/X-notify owns include their tests/ and fixtures/",
-   "slices.yaml W6 owns: web/e2e/** not web/tests/**"
+   "slices.yaml W6 owns: web/e2e/** not web/tests/**",
+   "runner/README.md: runner resolves \u00a716-only merge conflicts itself (merge commit, keep both blocks in landing order, run \u00a71 checks) instead of a round trip"
   ],
   "B1-polish": [
    "golden: add stemmed:true and non-null hash_v2 fixtures",
@@ -833,6 +834,13 @@
   ],
   "B6": [
    "B5b: fields present-but-not-fast: resolve fast-column needs per use (sorts/lifted ranges skip, term queries still use field)"
+  ],
+  "X-utp-wire": [
+   "DHT receive-loop demux + Node::utp() per PR #51 \"Shared-file edits still needed\" (crates/dht/src/node/{mod,actor}.rs, dht Cargo.toml); hold until M4 #48 merges (touches DHT). lodestar wiring (FetchOptions::utp, metrics utp stats, uTP settings flag) goes with B2. Docs \u00a713/\u00a76 update."
+  ],
+  "D-docker-followups": [
+   "packaging/unraid/lodestar.xml ExtraParams --user 99:100 (X-pack-static owner)",
+   "No LICENSE file: owner to choose a licence (image label NOASSERTION)"
   ]
  },
  "blocked_on_owner": [
