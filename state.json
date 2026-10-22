@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-10-22T15:40Z",
+  "updated_at": "2026-10-22T16:45Z",
   "launches": {
     "date": "2026-10-22",
     "count": 17
@@ -170,13 +170,13 @@
       "notes": "waits ext:m4-schema-settled (M4 PR2 #48)"
     },
     "B6": {
-      "status": "running",
+      "status": "in_review",
       "model": "opus",
       "session": "session_0113YcyKf7mgWsV9sNN3mNaW",
-      "pr": null,
+      "pr": 71,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "launched 14:40; not live.rs/compile.rs (B4/B17)"
+      "notes": "launched 14:40; not live.rs/compile.rs (B4/B17) | PR #71; reviewer started 16:45"
     },
     "B16": {
       "status": "pending",
@@ -197,31 +197,31 @@
       "notes": ""
     },
     "W7ab": {
-      "status": "running",
+      "status": "in_review",
       "model": "sonnet",
       "session": "session_01PZaAbtPHeB2SiUMG9VFpth",
-      "pr": null,
+      "pr": 76,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys"
+      "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #76; reviewer started 16:45"
     },
     "W7cd": {
-      "status": "running",
+      "status": "in_review",
       "model": "sonnet",
       "session": "session_016RoHWZ8Vbbs5moJ2c2fHqS",
-      "pr": null,
+      "pr": 78,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys"
+      "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #78; reviewer started 16:45"
     },
     "W7e": {
-      "status": "running",
+      "status": "in_review",
       "model": "sonnet",
       "session": "session_01KbNDuqr2bBED88auAfEkNp",
-      "pr": null,
+      "pr": 74,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys"
+      "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #74; reviewer started 16:45"
     },
     "W9": {
       "status": "pending",
@@ -341,13 +341,13 @@
       "notes": "deps met; held (crates/search busy with B6)"
     },
     "B13": {
-      "status": "running",
+      "status": "in_review",
       "model": "opus",
       "session": "session_012gnQYQihLxoGDKXk5pckME",
-      "pr": null,
+      "pr": 77,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "launched 15:59 (owner asked to start more work); no crates/search edits"
+      "notes": "launched 15:59 (owner asked to start more work); no crates/search edits | PR #77; reviewer started 16:45"
     },
     "B14": {
       "status": "running",
@@ -674,13 +674,13 @@
       "notes": "merged 10:19 as e8e6c6a (#60)"
     },
     "B17": {
-      "status": "running",
+      "status": "in_review",
       "model": "opus",
       "session": "session_01PZdBjxYQXsnEVmfRxJCCXw",
-      "pr": null,
+      "pr": 72,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "launched 14:40; owns compile.rs clause + settings content section"
+      "notes": "launched 14:40; owns compile.rs clause + settings content section | PR #72; reviewer started 16:45"
     },
     "S-blocklists": {
       "status": "pending",
@@ -884,7 +884,7 @@
     "F1b #66: sign-off on calibrated filter budget (50us at reference runner speed, scale up to 1.6x on slower runners)"
   ],
   "launches_today": 8,
-  "last_heartbeat": "2026-10-22T15:40Z",
+  "last_heartbeat": "2026-10-22T16:45Z",
   "owner_questions": [
     "F1 budget scope: gate covers cheaply-rejectable rule shapes (10% = 40.8 us on runner). Shapes the cheap check cannot decide cost more at 10% of rules (VM: NEAR/1 ~450-500, negation ~140, fuzzy ~125, prefix ~110 us; runner ~1.4x faster). Should those shapes be gated at 50 us too?",
     "Filter budget hardware: 50 us has no reference machine; gate now calibrated to the runner F1 measured on (10%=40.8 us), slower runners scale up to 1.6x. Confirm or set a reference machine."
