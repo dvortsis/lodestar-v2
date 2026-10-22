@@ -19,6 +19,49 @@ for (const mode of ['light', 'dark'] as const) {
 	});
 }
 
+// The classes must resolve to real colours: a utility Tailwind never generated computes to
+// transparent / inherited and the brush band, bar track and muted text silently vanish.
+for (const mode of ['light', 'dark'] as const) {
+	test.describe(`computed styles, riverstone ${mode}`, () => {
+		test.use({ themeId: `riverstone-${mode}`, colorMode: mode });
+
+		test('selection band and muted text use their tokens', async ({ page, go }) => {
+			await go('/_dev/ui/charts');
+			await page.getByRole('group', { name: 'Torrents by size' }).focus();
+			await page.keyboard.press('Enter');
+			const resolve = (prop: 'background-color' | 'color', token: string) =>
+				page.evaluate(
+					([p, t]) => {
+						const probe = document.createElement('div');
+						probe.style.setProperty(p!, `var(${t})`);
+						document.body.append(probe);
+						const value = getComputedStyle(probe).getPropertyValue(p!);
+						probe.remove();
+						return value;
+					},
+					[prop, token]
+				);
+			const band = await page
+				.getByTestId('hist-selection')
+				.evaluate((el) => getComputedStyle(el).backgroundColor);
+			expect(band).toBe(await resolve('background-color', '--color-selected'));
+			expect(band).not.toBe('rgba(0, 0, 0, 0)');
+			const muted = await page
+				.getByTestId('hbars')
+				.locator('[data-testid="hbars-share"]')
+				.first()
+				.evaluate((el) => getComputedStyle(el).color);
+			expect(muted).toBe(await resolve('color', '--color-muted-text'));
+			const track = await page
+				.getByTestId('hbars-item')
+				.first()
+				.locator('div[aria-hidden="true"]')
+				.evaluate((el) => getComputedStyle(el).backgroundColor);
+			expect(track).toBe(await resolve('background-color', '--color-selected'));
+		});
+	});
+}
+
 test('histogram brush works with the keyboard', async ({ page, go }) => {
 	await go('/_dev/ui/charts');
 	const plot = page.getByRole('group', { name: 'Torrents by size' });

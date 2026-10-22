@@ -55,6 +55,7 @@ describe('Kpi', () => {
 		};
 		expect(trend(5)).toBe('up');
 		expect(trend(0)).toBe('flat');
+		expect(document.body.innerHTML).not.toContain('M2 6h8');
 		// 0.00001 prints as "0.0%": no up arrow.
 		expect(trend(0.00001, 'percent')).toBe('flat');
 		expect(trend(-0.00001, 'percent')).toBe('flat');
@@ -261,6 +262,21 @@ describe('Histogram', () => {
 		render(Histogram, { ...base, selection: { from: 0, to: 4 }, oncommit });
 		await fireEvent.keyDown(screen.getByRole('slider', { name: 'Upper' }), { key: 'ArrowLeft' });
 		expect(oncommit).toHaveBeenLastCalledWith({ from: 0, to: 3 });
+	});
+	it('commits only when the range changed since the last commit', async () => {
+		const oncommit = vi.fn();
+		render(Histogram, { ...base, selection: { from: 0, to: 4 }, oncommit });
+		const from = screen.getByRole('slider', { name: 'Lower' });
+		// At the minimum already: nothing changes, nothing commits.
+		await fireEvent.keyDown(from, { key: 'ArrowLeft' });
+		expect(oncommit).not.toHaveBeenCalled();
+		await fireEvent.keyDown(from, { key: 'ArrowRight' });
+		await fireEvent.keyDown(from, { key: 'ArrowRight' });
+		expect(oncommit).toHaveBeenCalledTimes(2);
+		// A press-and-release on a handle without movement is not a new range either.
+		await fireEvent.pointerDown(from, { clientX: 0 });
+		await fireEvent.pointerUp(screen.getByRole('group', { name: 'Sizes' }));
+		expect(oncommit).toHaveBeenCalledTimes(2);
 	});
 	it('drags a handle without restarting the selection', async () => {
 		const onbrush = vi.fn();
