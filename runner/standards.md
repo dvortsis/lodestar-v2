@@ -80,18 +80,26 @@ Every UI slice reads the skills listed in its brief, so it fills gaps consistent
 - **Strings** live in the feature's `messages/{en,zh}.json`, worded per `docs/ui-glossary.md` and §10.14.
 - **Budgets (§10.1):** search-route JS ≤ 45 KB, CSS ≤ 20 KB, total first load ≤ 100 KB gzipped. Detail drawer ≤ 15 KB, Insights ≤ 45 KB, fonts on first paint ≤ 35 KB.
 
+## 4b. User documentation
+- **Audience: someone who can install an app from the Unraid app store but may not know how to set it up, or good security practice** (owner's decision §2.14). Any slice that writes or changes user-facing docs follows the project skill `user-docs` (`.claude/skills/user-docs/SKILL.md`), which layers Lodestar's rules on the owner's `documentation-skills` (`github-docs`, `material-composer`). It passes their gates, `lint_docs.py docs/user --strict` with 0 failed, and puts the `LINT:` line in the PR description. User-facing docs are the README, `docs/user/`, `docs/operations.md`, release notes, and in-app help or "Learn more" pages.
+- **A slice that changes a screen the user docs show** regenerates the affected screenshots in the same PR, once the docs capture (`S-doc-shots`) exists.
+- **A slice that adds a user-visible feature** adds or updates its how-to page, or names in its PR the follow-up slice that will.
+
 ## 5. Review checklist (every PR, by a fresh Opus reviewer)
 1. **Scope:** only owned paths changed, and nothing is missing from the brief's "Do" list.
 2. **Correctness against the spec sections the brief cites.** Any contradiction is blocking.
 3. **Checks:** the reviewer re-runs §1 itself and doesn't trust the PR text.
 4. **Tests:** they cover the behaviour, including edge cases and failure paths, not only the happy path.
-5. **Standards:** §2 and §4 above.
+5. **Standards:** §2, §4 and §4b above.
 6. **UI slices: the design.**
    - First check against `docs/architecture.md` §10 and the contract docs. A deviation from them is blocking.
    - Then check decisions they leave open against the owning skill: spacing against `layout-spacing`, states and forms against `application-interface-design`, charts against `analytics-chart-selection`, and so on. A gap filled against its skill is important; it's blocking if it hurts accessibility or correctness.
    - Run a `design-review` pass on each finished screen.
    - Never "fix" an architecture decision to match a skill default. If the two genuinely conflict, raise it to the owner.
 7. **Security:** for anything touching auth, credentials, untrusted input, filters, the cluster or companions, run `/security-review` as well.
+8. **User docs:** re-run the documentation gates from the repository root (`python3 "$GD/scripts/docs_tool.py" sync docs/user --check` and `python3 "$GD/scripts/lint_docs.py" docs/user --strict`, with `$GD` the `github-docs` skill folder as `user-docs` §1 finds it), then read the pages as the reader `user-docs` describes.
+   - **Blocking:** a step that needs knowledge the page doesn't give, a risky step without a warning and an undo, a choice without its safe recommendation, an unsafe shortcut taught, a UI label that doesn't match the app, or personal data or real torrent names in a screenshot.
+   - **Important:** a missing screenshot or diagram the skill calls for.
 
 **Severity:**
 - **Blocking:** a spec violation, a broken or failing check, a wrong value, a missing test for new behaviour, a file outside ownership, an unapproved dependency, a security issue.

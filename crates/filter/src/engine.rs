@@ -186,11 +186,7 @@ impl Engine {
             content_type: ContentType::Adult,
             ..*item
         };
-        let adult_class = facts.map(|f| {
-            let mut c = f.class.clone();
-            c.content_type = ContentType::Adult;
-            c
-        });
+        let adult_class = facts.map(|f| f.class.as_adult());
         let adult_facts = facts
             .zip(adult_class.as_ref())
             .map(|(f, class)| Facts { class, ..*f });
