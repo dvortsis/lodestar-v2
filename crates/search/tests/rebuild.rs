@@ -178,7 +178,15 @@ fn searches_keep_working_through_a_rebuild_and_the_swap() {
     wait("searches run during the rebuild", || all(|c| &c.0));
     assert!(serving.rebuilding());
     hold.store(false, Ordering::Relaxed);
-    wait("the rebuild finishes", || !serving.rebuilding());
+    // Fails at once, saying why, if the rebuild stopped on an error
+    // rather than running out the wait.
+    wait("the rebuild finishes", || match serving.progress() {
+        None => true,
+        Some(p) => {
+            assert_ne!(p.phase, RebuildPhase::Failed, "the rebuild failed: {p:?}");
+            false
+        }
+    });
     wait("searches run after the swap", || all(|c| &c.1));
     stop.store(true, Ordering::Relaxed);
     for s in searchers {
@@ -337,6 +345,12 @@ fn a_failed_rebuild_keeps_the_old_index_serving() {
             .progress()
             .is_some_and(|p| p.phase == RebuildPhase::Failed)
     });
+    // The failure says why, for the banner and for tests.
+    let failed = serving.progress().expect("still rebuilding");
+    assert!(
+        failed.error.as_deref().is_some_and(|e| !e.is_empty()),
+        "a failed rebuild carries its error: {failed:?}"
+    );
     let old = serving.index();
     assert_eq!(total(&old, "common movie"), n);
     // The old index still follows the store.
