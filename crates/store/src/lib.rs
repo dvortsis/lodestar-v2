@@ -366,6 +366,9 @@ pub struct Store {
     conn: Connection,
     codec: BlobCodec,
     config: StoreConfig,
+    /// A WAL scrub after a delete couldn't finish (a reader held an old
+    /// snapshot): the next delete or purge tries again.
+    scrub_pending: bool,
 }
 
 impl Store {
@@ -426,6 +429,7 @@ impl Store {
             conn,
             codec,
             config,
+            scrub_pending: false,
         })
     }
 
@@ -465,6 +469,7 @@ impl Store {
             conn,
             codec,
             config,
+            ..
         } = self;
         let own: Vec<Prepared> = batch
             .torrents
@@ -610,9 +615,10 @@ impl Store {
         }
         let done = enrich_rows(&tx, batch)?;
         let mut filtered: Vec<Filtered<'_>> = Vec::with_capacity(refiled.len());
+        let mut deleted = false;
         for r in refiled {
             if r.filtered.held.is_some() {
-                tx.execute("DELETE FROM torrents WHERE id = ?1", [r.id])?;
+                deleted |= tx.execute("DELETE FROM torrents WHERE id = ?1", [r.id])? > 0;
                 tx.execute("INSERT INTO reindex_log (torrent_id) VALUES (?1)", [r.id])?;
             } else if r.flags != 0 {
                 let marked = tx.execute(
@@ -628,6 +634,9 @@ impl Store {
         }
         filter::write(&tx, &filtered)?;
         tx.commit()?;
+        if deleted {
+            self.scrub_wal();
+        }
         Ok(Some(done))
     }
 
