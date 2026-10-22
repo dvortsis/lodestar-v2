@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, onLoginRequired } from '$lib/api/client';
 import {
 	BACKOFF_CAP_MS,
+	CONNECT_TIMEOUT_MS,
 	HEARTBEAT_TIMEOUT_MS,
 	HIDDEN_CLOSE_MS,
 	createEvents
@@ -526,5 +527,96 @@ describe('details', () => {
 		await tick();
 		flushFrame();
 		expect(second).not.toHaveBeenCalled();
+	});
+});
+
+describe('round 2', () => {
+	it('an aborted connection: a read that resolves after abort neither enqueues nor moves lastId', async () => {
+		let resolveRead!: (v: ReadableStreamReadResult<Uint8Array>) => void;
+		const fakeBody = {
+			getReader: () => ({
+				read: () => new Promise<ReadableStreamReadResult<Uint8Array>>((r) => (resolveRead = r)),
+				cancel: async () => {}
+			})
+		};
+		fetchMock
+			.mockResolvedValueOnce({ ok: true, status: 200, body: fakeBody })
+			.mockImplementation(async () => stream().response());
+		const ev = make();
+		const got = vi.fn();
+		ev.on('torrents', got);
+		await tick();
+		ev.on('rebuild', () => {}); // a topic change aborts the first connection
+		await tick();
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		resolveRead({
+			done: false,
+			value: enc.encode('id: e-9\nevent: torrents\ndata: {"added":1,"max_id":1}\n\n')
+		});
+		await tick();
+		flushFrame();
+		expect(got).not.toHaveBeenCalled();
+		ev.on('crawler', () => {}); // third connect: Last-Event-ID must not be e-9
+		await tick();
+		expect(headersOf(2)['Last-Event-ID']).toBeUndefined();
+	});
+
+	it('floors Retry-After: 0 on a 429 and a 503', async () => {
+		const ev = make();
+		fetchMock
+			.mockResolvedValueOnce(err(429, 'too_many_streams', { 'Retry-After': '0' }))
+			.mockResolvedValueOnce(err(503, 'events_unavailable', { 'Retry-After': '0' }))
+			.mockImplementation(async () => stream().response());
+		ev.on('torrents', () => {});
+		await tick(999);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		await tick(1);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		await tick(999);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		await tick(1);
+		expect(fetchMock).toHaveBeenCalledTimes(3);
+	});
+
+	it('gives up on a connection that never sends headers', async () => {
+		const ev = make();
+		fetchMock.mockImplementationOnce(
+			(_u: string, init: RequestInit) =>
+				new Promise((_, reject) =>
+					init.signal!.addEventListener('abort', () => reject(new DOMException('x', 'AbortError')))
+				)
+		);
+		fetchMock.mockImplementation(async () => stream().response());
+		ev.on('torrents', () => {});
+		await tick(CONNECT_TIMEOUT_MS - 1);
+		expect(ev.status).toBe('connecting');
+		await tick(1);
+		expect(ev.status).toBe('offline');
+		await tick(5000);
+		expect(ev.status).toBe('live');
+	});
+
+	it('forgets Last-Event-ID after a resync for an unknown id, but not after a lagged one', async () => {
+		const ev = make();
+		const a = stream();
+		const b = stream();
+		fetchMock
+			.mockResolvedValueOnce(a.response())
+			.mockResolvedValueOnce(b.response())
+			.mockImplementation(async () => stream().response());
+		ev.on('torrents', () => {});
+		await tick();
+		a.push(
+			frame('torrents', { added: 1, max_id: 1 }, 'x-1') + frame('resync', { reason: 'lagged' })
+		);
+		await tick();
+		a.end();
+		await tick(5000);
+		expect(headersOf(1)['Last-Event-ID']).toBe('x-1');
+		b.push(frame('resync', { reason: 'expired' }));
+		await tick();
+		b.end();
+		await tick(5000);
+		expect(headersOf(2)['Last-Event-ID']).toBeUndefined();
 	});
 });
