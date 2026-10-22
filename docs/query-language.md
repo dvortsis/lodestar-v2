@@ -59,6 +59,7 @@ The rest of this page is the precise reference: every field, operator and error.
 - [Fields](#fields)
 - [Sizes, counts and shares](#sizes-counts-and-shares)
 - [Dates](#dates)
+- [Swarm health](#swarm-health)
 - [Files inside torrents](#files-inside-torrents)
 - [Pasting a hash or magnet link](#pasting-a-hash-or-magnet-link)
 - [How results are ranked](#how-results-are-ranked)
@@ -342,6 +343,41 @@ discovered:soon => can't read
 discovered:2026-13-01 => can't read
 ```
 
+## Swarm health
+
+Lodestar asks public trackers and the DHT how many people share each torrent (a **scrape**). These fields filter on what they last said:
+
+| You write | Means |
+|---|---|
+| `seeders:>=5` | at least 5 seeders (people with the whole torrent) |
+| `leechers:>0` | someone is downloading it |
+| `trackers:>=3` | at least 3 trackers report people sharing it |
+| `dht:>100` | the DHT estimates more than 100 people (seeds and peers together) |
+| `seen:<24h` | Lodestar saw it active in the last 24 hours |
+| `time:22:00..02:00` | discovered between 22:00 and 02:00 |
+
+- **Never scraped matches no range.** A torrent Lodestar hasn't scraped yet has no counts, which isn't the same as 0: `seeders:0` and `seeders:<5` leave it out too.
+- `seeders:`, `leechers:`, `trackers:` and `dht:` take plain numbers, with the same ranges as [sizes and counts](#sizes-counts-and-shares).
+- `seen:` takes ages and dates, the same as `discovered:`. "Seen" means the last time the torrent showed up in the DHT or answered a scrape.
+- `time:` is a time of day (`HH:MM`). A range can wrap past midnight, as in `22:00..02:00`. It reads the time in the zone the search names (`tz`, minutes east of UTC, in the API). Without one, the time is UTC. The app doesn't send your zone yet.
+- A swarm a tracker exaggerates (fake seeding) doesn't count that tracker's numbers. If only the DHT is left, its estimate stands in.
+
+```query
+seeders:>=5
+seeders:5..50
+leechers:>0
+trackers:>=3
+dht:>100
+seen:<24h
+seen:>2w
+seen:2026-01-01..2026-03-31
+time:22:00..02:00
+time:09:00..17:30
+seeders:>=5 | trackers:>=3
+```
+
+You can also **sort** by `seeders`, `leechers`, `trackers` or `seen` (most first, or `+` for fewest first). Torrents never scraped always come last.
+
 ## Files inside torrents
 
 `file:` asks about a single file. `file:(ext:flac size:>50MB)` finds torrents that contain **one file** that is both FLAC and over 50 MB. That's different from `ext:flac size:>50MB`, which can match a torrent with a small FLAC and a large video.
@@ -383,18 +419,25 @@ hash:0123456789abcdef0123456789abcdef01234567
 
 ## How results are ranked
 
-Order **by relevance** is the default. Other sorts are `discovered`, `size` and `files`, each ascending or descending.
+Order **by relevance** is the default. Other sorts are `discovered`, `size`, `files`, `seeders`, `leechers`, `trackers` and `seen`, each ascending or descending.
 
 Relevance works in two steps, so a search stays fast even when millions of torrents match:
 
 1. Lodestar scores every match by how well your words match the name and the file paths (the usual text-search formula, called BM25), and keeps the best 200.
-2. Those 200 are scored again with two bonuses: one for words found in the name, and a larger one for words found in the resolved title. They are then shown in that order.
+2. Those 200 are scored again with two bonuses: one for words found in the name, and a larger one for words found in the resolved title. Then each score is multiplied by a few small factors, and they are shown in that order:
+   - **Seeders:** more seeders, a little higher (`1 + 0.2 × ln(1 + seeders)`). A torrent never scraped counts as 1 seeder.
+   - **Freshness:** a torrent not seen active recently slips, halving its edge every 30 days, but never below 75%.
+   - **Trackers:** up to 10% more for torrents several trackers report.
+   - **Junk:** a junk score of 100 halves the score.
+   - **Fake seeding:** a swarm flagged as fake seeding keeps 20% of its score.
 
 What this means for you:
 
 - Matches in the name or title tend to come before matches that only appear in a file path.
 - Within a group of 200, the order is exact. Between groups, it is approximate: a torrent that would score higher on the second step stays in its own group. Scrolling down never repeats or skips a row.
-- Not yet in the ranking: seeder counts, freshness, the junk penalty and the swarm checks. They need the swarm-health milestone. For now, `junk:<20` is a filter you add yourself.
+- Text comes first: the factors only reorder results that match about equally well.
+- An administrator can change the factors in `config.toml` (`[ranking]`).
+- To see how a result's score was made, add `explain=1` to an API search. Each result then carries its text score and every factor.
 
 ## Plurals fallback
 
@@ -520,23 +563,13 @@ These are in the plan but don't work today. Each gives an error that says so, an
 | Plan | Today |
 |---|---|
 | `/S0[1-9]E\d+/` regular expressions | *regex search arrives with the trigram index* |
-| `seeders:`, `trackers:`, `dht:` | *arrives with swarm health (M4)* |
-| `seen:`, `time:` (time of day) | *arrives with swarm health (M4)* |
 | `sig:` (identical payload) | *arrives with grouping keys (M7)* |
 | `resolved:plugin` | not a value; use `files`, `folder` or `structure` |
-| Sorting by seen, seeders or trackers | only relevance, discovered, size and files |
-| Seeder, freshness and junk priors in ranking | not yet; see [ranking](#how-results-are-ranked) |
-| Score breakdown (`?explain=1`) | not served |
 
 Each of these fails with the message shown after `=>`:
 
 ```query-fail
 /S0[1-9]E\d+/ => regex search arrives
-seeders:>=5 => arrives with swarm health
-trackers:>=3 => arrives with swarm health
-dht:>100 => arrives with swarm health
-seen:<24h => arrives with swarm health
-time:22:00..02:00 => arrives with swarm health
 sig:7a9f3c12 => arrives with grouping keys
 ```
 
