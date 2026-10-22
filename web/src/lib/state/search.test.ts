@@ -178,6 +178,41 @@ describe('search state', () => {
 		expect(s.parsing).toBe(false);
 	});
 
+	it('a submit superseded by a newer submit does not push its raw text', async () => {
+		const f = fakeNav();
+		const releases: (() => void)[] = [];
+		fetchMock.mockImplementation(
+			(u: string) =>
+				new Promise((resolve) => {
+					const q = new URL(u, 'http://x').searchParams.get('q') ?? '';
+					releases.push(() => resolve(json({ ast: word(q), canonical: q.trim().toLowerCase() })));
+				})
+		);
+		const s = createSearchState(f.nav);
+		s.setText('Foo  ');
+		const a = s.submit();
+		const b = s.submit();
+		releases.forEach((r) => r());
+		await Promise.all([a, b]);
+		expect(f.calls).toEqual([{ url: '/search?q=foo', push: true }]);
+	});
+
+	it('a submit superseded by setAst does nothing', async () => {
+		const f = fakeNav();
+		let release!: () => void;
+		fetchMock.mockImplementationOnce(
+			() => new Promise((r) => (release = () => r(json({ ast: word('x'), canonical: 'x' }))))
+		);
+		const s = createSearchState(f.nav);
+		s.setText('X ');
+		const a = s.submit();
+		fetchMock.mockImplementationOnce(async () => json({ canonical: 'new', hits: [] }));
+		await s.setAst(word('new'));
+		release();
+		await a;
+		expect(f.calls).toEqual([{ url: '/search?q=new', push: true }]);
+	});
+
 	it('does not push a duplicate entry when the URL is unchanged', async () => {
 		const f = fakeNav('http://x/search?q=a');
 		const s = createSearchState(f.nav);

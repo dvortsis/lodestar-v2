@@ -5,13 +5,19 @@
 // - Events are queued and handed to handlers once per animation frame, in arrival order.
 // - Several `crawler` snapshots in one frame collapse to the latest (a snapshot supersedes the
 //   previous one). `torrents` events are all delivered: each carries a count. Others are kept.
+// - In a hidden tab rAF doesn't run, so the backlog stays small: the latest `crawler`, `rebuild`
+//   and `insights` event are kept and `torrents` counts fold into one event.
 // - `resync` goes through the same queue, so it keeps its place in the order, and calls every
-//   consumer's `onResync`.
-// Reconnect: `Last-Event-ID`, the server's `retry:` as the base, doubled per consecutive failure
-// with jitter (50-100 %), capped at 30 s. A clean close, a network error or 35 s of silence
-// (2 x the 15 s heartbeat + slack) reconnects. 401 stops; 429 waits `Retry-After` and shows
-// `busy`. A tab hidden for 10 s closes its stream (the server allows 4 per session) and
-// reopens when visible again.
+//   consumer's `onResync`. A resync for an expired, unknown or restarted id also forgets
+//   `Last-Event-ID`, so the next reconnect doesn't trigger another one.
+// - An aborted connection delivers nothing and doesn't move `Last-Event-ID`.
+// Reconnect: `Last-Event-ID`, the server's `retry:` (at least 1 s) as the base, doubled per
+// consecutive failure with jitter (50-100 %), capped at 30 s. A clean close, a network error,
+// 35 s of silence (2 x the 15 s heartbeat + slack) or 15 s without response headers reconnects.
+// 401 stops until a request succeeds (see `onSessionOk`: a login resumes the stream); 429 waits
+// `Retry-After` (at least 1 s) and shows `busy`; 503 honours its `Retry-After` too.
+// A tab opened hidden takes no stream; a tab hidden for 10 s closes its stream (the server allows
+// 4 per session) and both open (reopen) with `Last-Event-ID` when visible.
 import {
 	ApiError,
 	errorFromResponse,
@@ -32,6 +38,7 @@ export const HEARTBEAT_TIMEOUT_MS = 35_000;
 export const BACKOFF_CAP_MS = 30_000;
 const DEFAULT_RETRY_MS = 5_000;
 const MIN_RETRY_MS = 1_000;
+export const CONNECT_TIMEOUT_MS = 15_000;
 const URL_PATH = '/api/v1/events';
 
 type Handler = (data: never) => void;
@@ -152,12 +159,18 @@ export function createEvents(deps: Partial<EventsDeps> = {}) {
 		status = 'connecting';
 		const headers: Record<string, string> = { Accept: 'text/event-stream' };
 		if (lastId) headers['Last-Event-ID'] = lastId;
+		// A hung proxy must not leave us `connecting` for ever: give up on the headers after a while.
+		const connectTimer = setTimeout(() => {
+			timedOut = true;
+			c.abort();
+		}, CONNECT_TIMEOUT_MS);
 		try {
 			const res = await fetch(`${URL_PATH}?topics=${encodeURIComponent(connectedTopics)}`, {
 				headers,
 				credentials: 'same-origin',
 				signal: c.signal
 			});
+			clearTimeout(connectTimer);
 			if (!res.ok || !res.body) {
 				const e = await errorFromResponse(res);
 				if (c.signal.aborted) return;
@@ -167,12 +180,15 @@ export function createEvents(deps: Partial<EventsDeps> = {}) {
 					unauthorized = true;
 					status = 'stopped';
 				} else if (e.status === 429) {
-					scheduleReconnect((e.retryAfter ?? Math.ceil(backoff() / 1000)) * 1000, 'busy');
+					scheduleReconnect(
+						Math.max(MIN_RETRY_MS, (e.retryAfter ?? Math.ceil(backoff() / 1000)) * 1000),
+						'busy'
+					);
 				} else if (e.status >= 400 && e.status < 500 && e.status !== 408) {
 					rejected = true; // e.g. unknown_topic: retrying can't help
 					status = 'stopped';
 				} else if (e.status === 503 && e.retryAfter !== undefined) {
-					scheduleReconnect(e.retryAfter * 1000, 'offline');
+					scheduleReconnect(Math.max(MIN_RETRY_MS, e.retryAfter * 1000), 'offline');
 				} else {
 					scheduleReconnect(backoff(), 'offline');
 				}
@@ -187,6 +203,7 @@ export function createEvents(deps: Partial<EventsDeps> = {}) {
 			if (c.signal.aborted && !timedOut) return;
 			scheduleReconnect(backoff(), 'offline'); // clean close, or silence
 		} catch (e) {
+			clearTimeout(connectTimer);
 			if (!timedOut && (c.signal.aborted || isAbort(e))) return;
 			error = new ApiError(0, 'network', e instanceof Error ? e.message : 'network error');
 			scheduleReconnect(backoff(), 'offline');
@@ -229,6 +246,7 @@ export function createEvents(deps: Partial<EventsDeps> = {}) {
 					}
 					if (item.id) lastId = item.id;
 					if (item.event === 'resync') {
+						if (!/"reason"\s*:\s*"lagged"/.test(item.data)) lastId = undefined;
 						enqueue({ event: 'resync', data: undefined });
 						continue;
 					}

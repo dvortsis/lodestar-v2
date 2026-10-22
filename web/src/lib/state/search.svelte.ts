@@ -74,8 +74,11 @@ export function createSearchState(nav: Nav = kitNav) {
 
 	const url = () => readUrl(nav.url().searchParams);
 
-	/** Parses `t` on the server (latest wins). Returns the canonical text, or null on an error. */
-	async function parse(t: string): Promise<string | null> {
+	/**
+	 * Parses `t` on the server (latest wins). Returns the canonical text, null on an error, or
+	 * undefined when a newer run superseded this one (the caller must then do nothing).
+	 */
+	async function parse(t: string): Promise<string | null | undefined> {
 		parsing = true;
 		try {
 			const r = await slot.run((signal) => api.get('/parse', { query: { q: t }, signal }));
@@ -84,7 +87,7 @@ export function createSearchState(nav: Nav = kitNav) {
 			parsing = false;
 			return r.canonical;
 		} catch (e) {
-			if (isAbort(e)) return null; // superseded: the newer run owns `parsing`
+			if (isAbort(e)) return undefined; // superseded: the newer run owns `parsing`
 			parsing = false;
 			ast = null;
 			parseError =
@@ -135,7 +138,7 @@ export function createSearchState(nav: Nav = kitNav) {
 			clearTimeout(timer);
 			timer = setTimeout(async () => {
 				const canonical = await parse(t);
-				if (t !== text) return; // typed on meanwhile
+				if (canonical === undefined || t !== text) return; // superseded, or typed on meanwhile
 				await commit(canonical ?? t, false); // an error keeps the raw text, so a reload shows it
 			}, PARSE_DEBOUNCE_MS);
 		},
@@ -145,7 +148,7 @@ export function createSearchState(nav: Nav = kitNav) {
 			clearTimeout(timer);
 			const t = text;
 			const canonical = await parse(t);
-			if (t !== text) return;
+			if (canonical === undefined || t !== text) return;
 			if (canonical !== null) text = canonical;
 			await commit(canonical ?? t, true);
 		},

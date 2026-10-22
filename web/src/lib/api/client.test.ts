@@ -162,6 +162,28 @@ describe('errors', () => {
 	});
 });
 
+describe('abort while reading the body', () => {
+	const abortingResponse = (status: number) => {
+		const res = new Response('{}', { status });
+		res.json = () => Promise.reject(new DOMException('Aborted', 'AbortError'));
+		return res;
+	};
+
+	it('stays an AbortError for an error body', async () => {
+		fetchMock.mockImplementation(async () => abortingResponse(500));
+		expect(isAbort(await api.get('/parse').catch((x) => x))).toBe(true);
+	});
+
+	it('stays an AbortError for a 200 body', async () => {
+		const ctl = new AbortController();
+		fetchMock.mockImplementation(async () => {
+			ctl.abort();
+			return abortingResponse(200);
+		});
+		expect(isAbort(await api.get('/parse', { signal: ctl.signal }).catch((x) => x))).toBe(true);
+	});
+});
+
 describe('401 handling', () => {
 	const unauth = () => envelope('login_required', 401);
 
