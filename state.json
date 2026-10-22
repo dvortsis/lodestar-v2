@@ -821,7 +821,7 @@
    "pr": 89,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 20:29 after #86 merged."
+   "notes": "Launched 20:29 after #86 merged. | 23:25 review: no blocking; asked I1 (test endpoint echoes body: partial-read SSRF), I2 semaphore, I3 event on drop, I4 secret sealing/refuse, I5 merged check + polish; files outside owns accepted."
   },
   "B2c": {
    "status": "pending",
@@ -1105,7 +1105,6 @@
  },
  "heartbeats": 4,
  "reviews_in_flight": [
-  "89",
   "88",
   94,
   95
