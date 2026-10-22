@@ -16,6 +16,7 @@
 
 mod core;
 mod engine;
+mod fasttok;
 mod hash;
 mod held;
 pub mod lists;
@@ -24,9 +25,11 @@ mod matcher;
 pub mod normalize;
 mod packs;
 mod payload;
+mod prefilter;
 pub mod reclassify;
 mod rules;
 mod seal;
+pub mod strictness;
 
 pub use crate::core::{
     Action, Core, CoreRule, CsList, Evidence, Field, Fixture, Hit, Item, Lists, Locked, MAX_FILES,
@@ -38,5 +41,6 @@ pub use held::HeldSet;
 pub use matcher::{Doc, Facts};
 pub use packs::{Pack, PackRule, PackSwitches};
 pub use payload::{PayloadSig, SPECIFIC_BYTES, SPECIFIC_FILES, payload_sig};
+pub use prefilter::RuleList;
 pub use rules::{Allow, ClassRule, Exception, Invalid, Match, Override, Strength, UserRule};
 pub use seal::{SealError, Sealer};

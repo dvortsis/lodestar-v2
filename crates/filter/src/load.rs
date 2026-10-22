@@ -43,9 +43,11 @@ pub fn decode_match(kind: u8, value: &[u8]) -> Option<Match> {
     })
 }
 
-/// Every pack on, then the stored switches.
+/// The stored switches over no pack on: packs are off until chosen, in
+/// the first-run wizard or in Settings (§20.6, owner's decision §2.8).
+/// An install that never chose stays without packs.
 pub fn pack_switches(stored: &[(String, bool)]) -> PackSwitches {
-    let mut s = PackSwitches::all();
+    let mut s = PackSwitches::default();
     for (id, on) in stored {
         if let Some(p) = Pack::from_name(id) {
             if *on {
@@ -223,7 +225,11 @@ mod tests {
                     unless_query: None,
                 },
             ],
-            pack_switches: vec![("spam".into(), false), ("MW-1".into(), false)],
+            pack_switches: vec![
+                ("malware".into(), true),
+                ("spam".into(), false),
+                ("MW-1".into(), false),
+            ],
             overrides: vec![OverrideRow {
                 id: 4,
                 kind: KIND_KEYWORD,
@@ -262,5 +268,17 @@ mod tests {
         assert_eq!(e.overrides[0].strength, Strength::Neutralize);
         assert_eq!(e.exceptions[0].rule, RuleRef::Core(crate::CoreRule::Cs4a));
         assert_eq!(e.allow.len(), 1);
+    }
+
+    #[test]
+    fn packs_are_off_until_chosen() {
+        // Nothing stored: a fresh install, or one that skipped the wizard.
+        let s = pack_switches(&[]);
+        assert_eq!(s, PackSwitches::default());
+        assert!(PackRule::ALL.iter().all(|r| !s.is_on(*r)));
+        // A pack rule switched on doesn't turn its pack on.
+        assert!(!pack_switches(&[("MW-2".into(), true)]).is_on(PackRule::Mw2));
+        let s = pack_switches(&[("lures".into(), true)]);
+        assert!(s.is_on(PackRule::Lu1) && !s.is_on(PackRule::Mw1));
     }
 }

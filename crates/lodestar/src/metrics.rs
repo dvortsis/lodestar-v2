@@ -64,6 +64,13 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
         m.started_at(),
     );
     o.one("torrents", "gauge", "Torrents stored.", m.torrents());
+    o.one(
+        "floor_removals_kept_total",
+        "counter",
+        "Locked-floor entries a config file or a floor-marked list dropped, kept until \
+         removed in the app (counted at each start and list refresh).",
+        crate::floor::KEPT.load(Ordering::Relaxed),
+    );
 
     o.family(
         "source_up",

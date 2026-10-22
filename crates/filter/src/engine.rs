@@ -22,7 +22,8 @@ use crate::core::{Action, Core, CoreRule, Evidence, Hit, Item};
 use crate::hash::TermSet;
 use crate::matcher::{Doc, Facts};
 use crate::packs::{self, PackRule, PackSwitches};
-use crate::rules::{self, Allow, ClassRule, Exception, Match, Override, Strength, UserRule};
+use crate::prefilter::RuleList;
+use crate::rules::{self, Allow, ClassRule, Exception, Match, Override, Strength};
 
 /// Which rule decided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -116,7 +117,8 @@ pub struct Engine {
     pub core: Core,
     pub lists: Vec<ListLayer>,
     pub packs: PackSwitches,
-    pub rules: Vec<UserRule>,
+    /// Your rules, indexed so a torrent only meets those that could match.
+    pub rules: RuleList,
     pub overrides: Vec<Override>,
     pub exceptions: Vec<Exception>,
     pub allow: Vec<Allow>,
@@ -132,7 +134,7 @@ impl Engine {
             core,
             lists: Vec::new(),
             packs: PackSwitches::default(),
-            rules: Vec::new(),
+            rules: RuleList::default(),
             overrides: Vec::new(),
             exceptions: Vec::new(),
             allow: Vec::new(),
@@ -232,11 +234,15 @@ impl Engine {
         {
             return None;
         }
-        for r in self.rules.iter().filter(|r| r.enabled) {
-            if !doc.matches(&r.query, neutral_words)
-                || r.unless.as_ref().is_some_and(|u| doc.matches(u, &[]))
-                || self.excepted(RuleRef::User(r.id), item, doc)
+        for i in doc.candidates(&self.rules) {
+            let (query, unless) = self.rules.compiled(i);
+            if !doc.matches_compiled(query, neutral_words)
+                || unless.is_some_and(|u| doc.matches_compiled(u, &[]))
             {
+                continue;
+            }
+            let r = &self.rules[i as usize];
+            if self.excepted(RuleRef::User(r.id), item, doc) {
                 continue;
             }
             let d = Decision {
@@ -263,6 +269,20 @@ impl Engine {
             .chain(self.listed(item.hashes))
             .filter(|d| !self.excepted(d.rule, item, doc))
             .max_by_key(|d| d.action)
+    }
+
+    /// How many of your rules a torrent meets: those the narrowing
+    /// returns, and those that pass the cheap check too and get the full
+    /// match. For the §20.8 budget test's report.
+    #[doc(hidden)]
+    pub fn rule_counts(&self, item: &Item, facts: Option<&Facts>) -> (usize, usize) {
+        let doc = Doc::new(item, facts);
+        let candidates = doc.candidates(&self.rules);
+        let full = candidates
+            .iter()
+            .filter(|&&i| doc.could_match(self.rules.compiled(i).0))
+            .count();
+        (candidates.len(), full)
     }
 
     fn excepted(&self, rule: RuleRef, item: &Item, doc: &Doc) -> bool {

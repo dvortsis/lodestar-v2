@@ -1,2 +1,2 @@
 200
-{"results":[{"decision":{"action":"drop","rule":"FK-4"},"draft":null,"shadow":[]}]}
+{"results":[{"decision":null,"draft":null,"shadow":[]}]}
