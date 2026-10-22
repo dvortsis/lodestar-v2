@@ -9,6 +9,7 @@ use crate::packet::{self, Header, PacketType};
 const LIMITS: Limits = Limits {
     recv_window: 8192,
     send_buffer: 8192,
+    idle_timeout: std::time::Duration::from_secs(60),
 };
 
 /// Parses `data` as a datagram. Whatever parses re-encodes to an equal

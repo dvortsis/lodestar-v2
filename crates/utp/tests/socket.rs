@@ -19,6 +19,20 @@ fn data(len: usize) -> Vec<u8> {
     (0..len).map(|i| (i * 7 + i / 251) as u8).collect()
 }
 
+/// A loopback socket. Every test peer shares 127.0.0.1, so the per-IP
+/// cap is lifted (`per_ip_cap_is_enforced` covers it).
+async fn bind_local() -> UtpSocket {
+    UtpSocket::bind_with(
+        localhost(),
+        Config {
+            max_per_ip: 1024,
+            ..Config::default()
+        },
+    )
+    .await
+    .unwrap()
+}
+
 /// Waits until `cond` holds, for up to `secs`.
 async fn eventually(secs: u64, mut cond: impl FnMut() -> bool) -> bool {
     for _ in 0..secs * 50 {
@@ -32,7 +46,7 @@ async fn eventually(secs: u64, mut cond: impl FnMut() -> bool) -> bool {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn echo_a_megabyte_each_way() {
-    let server = UtpSocket::bind(localhost()).await.unwrap();
+    let server = bind_local().await;
     let mut listener = server.listen(8);
     let addr = server.local_addr().unwrap();
     tokio::spawn(async move {
@@ -47,7 +61,7 @@ async fn echo_a_megabyte_each_way() {
         }
         s.shutdown().await.unwrap();
     });
-    let client = UtpSocket::bind(localhost()).await.unwrap();
+    let client = bind_local().await;
     let stream = timeout(Duration::from_secs(5), client.connect(addr))
         .await
         .unwrap()
@@ -83,7 +97,7 @@ async fn echo_a_megabyte_each_way() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn many_connections_at_once() {
-    let server = UtpSocket::bind(localhost()).await.unwrap();
+    let server = bind_local().await;
     let mut listener = server.listen(64);
     let addr = server.local_addr().unwrap();
     tokio::spawn(async move {
@@ -97,7 +111,7 @@ async fn many_connections_at_once() {
             });
         }
     });
-    let client = UtpSocket::bind(localhost()).await.unwrap();
+    let client = bind_local().await;
     let mut tasks = Vec::new();
     for i in 0..100u16 {
         let client = client.clone();
@@ -119,8 +133,8 @@ async fn many_connections_at_once() {
 async fn nobody_listening() {
     // A bound port without a listener ignores the SYN: connecting times
     // out (bounded by the caller), and the abandoned attempt unregisters.
-    let quiet = UtpSocket::bind(localhost()).await.unwrap();
-    let client = UtpSocket::bind(localhost()).await.unwrap();
+    let quiet = bind_local().await;
+    let client = bind_local().await;
     let r = timeout(
         Duration::from_millis(300),
         client.connect(quiet.local_addr().unwrap()),
@@ -149,7 +163,7 @@ async fn connection_cap_is_enforced() {
     )
     .await
     .unwrap();
-    let quiet = UtpSocket::bind(localhost()).await.unwrap();
+    let quiet = bind_local().await;
     let target = quiet.local_addr().unwrap();
     let c = client.clone();
     let pending = tokio::spawn(async move { c.connect(target).await.map(drop) });
@@ -161,10 +175,10 @@ async fn connection_cap_is_enforced() {
 
 #[tokio::test]
 async fn reset_reaches_the_peer() {
-    let server = UtpSocket::bind(localhost()).await.unwrap();
+    let server = bind_local().await;
     let mut listener = server.listen(1);
     let addr = server.local_addr().unwrap();
-    let client = UtpSocket::bind(localhost()).await.unwrap();
+    let client = bind_local().await;
     let mut c = client.connect(addr).await.unwrap();
     c.write_all(b"hello").await.unwrap();
     let mut s = listener.accept().await.unwrap();
@@ -219,7 +233,7 @@ async fn shares_a_port_with_krpc() {
     // A KRPC query and a uTP connection to the same port.
     let other = UdpSocket::bind(localhost()).await.unwrap();
     other.send_to(b"d1:y1:qe", addr).await.unwrap();
-    let client = UtpSocket::bind(localhost()).await.unwrap();
+    let client = bind_local().await;
     let mut c = client.connect(addr).await.unwrap();
     c.write_all(b"ping").await.unwrap();
     let mut got = Vec::new();
@@ -257,7 +271,7 @@ impl PacketSink for LossySink {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn survives_a_lossy_reordering_link() {
-    let server = UtpSocket::bind(localhost()).await.unwrap();
+    let server = bind_local().await;
     let mut listener = server.listen(1);
     let addr = server.local_addr().unwrap();
     let payload = data(200_000);
@@ -312,7 +326,7 @@ async fn dual_stack_socket_reaches_ipv4_peers() {
     let Ok(client) = UtpSocket::bind("[::]:0".parse().unwrap()).await else {
         return;
     };
-    let server = UtpSocket::bind(localhost()).await.unwrap();
+    let server = bind_local().await;
     let mut listener = server.listen(1);
     let addr = server.local_addr().unwrap();
     tokio::spawn(async move {
@@ -358,4 +372,37 @@ async fn dual_sink_routes_by_family() {
         v6: None,
     };
     assert!(only_v4.send_to(b"x", b).is_err());
+}
+
+#[tokio::test]
+async fn per_ip_cap_is_enforced() {
+    // Default config: 8 connections per IP, pending ones included.
+    let client = UtpSocket::bind(localhost()).await.unwrap();
+    let quiet = bind_local().await;
+    let target = quiet.local_addr().unwrap();
+    let mut pending = Vec::new();
+    for _ in 0..8 {
+        let c = client.clone();
+        pending.push(tokio::spawn(
+            async move { c.connect(target).await.map(drop) },
+        ));
+    }
+    assert!(eventually(2, || client.connections() == 8).await);
+    let err = client.connect(target).await.unwrap_err();
+    assert!(err.to_string().contains("too many"), "{err}");
+    // Another IP is unaffected (only the cap is checked, not reachability).
+    let other: SocketAddr = "127.0.0.2:9".parse().unwrap();
+    let c = client.clone();
+    let ninth = tokio::spawn(async move { c.connect(other).await.map(drop) });
+    assert!(eventually(2, || client.connections() == 9).await);
+    // Abandoned attempts free their slots.
+    for p in pending {
+        p.abort();
+    }
+    ninth.abort();
+    assert!(eventually(2, || client.connections() == 0).await);
+    let c = client.clone();
+    let again = tokio::spawn(async move { c.connect(target).await.map(drop) });
+    assert!(eventually(2, || client.connections() == 1).await);
+    again.abort();
 }

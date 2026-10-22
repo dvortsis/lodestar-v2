@@ -38,9 +38,16 @@ fn info_dict(size: usize) -> Vec<u8> {
 }
 
 async fn client() -> UtpSocket {
-    UtpSocket::bind("127.0.0.1:0".parse().unwrap())
-        .await
-        .unwrap()
+    // Every fake peer is on 127.0.0.1: lift the per-IP cap.
+    UtpSocket::bind_with(
+        "127.0.0.1:0".parse().unwrap(),
+        Config {
+            max_per_ip: 1024,
+            ..Config::default()
+        },
+    )
+    .await
+    .unwrap()
 }
 
 fn utp_opts(utp: UtpSocket, encryption: Encryption) -> FetchOptions {
@@ -237,7 +244,13 @@ fn lossy_client(seed: u64) -> UtpSocket {
         udp: Arc::new(std.try_clone().unwrap()),
         rng: Mutex::new(StdRng::seed_from_u64(seed)),
     });
-    let utp = UtpSocket::with_sink(sink, Config::default());
+    let utp = UtpSocket::with_sink(
+        sink,
+        Config {
+            max_per_ip: 1024,
+            ..Config::default()
+        },
+    );
     let udp = tokio::net::UdpSocket::from_std(std).unwrap();
     let feeder = utp.clone();
     tokio::spawn(async move {
