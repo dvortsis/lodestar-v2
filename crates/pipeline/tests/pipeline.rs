@@ -910,3 +910,49 @@ async fn a_not_adult_rule_never_takes_a_torrent_out_of_the_adult_only_core() {
         Some(lodestar_classify::ContentType::Adult)
     );
 }
+
+/// §20.6 and the owner's decision (§2.8): packs are off until chosen, so
+/// a fresh install that never chose stores a torrent a pack would hide.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn packs_are_off_on_a_fresh_install() {
+    use lodestar_store::flags;
+    // MW-1: an executable posing as a video.
+    let lure: &[(&str, i64)] = &[("Movie.2023.1080p.mp4.exe", 2_000_000)];
+    let run = |chosen: bool| async move {
+        let dir = tempfile::tempdir().unwrap();
+        let seeds = vec![Seed::v1(info_dict_with("Movie 2023 1080p", lure))];
+        let key = InfoHash(seeds[0].info_hash);
+        let peer = FakePeer::spawn(seeds, Accept::Both, Behavior::Honest, vec![]).await;
+        let mut store =
+            Store::open(dir.path().join("lodestar.db"), StoreConfig::default()).unwrap();
+        if chosen {
+            store.set_pack_switch("malware", true).unwrap();
+        }
+        let (feed, feed_tx) = scripted("feed");
+        let pipeline = Pipeline::start(config(), store, vec![feed]).await.unwrap();
+        feed_tx
+            .send(Found::key(key, 0).with_peers(vec![peer.addr()]))
+            .await
+            .unwrap();
+        until("stored", || {
+            pipeline.writer_stats().stored.load(Ordering::Relaxed) == 1
+        })
+        .await;
+        let store = pipeline.shutdown().await.unwrap();
+        let row = store
+            .torrent(store.find(&key).unwrap().unwrap())
+            .unwrap()
+            .unwrap();
+        (
+            row.flags & flags::HIDDEN != 0,
+            store.filter_hits(0).unwrap(),
+        )
+    };
+    let (hidden, hits) = run(false).await;
+    assert!(!hidden, "no pack is on until one is chosen");
+    assert!(hits.is_empty(), "{hits:?}");
+    // The same torrent once the pack is chosen, so the case above is real.
+    let (hidden, hits) = run(true).await;
+    assert!(hidden);
+    assert!(hits.iter().any(|h| h.rule == "MW-1"), "{hits:?}");
+}

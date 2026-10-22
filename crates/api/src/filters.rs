@@ -15,7 +15,7 @@
 //! locked floor, protective core actions, valid overrides and exceptions)
 //! hold on this server whatever a client sends.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -33,7 +33,7 @@ use lodestar_filter::{
     Override, Pack, PackRule, RuleRef, Sealer, Strength,
 };
 use lodestar_search::{Node, parse};
-use lodestar_store::{ExceptionRow, OverrideRow, RuleRow, RuleSet, Store};
+use lodestar_store::{ExceptionRow, FloorSource, OverrideRow, RuleRow, RuleSet, Store};
 use serde_json::{Value, json};
 use utoipa::OpenApi;
 
@@ -44,12 +44,12 @@ use crate::dto::filters::{
     AllowEntry, ApplyResponse, ClassRule, ClassRuleAdded, ClassRuleRemoved, Classes, CoreRuleState,
     CorrectResponse, Decision, DecisionCount, Detection, DetectionExample, ExceptionEntry,
     FixtureCounts, Fixtures, JobPhase, JobProgress, JobStarted, JobState, JobStatus, OverrideEntry,
-    Overview, PackRuleState, PackState, QuarantineEntry, Queue, RuleEntry, SubscriptionEntry,
-    TestResponse, TestResult,
+    Overview, PackRuleState, PackState, PendingFloorEntry, QuarantineEntry, Queue, RuleEntry,
+    Strictness, StrictnessList, SubscriptionEntry, TestResponse, TestResult,
 };
 pub use crate::dto::filters::{
     Assessment, Change, ChangeBody, ClassRuleBody, CorrectBody, IdBody, MatchInput, Preview,
-    Sample, SampleFile, TestBody,
+    Sample, SampleFile, StrictnessBody, TestBody,
 };
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{ClientIp, Json as JsonBody, Path, same_origin_json};
@@ -61,6 +61,7 @@ use crate::extract::{ClientIp, Json as JsonBody, Path, same_origin_json};
     queue,
     fixtures,
     test,
+    strictness,
     classes,
     correct,
     add_class_rule,
@@ -93,6 +94,11 @@ pub struct FiltersApi {
 const REPLAY_SECS: i64 = 30 * 86_400;
 /// Rows read for a preview.
 const PREVIEW_ROWS: usize = 100_000;
+/// Hashes listed per source of pending floor removals.
+const PENDING_HASHES: usize = 1_000;
+/// Floor entries one removal settles at most, and a request may name: a
+/// larger pending list is removed in batches, each confirmed.
+const MAX_FLOOR_BATCH: usize = 10_000;
 
 /// The filters routes (§20.7): all behind a session.
 pub fn routes() -> Router<ApiState> {
@@ -102,6 +108,7 @@ pub fn routes() -> Router<ApiState> {
             .route("/filters/queue", get(queue))
             .route("/filters/fixtures", get(fixtures))
             .route("/filters/test", post(test))
+            .route("/filters/strictness", post(strictness))
             .route("/classify", get(classes))
             .route("/classify/correct", post(correct))
             .route("/classify/rules", post(add_class_rule))
@@ -144,6 +151,46 @@ fn hex20(s: &str) -> ApiResult<[u8; 20]> {
 
 fn hex(h: &[u8]) -> String {
     h.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn floor_source(key: &str) -> ApiResult<FloorSource> {
+    FloorSource::from_key(key).ok_or_else(|| {
+        bad(
+            "unknown_floor_source",
+            "A floor source is file:<path> or list:<id>.",
+        )
+        .field("source")
+    })
+}
+
+/// The pending entries of `source` a floor change names: `hashes`, or all.
+fn pending_chosen(
+    store: &Store,
+    source: &FloorSource,
+    hashes: Option<&[String]>,
+) -> ApiResult<Vec<[u8; 20]>> {
+    if hashes.is_some_and(|hs| hs.len() > MAX_FLOOR_BATCH) {
+        return Err(bad(
+            "too_many_hashes",
+            format!("Settle at most {MAX_FLOOR_BATCH} floor entries at a time."),
+        )
+        .field("hashes"));
+    }
+    let pending = store.pending_floor_of(source).map_err(internal)?;
+    let chosen: Vec<[u8; 20]> = match hashes {
+        Some(hs) => {
+            let hs: HashSet<[u8; 20]> = hs.iter().map(|h| hex20(h)).collect::<ApiResult<_>>()?;
+            pending.into_iter().filter(|p| hs.contains(p)).collect()
+        }
+        None => pending,
+    };
+    if chosen.is_empty() {
+        return Err(not_found(
+            "floor_removal_not_found",
+            "There's no such pending floor removal.",
+        ));
+    }
+    Ok(chosen)
 }
 
 fn action(name: &str) -> ApiResult<Action> {
@@ -380,6 +427,7 @@ impl Snapshot {
                 .sum(),
             per_day: caught as f64 / 30.0,
             estimate: false,
+            removed_from_floor: 0,
         }
     }
 
@@ -631,6 +679,25 @@ fn warning(change: &Change, p: &Preview, neutral: Option<&Preview>) -> String {
              vetted child-abuse hash list."
                 .to_owned()
         }
+        Change::ResolveFloorRemoval { source, .. } => {
+            let from = match FloorSource::from_key(source) {
+                Some(FloorSource::File(path)) => format!("{path} no longer lists them"),
+                Some(FloorSource::List(id)) => {
+                    format!("the publisher of list {id} removed them")
+                }
+                None => "their source dropped them".to_owned(),
+            };
+            format!(
+                "This removes {} entries from the locked floor, so those torrents can be fetched \
+                 and indexed again. {from}, but a config file or a list can only add to the \
+                 floor, so they stay blocked until you remove them here. A list's publisher can \
+                 make mistakes or be compromised, and a file can be edited by anyone who can \
+                 write to it: remove them only if you know why they were dropped. {} dropped \
+                 items could be fetched again. Safer: keep them, which stops this notice and \
+                 keeps them blocked.",
+                p.removed_from_floor, p.tombstones
+            )
+        }
         Change::Undo => {
             "Undo puts back the previous rule set: changes made since are reverted, including \
              any that strengthened filtering."
@@ -866,10 +933,42 @@ impl FiltersApi {
                         not_found("subscription_not_found", "There's no such subscription.")
                     })?;
                 let shrank = sub.error.as_deref().is_some_and(|e| e.contains("shrank"));
-                if *accept && shrank {
+                // A floor-marked list's removals wait for a decision of
+                // their own (§2.7), so accepting one releases nothing.
+                if *accept && shrank && !sub.floor {
                     a.weakening = true;
                     a.preview = rules(vec![format!("L-{id}")]);
                 }
+            }
+            Change::ResolveFloorRemoval {
+                source,
+                hashes,
+                remove,
+            } => {
+                let mut chosen =
+                    pending_chosen(&self.store(), &floor_source(source)?, hashes.as_deref())?;
+                // A removal goes in batches the client can name back.
+                if *remove {
+                    chosen.truncate(MAX_FLOOR_BATCH);
+                }
+                a.floor_entries = Some(
+                    chosen
+                        .iter()
+                        .take(MAX_FLOOR_BATCH)
+                        .map(|h| hex(h))
+                        .collect(),
+                );
+                if *remove {
+                    let set: HashSet<&[u8; 20]> = chosen.iter().collect();
+                    a.weakening = true;
+                    a.preview.tombstones = snap
+                        .tombstones
+                        .iter()
+                        .filter(|t| set.contains(&t.0))
+                        .count();
+                    a.preview.removed_from_floor = chosen.len();
+                }
+                a.settles = Some(chosen);
             }
             Change::Subscribe { floor, kind, .. } => {
                 if *floor && kind != "content" {
@@ -1063,6 +1162,7 @@ impl FiltersApi {
             name: None,
             released: None,
             removed: None,
+            settled: None,
             version: 0,
         };
         match change {
@@ -1414,6 +1514,45 @@ impl FiltersApi {
                     return Err(conflict("nothing_held", "No version of that list is held."));
                 }
             }
+            Change::ResolveFloorRemoval {
+                source,
+                hashes,
+                remove,
+            } => {
+                let src = floor_source(source)?;
+                // Without `hashes` (keeping only: a removal names them),
+                // what the assessment counted, not whatever is pending by
+                // now.
+                let chosen = match (hashes, &out.assessment.settles) {
+                    (None, Some(counted)) => counted.clone(),
+                    _ => pending_chosen(store, &src, hashes.as_deref())?,
+                };
+                let done = store
+                    .resolve_pending_floor(&src, Some(&chosen), *remove, now)
+                    .map_err(internal)?;
+                // The store holds the floor; the engine follows it, for
+                // what actually left it (an entry another file lists
+                // stays). A list's own layer is rebuilt below.
+                self.engine.update(|c| match (&src, remove) {
+                    (FloorSource::File(_), true) => {
+                        for h in &done.unblocked {
+                            if c.cs.hash(h) == Some(Origin::Imported) {
+                                c.cs.remove_hash(h);
+                            }
+                        }
+                    }
+                    (FloorSource::List(_), false) => {
+                        for h in &done.settled {
+                            c.cs.add_hash(*h, Origin::Imported);
+                        }
+                    }
+                    _ => {}
+                });
+                for h in &done.unblocked {
+                    self.release(store, *h)?;
+                }
+                out.settled = Some(done.settled.len());
+            }
             Change::Undo => self.undo(store)?,
         }
         if let Some(p) = previous {
@@ -1425,6 +1564,7 @@ impl FiltersApi {
                 | Change::Unsubscribe { .. }
                 | Change::PauseSubscription { .. }
                 | Change::ResolveHeld { .. }
+                | Change::ResolveFloorRemoval { .. }
         ) {
             lodestar_filter::lists::apply(store, &self.engine, &self.ips).map_err(internal)?;
         }
@@ -1456,6 +1596,7 @@ impl FiltersApi {
         let store = self.store();
         let set = store.rule_set().map_err(internal)?;
         let subs = store.subscriptions().map_err(internal)?;
+        let pending = store.pending_floor().map_err(internal)?;
         let quarantine = store.quarantined(PREVIEW_ROWS).map_err(internal)?.len();
         let action_name = |code: u8| Action::from_code(code).map(|a| a.as_str().to_string());
         Ok(Overview {
@@ -1514,6 +1655,33 @@ impl FiltersApi {
                         }
                         .to_string(),
                     }
+                })
+                .collect(),
+            // Entries a config file or a floor-marked list dropped, still
+            // blocked until settled (§2.7).
+            pending_floor_removals: pending
+                .iter()
+                .map(|p| PendingFloorEntry {
+                    entries: p.hashes.len(),
+                    hashes: p
+                        .hashes
+                        .iter()
+                        .take(PENDING_HASHES)
+                        .map(|h| hex(h))
+                        .collect(),
+                    kind: match p.source {
+                        FloorSource::File(_) => "file",
+                        FloorSource::List(_) => "list",
+                    }
+                    .to_string(),
+                    name: match &p.source {
+                        FloorSource::File(path) => path.clone(),
+                        FloorSource::List(id) => subs
+                            .iter()
+                            .find(|s| s.id == *id)
+                            .map_or_else(|| format!("list {id}"), |s| s.name.clone()),
+                    },
+                    source: p.source.key(),
                 })
                 .collect(),
             packs: Pack::ALL
@@ -1599,6 +1767,100 @@ impl FiltersApi {
                     sealed: q.sealed.is_some(),
                 })
                 .collect(),
+        })
+    }
+}
+
+impl FiltersApi {
+    /// How strict a candidate set of lists is (owner's decision §2.9):
+    /// the IPv4 share it blocks, its IPv6 ranges, the torrents it drops,
+    /// what kind of lists they are, and a warning level with its text.
+    /// Lists already fetched are measured from their data; catalog lists
+    /// not subscribed yet use the catalog's measurement.
+    pub fn strictness(&self, body: &StrictnessBody) -> ApiResult<Strictness> {
+        use lodestar_filter::strictness::{self, Candidate, Category, Facts};
+        let store = self.store();
+        let subs = store.subscriptions().map_err(internal)?;
+        let mut ids: Vec<i64> = Vec::new();
+        let mut candidates = Vec::new();
+        for key in &body.catalog {
+            let e = strictness::catalog(key).ok_or_else(|| {
+                bad("unknown_list", format!("There's no catalog list {key:?}.")).field("catalog")
+            })?;
+            match subs.iter().find(|s| s.url == e.url) {
+                Some(s) => ids.push(s.id),
+                None => candidates.push(Candidate::from_catalog(e)),
+            }
+        }
+        ids.extend(&body.subscriptions);
+        ids.sort_unstable();
+        ids.dedup();
+        for id in ids {
+            let s = subs.iter().find(|s| s.id == id).ok_or_else(|| {
+                not_found("subscription_not_found", "There's no such subscription.")
+            })?;
+            let ip = s.kind == lodestar_filter::lists::KIND_IP;
+            let listed = strictness::CATALOG.iter().find(|e| e.url == s.url);
+            let categories = match (listed, ip, s.floor) {
+                (Some(e), _, _) => e.categories.to_vec(),
+                (None, true, _) => vec![Category::Peers],
+                (None, false, true) => vec![Category::ChildAbuse],
+                (None, false, false) => vec![Category::Content],
+            };
+            let data = store.subscription_data(id, false).map_err(internal)?;
+            let facts = match (data, ip) {
+                (Some(d), true) => {
+                    lodestar_filter::lists::IpSet::decode(&d).map_or(Facts::Unknown, Facts::Ips)
+                }
+                (Some(d), false) => {
+                    let mut n = (d.len() / 20) as u64;
+                    if s.floor {
+                        n += store
+                            .pending_floor_of(&FloorSource::List(id))
+                            .map_err(internal)?
+                            .len() as u64;
+                    }
+                    Facts::Hashes(n)
+                }
+                (None, _) => listed.map_or(Facts::Unknown, |e| Facts::Measured(e.measured)),
+            };
+            candidates.push(Candidate {
+                name: s.name.clone(),
+                ip,
+                floor: s.floor && !ip,
+                categories,
+                facts,
+            });
+        }
+        let a = strictness::assess(&candidates);
+        let cats = |c: &[Category]| c.iter().map(|c| c.as_str().to_string()).collect::<Vec<_>>();
+        Ok(Strictness {
+            categories: cats(&a.categories),
+            estimate: a.estimate,
+            floor_hashes: a.floor_hashes,
+            hashes: a.hashes,
+            ipv4_public_share: a.v4_public_share,
+            ipv4_share: a.v4_share,
+            ipv6_ranges: a.v6_ranges,
+            ipv6_share: a.v6_share,
+            level: a.level.as_str().to_string(),
+            lists: a
+                .lists
+                .iter()
+                .map(|l| StrictnessList {
+                    categories: cats(&l.categories),
+                    floor: l.floor,
+                    hashes: l.hashes,
+                    ipv4_public_share: l.v4_public_share,
+                    ipv4_share: l.v4_share,
+                    ipv6_ranges: l.v6_ranges,
+                    kind: if l.ip { "ip" } else { "content" }.to_string(),
+                    measured: l.measured,
+                    name: l.name.clone(),
+                })
+                .collect(),
+            text: a.text,
+            unknown: a.unknown,
         })
     }
 }
@@ -1986,6 +2248,29 @@ pub(crate) async fn test(
         .map_err(internal)?
 }
 
+/// How strict a candidate set of lists is (§2.9, §20.13): what it
+/// would block and a warning matched to it. Nothing is stored or
+/// connected.
+#[utoipa::path(
+    operation_id = "assessListStrictness",
+    post,
+    path = "/filters/strictness",
+    tag = "filters",
+    request_body = StrictnessBody,
+    responses((status = 200, body = Strictness))
+)]
+pub(crate) async fn strictness(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+    JsonBody(body): JsonBody<StrictnessBody>,
+) -> ApiResult<Json<Strictness>> {
+    same_origin_json(&headers)?;
+    let f = filters(&s)?;
+    tokio::task::spawn_blocking(move || f.strictness(&body).map(Json))
+        .await
+        .map_err(internal)?
+}
+
 /// Your classification correction for one stored torrent; it's
 /// classified again at once.
 #[utoipa::path(
@@ -2209,7 +2494,23 @@ fn apply_change(
                 .field("password")
                 .assessment(assessment));
             }
-            Some(p) => auth.confirm(ip, p).map_err(|e| auth_error(e, "password"))?,
+            Some(p) => {
+                // The password confirms the entries the warning listed, so
+                // a removal names them: what's pending can have grown since.
+                if let Change::ResolveFloorRemoval {
+                    hashes: None,
+                    remove: true,
+                    ..
+                } = &body.change
+                {
+                    return Err(bad(
+                        "floor_removal_needs_hashes",
+                        "Name the entries to remove: send back the floor_entries the warning listed as hashes.",
+                    )
+                    .field("hashes"));
+                }
+                auth.confirm(ip, p).map_err(|e| auth_error(e, "password"))?
+            }
         }
     }
     f.apply(&body.change, assessment, now).map(Json)

@@ -1773,6 +1773,18 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - One bar for every slice and review: `runner/standards.md`.
   - Merges happen only with green CI and no blocking findings from a fresh Opus reviewer.
 
+**M5 decisions (filtering, owner 2026-10-22):** PRs #33, #42 and #47 merged before §2.7–2.9 were applied. F1 brought `main` into line:
+- **Rule packs are off until chosen (§2.8, §20.6).** With nothing stored, `pack_switches` starts from no pack on. Packs turn on only through a stored choice: the wizard (pre-checked there) or Settings through the filters API. The guards and pack logic are unchanged.
+- **The 50 µs budget is the owner's (§1.6.6, §20.8).** `LODESTAR_BUDGET_US` is gone. The `filter budget` CI job runs the gate in release.
+  - **The first gate wasn't honest.** It judged one torrent, over and over, against rules none of whose words it had, so the narrowing skipped 99% of them. The review made 10% of the rules candidates that matched nothing and measured 16.8–17.0 ms per torrent.
+  - **The gate now** judges a varied set of 512 torrents with 1%, 10% and 25% of the rules built on words they have, and about 40 rules per torrent that get the full match (§20.8). It holds the core, 1% and 10%; 25% is reported.
+  - **What made it:** compiled queries with a three-valued cheap check (token texts, a Bloom filter of neighbouring tokens, token starts, extensions, sizes, tags); an index keyed on each rule's rarest-looking word; an exact ASCII fast path of the search tokenizer for the full match; a per-torrent vocabulary for prefixes and fuzzy words; and word plans and a flag table in the core's tokenizer and signals. On this set the engine went from 30 ms per torrent at 10% to 40.8 µs on the runner (core 8.9, 1% 32.9, 25% 48.1 reported). The build VM runs about 1.4× slower.
+  - **Scope:** the gate covers rule shapes the cheap check can reject. Shapes it can't decide (negations, NEAR, prefixes, fuzzy words, `title:`) get the full match on every torrent that has their words, and cost more (§20.8). Whether to hold those is the owner's call.
+  - **Correctness:** a differential property test checks the compiled match against the previous matcher on random queries and torrents, and the cheap check against the full match. Its *no* answers rest on property tests that the scan's keys, pairs, starts and vocabulary cover the tokenizer's tokens exactly or as supersets. Injected bugs were caught.
+- **The floor from config files only adds (§2.7).** `blocklist.files` add through the store. A floor-marked list's upstream removals stay blocked. Both kinds of drop wait in *pending floor removals*, reported once per start with a counter metric, and leave the floor only through `resolve_floor_removal` with the effect warning and the password.
+- **Floor removals, as reviewed:** a confirmed removal settles the entries its warning counted (`floor_entries`), never more. An entry two config files list stays while either lists it. Accepting a held version of a floor-marked list is no longer weakening, since what it drops stays blocked in the list's pending removals (§20.7).
+- **Subscriptions are off by default (§2.9).** The strictness assessment grades on the share of **public** IPv4, because FireHOL level 1's 14% of IPv4 is almost all reserved space. BT_BlockLists comes out severe.
+
 **B3 decisions (embedded UI serving, CSP):**
 - **Embedding:** `crates/lodestar/build.rs` bundles `web/build/` (or `$LODESTAR_WEB_BUILD`) when the default-on `web` feature is set. Every text file is precompressed at build time with brotli (q11) and gzip (level 9), each kept only if smaller; fonts and raster images are stored once. With no build (or `--no-default-features`), a stub page says "UI not built: run `npm run build` in web/", so `cargo test` needs no Node. No embed crate: `include_bytes!` from `OUT_DIR`. New direct dependencies of `crates/lodestar`: `brotli` 9.0.0 (build and dev; the only crate new to the tree), and `flate2`, `sha2` and `base64` (build and dev), `tower` and `proptest` (dev), all already in `Cargo.lock`. The bundle adds about 285 KiB to the stripped binary (raw 184 KiB + br 40 KiB + gz 46 KiB).
 - **Serving** is the router's fallback, so declared routes (`/api/**`, `/metrics`, `/healthz`, `/status`) always win. Unknown `/api/**` paths, including percent-encoded ones, get the API's `no_route` envelope. Other unknown GET paths get `index.html`, except under `/_app/`, `/fonts/`, `/brand/` and `/themes.json`, which 404 so a stale chunk fails loudly. Lookups go to a compile-time table, never the filesystem; dot segments, empty segments, backslashes and control characters, raw or percent-encoded, are 404s.
@@ -2430,7 +2442,7 @@ Term lists (`@cs/…`) ship only as **hashed, normalized tokens**, so no indicat
 **As built (first slice, `crates/filter`):**
 - **Implemented:** CS-1a/1b, CS-8a, CS-2a, CS-3a/3b, CS-4a and CS-5a/5b, plus CSX-2 (name evidence only, outside Adult), CSX-3 and CSX-4.
 - **Matching:** normalized tokens are hashed with a stable 64-bit hash (FNV-1a with a domain prefix, MurmurHash3 finisher). All term lists compile into one map, so each token costs one lookup.
-- **Speed:** about 45 µs for a 30-file torrent on the core alone, measured by an ignored test that's run in release.
+- **Speed:** about 9 µs per torrent on the core alone on the CI runner (11–16 µs on the build VM), over a varied set averaging 15 files (§20.8 has the budget gate). Each word's tokens are planned once and replayed when the word repeats, as words do across file names. The plans are cached per thread, keyed by the exact word, and a property test holds the tokenizer to the earlier one token for token, since stored fixtures and shipped lists are hashes of its tokens.
 - **Shipped lists:** `@cs/sexual` and `@cs/child_roles` ship as hash lists. `@cs/codes` ships **empty**: code terms come only from lists you import.
 - **Fixtures:** the core's must-match fixtures are hashed token streams built from the shipped sets, so no indicative text exists anywhere.
 - **Payload signatures:** CS-8a counts a payload as specific at ≥ 50 MB, or with ≥ 2 files whose sizes are ≥ 64 KiB and not multiples of 64 KiB.
@@ -2566,7 +2578,7 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
   - entries are exact torrents, keywords (normalized the same way the core normalizes, so evasion doesn't help) or queries, with an optional scope, an expiry and a shadow period;
   - *Neutralize term* takes one word. It removes that word's evidence from the core and from query rules.
 - **Exceptions** are per rule, by exact torrents, payload or query. The floor takes none. *Always allow* skips your rules and the packs.
-- **Packs:** MW-1–5, LU-1–4, FK-1/2/4/5, SP-1/2 and SC-1 are built, reading the junk reasons and structure fingerprints. Every pack is on by default, standing in for the wizard's pre-checked boxes. Not yet built:
+- **Packs:** MW-1–5, LU-1–4, FK-1/2/4/5, SP-1/2 and SC-1 are built, reading the junk reasons and structure fingerprints. **Packs are off until chosen** (owner's decision, §16 "M5 decisions"): with nothing stored, no pack is on. A pack turns on only through a stored choice, from the first-run wizard (where all five are pre-checked) or from Settings through the filters API, so an install that skips the wizard has none. Not yet built:
   - FK-3, which needs TMDB release dates;
   - SP-3, which needs per-publisher rates;
   - SP-4, which needs a signature index of hidden items.
@@ -2575,7 +2587,7 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
   - The API leaves hidden torrents out of search unless `hidden=true`.
   - Demotion's ranking penalty arrives with the M4 phase-2 re-rank.
   - Shadow decisions are logged as filter hits with action bit `0x80`, and nothing is applied.
-- **Speed** (an ignored test; set `LODESTAR_BUDGET_US` to raise the bound on slower machines): the full engine with every pack on costs the core plus about 10%. The core measured 45 µs for a 30-file torrent on the reference VM, and 60–75 µs on a slower one, where `main` measured the same.
+- **Speed:** the budget is the owner's, under 50 µs per torrent at 10,000 rules (§1.6.6), and the `filter budget` CI job measures it in release on the CI runner (§20.8).
 
 **Your rules (layer 3)** start empty. The wizard offers presets, all **off**: *Hide CAM/TS/TC*, *Hide sample-only*, *Hide password-protected archives*, *Prefer my languages* (demote others).
 
@@ -2605,11 +2617,23 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
     - **The writer** trusts a built-in worker's verdict at the current version and judges everything else again. It writes tombstones, quarantine rows and filter hits in the same transaction as the batch.
   - **Sealed names:** XChaCha20-Poly1305, keyed by `seal.key` in the data directory. The key isn't stored in the database, so a database copy alone reveals no names.
   - **Purge:** expired quarantine and filter hits past retention are purged hourly, and expired keys become fetchable again.
-  - **Old config blocklists:** the M1 `blocklist.files` load as imported CS-1b entries.
+  - **Config blocklists only add (owner's decision §2.7):**
+    - The M1 `blocklist.files` add their hashes to `cs_hashes` at start as imported CS-1b entries.
+    - An entry a file no longer lists, or one added by a file that left the config, stays in the floor. It waits in that file's *pending floor removals*, is reported once per start ("N floor entries were removed from <file>; remove them in the app to unblock") and counted in `lodestar_floor_removals_kept_total`.
+    - Each file's entries and its pending removals are kept in `settings` as packed hashes (`floor.file:<path>`, `floor.pending:file:<path>`), so no migration was needed.
+    - Your own confirmations and reports are never a file's to drop.
 - **API:** `filters` (rules CRUD, preview, warning, test, shadow, packs, review queue, release; password-gated for weakening changes) and `classify` corrections (Not adult / Is adult, Not junk).
 - **As built (`lodestar_api::filters`, behind the session):**
   - **Routes:** `GET /filters` (core switches, packs, your rules, CSX-5 entries, exceptions, Always allow, list subscriptions, counts), `GET /filters/queue` (quarantine by hash and rule, never with names, plus the 30-day decisions per rule), `POST /filters/preview` and `POST /filters/apply`.
-  - **One change per request,** tagged by `op`: core and pack switches, your rules (add / update / remove), CSX-5 entries, exceptions, Always allow, report abuse, remove CS-1 entries, release, confirm, reveal a sealed name, list subscriptions (subscribe / unsubscribe / pause / resolve a held version) and Undo.
+  - **One change per request,** tagged by `op`: core and pack switches, your rules (add / update / remove), CSX-5 entries, exceptions, Always allow, report abuse, remove CS-1 entries, release, confirm, reveal a sealed name, list subscriptions (subscribe / unsubscribe / pause / resolve a held version), pending floor removals (`resolve_floor_removal`) and Undo.
+  - **Pending floor removals (§2.7):**
+    - `GET /filters` lists them by source (`file:<path>` or `list:<id>`), with up to 1,000 hashes each.
+    - `resolve_floor_removal {source, hashes?, remove}` with `remove: true` takes them out of the floor. That's weakening, so it gets the effect warning and the password.
+    - Without `remove`, they stay in the floor as ordinary imported CS-1b entries and the notice stops. That's strengthening, so it needs no password.
+    - The assessment names the entries its warning counts (`floor_entries`), at most 10,000; a longer pending list is removed in batches. A removal confirmed with the password must send them back as `hashes` (400 `floor_removal_needs_hashes` otherwise, before the password is read), so a refresh in between can't widen what the password confirmed. Keeping may leave `hashes` out and keeps what the assessment counted. A request names at most 10,000 hashes.
+    - An entry another config file still lists never waits in one file's pending list, and removing it through one file's list never unblocks it while another file adds it.
+  - **Accepting a held version of a floor-marked list isn't weakening:** what the shrunken version drops waits in the list's pending removals, still blocked, so *Accept anyway* needs no password there. For other lists it's weakening as before.
+  - **Strictness (§2.9):** `POST /filters/strictness {subscriptions?: [id], catalog?: [key]}` assesses any candidate set of lists without storing or connecting anything (§20.13).
   - **Protocol (§20.11):** `preview` returns `{weakening, confirm, warning, preview, neutralize}` and never applies or asks for the password. `apply` runs the same assessment on the server; a change that needs confirming is refused with **428** and the assessment until the request carries the admin password, checked like a login (rate-limited per IP) and never remembered. Marking a list as part of the floor needs the password too.
   - **Guardrails hold server-side:** the floor can't be switched off (409), floor rules take no exceptions, overrides and exceptions are validated by the engine, and list actions must be protective.
   - **Preview numbers:** whole-rule changes count from the review queue, tombstones and `filter_hits` rollups. Entry-level changes (CSX-5, exceptions, Always allow) re-judge quarantined items from their sealed names and tombstones by hash, and are marked as estimates because file lists aren't kept. The 30-day figures are the upper bound for the rules the change can bypass. Previews also run as background jobs with progress (§20.10).
@@ -2643,6 +2667,30 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
 - **Precision corpus:** a labelled set of legitimate titles prone to false positives (the *Lolita* novel and films, *Sex Education*, medical and educational material, 18+ "teen"-labelled legal adult releases, games with age ratings in the name) must stay unblocked by the core. A sample of known-bad structures, in hashed fixture form, must stay blocked.
 - **Reversibility:** removing a rule restores hidden items and re-queues tombstones. Releasing a quarantined item re-fetches and indexes it.
 - **Performance:** under 50 µs per torrent at 10,000 rules; re-evaluation jobs stay within the §3 overhead budget.
+  - **As built:** `filter budget` in CI runs the ignored `budget` test in release on the runner.
+    - **The set:** 512 generated video releases (films and season packs, 1 to 60 files, 15 on average, with samples, subtitles and NFOs, varied sources, codecs, groups and made-up titles). Each pass judges every torrent once, so the tokenizer's per-word caches warm only as they would on ingest. It takes the median of seven passes after one warm-up.
+    - **The rules:** 10,000, with a share (1%, 10%, 25%) built on words the set has, so the narrowing can't rule them out by those words, and matching nothing. They're the review's `1080p <unique>` shape, phrases of two common words out of order, a common word with a size or a type no torrent has, and `file:(word size)`. The rest are keywords, phrases, groups, narrowed keywords and alternatives the set doesn't have, plus 1% that no word narrows: sizes, prefixes that start like the set's words (`1080z*`), and fuzzy words. The prefixes and fuzzy words get the full match on every torrent, about 40 rules per torrent.
+    - **The gate** holds the core, the 1% case and the 10% case under 50 µs, with no override. The 25% case is measured and reported, not held.
+    - **On the runner** (job 119777628892): core 8.93 µs; whole engine 32.92 µs at 1%, 40.78 µs at 10%, 48.05 µs at 25%. Fresh torrent sets cost the same as warm ones. The build VM runs about 1.4× slower and noisier (core 11–16, 1% 43–50, 10% 56–64, 25% 69–104), so the 10% case can fail there; the runner decides.
+    - **Scope:** the gate covers rule shapes the cheap check can reject. Shapes it can't decide get the full match on every torrent that has their words. The review measured them at 10% of rules on the build VM (divide by about 1.4 for the runner):
+
+      | Shape at 10% of rules | Build VM, µs per torrent |
+      |---|---|
+      | negation | 133–145 |
+      | NEAR/1 | 443–507 (208–234 since NEAR reads tokens in place) |
+      | prefix | 94–132 |
+      | fuzzy | 118–133 |
+      | `title:` | 83–85 |
+      | mix | 171–178 |
+
+      Most of that is the full match's first tokenization of every path (about 35 µs a torrent) and then a scan per rule. Whether to hold such shapes to the budget is the owner's call.
+    - **History:** the first version of this gate judged one torrent with rules none of whose words it had. The review measured 17 ms per torrent once 10% of the rules were candidates; this set measured 30 ms at 10% before the work below.
+  - **How the rules stay cheap:**
+    - **Narrowing:** each rule is indexed by a token text or tag it can't match without. Where several are each needed (an AND, a phrase's words), it's keyed on the rarest-looking, so `1080p cam` is looked at only for torrents that have `cam`. Rules are marked in a bit set by position and read in order.
+    - **A cheap check before the full match:** a query is compiled once, with its words tokenized and hashed. For a torrent, a three-valued check answers *no*, *yes* or *maybe* from what it has: its token texts, which token can follow which (a Bloom filter), the first two to four characters of its tokens (for prefixes), its extensions, file sizes, numbers and tags. It says *no* only where the full match must, and never *yes* from a hash, so a crafted hash collision can't make a rule match or stop one matching. Most rules that can't match cost a few lookups.
+    - **One scan per torrent** builds all of that: a byte scan of ASCII text (property-tested against the search tokenizer, token for token and pair for pair) or the tokenizer itself for other text. It also builds the torrent's vocabulary, each distinct token text once, compared byte for byte.
+    - **The full match** reads tokens from an exact ASCII fast path of the search tokenizer (property-tested), without a `String` per token. Prefixes and fuzzy words read the vocabulary. A fuzzy word skips texts whose length or character set rules them out before computing an edit distance, which allocates nothing.
+    - **Also compiled once:** *Always allow* queries, CSX-5 scopes and exception queries (remembered per thread by address, used only while the query there is unchanged). Keyword entries read the torrent's normalized texts once, not once per entry.
 - **Placement:** prepare and commit agree on the rule-set version; a mismatch is re-evaluated at commit (§19.4).
 - **Floor and switches:**
   - every core rule is on in a fresh install;
@@ -2780,7 +2828,7 @@ Exceptions are how you correct false positives without switching rules off. Like
 - **Precedence and edits:** subscribed entries sit in the pack layer, so CSX-5, your exceptions and *Always allow* apply to them. False positives are fixed with exceptions, never by editing the list. A refresh can't undo your exceptions.
 - **The core and the floor:** subscriptions **never feed the locked floor by default** (owner's decision). A remote list that wrote into CS-1 could block things you can't unblock if its publisher errs or is compromised.
   - If you have access to a vetted child-abuse hash list (§20.5.2), you can mark that one subscription as **CS-1b** explicitly. That needs the effect warning and your password, because it locks its entries.
-  - Its entries then follow upstream additions **and removals**, so a publisher's correction takes effect.
+  - Its entries follow upstream additions. **Upstream removals don't unblock anything by themselves** (owner's decision §2.7, which supersedes following removals automatically): they stay blocked in the list's pending floor removals until you remove or keep them in the app. Removing needs the effect warning and the password.
 - **Weakening changes:** unsubscribing, pausing or narrowing a list releases what it blocked. As with disabling a pack (§20.11), that shows the impact preview and effect warning and needs your password. Subscribing and refreshing need neither.
 - **Storage:** a `subscriptions` table (URL, kind, format, action, scope, schedule, ETag, last fetch, entry count, status) and `subscription_entries` (hashes and signatures; IP ranges are kept as a compact blob per list). Like everything in §20, no history of who changed what is kept.
 - **Verification:** golden parsers for every format, plus fuzz targets (they parse untrusted input); a fake list server in tests for conditional GETs, the size caps and the sanity gates; and a check that an IP-listed peer or node is never contacted by the DHT, the fetch pool or the scraper.
@@ -2796,4 +2844,13 @@ Exceptions are how you correct false positives without switching rules off. Like
     - FireHOL level 1: about 19k ranges.
     - BT_BlockLists: 689k ranges, 394k after merging, 3.5 MB stored. It parses in about 0.5 s and costs about 110 ns per lookup.
     - **BT_BlockLists covered about 49% of IPv4,** because it blocks whole provider allocations. The catalog says so. Lodestar warns whenever the combined lists cover more than 10%, because the crawler loses that share of the DHT.
-  - **Configuration for now:** subscriptions come from `[subscriptions]` in `config.toml`, as catalog keys and `[[subscriptions.lists]]`. They're added to the store at start, never removed from it. The filters API (next) adds connecting, removing and *Accept anyway* / *Keep previous* for held versions.
+    - **Measured again 2026-10-22**, as shares of all IPv4 and of public IPv4 (all IPv4 minus the IANA special-purpose ranges, which hold no DHT nodes):
+      - BT_BlockLists: 49% and 41%, 393,709 merged ranges;
+      - FireHOL level 1: 14% and 0.5%, 3,919 ranges (mostly reserved space);
+      - FireHOL level 2: under 0.1% of either, 18,677 ranges.
+  - **Off by default, chosen by you (owner's decision §2.9):** `[subscriptions] catalog` and `lists` default to empty, so nothing is fetched until you choose.
+  - **Strictness assessment** (`lodestar_filter::strictness`, `POST /filters/strictness`): for any candidate set it reports the IPv4 share blocked (all and public), IPv6 ranges and their share of global unicast, the torrents dropped by hash (pack layer and floor), the kinds of list and a warning level with plain-language text (§10.14).
+    - Subscribed lists are measured from their stored data. Catalog lists not fetched yet use the catalog's measurement, and the result is then marked as an estimate (a lower bound when lists may overlap).
+    - Levels come from the **public** IPv4 share, because reserved ranges cost the crawler nothing: **notice** from 1%, **strong** from 10% (where §20.13 already warns) and **severe** from 25%. BT_BlockLists comes out severe.
+    - Other inputs: any IPv6 share counts the same way, any content list is at least a notice, a floor-marked list is strong, and a list never fetched is a notice.
+  - **Configuration for now:** subscriptions come from `[subscriptions]` in `config.toml`, as catalog keys and `[[subscriptions.lists]]`. They're added to the store at start, never removed from it. The filters API adds connecting, removing and *Accept anyway* / *Keep previous* for held versions. The catalog now lives in `lodestar_filter::strictness`, so the API can assess it.
