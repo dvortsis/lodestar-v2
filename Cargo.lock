@@ -1257,6 +1257,7 @@ dependencies = [
 name = "lodestar-classify"
 version = "0.0.0"
 dependencies = [
+ "lodestar-metainfo",
  "lodestar-release-parser",
  "proptest",
 ]

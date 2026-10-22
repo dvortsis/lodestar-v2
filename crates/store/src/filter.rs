@@ -4,6 +4,7 @@
 //! The store keeps plain values: rule ids as text, actions and origins as
 //! small integers. Their meaning belongs to the filter engine.
 
+use lodestar_metainfo::InfoHash;
 use rusqlite::{Transaction, params};
 
 use crate::{Error, Result, Store};
@@ -200,6 +201,29 @@ impl Store {
             + tx.execute("DELETE FROM quarantine WHERE hash = ?1", [&hash[..]])?;
         tx.commit()?;
         Ok(n > 0)
+    }
+
+    /// Deletes stored torrents with any of these swarm hashes, and logs
+    /// them so the search indexer drops their documents (§20.5.2: abuse
+    /// material reported or confirmed after it was stored). Returns the
+    /// deleted ids. Ids are never reused, so hot-column slots left behind
+    /// are never read again.
+    pub fn delete_torrents(&mut self, hashes: &[[u8; 20]]) -> Result<Vec<i64>> {
+        let tx = self.conn.transaction()?;
+        let mut ids = Vec::new();
+        for h in hashes {
+            if let Some(id) = crate::find_any(&tx, std::iter::once(InfoHash(*h)))? {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+        }
+        for id in &ids {
+            tx.execute("DELETE FROM torrents WHERE id = ?1", [id])?;
+            tx.execute("INSERT INTO reindex_log (torrent_id) VALUES (?1)", [id])?;
+        }
+        tx.commit()?;
+        Ok(ids)
     }
 
     /// The quarantine, newest first.

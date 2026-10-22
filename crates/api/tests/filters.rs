@@ -9,9 +9,12 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use lodestar_api::filters::FiltersApi;
 use lodestar_api::{ApiState, Auth, router};
+use lodestar_bencode::{OwnedValue, to_vec};
+use lodestar_classify::ContentType;
 use lodestar_filter::lists::SharedIps;
 use lodestar_filter::{Action, Core, CsList, Engine, Handle, HeldSet, Lists, Sealer, Switches};
-use lodestar_store::{Filtered, Held, Store, StoreConfig, WriteBatch};
+use lodestar_metainfo::Info;
+use lodestar_store::{Filtered, Held, NewTorrent, SourceId, Store, StoreConfig, WriteBatch};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -406,11 +409,41 @@ async fn quarantine_review_never_shows_names_unasked() {
 async fn reported_hashes_join_cs1_and_floor_lists_need_the_password() {
     let f = fixture();
     let c = logged_in(&f).await;
-    let h = "ab".repeat(20);
-    let (status, _) = apply(&f, &c, json!({ "op": "report_abuse", "hashes": [h] }), None).await;
+    // A stored torrent, reported: refused from now on and deleted.
+    let raw = to_vec(&OwnedValue::Dict(
+        [
+            (b"length".to_vec(), OwnedValue::Int(5)),
+            (b"name".to_vec(), OwnedValue::Bytes(b"x".to_vec())),
+            (b"piece length".to_vec(), OwnedValue::Int(16_384)),
+            (b"pieces".to_vec(), OwnedValue::Bytes(vec![0; 20])),
+        ]
+        .into_iter()
+        .collect(),
+    ));
+    let info = Info::parse(&raw).unwrap();
+    let hash = info.primary_hash();
+    let id = f
+        .api
+        .store
+        .lock()
+        .unwrap()
+        .insert(&[NewTorrent {
+            info: &info,
+            raw_info: Some(&raw),
+            discovered_at: 1_700_000_000,
+            metadata_at: 1_700_000_000,
+            extra_flags: 0,
+            source: SourceId::new(0).unwrap(),
+        }])
+        .unwrap()[0]
+        .id();
+    let h: String = hash.0.iter().map(|b| format!("{b:02x}")).collect();
+    let (status, body) = apply(&f, &c, json!({ "op": "report_abuse", "hashes": [h] }), None).await;
     assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["deleted"], json!(1));
     assert_eq!(overview(&f, &c).await["cs1_entries"], json!(1));
-    assert!(f.api.engine.current().blocked_hash(&[[0xab; 20]]).is_some());
+    assert!(f.api.engine.current().blocked_hash(&[hash.0]).is_some());
+    assert!(f.api.store.lock().unwrap().torrent(id).unwrap().is_none());
 
     let sub = json!({
         "op": "subscribe", "url": "https://example.org/hashes.txt",
@@ -453,4 +486,240 @@ fn lodestar_api_now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64
+}
+
+#[tokio::test]
+async fn false_positives_become_exceptions_and_hashed_fixtures() {
+    let f = fixture();
+    let c = logged_in(&f).await;
+    let hash = [0x24u8; 20];
+    let sealed = f
+        .api
+        .sealer
+        .as_ref()
+        .unwrap()
+        .seal("Harmless.Documentary.2021")
+        .unwrap();
+    f.api
+        .store
+        .lock()
+        .unwrap()
+        .write(&WriteBatch {
+            filtered: &[Filtered {
+                hashes: &[hash],
+                rule: "CS-3a",
+                action: Action::Quarantine.code(),
+                held: Some(Held::Quarantine),
+                sealed: Some(&sealed),
+                evidence: &[],
+                at: lodestar_api_now(),
+                expires_at: lodestar_api_now() + 86_400,
+            }],
+            ..WriteBatch::default()
+        })
+        .unwrap();
+    f.api.held.insert(hash);
+
+    let change = json!({ "op": "false_positive", "hash": "24".repeat(20) });
+    let (status, body) = apply(&f, &c, change.clone(), None).await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED);
+    let w = body["assessment"]["warning"].as_str().unwrap();
+    assert!(w.contains("that rule only"), "{w}");
+    assert_eq!(body["assessment"]["preview"]["quarantine"], json!(1));
+    let (status, body) = apply(&f, &c, change.clone(), Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!f.api.held.contains(&hash));
+    let o = overview(&f, &c).await;
+    assert_eq!(o["exceptions"][0]["rule"], json!("CS-3a"));
+    assert_eq!(o["exceptions"][0]["hashes"], json!(["24".repeat(20)]));
+    assert_eq!(o["quarantine"], json!(0));
+    // Gone from the queue: a second report has nothing to act on.
+    let (status, _) = apply(&f, &c, change, Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // The example is kept as hashed tokens only.
+    {
+        let store = f.api.store.lock().unwrap();
+        let stored = store.fixtures("CS-3a").unwrap();
+        assert_eq!(stored.len(), 1);
+        assert!(!stored[0].1, "must not match");
+        let text = String::from_utf8_lossy(&stored[0].2).to_lowercase();
+        assert!(!text.contains("harmless") && !text.contains("documentary"));
+        assert!(lodestar_filter::Fixture::decode(&stored[0].2).is_some());
+    }
+    // A must-match example the rule doesn't catch is reported failing.
+    let miss = lodestar_filter::Fixture::of("plain words", &[], ContentType::Other);
+    f.api
+        .store
+        .lock()
+        .unwrap()
+        .add_fixture("CS-3a", true, &miss.encode())
+        .unwrap();
+    let (status, _, fx) = call(&f.app, get("/api/v1/filters/fixtures", &c)).await;
+    assert_eq!(status, StatusCode::OK);
+    let cs3a = fx["core"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["rule"] == "CS-3a")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        cs3a,
+        json!({ "rule": "CS-3a", "must_match": 1, "must_not_match": 1, "failing": 1 })
+    );
+}
+
+#[tokio::test]
+async fn rule_tests_try_a_draft_on_examples_without_storing_them() {
+    let f = fixture();
+    let c = logged_in(&f).await;
+    apply(
+        &f,
+        &c,
+        json!({ "op": "add_rule", "query": "ext:scr", "action": "drop" }),
+        None,
+    )
+    .await;
+    let samples = json!([
+        { "name": "Tool.Pack", "files": [
+            { "path": "setup.exe", "size": 50_000_000 },
+            { "path": "readme.txt", "size": 2_000 },
+        ] },
+        { "name": "Some.Movie.2020", "files": ["movie.mkv", "trailer.exe"], "type": "movie" },
+        { "name": "Screens", "files": ["saver.scr"] },
+    ]);
+    let (status, _, body) = call(
+        &f.app,
+        post(
+            "/api/v1/filters/test",
+            Some(&c),
+            json!({ "query": "ext:exe", "unless": "type:movie", "samples": samples }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let r = body["results"].as_array().unwrap();
+    assert_eq!(r[0]["draft"], json!(true));
+    assert_eq!(r[1]["draft"], json!(false), "unless: type:movie");
+    assert_eq!(r[2]["draft"], json!(false));
+    // The current rules decide too: U-1 drops the screensaver.
+    assert_eq!(r[0]["decision"], Value::Null);
+    assert_eq!(r[2]["decision"]["rule"], json!("U-1"));
+    assert_eq!(r[2]["decision"]["action"], json!("drop"));
+    // Without a draft, only the current rules.
+    let (status, _, body) = call(
+        &f.app,
+        post(
+            "/api/v1/filters/test",
+            Some(&c),
+            json!({ "samples": [{ "name": "x", "files": ["a.scr"] }] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["results"][0]["draft"], Value::Null);
+    // Bad input is refused.
+    let (status, _, _) = call(
+        &f.app,
+        post(
+            "/api/v1/filters/test",
+            Some(&c),
+            json!({ "query": "ext:", "samples": [] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let many: Vec<Value> = (0..51).map(|_| json!({ "name": "x" })).collect();
+    let (status, _, _) = call(
+        &f.app,
+        post("/api/v1/filters/test", Some(&c), json!({ "samples": many })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // Nothing was stored.
+    assert!(
+        f.api
+            .store
+            .lock()
+            .unwrap()
+            .fixtures("U-1")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn classification_corrections_reclassify_the_stored_torrent() {
+    let f = fixture();
+    let c = logged_in(&f).await;
+    let raw = to_vec(&OwnedValue::Dict(
+        [
+            (b"length".to_vec(), OwnedValue::Int(8 << 30)),
+            (
+                b"name".to_vec(),
+                OwnedValue::Bytes(b"The.Matrix.1999.1080p.BluRay.x264-GRP.mkv".to_vec()),
+            ),
+            (b"piece length".to_vec(), OwnedValue::Int(1 << 20)),
+            (b"pieces".to_vec(), OwnedValue::Bytes(vec![0; 20])),
+        ]
+        .into_iter()
+        .collect(),
+    ));
+    let info = Info::parse(&raw).unwrap();
+    let id = f
+        .api
+        .store
+        .lock()
+        .unwrap()
+        .insert(&[NewTorrent {
+            info: &info,
+            raw_info: Some(&raw),
+            discovered_at: 1_700_000_000,
+            metadata_at: 1_700_000_000,
+            extra_flags: 0,
+            source: SourceId::new(0).unwrap(),
+        }])
+        .unwrap()[0]
+        .id();
+    let h: String = info
+        .primary_hash()
+        .0
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let correct = |body: Value| post("/api/v1/classify/correct", Some(&c), body);
+
+    let (status, _, body) = call(&f.app, correct(json!({ "hash": h, "adult": true }))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["type"], json!("adult"));
+    assert_eq!(body["adult_kind"], json!("movie"));
+    {
+        let store = f.api.store.lock().unwrap();
+        let e = store.enrichment(id).unwrap().unwrap();
+        assert_eq!(
+            ContentType::from_code(e.content_type),
+            Some(ContentType::Adult)
+        );
+        // Logged for the indexer.
+        assert!(
+            store
+                .reindex_after(0, 100)
+                .unwrap()
+                .iter()
+                .any(|(_, t)| *t == id)
+        );
+    }
+    // Clearing the correction classifies it as before.
+    let (status, _, body) = call(&f.app, correct(json!({ "hash": h, "adult": null }))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["type"], json!("movie"));
+    assert_eq!(f.api.store.lock().unwrap().correction(id).unwrap(), None);
+
+    let (status, _, _) = call(
+        &f.app,
+        correct(json!({ "hash": "00".repeat(20), "adult": false })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
