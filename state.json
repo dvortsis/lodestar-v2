@@ -94,17 +94,17 @@
    "session": "session_01B4Sk9GZoxWRASeUcVB2C9W",
    "pr": 58,
    "attempt": 0,
-   "review_rounds": 0,
-   "notes": "PR #58 opened 08:43; 23 theme families; review pending"
+   "review_rounds": 1,
+   "notes": "round 1: no blocking; asked: merge main, catppuccin license, doc\u2194fixture test, stricter :430, size reason. Ownership extended to themes.test.ts, theme-files.test.ts, static/themes.json (forced by W1 tests)"
   },
   "W3": {
-   "status": "in_review",
+   "status": "merged",
    "model": "sonnet",
    "session": "session_01PtZR2UWvbfVrwEjd3TsbrG",
    "pr": 44,
    "attempt": 1,
-   "review_rounds": 1,
-   "notes": "round 1: merge main, compass fallbacks from tokens, metadata dims, description"
+   "review_rounds": 2,
+   "notes": "merged 08:52 as 5c7b413 (#44)"
   },
   "W4": {
    "status": "in_review",
@@ -112,8 +112,8 @@
    "session": "session_01Xz6N6pccu7mmGoppsJH6w1",
    "pr": 41,
    "attempt": 1,
-   "review_rounds": 1,
-   "notes": "round 1: merge main, README select CSS, zh lang gating"
+   "review_rounds": 2,
+   "notes": "round 2: only blocking = merge main (\u00a716 conflict); sent 08:52"
   },
   "W6": {
    "status": "pending",
@@ -755,7 +755,8 @@
   "2026-10-22 owner: the design decided in the 'Modern DHT crawler architecture' session (recorded in docs/architecture.md) is the primary design strategy; ui-design-skills only fills gaps. Encoded in runner/standards.md (PR #39).",
   "2026-10-22 owner: Riverstone is the default/official palette and keeps plum #9381B6 in categorical slot 6 (seafoam stays retired); the theme collection is 24 families x light/dark including Rosewood as the 24th. Log both in architecture \u00a716 with the next runner docs PR.",
   "2026-10-22 owner (audit follow-up): floor add-by-file/remove-in-app; packs per \u00a720.6; subscriptions off by default, user-chosen in wizard/settings with strictness-based warning; Riverstone unchanged, \u00a710.18 CVD claim corrected. Recorded in owner-decisions.md \u00a72.7-2.10 (PR #39).",
-  "2026-10-22 runner: community palette values stay as published; the theme compiler must derive content/tint tokens that satisfy the gates for every theme (W1c). W1b now waits for W1c and C1."
+  "2026-10-22 runner: community palette values stay as published; the theme compiler must derive content/tint tokens that satisfy the gates for every theme (W1c). W1b now waits for W1c and C1.",
+  "2026-10-22 W1b: ownership extended to web/scripts/themes.test.ts, theme-files.test.ts, web/static/themes.json (generated output and W1 placeholder assertions); record in slices.yaml at next runner PR"
  ],
  "open_issues": [
   "Filter session self-merged #42 against owner decision (packs on by default) + budget env; follow-up fix requested. Suggest owner consider branch protection.",
@@ -804,6 +805,10 @@
   ],
   "binary-puid": [
    "PUID/PGID privilege drop in the binary (security, Opus): \u00a711 promises it, the Unraid template sets PUID=99/PGID=100; until then the image runs as nonroot and the template needs --user 99:100. Fold into the next Opus slice owning crates/lodestar/src/main.rs (B2 or M6 CLI)"
+  ],
+  "runner-pr": [
+   "slices.yaml W1b title says 47 JSONs: is 23 families/46 themes; widen W1b owns",
+   "docs/themes.md derived-token gates table still says 9 pending (W1c): all 48 pass now"
   ]
  },
  "blocked_on_owner": [
