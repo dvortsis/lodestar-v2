@@ -489,7 +489,7 @@ pub fn render_search(out: &mut String, docs: u64, stats: &lodestar_search::Index
 }
 
 /// Scrape outcome labels, by [`lodestar_pipeline::health::Outcome`] code.
-pub const SCRAPE_OUTCOMES: [&str; 5] = ["ok", "timeout", "banned", "error", "skipped"];
+pub const SCRAPE_OUTCOMES: [&str; 6] = ["ok", "timeout", "banned", "error", "skipped", "late"];
 
 pub fn health_name(h: Health) -> &'static str {
     match h {

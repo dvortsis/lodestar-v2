@@ -101,7 +101,7 @@ illustrative; the outputs above are the contract.
 | **Seeders** | **Max across sources within the freshness window** (§10.12): the highest seeders count among the sources that answered within the window. The window is the **last answered round**: one scrape round asks every tracker at once. The BEP 33 DHT estimate is **not** a source in the max. It stands in only when no tracker reports (s + l + c > 0), and then `seeders_approx` is true. | `formatCount` | **Null = never scraped → `—`** (and "Never scraped" in the drawer). 0 = scraped, nobody seeding → `0`. ≈ only if the server sets `seeders_approx` (the value came from the DHT estimate alone). | Per-torrent (`last_scrape_at`) |
 | **Leechers** | As seeders, for leechers | `formatCount` | As seeders | Per-torrent |
 | **Completed** | Max `completed` (downloaded) across reporting trackers; a coarse age hint (§6) | `formatCount` | Null = never scraped | Per-torrent |
-| **Trackers reporting** | n of m: n = trackers whose answer had **s + l + c > 0** (opentracker rule, §15); **m = trackers that answered in the last answered round** (`SwarmUpdate.trackers_checked`). Trackers that didn't answer are in neither number. | `formatCount` for each; row `4 / 20`; drawer "Reported by 4 of 20 trackers checked" | Null = never scraped → `—`. `0 / 20` is a real zero. A round where nothing answered (no tracker, no DHT) changes nothing, so n and m keep the last answered round's values. A round only the DHT answered gives `0 / 0` with approximate counts. | Per-torrent |
+| **Trackers reporting** | n of m: n = trackers whose answer had **s + l + c > 0** (opentracker rule, §15), less a suspect outlier; **m = trackers that answered in the last answered round** (`SwarmUpdate.trackers_checked`). Trackers that didn't answer are in neither number. | `formatCount` for each; row `4 / 20`; drawer "Reported by 4 of 20 trackers checked" | Null = never scraped → `—`. `0 / 20` is a real zero. A round where nothing answered (no tracker, no DHT) changes nothing, so n and m keep the last answered round's values. A round only the DHT answered gives `0 / 0` with approximate counts. | Per-torrent |
 | **DHT estimate** | BEP 33 bloom-filter estimate of seeds and peers from up to 8 closest responders | `formatCount` | **Always ≈** ("≈ 1,225 seeds"; labelled "estimate"). Null = no estimate (no DHT answer, or no responder stores the hash: "unknown", not "dead") | Per-torrent |
 | **Scrape age** | `now − last_scrape_at` (time of the last *answered* round) | `formatRelative` (row focus/hover), `formatDateTime` (drawer) | Null = never scraped | Per-torrent |
 | **Swarm trend** | Least-squares slope of the last 7 daily seeders samples, seeders/day; needs ≥ 3 samples | `formatDelta` + "/day" (message) | Null = fewer than 3 samples → "Not enough history" | Per-torrent (daily ring) |
@@ -271,13 +271,13 @@ omitted). Times are Unix seconds. Status: **main** = served on `main` today;
 | `leechers` | integer | yes (as seeders) | Leechers | M4 |
 | `completed` | integer | yes (as seeders) | Completed | M4 |
 | `seeders_approx` | boolean | no | True when no tracker reported and the DHT estimate supplied the counts (signed off in M4: the DHT stands in, it's never part of the max) | M4 |
-| `trackers_reporting` | integer | yes (as seeders) | Trackers reporting (n) | M4 |
+| `trackers_reporting` | integer | yes (as seeders) | Trackers reporting (n); a suspect outlier isn't counted, and with only it and the DHT the DHT stands in (`seeders_approx`) | M4 |
 | `trackers_checked` | integer | yes (as seeders) | Trackers checked (m): trackers that answered in the last answered round | M4 |
 | `last_scrape_at` | integer | yes (as seeders) | Scrape age | M4 |
 | `swarm_suspect` | boolean | no | Suspect swarm (`swarm_flags::SUSPECT`) | M4 |
 | `score` | number | no | Relevance (hits only) | main |
 | `matched_files` | integer[] | omitted unless the query has a file clause | Matched-file positions | main |
-| `explain` | `{text, seeders, freshness, trackers, junk, penalty, score}` (numbers) | omitted unless `explain=1` on a relevance search | Score breakdown: the text score and each re-ranker multiplier (architecture §16 M4) | M4 |
+| `explain` | `{text, seeders, freshness, trackers, junk, penalty, score}` (numbers) | omitted unless `explain=true` on a relevance search | Score breakdown: the text score and each re-ranker multiplier (architecture §16 M4) | M4 |
 
 "Never scraped" means: no `swarm` row, or a row with `trackers_checked = 0`
 and no DHT estimate. The six nullable swarm fields (`seeders`,
@@ -291,7 +291,7 @@ and no DHT estimate. The six nullable swarm fields (`seeders`,
 | `dht_seeds` | integer | yes: null = no estimate | DHT estimate (always ≈) | M4 |
 | `dht_peers` | integer | yes (as `dht_seeds`) | DHT estimate | M4 |
 | `swarm_trend` | number (seeders/day) | yes: null = < 3 daily samples | Swarm trend | M4 |
-| `swarm_trackers` | `{url, seeders, leechers, completed, at}[]` | no (may be empty) | Per-tracker table; reporting trackers only, as of the last answered round. `at` is when that tracker answered | M4 |
+| `swarm_trackers` | `{url, seeders, leechers, completed, at}[]`; `url` never null | no (may be empty) | Per-tracker table; reporting trackers only, as of the last answered round. `at` is when that tracker answered | M4 |
 | `swarm_history` | `{daily: Sample[14], weekly: Sample[26]}` | yes: null = no ring kept | Swarm history; newest first | M4 |
 | `Sample` | `{at: integer, seeders: integer\|null, leechers: integer\|null}` | — | `at` = start of the UTC day or week; null counts = gap (`0xFFFF`). Days are Unix epoch days (UTC); a week is epoch-day / 7, so **weeks start on Thursday 00:00 UTC**. Counts saturate at **65,534**: show 65,534 as `≥ 65,534` | M4 |
 | `file_list`, `file_list_total`, `magnet` | as today | no | — | main |

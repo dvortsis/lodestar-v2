@@ -3,9 +3,14 @@
 //!
 //! A job is a round's hashes. The task splits them into requests the
 //! tracker accepts, paces every request, and reports the answers, or that
-//! the tracker failed or was skipped. A tracker that can't start within
-//! `max_wait` (backing off, down, banned) skips the job at once, so a bad
-//! tracker never holds a round up; it just isn't counted as checked.
+//! the tracker failed or was skipped.
+//!
+//! Each request must start by the job's limit: within `max_wait`, and
+//! early enough to finish before the round closes. A slow tracker (a
+//! raised `min_request_interval`, a Low intensity) sends the requests that
+//! fit, a partial job, and the rest of the round's hashes go unasked by
+//! it. One that can't start any (backing off, down, banned) skips the job
+//! at once, so a bad tracker never holds a round up.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -23,6 +28,9 @@ use super::trackers::{Failure, Health, Pacer};
 pub(crate) struct Job {
     pub round: u64,
     pub hashes: Arc<[InfoHash]>,
+    /// The last moment ([`Clock`] milliseconds) a request may start and
+    /// still be answered before the round closes.
+    pub deadline_ms: u64,
 }
 
 /// How a job went, for rollups and metrics. Codes are `rollup_hour.key`
@@ -37,17 +45,44 @@ pub enum Outcome {
     Error = 3,
     /// Not asked: the tracker was backing off, down or banned.
     Skipped = 4,
+    /// Answered after its round closed: the answers were dropped. Counted
+    /// by the scheduler, which knows the round is gone.
+    Late = 5,
+}
+
+impl Outcome {
+    pub const ALL: [Outcome; 6] = [
+        Outcome::Ok,
+        Outcome::Timeout,
+        Outcome::Banned,
+        Outcome::Error,
+        Outcome::Skipped,
+        Outcome::Late,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Outcome::Ok => "ok",
+            Outcome::Timeout => "timeout",
+            Outcome::Banned => "banned",
+            Outcome::Error => "error",
+            Outcome::Skipped => "skipped",
+            Outcome::Late => "late",
+        }
+    }
 }
 
 #[derive(Debug)]
 pub(crate) struct Done {
     pub round: u64,
     pub tracker: u16,
-    /// One entry per hash on success.
-    pub answers: Option<Vec<Option<Counts>>>,
+    /// One entry per hash of the job's leading hashes that were answered
+    /// (all of them, for a whole job that succeeded).
+    pub answers: Vec<Option<Counts>>,
     pub outcome: Outcome,
-    /// Whether any request went out: a skip asks nothing.
-    pub asked: bool,
+    /// How many of the job's leading hashes were asked about, a failed
+    /// request's included: 0 for a skip, fewer than all for a partial job.
+    pub asked: usize,
 }
 
 /// What the scheduler can see of a tracker task without asking it.
@@ -62,23 +97,26 @@ pub(crate) struct Gate {
 }
 
 impl Gate {
-    /// Whether a job of `hashes` sent now would be worked on rather than
-    /// skipped: the same check [`ClientTask`] makes when it receives it.
-    pub fn fits(&self, now_ms: u64, hashes: usize, per_request: usize, max_wait_ms: u64) -> bool {
-        fits(
+    /// Whether a job sent now could start at least one request by `limit`
+    /// rather than be skipped: the check [`ClientTask`] makes when it
+    /// receives it.
+    pub fn can_start(&self, limit: u64) -> bool {
+        requests_by(
             self.ready_at.load(Ordering::Relaxed),
             self.interval_ms.load(Ordering::Relaxed),
-            hashes.div_ceil(per_request.max(1)) as u64,
-            now_ms + max_wait_ms,
-        )
+            limit,
+        ) > 0
     }
 }
 
-/// Every request of a job must start by `limit`: an HTTP tracker taking
-/// 32 hashes a request needs three slots for a full round, and giving up
-/// after two would throw the first answers away.
-fn fits(ready_at: u64, interval_ms: u64, requests: u64, limit: u64) -> bool {
-    ready_at + requests.saturating_sub(1) * interval_ms <= limit
+/// How many requests, paced `interval_ms` apart from `ready_at`, can start
+/// by `limit`.
+pub(crate) fn requests_by(ready_at: u64, interval_ms: u64, limit: u64) -> u64 {
+    match limit.checked_sub(ready_at) {
+        None => 0,
+        Some(_) if interval_ms == 0 => u64::MAX,
+        Some(room) => 1 + room / interval_ms,
+    }
 }
 
 /// A tracker as the status page and metrics see it.
@@ -89,7 +127,7 @@ pub struct TrackerStatus {
     pub health: Health,
     pub failures: u32,
     /// Rounds by [`Outcome`] code.
-    pub rounds: [u64; 5],
+    pub rounds: [u64; 6],
     /// Unix seconds of the last answer.
     pub last_ok_at: Option<i64>,
 }
@@ -129,7 +167,7 @@ impl ClientTask {
         self.publish();
         while let Some(job) = jobs.recv().await {
             self.gate.busy.store(true, Ordering::Relaxed);
-            let (answers, outcome, asked) = self.scrape(&job.hashes).await;
+            let (answers, outcome, asked) = self.scrape(&job).await;
             self.record(outcome);
             self.publish();
             self.gate.busy.store(false, Ordering::Relaxed);
@@ -155,20 +193,26 @@ impl ClientTask {
             .store(self.pacer.interval().as_millis() as u64, Ordering::Relaxed);
     }
 
-    /// The answers (on success), the outcome, and whether anything was
-    /// asked.
-    async fn scrape(
-        &mut self,
-        hashes: &[InfoHash],
-    ) -> (Option<Vec<Option<Counts>>>, Outcome, bool) {
-        let limit = self.clock.now() + self.max_wait.as_millis() as u64;
+    /// The answers for the leading hashes answered, the outcome, and how
+    /// many leading hashes were asked about.
+    async fn scrape(&mut self, job: &Job) -> (Vec<Option<Counts>>, Outcome, usize) {
+        let now = self.clock.now();
+        let limit = (now + self.max_wait.as_millis() as u64).min(job.deadline_ms);
         let per_request = self.tracker.max_hashes().max(1);
-        let requests = hashes.len().div_ceil(per_request) as u64;
         let interval = self.pacer.interval().as_millis() as u64;
-        if !fits(self.pacer.ready_at(), interval, requests, limit) {
-            return (None, Outcome::Skipped, false);
+        // A partial job when the tracker is slower than the round: the
+        // requests that can start in time, the rest unasked. They go out
+        // an interval apart from the first, however long it sat idle.
+        let fit = requests_by(self.pacer.ready_at().max(now), interval, limit);
+        let take = usize::try_from(fit)
+            .unwrap_or(usize::MAX)
+            .saturating_mul(per_request)
+            .min(job.hashes.len());
+        if take == 0 {
+            return (Vec::new(), Outcome::Skipped, 0);
         }
-        let mut answers = Vec::with_capacity(hashes.len());
+        let hashes = &job.hashes[..take];
+        let mut answers = Vec::with_capacity(take);
         for chunk in hashes.chunks(per_request) {
             let ready = self.pacer.ready_at();
             tokio::time::sleep_until(self.clock.at(ready)).await;
@@ -177,7 +221,14 @@ impl ClientTask {
             match self.tracker.scrape(chunk).await {
                 Ok(reply) => {
                     self.pacer.succeeded(self.clock.now(), reply.retry_after);
-                    answers.extend(reply.counts);
+                    // One entry per hash asked, `None` for one left out.
+                    answers.extend(
+                        reply
+                            .counts
+                            .into_iter()
+                            .chain(std::iter::repeat(None))
+                            .take(chunk.len()),
+                    );
                 }
                 Err(e) => {
                     let failure = Failure::of(&e);
@@ -188,11 +239,13 @@ impl ClientTask {
                         _ => Outcome::Error,
                     };
                     tracing::debug!(tracker = self.id, "scrape failed: {e}");
-                    return (None, outcome, true);
+                    // Earlier requests' answers stand.
+                    let asked = answers.len() + chunk.len();
+                    return (answers, outcome, asked);
                 }
             }
         }
-        (Some(answers), Outcome::Ok, true)
+        (answers, Outcome::Ok, take)
     }
 
     fn record(&self, outcome: Outcome) {
@@ -211,19 +264,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_job_fits_when_its_last_request_starts_in_time() {
-        // Three HTTP requests 6 s apart, ready now: the last starts at 12 s.
-        assert!(fits(1_000, 6_000, 3, 13_000));
-        assert!(!fits(1_000, 6_000, 3, 12_999));
-        // One request only needs the next slot.
-        assert!(fits(5_000, 6_000, 1, 5_000));
-        assert!(fits(5_000, 6_000, 0, 5_000));
+    fn requests_that_start_by_the_limit() {
+        // Ready now, 6 s apart: by 12 s three can start, by 11.9 s two.
+        assert_eq!(requests_by(1_000, 6_000, 13_000), 3);
+        assert_eq!(requests_by(1_000, 6_000, 12_999), 2);
+        // Ready after the limit: none, a skip.
+        assert_eq!(requests_by(5_001, 6_000, 5_000), 0);
+        assert_eq!(requests_by(5_000, 6_000, 5_000), 1);
+        assert_eq!(requests_by(0, 0, 0), u64::MAX, "unpaced");
         let gate = Gate::default();
         gate.ready_at.store(10_000, Ordering::Relaxed);
         gate.interval_ms.store(2_000, Ordering::Relaxed);
-        // 74 hashes at 32 a request: three requests, the last at 14 s.
-        assert!(gate.fits(6_000, 74, 32, 8_000));
-        assert!(!gate.fits(6_000, 74, 32, 7_999));
-        assert!(gate.fits(6_000, 74, 74, 4_000), "one UDP packet");
+        assert!(gate.can_start(10_000));
+        assert!(!gate.can_start(9_999));
     }
 }

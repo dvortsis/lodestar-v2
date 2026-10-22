@@ -249,7 +249,7 @@ hash:abc123…  (or a bare 40-hex / magnet link pasted into the box)
 ```
 Units and relative dates are parsed. Unknown fields trigger a helpful error, not a silent ignore. Regex compiles to a trigram prefilter (the Google Code Search / zoekt technique) and then verifies against the name, with a hard time budget.
 
-**Ranking** is two-phase. Phase 1 is BM25 on the combined name-and-paths field, giving the top candidates (a window of 200; §16 explains why it isn't block-max WAND over ~1,000). Phase 2 re-ranks those candidates with the full feature set, which avoids scoring every match just to apply seeder and freshness priors. Paging past the window fetches the next phase-1 window and re-ranks it, so order is exact within each window and approximate only at window boundaries. The features: a phrase/proximity bonus, an exact-name bonus, and a parsed-title match bonus (title hits always outrank file-only hits via a capped file contribution, as Lodestar intended). It's then multiplied by quality priors: `log(1+seeders)`, a freshness decay, a junk penalty and a trackers-reporting nudge. A **swarm-consistency check** also feeds the junk score: one tracker reporting tens of thousands of seeders while the DHT estimate and every other tracker show ~0 is a classic fake-seeding signature, so it's penalized and labelled. All weights live in config, and `?explain=1` returns a per-result score breakdown. A **relevance judgment suite** (query → expected top-k) with an NDCG gate in CI keeps tuning honest.
+**Ranking** is two-phase. Phase 1 is BM25 on the combined name-and-paths field, giving the top candidates (a window of 200; §16 explains why it isn't block-max WAND over ~1,000). Phase 2 re-ranks those candidates with the full feature set, which avoids scoring every match just to apply seeder and freshness priors. Paging past the window fetches the next phase-1 window and re-ranks it, so order is exact within each window and approximate only at window boundaries. The features: a phrase/proximity bonus, an exact-name bonus, and a parsed-title match bonus (title hits always outrank file-only hits via a capped file contribution, as Lodestar intended). It's then multiplied by quality priors: `log(1+seeders)`, a freshness decay, a junk penalty and a trackers-reporting nudge. A **swarm-consistency check** also feeds the junk score: one tracker reporting tens of thousands of seeders while the DHT estimate and every other tracker show ~0 is a classic fake-seeding signature, so it's penalized and labelled. All weights live in config, and `?explain=true` returns a per-result score breakdown. A **relevance judgment suite** (query → expected top-k) with an NDCG gate in CI keeps tuning honest.
 
 **Results, facets and features:**
 - **Counts:** exact up to 100k matches, then "≈ 2.4M" via segment-level estimation, and exact on demand.
@@ -1930,20 +1930,33 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - A round closes when every answer is in, or after 60 s with what arrived. Its torrents go to the writer as one batch.
 - **Pacing:**
   - Rounds start once per tracker interval, with at most 2 in flight. The interval is 2 s at Balanced, 5 s at Low and 1 s at Aggressive; HTTP trackers default to three times that.
-  - A tracker still busy with the previous round sits the new one out (`skipped`). So does one whose last request of the job couldn't start within one slot more than a full round takes (one request over UDP, three over HTTP at 32 hashes), because it's backing off, down or banned. A bad tracker never holds a round up; it just isn't counted as checked.
-    - The check is all or nothing: an HTTP job never starts unless every request fits, because a job abandoned halfway would throw the answers it already had away.
-    - Each tracker task publishes when it's free and when its pacer allows the next request (`Gate`). The scheduler applies the same fit check before sending, and a round starts only when some tracker can take it (or, with no trackers, when the DHT is on).
-    - A round in which nobody was asked (every tracker skipped, no DHT scrape) writes nothing. Its torrents go back to their lanes, so an outage of our own making doesn't look like a dead swarm or use up an unreached retry.
+  - **A tracker still busy with the previous round sits the new one out** (`skipped`). A bad tracker never holds a round up; it just isn't counted as checked.
+  - **Each request of a job must start by the job's limit:** the earlier of
+    - one slot more than a full round takes (one request over UDP, three over HTTP at 32 hashes), and
+    - the round's deadline minus the tracker's longest request (UDP: a connect and a scrape with their retries; HTTP: its timeout; at most half a round).
+  - **Partial jobs:**
+    - Requests are counted from the later of now and the pacer's next slot, an interval apart.
+    - A tracker that can start some but not all of them in time sends those: a partial job. The rest of the round's hashes go unasked by it.
+    - This covers a tracker that raised `min_request_interval`, or a Low intensity.
+    - Before review, the fit was all or nothing, counted from a stale slot. A slow tracker then skipped job after job, or answered after its round had closed.
+  - **Skips:** a tracker that can't start even one request (backing off, down, banned) skips the job at once.
+  - **Gate:** each tracker task publishes when it's free, its pacer's next slot and its interval (`Gate`). The scheduler checks that at least one request fits before sending. A round starts only when some tracker can take it, or, with no trackers, when the DHT is on.
+  - **Who was asked, per hash:**
+    - A job reports how many of its leading hashes it asked about. A failed request's hashes count as asked; earlier requests' answers stand.
+    - The round writes only the torrents some tracker or the DHT was asked about.
+    - The rest learned nothing, not even an outage, and go back to their lanes. So an outage of our own making doesn't look like a dead swarm or use up an unreached retry.
+  - **Late answers:** answers arriving after their round closed are dropped and counted as `late` (outcome 5), not `ok`. The deadline cap makes them rare.
   - That's about 37 torrents/s at Balanced, roughly 3.2M torrent-scrapes a day across every tracker.
 - **Tracker health:**
   - **Backoff:** a failure waits 1 min, doubling (1, 2, 4, 8 min).
   - **Down:** after 5 failures in a row; probed hourly.
-  - **Banned:** a refusal mentioning a rate limit, ban, abuse or "too many", or HTTP 429/403. It lasts 24 h, doubling to a week.
+  - **Banned:** a refusal using a rate-limit or ban word (rate, limit, banned, blocked, abuse, denied, throttled, …), or the phrases "too many", "too fast" or "slow down", or HTTP 429/403. It lasts 24 h, doubling to a week.
+    - Words match whole, so "inaccurate" isn't "rate".
   - **Ok:** any success resets it.
   - `min_request_interval` slows a tracker for good, never speeds it up.
   - Health isn't persisted in M4: a restart starts every tracker as Ok, and a banning tracker costs one request to re-ban.
 - **Lanes, by deficit round robin:**
-  - **Interest** (detail views, the top 10 hits of a first page) goes first, always.
+  - **Interest** (detail views, the top 10 hits of a first page) goes first, with up to half of a round while other lanes have work, and fills whatever they leave. A busy search page can't starve "new torrents once" (§15).
   - **Hints don't rescrape fresh data:**
     - An interest hint for a torrent answered in the last 30 minutes is dropped.
     - A rediscovered torrent is dropped if it was answered within the alive minimum (6 h), because popular torrents are rediscovered constantly.
@@ -1962,7 +1975,10 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Aggregation:**
   - **Reporting:** trackers answering s+l+c > 0. **Checked:** every tracker that answered at all.
   - **Counts:** the most any reporting tracker gave, because trackers see different slices of a swarm. With no tracker reporting, the DHT's seeds and peers stand in.
-  - **Fake seeding:** a tracker claiming at least 1,000 seeders and 50× everything else (other trackers, or a DHT estimate from 2+ nodes) is flagged `SUSPECT`. Its claim is kept per tracker, but the counts come from the other sources. One tracker alone, or a one-node DHT estimate, is too thin to call fake.
+  - **Fake seeding:** a tracker claiming at least 1,000 seeders and 50× everything else (other trackers, or a DHT estimate from 2+ nodes) is flagged `SUSPECT`.
+    - Its claim is kept per tracker, but it isn't counted as reporting, and the counts come from the other sources.
+    - With only the outlier and the DHT, the DHT stands in (`seeders_approx`) rather than a false 0.
+    - One tracker alone, or a one-node DHT estimate, is too thin to call fake.
 - **Never scraped:** `PRIVATE` and `PRIVATE_SOURCE` torrents, checked again when a round loads them, since the interest and rediscovered lanes bypass the store's lane filters.
 - **Write path:**
   - Updates go through a writer input (`WriteBatch.swarm`). The hot columns change after the commit, so SQLite is always ahead of them.
@@ -1971,7 +1987,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Hot columns across restarts:** `open_hot` loads the snapshot when the stamp in `settings` matches, and clears the stamp at once. `save_hot` writes a new snapshot and stamp after the pipeline stops. A crash therefore always rebuilds from SQLite.
 - **The `Flags` hot column** carries the suspect bit (bit 0) for the ranking penalty. User flags (§7) will take bits 8 and up. It costs 4 B per torrent, so hot columns are 24 B per torrent (about 240 MB at 10M).
 - **Rollups:**
-  - `SCRAPE_REQUESTS` (5): jobs per tracker by outcome (ok, timeout, banned, error, skipped).
+  - `SCRAPE_REQUESTS` (5): jobs per tracker by outcome (ok, timeout, banned, error, skipped, late).
   - `SCRAPED` (6): torrents by lane and result (alive, dead, unreached).
   - `DHT_SCRAPES` (7).
   - `Rollups::add_dim` takes a dimension that isn't a source.
@@ -1979,7 +1995,9 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - property tests for the schedule bounds and for lane fairness and completeness;
   - unit tests for the pacer states, ban detection and aggregation (including fake seeding);
   - end to end with the fake UDP tracker: counts reach the store and hot columns, private torrents are never scraped, a rediscovery moves last-seen, a fresh hint doesn't rescrape, an unreachable tracker leaves counts unknown, a due rescrape keeps the DHT estimate it didn't ask for, and snapshots survive a clean restart but not a crash;
-  - end to end with the fake HTTP tracker: back-to-back rounds of four requests each are all answered, none skipped;
+  - end to end with the fake HTTP tracker: back-to-back rounds of four requests each are all answered, none skipped; a tracker that raises `min_request_interval` to a second answers partial jobs until every torrent is scraped, with none late or unreached (it fails with all-or-nothing jobs);
+  - end to end: a banning tracker stops rounds from starting, so its torrents' unreached count stays at 1; shutdown with a round in flight returns at once and keeps the old schedule;
+  - unit tests for who gets written (`settle`), round expiry, request fitting, the interest cap and the suspect fallback;
   - store tests for the unreached count: it climbs, caps at 15, keeps other flags and resets on an answer.
   - All stable over repeated runs.
 
@@ -1996,7 +2014,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Search API:**
   - Sorts gain `seeders`, `leechers`, `trackers` and `seen`.
   - `tz` is minutes east of UTC (±14 h), for `time:`.
-  - `explain=1` returns each hit's score parts. It runs the exact query, without the stem fallback.
+  - `explain=true` returns each hit's score parts. It runs the exact query, without the stem fallback.
   - **Field names follow the UI contract** (`docs/metrics.md` §7), as flat fields of the torrent summary, not a nested object. The contract was merged while this PR was in review.
   - Every hit and the detail view carry `seeders`, `leechers`, `completed`, `trackers_reporting`, `trackers_checked` and `last_scrape_at`, which are `null` together when the torrent was never scraped (§10.12: null ≠ zero). They also carry `seeders_approx`, `swarm_suspect` and `last_seen_at`.
     - They're read from the stored swarm row: one primary-key read per hit. The hot columns don't hold `completed`, `trackers_checked` or the scrape time, and the row is never behind them.
@@ -2047,7 +2065,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Neutral priors for unknowns.** A never-scraped torrent counts as 1 seeder and 1 tracker: above a dead swarm and below a live one, so new torrents aren't buried before their first scrape. An unknown last-seen counts as one half-life old.
 - **`RankWeights`** holds every weight, with the defaults above. `with_weights` sets it from the `[ranking]` config section, which also sets the suspect multiplier (default 0.2).
 - **Only the window is re-ranked.** Hits past the 200 candidates keep phase-1 order. When a page reaches past the window, its tail is scored for its parts, then put back in phase-1 order. Re-ranking the tail as well would let a hit move between pages as the window shifted, so it could be shown twice or not at all.
-- **Explain:** `search_page_explained` returns `ScoreParts` per relevance hit: text, each multiplier and the final score. That's what `?explain=1` will expose. Sorted pages have no parts.
+- **Explain:** `search_page_explained` returns `ScoreParts` per relevance hit: text, each multiplier and the final score. The API exposes it as `?explain=true`. Sorted pages have no parts.
 - **The window path costs little.** Text-only relevance without boosts (phrases, fielded words) now also takes the 200-candidate window when hot columns are attached. That's one id read, one junk read and five atomic loads per candidate.
   - A filter-only relevance query ranks an arbitrary 200 of its matches by the priors. Browsing by swarm health uses the seeders sort, not relevance.
 - **Bench:**

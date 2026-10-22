@@ -41,7 +41,8 @@ pub struct Aggregate {
     pub trackers_reporting: u16,
     pub trackers_checked: u16,
     pub dht: Option<(u32, u32)>,
-    /// Reporting trackers only, by tracker id.
+    /// Reporting trackers only, by tracker id, a suspect outlier's claim
+    /// included.
     pub per_tracker: Vec<(u16, Counts)>,
     pub suspect: bool,
     /// For the schedule: `None` when no source answered.
@@ -86,13 +87,15 @@ pub fn aggregate(answers: &[(u16, Option<Counts>)], dht: Option<DhtSeen>) -> Agg
                 .map(|(t, _)| *t)
         })
         .flatten();
+    // The outlier isn't counted as reporting either: with only it and the
+    // DHT, the DHT stands in (`seeders_approx`) rather than a false 0.
     let counted = per_tracker.iter().filter(|(t, _)| Some(*t) != outlier);
     let max = |f: fn(&Counts) -> u32| counted.clone().map(|(_, c)| f(c)).max().unwrap_or(0);
     let mut agg = Aggregate {
         seeders: max(|c| c.seeders),
         leechers: max(|c| c.leechers),
         completed: max(|c| c.completed),
-        trackers_reporting: per_tracker.len().min(usize::from(u16::MAX)) as u16,
+        trackers_reporting: counted.clone().count().min(usize::from(u16::MAX)) as u16,
         trackers_checked: answers.len().min(usize::from(u16::MAX)) as u16,
         dht: dht.map(|d| (d.seeds, d.peers)),
         per_tracker,
@@ -213,7 +216,7 @@ mod tests {
         let a = aggregate(&[(1, c(40_000, 3, 1)), (2, c(2, 1, 9))], dht(1, 2, 5));
         assert!(a.suspect);
         assert_eq!(a.seeders, 2, "counts come from the others");
-        assert_eq!(a.trackers_reporting, 2);
+        assert_eq!(a.trackers_reporting, 1, "the outlier isn't counted");
         assert_eq!(a.per_tracker[0].1.seeders, 40_000, "the claim is kept");
 
         // A big swarm everyone agrees on is fine.
@@ -225,6 +228,18 @@ mod tests {
         assert!(!aggregate(&[(1, c(40_000, 3, 1))], dht(0, 0, 1)).suspect);
         // But a solid DHT estimate of nothing is evidence.
         assert!(aggregate(&[(1, c(40_000, 3, 1))], dht(0, 1, 6)).suspect);
+        // Only the outlier and the DHT: the DHT stands in, not a false 0.
+        let a = aggregate(&[(1, c(40_000, 3, 1))], dht(4, 9, 6));
+        assert!(a.suspect);
+        assert_eq!(a.trackers_reporting, 0);
+        assert_eq!((a.hot_seeders(), a.hot_leechers()), (4, 9));
+        assert_eq!(
+            a.found,
+            Some(Seen {
+                seeders: 4,
+                leechers: 9
+            })
+        );
         // Small claims are never called fake.
         assert!(!aggregate(&[(1, c(900, 0, 0)), (2, c(1, 0, 0))], None).suspect);
     }

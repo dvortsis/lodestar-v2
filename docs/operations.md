@@ -323,6 +323,7 @@ Each tracker is in one of four states:
 | Banned | a refusal that mentions a rate limit or ban, or HTTP 429 or 403 | stays away for 24 hours, doubling on repeat to a week |
 
 - A tracker's `min_request_interval` (the HTTP scrape response may carry one) only ever slows requests. It's honoured up to a day.
+- A slow tracker isn't dropped. If it can't take a whole round's hashes before the round closes, it gets the ones it can (a partial job), and the rest of the round goes to the other trackers. Answers that still arrive after a round closed are counted as `late` in the metrics and dropped.
 - Health isn't saved. In M4 every tracker starts as Ok after a restart.
 - The status page lists each tracker with its state, so a banned tracker is visible rather than silently missing.
 
