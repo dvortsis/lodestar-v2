@@ -281,6 +281,20 @@ pub fn without_facet(node: &Node, facet: Facet) -> Option<Node> {
     })
 }
 
+/// `node` ANDed with `filters`.
+fn with_filters(node: Node, filters: &[Node]) -> Node {
+    if filters.is_empty() {
+        return node;
+    }
+    let mut of = match node {
+        Node::All => Vec::new(),
+        Node::And { of } => of,
+        n => vec![n],
+    };
+    of.extend(filters.iter().cloned());
+    Node::And { of }
+}
+
 /// A histogram.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Histo {
@@ -460,11 +474,16 @@ pub struct Bin {
     pub backfill: bool,
 }
 
-/// The facets of the search `lease` holds, whose query is `node` (the
-/// AST the lease was taken for).
+/// The facets of the search `lease` holds. The lease was taken for the
+/// user's query `node` ANDed with `filters`: clauses the server always
+/// applies (Adult visibility, §20.9). Disjunction removes a facet's own
+/// clauses from `node` only; `filters` are ANDed onto every pass as they
+/// are, so a facet never counts what they hide (`-type:adult` is not the
+/// `type` facet's selection).
 pub fn facets(
     lease: &Lease,
     node: &Node,
+    filters: &[Node],
     params: &FacetParams,
     cancel: &CancelToken,
 ) -> Result<Facets> {
@@ -518,7 +537,7 @@ pub fn facets(
     }
     let mut tallies: Vec<(Vec<Facet>, Tally)> = vec![(base.facets.clone(), shared_tally)];
     for f in own {
-        let variant = without_facet(node, f).expect("an own clause");
+        let variant = with_filters(without_facet(node, f).expect("an own clause"), filters);
         let compiled = index.compile(&variant, lease.now(), lease.stemmed());
         let estimate =
             count::estimate_with(searcher, &compiled, cancel, policy.segment_sample_above)?;

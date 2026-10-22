@@ -597,7 +597,7 @@ fn facets_path(
             let started = Instant::now();
             let ast = parse(q)?.without_hidden();
             let lease = Lease::new(index.clone(), &ast, now, Sort::Relevance, &cancel)?;
-            let got = facets(&lease, &ast, &FacetParams::default(), &cancel)?;
+            let got = facets(&lease, &ast, &[], &FacetParams::default(), &cancel)?;
             times.push(started.elapsed());
             hits += got.matches as usize;
         }

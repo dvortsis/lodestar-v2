@@ -175,7 +175,7 @@ fn lease(index: &Arc<SearchIndex>, node: &Node) -> Lease {
 fn run(index: &Arc<SearchIndex>, q: &str, params: &FacetParams) -> (Node, Lease, Facets) {
     let node = crate::parse(q).unwrap();
     let l = lease(index, &node);
-    let f = facets(&l, &node, params, &CancelToken::new()).unwrap();
+    let f = facets(&l, &node, &[], params, &CancelToken::new()).unwrap();
     (node, l, f)
 }
 
@@ -397,6 +397,50 @@ fn own_clauses_are_top_level_and_single_field() {
             ("2160p".to_owned(), false),
         ]
     );
+}
+
+#[test]
+fn always_on_filters_hold_in_every_pass() {
+    // Adult hidden (§20.9): the visibility clause is a top-level
+    // `-type:adult`, which would read as the `type` facet's own clause.
+    let docs = corpus(500);
+    let index = build(&docs, 2);
+    let hide = vec![crate::parse("-type:adult").unwrap()];
+    for q in [
+        "",
+        "type:movie,tv",
+        "res:1080p private:no",
+        "-type:music common",
+    ] {
+        let node = crate::parse(q).unwrap();
+        let full = with_filters(node.clone(), &hide);
+        let l = lease(&index, &full);
+        let got = facets(&l, &node, &hide, &all_values(), &CancelToken::new()).unwrap();
+        let types = got.term(Facet::Type).unwrap();
+        assert!(
+            types.values.iter().all(|v| v.value != "adult"),
+            "{q}: {types:?}"
+        );
+        assert!(got.term(Facet::Adult).is_none(), "{q}");
+        // Every pass counts within the filter: each facet's query, with
+        // the filter, as the index counts it.
+        for (f, t) in &got.terms {
+            let base = with_filters(without_facet(&node, *f).unwrap_or(node.clone()), &hide);
+            for v in &t.values {
+                let narrowed = Node::And {
+                    of: vec![base.clone(), leaf(*f, &v.value)],
+                };
+                assert_eq!(
+                    v.count as usize,
+                    total(&index, &narrowed),
+                    "{q}: {}={}",
+                    f.name(),
+                    v.value
+                );
+            }
+        }
+        assert_eq!(got.matches as usize, l.total().value, "{q}");
+    }
 }
 
 #[test]
@@ -632,7 +676,7 @@ fn a_cancelled_facet_pass_stops_early() {
             approx: false,
         },
     );
-    let r = facets(&l, &Node::All, &FacetParams::default(), &cancel);
+    let r = facets(&l, &Node::All, &[], &FacetParams::default(), &cancel);
     assert!(matches!(r, Err(Error::Cancelled)), "{r:?}");
     let went = visits.load(Ordering::Relaxed);
     // Segments run in parallel, each checking on its own.
@@ -645,7 +689,7 @@ fn a_cancelled_facet_pass_stops_early() {
     done.cancel();
     let l = lease(&index, &Node::All);
     assert!(matches!(
-        facets(&l, &Node::All, &FacetParams::default(), &done),
+        facets(&l, &Node::All, &[], &FacetParams::default(), &done),
         Err(Error::Cancelled)
     ));
     // Out of its budget, it says so.
@@ -660,7 +704,7 @@ fn a_cancelled_facet_pass_stops_early() {
     );
     let budget = CancelToken::new().with_budget(std::time::Duration::from_millis(20));
     assert!(matches!(
-        facets(&l, &Node::All, &FacetParams::default(), &budget),
+        facets(&l, &Node::All, &[], &FacetParams::default(), &budget),
         Err(Error::OutOfTime)
     ));
 }
@@ -672,9 +716,9 @@ fn a_lease_keeps_its_snapshot_across_a_commit() {
     let node = crate::parse("common res:1080p").unwrap();
     let l = lease(&index, &node);
     add(&index, &docs[200..], 1);
-    let old = facets(&l, &node, &all_values(), &CancelToken::new()).unwrap();
+    let old = facets(&l, &node, &[], &all_values(), &CancelToken::new()).unwrap();
     let new_lease = lease(&index, &node);
-    let new = facets(&new_lease, &node, &all_values(), &CancelToken::new()).unwrap();
+    let new = facets(&new_lease, &node, &[], &all_values(), &CancelToken::new()).unwrap();
     let in_first = |n: u64| (0..n).filter(|i| i % 2 == 0 && i % 4 != 3).count();
     // `res` drops its own clause: every `common` torrent with a res.
     let res_total = |f: &Facets| -> u64 {
@@ -875,7 +919,7 @@ mod rebuild {
                 &CancelToken::new(),
             )
             .unwrap();
-            facets(&l, &node, &FacetParams::default(), &CancelToken::new()).unwrap()
+            facets(&l, &node, &[], &FacetParams::default(), &CancelToken::new()).unwrap()
         };
         // The old index serves every facet it can; the year histogram
         // needs the new field.
