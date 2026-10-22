@@ -18,7 +18,7 @@ use lodestar_store::Store;
 use tantivy::collector::{Count, TopDocs};
 use tantivy::directory::MmapDirectory;
 use tantivy::query::{BooleanQuery, EnableScoring, Occur, Query, TermQuery};
-use tantivy::schema::{IndexRecordOption, Value};
+use tantivy::schema::{Field, IndexRecordOption, Schema, Value};
 use tantivy::{
     DocAddress, DocSet, Index, IndexReader, IndexWriter, ReloadPolicy, Searcher, TantivyDocument,
     Term,
@@ -42,6 +42,10 @@ pub enum Error {
     Io(std::io::Error),
     /// The index's commit payload isn't ours.
     Corrupt(&'static str),
+    /// Another process (or handle) is serving the index root.
+    Locked(PathBuf),
+    /// An older index kept serving during a rebuild takes no writes.
+    ReadOnly,
 }
 
 impl std::fmt::Display for Error {
@@ -51,6 +55,8 @@ impl std::fmt::Display for Error {
             Error::Store(e) => e.fmt(f),
             Error::Io(e) => write!(f, "index directory: {e}"),
             Error::Corrupt(what) => write!(f, "corrupt index: {what}"),
+            Error::Locked(root) => write!(f, "{} is in use by another instance", root.display()),
+            Error::ReadOnly => write!(f, "this index is read-only while it's rebuilt"),
         }
     }
 }
@@ -95,6 +101,81 @@ pub struct SearchIndex {
     fields: Fields,
     cache: Arc<SegmentCache>,
     files: FileIndex,
+    /// An older index serving during a rebuild whose schema differs from
+    /// this build's: its fields are mapped by name, and documents built
+    /// for this schema can't be written to it.
+    read_only: bool,
+}
+
+/// How an existing index can serve this build ([`SearchIndex::open_existing`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Compat {
+    /// Same schema: it can keep following the store.
+    Exact,
+    /// Every field this build uses is there, by name and value type, but
+    /// the schema differs: it serves queries and takes no writes.
+    ReadOnly,
+}
+
+/// Maps each field of `from` to the field of `to` with the same name and
+/// value type.
+fn field_map<'a>(from: &'a Schema, to: &'a Schema) -> impl Fn(Field) -> Option<Field> + 'a {
+    move |f| {
+        let entry = from.get_field_entry(f);
+        let g = to.get_field(entry.name()).ok()?;
+        let same =
+            to.get_field_entry(g).field_type().value_type() == entry.field_type().value_type();
+        same.then_some(g)
+    }
+}
+
+/// This build's fields resolved in another schema, or `None` if one is
+/// missing there. The literal names every field, so a new one can't be
+/// forgotten here.
+fn resolve_fields(f: &Fields, m: impl Fn(Field) -> Option<Field>) -> Option<Fields> {
+    let mut cat_count = f.cat_count;
+    for c in &mut cat_count {
+        *c = m(*c)?;
+    }
+    let mut cat_bytes = f.cat_bytes;
+    for c in &mut cat_bytes {
+        *c = m(*c)?;
+    }
+    Some(Fields {
+        id: m(f.id)?,
+        hash: m(f.hash)?,
+        name: m(f.name)?,
+        path: m(f.path)?,
+        text: m(f.text)?,
+        ext: m(f.ext)?,
+        flag: m(f.flag)?,
+        size: m(f.size)?,
+        files: m(f.files)?,
+        largest: m(f.largest)?,
+        piece_len: m(f.piece_len)?,
+        discovered: m(f.discovered)?,
+        metadata: m(f.metadata)?,
+        title: m(f.title)?,
+        title_stem: m(f.title_stem)?,
+        tag: m(f.tag)?,
+        year: m(f.year)?,
+        season: m(f.season)?,
+        episode: m(f.episode)?,
+        junk: m(f.junk)?,
+        cat_count,
+        cat_bytes,
+    })
+}
+
+fn resolve_file_fields(f: &FileFields, m: impl Fn(Field) -> Option<Field>) -> Option<FileFields> {
+    Some(FileFields {
+        torrent: m(f.torrent)?,
+        index: m(f.index)?,
+        name: m(f.name)?,
+        dir: m(f.dir)?,
+        ext: m(f.ext)?,
+        size: m(f.size)?,
+    })
 }
 
 /// The file index (§8, [`crate::files`]), in the `files` directory
@@ -286,6 +367,40 @@ impl SearchIndex {
         SearchIndex::wrap(index, fields, file_index, file_fields)
     }
 
+    /// Opens the existing index in `dir` with the schema it was built
+    /// with, for serving while a newer one is built. `None` when it lacks
+    /// a field this build queries (or has it with another value type), so
+    /// queries compiled for this build can't run on it.
+    pub(crate) fn open_existing(dir: &Path) -> Result<Option<(SearchIndex, Compat)>> {
+        let index = Index::open(MmapDirectory::open(dir)?)?;
+        let file_index = Index::open(MmapDirectory::open(dir.join("files"))?)?;
+        let (schema, fields) = schema::build();
+        let (file_schema, file_fields) = files::schema();
+        let compat = if index.schema() == schema && file_index.schema() == file_schema {
+            Compat::Exact
+        } else {
+            Compat::ReadOnly
+        };
+        let (old, old_files) = (index.schema(), file_index.schema());
+        let resolved = resolve_fields(&fields, field_map(&schema, &old)).zip(resolve_file_fields(
+            &file_fields,
+            field_map(&file_schema, &old_files),
+        ));
+        let Some((fields, file_fields)) = resolved else {
+            return Ok(None);
+        };
+        let mut s = SearchIndex::wrap(index, fields, file_index, file_fields)?;
+        s.read_only = compat == Compat::ReadOnly;
+        Ok(Some((s, compat)))
+    }
+
+    /// Lets a test fill an index opened read-only.
+    #[cfg(test)]
+    pub(crate) fn force_writable(mut self) -> SearchIndex {
+        self.read_only = false;
+        self
+    }
+
     /// A RAM index, for tests.
     pub fn in_memory() -> Result<SearchIndex> {
         let (schema, fields) = schema::build();
@@ -320,6 +435,7 @@ impl SearchIndex {
                 fields: file_fields,
                 cache: Arc::default(),
             },
+            read_only: false,
         })
     }
 
@@ -386,6 +502,9 @@ impl SearchIndex {
     /// The writer for both indexes. `heap_bytes` is split between them:
     /// a quarter goes to the file index, which has smaller documents.
     pub fn writer(&self, heap_bytes: usize) -> Result<Indexer> {
+        if self.read_only {
+            return Err(Error::ReadOnly);
+        }
         // Tantivy wants at least 15 MB per writer.
         let file_heap = (heap_bytes / 4).max(15 << 20);
         let torrents = Side::new(

@@ -9,6 +9,7 @@ mod filter;
 mod index;
 mod live;
 pub mod query;
+mod rebuild;
 pub mod schema;
 mod sorted;
 mod stem;
@@ -21,3 +22,4 @@ pub use index::{
 };
 pub use live::{IndexStats, LiveConfig, LiveIndexer};
 pub use query::{Node, ParseError, parse};
+pub use rebuild::{IndexVersion, Rebuild, RebuildPhase, RebuildProgress, Serving, ServingConfig};
