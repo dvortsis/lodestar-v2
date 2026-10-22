@@ -5,7 +5,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use lodestar_dht::node::{Config, Harvest, Node, Source, StatsSnapshot};
+use lodestar_dht::node::{Config, Harvest, Node, NodeHandle, Source, StatsSnapshot};
 use lodestar_metainfo::InfoHash;
 use lodestar_sources::{
     BoxFuture, Consent, Endpoint, Found, Kind, Manifest, Network, PluginError, Priority, Risk,
@@ -49,6 +49,7 @@ static MANIFEST: Manifest = Manifest {
 pub struct DhtSource {
     config: Config,
     stats: Arc<Mutex<Option<StatsSnapshot>>>,
+    node: Arc<Mutex<Option<NodeHandle>>>,
 }
 
 impl DhtSource {
@@ -56,7 +57,15 @@ impl DhtSource {
         DhtSource {
             config,
             stats: Arc::default(),
+            node: Arc::default(),
         }
+    }
+
+    /// The running node, for BEP 33 scrapes: set once it has started and
+    /// cleared when it stops. Clone the handle out rather than holding the
+    /// lock across a scrape.
+    pub fn node_handle(&self) -> Arc<Mutex<Option<NodeHandle>>> {
+        self.node.clone()
     }
 
     /// The node's counters, refreshed every second while it runs.
@@ -107,6 +116,7 @@ impl SourcePlugin for DhtSource {
                 .await
                 .map_err(|e| PluginError(format!("DHT bind failed: {e}")))?;
             tracing::info!(addrs = ?node.local_addrs(), "DHT node started");
+            *self.node.lock().expect("dht handle lock") = Some(node.handle());
             let mut tick = tokio::time::interval(Duration::from_secs(1));
             let mut requests_open = true;
             loop {
@@ -134,6 +144,7 @@ impl SourcePlugin for DhtSource {
                     }
                 }
             }
+            *self.node.lock().expect("dht handle lock") = None;
             node.shutdown()
                 .await
                 .map_err(|e| PluginError(format!("saving DHT state failed: {e}")))
