@@ -23,6 +23,8 @@
 //! `Origin` must match `Host`.
 
 pub mod auth;
+mod compare;
+mod discover;
 pub mod dto;
 pub mod error;
 pub mod extract;
@@ -68,6 +70,8 @@ pub fn router(state: ApiState) -> Router {
         .merge(torrents::routes())
         .merge(filters::routes())
         .merge(settings::routes())
+        .merge(compare::routes())
+        .merge(discover::routes())
         .merge(openapi::routes())
         // What `auth::protected` checks sessions against.
         .layer(Extension(auth::SessionAuth(state.auth.clone())))

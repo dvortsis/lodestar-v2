@@ -33,11 +33,11 @@ pub fn routes() -> Router<ApiState> {
     )
 }
 
-fn hex(b: &[u8]) -> String {
+pub(crate) fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-fn parse_hash(s: &str) -> ApiResult<InfoHash> {
+pub(crate) fn parse_hash(s: &str) -> ApiResult<InfoHash> {
     let bad = || {
         ApiError::bad_request("bad_hash", "Expected a 40-character hex info hash.").field("hash")
     };
