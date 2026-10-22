@@ -8,7 +8,7 @@ for (const mode of ['light', 'dark'] as const) {
 		test.use({ themeId: `riverstone-${mode}`, colorMode: mode });
 
 		test('charts showcase has no axe violations', async ({ page, go }) => {
-			await go('/_dev/ui/charts');
+			await go('/dev/ui/charts');
 			await expect(page.getByTestId('line')).toHaveAttribute('data-ready', 'true');
 			await expectNoA11yViolations(page);
 			await page.getByTestId('line-toggle').focus();
@@ -26,7 +26,7 @@ for (const mode of ['light', 'dark'] as const) {
 		test.use({ themeId: `riverstone-${mode}`, colorMode: mode });
 
 		test('selection band and muted text use their tokens', async ({ page, go }) => {
-			await go('/_dev/ui/charts');
+			await go('/dev/ui/charts');
 			await page.getByRole('group', { name: 'Torrents by size' }).focus();
 			await page.keyboard.press('Enter');
 			const resolve = (prop: 'background-color' | 'color', token: string) =>
@@ -63,7 +63,7 @@ for (const mode of ['light', 'dark'] as const) {
 }
 
 test('histogram brush works with the keyboard', async ({ page, go }) => {
-	await go('/_dev/ui/charts');
+	await go('/dev/ui/charts');
 	const plot = page.getByRole('group', { name: 'Torrents by size' });
 	await plot.focus();
 	await page.keyboard.press('Enter');
@@ -81,7 +81,7 @@ test('histogram brush works with the keyboard', async ({ page, go }) => {
 });
 
 test('the line chart waits for uPlot and shows the unit', async ({ page, go }) => {
-	await go('/_dev/ui/charts');
+	await go('/dev/ui/charts');
 	await expect(page.getByTestId('line')).toHaveAttribute('data-ready', 'true');
 	await expect(page.getByTestId('line').locator('canvas')).toHaveCount(1);
 	await expect(page.getByTestId('line').locator('.u-legend')).toContainText('Seeders');
