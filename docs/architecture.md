@@ -1519,6 +1519,15 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Size:** `title_stem` costs about 3 B per torrent (words only, no norms). The torrent index is 408 B per torrent at 100k (budget 512). Schema v4.
 - **Name patterns** moved into the §20 rule engine with #27 (an M4 add-on), so M3 doesn't build them.
 
+- **W8 formatters (`web/src/lib/format/`), choices that clarify `docs/metrics.md` §3:**
+  - Estimated values print `≈` + U+00A0 + value; sampled values print `≈` + value with no space, as §1 is written. The `sampled_note` message is shown by the panel, not the formatter.
+  - `formatRate` wraps `{n}/h` and `{n}/d` itself, and `formatRelative` takes the translated `just_now` string in `opts.justNow` (small en/zh fallback). W4 replaces both with messages.
+  - Rounding that would reach the next unit steps up (`1023.9 KiB` → `1.00 MiB`, `59.6 s` → `1 min`, `47.96 hr` → `2 days`, `999.6 ms` → `1 sec`). Bytes pick their digit count from the pre-rounding value, so `9.996 GiB` prints `10.00 GiB`.
+  - Bytes, percent, share, rate, latency and span treat negative input as invalid (`—`). Count, compact and score keep plain `Intl` output; only `formatDelta` uses U+2212.
+  - `formatDelta` takes `kind` (`count`, `compact`, `percent`) plus percent digits; `formatDateFull` takes a `bucket` (`hour`, `day`, `week`); `formatRelative` uses month = 30 d and year = 365 d.
+  - Percent `<`/`>` edges are detected from the `Intl` output itself, so they match the displayed digits.
+  - Size histograms: `sizeBinEdges(fromExp, toExp)` labels power-of-2 edges with `formatBytes`; `sizeBinLabel` joins two edges with an en dash. Labelling only; the server owns the bins.
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.
