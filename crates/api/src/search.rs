@@ -62,6 +62,8 @@ struct SearchParams {
     sort: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
+    /// Include torrents a filter rule hid (§20.3).
+    hidden: Option<bool>,
 }
 
 fn sort_param(s: Option<&str>) -> ApiResult<Sort> {
@@ -147,10 +149,15 @@ async fn run_search(s: ApiState, p: SearchParams) -> ApiResult<axum::Json<Value>
         .field("offset"));
     }
     let reader = s.reader.clone();
+    let shown = if p.hidden.unwrap_or(false) {
+        ast.clone()
+    } else {
+        ast.clone().without_hidden()
+    };
     tokio::task::spawn_blocking(move || {
         let started = Instant::now();
         let (results, stemmed) = index
-            .search_with_fallback(&ast, unix_now(), sort, limit, offset)
+            .search_with_fallback(&shown, unix_now(), sort, limit, offset)
             .map_err(internal)?;
         let store = reader.lock().expect("reader lock");
         let mut hits = Vec::with_capacity(results.hits.len());
