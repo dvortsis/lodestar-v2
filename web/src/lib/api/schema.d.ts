@@ -2404,7 +2404,7 @@ export interface components {
             shadow: string[];
         };
         /**
-         * @description A work's title identity (§16, B13): its normalized title plus the
+         * @description A work's title identity (`docs/decisions/2026-10-22-B13.md`): its normalized title plus the
          *     year, season and episode spans the release names, if any.
          */
         TitleIdentity: {

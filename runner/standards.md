@@ -102,8 +102,8 @@ Every UI slice reads the skills listed in its brief, so it fills gaps consistent
    - **Important:** a missing screenshot or diagram the skill calls for.
 
 **Severity:**
-- **Blocking:** a spec violation, a broken or failing check, a wrong value, a missing test for new behaviour, a file outside ownership, an unapproved dependency, a security issue.
+- **Blocking:** a spec violation, a broken or failing check the PR causes, a wrong value, a missing test for new behaviour, a file outside ownership, an unapproved dependency, a security issue.
 - **Important:** a defect or gap that later slices would inherit. These get fixed in the same PR when cheap; otherwise they go into the next brief that touches the area.
 - **Polish:** optional.
 
-A PR merges only when CI is green and there are no blocking findings.
+A PR merges only when CI is green, apart from a red check that isn't the PR's (`docs/owner-decisions.md` §2.18), and there are no blocking findings.
