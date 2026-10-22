@@ -469,7 +469,7 @@ fn shares(c: &Composition) -> Vec<CompositionShare> {
 /// Fills a hit's classification fields (`docs/metrics.md` §7.1) from the
 /// stored enrichment. Without one, or with a record this build can't
 /// read, they stay null or empty.
-fn enrich(hit: &mut SearchHit, e: Option<Enriched>) {
+pub(crate) fn enrich(hit: &mut SearchHit, e: Option<Enriched>) {
     let Some(e) = e else {
         return;
     };
