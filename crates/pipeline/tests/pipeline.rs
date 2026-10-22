@@ -314,6 +314,74 @@ async fn the_dht_plugin_runs_inside_the_pipeline() {
     assert!(state.exists(), "routing state saved");
 }
 
+/// A key only private sources reported is stored flagged, so it's never
+/// scraped publicly; a later public sighting clears the flag (§18.7).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn private_source_keys_are_flagged_until_seen_publicly() {
+    let seed = Seed::v1(info_dict("Members"));
+    let key = InfoHash(seed.info_hash);
+    let peer = FakePeer::spawn(vec![seed], Accept::Both, Behavior::Honest, vec![]).await;
+    let (private, private_tx) = scripted("private");
+    let (public, public_tx) = scripted("public");
+    let store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let pipeline = Pipeline::start(config(), store, vec![private, public])
+        .await
+        .unwrap();
+    let mut found = Found::key(key, 0).with_peers(vec![peer.addr()]);
+    found.private_source = true;
+    private_tx.send(found).await.unwrap();
+    until("stored", || {
+        pipeline.writer_stats().stored.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    // Wait for the commit to land before the rediscovery can find it.
+    until("have", || pipeline.have().contains(&key)).await;
+    public_tx.send(Found::key(key, 0)).await.unwrap();
+    until("rediscovery", || {
+        pipeline.writer_stats().rediscovered.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    let store = pipeline.shutdown().await.unwrap();
+    let id = store.find(&key).unwrap().unwrap();
+    assert_eq!(
+        store.torrent(id).unwrap().unwrap().flags & flags::PRIVATE_SOURCE,
+        0,
+        "the public sighting cleared it"
+    );
+}
+
+/// A private-source key stays flagged while only private sources see it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn private_source_flag_reaches_the_store() {
+    let seed = Seed::v1(info_dict("Members only"));
+    let key = InfoHash(seed.info_hash);
+    let peer = FakePeer::spawn(vec![seed], Accept::Both, Behavior::Honest, vec![]).await;
+    let (private, private_tx) = scripted("private");
+    let store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let pipeline = Pipeline::start(config(), store, vec![private])
+        .await
+        .unwrap();
+    let mut found = Found::key(key, 0).with_peers(vec![peer.addr()]);
+    found.private_source = true;
+    private_tx.send(found.clone()).await.unwrap();
+    until("stored", || {
+        pipeline.writer_stats().stored.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    until("have", || pipeline.have().contains(&key)).await;
+    private_tx.send(found).await.unwrap();
+    until("rediscovery", || {
+        pipeline.writer_stats().rediscovered.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    let store = pipeline.shutdown().await.unwrap();
+    let id = store.find(&key).unwrap().unwrap();
+    assert_ne!(
+        store.torrent(id).unwrap().unwrap().flags & flags::PRIVATE_SOURCE,
+        0
+    );
+}
+
 /// An import with an incomplete file list is re-fetched at startup and
 /// upgraded in place.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -411,9 +479,11 @@ async fn each_key_is_leased_and_counted_once() {
         pipeline.pool_stats().lost_count(Loss::NoPeers) == 1
     })
     .await;
+    // The pool counts a loss just before it ends the lease, so the lease
+    // may close a moment after the counter moves.
+    until("every lease ended", || stat(|s| &s.outstanding) == 0).await;
     assert_eq!(stat(|s| &s.granted), 2);
     assert_eq!(stat(|s| &s.held), 2);
-    assert_eq!(stat(|s| &s.outstanding), 0, "every lease ended");
     assert_eq!(stat(|s| &s.stale), 0);
     assert_eq!(pipeline.pool_stats().fetched.load(Ordering::Relaxed), 1);
 
@@ -666,4 +736,59 @@ async fn switched_off_rules_and_the_store_state_load_at_start() {
     let store = pipeline.shutdown().await.unwrap();
     assert!(store.find(&key).unwrap().is_some());
     assert!(store.quarantined(10).unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn your_rules_mark_stored_torrents_and_shadow_rules_only_log() {
+    use lodestar_store::{SHADOW, flags};
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lodestar.db");
+    let seeds = vec![
+        Seed::v1(info_dict("Movie 2023 CAM")),
+        Seed::v1(info_dict("Movie 2023 TELESYNC")),
+        Seed::v1(info_dict("Movie 2023 WEB")),
+    ];
+    let keys: Vec<InfoHash> = seeds.iter().map(|s| InfoHash(s.info_hash)).collect();
+    let peer = FakePeer::spawn(seeds, Accept::Both, Behavior::Honest, vec![]).await;
+    let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+    let hide = lodestar_filter::Action::Hide.code();
+    store.add_rule("cam", hide, None, None).unwrap();
+    store
+        .add_rule("telesync", hide, Some(i64::MAX), None)
+        .unwrap();
+    store.set_pack_switch("fakes", false).unwrap();
+    let (feed, feed_tx) = scripted("feed");
+    let pipeline = Pipeline::start(config(), store, vec![feed]).await.unwrap();
+    for k in &keys {
+        feed_tx
+            .send(Found::key(*k, 0).with_peers(vec![peer.addr()]))
+            .await
+            .unwrap();
+    }
+    until("stored", || {
+        pipeline.writer_stats().stored.load(Ordering::Relaxed) == 3
+    })
+    .await;
+    let store = pipeline.shutdown().await.unwrap();
+    let row = |k: &InfoHash| {
+        store
+            .torrent(store.find(k).unwrap().unwrap())
+            .unwrap()
+            .unwrap()
+    };
+    assert_ne!(row(&keys[0]).flags & flags::HIDDEN, 0, "hidden by U-1");
+    assert_eq!(
+        row(&keys[1]).flags & flags::HIDDEN,
+        0,
+        "U-2 is in shadow mode"
+    );
+    assert_eq!(row(&keys[2]).flags & (flags::HIDDEN | flags::FLAGGED), 0);
+    let hits = store.filter_hits(0).unwrap();
+    let find = |rule: &str| hits.iter().find(|h| h.rule == rule).unwrap();
+    assert_eq!(find("U-1").action, hide);
+    assert_eq!(find("U-2").action, hide | SHADOW);
+    assert!(
+        hits.iter().all(|h| !h.rule.starts_with("FK")),
+        "fakes switched off"
+    );
 }

@@ -22,7 +22,7 @@ pub mod testing;
 use std::fmt;
 use std::io;
 
-pub use fetch::{Encryption, FetchOptions, Fetched, fetch, fetch_on_stream};
+pub use fetch::{Deny, Encryption, FetchOptions, Fetched, fetch, fetch_on_stream};
 /// The uTP crate, for building the socket `FetchOptions::utp` takes.
 pub use lodestar_utp as utp;
 pub use stats::{FetchStats, Transport};
@@ -49,6 +49,8 @@ pub enum Error {
     Protocol(&'static str),
     /// The assembled metadata doesn't hash to the info hash.
     HashMismatch,
+    /// The address is on a subscribed IP blocklist; never contacted.
+    Denied,
 }
 
 /// Coarse outcome classes for metrics and the Insights loss reasons.
@@ -65,7 +67,7 @@ pub enum FailureKind {
 impl Error {
     pub fn kind(&self) -> FailureKind {
         match self {
-            Error::Connect(_) => FailureKind::Unreachable,
+            Error::Connect(_) | Error::Denied => FailureKind::Unreachable,
             Error::Timeout => FailureKind::TimedOut,
             Error::Io(_) | Error::NoExtensions | Error::NoMetadata | Error::Rejected => {
                 FailureKind::Refused
@@ -91,6 +93,7 @@ impl fmt::Display for Error {
             Error::MetadataSize(n) => write!(f, "metadata size {n} out of range"),
             Error::Protocol(why) => write!(f, "protocol violation: {why}"),
             Error::HashMismatch => f.write_str("metadata doesn't match the info hash"),
+            Error::Denied => f.write_str("address is blocklisted"),
         }
     }
 }

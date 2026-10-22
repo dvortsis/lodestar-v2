@@ -1,7 +1,7 @@
 //! Fetching an info dictionary from one peer (BEP 9), over TCP or uTP.
 
 use std::io;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -58,6 +58,24 @@ pub struct FetchOptions {
     pub utp: Option<UtpSocket>,
     /// Attempts and successes per transport; clones share it.
     pub stats: Arc<FetchStats>,
+    /// Addresses never connected to, over any transport: subscribed IP blocklists (§20.13).
+    pub deny: Option<Deny>,
+}
+
+/// A live address check, shared with whoever keeps the lists current.
+#[derive(Clone)]
+pub struct Deny(pub Arc<dyn Fn(IpAddr) -> bool + Send + Sync>);
+
+impl Deny {
+    pub fn denies(&self, ip: IpAddr) -> bool {
+        (self.0)(ip)
+    }
+}
+
+impl std::fmt::Debug for Deny {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Deny")
+    }
 }
 
 impl Default for FetchOptions {
@@ -79,6 +97,7 @@ impl Default for FetchOptions {
             utp_fallback_after: Duration::from_secs(2),
             utp: None,
             stats: Arc::new(FetchStats::default()),
+            deny: None,
         }
     }
 }
@@ -115,6 +134,9 @@ pub async fn fetch(
     info_hash: InfoHash,
     opts: &FetchOptions,
 ) -> Result<Fetched, Error> {
+    if opts.deny.as_ref().is_some_and(|d| d.denies(addr.ip())) {
+        return Err(Error::Denied);
+    }
     let deadline = Instant::now() + opts.timeout;
     if opts.transport == Transport::Tcp {
         return fetch_via(Transport::Tcp, addr, info_hash, opts, deadline)

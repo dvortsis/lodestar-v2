@@ -10,11 +10,14 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 lodestar-bencode = { path = "../crates/bencode" }
+lodestar-classify = { path = "../crates/classify" }
 lodestar-dht = { path = "../crates/dht" }
+lodestar-filter = { path = "../crates/filter" }
 lodestar-metainfo = { path = "../crates/metainfo" }
 lodestar-release-parser = { path = "../crates/release-parser" }
 lodestar-search = { path = "../crates/search" }
 lodestar-store = { path = "../crates/store" }
+lodestar-tracker-scrape = { path = "../crates/tracker-scrape" }
 lodestar-utp = { path = "../crates/utp" }
 
 # Each target is a separate binary; see README.md for running them.
@@ -63,6 +66,20 @@ bench = false
 [[bin]]
 name = "release"
 path = "fuzz_targets/release.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tracker_scrape"
+path = "fuzz_targets/tracker_scrape.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lists"
+path = "fuzz_targets/lists.rs"
 test = false
 doc = false
 bench = false
