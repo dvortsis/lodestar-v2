@@ -1826,6 +1826,46 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **qBittorrent "Send selected files":** the torrent is added paused, unselected files get priority 0 once the client has the metadata, and then the torrent starts. If a magnet's metadata doesn't arrive within 30 s, the torrent stays paused and the UI says the selection is pending, so nothing unwanted downloads.
 - **Webhook payload:** `lodestar.notification`, `schema_version` 1, with an `id` that stays the same across retries for deduplication. Private-source items are left out, and only their count is sent (§18.7).
 
+**Download-client adapters: Transmission, Deluge, rTorrent, Aria2 (X-clients):**
+- **All four:**
+  - **Bulk send:** none of the four has a batch add that reports per torrent, so each adapter adds the torrents one at a time.
+  - **Duplicates:** a single torrent that's already in the client is `Rejected` ("already in the client"). In a bulk send a duplicate counts as sent, because it's already where the user wants it; the send is refused only when every torrent was a duplicate.
+  - **A bulk send that fails part-way** returns `ClientError::Partial { sent, cause }`, so the caller can still count the torrents that went in (`sends`, `docs/metrics.md` §6.7) and doesn't retry them. qBittorrent sends a bulk add as one request, so it never returns `Partial`.
+  - **"Send selected files" works for a `.torrent` file in all four, but for a magnet only in Aria2.** Transmission, Deluge and rTorrent fetch a paused (or stopped) magnet's metadata only once it's started, so nothing could be selected before files start downloading. Checked live: every magnet selection was still pending after 30 s.
+    - `Capabilities::magnet_file_selection` says whether a client can do it. Where it can't, `check_magnets` refuses a magnet with a selection as `Unsupported(MagnetFileSelection)` before any request, and the UI offers "send all files" or the `.torrent` instead.
+    - A metadata-only start, without downloading payload, couldn't be verified here, because the session had no outbound peer network. It's left unsupported rather than guessed.
+    - For a `.torrent`, the adapter still waits up to 30 s (polling every 500 ms) for the client to register it, as qBittorrent does.
+  - **Hostile answers:** a file count above `MAX_FILES` (1,000,000) is a `Protocol` error before anything is sized from it. The check is in each adapter and in the shared `skipped_files`. JSON answers parse into typed structs; file lists are counted and never stored.
+  - **`ClientConfig`'s `Debug`** shows only the URL's scheme, host and port, so a token in the configured URL's query is never printed. The adapters drop the query anyway.
+  - **New auth failure:** Transmission answers an `rpc-whitelist` refusal and a brute-force ban with the same bare 403, so `AuthFailure::AddressRefused` says "check the client's IP allow-list, or whether it banned this address". rTorrent's web server uses it for 403 too.
+- **rTorrent: XML-RPC at the web server's `/RPC2`, not ruTorrent's `httprpc` plugin.**
+  - **Why:** every rTorrent install can expose `/RPC2`, and ruTorrent itself needs it (or SCGI). `httprpc` exists only where ruTorrent and PHP are installed, and its action set differs between ruTorrent versions. XML-RPC is typed and documented, with real fault answers.
+  - **Parsing:** answers are parsed with `quick-xml` 0.42.0, used as a reader only (no default features, no serde, no encodings). The parser:
+    - accepts only `i4`/`int`/`i8`, `string`, `boolean`, `double`, `nil`, `array` and `struct`;
+    - limits nesting to 16 levels, and `read_limited` bounds the size;
+    - refuses any `<!DOCTYPE`, and resolves only the five predefined entities and character references.
+
+    Property tests check that arbitrary bytes never panic and that deeper nesting is refused.
+  - **The save path and label go along as commands of the load** (`d.directory.set=…`, `d.custom1.set=…`). rTorrent keeps a magnet's load commands and applies them again when its metadata arrives; values set afterwards wouldn't survive that.
+    - rTorrent parses these commands, and evaluates a leading `$` even inside quotes (checked on 0.9.8: `d.custom1.set="$cat=x,y"` stored `xy`). So values are quoted with `\` and `"` escaped, and a value starting with `$` is refused.
+    - The label is percent-encoded, as ruTorrent stores it in `d.custom1`, so a label can't inject anything.
+  - **Checking the add:** `load.*` answers 0 even when rTorrent drops the torrent (a corrupt file, or a magnet with no trackers while DHT is off). So the adapter asks `d.hash` before the load (to catch a duplicate) and polls it for up to 5 s after (to confirm the torrent appeared).
+- **Transmission:**
+  - **Labels:** sent in `torrent-add` from RPC 17 (4.0), and with `torrent-set` after the add on RPC 16 (3.00). Older daemons have no labels, so the torrent is added without one, as the brief specifies.
+  - **Categories** are the labels already in use on the daemon's torrents, since Transmission keeps no label list of its own. Before RPC 16 they're `Unsupported`.
+  - **The 409 body** repeats the session id, so it's never read into an error.
+- **Deluge:**
+  - **Labels need the Label plugin.** Without it, an add with a label is refused as `Unsupported` before anything is added.
+  - The plugin only accepts lowercase labels, so the label is lowercased, and created with `label.add` before the add if it doesn't exist.
+  - **File priorities:** a selection keeps each selected file's existing priority and sets the skipped files to 0.
+  - **Errors:** only the exception text of a code 3/4 error is shown, without the traceback. A code 5 error ("couldn't read the request") is never shown, because its message quotes the request, password included.
+- **Aria2:**
+  - **Selection is passed at add time** (`select-file`, 1-based), and aria2 applies it itself, so it needs no paused flow.
+    - **A `.torrent`'s indices are checked with `aria2.getFiles`:** it's added paused, then started. An index past the last file leaves it paused and the add is refused as `InvalidRequest`, as in qBittorrent.
+    - **A magnet's indices can't be checked** before its metadata arrives; the outcome still says `Applied`.
+  - **Duplicates** only fail when the download starts (`errorCode` 12), so a started add is followed by one `aria2.tellStatus`. A paused duplicate fails later, inside aria2.
+  - **No categories.**
+
 **X-utp implementation decisions (uTP, `lodestar-utp`, behind a flag):**
 - **Our own crate, not a dependency.** The maintained candidates were measured against the §15 criteria (MIT/Apache, tokio-native, LEDBAT, bounded memory, no `unsafe` on our side, fuzzable parsing, active):
   - `librqbit-utp` 0.7 (Apache-2.0, tokio, active) has no LEDBAT: Cubic only, with LEDBAT a TODO. It also pulls in `libc`, `socket2`, `parking_lot` and `lazy_static`.
