@@ -811,7 +811,7 @@
    "pr": 88,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 19:40: rebuild rename (macOS), interrupted rebuild resume, NRT budget (Windows), uTP WSAENOBUFS."
+   "notes": "Launched 19:40: rebuild rename (macOS), interrupted rebuild resume, NRT budget (Windows), uTP WSAENOBUFS. | 23:08 review FIX: live.rs HANG=300s widens timeout; real cause likely LiveIndexer thread exits on commit error (production bug). Asked root-cause fix."
   },
   "B2b": {
    "status": "review",
@@ -955,7 +955,7 @@
    "pr": 94,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:38 (\"run as many feature sessions as possible\")."
+   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 23:06 review FIX: gate relevance job on bench, tol 0.001, ratchet warn, forbidden marks, shown()->with_filters."
   },
   "V6-cluster1": {
    "status": "review",
@@ -994,6 +994,11 @@
    "pr": 99,
    "notes": "r1 FIX applied verbatim bb4b544; merge on green",
    "merge": "55d90af"
+  },
+  "C-adult-other": {
+   "status": "launching",
+   "model": "opus",
+   "notes": "from #94 review: detect returns None for Other/Ebook at full score (content safety false negative)"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
