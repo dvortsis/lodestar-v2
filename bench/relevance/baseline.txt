@@ -5,4 +5,4 @@ ndcg@10 0.9186
 mrr 0.9247
 recall@50 0.9278
 queries 189
-inputs d0749e0380cd3c5f
+inputs f44a80b00a364567

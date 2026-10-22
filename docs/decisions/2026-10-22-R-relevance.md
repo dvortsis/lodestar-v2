@@ -1,4 +1,4 @@
-# R-relevance: the relevance suite and its NDCG@10 gate
+# R-relevance decisions (#94)
 
 Date: 2026-10-22. Slice: R-relevance. Spec: architecture §8 ("a relevance judgment suite … with an NDCG gate in CI"), §14 M8, §17; build plan P7.
 
@@ -8,7 +8,7 @@ Date: 2026-10-22. Slice: R-relevance. Spec: architecture §8 ("a relevance judgm
 
 2. **The corpus is hand-written fixtures, not the synthetic generator.** The generator's names draw on real group names and a shared word list, so its torrents would match judged queries without being judged. A fixed corpus of about 140 invented torrents keeps every match a judged or deliberately unjudged one. Unjudged results count as grade 0.
 
-3. **Queries run as `/search` runs them.** That means a `Lease` and its first page of 50, with the API's default visibility: `without_hidden()` and `-type:adult`, as `lodestar_api::search::base_query` adds them. The bin restates those two clauses rather than adding `lodestar-api` as a dependency of the bench crate.
+3. **Queries run as `/search` runs them.** That means a `Lease` and its first page of 50, with the API's default visibility: `without_hidden()` and `-type:adult`, joined with `lodestar_search::with_filters` exactly as `lodestar_api::search::base_query` joins them. Only the `-type:adult` clause is restated, which avoids adding `lodestar-api` as a dependency of the bench crate. Every query must match fewer than 50 torrents, so the page holds every result and the forbidden check sees them all; the bin stops with an error otherwise.
 
 4. **Measures.**
    - **NDCG@10:** exponential gain, log2 discount, with the ideal taken from every judged torrent.
@@ -17,8 +17,8 @@ Date: 2026-10-22. Slice: R-relevance. Spec: architecture §8 ("a relevance judgm
    - A query with only `x` judgments scores NDCG 1 when nothing forbidden shows, else 0. It's left out of the MRR and recall means.
 
 5. **The gate fails when:**
-   - overall NDCG@10 falls more than 0.01 below the committed baseline;
-   - any `x` ("never shown") torrent appears in any top 50;
+   - overall NDCG@10 falls more than 0.001 below the committed baseline. The suite is deterministic, so the tolerance only covers the baseline's 4-decimal rounding (runner review: 0.01 let about two whole queries fall to 0 unnoticed);
+   - any `x` ("never shown") torrent appears in any query's results;
    - the corpus or judgments changed since the baseline was written. `baseline.txt` stores a hash of both, with line endings normalised.
 
    A forbidden result fails the gate on its own, whatever the average, because hidden Adult and negation are correctness rules, not ranking quality.
@@ -41,7 +41,7 @@ Date: 2026-10-22. Slice: R-relevance. Spec: architecture §8 ("a relevance judgm
 - **the before and after:** overall NDCG@10, MRR and recall@50, and the worst-10 list.
 
 The rules:
-- **A ranking improvement raises the baseline**, so later changes can't quietly give the gain back.
+- **A ranking improvement raises the baseline**, so later changes can't quietly give the gain back. The bin prints a WARN line when NDCG@10 beats the baseline by more than the tolerance.
 - **A deliberate drop** needs its reason and the per-query losses in the PR, and the reviewer accepts it explicitly.
 - **Judgments are written from the ideal,** each with its one-line rationale. Never edit a grade to match what the ranking returns.
 - **Never raise the tolerance** to get a PR through. A change to it is a decision of its own, recorded here.

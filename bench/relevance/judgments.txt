@@ -175,13 +175,13 @@ x go-cam
 ? harbor -lights
 = Harbor without lights: the seal documentary; the show and the lights documentary must go.
 3 seals
-x hl-s02 hl-complete hl-1958 harbor-docu hl-s02e05
+x hl-s01e05 hl-s01 hl-s02e06 hl-s02 hl-s02-720 hl-s02e05-720 hl-s02e05 hl-2x05 hl-s03e01 hl-complete hl-1958 harbor-docu bg07 bg08
 
 ? type:tv harbor lights
 = The show only; the 1958 film is a movie.
 3 hl-complete hl-s01 hl-s02
 2 hl-s02-720 hl-s02e05 hl-s02e05-720 hl-s02e06 hl-s01e05 hl-s03e01 hl-2x05
-x hl-1958
+x hl-1958 harbor-docu
 
 ? type:movie harbor lights
 = The 1958 film; the lights documentary is a lookalike.
@@ -551,7 +551,7 @@ x ms-hentai
 ? title:meridian
 = Scoped to titles: path-only matches must not appear.
 3 mer-film mer-album
-x mer-mix mer-walls mer-course
+x mer-mix mer-walls mer-course tv-disco
 
 ? kaia rowe meridian
 = The track by Kaia Rowe in the mix.
@@ -739,7 +739,7 @@ x vr-xxx vr-xxx2
 ? file:(ext:flac) tessa vane
 = A file clause: FLAC releases only.
 3 tv-disco mer-album tv-paper
-x tv-mp3
+x tv-mp3 comp
 
 ? tin lanterns
 = The song is on three releases.
@@ -885,7 +885,7 @@ x cc-x264 cc-webrip cc-rail
 3 go-1080 go-2160 go-web go-720
 2 go2
 1 go-cam go-ost go-book
-x fest
+x fest eb-pack
 
 ? glass orchard ext:mkv
 = MKV releases only.

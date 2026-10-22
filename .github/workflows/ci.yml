@@ -140,13 +140,15 @@ jobs:
 
   relevance:
     name: relevance (§8)
+    needs: changes
+    if: needs.changes.outputs.bench == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # NDCG@10 on the judgment set against bench/relevance/baseline.txt
-      # (tolerance 0.01), plus no hidden or negated torrent in any result.
+      # (tolerance 0.001), plus no hidden or negated torrent in any result.
       - run: cargo run --release -p lodestar-bench --bin relevance -- --gate
 
   filter-budget:

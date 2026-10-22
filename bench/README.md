@@ -62,12 +62,16 @@ that have something to find.
 
 `--gate` fails when:
 
-- overall NDCG@10 falls more than `--tolerance` (default 0.01) below the
-  baseline;
-- any `x` torrent is in any query's top 50;
+- overall NDCG@10 falls more than `--tolerance` (default 0.001, enough
+  for the baseline's rounding) below the baseline;
+- any `x` torrent is in any query's results (every query must match
+  fewer than 50 torrents, so one page holds them all);
 - the corpus or judgments changed since the baseline was written.
 
 ### Updating the baseline
+
+When NDCG@10 beats the baseline by more than the tolerance, the run
+prints a WARN line: raise the baseline in that PR.
 
 Update it deliberately, in the PR that causes the change, and say why
 in the PR description (`docs/decisions/2026-10-22-R-relevance.md`):
