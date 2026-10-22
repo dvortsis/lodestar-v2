@@ -39,7 +39,7 @@ use lodestar_sources::{
     Discovery, Emitter, Fetcher, FunnelCounts, Kind, Loss, PluginError, PoolConfig, PoolHandle,
     PoolIo, PoolStats, Priority, Shutdown, SourceCtx, SourcePlugin,
 };
-use lodestar_store::{Event, FilterState, QueuedKey, SourceId, Store, WriteBatch};
+use lodestar_store::{Event, FilterState, QueuedKey, RuleSet, SourceId, Store, WriteBatch};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
@@ -358,7 +358,7 @@ impl Pipeline {
             })
             .collect();
         let backfill = config.backfill.as_secs() as i64;
-        let (store, ids, queue, have, backfill_until, stored_at_start, filter_state) =
+        let (store, ids, queue, have, backfill_until, stored_at_start, filter_state, rule_set) =
             tokio::task::spawn_blocking(move || prepare(store, &manifests, backfill))
                 .await
                 .map_err(Error::Join)??;
@@ -369,6 +369,9 @@ impl Pipeline {
         );
         let have = Arc::new(have);
         load_filter(&config.filter, &filter_state);
+        for note in config.filter.update_engine(|e| e.load_rules(&rule_set)) {
+            tracing::warn!("filter: {note}");
+        }
         let held = Arc::new(HeldSet::default());
         for (h, _) in &filter_state.held {
             held.insert(*h);
@@ -677,6 +680,7 @@ fn prepare(
         i64,
         u64,
         FilterState,
+        RuleSet,
     ),
     Error,
 > {
@@ -728,6 +732,7 @@ fn prepare(
         ..WriteBatch::default()
     })?;
     let filter = store.filter_state()?;
+    let rules = store.rule_set()?;
     Ok((
         store,
         ids,
@@ -736,6 +741,7 @@ fn prepare(
         first_run + backfill,
         stored,
         filter,
+        rules,
     ))
 }
 
