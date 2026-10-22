@@ -1,0 +1,19 @@
+{
+  "recorded_from": "Built by hand from the Discord webhook documentation (discord.com/developers/docs/resources/webhook) and its documented error bodies, not recorded: there is no live webhook to record from",
+  "note": "?wait=true: 200 with the created message",
+  "request": {
+    "method": "POST",
+    "path": "/api/webhooks/123456789012345678/Tk3n-SECRET_value",
+    "query": "wait=true"
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "body": "{\"id\":\"1234567890123456789\",\"type\":0,\"content\":\"\",\"channel_id\":\"223456789012345678\",\"author\":{\"bot\":true,\"id\":\"123456789012345678\",\"username\":\"Lodestar\",\"avatar\":null,\"discriminator\":\"0000\"},\"attachments\":[],\"embeds\":[{\"type\":\"rich\",\"title\":\"4K nature docs: 2 new\",\"description\":\"Two new results.\",\"url\":\"http://lodestar.lan/alerts/7\"}],\"mentions\":[],\"mention_roles\":[],\"pinned\":false,\"mention_everyone\":false,\"tts\":false,\"timestamp\":\"2025-10-22T12:00:00.123000+00:00\",\"edited_timestamp\":null,\"flags\":0,\"components\":[],\"webhook_id\":\"123456789012345678\"}"
+  }
+}
