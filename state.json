@@ -638,13 +638,13 @@
    "notes": "round 1: merge main, half-open/idle timeouts, per-IP cap, CI fuzz"
   },
   "X-integrations": {
-   "status": "in_review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01Pbk94fn6LWmUvc4LYw2c2P",
    "pr": 49,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": ""
+   "notes": "merged 09:14 as a6c18ef (#49)"
   },
   "X-pack-static": {
    "status": "merged",
@@ -813,6 +813,12 @@
   "B1-polish": [
    "golden: add stemmed:true and non-null hash_v2 fixtures",
    "explicit operation_ids if not done in #57"
+  ],
+  "metrics-contract": [
+   "metrics.md \u00a76.7: add notifications_delivered / notifications_failed (IntegrationMetrics already counts them)"
+  ],
+  "X-notify": [
+   "Webhook HMAC signature not implemented yet: add as additive field"
   ]
  },
  "blocked_on_owner": [
