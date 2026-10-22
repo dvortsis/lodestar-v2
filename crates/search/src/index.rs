@@ -194,6 +194,7 @@ fn resolve_fields(f: &Fields, r: &Resolver<'_>) -> Fields {
         year: m(f.year),
         season: m(f.season),
         episode: m(f.episode),
+        release_year: m(f.release_year),
         junk: m(f.junk),
         cat_count: f.cat_count.map(m),
         cat_bytes: f.cat_bytes.map(m),
@@ -669,7 +670,7 @@ impl SearchIndex {
         })
     }
 
-    fn compile(&self, node: &Node, now: i64, stems: bool) -> Compiled {
+    pub(crate) fn compile(&self, node: &Node, now: i64, stems: bool) -> Compiled {
         // `file:(…)` clauses run on the file index first.
         let mut clauses = Vec::new();
         compile::file_clauses(node, &mut clauses);
