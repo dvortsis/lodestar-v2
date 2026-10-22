@@ -62,13 +62,13 @@
       "notes": "merged 09:27 as a569b51 (#57)"
     },
     "B2": {
-      "status": "changes_requested",
+      "status": "in_review",
       "model": "opus",
       "session": "session_01QHUDtvte2DFAiHz6swmiU8",
       "pr": 67,
       "attempt": 1,
       "review_rounds": 2,
-      "notes": "Round 2 (14:05): fixes OK; blocking: file max_sockets=0 -> 0 sockets (inconsistent sentinel). Also purge stale read-only rows, shadow-log test."
+      "notes": "Round 2 (14:05): fixes OK; blocking: file max_sockets=0 -> 0 sockets (inconsistent sentinel). Also purge stale read-only rows, shadow-log test. | 14:07 round-2 fixes 6b3450d reviewed by runner (diff OK); merge on green CI."
     },
     "B3": {
       "status": "merged",
