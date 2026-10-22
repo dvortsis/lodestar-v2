@@ -68,7 +68,7 @@
       "pr": 67,
       "attempt": 1,
       "review_rounds": 2,
-      "notes": "Round 2 (14:05): fixes OK; blocking: file max_sockets=0 -> 0 sockets (inconsistent sentinel). Also purge stale read-only rows, shadow-log test. | 14:07 round-2 fixes 6b3450d reviewed by runner (diff OK); merge on green CI."
+      "notes": "Round 2 (14:05): fixes OK; blocking: file max_sockets=0 -> 0 sockets (inconsistent sentinel). Also purge stale read-only rows, shadow-log test. | 14:07 round-2 fixes 6b3450d reviewed by runner (diff OK); merge on green CI. | 14:20 session merged main itself (4de8e52, incl cursors.rs settings:None); CI running. Budget re-run spent on 6b3450d."
     },
     "B3": {
       "status": "merged",
