@@ -107,13 +107,13 @@
    "notes": "merged 08:52 as 5c7b413 (#44)"
   },
   "W4": {
-   "status": "in_review",
+   "status": "merged",
    "model": "sonnet",
    "session": "session_01Xz6N6pccu7mmGoppsJH6w1",
    "pr": 41,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "runner merged main into slice/W4 (c11de2a, \u00a716 resolved; web checks green locally); merge when CI green"
+   "notes": "merged 09:40 as 2352de1 (#41)"
   },
   "W6": {
    "status": "running",
@@ -283,8 +283,8 @@
    "session": "session_019VGYFBetAiATAi4KbpB7JZ",
    "pr": 59,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": "PR #59 opened 09:15; reviewer running"
+   "review_rounds": 1,
+   "notes": "round 1 FIX: image build fails (brand/source missing in web stage); CI red; path filters, frontend pin, TZ claim"
   },
   "G-v05": {
    "status": "pending",
