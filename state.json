@@ -59,7 +59,7 @@
    "pr": 57,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "round 1 approve; asked to fix 2 important: redact Debug on auth DTOs, \u00a716 deferred fields line; then merge"
+   "notes": "round 1 fixes pushed 16f4cb2 (redacted Debug + tests, \u00a716 deferred fields, operationIds); awaiting CI then merge"
   },
   "B2": {
    "status": "pending",
@@ -830,6 +830,9 @@
   ],
   "X-notify": [
    "Webhook HMAC signature not implemented yet: add as additive field"
+  ],
+  "unassigned-fields": [
+   "SearchHit/TorrentDetail M3 enrichment fields (title, resolved_via, content_type, adult_kind, composition, junk_*) and hidden_junk have no slice: assign at next API brief (B5a or B6), per \u00a716 B1 entry"
   ]
  },
  "blocked_on_owner": [
