@@ -52,6 +52,7 @@ const ROUTES: &[(&str, &str)] = &[
     ("PATCH", "/sources/{id}"),
     ("GET", "/network/check"),
     ("POST", "/network/check"),
+    ("GET", "/events"),
     ("GET", "/openapi.json"),
 ];
 const OPEN: [&str; 5] = ["/auth", "/setup", "/login", "/logout", "/openapi.json"];

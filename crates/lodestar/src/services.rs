@@ -12,8 +12,12 @@ use std::future::Future;
 use std::io::Write;
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
+use axum::Extension;
+use lodestar_api::dto::events::CrawlerEvent;
+use lodestar_api::events::{EventHub, EventSources, EventsConfig};
 use lodestar_filter::Sealer;
 use lodestar_filter::lists::SharedIps;
 use lodestar_pipeline::{Control, DhtSource, Pipeline};
@@ -35,6 +39,8 @@ pub struct Services {
     pub api: lodestar_api::ApiState,
     /// The status page's and metrics' state.
     pub http: http::AppState,
+    /// `/api/v1/events`: the live stream's hub.
+    pub events: Arc<EventHub>,
     pub handles: Handles,
     listener: TcpListener,
 }
@@ -68,12 +74,12 @@ impl Services {
         let config = &settings.effective_config(config);
         // The crawler's pause (B14) outlives a restart: everything starts
         // paused, so nothing is harvested or fetched before it applies.
-        let crawler = settings
+        let crawl_settings = settings
             .subscribe::<settings::crawler::Crawler>()
             .borrow()
             .clone();
         let mut pipeline_config = config.pipeline_config()?;
-        pipeline_config.pool.paused = crawler.paused;
+        pipeline_config.pool.paused = crawl_settings.paused;
         let key = seal_key(&config.data_dir.join("seal.key"))?;
         pipeline_config.sealer = Some(Arc::new(Sealer::new(&key)));
         // Subscribed IP lists (§20.13): one shared set, consulted by the
@@ -139,7 +145,7 @@ impl Services {
         if config.dht.enabled {
             let mut dht_config = config.dht_config();
             dht_config.deny = Some(lodestar_dht::node::Deny(denied.clone()));
-            dht_config.paused = crawler.paused;
+            dht_config.paused = crawl_settings.paused;
             let dht = Arc::new(DhtSource::new(dht_config));
             dht_stats = Some(dht.stats_handle());
             settings::crawler::follow_intensity(settings.subscribe(), dht.node_handle());
@@ -173,8 +179,8 @@ impl Services {
             pipeline.monitor(),
             dht_source,
             control.clone(),
-            crawler.paused,
-            crawler.intensity.into(),
+            crawl_settings.paused,
+            crawl_settings.intensity.into(),
         )
         .await?;
         settings::crawler::follow_control(settings.subscribe(), crawl.clone());
@@ -225,6 +231,37 @@ impl Services {
             reader,
             search: search_state,
         };
+        // The live stream (§9): new torrents from the serving index's
+        // commits, crawler snapshots from the status page's counters, and
+        // rebuild progress.
+        let crawler = {
+            let (monitor, dht) = (http.monitor.clone(), http.dht.clone());
+            move || {
+                let get = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
+                let p = monitor.pool_stats();
+                CrawlerEvent {
+                    at: crate::unix_now().max(0) as u64,
+                    dht_nodes: dht
+                        .as_ref()
+                        .and_then(|d| *d.lock().unwrap_or_else(|e| e.into_inner()))
+                        .map(|d| d.routing_nodes),
+                    fetch_active: get(&p.active),
+                    fetch_pending: get(&p.pending),
+                    fetched: get(&p.fetched),
+                    harvested: get(&monitor.intake_stats().received),
+                    stored: get(&monitor.writer_stats().stored),
+                    torrents: monitor.torrents(),
+                }
+            }
+        };
+        let events = EventHub::start(
+            EventsConfig::default(),
+            EventSources {
+                commits: serving.as_ref().map(|s| s.commit_hook().clone()),
+                crawler: Some(Arc::new(crawler)),
+                rebuild: search.clone(),
+            },
+        );
         let listener = TcpListener::bind(config.http.bind)
             .await
             .map_err(|e| format!("binding {}: {e}", config.http.bind))?;
@@ -236,6 +273,7 @@ impl Services {
         Ok(Services {
             api,
             http,
+            events,
             handles: Handles {
                 subscriptions: (stop_subscriptions, refresher),
                 pipeline,
@@ -253,13 +291,24 @@ impl Services {
         let Services {
             api,
             http,
+            events,
             handles,
             listener,
         } = self;
-        let app = http::router(http, api).into_make_service_with_connect_info::<SocketAddr>();
+        let app = http::router(http, api)
+            .layer(Extension(events.clone()))
+            .into_make_service_with_connect_info::<SocketAddr>();
+        // Open streams never end on their own: closing the hub ends them,
+        // so the graceful shutdown doesn't wait on them.
+        let hub = events.clone();
+        let signal = async move {
+            signal.await;
+            hub.close();
+        };
         axum::serve(listener, app)
             .with_graceful_shutdown(signal)
             .await?;
+        events.close();
         handles.shutdown().await
     }
 }

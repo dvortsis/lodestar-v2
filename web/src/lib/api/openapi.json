@@ -306,6 +306,128 @@
         ]
       }
     },
+    "/events": {
+      "get": {
+        "tags": [
+          "events"
+        ],
+        "summary": "The live event stream.",
+        "description": "Each frame is `id: <epoch>-<seq>` (none on `resync`), `event: <name>`\nand `data: <json>`, the payload of the `Event` variant of that name.\nSend the last id back as `Last-Event-ID` (`EventSource` does) to\nreplay what was missed; when that can't be done exactly (a restart,\ntoo long ago, or an id that isn't ours), a `resync` comes first. A\nclient that falls behind gets a `resync` and carries on from live. A\ncomment every 15 s keeps the connection open; `retry:` is 5 s.",
+        "operationId": "getEvents",
+        "parameters": [
+          {
+            "name": "topics",
+            "in": "query",
+            "description": "Comma-separated topics, e.g. `torrents,crawler`; all of them when\nabsent. An unknown or empty one is a 400 with `field: \"topics\"`.",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Topic"
+              }
+            },
+            "style": "form",
+            "explode": false
+          },
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "description": "The last `id:` received, to resume after it.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The stream: one `Event` per frame (`event:` names the variant, `data:` holds its payload).",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`no-store`."
+              },
+              "X-Accel-Buffering": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`no`, so a proxy doesn't buffer it."
+              }
+            },
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/Event"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An unknown topic (`unknown_topic`, `field: \"topics\"`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session (`login_required`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many open streams, in all or for this session (`too_many_streams`).",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                },
+                "description": "Seconds to wait."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not served here, or shutting down (`events_unavailable`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/filters": {
       "get": {
         "tags": [
@@ -1444,6 +1566,39 @@
   },
   "components": {
     "schemas": {
+      "AlertsEvent": {
+        "type": "object",
+        "description": "`event: alerts` (reserved: B9 publishes it): a saved search matched\nnew torrents. The matches themselves come from the API.",
+        "required": [
+          "alert",
+          "matched",
+          "max_id",
+          "saved_search"
+        ],
+        "properties": {
+          "alert": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The alert's id."
+          },
+          "matched": {
+            "type": "integer",
+            "format": "int64",
+            "description": "New matches.",
+            "minimum": 0
+          },
+          "max_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The highest matching torrent id."
+          },
+          "saved_search": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The saved search's id."
+          }
+        }
+      },
       "AllowEntry": {
         "type": "object",
         "required": [
@@ -2940,6 +3095,83 @@
           }
         }
       },
+      "CrawlerEvent": {
+        "type": "object",
+        "description": "`event: crawler`: the same counters as the status page and\n`/metrics`, sent every 5 s while anyone subscribes.",
+        "required": [
+          "at",
+          "dht_nodes",
+          "fetch_active",
+          "fetch_pending",
+          "fetched",
+          "harvested",
+          "stored",
+          "torrents"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds.",
+            "minimum": 0
+          },
+          "dht_nodes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Nodes in the DHT routing table; null when the DHT is off or\nhasn't reported yet.",
+            "minimum": 0
+          },
+          "fetch_active": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Metadata fetches running now.",
+            "minimum": 0
+          },
+          "fetch_pending": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Hashes waiting for a fetch.",
+            "minimum": 0
+          },
+          "fetched": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Metadata fetched since start.",
+            "minimum": 0
+          },
+          "harvested": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Hashes received from sources since start.",
+            "minimum": 0
+          },
+          "stored": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Torrents stored since start.",
+            "minimum": 0
+          },
+          "torrents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Torrents in the store.",
+            "minimum": 0
+          }
+        },
+        "example": {
+          "at": 1700000000,
+          "dht_nodes": 812,
+          "fetch_active": 40,
+          "fetch_pending": 1200,
+          "fetched": 3400,
+          "harvested": 91000,
+          "stored": 3100,
+          "torrents": 48211
+        }
+      },
       "CrawlerPatch": {
         "type": "object",
         "description": "`PATCH /crawler`: the global bar's intensity control. The same\nsetting as `crawler.intensity` in `/settings/crawler`.",
@@ -3204,6 +3436,119 @@
           }
         }
       },
+      "Event": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "event"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/TorrentsEvent"
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "torrents"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "event"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/CrawlerEvent"
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "crawler"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "event"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/RebuildEvent"
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "rebuild"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "event"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/AlertsEvent"
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "alerts"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "event"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/InsightsEvent"
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "insights"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "event"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/ResyncEvent"
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "resync"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "One frame of the stream: `event:` names the variant and `data:` holds\nits payload. Every event but `resync` has an `id:` of the form\n`<epoch>-<seq>` to send back as `Last-Event-ID`."
+      },
       "ExceptionEntry": {
         "type": "object",
         "required": [
@@ -3409,6 +3754,63 @@
           "id": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "InsightsEvent": {
+        "type": "object",
+        "description": "`event: insights` (reserved: B11a publishes it every 30 s): the stage\nstrip's headline numbers (`docs/metrics.md` §6.1, §7.5).",
+        "required": [
+          "stages",
+          "updated_at"
+        ],
+        "properties": {
+          "stages": {
+            "$ref": "#/components/schemas/InsightsStages"
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds."
+          }
+        }
+      },
+      "InsightsStages": {
+        "type": "object",
+        "description": "`docs/metrics.md` §7.5 `stages`.",
+        "required": [
+          "discover",
+          "fetch",
+          "index",
+          "serve",
+          "understand"
+        ],
+        "properties": {
+          "discover": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Always approximate.",
+            "minimum": 0
+          },
+          "fetch": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "index": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "serve": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "understand": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -4035,6 +4437,94 @@
             }
           }
         }
+      },
+      "RebuildEvent": {
+        "type": "object",
+        "description": "`event: rebuild`: index rebuild progress (§8, the \"Index rebuilding\"\nbanner of §10.4), sent when it changes, and once more with `done`.",
+        "required": [
+          "done",
+          "error",
+          "from",
+          "phase",
+          "to",
+          "total",
+          "unavailable"
+        ],
+        "properties": {
+          "done": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Torrents in the new index so far.",
+            "minimum": 0
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it stopped, once `failed`."
+          },
+          "from": {
+            "type": "string",
+            "description": "The index serving meanwhile, e.g. `v3-t1`."
+          },
+          "phase": {
+            "$ref": "#/components/schemas/RebuildPhase"
+          },
+          "to": {
+            "type": "string",
+            "description": "The index being built."
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Torrents to build before finishing.",
+            "minimum": 0
+          },
+          "unavailable": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields that match nothing until the swap."
+          }
+        }
+      },
+      "RebuildPhase": {
+        "type": "string",
+        "description": "A rebuild's phase; `done` once the new index serves.",
+        "enum": [
+          "building",
+          "finishing",
+          "swapping",
+          "failed",
+          "done"
+        ]
+      },
+      "ResyncEvent": {
+        "type": "object",
+        "description": "`event: resync`: events were missed; refetch what the page shows, then\ncarry on with the events that follow. It has no `id:`.",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "$ref": "#/components/schemas/ResyncReason"
+          }
+        },
+        "example": {
+          "reason": "lagged"
+        }
+      },
+      "ResyncReason": {
+        "type": "string",
+        "description": "Why a `resync` was sent.",
+        "enum": [
+          "restarted",
+          "expired",
+          "malformed",
+          "lagged"
+        ]
       },
       "RuleEntry": {
         "type": "object",
@@ -5467,6 +5957,17 @@
           }
         }
       },
+      "Topic": {
+        "type": "string",
+        "description": "What a client subscribes to with `?topics=`.",
+        "enum": [
+          "torrents",
+          "crawler",
+          "rebuild",
+          "alerts",
+          "insights"
+        ]
+      },
       "TorrentDetail": {
         "type": "object",
         "description": "`GET /torrents/{hash}`: the torrent summary (`docs/metrics.md` §7.1),\nits swarm section (§7.2) and the first 500 files.\n\nThe swarm fields are `null` until swarm health is served (M4): null is\n\"never scraped\", never 0.",
@@ -5649,6 +6150,31 @@
             "minimum": 0
           }
         }
+      },
+      "TorrentsEvent": {
+        "type": "object",
+        "description": "`event: torrents`: torrents became searchable. Commits close together\nmay arrive as one event.",
+        "required": [
+          "added",
+          "max_id"
+        ],
+        "properties": {
+          "added": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Torrents new to the index since the previous `torrents` event;\ncan be 0 when only `max_id` moved on.",
+            "minimum": 0
+          },
+          "max_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The highest torrent id searchable now."
+          }
+        },
+        "example": {
+          "added": 12,
+          "max_id": 48211
+        }
       }
     },
     "responses": {
@@ -5700,6 +6226,10 @@
     {
       "name": "crawler",
       "description": "Stats, the crawler's controls, sources and the network check (§9, §10.9, §18.8)."
+    },
+    {
+      "name": "events",
+      "description": "The live server-sent event stream (§9)."
     },
     {
       "name": "meta",
