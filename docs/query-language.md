@@ -1,8 +1,57 @@
-# The query language
+# Searching in Lodestar
 
-Type into the search box to find torrents. A plain search works like any other: `dark knight` finds torrents with both words. Everything below is optional, for when you want to be more exact.
+Lodestar keeps an **index** (a searchable list) of the **torrents** it has found. A torrent is a description of a set of files that people share over BitTorrent; Lodestar stores that description, not the files themselves. This page shows how to search that list.
 
-This page describes what Lodestar does today. Where a feature is planned but not built yet, it says so. Every example here is checked by a test that runs it through the real parser (`docs/query-language-examples.txt`).
+You can ignore everything after "Start here" until you need it. Most searches are plain words.
+
+## Start here
+
+Type words in the search box. A torrent must contain **all** of them to match.
+
+| Goal | Type | Why |
+|---|---|---|
+| Find a title | `big buck bunny` | All three words must appear in the name or in a file name. |
+| Find an exact phrase | `"big buck bunny"` | Quotes keep the words together, in order. |
+| Leave something out | `big buck bunny -cam` | A minus sign removes matches that contain `cam`. |
+| Either word | `bunny \| squirrel` | The `|` means "or". |
+| Only big files | `big buck bunny size:>4GB` | `size:` filters by the torrent's total size. |
+| Only a video format | `big buck bunny res:1080p` | `res:` is the picture size. `4k` also works. |
+| Only recent finds | `big buck bunny discovered:<7d` | `d` is days: seen in the last 7 days. |
+| Look up one torrent | Paste its **info hash** or a **magnet link** | The info hash is the 40-character code that identifies a torrent. A magnet link is a link that contains it. |
+
+Things to know:
+
+- Capitals, accents and punctuation don't matter. `Big.Buck.Bunny` and `big buck bunny` match the same torrents.
+- A filter is a word, a colon and a value, with no spaces: `size:>4GB`. These are called **fields**.
+- Several values after one field mean "any of": `type:movie,tv`.
+- If a search finds fewer than 10 results, Lodestar also tries singular and plural forms of your words. You don't need to do anything.
+- If you mistype a field, Lodestar tells you and suggests the right one. A typo in a plain word just finds fewer results; add `~` in front (`~bnuny`) to also match close spellings.
+
+Not everything in the original plan works yet. This page marks it clearly; see [Not available yet](#not-available-yet).
+
+### What happens when you search
+
+```mermaid
+flowchart TD
+    A[You type a search] --> B[Lodestar reads it]
+    B -->|Can't read it| E[An error shows which part]
+    B --> C[Find exact matches]
+    C -->|10 or more| F[Show results, best first]
+    C -->|Fewer than 10| D[Also match plural and singular forms]
+    D --> F
+```
+
+In words: Lodestar reads your search first. If it can't, it shows an error that points at the problem. If it can, it finds the exact matches. With fewer than 10, it also tries singular and plural forms and lists those after the exact ones.
+
+### Recommended habits
+
+- **Start with plain words (recommended).** Add one filter at a time and watch the result count change.
+- **Use `size:` and `res:` before long lists of words.** They narrow results faster and don't depend on how a release was named.
+- **Leave "Hidden by filters" off (recommended).** Those torrents are hidden on purpose; see [Hidden torrents and Adult](#hidden-torrents-and-adult).
+
+## Full reference
+
+The rest of this page is the precise reference: every field, operator and error. It describes what Lodestar does today, and it marks plans that aren't built yet. Every example is checked by a test that runs it through the real parser (`docs/query-language-examples.txt`).
 
 - [The basics](#the-basics)
 - [Operators](#operators)
@@ -21,35 +70,35 @@ This page describes what Lodestar does today. Where a feature is planned but not
 
 ## The basics
 
-- Words are joined with AND: `dark knight` needs both.
-- Case, accents and punctuation don't matter. `Dark.Knight`, `dark_knight` and `DARK KNIGHT` all match the same torrents.
+- Words are joined with AND: `big buck bunny` needs both.
+- Case, accents and punctuation don't matter. `Big.Buck.Bunny`, `big_buck_bunny` and `BIG BUCK BUNNY` all match the same torrents.
 - A field narrows the search to one kind of fact: `res:2160p`, `size:>4GB`. A field name is lowercase and ends in `:`, with no space before the value.
 - An empty search lists everything (browse), in the sort order you pick.
 
 ```
-dark knight res:2160p hdr:dv size:>20GB
-"dark knight" -cam year:2008 type:movie
+big buck bunny res:2160p hdr:dv size:>20GB
+"big buck bunny" -cam year:2008 type:movie
 ```
 
 ## Operators
 
 | You type | Means |
 |---|---|
-| `dark knight` | both words (AND is implied) |
-| `dark AND knight` | the same, written out |
-| `batman \| joker`, `batman OR joker` | either |
+| `big buck bunny` | both words (AND is implied) |
+| `big AND bunny` | the same, written out |
+| `bunny \| squirrel`, `bunny OR squirrel` | either |
 | `-cam`, `!cam` | leave out torrents that match `cam` |
-| `(batman \| joker) AND 2019` | grouping |
-| `"dark knight"` | the exact phrase, words side by side |
-| `dark NEAR/5 knight` | the words within 5 words of each other, in either order |
+| `(bunny \| squirrel) AND 2019` | grouping |
+| `"big buck bunny"` | the exact phrase, words side by side |
+| `big NEAR/5 bunny` | the words within 5 words of each other, in either order |
 | `comput*` | any word starting with `comput` (at least 2 letters before the `*`) |
-| `~knigth` | a word close to this one: 1 typo for words under 6 letters, up to 2 from 6 on (at least 3 letters) |
+| `~bnuny` | a word close to this one: 1 typo for words under 6 letters, up to 2 from 6 on (at least 3 letters) |
 
 Details that trip people up:
 
 - **OR binds loosest.** `a b | c` means `(a b) | c`. Use brackets when in doubt: `a (b | c)`.
 - **`-` and `!` negate only when a term follows.** `WEB-DL` is one word, and a `-` on its own or before `)` is just a character.
-- **There is no `NOT` keyword.** Only `-` and `!` negate; `dark NOT cam` searches for the three words `dark`, `NOT` and `cam`. (`AND`, `OR` and `NEAR` must be capitals to count as operators.)
+- **There is no `NOT` keyword.** Only `-` and `!` negate; `big NOT cam` searches for the three words `big`, `NOT` and `cam`. (`AND`, `OR` and `NEAR` must be capitals to count as operators.)
 - **NEAR** joins words and phrases, all in the same field, with one distance per chain: `a NEAR/3 b NEAR/3 c`. Bare `NEAR` means 5. The distance is 1–50, and a chain holds up to 16 words.
 - **Phrases** are checked against the name. Names keep word positions; folder and file paths inside torrents don't, so `path:"a b"` means "both words in the path", not "side by side". To match a phrase inside a file name, use `file:"…"`.
 - Negation is exact. `-cam` only removes torrents that really contain `cam`, even when the plurals fallback widened the rest of the search.
@@ -57,14 +106,14 @@ Details that trip people up:
 Examples that parse:
 
 ```
-batman | joker
-(batman | joker) AND 2019
-dark -cam
+bunny | squirrel
+(bunny | squirrel) AND 2019
+bunny -cam
 -(cam | ts)
-dark NEAR/5 knight
-dark NEAR knight NEAR/5 rises
+big NEAR/5 bunny
+big NEAR buck NEAR/5 bunny
 comput*
-~knigth
+~bnuny
 ```
 
 ## Fields
@@ -75,9 +124,9 @@ Add a field name and a colon. Several values in one field, separated by commas, 
 
 | Field | Searches | Example |
 |---|---|---|
-| (none) | the name and the paths of the files inside | `dark knight` |
-| `name:` | the torrent's name only | `name:"dark knight"` |
-| `title:` | the resolved title, which is what Lodestar worked out the release is, including alternative titles | `title:joker` |
+| (none) | the name and the paths of the files inside | `big buck bunny` |
+| `name:` | the torrent's name only | `name:"big buck bunny"` |
+| `title:` | the resolved title, which is what Lodestar worked out the release is, including alternative titles | `title:squirrel` |
 | `path:` | folder and file names inside the torrent | `path:extras` |
 
 `name:`, `title:` and `path:` take a word, a `word*` prefix, a `~fuzzy` word, or a quoted phrase.
@@ -185,9 +234,9 @@ Ages stay relative. A saved search with `discovered:<7d` always means "the last 
 
 ```
 file:(ext:flac size:>50MB)
-file:(name:"dark knight" ext:mkv)
+file:(name:"big buck bunny" ext:mkv)
 file:soundtrack
-file:"dark knight"
+file:"big buck bunny"
 file:(ext:mkv | ext:mp4)
 ```
 
@@ -228,7 +277,7 @@ What this means for you:
 
 ## Plurals fallback
 
-If your search finds **fewer than 10** torrents, Lodestar tries again, allowing each word to match by its plural/singular form in the **title**. `knights` finds *The Dark Knight*, and `knight` finds *Knights of the Zodiac*. The stemming is deliberately light: it undoes `-s`, `-es` and `-ies`, plus the possessive, and it leaves `-ing`, `-ed` and short words (`bus`, `gas`) alone, so unrelated titles don't merge.
+If your search finds **fewer than 10** torrents, Lodestar tries again, allowing each word to match by its plural/singular form in the **title**. `bunnies` finds *Big Buck Bunny*, and `bunny` finds a title that only says *Bunnies*. The stemming is deliberately light: it undoes `-s`, `-es` and `-ies`, plus the possessive, and it leaves `-ing`, `-ed` and short words (`bus`, `gas`) alone, so unrelated titles don't merge.
 
 - Matches found only by the fallback always come **after** exact matches.
 - It applies to plain words and `title:` words. It does not apply to quoted phrases, `name:`, `path:`, prefixes or fuzzy words.
@@ -279,15 +328,15 @@ Examples that fail:
 resolvd:files
 size:5..1
 type:cartoon
-dark*knight
-(dark knight
+big*bunny
+(big buck bunny
 ```
 
 ## Hidden torrents and Adult
 
 ### Hidden by filters
 
-Your filter rules (Settings → Filters & Safety) can hide torrents. Hidden torrents are left out of search; this is the same as adding `hidden:no` to every search. To see them, turn on "Hidden by filters" in the UI, or put `hidden:yes` in the query. A query that mentions `hidden:` anywhere is left alone, so `hidden:yes dark` shows only hidden matches. `demoted:` and `flagged:` select torrents a rule pushed down or flagged.
+Your filter rules (Settings → Filters & Safety) can hide torrents. Hidden torrents are left out of search; this is the same as adding `hidden:no` to every search. To see them, turn on "Hidden by filters" in the UI, or put `hidden:yes` in the query. A query that mentions `hidden:` anywhere is left alone, so `hidden:yes big` shows only hidden matches. `demoted:` and `flagged:` select torrents a rule pushed down or flagged.
 
 ### Adult
 

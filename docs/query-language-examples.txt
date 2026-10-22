@@ -2,26 +2,36 @@
 # parses each line with the real parser. A line starting with "!" must fail
 # to parse; a line starting with "#" is a comment.
 
+# Start here
+big buck bunny
+"big buck bunny"
+big buck bunny -cam
+bunny | squirrel
+big buck bunny size:>4GB
+big buck bunny res:1080p
+big buck bunny discovered:<7d
+Big.Buck.Bunny
+
 # Words, phrases, grouping
-dark knight
-"dark knight"
-dark NEAR/5 knight
-dark NEAR knight NEAR/5 rises
-batman | joker
-batman OR joker
-(batman | joker) AND 2019
-dark -cam
-dark !cam
+big buck bunny
+"big buck bunny"
+big NEAR/5 bunny
+big NEAR buck NEAR/5 bunny
+bunny | squirrel
+bunny OR squirrel
+(bunny | squirrel) AND 2019
+bunny -cam
+big !cam
 -(cam | ts)
 comput*
-~knigth
-~batman
+~bnuny
+~bunny
 
 # Text fields
-name:batman
-name:"dark knight"
-title:joker
-title:"the dark knight"
+name:bunny
+name:"big buck bunny"
+title:squirrel
+title:"big buck bunny"
 path:extras
 path:subs*
 
@@ -32,9 +42,9 @@ ext:.FLAC
 !ext:exe
 -ext:exe
 file:(ext:flac size:>50MB)
-file:(name:"dark knight" ext:mkv)
+file:(name:"big buck bunny" ext:mkv)
 file:soundtrack
-file:"dark knight"
+file:"big buck bunny"
 file:(ext:mkv | ext:mp4)
 
 # Sizes and counts
@@ -119,8 +129,8 @@ magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Example
 magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567
 
 # Combined
-dark knight res:2160p hdr:dv size:>20GB
-"dark knight" -cam year:2008 type:movie
+big buck bunny res:2160p hdr:dv size:>20GB
+"big buck bunny" -cam year:2008 type:movie
 (res:2160p | res:1080p) codec:x265 -hdr:dv
 s:2 e:5 group:ntb discovered:<30d
 ext:flac file:(ext:cue) cat:audio>=90%
@@ -144,22 +154,22 @@ ext:flac file:(ext:cue) cat:audio>=90%
 !cat:video>=150%
 !private:maybe
 !hash:abc123
-!dark*knight
+!big*bunny
 !c*
 !~ab
-!dark NEAR/0 knight
-!dark NEAR/51 knight
-!dark NEAR (a | b)
-!dark NEAR/3 knight NEAR/4 rises
-!name:dark NEAR title:knight
-!(dark knight
-!dark knight)
+!big NEAR/0 bunny
+!big NEAR/51 bunny
+!big NEAR (a | b)
+!big NEAR/3 bunny NEAR/4 buck
+!name:big NEAR title:bunny
+!(big buck bunny
+!big buck bunny)
 !()
-!"dark knight
+!"big buck bunny
 !file:(seeders:5)
-!file:(title:joker)
+!file:(title:squirrel)
 !file:(files:>3)
-!OR dark
+!OR big
 !discovered:soon
 !discovered:<0d
 !discovered:2026-13-01
