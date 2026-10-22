@@ -1,0 +1,147 @@
+/*
+ * Static design tokens (docs/design-tokens.md §5-§9). Same in every theme; colours come from
+ * critical.css (compiler). Spacing is not defined here: Tailwind's default --spacing (0.25rem)
+ * stays, and the allowed steps are enforced by the lint ban (scripts/bans.mjs).
+ * `@theme static` keeps every variable in the output even where no utility uses it, because
+ * daisyUI's component CSS and the charts read them with var().
+ */
+
+/* Fonts (§8). Latin loads on first paint (preloaded in app.html); Latin-Extended and Mono load
+   on demand. Subsets are built by scripts/fonts.mjs into static/fonts/. */
+@font-face {
+	font-family: 'Atkinson Hyperlegible Next';
+	font-style: normal;
+	font-weight: 400 600;
+	font-display: swap;
+	src: url('/fonts/atkinson-hyperlegible-next-latin.woff2') format('woff2');
+	unicode-range:
+		U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+		U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+	font-family: 'Atkinson Hyperlegible Next';
+	font-style: normal;
+	font-weight: 400 600;
+	font-display: swap;
+	src: url('/fonts/atkinson-hyperlegible-next-latin-ext.woff2') format('woff2');
+	unicode-range:
+		U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+		U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F,
+		U+A720-A7FF;
+}
+
+@font-face {
+	font-family: 'Atkinson Hyperlegible Mono';
+	font-style: normal;
+	font-weight: 400 600;
+	font-display: swap;
+	src: url('/fonts/atkinson-hyperlegible-mono-latin.woff2') format('woff2');
+	unicode-range:
+		U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+		U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@theme static {
+	/* §8 families */
+	--font-sans:
+		'Atkinson Hyperlegible Next', system-ui, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK',
+		sans-serif;
+	--font-mono: 'Atkinson Hyperlegible Mono', ui-monospace, monospace;
+
+	/* §8 scale: Tailwind's default steps are reset, so only text-caption … text-display exist */
+	--text-*: initial;
+	--text-caption: 12px;
+	--text-caption--line-height: 16px;
+	--text-small: 13px;
+	--text-small--line-height: 18px;
+	--text-body: 14px;
+	--text-body--line-height: 20px;
+	--text-body-lg: 16px;
+	--text-body-lg--line-height: 24px;
+	--text-title: 20px;
+	--text-title--line-height: 26px;
+	--text-display: 28px;
+	--text-display--line-height: 32px;
+	--text-display--letter-spacing: -0.02em;
+
+	/* §8 weights */
+	--font-weight-*: initial;
+	--font-weight-normal: 400;
+	--font-weight-medium: 500;
+	--font-weight-semibold: 600;
+
+	/* §6 radii: the daisyUI trio plus the single dialog/drawer override */
+	--radius-*: initial;
+	--radius-sheet: 16px;
+	--radius-box: 12px;
+	--radius-field: 8px;
+	--radius-selector: 4px;
+
+	/* §6 borders and surface effects (daisyUI) */
+	--border: 1px;
+	--depth: 0;
+	--noise: 0;
+
+	/* §6 control and target sizes. daisyUI md controls = 10 x --size-field = 40px; sm = 32px. */
+	--size-field: 0.25rem;
+	--size-selector: 0.25rem;
+	--control-height: 40px;
+	--control-height-dense: 32px;
+	--query-bar-height: 48px;
+	--target-min: 44px;
+	--icon-size-row: 16px;
+	--icon-size-nav: 20px;
+	--focus-ring-width: 2px;
+	--focus-ring-offset: 2px;
+
+	/* §7 density and layout */
+	--row-height-compact: 36px;
+	--row-height-comfortable: 64px;
+	--rail-width: 264px;
+	--results-min-width: 560px;
+	--drawer-min-width: 480px;
+	--drawer-max-width: 640px;
+	--drawer-overlay-width: 560px;
+	--drawer-overlay-width-narrow: 480px;
+	--manuscript-width: 720px;
+	--prose-measure: 70ch;
+	--compbar-min-width: 64px;
+	--compbar-max-width: 120px;
+	--compbar-gap: 2px;
+	--art-height-large: 240px;
+	--art-height-small: 160px;
+
+	/* §7 breakpoints (§10.15 ranges); small is the base and has no variant */
+	--breakpoint-*: initial;
+	--breakpoint-medium: 480px;
+	--breakpoint-large: 640px;
+	--breakpoint-x-large: 1024px;
+	--breakpoint-xx-large: 1366px;
+	--breakpoint-xxx-large: 1920px;
+
+	/* §9 motion */
+	--duration-fast: 150ms;
+	--duration-popover-out: 100ms;
+	--duration-drawer-in: 300ms;
+	--duration-drawer-out: 200ms;
+	--duration-banner: 200ms;
+	--duration-stagger: 80ms;
+	--duration-reduced-fade: 100ms;
+	--ease-*: initial;
+	--ease-out: cubic-bezier(0, 0, 0.2, 1);
+	--ease-in: cubic-bezier(0.4, 0, 1, 1);
+	--scale-press: 0.98;
+}
+
+/* §9: under reduced motion every duration is 0 except the opacity crossfade. */
+@media (prefers-reduced-motion: reduce) {
+	:root {
+		--duration-fast: 0ms;
+		--duration-popover-out: 0ms;
+		--duration-drawer-in: 0ms;
+		--duration-drawer-out: 0ms;
+		--duration-banner: 0ms;
+		--duration-stagger: 0ms;
+	}
+}
