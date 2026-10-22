@@ -1519,6 +1519,26 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Size:** `title_stem` costs about 3 B per torrent (words only, no norms). The torrent index is 408 B per torrent at 100k (budget 512). Schema v4.
 - **Name patterns** moved into the §20 rule engine with #27 (an M4 add-on), so M3 doesn't build them.
 
+**X-utp implementation decisions (uTP, `lodestar-utp`, behind a flag):**
+- **Our own crate, not a dependency.** The maintained candidates were measured against the §15 criteria (MIT/Apache, tokio-native, LEDBAT, bounded memory, no `unsafe` on our side, fuzzable parsing, active):
+  - `librqbit-utp` 0.7 (Apache-2.0, tokio, active) has no LEDBAT: Cubic only, with LEDBAT a TODO. It also pulls in `libc`, `socket2`, `parking_lot` and `lazy_static`.
+  - `utp-rs` 0.1.0-alpha.17 (MIT, tokio, LEDBAT) is an alpha with no release since March 2025, and uses unbounded channels per connection, so a peer can grow our memory.
+  - `utp` and `tokio-utp` haven't had a release since 2017; `libutp` bindings need `unsafe` FFI.
+  - `crates/utp` has no new dependencies (tokio, rand).
+- **Design:** a sans-IO connection state machine (packet codec, selective ACK, fast retransmit on three duplicate or selectively acknowledged packets, RFC 6298 timeouts with exponential backoff, LEDBAT with a 100 ms target and slow start, sequence-number wraparound), driven by a thin tokio layer: one mutex per connection, a timer task per connection, non-blocking sends.
+  - The state machine is tested over a simulated network with a virtual clock: loss, duplication, reordering and starting sequence numbers near 65535. A fuzz target (`utp`) drives the parser and the state machine with hostile packets.
+  - **Hostile-input limits:** buffered bytes per connection stay under 2 × the receive window plus the send buffer (64 KiB each by default), with at most 256 packets in flight and 256 held out of order. ACKs for packets we never sent are ignored. Packets for unknown connections are dropped silently, never answered, so the port can't be used as a reflector. Incoming connections are accepted only by a listener (the crawler has none).
+  - The accepting side sends nothing but its SYN-ACK until the initiator answers, as in libutp. Otherwise data reordered ahead of the SYN-ACK would desynchronise the initiator's sequence numbers.
+  - After both FINs, a connection lingers in TIME-WAIT (4 × RTO, at least 4 s, restarted by each packet) to re-acknowledge retransmissions. A dropped stream closes with a FIN in the background, capped at 5 s.
+  - Packets carry at most 1,200 payload bytes, which fits the IPv6 minimum MTU through tunnels and VPNs without path-MTU discovery.
+  - Measured: **77 MiB/s** on loopback (one connection, release build) and about **2.4 KB per idle connection endpoint**; at most 192 KiB per connection under load.
+- **Shared port (§5):** `lodestar_utp::classify` splits datagrams on the DHT's port by their first byte. uTP has version nibble 1 and type 0–4; KRPC starts with `d` (0x64), which would read as type 6, version 4, so the two never collide. `UtpSocket::with_sink` sends through the DHT's sockets (`DualSink` picks the IPv4 or IPv6 one) and receives via `feed`.
+- **In `peer-wire`:** the BEP 3/10/9 exchange and MSE run over any `AsyncRead + AsyncWrite` stream (`fetch_on_stream`). `FetchOptions` gains `transport` (TCP by default), `fallback_to_tcp` (on by default), `utp_fallback_after` (2 s) and `utp`.
+  - With uTP first, a peer that doesn't open a uTP connection within 2 s is fetched over TCP inside the same deadline. A peer that answered over uTP isn't retried over TCP.
+  - The deadline, the metadata size cap and every other limit are identical across transports. The TCP path is unchanged.
+- **Metrics:** `lodestar_fetch_{attempts,success,connect_timeouts}_total{transport}`, `lodestar_utp_retransmits_total` and `lodestar_utp_connection_timeouts_total`. The labelled success counter sums to today's unlabelled one and replaces it.
+- **Windows (§11):** all uTP connections share one UDP port, so they avoid TCP's ephemeral-port and TIME_WAIT exhaustion. The receive loop ignores per-datagram errors such as the `ConnectionReset` Windows reports for an ICMP "port unreachable".
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.

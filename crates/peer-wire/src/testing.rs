@@ -2,13 +2,17 @@
 //! with configurable encryption and misbehaviour. Used by this crate's
 //! tests and the pipeline's end-to-end tests (feature `testing`).
 
+use std::io;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
+use lodestar_utp::UtpSocket;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use sha1::{Digest, Sha1};
-use tokio::io::BufReader;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, BufReader, ReadBuf};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
@@ -46,6 +50,7 @@ pub enum Behavior {
 pub struct FakePeer {
     addr: SocketAddr,
     task: JoinHandle<()>,
+    utp: Option<UtpSocket>,
 }
 
 /// One torrent the peer seeds.
@@ -83,11 +88,115 @@ impl FakePeer {
                 });
             }
         });
-        FakePeer { addr, task }
+        FakePeer {
+            addr,
+            task,
+            utp: None,
+        }
+    }
+
+    /// The same peer, reached over uTP on a loopback UDP port.
+    pub async fn spawn_utp(
+        seeds: Vec<Seed>,
+        accept: Accept,
+        behavior: Behavior,
+        pex: Vec<SocketAddr>,
+    ) -> FakePeer {
+        let socket = UtpSocket::bind("127.0.0.1:0".parse().expect("addr"))
+            .await
+            .expect("bind");
+        let addr = socket.local_addr().expect("bound");
+        let mut listener = socket.listen(64);
+        let seeds = Arc::new(seeds);
+        let pex = Arc::new(pex);
+        let task = tokio::spawn(async move {
+            while let Ok(mut stream) = listener.accept().await {
+                let seeds = seeds.clone();
+                let pex = pex.clone();
+                tokio::spawn(async move {
+                    // No peek on a uTP stream: read the first 20 bytes and
+                    // put them back in front.
+                    let mut head = [0u8; 20];
+                    if stream.read_exact(&mut head).await.is_err() {
+                        return;
+                    }
+                    let plain_hello = is_plain_hello(&head);
+                    let stream = Prefixed {
+                        head: head.to_vec(),
+                        inner: stream,
+                    };
+                    let _ = serve_stream(
+                        BufReader::new(stream),
+                        plain_hello,
+                        &seeds,
+                        accept,
+                        behavior,
+                        &pex,
+                    )
+                    .await;
+                });
+            }
+        });
+        FakePeer {
+            addr,
+            task,
+            utp: Some(socket),
+        }
     }
 
     pub fn addr(&self) -> SocketAddr {
         self.addr
+    }
+
+    /// The peer's uTP socket (peers from [`spawn_utp`](Self::spawn_utp)).
+    pub fn utp(&self) -> Option<&UtpSocket> {
+        self.utp.as_ref()
+    }
+}
+
+/// Plain BitTorrent starts with "\x13BitTorrent protocol"; an MSE public
+/// key is random, so a single byte would misfire 1 in 256 times.
+fn is_plain_hello(head: &[u8; 20]) -> bool {
+    head[0] == 19 && &head[1..] == message::PROTOCOL
+}
+
+/// A stream with bytes already read from it put back in front.
+struct Prefixed<S> {
+    head: Vec<u8>,
+    inner: S,
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for Prefixed<S> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        if !self.head.is_empty() {
+            let n = self.head.len().min(buf.remaining());
+            buf.put_slice(&self.head[..n]);
+            self.head.drain(..n);
+            return Poll::Ready(Ok(()));
+        }
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for Prefixed<S> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        data: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(cx, data)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 }
 
@@ -104,8 +213,6 @@ async fn serve(
     behavior: Behavior,
     pex: &[SocketAddr],
 ) -> Result<(), crate::Error> {
-    // Plain BitTorrent starts with "\x13BitTorrent protocol"; an MSE
-    // public key is random, so a single byte would misfire 1 in 256 times.
     let plain_hello = {
         let mut head = [0u8; 20];
         loop {
@@ -116,9 +223,27 @@ async fn serve(
                 _ => tokio::time::sleep(std::time::Duration::from_millis(5)).await,
             }
         }
-        head[0] == 19 && &head[1..] == message::PROTOCOL
+        is_plain_hello(&head)
     };
-    let mut stream = BufReader::new(stream);
+    serve_stream(
+        BufReader::new(stream),
+        plain_hello,
+        seeds,
+        accept,
+        behavior,
+        pex,
+    )
+    .await
+}
+
+async fn serve_stream<S: AsyncRead + AsyncWrite + Unpin>(
+    mut stream: S,
+    plain_hello: bool,
+    seeds: &[Seed],
+    accept: Accept,
+    behavior: Behavior,
+    pex: &[SocketAddr],
+) -> Result<(), crate::Error> {
     let (ciphers, initial) = match (plain_hello, accept) {
         (true, Accept::EncryptedOnly) | (false, Accept::PlaintextOnly) => return Ok(()),
         (true, _) => (
