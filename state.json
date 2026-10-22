@@ -635,7 +635,7 @@
    "pr": 51,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "round 2 approve; blocked on Windows dual_stack_socket_reaches_ipv4_peers failure (V6ONLY) + \u00a716 conflict; sent 09:13"
+   "notes": "round 2 fixes pushed c6fd27f (socket2 set_only_v6(false), merged main); merge when windows CI green"
   },
   "X-integrations": {
    "status": "merged",
