@@ -1007,7 +1007,7 @@
  },
  "heartbeats": 4,
  "reviews_in_flight": {
-  "81": "runner secure-delete R2 (f5d1085)"
+  "81": "runner secure-delete R3 (d2263b9)"
  },
  "carry_forward": {
   "next-bans-touch": [
@@ -1066,8 +1066,7 @@
     "done 19:17: B13, B6, Q-docs, B14, R-docs told; B4b brief pending"
    ]
   },
-  "pr81_fix": "#81 review FIX: (1) test must distinguish ON from FAST: >16KB value (overflow pages) deleted, assert gone from DB file; (2) WAL keeps insert-time frames until TRUNCATE (prod TRUNCATE only at shutdown): call store.checkpoint() (TRUNCATE) after purge_filter / release / delete_torrents / #70's release_rules when they deleted rows; drive test through those APIs. Do it after #70 merges (filter.rs conflict).",
-  "tantivy_deleted_names": "Deleted torrents' names stay in Tantivy segment files until merge. Follow-up after B6: on delete_torrents, force-merge segments holding deleted docs (rare path). In the spirit of owner decision 'deleted data is overwritten' (\u00a72.17).",
+  "tantivy_deleted_names": "Deleted torrents' names stay in Tantivy segment files until merge. Follow-up after B6: on delete_torrents, force-merge segments holding deleted docs (rare path). In the spirit of owner decision 'deleted data is overwritten' (\u00a72.17). (noted in #81 body as follow-up)",
   "w7ab_css_growth": "Record in \u00a716: daisyUI component CSS for the primitives adds ~5.6 KB gz to first-load CSS (11.89 -> 17.48 KB); accepted by runner (one global Tailwind sheet; screens need it). CSS headroom ~2.2 KB: watch W7cd/W7e/screens.",
   "runtime_chunk_growth": "W7cd measured: showcase pages using transitions/bind:offsetHeight/snippets grow the shared Svelte runtime chunk 16.8->21.7 kB gz that search loads. Screens using these primitives will do the same: budget JS 45 kB has ~12 kB headroom; watch in W9/search screens, keep transitions lazy where possible.",
   "b6_from_b17_review": "B17 reviewer: B6 must AND visibility onto every own-clause variant (filters param), test Adult hidden + type:movie selection -> no adult in type facet, and check the lease fingerprint/visibility when a cursor lease is passed (no pre-toggle lease). Also Not-adult with leftover adult_kind tag matches adult:<kind> - B6 adult facet aware.",
