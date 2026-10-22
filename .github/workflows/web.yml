@@ -1,6 +1,11 @@
 name: Web
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - '.github/workflows/web.yml'
   pull_request:
     paths:
       - 'web/**'

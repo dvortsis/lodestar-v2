@@ -3,9 +3,31 @@ import svelte from 'eslint-plugin-svelte';
 import globals from 'globals';
 import ts from 'typescript-eslint';
 import svelteConfig from './svelte.config.js';
-import { ARBITRARY_VALUE, HEX_COLOUR } from './scripts/bans.mjs';
+import { ARBITRARY_VALUE, FRAGMENT_ATTRIBUTES, HEX_COLOUR } from './scripts/bans.mjs';
 
-const banned = (re) => `Literal[value=${String(re)}]`;
+// §10.18: no hex colours and no Tailwind arbitrary values outside the theme module.
+// Shares its patterns with scripts/check-bans.mjs.
+const noBannedLiterals = {
+	meta: { type: 'problem', schema: [] },
+	create(context) {
+		function check(node, text, attribute) {
+			if (!(attribute && FRAGMENT_ATTRIBUTES.test(attribute)) && HEX_COLOUR.test(text)) {
+				context.report({ node, message: 'Hex colour literal: use a theme token.' });
+			}
+			if (ARBITRARY_VALUE.test(text)) {
+				context.report({
+					node,
+					message: 'Tailwind arbitrary value: use a token or scale value.'
+				});
+			}
+		}
+		return {
+			Literal: (node) => typeof node.value === 'string' && check(node, node.value),
+			TemplateElement: (node) => check(node, node.value.raw),
+			SvelteLiteral: (node) => check(node, node.value, node.parent?.key?.name)
+		};
+	}
+};
 
 export default ts.config(
 	{
@@ -20,8 +42,10 @@ export default ts.config(
 	js.configs.recommended,
 	...ts.configs.recommended,
 	...svelte.configs.recommended,
+	{ languageOptions: { globals: globals.browser } },
 	{
-		languageOptions: { globals: { ...globals.browser, ...globals.node } }
+		files: ['*.config.{js,ts}', 'scripts/**', 'vitest-setup.ts', 'e2e/**'],
+		languageOptions: { globals: globals.node }
 	},
 	{
 		files: ['**/*.svelte', '**/*.svelte.ts', '**/*.svelte.js'],
@@ -35,34 +59,9 @@ export default ts.config(
 		}
 	},
 	{
-		// §10.18: no hex colours, no Tailwind arbitrary values outside the theme module.
 		files: ['src/**/*.ts', 'src/**/*.svelte'],
-		ignores: ['src/lib/theme/**'],
-		rules: {
-			'no-restricted-syntax': [
-				'error',
-				{ selector: banned(HEX_COLOUR), message: 'Hex colour literal: use a theme token.' },
-				{
-					selector: banned(ARBITRARY_VALUE),
-					message: 'Tailwind arbitrary value: use a token or scale value.'
-				},
-				{
-					selector: `TemplateElement[value.raw=${String(HEX_COLOUR)}]`,
-					message: 'Hex colour literal: use a theme token.'
-				},
-				{
-					selector: `TemplateElement[value.raw=${String(ARBITRARY_VALUE)}]`,
-					message: 'Tailwind arbitrary value: use a token or scale value.'
-				},
-				{
-					selector: `SvelteLiteral[value=${String(HEX_COLOUR)}]`,
-					message: 'Hex colour literal: use a theme token.'
-				},
-				{
-					selector: `SvelteLiteral[value=${String(ARBITRARY_VALUE)}]`,
-					message: 'Tailwind arbitrary value: use a token or scale value.'
-				}
-			]
-		}
+		ignores: ['src/lib/theme/**', 'src/**/*.test.ts'],
+		plugins: { lodestar: { rules: { 'no-banned-literals': noBannedLiterals } } },
+		rules: { 'lodestar/no-banned-literals': 'error' }
 	}
 );
