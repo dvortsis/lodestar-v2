@@ -580,3 +580,36 @@ fn near_hostile() {
         println!("{q} on {tokens} tokens: {:.1} µs per text", secs * 1e6);
     }
 }
+
+/// The switch from plain scans to the windowed search, after 8: the
+/// first word's place that matches comes after 7 to 10 that don't, with
+/// the other words after it or before it, and in a chain of three.
+#[test]
+fn the_scan_threshold_changes_nothing() {
+    let far = " zz zz zz ";
+    for (first, second, third) in [("a", "b", "c"), ("1080p", "x264", "web-dl")] {
+        for misses in 7..=10 {
+            let lead = format!("{first}{far}").repeat(misses);
+            for (tail, words) in [
+                (format!("{first} {second}"), vec![first, second]),
+                (format!("{second} {first}"), vec![first, second]),
+                (
+                    format!("{first} {second} {third}"),
+                    vec![first, second, third],
+                ),
+                (
+                    format!("{third} {second} {first}"),
+                    vec![first, second, third],
+                ),
+                (format!("{first}{far}{second}"), vec![first, second]),
+                (format!("{second}{far}{first}"), vec![first, second]),
+            ] {
+                let name = format!("{lead}{tail}");
+                let q = words.join(" NEAR/1 ");
+                let expect = reference(&name, &words, 1);
+                assert_eq!(matches(&name, &q), expect, "{q} on {name:?}");
+                assert_eq!(expect, !tail.contains("zz"), "{q} on {name:?}");
+            }
+        }
+    }
+}
