@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-22T06:22:00Z",
+ "updated_at": "2026-10-22T06:36:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 14
@@ -13,7 +13,7 @@
    "session": "session_01A5BEzkYtiRur7VEKtby9FH",
    "pr": 38,
    "attempt": 1,
-   "review_rounds": 3,
+   "review_rounds": 4,
    "notes": "round 1: changes requested (status.html error envelope regression - ownership granted; \u00a716 placement; 405 envelope; offset overflow; extractor messages)"
   },
   "B5b": {
@@ -22,8 +22,8 @@
    "session": "session_01BEmSnYW9wHszPF16AVqmtL",
    "pr": 46,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": ""
+   "review_rounds": 1,
+   "notes": "round 1: absent-field approach for added fields; swap ordering; no delete on transient errors; Windows test; no sleeps"
   },
   "C0": {
    "status": "merged",
@@ -701,22 +701,22 @@
    "notes": "owner filtering decisions on main: packs off, budget gate, floor add-only, subscription strictness"
   },
   "F2": {
-   "status": "pending",
+   "status": "done_elsewhere",
    "model": "opus",
    "session": null,
-   "pr": null,
+   "pr": 52,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": "move /filters/preview onto B10b /jobs (\u00a720.10); deps B10b"
+   "notes": "built by the filter session in #52 (open, to review after B0)"
   },
   "F3": {
-   "status": "pending",
+   "status": "done_elsewhere",
    "model": "opus",
    "session": null,
-   "pr": null,
+   "pr": 52,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": "Is adult/Not adult corrections feed adult detection as rules+fixtures (\u00a720.9)"
+   "notes": "built by the filter session in #52"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -740,7 +740,7 @@
   }
  },
  "watch_policy": "Owner asked the runner to keep an eye on and manage these sessions: each heartbeat check status; report a pending permission prompt to the owner (runner cannot approve); nudge an idle session with remaining work; flag conflicts with slice ownership and migration order.",
- "migration_order": "V4 filter, V5 swarm (#32 merged), V6 subscriptions (#33 merged), V7 filter rules (#42), V8 class_corrections (#47), V9 reserved for M4 PR2, then M5 (B8). The runner assigns numbers (both M4 sessions told 06:06).",
+ "migration_order": "V4 filter, V5 swarm, V6 subscriptions, V7 filter rules, V8 class_corrections (all merged), V9 class_rules (#52 open), V10 reserved M4 PR2, V11 next free (F1 if needed, then M5 B8). Runner assigns.",
  "decisions": [
   "2026-10-22 spacing: keep Tailwind v4 default --spacing (p-4=16px); only utility steps matching the \u00a710.2 ramp are allowed; W2 extends the ban check to off-ramp steps",
   "2026-10-22 owner: the design decided in the 'Modern DHT crawler architecture' session (recorded in docs/architecture.md) is the primary design strategy; ui-design-skills only fills gaps. Encoded in runner/standards.md (PR #39).",
