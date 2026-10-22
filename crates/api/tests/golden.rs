@@ -225,6 +225,7 @@ fn fixture() -> Fixture {
             reader: Arc::new(Mutex::new(reader)),
             filters: Some(api.clone()),
             settings: None,
+            adult: Default::default(),
         }),
     );
     let hashes = infos
@@ -1159,6 +1160,7 @@ async fn filters_without_an_index_or_filters() {
                 )),
                 filters,
                 settings: None,
+                adult: Default::default(),
             }),
         )
     };

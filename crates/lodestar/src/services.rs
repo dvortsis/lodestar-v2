@@ -190,6 +190,7 @@ impl Services {
             reader: reader.clone(),
             filters: Some(filters),
             settings: Some(settings.clone()),
+            adult: settings::content::follow(settings.subscribe()),
         };
         settings::log::follow(settings.subscribe());
         let http = http::AppState {
