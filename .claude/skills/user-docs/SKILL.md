@@ -1,30 +1,58 @@
 ---
 name: user-docs
-description: Rules for writing Lodestar's user-facing documentation for moderately tech-savvy self-hosters. Explain more, with screenshots and diagrams. Use it whenever you write or edit the README, anything under docs/user/, docs/operations.md, release notes, in-app "Learn more" or help pages, or any help text longer than a sentence. Not for developer or contract docs (architecture.md, build-plan.md, design-tokens.md, metrics.md, runner/).
+description: Rules for writing Lodestar's user-facing documentation for people who can install an app from the Unraid app store but may not know how to set it up, how Docker or Windows security work, or good security practice. Guide them plainly and briefly, with safe recommendations, screenshots and diagrams. Use it whenever you write or edit the README, anything under docs/user/, docs/operations.md, release notes, in-app "Learn more" or help pages, or any help text longer than a sentence. Not for developer or contract docs (architecture.md, build-plan.md, design-tokens.md, metrics.md, runner/).
 ---
 
 # Writing Lodestar's user documentation
 
-The owner decided this on 2026-10-22 (`docs/owner-decisions.md` §2.14): **write for moderately tech-savvy users, not for people who already know what they're doing.** Explain more, and show it with screenshots and diagrams wherever you can.
+The owner decided this on 2026-10-22 (`docs/owner-decisions.md` §2.14): **write for someone who can install an app from the Unraid app store but may not know how to set it up, and guide them to a safe setup plainly and briefly.** Show it with screenshots and diagrams wherever you can.
 
 ## 1. Who you're writing for
-The reader:
-- **can:**
-  - install an app from Unraid's Community Applications, or run a `docker compose` file someone gave them;
-  - use the Windows installer;
-  - copy a command into a terminal;
-  - find their router's admin page.
-- **doesn't know:**
-  - what the DHT is, or what an info hash is;
-  - what port forwarding does, or why UDP matters;
-  - what an environment variable, a volume mount or a reverse proxy is;
-  - how to read a log, or what `0.0.0.0` means.
-- **wants** to get it working, understand what they just did well enough to fix it later, and not break anything.
+**Someone who can install an app from the Unraid app store (Community Applications), but may not know how to set it up.**
 
-Test each page by asking whether this reader could follow it **without opening another website**. If a step needs outside knowledge, explain it on the page or link to a page of ours that does.
+- **They can:**
+  - find and install an app from Unraid's Community Applications, or run the Windows installer;
+  - open a web page by its address;
+  - copy and paste a command when told exactly where.
+- **They may not know:**
+  - **What the setup fields mean,** such as the paths, the ports, the appdata folder, or why a field matters.
+  - **How Docker actually works:**
+    - that a container is thrown away and rebuilt, and only mapped folders survive;
+    - what a port mapping or a network mode does;
+    - why `/mnt/user` and `/mnt/cache` behave differently.
+  - **Windows' security features and limits:**
+    - firewall prompts, SmartScreen and Defender warnings;
+    - services and the accounts they run as;
+    - why real-time scanning slows a database down.
+  - **The networking:** what the DHT is, what port forwarding does, why UDP matters, what `0.0.0.0` means.
+  - **Good security and safety practice:**
+    - strong passwords;
+    - not exposing the web UI to the internet;
+    - what a VPN does and doesn't hide;
+    - keeping API keys private;
+    - backups and updates.
+- **They want** to get it working **safely**, understand enough to make the right choice at each step, and not break anything.
+
+**Guide them, plainly.** Write as a calm, matter-of-fact guide:
+- say what to do, why in a sentence, and what's safe;
+- don't lecture, don't reassure ("Don't worry!") and don't pad.
+
+Test each page by asking whether this reader could follow it **without opening another website** and end up with a **safe** setup. If a step needs outside knowledge, explain it briefly on the page, or link to one of our pages that does.
 
 ## 2. Writing rules
-- **Explain why, not only what.** One sentence before a step says what it achieves ("Lodestar needs to receive messages from other computers, so the DHT port must be open"). Give the background first, then the instruction.
+- **Explain enough to choose well, and no more.** Give the reason in one sentence ("Lodestar needs to receive messages from other computers, so the DHT port must be open"). Longer background goes in a collapsed block or on an explanation page:
+  ```
+  <details><summary>Why does this matter?</summary>
+
+  …
+
+  </details>
+  ```
+- **Be brief:**
+  - Cut words that don't help the reader act or decide.
+  - One idea per sentence; aim for under 20 words.
+  - Steps start with the verb ("Open…", "Set…", "Click…").
+  - If a paragraph runs past four lines, ask whether it's a list, a step, or background that belongs in a collapsed block.
 - **Define every technical term the first time it appears**, in plain words, and link the glossary (`docs/user/glossary.md`, which builds on `docs/ui-glossary.md`). Example: "the **DHT** (the shared address book that BitTorrent computers use to find each other)".
 - **Use the app's exact words.** Buttons, screens and fields are in **bold**, exactly as the UI writes them (`docs/ui-glossary.md`, §10.14). Give paths through the UI as **Settings → Network & VPN → DHT port**.
 - **One action per numbered step.** After any step that changes something, say what you should see ("The status pill turns to **Crawling**").
@@ -39,16 +67,41 @@ Test each page by asking whether this reader could follow it **without opening a
   > Changing this port disconnects Lodestar from the DHT until it's open in your router too. To undo, set it back to 6881.
   ```
   GitHub renders `> [!NOTE]`, `> [!TIP]`, `> [!IMPORTANT]`, `> [!WARNING]` and `> [!CAUTION]`. Use NOTE and TIP sparingly, and WARNING or CAUTION only for real risk.
-- **Plain English:**
-  - short sentences (aim for under 25 words);
+- **Plain, matter-of-fact English:**
   - active voice, addressing the reader as "you";
   - about a US grade 8 reading level;
-  - no "simply", "just", "obviously", "easy" or "of course".
+  - no "simply", "just", "obviously", "easy" or "of course";
+  - no exclamation marks, and no filler ("In this guide we will…", "It's worth noting that…").
 - **Realistic, safe examples:**
   - private addresses (`192.168.1.20`) and `example.com`;
   - fixture torrent names from the test data (`Big.Buck.Bunny.2008.1080p`);
   - **never** real third-party torrent names, real IPs, tokens, API keys or passwords, even fake-looking ones that could be real.
 - **Be honest about limits:** say what Lodestar can't do or can't know (architecture §1, "Hard truths"), and how long things take ("The first results appear within a few minutes; a useful index takes a few days").
+
+## 2b. Safety and security guidance
+Assume the reader doesn't know good practice, and build it into the steps rather than into a lecture at the end.
+- **Every choice has a recommended answer.** Mark it **(recommended)** and say why in one line. When the safe choice is the default, say so ("Leave this as it is").
+- **Name unsafe choices plainly.** Say what can go wrong and what to do instead, without drama. For example:
+
+  > [!CAUTION]
+  > Don't forward port 8090 on your router. It would put Lodestar's web page on the internet. To reach it from outside your home, use a VPN such as Tailscale or WireGuard instead.
+
+- **Cover these wherever they come up:**
+  - **The web UI stays on your home network.** Never port-forward 8090. For remote access, use a VPN, or a reverse proxy with HTTPS (advanced).
+  - **The admin password:** use a long, unique one from a password manager. Keep the setup token private, because it's only valid until setup is done.
+  - **API keys and feed tokens** work like passwords: one per app, and regenerate any that leaks.
+  - **Only the DHT port is forwarded**, and only when the reader chooses to.
+  - **What a VPN hides and what it doesn't.** Crawling the DHT shows your IP to other peers; a VPN hides it. Lodestar never downloads torrent content.
+  - **Unraid:**
+    - appdata goes on the cache pool (`/mnt/cache/appdata/lodestar`), not `/mnt/user`;
+    - the paths the template should map, and why;
+    - which template fields to leave alone.
+  - **Windows:**
+    - what the SmartScreen and firewall prompts are and which answer to give;
+    - the optional Defender exclusion, what it trades away and when to take it;
+    - why Lodestar runs as a service.
+  - **Backups** (where they are and how to restore), **updates** (§12.2), and **the content filters'** defaults and what changing them means.
+- **Never teach an unsafe shortcut**, even as an aside: no disabling the firewall, no running as administrator "to make it work", no `chmod 777`, no turning off sign-in.
 
 ## 3. Page structure
 Use the type of page that fits the reader's goal. Don't mix them on one page.
@@ -98,9 +151,11 @@ Every get-started and how-to page has these parts, in this order:
 - **In-app help** uses static SVG in the spirit of the `infographic-design` skill (`dvortsis/skills`), with a text equivalent, as the onboarding explainer already does (§10.10.10).
 
 ## 6. Before you finish: checklist
-- [ ] Could the reader above follow it without another website?
+- [ ] Could the reader above follow it without another website, and end up with a safe setup?
+- [ ] Every choice shows the recommended answer, and every unsafe option is named, with the safe alternative.
+- [ ] Brief: no filler, background collapsed or linked, sentences mostly under 20 words.
 - [ ] Every term defined or linked on first use, and every placeholder explained.
-- [ ] The why comes before the steps, and a check follows each change.
+- [ ] A one-line why before each step that needs one, and a check after each change.
 - [ ] Platform sections cover Unraid, Docker, Windows and Linux where the steps differ.
 - [ ] Risky steps are warned about before they happen, with the undo.
 - [ ] A screenshot for each Lodestar screen the steps use, with alt text and no personal data.

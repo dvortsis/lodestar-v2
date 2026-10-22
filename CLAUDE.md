@@ -50,7 +50,10 @@ Read the relevant sections before starting any task. If work changes a decision,
 - **Clones are shallow.** Run `git fetch origin main` before pushing a branch.
 
 ## User documentation
-- **Write for moderately tech-savvy users, not experts** (owner, 2026-10-22; `docs/owner-decisions.md` §2.14). Explain more, define terms, and show screenshots and diagrams wherever you can.
+- **Write for someone who can install an app from the Unraid app store but may not know how to set it up** (owner, 2026-10-22; `docs/owner-decisions.md` §2.14). They may not know Docker's architecture, Windows' security features and limits, or good security practice.
+  - Guide them to a safe setup: plainly, matter-of-fact, not wordy.
+  - Define terms and recommend the safe choice.
+  - Show screenshots and diagrams wherever you can.
 - The project skill **`user-docs`** (`.claude/skills/user-docs/SKILL.md`) holds the rules and the checklist. Use it for the README, `docs/user/`, `docs/operations.md`, release notes and in-app help.
 - Developer and contract docs (`architecture.md`, `build-plan.md`, the contract docs, `runner/`) are exempt.
 
