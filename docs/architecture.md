@@ -1519,6 +1519,12 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Size:** `title_stem` costs about 3 B per torrent (words only, no norms). The torrent index is 408 B per torrent at 100k (budget 512). Schema v4.
 - **Name patterns** moved into the §20 rule engine with #27 (an M4 add-on), so M3 doesn't build them.
 
+**W4 implementation decisions (i18n):**
+- **Messages are merged, not committed.** `web/scripts/messages.ts` merges `features/<feature>/messages/{en,zh}.json` and the shared `i18n/messages/` into `web/messages/{en,zh}.json` (generated, gitignored), which Paraglide compiles into `src/lib/paraglide/` (also gitignored). Feature keys start with `<feature>_`; shared keys with `common_` or `glossary_` (the glossary seed is `glossary_<key>`, categories `glossary_category_<key>`).
+- **Strategy is `globalVariable` + base locale.** No URL or cookie strategy: the locale is a client setting, resolved as settings, then `navigator.languages`, then en (`web/src/lib/i18n/locale.svelte.ts`). The runtime adds about 1.3 KB gzipped to search-route JS; messages are tree-shaken per call site.
+- **Paraglide's JSON plugin is vendored** (`web/vendor/inlang-plugin-message-format/`, MIT, 4.5.5) instead of loaded from jsDelivr, so compiles are offline and reproducible.
+- **Missing zh is a warning, not an error**; a zh key with no en key, a duplicate key or an invalid or mismatched placeholder fails the build. Messages use plain `{name}` placeholders, no ICU plural/select.
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.

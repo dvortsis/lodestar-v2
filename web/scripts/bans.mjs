@@ -13,7 +13,12 @@ export const ARBITRARY_VALUE =
 export const FRAGMENT_ATTRIBUTES = /^(?:href|xlink:href|id|for|name|popovertarget|aria-[a-z]+)$/;
 
 /** Paths exempt from the bans (posix, relative to web/). */
-export const EXEMPT = [/^src\/lib\/theme\//, /^src\/lib\/api\/schema\.d\.ts$/, /\.generated\./];
+export const EXEMPT = [
+	/^src\/lib\/theme\//,
+	/^src\/lib\/paraglide\//,
+	/^src\/lib\/api\/schema\.d\.ts$/,
+	/\.generated\./
+];
 
 export const isExempt = (file) => EXEMPT.some((re) => re.test(file));
 

@@ -4,3 +4,7 @@ build
 test-results
 playwright-report
 .lighthouseci
+
+# generated
+/messages
+/src/lib/paraglide
