@@ -12,7 +12,7 @@ use lodestar_integrations::{
     AddOptions, AuthFailure, Category, ClientError, ClientKind, DownloadClient, Magnet, Secret,
     Selection, TorrentFile,
 };
-use support::{Fixture, ReplayServer, Received, fixture, fixture_bytes};
+use support::{Fixture, Received, ReplayServer, fixture, fixture_bytes};
 
 const PASSWORD: &str = "correct-horse-battery";
 const FIXTURE_HASH: &str = "F16304349815C2941FE00ABABB5FE4E9098E0EE4";
@@ -64,7 +64,11 @@ fn call(req: &Received) -> (String, Vec<String>) {
     let params = body
         .split("<param>")
         .skip(1)
-        .map(|p| p.trim_end_matches("</params></methodCall>").trim_end_matches("</param>").to_owned())
+        .map(|p| {
+            p.trim_end_matches("</params></methodCall>")
+                .trim_end_matches("</param>")
+                .to_owned()
+        })
         .collect();
     (method, params)
 }
@@ -118,8 +122,12 @@ async fn the_web_servers_refusals_are_auth_errors() {
 
 #[tokio::test]
 async fn adds_a_magnet_with_its_path_and_label_as_load_commands() {
-    let server =
-        ReplayServer::start(script(&["hash_missing", "load_start_magnet", "hash_present"])).await;
+    let server = ReplayServer::start(script(&[
+        "hash_missing",
+        "load_start_magnet",
+        "hash_present",
+    ]))
+    .await;
     let opts = AddOptions {
         category: Some("Movies".into()),
         save_path: Some("/data/movies, \"new\"".into()),
@@ -194,19 +202,29 @@ async fn a_load_rtorrent_drops_is_a_rejection() {
             .with_metadata_wait(Duration::ZERO, Duration::from_millis(1))
     };
     // A magnet without trackers while DHT is off: load answers 0, adds nothing.
-    let server =
-        ReplayServer::start(script(&["hash_missing", "load_start_magnet", "hash_missing"])).await;
+    let server = ReplayServer::start(script(&[
+        "hash_missing",
+        "load_start_magnet",
+        "hash_missing",
+    ]))
+    .await;
     assert!(matches!(
         rt(&server).add_magnet(&magnet(), &AddOptions::default()).await,
         Err(ClientError::Rejected(why)) if why.contains("DHT")
     ));
     server.finish();
 
-    let server =
-        ReplayServer::start(script(&["hash_missing", "load_raw_invalid", "hash_missing"])).await;
+    let server = ReplayServer::start(script(&[
+        "hash_missing",
+        "load_raw_invalid",
+        "hash_missing",
+    ]))
+    .await;
     let file = TorrentFile::new(b"garbage".to_vec(), FIXTURE_HASH).unwrap();
     assert!(matches!(
-        rt(&server).add_torrent_file(&file, &AddOptions::default()).await,
+        rt(&server)
+            .add_torrent_file(&file, &AddOptions::default())
+            .await,
         Err(ClientError::Rejected(_))
     ));
     let reqs = server.finish();
@@ -214,7 +232,10 @@ async fn a_load_rtorrent_drops_is_a_rejection() {
         call(&reqs[1]),
         (
             "load.raw_start".into(),
-            vec![string(""), "<value><base64>Z2FyYmFnZQ==</base64></value>".into()]
+            vec![
+                string(""),
+                "<value><base64>Z2FyYmFnZQ==</base64></value>".into()
+            ]
         )
     );
 }
@@ -240,7 +261,10 @@ async fn selected_files_of_a_torrent_file() {
         selected_files: Some(vec![2, 0]),
         ..AddOptions::default()
     };
-    let out = client(&server).add_torrent_file(&file, &opts).await.unwrap();
+    let out = client(&server)
+        .add_torrent_file(&file, &opts)
+        .await
+        .unwrap();
     assert_eq!(out.selection, Selection::Applied);
     let reqs = server.finish();
     // Loaded without starting, so nothing downloads before the selection.
@@ -248,16 +272,28 @@ async fn selected_files_of_a_torrent_file() {
     assert_eq!(method, "load.raw");
     assert!(params[1].starts_with("<value><base64>ZDg6YW5ub3VuY2U"));
     assert_eq!(params[2], string(r#"d.directory.set="/data/music""#));
-    assert_eq!(call(&reqs[4]), ("d.is_meta".into(), vec![string(FIXTURE_HASH)]));
-    assert_eq!(call(&reqs[5]), ("d.size_files".into(), vec![string(FIXTURE_HASH)]));
+    assert_eq!(
+        call(&reqs[4]),
+        ("d.is_meta".into(), vec![string(FIXTURE_HASH)])
+    );
+    assert_eq!(
+        call(&reqs[5]),
+        ("d.size_files".into(), vec![string(FIXTURE_HASH)])
+    );
     let multicall = reqs[6].body_text();
     assert!(multicall.contains("<methodName>system.multicall</methodName>"));
     assert!(multicall.contains(&format!(
         "<value><string>f.priority.set</string></value></member><member><name>params</name><value><array><data><value><string>{FIXTURE_HASH}:f1</string></value><value><i8>0</i8></value></data></array>"
     )));
     assert_eq!(multicall.matches("f.priority.set").count(), 1);
-    assert_eq!(call(&reqs[7]), ("d.update_priorities".into(), vec![string(FIXTURE_HASH)]));
-    assert_eq!(call(&reqs[8]), ("d.start".into(), vec![string(FIXTURE_HASH)]));
+    assert_eq!(
+        call(&reqs[7]),
+        ("d.update_priorities".into(), vec![string(FIXTURE_HASH)])
+    );
+    assert_eq!(
+        call(&reqs[8]),
+        ("d.start".into(), vec![string(FIXTURE_HASH)])
+    );
 }
 
 #[tokio::test]
@@ -540,7 +576,10 @@ async fn no_password_in_logs_debug_or_errors() {
         format!("{bad} {bad:?}"),
     ] {
         assert!(!text.contains(PASSWORD), "password leaked: {text}");
-        assert!(!text.contains("Y29ycmVjdC1ob3Jz"), "basic auth leaked: {text}");
+        assert!(
+            !text.contains("Y29ycmVjdC1ob3Jz"),
+            "basic auth leaked: {text}"
+        );
     }
 }
 
@@ -567,19 +606,35 @@ async fn live() {
         paused: true,
         ..AddOptions::default()
     };
-    println!("add magnet: {:?}", rt.add_magnet(&with_tracker, &opts).await);
+    println!(
+        "add magnet: {:?}",
+        rt.add_magnet(&with_tracker, &opts).await
+    );
     println!("add again: {:?}", rt.add_magnet(&with_tracker, &opts).await);
     let bare = Magnet::parse(&format!("magnet:?xt=urn:btih:{}", "2".repeat(40))).unwrap();
-    println!("magnet without trackers: {:?}", rt.add_magnet(&bare, &AddOptions::default()).await);
+    println!(
+        "magnet without trackers: {:?}",
+        rt.add_magnet(&bare, &AddOptions::default()).await
+    );
     let select = AddOptions {
         selected_files: Some(vec![0, 2]),
         ..AddOptions::default()
     };
-    println!("add file, files 0 and 2: {:?}", rt.add_torrent_file(&torrent(), &select).await);
+    println!(
+        "add file, files 0 and 2: {:?}",
+        rt.add_torrent_file(&torrent(), &select).await
+    );
     let other = Magnet::parse(&format!("magnet:?xt=urn:btih:{}{tracker}", "1".repeat(40))).unwrap();
     println!(
         "magnet with a selection: {:?}",
-        rt.add_magnet(&other, &AddOptions { selected_files: Some(vec![0]), ..AddOptions::default() }).await
+        rt.add_magnet(
+            &other,
+            &AddOptions {
+                selected_files: Some(vec![0]),
+                ..AddOptions::default()
+            }
+        )
+        .await
     );
     println!("categories: {:?}", rt.categories().await);
 }
