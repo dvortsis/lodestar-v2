@@ -13,6 +13,10 @@
 //! against the exact count on every query of at least
 //! [`ESTIMATE_FROM`] matches, gated at [`estimate_tolerance`].
 //!
+//! A third table times `/facets` (B6): a lease, then every facet group
+//! and histogram for it, for a broad word alone and with selections that
+//! need disjunctive passes of their own, gated at [`FACETS_P95`].
+//!
 //! Last, it times new torrent → searchable (§3) through the live indexer
 //! at its production settings, gated at [`NRT_MAX`]. The unit tests only
 //! check that the indexer follows the store: a wall-clock budget there
@@ -27,7 +31,8 @@ use std::time::{Duration, Instant};
 use lodestar_bench::synth::Generator;
 use lodestar_metainfo::Info;
 use lodestar_search::{
-    CancelToken, Lease, LiveConfig, LiveIndexer, SearchIndex, Sort, Start, index_dir, parse,
+    CancelToken, FacetParams, Lease, LiveConfig, LiveIndexer, SearchIndex, Sort, Start, facets,
+    index_dir, parse,
 };
 use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig};
 use rand::seq::IndexedRandom;
@@ -38,6 +43,8 @@ use rand_chacha::ChaCha8Rng;
 const KEYWORD_P95: Duration = Duration::from_millis(30);
 /// §3: filter-only browse over the whole corpus, p95.
 const BROWSE_P95: Duration = Duration::from_millis(50);
+/// §3: facets for the same query (a separate request), p95.
+const FACETS_P95: Duration = Duration::from_millis(100);
 /// The deep-cursor class reads this many pages of 50 before timing one.
 const DEEP_PAGES: usize = 20;
 /// The estimate samples a sixteenth of the documents, so its relative
@@ -59,9 +66,13 @@ const NRT_GIVE_UP: Duration = Duration::from_secs(120);
 
 const USAGE: &str = "\
 Usage: search-bench [--torrents N] [--queries N] [--dir PATH] [--seed S] [--gate]
+                    [--commit-every N]
 
   --torrents N   corpus size (default 1000000)
   --queries N    queries per class (default 300)
+  --commit-every N
+                 index commits every N torrents (default 200000): fewer,
+                 larger segments, as a live index's merges make them
   --dir PATH     keep the store and index here and reuse them next run
   --seed S       generator seed (default 1)
   --gate         exit 1 if a p95 target or the NRT budget is missed
@@ -74,6 +85,7 @@ struct Args {
     dir: Option<PathBuf>,
     seed: u64,
     gate: bool,
+    commit_every: usize,
 }
 
 fn args() -> Result<Args, String> {
@@ -83,6 +95,7 @@ fn args() -> Result<Args, String> {
         dir: None,
         seed: 1,
         gate: false,
+        commit_every: 200_000,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -95,6 +108,11 @@ fn args() -> Result<Args, String> {
             "--dir" => a.dir = Some(PathBuf::from(value("--dir")?)),
             "--seed" => a.seed = value("--seed")?.parse().map_err(|_| "bad --seed")?,
             "--gate" => a.gate = true,
+            "--commit-every" => {
+                a.commit_every = value("--commit-every")?
+                    .parse()
+                    .map_err(|_| "bad --commit-every")?
+            }
             "-h" | "--help" => return Err(USAGE.into()),
             other => return Err(format!("unknown argument {other}\n\n{USAGE}")),
         }
@@ -108,6 +126,7 @@ fn build(
     index: &SearchIndex,
     seed: u64,
     n: usize,
+    commit_every: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let have = (store.count()? as usize).min(n);
     let mut generator = Generator::new(seed);
@@ -172,7 +191,7 @@ fn build(
         if added == 0 {
             break;
         }
-        if indexer.pending() >= 200_000 {
+        if indexer.pending() >= commit_every {
             indexer.commit()?;
             eprintln!(
                 "  indexed up to id {} ({:.0}/s)",
@@ -373,7 +392,7 @@ fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
     let index = SearchIndex::open(&index_dir(&dir.join("index")))?;
     {
         let mut store = Store::open(&db, StoreConfig::default())?;
-        build(&mut store, &index, a.seed, a.torrents)?;
+        build(&mut store, &index, a.seed, a.torrents, a.commit_every)?;
         store.checkpoint()?;
     }
     let reader = Store::open_reader(&db, StoreConfig::default())?;
@@ -445,6 +464,7 @@ fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
         }
     }
     ok &= api_path(a, &index, &reader, now)?;
+    ok &= facets_path(a, &index, now)?;
     ok &= nrt(a, &index, &db)?;
     Ok(ok)
 }
@@ -604,6 +624,82 @@ fn api_path(
         if pass { "PASS" } else { "FAIL" }
     );
     Ok(ok && pass)
+}
+
+/// `/facets` as the API runs it: a lease for the query, then every term
+/// facet and histogram over it. "broad word" is one pass for all groups;
+/// the selections add one disjunctive pass each.
+fn facets_path(
+    a: &Args,
+    index: &SearchIndex,
+    now: i64,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let index = Arc::new(index.clone());
+    let cancel = CancelToken::new();
+    let (words, _) = vocabulary(a.seed ^ 0x5eed, 20_000);
+    let common = &words[..words.len().min(100)];
+    let mut rng = ChaCha8Rng::seed_from_u64(a.seed ^ 0xface7);
+    let selections = [
+        "res:1080p,2160p",
+        "type:movie,tv",
+        "ext:mkv -ext:exe",
+        "lang:en private:no",
+        "res:1080p type:movie",
+    ];
+    let mut broad = Vec::new();
+    let mut selected = Vec::new();
+    for _ in 0..a.queries {
+        let w = common.choose(&mut rng).expect("vocabulary");
+        broad.push(w.clone());
+        let s = selections[rng.random_range(0..selections.len())];
+        selected.push(format!("{w} {s}"));
+    }
+    // The whole corpus: the shared pass at its widest (sampled at scale).
+    let browse = vec![String::new(); a.queries.min(50)];
+    // Browsing with selections: the widest disjunctive passes, each over
+    // most of the corpus (near the sampling threshold at 1M torrents).
+    let browse_selected: Vec<String> = (0..a.queries.min(50))
+        .map(|i| selections[i % selections.len()].to_string())
+        .collect();
+    let ms = |d: Duration| format!("{:.2}", d.as_secs_f64() * 1000.0);
+    println!("\n  /facets: a lease, then every term facet and histogram");
+    println!(
+        "  {:<24} {:>8} {:>8} {:>8} {:>10}  target",
+        "class", "p50", "p95", "max", "mean hits"
+    );
+    let mut ok = true;
+    for (name, queries) in [
+        ("broad word", &broad),
+        ("word + selections", &selected),
+        ("browse everything", &browse),
+        ("browse + selections", &browse_selected),
+    ] {
+        let mut times = Vec::with_capacity(queries.len());
+        let mut hits = 0usize;
+        for q in queries {
+            let started = Instant::now();
+            let ast = parse(q)?.without_hidden();
+            let lease = Lease::new(index.clone(), &ast, now, Sort::Relevance, &cancel)?;
+            let got = facets(&lease, &ast, &[], &FacetParams::default(), &cancel)?;
+            times.push(started.elapsed());
+            hits += got.matches as usize;
+        }
+        times.sort();
+        let p95 = pct(&times, 0.95);
+        let pass = p95 <= FACETS_P95;
+        ok &= pass;
+        println!(
+            "  {:<24} {:>8} {:>8} {:>8} {:>10}  p95 < {} ms {}",
+            name,
+            ms(pct(&times, 0.5)),
+            ms(p95),
+            ms(*times.last().expect("queries")),
+            hits / queries.len(),
+            FACETS_P95.as_millis(),
+            if pass { "PASS" } else { "FAIL" }
+        );
+    }
+    Ok(ok)
 }
 
 fn main() -> ExitCode {
