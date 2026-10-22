@@ -1236,6 +1236,7 @@ dependencies = [
  "lodestar-sources-importers",
  "lodestar-store",
  "mimalloc",
+ "proptest",
  "reqwest",
  "rustls",
  "serde",

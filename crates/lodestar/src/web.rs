@@ -39,7 +39,7 @@ mod embedded {
 const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 const SHORT: &str = "public, max-age=3600";
 const REVALIDATE: &str = "no-cache";
-const PERMISSIONS: &str = "accelerometer=(), camera=(), display-capture=(), geolocation=(), \
+pub const PERMISSIONS: &str = "accelerometer=(), camera=(), display-capture=(), geolocation=(), \
      gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), usb=()";
 /// Paths that hold only files: a miss there is a 404, never the app.
 const ASSET_DIRS: [&str; 3] = ["_app/", "fonts/", "brand/"];
@@ -84,7 +84,7 @@ pub async fn serve(method: Method, uri: Uri, headers: HeaderMap) -> Response {
         }
         None => index(),
     };
-    respond(asset, &headers)
+    respond(asset, &headers, method == Method::HEAD)
 }
 
 /// The table key for a request path: percent-decoded, without the leading
@@ -118,7 +118,7 @@ fn key(path: &str) -> Option<String> {
     (!bad).then_some(key)
 }
 
-fn respond(asset: &'static Asset, req: &HeaderMap) -> Response {
+fn respond(asset: &'static Asset, req: &HeaderMap, head: bool) -> Response {
     let (body, encoding) = match pick(req, asset.br.is_some(), asset.gz.is_some()) {
         Some("br") => (asset.br.unwrap(), Some("br")),
         Some(_) => (asset.gz.unwrap(), Some("gzip")),
@@ -142,9 +142,15 @@ fn respond(asset: &'static Asset, req: &HeaderMap) -> Response {
             .status(StatusCode::NOT_MODIFIED)
             .body(Body::empty())
     } else {
+        // HEAD: the GET headers, with the length of the body not sent.
         Response::builder()
             .header(header::CONTENT_TYPE, asset.mime)
-            .body(Body::from(body))
+            .header(header::CONTENT_LENGTH, body.len())
+            .body(if head {
+                Body::empty()
+            } else {
+                Body::from(body)
+            })
     }
     .expect("static headers are valid");
     let h = res.headers_mut();
@@ -565,6 +571,98 @@ mod tests {
         let res = call("HEAD", "/", &[]).await;
         assert_eq!(res.status(), StatusCode::OK);
         assert!(header(&res, "content-security-policy").is_some());
+        assert_eq!(
+            header(&res, "content-length"),
+            Some(index().raw.len().to_string().as_str())
+        );
+        assert!(body(res).await.is_empty());
+        if let Some(br) = index().br {
+            let res = call("HEAD", "/", &[("accept-encoding", "br")]).await;
+            assert_eq!(header(&res, "content-encoding"), Some("br"));
+            assert_eq!(
+                header(&res, "content-length"),
+                Some(br.len().to_string().as_str())
+            );
+            assert!(body(res).await.is_empty());
+        }
+    }
+
+    proptest::proptest! {
+        /// Request paths are untrusted: whatever arrives, `key` never
+        /// panics, and a key it accepts is a plain relative path.
+        #[test]
+        fn key_accepts_only_plain_paths(path in "/?([a-z.%/\\\\]|%[0-9a-fA-F]{2}|\\PC){0,24}") {
+            if let Some(k) = key(&path) {
+                let segments = k.strip_suffix('/').unwrap_or(&k);
+                proptest::prop_assert!(
+                    k.is_empty()
+                        || segments.split('/').all(|s| !s.is_empty() && s != "." && s != "..")
+                );
+                proptest::prop_assert!(!k.contains('\\') && !k.chars().any(char::is_control));
+            }
+        }
+
+        /// Accept-Encoding is untrusted: `pick` and `qvalue` never panic,
+        /// and `pick` only names an encoding the asset has.
+        #[test]
+        fn pick_names_only_bodies_that_exist(
+            values in proptest::collection::vec("[ -~]{0,40}", 0..3),
+            br: bool,
+            gz: bool,
+        ) {
+            let mut req = HeaderMap::new();
+            for v in &values {
+                if let Ok(v) = HeaderValue::from_str(v) {
+                    req.append(header::ACCEPT_ENCODING, v);
+                }
+                for part in v.split(['=', ';', ',']) {
+                    if let Some(q) = qvalue(part) {
+                        proptest::prop_assert!(q <= 1000);
+                    }
+                }
+            }
+            match pick(&req, br, gz) {
+                Some("br") => proptest::prop_assert!(br),
+                Some("gzip") => proptest::prop_assert!(gz),
+                Some(other) => proptest::prop_assert!(false, "unknown encoding {other}"),
+                None => {}
+            }
+        }
+
+        /// The same, for codings built from the grammar's pieces.
+        #[test]
+        fn pick_respects_q_zero(
+            items in proptest::collection::vec(
+                ("(br|gzip|x-gzip|\\*|identity|deflate)", proptest::option::of("(0|1|0\\.[0-9]{1,3}|1\\.0{1,3})")),
+                0..5,
+            ),
+        ) {
+            let value = items
+                .iter()
+                .map(|(c, q)| match q { Some(q) => format!("{c};q={q}"), None => c.clone() })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let mut req = HeaderMap::new();
+            req.insert(header::ACCEPT_ENCODING, HeaderValue::from_str(&value).unwrap());
+            // The last mention of a coding (or of `*`) decides it.
+            let q = |names: &[&str]| -> Option<u16> {
+                items
+                    .iter()
+                    .rev()
+                    .find(|(c, _)| names.contains(&c.as_str()))
+                    .map(|(_, q)| q.as_deref().map_or(1000, |q| qvalue(q).unwrap()))
+            };
+            let any = q(&["*"]);
+            let (q_br, q_gz) = (q(&["br"]).or(any).unwrap_or(0), q(&["gzip", "x-gzip"]).or(any).unwrap_or(0));
+            let want = if q_br > 0 && q_br >= q_gz {
+                Some("br")
+            } else if q_gz > 0 {
+                Some("gzip")
+            } else {
+                None
+            };
+            proptest::prop_assert_eq!(pick(&req, true, true), want, "{}", value);
+        }
     }
 
     #[test]

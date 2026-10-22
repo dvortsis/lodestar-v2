@@ -18,9 +18,12 @@ fn main() {
             None => PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap())
                 .join("../../web/build"),
         };
-        // Cargo scans a directory recursively. A missing path would rerun
-        // this script on every build, so until the build exists, watch its
-        // parent (which sees it appear).
+        // Cargo scans a directory recursively, and a missing path reruns
+        // this script (and recompiles the crate) on every build. So until
+        // the build exists, watch its parent, which sees it appear. That
+        // scan includes node_modules: about 0.3 s on a no-op build, against
+        // seconds for a recompile. Narrower existing paths (package.json)
+        // don't change when `npm run build` runs, so they'd miss it.
         let watch = match (dir.exists(), dir.parent()) {
             (false, Some(parent)) if parent.exists() => parent,
             _ => &dir,
