@@ -834,6 +834,10 @@
   {
    "at": "2026-10-22T17:45Z",
    "what": "LICENSE answered by the owner in the settings session: AGPL-3.0-or-later (owner-decisions \u00a72.12 on claude/brave-newton-53jgly)."
+  },
+  {
+   "at": "2026-10-22T18:52Z",
+   "what": "#75 merged: runner limits 16/16 in slices.yaml; owner-decisions \u00a72.15-17 (concurrency, adult-relabel tombstones, secure_delete)."
   }
  ],
  "open_issues": [
@@ -843,7 +847,7 @@
  "runner_prs": {
   "34": "merged",
   "39": "merged 07:43",
-  "75": "open: max_core 8, owner decisions 11-12, CJK SC, integrations README",
+  "75": "merged 51d3a9d 18:52",
   "80": "open: token role utilities (@theme inline reference)",
   "81": "open: secure_delete (owner decision)"
  },
