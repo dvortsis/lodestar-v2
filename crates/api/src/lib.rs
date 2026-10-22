@@ -25,6 +25,7 @@
 pub mod auth;
 pub mod dto;
 pub mod error;
+pub mod events;
 pub mod extract;
 pub mod filters;
 pub mod openapi;
@@ -42,7 +43,7 @@ pub use auth::{Auth, require_session};
 pub use error::{ApiError, ApiResult};
 pub use extract::ClientIp;
 pub(crate) use search::unix_now;
-pub use search::{MATCHED_FILES, MAX_LIMIT, MAX_WINDOW};
+pub use search::{AdultVisibility, MATCHED_FILES, MAX_LIMIT, MAX_WINDOW};
 
 #[derive(Clone, Debug)]
 pub struct ApiState {
@@ -56,6 +57,8 @@ pub struct ApiState {
     pub filters: Option<Arc<filters::FiltersApi>>,
     /// `None` when the settings registry isn't served (tests, tools).
     pub settings: Option<Arc<dyn settings::SettingsApi>>,
+    /// "Show adult content" (§20.9), followed live; hidden by default.
+    pub adult: AdultVisibility,
 }
 
 /// The `/api/v1` routes. The server must be run with
@@ -68,6 +71,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(torrents::routes())
         .merge(filters::routes())
         .merge(settings::routes())
+        .merge(events::routes())
         .merge(openapi::routes())
         // What `auth::protected` checks sessions against.
         .layer(Extension(auth::SessionAuth(state.auth.clone())))

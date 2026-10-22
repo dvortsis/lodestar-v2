@@ -511,6 +511,8 @@ fn corrections_override_adult_detection_and_junk() {
     assert_eq!(c.content_type, ContentType::Adult);
     assert_eq!(c.adult_kind, Some(AdultKind::Movie));
     assert_eq!(c.confidence, 100);
+    // Relabelling a classification gives the same.
+    assert_eq!(classify(movie, &files).as_adult(), c);
     // Ebook and Other, which detection leaves alone, get a kind too.
     let book = classify_corrected("Some Book", &[file("Some Book.epub", "2M")], fix);
     assert_eq!(book.adult_kind, Some(AdultKind::Comics));
