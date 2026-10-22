@@ -4,17 +4,22 @@
 //!
 //! Scope so far: schema and migrations, connection setup, the file-tree
 //! blob codec with zstd dictionaries, batched writes and reads, source
-//! provenance and the shared id sequence (§18.5), Insights counters (§7)
-//! and the persisted fetch queue (§5). A single [`Store`] owns the one
-//! writer connection; the pipeline's writer task drives it.
+//! provenance and the shared id sequence (§18.5), Insights counters (§7),
+//! the persisted fetch queue (§5), and swarm health: scrape results,
+//! per-tracker detail, history and the tracker list (§7, M4). A single
+//! [`Store`] owns the one writer connection; the pipeline's writer task
+//! drives it.
 
 mod compress;
 pub mod filetree;
 mod filter;
+pub mod history;
+pub mod hot;
 mod insights;
 mod schema;
 mod sources;
 mod subscriptions;
+mod swarm;
 
 use std::fmt;
 use std::io;
@@ -28,10 +33,15 @@ use rusqlite::{Connection, OptionalExtension, params};
 pub use compress::{BlobCodec, Codec, Compressed};
 pub use filetree::{CodecError, FileTree};
 pub use filter::{FilterHit, FilterState, Filtered, Held, Quarantined};
+pub use history::{History, trend};
+pub use hot::{Col, HotColumns, NEVER, SwarmHot};
 pub use insights::{CohortCount, Counter, Event};
 pub use rusqlite;
 pub use sources::{MAX_SOURCES, QueuedKey, SourceId, SourceRow, SourceState};
 pub use subscriptions::{NewSubscription, Refresh, Subscription};
+pub use swarm::{
+    SwarmRow, SwarmUpdate, TrackerCounts, TrackerRow, TrackerSample, swarm_flags, tracker_state,
+};
 
 /// Bits of the `torrents.flags` column. Values are persisted: append only.
 pub mod flags {
@@ -51,6 +61,10 @@ pub mod flags {
     pub const SINGLE_FILE: i64 = 1 << 8;
     /// Metainfo parsing reported warnings.
     pub const WARNINGS: i64 = 1 << 9;
+    /// Only private sources (a private tracker's feed, §18.7) have reported
+    /// it: never sent to public DHT lookups, trackers or scrapes. A public
+    /// sighting clears it; nothing sets it on a stored public torrent.
+    pub const PRIVATE_SOURCE: i64 = 1 << 10;
 }
 
 #[derive(Debug)]
@@ -253,15 +267,25 @@ pub struct WriteBatch<'a> {
     pub events: &'a [Event],
     /// Torrents a filter rule acted on (§20.3), recorded with the batch.
     pub filtered: &'a [Filtered<'a>],
+    /// Scrape results, applied after the touches.
+    pub swarm: &'a [SwarmUpdate],
 }
 
-/// A stored torrent seen again: its swarm hash and the sources (a bitset)
-/// that saw it.
+/// A stored torrent seen again: its swarm hash, the sources (a bitset)
+/// that saw it, when, and whether any of them is public.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Touch {
     pub hash: InfoHash,
     pub sources: u64,
+    /// Unix seconds; moves `last_seen_at` forward, at most hourly.
+    pub at: i64,
+    /// A public sighting clears [`flags::PRIVATE_SOURCE`].
+    pub public: bool,
 }
+
+/// `last_seen_at` is written through to SQLite at most this often per
+/// torrent; the hot column has the exact value (§16, M4).
+pub const LAST_SEEN_WRITE_EVERY: i64 = 3600;
 
 /// What [`Store::write`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -272,6 +296,8 @@ pub struct Written {
     pub prepared: Vec<Inserted>,
     /// One per touch: the torrent's id, or `None` if it isn't stored.
     pub touched: Vec<Option<i64>>,
+    /// One per swarm update: `false` when the torrent was deleted.
+    pub swarm: Vec<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -447,9 +473,21 @@ impl Store {
             let id = find_any(&tx, std::iter::once(t.hash))?;
             if let Some(id) = id {
                 add_sources(&tx, id, t.sources)?;
+                tx.prepare_cached(
+                    "UPDATE torrents SET last_seen_at = ?2 WHERE id = ?1 AND last_seen_at <= ?3",
+                )?
+                .execute(params![id, t.at, t.at - LAST_SEEN_WRITE_EVERY])?;
+                if t.public {
+                    make_public(&tx, id)?;
+                }
             }
             touched.push(id);
         }
+        let swarm = batch
+            .swarm
+            .iter()
+            .map(|u| swarm::apply(&tx, u))
+            .collect::<Result<_>>()?;
         insights::write(&tx, batch.counters, batch.cohorts, batch.events)?;
         filter::write(&tx, batch.filtered)?;
         tx.commit()?;
@@ -457,6 +495,7 @@ impl Store {
             torrents: out,
             prepared,
             touched,
+            swarm,
         })
     }
 
@@ -870,6 +909,9 @@ fn commit_one(tx: &Connection, codec: &BlobCodec, t: &PreparedTorrent<'_>) -> Re
     let bit = t.source.bit();
     if let Some(id) = find_any(tx, p.swarm_hashes())? {
         add_sources(tx, id, bit as u64)?;
+        if t.extra_flags & flags::PRIVATE_SOURCE == 0 {
+            make_public(tx, id)?;
+        }
         // An import with an incomplete file list gets the real one when
         // the info dict is fetched.
         if t.extra_flags & flags::FILES_PARTIAL == 0 && t.verified {
@@ -965,7 +1007,12 @@ fn upgrade_partial(conn: &Connection, id: i64, t: &PreparedTorrent<'_>) -> Resul
         to_i64(p.piece_count)?,
         to_i64(p.file_count)?,
         to_i64(p.info_size)?,
-        p.flags | t.extra_flags | (flags_now & keep),
+        // Private-source only if both the stored row and this commit are:
+        // an upgrade never makes a public torrent private.
+        p.flags
+            | (t.extra_flags & !flags::PRIVATE_SOURCE)
+            | (flags_now & keep)
+            | (flags_now & t.extra_flags & flags::PRIVATE_SOURCE),
         t.metadata_at,
         p.info_hash_v2.as_ref().map(|h| &h.0[..]),
     ])?;
@@ -992,6 +1039,15 @@ fn upgrade_partial(conn: &Connection, id: i64, t: &PreparedTorrent<'_>) -> Resul
     }
     conn.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
         .execute([id])?;
+    Ok(())
+}
+
+/// Clears [`flags::PRIVATE_SOURCE`], writing only when it's set.
+fn make_public(conn: &Connection, id: i64) -> Result<()> {
+    conn.prepare_cached(
+        "UPDATE torrents SET flags = flags & ~?2 WHERE id = ?1 AND flags & ?2 != 0",
+    )?
+    .execute(params![id, flags::PRIVATE_SOURCE])?;
     Ok(())
 }
 
