@@ -29,7 +29,7 @@ pub struct SiblingsResponse {
     pub same_file: HitGroup,
 }
 
-/// A work's title identity (§16, B13): its normalized title plus the
+/// A work's title identity (`docs/decisions/2026-10-22-B13.md`): its normalized title plus the
 /// year, season and episode spans the release names, if any.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct TitleIdentity {

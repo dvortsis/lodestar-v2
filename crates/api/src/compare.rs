@@ -110,7 +110,7 @@ fn spans(r: &Record, key: &str) -> Vec<String> {
     v
 }
 
-/// A torrent's title identity (§16, B13): `None` without a parsed title
+/// A torrent's title identity (`docs/decisions/2026-10-22-B13.md`): `None` without a parsed title
 /// that has any words.
 fn identity(r: &Record) -> Option<TitleIdentity> {
     let words = title_words(r.release("title")?);

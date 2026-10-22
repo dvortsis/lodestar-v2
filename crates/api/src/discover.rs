@@ -130,7 +130,7 @@ pub(crate) async fn discover(
         },
         // TODO(B8): the store records no time a torrent's resolution
         // changed (`torrent_parsed` keeps no timestamp, `reindex_log` no
-        // time or reason); B8's migration adds one (§16, B13).
+        // time or reason); B8's migration adds one (`docs/decisions/2026-10-22-B13.md`).
         recently_resolved: HitGroup::unavailable(Unavailable::NeedsResolutionHistory),
         // TODO(M4): swarm history and the trend arrive with #48's
         // continuation; then Rising is the top N by `swarm_trend`.
