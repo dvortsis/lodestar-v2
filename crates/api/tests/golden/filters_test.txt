@@ -1,2 +1,2 @@
 200
-{"results":[{"decision":null,"draft":true,"shadow":[]},{"decision":{"action":"drop","rule":"FK-4"},"draft":false,"shadow":["U-1"]},{"decision":{"action":"drop","rule":"FK-4"},"draft":false,"shadow":[]}]}
+{"results":[{"decision":null,"draft":true,"shadow":[]},{"decision":{"action":"hide","rule":"MW-2"},"draft":false,"shadow":["U-1"]},{"decision":null,"draft":false,"shadow":[]}]}

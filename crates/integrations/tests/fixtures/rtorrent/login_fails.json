@@ -1,0 +1,35 @@
+{
+  "recorded_from": "rTorrent 0.9.8 / libtorrent 0.13.8, XML-RPC over SCGI behind nginx 1.24 at /RPC2 with basic auth",
+  "note": "system.client_version: wrong password: nginx's 401 page",
+  "request": {
+    "method": "POST",
+    "path": "/RPC2",
+    "query": null
+  },
+  "response": {
+    "status": 401,
+    "headers": [
+      [
+        "server",
+        "nginx/1.24.0 (Ubuntu)"
+      ],
+      [
+        "content-type",
+        "text/html"
+      ],
+      [
+        "content-length",
+        "188"
+      ],
+      [
+        "connection",
+        "keep-alive"
+      ],
+      [
+        "www-authenticate",
+        "Basic realm=\"rtorrent\""
+      ]
+    ],
+    "body": "<html>\r\n<head><title>401 Authorization Required</title></head>\r\n<body>\r\n<center><h1>401 Authorization Required</h1></center>\r\n<hr><center>nginx/1.24.0 (Ubuntu)</center>\r\n</body>\r\n</html>\r\n"
+  }
+}

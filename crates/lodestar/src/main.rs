@@ -3,6 +3,7 @@
 //! running instance for Docker's `HEALTHCHECK`.
 
 mod config;
+mod floor;
 mod http;
 mod metrics;
 mod services;

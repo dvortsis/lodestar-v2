@@ -250,6 +250,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/filters/strictness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * How strict a candidate set of lists is (§2.9, §20.13): what it
+         *     would block and a warning matched to it. Nothing is stored or
+         *     connected.
+         */
+        post: operations["assessListStrictness"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/filters/test": {
         parameters: {
             query?: never;
@@ -463,6 +484,8 @@ export interface components {
             released?: number;
             /** @description `remove_cs1`: hashes removed. */
             removed?: number;
+            /** @description `resolve_floor_removal`: pending floor entries settled. */
+            settled?: number;
             /**
              * Format: int64
              * @description The rule set's version after the change.
@@ -476,6 +499,13 @@ export interface components {
              *     as part of the locked floor).
              */
             confirm: boolean;
+            /**
+             * @description For a floor removal: the entries the warning counts, 40 hex digits
+             *     each. A removal settles at most 10,000 at a time, so a longer
+             *     pending list goes in batches. Send these back as `hashes` to
+             *     confirm the removal with the password.
+             */
+            floor_entries?: string[];
             neutralize: null | components["schemas"]["Preview"];
             preview: components["schemas"]["Preview"];
             /** @description The plain-language effect warning; null for a strengthening change. */
@@ -729,6 +759,13 @@ export interface components {
             id: number;
             /** @enum {string} */
             op: "resolve_held";
+        } | {
+            /** @description 40 hex digits each, at most 10,000. */
+            hashes?: string[] | null;
+            /** @enum {string} */
+            op: "resolve_floor_removal";
+            remove?: boolean;
+            source: string;
         } | {
             /** @enum {string} */
             op: "undo";
@@ -1004,6 +1041,11 @@ export interface components {
             ip_ranges: number;
             overrides: components["schemas"]["OverrideEntry"][];
             packs: components["schemas"]["PackState"][];
+            /**
+             * @description Entries a config file or a floor-marked list dropped, still blocked
+             *     until you settle them (§2.7).
+             */
+            pending_floor_removals: components["schemas"]["PendingFloorEntry"][];
             /** @description Items in quarantine. */
             quarantine: number;
             rules: components["schemas"]["RuleEntry"][];
@@ -1037,6 +1079,18 @@ export interface components {
             new: string;
             old: string;
         };
+        /** @description Floor entries one source dropped, waiting for a decision (§2.7). */
+        PendingFloorEntry: {
+            entries: number;
+            /** @description Up to 1,000 of them, 40 hex digits each. */
+            hashes: string[];
+            /** @description `file` or `list`. */
+            kind: string;
+            /** @description The file's path, or the list's name. */
+            name: string;
+            /** @description `file:<path>` or `list:<id>`, for `resolve_floor_removal`. */
+            source: string;
+        };
         /**
          * @description What a change would do (§20.10). Counts come from the review queue,
          *     the tombstones, the filter hits of the replay window and the index.
@@ -1064,6 +1118,8 @@ export interface components {
             per_day: number;
             /** @description Quarantined items it would release now. */
             quarantine: number;
+            /** @description Entries that would leave the locked floor. */
+            removed_from_floor: number;
             /**
              * Format: int64
              * @description Stored items whose hide, demote or flag mark it would clear.
@@ -1252,6 +1308,78 @@ export interface components {
              *     case).
              */
             token: string;
+        };
+        /**
+         * @description `POST /filters/strictness`: what the lists would block, and a warning
+         *     matched to it (§2.9, §20.13).
+         */
+        Strictness: {
+            /** @description `anti_p2p`, `peers`, `content`, `child_abuse`, … */
+            categories: string[];
+            /**
+             * @description Some figures are the catalog's measurements of lists not fetched
+             *     yet, and lists may overlap: a lower bound.
+             */
+            estimate: boolean;
+            /**
+             * Format: int64
+             * @description Torrents a floor-marked list blocks by hash.
+             */
+            floor_hashes: number;
+            /**
+             * Format: int64
+             * @description Torrents blocked by hash.
+             */
+            hashes: number;
+            /**
+             * Format: double
+             * @description The share of public IPv4 blocked (0–1); the level reads this.
+             */
+            ipv4_public_share: number;
+            /**
+             * Format: double
+             * @description The share of all IPv4 blocked (0–1).
+             */
+            ipv4_share: number;
+            ipv6_ranges: number;
+            /**
+             * Format: double
+             * @description The share of IPv6 global unicast blocked (0–1).
+             */
+            ipv6_share: number;
+            /** @description `none`, `notice`, `strong` or `severe`. */
+            level: string;
+            lists: components["schemas"]["StrictnessList"][];
+            /** @description The plain-language warning. */
+            text: string;
+            /** @description Lists never fetched, so what they block isn't known. */
+            unknown: string[];
+        };
+        /**
+         * @description `POST /filters/strictness`: a candidate set of lists to assess,
+         *     subscriptions by id and catalog lists by key (`lodestar lists`), in
+         *     any mix.
+         */
+        StrictnessBody: {
+            catalog?: string[];
+            subscriptions?: number[];
+        };
+        /** @description One list's figures in a [`Strictness`]; null where unknown. */
+        StrictnessList: {
+            categories: string[];
+            floor: boolean;
+            /** Format: int64 */
+            hashes: number | null;
+            /** Format: double */
+            ipv4_public_share: number | null;
+            /** Format: double */
+            ipv4_share: number | null;
+            ipv6_ranges: number | null;
+            /** @description `content` or `ip`. */
+            kind: string;
+            /** @description The figures are a catalog measurement, not this list's data. */
+            measured: boolean;
+            name: string;
         };
         /** @description A list subscription (§20.6). */
         SubscriptionEntry: {
@@ -1703,6 +1831,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Queue"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    assessListStrictness: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StrictnessBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Strictness"];
                 };
             };
             default: components["responses"]["Error"];

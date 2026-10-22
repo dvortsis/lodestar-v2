@@ -10,6 +10,7 @@
 
 use std::collections::BTreeSet;
 
+use lodestar_classify::ext::Ext;
 use lodestar_classify::{Category, ContentType, FileInfo, JunkReason, Structure};
 
 use crate::core::{Action, Item};
@@ -163,8 +164,8 @@ fn words(text: &str) -> Vec<String> {
         .collect()
 }
 
-fn ext(f: &FileInfo) -> String {
-    lodestar_classify::ext::extension(f.name()).map_or_else(String::new, |e| e.as_str().to_owned())
+fn ext(f: &FileInfo) -> Option<Ext> {
+    lodestar_classify::ext::extension(f.name())
 }
 
 const EXECUTABLE: &[&str] = &[
@@ -220,7 +221,7 @@ pub struct Ctx<'a> {
     item: &'a Item<'a>,
     facts: &'a Facts<'a>,
     /// Content files with their lowercase extensions.
-    files: Vec<(&'a FileInfo, String)>,
+    files: Vec<(&'a FileInfo, Option<Ext>)>,
     name_words: std::cell::OnceCell<Vec<String>>,
 }
 
@@ -259,7 +260,7 @@ impl<'a> Ctx<'a> {
     fn with_ext<'s>(&'s self, set: &'s [&str]) -> impl Iterator<Item = &'s FileInfo> + 's {
         self.files
             .iter()
-            .filter(move |(_, e)| set.contains(&e.as_str()))
+            .filter(move |(_, e)| e.is_some_and(|e| set.contains(&e.as_str())))
             .map(|(f, _)| *f)
     }
 
