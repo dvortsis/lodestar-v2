@@ -117,9 +117,11 @@ jobs:
       - name: Process ids and /data ownership (PUID/PGID)
         run: |
           volume=$(docker volume inspect --format '{{.Mountpoint}}' lodestar-smoke-data)
-          packaging/docker/check-ids.sh lodestar-smoke 65532 65532 "$SMOKE_DATA"
-          packaging/docker/check-ids.sh lodestar-volume 65532 65532 "$volume"
-          packaging/docker/check-ids.sh lodestar-puid 99 100 "$SMOKE_PUID_DATA"
+          rc=0
+          packaging/docker/check-ids.sh lodestar-smoke 65532 65532 "$SMOKE_DATA" || rc=1
+          packaging/docker/check-ids.sh lodestar-volume 65532 65532 "$volume" || rc=1
+          packaging/docker/check-ids.sh lodestar-puid 99 100 "$SMOKE_PUID_DATA" || rc=1
+          [ "$rc" = 0 ] || exit 1
           # The files the server created there are the new account's too.
           owner=$(sudo stat --format '%u:%g' "$SMOKE_PUID_DATA/lodestar.db")
           [ "$owner" = 99:100 ] || { echo "::error::lodestar.db is owned by $owner"; exit 1; }

@@ -5,9 +5,9 @@
 #   check-ids.sh <container> <uid> <gid> [<host path of /data>]
 #
 # Every thread of the container's PID 1 must run as uid:gid (real, effective,
-# saved and filesystem ids), with no supplementary groups and no permitted,
-# effective or ambient capabilities, so setuid(0) can't succeed. If a path is
-# given, /data's owner must be uid:gid too.
+# saved and filesystem ids), with no supplementary groups other than gid and
+# no permitted, effective or ambient capabilities, so setuid(0) can't
+# succeed. If a path is given, /data's owner must be uid:gid too.
 set -euo pipefail
 
 name=$1 uid=$2 gid=$3 data=${4:-}
@@ -24,7 +24,9 @@ for status in /proc/"$pid"/task/*/status; do
   echo "$name ${status%/status}: Uid=[$got_uid] Gid=[$got_gid] Groups=[$groups]"
   [ "$got_uid" = "$uid $uid $uid $uid" ] || { echo "::error::$name runs as uid $got_uid, not $uid"; fail=1; }
   [ "$got_gid" = "$gid $gid $gid $gid" ] || { echo "::error::$name runs as gid $got_gid, not $gid"; fail=1; }
-  [ -z "$groups" ] || { echo "::error::$name keeps supplementary groups: $groups"; fail=1; }
+  # The binary's drop leaves none; `docker --user u:g` lists g itself,
+  # which grants nothing beyond the primary group.
+  [ -z "$groups" ] || [ "$groups" = "$gid" ] || { echo "::error::$name keeps supplementary groups: $groups"; fail=1; }
   for cap in CapPrm CapEff CapAmb; do
     v=$(field "$cap")
     case "$v" in
