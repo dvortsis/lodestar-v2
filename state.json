@@ -193,8 +193,8 @@
    "session": "session_01RL3YBaUPYXgdgK3wY2DRpG",
    "pr": 83,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": ""
+   "review_rounds": 1,
+   "notes": "R1 FIX 19:05: hidden-at-subscribe stream never closes (slot hog, queue growth); parsing stuck; typed wrapper gaps (202, required path/body, GET body); 401 halt; envelope extras (setup_required)."
   },
   "W7ab": {
    "status": "changes_requested",
@@ -874,7 +874,6 @@
  "heartbeats": 4,
  "reviews_in_flight": {
   "71": "B6 round 2 (ee81535)",
-  "83": "W5 R1 line-by-line",
   "84": "D-puid R1 + security",
   "85": "F-near R1"
  },
