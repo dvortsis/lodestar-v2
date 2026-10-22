@@ -69,7 +69,8 @@ pub fn router(state: AppState, api: ApiState) -> Router {
 /// The status page keeps its own policy: it is one file with its script
 /// and styles inline, and renders peer-supplied names as text only.
 pub const STATUS_CSP: &str = "default-src 'self'; style-src 'unsafe-inline'; \
-    script-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+    script-src 'unsafe-inline'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; \
+    form-action 'self'";
 
 async fn page() -> Response {
     (
@@ -78,6 +79,10 @@ async fn page() -> Response {
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
             (header::REFERRER_POLICY, "no-referrer"),
             (header::CACHE_CONTROL, "no-cache"),
+            (
+                header::HeaderName::from_static("permissions-policy"),
+                crate::web::PERMISSIONS,
+            ),
         ],
         Html(STATUS_PAGE),
     )
