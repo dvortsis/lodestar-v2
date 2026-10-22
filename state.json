@@ -798,6 +798,15 @@
    "attempt": 1,
    "review_rounds": 0,
    "notes": "Launched 19:18 after B17 merged."
+  },
+  "X-flakes": {
+   "status": "running",
+   "model": "opus",
+   "session": "session_01DU5FDv74GuCpGhpTHM6Vte",
+   "pr": null,
+   "attempt": 1,
+   "review_rounds": 0,
+   "notes": "Launched 19:40: rebuild rename (macOS), interrupted rebuild resume, NRT budget (Windows), uTP WSAENOBUFS."
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -948,24 +957,21 @@
   "pr81_fix": "#81 review FIX: (1) test must distinguish ON from FAST: >16KB value (overflow pages) deleted, assert gone from DB file; (2) WAL keeps insert-time frames until TRUNCATE (prod TRUNCATE only at shutdown): call store.checkpoint() (TRUNCATE) after purge_filter / release / delete_torrents / #70's release_rules when they deleted rows; drive test through those APIs. Do it after #70 merges (filter.rs conflict).",
   "tantivy_deleted_names": "Deleted torrents' names stay in Tantivy segment files until merge. Follow-up after B6: on delete_torrents, force-merge segments holding deleted docs (rare path). In the spirit of owner decision 'deleted data is overwritten' (\u00a72.17).",
   "w7ab_css_growth": "Record in \u00a716: daisyUI component CSS for the primitives adds ~5.6 KB gz to first-load CSS (11.89 -> 17.48 KB); accepted by runner (one global Tailwind sheet; screens need it). CSS headroom ~2.2 KB: watch W7cd/W7e/screens.",
-  "rebuild_windows_flake": "test (windows-latest) failed crates/search/tests/rebuild.rs:124 an_interrupted_rebuild_resumes_from_its_watermarks ('the rebuild finishes') on Q-docs da02e04 (no src change). Watch; if it recurs, root-cause (timeout on slow Windows runner?) in a small fix PR. 2nd occurrence (settings session, linux local): rebuild.rs:283 'resumed, not started over' left 1050 right 1000 \u2014 background rebuild stepped before progress() read. Two hits -> schedule a fix slice (search/rebuild.rs test; after B6 merges since B6 owns crates/search).",
   "runtime_chunk_growth": "W7cd measured: showcase pages using transitions/bind:offsetHeight/snippets grow the shared Svelte runtime chunk 16.8->21.7 kB gz that search loads. Screens using these primitives will do the same: budget JS 45 kB has ~12 kB headroom; watch in W9/search screens, keep transitions lazy where possible.",
   "b6_from_b17_review": "B17 reviewer: B6 must AND visibility onto every own-clause variant (filters param), test Adult hidden + type:movie selection -> no adult in type facet, and check the lease fingerprint/visibility when a cursor lease is passed (no pre-toggle lease). Also Not-adult with leftover adult_kind tag matches adult:<kind> - B6 adult facet aware.",
   "unenriched_adult_gap": "Unenriched imports/backfill aren't hidden by B17 (no type tag). Put in importer/backfill brief; consider raising with owner.",
   "sse_crawler_paused": "B4 SSE crawler event lacks `paused` (B14 asked to add if cheap).",
   "pr70_r3": "#70 R4 MERGE 19:36 (01c1626); asked 2 small fixes: was_on from store; purge ON CONFLICT keep floor only. Runner verifies delta then merges.",
   "slices_from_86": "After #86 merges: add B2b, B2c, M-settings-form, S-settings-2, M-security-settings, B-log1, B-log2, S-logs, S-about, B-update, S-updates, S-doc-shots to state.slices (pending). B2b + B-log1(after B2b) ready first.",
-  "search_timing_flakes": "Windows CI: crates/search/tests/index.rs:214 NRT budget (the_live_indexer_follows_the_store_within_seconds) failed on B6 ee81535; plus rebuild.rs flake. Fix slice after B6 merges (crates/search owner).",
   "near_followups": "F-near follow-ups: prefix/fuzzy words share the folded-join bug; NEAR ignores CSX-5 'Neutralize term'; plain word over-matches vs NEAR word; single-token NEAR quadratic window.",
-  "skills_repo_for_docs": "Docs slices + their reviewers need dvortsis/skills (documentation-skills scripts): attach via create_session sources or add_repo.",
-  "utp_windows_flake": "Windows CI: peer-wire/tests/utp.rs fetches_plaintext_and_encrypted_over_utp WSAENOBUFS(10055) on bind \u2014 flaky."
+  "skills_repo_for_docs": "Docs slices + their reviewers need dvortsis/skills (documentation-skills scripts): attach via create_session sources or add_repo."
  },
  "blocked_on_owner": [
   "Modern DHT crawler architecture: waiting on an AskUserQuestion",
   "F1b #66: sign-off on calibrated filter budget (50us at reference runner speed, scale up to 1.6x on slower runners)"
  ],
  "launches_today": 8,
- "last_heartbeat": "2026-10-22T18:50Z",
+ "last_heartbeat": "2026-10-22T19:40Z",
  "owner_questions": [
   "F1 budget scope: gate covers cheaply-rejectable rule shapes (10% = 40.8 us on runner). Shapes the cheap check cannot decide cost more at 10% of rules (VM: NEAR/1 ~450-500, negation ~140, fuzzy ~125, prefix ~110 us; runner ~1.4x faster). Should those shapes be gated at 50 us too?",
   "Filter budget hardware: 50 us has no reference machine; gate now calibrated to the runner F1 measured on (10%=40.8 us), slower runners scale up to 1.6x. Confirm or set a reference machine.",
