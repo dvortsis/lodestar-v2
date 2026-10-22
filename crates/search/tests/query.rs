@@ -376,9 +376,40 @@ fn lifted_swarm_clauses_match_clauses_in_the_query() {
         "dht:0",
         "time:00:00..00:10 size:<1GB",
         "-time:12..13 -seeders:0",
+        // Combinations are one check of their own.
+        "knight (seeders:>=5 | trackers:>=3)",
+        "(seeders:0 | -seen:<3d) private:no",
+        "-(dht:0 | time:12..13)",
+        "(seeders:>=1 trackers:>=2) | dht:>0",
     ] {
         let wrapped = format!("({q}) | zzznomatch");
         assert_eq!(find(&ix, q), find(&ix, &wrapped), "{q}");
+    }
+}
+
+#[test]
+fn sorted_searches_in_pieces_agree() {
+    // A cold top-k splits segments into doc ranges searched in parallel;
+    // two-document pieces must give the same pages as whole segments.
+    let ix = hot_corpus();
+    let pieces = hot_corpus().with_sort_pieces(2);
+    for q in ["", "knight", "seeders:>=1", "-joker"] {
+        for sort in [
+            Sort::Seeders { desc: true },
+            Sort::Trackers { desc: false },
+            Sort::Discovered { desc: true },
+            Sort::Size { desc: false },
+        ] {
+            for (limit, offset) in [(10, 0), (2, 0), (2, 3)] {
+                let page = |ix: &SearchIndex| {
+                    let r = ix
+                        .search_page(&ix.query(&parse(q).unwrap(), NOW), sort, limit, offset)
+                        .unwrap();
+                    (r.total, r.hits.iter().map(|h| h.id).collect::<Vec<_>>())
+                };
+                assert_eq!(page(&ix), page(&pieces), "{q:?} {sort:?} {limit} {offset}");
+            }
+        }
     }
 }
 

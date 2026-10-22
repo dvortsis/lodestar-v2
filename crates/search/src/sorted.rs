@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use lodestar_store::{Col, HotColumns, NEVER};
 use tantivy::index::SegmentId;
 use tantivy::query::EnableScoring;
-use tantivy::{DocAddress, DocId, Searcher, SegmentReader};
+use tantivy::{DocAddress, DocId, DocSet, Searcher, SegmentReader};
 
 use crate::filter;
 use crate::index::{Compiled, Result};
@@ -29,6 +29,10 @@ use crate::index::{Compiled, Result};
 const CACHE_ENTRIES: usize = 4096;
 /// Deeper pages than this aren't cached.
 const CACHE_MAX_K: usize = 1000;
+/// Documents per parallel piece of a segment. Merged segments are uneven
+/// (one can hold most of the index), so a cold top-k splits each into
+/// doc ranges and the executor's threads share them.
+pub(crate) const PIECE_DOCS: u32 = 1 << 19;
 
 /// Where an order's values come from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -90,41 +94,72 @@ pub(crate) fn search(
     order: Order,
     hot: Option<&Arc<HotColumns>>,
     page: std::ops::Range<usize>,
+    piece_docs: u32,
 ) -> Result<(Vec<DocAddress>, usize)> {
     let (offset, k) = (page.start, page.end);
     let limit = k.saturating_sub(offset);
     let weight = query
         .query
         .weight(EnableScoring::disabled_from_searcher(searcher))?;
-    let segments = searcher.segment_readers().iter().enumerate();
-    let tops = searcher.index().search_executor().map(
-        |(ord, reader): (usize, &SegmentReader)| {
-            let key = (
+    let readers = searcher.segment_readers();
+    let keys: Vec<Key> = readers
+        .iter()
+        .map(|reader| {
+            (
                 key.to_owned(),
                 order,
                 k,
                 reader.segment_id(),
                 reader.num_deleted_docs(),
-            );
-            let cached = cache.map.lock().expect("cache lock").get(&key).cloned();
-            let top = match cached {
-                Some(top) => top,
-                None => {
-                    let top = Arc::new(segment_top(weight.as_ref(), reader, query, order, hot, k)?);
-                    if k <= CACHE_MAX_K {
-                        let mut map = cache.map.lock().expect("cache lock");
-                        if map.len() >= CACHE_ENTRIES {
-                            map.clear();
-                        }
-                        map.insert(key, top.clone());
-                    }
-                    top
-                }
-            };
-            Ok((ord as u32, top))
+            )
+        })
+        .collect();
+    let mut tops: Vec<Option<Top>> = {
+        let map = cache.map.lock().expect("cache lock");
+        keys.iter().map(|key| map.get(key).cloned()).collect()
+    };
+    // The segments not cached, in pieces the threads share.
+    let pieces: Vec<(usize, std::ops::Range<DocId>)> = tops
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.is_none())
+        .flat_map(|(ord, _)| {
+            let max = readers[ord].max_doc();
+            (0..max.div_ceil(piece_docs).max(1))
+                .map(move |i| (ord, i * piece_docs..((i + 1) * piece_docs).min(max)))
+        })
+        .collect();
+    let found = searcher.index().search_executor().map(
+        |(ord, range): (usize, std::ops::Range<DocId>)| {
+            let top = segment_top(weight.as_ref(), &readers[ord], query, order, hot, k, range)?;
+            Ok((ord, top))
         },
-        segments,
+        pieces.into_iter(),
     )?;
+    let mut merged: HashMap<usize, SegmentTop> = HashMap::new();
+    for (ord, (part, count)) in found {
+        let e = merged.entry(ord).or_default();
+        e.0.extend(part);
+        e.1 += count;
+    }
+    for (ord, (mut part, count)) in merged {
+        // Best first, as `Rank` orders them, then the segment's top k.
+        part.sort_unstable_by(|a, b| (b.0, b.1, Reverse(b.2)).cmp(&(a.0, a.1, Reverse(a.2))));
+        part.truncate(k);
+        let top = Arc::new((part, count));
+        if k <= CACHE_MAX_K {
+            let mut map = cache.map.lock().expect("cache lock");
+            if map.len() >= CACHE_ENTRIES {
+                map.clear();
+            }
+            map.insert(keys[ord].clone(), top.clone());
+        }
+        tops[ord] = Some(top);
+    }
+    let tops = tops
+        .into_iter()
+        .enumerate()
+        .map(|(ord, t)| (ord as u32, t.expect("every segment searched")));
     let mut total = 0;
     let mut all = Vec::new();
     for (seg, top) in tops {
@@ -152,6 +187,7 @@ fn segment_top(
     order: Order,
     hot: Option<&Arc<HotColumns>>,
     k: usize,
+    range: std::ops::Range<DocId>,
 ) -> tantivy::Result<SegmentTop> {
     let fast = reader.fast_fields();
     let value: Box<dyn Fn(DocId) -> Option<u64>> = match order.by {
@@ -184,7 +220,7 @@ fn segment_top(
     let alive = reader.alive_bitset();
     let mut heap: BinaryHeap<Reverse<Rank>> = BinaryHeap::with_capacity(k + 1);
     let mut count = 0;
-    weight.for_each_no_score(reader, &mut |docs| {
+    let mut each = |docs: &[DocId]| {
         for &doc in docs {
             if alive.is_some_and(|a| !a.is_alive(doc)) || !checks.iter().all(|c| c.passes(doc)) {
                 continue;
@@ -210,7 +246,24 @@ fn segment_top(
                 heap.push(Reverse(rank));
             }
         }
-    })?;
+    };
+    // This piece's documents only: seek to its start, stop at its end.
+    let mut scorer = weight.scorer(reader, 1.0)?;
+    let mut doc = if scorer.doc() >= range.start {
+        scorer.doc()
+    } else {
+        scorer.seek(range.start)
+    };
+    let mut buf = [0; 64];
+    while doc < range.end {
+        let mut n = 0;
+        while doc < range.end && n < buf.len() {
+            buf[n] = doc;
+            n += 1;
+            doc = scorer.advance();
+        }
+        each(&buf[..n]);
+    }
     let top = heap
         .into_iter()
         .map(|Reverse(r)| (r.present, r.value, r.addr.0.1))
