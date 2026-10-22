@@ -373,12 +373,14 @@ fn migrates_a_v4_database_with_data() {
     let id = {
         let mut store = Store::open(&path, StoreConfig::default()).unwrap();
         let (id, _) = add(&mut store, "kept", false, 0);
-        // Roll the file back to v4, as the build before swarm health left it.
+        // Roll the file back to v4, as the build before swarm health left
+        // it: later migrations go too, or v5 would never be applied again.
         store
             .connection()
             .execute_batch(
-                "DROP TABLE swarm_history; DROP TABLE swarm_trackers; DROP TABLE swarm;
-                 DROP TABLE trackers; DELETE FROM schema_migrations WHERE version = 5;",
+                "DROP TABLE subscription_data; DROP TABLE subscriptions;
+                 DROP TABLE swarm_history; DROP TABLE swarm_trackers; DROP TABLE swarm;
+                 DROP TABLE trackers; DELETE FROM schema_migrations WHERE version >= 5;",
             )
             .unwrap();
         id
