@@ -540,14 +540,16 @@ export function themesJson(
  * Pre-paint script. `lodestar.theme` in localStorage holds
  * `{ mode: 'system'|'light'|'dark', light: { id, vars? }, dark: { id, vars? } }`; `vars` is the
  * cached custom-property map of a non-Riverstone theme. Anything missing or malformed falls back
- * to Riverstone for the resolved mode.
+ * to Riverstone for the resolved mode, including a non-Riverstone id with no cached `vars`
+ * (its `data-theme` would match no CSS).
  */
 export const PREPAINT =
-	"(function(){var d=document.documentElement,s={};try{s=JSON.parse(localStorage.getItem('lodestar.theme'))||{}}catch(e){}" +
+	"(function(){var d=document.documentElement,s={},v,i,p;try{s=JSON.parse(localStorage.getItem('lodestar.theme'))||{}}catch(e){}" +
 	"var m=s.mode,n=m=='dark'||(m!='light'&&matchMedia('(prefers-color-scheme:dark)').matches)," +
-	"t=s[n?'dark':'light']||{},i=typeof t.id=='string'&&/^[a-z0-9-]+$/.test(t.id)?t.id:'riverstone-'+(n?'dark':'light'),v=t.vars,p;" +
-	"d.dataset.theme=i;d.style.colorScheme=n?'dark':'light';" +
-	"if(v&&typeof v=='object'&&i.indexOf('riverstone-')!=0)for(p in v)/^--[a-z0-9-]+$/.test(p)&&d.style.setProperty(p,v[p])})()";
+	"t=s[n?'dark':'light']||{},r='riverstone-'+(n?'dark':'light'),ok;i=t.id;v=t.vars;" +
+	"ok=typeof i=='string'&&/^[a-z0-9-]+$/.test(i)&&i.indexOf('riverstone-')!=0&&v&&typeof v=='object'&&Object.keys(v).length;" +
+	"d.dataset.theme=ok?i:r;d.style.colorScheme=n?'dark':'light';" +
+	'if(ok)for(p in v)/^--[a-z0-9-]+$/.test(p)&&d.style.setProperty(p,v[p])})()';
 
 export const prepaintFile = () =>
 	`// ${HEADER}\n/* eslint-disable */\n// @ts-nocheck\n// prettier-ignore\n${PREPAINT};\n`;

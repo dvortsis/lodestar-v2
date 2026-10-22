@@ -5,7 +5,7 @@
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<title>Lodestar</title>
 		<!-- prettier-ignore -->
-		<script id="prepaint">(function(){var d=document.documentElement,s={};try{s=JSON.parse(localStorage.getItem('lodestar.theme'))||{}}catch(e){}var m=s.mode,n=m=='dark'||(m!='light'&&matchMedia('(prefers-color-scheme:dark)').matches),t=s[n?'dark':'light']||{},i=typeof t.id=='string'&&/^[a-z0-9-]+$/.test(t.id)?t.id:'riverstone-'+(n?'dark':'light'),v=t.vars,p;d.dataset.theme=i;d.style.colorScheme=n?'dark':'light';if(v&&typeof v=='object'&&i.indexOf('riverstone-')!=0)for(p in v)/^--[a-z0-9-]+$/.test(p)&&d.style.setProperty(p,v[p])})()</script>
+		<script id="prepaint">(function(){var d=document.documentElement,s={},v,i,p;try{s=JSON.parse(localStorage.getItem('lodestar.theme'))||{}}catch(e){}var m=s.mode,n=m=='dark'||(m!='light'&&matchMedia('(prefers-color-scheme:dark)').matches),t=s[n?'dark':'light']||{},r='riverstone-'+(n?'dark':'light'),ok;i=t.id;v=t.vars;ok=typeof i=='string'&&/^[a-z0-9-]+$/.test(i)&&i.indexOf('riverstone-')!=0&&v&&typeof v=='object'&&Object.keys(v).length;d.dataset.theme=ok?i:r;d.style.colorScheme=n?'dark':'light';if(ok)for(p in v)/^--[a-z0-9-]+$/.test(p)&&d.style.setProperty(p,v[p])})()</script>
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">
