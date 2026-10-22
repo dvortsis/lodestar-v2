@@ -409,6 +409,9 @@ CREATE TABLE class_rules (
 
 /// Pragmas that persist in the file and can only be set before the first
 /// table exists, then the per-connection ones.
+/// How long a connection waits for a lock another connection holds.
+pub(crate) const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 pub(crate) fn configure(conn: &Connection, mmap_size: u64) -> Result<()> {
     let page_count: i64 = conn.pragma_query_value(None, "page_count", |r| r.get(0))?;
     if page_count == 0 {
@@ -424,7 +427,7 @@ pub(crate) fn configure(conn: &Connection, mmap_size: u64) -> Result<()> {
     // folder (which also holds seal.key) mustn't yield purged quarantine
     // names or deleted torrents (owner, 2026-10-22).
     conn.pragma_update(None, "secure_delete", true)?;
-    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    conn.busy_timeout(BUSY_TIMEOUT)?;
     Ok(())
 }
 

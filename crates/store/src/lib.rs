@@ -469,7 +469,7 @@ impl Store {
             conn,
             codec,
             config,
-            ..
+            scrub_pending: _,
         } = self;
         let own: Vec<Prepared> = batch
             .torrents
