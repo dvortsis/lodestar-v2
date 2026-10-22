@@ -1001,6 +1001,12 @@
    "model": "opus",
    "notes": "from #94 review: detect returns None for Other/Ebook at full score (content safety false negative)",
    "session": "session_01KNC8PugVKjddvhH6vT8qXN"
+  },
+  "B4b-r2": {
+   "status": "running",
+   "model": "opus",
+   "session": "session_01SK5Ci2FahQUSGQuDVozi28",
+   "notes": "follow-up of #87 review: max_id visible-only, replay toggle, swap adult test"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
