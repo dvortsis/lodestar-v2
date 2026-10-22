@@ -10,6 +10,8 @@
 //!   follow the channel ([`log`], [`crawler::follow_intensity`]); fields
 //!   that can't are `restart_required`, and the section lists the ones
 //!   whose saved value waits for a restart.
+//! - `null` for a field resets it: its saved value is removed, and the
+//!   file's value or the default applies again.
 //! - Nothing here reaches filtering state (rules, the floor, packs,
 //!   subscriptions: the filters API's, §20.7) or secrets (the
 //!   integrations `SecretStore`), and no field moves files at runtime.
@@ -129,8 +131,10 @@ pub trait Section:
     const FIELDS: &'static [Field];
     /// Its values as `config` has them (defaults, file, environment).
     fn from_config(config: &Config) -> Self;
-    /// Writes its values into `config`, which the services read at start.
-    fn apply(&self, config: &mut Config);
+    /// Writes `field`'s value into `config`, which the services read at
+    /// start. Only fields saved in the app are applied: the file's and the
+    /// environment's are in `config` already, exactly as written.
+    fn apply(&self, field: &str, config: &mut Config);
     /// Checks of `field` beyond its type and bounds; the message is for
     /// people.
     fn check(&self, _field: &str) -> Result<(), String> {
@@ -216,6 +220,17 @@ impl<T: Section> Entry<T> {
             trial.insert(field.name.to_string(), value.clone());
             match validate::<T>(&trial, field) {
                 Ok(_) => {
+                    // Never the value: say only that the file's is shadowed.
+                    if entry.base_source[field.name] == SettingSource::File
+                        && entry.base.get(field.name) != Some(&value)
+                    {
+                        tracing::info!(
+                            "settings: {}.{} is saved in the app and overrides config.toml; \
+                             set it to null in the app to reset",
+                            T::SECTION,
+                            field.name
+                        );
+                    }
                     saved.insert(field.name.to_string(), value);
                 }
                 Err(message) => tracing::warn!("settings: ignoring saved {k}: {message}"),
@@ -281,11 +296,12 @@ impl<T: Section> Entry<T> {
         }
     }
 
-    /// Checks `patch` against the current values; returns the values to
-    /// save, normalized, and the section they make.
-    fn plan(&self, patch: &Map<String, Value>) -> Result<(Vec<(String, Value)>, T), SettingsError> {
+    /// Checks `patch` against the current values; returns each field's
+    /// new saved value, normalized (`None`: reset, its saved value
+    /// removed), and the section they make.
+    fn plan(&self, patch: &Map<String, Value>) -> Result<(Changes, T), SettingsError> {
         let saved = self.saved.lock().expect("settings lock");
-        let mut merged = self.effective_map(&saved);
+        let mut next = saved.clone();
         let mut fields = Vec::new();
         for (name, value) in patch {
             let Some(field) = T::FIELDS.iter().find(|f| f.name == name) else {
@@ -300,6 +316,12 @@ impl<T: Section> Entry<T> {
                     var: field.env.unwrap_or_default().to_string(),
                 });
             }
+            fields.push(field);
+            // `null` resets the field to the file's value or the default.
+            if value.is_null() {
+                next.remove(name);
+                continue;
+            }
             // Each field alone first, so an error names the field at fault.
             let mut trial = self.effective_map(&saved);
             trial.insert(name.clone(), value.clone());
@@ -307,9 +329,9 @@ impl<T: Section> Entry<T> {
                 field: name.clone(),
                 message,
             })?;
-            merged.insert(name.clone(), value.clone());
-            fields.push(field);
+            next.insert(name.clone(), value.clone());
         }
+        let merged = self.effective_map(&next);
         let section: T = from_object(&merged).map_err(|e| SettingsError::Invalid {
             field: patch.keys().next().cloned().unwrap_or_default(),
             message: format!("Not a valid value: {e}."),
@@ -319,7 +341,9 @@ impl<T: Section> Entry<T> {
         let out = fields
             .iter()
             .map(|f| {
-                let v = normalized.get(f.name).cloned().unwrap_or(Value::Null);
+                let v = next
+                    .contains_key(f.name)
+                    .then(|| normalized.get(f.name).cloned().unwrap_or(Value::Null));
                 (f.name.to_string(), v)
             })
             .collect();
@@ -356,9 +380,12 @@ trait Erased: Send + Sync + std::fmt::Debug {
     fn as_any(&self) -> &dyn Any;
 }
 
+/// Each patched field's new saved value; `None` removes it.
+type Changes = Vec<(String, Option<Value>)>;
+
 /// A checked patch, waiting to be saved.
 struct Planned {
-    fields: Vec<(String, Value)>,
+    fields: Changes,
     section: Box<dyn Any + Send>,
 }
 
@@ -402,7 +429,10 @@ impl<T: Section> Erased for Entry<T> {
     fn commit(&self, planned: Planned) {
         let mut saved = self.saved.lock().expect("settings lock");
         for (name, value) in planned.fields {
-            saved.insert(name, value);
+            match value {
+                Some(v) => saved.insert(name, v),
+                None => saved.remove(&name),
+            };
         }
         let section = *planned
             .section
@@ -418,7 +448,13 @@ impl<T: Section> Erased for Entry<T> {
     }
 
     fn apply(&self, config: &mut Config) {
-        self.tx.borrow().apply(config);
+        let saved = self.saved.lock().expect("settings lock");
+        let current = self.tx.borrow();
+        for f in T::FIELDS {
+            if saved.contains_key(f.name) && !self.env_set(f) && !f.read_only {
+                current.apply(f.name, config);
+            }
+        }
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -426,7 +462,8 @@ impl<T: Section> Erased for Entry<T> {
     }
 }
 
-/// `T`'s JSON schema, inline, with each number field's bounds.
+/// `T`'s JSON schema, inline, with each number field's bounds and
+/// `readOnly` on the fields the app never changes.
 fn schema<T: Section>() -> Value {
     let mut schema =
         serde_json::to_value(<T as utoipa::PartialSchema>::schema()).expect("a schema serializes");
@@ -435,6 +472,9 @@ fn schema<T: Section>() -> Value {
             if let (Some((min, max)), Some(Value::Object(p))) = (f.range, props.get_mut(f.name)) {
                 p.insert("minimum".into(), min.into());
                 p.insert("maximum".into(), max.into());
+            }
+            if let (true, Some(Value::Object(p))) = (f.read_only, props.get_mut(f.name)) {
+                p.insert("readOnly".into(), true.into());
             }
         }
     }
@@ -538,16 +578,21 @@ impl SettingsApi for Registry {
         let entry = self.find(section).ok_or(SettingsError::UnknownSection)?;
         let _write = self.write.lock().expect("settings write lock");
         let planned = entry.plan(&patch.0)?;
-        let rows: Vec<(String, String)> = planned
-            .fields
-            .iter()
-            .map(|(name, value)| (key(section, name), value.to_string()))
-            .collect();
-        let refs: Vec<(&str, &str)> = rows.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        let mut set = Vec::new();
+        let mut remove = Vec::new();
+        for (name, value) in &planned.fields {
+            match value {
+                Some(v) => set.push((key(section, name), v.to_string())),
+                None => remove.push(key(section, name)),
+            }
+        }
+        let set: Vec<(&str, &str)> = set.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        let remove: Vec<&str> = remove.iter().map(String::as_str).collect();
+        // Saves and resets together, in one transaction.
         self.store
             .lock()
             .expect("store lock")
-            .set_settings_text(&refs)
+            .update_settings_text(&set, &remove)
             .map_err(|e| SettingsError::Store(e.to_string()))?;
         entry.commit(planned);
         Ok(entry.values())

@@ -38,8 +38,11 @@ impl Section for Search {
         }
     }
 
-    fn apply(&self, config: &mut Config) {
-        config.search.enabled = self.enabled;
-        config.search.heap_mib = self.heap_mib as usize;
+    fn apply(&self, field: &str, config: &mut Config) {
+        match field {
+            "enabled" => config.search.enabled = self.enabled,
+            "heap_mib" => config.search.heap_mib = self.heap_mib as usize,
+            _ => {}
+        }
     }
 }

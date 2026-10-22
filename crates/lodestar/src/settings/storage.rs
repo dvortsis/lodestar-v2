@@ -40,8 +40,11 @@ impl Section for Storage {
         }
     }
 
-    fn apply(&self, config: &mut Config) {
-        config.store.mmap_mib = self.mmap_mib;
-        config.store.archive_raw = self.archive_raw;
+    fn apply(&self, field: &str, config: &mut Config) {
+        match field {
+            "mmap_mib" => config.store.mmap_mib = self.mmap_mib,
+            "archive_raw" => config.store.archive_raw = self.archive_raw,
+            _ => {}
+        }
     }
 }

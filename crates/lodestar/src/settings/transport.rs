@@ -38,5 +38,5 @@ impl Section for Transport {
         Transport::default()
     }
 
-    fn apply(&self, _: &mut Config) {}
+    fn apply(&self, _: &str, _: &mut Config) {}
 }

@@ -53,14 +53,24 @@ impl Store {
     /// Stores every `(key, text)` pair in one transaction: all of them
     /// are written, or none is.
     pub fn set_settings_text(&mut self, entries: &[(&str, &str)]) -> Result<()> {
+        self.update_settings_text(entries, &[])
+    }
+
+    /// Stores every `(key, text)` pair in `set` and deletes every key in
+    /// `remove`, in one transaction: all of it happens, or none does.
+    pub fn update_settings_text(&mut self, set: &[(&str, &str)], remove: &[&str]) -> Result<()> {
         let tx = self.conn.transaction()?;
         {
-            let mut stmt = tx.prepare_cached(
+            let mut upsert = tx.prepare_cached(
                 "INSERT INTO settings (key, value) VALUES (?1, ?2)
                  ON CONFLICT (key) DO UPDATE SET value = excluded.value",
             )?;
-            for (key, value) in entries {
-                stmt.execute(params![key, value])?;
+            for (key, value) in set {
+                upsert.execute(params![key, value])?;
+            }
+            let mut delete = tx.prepare_cached("DELETE FROM settings WHERE key = ?1")?;
+            for key in remove {
+                delete.execute([key])?;
             }
         }
         tx.commit()?;
@@ -110,6 +120,22 @@ mod tests {
     }
 
     #[test]
+    fn updates_set_and_remove_together() {
+        let (_dir, mut s) = store();
+        s.set_settings_text(&[("config.a", "1"), ("config.b", "2")])
+            .unwrap();
+        s.update_settings_text(&[("config.c", "3")], &["config.a", "config.missing"])
+            .unwrap();
+        assert_eq!(
+            s.settings_with_prefix("config.").unwrap(),
+            vec![
+                ("config.b".to_string(), "2".to_string()),
+                ("config.c".to_string(), "3".to_string()),
+            ]
+        );
+    }
+
+    #[test]
     fn a_non_text_value_is_corrupt() {
         let (_dir, mut s) = store();
         s.set_setting_i64("config.n", 5).unwrap();
@@ -133,5 +159,11 @@ mod tests {
         );
         assert_eq!(s.setting_text("config.a").unwrap().as_deref(), Some("old"));
         assert_eq!(s.setting_text("config.boom").unwrap(), None);
+        // A failed write rolls back the deletes beside it too.
+        assert!(
+            s.update_settings_text(&[("config.boom", "1")], &["config.a"])
+                .is_err()
+        );
+        assert_eq!(s.setting_text("config.a").unwrap().as_deref(), Some("old"));
     }
 }

@@ -48,7 +48,8 @@ Options:
   -h, --help       Print this help
 
 Environment: LODESTAR_DATA_DIR, LODESTAR_HTTP_BIND, LODESTAR_DHT_PORT,
-LODESTAR_DHT_ENABLED, LODESTAR_INTENSITY, LODESTAR_LOG";
+LODESTAR_DHT_ENABLED, LODESTAR_INTENSITY, LODESTAR_LOG,
+LODESTAR_SECURE_COOKIES";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
@@ -137,7 +138,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Command::Healthcheck(path) => match load(path) {
-            Ok(config) => match healthcheck(config.http.bind) {
+            Ok(config) => match healthcheck(settings::network::effective_bind(&config)) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {
                     eprintln!("unhealthy: {e}");

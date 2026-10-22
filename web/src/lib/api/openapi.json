@@ -3891,7 +3891,7 @@
       },
       "SettingsPatch": {
         "type": "object",
-        "description": "`PATCH /settings/{section}`: some of the section's fields and their\nnew values, as its schema in `GET /settings` describes. Fields left\nout keep their values; an unknown field is refused."
+        "description": "`PATCH /settings/{section}`: some of the section's fields and their\nnew values, as its schema in `GET /settings` describes. Fields left\nout keep their values; an unknown field is refused. `null` resets a\nfield: its saved value is removed, and the `config.toml` value or the\ndefault applies again."
       },
       "SettingsSection": {
         "type": "object",
