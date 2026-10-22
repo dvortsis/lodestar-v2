@@ -1519,6 +1519,20 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Size:** `title_stem` costs about 3 B per torrent (words only, no norms). The torrent index is 408 B per torrent at 100k (budget 512). Schema v4.
 - **Name patterns** moved into the §20 rule engine with #27 (an M4 add-on), so M3 doesn't build them.
 
+**M5 decisions (index rebuild):**
+- **The directory name is the proof of completeness.** Under `data/index`, `v{schema}-t{tokenizer}` is complete, `….building` is in progress and `….trash` is being deleted. A build becomes complete only by an atomic rename, after its final commit and a `COMPLETE` marker. A crash between the marker and the rename just needs the rename at the next start. Directories from before this change already have the complete form, so upgrading doesn't rebuild.
+- **`Serving::open_or_rebuild(root, store_path, config)`** is the binary's entry point (wired in by B5a). It holds an exclusive lock on `root/.lock`, so a second instance fails with `Error::Locked`. It serves through an `RwLock<Arc<SearchIndex>>`: readers take the index once per query, which moves them to the new one between queries.
+  - When this build's index exists, it opens that index and starts the live indexer, as before.
+  - Otherwise, the newest complete older index keeps serving. Meanwhile, `Rebuild` follows the store into `….building` with the ordinary `Indexer::catch_up`, covering both indexes, per-index watermarks and `reindex_log`. It commits every 50k torrents, so an interrupted build resumes from its own watermarks.
+  - Once caught up, the build commits, waits for merges, writes the marker and renames. Then it catches up once more and starts a live indexer on the new index. Readers swap to it, and the old live indexer stops. Each index follows `reindex_log` from its own sequence, so entries logged at any point are applied by whichever index is behind them, before or after the swap.
+  - With nothing older to serve (a new install, or no servable older index), any partial build is promoted and fills live, which is the old behaviour.
+- **An older index serves by field name.** Its stored schema is used, and every field this build queries is resolved by name and value type. If the schema is identical (a tokenizer bump), the old index keeps following the store until the swap. If it differs, it serves read-only, and torrents stored meanwhile appear at the swap. Queries for capabilities it lacks (a field that's fast only in the new schema) can fail one at a time until then.
+  - An older index that lacks a field entirely can't run this build's queries, so it isn't served. **A bump that adds a field (B6, M7) therefore needs a schema overlay:** reopen the old index with the new fields appended, which Tantivy reads as empty. That's left to the first bump that needs it, because it requires `serde_json` in the search crate.
+- **Old directories are renamed to trash and then deleted after the swap, with backoff retries** (Windows can't delete mapped files, §11). Whatever is left is retried at the next start. A newer version's directory is never deleted, so a downgrade and upgrade don't rebuild twice.
+- **`RebuildProgress { phase, done, total, started_at, from, to }`** comes from `Serving::progress()` for the "Index rebuilding" banner (§10.4) and Insights. The phases are `Building`, `Finishing`, `Swapping` and `Failed`. A failure is logged, and the old index keeps serving until the next start resumes the build. The live counters (`IndexStats`) are kept across the swap.
+- **Memory:** while a rebuild runs, two writers are active (live and build), each with the configured heap.
+- **Tests** use a version override in `ServingConfig`, so they don't bump `SCHEMA_VERSION`.
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.

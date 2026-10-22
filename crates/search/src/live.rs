@@ -60,10 +60,20 @@ pub struct LiveIndexer {
 
 impl LiveIndexer {
     /// Starts following `store` (a reader connection) into `index`.
-    pub fn spawn(index: SearchIndex, mut store: Store, config: LiveConfig) -> Result<LiveIndexer> {
+    pub fn spawn(index: SearchIndex, store: Store, config: LiveConfig) -> Result<LiveIndexer> {
+        LiveIndexer::spawn_with_stats(index, store, config, Arc::default())
+    }
+
+    /// The same, counting into `stats`, which outlive this indexer: the
+    /// serving handle keeps one set across an index swap.
+    pub fn spawn_with_stats(
+        index: SearchIndex,
+        mut store: Store,
+        config: LiveConfig,
+        stats: Arc<IndexStats>,
+    ) -> Result<LiveIndexer> {
         let mut indexer = index.writer(config.heap_bytes)?;
         let stop = Arc::new(AtomicBool::new(false));
-        let stats = Arc::new(IndexStats::default());
         stats.watermark.store(indexer.last_id(), Ordering::Relaxed);
         let (s, st) = (stop.clone(), stats.clone());
         let thread = std::thread::Builder::new()
