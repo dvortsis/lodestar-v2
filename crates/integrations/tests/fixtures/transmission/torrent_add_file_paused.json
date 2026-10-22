@@ -1,0 +1,39 @@
+{
+  "recorded_from": "Transmission 4.0.5 (rpc-version 17), transmission-daemon on Ubuntu 24.04",
+  "note": "torrent-add with metainfo (base64 .torrent), paused, for a file selection",
+  "request": {
+    "method": "POST",
+    "path": "/transmission/rpc",
+    "query": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "server",
+        "Transmission"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "content-security-policy",
+        "frame-ancestors 'self'"
+      ],
+      [
+        "access-control-allow-origin",
+        "*"
+      ],
+      [
+        "content-type",
+        "application/json; charset=UTF-8"
+      ],
+      [
+        "content-length",
+        "146"
+      ]
+    ],
+    "body": "{\"arguments\":{\"torrent-added\":{\"hashString\":\"f16304349815c2941fe00ababb5fe4e9098e0ee4\",\"id\":2,\"name\":\"Lodestar Fixture Pack\"}},\"result\":\"success\"}"
+  }
+}

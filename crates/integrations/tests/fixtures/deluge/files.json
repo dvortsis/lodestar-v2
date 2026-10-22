@@ -1,0 +1,27 @@
+{
+  "recorded_from": "Deluge 2.1.2.dev0 (Web UI JSON-RPC, libtorrent 2.0.10), deluged + deluge-web on Ubuntu 24.04",
+  "note": "core.get_torrent_status: the .torrent fixture's three files",
+  "request": {
+    "method": "POST",
+    "path": "/json",
+    "query": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "server",
+        "TwistedWeb"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "set-cookie",
+        "_session_id=51cec5b254ced983cc6da4135a601fd4b21cc9fcf5daee1f2d5b20dc59e7d8554811; Expires=Thu, 22 Oct 2026 10:28:23 GMT; Path=/json"
+      ]
+    ],
+    "body": "{\"result\": {\"files\": [{\"index\": 0, \"path\": \"Lodestar Fixture Pack/Disc 1/track01.flac\", \"size\": 4000, \"offset\": 0}, {\"index\": 1, \"path\": \"Lodestar Fixture Pack/Disc 1/track02.flac\", \"size\": 5000, \"offset\": 4000}, {\"index\": 2, \"path\": \"Lodestar Fixture Pack/cover.jpg\", \"size\": 1000, \"offset\": 9000}]}, \"error\": null, \"id\": 23}"
+  }
+}

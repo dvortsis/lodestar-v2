@@ -1,0 +1,23 @@
+{
+  "recorded_from": "Deluge 2.1.2.dev0 (Web UI JSON-RPC, libtorrent 2.0.10), deluged + deluge-web on Ubuntu 24.04",
+  "note": "auth.login: wrong password",
+  "request": {
+    "method": "POST",
+    "path": "/json",
+    "query": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "server",
+        "TwistedWeb"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "body": "{\"result\": false, \"error\": null, \"id\": 1}"
+  }
+}
