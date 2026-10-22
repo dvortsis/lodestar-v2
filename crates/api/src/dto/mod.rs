@@ -20,6 +20,7 @@ pub mod facets;
 pub mod filters;
 pub mod search;
 pub mod settings;
+pub mod suggest;
 pub mod torrents;
 
 /// What a secret (a password, the setup token) shows as in `Debug`

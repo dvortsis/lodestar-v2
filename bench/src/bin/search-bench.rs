@@ -16,6 +16,10 @@
 //! A third table times `/facets` (B6): a lease, then every facet group
 //! and histogram for it, for a broad word alone and with selections that
 //! need disjunctive passes of their own, gated at [`FACETS_P95`].
+//!
+//! A fourth times `/suggest` (B7) for each kind of item, under the base
+//! query `/search` runs (hidden and Adult torrents left out), gated at
+//! [`SUGGEST_P95`], after building the title FST and reporting its size.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -25,8 +29,11 @@ use std::time::{Duration, Instant};
 
 use lodestar_bench::synth::Generator;
 use lodestar_metainfo::Info;
+use lodestar_search::query::TagKey;
+use lodestar_search::suggest::{self, Shown};
 use lodestar_search::{
-    CancelToken, FacetParams, Lease, SearchIndex, Sort, Start, facets, index_dir, parse,
+    CancelToken, FacetParams, Lease, Node, SearchIndex, Sort, Start, facets, index_dir, parse,
+    with_filters,
 };
 use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig};
 use rand::seq::IndexedRandom;
@@ -39,6 +46,8 @@ const KEYWORD_P95: Duration = Duration::from_millis(30);
 const BROWSE_P95: Duration = Duration::from_millis(50);
 /// §3: facets for the same query (a separate request), p95.
 const FACETS_P95: Duration = Duration::from_millis(100);
+/// §3: typeahead / suggest, p95.
+const SUGGEST_P95: Duration = Duration::from_millis(15);
 /// The deep-cursor class reads this many pages of 50 before timing one.
 const DEEP_PAGES: usize = 20;
 /// The estimate samples a sixteenth of the documents, so its relative
@@ -451,6 +460,7 @@ fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
     }
     ok &= api_path(a, &index, &reader, now)?;
     ok &= facets_path(a, &index, now)?;
+    ok &= suggest_path(a, &index, &reader, now)?;
     Ok(ok)
 }
 
@@ -631,6 +641,158 @@ fn facets_path(
             ms(*times.last().expect("queries")),
             hits / queries.len(),
             FACETS_P95.as_millis(),
+            if pass { "PASS" } else { "FAIL" }
+        );
+    }
+    Ok(ok)
+}
+
+/// `/suggest` as the API runs it, per kind of item, after building the
+/// title FST from the store (its build time and memory are reported).
+fn suggest_path(
+    a: &Args,
+    index: &SearchIndex,
+    store: &Store,
+    now: i64,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let started = Instant::now();
+    index.titles().rebuild_from(store)?;
+    let built = started.elapsed();
+    let set = index.titles().current().ok_or("no title set")?;
+    println!(
+        "\n  /suggest: title FST of {} titles from {} torrents, built in {:.1} s, {:.1} MB in memory",
+        set.len(),
+        set.torrents(),
+        built.as_secs_f64(),
+        set.memory_bytes() as f64 / 1e6
+    );
+    let (words, names) = vocabulary(a.seed ^ 0x5eed, 20_000);
+    let common = &words[..words.len().min(100)];
+    // Common words of letters only, long enough to misspell.
+    let letters: Vec<String> = common
+        .iter()
+        .filter(|w| w.len() >= 5 && w.bytes().all(|b| b.is_ascii_lowercase()))
+        .cloned()
+        .collect();
+    let mut rng = ChaCha8Rng::seed_from_u64(a.seed ^ 0x0506_6357);
+    let cut = |w: &str, n: usize| w.chars().take(n).collect::<String>();
+    let mut make = |f: &mut dyn FnMut(&mut ChaCha8Rng) -> String| {
+        (0..a.queries).map(|_| f(&mut rng)).collect::<Vec<_>>()
+    };
+    let values = [
+        "res:", "res:10", "ext:m", "lang:", "group:", "group:r", "codec:h", "type:", "hdr:",
+        "audio:a",
+    ];
+    let chips = [
+        "2160p", "x265", "mkv", "1080p", "flac", "2019", "hevc", "french",
+    ];
+    let classes: Vec<(&str, Vec<String>)> = vec![
+        (
+            "title prefix",
+            make(&mut |r| {
+                let name = names.choose(r).expect("names");
+                let n = r.random_range(1..=3usize);
+                format!("{} {}", name[0], cut(&name[1], n))
+            }),
+        ),
+        (
+            "short prefix",
+            make(&mut |r| cut(common.choose(r).expect("words"), 2)),
+        ),
+        (
+            "field value",
+            make(&mut |r| values.choose(r).expect("values").to_string()),
+        ),
+        (
+            "smart chip",
+            make(&mut |r| {
+                format!(
+                    "{} {}",
+                    common.choose(r).expect("words"),
+                    chips.choose(r).expect("chips")
+                )
+            }),
+        ),
+        (
+            "did you mean",
+            make(&mut |r| {
+                // A common word with one letter changed (one edit): it
+                // finds nothing, so the fuzzy pass runs.
+                let mut w: Vec<char> = letters.choose(r).expect("words").chars().collect();
+                let i = r.random_range(1..w.len());
+                w[i] = if w[i] == 'z' {
+                    'a'
+                } else {
+                    (w[i] as u8 + 1) as char
+                };
+                w.into_iter().collect()
+            }),
+        ),
+        (
+            "field name",
+            make(&mut |r| {
+                cut(
+                    ["re", "ex", "si", "ty", "co", "la"]
+                        .choose(r)
+                        .expect("names"),
+                    2,
+                )
+            }),
+        ),
+    ];
+    // `/search`'s base query: hidden and Adult torrents left out.
+    let no_adult = [Node::Not {
+        of: Box::new(Node::Tag {
+            key: TagKey::Type,
+            any: vec!["adult".into()],
+        }),
+    }];
+    let restrict = move |n: Node| with_filters(n.without_hidden(), &no_adult);
+    let shown = Shown {
+        adult: false,
+        hidden: false,
+    };
+    let cancel = CancelToken::new();
+    let ms = |d: Duration| format!("{:.2}", d.as_secs_f64() * 1000.0);
+    println!(
+        "  {:<24} {:>8} {:>8} {:>8} {:>10}  target",
+        "class", "p50", "p95", "max", "mean items"
+    );
+    let mut ok = true;
+    for (name, queries) in &classes {
+        let run = |q: &str| {
+            let req = suggest::Request {
+                q,
+                pos: None,
+                limit: suggest::DEFAULT_LIMIT,
+                shown,
+                restrict: &restrict,
+                now,
+            };
+            suggest::suggest(index, &req, &cancel)
+        };
+        for q in queries.iter().take(20) {
+            run(q)?;
+        }
+        let mut times = Vec::with_capacity(queries.len());
+        let mut items = 0usize;
+        for q in queries {
+            let started = Instant::now();
+            items += run(q)?.len();
+            times.push(started.elapsed());
+        }
+        times.sort();
+        let p95 = pct(&times, 0.95);
+        let pass = p95 <= SUGGEST_P95;
+        ok &= pass;
+        println!(
+            "  {:<24} {:>8} {:>8} {:>8} {:>10}  p95 < {} ms {}",
+            name,
+            ms(pct(&times, 0.5)),
+            ms(p95),
+            ms(*times.last().expect("queries")),
+            items / queries.len(),
+            SUGGEST_P95.as_millis(),
             if pass { "PASS" } else { "FAIL" }
         );
     }

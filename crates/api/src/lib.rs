@@ -32,6 +32,7 @@ pub mod filters;
 pub mod openapi;
 mod search;
 pub mod settings;
+mod suggest;
 mod torrents;
 
 use std::sync::{Arc, Mutex};
@@ -70,6 +71,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(auth::routes())
         .merge(search::routes())
         .merge(facets::routes())
+        .merge(suggest::routes())
         .merge(torrents::routes())
         .merge(filters::routes())
         .merge(settings::routes())

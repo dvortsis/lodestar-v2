@@ -146,6 +146,11 @@ impl LiveIndexer {
         hook: Arc<CommitHook>,
     ) -> Result<LiveIndexer> {
         let mut indexer = index.writer(config.heap_bytes)?;
+        // B7: the title FST follows this store, rebuilt off this thread.
+        let titles = index.titles().clone();
+        if let Some(path) = store.connection().path().filter(|p| !p.is_empty()) {
+            titles.follow(path.into());
+        }
         let stop = Arc::new(AtomicBool::new(false));
         stats.watermark.store(indexer.last_id(), Ordering::Relaxed);
         let (s, st) = (stop.clone(), stats.clone());
@@ -161,6 +166,7 @@ impl LiveIndexer {
                     st.commits.fetch_add(1, Ordering::Relaxed);
                     let now = unix_now();
                     st.last_commit.store(now, Ordering::Relaxed);
+                    titles.committed();
                     if *new_docs > 0 {
                         hook.publish(Committed {
                             docs_added: std::mem::take(new_docs),
