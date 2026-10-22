@@ -665,13 +665,13 @@
    "notes": "launched 09:14 (briefs/X-clients.md); quick-xml approved"
   },
   "X-notify": {
-   "status": "running",
+   "status": "in_review",
    "model": "sonnet",
    "session": "session_01JVt8W2aGJyEFgv7HYwQJUF",
-   "pr": null,
+   "pr": 60,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "launched 09:14 (briefs/X-notify.md); ntfy, Discord, RSS renderer; email split out"
+   "notes": "PR #60 opened 09:35; reviewer (incl. security) running"
   },
   "B17": {
    "status": "pending",
@@ -847,5 +847,6 @@
   "M4 continuation: waiting on ExitPlanMode approval (plan mode) \u2014 can't act on #48 review",
   "Modern DHT crawler architecture: waiting on an AskUserQuestion"
  ],
- "launches_today": 4
+ "launches_today": 4,
+ "last_heartbeat": "2026-10-22T09:38Z"
 }
