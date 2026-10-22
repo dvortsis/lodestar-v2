@@ -963,6 +963,8 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 | 7 | Torznab, download clients, notifications, grouping/"same file", regex prefilter, uTP, `.torrent` import, opt-in plugins | Feature tests; uTP raises metadata success rate (measured) |
 | 8 | Hardening: relevance suite + NDCG gate, perf/size gates, docs, 1.0 | All gates green; docs complete |
 
+**Build plan:** the order of work from M5 to 1.0, the PR slices and which ones helper agents take are in `docs/build-plan.md`.
+
 **MVP cut line:** this scope is large for a small team. **v0.5 = M0–M3 + the minimum of M5 + Docker**: a crawler with MSE, search with the query language, effective titles and composition, and the core UI. Swarm health (M4), Windows MSI, Unraid CA, Torznab, plugins, uTP, compare and grouping follow in v0.6–1.0. Each milestone ships something usable.
 
 **v0.5 also includes the importer framework** (M2 add-on): the bitmagnet importer plus Rutracker dumps, MagnetDB (if access is granted), RARBG/magnetico/bitmagnet exports and DMM hashlists, so the cold start is skipped.
