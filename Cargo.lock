@@ -1401,6 +1401,7 @@ dependencies = [
  "lodestar-bencode",
  "lodestar-metainfo",
  "lodestar-peer-wire",
+ "lodestar-utp",
  "num-bigint",
  "proptest",
  "rand 0.10.3",
@@ -1501,6 +1502,16 @@ dependencies = [
  "rustls",
  "tokio",
  "url",
+]
+
+[[package]]
+name = "lodestar-utp"
+version = "0.0.0"
+dependencies = [
+ "proptest",
+ "rand 0.10.3",
+ "socket2",
+ "tokio",
 ]
 
 [[package]]
