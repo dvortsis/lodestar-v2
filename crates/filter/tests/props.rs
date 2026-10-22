@@ -246,6 +246,72 @@ fn ten_thousand_rules(share: usize) -> Vec<lodestar_filter::UserRule> {
         .collect()
 }
 
+/// The calibration workload's median time on the reference runner, in
+/// nanoseconds: the runner that measured F1's merge commit (df5cb91, job
+/// 119803975616: core 8.9 µs, 10% 40.8 µs). See [`calibrate`].
+const REFERENCE_NS: u64 = 51_000_000;
+
+/// The budget's scale is capped here, so a pathologically slow or
+/// overloaded machine fails rather than passing anything.
+const MAX_SCALE: f64 = 1.6;
+
+/// A fixed CPU workload that shares no code with the filter crate: split
+/// a fixed corpus of release-like lines into words, lowercase them into a
+/// buffer, hash them (FNV-1a), count them in a table and sort each line's
+/// hashes. It's what the filter does in kind (bytes, small strings,
+/// hashing, branches), so it tracks the same CPU differences. Returns the
+/// median of seven runs, in nanoseconds, after one warm-up.
+fn calibrate() -> u64 {
+    let mut r = Rng(0x2545_f491_4f6c_dd1d);
+    let corpus: Vec<String> = (0..4_000)
+        .map(|_| {
+            let words = 6 + r.next() as usize % 10;
+            (0..words)
+                .map(|_| {
+                    let w = r.word();
+                    match r.next() % 4 {
+                        0 => w.to_uppercase(),
+                        1 => format!("{w}{}", r.next() % 2160),
+                        _ => w,
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(if r.next() % 2 == 0 { "." } else { " " })
+        })
+        .collect();
+    let run = || {
+        let mut table = vec![0u32; 4096];
+        let mut word = String::new();
+        let mut hashes: Vec<u64> = Vec::new();
+        for _ in 0..30 {
+            for line in &corpus {
+                hashes.clear();
+                for w in line.split(|c: char| !c.is_ascii_alphanumeric()) {
+                    word.clear();
+                    word.extend(w.chars().map(|c| c.to_ascii_lowercase()));
+                    let h = word.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+                        (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+                    });
+                    table[(h % 4096) as usize] += 1;
+                    hashes.push(h);
+                }
+                hashes.sort_unstable();
+            }
+        }
+        std::hint::black_box(&table);
+    };
+    run();
+    let mut times: Vec<u64> = (0..7)
+        .map(|_| {
+            let start = Instant::now();
+            run();
+            start.elapsed().as_nanos() as u64
+        })
+        .collect();
+    times.sort_unstable();
+    times[3]
+}
+
 /// §20.8 and the owner's budget (§1.6.6): under 50 µs per torrent at
 /// 10,000 rules. Ignored in debug test runs; CI runs it in release (the
 /// `filter budget` job): `cargo test --release -p lodestar-filter --test
@@ -256,12 +322,27 @@ fn ten_thousand_rules(share: usize) -> Vec<lodestar_filter::UserRule> {
 /// 25% of the rules built on words the torrents have. The budget holds
 /// the core, 1% and 10%; 25% is measured and reported, not held.
 ///
-/// The CI runner is authoritative. A slower machine (the build VM runs
-/// about 1.4 times slower) can fail the 10% case locally.
+/// The owner's 50 µs holds at the reference runner's speed. A slower
+/// machine gets the budget scaled by how much slower it runs a fixed
+/// workload ([`calibrate`]), up to [`MAX_SCALE`]; a faster one never gets
+/// more than 50 µs.
 #[test]
 #[ignore]
 fn budget() {
-    const BUDGET_US: u128 = 50;
+    const OWNERS_US: f64 = 50.0;
+    // Calibrated right before each case, so a shared machine's speed is
+    // read when the case runs.
+    let calibrated = || {
+        let now = calibrate();
+        let scale = (now as f64 / REFERENCE_NS as f64).clamp(1.0, MAX_SCALE);
+        let budget = std::time::Duration::from_secs_f64(OWNERS_US * scale / 1e6);
+        let line = format!(
+            "calibration {:.1} ms (reference {:.1} ms), scale {scale:.2}, budget {budget:?}",
+            now as f64 / 1e6,
+            REFERENCE_NS as f64 / 1e6
+        );
+        (budget, line)
+    };
     let set = torrents(512);
     let classes: Vec<_> = set
         .iter()
@@ -315,11 +396,13 @@ fn budget() {
     };
     let core = shipped();
     let mut over = Vec::new();
+    let (budget, line) = calibrated();
     let per = time("core", &|i| {
         std::hint::black_box(core.verdict(std::hint::black_box(&items[i])));
     });
-    if per.as_micros() >= BUDGET_US {
-        over.push(format!("core: {per:?}"));
+    println!("core: {line}");
+    if per >= budget {
+        over.push(format!("core: {per:?} ({line})"));
     }
 
     // The whole engine: the core, every pack, and 10,000 of your rules,
@@ -338,6 +421,7 @@ fn budget() {
             met as f64 / items.len() as f64,
             full as f64 / items.len() as f64
         );
+        let (budget, line) = calibrated();
         let per = time(&what, &|i| {
             let v = engine.judge(std::hint::black_box(&items[i]), Some(&facts[i]), 0);
             assert!(
@@ -346,13 +430,14 @@ fn budget() {
                 "no rule of yours matches the set"
             );
         });
-        if per.as_micros() >= BUDGET_US {
+        println!("{what}: {line}");
+        if per >= budget {
             if held {
-                over.push(format!("{what}: {per:?}"));
+                over.push(format!("{what}: {per:?} ({line})"));
             } else {
-                println!("{what}: over {BUDGET_US} µs (reported, not held)");
+                println!("{what}: over {budget:?} (reported, not held)");
             }
         }
     }
-    assert!(over.is_empty(), "over the {BUDGET_US} µs budget: {over:?}");
+    assert!(over.is_empty(), "over budget: {over:?}");
 }
