@@ -139,6 +139,7 @@ impl Store {
     pub fn remove_subscription(&mut self, id: i64) -> Result<bool> {
         let tx = self.conn.transaction()?;
         tx.execute("DELETE FROM subscription_data WHERE sub_id = ?1", [id])?;
+        crate::floor::forget_list(&tx, id)?;
         let n = tx.execute("DELETE FROM subscriptions WHERE id = ?1", [id])?;
         tx.commit()?;
         Ok(n > 0)
@@ -163,9 +164,12 @@ impl Store {
             .optional()?)
     }
 
-    /// Records a refresh at `now`.
-    pub fn record_refresh(&mut self, id: i64, now: i64, refresh: &Refresh<'_>) -> Result<()> {
+    /// Records a refresh at `now`. For a list that's part of the floor,
+    /// returns how many entries the new version dropped that now wait in
+    /// its pending floor removals (still blocked, §2.7).
+    pub fn record_refresh(&mut self, id: i64, now: i64, refresh: &Refresh<'_>) -> Result<usize> {
         let tx = self.conn.transaction()?;
+        let mut kept = 0;
         match *refresh {
             Refresh::Updated {
                 data,
@@ -173,6 +177,8 @@ impl Store {
                 etag,
                 last_modified,
             } => {
+                let old = applied(&tx, id)?;
+                kept = crate::floor::note_list_version(&tx, id, old.as_deref(), data)?;
                 tx.execute("DELETE FROM subscription_data WHERE sub_id = ?1", [id])?;
                 tx.execute(
                     "INSERT INTO subscription_data (sub_id, pending, entries, data)
@@ -222,7 +228,7 @@ impl Store {
             }
         }
         tx.commit()?;
-        Ok(())
+        Ok(kept)
     }
 
     /// Applies (`accept`) or discards a held-back version. Returns whether
@@ -240,6 +246,13 @@ impl Store {
             return Ok(false);
         };
         if accept {
+            let old = applied(&tx, id)?;
+            let held: Vec<u8> = tx.query_row(
+                "SELECT data FROM subscription_data WHERE sub_id = ?1 AND pending = 1",
+                [id],
+                |r| r.get(0),
+            )?;
+            crate::floor::note_list_version(&tx, id, old.as_deref(), &held)?;
             tx.execute(
                 "DELETE FROM subscription_data WHERE sub_id = ?1 AND pending = 0",
                 [id],
@@ -266,4 +279,13 @@ impl Store {
         tx.commit()?;
         Ok(true)
     }
+}
+
+fn applied(c: &rusqlite::Connection, id: i64) -> Result<Option<Vec<u8>>> {
+    Ok(c.query_row(
+        "SELECT data FROM subscription_data WHERE sub_id = ?1 AND pending = 0",
+        [id],
+        |r| r.get(0),
+    )
+    .optional()?)
 }

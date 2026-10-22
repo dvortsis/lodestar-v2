@@ -177,9 +177,15 @@ fn keyword_tokens(k: &str) -> Vec<Token> {
 }
 
 /// Whether the keyword's words appear in a row in the text.
+#[cfg(test)]
 fn has_keyword(words: &[Token], text: &str) -> bool {
     let mut tokens = Vec::new();
     normalize::tokens(text, &mut tokens);
+    in_a_row(words, &tokens)
+}
+
+/// Whether the keyword's words appear in a row in these tokens.
+fn in_a_row(words: &[Token], tokens: &[Token]) -> bool {
     let Some(first) = words.first() else {
         return false;
     };
@@ -199,12 +205,7 @@ pub(crate) fn matches(what: &Match, item: &Item, doc: &Doc) -> bool {
         Match::Payload(sig) => payload_sig(item.files).is_some_and(|p| p.sig == *sig),
         Match::Keyword(k) => {
             let words = keyword_tokens(k);
-            has_keyword(&words, item.name)
-                || item
-                    .files
-                    .iter()
-                    .take(crate::MAX_FILES)
-                    .any(|f| has_keyword(&words, &f.path.join("/")))
+            doc.normalized().iter().any(|t| in_a_row(&words, t))
         }
         Match::Query(q) => doc.matches(q, &[]),
     }
