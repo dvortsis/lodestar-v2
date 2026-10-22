@@ -21,9 +21,10 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
+use axum::routing::{get, post};
+use axum::{Json, Router};
 use lodestar_classify::ContentType;
 use lodestar_filter::lists::SharedIps;
 use lodestar_filter::load::{KIND_HASHES, KIND_KEYWORD, KIND_PAYLOAD, KIND_QUERY, encode_match};
@@ -36,7 +37,10 @@ use lodestar_store::{ExceptionRow, OverrideRow, RuleRow, RuleSet, Store};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::{ApiError, ApiResult, ApiState, ClientIp, auth_error, internal, same_origin_json};
+use crate::ApiState;
+use crate::auth::{self, auth_error};
+use crate::error::{ApiError, ApiResult, internal};
+use crate::extract::{ClientIp, Json as JsonBody, Path, same_origin_json};
 
 /// What the filters API works with. The store is the writable control
 /// connection, not the ingest writer's.
@@ -59,14 +63,46 @@ const REPLAY_SECS: i64 = 30 * 86_400;
 /// Rows read for a preview.
 const PREVIEW_ROWS: usize = 100_000;
 
-fn bad(message: impl Into<String>) -> ApiError {
-    ApiError::new(StatusCode::BAD_REQUEST, message)
+/// The filters routes (§20.7): all behind a session.
+pub fn routes() -> Router<ApiState> {
+    auth::protected(
+        Router::new()
+            .route("/filters", get(overview))
+            .route("/filters/queue", get(queue))
+            .route("/filters/fixtures", get(fixtures))
+            .route("/filters/test", post(test))
+            .route("/classify", get(classes))
+            .route("/classify/correct", post(correct))
+            .route("/classify/rules", post(add_class_rule))
+            .route("/classify/rules/remove", post(remove_class_rule))
+            .route("/filters/preview", post(preview))
+            .route("/filters/preview/jobs", post(start_preview))
+            .route("/filters/preview/jobs/{id}", get(preview_job))
+            .route("/filters/preview/jobs/{id}/cancel", post(cancel_preview))
+            .route("/filters/apply", post(apply)),
+    )
+}
+
+/// A 400 for a change or test the filters refuse.
+fn bad(code: &'static str, message: impl Into<String>) -> ApiError {
+    ApiError::bad_request(code, message.into())
+}
+
+fn not_found(code: &'static str, message: &'static str) -> ApiError {
+    ApiError::new(StatusCode::NOT_FOUND, code, message)
+}
+
+fn conflict(code: &'static str, message: impl Into<String>) -> ApiError {
+    ApiError::new(StatusCode::CONFLICT, code, message.into())
 }
 
 fn hex20(s: &str) -> ApiResult<[u8; 20]> {
     let s = s.trim();
     if s.len() != 40 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(bad(format!("{s:?} isn't a 40-digit info hash")));
+        return Err(bad(
+            "bad_hash",
+            format!("{s:?} isn't a 40-digit info hash."),
+        ));
     }
     let mut out = [0u8; 20];
     for (i, o) in out.iter_mut().enumerate() {
@@ -89,11 +125,23 @@ fn action(name: &str) -> ApiResult<Action> {
     ]
     .into_iter()
     .find(|a| a.as_str() == name)
-    .ok_or_else(|| bad("action: flag, demote, hide, quarantine or drop"))
+    .ok_or_else(|| {
+        bad(
+            "unknown_action",
+            "The action must be flag, demote, hide, quarantine or drop.",
+        )
+        .field("action")
+    })
 }
 
 fn query(text: &str) -> ApiResult<Node> {
-    parse(text).map_err(|e| bad(format!("query: {}", e.message)))
+    parse(text).map_err(|e| {
+        bad(
+            "query_syntax",
+            format!("The query doesn't parse: {}", e.message),
+        )
+        .span(e.start, e.end)
+    })
 }
 
 fn days(d: Option<u32>, now: i64) -> Option<i64> {
@@ -119,11 +167,14 @@ impl MatchInput {
             self.payload.is_some(),
         ];
         if given.iter().filter(|g| **g).count() != 1 {
-            return Err(bad("give exactly one of hashes, keyword, query or payload"));
+            return Err(bad(
+                "bad_match",
+                "Give exactly one of hashes, keyword, query or payload.",
+            ));
         }
         if let Some(hs) = &self.hashes {
             if hs.is_empty() {
-                return Err(bad("no hashes"));
+                return Err(bad("bad_match", "Give at least one hash.").field("hashes"));
             }
             return Ok(Match::Hashes(
                 hs.iter().map(|h| hex20(h)).collect::<ApiResult<_>>()?,
@@ -140,7 +191,9 @@ impl MatchInput {
             .ok()
             .filter(|_| p.len() == 16)
             .map(Match::Payload)
-            .ok_or_else(|| bad("payload: 16 hex digits"))
+            .ok_or_else(|| {
+                bad("bad_match", "A payload signature is 16 hex digits.").field("payload")
+            })
     }
 }
 
@@ -312,7 +365,7 @@ impl Progress {
     fn step(&self, n: u64) -> ApiResult<()> {
         self.done.fetch_add(n, Ordering::Relaxed);
         if self.cancelled.load(Ordering::Acquire) {
-            return Err(ApiError::new(StatusCode::CONFLICT, "preview cancelled"));
+            return Err(conflict("preview_cancelled", "The preview was cancelled."));
         }
         Ok(())
     }
@@ -375,7 +428,8 @@ impl PreviewJobs {
         if running >= MAX_JOBS {
             return Err(ApiError::new(
                 StatusCode::TOO_MANY_REQUESTS,
-                "too many previews running; wait for one to finish or cancel it",
+                "too_many_previews",
+                "Too many previews are running: wait for one to finish, or cancel it.",
             ));
         }
         let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
@@ -390,7 +444,7 @@ impl PreviewJobs {
             .unwrap_or_else(|e| e.into_inner())
             .get(&id)
             .cloned()
-            .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "no such preview"))
+            .ok_or_else(|| not_found("preview_not_found", "There's no such preview."))
     }
 }
 
@@ -531,7 +585,12 @@ fn pack_rules(id: &str) -> ApiResult<Vec<String>> {
     }
     PackRule::from_id(id)
         .map(|r| vec![r.id().to_owned()])
-        .ok_or_else(|| bad(format!("no pack or pack rule {id:?}")))
+        .ok_or_else(|| {
+            bad(
+                "unknown_pack",
+                format!("There's no pack or pack rule {id:?}."),
+            )
+        })
 }
 
 fn override_entry(
@@ -554,18 +613,21 @@ fn override_entry(
         expires_at: days(expires_days, now),
         shadow_until: days(shadow_days, now),
     };
-    o.validate().map_err(|e| bad(e.to_string()))?;
+    o.validate()
+        .map_err(|e| bad("invalid_override", e.to_string()))?;
     Ok(o)
 }
 
 fn exception_entry(rule: &str, what: &MatchInput) -> ApiResult<Exception> {
-    let rule = RuleRef::from_id(rule).ok_or_else(|| bad(format!("no rule {rule:?}")))?;
+    let rule = RuleRef::from_id(rule)
+        .ok_or_else(|| bad("unknown_rule", format!("There's no rule {rule:?}.")).field("rule"))?;
     let e = Exception {
         id: 0,
         rule,
         what: what.to_match()?,
     };
-    e.validate().map_err(|e| bad(e.to_string()))?;
+    e.validate()
+        .map_err(|e| bad("invalid_exception", e.to_string()))?;
     Ok(e)
 }
 
@@ -719,11 +781,13 @@ impl FiltersApi {
         let rules = |ids: Vec<String>| snap.for_rules(&ids);
         match change {
             Change::CoreSwitch { rule, on } => {
-                let r = CoreRule::from_id(rule).ok_or_else(|| bad(format!("no rule {rule:?}")))?;
+                let r = CoreRule::from_id(rule).ok_or_else(|| {
+                    bad("unknown_rule", format!("There's no rule {rule:?}.")).field("rule")
+                })?;
                 if r.floor() && !on {
-                    return Err(ApiError::new(
-                        StatusCode::CONFLICT,
-                        format!("{rule} is part of the locked floor and can't be switched off"),
+                    return Err(conflict(
+                        "floor_locked",
+                        format!("{rule} is part of the locked floor and can't be switched off."),
                     ));
                 }
                 if !on && engine.core.switches.is_on(r) {
@@ -871,7 +935,9 @@ impl FiltersApi {
                     .quarantine
                     .iter()
                     .find(|q| q.hash == h)
-                    .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not in quarantine"))?;
+                    .ok_or_else(|| {
+                        not_found("not_in_quarantine", "That torrent isn't in quarantine.")
+                    })?;
                 exception_entry(
                     &q.rule,
                     &MatchInput {
@@ -911,7 +977,9 @@ impl FiltersApi {
                     .store()
                     .subscription(*id)
                     .map_err(internal)?
-                    .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "no such subscription"))?;
+                    .ok_or_else(|| {
+                        not_found("subscription_not_found", "There's no such subscription.")
+                    })?;
                 let shrank = sub.error.as_deref().is_some_and(|e| e.contains("shrank"));
                 if *accept && shrank {
                     a.weakening = true;
@@ -920,7 +988,11 @@ impl FiltersApi {
             }
             Change::Subscribe { floor, kind, .. } => {
                 if *floor && kind != "content" {
-                    return Err(bad("only content lists can join the floor"));
+                    return Err(bad(
+                        "floor_needs_content_list",
+                        "Only content lists can join the floor.",
+                    )
+                    .field("floor"));
                 }
                 a.confirm = *floor;
             }
@@ -991,7 +1063,7 @@ impl FiltersApi {
         let data = store
             .previous()
             .map_err(internal)?
-            .ok_or_else(|| ApiError::new(StatusCode::CONFLICT, "nothing to undo"))?;
+            .ok_or_else(|| conflict("nothing_to_undo", "There's nothing to undo."))?;
         let v: Value = serde_json::from_slice(&data).map_err(internal)?;
         let unhex = |s: &Value| -> Vec<u8> {
             let s = s.as_str().unwrap_or_default();
@@ -1090,14 +1162,19 @@ impl FiltersApi {
         } else {
             None
         };
-        let gone = || ApiError::new(StatusCode::NOT_FOUND, "no such entry");
+        let gone = || not_found("entry_not_found", "There's no such entry.");
         let mut out = json!({});
         match change {
             Change::CoreSwitch { rule, on } => {
-                let r = CoreRule::from_id(rule).ok_or_else(|| bad("no such rule"))?;
+                let r = CoreRule::from_id(rule).ok_or_else(|| {
+                    bad("unknown_rule", format!("There's no rule {rule:?}.")).field("rule")
+                })?;
                 if r.floor() {
                     if !on {
-                        return Err(ApiError::new(StatusCode::CONFLICT, "the floor is locked"));
+                        return Err(conflict(
+                            "floor_locked",
+                            "The locked floor can't be switched off.",
+                        ));
                     }
                 } else {
                     store.set_core_switch(r.id(), *on).map_err(internal)?;
@@ -1343,7 +1420,13 @@ impl FiltersApi {
                     .as_deref()
                     .zip(q.sealed.as_deref())
                     .and_then(|(s, sealed)| s.open(sealed).ok())
-                    .ok_or_else(|| ApiError::new(StatusCode::GONE, "no sealed name is kept"))?;
+                    .ok_or_else(|| {
+                        ApiError::new(
+                            StatusCode::GONE,
+                            "no_sealed_name",
+                            "No sealed name is kept for that torrent.",
+                        )
+                    })?;
                 out["name"] = json!(name);
             }
             Change::Subscribe {
@@ -1358,10 +1441,15 @@ impl FiltersApi {
                 let ip = match kind.as_str() {
                     "ip" => true,
                     "content" => false,
-                    _ => return Err(bad("kind: content or ip")),
+                    _ => {
+                        return Err(bad("unknown_list_kind", "A list's kind is content or ip.")
+                            .field("kind"));
+                    }
                 };
                 if !(url.starts_with("https://") || url.starts_with("http://")) {
-                    return Err(bad("the list's URL must be http or https"));
+                    return Err(
+                        bad("bad_list_url", "The list's URL must be http or https.").field("url")
+                    );
                 }
                 let act = act
                     .as_deref()
@@ -1369,13 +1457,25 @@ impl FiltersApi {
                     .transpose()?
                     .unwrap_or(Action::Drop);
                 if !act.protective() {
-                    return Err(bad("lists drop or quarantine"));
+                    return Err(
+                        bad("bad_list_action", "A list's action is drop or quarantine.")
+                            .field("action"),
+                    );
                 }
                 if let Some(f) = format {
-                    let fm = lodestar_filter::lists::Format::from_name(f)
-                        .ok_or_else(|| bad("format: hashes, p2p, dat or cidr"))?;
+                    let fm = lodestar_filter::lists::Format::from_name(f).ok_or_else(|| {
+                        bad(
+                            "unknown_list_format",
+                            "The format must be hashes, p2p, dat or cidr.",
+                        )
+                        .field("format")
+                    })?;
                     if fm.is_ip() != ip {
-                        return Err(bad("that format doesn't fit this kind of list"));
+                        return Err(bad(
+                            "list_format_mismatch",
+                            "That format doesn't fit this kind of list.",
+                        )
+                        .field("format"));
                     }
                 }
                 let id = store
@@ -1410,7 +1510,7 @@ impl FiltersApi {
             }
             Change::ResolveHeld { id, accept } => {
                 if !store.resolve_held(*id, *accept, now).map_err(internal)? {
-                    return Err(ApiError::new(StatusCode::CONFLICT, "no version is held"));
+                    return Err(conflict("nothing_held", "No version of that list is held."));
                 }
             }
             Change::Undo => self.undo(store)?,
@@ -1598,15 +1698,21 @@ pub struct IdBody {
 /// A classification rule's query: it decides the type, so it can't test
 /// the type itself (the index already holds corrected types).
 fn class_query(text: &str) -> ApiResult<Node> {
-    let node = query(text)?;
+    let node = query(text).map_err(|e| e.field("query"))?;
     if matches!(node, Node::All) {
-        return Err(bad("a classification rule needs a query"));
+        return Err(bad(
+            "class_rule_needs_query",
+            "A classification rule needs a query.",
+        )
+        .field("query"));
     }
     use lodestar_search::query::TagKey;
     if node.mentions_tag(TagKey::Type) || node.mentions_tag(TagKey::Adult) {
         return Err(bad(
-            "a classification rule decides the type, so its query can't test type: or adult:",
-        ));
+            "class_rule_tests_type",
+            "A classification rule decides the type, so its query can't test type: or adult:.",
+        )
+        .field("query"));
     }
     Ok(node)
 }
@@ -1662,7 +1768,7 @@ impl FiltersApi {
         let id = store
             .find(&lodestar_metainfo::InfoHash(hash))
             .map_err(internal)?
-            .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "no such torrent"))?;
+            .ok_or_else(|| not_found("torrent_not_found", "There's no torrent with that hash."))?;
         let fix = lodestar_classify::Correction {
             adult: body.adult,
             not_junk: body.not_junk,
@@ -1672,13 +1778,19 @@ impl FiltersApi {
             not_junk: fix.not_junk,
         };
         if !store.set_correction(id, stored).map_err(internal)? {
-            return Err(ApiError::new(StatusCode::NOT_FOUND, "no such torrent"));
+            return Err(not_found(
+                "torrent_not_found",
+                "There's no torrent with that hash.",
+            ));
         }
         let (Some(row), Some(tree)) = (
             store.torrent(id).map_err(internal)?,
             store.files(id).map_err(internal)?,
         ) else {
-            return Err(ApiError::new(StatusCode::NOT_FOUND, "no such torrent"));
+            return Err(not_found(
+                "torrent_not_found",
+                "There's no torrent with that hash.",
+            ));
         };
         let files = lodestar_classify::file_infos(&tree.files, tree.encoding);
         let engine = self.engine.current();
@@ -1755,7 +1867,12 @@ impl FiltersApi {
         let q = store
             .remove_class_rule(id)
             .map_err(internal)?
-            .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "no such rule"))?;
+            .ok_or_else(|| {
+                not_found(
+                    "class_rule_not_found",
+                    "There's no such classification rule.",
+                )
+            })?;
         self.reload(&store)?;
         let queued = match parse(&q) {
             Ok(node) => self.requeue(&mut store, &node, now)?,
@@ -1787,7 +1904,11 @@ impl FiltersApi {
     /// live preview). Nothing is stored or logged.
     pub fn test(&self, body: &TestBody, now: i64) -> ApiResult<Value> {
         if body.samples.len() > MAX_SAMPLES {
-            return Err(bad(format!("at most {MAX_SAMPLES} samples")));
+            return Err(bad(
+                "too_many_samples",
+                format!("Send at most {MAX_SAMPLES} samples."),
+            )
+            .field("samples"));
         }
         let draft = body.query.as_deref().map(query).transpose()?;
         let unless = body.unless.as_deref().map(query).transpose()?;
@@ -1811,8 +1932,9 @@ impl FiltersApi {
                 .collect();
             let mut class = lodestar_classify::classify(&s.name, &files);
             if let Some(t) = s.content_type.as_deref() {
-                class.content_type =
-                    ContentType::from_name(t).ok_or_else(|| bad(format!("type {t:?}")))?;
+                class.content_type = ContentType::from_name(t).ok_or_else(|| {
+                    bad("unknown_type", format!("There's no content type {t:?}.")).field("type")
+                })?;
             }
             let facts = Facts {
                 class: &class,
@@ -1847,9 +1969,13 @@ impl FiltersApi {
 }
 
 fn filters(s: &ApiState) -> ApiResult<Arc<FiltersApi>> {
-    s.filters
-        .clone()
-        .ok_or_else(|| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "filtering isn't available"))
+    s.filters.clone().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "filters_unavailable",
+            "Filtering isn't available.",
+        )
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -1858,31 +1984,31 @@ pub struct ChangeBody {
     pub password: Option<String>,
 }
 
-pub(crate) async fn overview(State(s): State<ApiState>) -> ApiResult<Json<Value>> {
+async fn overview(State(s): State<ApiState>) -> ApiResult<Json<Value>> {
     let f = filters(&s)?;
     tokio::task::spawn_blocking(move || f.overview().map(Json))
         .await
         .map_err(internal)?
 }
 
-pub(crate) async fn queue(State(s): State<ApiState>) -> ApiResult<Json<Value>> {
+async fn queue(State(s): State<ApiState>) -> ApiResult<Json<Value>> {
     let f = filters(&s)?;
     tokio::task::spawn_blocking(move || f.queue(crate::unix_now()).map(Json))
         .await
         .map_err(internal)?
 }
 
-pub(crate) async fn fixtures(State(s): State<ApiState>) -> ApiResult<Json<Value>> {
+async fn fixtures(State(s): State<ApiState>) -> ApiResult<Json<Value>> {
     let f = filters(&s)?;
     tokio::task::spawn_blocking(move || f.fixtures().map(Json))
         .await
         .map_err(internal)?
 }
 
-pub(crate) async fn test(
+async fn test(
     State(s): State<ApiState>,
     headers: HeaderMap,
-    Json(body): Json<TestBody>,
+    JsonBody(body): JsonBody<TestBody>,
 ) -> ApiResult<Json<Value>> {
     same_origin_json(&headers)?;
     let f = filters(&s)?;
@@ -1891,10 +2017,10 @@ pub(crate) async fn test(
         .map_err(internal)?
 }
 
-pub(crate) async fn correct(
+async fn correct(
     State(s): State<ApiState>,
     headers: HeaderMap,
-    Json(body): Json<CorrectBody>,
+    JsonBody(body): JsonBody<CorrectBody>,
 ) -> ApiResult<Json<Value>> {
     same_origin_json(&headers)?;
     let f = filters(&s)?;
@@ -1903,17 +2029,17 @@ pub(crate) async fn correct(
         .map_err(internal)?
 }
 
-pub(crate) async fn classes(State(s): State<ApiState>) -> ApiResult<Json<Value>> {
+async fn classes(State(s): State<ApiState>) -> ApiResult<Json<Value>> {
     let f = filters(&s)?;
     tokio::task::spawn_blocking(move || f.classes().map(Json))
         .await
         .map_err(internal)?
 }
 
-pub(crate) async fn add_class_rule(
+async fn add_class_rule(
     State(s): State<ApiState>,
     headers: HeaderMap,
-    Json(body): Json<ClassRuleBody>,
+    JsonBody(body): JsonBody<ClassRuleBody>,
 ) -> ApiResult<Json<Value>> {
     same_origin_json(&headers)?;
     let f = filters(&s)?;
@@ -1922,10 +2048,10 @@ pub(crate) async fn add_class_rule(
         .map_err(internal)?
 }
 
-pub(crate) async fn remove_class_rule(
+async fn remove_class_rule(
     State(s): State<ApiState>,
     headers: HeaderMap,
-    Json(body): Json<IdBody>,
+    JsonBody(body): JsonBody<IdBody>,
 ) -> ApiResult<Json<Value>> {
     same_origin_json(&headers)?;
     let f = filters(&s)?;
@@ -1936,10 +2062,10 @@ pub(crate) async fn remove_class_rule(
 
 /// `POST /filters/preview/jobs`: starts a preview in the background and
 /// returns its id (202).
-pub(crate) async fn start_preview(
+async fn start_preview(
     State(s): State<ApiState>,
     headers: HeaderMap,
-    Json(body): Json<ChangeBody>,
+    JsonBody(body): JsonBody<ChangeBody>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     same_origin_json(&headers)?;
     let f = filters(&s)?;
@@ -1955,10 +2081,7 @@ pub(crate) async fn start_preview(
 
 /// `GET /filters/preview/jobs/{id}`: progress while it runs, then the
 /// assessment (or the error) once it's done.
-pub(crate) async fn preview_job(
-    State(s): State<ApiState>,
-    Path(id): Path<u64>,
-) -> ApiResult<Json<Value>> {
+async fn preview_job(State(s): State<ApiState>, Path(id): Path<u64>) -> ApiResult<Json<Value>> {
     let job = filters(&s)?.jobs.get(id)?;
     let result = job.result.lock().unwrap_or_else(|e| e.into_inner());
     Ok(Json(match result.as_ref() {
@@ -1971,14 +2094,14 @@ pub(crate) async fn preview_job(
         Some(Err(e)) => json!({
             "state": "failed",
             "progress": job.progress.json(),
-            "status": e.status.as_u16(),
-            "error": e.body["error"],
+            "status": e.status().as_u16(),
+            "error": e.body()["error"].clone(),
         }),
     }))
 }
 
 /// `POST /filters/preview/jobs/{id}/cancel`.
-pub(crate) async fn cancel_preview(
+async fn cancel_preview(
     State(s): State<ApiState>,
     Path(id): Path<u64>,
     headers: HeaderMap,
@@ -1989,10 +2112,10 @@ pub(crate) async fn cancel_preview(
     Ok(Json(json!({ "ok": true })))
 }
 
-pub(crate) async fn preview(
+async fn preview(
     State(s): State<ApiState>,
     headers: HeaderMap,
-    Json(body): Json<ChangeBody>,
+    JsonBody(body): JsonBody<ChangeBody>,
 ) -> ApiResult<Json<Assessment>> {
     same_origin_json(&headers)?;
     let f = filters(&s)?;
@@ -2001,11 +2124,11 @@ pub(crate) async fn preview(
         .map_err(internal)?
 }
 
-pub(crate) async fn apply(
+async fn apply(
     State(s): State<ApiState>,
     ClientIp(ip): ClientIp,
     headers: HeaderMap,
-    Json(body): Json<ChangeBody>,
+    JsonBody(body): JsonBody<ChangeBody>,
 ) -> ApiResult<Json<Value>> {
     same_origin_json(&headers)?;
     let f = filters(&s)?;
@@ -2017,7 +2140,7 @@ pub(crate) async fn apply(
 
 fn apply_change(
     f: &FiltersApi,
-    auth: &crate::Auth,
+    auth: &auth::Auth,
     ip: IpAddr,
     body: ChangeBody,
 ) -> ApiResult<Json<Value>> {
@@ -2026,15 +2149,20 @@ fn apply_change(
     if assessment.confirm {
         match body.password.as_deref() {
             None | Some("") => {
-                return Err(ApiError {
-                    status: StatusCode::PRECONDITION_REQUIRED,
-                    body: json!({
-                        "error": "this change weakens filtering: read the warning and confirm with your password",
-                        "assessment": assessment,
-                    }),
-                });
+                // The assessment rides beside the error: the warning the
+                // client shows before asking for the password.
+                return Err(ApiError::new(
+                    StatusCode::PRECONDITION_REQUIRED,
+                    "confirm_required",
+                    "This change weakens filtering: read the warning and confirm with your password.",
+                )
+                .field("password")
+                .with(
+                    "assessment",
+                    serde_json::to_value(&assessment).map_err(internal)?,
+                ));
             }
-            Some(p) => auth.confirm(ip, p).map_err(auth_error)?,
+            Some(p) => auth.confirm(ip, p).map_err(|e| auth_error(e, "password"))?,
         }
     }
     let mut out = f.apply(&body.change, now)?;
