@@ -16,17 +16,19 @@
 use std::collections::HashMap;
 use std::sync::{Arc, PoisonError, RwLock};
 
-use rustls::client::WebPkiServerVerifier;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::client::{Resumption, WebPkiServerVerifier};
 use rustls::crypto::{CryptoProvider, WebPkiSupportedAlgorithms, verify_tls13_signature};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
-use rustls::server::{ClientHello, ResolvesServerCert, WebPkiClientVerifier};
+use rustls::server::{
+    ClientHello, NoServerSessionStorage, ResolvesServerCert, WebPkiClientVerifier,
+};
 use rustls::sign::CertifiedKey;
 use rustls::time_provider::{DefaultTimeProvider, TimeProvider};
 use rustls::{
-    CertificateError, ClientConfig, DigitallySignedStruct, DistinguishedName, Error, RootCertStore,
-    ServerConfig, ServerConnection, SignatureScheme,
+    CertificateError, ClientConfig, DigitallySignedStruct, DistinguishedName, Error, HandshakeKind,
+    RootCertStore, ServerConfig, ServerConnection, SignatureScheme,
 };
 
 use crate::{ClusterError, Fingerprint, KeyPair, WorkerId};
@@ -121,6 +123,7 @@ pub(crate) struct Shared {
 #[derive(Clone)]
 pub struct CoordinatorTls {
     shared: Arc<Shared>,
+    time: Arc<dyn TimeProvider>,
     cluster: Arc<ServerConfig>,
     join: Arc<ServerConfig>,
 }
@@ -149,8 +152,17 @@ impl CoordinatorTls {
             .with_no_client_auth()
             .with_cert_resolver(resolver);
         join.alpn_protocols = vec![ALPN_JOIN.to_vec()];
+        // No session resumption: a resumed TLS 1.3 handshake restores the
+        // peer's certificate from the ticket without verifying it again, so
+        // revocation and expiry would stop applying. Every connection is a
+        // full handshake (one per worker, long-lived, so this costs nothing).
+        for config in [&mut cluster, &mut join] {
+            config.session_storage = Arc::new(NoServerSessionStorage {});
+            config.send_tls13_tickets = 0;
+        }
         Ok(CoordinatorTls {
             shared,
+            time,
             cluster: Arc::new(cluster),
             join: Arc::new(join),
         })
@@ -183,12 +195,16 @@ impl CoordinatorTls {
     }
 
     /// The worker behind a completed cluster handshake, re-checked against
-    /// the revocation list. `None` for a join connection or a certificate
-    /// revoked since the handshake.
+    /// the revocation list and the certificate's expiry. `None` for a join
+    /// connection, a resumed session (never offered; refused anyway), or a
+    /// certificate revoked or expired since the handshake.
     pub fn identify(&self, conn: &ServerConnection) -> Option<PeerIdentity> {
-        if conn.alpn_protocol() != Some(ALPN_CLUSTER) {
+        if conn.alpn_protocol() != Some(ALPN_CLUSTER)
+            || conn.handshake_kind() != Some(HandshakeKind::Full)
+        {
             return None;
         }
+        let now = i64::try_from(self.time.current_time()?.as_secs()).ok()?;
         let cert = conn.peer_certificates()?.first()?;
         let trust = self
             .shared
@@ -196,7 +212,7 @@ impl CoordinatorTls {
             .read()
             .unwrap_or_else(PoisonError::into_inner);
         let issued = trust.issued.get(&Fingerprint::of(cert))?;
-        (!issued.revoked).then(|| PeerIdentity {
+        (!issued.revoked && now <= issued.not_after).then(|| PeerIdentity {
             worker: issued.worker,
             name: issued.name.clone(),
             serial: issued.serial,
@@ -373,6 +389,7 @@ pub(crate) fn join_client_config(
     time: Option<Arc<dyn TimeProvider>>,
 ) -> Result<Arc<ClientConfig>, ClusterError> {
     let mut config = client_builder(CoordinatorPin::Fingerprint(ca), time)?.with_no_client_auth();
+    config.resumption = Resumption::disabled();
     config.alpn_protocols = vec![ALPN_JOIN.to_vec()];
     Ok(Arc::new(config))
 }
@@ -387,6 +404,7 @@ pub(crate) fn cluster_client_config(
     let pin = CoordinatorPin::Roots(server_verifier(cas)?);
     let der = PrivateKeyDer::Pkcs8(key.pkcs8().to_vec().into());
     let mut config = client_builder(pin, time)?.with_client_auth_cert(vec![cert], der)?;
+    config.resumption = Resumption::disabled();
     config.alpn_protocols = vec![ALPN_CLUSTER.to_vec()];
     Ok(Arc::new(config))
 }

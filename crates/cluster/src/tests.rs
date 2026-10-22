@@ -31,6 +31,23 @@ impl TimeProvider for At {
     }
 }
 
+/// A clock tests can move, for one long-lived configuration.
+#[derive(Debug)]
+struct Clock(std::sync::atomic::AtomicI64);
+
+impl Clock {
+    fn set(&self, t: i64) {
+        self.0.store(t, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl TimeProvider for Clock {
+    fn current_time(&self) -> Option<UnixTime> {
+        let t = self.0.load(std::sync::atomic::Ordering::SeqCst);
+        Some(UnixTime::since_unix_epoch(Duration::from_secs(t as u64)))
+    }
+}
+
 fn at(t: i64) -> Option<Arc<dyn TimeProvider>> {
     Some(Arc::new(At(t)))
 }
@@ -144,6 +161,13 @@ fn handshake(tls: &CoordinatorTls, client: Arc<ClientConfig>) -> Outcome {
             return Outcome::Server(e);
         }
         if !server.is_handshaking() && !client.is_handshaking() {
+            // Deliver anything sent after the handshake (session tickets,
+            // if the server offered any), so a reused client config would
+            // try to resume next time.
+            if let Err(e) = transfer_to_client(&mut server, &mut client) {
+                return Outcome::Client(e);
+            }
+            assert_eq!(server.handshake_kind(), Some(rustls::HandshakeKind::Full));
             return Outcome::Done(tls.identify(&server));
         }
     }
@@ -850,4 +874,94 @@ fn nothing_secret_prints() {
     let creds = c.join("vps", T0);
     let debug = format!("{creds:?}");
     assert!(debug.contains("vps") && !debug.contains("key"), "{debug}");
+}
+
+/// One long-lived coordinator configuration and one reused worker
+/// configuration, as in production: a reconnect must never resume a
+/// session (which would skip the certificate checks).
+#[test]
+fn reconnects_are_full_handshakes_so_revocation_and_expiry_apply() {
+    let mut c = cluster(1);
+    let creds = c.join("nas", T0);
+    let other = c.join("vps", T0);
+    let coord_clock = Arc::new(Clock(T0.into()));
+    let worker_clock = Arc::new(Clock(T0.into()));
+    let tls = c
+        .coord
+        .tls()
+        .with_time_provider(coord_clock.clone())
+        .unwrap();
+    let config = creds.client_config(Some(worker_clock.clone())).unwrap();
+    let other_config = other.client_config(Some(worker_clock.clone())).unwrap();
+
+    for _ in 0..3 {
+        // `handshake` asserts each one is a full handshake.
+        assert!(matches!(
+            handshake(&tls, config.clone()),
+            Outcome::Done(Some(_))
+        ));
+    }
+    c.coord.revoke(&mut c.store, creds.worker()).unwrap();
+    assert_eq!(
+        refused_cert(&handshake(&tls, config)),
+        Some(CertificateError::Revoked)
+    );
+
+    // Expiry, on the same long-lived configurations: just before, fine;
+    // just after, refused, and the coordinator renews nothing.
+    let end = other.not_after();
+    coord_clock.set(end);
+    worker_clock.set(end);
+    let Outcome::Done(Some(peer)) = handshake(&tls, other_config.clone()) else {
+        panic!("refused");
+    };
+    coord_clock.set(end + 1);
+    assert_eq!(
+        refused_cert(&handshake(&tls, other_config)),
+        Some(CertificateError::Expired)
+    );
+    assert!(matches!(
+        c.coord.renew(&mut c.store, &peer, &[1; 32], end + 1),
+        Err(ClusterError::Expired)
+    ));
+}
+
+#[test]
+fn renewal_uses_the_record_not_the_callers_identity() {
+    let mut c = cluster(1);
+    let creds = c.join("nas", T0);
+    let Outcome::Done(Some(mut peer)) = c.connect(&creds, T0) else {
+        panic!("refused");
+    };
+    peer.name = "admin".into();
+    let grant = c.coord.renew(&mut c.store, &peer, &[1; 32], T0).unwrap();
+    assert_eq!(grant.name, "nas");
+}
+
+#[test]
+fn two_coordinators_on_one_database_spend_a_token_once() {
+    let path =
+        std::env::temp_dir().join(format!("lodestar-cluster-db-{}.sqlite", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let secrets = SecretStore::from_key(&[1; 32]);
+    let mut store_a = Store::open(&path, StoreConfig::default()).unwrap();
+    let mut a = Coordinator::open(&mut store_a, &secrets, T0).unwrap();
+    let token = a.create_join_token(&mut store_a, "nas", T0).unwrap();
+    let second = a.create_join_token(&mut store_a, "vps", T0).unwrap();
+    let mut store_b = Store::open(&path, StoreConfig::default()).unwrap();
+    let mut b = Coordinator::open(&mut store_b, &secrets, T0).unwrap();
+
+    let key = [5u8; 32];
+    let grant = a.redeem(&mut store_a, &token, &key, T0).unwrap();
+    assert!(matches!(
+        b.redeem(&mut store_b, &token, &key, T0),
+        Err(JoinError::AlreadyUsed)
+    ));
+    // And worker ids stay unique across both.
+    let other = b.redeem(&mut store_b, &second, &key, T0).unwrap();
+    assert_ne!(grant.worker, other.worker);
+    drop((a, b, store_a, store_b));
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+    }
 }
