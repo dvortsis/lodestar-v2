@@ -24,6 +24,7 @@
 		"e2e:motion": "playwright test --project=reduced-motion",
 		"e2e:keyboard": "playwright test --project=keyboard-only",
 		"e2e:all-themes": "E2E_ALL_THEMES=1 playwright test --project=all-themes",
+		"e2e:typecheck": "tsc -p e2e",
 		"e2e:update": "playwright test --update-snapshots",
 		"size": "size-limit",
 		"api:types": "node scripts/api-types.mjs",

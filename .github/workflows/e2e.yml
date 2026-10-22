@@ -1,9 +1,12 @@
 name: E2E
 
 # PR run: Riverstone light/dark × 7 breakpoints × 2 densities, the rotating 6 themes, reduced
-# motion and keyboard-only projects (axe and snapshots in each), then Lighthouse CI.
-# Nightly / manual: the `all-themes` project (axe on every route in all 48 themes).
-# Manual with `update_snapshots`: regenerates the Linux baselines and uploads them (web/e2e/README.md).
+# motion and keyboard-only projects (axe everywhere; baselines for key screens), then Lighthouse CI.
+# Nightly / manual: the `all-themes` project (axe on every route + key-screen baselines, 48 themes).
+#
+# Everything runs in the Playwright image pinned below (match @playwright/test in web/package.json),
+# so text rendering is reproducible and the baselines are generated here, never on a laptop.
+# To regenerate them: web/e2e/README.md "Updating snapshots".
 
 on:
   pull_request:
@@ -16,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       update_snapshots:
-        description: 'Regenerate Linux snapshot baselines and upload them as an artifact'
+        description: 'Regenerate the baselines and upload them as an artifact'
         type: boolean
         default: false
 
@@ -37,28 +40,36 @@ jobs:
     if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.update_snapshots)
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    container:
+      image: mcr.microsoft.com/playwright:v1.56.1-noble@sha256:f1e7e01021efd65dd1a2c56064be399f3e4de00fd021ac561325f2bfbb2b837a
+    env:
+      HOME: /root
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e:typecheck
       - name: Playwright
         # The web server (build + preview, cold `npm run assets` ~73 s) is started by the config.
-        run: npx playwright test ${{ inputs.update_snapshots && '--update-snapshots' || '' }}
+        # `web/e2e/.update-snapshots` (a marker file) or the dispatch input regenerates the baselines.
+        run: |
+          if [ -f e2e/.update-snapshots ] || [ "${{ inputs.update_snapshots }}" = "true" ]; then
+            echo "UPDATE=1" >> "$GITHUB_ENV"
+            # all-themes too: it owns the 46-theme baseline set, of which a PR run checks only 6.
+            E2E_ALL_THEMES=1 npx playwright test --update-snapshots
+          else
+            npx playwright test
+          fi
       - name: Upload regenerated baselines
-        if: inputs.update_snapshots
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: env.UPDATE == '1'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: snapshot-baselines
-          path: web/e2e/**/*-snapshots/*-linux.png
+          path: |
+            web/e2e/**/*-snapshots/*-linux.png
           if-no-files-found: error
       - name: Upload report and diffs
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-report
           # test-results holds the expected/actual/diff images of every failed snapshot.
@@ -72,47 +83,43 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    container:
+      image: mcr.microsoft.com/playwright:v1.56.1-noble@sha256:f1e7e01021efd65dd1a2c56064be399f3e4de00fd021ac561325f2bfbb2b837a
+    env:
+      HOME: /root
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: npm ci
       # Lighthouse measures the production build (no VITE_DEV_ROUTES), served by `npm run preview`.
       - run: npm run build
-      - run: npx playwright install --with-deps chromium
       - name: Lighthouse CI
         run: |
           export CHROME_PATH="$(node -e "console.log(require('@playwright/test').chromium.executablePath())")"
           npm run lhci
       - name: Upload Lighthouse reports
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: lighthouse-reports
           path: web/.lighthouseci
           retention-days: 14
 
   all-themes:
-    name: playwright (all-themes axe)
+    name: playwright (all-themes)
     if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.update_snapshots)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
+    container:
+      image: mcr.microsoft.com/playwright:v1.56.1-noble@sha256:f1e7e01021efd65dd1a2c56064be399f3e4de00fd021ac561325f2bfbb2b837a
+    env:
+      HOME: /root
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
       - run: npm run e2e:all-themes
       - name: Upload report
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-report-all-themes
           path: |

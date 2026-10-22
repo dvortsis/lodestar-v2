@@ -1,6 +1,10 @@
 import AxeBuilder from '@axe-core/playwright';
 import type { Page } from '@playwright/test';
 
+// @axe-core/playwright resolves its own copy of playwright-core, so its Page type is nominally
+// different from ours; the objects are the same at runtime.
+type AxePage = ConstructorParameters<typeof AxeBuilder>[0]['page'];
+
 /** WCAG 2.2 AA, cumulative: axe tags A and AA of 2.0, 2.1 and 2.2. */
 export const WCAG_22_AA = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
 
@@ -16,7 +20,7 @@ export interface A11yOptions {
 
 /** Fails with each violation's rule, impact, targets and help URL. */
 export async function expectNoA11yViolations(page: Page, opts: A11yOptions = {}) {
-	let axe = new AxeBuilder({ page }).withTags(opts.tags ?? WCAG_22_AA);
+	let axe = new AxeBuilder({ page: page as unknown as AxePage }).withTags(opts.tags ?? WCAG_22_AA);
 	for (const s of opts.include ?? []) axe = axe.include(s);
 	for (const s of opts.exclude ?? []) axe = axe.exclude(s);
 	if (opts.disableRules?.length) axe = axe.disableRules(opts.disableRules);

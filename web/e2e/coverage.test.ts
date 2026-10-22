@@ -1,3 +1,5 @@
+// TODO(W6 follow-up): once the routes have real content, turn the annotation below into a failure
+// (`expect(uncovered).toEqual([])`) so a new route cannot ship without baselines and axe.
 // Flags (as an annotation, not a failure) any route under src/routes that the smoke matrix does not
 // cover, so the slice that adds a route knows to add it to support/routes.ts.
 import { readdirSync, statSync } from 'node:fs';

@@ -9,6 +9,8 @@ test('/ redirects to /search', async ({ page }) => {
 
 test('/search has no axe violations', async ({ page }) => {
 	await page.goto('/search');
-	const results = await new AxeBuilder({ page }).analyze();
+	const results = await new AxeBuilder({
+		page: page as unknown as ConstructorParameters<typeof AxeBuilder>[0]['page']
+	}).analyze();
 	expect(results.violations).toEqual([]);
 });

@@ -17,6 +17,11 @@ export interface Appearance {
 	density: Density;
 	/** `reduce` emulates prefers-reduced-motion. Set with `contextOptions.reducedMotion` too (see config). */
 	motion: 'reduce' | null;
+	/**
+	 * Which baselines the project owns: `matrix` (key screens per breakpoint/theme/density),
+	 * `themes` (key screens in the theme set, at 1366), or `none` (axe and render checks only).
+	 */
+	shots: 'matrix' | 'themes' | 'none';
 }
 
 /** Writes `lodestar.theme` before any page script runs, exactly as the Appearance settings do. */
@@ -47,6 +52,7 @@ export const test = base.extend<
 	colorMode: ['light', { option: true }],
 	density: ['comfortable', { option: true }],
 	motion: [null, { option: true }],
+	shots: ['none', { option: true }],
 
 	page: async ({ page, themeId, motion }, use) => {
 		await applyTheme(page, themeId, motion);
