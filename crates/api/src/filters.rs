@@ -343,7 +343,8 @@ pub enum Change {
     /// (owner's decision §2.7). They stay blocked until this: `remove`
     /// takes them out of the floor, which weakens it; otherwise they stay
     /// in it as ordinary CS-1b entries. `source` is a pending source's key
-    /// (`file:<path>`, `list:<id>`); without `hashes`, all of its entries.
+    /// (`file:<path>`, `list:<id>`); without `hashes`, all of its entries
+    /// the assessment counted ([`Assessment::floor_entries`]).
     ResolveFloorRemoval {
         source: String,
         hashes: Option<Vec<String>>,
@@ -385,6 +386,14 @@ pub struct Assessment {
     pub preview: Preview,
     /// For a keyword override: the same entry as *Neutralize term*.
     pub neutralize: Option<Preview>,
+    /// For a floor removal: the entries the warning counts (up to 1,000
+    /// shown). Applying settles exactly these, even if more are pending
+    /// by then; send them back as `hashes` to confirm the same set later.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub floor_entries: Option<Vec<String>>,
+    /// All of them, for applying.
+    #[serde(skip)]
+    settles: Option<Vec<[u8; 20]>>,
 }
 
 /// How far a preview has got (§20.10): shared with a running job, read by
@@ -1064,6 +1073,9 @@ impl FiltersApi {
             } => {
                 let chosen =
                     pending_chosen(&self.store(), &floor_source(source)?, hashes.as_deref())?;
+                a.floor_entries =
+                    Some(chosen.iter().take(PENDING_HASHES).map(|h| hex(h)).collect());
+                a.settles = Some(chosen.clone());
                 if *remove {
                     a.weakening = true;
                     a.preview.tombstones = snap
@@ -2414,7 +2426,24 @@ fn apply_change(
             Some(p) => auth.confirm(ip, p).map_err(|e| auth_error(e, "password"))?,
         }
     }
-    let mut out = f.apply(&body.change, now)?;
+    // A floor removal settles what its warning counted, not whatever is
+    // pending by the time it runs.
+    let change = match (&body.change, &assessment.settles) {
+        (
+            Change::ResolveFloorRemoval {
+                source,
+                hashes: None,
+                remove,
+            },
+            Some(chosen),
+        ) => Change::ResolveFloorRemoval {
+            source: source.clone(),
+            hashes: Some(chosen.iter().map(|h| hex(h)).collect()),
+            remove: *remove,
+        },
+        _ => body.change,
+    };
+    let mut out = f.apply(&change, now)?;
     out["applied"] = json!(true);
     out["assessment"] = serde_json::to_value(&assessment).map_err(internal)?;
     Ok(Json(out))

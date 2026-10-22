@@ -234,15 +234,15 @@ impl Engine {
         {
             return None;
         }
-        for r in doc
-            .candidates(&self.rules)
-            .into_iter()
-            .filter(|r| r.enabled)
-        {
-            if !doc.matches_candidate(&r.query, neutral_words)
-                || r.unless.as_ref().is_some_and(|u| doc.matches(u, &[]))
-                || self.excepted(RuleRef::User(r.id), item, doc)
+        for i in doc.candidates(&self.rules) {
+            let (query, unless) = self.rules.compiled(i);
+            if !doc.matches_compiled(query, neutral_words)
+                || unless.is_some_and(|u| doc.matches_compiled(u, &[]))
             {
+                continue;
+            }
+            let r = &self.rules[i as usize];
+            if self.excepted(RuleRef::User(r.id), item, doc) {
                 continue;
             }
             let d = Decision {
@@ -269,6 +269,20 @@ impl Engine {
             .chain(self.listed(item.hashes))
             .filter(|d| !self.excepted(d.rule, item, doc))
             .max_by_key(|d| d.action)
+    }
+
+    /// How many of your rules a torrent meets: those the narrowing
+    /// returns, and those that pass the cheap check too and get the full
+    /// match. For the §20.8 budget test's report.
+    #[doc(hidden)]
+    pub fn rule_counts(&self, item: &Item, facts: Option<&Facts>) -> (usize, usize) {
+        let doc = Doc::new(item, facts);
+        let candidates = doc.candidates(&self.rules);
+        let full = candidates
+            .iter()
+            .filter(|&&i| doc.could_match(self.rules.compiled(i).0))
+            .count();
+        (candidates.len(), full)
     }
 
     fn excepted(&self, rule: RuleRef, item: &Item, doc: &Doc) -> bool {

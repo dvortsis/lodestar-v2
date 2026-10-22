@@ -745,6 +745,7 @@ async fn every_filters_route_needs_a_session_and_errors_use_the_envelope() {
         ("POST", "/api/v1/filters/test"),
         ("POST", "/api/v1/filters/preview"),
         ("POST", "/api/v1/filters/apply"),
+        ("POST", "/api/v1/filters/strictness"),
         ("POST", "/api/v1/classify/correct"),
         ("GET", "/api/v1/classify"),
         ("POST", "/api/v1/classify/rules"),
@@ -1160,6 +1161,7 @@ async fn floor_entries_a_file_dropped_leave_only_with_the_password() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["weakening"], true);
     assert_eq!(body["preview"]["removed_from_floor"], 1);
+    assert_eq!(body["floor_entries"], json!([hex(&b)]));
     assert!(
         body["warning"]
             .as_str()
@@ -1170,14 +1172,22 @@ async fn floor_entries_a_file_dropped_leave_only_with_the_password() {
     let (status, body) = apply(&f, &cookie, change.clone(), None).await;
     assert_eq!(status, StatusCode::PRECONDITION_REQUIRED, "{body}");
     assert!(f.api.engine.current().blocked_hash(&[b]).is_some());
+    // A wrong password changes nothing: still blocked, still waiting.
+    let (status, body) = apply(&f, &cookie, change.clone(), Some("wrong password")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    assert!(f.api.engine.current().blocked_hash(&[b]).is_some());
+    let o = overview(&f, &cookie).await;
+    assert_eq!(o["pending_floor_removals"][0]["entries"], 1);
     let (status, body) = apply(&f, &cookie, change.clone(), Some(PASSWORD)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["settled"], 1);
+    assert_eq!(body["assessment"]["floor_entries"], json!([hex(&b)]));
     let e = f.api.engine.current();
     assert!(e.blocked_hash(&[b]).is_none());
     assert!(e.blocked_hash(&[a]).is_some(), "the file still lists it");
     let o = overview(&f, &cookie).await;
     assert!(o["pending_floor_removals"].as_array().unwrap().is_empty());
+
     // Nothing left to settle.
     let (status, _) = apply(&f, &cookie, change, Some(PASSWORD)).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -1189,6 +1199,39 @@ async fn floor_entries_a_file_dropped_leave_only_with_the_password() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // The entries a warning counted are what a confirmation settles,
+    // even if more are pending by then.
+    let c = [0xc3u8; 20];
+    let sync = |hs: &[[u8; 20]], at| {
+        let mut s = f.api.store.lock().unwrap();
+        s.sync_floor_file("/config/blocked.txt", hs, at).unwrap();
+        for h in hs {
+            let h = *h;
+            f.api
+                .engine
+                .update(|e| e.cs.add_hash(h, lodestar_filter::Origin::Imported));
+        }
+    };
+    sync(&[a, c], 3);
+    sync(&[c], 4);
+    let all = json!({ "op": "resolve_floor_removal", "source": "file:/config/blocked.txt",
+        "remove": true });
+    let (_, body) = apply(&f, &cookie, all, None).await;
+    let shown = body["assessment"]["floor_entries"].clone();
+    assert_eq!(shown, json!([hex(&a)]), "{body}");
+    sync(&[], 5);
+    let confirm = json!({ "op": "resolve_floor_removal", "source": "file:/config/blocked.txt",
+        "hashes": shown, "remove": true });
+    let (status, body) = apply(&f, &cookie, confirm, Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["settled"], 1);
+    assert!(
+        f.api.engine.current().blocked_hash(&[c]).is_some(),
+        "not in the warning"
+    );
+    let o = overview(&f, &cookie).await;
+    assert_eq!(o["pending_floor_removals"][0]["hashes"], json!([hex(&c)]));
 }
 
 /// A floor-marked list's upstream removals wait too. Keeping them is
@@ -1238,6 +1281,72 @@ async fn floor_entries_a_list_dropped_can_be_kept_without_the_password() {
     assert!(f.api.engine.current().blocked_hash(&[b]).is_some());
     let o = overview(&f, &cookie).await;
     assert!(o["pending_floor_removals"].as_array().unwrap().is_empty());
+}
+
+/// Removing a floor list's upstream removals is weakening: the password,
+/// and nothing changes on a wrong one.
+#[tokio::test]
+async fn floor_entries_a_list_dropped_leave_only_with_the_password() {
+    let f = fixture();
+    let cookie = logged_in(&f).await;
+    let (a, b, c) = ([0xa1u8; 20], [0xb2u8; 20], [0xc3u8; 20]);
+    let id = {
+        let mut s = f.api.store.lock().unwrap();
+        let id = s
+            .add_subscription(&lodestar_store::NewSubscription {
+                url: "https://example.org/cs.txt",
+                name: "Vetted list",
+                kind: 0,
+                format: Some("hashes"),
+                action: Action::Drop.code(),
+                floor: true,
+                interval_secs: 86_400,
+            })
+            .unwrap();
+        // The publisher drops `b` and `c`.
+        for data in [[a, b, c].concat(), a.to_vec()] {
+            s.record_refresh(
+                id,
+                1,
+                &lodestar_store::Refresh::Updated {
+                    data: &data,
+                    entries: (data.len() / 20) as i64,
+                    etag: None,
+                    last_modified: None,
+                },
+            )
+            .unwrap();
+        }
+        lodestar_filter::lists::apply(&s, &f.api.engine, &f.api.ips).unwrap();
+        id
+    };
+    let blocked = |h: &[u8; 20]| f.api.engine.current().blocked_hash(&[*h]).is_some();
+    assert!(blocked(&b) && blocked(&c));
+    let hex = |h: &[u8; 20]| h.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    // Only `b`, by hash.
+    let change = json!({ "op": "resolve_floor_removal", "source": format!("list:{id}"),
+        "hashes": [hex(&b)], "remove": true });
+    let (status, body) = apply(&f, &cookie, change.clone(), None).await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED, "{body}");
+    let (status, body) = apply(&f, &cookie, change.clone(), Some("wrong password")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    assert!(
+        blocked(&b) && blocked(&c),
+        "a wrong password changes nothing"
+    );
+    assert_eq!(
+        overview(&f, &cookie).await["pending_floor_removals"][0]["entries"],
+        2
+    );
+    let (status, body) = apply(&f, &cookie, change, Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["settled"], 1);
+    assert!(!blocked(&b), "removed");
+    assert!(blocked(&c), "still waiting");
+    assert!(blocked(&a), "the list still has it");
+    let o = overview(&f, &cookie).await;
+    assert_eq!(o["pending_floor_removals"][0]["entries"], 1);
+    assert_eq!(o["pending_floor_removals"][0]["hashes"][0], hex(&c));
 }
 
 /// Owner's decision §2.9: the strictness of a candidate set of lists, for

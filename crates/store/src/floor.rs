@@ -103,6 +103,18 @@ fn imported(c: &Connection, hash: &[u8; 20]) -> Result<bool> {
     )?)
 }
 
+/// Every entry the config files other than `path` still add.
+fn listed_by_other_files(c: &Connection, path: &str) -> Result<Set> {
+    let mut stmt =
+        c.prepare_cached("SELECT value FROM settings WHERE key LIKE 'floor.file:%' AND key != ?1")?;
+    let rows = stmt.query_map([format!("{MANIFEST}{path}")], |r| r.get::<_, Vec<u8>>(0))?;
+    let mut out = Set::new();
+    for data in rows {
+        out.extend(unpack(&data?));
+    }
+    Ok(out)
+}
+
 fn pending_key(source: &FloorSource) -> String {
     format!("{PENDING}{}", source.key())
 }
@@ -148,6 +160,10 @@ impl Store {
     /// entries. Entries it added before and no longer lists stay in the
     /// floor and wait in its pending removals. Returns how many wait.
     /// A file that's no longer configured is synced with no entries.
+    ///
+    /// An entry another file still lists doesn't wait: that file keeps it
+    /// in the floor, and it waits in that file's list if that file drops
+    /// it too.
     pub fn sync_floor_file(&mut self, path: &str, hashes: &[[u8; 20]], at: i64) -> Result<usize> {
         let tx = self.conn.transaction()?;
         let listed: Set = hashes.iter().copied().collect();
@@ -165,9 +181,10 @@ impl Store {
             }
         }
         pending.extend(before.difference(&listed));
+        let others = listed_by_other_files(&tx, path)?;
         let mut kept = Set::new();
         for h in pending {
-            if !listed.contains(&h) && imported(&tx, &h)? {
+            if !listed.contains(&h) && !others.contains(&h) && imported(&tx, &h)? {
                 kept.insert(h);
             }
         }
@@ -250,9 +267,12 @@ impl Store {
                 manifest.retain(|h| !chosen.contains(h));
                 write(&tx, &manifest_key, &manifest)?;
                 if remove {
+                    // An entry another file lists stays: that file adds it,
+                    // and the next start would add it back.
+                    let others = listed_by_other_files(&tx, path)?;
                     let mut del =
                         tx.prepare_cached("DELETE FROM cs_hashes WHERE hash = ?1 AND origin = ?2")?;
-                    for h in &chosen {
+                    for h in chosen.difference(&others) {
                         del.execute(params![&h[..], IMPORTED])?;
                     }
                 }
@@ -345,6 +365,39 @@ mod tests {
         // Settled entries aren't the file's any more.
         assert_eq!(s.sync_floor_file("f.txt", &[], 40).unwrap(), 0);
         assert_eq!(cs(&s).len(), 2);
+    }
+
+    /// An entry two files list stays blocked while either lists it, and
+    /// never waits in one file's list while the other still adds it.
+    #[test]
+    fn an_entry_two_files_list_stays_while_either_does() {
+        let mut s = store();
+        let (a, h) = ([1; 20], [2; 20]);
+        s.sync_floor_file("a.txt", &[a, h], 10).unwrap();
+        s.sync_floor_file("b.txt", &[h], 10).unwrap();
+        // `a.txt` drops `h`; `b.txt` still lists it, so nothing waits.
+        assert_eq!(s.sync_floor_file("a.txt", &[a], 20).unwrap(), 0);
+        assert_eq!(s.sync_floor_file("b.txt", &[h], 20).unwrap(), 0);
+        assert!(s.pending_floor().unwrap().is_empty());
+        assert!(cs(&s).contains(&(h, IMPORTED)));
+        // Then `b.txt` drops it too: it waits there.
+        assert_eq!(s.sync_floor_file("a.txt", &[a], 30).unwrap(), 0);
+        assert_eq!(s.sync_floor_file("b.txt", &[], 30).unwrap(), 1);
+        let src = FloorSource::File("b.txt".into());
+        assert_eq!(s.pending_floor_of(&src).unwrap(), [h]);
+        assert_eq!(s.resolve_pending_floor(&src, None, true, 40).unwrap(), [h]);
+        assert!(!cs(&s).contains(&(h, IMPORTED)), "removed");
+
+        // A file that starts listing an entry after another dropped it:
+        // removing it through the first file's list leaves it blocked.
+        let mut s = store();
+        s.sync_floor_file("a.txt", &[h], 10).unwrap();
+        assert_eq!(s.sync_floor_file("a.txt", &[], 20).unwrap(), 1);
+        s.sync_floor_file("b.txt", &[h], 20).unwrap();
+        let src = FloorSource::File("a.txt".into());
+        assert_eq!(s.resolve_pending_floor(&src, None, true, 30).unwrap(), [h]);
+        assert!(cs(&s).contains(&(h, IMPORTED)), "b.txt still adds it");
+        assert!(s.pending_floor().unwrap().is_empty());
     }
 
     #[test]
