@@ -36,8 +36,8 @@ expose them.
 ### Docker **(planned)**
 The multi-arch image (`ghcr.io/dvortsis/lodestar-v2`) and a
 `docker-compose.yml` come with the Docker packaging slice. The design: one
-container, `/data` as a volume, `8090/tcp` for the web UI, `6881/udp` and
-`6881/tcp` for the DHT and peers, a `HEALTHCHECK` that runs
+container, `/data` as a volume, `8090/tcp` for the web UI, `6881/udp` for the DHT
+(`6881/tcp` is reserved for incoming peer connections, planned), a `HEALTHCHECK` that runs
 `lodestar healthcheck`.
 
 ### Unraid
@@ -53,7 +53,7 @@ Until Community Applications lists Lodestar, copy the XML file to
 `/boot/config/plugins/dockerMan/templates-user/` on the server, then add the
 container from **Docker → Add Container → Template**.
 
-Defaults: web UI on 8090, `6881/udp` and `6881/tcp`, `PUID=99`, `PGID=100`,
+Defaults: web UI on 8090, `6881/udp` (and a reserved, unused `6881/tcp`), `PUID=99`, `PGID=100`,
 and `/data` mapped to `/mnt/cache/appdata/lodestar`. See §5 for why that is a
 pool path.
 
@@ -99,7 +99,7 @@ progress.
 |---|---|
 | `8090/tcp` | Web UI, API, `/metrics`, `/healthz`. Keep it on your LAN. |
 | `6881/udp` | DHT. Forward it on your router for the best reach. |
-| `6881/tcp` | Peer connections. Forward it together with the UDP port. |
+| `6881/tcp` | Reserved for incoming peer connections **(planned)**. Fetches are outbound only today, so there's nothing to forward yet. |
 | `8091/tcp` | Cluster port for workers **(planned)** |
 
 Change the DHT port with `LODESTAR_DHT_PORT`. The web address comes from
@@ -171,8 +171,10 @@ Today, under `LODESTAR_DATA_DIR`:
 | `config.toml` | Optional settings |
 | `import-bitmagnet.cursor` | Resume point of a bitmagnet import |
 
-`data/hot/*.col` (memory-mapped statistics columns) and `cold.db` are in the
-design (§4, §11) but **not created yet (planned)**.
+Swarm-statistics hot columns are plain in-memory atomics. The store can
+snapshot them to `*.col` files at a clean shutdown (§16), but the binary
+doesn't write those snapshots yet **(planned)**. `cold.db` and the
+`data/hot`/`data/cold` split are also **planned**.
 
 ## 7. Upgrades and backups
 

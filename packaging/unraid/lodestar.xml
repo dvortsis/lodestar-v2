@@ -5,7 +5,6 @@
   <Registry>https://github.com/dvortsis/lodestar-v2/pkgs/container/lodestar-v2</Registry>
   <Network>bridge</Network>
   <MyIP/>
-  <Shell>sh</Shell>
   <Privileged>false</Privileged>
   <Support>https://github.com/dvortsis/lodestar-v2/issues</Support>
   <Project>https://github.com/dvortsis/lodestar-v2</Project>
@@ -24,10 +23,10 @@
   <Icon>https://raw.githubusercontent.com/dvortsis/lodestar-v2/main/packaging/icons/lodestar-256.png</Icon>
   <Config Name="Web UI" Target="8090" Default="8090" Mode="tcp" Description="Web UI and API." Type="Port" Display="always" Required="true" Mask="false">8090</Config>
   <Config Name="DHT / peers (UDP)" Target="6881" Default="6881" Mode="udp" Description="DHT traffic. Forward this UDP port on your router for best reach." Type="Port" Display="always" Required="true" Mask="false">6881</Config>
-  <Config Name="Peers (TCP)" Target="6881" Default="6881" Mode="tcp" Description="Peer connections for metadata exchange." Type="Port" Display="always" Required="true" Mask="false">6881</Config>
+    <Config Name="Peers (TCP)" Target="6881" Default="6881" Mode="tcp" Description="Reserved for incoming peer connections (planned). Lodestar only makes outbound fetches today, so nothing listens here yet." Type="Port" Display="advanced" Required="false" Mask="false">6881</Config>
   <Config Name="Data" Target="/data" Default="/mnt/cache/appdata/lodestar" Mode="rw" Description="Index, database and settings. Use a pool path (/mnt/cache/... or your pool name), not /mnt/user. /mnt/user goes through Unraid's FUSE layer, which is slow for this workload and risky for SQLite." Type="Path" Display="always" Required="true" Mask="false">/mnt/cache/appdata/lodestar</Config>
-  <Config Name="Hot path (optional)" Target="/data/hot" Default="" Mode="rw" Description="Optional. Indexes and hot columns. Must be on an SSD or NVMe pool. Leave empty to keep everything under Data." Type="Path" Display="advanced" Required="false" Mask="false"></Config>
-  <Config Name="Cold path (optional)" Target="/data/cold" Default="" Mode="rw" Description="Optional. File-tree blobs and the optional raw archive. Written continuously as torrents arrive, so on the parity array it keeps disks spinning and slows writes. Keep it on the cache pool unless you have a reason." Type="Path" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Hot path (optional)" Target="/data/hot" Default="" Mode="rw" Description="Planned, not used yet. Optional. Indexes and hot columns. Must be on an SSD or NVMe pool. Leave empty to keep everything under Data." Type="Path" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Cold path (optional)" Target="/data/cold" Default="" Mode="rw" Description="Planned, not used yet. Optional. File-tree blobs and the optional raw archive. Written continuously as torrents arrive, so on the parity array it keeps disks spinning and slows writes. Keep it on the cache pool unless you have a reason." Type="Path" Display="advanced" Required="false" Mask="false"></Config>
   <Config Name="PUID" Target="PUID" Default="99" Mode="rw" Description="User ID the container runs as (99 = nobody)." Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
   <Config Name="PGID" Target="PGID" Default="100" Mode="rw" Description="Group ID the container runs as (100 = users)." Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
   <Config Name="TZ" Target="TZ" Default="Etc/UTC" Mode="rw" Description="Time zone for log timestamps, for example Europe/Berlin." Type="Variable" Display="advanced" Required="false" Mask="false">Etc/UTC</Config>

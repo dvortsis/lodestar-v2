@@ -29,8 +29,8 @@ journalctl -u lodestar | grep "setup token"
   competing with the rest of the host. Remove them if this machine is
   dedicated to Lodestar.
 - **File limit:** `LimitNOFILE=8192` covers 400 metadata sockets with
-  headroom. Raise it if you set `LODESTAR_INTENSITY=aggressive` (about
-  1000 sockets).
+  headroom, including the roughly 1000 sockets of
+  `LODESTAR_INTENSITY=aggressive`.
 - **Data elsewhere:** `ProtectSystem=strict` makes everything outside the
   state directory read-only. To keep data on another disk, bind-mount it to
   `/var/lib/lodestar` or add its path to `ReadWritePaths=` and set
