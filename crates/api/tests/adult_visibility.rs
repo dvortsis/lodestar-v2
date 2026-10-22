@@ -469,6 +469,116 @@ async fn visibility_follows_your_corrections() {
     assert_eq!(names(&body), sorted(&[0, 3]));
 }
 
+/// One facet's values, `value → count`.
+fn facet(body: &Value, name: &str) -> Vec<(String, u64)> {
+    body["facets"][name]["values"]
+        .as_array()
+        .map(|vs| {
+            vs.iter()
+                .map(|v| {
+                    (
+                        v["value"].as_str().unwrap().to_owned(),
+                        v["count"].as_u64().unwrap(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn facets_count_what_search_shows_in_both_states() {
+    let f = fixture();
+    let c = session(&f).await;
+    for shown in [false, true] {
+        f.show.send(shown).unwrap();
+        for q in ["", "movie", "type:movie", "type:movie,tv", "adult:movie"] {
+            let (status, search) =
+                json_call(&f.app, get(&format!("/api/v1/search?q={}", encode(q)), &c)).await;
+            assert_eq!(status, StatusCode::OK, "{q}");
+            let (status, body) =
+                json_call(&f.app, get(&format!("/api/v1/facets?q={}", encode(q)), &c)).await;
+            assert_eq!(status, StatusCode::OK, "{q}: {body}");
+            assert_eq!(body["total"], search["total"], "shown={shown} {q}");
+            let types = facet(&body, "type");
+            if shown {
+                // Disjunctive: a `type:` selection still counts the
+                // Adult torrents the rest of the query matches.
+                if q.is_empty() || q.starts_with("type:") {
+                    assert!(types.contains(&("adult".into(), 2)), "{q}: {types:?}");
+                }
+            } else {
+                // Hidden: no `adult` under `type`, listed or counted, and
+                // no adult group, whatever the query selects.
+                assert!(types.iter().all(|(v, _)| v != "adult"), "{q}: {types:?}");
+                assert!(body["facets"].get("adult").is_none(), "{q}: {body}");
+                assert!(
+                    !body["unavailable"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&json!("adult"))
+                );
+            }
+        }
+        // The adult group: there exactly when Adult is shown.
+        let (_, body) = json_call(&f.app, get("/api/v1/facets", &c)).await;
+        let kinds = facet(&body, "adult");
+        if shown {
+            let (_, search) = json_call(&f.app, get("/api/v1/search?q=adult:movie", &c)).await;
+            let movie = search["total"].as_u64().unwrap();
+            assert!(movie > 0);
+            assert!(kinds.contains(&("movie".into(), movie)), "{kinds:?}");
+        } else {
+            assert!(kinds.is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_adult_facet_follows_your_corrections() {
+    let mut f = fixture();
+    let c = session(&f).await;
+    // Not adult on a detected-adult torrent: its class is a movie's now,
+    // whatever kind the classifier gave it.
+    f.correct(1, false);
+    f.reindex();
+    f.show.send(true).unwrap();
+    let (_, body) = json_call(&f.app, get("/api/v1/facets", &c)).await;
+    let types = facet(&body, "type");
+    assert!(types.contains(&("adult".into(), 1)), "{types:?}");
+    let kinds = facet(&body, "adult");
+    let in_class: u64 = kinds.iter().map(|(_, n)| n).sum();
+    assert_eq!(in_class, 1, "only the Adult-class torrent: {kinds:?}");
+    // Selecting a kind counts within the class too.
+    let (_, body) = json_call(&f.app, get("/api/v1/facets?q=adult:movie", &c)).await;
+    let kinds = facet(&body, "adult");
+    assert!(kinds.iter().all(|(_, n)| *n <= 1), "{kinds:?}");
+}
+
+#[tokio::test]
+async fn a_facets_lease_from_before_a_toggle_is_refused() {
+    let f = fixture();
+    let c = session(&f).await;
+    for (before, after) in [(false, true), (true, false)] {
+        f.show.send(before).unwrap();
+        let (_, first) = json_call(&f.app, get("/api/v1/search?limit=1", &c)).await;
+        let lease = first["next_cursor"].as_str().unwrap().to_string();
+        let uri = format!("/api/v1/facets?lease={}", encode(&lease));
+        let (status, body) = json_call(&f.app, get(&uri, &c)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["total"], first["total"]);
+        f.show.send(after).unwrap();
+        let (status, body) = json_call(&f.app, get(&uri, &c)).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "{before} → {after}: {body}"
+        );
+        assert_eq!(body["error"]["code"], "bad_cursor");
+        assert_eq!(body["error"]["field"], "lease");
+    }
+}
+
 #[tokio::test]
 async fn unauthenticated_requests_get_401() {
     let f = fixture();
