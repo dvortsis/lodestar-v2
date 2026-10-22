@@ -61,6 +61,10 @@ const FRAGMENTS: &[&str] = &[
     "cat:software=0",
     "bytes:video=10..50",
     "cat:audio",
+    "file:(",
+    "file:(ext:flac size:>50MB)",
+    "file:sample",
+    "file:\"x y\"",
     "0123456789abcdef0123456789abcdef01234567",
 ];
 

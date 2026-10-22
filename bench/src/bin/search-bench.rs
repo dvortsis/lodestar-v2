@@ -212,6 +212,12 @@ fn classes(seed: u64, per_class: usize) -> Vec<Class> {
         "ext:flac,mp3",
         "private:no size:1GB..8GB",
     ];
+    let file_clauses = [
+        "file:(ext:mkv size:>1GB)",
+        "file:(ext:flac size:>20MB)",
+        "file:sample",
+        "file:(ext:mp4,mkv -path:sample)",
+    ];
     let facets = [
         "type:movie",
         "res:1080p",
@@ -283,6 +289,21 @@ fn classes(seed: u64, per_class: usize) -> Vec<Class> {
                     "{} {}",
                     pick(r, common),
                     facets[r.random_range(0..facets.len())]
+                )
+            }),
+        },
+        // File clauses (§8): the file index first, then the torrent query
+        // filtered by the matching torrents.
+        Class {
+            name: "word + file clause",
+            target: Some(KEYWORD_P95),
+            cold: false,
+            sort: Sort::Relevance,
+            queries: make(&mut |r| {
+                format!(
+                    "{} {}",
+                    pick(r, common),
+                    file_clauses[r.random_range(0..file_clauses.len())]
                 )
             }),
         },

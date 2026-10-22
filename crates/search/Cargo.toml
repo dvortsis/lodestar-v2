@@ -12,7 +12,7 @@ lodestar-classify.workspace = true
 lodestar-metainfo.workspace = true
 lodestar-release-parser.workspace = true
 lodestar-store.workspace = true
-tantivy = { version = "0.27.0", default-features = false, features = ["mmap", "lz4-compression", "stemmer"] }
+tantivy = { version = "0.27.0", default-features = false, features = ["mmap", "lz4-compression", "zstd-compression", "stemmer"] }
 serde = { version = "1", features = ["derive"] }
 tracing = "0.1.44"
 unicode-normalization = "0.1.24"

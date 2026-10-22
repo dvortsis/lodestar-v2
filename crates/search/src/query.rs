@@ -14,12 +14,13 @@
 //! type:movie,tv  res:4k  hdr:dv  codec:x265  audio:atmos  lang:fr
 //! group:ntb  has:nfo  resolved:files  ambiguous:yes
 //! year:2019..2021  s:2  e:5  junk:<20  cat:video>=80%  bytes:video>90%
+//! file:(ext:flac size:>50MB)  file:"dark knight"   one file matching all
 //! ```
 //!
 //! Keyword values are normalised as the release parser reads them
 //! (`codec:x265` is `codec:h265`, `res:4k` is `res:2160p`), so the AST
 //! holds what the index holds. Fields that need later milestones
-//! (`file:`, `seeders:`, …) parse to a clear "not available yet" error
+//! (`seeders:`, `regex`, …) parse to a clear "not available yet" error
 //! rather than being ignored.
 //! Input is untrusted: length, clause count and nesting are bounded.
 
@@ -204,6 +205,12 @@ pub enum Node {
         key: TagKey,
         any: Vec<String>,
     },
+    /// Torrents with at least one file matching every clause of `of`
+    /// (words, phrases, `name:`, `path:`, `ext:`, `size:`), answered by
+    /// the file index.
+    File {
+        of: Box<Node>,
+    },
     /// A category's share of the files or bytes, inclusive percentages.
     Share {
         by: ShareBy,
@@ -251,6 +258,7 @@ enum FieldKind {
     Magnet,
     Tag(TagKey),
     Share(ShareBy),
+    File,
     /// Known, but needs a later milestone.
     Later(&'static str),
 }
@@ -290,7 +298,7 @@ const FIELDS: &[(&str, FieldKind)] = &[
     ("junk", FieldKind::Num(NumField::Junk)),
     ("cat", FieldKind::Share(ShareBy::Count)),
     ("bytes", FieldKind::Share(ShareBy::Bytes)),
-    ("file", FieldKind::Later("the file index (M3)")),
+    ("file", FieldKind::File),
     ("sig", FieldKind::Later("grouping keys (M7)")),
     ("seeders", FieldKind::Later("swarm health (M4)")),
     ("trackers", FieldKind::Later("swarm health (M4)")),
@@ -664,6 +672,14 @@ impl Parser<'_> {
                         self.pos += 1;
                         return phrase(f, &text, start, end);
                     }
+                    // file:(ext:flac size:>50MB), file:"dark knight"
+                    if kind == FieldKind::File
+                        && matches!(self.peek(), Some(Lex::LParen | Lex::Quoted(_)))
+                    {
+                        let inner = self.primary()?;
+                        let end = self.toks[self.pos - 1].end;
+                        return file(inner, start, end);
+                    }
                     if let FieldKind::Later(what) = kind {
                         return err(format!("{name}: arrives with {what}"), start, end);
                     }
@@ -806,8 +822,20 @@ fn field_value(
             Ok(Node::Tag { key, any })
         }
         FieldKind::Share(by) => share(by, name, value, start, end),
+        FieldKind::File => file(word(TextField::Any, value, start, end)?, start, end),
         FieldKind::Later(what) => err(format!("{name}: arrives with {what}"), start, end),
     }
+}
+
+fn file(of: Node, start: usize, end: usize) -> Result<Node, ParseError> {
+    if !crate::files::file_clause_ok(&of) {
+        return err(
+            "file:(…) takes words, phrases, name:, path:, ext: and size:",
+            start,
+            end,
+        );
+    }
+    Ok(Node::File { of: Box::new(of) })
 }
 
 /// Longest keyword value accepted.
@@ -1117,6 +1145,19 @@ fn date_text(t: i64) -> String {
 // ---- rendering -------------------------------------------------------------
 
 impl Node {
+    /// Whether the query has a `file:(…)` clause, so its results have
+    /// matched files ([`SearchIndex::matched_files`]).
+    ///
+    /// [`SearchIndex::matched_files`]: crate::SearchIndex::matched_files
+    pub fn has_file_clause(&self) -> bool {
+        match self {
+            Node::And { of } | Node::Or { of } => of.iter().any(Node::has_file_clause),
+            Node::Not { of } => of.has_file_clause(),
+            Node::File { .. } => true,
+            _ => false,
+        }
+    }
+
     /// Canonical query text; [`parse`] of it gives back the same AST.
     pub fn to_query(&self) -> String {
         let mut s = String::new();
@@ -1175,6 +1216,11 @@ impl Node {
                 let _ = write!(out, "{}\"{text}\"", text_field(*field));
             }
             Node::Near { field, words, slop } => {
+                // Negated, it needs brackets: `-a NEAR b` reads as NEAR
+                // applied to `-a`.
+                if nested {
+                    out.push('(');
+                }
                 for (i, w) in words.iter().enumerate() {
                     if i > 0 {
                         let _ = write!(out, " NEAR/{slop} ");
@@ -1186,6 +1232,9 @@ impl Node {
                     } else {
                         let _ = write!(out, "{}\"{w}\"", text_field(*field));
                     }
+                }
+                if nested {
+                    out.push(')');
                 }
             }
             Node::Prefix { field, prefix } => {
@@ -1253,6 +1302,31 @@ impl Node {
             Node::Tag { key, any } => {
                 let _ = write!(out, "{}:{}", key.as_str(), any.join(","));
             }
+            Node::File { of } => match **of {
+                // A single word keeps the `file:word` form: in brackets,
+                // `file:res:x`'s word would read as a field, and
+                // `file:-x`'s as a negation.
+                Node::Word {
+                    field: TextField::Any,
+                    ..
+                }
+                | Node::Prefix {
+                    field: TextField::Any,
+                    ..
+                }
+                | Node::Fuzzy {
+                    field: TextField::Any,
+                    ..
+                } => {
+                    out.push_str("file:");
+                    of.render(out, false);
+                }
+                _ => {
+                    out.push_str("file:(");
+                    of.render(out, false);
+                    out.push(')');
+                }
+            },
             Node::Share { by, cat, lo, hi } => {
                 let name = match by {
                     ShareBy::Count => "cat",
@@ -1456,7 +1530,12 @@ mod tests {
     fn helpful_errors() {
         let e = |q: &str| parse(q).unwrap_err().message;
         assert_eq!(e("sise:>1GB"), "unknown field sise: (did you mean size:?)");
-        assert_eq!(e("file:x"), "file: arrives with the file index (M3)");
+        assert_eq!(
+            e("file:(res:1080p)"),
+            "file:(…) takes words, phrases, name:, path:, ext: and size:"
+        );
+        assert!(e("file:(file:(x))").starts_with("file:(…) takes"));
+        assert_eq!(e("file:"), "file: needs a value");
         assert!(e("type:film").starts_with("type: expects one of movie, tv"));
         assert!(e("has:nope").contains("nfo"));
         assert!(e("cat:vid>1").contains("expects a category"));
@@ -1605,6 +1684,34 @@ mod tests {
     }
 
     #[test]
+    fn file_clauses() {
+        let file = |of| Node::File { of: Box::new(of) };
+        assert_eq!(parse("file:sample").unwrap(), file(w("sample")));
+        assert_eq!(
+            parse("file:\"dark knight\"").unwrap(),
+            file(Node::Phrase {
+                field: TextField::Any,
+                text: "dark knight".into()
+            })
+        );
+        assert_eq!(
+            parse("file:(ext:flac size:>50MB)").unwrap(),
+            file(Node::And {
+                of: vec![
+                    Node::Ext {
+                        any: vec!["flac".into()]
+                    },
+                    Node::Range {
+                        field: NumField::Size,
+                        lo: Some((50 << 20) + 1),
+                        hi: None
+                    },
+                ]
+            })
+        );
+    }
+
+    #[test]
     fn limits() {
         assert!(parse(&"a ".repeat(MAX_CLAUSES)).is_ok());
         assert!(parse(&"a ".repeat(MAX_CLAUSES + 1)).is_err());
@@ -1645,9 +1752,13 @@ mod tests {
             "hdr:dv audio:atmos lang:fr group:ntb has:nfo resolved:folder ambiguous:no",
             "year:2019..2021 s:2 e:>=5 junk:<=20",
             "cat:video cat:software=0 bytes:video>=91 cat:audio<=40 bytes:image=10..50",
-            // Found by fuzzing: phrase words that look like syntax, and a
-            // lone `!` before `)`.
+            "file:(ext:flac size:>50MB) -file:sample file:(\"a b\" | name:co* path:extras)",
+            "(x | file:(a -b)) file:(dark NEAR/2 knight)",
+            // Found by fuzzing: phrase words that look like syntax, a
+            // lone `!` before `)`, and a negated NEAR.
             "\"a\" NEAR \"NEAR $*\" NEAR \"x|y\"",
+            "!(\"?\"NEAR\n\0m){A",
+            "file:res:x file:-y file:NEAR file:~abcd file:res:x* file:(a)",
             "(a ,$!\r!\r) b",
         ] {
             let ast = parse(q).unwrap();

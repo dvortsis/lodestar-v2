@@ -1,6 +1,7 @@
 //! Query AST → Tantivy query (architecture §8).
 
 use std::ops::Bound;
+use std::sync::Arc;
 
 use lodestar_classify::Category;
 use tantivy::Term;
@@ -10,12 +11,56 @@ use tantivy::query::{
 };
 use tantivy::schema::{Field, IndexRecordOption};
 
+use crate::files::{IdSet, IdsQuery};
 use crate::filter::FastRange;
 use crate::query::{Node, NumField, ShareBy, TagKey, TextField, When};
 use crate::schema::{Fields, NAME_BOOST, PATH_BOOST, TITLE_BOOST, share_field};
 use crate::tokenizer::{self, Tok, TokKind};
 
 type Q = Box<dyn Query>;
+
+/// The torrent ids with a matching file, for each `file:(…)` clause in
+/// a query, keyed by the clause's inner node (`{:?}`). The caller runs
+/// them on the file index first.
+pub(crate) type FileSets = std::collections::HashMap<String, Arc<IdSet>>;
+
+/// What compiling needs: the torrent index's fields (it derefs to them)
+/// and the `file:(…)` results.
+pub(crate) struct Cx<'a> {
+    pub fields: &'a Fields,
+    pub files: &'a FileSets,
+}
+
+impl std::ops::Deref for Cx<'_> {
+    type Target = Fields;
+
+    fn deref(&self) -> &Fields {
+        self.fields
+    }
+}
+
+impl Cx<'_> {
+    fn ids(&self, of: &Node) -> Arc<IdSet> {
+        self.files
+            .get(&format!("{of:?}"))
+            .cloned()
+            .unwrap_or_default()
+    }
+}
+
+/// Every `file:(…)` clause's inner node, in order.
+pub(crate) fn file_clauses(node: &Node, out: &mut Vec<Node>) {
+    match node {
+        Node::And { of } | Node::Or { of } => {
+            for n in of {
+                file_clauses(n, out);
+            }
+        }
+        Node::Not { of } => file_clauses(of, out),
+        Node::File { of } => out.push((**of).clone()),
+        _ => {}
+    }
+}
 
 /// A compiled query in its parts.
 pub(crate) struct Parts {
@@ -38,7 +83,7 @@ pub(crate) struct Parts {
 ///   back separately for the re-ranker. A conjunction of plain terms is
 ///   a flat intersection, about twice as fast as one carrying optional
 ///   boost clauses.
-pub(crate) fn compile(node: &Node, f: &Fields, now: i64) -> Parts {
+pub(crate) fn compile(node: &Node, f: &Cx<'_>, now: i64) -> Parts {
     let of: Vec<&Node> = match node {
         Node::And { of } => of.iter().collect(),
         n => vec![n],
@@ -54,7 +99,7 @@ pub(crate) fn compile(node: &Node, f: &Fields, now: i64) -> Parts {
     rest.extend(&ranges[..keep]);
     let filters = ranges[keep..]
         .iter()
-        .map(|n| fast_range(n, now).expect("liftable"))
+        .map(|n| fast_range(n, f, now).expect("liftable"))
         .collect();
     let mut clauses = Vec::new();
     let mut boosts = Vec::new();
@@ -172,14 +217,14 @@ fn share_name(by: ShareBy, cat: &str) -> Option<String> {
 fn liftable(n: &Node) -> bool {
     match n {
         Node::Range { field, .. } => field.is_fast(),
-        Node::Date { .. } => true,
+        Node::Date { .. } | Node::File { .. } => true,
         Node::Share { by, cat, .. } => share_name(*by, cat).is_some(),
         _ => false,
     }
 }
 
 /// A liftable node as a fast-field check.
-fn fast_range(node: &Node, now: i64) -> Option<FastRange> {
+fn fast_range(node: &Node, cx: &Cx<'_>, now: i64) -> Option<FastRange> {
     Some(match node {
         Node::Range { field, lo, hi } if field.is_fast() => FastRange::U64 {
             field: fast_name(*field).to_owned(),
@@ -198,13 +243,14 @@ fn fast_range(node: &Node, now: i64) -> Option<FastRange> {
             hi: u64::from(*hi),
             missing: Some(0),
         },
+        Node::File { of } => FastRange::Ids { ids: cx.ids(of) },
         _ => return None,
     })
 }
 
 /// `None` for a clause that constrains nothing (a word with no tokens,
 /// like a lone `-`), so `And` can drop it.
-fn compile_opt(node: &Node, f: &Fields, now: i64) -> Option<Q> {
+fn compile_opt(node: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
     Some(match node {
         Node::All => Box::new(AllQuery),
         Node::And { of } => {
@@ -383,6 +429,14 @@ fn compile_opt(node: &Node, f: &Fields, now: i64) -> Option<Q> {
                 (lo, hi) => range(lo, hi),
             }
         }
+        Node::File { of } => {
+            let ids = f.ids(of);
+            if ids.is_empty() {
+                Box::new(EmptyQuery)
+            } else {
+                Box::new(IdsQuery { ids })
+            }
+        }
         Node::Hash { hash } => match hex20(hash) {
             Some(bytes) => Box::new(TermQuery::new(
                 Term::from_field_bytes(f.hash, &bytes),
@@ -469,7 +523,7 @@ fn per_field(field: TextField, f: &Fields, build: impl Fn(Field, bool) -> Q) -> 
 /// whole-word token where it has one (instead of its parts, which sit
 /// inside its byte range), else its single part. Joined compounds are
 /// left out.
-fn units(toks: &[Tok]) -> Vec<Tok> {
+pub(crate) fn units(toks: &[Tok]) -> Vec<Tok> {
     let mut out = Vec::new();
     let mut whole: Option<(usize, usize)> = None;
     for t in toks {
@@ -511,7 +565,7 @@ pub(crate) fn word_query(field: Field, toks: &[Tok], positions: bool) -> Q {
 
 /// Parts in order as a phrase (with `slop`), or all of them without
 /// positions.
-fn parts_query(field: Field, parts: &[Tok], positions: bool, slop: u32) -> Q {
+pub(crate) fn parts_query(field: Field, parts: &[Tok], positions: bool, slop: u32) -> Q {
     match parts {
         [one] => term(field, &one.text, IndexRecordOption::WithFreqs),
         many if positions => {
@@ -538,7 +592,7 @@ fn parts_query(field: Field, parts: &[Tok], positions: bool, slop: u32) -> Q {
 
 /// A prefix or fuzzy word as it's indexed: its compound if it has one,
 /// else its only part.
-fn folded_word(word: &str) -> Option<String> {
+pub(crate) fn folded_word(word: &str) -> Option<String> {
     let toks = tokenizer::tokenize(word);
     toks.iter()
         .find(|t| t.kind == TokKind::Whole)
@@ -547,7 +601,7 @@ fn folded_word(word: &str) -> Option<String> {
         .map(|t| t.text.clone())
 }
 
-fn regex_escape(s: &str) -> String {
+pub(crate) fn regex_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         if "\\.+*?()|[]{}^$#&-~".contains(c) {
