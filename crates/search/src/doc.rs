@@ -76,6 +76,9 @@ impl DocEnrichment {
             }
         };
         tag(TagKey::Type, record.content_type.as_str());
+        if let Some(k) = record.adult_kind {
+            tag(TagKey::Adult, k.as_str());
+        }
         for (key, field) in [
             (TagKey::Res, "res"),
             (TagKey::Hdr, "hdr"),

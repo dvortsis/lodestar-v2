@@ -2224,6 +2224,12 @@ There are **two taxonomies**:
   - **Supporting signals:** file structure (scene sets, image sets with model and set naming), terms in the name.
   - **Counter-signals that win:** a TMDB/TVDB/MusicBrainz match to mainstream media (*Sex Education*, *Sex and the City*), educational and medical contexts.
   - A confidence score is stored. **Not adult / Is adult** corrections feed back as rules and fixtures (§20.4).
+  - **As built (classifier v2, `crates/classify/src/adult.rs`):** the name and the largest file's name are scanned as words.
+    - Strong: `XXX` as a tag (never the first word, which is the film *xXx*) 90; a known site or studio 85; `hentai` 60.
+    - Supporting: each distinct adult term 35, and `Site.YY.MM.DD` scene naming 30, capped at 70; strong plus supporting adds 10.
+    - Counter: a documentary, educational or medical word cancels the supporting score and takes 40 off the strong one. Season or episode numbers cancel the supporting score.
+    - A torrent is adult at **≥ 60**. The kind follows the type it would otherwise have (TV and Video → Scene; Movie → Movie, or Scene with scene naming; Images → Photos; Comic → Comics; Game and Software → Game; Music and Audiobook → Audio), and VR words turn Scene or Movie into VR.
+    - **Ebook and Other keep their type** because no adult kind fits them. Source categories, enrichment matches and corrections arrive with the filter engine and plugins, and adjust this score.
 - **Visibility is a preference, not a legal tier:**
   - "Show adult content" is **off by default** and turned on with an **18+ confirmation**.
   - It applies to Search, Discover, Alerts and Insights segments. Outputs (Torznab, Stremio, export) each have their own adult setting, also off by default.
