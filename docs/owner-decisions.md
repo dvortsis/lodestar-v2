@@ -286,7 +286,7 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
       - an offline, password-protected **recovery key** (`67922DDF005FD310`) that only signs key changes.
 
       The public keys are in `packaging/keys/`.
-14. **User documentation is written for moderately tech-savvy users, not experts** (owner, 2026-10-22, settings session: "add rules to write documentation for moderately-tech-savvy users, rather than users who actually know what they're doing. That means explaining things more, create/ provide diagrams and screenshots when possible").
+14. **User documentation is written for people who can install an app from the Unraid app store but may not know how to set it up** (owner, 2026-10-22, settings session: "add rules to write documentation for moderately-tech-savvy users, rather than users who actually know what they're doing. That means explaining things more, create/ provide diagrams and screenshots when possible").
     - The rules are in the project skill `user-docs` (`.claude/skills/user-docs/SKILL.md`), referenced from `CLAUDE.md` and `runner/standards.md` §4b.
     - **The rules:**
       - explain why before how, and define every term on first use;
@@ -308,6 +308,10 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **Precedence,** as with `ui-design-skills`: these decisions, then `user-docs`, then the skills.
     - **Brand:** a `brand/brand.json` profile fixes the fonts the skills would otherwise misdetect.
     - **Scope:** the README, `docs/user/`, `docs/operations.md`, release notes and in-app help. Developer and contract docs are exempt.
+
+15. **Runner concurrency:** up to 16 Opus code slices and 16 helper slices at once (raised from 4 core / 8 helpers, then doubled the same day). Slices still need disjoint owned paths, and every PR still gets a fresh Opus review before merge.
+16. **Adult-relabel quarantines:** when a user's Is-adult correction or class rule makes the Adult-only child-safety core quarantine a torrent, the sealed name is still purged after 30 days, but the entry then becomes a tombstone (hash and rule only), so the torrent is never fetched again. It can still be released deliberately, with the effect warning and the password.
+17. **Deleted data is overwritten:** SQLite's `secure_delete` is on, so deleted rows (sealed quarantine names, deleted torrents) are zeroed rather than left in free pages that a copy of the data folder could recover.
 
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.

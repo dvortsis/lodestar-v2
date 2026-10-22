@@ -697,3 +697,31 @@ fn hidden_torrents_stay_out_unless_asked_for() {
     );
     assert_eq!(names(&index, "day").len(), 2);
 }
+
+#[test]
+fn matching_ids_share_one_limit_across_segments() {
+    use lodestar_search::parse;
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let index = SearchIndex::in_memory().unwrap();
+    let mut w = index.writer(15 << 20).unwrap();
+    // Three commits, so three segments of two matching torrents each.
+    for batch in 0..3 {
+        add(
+            &mut store,
+            &[
+                torrent(&format!("match {batch}a"), &["x"]),
+                torrent(&format!("match {batch}b"), &["x"]),
+                torrent(&format!("other {batch}"), &["x"]),
+            ],
+        );
+        w.catch_up(&mut store, 100).unwrap();
+        w.commit().unwrap();
+    }
+    let q = index.query(&parse("match").unwrap(), NOW);
+    let (all, over) = index.matching_ids(&q, 100).unwrap();
+    assert_eq!((all.len(), over), (6, false));
+    let (some, over) = index.matching_ids(&q, 3).unwrap();
+    assert_eq!((some.len(), over), (3, true), "3 in total, not per segment");
+    let (exact, over) = index.matching_ids(&q, 6).unwrap();
+    assert_eq!((exact.len(), over), (6, false));
+}

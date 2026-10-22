@@ -32,6 +32,6 @@ pub use index::{
     index_dir,
 };
 pub use lease::{EXACT_BUDGET, Lease, LeaseConfig, Leases, Page, Start};
-pub use live::{IndexStats, LiveConfig, LiveIndexer};
+pub use live::{CommitHook, Committed, IndexStats, LiveConfig, LiveIndexer};
 pub use query::{Node, ParseError, parse};
 pub use rebuild::{IndexVersion, Rebuild, RebuildPhase, RebuildProgress, Serving, ServingConfig};
