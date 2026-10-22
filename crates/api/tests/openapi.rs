@@ -190,6 +190,7 @@ fn app() -> (tempfile::TempDir, Router) {
             reader: Arc::new(Mutex::new(reader)),
             filters: None,
             settings: None,
+            adult: Default::default(),
         }),
     );
     (dir, app)

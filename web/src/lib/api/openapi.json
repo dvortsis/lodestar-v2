@@ -1218,6 +1218,16 @@
               }
             }
           },
+          "422": {
+            "description": "`adult_confirmation_required`: a patch turning on an adult setting without `\"confirm_adult\": true`; nothing is saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -1301,6 +1311,16 @@
               }
             }
           },
+          "404": {
+            "description": "`torrent_not_found`, or `adult_hidden`: an Adult torrent while \"Show adult content\" is off.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -1357,6 +1377,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FilesPage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`torrent_not_found`, or `adult_hidden`: an Adult torrent while \"Show adult content\" is off.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -3911,6 +3941,7 @@
           "hits",
           "limit",
           "next_cursor",
+          "notices",
           "offset",
           "total",
           "total_approx",
@@ -3933,6 +3964,13 @@
               "null"
             ],
             "description": "Pass as `cursor` for the next page; null on the last page."
+          },
+          "notices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchNotice"
+            },
+            "description": "As search's: `adult_hidden` for the `adult` tab while \"Show adult\ncontent\" is off, so it's empty."
           },
           "offset": {
             "type": "integer",
@@ -4720,6 +4758,13 @@
           }
         }
       },
+      "SearchNotice": {
+        "type": "string",
+        "description": "A note on what a search left out.",
+        "enum": [
+          "adult_hidden"
+        ]
+      },
       "SearchRequest": {
         "type": "object",
         "description": "`POST /search`'s body, and `GET /search`'s parameters (where `ast` is\nrefused: send an AST with POST).",
@@ -4805,6 +4850,7 @@
           "hits",
           "limit",
           "next_cursor",
+          "notices",
           "offset",
           "stemmed",
           "took_ms",
@@ -4832,6 +4878,13 @@
               "null"
             ],
             "description": "Pass as `cursor` for the next page, read from the same index\nsnapshot (§8); null on the last page. Opaque, URL-safe, at most\n256 characters, valid for 10 minutes after its last use."
+          },
+          "notices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchNotice"
+            },
+            "description": "What the server left out of these results, for the UI to say:\n`adult_hidden` when the query asks for Adult (`type:adult`,\n`adult:…`) while \"Show adult content\" is off, so it matched\nnothing adult (§20.9)."
           },
           "offset": {
             "type": "integer",

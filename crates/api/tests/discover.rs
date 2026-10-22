@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use lodestar_api::{ApiState, Auth, router};
+use lodestar_api::{AdultVisibility, ApiState, Auth, router};
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_classify::Correction;
 use lodestar_metainfo::Info;
@@ -78,6 +78,11 @@ struct Fixture {
 }
 
 fn fixture(torrents: &[T<'_>], search: bool) -> Fixture {
+    fixture_with(torrents, search, false)
+}
+
+/// `adult`: "Show adult content" on.
+fn fixture_with(torrents: &[T<'_>], search: bool, adult: bool) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("t.db");
     let mut store = Store::open(&db, StoreConfig::default()).unwrap();
@@ -135,6 +140,7 @@ fn fixture(torrents: &[T<'_>], search: bool) -> Fixture {
             reader: Arc::new(Mutex::new(reader)),
             filters: None,
             settings: None,
+            adult: AdultVisibility::follow(move || adult),
         }),
     );
     Fixture {
@@ -421,4 +427,35 @@ async fn unavailable_sections_and_errors() {
     let (status, body) = json_of(&f.app, get("/api/v1/discover", Some(&c))).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["error"]["code"], "search_disabled");
+}
+
+#[tokio::test]
+async fn adult_follows_the_setting() {
+    let all = catalogue();
+    // Hidden (the default): the Adult tab is empty and says why.
+    let f = fixture(&all, true);
+    let c = session(&f).await;
+    let (_, body) = json_of(&f.app, get("/api/v1/discover?type=adult", Some(&c))).await;
+    assert_eq!(body["newest"]["hits"], json!([]));
+    assert_eq!(body["newest"]["notices"], json!(["adult_hidden"]));
+    let (_, body) = json_of(&f.app, get("/api/v1/discover", Some(&c))).await;
+    assert_eq!(body["newest"]["notices"], json!([]));
+
+    // Shown: Adult appears in Newest and its tab, hidden torrents still don't.
+    let f = fixture_with(&all, true, true);
+    let c = session(&f).await;
+    let c = Some(c.as_str());
+    let everything = all_pages(&f, "/api/v1/discover?limit=2", c).await;
+    assert!(
+        everything.contains(&all[4].name.to_string()),
+        "{everything:?}"
+    );
+    assert!(
+        !everything.contains(&all[2].name.to_string()),
+        "{everything:?}"
+    );
+    let (_, body) = json_of(&f.app, get("/api/v1/discover?type=adult", c)).await;
+    assert_eq!(names(&body["newest"]), vec![all[4].name.to_string()]);
+    assert_eq!(body["newest"]["notices"], json!([]));
+    assert_eq!(body["newest"]["total"], 1);
 }

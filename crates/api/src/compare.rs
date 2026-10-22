@@ -68,11 +68,12 @@ fn visible(
     store: &Store,
     hash: &InfoHash,
     hidden_ok: bool,
+    adult: bool,
 ) -> ApiResult<(TorrentRow, Option<Enriched>)> {
     let id = store.find(hash).map_err(internal)?.ok_or_else(not_found)?;
     let row = store.torrent(id).map_err(internal)?.ok_or_else(not_found)?;
     let enrichment = store.enrichment(id).map_err(internal)?;
-    if withheld(&row, enrichment.as_ref(), hidden_ok) {
+    if withheld(&row, enrichment.as_ref(), hidden_ok, adult) {
         return Err(not_found());
     }
     Ok((row, enrichment))
@@ -177,18 +178,20 @@ pub(crate) async fn siblings(
     Path(hash): Path<String>,
 ) -> ApiResult<Json<SiblingsResponse>> {
     let hash = torrents::parse_hash(&hash)?;
+    // "Show adult content", read once for the whole request.
+    let adult = s.adult.shown();
     tokio::task::spawn_blocking(move || {
         let (row, enrichment) = {
             let store = s.reader.lock().expect("reader lock");
             // The drawer opens torrents a filter hid (`hidden=true`), so
             // its Related does too; Adult while hidden is a 404.
-            visible(&store, &hash, true)?
+            visible(&store, &hash, true, adult)?
         };
         let identity = record(enrichment.as_ref()).as_ref().and_then(identity);
         let other_versions = match (&identity, &s.index) {
             (None, _) => HitGroup::unavailable(Unavailable::NoTitle),
             (Some(_), None) => HitGroup::unavailable(Unavailable::SearchDisabled),
-            (Some(id), Some(index)) => other_versions(&s, index, row.id, id)?,
+            (Some(id), Some(index)) => other_versions(&s, index, row.id, id, adult)?,
         };
         Ok(Json(SiblingsResponse {
             hash: torrents::hex(&row.info_hash.0),
@@ -209,9 +212,10 @@ fn other_versions(
     search: &lodestar_search::SearchHandle,
     id: i64,
     identity: &TitleIdentity,
+    adult: bool,
 ) -> ApiResult<HitGroup> {
     let index = search.index();
-    let node = shown(candidates_query(identity));
+    let node = shown(&candidates_query(identity), adult);
     // Relevance: the title field's BM25 ranks the exact title over
     // longer ones. The swarm and freshness priors join it with M4.
     let results = index
@@ -222,20 +226,24 @@ fn other_versions(
             0,
         )
         .map_err(internal)?;
-    let store = s.reader.lock().expect("reader lock");
     let mut hits = Vec::new();
     let mut truncated = false;
     for h in &results.hits {
         if h.id as i64 == id {
             continue;
         }
-        // Deleted since indexing: it drops out.
-        let Some(row) = store.torrent(h.id as i64).map_err(internal)? else {
-            continue;
+        // The shared reader is locked per candidate, not across them.
+        let (row, e) = {
+            let store = s.reader.lock().expect("reader lock");
+            // Deleted since indexing: it drops out.
+            let Some(row) = store.torrent(h.id as i64).map_err(internal)? else {
+                continue;
+            };
+            let e = store.enrichment(row.id).map_err(internal)?;
+            (row, e)
         };
-        let e = store.enrichment(row.id).map_err(internal)?;
         // The index may lag the store: the stored state decides.
-        if withheld(&row, e.as_ref(), false) {
+        if withheld(&row, e.as_ref(), false, adult) {
             continue;
         }
         let Some(theirs) = record(e.as_ref()).as_ref().and_then(self::identity) else {
@@ -295,12 +303,14 @@ pub(crate) async fn compare(
         )
         .field("hashes"));
     }
+    // "Show adult content", read once for the whole request.
+    let adult = s.adult.shown();
     tokio::task::spawn_blocking(move || {
         // The reader is shared by every API read: it's locked for each
         // lookup and each blob, never across the comparison.
         let mut rows = Vec::with_capacity(n);
         for h in &hashes {
-            let found = visible(&s.reader.lock().expect("reader lock"), h, false)?;
+            let found = visible(&s.reader.lock().expect("reader lock"), h, false, adult)?;
             rows.push(found);
         }
         let records: Vec<Option<Record>> = rows.iter().map(|(_, e)| record(e.as_ref())).collect();

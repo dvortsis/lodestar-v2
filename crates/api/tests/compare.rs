@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use lodestar_api::{ApiState, Auth, router};
+use lodestar_api::{AdultVisibility, ApiState, Auth, router};
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_classify::Correction;
 use lodestar_metainfo::Info;
@@ -81,6 +81,11 @@ struct Fixture {
 }
 
 fn fixture(torrents: &[T<'_>], search: bool) -> Fixture {
+    fixture_with(torrents, search, false)
+}
+
+/// `adult`: "Show adult content" on.
+fn fixture_with(torrents: &[T<'_>], search: bool, adult: bool) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("t.db");
     let mut store = Store::open(&db, StoreConfig::default()).unwrap();
@@ -138,6 +143,7 @@ fn fixture(torrents: &[T<'_>], search: bool) -> Fixture {
             reader: Arc::new(Mutex::new(reader)),
             filters: None,
             settings: None,
+            adult: AdultVisibility::follow(move || adult),
         }),
     );
     let hashes = infos
@@ -662,4 +668,32 @@ async fn the_file_diff_is_bounded() {
     for list in body["file_diff"]["only"].as_array().unwrap() {
         assert!(list["files"].as_array().unwrap().len() <= 2000);
     }
+}
+
+#[tokio::test]
+async fn adult_shown_follows_the_setting() {
+    let all = works();
+    let f = fixture_with(&all, true, true);
+    let c = session(&f).await;
+    let c = Some(c.as_str());
+    let siblings = |i: usize| format!("/api/v1/torrents/{}/siblings", f.hashes[i]);
+
+    // With Show adult content on, the Adult copy is a sibling, answers
+    // for itself, and compares; the hidden one stays out.
+    let (status, body) = json_of(&f.app, get(&siblings(KNIGHT_1080), c)).await;
+    assert_eq!(status, StatusCode::OK);
+    let got = names(&body["other_versions"]);
+    assert!(got.contains(&all[KNIGHT_ADULT].name.to_string()), "{got:?}");
+    assert!(
+        !got.contains(&all[KNIGHT_HIDDEN].name.to_string()),
+        "{got:?}"
+    );
+    let (status, body) = json_of(&f.app, get(&siblings(KNIGHT_ADULT), c)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(names(&body["other_versions"]).contains(&all[KNIGHT_1080].name.to_string()));
+    let (status, body) = json_of(&f.app, compare(&f, &[KNIGHT_1080, KNIGHT_ADULT], c)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["torrents"][1]["content_type"], "adult");
+    let (status, _) = call(&f.app, compare(&f, &[KNIGHT_1080, KNIGHT_HIDDEN], c)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
