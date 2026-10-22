@@ -147,3 +147,18 @@
 		--duration-stagger: 0ms;
 	}
 }
+
+/*
+ * Lodestar's own colour roles (docs/design-tokens.md §2). daisyUI has no slot for them, so the
+ * compiler emits them only inside the theme blocks of critical.css, and Tailwind never generated
+ * their utilities (`text-muted-text`, `bg-selected`, `border-field-border`, …). Registering them
+ * here as `inline reference` makes Tailwind generate the classes against the theme's own
+ * variables, without emitting a second :root definition.
+ */
+@theme inline reference {
+	--color-muted-text: var(--color-muted-text);
+	--color-field-border: var(--color-field-border);
+	--color-selected: var(--color-selected);
+	--color-hover: var(--color-hover);
+	--color-accent-ink: var(--color-accent-ink);
+}

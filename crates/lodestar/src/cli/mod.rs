@@ -26,6 +26,7 @@ use std::process::ExitCode;
 use clap::{Args, Parser, Subcommand};
 
 use crate::config::Config;
+use crate::privdrop;
 use util::Failure;
 
 const AFTER_HELP: &str = "\
@@ -120,7 +121,9 @@ pub fn parse() -> Cli {
 
 /// Runs a maintenance command; `serve`, `healthcheck`, `import-bitmagnet`
 /// and `lists` are the binary's own (main.rs).
-pub fn run(command: Command, config_path: Option<&Path>) -> ExitCode {
+/// `dropped` is what the PUID/PGID drop did, logged once the config (and
+/// so the log filter) is loaded.
+pub fn run(command: Command, config_path: Option<&Path>, dropped: &privdrop::Report) -> ExitCode {
     let config = match Config::load(config_path, |k| std::env::var(k).ok()) {
         Ok(c) => c,
         Err(e) => {
@@ -128,6 +131,8 @@ pub fn run(command: Command, config_path: Option<&Path>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    crate::settings::log::init(&config.log);
+    dropped.log(&config.data_dir);
     let (name, outcome) = match command {
         Command::Backup(a) => (
             "backup",
