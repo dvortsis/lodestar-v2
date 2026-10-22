@@ -12,6 +12,7 @@ mod subscriptions;
 mod web;
 #[cfg(test)]
 mod web_build;
+mod windows;
 
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
@@ -107,6 +108,9 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
 }
 
 fn main() -> ExitCode {
+    if let Some(code) = windows::hook() {
+        return code;
+    }
     let command = match parse_args(std::env::args().skip(1)) {
         Ok(c) => c,
         Err(e) => {
