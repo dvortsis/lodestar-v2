@@ -792,3 +792,47 @@ async fn your_rules_mark_stored_torrents_and_shadow_rules_only_log() {
         "fakes switched off"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn classification_rules_change_what_is_stored_not_what_filtering_sees() {
+    use lodestar_classify::ContentType;
+    use lodestar_store::flags;
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lodestar.db");
+    let seeds = vec![
+        Seed::v1(info_dict("Holiday Clips 2023 Lexb")),
+        Seed::v1(info_dict("Holiday Clips 2023 Other")),
+    ];
+    let keys: Vec<InfoHash> = seeds.iter().map(|s| InfoHash(s.info_hash)).collect();
+    let peer = FakePeer::spawn(seeds, Accept::Both, Behavior::Honest, vec![]).await;
+    let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+    // Your rule hides adult torrents; your classification rule calls
+    // "lexb" ones adult.
+    let hide = lodestar_filter::Action::Hide.code();
+    store.add_rule("type:adult", hide, None, None).unwrap();
+    store.add_class_rule("lexb", true).unwrap();
+    store.set_pack_switch("fakes", false).unwrap();
+    let (feed, feed_tx) = scripted("feed");
+    let pipeline = Pipeline::start(config(), store, vec![feed]).await.unwrap();
+    for k in &keys {
+        feed_tx
+            .send(Found::key(*k, 0).with_peers(vec![peer.addr()]))
+            .await
+            .unwrap();
+    }
+    until("stored", || {
+        pipeline.writer_stats().stored.load(Ordering::Relaxed) == 2
+    })
+    .await;
+    let store = pipeline.shutdown().await.unwrap();
+    let id = |k: &InfoHash| store.find(k).unwrap().unwrap();
+    let kind = |k: &InfoHash| {
+        ContentType::from_code(store.enrichment(id(k)).unwrap().unwrap().content_type)
+    };
+    assert_eq!(kind(&keys[0]), Some(ContentType::Adult), "stored as adult");
+    assert_ne!(kind(&keys[1]), Some(ContentType::Adult));
+    // Filtering judged detection's classification: not adult, not hidden.
+    let flags_of = |k: &InfoHash| store.torrent(id(k)).unwrap().unwrap().flags;
+    assert_eq!(flags_of(&keys[0]) & flags::HIDDEN, 0);
+    assert_eq!(flags_of(&keys[1]) & flags::HIDDEN, 0);
+}

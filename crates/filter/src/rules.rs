@@ -12,6 +12,18 @@ use crate::matcher::Doc;
 use crate::normalize::{self, Token};
 use crate::payload::payload_sig;
 
+/// A classification rule (§20.9): every torrent the query matches is
+/// stored as adult (or not), like a per-torrent correction. It changes
+/// what's stored and searched, never what filtering sees: the engine
+/// judges with detection's own classification, so a Not adult rule can't
+/// take a torrent out of the Adult-only core checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassRule {
+    pub id: u32,
+    pub query: Node,
+    pub adult: bool,
+}
+
 /// A saved query plus an action (layer 3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserRule {
