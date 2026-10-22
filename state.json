@@ -62,13 +62,13 @@
       "notes": "merged 09:27 as a569b51 (#57)"
     },
     "B2": {
-      "status": "in_review",
+      "status": "merged",
       "model": "opus",
       "session": "session_01QHUDtvte2DFAiHz6swmiU8",
       "pr": 67,
       "attempt": 1,
       "review_rounds": 2,
-      "notes": "Round 2 (14:05): fixes OK; blocking: file max_sockets=0 -> 0 sockets (inconsistent sentinel). Also purge stale read-only rows, shadow-log test. | 14:07 round-2 fixes 6b3450d reviewed by runner (diff OK); merge on green CI. | 14:20 session merged main itself (4de8e52, incl cursors.rs settings:None); CI running. Budget re-run spent on 6b3450d."
+      "notes": "Round 2 (14:05): fixes OK; blocking: file max_sockets=0 -> 0 sockets (inconsistent sentinel). Also purge stale read-only rows, shadow-log test. | 14:07 round-2 fixes 6b3450d reviewed by runner (diff OK); merge on green CI. | 14:20 session merged main itself (4de8e52, incl cursors.rs settings:None); CI running. Budget re-run spent on 6b3450d. | merged 14:39 as 724c347."
     },
     "B3": {
       "status": "merged",
@@ -170,13 +170,13 @@
       "notes": "waits ext:m4-schema-settled (M4 PR2 #48)"
     },
     "B6": {
-      "status": "pending",
+      "status": "running",
       "model": "opus",
-      "session": null,
+      "session": "session_0113YcyKf7mgWsV9sNN3mNaW",
       "pr": null,
-      "attempt": 0,
+      "attempt": 1,
       "review_rounds": 0,
-      "notes": ""
+      "notes": "launched 14:40; not live.rs/compile.rs (B4/B17)"
     },
     "B16": {
       "status": "pending",
@@ -332,31 +332,31 @@
       "notes": ""
     },
     "B5c": {
-      "status": "pending",
+      "status": "ready",
       "model": "opus",
       "session": null,
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": ""
+      "notes": "deps met; held (crates/search busy with B6)"
     },
     "B13": {
-      "status": "pending",
+      "status": "ready",
       "model": "opus",
       "session": null,
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": ""
+      "notes": "deps met; held for core cap (B4,B6,B17 active)"
     },
     "B14": {
-      "status": "pending",
+      "status": "ready",
       "model": "opus",
       "session": null,
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": ""
+      "notes": "deps met (B2); held for core cap"
     },
     "B11b": {
       "status": "pending",
@@ -674,13 +674,13 @@
       "notes": "merged 10:19 as e8e6c6a (#60)"
     },
     "B17": {
-      "status": "pending",
+      "status": "running",
       "model": "opus",
-      "session": null,
+      "session": "session_01PZdBjxYQXsnEVmfRxJCCXw",
       "pr": null,
-      "attempt": 0,
+      "attempt": 1,
       "review_rounds": 0,
-      "notes": ""
+      "notes": "launched 14:40; owns compile.rs clause + settings content section"
     },
     "S-blocklists": {
       "status": "pending",
@@ -880,7 +880,7 @@
     ],
     "posthoc_52_54": "Reviewed 14:00: FOLLOW-UP. Blocking: Is-adult class rule skips CS-5 core (worker.rs prepare_one). Also preview job slot leak/cap, requeue lock+chunking, class-rule race, /classify lock, class-rule cost cap, \u00a716. Sent to filter session session_01N83eB81W8xkqJgXiD7JLM3 for PR on fix/m4-class-rules (runner merges). Bench addition after F1b. | 14:26 fix PR #68 (fix/m4-class-rules) opened; reviewer started (incl. stored-torrent Is-adult re-filter gap).",
     "settings_form_patch_changed_only": "S-settings-1 brief: settings forms must PATCH only changed fields (re-saving dht_port moves every DHT bind to it).",
-    "b5a_polish": "B5a polish: replace cancelled_after_30ms in exact-count test with tripwire; wait_for in expired_leases_are_swept test; join rebuild thread if sweeper spawn fails. Fold into B6 or B5c (crates/search owners)."
+    "b5a_polish": "B5a polish: replace cancelled_after_30ms in exact-count test with tripwire; wait_for in expired_leases_are_swept test; join rebuild thread if sweeper spawn fails. Fold into B5c (B6 brief did not include it) (crates/search owners)."
   },
   "blocked_on_owner": [
     "M4 continuation: waiting on ExitPlanMode approval (plan mode) \u2014 can't act on #48 review",
