@@ -396,7 +396,7 @@ Magnet links can **append the best-scoring trackers** from scrape data (toggle),
 - **Five stable top-level destinations:** **Search** (home), **Discover**, **Alerts**, **Insights**, **Settings**.
   - The top bar holds the wordmark, navigation, a global status pill ("Crawling · 1.2k/h", icon + text, linking to Insights) and the command-palette trigger.
   - The current location is marked with an underline and `aria-current`.
-  - An overflow menu holds Import, Backup, Syntax guide and About.
+  - An overflow menu holds Import, Backup, Logs (§10.10.12), Syntax guide and About.
 - **The URL is the state:**
   - `/search?q=…&sort=…&density=…&group=…`
   - `/t/{hash}` opens the detail as a drawer when coming from Search, or as a full page from a direct link.
@@ -640,12 +640,12 @@ Settings is where an owner fixes things at 2 a.m. without reading docs. It needs
   - **Crawling:** Crawler, Network & VPN, Sources, Workers, Companions
   - **Library:** Storage & retention, Search & ranking, Trackers, Filters & Safety
   - **Connections:** Integrations, Notifications, Insights & digest
-  - **System:** General, Security, About
+  - **System:** General, Logging, Security, About
 
   Screens whose features haven't shipped yet (Workers, Companions, and Sources before v0.6) don't appear in the navigation. They are never shown as empty placeholders.
 - **`/settings` is the Overview** (§10.10.3). `/settings/{screen}` opens a screen, and `#field` deep-links to one setting. Copy link appears in every field's menu.
 - **x-large and wider (≥ 1024 px):** two panes. On the left is a sticky navigation (search box, then the groups). On the right is the manuscript column (max 720 px).
-- **Below 1024 px:** list, then detail. `/settings` shows the search box and the grouped list, with status badges. A screen opens full width with a Back link to the list. This **replaces "becomes a select on narrow screens"**, because a select can't show status badges, and 19 screens are too many to scan in one.
+- **Below 1024 px:** list, then detail. `/settings` shows the search box and the grouped list, with status badges. A screen opens full width with a Back link to the list. This **replaces "becomes a select on narrow screens"**, because a select can't show status badges, and 20 screens are too many to scan in one.
 - **Navigation items** have an icon and a label. An item that needs attention gets an icon + text badge ("1 problem", "Restart needed"), and its accessible name says so ("Network & VPN, 1 problem"). The current screen is marked with `aria-current`. Navigation entries are links, not tabs.
 - **Inside a screen:**
   - The heading and a one-sentence purpose come first.
@@ -663,6 +663,8 @@ Settings is where an owner fixes things at 2 a.m. without reading docs. It needs
     - "A saved value hides your `config.toml` value for `crawler.intensity`" (B2 logs this; the Overview shows it with Reset)
     - an integration failing its last test
     - a source in error, a worker offline
+    - errors logged in the last hour ("12 errors in the last hour · View", opening `/logs` filtered to errors)
+    - torrent details turned on in the logs, with the time remaining and Turn off now (§12.1)
     - no backup in 14 days
     - an update available (only when update checks are on)
   - **Changed from default:** a count per screen, linking to that screen with Show changed only turned on.
@@ -761,7 +763,8 @@ Graded by consequence, so a confirmation always means something:
 
 | Kind | Examples | What the UI does |
 |---|---|---|
-| Safe | log level, intensity, timeouts | Staged, saved, Undo |
+| Safe | log verbosity, intensity, timeouts | Staged, saved, Undo |
+| Privacy | torrent details in logs (Hashes, Full) | A dialog says what will be recorded and where, and asks for a duration (default 1 hour). A banner shows while it's on (§10.10.12). |
 | Disruptive | HTTP address, DHT port, disabling the DHT or search | Save opens a dialog that names the effect ("Lodestar will be at http://192.168.1.5:8191 after a restart"; "Search stops until you turn it back on") |
 | Destructive, not undoable | Purge a source's data, clear usage data, revoke a worker, reset all settings, Remove a secret | A **Danger zone** action, run on its own (not part of Save). A confirmation dialog shows the exact count and size, and the button names the action ("Delete 1,204,331 torrents found only by Nyaa"). Focus starts on Cancel. |
 | Weakens content protection | §20.11's list | §20.11's effect warning and **password, every time**, unchanged (M-filters-dialogs) |
@@ -790,9 +793,10 @@ Generated screens render from the schema with no screen-specific code beyond gro
 | Integrations | download clients, Torznab/*arr, each with **Test connection** run on the unsaved values | integrations API | S-settings-2 |
 | Notifications | channels (ntfy, Discord, email, webhook), each with **Send test**, and which events go where | integrations API | S-settings-2 |
 | Insights & digest | digest schedule and channels with a preview (§10.9.7), query logging and retention, clear usage data | `insights`, digest API | S-settings-2 (digest preview: S-insights-3) |
-| General | log level, update check (off by default), backup schedule, Backup & portability (§10.10.6), Reset all | `general`, `/system` | S-settings-1 |
+| General | update check (off by default), backup schedule, Backup & portability (§10.10.6), Reset all | `general`, `/system` | S-settings-1 |
+| Logging | verbosity (simple, per component, raw), torrent details (Off by default; time-limited), outputs and rotation with a size preview, log files with download, delete (§10.10.12, §12.1) | `logging`, logs API | S-logs |
 | Security | password, sessions, API keys and feed tokens, trusted-proxy auth, secure cookies (read-only) | auth API (B12) | M-security-settings |
-| About | version, build, licences, data directory and sizes, a copyable diagnostics block (versions, OS, settings sources; no secrets, no torrent names), links | `/system` | S-settings-2 |
+| About | version, build, licences, data directory and sizes, a copyable diagnostics block (versions, OS, settings sources; no secrets, no torrent names), **Download diagnostics** (that block plus the last 24 h of logs, always with torrent details removed), links | `/system` | S-settings-2 |
 
 **Test connection** and **Send test** run on the server with the values on screen (`POST /settings/test`), through the SSRF guard. They save nothing, and the result appears inline ("Connected to qBittorrent 5.0.2" or "Refused: wrong password").
 
@@ -860,7 +864,64 @@ Stepped progress, with one primary action per step:
     - search jumping to an Advanced field;
     - narrow list → detail;
     - keyboard-only flows;
-    - axe on every screen in Riverstone light/dark plus the rotating theme sample (§10.17).
+    - axe on every screen in Riverstone light/dark plus the rotating theme sample (§10.17);
+    - the live log: follow, pause, Jump to latest, filters, Load earlier, reconnect, and a time-limited details banner that ends on time.
+
+#### 10.10.12 Logs: the Logging screen and the live log
+**Settings → Logging** (System group) holds the options. **The live log is its own page, `/logs`**, because log lines need the full width rather than the 720 px manuscript column. It's not a sixth destination; it's linked from:
+- the overflow menu ("Logs");
+- Settings → Logging ("Open live log");
+- the Overview's error row;
+- About;
+- error toasts ("View in log").
+
+**Settings → Logging:**
+- **Verbosity:** a SegmentedControl, with each option named in plain words plus its technical term ("Normal (info)").
+  - **Advanced:** a table of components, each with its own level.
+  - **Expert:** the raw filter string. B2's `general.log_level` moves into this `logging` section in B2b. Editing the raw string updates the table, and a string the table can't show switches it to "Custom".
+- **Torrent details:** Off / Hashes / Full, each with a one-line consequence.
+  - Hashes and Full open a dialog that says exactly what will be recorded and where ("Torrent and file names will be written to the log file for 1 hour. The console and `docker logs` stay without them."). The dialog asks for a duration (1 hour, 24 hours, until I turn it off).
+  - While details are on, a **banner with the time remaining** shows on this screen, on `/logs` and on the Overview, with a **Turn off now** button.
+  - Turning details off offers to delete the files written meanwhile (§12.1).
+- **Outputs:**
+  - console format (text or JSON);
+  - console detail (off, or the same as the file);
+  - log file on/off, folder (restart), file size, files kept, maximum age, total cap, each with a **size preview** ("≈ 130 MiB at today's rate");
+  - Windows Event Log (Windows service only).
+- **Log files:** a list with name, size, time range and a "Contains torrent details" badge. Each file has **Download** (text or JSON lines; "Remove torrent details" is on by default when the file has them). The list also has **Download all (zip)**, and shows the folder path with Copy. On Docker, there's a hint that the console log is also in `docker logs <container>`.
+- **Danger zone:** **Delete log files** (all, or only those with torrent details), with the count and size in the dialog.
+
+**The live log (`/logs`):**
+- **On opening,** it shows the ring buffer's recent lines at once, then follows new ones over the `logs` SSE topic, batched per animation frame (§10.1).
+- **The list:**
+  - Virtualized (TanStack Virtual), with fixed-height one-line rows in Atkinson Hyperlegible Mono.
+  - Each row shows the time, level (icon + text), component and message. A click or `Enter` expands the row's fields.
+  - The client keeps at most 10,000 lines; older ones are dropped, with a note.
+- **Following:**
+  - **Following** is on while you're at the bottom. Scrolling up pauses it, and a "214 new lines · Jump to latest" button appears.
+  - **Pause** (`Space`) freezes the view while lines keep arriving.
+  - The stream is suspended while the tab is hidden, and catches up from the cursor when you return.
+- **Toolbar:**
+  - minimum level;
+  - component chips;
+  - text filter (`/`), applied on the server to the stream and to history, so filtered-out debug lines never travel;
+  - time in local or UTC;
+  - wrap lines;
+  - **Load earlier** (pages back into the files through `GET /logs`);
+  - **Copy visible** and **Download visible**;
+  - **Open full log**, which opens Settings → Logging → Log files.
+- **When the level hides what you need:** if the viewer's minimum level is below what's being recorded, it says "Debug lines aren't being recorded" and offers **Record detailed logs for 30 minutes**.
+- **Torrent details status:** a status chip shows the current setting ("Torrent details: Off"). While details are on, it becomes the time-remaining banner.
+- **States:**
+  - **Connecting** and **Reconnecting** (with backoff; no lines are lost, since the cursor resumes);
+  - **Stream ended** (server restarting; it reconnects on its own);
+  - **No lines match** (with "Clear filters");
+  - **File logging is off** (Load earlier only reaches the ring buffer).
+- **Accessibility:**
+  - The list is `role="log"`, with announcements **off by default**, because a live stream read aloud is unusable. An option announces only new errors.
+  - Every control is reachable by keyboard: `Space`, `/`, `End` (jump to latest), `Home`.
+  - Level is shown as icon + text.
+- **Performance:** a separate lazy chunk of at most 12 KB gzipped. Holding 10,000 lines and taking 200 lines/s must keep INP under 100 ms.
 
 ### 10.11 Component inventory (one canonical primitive per role)
 - **Controls and fields:** Button (primary / secondary / quiet / danger × dense / default, with a loading state), IconButton, Field (Input, Select, Combobox, Textarea, Checkbox, Radio, Toggle, Slider, RangeInput with units), SegmentedControl.
@@ -1139,8 +1200,47 @@ With the plum swap, all six colours are distinct under normal vision. Under colo
 - **Cluster security** (§19.6): mutual TLS with a cluster CA created on first use; one-time join tokens (15-minute expiry); per-worker certificates with immediate revocation; workers receive only the have-filter, assignments, sealed credentials and leases; 0.5% re-verification sampling with quarantine and purge-by-worker.
 - **Companion supply chain** (§18.10): a signed catalogue pinned per release, with SHA-256 and upstream signatures verified before anything runs. Every install needs confirmation; companions run with the least privilege, bound to localhost or the internal network; credentials are random and encrypted at rest.
 - **Content safety (§20):** the child-safety core is **always on**, on every source, network and worker. Its **locked floor** (CS-1a/1b, CS-8a: torrents you confirmed or imported, plus their exact reposts) can't be removed. Every other core rule is **editable and can be switched off** behind guardrails: intent fixtures, protective-only actions, overrides over signed base rules, and, for any change that weakens protection, a plain-language effect warning (§20.11) and your password. No audit log is kept. Your **CSX-5 override list** can override everything except the floor, always after a mandatory **impact preview**. Hash-list matches are dropped; pattern matches are quarantined (hash + sealed name) for review. Nothing else is stored or indexed.
-- Observability: `tracing` structured logs, Prometheus metrics for every pipeline stage, and the built-in dashboard.
+- Observability: `tracing` structured logs with torrent details off by default, a log file, a live log in the UI (§12.1), Prometheus metrics for every pipeline stage, and the built-in dashboard.
 - Graceful shutdown flushes batches, commits the index and persists the DHT state. Crash-safe: SQLite is the source of truth, and the index catches up on startup from a `last_indexed_id` watermark.
+
+### 12.1 Logging
+Logs exist to diagnose Lodestar, not to record what it found. **By default they contain no torrent specifics.** Full detail is a deliberate, time-limited choice. Logs leave the machine only when you download them.
+
+- **Two independent settings:**
+  - **Verbosity**, how much is logged: Errors only / Warnings / **Normal** (info, the default) / Detailed (debug) / Everything (trace). Advanced settings add a level per component (DHT, Fetch, Pipeline, Search, API, Sources, Filters, Integrations, Workers, Companions). Expert settings take a raw `tracing` filter string.
+  - **Torrent details**, what a line may say about content:
+    - **Off** (default): no info hashes, torrent or file names, paths, tracker URLs, peer addresses or search queries.
+    - **Hashes:** info hashes, but no names, paths or peer addresses.
+    - **Full:** everything except what's never logged (below).
+- **References, not identifiers.** With details Off, a line names a torrent as `ref:7f3a2c9e`. That's a keyed hash of its info hash under a random key made at each start and never written down. Lines from one run can be followed together, but a reference can't be turned back into a hash or matched against a public hash list. A restart starts new references.
+- **Never logged, at any setting:**
+  - **Passwords, API keys, feed tokens, cookies, secrets and sealed values.** The setup token is the one exception: it's printed at start until setup completes, and stops working after that (§12).
+  - **A peer address together with any torrent identifier.** This is "No profiles of people" (§18.7). At Full, a connection-level line may show an address, but never with what that peer has.
+  - **The names or paths of quarantined, dropped or hash-listed items.** Lines carry the rule id and a reference only.
+  - **What a filtering change did.** Lines say only "filters: rule set updated (revision 42)", never which rule, term, exception or item was involved. This follows the owner's no-audit-log decisions (§1.8.8, §1.8.9).
+- **Enforced where the line is written, not scrubbed afterwards:**
+  - Torrent hashes, names, paths, peer addresses, URLs and queries are passed to `tracing` only through typed wrappers (`log::Torrent`, `log::Name`, `log::Path`, `log::Peer`, `log::Url`, `log::Query`). Each wrapper renders according to the current detail setting, and marks its field as sensitive in the structured record.
+  - A CI check refuses `tracing` fields with those names or types that bypass the wrappers.
+  - Third-party crates (HTTP, TLS, Tantivy) are capped at warnings by default. URLs in their messages have query strings and passkeys removed.
+  - **A canary test** runs the pipeline over fixtures at every verbosity, with details Off. It fails if any fixture's hash (hex or base32), name, path, tracker passkey or peer address appears in any output: console, file, ring buffer or live stream.
+- **Full is time-limited.** Turning on Hashes or Full asks for how long: **1 hour** (default), 24 hours, or until turned off. When the time runs out, details go back to Off and an info line records the switch. The same applies to temporary verbosity: "Detailed for 30 minutes" is the one-click choice the live log offers (§10.10.12).
+  - Turning detail back to Off offers **"Also delete log files that contain torrent details"**. Lodestar tracks which files were written while detail was on.
+- **Where logs go:**
+  - **Console (stderr):** always on, so `docker logs`, the systemd journal and Unraid's log viewer work. Text by default, JSON as an option. **The console stays at details Off even when the file is at Full**, unless you choose "file and console". Lodestar can't delete what the container runtime or journal keeps.
+  - **Log file:** on by default, at `<data>/logs/lodestar.jsonl`, as structured JSON lines with sensitive fields marked.
+    - Rotation by size: 16 MiB per file by default. Rotated files are gzip-compressed. Lodestar keeps 7 of them, for at most 14 days, and the logs folder never goes over a total cap (default 256 MiB).
+    - All of these are settings. The folder is configurable, and applies after a restart.
+    - A disk-full condition stops file logging with a console warning, rather than stopping Lodestar.
+  - **Windows service:** the file is the main log. Errors also go to the Windows Event Log (on by default for the service).
+  - **In-memory ring buffer:** the last 5,000 records (at most 4 MiB). It feeds the live log the moment it opens.
+- **Floods:** a burst of repeated lines (same target, level and message) is folded into one "repeated 1,204 times in 10 s" line in every output. A noisy failure can't fill the disk or swamp the live stream.
+- **Metrics:** `lodestar_log_records_total{level}`. The Settings Overview uses it for "12 errors in the last hour · View" (§10.10.3).
+- **API** (admin session only; API keys and feed tokens can't read logs):
+  - **`GET /logs`:** history, newest first, with a cursor. Filters: level, component, text, time range. It reads the ring buffer, then the files.
+  - **`logs` SSE topic** (B4): live records, filtered on the server by level and component, so debug lines travel only when the viewer asks for them.
+  - **`GET /logs/files`:** name, size, time range, and whether the file contains torrent details.
+  - **`GET /logs/files/{name}?format=text|jsonl&redact=true|false`** and **`GET /logs/archive.zip`**. `redact=true` strips the fields marked as sensitive, so a log written at Full can still be shared safely. It's the default whenever a file contains details.
+  - **`DELETE /logs/files`:** delete log files, all of them or only those containing details.
 
 ## 13. Repo layout (Cargo workspace)
 
@@ -2168,6 +2268,26 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **No settings history**, following the owner's no-audit-log instinct (§1.8.8). Recovery comes from Undo, Reset and export.
 - **Risk grading (§10.10.7).** Destructive actions get an exact-count confirmation and no typed confirmation. Security changes reuse B12's password confirmation. Weakening filter changes keep §20.11 unchanged.
 - **Delegation.** The form engine (draft store, validation mapping, atomic save, conflicts, leave guard) is an **Opus** slice, `M-settings-form`: every screen and the wizard depend on it, and its failure modes lose user data. The Security screen is Opus as well (`M-security-settings`). Screens and the shell stay with Sonnet helpers, per policy. The API additions are B2b (schema hints, revisions, batch patch, preview, test, preferences, SSE, export/import) and B2c (`/system`, restart, the address timer).
+
+**Logging plan (owner, 2026-10-22, §12.1, §10.10.12):** the owner asked for robust logging options that **don't capture torrent specifics by default**, a way to **see the live, ongoing log**, and a **link to the full log**. Until now, logs went only to stderr, and nothing stopped a line from carrying a hash, a name or a peer address.
+- **Torrent details are a separate setting from verbosity:** Off (default) / Hashes / Full. Hashes and Full are time-limited (default 1 hour). With details Off, lines use per-run keyed references (`ref:…`) that can't be reversed.
+- **Never logged, at any setting:**
+  - a peer address with a torrent identifier ("No profiles of people", §18.7);
+  - secrets;
+  - names of quarantined or dropped items;
+  - what a filtering change did. This extends the no-audit-log decisions (§1.8.8–9) to the log.
+- **Enforced at the source.** Typed wrappers handle every sensitive field, a CI check catches bypasses, and a canary test asserts that no fixture identifier reaches any output with details Off.
+- **Outputs:**
+  - the console stays without details unless you choose otherwise, because Lodestar can't delete what `docker logs` keeps;
+  - a rotating, gzip-compressed JSON-lines file with a total cap;
+  - a ring buffer for the live view;
+  - the Windows Event Log for service errors.
+- **UI:** Settings → Logging (System group), plus a full-width live log at `/logs` (SSE topic `logs`, filtered on the server). It's linked from the overflow menu, the Overview, About and error toasts. Log files can be downloaded with sensitive fields removed. `general.log_level` moves into the new `logging` section.
+- **Slices:** the logging core is **Opus** in two PRs, because it's privacy-critical and concurrent:
+  - `B-log1`: wrappers and sweep, file sink, `logging` section, canary;
+  - `B-log2`: ring buffer, SSE, history and file API.
+
+  The screens are a Sonnet slice, `S-logs`.
 
 ## 17. Verification (once built)
 
