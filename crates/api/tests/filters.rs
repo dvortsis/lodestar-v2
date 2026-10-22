@@ -1112,3 +1112,244 @@ async fn a_cancelled_preview_stops() {
         .unwrap();
     assert_eq!(a.preview.quarantine, 1);
 }
+
+/// Owner's decision §2.7: what a config file dropped stays in the floor,
+/// waiting; removing it needs the effect warning and the password.
+#[tokio::test]
+async fn floor_entries_a_file_dropped_leave_only_with_the_password() {
+    let f = fixture();
+    let cookie = logged_in(&f).await;
+    let (a, b) = ([0xa1u8; 20], [0xb2u8; 20]);
+    let hex = |h: &[u8; 20]| h.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    {
+        let mut s = f.api.store.lock().unwrap();
+        s.sync_floor_file("/config/blocked.txt", &[a, b], 1)
+            .unwrap();
+        // `b` deleted from the file, then a restart.
+        assert_eq!(
+            s.sync_floor_file("/config/blocked.txt", &[a], 2).unwrap(),
+            1
+        );
+        let state = s.filter_state().unwrap();
+        f.api.engine.update(|c| {
+            for (h, _) in &state.cs_hashes {
+                c.cs.add_hash(*h, lodestar_filter::Origin::Imported);
+            }
+        });
+    }
+    assert!(f.api.engine.current().blocked_hash(&[b]).is_some());
+    let o = overview(&f, &cookie).await;
+    let p = &o["pending_floor_removals"];
+    assert_eq!(p.as_array().unwrap().len(), 1, "{p}");
+    assert_eq!(p[0]["source"], "file:/config/blocked.txt");
+    assert_eq!(p[0]["kind"], "file");
+    assert_eq!(p[0]["entries"], 1);
+    assert_eq!(p[0]["hashes"][0], hex(&b));
+
+    let change = json!({ "op": "resolve_floor_removal", "source": "file:/config/blocked.txt",
+        "remove": true });
+    let (status, _, body) = call(
+        &f.app,
+        post(
+            "/api/v1/filters/preview",
+            Some(&cookie),
+            json!({ "change": change }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["weakening"], true);
+    assert_eq!(body["preview"]["removed_from_floor"], 1);
+    assert!(
+        body["warning"]
+            .as_str()
+            .unwrap()
+            .contains("/config/blocked.txt no longer lists them"),
+        "{body}"
+    );
+    let (status, body) = apply(&f, &cookie, change.clone(), None).await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED, "{body}");
+    assert!(f.api.engine.current().blocked_hash(&[b]).is_some());
+    let (status, body) = apply(&f, &cookie, change.clone(), Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["settled"], 1);
+    let e = f.api.engine.current();
+    assert!(e.blocked_hash(&[b]).is_none());
+    assert!(e.blocked_hash(&[a]).is_some(), "the file still lists it");
+    let o = overview(&f, &cookie).await;
+    assert!(o["pending_floor_removals"].as_array().unwrap().is_empty());
+    // Nothing left to settle.
+    let (status, _) = apply(&f, &cookie, change, Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = apply(
+        &f,
+        &cookie,
+        json!({ "op": "resolve_floor_removal", "source": "elsewhere" }),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+/// A floor-marked list's upstream removals wait too. Keeping them is
+/// strengthening, so it needs no password, and they stay blocked.
+#[tokio::test]
+async fn floor_entries_a_list_dropped_can_be_kept_without_the_password() {
+    let f = fixture();
+    let cookie = logged_in(&f).await;
+    let (a, b) = ([0xa1u8; 20], [0xb2u8; 20]);
+    let id = {
+        let mut s = f.api.store.lock().unwrap();
+        let id = s
+            .add_subscription(&lodestar_store::NewSubscription {
+                url: "https://example.org/cs.txt",
+                name: "Vetted list",
+                kind: 0,
+                format: Some("hashes"),
+                action: Action::Drop.code(),
+                floor: true,
+                interval_secs: 86_400,
+            })
+            .unwrap();
+        for data in [[a, b].concat(), a.to_vec()] {
+            s.record_refresh(
+                id,
+                1,
+                &lodestar_store::Refresh::Updated {
+                    data: &data,
+                    entries: (data.len() / 20) as i64,
+                    etag: None,
+                    last_modified: None,
+                },
+            )
+            .unwrap();
+        }
+        lodestar_filter::lists::apply(&s, &f.api.engine, &f.api.ips).unwrap();
+        id
+    };
+    assert!(f.api.engine.current().blocked_hash(&[b]).is_some());
+    let o = overview(&f, &cookie).await;
+    let p = &o["pending_floor_removals"][0];
+    assert_eq!(p["source"], format!("list:{id}"));
+    assert_eq!(p["name"], "Vetted list");
+    let keep = json!({ "op": "resolve_floor_removal", "source": format!("list:{id}") });
+    let (status, body) = apply(&f, &cookie, keep, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(f.api.engine.current().blocked_hash(&[b]).is_some());
+    let o = overview(&f, &cookie).await;
+    assert!(o["pending_floor_removals"].as_array().unwrap().is_empty());
+}
+
+/// Owner's decision §2.9: the strictness of a candidate set of lists, for
+/// the wizard (catalog lists, nothing fetched) and Settings (subscribed
+/// lists, measured from their data). Nothing is stored or connected.
+#[tokio::test]
+async fn strictness_of_candidate_lists() {
+    let f = fixture();
+    let cookie = logged_in(&f).await;
+    let assess = |body: Value| {
+        let (app, cookie) = (f.app.clone(), cookie.clone());
+        async move {
+            call(
+                &app,
+                post("/api/v1/filters/strictness", Some(&cookie), body),
+            )
+            .await
+        }
+    };
+    let (status, _, s) = assess(json!({ "catalog": ["bt-blocklists"] })).await;
+    assert_eq!(status, StatusCode::OK, "{s}");
+    assert_eq!(s["level"], "severe");
+    assert!((s["ipv4_share"].as_f64().unwrap() - 0.49).abs() < 0.01);
+    assert_eq!(s["estimate"], true);
+    assert_eq!(s["lists"][0]["measured"], true);
+    assert!(
+        s["text"]
+            .as_str()
+            .unwrap()
+            .contains("out of the crawler's reach")
+    );
+    assert!(
+        s["categories"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("anti_p2p"))
+    );
+    let (_, _, s) = assess(json!({ "catalog": ["firehol-level1"] })).await;
+    assert_eq!(s["level"], "none");
+    let (status, _, _) = assess(json!({ "catalog": ["nope"] })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        f.api
+            .store
+            .lock()
+            .unwrap()
+            .subscriptions()
+            .unwrap()
+            .is_empty(),
+        "assessing connects nothing"
+    );
+
+    // Subscribed lists are measured from their data: a fetched IP list
+    // covering 64 /8s of public space, a content list, and a floor list.
+    let ids = {
+        let mut st = f.api.store.lock().unwrap();
+        let mut add = |url: &str, kind: u8, floor: bool, data: Vec<u8>| {
+            let id = st
+                .add_subscription(&lodestar_store::NewSubscription {
+                    url,
+                    name: url,
+                    kind,
+                    format: None,
+                    action: Action::Drop.code(),
+                    floor,
+                    interval_secs: 86_400,
+                })
+                .unwrap();
+            st.record_refresh(
+                id,
+                1,
+                &lodestar_store::Refresh::Updated {
+                    data: &data,
+                    entries: 1,
+                    etag: None,
+                    last_modified: None,
+                },
+            )
+            .unwrap();
+            id
+        };
+        let ips = lodestar_filter::lists::IpSet::new([lodestar_filter::lists::IpRange::V4(
+            11 << 24,
+            (75 << 24) - 1,
+        )]);
+        [
+            add("https://example.org/ips", 1, false, ips.encode()),
+            add(
+                "https://example.org/hashes",
+                0,
+                false,
+                [[1u8; 20], [2; 20]].concat(),
+            ),
+            add("https://example.org/vetted", 0, true, [3u8; 20].to_vec()),
+        ]
+    };
+    let (status, _, s) = assess(json!({ "subscriptions": [ids[0]] })).await;
+    assert_eq!(status, StatusCode::OK, "{s}");
+    assert_eq!(s["level"], "severe");
+    assert_eq!(s["estimate"], false);
+    let (_, _, s) = assess(json!({ "subscriptions": [ids[1], ids[2]] })).await;
+    assert_eq!(s["level"], "strong", "{s}");
+    assert_eq!(
+        (s["hashes"].as_u64(), s["floor_hashes"].as_u64()),
+        (Some(2), Some(1))
+    );
+    assert!(
+        s["text"]
+            .as_str()
+            .unwrap()
+            .contains("joins the locked floor")
+    );
+    let (status, _, _) = assess(json!({ "subscriptions": [999] })).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

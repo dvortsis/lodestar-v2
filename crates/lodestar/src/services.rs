@@ -24,7 +24,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::config::Config;
-use crate::{http, subscriptions};
+use crate::{floor, http, subscriptions};
 
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -70,6 +70,7 @@ impl Services {
         let heap = config.search.heap_mib.max(16) << 20;
         let filter = pipeline_config.filter.clone();
         let subs_config = config.subscriptions.clone();
+        let blocklist = config.blocklist_files()?;
         let subs_ips = ips.clone();
         let (store, control, reader, live) = tokio::task::spawn_blocking(move || {
             let store = Store::open(&db, store_config.clone())?;
@@ -77,6 +78,9 @@ impl Services {
             // they never wait behind the ingest writer for long.
             let mut control = Store::open(&db, store_config.clone())?;
             subscriptions::sync_config(&mut control, &subs_config)?;
+            // Before the pipeline loads the floor from the store.
+            floor::sync_files(&mut control, &blocklist, crate::unix_now())?;
+            floor::report(&control)?;
             subscriptions::apply(&control, &filter, &subs_ips)?;
             let reader = Store::open_reader(&db, store_config.clone())?;
             // The indexer follows the store through its own connection.

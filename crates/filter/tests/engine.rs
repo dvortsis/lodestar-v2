@@ -227,3 +227,16 @@ fn prefetch_refusal_stays_conservative() {
     assert!(e.blocked_hash(&[H]).is_none());
     let _ = ContentType::Video;
 }
+
+/// §20.6 and the owner's decision (§2.8): a fresh store has no pack on.
+#[test]
+fn a_fresh_store_loads_with_no_pack_on() {
+    let store =
+        lodestar_store::Store::open_in_memory(lodestar_store::StoreConfig::default()).unwrap();
+    let mut e = engine();
+    e.packs = PackSwitches::all();
+    let notes = e.load_rules(&store.rule_set().unwrap());
+    assert!(notes.is_empty(), "{notes:?}");
+    assert_eq!(e.packs, PackSwitches::default());
+    assert!(PackRule::ALL.iter().all(|r| !e.packs.is_on(*r)));
+}

@@ -22,45 +22,7 @@ use crate::config::{ListAction, ListKind, Subscriptions};
 const CONTENT: u8 = 0;
 const IP: u8 = 1;
 
-/// A list in the one-click catalog. Every entry was checked to be live
-/// and in the stated format before it was added; check them again before
-/// each release.
-pub struct CatalogEntry {
-    pub key: &'static str,
-    pub name: &'static str,
-    pub url: &'static str,
-    pub format: Format,
-    pub about: &'static str,
-}
-
-pub const CATALOG: &[CatalogEntry] = &[
-    CatalogEntry {
-        key: "bt-blocklists",
-        name: "BT_BlockLists (Naunter)",
-        url: "https://raw.githubusercontent.com/Naunter/BT_BlockLists/master/bt_blocklists.gz",
-        format: Format::P2p,
-        about: "Combined P2P blocklist of anti-P2P, monitoring and known-bad peer \
-                ranges, popular with BitTorrent clients. Very broad: it blocks whole \
-                provider allocations and covered about half of the IPv4 space when \
-                checked, which noticeably shrinks the DHT the crawler can see. About \
-                34 MB expanded.",
-    },
-    CatalogEntry {
-        key: "firehol-level1",
-        name: "FireHOL level 1",
-        url: "https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level1.netset",
-        format: Format::Cidr,
-        about: "Networks that are attacking or abusing right now, chosen for the \
-                fewest false positives. Small.",
-    },
-    CatalogEntry {
-        key: "firehol-level2",
-        name: "FireHOL level 2",
-        url: "https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level2.netset",
-        format: Format::Cidr,
-        about: "Addresses seen attacking in the last 48 hours. Broader than level 1.",
-    },
-];
+pub use lodestar_filter::strictness::{CATALOG, catalog};
 
 /// A new version that shrinks below this share of the last one is held.
 const MAX_SHRINK: f64 = 0.5;
@@ -93,10 +55,7 @@ impl Limits {
 pub fn sync_config(store: &mut Store, c: &Subscriptions) -> Result<(), String> {
     let interval = |h: Option<u64>| (h.unwrap_or(c.refresh_hours).max(1) * 3600) as i64;
     for key in &c.catalog {
-        let e = CATALOG
-            .iter()
-            .find(|e| e.key == key)
-            .ok_or_else(|| format!("subscriptions: no catalog list {key:?}"))?;
+        let e = catalog(key).ok_or_else(|| format!("subscriptions: no catalog list {key:?}"))?;
         store
             .add_subscription(&NewSubscription {
                 url: e.url,
@@ -352,9 +311,18 @@ fn record(store: &mut Store, sub: &Subscription, fetched: Fetched, now: i64) -> 
             }
         }
     };
-    if let Err(e) = store.record_refresh(sub.id, now, &refresh) {
-        tracing::warn!(list = %sub.name, "recording a refresh failed: {e}");
-        return false;
+    match store.record_refresh(sub.id, now, &refresh) {
+        Ok(0) => {}
+        Ok(kept) => {
+            // A floor-marked list only adds (§2.7).
+            let source = lodestar_store::FloorSource::List(sub.id);
+            tracing::warn!("{}", crate::floor::message(store, &source, kept));
+            crate::floor::KEPT.fetch_add(kept as u64, std::sync::atomic::Ordering::Relaxed);
+        }
+        Err(e) => {
+            tracing::warn!(list = %sub.name, "recording a refresh failed: {e}");
+            return false;
+        }
     }
     changed
 }
@@ -622,6 +590,48 @@ mod tests {
         assert!(e.blocked_hash(&[[0xbb; 20]]).is_none());
     }
 
+    /// Owner's decision §2.7: a floor-marked list's upstream removals wait
+    /// for a decision in the app, still blocked.
+    #[tokio::test]
+    async fn floor_lists_keep_upstream_removals() {
+        let hashes = |hs: &[[u8; 20]]| -> Vec<u8> {
+            hs.iter()
+                .map(|h| h.iter().map(|b| format!("{b:02x}")).collect::<String>() + "\n")
+                .collect::<String>()
+                .into_bytes()
+        };
+        let (a, b, c) = ([0xa1; 20], [0xb2; 20], [0xc3; 20]);
+        let (url, server) = serve(vec![(200, hashes(&[a, b, c])), (200, hashes(&[a, b]))]);
+        let (store, filter, ips, limits) = setup(vec![list(&url, ListKind::Content, true)]);
+        let agent = client(&limits);
+        refresh_due(&store, &agent, &limits, &filter, &ips, 5).await;
+        let before = crate::floor::KEPT.load(std::sync::atomic::Ordering::Relaxed);
+        refresh_due(&store, &agent, &limits, &filter, &ips, 5 + 86_400).await;
+        server.join().unwrap();
+        assert!(crate::floor::KEPT.load(std::sync::atomic::Ordering::Relaxed) > before);
+        let e = filter.current();
+        for h in [a, c] {
+            let d = e.blocked_hash(&[h]).unwrap();
+            assert_eq!(d.rule, RuleRef::Core(CoreRule::Cs1b));
+        }
+        let mut s = store.lock().unwrap();
+        let id = s.subscriptions().unwrap()[0].id;
+        let source = lodestar_store::FloorSource::List(id);
+        assert_eq!(s.pending_floor_of(&source).unwrap(), [c]);
+        // Reported again at the next start.
+        let lines = crate::floor::report(&s).unwrap();
+        assert!(
+            lines[0].starts_with("1 floor entry was removed upstream from"),
+            "{lines:?}"
+        );
+        // Removed in the app: unblocked.
+        s.resolve_pending_floor(&source, None, true, 10).unwrap();
+        apply(&s, &filter, &ips).unwrap();
+        let e = filter.current();
+        assert!(e.blocked_hash(&[c]).is_none());
+        assert!(e.blocked_hash(&[a]).is_some());
+    }
+
     #[tokio::test]
     async fn failures_are_recorded_not_applied() {
         let (url, server) = serve(vec![(404, Vec::new()), (200, b"\0\0binary".to_vec())]);
@@ -636,6 +646,17 @@ mod tests {
         assert!(sub.error.unwrap().contains("isn't text"));
         server.join().unwrap();
         assert!(ips.current().is_empty());
+    }
+
+    /// Owner's decision §2.9: subscriptions are off by default, so a
+    /// default config connects no list.
+    #[test]
+    fn no_list_is_connected_by_default() {
+        let c = crate::config::Config::default().subscriptions;
+        assert!(c.catalog.is_empty() && c.lists.is_empty());
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        sync_config(&mut store, &c).unwrap();
+        assert!(store.subscriptions().unwrap().is_empty());
     }
 
     #[test]
