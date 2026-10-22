@@ -760,7 +760,7 @@ Categorical (official, as amended): `#527F91` `#829F8A` `#C4A765` `#BF8173` `#8C
 - **Light-mode `primary` (`#527F91`) is just short for normal-size text:** 4.02:1 on background and 4.37:1 on surface. White text on a primary button is 4.37:1. All of these need 4.5:1.
 - **Light-mode `accent` (`#829F8A`) is 2.65–2.89:1.** That fails text (4.5:1) and UI boundaries (3:1). It's fine as a fill behind `text` (4.03:1, which passes for large or bold labels) or as decoration.
 - **4 of the 6 categorical colours are under 3:1 on the light surface:** `#829F8A` 2.89, `#C4A765` 2.32, `#8C9BA7` 2.85, `#92A9A0` 2.50.
-- **Originally, two categorical colours were near-duplicates:** sage `#829F8A` vs seafoam `#92A9A0` (ΔE_ok ≈ 1.9; ≈ 1.5 under colour-vision deficiency). This is now **resolved** by the plum replacement above. The remaining weakest pair is sage vs slate (ΔE_ok ≈ 5.1 normal, ≈ 4.1 deutan), which is acceptable.
+- **Originally, two categorical colours were near-duplicates:** sage `#829F8A` vs seafoam `#92A9A0` (ΔE_ok ≈ 1.9; ≈ 1.5 under colour-vision deficiency). This is now **resolved** by the plum replacement above. The remaining weakest pair under normal vision is sage vs slate (ΔE_ok ≈ 5.1). Under deuteranopia the weakest pair is sage vs terracotta at about 3.3–3.6 (PR #37's measurements). The owner kept the palette (2026-10-22), and the non-colour cues below carry the difference.
 
 **Resolution: keep the official values as the brand values; derive role tokens for anything that must pass.** Text, buttons and data marks use **ink/data variants** that keep each hue and only shift its lightness in OKLCH.
 
@@ -795,7 +795,7 @@ Categorical (official, as amended): `#527F91` `#829F8A` `#C4A765` `#BF8173` `#8C
 | 6 | `#9381B6` plum | Archives & disc images |
 | — | `muted-text` grey | Other |
 
-With the plum swap, all six colours are distinguishable. Colour is still never the only cue:
+With the plum swap, all six colours are distinct under normal vision. Under colour-vision deficiency some pairs come closer (see above), so colour is never the only cue:
 - a **2 px surface-coloured gap** between segments;
 - **fixed segment order** (Video, Audio, Images, Documents, Archives, Software, Other);
 - visible dominant-share text ("82% video");
