@@ -1006,7 +1006,7 @@
    "status": "review",
    "model": "opus",
    "session": "session_01SK5Ci2FahQUSGQuDVozi28",
-   "notes": "follow-up of #87 review: max_id visible-only, replay toggle, swap adult test | 23:32 PR #104 (branch slice/B4b). Runner decision (\u00a72.19, content-safety strengthening): max_id null while Adult hidden. Reviewer started.",
+   "notes": "follow-up of #87 review: max_id visible-only, replay toggle, swap adult test | 23:32 PR #104 (branch slice/B4b). Runner decision (\u00a72.19, content-safety strengthening): max_id null while Adult hidden. Reviewer started. | 23:43 review FIX at ce2fd15: null max_id not landed yet; sent full plan + I1 (keep lastId on visibility resync) + I2 note.",
    "pr": 104
   },
   "runner-secure-delete": {
@@ -1112,8 +1112,7 @@
  },
  "heartbeats": 4,
  "reviews_in_flight": [
-  "88",
-  104
+  "88"
  ],
  "carry_forward": {
   "next-bans-touch": [
@@ -1192,7 +1191,8 @@
   "events_filter_hidden": "B4 'N new' counts filter-hidden torrents (flags::HIDDEN); design question: count visible-by-default only? (from #87 review)",
   "crawler_rate": "CrawlerEvent needs a server-computed ingest rate for the status pill (metrics.md:169) \u2014 from W9 review",
   "icons_weight": "Phosphor icons are regular weight but \u00a710.2 says Bold (predates W9; W7 primitives) \u2014 next UI slice touching icons",
-  "skip_link": "Search slice: skip link label 'Skip to results' (\u00a710.13)"
+  "skip_link": "Search slice: skip link label 'Skip to results' (\u00a710.13)",
+  "n_new_reset": "Future 'N new' consumer (search) must reset its count when the Adult setting changes (hidden tab queued frames not re-screened) \u2014 from #104 review"
  },
  "blocked_on_owner": [
   "Modern DHT crawler architecture: waiting on an AskUserQuestion",
