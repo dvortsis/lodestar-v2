@@ -1,0 +1,21 @@
+{
+	"id": "rosewood",
+	"name": "Rosewood",
+	"group": "original",
+	"light": {
+		"background": "#F7F2F3",
+		"surface": "#FFFFFF",
+		"text": "#3B2A30",
+		"primary": "#8E5A6B",
+		"accent": "#7E9A86",
+		"categorical": ["#466887", "#75967D", "#B09051", "#A56354", "#82777E", "#8E73AE"]
+	},
+	"dark": {
+		"background": "#1D1517",
+		"surface": "#2B2024",
+		"text": "#F1E6E9",
+		"primary": "#D9A3B4",
+		"accent": "#A9C6B0",
+		"categorical": ["#7697B8", "#B1D3B9", "#BDA161", "#BC7C75", "#AFA3A9", "#C4A7E6"]
+	}
+}
