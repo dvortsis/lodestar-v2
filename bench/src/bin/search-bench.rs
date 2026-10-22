@@ -12,6 +12,10 @@
 //! the sampled count estimate (what `total_approx` reports at scale)
 //! against the exact count on every query of at least
 //! [`ESTIMATE_FROM`] matches, gated at [`estimate_tolerance`].
+//!
+//! A third table times `/facets` (B6): a lease, then every facet group
+//! and histogram for it, for a broad word alone and with selections that
+//! need disjunctive passes of their own, gated at [`FACETS_P95`].
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -21,7 +25,9 @@ use std::time::{Duration, Instant};
 
 use lodestar_bench::synth::Generator;
 use lodestar_metainfo::Info;
-use lodestar_search::{CancelToken, Lease, SearchIndex, Sort, Start, index_dir, parse};
+use lodestar_search::{
+    CancelToken, FacetParams, Lease, SearchIndex, Sort, Start, facets, index_dir, parse,
+};
 use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig};
 use rand::seq::IndexedRandom;
 use rand::{RngExt, SeedableRng};
@@ -31,6 +37,8 @@ use rand_chacha::ChaCha8Rng;
 const KEYWORD_P95: Duration = Duration::from_millis(30);
 /// §3: filter-only browse over the whole corpus, p95.
 const BROWSE_P95: Duration = Duration::from_millis(50);
+/// §3: facets for the same query (a separate request), p95.
+const FACETS_P95: Duration = Duration::from_millis(100);
 /// The deep-cursor class reads this many pages of 50 before timing one.
 const DEEP_PAGES: usize = 20;
 /// The estimate samples a sixteenth of the documents, so its relative
@@ -430,6 +438,7 @@ fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
         }
     }
     ok &= api_path(a, &index, &reader, now)?;
+    ok &= facets_path(a, &index, now)?;
     Ok(ok)
 }
 
@@ -538,6 +547,76 @@ fn api_path(
         if pass { "PASS" } else { "FAIL" }
     );
     Ok(ok && pass)
+}
+
+/// `/facets` as the API runs it: a lease for the query, then every term
+/// facet and histogram over it. "broad word" is one pass for all groups;
+/// the selections add one disjunctive pass each.
+fn facets_path(
+    a: &Args,
+    index: &SearchIndex,
+    now: i64,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let index = Arc::new(index.clone());
+    let cancel = CancelToken::new();
+    let (words, _) = vocabulary(a.seed ^ 0x5eed, 20_000);
+    let common = &words[..words.len().min(100)];
+    let mut rng = ChaCha8Rng::seed_from_u64(a.seed ^ 0xface7);
+    let selections = [
+        "res:1080p,2160p",
+        "type:movie,tv",
+        "ext:mkv -ext:exe",
+        "lang:en private:no",
+        "res:1080p type:movie",
+    ];
+    let mut broad = Vec::new();
+    let mut selected = Vec::new();
+    for _ in 0..a.queries {
+        let w = common.choose(&mut rng).expect("vocabulary");
+        broad.push(w.clone());
+        let s = selections[rng.random_range(0..selections.len())];
+        selected.push(format!("{w} {s}"));
+    }
+    // The whole corpus: the shared pass at its widest (sampled at scale).
+    let browse = vec![String::new(); a.queries.min(50)];
+    let ms = |d: Duration| format!("{:.2}", d.as_secs_f64() * 1000.0);
+    println!("\n  /facets: a lease, then every term facet and histogram");
+    println!(
+        "  {:<24} {:>8} {:>8} {:>8} {:>10}  target",
+        "class", "p50", "p95", "max", "mean hits"
+    );
+    let mut ok = true;
+    for (name, queries) in [
+        ("broad word", &broad),
+        ("word + selections", &selected),
+        ("browse everything", &browse),
+    ] {
+        let mut times = Vec::with_capacity(queries.len());
+        let mut hits = 0usize;
+        for q in queries {
+            let started = Instant::now();
+            let ast = parse(q)?.without_hidden();
+            let lease = Lease::new(index.clone(), &ast, now, Sort::Relevance, &cancel)?;
+            let got = facets(&lease, &ast, &FacetParams::default(), &cancel)?;
+            times.push(started.elapsed());
+            hits += got.matches as usize;
+        }
+        times.sort();
+        let p95 = pct(&times, 0.95);
+        let pass = p95 <= FACETS_P95;
+        ok &= pass;
+        println!(
+            "  {:<24} {:>8} {:>8} {:>8} {:>10}  p95 < {} ms {}",
+            name,
+            ms(pct(&times, 0.5)),
+            ms(p95),
+            ms(*times.last().expect("queries")),
+            hits / queries.len(),
+            FACETS_P95.as_millis(),
+            if pass { "PASS" } else { "FAIL" }
+        );
+    }
+    Ok(ok)
 }
 
 fn main() -> ExitCode {

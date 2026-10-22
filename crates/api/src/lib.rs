@@ -26,6 +26,7 @@ pub mod auth;
 pub mod dto;
 pub mod error;
 pub mod extract;
+mod facets;
 pub mod filters;
 pub mod openapi;
 mod search;
@@ -65,6 +66,7 @@ pub fn router(state: ApiState) -> Router {
         // Add a module, add one line.
         .merge(auth::routes())
         .merge(search::routes())
+        .merge(facets::routes())
         .merge(torrents::routes())
         .merge(filters::routes())
         .merge(settings::routes())

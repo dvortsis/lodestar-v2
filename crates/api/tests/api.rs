@@ -330,6 +330,7 @@ async fn errors_share_one_envelope() {
         Request::delete("/api/v1/password")
             .body(Body::empty())
             .unwrap(),
+        get("/api/v1/facets", None),
         get("/api/v1/settings", None),
         get("/api/v1/settings/crawler", None),
         get("/api/v1/settings/nope", None),

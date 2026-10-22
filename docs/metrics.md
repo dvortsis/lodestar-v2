@@ -309,12 +309,21 @@ and no DHT estimate (PR #32). The six nullable swarm fields (`seeders`,
 
 ### 7.4 Facets response (B6)
 
+`GET /facets` (the search's `q`, `sort`, `hidden`, optional `lease` = a
+search's `next_cursor`, `limit.<facet>=` 1–100) or `POST` with the AST.
+Counts are over exactly what `/search` returns for the same parameters.
+
 | Field | Type | Nullable | Notes |
 |---|---|---|---|
-| `sampled` | boolean | no | True above 1M matches |
-| `sample_rate` | number 0–1 | yes: null when not sampled | For the "≈" note |
-| `facets.<name>` | `{value: string, count: integer}[]` | no | Term facets; disjunctive |
-| `histograms.<name>` | `{lo: number, hi: number, count: integer}[]` | no | Explicit bins; empty bins present with `count: 0` |
+| `total`, `total_approx` | integer, boolean | no | The search's result count, as `/search` reports it |
+| `sampled` | boolean | no | True when any group was computed on a sample (a pass above 1M matches) |
+| `sample_rate` | number 0–1 | yes: null when not sampled | Share of the documents a sampled pass visited, for the "≈" note (`sampled_note`) |
+| `facets.<name>` | `{approx: boolean, distinct: integer, other: integer, values: {value: string, count: integer, selected: boolean, excluded: boolean}[]}` | no | Term facets; **disjunctive** (each ignores the query's own clauses on it, architecture §16 "B6"). `values`: the top 8 (or `limit.<name>`) by count, ties by value, then any selected or excluded value outside them (count may be 0). `other`: the unlisted values' counts summed. `approx`: sampled, show "≈". Flags (`private`, `v2`, `ambiguous`, `imported`, `backfill`) list `yes` and `no`. Names: `type`, `ext`, `res`, `category`, `lang`, `group`, `codec`, `audio`, `hdr`, `private`, `v2`, `has`, `ambiguous`, `imported`, `backfill`, and `adult` only when it has values |
+| `histograms.<name>` | `{approx: boolean, unit: string, missing: integer, bins: {lo: integer, hi: integer\|null, count: integer, backfill: boolean}[]}` | no | Explicit bins, `lo` inclusive, `hi` exclusive (null: open top bin); empty bins present with `count: 0`. Not disjunctive: bins + `missing` sum to the result count. `size`: bytes, `[0, 1 MiB)`, then powers of two to `[512 GiB, 1 TiB)`, then `[1 TiB, ∞)`. `discovered`: UTC seconds; `unit` is `hour`, `day`, `week` (Unix epoch weeks, from Thursday 00:00 UTC, as §7.2) or `month` (UTC calendar months), chosen from the matches' range (< 48 h, < 90 days, < 104 weeks, else months). `year`: the release's first year, `[y, y + 1)`; `missing` = no year parsed |
+| `backfill_before` | integer (Unix seconds) | yes: null = unknown | The crawler's first run; a `discovered` bin with `backfill: true` ends by then (§10.4 "Backfill" marker). Labels use the user's timezone; edges stay UTC (§2) |
+| `buckets.seeders`, `buckets.trackers` | term facet (as `facets.<name>`), values `≥1`, `≥5`, `≥50`, `never_scraped` | yes: **null until M4's swarm fields are indexed** | Never zeros while unavailable: show "—" |
+| `unavailable` | string[] | no | Groups this index can't serve: fields an older index lacks during a rebuild ("index rebuilding; … not yet available"), and `seeders`/`trackers` until M4 |
+| `canonical`, `took_ms` | as `/search` | no | — |
 
 ### 7.5 Insights (planned; names fixed here)
 

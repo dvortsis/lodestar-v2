@@ -71,7 +71,7 @@ pub(crate) async fn parse_query(
     Ok(axum::Json(ParseResponse { ast, canonical }))
 }
 
-fn sort_param(s: Option<&str>) -> ApiResult<Sort> {
+pub(crate) fn sort_param(s: Option<&str>) -> ApiResult<Sort> {
     Ok(match s.unwrap_or("relevance") {
         "relevance" => Sort::Relevance,
         "discovered" | "-discovered" => Sort::Discovered { desc: true },
@@ -150,29 +150,7 @@ async fn run_search(
             "Search is turned off.",
         ));
     };
-    let ast = match (p.ast, p.q) {
-        (Some(ast), None) => {
-            // An AST from a client must be one the parser could produce.
-            let text = ast.to_query();
-            match parse(&text) {
-                Ok(again) if again == ast => ast,
-                _ => {
-                    return Err(ApiError::bad_request(
-                        "invalid_ast",
-                        "That query AST isn't one the parser can produce.",
-                    )
-                    .field("ast"));
-                }
-            }
-        }
-        (None, q) => parse(q.as_deref().unwrap_or("")).map_err(parse_error)?,
-        (Some(_), Some(_)) => {
-            return Err(ApiError::bad_request(
-                "q_and_ast",
-                "Send q or ast, not both.",
-            ));
-        }
-    };
+    let (ast, shown) = request_query(p.ast, p.q, p.hidden.unwrap_or(false))?;
     let sort = sort_param(p.sort.as_deref())?;
     let limit = p.limit.unwrap_or(50).clamp(1, MAX_LIMIT);
     if p.cursor.is_some() && p.offset.is_some() {
@@ -190,11 +168,6 @@ async fn run_search(
         )
         .field("offset"));
     }
-    let shown = if p.hidden.unwrap_or(false) {
-        ast.clone()
-    } else {
-        ast.clone().without_hidden()
-    };
     let fingerprint = fingerprint(&shown, sort);
     let client = client_of(headers);
     let cursor = p
@@ -284,7 +257,47 @@ async fn run_search(
     .map_err(internal)?
 }
 
-fn search_error(e: SearchError) -> ApiError {
+/// The query a request runs: its AST (from `q`, or an `ast` the parser
+/// could have produced) and the AST as run, with the hidden-torrent
+/// clause unless `hidden`. `/facets` builds its base with this too, so it
+/// counts exactly what `/search` returns.
+pub(crate) fn request_query(
+    ast: Option<Node>,
+    q: Option<String>,
+    hidden: bool,
+) -> ApiResult<(Node, Node)> {
+    let ast = match (ast, q) {
+        (Some(ast), None) => {
+            // An AST from a client must be one the parser could produce.
+            let text = ast.to_query();
+            match parse(&text) {
+                Ok(again) if again == ast => ast,
+                _ => {
+                    return Err(ApiError::bad_request(
+                        "invalid_ast",
+                        "That query AST isn't one the parser can produce.",
+                    )
+                    .field("ast"));
+                }
+            }
+        }
+        (None, q) => parse(q.as_deref().unwrap_or("")).map_err(parse_error)?,
+        (Some(_), Some(_)) => {
+            return Err(ApiError::bad_request(
+                "q_and_ast",
+                "Send q or ast, not both.",
+            ));
+        }
+    };
+    let shown = if hidden {
+        ast.clone()
+    } else {
+        ast.clone().without_hidden()
+    };
+    Ok((ast, shown))
+}
+
+pub(crate) fn search_error(e: SearchError) -> ApiError {
     match e {
         SearchError::LeaseExpired => ApiError::new(
             StatusCode::GONE,
@@ -312,7 +325,7 @@ fn bad_cursor() -> ApiError {
 
 /// The search a cursor continues: the query as run (hidden torrents
 /// included or not) and the sort.
-fn fingerprint(shown: &Node, sort: Sort) -> [u8; 8] {
+pub(crate) fn fingerprint(shown: &Node, sort: Sort) -> [u8; 8] {
     let mut h = Sha256::new();
     h.update(b"lodestar-search-v1|");
     h.update(format!("{shown:?}|{sort:?}").as_bytes());
@@ -324,7 +337,7 @@ fn fingerprint(shown: &Node, sort: Sort) -> [u8; 8] {
 
 /// Who holds a lease: the session (leases are capped per client, and
 /// another session's cursor reads as expired).
-fn client_of(headers: &HeaderMap) -> u64 {
+pub(crate) fn client_of(headers: &HeaderMap) -> u64 {
     let session = headers
         .get_all(header::COOKIE)
         .iter()
@@ -380,7 +393,7 @@ fn seal_cursor(c: &Cursor) -> String {
 }
 
 /// Checks a cursor's form, epoch, tag and search, in that order.
-fn open_cursor(text: &str, fingerprint: &[u8; 8]) -> ApiResult<Cursor> {
+pub(crate) fn open_cursor(text: &str, fingerprint: &[u8; 8]) -> ApiResult<Cursor> {
     if text.len() > MAX_CURSOR || text.len() % 2 != 0 {
         return Err(bad_cursor());
     }
