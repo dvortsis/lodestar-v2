@@ -42,6 +42,8 @@ pub const EXACT_BUDGET: Duration = Duration::from_secs(5);
 pub struct Lease {
     index: Arc<SearchIndex>,
     searcher: Searcher,
+    /// The query it was taken for, as given.
+    node: Node,
     compiled: Compiled,
     stemmed: bool,
     sort: Sort,
@@ -123,6 +125,7 @@ impl Lease {
         Ok(Lease {
             index,
             searcher,
+            node: node.clone(),
             compiled,
             stemmed,
             sort,
@@ -138,6 +141,7 @@ impl Lease {
         Lease {
             searcher: index.searcher(),
             index,
+            node: crate::Node::All,
             compiled,
             stemmed: false,
             sort: Sort::Relevance,
@@ -157,6 +161,11 @@ impl Lease {
 
     /// The time the query's relative dates resolved against: facets
     /// compile their variants of it at the same instant.
+    /// The query this lease was taken for.
+    pub fn node(&self) -> &Node {
+        &self.node
+    }
+
     pub fn now(&self) -> i64 {
         self.now
     }

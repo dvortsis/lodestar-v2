@@ -349,6 +349,7 @@ fn counts_reconcile_with_brute_force_and_the_index() {
         "cat:video ext:mkv,flac -ext:exe",
         "cat:audio=0 common",
         "cat:video<60 cat:subtitle",
+        "cat:video>=80% common",
         "lang:ja lang:en has:nfo",
         "group:g3 | group:g4",
         "ambiguous:yes imported:no backfill:no",
@@ -405,12 +406,13 @@ fn own_clauses_are_top_level_and_single_field() {
     assert!(!Facet::V2.owns(&p("private:no")));
     assert!(Facet::Category.owns(&p("cat:video | cat:audio")));
     assert!(!Facet::Category.owns(&p("bytes:video>50")));
-    // Shares: "has some" is a selection, "has none" an exclusion, any
-    // other range a plain filter.
+    // Shares: "has some" (what the facet counts) is a selection, "has
+    // none" an exclusion, any other range a plain filter.
     for (q, want) in [
         ("cat:video", Some(false)),
-        ("cat:video>=80%", Some(false)),
-        ("cat:video=10..50", Some(false)),
+        ("cat:video>0", Some(false)),
+        ("cat:video>=80%", None),
+        ("cat:video=10..50", None),
         ("cat:video=0", Some(true)),
         ("-cat:video=0", Some(false)),
         ("cat:video<50", None),
@@ -676,6 +678,41 @@ fn discovered_bins_follow_the_range() {
     }
     assert_eq!(civil(0), (1970, 1, 1));
     assert_eq!(civil(days_from_civil(2024, 2, 29)), (2024, 2, 29));
+}
+
+#[test]
+fn stray_dates_go_in_edge_bins() {
+    // 1,000 torrents over 60 days, one at 1970 (a source's created_at of
+    // 0) and one in 9999.
+    let mut hours: HashMap<i64, f64> = (0..1_000).map(|i| (hour(T0 + i * 5_184), 1.0)).collect();
+    let far = days_from_civil(9999, 6, 1) * DAY;
+    hours.insert(0, 1.0);
+    hours.insert(hour(far), 1.0);
+    let (unit, bins) = discovered_bins(&hours, Some(T0 + 10 * DAY));
+    assert_eq!(unit, Unit::Day, "chosen from the bulk's range");
+    let (first, last) = (&bins[0], &bins[bins.len() - 1]);
+    assert_eq!((first.lo, first.count), (0, 1));
+    assert!(first.backfill);
+    assert_eq!((last.hi, last.count), (None, 1));
+    assert_eq!(last.lo, bins[bins.len() - 2].hi.unwrap());
+    assert!(bins.len() <= 64, "61 days and two edges: {}", bins.len());
+    assert_eq!(bins.iter().map(|b| b.count).sum::<u64>(), 1_002);
+    // Bins tile: each starts where the last ended.
+    for w in bins.windows(2) {
+        assert_eq!(w[0].hi, Some(w[1].lo));
+    }
+    // A bulk spread over centuries is capped, in years.
+    let wide: HashMap<i64, f64> = (0..2_000)
+        .map(|y| (hour(days_from_civil(1000 + y, 3, 1) * DAY), 1.0))
+        .collect();
+    let (unit, bins) = discovered_bins(&wide, None);
+    assert_eq!(unit, Unit::Year);
+    assert!(bins.len() <= MAX_DISCOVERED_BINS, "{}", bins.len());
+    assert_eq!(bins.iter().map(|b| b.count).sum::<u64>(), 2_000);
+    assert_eq!(bins[1].hi, Some(bins[2].lo));
+    // And no stray date makes a segment's hour counts span decades.
+    let h = Hours::for_column(None, T0);
+    assert!(h.dense.is_empty());
 }
 
 #[test]

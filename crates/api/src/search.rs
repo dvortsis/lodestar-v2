@@ -104,19 +104,8 @@ impl BaseQuery {
     /// `node` (the user's query, or a pass's edit of it) with the
     /// visibility clauses ANDed on.
     pub fn restrict(&self, node: Node) -> Node {
-        self.visibility
-            .iter()
-            .cloned()
-            .fold(node, |node, clause| match node {
-                Node::All => clause,
-                Node::And { mut of } => {
-                    of.push(clause);
-                    Node::And { of }
-                }
-                other => Node::And {
-                    of: vec![other, clause],
-                },
-            })
+        // The same function `/facets` holds its lease to.
+        lodestar_search::with_filters(node, &self.visibility)
     }
 }
 
@@ -761,5 +750,35 @@ mod tests {
             base_query(&Node::All, HIDDEN).query(),
             not(tag(TagKey::Type, ADULT))
         );
+    }
+
+    /// `/search` and `/facets` take their leases for `query()`; facets
+    /// count `with_filters(node, visibility)` and require the two to be
+    /// the same node.
+    #[test]
+    fn the_query_is_what_facets_hold_a_lease_to() {
+        for v in [false, true].map(|adult| Visibility {
+            hidden: false,
+            adult,
+        }) {
+            for ast in [
+                Node::All,
+                word("dark"),
+                tag(TagKey::Type, "movie"),
+                Node::And {
+                    of: vec![word("dark"), not(tag(TagKey::Type, ADULT))],
+                },
+                Node::Or {
+                    of: vec![word("dark"), word("light")],
+                },
+            ] {
+                let base = base_query(&ast, v);
+                assert_eq!(
+                    base.query(),
+                    lodestar_search::with_filters(base.node.clone(), &base.visibility),
+                    "{ast:?} {v:?}"
+                );
+            }
+        }
     }
 }
