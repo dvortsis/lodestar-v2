@@ -260,6 +260,8 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
    - The app shows a **warning matched to how strict the chosen lists are**, for example a list that would hide a large share of the DHT.
    - The owner didn't address the refresh mechanics (24 h refresh; holding a version that is empty, shrinks by more than half or grows tenfold); they stay as designed in §20.13.
 10. **Riverstone stays exactly as chosen.** The §10.18 claim about colour-blind distinctness was wrong and is corrected. The non-colour cues (2 px gaps, fixed order, labels, the "High-legibility data" patterns option) carry the difference.
+11. **Runner concurrency:** up to 8 Opus code slices and 8 helper slices at once (raised from 4 core). Slices still need disjoint owned paths, and every PR still gets a fresh Opus review before merge.
+12. **Adult-relabel quarantines:** when a user's Is-adult correction or class rule makes the Adult-only child-safety core quarantine a torrent, the sealed name is still purged after 30 days, but the entry then becomes a tombstone (hash and rule only), so the torrent is never fetched again. It can still be released deliberately, with the effect warning and the password.
 
 ## 3. Points still open (not decided by the owner)
 - **Name-pattern blocklists.** The owner said "build those" *(M4, 10-22 03:27:05)*; they were then moved into the §20 rule engine by the approved design PR #27. Assumed satisfied by the rule engine unless the owner says otherwise.
