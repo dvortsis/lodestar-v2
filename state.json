@@ -1,9 +1,9 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-22T06:15:00Z",
+ "updated_at": "2026-10-22T06:22:00Z",
  "launches": {
   "date": "2026-10-22",
-  "count": 13
+  "count": 14
  },
  "tags": {},
  "slices": {
@@ -377,13 +377,13 @@
    "notes": ""
   },
   "B15": {
-   "status": "done_elsewhere",
+   "status": "merged_elsewhere",
    "model": "opus",
    "session": null,
    "pr": 47,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": "built by the filter session (#47); runner reviews #47 under standards instead"
+   "notes": "#47 merged by the filter session 06:19"
   },
   "B10a": {
    "status": "pending",
@@ -690,6 +690,33 @@
    "attempt": 0,
    "review_rounds": 0,
    "notes": ""
+  },
+  "F1": {
+   "status": "running",
+   "model": "opus",
+   "session": "session_01V5sNo28tD6bZx3CNFdYjWY",
+   "pr": null,
+   "attempt": 1,
+   "review_rounds": 0,
+   "notes": "owner filtering decisions on main: packs off, budget gate, floor add-only, subscription strictness"
+  },
+  "F2": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": "move /filters/preview onto B10b /jobs (\u00a720.10); deps B10b"
+  },
+  "F3": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": "Is adult/Not adult corrections feed adult detection as rules+fixtures (\u00a720.9)"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -743,7 +770,7 @@
   "32": "merged 05:36 by M4 session",
   "33": "merged 05:51 by filter session (owner decisions follow-up requested)",
   "42": "MERGED 06:07 by the filter session despite the runner's request; packs on by default (contradicts owner \u00a72.8) and LODESTAR_BUDGET_US kept. Follow-up fix PR requested 06:14; owner told.",
-  "47": "open, filters API (B15)"
+  "47": "merged 06:19 by the filter session (V8 class_corrections)"
  },
  "heartbeats": 1
 }
