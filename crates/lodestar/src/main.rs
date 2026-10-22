@@ -7,6 +7,9 @@ mod http;
 mod metrics;
 mod services;
 mod subscriptions;
+mod web;
+#[cfg(test)]
+mod web_build;
 
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
@@ -29,7 +32,8 @@ Usage: lodestar [serve|healthcheck] [--config <path>]
        lodestar lists
 
 Commands:
-  serve             Run the crawler, search, status page and metrics (default)
+  serve             Run the crawler, search, UI, status page and metrics
+                    (default)
   healthcheck       Exit 0 if the local instance answers /healthz, 1 otherwise
   import-bitmagnet  Import a bitmagnet database (read-only, resumable); run
                     it while the server is stopped
