@@ -308,7 +308,13 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
       - Every choice shows its recommended, safe answer.
       - Unsafe options are named plainly, with the alternative.
       - Background stays brief, collapsed or linked.
-    - No ready-made skill fitted. The owner's `dvortsis/skills` covers UI design only, and its `infographic-design` informs the diagrams.
+    - **"Use documentation-skills to guide your documentation process"** (owner, the same day). The owner's new `dvortsis/skills/documentation-skills` collection guides the process:
+      - `github-docs` for the guide (its "capable installer" is this audience);
+      - `material-composer` for other materials.
+
+      `user-docs` became a thin Lodestar layer on top of them. It sets the folder (`docs/user/`), the facts, the screenshots, Lodestar's safe choices, and their gates.
+    - **Precedence,** as with `ui-design-skills`: these decisions, then `user-docs`, then the skills.
+    - **Brand:** a `brand/brand.json` profile fixes the fonts the skills would otherwise misdetect.
     - **Scope:** the README, `docs/user/`, `docs/operations.md`, release notes and in-app help. Developer and contract docs are exempt.
 
 ## 3. Points still open (not decided by the owner)
