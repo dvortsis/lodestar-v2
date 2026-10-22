@@ -251,6 +251,7 @@ impl Services {
                 health: monitor.health().cloned(),
                 rollups: monitor.rollups().clone(),
             })),
+            adult: settings::content::follow(settings.subscribe()),
         };
         settings::log::follow(settings.subscribe());
         let http = http::AppState {

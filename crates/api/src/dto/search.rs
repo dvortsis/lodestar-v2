@@ -113,6 +113,11 @@ pub struct SearchResponse {
     /// 256 characters, valid for 10 minutes after its last use.
     #[schema(required = true)]
     pub next_cursor: Option<String>,
+    /// What the server left out of these results, for the UI to say:
+    /// `adult_hidden` when the query asks for Adult (`type:adult`,
+    /// `adult:…`) while "Show adult content" is off, so it matched
+    /// nothing adult (§20.9).
+    pub notices: Vec<SearchNotice>,
     /// Hits before this page.
     pub offset: usize,
     /// Few exact matches: plural forms in titles were included too (§8),
@@ -124,6 +129,15 @@ pub struct SearchResponse {
     /// `total` is an estimate (above 100,000 matches; shown with "≈");
     /// ask with `exact` for the exact count.
     pub total_approx: bool,
+}
+
+/// A note on what a search left out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchNotice {
+    /// The query asks for Adult, which is hidden: turn on "Show adult
+    /// content" in Settings to see it.
+    AdultHidden,
 }
 
 /// One search result: the torrent summary (`docs/metrics.md` §7.1), its

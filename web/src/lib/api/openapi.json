@@ -304,6 +304,130 @@
         ]
       }
     },
+    "/facets": {
+      "get": {
+        "tags": [
+          "search"
+        ],
+        "summary": "Facets for query text. To send an AST, POST it.",
+        "operationId": "facetsGet",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "The query text, as `/search` takes it.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "The search's sort; checked against `lease`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "hidden",
+            "in": "query",
+            "description": "Include torrents a filter rule hid (§20.3).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "tz",
+            "in": "query",
+            "description": "The user's zone for `time:`, in minutes east of UTC (−840 to 840), as `/search`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "lease",
+            "in": "query",
+            "description": "A search's `next_cursor`: count its index snapshot. Send the same `q`, `sort` and `hidden`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit.{facet}",
+            "in": "query",
+            "description": "Values listed for one facet (`limit.ext=20`): 1–100, 8 by default.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacetsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "search"
+        ],
+        "summary": "Facets for query text or a query AST.",
+        "operationId": "facetsPost",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FacetsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacetsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/filters": {
       "get": {
         "tags": [
@@ -581,6 +705,28 @@
         ],
         "summary": "The review queue: quarantine (never with names) and the last 30 days'\ndecisions per rule.",
         "operationId": "getFilterQueue",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The previous page's `next_cursor`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Quarantine rows per page: 1–1000, 1000 by default.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 1
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "",
@@ -666,6 +812,66 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TestResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/filters/tombstones": {
+      "get": {
+        "tags": [
+          "filters"
+        ],
+        "summary": "Tombstones (dropped torrents) by hash and rule, never with names, in\npages; `adult=true` lists only adult holds.",
+        "operationId": "getFilterTombstones",
+        "parameters": [
+          {
+            "name": "adult",
+            "in": "query",
+            "description": "Only adult holds: torrents held because you relabelled them adult,\nwhich the 30-day purge left as tombstones.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The previous page's `next_cursor`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Tombstones per page: 1–1000, 1000 by default.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tombstones"
                 }
               }
             }
@@ -1138,6 +1344,16 @@
               }
             }
           },
+          "422": {
+            "description": "`adult_confirmation_required`: a patch turning on an adult setting without `\"confirm_adult\": true`; nothing is saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -1221,6 +1437,16 @@
               }
             }
           },
+          "404": {
+            "description": "`torrent_not_found`, or `adult_hidden`: an Adult torrent while \"Show adult content\" is off.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -1277,6 +1503,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FilesPage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`torrent_not_found`, or `adult_hidden`: an Adult torrent while \"Show adult content\" is off.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -3216,6 +3452,194 @@
           }
         }
       },
+      "FacetValue": {
+        "type": "object",
+        "required": [
+          "count",
+          "excluded",
+          "selected",
+          "value"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "excluded": {
+            "type": "boolean",
+            "description": "The query excludes it (`-res:480p`)."
+          },
+          "selected": {
+            "type": "boolean",
+            "description": "The query selects it."
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "FacetsRequest": {
+        "type": "object",
+        "description": "`POST /facets`'s body. `GET /facets` takes the same fields as query\nparameters, with `limit.<facet>=` for `limits` (and no `ast`).",
+        "properties": {
+          "ast": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AstNode",
+                "description": "A query AST, as `/parse` returns it."
+              }
+            ],
+            "default": null
+          },
+          "hidden": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Include torrents a filter rule hid (§20.3), as `/search`.",
+            "default": null
+          },
+          "lease": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A search response's `next_cursor`: count the same index snapshot\nas its results. Send the same `q`, `sort` and `hidden` with it.\nWithout one, the index serving now.",
+            "default": null
+          },
+          "limits": {
+            "type": "object",
+            "description": "Values listed per facet: 8 by default, 1–100.",
+            "default": {},
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "example": {
+              "ext": 20
+            }
+          },
+          "q": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The query text, as `/search` takes it. Send `q` or `ast`, not\nboth.",
+            "default": null
+          },
+          "sort": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The search's sort; it doesn't change the counts, but a `lease`\nis checked against it.",
+            "default": null
+          },
+          "tz": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The user's zone for `time:`, in minutes east of UTC (−840 to\n840), as `/search`; 0 by default.",
+            "default": null
+          }
+        },
+        "additionalProperties": false
+      },
+      "FacetsResponse": {
+        "type": "object",
+        "description": "`GET`/`POST /facets`. Counts are disjunctive: a facet's counts ignore\nthe query's own clauses on that facet (architecture §16, \"B6\").",
+        "required": [
+          "backfill_before",
+          "buckets",
+          "canonical",
+          "facets",
+          "histograms",
+          "sample_rate",
+          "sampled",
+          "took_ms",
+          "total",
+          "total_approx",
+          "unavailable"
+        ],
+        "properties": {
+          "backfill_before": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When the crawler first ran (Unix seconds); discovered bins that\nend by then are `backfill`. Null when the store doesn't know."
+          },
+          "buckets": {
+            "$ref": "#/components/schemas/SwarmBuckets",
+            "description": "The swarm buckets: null until swarm health is in the index (M4),\nnever zeros."
+          },
+          "canonical": {
+            "type": "string",
+            "description": "The query as the server understood it."
+          },
+          "facets": {
+            "type": "object",
+            "description": "Term facets by name: `type`, `ext`, `res`, `category`, `lang`,\n`group`, `codec`, `audio`, `hdr`, `private`, `v2`, `has`,\n`ambiguous`, `imported`, `backfill`, and `adult` when there are\nadult subtypes to list.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/TermFacet"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "histograms": {
+            "type": "object",
+            "description": "`size`, `discovered` and `year`.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Histogram"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "sample_rate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The share of the documents a sampled group visited (for the \"≈\"\nnote); null when nothing was sampled."
+          },
+          "sampled": {
+            "type": "boolean",
+            "description": "Some group was computed on a sample (above 1,000,000 matches, or\n300,000 when a segment holds more than 300,000 torrents)."
+          },
+          "took_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "total": {
+            "type": "integer",
+            "description": "The search's result count, as `/search` reports it.",
+            "minimum": 0
+          },
+          "total_approx": {
+            "type": "boolean"
+          },
+          "unavailable": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Groups this index can't serve: fields an older index lacks while\nit's rebuilt, and the swarm buckets until M4."
+          }
+        }
+      },
       "FileEntry": {
         "type": "object",
         "description": "One file of a torrent.",
@@ -3308,6 +3732,70 @@
             "items": {
               "$ref": "#/components/schemas/FixtureCounts"
             }
+          }
+        }
+      },
+      "Histogram": {
+        "type": "object",
+        "description": "A histogram with explicit bins; empty bins are present with count 0.",
+        "required": [
+          "approx",
+          "bins",
+          "missing",
+          "unit"
+        ],
+        "properties": {
+          "approx": {
+            "type": "boolean"
+          },
+          "bins": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HistogramBin"
+            }
+          },
+          "missing": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Matches without a value (no year parsed); the bins plus this sum\nto the result count.",
+            "minimum": 0
+          },
+          "unit": {
+            "type": "string",
+            "description": "What the edges measure: `bytes`; `hour`, `day`, `week` (from a\nThursday), `month` or `year` in UTC seconds (`discovered`, whose\nfirst and last bins may be irregular edge bins); or `year` (the\nrelease year)."
+          }
+        }
+      },
+      "HistogramBin": {
+        "type": "object",
+        "required": [
+          "backfill",
+          "count",
+          "hi",
+          "lo"
+        ],
+        "properties": {
+          "backfill": {
+            "type": "boolean",
+            "description": "Ends by the crawler's first run (`backfill_before`)."
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "hi": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Exclusive; null for the open top bin."
+          },
+          "lo": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Inclusive."
           }
         }
       },
@@ -3843,6 +4331,7 @@
       "QuarantineEntry": {
         "type": "object",
         "required": [
+          "adult_hold",
           "at",
           "expires_at",
           "hash",
@@ -3850,13 +4339,18 @@
           "sealed"
         ],
         "properties": {
+          "adult_hold": {
+            "type": "boolean",
+            "description": "Held only because you relabelled it adult (a correction or a\nclassification rule) and the Adult-only core caught it: at\n`expires_at` it becomes a tombstone rather than being released."
+          },
           "at": {
             "type": "integer",
             "format": "int64"
           },
           "expires_at": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "When its sealed name is deleted and its quarantine ends."
           },
           "hash": {
             "type": "string"
@@ -3875,6 +4369,7 @@
         "description": "`GET /filters/queue`: quarantine (never with names) and the replay\nwindow's decisions per rule.",
         "required": [
           "decisions_30d",
+          "next_cursor",
           "quarantine"
         ],
         "properties": {
@@ -3883,6 +4378,13 @@
             "items": {
               "$ref": "#/components/schemas/DecisionCount"
             }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The next page of quarantine, if there is one: pass as `cursor`."
           },
           "quarantine": {
             "type": "array",
@@ -4343,6 +4845,13 @@
           }
         }
       },
+      "SearchNotice": {
+        "type": "string",
+        "description": "A note on what a search left out.",
+        "enum": [
+          "adult_hidden"
+        ]
+      },
       "SearchRequest": {
         "type": "object",
         "description": "`POST /search`'s body, and `GET /search`'s parameters (where `ast` is\nrefused: send an AST with POST).",
@@ -4445,6 +4954,7 @@
           "hits",
           "limit",
           "next_cursor",
+          "notices",
           "offset",
           "stemmed",
           "took_ms",
@@ -4472,6 +4982,13 @@
               "null"
             ],
             "description": "Pass as `cursor` for the next page, read from the same index\nsnapshot (§8); null on the last page. Opaque, URL-safe, at most\n256 characters, valid for 10 minutes after its last use."
+          },
+          "notices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchNotice"
+            },
+            "description": "What the server left out of these results, for the UI to say:\n`adult_hidden` when the query asks for Adult (`type:adult`,\n`adult:…`) while \"Show adult content\" is off, so it matched\nnothing adult (§20.9)."
           },
           "offset": {
             "type": "integer",
@@ -4984,6 +5501,36 @@
           }
         }
       },
+      "SwarmBuckets": {
+        "type": "object",
+        "description": "Seeders and trackers reporting, as `≥1`, `≥5`, `≥50` and\n`never_scraped` values (§10.4).",
+        "required": [
+          "seeders",
+          "trackers"
+        ],
+        "properties": {
+          "seeders": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TermFacet"
+              }
+            ]
+          },
+          "trackers": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TermFacet"
+              }
+            ]
+          }
+        }
+      },
       "SwarmHistory": {
         "type": "object",
         "description": "A torrent's swarm history (`docs/metrics.md` §7.2).",
@@ -5074,6 +5621,41 @@
           }
         }
       },
+      "TermFacet": {
+        "type": "object",
+        "description": "One term facet.",
+        "required": [
+          "approx",
+          "distinct",
+          "other",
+          "values"
+        ],
+        "properties": {
+          "approx": {
+            "type": "boolean",
+            "description": "Computed on a sample: show the counts with \"≈\"."
+          },
+          "distinct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Distinct values with a count, listed or not.",
+            "minimum": 0
+          },
+          "other": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The counts of the values not listed, summed (a torrent with two\nsuch values counts twice).",
+            "minimum": 0
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FacetValue"
+            },
+            "description": "The top values by count (ties by value), then any value the query\nselects or excludes that isn't among them. Flags list `yes` and\n`no`."
+          }
+        }
+      },
       "TestBody": {
         "type": "object",
         "description": "`POST /filters/test`: a draft rule and examples to try it on.",
@@ -5149,6 +5731,54 @@
               "type": "string"
             },
             "description": "Rules in shadow mode that would have decided."
+          }
+        }
+      },
+      "TombstoneEntry": {
+        "type": "object",
+        "required": [
+          "adult_hold",
+          "at",
+          "hash",
+          "rule"
+        ],
+        "properties": {
+          "adult_hold": {
+            "type": "boolean",
+            "description": "Left by an adult hold's quarantine at the 30-day purge."
+          },
+          "at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          }
+        }
+      },
+      "Tombstones": {
+        "type": "object",
+        "description": "`GET /filters/tombstones`: dropped torrents, by hash and rule (no\nnames), so one can be found and released.",
+        "required": [
+          "next_cursor",
+          "tombstones"
+        ],
+        "properties": {
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The next page, if there is one: pass as `cursor`."
+          },
+          "tombstones": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TombstoneEntry"
+            }
           }
         }
       },

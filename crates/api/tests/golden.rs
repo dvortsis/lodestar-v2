@@ -227,6 +227,7 @@ fn fixture() -> Fixture {
             hot: None,
             events: None,
             settings: None,
+            adult: Default::default(),
         }),
     );
     let hashes = infos
@@ -692,6 +693,7 @@ fn quarantine(f: &Fixture, hashes: &[[u8; 20]], rule: &str) {
             evidence: &[],
             at: now(),
             expires_at: now() + 86_400,
+            adult_hold: false,
         })
         .collect();
     f.api
@@ -1162,6 +1164,7 @@ async fn filters_without_an_index_or_filters() {
                 hot: None,
                 events: None,
                 settings: None,
+                adult: Default::default(),
             }),
         )
     };

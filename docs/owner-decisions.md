@@ -260,9 +260,71 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
    - The app shows a **warning matched to how strict the chosen lists are**, for example a list that would hide a large share of the DHT.
    - The owner didn't address the refresh mechanics (24 h refresh; holding a version that is empty, shrinks by more than half or grows tenfold); they stay as designed in §20.13.
 10. **Riverstone stays exactly as chosen.** The §10.18 claim about colour-blind distinctness was wrong and is corrected. The non-colour cues (2 px gaps, fixed order, labels, the "High-legibility data" patterns option) carry the difference.
+11. **Users control what is logged** (owner, 2026-10-22, settings session: "Allow user control over what is actually logged").
+    - Every log event and every kind of data in a line can be switched by the user. By default there are no torrent specifics (architecture §12.1).
+    - Asked whether the items otherwise never logged should be controllable too, the owner chose **"Allow both"**:
+      - **Peer activity** (a peer address together with a torrent) and **Filter change details** (which rule, term or exception changed) may be logged;
+      - each is **opt-in, off by default, time-limited and shown with a warning**;
+      - they're written only to the local log file and live log.
+    - This narrows "No profiles of people" (§1.9.7) and the no-audit-log decisions (§1.8.8, §1.8.9) for the log only, while the user has opted in. Outside that, they stand unchanged.
+    - **Secrets are never logged.** The names of sealed (quarantined or dropped) items stay unloggable as well; they weren't part of the question, and revealing one keeps §20.11's warning and password.
+12. **Lodestar's licence is AGPL-3.0-or-later** (owner, 2026-10-22, settings session). The owner said "This app will stay open source" and asked for the most appropriate licence. The owner chose the recommended **AGPL-3.0** over GPL-3.0, MPL-2.0 and MIT/Apache-2.0.
+    - **Why:** Lodestar is a self-hosted network service. The AGPL makes anyone who runs a modified version for others over a network offer them its source, so every fork stays open; plain GPL doesn't cover hosted forks. The same choice is made by comparable self-hosted apps (Immich, Mastodon, Nextcloud, Grafana).
+    - **Applied:**
+      - `LICENSE` holds the full text;
+      - `license = "AGPL-3.0-or-later"` is set in `[workspace.package]` (every crate inherits it), in `fuzz/` and in `web/package.json`;
+      - the README has a licence section.
+    - **The About screen's "Source code for this version" link** is the offer of source the AGPL requires (architecture §10.10.13).
+    - **Brand assets** (the name as a product name, the logos, the mascot, the scenes and the icons) are outside the AGPL: all rights reserved, usable unmodified to refer to Lodestar (`brand/LICENSE.md`).
+    - **Dependency allowlist** *(detail added by the settings session to carry out this decision, not the owner's words; architecture §16)*. It's enforced by CI, with B2c's licence generation, and applies to shipped components only:
+      - **Allowed:** MIT, MIT-0, Apache-2.0, BSD-2/3-Clause, ISC, Zlib, 0BSD, BSL-1.0, BlueOak-1.0.0, Unicode-3.0, MPL-2.0, CC0-1.0, OFL-1.1 (fonts, shipped as separate files) and the GPL-3.0/AGPL-3.0 family.
+      - Packages with no licence field go in a reviewed overrides file. The list is generated per shipped target, so platform-only crates drop out (architecture §10.10.13).
+      - **Refused:** GPL-2.0-only, SSPL, non-commercial and proprietary licences.
+      - Companions such as qBittorrent run as separate programs and aren't affected.
+13. **Easy auto-update, optional at each release level** (owner, 2026-10-22, settings session: "Can we build in easy auto capability and make it optional at various release levels?", meaning auto-update). Architecture §12.2 has the details. This supersedes "Lodestar never updates itself" and the check-only design.
+    - **Off until the user chooses it.** Checking contacts GitHub, and the system is offline by default (§1.2.3). The first-run wizard asks.
+    - **The choices:**
+      - **Check and notify**, or **Install automatically** at one of three levels: **Fixes only** (recommended), **Fixes and features**, or **All releases**;
+      - **Always install security fixes**;
+      - a channel: **Stable**, **Beta** or **Nightly**.
+    - **Never automatic:** releases that need manual steps.
+    - **Every update** is signed and verified, waits for an install window, is health-checked afterwards, and is rolled back automatically on failure.
+    - **"No telemetry, ever"** still holds: checking sends nothing about the installation.
+    - **Signing keys** (created by the owner, 2026-10-22):
+      - a **release key** (`02910813433E81E0`), stored as the `RELEASE_SIGNING_KEY` secret of the GitHub `release` environment;
+      - an offline, password-protected **recovery key** (`67922DDF005FD310`) that only signs key changes.
+
+      The public keys are in `packaging/keys/`.
+14. **User documentation is written for people who can install an app from the Unraid app store but may not know how to set it up** (owner, 2026-10-22, settings session: "add rules to write documentation for moderately-tech-savvy users, rather than users who actually know what they're doing. That means explaining things more, create/ provide diagrams and screenshots when possible").
+    - The rules are in the project skill `user-docs` (`.claude/skills/user-docs/SKILL.md`), referenced from `CLAUDE.md` and `runner/standards.md` §4b.
+    - **The rules:**
+      - explain why before how, and define every term on first use;
+      - one action per step, with a check after each change;
+      - per-platform sections;
+      - warnings, with the undo, before risky steps;
+      - "If something went wrong" on every guide;
+      - screenshots for every Lodestar screen a guide uses, captured automatically from fixture data;
+      - Mermaid diagrams for anything that flows or connects, each with a text equivalent.
+    - **The audience, refined the same day:** someone who can install an app from the Unraid app store but may not know how to set it up. They may be unfamiliar with Docker's architecture, with Windows' security features and limits, and with good security and safety practice. *"This user should be guided, in a plain matter-of-fact way, without being too wordy."*
+      - Every choice shows its recommended, safe answer.
+      - Unsafe options are named plainly, with the alternative.
+      - Background stays brief, collapsed or linked.
+    - **"Use documentation-skills to guide your documentation process"** (owner, the same day). The owner's new `dvortsis/skills/documentation-skills` collection guides the process:
+      - `github-docs` for the guide (its "capable installer" is this audience);
+      - `material-composer` for other materials.
+
+      `user-docs` became a thin Lodestar layer on top of them. It sets the folder (`docs/user/`), the facts, the screenshots, Lodestar's safe choices, and their gates.
+    - **Precedence,** as with `ui-design-skills`: these decisions, then `user-docs`, then the skills.
+    - **Brand:** a `brand/brand.json` profile fixes the fonts the skills would otherwise misdetect.
+    - **Scope:** the README, `docs/user/`, `docs/operations.md`, release notes and in-app help. Developer and contract docs are exempt.
+
+15. **Runner concurrency:** up to 16 Opus code slices and 16 helper slices at once (raised from 4 core / 8 helpers, then doubled the same day). Slices still need disjoint owned paths, and every PR still gets a fresh Opus review before merge.
+16. **Adult-relabel quarantines:** when a user's Is-adult correction or class rule makes the Adult-only child-safety core quarantine a torrent, the sealed name is still purged after 30 days, but the entry then becomes a tombstone (hash and rule only), so the torrent is never fetched again. It can still be released deliberately, with the effect warning and the password.
+17. **Deleted data is overwritten:** SQLite's `secure_delete` is on, so deleted rows (sealed quarantine names, deleted torrents) are zeroed rather than left in free pages that a copy of the data folder could recover.
 
 ## 3. Points still open (not decided by the owner)
 - **Name-pattern blocklists.** The owner said "build those" *(M4, 10-22 03:27:05)*; they were then moved into the §20 rule engine by the approved design PR #27. Assumed satisfied by the rule engine unless the owner says otherwise.
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.
+- **Recovery-key rotation.** The update design (architecture §12.2) treats the offline recovery key as an accepted risk: if it's lost or compromised, the remedy is a new build installed by hand. Whether to add a recovery-key rotation statement (signed by the current recovery key, sequenced, revoking the old one) is the owner's decision; the build runner raised it.
 - **Repository visibility.** The repo is public. The owner created it that way and hasn't commented since.

@@ -10,6 +10,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::routing::get;
 use hmac::{Hmac, KeyInit, Mac};
 use lodestar_classify::{Category, Composition, Record};
+use lodestar_search::query::TagKey;
 use lodestar_search::{
     CancelToken, Cursor, Error as SearchError, Lease, Node, ParseError, Sort, Start, parse,
 };
@@ -19,8 +20,8 @@ use sha2::{Digest, Sha256};
 use utoipa::OpenApi;
 
 use crate::dto::search::{
-    CompositionShare, ParseQuery, ParseResponse, ScoreParts, SearchHit, SearchRequest,
-    SearchResponse,
+    CompositionShare, ParseQuery, ParseResponse, ScoreParts, SearchHit, SearchNotice,
+    SearchRequest, SearchResponse,
 };
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{Json, Query, same_origin_json};
@@ -41,6 +42,135 @@ pub const MAX_LIMIT: usize = 200;
 pub const MAX_WINDOW: usize = 10_000;
 /// Matched files listed per hit for a query with `file:(…)`.
 pub const MATCHED_FILES: usize = 20;
+
+/// Whether "Show adult content" is on (§20.9), read live: the server
+/// hands in a reader over the settings registry's `content` channel, so
+/// a change applies to the next request with no restart. The default,
+/// for tests and tools, keeps Adult hidden.
+#[derive(Clone, Default)]
+pub struct AdultVisibility(Option<Arc<dyn Fn() -> bool + Send + Sync>>);
+
+impl AdultVisibility {
+    /// Follows `shown`, called once per request.
+    pub fn follow(shown: impl Fn() -> bool + Send + Sync + 'static) -> AdultVisibility {
+        AdultVisibility(Some(Arc::new(shown)))
+    }
+
+    /// Whether Adult is shown now.
+    pub fn shown(&self) -> bool {
+        self.0.as_ref().is_some_and(|f| f())
+    }
+}
+
+impl std::fmt::Debug for AdultVisibility {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("AdultVisibility")
+            .field(&self.shown())
+            .finish()
+    }
+}
+
+/// What a search may show of the index, besides what the query asks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Visibility {
+    /// Torrents a filter rule hid are included (`hidden=true`, §20.3).
+    pub hidden: bool,
+    /// Adult torrents are included ("Show adult content", §20.9).
+    pub adult: bool,
+}
+
+/// A query as it runs against the index, with what it left out.
+///
+/// The user's part and the visibility clauses are kept apart because a
+/// visibility clause has the same shape as a user's own (`-type:adult`):
+/// a pass that edits the user's query, like a facet dropping its own
+/// clauses, must never see them. Run [`BaseQuery::query`], or
+/// [`BaseQuery::restrict`] on whatever the pass made of `node`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BaseQuery {
+    /// The user's query, without the torrents a filter rule hid unless
+    /// asked. Never run it on its own.
+    pub node: Node,
+    /// Clauses ANDed onto every query the index runs, after any edit of
+    /// `node` (today: `-type:adult` while Adult is hidden).
+    pub visibility: Vec<Node>,
+    /// What the response tells the user about it.
+    pub notices: Vec<SearchNotice>,
+}
+
+impl BaseQuery {
+    /// `node` as the index runs it.
+    pub fn query(&self) -> Node {
+        self.restrict(self.node.clone())
+    }
+
+    /// `node` (the user's query, or a pass's edit of it) with the
+    /// visibility clauses ANDed on.
+    pub fn restrict(&self, node: Node) -> Node {
+        // The same function `/facets` holds its lease to.
+        lodestar_search::with_filters(node, &self.visibility)
+    }
+}
+
+/// The query every count of the index runs (search, totals, exact
+/// counts, cursors and facets): `ast` without the torrents a filter rule
+/// hid unless `v.hidden` (or it asks about them itself), and without
+/// Adult unless `v.adult`.
+///
+/// Adult is left out whatever the query asks: `type:adult` or `adult:…`
+/// while it's hidden matches nothing and carries the `adult_hidden`
+/// notice. Adult follows the stored, effective class (`type:adult` in
+/// the index), so your Is adult / Not adult corrections apply once the
+/// live indexer picks them up.
+///
+/// Facets (B6) strip their own clauses from `node`, then run
+/// `restrict(stripped)` for every pass, so `type` never counts Adult
+/// while it's hidden.
+pub fn base_query(ast: &Node, v: Visibility) -> BaseQuery {
+    let node = if v.hidden {
+        ast.clone()
+    } else {
+        ast.clone().without_hidden()
+    };
+    let mut visibility = Vec::new();
+    let mut notices = Vec::new();
+    if !v.adult {
+        if asks_for_adult(ast, true) {
+            notices.push(SearchNotice::AdultHidden);
+        }
+        visibility.push(Node::Not {
+            of: Box::new(Node::Tag {
+                key: TagKey::Type,
+                any: vec![ADULT.to_string()],
+            }),
+        });
+    }
+    BaseQuery {
+        node,
+        visibility,
+        notices,
+    }
+}
+
+/// `type:adult`, as the index stores it.
+const ADULT: &str = "adult";
+
+/// Whether a clause that isn't negated asks for Adult (`type:adult`,
+/// `adult:…`). `-type:adult` doesn't.
+fn asks_for_adult(node: &Node, positive: bool) -> bool {
+    match node {
+        Node::Tag {
+            key: TagKey::Type,
+            any,
+        } => positive && any.iter().any(|t| t == ADULT),
+        Node::Tag {
+            key: TagKey::Adult, ..
+        } => positive,
+        Node::And { of } | Node::Or { of } => of.iter().any(|n| asks_for_adult(n, positive)),
+        Node::Not { of } => asks_for_adult(of, !positive),
+        _ => false,
+    }
+}
 
 pub fn routes() -> Router<ApiState> {
     auth::protected(
@@ -75,7 +205,7 @@ pub(crate) async fn parse_query(
     Ok(axum::Json(ParseResponse { ast, canonical }))
 }
 
-fn sort_param(s: Option<&str>) -> ApiResult<Sort> {
+pub(crate) fn sort_param(s: Option<&str>) -> ApiResult<Sort> {
     Ok(match s.unwrap_or("relevance") {
         "relevance" => Sort::Relevance,
         "discovered" | "-discovered" => Sort::Discovered { desc: true },
@@ -164,38 +294,9 @@ async fn run_search(
             "Search is turned off.",
         ));
     };
-    let ast = match (p.ast, p.q) {
-        (Some(ast), None) => {
-            // An AST from a client must be one the parser could produce.
-            let text = ast.to_query();
-            match parse(&text) {
-                Ok(again) if again == ast => ast,
-                _ => {
-                    return Err(ApiError::bad_request(
-                        "invalid_ast",
-                        "That query AST isn't one the parser can produce.",
-                    )
-                    .field("ast"));
-                }
-            }
-        }
-        (None, q) => parse(q.as_deref().unwrap_or("")).map_err(parse_error)?,
-        (Some(_), Some(_)) => {
-            return Err(ApiError::bad_request(
-                "q_and_ast",
-                "Send q or ast, not both.",
-            ));
-        }
-    };
+    let ast = request_ast(p.ast, p.q)?;
     let sort = sort_param(p.sort.as_deref())?;
-    let tz = p.tz.unwrap_or(0);
-    if !TZ_RANGE.contains(&tz) {
-        return Err(ApiError::bad_request(
-            "bad_tz",
-            "tz is minutes east of UTC, from -840 to 840.",
-        )
-        .field("tz"));
-    }
+    let tz = tz_param(p.tz)?;
     let explain = p.explain.unwrap_or(false);
     let limit = p.limit.unwrap_or(50).clamp(1, MAX_LIMIT);
     if p.cursor.is_some() && p.offset.is_some() {
@@ -214,12 +315,14 @@ async fn run_search(
         .field("offset"));
     }
     let (hot, events) = (s.hot.clone(), s.events.clone());
-    let shown = if p.hidden.unwrap_or(false) {
-        ast.clone()
-    } else {
-        ast.clone().without_hidden()
+    let visibility = Visibility {
+        hidden: p.hidden.unwrap_or(false),
+        adult: s.adult.shown(),
     };
-    let fingerprint = fingerprint(&shown, sort);
+    let base = base_query(&ast, visibility);
+    let shown = base.query();
+    let notices = base.notices;
+    let fingerprint = fingerprint(&shown, visibility, sort);
     let client = client_of(headers);
     let cursor = p
         .cursor
@@ -290,6 +393,12 @@ async fn run_search(
         for (i, h) in page.hits.iter().enumerate() {
             // A torrent deleted since indexing just drops out of the page.
             if let Some(row) = store.torrent(h.id as i64).map_err(internal)? {
+                let enrichment = store.enrichment(row.id).map_err(internal)?;
+                // A correction to Is adult reaches the index at the next
+                // commit; until then the stored class still keeps it out.
+                if !visibility.adult && enrichment.as_ref().is_some_and(is_adult) {
+                    continue;
+                }
                 let matched_files = if ast.has_file_clause() {
                     // Positions in the torrent's file list (§8), from the
                     // lease's index.
@@ -316,7 +425,7 @@ async fn run_search(
                         trackers: f64::from(p.trackers),
                     });
                 let mut hit = torrents::hit(&row, h.score, matched_files, swarm, parts);
-                enrich(&mut hit, store.enrichment(row.id).map_err(internal)?);
+                enrich(&mut hit, enrichment);
                 hits.push(hit);
             }
         }
@@ -325,6 +434,7 @@ async fn run_search(
             hits,
             limit,
             next_cursor,
+            notices,
             offset: served as usize,
             stemmed: lease.stemmed(),
             took_ms: started.elapsed().as_secs_f64() * 1000.0,
@@ -336,7 +446,51 @@ async fn run_search(
     .map_err(internal)?
 }
 
-fn search_error(e: SearchError) -> ApiError {
+/// A request's `tz`, minutes east of UTC (0 when absent). `/facets`
+/// takes it too, so `time:` counts the hours `/search` returns.
+pub(crate) fn tz_param(tz: Option<i32>) -> ApiResult<i32> {
+    let tz = tz.unwrap_or(0);
+    if !TZ_RANGE.contains(&tz) {
+        return Err(ApiError::bad_request(
+            "bad_tz",
+            "tz is minutes east of UTC, from -840 to 840.",
+        )
+        .field("tz"));
+    }
+    Ok(tz)
+}
+
+/// A request's query: from `q`, or an `ast` the parser could have
+/// produced. `/facets` reads its query with this and runs it through
+/// [`base_query`] too, so it counts exactly what `/search` returns.
+pub(crate) fn request_ast(ast: Option<Node>, q: Option<String>) -> ApiResult<Node> {
+    let ast = match (ast, q) {
+        (Some(ast), None) => {
+            // An AST from a client must be one the parser could produce.
+            let text = ast.to_query();
+            match parse(&text) {
+                Ok(again) if again == ast => ast,
+                _ => {
+                    return Err(ApiError::bad_request(
+                        "invalid_ast",
+                        "That query AST isn't one the parser can produce.",
+                    )
+                    .field("ast"));
+                }
+            }
+        }
+        (None, q) => parse(q.as_deref().unwrap_or("")).map_err(parse_error)?,
+        (Some(_), Some(_)) => {
+            return Err(ApiError::bad_request(
+                "q_and_ast",
+                "Send q or ast, not both.",
+            ));
+        }
+    };
+    Ok(ast)
+}
+
+pub(crate) fn search_error(e: SearchError) -> ApiError {
     match e {
         SearchError::LeaseExpired => ApiError::new(
             StatusCode::GONE,
@@ -362,12 +516,14 @@ fn bad_cursor() -> ApiError {
     .field("cursor")
 }
 
-/// The search a cursor continues: the query as run (hidden torrents
-/// included or not) and the sort.
-fn fingerprint(shown: &Node, sort: Sort) -> [u8; 8] {
+/// The search a cursor continues: the query as run, what it may show
+/// (hidden torrents, Adult) and the sort. A cursor from before "Show
+/// adult content" changed is refused rather than reading its old
+/// snapshot.
+pub(crate) fn fingerprint(shown: &Node, v: Visibility, sort: Sort) -> [u8; 8] {
     let mut h = Sha256::new();
-    h.update(b"lodestar-search-v1|");
-    h.update(format!("{shown:?}|{sort:?}").as_bytes());
+    h.update(b"lodestar-search-v2|");
+    h.update(format!("{shown:?}|{v:?}|{sort:?}").as_bytes());
     let d = h.finalize();
     let mut out = [0; 8];
     out.copy_from_slice(&d[..8]);
@@ -376,7 +532,7 @@ fn fingerprint(shown: &Node, sort: Sort) -> [u8; 8] {
 
 /// Who holds a lease: the session (leases are capped per client, and
 /// another session's cursor reads as expired).
-fn client_of(headers: &HeaderMap) -> u64 {
+pub(crate) fn client_of(headers: &HeaderMap) -> u64 {
     let session = headers
         .get_all(header::COOKIE)
         .iter()
@@ -432,7 +588,7 @@ fn seal_cursor(c: &Cursor) -> String {
 }
 
 /// Checks a cursor's form, epoch, tag and search, in that order.
-fn open_cursor(text: &str, fingerprint: &[u8; 8]) -> ApiResult<Cursor> {
+pub(crate) fn open_cursor(text: &str, fingerprint: &[u8; 8]) -> ApiResult<Cursor> {
     if text.len() > MAX_CURSOR || text.len() % 2 != 0 {
         return Err(bad_cursor());
     }
@@ -464,7 +620,8 @@ fn open_cursor(text: &str, fingerprint: &[u8; 8]) -> ApiResult<Cursor> {
     if cursor.fingerprint != *fingerprint {
         return Err(ApiError::bad_request(
             "bad_cursor",
-            "That cursor belongs to another search: send the same q, sort and hidden with it.",
+            "That cursor belongs to another search: send the same q, sort and hidden with it. \
+             If Show adult content changed since, start the search again.",
         )
         .field("cursor"));
     }
@@ -518,6 +675,12 @@ fn shares(c: &Composition) -> Vec<CompositionShare> {
         .collect()
 }
 
+/// Whether a stored classification is Adult (its effective class, your
+/// correction included).
+pub(crate) fn is_adult(e: &Enriched) -> bool {
+    e.content_type == lodestar_classify::ContentType::Adult.code()
+}
+
 /// Fills a hit's classification fields (`docs/metrics.md` §7.1) from the
 /// stored enrichment. Without one, or with a record this build can't
 /// read, they stay null or empty.
@@ -547,4 +710,133 @@ pub(crate) fn unix_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tag(key: TagKey, v: &str) -> Node {
+        Node::Tag {
+            key,
+            any: vec![v.into()],
+        }
+    }
+
+    fn word(w: &str) -> Node {
+        Node::Word {
+            field: lodestar_search::query::TextField::Any,
+            word: w.into(),
+        }
+    }
+
+    fn not(n: Node) -> Node {
+        Node::Not { of: Box::new(n) }
+    }
+
+    /// What B6's `type` facet does to a query: drop its own top-level
+    /// conjuncts, negations included.
+    fn without_type(node: &Node) -> Node {
+        let owns = |n: &Node| match n {
+            Node::Tag { key, .. } => *key == TagKey::Type,
+            Node::Not { of } => matches!(
+                **of,
+                Node::Tag {
+                    key: TagKey::Type,
+                    ..
+                }
+            ),
+            _ => false,
+        };
+        match node {
+            Node::And { of } => Node::And {
+                of: of.iter().filter(|n| !owns(n)).cloned().collect(),
+            },
+            n if owns(n) => Node::All,
+            n => n.clone(),
+        }
+    }
+
+    const HIDDEN: Visibility = Visibility {
+        hidden: true,
+        adult: false,
+    };
+
+    #[test]
+    fn a_facet_pass_cannot_strip_adult_visibility() {
+        let no_adult = not(tag(TagKey::Type, ADULT));
+        for ast in [
+            Node::All,
+            tag(TagKey::Type, "movie"),
+            not(tag(TagKey::Type, ADULT)),
+            Node::And {
+                of: vec![word("dark"), tag(TagKey::Type, ADULT)],
+            },
+        ] {
+            let base = base_query(&ast, HIDDEN);
+            assert_eq!(base.visibility, vec![no_adult.clone()], "{ast:?}");
+            let pass = base.restrict(without_type(&base.node));
+            let kept = match &pass {
+                Node::And { of } => of.contains(&no_adult),
+                n => *n == no_adult,
+            };
+            assert!(kept, "{ast:?} ran as {pass:?}");
+        }
+    }
+
+    #[test]
+    fn the_query_is_the_users_with_visibility_anded_on() {
+        let ast = word("dark");
+        let base = base_query(&ast, HIDDEN);
+        assert_eq!(base.node, ast);
+        assert_eq!(
+            base.query(),
+            Node::And {
+                of: vec![ast.clone(), not(tag(TagKey::Type, ADULT))],
+            }
+        );
+        let shown = base_query(
+            &ast,
+            Visibility {
+                hidden: true,
+                adult: true,
+            },
+        );
+        assert!(shown.visibility.is_empty());
+        assert_eq!(shown.query(), ast);
+        assert_eq!(
+            base_query(&Node::All, HIDDEN).query(),
+            not(tag(TagKey::Type, ADULT))
+        );
+    }
+
+    /// `/search` and `/facets` take their leases for `query()`; facets
+    /// count `with_filters(node, visibility)` and require the two to be
+    /// the same node.
+    #[test]
+    fn the_query_is_what_facets_hold_a_lease_to() {
+        for v in [false, true].map(|adult| Visibility {
+            hidden: false,
+            adult,
+        }) {
+            for ast in [
+                Node::All,
+                word("dark"),
+                tag(TagKey::Type, "movie"),
+                Node::And {
+                    of: vec![word("dark"), not(tag(TagKey::Type, ADULT))],
+                },
+                Node::Or {
+                    of: vec![word("dark"), word("light")],
+                },
+            ] {
+                let base = base_query(&ast, v);
+                assert_eq!(
+                    base.query(),
+                    lodestar_search::with_filters(base.node.clone(), &base.visibility),
+                    "{ast:?} {v:?}"
+                );
+            }
+        }
+    }
 }

@@ -28,10 +28,11 @@ test.describe('OpenAPI mock', () => {
 
 	test('matches path templates, preferring static segments', async ({ page, mock }) => {
 		mock
-			.on('getFilterQueue', { decisions_30d: [], quarantine: [] })
+			.on('getFilterQueue', { decisions_30d: [], next_cursor: null, quarantine: [] })
 			.on('getFilterPreviewJob', { status: 200, body: { id: 'x' } });
 		expect((await fetchJson(page, '/api/v1/filters/queue')).body).toEqual({
 			decisions_30d: [],
+			next_cursor: null,
 			quarantine: []
 		});
 		expect((await fetchJson(page, '/api/v1/filters/preview/jobs/abc')).body).toEqual({ id: 'x' });

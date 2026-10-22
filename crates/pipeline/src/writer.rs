@@ -237,8 +237,9 @@ impl Writer {
         committing
     }
 
-    /// Removes expired quarantine (its keys become fetchable again) and
-    /// filter hits past their retention.
+    /// Removes expired quarantine (its keys become fetchable again, except
+    /// adult holds, which stay refused as tombstones) and filter hits past
+    /// their retention.
     async fn purge(&mut self) {
         let now = unix_now();
         self.last_purge = now;
@@ -600,6 +601,11 @@ fn transaction(
                 evidence,
                 at: now,
                 expires_at: quarantine_until,
+                // Held by the Adult-only core only because your rule made
+                // it adult: a tombstone when the quarantine ends (§20.9).
+                adult_hold: !shadow
+                    && c.results.fix == Some(true)
+                    && lodestar_filter::reclassify::adult_hold(d),
             }
         })
         .collect();

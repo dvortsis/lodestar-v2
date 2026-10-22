@@ -128,6 +128,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/facets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Facets for query text. To send an AST, POST it. */
+        get: operations["facetsGet"];
+        put?: never;
+        /** Facets for query text or a query AST. */
+        post: operations["facetsPost"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/filters": {
         parameters: {
             query?: never;
@@ -312,6 +330,26 @@ export interface paths {
          *     is stored or logged.
          */
         post: operations["testFilterRule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/filters/tombstones": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Tombstones (dropped torrents) by hash and rule, never with names, in
+         *     pages; `adult=true` lists only adult holds.
+         */
+        get: operations["getFilterTombstones"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1147,6 +1185,117 @@ export interface components {
             /** @description The rule it releases from. */
             rule: string;
         };
+        FacetValue: {
+            /** Format: int64 */
+            count: number;
+            /** @description The query excludes it (`-res:480p`). */
+            excluded: boolean;
+            /** @description The query selects it. */
+            selected: boolean;
+            value: string;
+        };
+        /**
+         * @description `POST /facets`'s body. `GET /facets` takes the same fields as query
+         *     parameters, with `limit.<facet>=` for `limits` (and no `ast`).
+         */
+        FacetsRequest: {
+            /** @default null */
+            ast: null | components["schemas"]["AstNode"];
+            /**
+             * @description Include torrents a filter rule hid (§20.3), as `/search`.
+             * @default null
+             */
+            hidden: boolean | null;
+            /**
+             * @description A search response's `next_cursor`: count the same index snapshot
+             *     as its results. Send the same `q`, `sort` and `hidden` with it.
+             *     Without one, the index serving now.
+             * @default null
+             */
+            lease: string | null;
+            /**
+             * @description Values listed per facet: 8 by default, 1–100.
+             * @default {}
+             * @example {
+             *       "ext": 20
+             *     }
+             */
+            limits: {
+                [key: string]: number;
+            };
+            /**
+             * @description The query text, as `/search` takes it. Send `q` or `ast`, not
+             *     both.
+             * @default null
+             */
+            q: string | null;
+            /**
+             * @description The search's sort; it doesn't change the counts, but a `lease`
+             *     is checked against it.
+             * @default null
+             */
+            sort: string | null;
+            /**
+             * Format: int32
+             * @description The user's zone for `time:`, in minutes east of UTC (−840 to
+             *     840), as `/search`; 0 by default.
+             * @default null
+             */
+            tz: number | null;
+        };
+        /**
+         * @description `GET`/`POST /facets`. Counts are disjunctive: a facet's counts ignore
+         *     the query's own clauses on that facet (architecture §16, "B6").
+         */
+        FacetsResponse: {
+            /**
+             * Format: int64
+             * @description When the crawler first ran (Unix seconds); discovered bins that
+             *     end by then are `backfill`. Null when the store doesn't know.
+             */
+            backfill_before: number | null;
+            /**
+             * @description The swarm buckets: null until swarm health is in the index (M4),
+             *     never zeros.
+             */
+            buckets: components["schemas"]["SwarmBuckets"];
+            /** @description The query as the server understood it. */
+            canonical: string;
+            /**
+             * @description Term facets by name: `type`, `ext`, `res`, `category`, `lang`,
+             *     `group`, `codec`, `audio`, `hdr`, `private`, `v2`, `has`,
+             *     `ambiguous`, `imported`, `backfill`, and `adult` when there are
+             *     adult subtypes to list.
+             */
+            facets: {
+                [key: string]: components["schemas"]["TermFacet"];
+            };
+            /** @description `size`, `discovered` and `year`. */
+            histograms: {
+                [key: string]: components["schemas"]["Histogram"];
+            };
+            /**
+             * Format: double
+             * @description The share of the documents a sampled group visited (for the "≈"
+             *     note); null when nothing was sampled.
+             */
+            sample_rate: number | null;
+            /**
+             * @description Some group was computed on a sample (above 1,000,000 matches, or
+             *     300,000 when a segment holds more than 300,000 torrents).
+             */
+            sampled: boolean;
+            /** Format: double */
+            took_ms: number;
+            /** @description The search's result count, as `/search` reports it. */
+            total: number;
+            total_approx: boolean;
+            /**
+             * @description Groups this index can't serve: fields an older index lacks while
+             *     it's rebuilt, and the swarm buckets until M4.
+             */
+            unavailable: string[];
+        };
         /** @description One file of a torrent. */
         FileEntry: {
             /** @description Any of `padding`, `hidden`, `executable`, `symlink`. */
@@ -1176,6 +1325,40 @@ export interface components {
          */
         Fixtures: {
             core: components["schemas"]["FixtureCounts"][];
+        };
+        /** @description A histogram with explicit bins; empty bins are present with count 0. */
+        Histogram: {
+            approx: boolean;
+            bins: components["schemas"]["HistogramBin"][];
+            /**
+             * Format: int64
+             * @description Matches without a value (no year parsed); the bins plus this sum
+             *     to the result count.
+             */
+            missing: number;
+            /**
+             * @description What the edges measure: `bytes`; `hour`, `day`, `week` (from a
+             *     Thursday), `month` or `year` in UTC seconds (`discovered`, whose
+             *     first and last bins may be irregular edge bins); or `year` (the
+             *     release year).
+             */
+            unit: string;
+        };
+        HistogramBin: {
+            /** @description Ends by the crawler's first run (`backfill_before`). */
+            backfill: boolean;
+            /** Format: int64 */
+            count: number;
+            /**
+             * Format: int64
+             * @description Exclusive; null for the open top bin.
+             */
+            hi: number | null;
+            /**
+             * Format: int64
+             * @description Inclusive.
+             */
+            lo: number;
         };
         /** @description `POST /classify/rules/remove`. */
         IdBody: {
@@ -1391,9 +1574,18 @@ export interface components {
             tombstones: number;
         };
         QuarantineEntry: {
+            /**
+             * @description Held only because you relabelled it adult (a correction or a
+             *     classification rule) and the Adult-only core caught it: at
+             *     `expires_at` it becomes a tombstone rather than being released.
+             */
+            adult_hold: boolean;
             /** Format: int64 */
             at: number;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description When its sealed name is deleted and its quarantine ends.
+             */
             expires_at: number;
             hash: string;
             rule: string;
@@ -1406,6 +1598,8 @@ export interface components {
          */
         Queue: {
             decisions_30d: components["schemas"]["DecisionCount"][];
+            /** @description The next page of quarantine, if there is one: pass as `cursor`. */
+            next_cursor: string | null;
             quarantine: components["schemas"]["QuarantineEntry"][];
         };
         /**
@@ -1627,6 +1821,11 @@ export interface components {
             trackers_reporting: number | null;
         };
         /**
+         * @description A note on what a search left out.
+         * @enum {string}
+         */
+        SearchNotice: "adult_hidden";
+        /**
          * @description `POST /search`'s body, and `GET /search`'s parameters (where `ast` is
          *     refused: send an AST with POST).
          */
@@ -1701,6 +1900,13 @@ export interface components {
              *     256 characters, valid for 10 minutes after its last use.
              */
             next_cursor: string | null;
+            /**
+             * @description What the server left out of these results, for the UI to say:
+             *     `adult_hidden` when the query asks for Adult (`type:adult`,
+             *     `adult:…`) while "Show adult content" is off, so it matched
+             *     nothing adult (§20.9).
+             */
+            notices: components["schemas"]["SearchNotice"][];
             /** @description Hits before this page. */
             offset: number;
             /**
@@ -1957,6 +2163,14 @@ export interface components {
             updated_at: number | null;
             url: string;
         };
+        /**
+         * @description Seeders and trackers reporting, as `≥1`, `≥5`, `≥50` and
+         *     `never_scraped` values (§10.4).
+         */
+        SwarmBuckets: {
+            seeders: null | components["schemas"]["TermFacet"];
+            trackers: null | components["schemas"]["TermFacet"];
+        };
         /** @description A torrent's swarm history (`docs/metrics.md` §7.2). */
         SwarmHistory: {
             daily: components["schemas"]["SwarmSample"][];
@@ -1993,6 +2207,28 @@ export interface components {
             seeders: number;
             url: string;
         };
+        /** @description One term facet. */
+        TermFacet: {
+            /** @description Computed on a sample: show the counts with "≈". */
+            approx: boolean;
+            /**
+             * Format: int64
+             * @description Distinct values with a count, listed or not.
+             */
+            distinct: number;
+            /**
+             * Format: int64
+             * @description The counts of the values not listed, summed (a torrent with two
+             *     such values counts twice).
+             */
+            other: number;
+            /**
+             * @description The top values by count (ties by value), then any value the query
+             *     selects or excludes that isn't among them. Flags list `yes` and
+             *     `no`.
+             */
+            values: components["schemas"]["FacetValue"][];
+        };
         /** @description `POST /filters/test`: a draft rule and examples to try it on. */
         TestBody: {
             query?: string | null;
@@ -2010,6 +2246,23 @@ export interface components {
             draft: boolean | null;
             /** @description Rules in shadow mode that would have decided. */
             shadow: string[];
+        };
+        TombstoneEntry: {
+            /** @description Left by an adult hold's quarantine at the 30-day purge. */
+            adult_hold: boolean;
+            /** Format: int64 */
+            at: number;
+            hash: string;
+            rule: string;
+        };
+        /**
+         * @description `GET /filters/tombstones`: dropped torrents, by hash and rule (no
+         *     names), so one can be found and released.
+         */
+        Tombstones: {
+            /** @description The next page, if there is one: pass as `cursor`. */
+            next_cursor: string | null;
+            tombstones: components["schemas"]["TombstoneEntry"][];
         };
         /**
          * @description What a client subscribes to with `?topics=`.
@@ -2330,6 +2583,63 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    facetsGet: {
+        parameters: {
+            query?: {
+                /** @description The query text, as `/search` takes it. */
+                q?: string;
+                /** @description The search's sort; checked against `lease`. */
+                sort?: string;
+                /** @description Include torrents a filter rule hid (§20.3). */
+                hidden?: boolean;
+                /** @description The user's zone for `time:`, in minutes east of UTC (−840 to 840), as `/search`. */
+                tz?: number;
+                /** @description A search's `next_cursor`: count its index snapshot. Send the same `q`, `sort` and `hidden`. */
+                lease?: string;
+                /** @description Values listed for one facet (`limit.ext=20`): 1–100, 8 by default. */
+                "limit.{facet}"?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacetsResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    facetsPost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FacetsRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacetsResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getFilters: {
         parameters: {
             query?: never;
@@ -2495,7 +2805,12 @@ export interface operations {
     };
     getFilterQueue: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description The previous page's `next_cursor`. */
+                cursor?: string;
+                /** @description Quarantine rows per page: 1–1000, 1000 by default. */
+                limit?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -2556,6 +2871,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TestResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getFilterTombstones: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Only adult holds: torrents held because you relabelled them adult,
+                 *     which the 30-day purge left as tombstones.
+                 */
+                adult?: boolean;
+                /** @description The previous page's `next_cursor`. */
+                cursor?: string;
+                /** @description Tombstones per page: 1–1000, 1000 by default. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Tombstones"];
                 };
             };
             default: components["responses"]["Error"];
@@ -2816,6 +3161,15 @@ export interface operations {
                     "application/json": components["schemas"]["SectionValues"];
                 };
             };
+            /** @description `adult_confirmation_required`: a patch turning on an adult setting without `"confirm_adult": true`; nothing is saved. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -2866,6 +3220,15 @@ export interface operations {
                     "application/json": components["schemas"]["TorrentDetail"];
                 };
             };
+            /** @description `torrent_not_found`, or `adult_hidden`: an Adult torrent while "Show adult content" is off. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -2892,6 +3255,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FilesPage"];
+                };
+            };
+            /** @description `torrent_not_found`, or `adult_hidden`: an Adult torrent while "Show adult content" is off. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
