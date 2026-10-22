@@ -222,7 +222,7 @@
    "pr": 74,
    "attempt": 1,
    "review_rounds": 3,
-   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #74; reviewer started 16:45 | 17:10 r1 FIX: token classes (runner shared fix), dup groups, brush, null delta, dates, int axes. R2 FIX 17:55: computed-style test missing, x-axis tick overlap, showcase in prod (+1.83 kB; move to dev-routes after #76). 18:04 R2 fixes pushed 219eed7; waits on #80 and #76. 20:20 6ad522d dev-routes moved; computed-style tests red until #80 (owner baselines). Blocked on #80. 20:50 R3 FIX: brush external-selection commit, measured tick spacing, PR body. Verified all 6 specs pass with #80. 20:56 b6fc4b1 verified by runner -> APPROVED, merge after #80 lands (computed-style tests). | 22:35 #80 merged; asked W7e to merge main + fix playwright fail (run 39851958635)"
+   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #74; reviewer started 16:45 | 17:10 r1 FIX: token classes (runner shared fix), dup groups, brush, null delta, dates, int axes. R2 FIX 17:55: computed-style test missing, x-axis tick overlap, showcase in prod (+1.83 kB; move to dev-routes after #76). 18:04 R2 fixes pushed 219eed7; waits on #80 and #76. 20:20 6ad522d dev-routes moved; computed-style tests red until #80 (owner baselines). Blocked on #80. 20:50 R3 FIX: brush external-selection commit, measured tick spacing, PR body. Verified all 6 specs pass with #80. 20:56 b6fc4b1 verified by runner -> APPROVED, merge after #80 lands (computed-style tests). | 22:35 #80 merged; asked W7e to merge main + fix playwright fail (run 39851958635) | 22:40 head ba77799 (main merged; playwright fail was #80 token dependency, now 499 pass). Merge on green."
   },
   "W9": {
    "status": "running",
