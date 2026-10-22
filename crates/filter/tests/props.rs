@@ -48,8 +48,9 @@ proptest! {
     }
 }
 
-/// §20.4: under 50 µs per torrent. Run with
-/// `cargo test --release -p lodestar-filter --test props -- --ignored`.
+/// §20.4: under 50 µs per torrent on the reference machine (§3). Run with
+/// `cargo test --release -p lodestar-filter --test props -- --ignored`;
+/// `LODESTAR_BUDGET_US` raises the bound on slower machines.
 #[test]
 #[ignore]
 fn budget() {
@@ -73,12 +74,37 @@ fn budget() {
         files: &files,
         content_type: ContentType::Tv,
     };
+    let budget: u128 = std::env::var("LODESTAR_BUDGET_US")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(50);
     let rounds = 2_000;
     let start = Instant::now();
     for _ in 0..rounds {
         assert!(core.verdict(std::hint::black_box(&item)).is_none());
     }
     let per = start.elapsed() / rounds;
-    println!("{per:?} per 30-file torrent");
-    assert!(per.as_micros() < 50, "{per:?}");
+    println!("{per:?} per 30-file torrent (core)");
+    assert!(per.as_micros() < budget, "{per:?}");
+
+    // The whole engine with every pack on, reading the classification.
+    let mut engine = lodestar_filter::Engine::new(core);
+    engine.packs = lodestar_filter::PackSwitches::all();
+    let class = lodestar_classify::classify(item.name, item.files);
+    let facts = lodestar_filter::Facts {
+        class: &class,
+        size: 45_000_000_000,
+        piece_len: 1 << 22,
+        flags: 0,
+        discovered_at: 0,
+        now: 0,
+    };
+    let start = Instant::now();
+    for _ in 0..rounds {
+        let v = engine.judge(std::hint::black_box(&item), Some(&facts), 0);
+        assert!(v.decision.is_none());
+    }
+    let per = start.elapsed() / rounds;
+    println!("{per:?} per 30-file torrent (engine, packs on)");
+    assert!(per.as_micros() < budget, "{per:?}");
 }

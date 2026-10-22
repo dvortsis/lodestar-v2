@@ -16,6 +16,7 @@ mod filter;
 pub mod history;
 pub mod hot;
 mod insights;
+mod rules;
 mod schema;
 mod sources;
 mod subscriptions;
@@ -32,10 +33,11 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 pub use compress::{BlobCodec, Codec, Compressed};
 pub use filetree::{CodecError, FileTree};
-pub use filter::{FilterHit, FilterState, Filtered, Held, Quarantined};
+pub use filter::{FilterHit, FilterState, Filtered, Held, Quarantined, SHADOW};
 pub use history::{History, trend};
 pub use hot::{Col, HotColumns, NEVER, SwarmHot};
 pub use insights::{CohortCount, Counter, Event};
+pub use rules::{ExceptionRow, OverrideRow, RuleRow, RuleSet};
 pub use rusqlite;
 pub use sources::{MAX_SOURCES, QueuedKey, SourceId, SourceRow, SourceState};
 pub use subscriptions::{NewSubscription, Refresh, Subscription};
@@ -65,6 +67,12 @@ pub mod flags {
     /// it: never sent to public DHT lookups, trackers or scrapes. A public
     /// sighting clears it; nothing sets it on a stored public torrent.
     pub const PRIVATE_SOURCE: i64 = 1 << 10;
+    /// A filter rule hides it from search (§20.3).
+    pub const HIDDEN: i64 = 1 << 11;
+    /// A filter rule demotes it in ranking.
+    pub const DEMOTED: i64 = 1 << 12;
+    /// A filter rule flagged it for review.
+    pub const FLAGGED: i64 = 1 << 13;
 }
 
 #[derive(Debug)]
