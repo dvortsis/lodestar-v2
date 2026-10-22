@@ -11,7 +11,8 @@
 		onLoadMore,
 		onActiveChange,
 		onActivate,
-		onKey
+		onKey,
+		resetKey
 	}: {
 		items: Item[];
 		hasMore?: boolean;
@@ -19,7 +20,8 @@
 		onLoadMore?: () => void;
 		onActiveChange?: (i: number, item: Item) => void;
 		onActivate?: (i: number, item: Item) => void;
-		onKey?: (e: KeyboardEvent, ctx: { index: number; item: Item }) => void;
+		onKey?: (e: KeyboardEvent, ctx: { index: number; item: Item; onRow: boolean }) => void;
+		resetKey?: unknown;
 	} = $props();
 	let activeIndex = $state(0);
 </script>
@@ -39,6 +41,7 @@
 	{onActiveChange}
 	{onActivate}
 	{onKey}
+	{resetKey}
 >
 	{#snippet row(item, index, state)}
 		<div data-active={state.active} data-row={index}>{item.name}</div>

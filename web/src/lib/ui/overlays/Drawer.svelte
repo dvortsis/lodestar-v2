@@ -3,7 +3,7 @@
 	// to the title on open; Esc (with focus inside) closes it and returns focus to the invoking row.
 	// The width is controlled: the feature persists it from `onWidthChange` (no storage in here).
 	import type { Snippet } from 'svelte';
-	import { drawerSlide } from './motion';
+	import { drawerSlide, tokenPx } from './motion';
 	import IconX from '~icons/ph/x';
 	import './overlays.css';
 
@@ -16,7 +16,7 @@
 		children: Snippet;
 		/** Actions rendered beside the title (primary action, menu). */
 		actions?: Snippet;
-		/** Width in px; clamped to [minWidth, maxWidth]. */
+		/** Width in px; clamped to [minWidth, maxWidth]. Defaults to `--drawer-overlay-width`. */
 		width?: number;
 		minWidth?: number;
 		maxWidth?: number;
@@ -32,15 +32,18 @@
 		resizeLabel,
 		children,
 		actions,
-		width = 560,
-		minWidth = 480,
-		maxWidth = 640,
+		width: widthProp,
+		minWidth: minProp,
+		maxWidth: maxProp,
 		onWidthChange,
 		onClose,
 		returnFocus
 	}: Props = $props();
 
 	const STEP = 16;
+	const width = $derived(widthProp ?? tokenPx('--drawer-overlay-width', 560));
+	const minWidth = $derived(minProp ?? tokenPx('--drawer-min-width', 480));
+	const maxWidth = $derived(maxProp ?? tokenPx('--drawer-max-width', 640));
 	let titleEl = $state<HTMLElement>();
 	let invoker: Element | null = null;
 	let dragWidth = $state<number | null>(null);
@@ -64,6 +67,9 @@
 
 	function onKeydown(event: KeyboardEvent) {
 		if (event.key === 'Escape' && !event.defaultPrevented) {
+			// Esc belongs to a tooltip, menu or popover opened from inside the drawer first.
+			const target = event.target as Element;
+			if (target.closest('[data-state$="open"], [aria-expanded="true"]')) return;
 			event.preventDefault();
 			close();
 		}
@@ -94,6 +100,7 @@
 	}
 
 	function onHandleDown(event: PointerEvent) {
+		if (event.button !== 0) return;
 		const handle = event.currentTarget as HTMLElement;
 		const startX = event.clientX;
 		const startWidth = shown;
@@ -122,7 +129,7 @@
 		in:drawerSlide
 		out:drawerSlide={{ out: true }}
 		style:width="{shown}px"
-		class="relative flex h-full max-w-full shrink-0 flex-col border-s border-base-300 bg-base-100 text-body text-base-content"
+		class="relative flex h-full max-w-full shrink-0 flex-col rounded-s-sheet border-s border-base-300 bg-base-100 text-body text-base-content"
 		data-testid="drawer"
 	>
 		<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->

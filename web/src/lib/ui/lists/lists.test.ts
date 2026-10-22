@@ -8,6 +8,8 @@ import type { FlatNode } from './tree-model';
 
 beforeAll(() => stubLayout());
 
+const rowBox = (n: number) =>
+	document.querySelector(`[role="row"][data-index="${n}"] input`) as HTMLInputElement;
 const key = (el: Element, k: string, init: KeyboardEventInit = {}) =>
 	fireEvent.keyDown(el, { key: k, ...init });
 const active = () => document.activeElement as HTMLElement;
@@ -192,7 +194,7 @@ describe('Table', () => {
 	it('selects rows with the checkbox, with shift for a range, and select-all', async () => {
 		const onSelected = vi.fn();
 		render(TableHarness, { rows: torrents, onSelected });
-		const box = (n: number) => screen.getByLabelText(`Select Torrent ${n}`);
+		const box = (n: number) => rowBox(n);
 		await fireEvent.click(box(1));
 		expect(screen.getByTestId('selected').textContent).toBe('t1');
 		await fireEvent.click(box(4), { shiftKey: true });
@@ -212,7 +214,7 @@ describe('Table', () => {
 
 	it('marks selected rows with aria-selected', async () => {
 		render(TableHarness, { rows: torrents });
-		await fireEvent.click(screen.getByLabelText('Select Torrent 0'));
+		await fireEvent.click(rowBox(0));
 		expect(screen.getAllByRole('row')[1]!.getAttribute('aria-selected')).toBe('true');
 		expect(screen.getAllByRole('row')[2]!.getAttribute('aria-selected')).toBe('false');
 	});
@@ -366,12 +368,14 @@ describe('Tree', () => {
 		items()[0]!.focus();
 		await key(active(), '*');
 		await waitFor(() => expect(items().length).toBeGreaterThan(3));
-		const bravoBox = screen.getByLabelText('Select Bravo') as HTMLInputElement;
+		const boxOf = (n: string) =>
+			items()
+				.find((i) => label(i).includes(n))!
+				.querySelector('input') as HTMLInputElement;
+		const bravoBox = boxOf('Bravo');
 		expect(bravoBox.indeterminate).toBe(false);
-		await fireEvent.click(screen.getByLabelText('Select z.nfo'));
-		await waitFor(() =>
-			expect((screen.getByLabelText('Select Alpha') as HTMLInputElement).indeterminate).toBe(true)
-		);
+		await fireEvent.click(boxOf('z.nfo'));
+		await waitFor(() => expect(boxOf('Alpha').indeterminate).toBe(true));
 	});
 
 	it('renders an empty tree', () => {
@@ -391,5 +395,122 @@ describe('Tree', () => {
 		expect(performance.now() - t0).toBeLessThan(3000);
 		expect(items().length).toBeGreaterThan(5);
 		expect(items().length).toBeLessThan(40);
+	});
+});
+
+describe('review follow-ups', () => {
+	it('PageDown and PageUp move by a page', async () => {
+		render(ListHarness, { items: names(100) });
+		const first = screen.getAllByRole('option')[0]!;
+		first.focus();
+		await key(first, 'PageDown');
+		await waitFor(() => expect(screen.getByTestId('active').textContent).toBe('9'));
+		await key(active(), 'PageUp');
+		await waitFor(() => expect(screen.getByTestId('active').textContent).toBe('0'));
+	});
+
+	it('rows are not measured: they get their fixed height', () => {
+		render(ListHarness, { items: names(5) });
+		for (const o of screen.getAllByRole('option')) expect(o.style.height).toBe('36px');
+	});
+
+	it('load more fires again after resetKey changes with the same length', async () => {
+		const onLoadMore = vi.fn();
+		const { rerender } = render(ListHarness, {
+			items: names(3),
+			hasMore: true,
+			onLoadMore,
+			resetKey: 'a'
+		});
+		await waitFor(() => expect(onLoadMore).toHaveBeenCalledTimes(1));
+		await rerender({ items: names(3, 'b'), hasMore: true, onLoadMore, resetKey: 'b' });
+		await waitFor(() => expect(onLoadMore).toHaveBeenCalledTimes(2));
+	});
+
+	it('load more retries after a page that ended without new rows', async () => {
+		const onLoadMore = vi.fn();
+		const props = { items: names(3), hasMore: true, onLoadMore };
+		const { rerender } = render(ListHarness, props);
+		await waitFor(() => expect(onLoadMore).toHaveBeenCalledTimes(1));
+		await rerender({ ...props, loadingMore: true });
+		await rerender({ ...props, loadingMore: false });
+		await waitFor(() => expect(onLoadMore).toHaveBeenCalledTimes(2));
+	});
+
+	it('Table: the shift-range anchor follows its row across a prepend', async () => {
+		const { rerender } = render(TableHarness, { rows: torrents });
+		await fireEvent.click(rowBox(3));
+		const fresh = [
+			{ id: 'n1', name: 'New 1', size: '1 B', seeders: '1' },
+			{ id: 'n2', name: 'New 2', size: '1 B', seeders: '1' }
+		];
+		await rerender({ rows: [...fresh, ...torrents] });
+		// t5 now sits at index 7; the anchor t3 at index 5.
+		await fireEvent.click(rowBox(7), { shiftKey: true });
+		expect(screen.getByTestId('selected').textContent).toBe('t3,t4,t5');
+	});
+
+	it('Table: Shift+Space extends the selection from the anchor', async () => {
+		render(TableHarness, { rows: torrents });
+		const row0 = screen.getAllByRole('row')[1]!;
+		row0.focus();
+		await key(row0, ' ');
+		for (let i = 0; i < 3; i++) {
+			await key(active(), 'ArrowDown');
+			await waitFor(() => expect(active().dataset.index).toBe(String(i + 1)));
+		}
+		await key(active(), ' ', { shiftKey: true });
+		expect(screen.getByTestId('selected').textContent).toBe('t0,t1,t2,t3');
+	});
+
+	it('Table: aria-rowcount is -1 while more rows can load', () => {
+		render(TableHarness, { rows: torrents, hasMore: true });
+		expect(screen.getByRole('grid').getAttribute('aria-rowcount')).toBe('-1');
+	});
+
+	it('Table: a required column that is hidden can be re-enabled', async () => {
+		render(TableHarness, { rows: torrents, initialVisible: ['size', 'seeders'] });
+		await fireEvent.click(screen.getByRole('button', { name: 'Columns' }));
+		const name = (await screen.findByLabelText('Name', { selector: 'input' })) as HTMLInputElement;
+		expect(name.disabled).toBe(false);
+	});
+
+	it('Table: clicking a row checkbox keeps the arrow keys working', async () => {
+		render(TableHarness, { rows: torrents });
+		await fireEvent.click(rowBox(1));
+		await waitFor(() => expect(active().dataset.index).toBe('1'));
+		expect(active().getAttribute('role')).toBe('row');
+		await key(active(), 'ArrowDown');
+		await waitFor(() => expect(active().dataset.index).toBe('2'));
+	});
+
+	it('Tree: clicking a checkbox makes its row active and arrows keep working', async () => {
+		render(TreeHarness, { nodes: sample });
+		const box = items()[1]!.querySelector('input') as HTMLInputElement;
+		await fireEvent.click(box);
+		await waitFor(() => expect(label(active())).toContain('Charlie'));
+		await key(active(), 'ArrowDown');
+		await waitFor(() => expect(label(active())).toContain('Delta'));
+		// The click toggled the checkbox without expanding or activating the row.
+		expect(items().length).toBe(3);
+	});
+
+	it('Tree: rows are named by their text only (the checkbox is hidden from AT)', () => {
+		render(TreeHarness, { nodes: sample });
+		const box = items()[0]!.querySelector('input') as HTMLInputElement;
+		expect(box.getAttribute('aria-hidden')).toBe('true');
+		expect(items()[0]!.getAttribute('aria-checked')).toBe('false');
+	});
+
+	it('Tree: accepts a precomputed index', () => {
+		render(TreeHarness, { nodes: sample, precomputed: true });
+		expect(items()).toHaveLength(3);
+		expect(items()[0]!.getAttribute('aria-setsize')).toBe('3');
+	});
+
+	it('Tree: indents with the row-icon token, not off-ramp spacing', () => {
+		render(TreeHarness, { nodes: sample });
+		const inner = items()[0]!.firstElementChild as HTMLElement;
+		expect(inner.style.paddingInlineStart).toContain('--icon-size-row');
 	});
 });

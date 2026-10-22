@@ -75,10 +75,6 @@
 	--ls-slide-out: ls-slide-bottom-out;
 }
 
-.ls-drawer {
-	animation: ls-slide-right-in var(--duration-drawer-in) var(--ease-out);
-}
-
 /* Reduced motion keeps only a short opacity crossfade. */
 @media (prefers-reduced-motion: reduce) {
 	.ls-pop[data-state='delayed-open'],
@@ -86,8 +82,7 @@
 	.ls-pop[data-state='open'],
 	.ls-overlay[data-state='open'],
 	.ls-dialog[data-state='open'],
-	.ls-sheet[data-state='open'],
-	.ls-drawer {
+	.ls-sheet[data-state='open'] {
 		animation: ls-fade-in var(--duration-reduced-fade) var(--ease-out);
 	}
 	.ls-pop[data-state='closed'],

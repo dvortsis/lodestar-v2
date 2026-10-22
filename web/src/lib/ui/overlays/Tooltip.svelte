@@ -3,6 +3,7 @@
 	// (§10.13): the trigger keeps its own accessible name.
 	import { Tooltip } from 'bits-ui';
 	import type { Snippet } from 'svelte';
+	import TooltipProvider from './TooltipProvider.svelte';
 	import './overlays.css';
 
 	interface Props {
@@ -12,18 +13,21 @@
 		side?: 'top' | 'right' | 'bottom' | 'left';
 		delayDuration?: number;
 		open?: boolean;
+		/** An ancestor <TooltipProvider> exists (the app root mounts one); don't wrap another. */
+		shared?: boolean;
 	}
 	let {
 		content,
 		trigger,
 		side = 'top',
 		delayDuration = 300,
-		open = $bindable(false)
+		open = $bindable(false),
+		shared = false
 	}: Props = $props();
 </script>
 
-<Tooltip.Provider {delayDuration}>
-	<Tooltip.Root bind:open>
+{#snippet tip()}
+	<Tooltip.Root bind:open {delayDuration}>
 		<Tooltip.Trigger>
 			{#snippet child({ props })}
 				{@render trigger({ props })}
@@ -40,4 +44,10 @@
 			</Tooltip.Content>
 		</Tooltip.Portal>
 	</Tooltip.Root>
-</Tooltip.Provider>
+{/snippet}
+
+{#if shared}
+	{@render tip()}
+{:else}
+	<TooltipProvider>{@render tip()}</TooltipProvider>
+{/if}

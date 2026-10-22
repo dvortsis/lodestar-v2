@@ -1,7 +1,13 @@
 <script lang="ts">
 	import Tree from '../Tree.svelte';
-	import type { FlatNode } from '../tree-model';
-	let { nodes, onChecked }: { nodes: FlatNode[]; onChecked?: (c: Set<string>) => void } = $props();
+	import { buildIndex, type FlatNode } from '../tree-model';
+	let {
+		nodes,
+		onChecked,
+		precomputed = false
+	}: { nodes: FlatNode[]; onChecked?: (c: Set<string>) => void; precomputed?: boolean } = $props();
+	// svelte-ignore state_referenced_locally
+	const index = precomputed ? buildIndex(nodes) : undefined;
 	let expanded = $state(new Set<string>());
 	let checked = $state(new Set<string>());
 </script>
@@ -9,6 +15,7 @@
 <Tree
 	{nodes}
 	label="Files"
+	{index}
 	{expanded}
 	onExpandedChange={(e) => (expanded = e)}
 	{checked}
@@ -16,6 +23,5 @@
 		checked = c;
 		onChecked?.(c);
 	}}
-	checkLabel={(n) => `Select ${n.name}`}
 />
 <span data-testid="checked">{checked.size}</span>

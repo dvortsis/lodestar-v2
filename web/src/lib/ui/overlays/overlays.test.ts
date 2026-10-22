@@ -73,6 +73,18 @@ describe('Tooltip', () => {
 	});
 });
 
+describe('Tooltip hover', () => {
+	it('opens on pointer hover and closes on leave', async () => {
+		render(OverlayHarness);
+		const trigger = screen.getByRole('button', { name: 'Copy' });
+		await fireEvent.pointerEnter(trigger, { pointerType: 'mouse' });
+		await fireEvent.pointerMove(trigger, { pointerType: 'mouse' });
+		expect((await screen.findByRole('tooltip')).textContent).toContain('Copies the magnet link');
+		await fireEvent.pointerLeave(trigger, { pointerType: 'mouse' });
+		await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
+	});
+});
+
 describe('Popover', () => {
 	it('opens from its trigger, is named, does not trap focus, and closes on Esc', async () => {
 		render(OverlayHarness);
@@ -135,6 +147,25 @@ describe('Menu', () => {
 	it('marks disabled items', async () => {
 		await openMenu();
 		expect(item('Disabled one').getAttribute('aria-disabled')).toBe('true');
+	});
+});
+
+describe('Drawer Esc and nested overlays', () => {
+	it('Esc closes an open tooltip first and the drawer only on the next press', async () => {
+		render(DrawerHarness);
+		const row = screen.getByTestId('row');
+		row.focus();
+		await fireEvent.click(row);
+		await screen.findByRole('heading', { name: 'Ubuntu 24.04' });
+		const copy = screen.getByRole('button', { name: 'Copy' });
+		copy.focus();
+		await fireEvent.focus(copy);
+		await screen.findByRole('tooltip');
+		await key(copy, 'Escape');
+		await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
+		expect(screen.queryByRole('complementary')).not.toBeNull();
+		await key(copy, 'Escape');
+		await waitFor(() => expect(screen.queryByRole('complementary')).toBeNull());
 	});
 });
 

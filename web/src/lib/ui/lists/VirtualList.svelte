@@ -5,6 +5,7 @@
 	// `preventDefault()` there skips the built-ins; the shortcut registry itself belongs to W9.
 	import { createVirtualizer, type VirtualItem } from '@tanstack/svelte-virtual';
 	import { untrack, type Snippet } from 'svelte';
+	import { tokenPx } from '../overlays/motion';
 	import './lists.css';
 
 	type Role = 'listbox' | 'grid' | 'tree' | 'treegrid';
@@ -24,8 +25,10 @@
 		/** Accessible name of the list. */
 		label: string;
 		role?: Role;
-		/** Row height estimate in px; rows are measured, so two-line rows may differ. */
+		/** Row height in px (fixed per density, §10.1). Defaults to `--row-height-compact`. */
 		estimateSize?: number;
+		/** Opt in to measuring each row (a ResizeObserver per row) when heights vary. */
+		measureRows?: boolean;
 		row: Snippet<[item: T, index: number, state: RowState]>;
 		/** Sticky header rendered inside the scroller (a table's column headers). */
 		header?: Snippet;
@@ -58,7 +61,8 @@
 		getKey,
 		label,
 		role = 'listbox',
-		estimateSize = 36,
+		estimateSize: estimateProp,
+		measureRows = false,
 		row,
 		header,
 		itemAttrs,
@@ -77,6 +81,7 @@
 		class: className = ''
 	}: Props = $props();
 
+	const estimateSize = $derived(estimateProp ?? tokenPx('--row-height-compact', 36));
 	let scroller = $state<HTMLElement>();
 	let headerHeight = $state(0);
 	const isGrid = $derived(role === 'grid' || role === 'treegrid');
@@ -84,19 +89,20 @@
 
 	// --- active row, tracked by key so a prepend cannot move focus to another row -------------
 	let activeKey = $state<string | null>(null);
-	const indexByKey = $derived.by(() => {
-		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- rebuilt by the $derived on every change
-		const m = new Map<string, number>();
-		items.forEach((it, i) => m.set(getKey(it, i), i));
-		return m;
-	});
+	/** Index of the row with `key`: the active row's own slot first, then a scan. */
+	function findIndex(key: string, hint: number): number | undefined {
+		const at = items[hint];
+		if (at !== undefined && getKey(at, hint) === key) return hint;
+		for (let i = 0; i < items.length; i++) if (getKey(items[i] as T, i) === key) return i;
+		return undefined;
+	}
 	$effect.pre(() => {
 		// Items changed: re-resolve the active row by key; fall back to clamping the index.
 		void items;
 		untrack(() => {
 			const k = activeKey;
 			if (k !== null) {
-				const at = indexByKey.get(k);
+				const at = findIndex(k, activeIndex);
 				if (at !== undefined) activeIndex = at;
 				else activeIndex = Math.min(activeIndex, Math.max(0, items.length - 1));
 			} else activeIndex = Math.min(Math.max(activeIndex, 0), Math.max(0, items.length - 1));
@@ -148,11 +154,12 @@
 			lastItems = list;
 			if (resetKeyNow !== lastReset) {
 				lastReset = resetKeyNow;
+				requestedAt = -1;
 				activeKey = null;
 				activeIndex = 0;
 				$virt.scrollToOffset(0);
 			} else if (a && scroller && scroller.scrollTop > 0) {
-				const at = indexByKey.get(a.key);
+				const at = findIndex(a.key, 0);
 				const target = at === undefined ? undefined : $virt.getOffsetForIndex(at, 'start')?.[0];
 				if (target !== undefined) $virt.scrollToOffset(target - margin + a.delta);
 			}
@@ -168,9 +175,13 @@
 		};
 	});
 
-	// --- load more ---------------------------------------------------------------------------
 	let requestedAt = -1;
+	// --- load more ---------------------------------------------------------------------------
+	let wasLoading = false;
 	$effect(() => {
+		// A page that ended without new rows failed or came back empty: allow asking again.
+		if (wasLoading && !loadingMore && requestedAt === items.length) requestedAt = -1;
+		wasLoading = loadingMore;
 		if (!hasMore || loadingMore || !onLoadMore) return;
 		const sentinelShown = $virt.getVirtualItems().some((v) => v.index >= items.length);
 		if (sentinelShown && requestedAt !== items.length) {
@@ -266,17 +277,21 @@
 	}
 
 	function onclick(event: MouseEvent) {
-		const rowEl = (event.target as HTMLElement).closest<HTMLElement>('[data-index]');
+		const target = event.target as HTMLElement;
+		const rowEl = target.closest<HTMLElement>('[data-index]');
 		if (!rowEl) return;
 		const index = Number(rowEl.dataset.index);
 		const item = items[index];
 		if (item === undefined) return;
-		setActive(index, false);
-		onActivate?.(index, item);
+		// A click on a control inside the row (a checkbox) makes the row active and takes focus
+		// back to it, so the arrow keys keep working; it does not activate the row.
+		const onControl = target !== rowEl && !!target.closest('input,button,a,select,textarea');
+		setActive(index, onControl);
+		if (!onControl) onActivate?.(index, item);
 	}
 
 	function measure(node: HTMLElement) {
-		$virt.measureElement(node);
+		if (measureRows) $virt.measureElement(node);
 	}
 
 	const total = $derived(totalCount ?? items.length);
@@ -289,7 +304,11 @@
 		{role}
 		aria-label={label}
 		aria-multiselectable={multiselectable || undefined}
-		aria-rowcount={isGrid ? total + (header ? 1 : 0) : undefined}
+		aria-rowcount={isGrid
+			? hasMore && totalCount === undefined
+				? -1
+				: total + (header ? 1 : 0)
+			: undefined}
 		{onkeydown}
 		{onclick}
 		class="h-full overflow-auto"
@@ -313,7 +332,8 @@
 						aria-rowindex={isGrid ? v.index + 1 + (header ? 1 : 0) : undefined}
 						{...itemAttrs?.(item, v.index)}
 						{...{ tabindex: active ? 0 : -1 }}
-						class="ls-focus absolute inset-x-0 top-0 w-full"
+						class="ls-row-focus absolute inset-x-0 top-0 w-full"
+						style:height={measureRows ? undefined : `${v.size}px`}
 						style:transform="translateY({v.start - headerHeight}px)"
 					>
 						{@render row(item, v.index, { active })}
@@ -325,6 +345,7 @@
 						role="presentation"
 						aria-hidden="true"
 						class="absolute inset-x-0 top-0 w-full p-2 text-center text-small text-muted-text"
+						style:height={measureRows ? undefined : `${v.size}px`}
 						style:transform="translateY({v.start - headerHeight}px)"
 					>
 						{loadingMore ? loadMoreLabel : ''}

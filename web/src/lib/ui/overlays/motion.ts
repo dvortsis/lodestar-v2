@@ -3,6 +3,14 @@
 // beyond picking the crossfade.
 import { cubicOut } from 'svelte/easing';
 
+/** A px token such as `--drawer-min-width`, read once from the root; `fallback` where CSS isn't loaded (tests). */
+export function tokenPx(name: string, fallback: number): number {
+	if (typeof document === 'undefined') return fallback;
+	const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+	const n = raw.endsWith('px') ? parseFloat(raw) : NaN;
+	return Number.isFinite(n) ? n : fallback;
+}
+
 function tokenMs(name: string): number {
 	if (typeof document === 'undefined') return 0;
 	const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
