@@ -10,7 +10,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::{Error, Result};
 
 /// `(version, sql)`, applied in order, each in its own transaction.
-pub(crate) const MIGRATIONS: &[(i64, &str)] = &[(1, V1), (2, V2), (3, V3), (4, V4)];
+pub(crate) const MIGRATIONS: &[(i64, &str)] = &[(1, V1), (2, V2), (3, V3), (4, V4), (5, V5)];
 
 /// M0: the canonical torrent tables plus settings and zstd dictionaries.
 ///
@@ -224,6 +224,42 @@ CREATE TABLE filter_hits (
     evidence BLOB NOT NULL
 ) STRICT;
 CREATE INDEX filter_hits_at ON filter_hits (at);
+";
+
+/// Blocklist subscriptions (§20.13): what to fetch, how it went, and the
+/// parsed list (hashes, 20 bytes each, or encoded IP ranges). A version
+/// held back by the sanity gates waits as `pending = 1`.
+const V5: &str = "
+CREATE TABLE subscriptions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    url           TEXT NOT NULL UNIQUE,
+    name          TEXT NOT NULL,
+    -- 0 content (hashes), 1 IP ranges.
+    kind          INTEGER NOT NULL,
+    -- NULL: detected on each fetch.
+    format        TEXT,
+    -- The filter action code, for content lists.
+    action        INTEGER NOT NULL,
+    -- A child-abuse hash list you marked as CS-1b.
+    floor         INTEGER NOT NULL DEFAULT 0,
+    enabled       INTEGER NOT NULL DEFAULT 1,
+    interval_secs INTEGER NOT NULL,
+    etag          TEXT,
+    last_modified TEXT,
+    checked_at    INTEGER,
+    updated_at    INTEGER,
+    entries       INTEGER NOT NULL DEFAULT 0,
+    status        TEXT NOT NULL DEFAULT 'new',
+    error         TEXT
+) STRICT;
+
+CREATE TABLE subscription_data (
+    sub_id  INTEGER NOT NULL REFERENCES subscriptions (id) ON DELETE CASCADE,
+    pending INTEGER NOT NULL,
+    entries INTEGER NOT NULL,
+    data    BLOB NOT NULL,
+    PRIMARY KEY (sub_id, pending)
+) STRICT, WITHOUT ROWID;
 ";
 
 /// Pragmas that persist in the file and can only be set before the first

@@ -14,6 +14,7 @@ mod filter;
 mod insights;
 mod schema;
 mod sources;
+mod subscriptions;
 
 use std::fmt;
 use std::io;
@@ -30,6 +31,7 @@ pub use filter::{FilterHit, FilterState, Filtered, Held, Quarantined};
 pub use insights::{CohortCount, Counter, Event};
 pub use rusqlite;
 pub use sources::{MAX_SOURCES, QueuedKey, SourceId, SourceRow, SourceState};
+pub use subscriptions::{NewSubscription, Refresh, Subscription};
 
 /// Bits of the `torrents.flags` column. Values are persisted: append only.
 pub mod flags {

@@ -131,6 +131,25 @@ pub struct Config {
     /// BEP 43: don't answer queries and ask others not to route to us.
     pub read_only: bool,
     pub harvest: HarvestConfig,
+    /// Addresses never contacted or answered: subscribed IP blocklists
+    /// (§20.13). Checked on every packet, so it must be cheap.
+    pub deny: Option<Deny>,
+}
+
+/// A live address check, shared with whoever keeps the lists current.
+#[derive(Clone)]
+pub struct Deny(pub Arc<dyn Fn(IpAddr) -> bool + Send + Sync>);
+
+impl Deny {
+    pub fn denies(&self, ip: IpAddr) -> bool {
+        (self.0)(ip)
+    }
+}
+
+impl std::fmt::Debug for Deny {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Deny")
+    }
 }
 
 impl Default for Config {
@@ -146,6 +165,7 @@ impl Default for Config {
             save_every: Duration::from_secs(600),
             read_only: false,
             harvest: HarvestConfig::default(),
+            deny: None,
         }
     }
 }
@@ -182,6 +202,8 @@ pub struct Stats {
     pub samples_sent: AtomicU64,
     /// Nodes that answered sample_infohashes with an error or timed out.
     pub sample_failures: AtomicU64,
+    /// Packets to or from a blocklisted address, not sent or ignored.
+    pub denied: AtomicU64,
 }
 
 impl Stats {
@@ -213,6 +235,7 @@ impl Stats {
             harvest_dropped: g(&self.harvest_dropped),
             samples_sent: g(&self.samples_sent),
             sample_failures: g(&self.sample_failures),
+            denied: g(&self.denied),
         }
     }
 }
@@ -240,6 +263,7 @@ pub struct StatsSnapshot {
     pub harvest_dropped: u64,
     pub samples_sent: u64,
     pub sample_failures: u64,
+    pub denied: u64,
 }
 
 impl StatsSnapshot {
