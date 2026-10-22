@@ -12,6 +12,7 @@ mod compress;
 pub mod filetree;
 mod filter;
 mod insights;
+mod rules;
 mod schema;
 mod sources;
 mod subscriptions;
@@ -27,8 +28,9 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 pub use compress::{BlobCodec, Codec, Compressed};
 pub use filetree::{CodecError, FileTree};
-pub use filter::{FilterHit, FilterState, Filtered, Held, Quarantined};
+pub use filter::{FilterHit, FilterState, Filtered, Held, Quarantined, SHADOW};
 pub use insights::{CohortCount, Counter, Event};
+pub use rules::{ExceptionRow, OverrideRow, RuleRow, RuleSet};
 pub use rusqlite;
 pub use sources::{MAX_SOURCES, QueuedKey, SourceId, SourceRow, SourceState};
 pub use subscriptions::{NewSubscription, Refresh, Subscription};
@@ -51,6 +53,13 @@ pub mod flags {
     pub const SINGLE_FILE: i64 = 1 << 8;
     /// Metainfo parsing reported warnings.
     pub const WARNINGS: i64 = 1 << 9;
+    // Bit 10 is taken by the M4 swarm-health work (`PRIVATE_SOURCE`).
+    /// A filter rule hides it from search (§20.3).
+    pub const HIDDEN: i64 = 1 << 11;
+    /// A filter rule demotes it in ranking.
+    pub const DEMOTED: i64 = 1 << 12;
+    /// A filter rule flagged it for review.
+    pub const FLAGGED: i64 = 1 << 13;
 }
 
 #[derive(Debug)]
