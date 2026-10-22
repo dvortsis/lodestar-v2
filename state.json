@@ -656,13 +656,13 @@
    "notes": "merged after round 2"
   },
   "X-clients": {
-   "status": "in_review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01ENLgps19e6tSx74Sv1SxUB",
    "pr": 62,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "round 1 fixes pushed e115ef2 (MAX_FILES cap, typed JSON, magnet selection caps, Partial errors, redacted config Debug); runner verified cap; merge on CI green; 11:45 re-ran failed windows job once (known rebuild.rs flake, not this PR)"
+   "notes": "merged 11:54 as 813ef0d (#62)"
   },
   "X-notify": {
    "status": "merged",
