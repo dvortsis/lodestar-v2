@@ -53,13 +53,13 @@
    "notes": "merged after round 2"
   },
   "B1": {
-   "status": "in_review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01UxCJe2QQNeBEaCZrmcDRJi",
    "pr": 57,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "round 1 fixes pushed 16f4cb2 (redacted Debug + tests, \u00a716 deferred fields, operationIds); awaiting CI then merge"
+   "notes": "merged 09:27 as a569b51 (#57)"
   },
   "B2": {
    "status": "pending",
