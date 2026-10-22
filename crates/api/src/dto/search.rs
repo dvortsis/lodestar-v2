@@ -1,7 +1,7 @@
 //! `/parse` and `/search` (§8, §9), and the query AST they carry.
 
 use lodestar_search::query::Node;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
 /// `GET /parse?q=`.
@@ -39,10 +39,56 @@ pub struct SearchRequest {
     pub sort: Option<String>,
     /// Results per page: 1–200, 50 by default.
     pub limit: Option<usize>,
-    /// `offset + limit` may not pass 10,000.
+    /// `offset + limit` may not pass 10,000. Not with `cursor`.
     pub offset: Option<usize>,
     /// Include torrents a filter rule hid (§20.3).
     pub hidden: Option<bool>,
+    /// The previous page's `next_cursor`, to read the next page from the
+    /// same index snapshot. Send the same `q` (or `ast`), `sort` and
+    /// `hidden` with it.
+    pub cursor: Option<String>,
+    /// Count every match exactly, even above 100,000 (within a time
+    /// budget; `total_approx` says whether it made it). `1` or `true`.
+    #[serde(deserialize_with = "flag")]
+    #[schema(value_type = Option<bool>)]
+    pub exact: Option<bool>,
+}
+
+/// A boolean that a query string may also spell `1` or `0`.
+fn flag<'de, D: Deserializer<'de>>(d: D) -> Result<Option<bool>, D::Error> {
+    struct Flag;
+    impl<'de> serde::de::Visitor<'de> for Flag {
+        type Value = Option<bool>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("true, false, 1 or 0")
+        }
+
+        fn visit_bool<E: serde::de::Error>(self, v: bool) -> Result<Self::Value, E> {
+            Ok(Some(v))
+        }
+
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            match v {
+                "true" | "1" => Ok(Some(true)),
+                "false" | "0" => Ok(Some(false)),
+                _ => Err(E::invalid_value(serde::de::Unexpected::Str(v), &self)),
+            }
+        }
+
+        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_some<E: Deserializer<'de>>(self, d: E) -> Result<Self::Value, E::Error> {
+            d.deserialize_any(Flag)
+        }
+    }
+    d.deserialize_any(Flag)
 }
 
 /// `GET`/`POST /search`.
@@ -52,6 +98,12 @@ pub struct SearchResponse {
     pub canonical: String,
     pub hits: Vec<SearchHit>,
     pub limit: usize,
+    /// Pass as `cursor` for the next page, read from the same index
+    /// snapshot (§8); null on the last page. Opaque, URL-safe, at most
+    /// 256 characters, valid for 10 minutes after its last use.
+    #[schema(required = true)]
+    pub next_cursor: Option<String>,
+    /// Hits before this page.
     pub offset: usize,
     /// Few exact matches: plural forms in titles were included too (§8),
     /// ranked after the exact ones.
@@ -59,15 +111,31 @@ pub struct SearchResponse {
     pub took_ms: f64,
     /// Matches in all, not just this page.
     pub total: usize,
+    /// `total` is an estimate (above 100,000 matches; shown with "≈");
+    /// ask with `exact` for the exact count.
+    pub total_approx: bool,
 }
 
 /// One search result: the torrent summary (`docs/metrics.md` §7.1), its
 /// relevance and, for a query with a file clause, the files that matched.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct SearchHit {
+    /// `scene`, `movie`, `photos`, `comics`, `game`, `vr` or `audio`;
+    /// set only when `content_type` is `adult`.
+    #[schema(required = true)]
+    pub adult_kind: Option<String>,
     /// Null = never scraped.
     #[schema(required = true)]
     pub completed: Option<u32>,
+    /// What the torrent is made of, by colour group, in the composition
+    /// bar's order; groups without files are left out, and it's empty
+    /// before classification.
+    pub composition: Vec<CompositionShare>,
+    /// `movie`, `tv`, `music`, `audiobook`, `ebook`, `comic`, `software`,
+    /// `game`, `images`, `video`, `other` or `adult`; null = not
+    /// classified.
+    #[schema(required = true)]
+    pub content_type: Option<String>,
     pub discovered_at: i64,
     pub files: u64,
     #[schema(example = json!(["single_file"]))]
@@ -78,6 +146,13 @@ pub struct SearchHit {
     #[schema(required = true)]
     pub hash_v2: Option<String>,
     pub id: i64,
+    /// Stable reason keys (`docs/metrics.md` §7.1); empty when there are
+    /// none or before classification.
+    #[schema(example = json!(["double-extension"]))]
+    pub junk_reasons: Vec<String>,
+    /// 0–100; null = not classified.
+    #[schema(required = true)]
+    pub junk_score: Option<u8>,
     /// Null = never scraped.
     #[schema(required = true)]
     pub last_scrape_at: Option<i64>,
@@ -92,12 +167,20 @@ pub struct SearchHit {
     pub metadata_at: i64,
     pub name: String,
     pub piece_len: u64,
+    /// How the title was found when the name wasn't informative:
+    /// `files`, `folder` or `structure`; null = from the name itself, or
+    /// not classified.
+    #[schema(required = true)]
+    pub resolved_via: Option<String>,
     /// Relevance; 0 under any sort but `relevance`.
     pub score: f64,
     /// Null = never scraped.
     #[schema(required = true)]
     pub seeders: Option<u32>,
     pub size: u64,
+    /// The resolved title; null = not resolved.
+    #[schema(required = true)]
+    pub title: Option<String>,
     /// Trackers that answered in the last answered round; null = never
     /// scraped.
     #[schema(required = true)]
@@ -105,6 +188,23 @@ pub struct SearchHit {
     /// Of those, trackers that reported anyone; null = never scraped.
     #[schema(required = true)]
     pub trackers_reporting: Option<u32>,
+}
+
+/// One colour group's share of a torrent (`docs/metrics.md` §4, §7.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CompositionShare {
+    /// Bytes in the group, padding excluded.
+    pub bytes: u64,
+    /// Files in the group, padding excluded.
+    pub files: u32,
+    /// `video`, `audio`, `images`, `documents`, `archives`, `software` or
+    /// `other`.
+    pub group: String,
+    /// Whole percent of the non-padding bytes: any non-zero share is at
+    /// least 1, and only a complete one is 100.
+    pub pct_bytes: u8,
+    /// The same, of the non-padding files.
+    pub pct_files: u8,
 }
 
 // The AST's schema. `Node` lives in `lodestar-search`, which knows

@@ -1,6 +1,7 @@
 //! Builds and wires every long-running service of `lodestar serve`: the
 //! store and its readers, the blocklist subscriptions, the pipeline, the
-//! live indexer, the filters API, the API state and the HTTP server. `main.rs` parses the command line and calls
+//! live indexer, the filters API, the settings registry, the API state
+//! and the HTTP server. `main.rs` parses the command line and calls
 //! [`Services::start`]; [`Services::run`] serves until a signal, then
 //! shuts down in order.
 //!
@@ -16,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use lodestar_filter::Sealer;
 use lodestar_filter::lists::SharedIps;
 use lodestar_pipeline::{DhtSource, Pipeline};
-use lodestar_search::{LiveConfig, LiveIndexer, SearchIndex};
+use lodestar_search::{LiveConfig, SearchHandle, Serving, ServingConfig};
 use lodestar_sources::SourcePlugin;
 use lodestar_store::Store;
 use tokio::net::TcpListener;
@@ -24,7 +25,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::config::Config;
-use crate::{floor, http, subscriptions};
+use crate::{floor, http, settings, subscriptions};
 
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -43,7 +44,8 @@ pub struct Handles {
     /// The blocklist refresher (§20.13) and its stop signal.
     subscriptions: (watch::Sender<bool>, JoinHandle<()>),
     pipeline: Pipeline,
-    live: Option<LiveIndexer>,
+    /// The index, its live indexer and any rebuild (§8).
+    search: Option<Arc<Serving>>,
 }
 
 impl Services {
@@ -52,6 +54,18 @@ impl Services {
     pub async fn start(config: &Config) -> Result<Services, BoxError> {
         std::fs::create_dir_all(&config.data_dir)
             .map_err(|e| format!("creating {}: {e}", config.data_dir.display()))?;
+        // The settings registry (§11) over its own connection: saved
+        // values join the file and environment before anything starts.
+        let settings = {
+            let (db, store_config, base) =
+                (config.db_path(), config.store_config(), config.clone());
+            tokio::task::spawn_blocking(move || {
+                let store = Arc::new(Mutex::new(Store::open(&db, store_config)?));
+                Ok::<_, BoxError>(Arc::new(settings::Registry::load(&base, store)?))
+            })
+            .await??
+        };
+        let config = &settings.effective_config(config);
         let mut pipeline_config = config.pipeline_config()?;
         let key = seal_key(&config.data_dir.join("seal.key"))?;
         pipeline_config.sealer = Some(Arc::new(Sealer::new(&key)));
@@ -68,13 +82,16 @@ impl Services {
         let db = config.db_path();
         let store_config = config.store_config();
         let search = config.search.enabled;
+        // The root holds one directory per index version (§8); this
+        // build's is the one `index_path` names.
         let index_path = config.index_path();
+        let index_root = index_path.parent().unwrap_or(&index_path).to_path_buf();
         let heap = config.search.heap_mib.max(16) << 20;
         let filter = pipeline_config.filter.clone();
         let subs_config = config.subscriptions.clone();
         let blocklist = config.blocklist_files()?;
         let subs_ips = ips.clone();
-        let (store, control, reader, live) = tokio::task::spawn_blocking(move || {
+        let (store, control, reader, serving) = tokio::task::spawn_blocking(move || {
             let store = Store::open(&db, store_config.clone())?;
             // Settings and lists change through a second connection, so
             // they never wait behind the ingest writer for long.
@@ -85,22 +102,27 @@ impl Services {
             floor::report(&control)?;
             subscriptions::apply(&control, &filter, &subs_ips)?;
             let reader = Store::open_reader(&db, store_config.clone())?;
-            // The indexer follows the store through its own connection.
-            let live = if search {
-                let index = SearchIndex::open(&index_path)?;
-                let live_reader = Store::open_reader(&db, store_config)?;
-                let config = LiveConfig {
-                    heap_bytes: heap,
-                    ..LiveConfig::default()
+            // The index this build serves (rebuilt in the background from
+            // an older one if need be); its indexer follows the store
+            // through its own connection.
+            let serving = if search {
+                let config = ServingConfig {
+                    live: LiveConfig {
+                        heap_bytes: heap,
+                        ..LiveConfig::default()
+                    },
+                    store: store_config,
+                    ..ServingConfig::default()
                 };
-                Some((
-                    index.clone(),
-                    LiveIndexer::spawn(index, live_reader, config)?,
-                ))
+                Some(Arc::new(Serving::open_or_rebuild(
+                    &index_root,
+                    &db,
+                    config,
+                )?))
             } else {
                 None
             };
-            Ok::<_, BoxError>((store, control, reader, live))
+            Ok::<_, BoxError>((store, control, reader, serving))
         })
         .await??;
 
@@ -111,6 +133,7 @@ impl Services {
             dht_config.deny = Some(lodestar_dht::node::Deny(denied.clone()));
             let dht = Arc::new(DhtSource::new(dht_config));
             dht_stats = Some(dht.stats_handle());
+            settings::crawler::follow_intensity(settings.subscribe(), dht.node_handle());
             plugins.push(dht);
         }
         let auth = Arc::new(
@@ -131,17 +154,20 @@ impl Services {
         let held = pipeline_config.held.clone();
         let sealer = pipeline_config.sealer.clone();
         let reenrich = pipeline_config.reenrich.clone();
+        let quarantine_secs = pipeline_config.quarantine.as_secs() as i64;
         let pipeline = Pipeline::start(pipeline_config, store, plugins).await?;
         let control = Arc::new(Mutex::new(control));
+        let search = serving.clone().map(SearchHandle::serving);
         let filters = Arc::new(lodestar_api::filters::FiltersApi {
             store: control.clone(),
             engine: filter.clone(),
             held,
             sealer,
             ips: ips.clone(),
-            index: live.as_ref().map(|(index, _)| index.clone()),
+            index: search.clone(),
             reenrich,
             jobs: Default::default(),
+            quarantine_secs,
         });
         let (stop_subscriptions, subscriptions_stopped) = watch::channel(false);
         let refresher = tokio::spawn(subscriptions::run(
@@ -154,18 +180,20 @@ impl Services {
         let reader = Arc::new(Mutex::new(reader));
         let api = lodestar_api::ApiState {
             auth,
-            index: live.as_ref().map(|(index, _)| index.clone()),
+            index: search.clone(),
             reader: reader.clone(),
             filters: Some(filters),
+            settings: Some(settings.clone()),
         };
+        settings::log::follow(settings.subscribe());
         let http = http::AppState {
             monitor: pipeline.monitor(),
             dht: dht_stats,
             fetch: fetch_stats,
             reader,
-            search: live.as_ref().map(|(index, l)| http::SearchState {
-                index: index.clone(),
-                stats: l.stats(),
+            search: serving.as_ref().map(|s| http::SearchState {
+                index: SearchHandle::serving(s.clone()),
+                stats: s.stats(),
             }),
         };
         let listener = TcpListener::bind(config.http.bind)
@@ -182,7 +210,7 @@ impl Services {
             handles: Handles {
                 subscriptions: (stop_subscriptions, refresher),
                 pipeline,
-                live: live.map(|(_, live)| live),
+                search: serving,
             },
             listener,
         })
@@ -217,9 +245,11 @@ impl Handles {
         let _ = stop.send(true);
         let _ = refresher.await;
         self.pipeline.shutdown().await?;
-        if let Some(live) = self.live {
-            // After the writer, so the last batch gets indexed too.
-            tokio::task::spawn_blocking(move || live.stop()).await??;
+        if let Some(search) = self.search {
+            // After the writer, so the last batch gets indexed too. Other
+            // handles (requests still finishing) may hold it: stopping
+            // works through a shared one.
+            tokio::task::spawn_blocking(move || search.stop()).await??;
         }
         tracing::info!("stopped cleanly");
         Ok(())

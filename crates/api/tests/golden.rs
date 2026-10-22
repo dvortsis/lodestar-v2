@@ -9,8 +9,11 @@
 //! each test checks they're all there and null on every hit and detail,
 //! then strips them, and the rest must match the old bytes exactly.
 //!
+//! Since then, fields were added through bless (B5a: `next_cursor`,
+//! `total_approx` and the classification fields of hits).
+//!
 //! Values that move between runs (times, `took_ms`) are zeroed before the
-//! comparison. `LODESTAR_BLESS=1 cargo test -p lodestar-api --test golden`
+//! comparison, and a `next_cursor` (random lease ids) becomes `"…"`. `LODESTAR_BLESS=1 cargo test -p lodestar-api --test golden`
 //! rewrites the files; review the diff before committing it.
 
 use std::net::SocketAddr;
@@ -208,18 +211,20 @@ fn fixture() -> Fixture {
         held: Arc::new(HeldSet::default()),
         sealer: Some(Arc::new(Sealer::new(&[7; 32]))),
         ips: Arc::new(SharedIps::default()),
-        index: Some(index.clone()),
+        index: Some(index.clone().into()),
         reenrich: Arc::new(AtomicBool::new(false)),
         jobs: Default::default(),
+        quarantine_secs: 30 * 86_400,
     });
     let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
     let app = Router::new().nest(
         "/api/v1",
         router(ApiState {
             auth: auth.clone(),
-            index: Some(index),
+            index: Some(index.into()),
             reader: Arc::new(Mutex::new(reader)),
             filters: Some(api.clone()),
+            settings: None,
         }),
     );
     let hashes = infos
@@ -241,9 +246,18 @@ fn fixture() -> Fixture {
     }
 }
 
-/// Zeroes the number after each `"key":` in [`VOLATILE`].
+/// Zeroes the number after each `"key":` in [`VOLATILE`], and blanks
+/// cursors.
 fn normalize(body: &str) -> String {
     let mut out = body.to_string();
+    let pat = "\"next_cursor\":\"";
+    let mut from = 0;
+    while let Some(i) = out[from..].find(pat) {
+        let start = from + i + pat.len();
+        let end = out[start..].find('"').map_or(out.len(), |n| start + n);
+        out.replace_range(start..end, "…");
+        from = start;
+    }
     for key in VOLATILE {
         let pat = format!("\"{key}\":");
         let mut from = 0;
@@ -1131,6 +1145,7 @@ async fn filters_without_an_index_or_filters() {
         index: None,
         reenrich: Arc::new(AtomicBool::new(false)),
         jobs: Default::default(),
+        quarantine_secs: 30 * 86_400,
     });
     let app = |filters: Option<Arc<FiltersApi>>| {
         Router::new().nest(
@@ -1142,6 +1157,7 @@ async fn filters_without_an_index_or_filters() {
                     Store::open_reader(&db, StoreConfig::default()).unwrap(),
                 )),
                 filters,
+                settings: None,
             }),
         )
     };
