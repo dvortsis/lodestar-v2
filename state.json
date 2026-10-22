@@ -953,10 +953,10 @@
    "notes": "Launched 21:38 (\"run as many feature sessions as possible\")."
   },
   "V6-cluster1": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_016PSd1TREK3Wjy3haR5ZVux",
-   "pr": null,
+   "pr": 96,
    "attempt": 1,
    "review_rounds": 0,
    "notes": "Launched 21:38 (\"run as many feature sessions as possible\")."
@@ -1075,7 +1075,8 @@
   "88",
   "87",
   94,
-  95
+  95,
+  96
  ],
  "carry_forward": {
   "next-bans-touch": [
