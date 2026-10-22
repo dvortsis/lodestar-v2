@@ -734,7 +734,7 @@
    "pr": 63,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "round 1 fixes pushed af0a35e (transient drops, =? broken, private peer for plaintext auth, resolve timeout); merge on CI green (filter gate pending F1b)"
+   "notes": "round 1 fixes pushed af0a35e (transient drops, =? broken, private peer for plaintext auth, resolve timeout); merge on CI green (filter gate pending F1b); 12:50 one rerun of filter budget"
   },
   "B5a-swapfix": {
    "status": "in_review",
@@ -743,16 +743,16 @@
    "pr": 65,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "round 1 FIX (error field untested) fixed by runner 87a5a06 + \u00a716 wording; merge on CI green"
+   "notes": "round 1 FIX (error field untested) fixed by runner 87a5a06 + \u00a716 wording; merge on CI green; 12:50 one rerun of filter budget (main-side runner variance)"
   },
   "F1b": {
-   "status": "in_review",
+   "status": "blocked",
    "model": "opus",
    "session": "session_01V5sNo28tD6bZx3CNFdYjWY",
    "pr": 66,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": "PR #66 (props.rs only, CI green); reviewer started 12:45"
+   "review_rounds": 1,
+   "notes": "round 1 FIX: REFERENCE_NS guessed (derive ~53ms), docs \u00a720.8/\u00a716, interleave calibration; NEEDS OWNER SIGN-OFF before merge (changes enforcement of owner 50us)"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -881,12 +881,14 @@
  "blocked_on_owner": [
   "M4 continuation: waiting on ExitPlanMode approval (plan mode) \u2014 can't act on #48 review",
   "Modern DHT crawler architecture: waiting on an AskUserQuestion",
-  "W6 baselines: allow *.blob.core.windows.net (GitHub Actions artifact storage) in environment network, or owner commits artifact 12421952170 into web/e2e/ and removes web/e2e/.update-snapshots on slice/W6"
+  "W6 baselines: allow *.blob.core.windows.net (GitHub Actions artifact storage) in environment network, or owner commits artifact 12421952170 into web/e2e/ and removes web/e2e/.update-snapshots on slice/W6",
+  "F1b #66: sign-off on calibrated filter budget (50us at reference runner speed, scale up to 1.6x on slower runners)"
  ],
  "launches_today": 7,
  "last_heartbeat": "2026-10-22T12:44Z",
  "owner_questions": [
   "F1 budget scope: gate covers cheaply-rejectable rule shapes (10% = 40.8 us on runner). Shapes the cheap check cannot decide cost more at 10% of rules (VM: NEAR/1 ~450-500, negation ~140, fuzzy ~125, prefix ~110 us; runner ~1.4x faster). Should those shapes be gated at 50 us too?",
   "Filter budget hardware: 50 us has no reference machine; gate now calibrated to the runner F1 measured on (10%=40.8 us), slower runners scale up to 1.6x. Confirm or set a reference machine."
- ]
+ ],
+ "last_owner_push": "2026-10-22T12:50Z"
 }
