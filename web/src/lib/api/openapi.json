@@ -109,7 +109,7 @@
         "tags": [
           "classify"
         ],
-        "summary": "Adds a classification rule; the stored torrents it matches are\nclassified again.",
+        "summary": "Adds a classification rule; the stored torrents it matches are\nclassified again. At most 1,000 rules: past that, 422\n`too_many_class_rules`.",
         "operationId": "addClassRule",
         "requestBody": {
           "content": {
@@ -2326,7 +2326,8 @@
         "description": "`POST /classify/rules`: the new rule.",
         "required": [
           "id",
-          "queued"
+          "queued",
+          "truncated"
         ],
         "properties": {
           "id": {
@@ -2340,6 +2341,10 @@
             ],
             "description": "Stored torrents queued to be classified again; null without a\nsearch index (only torrents arriving later are affected).",
             "minimum": 0
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "More stored torrents matched than are queued at once (1,000,000):\nthe rest are classified again when next re-enriched."
           }
         }
       },
@@ -2364,7 +2369,8 @@
         "type": "object",
         "description": "`POST /classify/rules/remove`.",
         "required": [
-          "queued"
+          "queued",
+          "truncated"
         ],
         "properties": {
           "queued": {
@@ -2374,6 +2380,10 @@
             ],
             "description": "As [`ClassRuleAdded::queued`].",
             "minimum": 0
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "As [`ClassRuleAdded::truncated`]."
           }
         }
       },
@@ -2846,7 +2856,8 @@
         "enum": [
           "running",
           "done",
-          "failed"
+          "failed",
+          "cancelled"
         ]
       },
       "JobStatus": {
