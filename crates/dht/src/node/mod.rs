@@ -134,6 +134,9 @@ pub struct Config {
     /// Addresses never contacted or answered: subscribed IP blocklists
     /// (§20.13). Checked on every packet, so it must be cheap.
     pub deny: Option<Deny>,
+    /// Start paused (the crawler's pause, which persists): see
+    /// [`NodeHandle::set_paused`].
+    pub paused: bool,
 }
 
 /// A live address check, shared with whoever keeps the lists current.
@@ -166,6 +169,7 @@ impl Default for Config {
             read_only: false,
             harvest: HarvestConfig::default(),
             deny: None,
+            paused: false,
         }
     }
 }
@@ -178,6 +182,9 @@ pub struct Stats {
     pub packets_out: AtomicU64,
     pub malformed_in: AtomicU64,
     pub queries_in: AtomicU64,
+    /// Queries from an IP we hadn't queried recently: proof that
+    /// unsolicited inbound packets reach the DHT port (the network check).
+    pub queries_in_unsolicited: AtomicU64,
     pub responses_in: AtomicU64,
     pub errors_in: AtomicU64,
     pub queries_out: AtomicU64,
@@ -225,6 +232,7 @@ impl Stats {
             packets_out: g(&self.packets_out),
             malformed_in: g(&self.malformed_in),
             queries_in: g(&self.queries_in),
+            queries_in_unsolicited: g(&self.queries_in_unsolicited),
             responses_in: g(&self.responses_in),
             errors_in: g(&self.errors_in),
             queries_out: g(&self.queries_out),
@@ -257,6 +265,7 @@ pub struct StatsSnapshot {
     pub packets_out: u64,
     pub malformed_in: u64,
     pub queries_in: u64,
+    pub queries_in_unsolicited: u64,
     pub responses_in: u64,
     pub errors_in: u64,
     pub queries_out: u64,
@@ -313,6 +322,25 @@ pub struct Snapshot {
     pub seen_filter_bytes: usize,
     /// The intensity the node runs at now.
     pub intensity: Intensity,
+    pub paused: bool,
+    /// What other nodes report as our address.
+    pub external: ExternalVotes,
+}
+
+/// The external address other nodes say they see us at (the BEP 42 `ip`
+/// key of their replies), tallied over the last 32 distinct reporters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ExternalVotes {
+    /// The majority address: set once at least 5 reporters agree and
+    /// they're more than half of them.
+    pub ip: Option<IpAddr>,
+    /// The port most of those reporters saw (a NAT may rewrite it);
+    /// `None` without a majority address.
+    pub port: Option<u16>,
+    /// Distinct reporters in the window.
+    pub voters: usize,
+    /// Reporters naming the leading address.
+    pub agreeing: usize,
 }
 
 pub(crate) enum Command {
@@ -320,6 +348,7 @@ pub(crate) enum Command {
     GetPeers(InfoHash),
     Scrape(InfoHash, oneshot::Sender<Option<DhtEstimate>>),
     SetIntensity(Intensity),
+    SetPaused(bool),
 }
 
 /// A DHT swarm estimate (BEP 33) from the nodes closest to a hash.
@@ -358,6 +387,23 @@ impl NodeHandle {
             .send(Command::SetIntensity(intensity))
             .await
             .is_ok()
+    }
+
+    /// Pauses or resumes harvesting (the crawler's pause). Paused, the
+    /// node sends no BEP 51 samples and starts no `get_peers` lookups or
+    /// scrapes (queued lookups wait; queued and new scrapes answer
+    /// `None`), and reports no harvests. It keeps its routing table up
+    /// and answers other nodes' queries. Lookups already running finish.
+    /// `false` if the node has stopped.
+    pub async fn set_paused(&self, paused: bool) -> bool {
+        self.commands.send(Command::SetPaused(paused)).await.is_ok()
+    }
+
+    /// `None` if the node has stopped.
+    pub async fn snapshot(&self) -> Option<Snapshot> {
+        let (tx, rx) = oneshot::channel();
+        self.commands.send(Command::Snapshot(tx)).await.ok()?;
+        rx.await.ok()
     }
 }
 

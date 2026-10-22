@@ -102,6 +102,12 @@ impl SeenFilter {
         true
     }
 
+    /// Whether the hash was seen recently, without recording it.
+    pub fn contains(&self, hash: &InfoHash) -> bool {
+        let h = self.positions(hash);
+        self.current.contains(h, self.k) || self.previous.contains(h, self.k)
+    }
+
     /// Bytes held by both generations.
     pub fn memory(&self) -> usize {
         (self.current.bits.len() + self.previous.bits.len()) * 8

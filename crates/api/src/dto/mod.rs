@@ -16,6 +16,7 @@
 pub mod auth;
 pub mod error;
 pub mod filters;
+pub mod ops;
 pub mod search;
 pub mod settings;
 pub mod torrents;

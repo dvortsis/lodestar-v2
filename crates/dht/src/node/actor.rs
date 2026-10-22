@@ -20,7 +20,9 @@ use super::peers::PeerStore;
 use super::sampler::{self, Sampler};
 use super::seen::SeenFilter;
 use super::tokens::Tokens;
-use super::{Command, Config, DhtEstimate, Harvest, Intensity, Snapshot, Source, Stats};
+use super::{
+    Command, Config, DhtEstimate, ExternalVotes, Harvest, Intensity, Snapshot, Source, Stats,
+};
 use crate::compact::{self, CompactNodes, NodeId, NodeInfo};
 use crate::krpc::{self, Body, ErrorBody, Message, Method, Query, Response, Want, error_code};
 use crate::routing::{Contact, Inserted, RoutingTable, Status};
@@ -64,6 +66,10 @@ const SCRAPE_DEADLINE: Duration = Duration::from_secs(30);
 const LOW_FRONTIER: usize = 64;
 /// Backoff for a sample query that timed out (may be transient).
 const SAMPLE_TIMEOUT_BACKOFF: Duration = Duration::from_secs(30 * 60);
+/// IPs we queried, remembered so a query from them isn't counted as
+/// unsolicited: one generation lasts at least ~3 minutes at Aggressive,
+/// about the longest a home router keeps a UDP mapping open.
+const CONTACTED_CAPACITY: usize = 200_000;
 
 #[derive(Debug, Clone, Copy)]
 enum Purpose {
@@ -146,9 +152,10 @@ impl TokenBucket {
 }
 
 /// Majority vote over the external address other nodes report (BEP 42).
+/// One vote per reporter, the last [`ExternalIp::WINDOW`] reporters.
 #[derive(Default)]
 struct ExternalIp {
-    votes: VecDeque<(IpAddr, IpAddr)>,
+    votes: VecDeque<(IpAddr, SocketAddr)>,
     current: Option<IpAddr>,
 }
 
@@ -157,23 +164,71 @@ impl ExternalIp {
     const QUORUM: usize = 5;
 
     /// Records a report; returns the new address when the majority changes.
-    fn vote(&mut self, reporter: IpAddr, reported: IpAddr) -> Option<IpAddr> {
+    fn vote(&mut self, reporter: IpAddr, reported: SocketAddr) -> Option<IpAddr> {
         self.votes.retain(|(r, _)| *r != reporter);
         self.votes.push_back((reporter, reported));
         if self.votes.len() > Self::WINDOW {
             self.votes.pop_front();
         }
-        let mut counts: HashMap<IpAddr, usize> = HashMap::new();
-        for (_, ip) in &self.votes {
-            *counts.entry(*ip).or_default() += 1;
+        let t = self.tally();
+        match t.ip {
+            Some(best) if self.current != Some(best) => {
+                self.current = Some(best);
+                Some(best)
+            }
+            _ => None,
         }
-        let (best, n) = counts.into_iter().max_by_key(|(_, n)| *n)?;
-        if n >= Self::QUORUM && n * 2 > self.votes.len() && self.current != Some(best) {
-            self.current = Some(best);
-            return Some(best);
-        }
-        None
     }
+
+    /// The leading address and its port, with the evidence. Ties go to
+    /// the smaller value, so the answer doesn't depend on map order.
+    fn tally(&self) -> ExternalVotes {
+        let mut ips: HashMap<IpAddr, usize> = HashMap::new();
+        for (_, addr) in &self.votes {
+            *ips.entry(addr.ip()).or_default() += 1;
+        }
+        let Some((best, n)) = ips
+            .into_iter()
+            .max_by_key(|(ip, n)| (*n, std::cmp::Reverse(*ip)))
+        else {
+            return ExternalVotes::default();
+        };
+        let majority = n >= Self::QUORUM && n * 2 > self.votes.len();
+        let port = majority
+            .then(|| {
+                let mut ports: HashMap<u16, usize> = HashMap::new();
+                for (_, addr) in self.votes.iter().filter(|(_, a)| a.ip() == best) {
+                    *ports.entry(addr.port()).or_default() += 1;
+                }
+                ports
+                    .into_iter()
+                    .max_by_key(|(p, n)| (*n, std::cmp::Reverse(*p)))
+                    .map(|(p, _)| p)
+            })
+            .flatten();
+        ExternalVotes {
+            ip: majority.then_some(best),
+            port,
+            voters: self.votes.len(),
+            agreeing: n,
+        }
+    }
+}
+
+/// The filter key for an IP we queried.
+fn contact_key(ip: IpAddr) -> InfoHash {
+    let mut key = [0u8; 20];
+    match ip {
+        IpAddr::V4(v4) => {
+            key[0] = 4;
+            key[1..5].copy_from_slice(&v4.octets());
+        }
+        IpAddr::V6(v6) => {
+            key[0] = 6;
+            key[1..17].copy_from_slice(&v6.octets());
+        }
+    }
+    InfoHash(key)
 }
 
 struct Family {
@@ -218,6 +273,10 @@ struct Actor {
     /// Scrape lookups that ran out of query budget, to drive next tick.
     stalled: Vec<u32>,
     last_prune: Instant,
+    /// IPs we've queried lately, to tell unsolicited queries apart.
+    contacted: SeenFilter,
+    /// The crawler's pause: no sampling, lookups, scrapes or harvests.
+    paused: bool,
 }
 
 pub(crate) async fn run(
@@ -284,6 +343,8 @@ pub(crate) async fn run(
         scrape_rate: scrape_bucket(cfg.intensity, now),
         stalled: Vec::new(),
         last_prune: now,
+        contacted: SeenFilter::new(CONTACTED_CAPACITY, 0.01),
+        paused: cfg.paused,
         cfg,
     };
     actor.start_bootstrap(&sockets, saved.map(|s| s.nodes).unwrap_or_default());
@@ -400,7 +461,19 @@ impl Actor {
                     stored_peer_hashes: self.peer_store.len(),
                     seen_filter_bytes: self.seen.memory(),
                     intensity: self.cfg.intensity,
+                    paused: self.paused,
+                    external: self.external.tally(),
                 });
+            }
+            Command::SetPaused(paused) => {
+                self.paused = paused;
+                if paused {
+                    // Waiting callers hear "no estimate" now rather than
+                    // after the pause.
+                    for (_, reply) in self.scrape_queue.drain(..) {
+                        let _ = reply.send(None);
+                    }
+                }
             }
             Command::SetIntensity(intensity) => {
                 // The rates and the outstanding cap follow at once; the
@@ -418,7 +491,9 @@ impl Actor {
             }
             Command::Scrape(hash, reply) => {
                 Stats::inc(&self.stats.scrapes_requested);
-                if self.scrape_queue.len() < MAX_SCRAPE_QUEUE {
+                if self.paused {
+                    let _ = reply.send(None);
+                } else if self.scrape_queue.len() < MAX_SCRAPE_QUEUE {
                     self.scrape_queue.push_back((hash, reply));
                 } else {
                     Stats::inc(&self.stats.scrapes_dropped);
@@ -431,6 +506,11 @@ impl Actor {
     /// Hands a hash to the pipeline. Sightings without peers are
     /// deduplicated; announces and lookup results always pass.
     fn harvest_hash(&mut self, hash: InfoHash, source: Source, peers: Vec<SocketAddr>) {
+        // Paused, nothing is harvested; the answers of lookups already
+        // running still reach the pool that asked.
+        if self.paused && source != Source::Lookup {
+            return;
+        }
         let new = self.seen.insert(&hash);
         if new {
             if self.recent.len() == RECENT_SAMPLES {
@@ -535,6 +615,7 @@ impl Actor {
             return Sent::Failed;
         }
         Stats::inc(&self.stats.queries_out);
+        self.contacted.insert(&contact_key(to.ip()));
         *self.pending_addrs.entry(to).or_default() += 1;
         self.pending.insert(
             tid,
@@ -579,6 +660,9 @@ impl Actor {
         match &msg.body {
             Body::Query(q) => {
                 Stats::inc(&self.stats.queries_in);
+                if !self.contacted.contains(&contact_key(from.ip())) {
+                    Stats::inc(&self.stats.queries_in_unsolicited);
+                }
                 self.on_query(sockets, family, &msg, q, from);
             }
             Body::Response(r) => {
@@ -797,7 +881,7 @@ impl Actor {
         let now = self.now_secs();
 
         if let Some(ip) = msg.ip {
-            self.on_external_ip(from.ip(), ip.ip());
+            self.on_external_ip(from.ip(), ip);
         }
         // A node that answers under a different id than the one we queried
         // is suspicious: don't route to it and don't trust its answer.
@@ -903,7 +987,7 @@ impl Actor {
         self.drive_lookup(sockets, lid);
     }
 
-    fn on_external_ip(&mut self, reporter: IpAddr, reported: IpAddr) {
+    fn on_external_ip(&mut self, reporter: IpAddr, reported: SocketAddr) {
         let Some(ip) = self.external.vote(reporter, reported) else {
             return;
         };
@@ -1195,14 +1279,14 @@ impl Actor {
             self.sampler.prune(now_i);
             self.last_prune = now_i;
         }
-        while self.active_get_peers < MAX_GET_PEERS {
+        while !self.paused && self.active_get_peers < MAX_GET_PEERS {
             let Some(hash) = self.get_peers_queue.pop_front() else {
                 break;
             };
             self.start_get_peers(sockets, hash);
         }
         self.scrape_tick(sockets, now_i);
-        if self.cfg.harvest.sample {
+        if self.cfg.harvest.sample && !self.paused {
             self.sample_tick(sockets, now_i);
         }
 
@@ -1248,7 +1332,7 @@ impl Actor {
             let lookup = self.lookups.remove(&lid).expect("listed above");
             self.finish_scrape(lid, &lookup);
         }
-        while self.active_scrapes < MAX_SCRAPES {
+        while !self.paused && self.active_scrapes < MAX_SCRAPES {
             // A caller that stopped waiting doesn't cost a lookup.
             while self
                 .scrape_queue
@@ -1340,22 +1424,63 @@ mod tests {
     fn external_ip_needs_a_quorum_of_distinct_reporters() {
         let mut e = ExternalIp::default();
         let me: IpAddr = "203.0.113.9".parse().unwrap();
+        let at = |port| SocketAddr::new(me, port);
         // One reporter repeating itself never reaches quorum.
         for _ in 0..10 {
-            assert_eq!(e.vote("1.1.1.1".parse().unwrap(), me), None);
+            assert_eq!(e.vote("1.1.1.1".parse().unwrap(), at(6881)), None);
         }
         for i in 2..=4u8 {
-            assert_eq!(e.vote(IpAddr::from([1, 1, 1, i]), me), None);
+            assert_eq!(e.vote(IpAddr::from([1, 1, 1, i]), at(6881)), None);
         }
-        assert_eq!(e.vote("1.1.1.5".parse().unwrap(), me), Some(me));
+        assert_eq!(e.tally().ip, None, "4 reporters are short of quorum");
+        assert_eq!(e.tally().voters, 4);
+        assert_eq!(e.vote("1.1.1.5".parse().unwrap(), at(40000)), Some(me));
         // No change reported twice.
-        assert_eq!(e.vote("1.1.1.6".parse().unwrap(), me), None);
+        assert_eq!(e.vote("1.1.1.6".parse().unwrap(), at(6881)), None);
         // A minority liar doesn't flip it.
-        let liar: IpAddr = "198.51.100.1".parse().unwrap();
+        let liar: SocketAddr = "198.51.100.1:1".parse().unwrap();
         for i in 10..13u8 {
             assert_eq!(e.vote(IpAddr::from([2, 2, 2, i]), liar), None);
         }
         assert_eq!(e.current, Some(me));
+        assert_eq!(
+            e.tally(),
+            ExternalVotes {
+                ip: Some(me),
+                port: Some(6881),
+                voters: 9,
+                agreeing: 6,
+            }
+        );
+    }
+
+    #[test]
+    fn the_tally_is_bounded_and_needs_a_majority() {
+        let mut e = ExternalIp::default();
+        // Thousands of reporters keep only the last WINDOW votes.
+        for i in 0..5000u32 {
+            let reporter = IpAddr::from(i.to_be_bytes());
+            let reported = SocketAddr::from(([10, 0, (i % 7) as u8, 1], 1));
+            e.vote(reporter, reported);
+        }
+        let t = e.tally();
+        assert_eq!(t.voters, ExternalIp::WINDOW);
+        // Seven addresses split the votes: no majority, no address.
+        assert_eq!((t.ip, t.port), (None, None));
+        assert!(t.agreeing <= ExternalIp::WINDOW / 7 + 1);
+        assert_eq!(ExternalIp::default().tally(), ExternalVotes::default());
+    }
+
+    #[test]
+    fn contact_keys_keep_families_and_addresses_apart() {
+        let v4 = contact_key("1.2.3.4".parse().unwrap());
+        let v6 = contact_key("::1.2.3.4".parse().unwrap());
+        assert_ne!(v4, v6);
+        assert_ne!(v4, contact_key("1.2.3.5".parse().unwrap()));
+        let mut f = SeenFilter::new(100, 0.01);
+        f.insert(&v4);
+        assert!(f.contains(&v4));
+        assert!(!f.contains(&v6));
     }
 
     #[test]

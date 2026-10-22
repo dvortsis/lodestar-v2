@@ -28,6 +28,7 @@ pub mod error;
 pub mod extract;
 pub mod filters;
 pub mod openapi;
+pub mod ops;
 mod search;
 pub mod settings;
 mod torrents;
@@ -56,6 +57,8 @@ pub struct ApiState {
     pub filters: Option<Arc<filters::FiltersApi>>,
     /// `None` when the settings registry isn't served (tests, tools).
     pub settings: Option<Arc<dyn settings::SettingsApi>>,
+    /// `None` when no pipeline runs (tests, tools).
+    pub ops: Option<Arc<dyn ops::OpsApi>>,
 }
 
 /// The `/api/v1` routes. The server must be run with
@@ -68,6 +71,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(torrents::routes())
         .merge(filters::routes())
         .merge(settings::routes())
+        .merge(ops::routes())
         .merge(openapi::routes())
         // What `auth::protected` checks sessions against.
         .layer(Extension(auth::SessionAuth(state.auth.clone())))

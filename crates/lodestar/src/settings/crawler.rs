@@ -1,14 +1,21 @@
-//! Crawler: the intensity (live) and the metadata fetch limits.
+//! Crawler: the pause and the intensity (both live) and the metadata
+//! fetch limits.
 //!
 //! A new intensity reaches the running DHT node at once (its query and
 //! reply rates and its cap on outstanding queries). The fetch pool's
 //! socket count, which follows the intensity when `max_sockets` is 0
 //! (or unset in `config.toml`), takes it at the next start.
+//!
+//! `paused` is the crawler's pause (`POST /crawler/pause`, B14): saved
+//! here so it survives a restart, applied to the running pipeline by
+//! [`follow_control`], and never set in `config.toml` or the
+//! environment.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lodestar_dht::node::NodeHandle;
+use lodestar_pipeline::Control;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -53,6 +60,9 @@ pub struct Crawler {
     pub timeout_secs: u64,
     /// The largest info dict fetched, in MiB.
     pub max_metadata_mib: u64,
+    /// Harvesting and metadata fetching are paused; the DHT node still
+    /// answers other nodes.
+    pub paused: bool,
 }
 
 impl Default for Crawler {
@@ -80,6 +90,7 @@ impl Section for Crawler {
             .file("fetch.max_metadata_mib")
             .restart()
             .range(1, 64),
+        Field::new("paused"),
     ];
 
     fn from_config(config: &Config) -> Self {
@@ -100,6 +111,8 @@ impl Section for Crawler {
                 .map_or(0, |n| u32::try_from(n).unwrap_or(u32::MAX)),
             timeout_secs: config.fetch.timeout_secs,
             max_metadata_mib: config.fetch.max_metadata_mib as u64,
+            // Only ever saved in the app.
+            paused: false,
         }
     }
 
@@ -119,6 +132,8 @@ impl Section for Crawler {
             }
             "timeout_secs" => config.fetch.timeout_secs = self.timeout_secs,
             "max_metadata_mib" => config.fetch.max_metadata_mib = self.max_metadata_mib as usize,
+            // The services read it from the registry, not the config.
+            "paused" => {}
             _ => {}
         }
     }
@@ -168,6 +183,26 @@ pub fn follow_intensity(
                     // Not started yet, or restarting.
                     _ => tokio::time::sleep(NODE_RETRY).await,
                 }
+            }
+        }
+    })
+}
+
+/// Hands every change of the pause to the running pipeline and records
+/// pause, resume and intensity changes as events, however they were made
+/// (`/crawler` or `PATCH /settings/crawler`). Each is applied and
+/// recorded once: [`Control`] ignores a repeat. Runs until the registry
+/// is dropped.
+pub fn follow_control(mut rx: watch::Receiver<Crawler>, control: Control) -> JoinHandle<()> {
+    rx.borrow_and_update();
+    tokio::spawn(async move {
+        while rx.changed().await.is_ok() {
+            let now = rx.borrow_and_update().clone();
+            if let Err(e) = control.set_paused(now.paused).await {
+                tracing::error!("crawler: applying the pause failed: {e}");
+            }
+            if let Err(e) = control.note_intensity(now.intensity.into()).await {
+                tracing::error!("crawler: recording the intensity failed: {e}");
             }
         }
     })
