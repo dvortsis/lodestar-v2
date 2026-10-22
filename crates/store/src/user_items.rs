@@ -12,7 +12,7 @@
 
 use rusqlite::{OptionalExtension, params};
 
-use crate::user_data::check_note;
+use crate::user_data::{check_note, write_tx};
 use crate::{Error, Result, Store};
 
 /// At most this many labels per torrent.
@@ -155,7 +155,7 @@ impl Store {
         if let Some(Some(note)) = u.note {
             check_note(note)?;
         }
-        let tx = self.conn.transaction()?;
+        let tx = write_tx(&mut self.conn)?;
         let known: bool = tx
             .prepare_cached("SELECT EXISTS (SELECT 1 FROM torrents WHERE id = ?1)")?
             .query_row([torrent_id], |r| r.get(0))?;

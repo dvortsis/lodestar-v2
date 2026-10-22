@@ -17,6 +17,7 @@
 
 use rusqlite::{OptionalExtension, params};
 
+use crate::user_data::write_tx;
 use crate::{Error, Result, Store};
 
 /// Whether the query log is on: the setting's value, passed in by the
@@ -94,7 +95,7 @@ impl Store {
                 "hour must be at least 1 and last_id not negative",
             ));
         }
-        let tx = self.conn.transaction()?;
+        let tx = write_tx(&mut self.conn)?;
         let (max_hour, max_id): (i64, i64) = tx.query_row(
             "SELECT coalesce(max(hour), 0), coalesce(max(last_id), 0) FROM index_watermark_hour",
             [],
@@ -154,7 +155,7 @@ impl Store {
         if logging == QueryLogging::Off || entries.is_empty() {
             return Ok(0);
         }
-        let tx = self.conn.transaction()?;
+        let tx = write_tx(&mut self.conn)?;
         {
             let mut stmt = tx.prepare_cached(
                 "INSERT INTO query_log (at, query, results, latency_us) VALUES (?1, ?2, ?3, ?4)",
@@ -175,7 +176,7 @@ impl Store {
     /// Deletes queries logged before `before`, then the oldest beyond the
     /// newest `max_rows`. Returns how many were deleted.
     pub fn prune_query_log(&mut self, before: i64, max_rows: u64) -> Result<usize> {
-        let tx = self.conn.transaction()?;
+        let tx = write_tx(&mut self.conn)?;
         let mut deleted = tx.execute("DELETE FROM query_log WHERE at < ?1", [before])?;
         deleted += tx.execute(
             "DELETE FROM query_log WHERE id IN (
@@ -234,7 +235,7 @@ impl Store {
     /// ambiguous or unresolved before, or its title changed). Torrents with
     /// no enrichment record are skipped. Returns how many were set.
     pub fn set_resolved_at(&mut self, resolved: &[Resolved]) -> Result<usize> {
-        let tx = self.conn.transaction()?;
+        let tx = write_tx(&mut self.conn)?;
         let mut done = 0;
         {
             let mut stmt = tx.prepare_cached(
