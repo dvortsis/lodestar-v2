@@ -878,7 +878,7 @@
     "integrations-readme": [
       "README rule 1: mention net::connect_tcp/resolve_tcp for non-HTTP protocols"
     ],
-    "posthoc_52_54": "Reviewed 14:00: FOLLOW-UP. Blocking: Is-adult class rule skips CS-5 core (worker.rs prepare_one). Also preview job slot leak/cap, requeue lock+chunking, class-rule race, /classify lock, class-rule cost cap, \u00a716. Sent to filter session session_01N83eB81W8xkqJgXiD7JLM3 for PR on fix/m4-class-rules (runner merges). Bench addition after F1b.",
+    "posthoc_52_54": "Reviewed 14:00: FOLLOW-UP. Blocking: Is-adult class rule skips CS-5 core (worker.rs prepare_one). Also preview job slot leak/cap, requeue lock+chunking, class-rule race, /classify lock, class-rule cost cap, \u00a716. Sent to filter session session_01N83eB81W8xkqJgXiD7JLM3 for PR on fix/m4-class-rules (runner merges). Bench addition after F1b. | 14:26 fix PR #68 (fix/m4-class-rules) opened; reviewer started (incl. stored-torrent Is-adult re-filter gap).",
     "settings_form_patch_changed_only": "S-settings-1 brief: settings forms must PATCH only changed fields (re-saving dht_port moves every DHT bind to it).",
     "b5a_polish": "B5a polish: replace cancelled_after_30ms in exact-count test with tripwire; wait_for in expired_leases_are_swept test; join rebuild thread if sweeper spawn fails. Fold into B6 or B5c (crates/search owners)."
   },
