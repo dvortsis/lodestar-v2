@@ -661,8 +661,8 @@
    "session": "session_01ENLgps19e6tSx74Sv1SxUB",
    "pr": 62,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": "PR #62 CI green; reviewer (incl. security) started 10:39"
+   "review_rounds": 1,
+   "notes": "round 1 FIX: rTorrent d.size_files unbounded alloc; important: typed JSON (IgnoredAny), magnet selection unsupported on 3 clients (honest caps), partial bulk count, ClientConfig Debug"
   },
   "X-notify": {
    "status": "merged",
