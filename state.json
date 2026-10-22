@@ -772,7 +772,12 @@
   },
   "policy": {
     "merge_fallback": "If a direct merge is refused, enable GitHub auto-merge (merge commit) on the PR, only after CI is green and the review has no blocking findings. Owner-approved 2026-10-22. Fold into runner/README.md with the next runner PR.",
-    "merges": "All PRs, including the M4 sessions', are reviewed by a fresh Opus reviewer and merged by the runner (both M4 sessions told 05:58)."
+    "merges": "All PRs, including the M4 sessions', are reviewed by a fresh Opus reviewer and merged by the runner (both M4 sessions told 05:58).",
+    "limits": {
+      "max_core": 8,
+      "max_helpers": 8,
+      "source": "owner 2026-10-22 16:03: \"increase the runner's limit to 8\" (max_core 4 -> 8; helpers already 8). Folded into slices.yaml via R-docs."
+    }
   },
   "watched_sessions": {
     "session_015F9H2aHowz7TJLffFYxUvf": {
