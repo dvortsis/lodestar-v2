@@ -1,2 +1,2 @@
 200
-{"canonical":"file:ext:mkv","hits":[],"limit":50,"offset":0,"stemmed":false,"took_ms":0,"total":0}
+{"canonical":"file:ext:mkv","hits":[],"limit":50,"next_cursor":null,"offset":0,"stemmed":false,"took_ms":0,"total":0,"total_approx":false}
