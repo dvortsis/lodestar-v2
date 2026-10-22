@@ -850,7 +850,10 @@ impl FiltersApi {
                         format!("{rule} is part of the locked floor and can't be switched off."),
                     ));
                 }
-                if !on && engine.core.switches.is_on(r) {
+                // As stored: the engine can lag the store after an apply
+                // that failed part-way.
+                let stored_on = self.store().core_switch(r.id()).map_err(internal)?;
+                if !on && stored_on {
                     a.weakening = true;
                     a.preview = rules(vec![rule.clone()]);
                 }
@@ -1317,8 +1320,9 @@ impl FiltersApi {
                         ));
                     }
                 } else {
-                    // Under the store lock the engine is the stored state.
-                    let was_on = self.engine.current().core.switches.is_on(r);
+                    // As stored, under the store lock (the engine can lag
+                    // the store after an apply that failed part-way).
+                    let was_on = store.core_switch(r.id()).map_err(internal)?;
                     if !on && was_on && !out.assessment.confirm {
                         // Switched on since the preview, which then asked
                         // for no password: preview again.
