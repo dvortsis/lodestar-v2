@@ -142,6 +142,15 @@ fn conflict(code: &'static str, message: impl Into<String>) -> ApiError {
     ApiError::new(StatusCode::CONFLICT, code, message.into())
 }
 
+/// The state changed since the preview so that this change now weakens
+/// filtering: it must be previewed (and confirmed) again.
+fn changed_since_preview() -> ApiError {
+    conflict(
+        "changed_since_preview",
+        "Filtering changed since this was previewed: preview it again.",
+    )
+}
+
 fn hex20(s: &str) -> ApiResult<[u8; 20]> {
     let s = s.trim();
     if s.len() != 40 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -1236,8 +1245,11 @@ impl FiltersApi {
     }
 
     /// Releases everything `rules` hold, quarantine and tombstones: they
-    /// stopped applying. Returns how many hashes were released.
+    /// stopped applying. The engine is reloaded from the store first, so
+    /// a hash released early can't be held again by a rule that's gone.
+    /// Returns how many hashes were released.
     fn release_rules(&self, store: &mut Store, rules: &[String]) -> ApiResult<usize> {
+        self.reload(store)?;
         store
             .release_rules(rules, |hashes| {
                 for h in hashes {
@@ -1305,7 +1317,13 @@ impl FiltersApi {
                         ));
                     }
                 } else {
+                    // Under the store lock the engine is the stored state.
                     let was_on = self.engine.current().core.switches.is_on(r);
+                    if !on && was_on && !out.assessment.confirm {
+                        // Switched on since the preview, which then asked
+                        // for no password: preview again.
+                        return Err(changed_since_preview());
+                    }
                     store.set_core_switch(r.id(), *on).map_err(internal)?;
                     if !on && was_on {
                         // What it holds is released and processed (§20.5.3).
@@ -1632,6 +1650,13 @@ impl FiltersApi {
                 }
             }
             Change::ResolveHeld { id, accept } => {
+                let sub = store.subscription(*id).map_err(internal)?.ok_or_else(|| {
+                    not_found("subscription_not_found", "There's no such subscription.")
+                })?;
+                let shrank = sub.error.as_deref().is_some_and(|e| e.contains("shrank"));
+                if *accept && shrank && !sub.floor && !out.assessment.confirm {
+                    return Err(changed_since_preview());
+                }
                 if !store.resolve_held(*id, *accept, now).map_err(internal)? {
                     return Err(conflict("nothing_held", "No version of that list is held."));
                 }
@@ -1695,19 +1720,11 @@ impl FiltersApi {
         Ok(out)
     }
 
-    /// A list that stopped applying lets its tombstones go.
+    /// A list that stopped applying lets what it holds go. The list layer
+    /// is rebuilt first, so nothing released is held by it again.
     fn release_list(&self, store: &mut Store, id: i64) -> ApiResult<()> {
-        let rule = format!("L-{id}");
-        let dropped: Vec<[u8; 20]> = store
-            .tombstones(PREVIEW_ROWS)
-            .map_err(internal)?
-            .into_iter()
-            .filter(|t| t.rule == rule)
-            .map(|t| t.hash)
-            .collect();
-        for h in dropped {
-            self.release(store, h)?;
-        }
+        lodestar_filter::lists::apply(store, &self.engine, &self.ips).map_err(internal)?;
+        self.release_rules(store, &[format!("L-{id}")])?;
         Ok(())
     }
 

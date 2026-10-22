@@ -2069,3 +2069,83 @@ async fn adult_tombstones_can_be_listed_and_released() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(!f.api.held.contains(&[0x31; 20]));
 }
+
+/// A change previewed while it didn't weaken filtering, which weakens it
+/// by the time it applies, is refused rather than applied without the
+/// password (runner's probe, #70).
+#[tokio::test]
+async fn a_change_that_became_weakening_since_its_preview_is_refused() {
+    use lodestar_api::filters::Change;
+    let f = fixture();
+    let c = logged_in(&f).await;
+    let now = lodestar_api_now();
+    let off = json!({ "op": "core_switch", "rule": "CS-3a", "on": false });
+    let (status, body) = apply(&f, &c, off.clone(), Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    hold(&f, [0x51; 20], "CS-3a", Held::Quarantine, now);
+
+    // Previewed while CS-3a is off: no password asked.
+    let change: Change = serde_json::from_value(off).unwrap();
+    let stale = f.api.assess(&change, now).unwrap();
+    assert!(!stale.confirm);
+    // Switched back on meanwhile (strengthening, no password).
+    let on = json!({ "op": "core_switch", "rule": "CS-3a", "on": true });
+    let (status, body) = apply(&f, &c, on, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let err = f.api.apply(&change, stale, now).unwrap_err();
+    assert_eq!(err.status(), StatusCode::CONFLICT);
+    assert_eq!(err.code(), "changed_since_preview");
+    assert!(f.api.held.contains(&[0x51; 20]), "nothing released");
+    assert_eq!(core_on(&overview(&f, &c).await, "CS-3a"), json!(true));
+
+    // Accepting a held list version: previewed before one shrank.
+    let id = f
+        .api
+        .store
+        .lock()
+        .unwrap()
+        .add_subscription(&lodestar_store::NewSubscription {
+            url: "https://lists.example/a.txt",
+            name: "a",
+            kind: 0,
+            format: Some("hashes"),
+            action: Action::Drop.code(),
+            floor: false,
+            interval_secs: 3600,
+        })
+        .unwrap();
+    let accept: Change =
+        serde_json::from_value(json!({ "op": "resolve_held", "id": id, "accept": true })).unwrap();
+    let stale = f.api.assess(&accept, now).unwrap();
+    assert!(!stale.confirm);
+    {
+        let mut store = f.api.store.lock().unwrap();
+        let data = [[1u8; 20], [2; 20], [3; 20]].concat();
+        fn refresh(data: &[u8], held: bool) -> lodestar_store::Refresh<'_> {
+            if held {
+                lodestar_store::Refresh::Held {
+                    data,
+                    entries: (data.len() / 20) as i64,
+                    etag: None,
+                    last_modified: None,
+                    why: "shrank",
+                }
+            } else {
+                lodestar_store::Refresh::Updated {
+                    data,
+                    entries: (data.len() / 20) as i64,
+                    etag: None,
+                    last_modified: None,
+                }
+            }
+        }
+        store.record_refresh(id, 1, &refresh(&data, false)).unwrap();
+        store
+            .record_refresh(id, 2, &refresh(&data[..20], true))
+            .unwrap();
+    }
+    let err = f.api.apply(&accept, stale, now).unwrap_err();
+    assert_eq!(err.code(), "changed_since_preview");
+    let fresh = f.api.assess(&accept, now).unwrap();
+    assert!(fresh.confirm, "a fresh preview asks for the password");
+}
