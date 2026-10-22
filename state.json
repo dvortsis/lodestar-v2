@@ -1,895 +1,895 @@
 {
- "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-22T08:46:00Z",
- "launches": {
-  "date": "2026-10-22",
-  "count": 17
- },
- "tags": {},
- "slices": {
-  "B0": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_01A5BEzkYtiRur7VEKtby9FH",
-   "pr": 38,
-   "attempt": 1,
-   "review_rounds": 4,
-   "notes": "merged 07:40 after round 4 + #52 port"
-  },
-  "B5b": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_01BEmSnYW9wHszPF16AVqmtL",
-   "pr": 46,
-   "attempt": 1,
-   "review_rounds": 2,
-   "notes": "merged 10:00 as ce190f2 (#46)"
-  },
-  "C0": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_01F4G5nVWxS91JsSEEC2mka5",
-   "pr": 36,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "round 1: changes requested (trackers_checked meaning; Intl examples; stale/segments/exceptions fields; keep Tailwind default spacing, restrict to ramp steps)"
-  },
-  "C1": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_01NSdirPw4xiTrGseUFMRd8U",
-   "pr": 37,
-   "attempt": 1,
-   "review_rounds": 2,
-   "notes": "merged 08:44 after round 2"
-  },
-  "W0": {
-   "status": "merged",
-   "model": "sonnet",
-   "session": "session_01G472Ud4a5RmEjGnhwpwTQw",
-   "pr": 35,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "merged after round 2"
-  },
-  "B1": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_01UxCJe2QQNeBEaCZrmcDRJi",
-   "pr": 57,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "merged 09:27 as a569b51 (#57)"
-  },
-  "B2": {
-   "status": "in_review",
-   "model": "opus",
-   "session": "session_01QHUDtvte2DFAiHz6swmiU8",
-   "pr": 67,
-   "attempt": 1,
-   "review_rounds": 0,
-   "notes": "PR #67; reviewer (incl. security) started 12:45"
-  },
-  "B3": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_01R8S4Q4PGSjv2tZYtdKuZu3",
-   "pr": 56,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "merged 08:45 as 5195a08 (#56)"
-  },
-  "W1": {
-   "status": "merged",
-   "model": "sonnet",
-   "session": "session_013n3VVF4K4QtH4YeGKjACBY",
-   "pr": 43,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "merged after round 2"
-  },
-  "W1b": {
-   "status": "merged",
-   "model": "haiku",
-   "session": "session_01B4Sk9GZoxWRASeUcVB2C9W",
-   "pr": 58,
-   "attempt": 0,
-   "review_rounds": 1,
-   "notes": "merged 09:01 as 4d6ee4f (#58)"
-  },
-  "W3": {
-   "status": "merged",
-   "model": "sonnet",
-   "session": "session_01PtZR2UWvbfVrwEjd3TsbrG",
-   "pr": 44,
-   "attempt": 1,
-   "review_rounds": 2,
-   "notes": "merged 08:52 as 5c7b413 (#44)"
-  },
-  "W4": {
-   "status": "merged",
-   "model": "sonnet",
-   "session": "session_01Xz6N6pccu7mmGoppsJH6w1",
-   "pr": 41,
-   "attempt": 1,
-   "review_rounds": 2,
-   "notes": "merged 09:40 as 2352de1 (#41)"
-  },
-  "W6": {
-   "status": "blocked",
-   "model": "sonnet",
-   "session": "session_01QpHMCsgJt8gZPg3S2SnCGv",
-   "pr": 61,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "round-1 fixes pushed ac85d7c, CI green but e2e in update mode (.update-snapshots marker). Baselines in artifact snapshot-baselines id 12421952170 (run 39769166066); blob host productionresultssa*.blob.core.windows.net denied by network policy; CI commit job denied by classifier. Needs owner: allow host or commit artifact."
-  },
-  "W2": {
-   "status": "merged",
-   "model": "sonnet",
-   "session": "session_01EFumqKZRWcv8y4PCvuGEV4",
-   "pr": 50,
-   "attempt": 1,
-   "review_rounds": 0,
-   "notes": "approved round 1; playwright.config.ts edit accepted"
-  },
-  "W8": {
-   "status": "merged",
-   "model": "sonnet",
-   "session": "session_0121PwTE5wgafTpKrc4nNuuz",
-   "pr": 40,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "merged after round 2"
-  },
-  "B5a": {
-   "status": "in_review",
-   "model": "opus",
-   "session": "session_01Uk4thMoRJwF3Rzg9SUrxUQ",
-   "pr": 64,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "round 1: no blocking in code; asked: de-flake cancellation timing tests, revert index_root rename (B2 owns config.rs), tolerance wording, periodic lease sweep, PR description; optional seal-key HMAC. Scope exceptions accepted."
-  },
-  "B4": {
-   "status": "ready",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": "held until B5a merges (B5a owns crates/search/** incl. live.rs)"
-  },
-  "B8": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": "waits ext:m4-schema-settled (M4 PR2 #48)"
-  },
-  "B6": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "B16": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "W5": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "W7ab": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "W7cd": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "W7e": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "W9": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "M-auth": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-search-1": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-search-2": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-search-3": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-detail": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "D-docker": {
-   "status": "merged",
-   "model": "sonnet",
-   "session": "session_019VGYFBetAiATAi4KbpB7JZ",
-   "pr": 59,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "merged 09:58 as 2773dd2 (#59); image 22 MiB, smoke healthy/SPA/clean stop on CI"
-  },
-  "G-v05": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "B11a": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "B7": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "B12": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "B9": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "B5c": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "B13": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "B14": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "B11b": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "B10b": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "B15": {
-   "status": "merged_elsewhere",
-   "model": "opus",
-   "session": null,
-   "pr": 47,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": "#47 merged by the filter session 06:19"
-  },
-  "B10a": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "B11c": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-search-4": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-search-5": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-search-6": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-compare": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-discover": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-alerts": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-insights-1": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-insights-2": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-insights-3": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-settings-1": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-wizard": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-appearance": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "M-filters-dialogs": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-filters": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-keys": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-e2e": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "H-zh": {
-   "status": "pending",
-   "model": "haiku",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "G-m5": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "E-M6": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "E-v06-workers": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "E-v06-companions": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "E-v06-sources": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "E-M7": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "E-v08": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "E-M8": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "X-utp": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_0141epGbZVUkFGWnyYhDra42",
-   "pr": 51,
-   "attempt": 1,
-   "review_rounds": 2,
-   "notes": "merged 09:29 as cedc5cd (#51)"
-  },
-  "X-integrations": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_01Pbk94fn6LWmUvc4LYw2c2P",
-   "pr": 49,
-   "attempt": 1,
-   "review_rounds": 0,
-   "notes": "merged 09:14 as a6c18ef (#49)"
-  },
-  "X-pack-static": {
-   "status": "merged",
-   "model": "sonnet",
-   "session": "session_0159tQEctmkzsDhjisVQgZ3b",
-   "pr": 45,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "merged after round 2"
-  },
-  "X-clients": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_01ENLgps19e6tSx74Sv1SxUB",
-   "pr": 62,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "merged 11:54 as 813ef0d (#62)"
-  },
-  "X-notify": {
-   "status": "merged",
-   "model": "sonnet",
-   "session": "session_01JVt8W2aGJyEFgv7HYwQJUF",
-   "pr": 60,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "merged 10:19 as e8e6c6a (#60)"
-  },
-  "B17": {
-   "status": "pending",
-   "model": "opus",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "S-blocklists": {
-   "status": "pending",
-   "model": "sonnet",
-   "session": null,
-   "pr": null,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": ""
-  },
-  "F1": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_01V5sNo28tD6bZx3CNFdYjWY",
-   "pr": 55,
-   "attempt": 1,
-   "review_rounds": 2,
-   "notes": "merged 11:43 as df5cb91 (#55)"
-  },
-  "F2": {
-   "status": "done_elsewhere",
-   "model": "opus",
-   "session": null,
-   "pr": 52,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": "built by the filter session in #52 (open, to review after B0)"
-  },
-  "F3": {
-   "status": "done_elsewhere",
-   "model": "opus",
-   "session": null,
-   "pr": 52,
-   "attempt": 0,
-   "review_rounds": 0,
-   "notes": "built by the filter session in #52"
-  },
-  "W1c": {
-   "status": "merged",
-   "model": "sonnet",
-   "session": "session_013n3VVF4K4QtH4YeGKjACBY",
-   "pr": 53,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "merged 07:50"
-  },
-  "X-email": {
-   "status": "in_review",
-   "model": "opus",
-   "session": "session_01XTY2bFUF4NSdqoD8YDJjpA",
-   "pr": 63,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "round 1 fixes pushed af0a35e (transient drops, =? broken, private peer for plaintext auth, resolve timeout); merge on CI green (filter gate pending F1b); 12:50 one rerun of filter budget"
-  },
-  "B5a-swapfix": {
-   "status": "merged",
-   "model": "opus",
-   "session": "session_01Uk4thMoRJwF3Rzg9SUrxUQ",
-   "pr": 65,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "merged 12:59 as 3577c1d (#65); filter budget passed on rerun (fast runner)"
-  },
-  "F1b": {
-   "status": "blocked",
-   "model": "opus",
-   "session": "session_01V5sNo28tD6bZx3CNFdYjWY",
-   "pr": 66,
-   "attempt": 1,
-   "review_rounds": 1,
-   "notes": "round 1 fixes pushed: REFERENCE_NS=60ms (stricter, derived from 3 runner measurements), per-pass calibration, docs \u00a720.8/\u00a716; awaiting OWNER sign-off before merge"
-  }
- },
- "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
- "runner_pr": {
-  "number": 34,
-  "status": "merged",
-  "sha": "36100b9"
- },
- "policy": {
-  "merge_fallback": "If a direct merge is refused, enable GitHub auto-merge (merge commit) on the PR, only after CI is green and the review has no blocking findings. Owner-approved 2026-10-22. Fold into runner/README.md with the next runner PR.",
-  "merges": "All PRs, including the M4 sessions', are reviewed by a fresh Opus reviewer and merged by the runner (both M4 sessions told 05:58)."
- },
- "watched_sessions": {
-  "session_015F9H2aHowz7TJLffFYxUvf": {
-   "title": "M4 continuation",
-   "work": "M4 swarm health, branch claude/relaxed-knuth-vexgae (PR #32), migration V5"
-  },
-  "session_01N83eB81W8xkqJgXiD7JLM3": {
-   "title": "Modern DHT crawler architecture",
-   "work": "content filter rule persistence and writer judging, migration V6"
-  }
- },
- "watch_policy": "Owner asked the runner to keep an eye on and manage these sessions: each heartbeat check status; report a pending permission prompt to the owner (runner cannot approve); nudge an idle session with remaining work; flag conflicts with slice ownership and migration order.",
- "migration_order": "V4 filter, V5 swarm, V6 subscriptions, V7 filter rules, V8 class_corrections (all merged), V9 class_rules (#52 open), V10 reserved M4 PR2, V11 next free (F1 if needed, then M5 B8). Runner assigns.",
- "decisions": [
-  "2026-10-22 spacing: keep Tailwind v4 default --spacing (p-4=16px); only utility steps matching the \u00a710.2 ramp are allowed; W2 extends the ban check to off-ramp steps",
-  "2026-10-22 owner: the design decided in the 'Modern DHT crawler architecture' session (recorded in docs/architecture.md) is the primary design strategy; ui-design-skills only fills gaps. Encoded in runner/standards.md (PR #39).",
-  "2026-10-22 owner: Riverstone is the default/official palette and keeps plum #9381B6 in categorical slot 6 (seafoam stays retired); the theme collection is 24 families x light/dark including Rosewood as the 24th. Log both in architecture \u00a716 with the next runner docs PR.",
-  "2026-10-22 owner (audit follow-up): floor add-by-file/remove-in-app; packs per \u00a720.6; subscriptions off by default, user-chosen in wizard/settings with strictness-based warning; Riverstone unchanged, \u00a710.18 CVD claim corrected. Recorded in owner-decisions.md \u00a72.7-2.10 (PR #39).",
-  "2026-10-22 runner: community palette values stay as published; the theme compiler must derive content/tint tokens that satisfy the gates for every theme (W1c). W1b now waits for W1c and C1.",
-  "2026-10-22 W1b: ownership extended to web/scripts/themes.test.ts, theme-files.test.ts, web/static/themes.json (generated output and W1 placeholder assertions); record in slices.yaml at next runner PR"
- ],
- "open_issues": [
-  "Filter session self-merged #42 against owner decision (packs on by default) + budget env; follow-up fix requested. Suggest owner consider branch protection.",
-  "Filter session keeps self-merging (#33,#42,#47,#52) driven by the owner's '/goal finish whatever is left to do' loop; only the owner can end that goal"
- ],
- "runner_prs": {
-  "34": "merged",
-  "39": "merged 07:43"
- },
- "m4_plan": "M4 swarm: #32 now; PR2 after #32 (scrape scheduler, search on hot columns, API/binary wiring) touching crates/api/**, crates/lodestar/src/{main,http,metrics,config}.rs, crates/search/src/{index,lib,compile,filter,sorted,query}.rs \u2014 overlaps B0/B5b/B5a/B6; M4 session merges main over them. It will message the runner when M4 is complete.",
- "audit_2026_10_22": {
-  "result": "no owner-decision violations",
-  "actions": {
-   "W1 #43": "contract values exact; neutral-content >=4.5; web/themes/<family>.json",
-   "W3 #44": "cut to ~1.5 MB; one script line; \u00a716 entry",
-   "W4 #41": "npm plugin instead of vendoring; glossary keys; list shared-file edits",
-   "W8 #40": "\u00a716 entry",
-   "M4 filter #33/#42": "V7 for #42; no budget env loosening; packs per \u00a720.6; floor add-only from config; subscriptions off by default + strictness warning",
-   "new slices": "B17 adult default, S-blocklists; X-clients -> Opus"
-  }
- },
- "m4_prs": {
-  "32": "merged 05:36 by M4 session",
-  "33": "merged 05:51 by filter session (owner decisions follow-up requested)",
-  "42": "MERGED 06:07 by the filter session despite the runner's request; packs on by default (contradicts owner \u00a72.8) and LODESTAR_BUDGET_US kept. Follow-up fix PR requested 06:14; owner told.",
-  "47": "merged 06:19 by the filter session (V8 class_corrections)",
-  "48": "review round 1: merge main (B0 layout), 10M exit evidence, scheduler fixes",
-  "52": "MERGED by the filter session (self-merge again), conflicts with B0"
- },
- "heartbeats": 3,
- "reviews_in_flight": [],
- "carry_forward": {
-  "next-bans-touch": [
-   "bans.mjs:241 accept '=' so class:pb-11={x} is caught",
-   "fonts.test.ts imports fontverter (transitive dep): comment or parse otherwise"
+  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
+  "updated_at": "2026-10-22T08:46:00Z",
+  "launches": {
+    "date": "2026-10-22",
+    "count": 17
+  },
+  "tags": {},
+  "slices": {
+    "B0": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_01A5BEzkYtiRur7VEKtby9FH",
+      "pr": 38,
+      "attempt": 1,
+      "review_rounds": 4,
+      "notes": "merged 07:40 after round 4 + #52 port"
+    },
+    "B5b": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_01BEmSnYW9wHszPF16AVqmtL",
+      "pr": 46,
+      "attempt": 1,
+      "review_rounds": 2,
+      "notes": "merged 10:00 as ce190f2 (#46)"
+    },
+    "C0": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_01F4G5nVWxS91JsSEEC2mka5",
+      "pr": 36,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "round 1: changes requested (trackers_checked meaning; Intl examples; stale/segments/exceptions fields; keep Tailwind default spacing, restrict to ramp steps)"
+    },
+    "C1": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_01NSdirPw4xiTrGseUFMRd8U",
+      "pr": 37,
+      "attempt": 1,
+      "review_rounds": 2,
+      "notes": "merged 08:44 after round 2"
+    },
+    "W0": {
+      "status": "merged",
+      "model": "sonnet",
+      "session": "session_01G472Ud4a5RmEjGnhwpwTQw",
+      "pr": 35,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "merged after round 2"
+    },
+    "B1": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_01UxCJe2QQNeBEaCZrmcDRJi",
+      "pr": 57,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "merged 09:27 as a569b51 (#57)"
+    },
+    "B2": {
+      "status": "changes_requested",
+      "model": "opus",
+      "session": "session_01QHUDtvte2DFAiHz6swmiU8",
+      "pr": 67,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "PR #67 round 1 FIX (13:20): DHT bind ports rewritten w/o saved value; secure_cookies lockout -> read-only; plus null-reset, http_bind port 0, shadow log, healthcheck. Out-of-own edits ratified."
+    },
+    "B3": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_01R8S4Q4PGSjv2tZYtdKuZu3",
+      "pr": 56,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "merged 08:45 as 5195a08 (#56)"
+    },
+    "W1": {
+      "status": "merged",
+      "model": "sonnet",
+      "session": "session_013n3VVF4K4QtH4YeGKjACBY",
+      "pr": 43,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "merged after round 2"
+    },
+    "W1b": {
+      "status": "merged",
+      "model": "haiku",
+      "session": "session_01B4Sk9GZoxWRASeUcVB2C9W",
+      "pr": 58,
+      "attempt": 0,
+      "review_rounds": 1,
+      "notes": "merged 09:01 as 4d6ee4f (#58)"
+    },
+    "W3": {
+      "status": "merged",
+      "model": "sonnet",
+      "session": "session_01PtZR2UWvbfVrwEjd3TsbrG",
+      "pr": 44,
+      "attempt": 1,
+      "review_rounds": 2,
+      "notes": "merged 08:52 as 5c7b413 (#44)"
+    },
+    "W4": {
+      "status": "merged",
+      "model": "sonnet",
+      "session": "session_01Xz6N6pccu7mmGoppsJH6w1",
+      "pr": 41,
+      "attempt": 1,
+      "review_rounds": 2,
+      "notes": "merged 09:40 as 2352de1 (#41)"
+    },
+    "W6": {
+      "status": "blocked",
+      "model": "sonnet",
+      "session": "session_01QpHMCsgJt8gZPg3S2SnCGv",
+      "pr": 61,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "round-1 fixes pushed ac85d7c, CI green but e2e in update mode (.update-snapshots marker). Baselines in artifact snapshot-baselines id 12421952170 (run 39769166066); blob host productionresultssa*.blob.core.windows.net denied by network policy; CI commit job denied by classifier. Needs owner: allow host or commit artifact."
+    },
+    "W2": {
+      "status": "merged",
+      "model": "sonnet",
+      "session": "session_01EFumqKZRWcv8y4PCvuGEV4",
+      "pr": 50,
+      "attempt": 1,
+      "review_rounds": 0,
+      "notes": "approved round 1; playwright.config.ts edit accepted"
+    },
+    "W8": {
+      "status": "merged",
+      "model": "sonnet",
+      "session": "session_0121PwTE5wgafTpKrc4nNuuz",
+      "pr": 40,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "merged after round 2"
+    },
+    "B5a": {
+      "status": "in_review",
+      "model": "opus",
+      "session": "session_01Uk4thMoRJwF3Rzg9SUrxUQ",
+      "pr": 64,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "round 1: no blocking in code; asked: de-flake cancellation timing tests, revert index_root rename (B2 owns config.rs), tolerance wording, periodic lease sweep, PR description; optional seal-key HMAC. Scope exceptions accepted."
+    },
+    "B4": {
+      "status": "ready",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": "held until B5a merges (B5a owns crates/search/** incl. live.rs)"
+    },
+    "B8": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": "waits ext:m4-schema-settled (M4 PR2 #48)"
+    },
+    "B6": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "B16": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "W5": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "W7ab": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "W7cd": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "W7e": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "W9": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "M-auth": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-search-1": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-search-2": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-search-3": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-detail": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "D-docker": {
+      "status": "merged",
+      "model": "sonnet",
+      "session": "session_019VGYFBetAiATAi4KbpB7JZ",
+      "pr": 59,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "merged 09:58 as 2773dd2 (#59); image 22 MiB, smoke healthy/SPA/clean stop on CI"
+    },
+    "G-v05": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "B11a": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "B7": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "B12": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "B9": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "B5c": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "B13": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "B14": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "B11b": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "B10b": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "B15": {
+      "status": "merged_elsewhere",
+      "model": "opus",
+      "session": null,
+      "pr": 47,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": "#47 merged by the filter session 06:19"
+    },
+    "B10a": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "B11c": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-search-4": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-search-5": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-search-6": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-compare": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-discover": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-alerts": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-insights-1": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-insights-2": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-insights-3": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-settings-1": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-wizard": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-appearance": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "M-filters-dialogs": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-filters": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-keys": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-e2e": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "H-zh": {
+      "status": "pending",
+      "model": "haiku",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "G-m5": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "E-M6": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "E-v06-workers": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "E-v06-companions": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "E-v06-sources": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "E-M7": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "E-v08": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "E-M8": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "X-utp": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_0141epGbZVUkFGWnyYhDra42",
+      "pr": 51,
+      "attempt": 1,
+      "review_rounds": 2,
+      "notes": "merged 09:29 as cedc5cd (#51)"
+    },
+    "X-integrations": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_01Pbk94fn6LWmUvc4LYw2c2P",
+      "pr": 49,
+      "attempt": 1,
+      "review_rounds": 0,
+      "notes": "merged 09:14 as a6c18ef (#49)"
+    },
+    "X-pack-static": {
+      "status": "merged",
+      "model": "sonnet",
+      "session": "session_0159tQEctmkzsDhjisVQgZ3b",
+      "pr": 45,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "merged after round 2"
+    },
+    "X-clients": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_01ENLgps19e6tSx74Sv1SxUB",
+      "pr": 62,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "merged 11:54 as 813ef0d (#62)"
+    },
+    "X-notify": {
+      "status": "merged",
+      "model": "sonnet",
+      "session": "session_01JVt8W2aGJyEFgv7HYwQJUF",
+      "pr": 60,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "merged 10:19 as e8e6c6a (#60)"
+    },
+    "B17": {
+      "status": "pending",
+      "model": "opus",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "S-blocklists": {
+      "status": "pending",
+      "model": "sonnet",
+      "session": null,
+      "pr": null,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": ""
+    },
+    "F1": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_01V5sNo28tD6bZx3CNFdYjWY",
+      "pr": 55,
+      "attempt": 1,
+      "review_rounds": 2,
+      "notes": "merged 11:43 as df5cb91 (#55)"
+    },
+    "F2": {
+      "status": "done_elsewhere",
+      "model": "opus",
+      "session": null,
+      "pr": 52,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": "built by the filter session in #52 (open, to review after B0)"
+    },
+    "F3": {
+      "status": "done_elsewhere",
+      "model": "opus",
+      "session": null,
+      "pr": 52,
+      "attempt": 0,
+      "review_rounds": 0,
+      "notes": "built by the filter session in #52"
+    },
+    "W1c": {
+      "status": "merged",
+      "model": "sonnet",
+      "session": "session_013n3VVF4K4QtH4YeGKjACBY",
+      "pr": 53,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "merged 07:50"
+    },
+    "X-email": {
+      "status": "in_review",
+      "model": "opus",
+      "session": "session_01XTY2bFUF4NSdqoD8YDJjpA",
+      "pr": 63,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "round 1 fixes pushed af0a35e (transient drops, =? broken, private peer for plaintext auth, resolve timeout); merge on CI green (filter gate pending F1b); 12:50 one rerun of filter budget"
+    },
+    "B5a-swapfix": {
+      "status": "merged",
+      "model": "opus",
+      "session": "session_01Uk4thMoRJwF3Rzg9SUrxUQ",
+      "pr": 65,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "merged 12:59 as 3577c1d (#65); filter budget passed on rerun (fast runner)"
+    },
+    "F1b": {
+      "status": "blocked",
+      "model": "opus",
+      "session": "session_01V5sNo28tD6bZx3CNFdYjWY",
+      "pr": 66,
+      "attempt": 1,
+      "review_rounds": 1,
+      "notes": "round 1 fixes pushed: REFERENCE_NS=60ms (stricter, derived from 3 runner measurements), per-pass calibration, docs \u00a720.8/\u00a716; awaiting OWNER sign-off before merge"
+    }
+  },
+  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
+  "runner_pr": {
+    "number": 34,
+    "status": "merged",
+    "sha": "36100b9"
+  },
+  "policy": {
+    "merge_fallback": "If a direct merge is refused, enable GitHub auto-merge (merge commit) on the PR, only after CI is green and the review has no blocking findings. Owner-approved 2026-10-22. Fold into runner/README.md with the next runner PR.",
+    "merges": "All PRs, including the M4 sessions', are reviewed by a fresh Opus reviewer and merged by the runner (both M4 sessions told 05:58)."
+  },
+  "watched_sessions": {
+    "session_015F9H2aHowz7TJLffFYxUvf": {
+      "title": "M4 continuation",
+      "work": "M4 swarm health, branch claude/relaxed-knuth-vexgae (PR #32), migration V5"
+    },
+    "session_01N83eB81W8xkqJgXiD7JLM3": {
+      "title": "Modern DHT crawler architecture",
+      "work": "content filter rule persistence and writer judging, migration V6"
+    }
+  },
+  "watch_policy": "Owner asked the runner to keep an eye on and manage these sessions: each heartbeat check status; report a pending permission prompt to the owner (runner cannot approve); nudge an idle session with remaining work; flag conflicts with slice ownership and migration order.",
+  "migration_order": "V4 filter, V5 swarm, V6 subscriptions, V7 filter rules, V8 class_corrections (all merged), V9 class_rules (#52 open), V10 reserved M4 PR2, V11 next free (F1 if needed, then M5 B8). Runner assigns.",
+  "decisions": [
+    "2026-10-22 spacing: keep Tailwind v4 default --spacing (p-4=16px); only utility steps matching the \u00a710.2 ramp are allowed; W2 extends the ban check to off-ramp steps",
+    "2026-10-22 owner: the design decided in the 'Modern DHT crawler architecture' session (recorded in docs/architecture.md) is the primary design strategy; ui-design-skills only fills gaps. Encoded in runner/standards.md (PR #39).",
+    "2026-10-22 owner: Riverstone is the default/official palette and keeps plum #9381B6 in categorical slot 6 (seafoam stays retired); the theme collection is 24 families x light/dark including Rosewood as the 24th. Log both in architecture \u00a716 with the next runner docs PR.",
+    "2026-10-22 owner (audit follow-up): floor add-by-file/remove-in-app; packs per \u00a720.6; subscriptions off by default, user-chosen in wizard/settings with strictness-based warning; Riverstone unchanged, \u00a710.18 CVD claim corrected. Recorded in owner-decisions.md \u00a72.7-2.10 (PR #39).",
+    "2026-10-22 runner: community palette values stay as published; the theme compiler must derive content/tint tokens that satisfy the gates for every theme (W1c). W1b now waits for W1c and C1.",
+    "2026-10-22 W1b: ownership extended to web/scripts/themes.test.ts, theme-files.test.ts, web/static/themes.json (generated output and W1 placeholder assertions); record in slices.yaml at next runner PR"
   ],
-  "contract-docs": [
-   "design-tokens.md CJK fallback: use installed family names (\"Noto Sans CJK SC\" etc.) \u2014 \u00a710.2 wording to align"
+  "open_issues": [
+    "Filter session self-merged #42 against owner decision (packs on by default) + budget env; follow-up fix requested. Suggest owner consider branch protection.",
+    "Filter session keeps self-merging (#33,#42,#47,#52) driven by the owner's '/goal finish whatever is left to do' loop; only the owner can end that goal"
   ],
-  "binary-puid": [
-   "PUID/PGID privilege drop in the binary (security, Opus): \u00a711 promises it, the Unraid template sets PUID=99/PGID=100; until then the image runs as nonroot and the template needs --user 99:100. Fold into the next Opus slice owning crates/lodestar/src/main.rs (B2 or M6 CLI)"
+  "runner_prs": {
+    "34": "merged",
+    "39": "merged 07:43"
+  },
+  "m4_plan": "M4 swarm: #32 now; PR2 after #32 (scrape scheduler, search on hot columns, API/binary wiring) touching crates/api/**, crates/lodestar/src/{main,http,metrics,config}.rs, crates/search/src/{index,lib,compile,filter,sorted,query}.rs \u2014 overlaps B0/B5b/B5a/B6; M4 session merges main over them. It will message the runner when M4 is complete.",
+  "audit_2026_10_22": {
+    "result": "no owner-decision violations",
+    "actions": {
+      "W1 #43": "contract values exact; neutral-content >=4.5; web/themes/<family>.json",
+      "W3 #44": "cut to ~1.5 MB; one script line; \u00a716 entry",
+      "W4 #41": "npm plugin instead of vendoring; glossary keys; list shared-file edits",
+      "W8 #40": "\u00a716 entry",
+      "M4 filter #33/#42": "V7 for #42; no budget env loosening; packs per \u00a720.6; floor add-only from config; subscriptions off by default + strictness warning",
+      "new slices": "B17 adult default, S-blocklists; X-clients -> Opus"
+    }
+  },
+  "m4_prs": {
+    "32": "merged 05:36 by M4 session",
+    "33": "merged 05:51 by filter session (owner decisions follow-up requested)",
+    "42": "MERGED 06:07 by the filter session despite the runner's request; packs on by default (contradicts owner \u00a72.8) and LODESTAR_BUDGET_US kept. Follow-up fix PR requested 06:14; owner told.",
+    "47": "merged 06:19 by the filter session (V8 class_corrections)",
+    "48": "review round 1: merge main (B0 layout), 10M exit evidence, scheduler fixes",
+    "52": "MERGED by the filter session (self-merge again), conflicts with B0"
+  },
+  "heartbeats": 3,
+  "reviews_in_flight": [],
+  "carry_forward": {
+    "next-bans-touch": [
+      "bans.mjs:241 accept '=' so class:pb-11={x} is caught",
+      "fonts.test.ts imports fontverter (transitive dep): comment or parse otherwise"
+    ],
+    "contract-docs": [
+      "design-tokens.md CJK fallback: use installed family names (\"Noto Sans CJK SC\" etc.) \u2014 \u00a710.2 wording to align"
+    ],
+    "binary-puid": [
+      "PUID/PGID privilege drop in the binary (security, Opus): \u00a711 promises it, the Unraid template sets PUID=99/PGID=100; until then the image runs as nonroot and the template needs --user 99:100. Fold into the next Opus slice owning crates/lodestar/src/main.rs (B2 or M6 CLI)"
+    ],
+    "runner-pr": [
+      "slices.yaml W1b title says 47 JSONs: is 23 families/46 themes; widen W1b owns",
+      "docs/themes.md derived-token gates table still says 9 pending (W1c): all 48 pass now",
+      "slices.yaml: add X-email (opus, deps X-notify); narrow X-notify owns to notify/{ntfy,discord,rss}.rs + tests",
+      "slices.yaml: X-clients/X-notify owns include their tests/ and fixtures/",
+      "slices.yaml W6 owns: web/e2e/** not web/tests/**",
+      "runner/README.md: runner resolves \u00a716-only merge conflicts itself (merge commit, keep both blocks in landing order, run \u00a71 checks) instead of a round trip"
+    ],
+    "B1-polish": [
+      "golden: add stemmed:true and non-null hash_v2 fixtures",
+      "explicit operation_ids if not done in #57",
+      "add OpenAPI examples to utoipa schemas (W6 mock defaults; 0/24 ops have examples)"
+    ],
+    "metrics-contract": [
+      "metrics.md \u00a76.7: add notifications_delivered / notifications_failed (IntegrationMetrics already counts them)"
+    ],
+    "X-notify": [
+      "Webhook HMAC signature not implemented yet: add as additive field"
+    ],
+    "B6": [
+      "B5b: fields present-but-not-fast: resolve fast-column needs per use (sorts/lifted ranges skip, term queries still use field)"
+    ],
+    "X-utp-wire": [
+      "DHT receive-loop demux + Node::utp() per PR #51 \"Shared-file edits still needed\" (crates/dht/src/node/{mod,actor}.rs, dht Cargo.toml); hold until M4 #48 merges (touches DHT). lodestar wiring (FetchOptions::utp, metrics utp stats, uTP settings flag) goes with B2. Docs \u00a713/\u00a76 update."
+    ],
+    "D-docker-followups": [
+      "packaging/unraid/lodestar.xml ExtraParams --user 99:100 (X-pack-static owner)",
+      "No LICENSE file: owner to choose a licence (image label NOASSERTION)"
+    ],
+    "polish": [
+      "first-run log says \"open http://0.0.0.0:8090/\": print a reachable address or \"this host\" (lodestar services.rs)"
+    ],
+    "runner-docs-pr": [
+      "\u00a716: X-notify decisions (Discord send without redirects; ntfy requires JSON with id on 2xx; ntfy credentials over http only to private hosts)",
+      "\u00a716/D-docker: STRIP/DEBUG override in image; \u00a74 data layout differs from code",
+      "\u00a716: snapshot policy (key screens only; 46-theme set at bp1366; compact only densityAware routes; baselines generated in pinned playwright container)"
+    ],
+    "M4-48": [
+      "#48 rewrites crates/search index/query/compile/filter/sorted; main has since gained B0,B1,B5b (+B5a soon): #48 needs a large merge of main before it can land"
+    ],
+    "flaky": [
+      "2026-10-22 11:13 Windows: search/tests/rebuild.rs searches_keep_working_through_a_rebuild_and_the_swap timed out (rebuild never finished in 30s) on PR #61 run 39768313014. Hypothesis: SRWLock writer starvation by spinning readers of Serving RwLock. Routed to B5a to root-cause.",
+      "11:22 failed again on PR #62 (job 119791380998): now consistent; asked B5a for a separate fix PR slice/B5a-swapfix first",
+      "11:48 root cause per B5a: finishing rename refused on Windows (scanner holds files) -> Failed phase, rebuilding() stays true. Fix PR #65.",
+      "12:59 swap fix #65 merged; Windows rebuild test green on #64 and #65 runs"
+    ],
+    "filter-followup": [
+      "NEAR quirk (pre-existing, #42): words that split into several tokens (1080p, x264) can never match inside NEAR; needs a fix in a filter slice"
+    ],
+    "integrations-readme": [
+      "README rule 1: mention net::connect_tcp/resolve_tcp for non-HTTP protocols"
+    ]
+  },
+  "blocked_on_owner": [
+    "M4 continuation: waiting on ExitPlanMode approval (plan mode) \u2014 can't act on #48 review",
+    "Modern DHT crawler architecture: waiting on an AskUserQuestion",
+    "W6 baselines: allow *.blob.core.windows.net (GitHub Actions artifact storage) in environment network, or owner commits artifact 12421952170 into web/e2e/ and removes web/e2e/.update-snapshots on slice/W6",
+    "F1b #66: sign-off on calibrated filter budget (50us at reference runner speed, scale up to 1.6x on slower runners)"
   ],
-  "runner-pr": [
-   "slices.yaml W1b title says 47 JSONs: is 23 families/46 themes; widen W1b owns",
-   "docs/themes.md derived-token gates table still says 9 pending (W1c): all 48 pass now",
-   "slices.yaml: add X-email (opus, deps X-notify); narrow X-notify owns to notify/{ntfy,discord,rss}.rs + tests",
-   "slices.yaml: X-clients/X-notify owns include their tests/ and fixtures/",
-   "slices.yaml W6 owns: web/e2e/** not web/tests/**",
-   "runner/README.md: runner resolves \u00a716-only merge conflicts itself (merge commit, keep both blocks in landing order, run \u00a71 checks) instead of a round trip"
+  "launches_today": 7,
+  "last_heartbeat": "2026-10-22T12:44Z",
+  "owner_questions": [
+    "F1 budget scope: gate covers cheaply-rejectable rule shapes (10% = 40.8 us on runner). Shapes the cheap check cannot decide cost more at 10% of rules (VM: NEAR/1 ~450-500, negation ~140, fuzzy ~125, prefix ~110 us; runner ~1.4x faster). Should those shapes be gated at 50 us too?",
+    "Filter budget hardware: 50 us has no reference machine; gate now calibrated to the runner F1 measured on (10%=40.8 us), slower runners scale up to 1.6x. Confirm or set a reference machine."
   ],
-  "B1-polish": [
-   "golden: add stemmed:true and non-null hash_v2 fixtures",
-   "explicit operation_ids if not done in #57",
-   "add OpenAPI examples to utoipa schemas (W6 mock defaults; 0/24 ops have examples)"
-  ],
-  "metrics-contract": [
-   "metrics.md \u00a76.7: add notifications_delivered / notifications_failed (IntegrationMetrics already counts them)"
-  ],
-  "X-notify": [
-   "Webhook HMAC signature not implemented yet: add as additive field"
-  ],
-  "B6": [
-   "B5b: fields present-but-not-fast: resolve fast-column needs per use (sorts/lifted ranges skip, term queries still use field)"
-  ],
-  "X-utp-wire": [
-   "DHT receive-loop demux + Node::utp() per PR #51 \"Shared-file edits still needed\" (crates/dht/src/node/{mod,actor}.rs, dht Cargo.toml); hold until M4 #48 merges (touches DHT). lodestar wiring (FetchOptions::utp, metrics utp stats, uTP settings flag) goes with B2. Docs \u00a713/\u00a76 update."
-  ],
-  "D-docker-followups": [
-   "packaging/unraid/lodestar.xml ExtraParams --user 99:100 (X-pack-static owner)",
-   "No LICENSE file: owner to choose a licence (image label NOASSERTION)"
-  ],
-  "polish": [
-   "first-run log says \"open http://0.0.0.0:8090/\": print a reachable address or \"this host\" (lodestar services.rs)"
-  ],
-  "runner-docs-pr": [
-   "\u00a716: X-notify decisions (Discord send without redirects; ntfy requires JSON with id on 2xx; ntfy credentials over http only to private hosts)",
-   "\u00a716/D-docker: STRIP/DEBUG override in image; \u00a74 data layout differs from code",
-   "\u00a716: snapshot policy (key screens only; 46-theme set at bp1366; compact only densityAware routes; baselines generated in pinned playwright container)"
-  ],
-  "M4-48": [
-   "#48 rewrites crates/search index/query/compile/filter/sorted; main has since gained B0,B1,B5b (+B5a soon): #48 needs a large merge of main before it can land"
-  ],
-  "flaky": [
-   "2026-10-22 11:13 Windows: search/tests/rebuild.rs searches_keep_working_through_a_rebuild_and_the_swap timed out (rebuild never finished in 30s) on PR #61 run 39768313014. Hypothesis: SRWLock writer starvation by spinning readers of Serving RwLock. Routed to B5a to root-cause.",
-   "11:22 failed again on PR #62 (job 119791380998): now consistent; asked B5a for a separate fix PR slice/B5a-swapfix first",
-   "11:48 root cause per B5a: finishing rename refused on Windows (scanner holds files) -> Failed phase, rebuilding() stays true. Fix PR #65.",
-   "12:59 swap fix #65 merged; Windows rebuild test green on #64 and #65 runs"
-  ],
-  "filter-followup": [
-   "NEAR quirk (pre-existing, #42): words that split into several tokens (1080p, x264) can never match inside NEAR; needs a fix in a filter slice"
-  ],
-  "integrations-readme": [
-   "README rule 1: mention net::connect_tcp/resolve_tcp for non-HTTP protocols"
-  ]
- },
- "blocked_on_owner": [
-  "M4 continuation: waiting on ExitPlanMode approval (plan mode) \u2014 can't act on #48 review",
-  "Modern DHT crawler architecture: waiting on an AskUserQuestion",
-  "W6 baselines: allow *.blob.core.windows.net (GitHub Actions artifact storage) in environment network, or owner commits artifact 12421952170 into web/e2e/ and removes web/e2e/.update-snapshots on slice/W6",
-  "F1b #66: sign-off on calibrated filter budget (50us at reference runner speed, scale up to 1.6x on slower runners)"
- ],
- "launches_today": 7,
- "last_heartbeat": "2026-10-22T12:44Z",
- "owner_questions": [
-  "F1 budget scope: gate covers cheaply-rejectable rule shapes (10% = 40.8 us on runner). Shapes the cheap check cannot decide cost more at 10% of rules (VM: NEAR/1 ~450-500, negation ~140, fuzzy ~125, prefix ~110 us; runner ~1.4x faster). Should those shapes be gated at 50 us too?",
-  "Filter budget hardware: 50 us has no reference machine; gate now calibrated to the runner F1 measured on (10%=40.8 us), slower runners scale up to 1.6x. Confirm or set a reference machine."
- ],
- "last_owner_push": "2026-10-22T12:50Z"
+  "last_owner_push": "2026-10-22T12:50Z"
 }
