@@ -379,6 +379,7 @@ hash:0123456789abcdef0123456789abcdef01234567
 - Upper or lower case both work (`0123456789ABCDEF0123456789ABCDEF01234567` is read the same).
 - Only the `btih` hash is used. A magnet link without a 40-digit hex `btih` is an error.
 - `hash:` and `magnet:` can be written explicitly too. A 32-character base32 hash isn't read yet.
+- If the torrent is Adult and Adult is hidden, you get "not found" (see [Adult](#hidden-torrents-and-adult)).
 
 ## How results are ranked
 
@@ -483,9 +484,13 @@ hidden:yes
 
 ### Adult
 
-Adult is a content type (`type:adult`) with a kind (`adult:scene`, `adult:vr`, `adult:photos`, …). The plan is that Adult is hidden unless **Show adult content** is on (**Settings → Appearance**, with an 18+ confirmation) and is then excluded from search, facets and Discover. That setting is **(planned)**.
+**Adult** is a kind of content (`type:adult`) with a sub-kind (`adult:scene`, `adult:vr`, `adult:photos`, …). Lodestar hides it by default (recommended). Hiding changes only what you see: Adult torrents are still stored and indexed.
 
-**As built today, search does not apply that preference yet.** The index stores the type and kind, so `type:adult` and `adult:scene` work, and `-type:adult` removes adult torrents, but a plain search does not hide them on its own.
+While Adult is hidden:
+
+- Plain searches, counts and filters leave Adult torrents out.
+- `type:adult` and `adult:<kind>` return no results, and the answer carries a notice that Adult is hidden. `-type:adult` is not asking for Adult and gets no notice.
+- Pasting the hash of an Adult torrent answers "not found" (the error code is `adult_hidden`, so the app can explain why).
 
 ```query
 type:adult
@@ -493,7 +498,20 @@ adult:scene
 -type:adult
 ```
 
-The preference will arrive with its own slice; this page changes when it does.
+To show Adult, turn on **Show adult content** in the **Content** settings section. It needs a confirmation that you are 18 or older. The **Settings → Content** screen is **(planned)**. Until it exists, send the change to the settings API, with the confirmation in the same request:
+
+```text
+PATCH /settings/content
+{"show_adult": true, "confirm_adult": true}
+```
+
+Without `"confirm_adult": true`, the server answers `422 adult_confirmation_required` and saves nothing. Turning it off needs no confirmation. The change applies at once, with no restart. An administrator can also set it in `config.toml` (`[content] show_adult`) or with the `LODESTAR_SHOW_ADULT` environment variable. That setting then can't be changed in the app.
+
+> [!NOTE]
+> A page cursor from before you changed the setting stops working (`400 bad_cursor`). Run the search again.
+
+> [!NOTE]
+> A torrent Lodestar hasn't classified yet (new imports, or a backfill still running) isn't hidden until it is. This is a known gap.
 
 ## Not available yet
 

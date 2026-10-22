@@ -2,8 +2,8 @@
 //! parser. The page is the source: a code block tagged `query` must
 //! parse (and round-trip), and one tagged `query-fail` lists
 //! `query => message fragment` lines that must fail with that message.
-//! Mermaid blocks are skipped; any other code block is an error, so
-//! nothing on the page goes unchecked.
+//! Mermaid and `text` blocks (a request body, say) are skipped; any
+//! other code block is an error, so nothing on the page goes unchecked.
 
 use lodestar_search::parse;
 
@@ -22,7 +22,7 @@ fn examples_parse_as_documented() {
                 None => Some(tag.trim()),
             };
             if let Some(tag) = lang {
-                if !matches!(tag, "query" | "query-fail" | "mermaid") {
+                if !matches!(tag, "query" | "query-fail" | "mermaid" | "text") {
                     problems.push(format!("line {at}: code block tagged {tag:?}"));
                 }
             }
