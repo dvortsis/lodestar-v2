@@ -25,7 +25,7 @@ fixes the words.
 | `discovered` | Discovered | When Lodestar first saw the torrent's key, not when it was created. Torrents first seen during the warm-up window carry "First seen during backfill". | 发现时间 (TBD) |
 | `last_seen` | Last seen | The latest time the torrent's key was seen active in the DHT. | 最后出现 (TBD) |
 | `seeders` | Seeders | Peers with the complete torrent: the highest count among sources within the freshness window. "—" means never scraped; 0 means scraped and nobody seeding. | 做种数 (TBD) |
-| `trackers_reporting` | Trackers reporting | Trackers whose last scrape reported any seeders, leechers or completions for this torrent, out of the trackers checked ("4 / 20"; "Reported by 4 of 20 trackers checked"). | 报告的 Tracker (TBD) |
+| `trackers_reporting` | Trackers reporting | Trackers whose last scrape reported any seeders, leechers or completions for this torrent, out of the trackers that answered the last answered scrape round ("4 / 20"; "Reported by 4 of 20 trackers checked"). | 报告的 Tracker (TBD) |
 | `junk` | Junk | A torrent whose junk score (0–100, with reasons) is over the threshold: lure files, executables in media, mismatched names and similar. Hidden by default ("N hidden · Show"). | 垃圾 (TBD) |
 | `version_group` | Version group | Torrents of the same release in different versions (resolution, codec, edition, group). "Group versions" collapses them. | 版本组 (TBD) |
 | `clone` | Clone | A torrent with an identical payload (same files and contents) to another, under a different info hash. | 克隆 (TBD) |
@@ -38,16 +38,16 @@ Terms the core terms depend on, and the truthful-state strings from §10.14.
 |---|---|---|---|
 | `leechers` | Leechers | Peers still downloading. Same null/zero rules as seeders. | 下载数 (TBD) |
 | `completed` | Completed | Downloads trackers report as finished. | 完成数 (TBD) |
-| `trackers_checked` | Trackers checked | Trackers asked in the last scrape round (the "m" in "n of m"). | 已检查的 Tracker (TBD) |
+| `trackers_checked` | Trackers checked | Trackers that **answered** in the last answered scrape round (the "m" in "n of m"). Trackers that didn't answer aren't counted, and a round where none answered changes nothing. | 已检查的 Tracker (TBD) |
 | `dht_estimate` | DHT estimate | Seeds and peers estimated from the DHT (BEP 33). Always shown as an estimate ("≈"). | DHT 估计 (TBD) |
 | `never_scraped` | Never scraped | No swarm data yet; shown as "—" in rows. | 从未抓取 (TBD) |
-| `scrape_age` | Seen {time} ago | How old the swarm data is ("Seen 3 h ago"; the `Intl` relative time). | {time}前检查 (TBD) |
+| `scrape_age` | Seen {relative} | How old the swarm data is. `{relative}` is the full `formatRelative` output, which already carries "ago" ("Seen 3 hours ago", "Seen yesterday"). | 检查于{relative} (TBD; e.g. 检查于3小时前) |
 | `backfill` | First seen during backfill | The discovered date only means "when Lodestar first saw it" (warm-up window). | 回填期间首次发现 (TBD) |
 | `estimate` | ≈ | Prefix for an estimated value ("≈ 2.4M"). The accessible name is "about". | ≈ / 约 (TBD) |
 | `sampled_note` | Counts are estimated from a sample | Note on a sampled facet panel. | 计数基于抽样估计 (TBD) |
 | `incomplete` | Incomplete | A discovery cohort that hasn't finished (not yet final). | 未完成 (TBD) |
 | `swarm_suspect` | Suspect seeders | One tracker reports a swarm nobody else sees. | 可疑做种数 (TBD) |
-| `composition` | Composition | The share of a torrent's bytes in each file category group ("82% video"). | 内容构成 (TBD) |
+| `composition` | Composition | The share of a torrent's bytes (not counting padding files) in each file category group ("82% video"). | 内容构成 (TBD) |
 | `category_group` | File type | A colour group of file categories: Video, Audio, Images, Documents, Archives, Software, Other. | 文件类型 (TBD) |
 | `content_type` | Type | What the torrent is: Movie, TV, Music, Audiobook, Ebook, Comic, Software, Game, Images, Video, Other, Adult. | 类型 (TBD) |
 | `adult_kind` | Adult type | The kind of adult item: Scene, Movie, Photos, Comics, Game, VR, Audio (§20.9). Shown only when "Show adult content" is on. | 成人类型 (TBD) |
