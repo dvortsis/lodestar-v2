@@ -28,7 +28,6 @@ use axum::{Json, Router};
 use lodestar_classify::ContentType;
 use lodestar_filter::lists::SharedIps;
 use lodestar_filter::load::{KIND_HASHES, KIND_KEYWORD, KIND_PAYLOAD, KIND_QUERY, encode_match};
-use lodestar_filter::reclassify::Refiling;
 use lodestar_filter::{
     Action, CoreRule, Doc, Engine, Exception, Facts, Fixture, Handle, HeldSet, Item,
     MAX_CLASS_RULES, Match, Origin, Override, Pack, PackRule, RuleRef, Sealer, Strength,
@@ -45,21 +44,23 @@ use crate::dto::filters::{
     AllowEntry, ApplyResponse, ClassRule, ClassRuleAdded, ClassRuleRemoved, Classes, CoreRuleState,
     CorrectResponse, Decision, DecisionCount, Detection, DetectionExample, ExceptionEntry,
     FixtureCounts, Fixtures, JobPhase, JobProgress, JobStarted, JobState, JobStatus, OverrideEntry,
-    Overview, PackRuleState, PackState, PendingFloorEntry, QuarantineEntry, Queue, RuleEntry,
-    Strictness, StrictnessList, SubscriptionEntry, TestResponse, TestResult,
+    Overview, PackRuleState, PackState, PendingFloorEntry, QuarantineEntry, Queue, QueueQuery,
+    RuleEntry, Strictness, StrictnessList, SubscriptionEntry, TestResponse, TestResult,
+    TombstoneEntry, Tombstones, TombstonesQuery,
 };
 pub use crate::dto::filters::{
     Assessment, Change, ChangeBody, ClassRuleBody, CorrectBody, IdBody, MatchInput, Preview,
     Sample, SampleFile, StrictnessBody, TestBody,
 };
 use crate::error::{ApiError, ApiResult, internal};
-use crate::extract::{ClientIp, Json as JsonBody, Path, same_origin_json};
+use crate::extract::{ClientIp, Json as JsonBody, Path, Query, same_origin_json};
 
 /// This module's half of `/openapi.json`.
 #[derive(OpenApi)]
 #[openapi(paths(
     overview,
     queue,
+    tombstones,
     fixtures,
     test,
     strictness,
@@ -98,6 +99,8 @@ pub struct FiltersApi {
 const REPLAY_SECS: i64 = 30 * 86_400;
 /// Rows read for a preview.
 const PREVIEW_ROWS: usize = 100_000;
+/// Quarantine rows per review-queue page, at most and by default.
+const QUEUE_PAGE: usize = 1_000;
 /// Hashes listed per source of pending floor removals.
 const PENDING_HASHES: usize = 1_000;
 /// Floor entries one removal settles at most, and a request may name: a
@@ -110,6 +113,7 @@ pub fn routes() -> Router<ApiState> {
         Router::new()
             .route("/filters", get(overview))
             .route("/filters/queue", get(queue))
+            .route("/filters/tombstones", get(tombstones))
             .route("/filters/fixtures", get(fixtures))
             .route("/filters/test", post(test))
             .route("/filters/strictness", post(strictness))
@@ -136,6 +140,15 @@ fn not_found(code: &'static str, message: &'static str) -> ApiError {
 
 fn conflict(code: &'static str, message: impl Into<String>) -> ApiError {
     ApiError::new(StatusCode::CONFLICT, code, message.into())
+}
+
+/// The state changed since the preview so that this change now weakens
+/// filtering: it must be previewed (and confirmed) again.
+fn changed_since_preview() -> ApiError {
+    conflict(
+        "changed_since_preview",
+        "Filtering changed since this was previewed: preview it again.",
+    )
 }
 
 fn hex20(s: &str) -> ApiResult<[u8; 20]> {
@@ -435,16 +448,24 @@ impl PreviewJobs {
 
 /// The current state, read once per preview.
 struct Snapshot {
+    /// Every rule's held hashes: `(quarantined, tombstoned)`, counted in
+    /// full (the rows below are the newest only).
+    held: HashMap<String, (usize, usize)>,
     quarantine: Vec<lodestar_store::Quarantined>,
-    tombstones: Vec<([u8; 20], String, i64)>,
+    tombstones: Vec<lodestar_store::Tombstone>,
     hits: Vec<(String, u8, i64)>,
 }
 
 impl Snapshot {
     fn read(store: &Store, now: i64) -> lodestar_store::Result<Snapshot> {
         Ok(Snapshot {
+            held: store
+                .held_counts()?
+                .into_iter()
+                .map(|(r, q, t)| (r, (q, t)))
+                .collect(),
             quarantine: store.quarantined(PREVIEW_ROWS)?,
-            tombstones: store.tombstones(PREVIEW_ROWS)?.into_iter().collect(),
+            tombstones: store.tombstones(PREVIEW_ROWS)?,
             hits: store.hit_counts(now - REPLAY_SECS)?,
         })
     }
@@ -465,8 +486,16 @@ impl Snapshot {
             .collect();
         let caught: i64 = live.iter().map(|(_, _, n)| n).sum();
         Preview {
-            quarantine: self.quarantine.iter().filter(|q| hit(&q.rule)).count(),
-            tombstones: self.tombstones.iter().filter(|t| hit(&t.1)).count(),
+            quarantine: rules
+                .iter()
+                .filter_map(|r| self.held.get(r))
+                .map(|h| h.0)
+                .sum(),
+            tombstones: rules
+                .iter()
+                .filter_map(|r| self.held.get(r))
+                .map(|h| h.1)
+                .sum(),
             stored: live
                 .iter()
                 .filter(|(_, a, _)| mark(*a))
@@ -535,7 +564,7 @@ impl Snapshot {
         for chunk in self.tombstones.chunks(1024) {
             p.tombstones += chunk
                 .iter()
-                .filter(|(h, rule, _)| released_by_hash(after, h, rule))
+                .filter(|t| released_by_hash(after, &t.hash, &t.rule))
                 .count();
             progress.step(chunk.len() as u64)?;
         }
@@ -559,6 +588,15 @@ fn released_by_hash(engine: &Engine, hash: &[u8; 20], rule: &str) -> bool {
             .exceptions
             .iter()
             .any(|e| e.rule.id() == rule && covers(&e.what))
+}
+
+/// A review-queue cursor, `{at}.{hash}`: the last row of the page before.
+fn queue_cursor(c: &str) -> ApiResult<(i64, [u8; 20])> {
+    let bad_cursor = || bad("bad_cursor", "That isn't a review-queue cursor.").field("cursor");
+    let (at, hash) = c.split_once('.').ok_or_else(bad_cursor)?;
+    let at = at.parse().map_err(|_| bad_cursor())?;
+    let hash = hex20(hash).map_err(|_| bad_cursor())?;
+    Ok((at, hash))
 }
 
 fn pack_rules(id: &str) -> ApiResult<Vec<String>> {
@@ -645,9 +683,16 @@ fn count_line(p: &Preview) -> String {
     s
 }
 
+/// The side effect of releasing an adult hold (§20.11): the relabel that
+/// made the Adult-only checks apply may not be there when it's next seen.
+const ADULT_HOLD_NOTE: &str = "It was held because your correction or an Is adult \
+    classification rule made it adult. A correction is deleted with the torrent: if no Is \
+    adult rule matches it when it's next seen, it's judged as detection classifies it, and if \
+    that isn't adult, the Adult-only child-safety checks won't look at it.";
+
 /// The effect warning (§20.11): what it does, what else it lets
 /// through, the numbers, and a safer alternative.
-fn warning(change: &Change, p: &Preview, neutral: Option<&Preview>) -> String {
+fn warning(change: &Change, p: &Preview, neutral: Option<&Preview>, adult_hold: bool) -> String {
     let n = count_line(p);
     match change {
         Change::CoreSwitch { rule, .. } => format!(
@@ -708,8 +753,18 @@ fn warning(change: &Change, p: &Preview, neutral: Option<&Preview>) -> String {
         Change::FalsePositive { .. } => format!(
             "This releases one torrent from the rule that held it, and from that rule only. \
              Other rules still check it, and future torrents with similar names are still \
-             checked. It will be fetched and indexed. {n}"
+             checked. It will be fetched and indexed. {n}{}",
+            if adult_hold {
+                format!(" {ADULT_HOLD_NOTE}")
+            } else {
+                String::new()
+            }
         ),
+        Change::Release { .. } if adult_hold => {
+            format!(
+                "Releasing this torrent fetches and indexes it the next time it's seen. {ADULT_HOLD_NOTE} Safer: keep it held."
+            )
+        }
         Change::Release { .. } => {
             "Releasing this torrent fetches and indexes it normally the next time it's seen. \
              Every rule checks it again then."
@@ -795,7 +850,10 @@ impl FiltersApi {
                         format!("{rule} is part of the locked floor and can't be switched off."),
                     ));
                 }
-                if !on && engine.core.switches.is_on(r) {
+                // As stored: the engine can lag the store after an apply
+                // that failed part-way.
+                let stored_on = self.store().core_switch(r.id()).map_err(internal)?;
+                if !on && stored_on {
                     a.weakening = true;
                     a.preview = rules(vec![rule.clone()]);
                 }
@@ -932,7 +990,11 @@ impl FiltersApi {
                 let hs: Vec<[u8; 20]> =
                     hashes.iter().map(|h| hex20(h)).collect::<ApiResult<_>>()?;
                 a.weakening = true;
-                a.preview.tombstones = snap.tombstones.iter().filter(|t| hs.contains(&t.0)).count();
+                a.preview.tombstones = snap
+                    .tombstones
+                    .iter()
+                    .filter(|t| hs.contains(&t.hash))
+                    .count();
             }
             Change::FalsePositive { hash } => {
                 let h = hex20(hash)?;
@@ -961,7 +1023,7 @@ impl FiltersApi {
                 let h = hex20(hash)?;
                 a.weakening = true;
                 a.preview.quarantine = snap.quarantine.iter().filter(|q| q.hash == h).count();
-                a.preview.tombstones = snap.tombstones.iter().filter(|t| t.0 == h).count();
+                a.preview.tombstones = snap.tombstones.iter().filter(|t| t.hash == h).count();
             }
             Change::RevealName { hash } => {
                 hex20(hash)?;
@@ -1017,7 +1079,7 @@ impl FiltersApi {
                     a.preview.tombstones = snap
                         .tombstones
                         .iter()
-                        .filter(|t| set.contains(&t.0))
+                        .filter(|t| set.contains(&t.hash))
                         .count();
                     a.preview.removed_from_floor = chosen.len();
                 }
@@ -1045,7 +1107,19 @@ impl FiltersApi {
         }
         a.confirm |= a.weakening;
         if a.confirm {
-            a.warning = Some(warning(change, &a.preview, a.neutralize.as_ref()));
+            let adult_hold = match change {
+                Change::Release { hash } | Change::FalsePositive { hash } => {
+                    let h = hex20(hash)?;
+                    self.store().adult_hold(&h).map_err(internal)?
+                }
+                _ => false,
+            };
+            a.warning = Some(warning(
+                change,
+                &a.preview,
+                a.neutralize.as_ref(),
+                adult_hold,
+            ));
         }
         progress.begin(DONE, 0);
         Ok(a)
@@ -1173,6 +1247,21 @@ impl FiltersApi {
         Ok(had)
     }
 
+    /// Releases everything `rules` hold, quarantine and tombstones: they
+    /// stopped applying. The engine is reloaded from the store first, so
+    /// a hash released early can't be held again by a rule that's gone.
+    /// Returns how many hashes were released.
+    fn release_rules(&self, store: &mut Store, rules: &[String]) -> ApiResult<usize> {
+        self.reload(store)?;
+        store
+            .release_rules(rules, |hashes| {
+                for h in hashes {
+                    self.held.remove(h);
+                }
+            })
+            .map_err(internal)
+    }
+
     /// Applies `change`, whose `assessment` the caller has already
     /// checked the password for.
     pub fn apply(
@@ -1231,26 +1320,27 @@ impl FiltersApi {
                         ));
                     }
                 } else {
+                    // As stored, under the store lock (the engine can lag
+                    // the store after an apply that failed part-way).
+                    let was_on = store.core_switch(r.id()).map_err(internal)?;
+                    if !on && was_on && !out.assessment.confirm {
+                        // Switched on since the preview, which then asked
+                        // for no password: preview again.
+                        return Err(changed_since_preview());
+                    }
                     store.set_core_switch(r.id(), *on).map_err(internal)?;
-                    if !on {
-                        // Its quarantine is released and processed (§20.5.3).
-                        let held: Vec<[u8; 20]> = store
-                            .quarantined(PREVIEW_ROWS)
-                            .map_err(internal)?
-                            .into_iter()
-                            .filter(|q| q.rule == r.id())
-                            .map(|q| q.hash)
-                            .collect();
-                        for h in &held {
-                            self.release(store, *h)?;
-                        }
-                        out.released = Some(held.len());
+                    if !on && was_on {
+                        // What it holds is released and processed (§20.5.3).
+                        out.released = Some(self.release_rules(store, &[r.id().to_owned()])?);
                     }
                 }
             }
             Change::PackSwitch { id, on } => {
-                pack_rules(id)?;
+                let rules = pack_rules(id)?;
                 store.set_pack_switch(id, *on).map_err(internal)?;
+                if !on {
+                    out.released = Some(self.release_rules(store, &rules)?);
+                }
             }
             Change::AddRule {
                 query: q,
@@ -1314,6 +1404,7 @@ impl FiltersApi {
                 if !store.remove_rule(*id).map_err(internal)? {
                     return Err(gone());
                 }
+                out.released = Some(self.release_rules(store, &[format!("U-{id}")])?);
             }
             Change::AddOverride {
                 what,
@@ -1563,6 +1654,13 @@ impl FiltersApi {
                 }
             }
             Change::ResolveHeld { id, accept } => {
+                let sub = store.subscription(*id).map_err(internal)?.ok_or_else(|| {
+                    not_found("subscription_not_found", "There's no such subscription.")
+                })?;
+                let shrank = sub.error.as_deref().is_some_and(|e| e.contains("shrank"));
+                if *accept && shrank && !sub.floor && !out.assessment.confirm {
+                    return Err(changed_since_preview());
+                }
                 if !store.resolve_held(*id, *accept, now).map_err(internal)? {
                     return Err(conflict("nothing_held", "No version of that list is held."));
                 }
@@ -1626,19 +1724,11 @@ impl FiltersApi {
         Ok(out)
     }
 
-    /// A list that stopped applying lets its tombstones go.
+    /// A list that stopped applying lets what it holds go. The list layer
+    /// is rebuilt first, so nothing released is held by it again.
     fn release_list(&self, store: &mut Store, id: i64) -> ApiResult<()> {
-        let rule = format!("L-{id}");
-        let dropped: Vec<[u8; 20]> = store
-            .tombstones(PREVIEW_ROWS)
-            .map_err(internal)?
-            .into_iter()
-            .filter(|t| t.1 == rule)
-            .map(|t| t.0)
-            .collect();
-        for h in dropped {
-            self.release(store, h)?;
-        }
+        lodestar_filter::lists::apply(store, &self.engine, &self.ips).map_err(internal)?;
+        self.release_rules(store, &[format!("L-{id}")])?;
         Ok(())
     }
 
@@ -1793,11 +1883,55 @@ impl FiltersApi {
         })
     }
 
+    /// Tombstones, newest first, never with names (none is kept): a page,
+    /// with `adult` only adult holds, so one can be found and released.
+    pub fn tombstones(&self, page: &TombstonesQuery) -> ApiResult<Tombstones> {
+        let limit = page.limit.unwrap_or(QUEUE_PAGE);
+        if !(1..=QUEUE_PAGE).contains(&limit) {
+            return Err(bad("bad_limit", "limit must be 1–1000.").field("limit"));
+        }
+        let before = page.cursor.as_deref().map(queue_cursor).transpose()?;
+        let mut t = self
+            .store()
+            .tombstones_before(before, page.adult, limit + 1)
+            .map_err(internal)?;
+        let more = t.len() > limit;
+        t.truncate(limit);
+        Ok(Tombstones {
+            next_cursor: t
+                .last()
+                .filter(|_| more)
+                .map(|l| format!("{}.{}", l.at, hex(&l.hash))),
+            tombstones: t
+                .iter()
+                .map(|t| TombstoneEntry {
+                    adult_hold: t.adult_hold,
+                    at: t.at,
+                    hash: hex(&t.hash),
+                    rule: t.rule.clone(),
+                })
+                .collect(),
+        })
+    }
+
     /// The review queue (§20.7): quarantine, never with names, and the
     /// replay window's decisions per rule.
-    pub fn queue(&self, now: i64) -> ApiResult<Queue> {
+    pub fn queue(&self, now: i64, page: &QueueQuery) -> ApiResult<Queue> {
+        let limit = page.limit.unwrap_or(QUEUE_PAGE);
+        if !(1..=QUEUE_PAGE).contains(&limit) {
+            return Err(bad("bad_limit", "limit must be 1–1000.").field("limit"));
+        }
+        let before = page.cursor.as_deref().map(queue_cursor).transpose()?;
         let store = self.store();
-        let q = store.quarantined(1_000).map_err(internal)?;
+        let mut q = store
+            .quarantined_before(before, limit + 1)
+            .map_err(internal)?;
+        let more = q.len() > limit;
+        q.truncate(limit);
+        let next_cursor = q
+            .last()
+            .filter(|_| more)
+            .map(|l| format!("{}.{}", l.at, hex(&l.hash)));
         let hits = store.hit_counts(now - REPLAY_SECS).map_err(internal)?;
         Ok(Queue {
             decisions_30d: hits
@@ -1810,9 +1944,11 @@ impl FiltersApi {
                     shadow: act & lodestar_store::SHADOW != 0,
                 })
                 .collect(),
+            next_cursor,
             quarantine: q
                 .iter()
                 .map(|q| QuarantineEntry {
+                    adult_hold: q.adult_hold,
                     at: q.at,
                     expires_at: q.expires_at,
                     hash: hex(&q.hash),
@@ -2051,19 +2187,25 @@ impl FiltersApi {
                 "There's no torrent with that hash.",
             ));
         };
+        let was_adult = store.content_type(id).map_err(internal)?
+            == Some(lodestar_classify::ContentType::Adult.code());
         let files = lodestar_classify::file_infos(&tree.files, tree.encoding);
         // Under the lock, the generation can't move between reading it and
         // the write; the check still guards the order (§20.9).
         let generation = store.class_gen().map_err(internal)?;
         let engine = self.engine.current();
         let now = crate::unix_now();
-        // Relabelled adult, it's judged as adult too, as at ingest (§20.9).
-        let r = lodestar_filter::reclassify::reclassify_row(&row, &files, fix, Some(&engine), now);
-        let refiling = r
-            .as_adult
-            .as_ref()
-            .map(|d| Refiling::new(&row, d, self.sealer.as_deref()));
-        let refiled: Vec<_> = refiling
+        // Becoming adult, it's judged as adult too, as at ingest (§20.9).
+        let r = lodestar_filter::reclassify::reclassify_row(
+            &row,
+            &files,
+            fix,
+            was_adult,
+            Some(&engine),
+            now,
+        );
+        let refilings = r.refilings(&row, self.sealer.as_deref());
+        let refiled: Vec<_> = refilings
             .iter()
             .map(|f| f.refiled(now, now + self.quarantine_secs))
             .collect();
@@ -2074,8 +2216,9 @@ impl FiltersApi {
             store.mark_unenriched(&[id]).map_err(internal)?;
             self.reenrich.store(true, Ordering::Release);
         }
-        let held_by = refiling
-            .filter(|f| written.is_some() && f.held.is_some())
+        let held_by = refilings
+            .into_iter()
+            .find(|f| written.is_some() && f.held.is_some())
             .map(|f| {
                 for h in &f.hashes {
                     self.held.insert(*h);
@@ -2341,10 +2484,39 @@ pub(crate) async fn overview(State(s): State<ApiState>) -> ApiResult<Json<Overvi
 /// The review queue: quarantine (never with names) and the last 30 days'
 /// decisions per rule.
 #[utoipa::path(
-    operation_id = "getFilterQueue",get, path = "/filters/queue", tag = "filters", responses((status = 200, body = Queue)))]
-pub(crate) async fn queue(State(s): State<ApiState>) -> ApiResult<Json<Queue>> {
+    operation_id = "getFilterQueue",
+    get,
+    path = "/filters/queue",
+    tag = "filters",
+    params(QueueQuery),
+    responses((status = 200, body = Queue))
+)]
+pub(crate) async fn queue(
+    State(s): State<ApiState>,
+    Query(page): Query<QueueQuery>,
+) -> ApiResult<Json<Queue>> {
     let f = filters(&s)?;
-    tokio::task::spawn_blocking(move || f.queue(crate::unix_now()).map(Json))
+    tokio::task::spawn_blocking(move || f.queue(crate::unix_now(), &page).map(Json))
+        .await
+        .map_err(internal)?
+}
+
+/// Tombstones (dropped torrents) by hash and rule, never with names, in
+/// pages; `adult=true` lists only adult holds.
+#[utoipa::path(
+    operation_id = "getFilterTombstones",
+    get,
+    path = "/filters/tombstones",
+    tag = "filters",
+    params(TombstonesQuery),
+    responses((status = 200, body = Tombstones))
+)]
+pub(crate) async fn tombstones(
+    State(s): State<ApiState>,
+    Query(page): Query<TombstonesQuery>,
+) -> ApiResult<Json<Tombstones>> {
+    let f = filters(&s)?;
+    tokio::task::spawn_blocking(move || f.tombstones(&page).map(Json))
         .await
         .map_err(internal)?
 }
