@@ -295,7 +295,7 @@ const CALIB_REF_NS: f64 = 7_400.0;
 ///
 /// The budget is in reference-runner microseconds (owner, 2026-10-22;
 /// `docs/decisions/2026-10-22-filter-budget.md`). Hosted runners differ
-/// by about 1.5× in speed, so the test times [`calibrate`] before any
+/// by 1.5-1.9× in speed, so the test times [`calibrate`] before any
 /// filter code runs and again once the engine is gone, and divides each
 /// case's time by how much slower than [`CALIB_REF_NS`] it ran. The
 /// calibration never runs beside filter state, so a regression can't slow
