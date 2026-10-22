@@ -752,7 +752,7 @@ Single-key shortcuts can be turned off or remapped (§10.13).
 | primary | `#527F91` | `#85AFC0` |
 | accent | `#829F8A` | `#A0C3A7` |
 
-Categorical (official, as amended): `#527F91` `#829F8A` `#C4A765` `#BF8173` `#8C9BA7` **`#9381B6`**. Seafoam `#92A9A0` was replaced by a muted plum. You suggested `#9C8AA5`; it fixes normal vision but nearly matches slate under deuteranopia (ΔE_ok 0.9). `#9381B6` (OKLCH 0.64 / 0.08 / 300°) keeps every pair at ΔE_ok ≥ 5.5 for normal, deuteranopic and protanopic vision in both modes, and is ≥ 3:1 on both surfaces (no light-mode data variant needed). The brand files `tokens/colors.json`/`theme.css` get the same update.
+Categorical (official, as amended): `#527F91` `#829F8A` `#C4A765` `#BF8173` `#8C9BA7` **`#9381B6`**. Seafoam `#92A9A0` was replaced by a muted plum. You suggested `#9C8AA5`; it fixes normal vision but nearly matches slate under deuteranopia (ΔE_ok 0.9). `#9381B6` (OKLCH 0.64 / 0.08 / 300°) keeps every pair at ΔE_ok ≥ 5 under normal vision (weakest: sage vs slate, 5.1) and is ≥ 3:1 on both surfaces (no light-mode data variant needed). **Correction (2026-10-22):** the earlier claim of ≥ 5.5 under deuteranopia and protanopia was wrong. Measured in the palette work (PR #37), the weakest pair falls to about 3.3–3.6 under deuteranopia. The owner kept the palette as chosen; the non-colour cues below carry the difference. The brand files `tokens/colors.json`/`theme.css` get the same update.
 
 **Contrast audit of the supplied values (WCAG 2.x):**
 - **Dark mode passes everywhere it's used.** Text 14.2:1 on background; primary 7.1:1; accent 8.7:1; every categorical colour ≥ 3.06:1 on surface.
@@ -1532,6 +1532,11 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Themes (owner, 2026-10-22):**
   - Riverstone is the default and official palette, with plum `#9381B6` in categorical slot 6. Seafoam `#92A9A0` stays retired: it was too close to sage.
   - The collection is **24 families × light and dark = 48 themes**. §10.18 names 23 families; the 24th is **Rosewood**, proposed in the palette work (PR #37) and approved.
+- **Filtering decisions (owner, 2026-10-22; `docs/owner-decisions.md` §2.7–2.9):**
+  - Config files may only **add** to the locked floor. Removals or weakenings (deleting a hash from `blocklist.files`, a floor-marked list's upstream removals) are refused at start-up and go through the app with the effect warning and password.
+  - Rule packs are off until chosen and pre-checked in the first-run wizard (§20.6), never on by default.
+  - Blocklist subscriptions are off by default and chosen in the wizard or Settings, with a warning matched to how strict the chosen lists are. The §20.13 refresh mechanics stay as designed.
+- **Riverstone colour-blind figures corrected** in §10.18. The palette is unchanged by owner decision.
 - **The build runs as parallel slices** (`docs/build-plan.md`, `runner/`).
   - One bar for every slice and review: `runner/standards.md`.
   - Merges happen only with green CI and no blocking findings from a fresh Opus reviewer.

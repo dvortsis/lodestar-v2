@@ -227,8 +227,17 @@ All of this is final as of PR #27, approved by "go" at 02:45:15, plus the later 
 4. **Merging.** The build runner may merge PRs with green CI and no blocking findings from a fresh reviewer. It may use GitHub auto-merge as a fallback, and may create as many branches as needed.
 5. **The build runs continuously and in parallel** (`docs/build-plan.md`, `runner/`). The owner leaves to the runner the choice of which features run in parallel. The runner watches and coordinates the M4 sessions.
 6. **Usage:** the owner has a high-usage plan and wants throughput. Concurrency is limited by quality (dependencies, file ownership, review), not cost.
+7. **The locked floor from config files: add by file, remove only in the app.**
+   - Config files (`blocklist.files`, a subscription marked `floor = true`) may only **add** to the locked floor.
+   - Anything that would remove or weaken a floor entry is refused at start-up and has to be done in the app, with the effect warning and the password (§1.8.8). That covers deleting a hash from the file, and a floor-marked list's upstream removals, which wait for confirmation there.
+8. **Rule packs follow §20.6:** off until chosen, and pre-checked in the first-run wizard. Packs are never on by default for installs that skip the wizard.
+9. **Blocklist subscriptions are the user's choice:**
+   - **Off by default.**
+   - The user chooses whether to add lists, and which ones, in the first-run wizard and in Settings.
+   - The app shows a **warning matched to how strict the chosen lists are**, for example a list that would hide a large share of the DHT.
+   - The owner didn't address the refresh mechanics (24 h refresh; holding a version that is empty, shrinks by more than half or grows tenfold); they stay as designed in §20.13.
+10. **Riverstone stays exactly as chosen.** The §10.18 claim about colour-blind distinctness was wrong and is corrected. The non-colour cues (2 px gaps, fixed order, labels, the "High-legibility data" patterns option) carry the difference.
 
 ## 3. Points still open (not decided by the owner)
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.
-- **Blocklist subscription mechanics** (§20.13): the refresh interval, the sanity gates, and password-free connecting. These are assistant design; the owner agreed only to "subscribed lists never feed the floor" (§1.8.11).
 - **Repository visibility.** The repo is public. The owner created it that way and hasn't commented since.
