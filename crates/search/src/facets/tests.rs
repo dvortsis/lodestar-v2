@@ -728,6 +728,36 @@ fn size_bins_are_powers_of_two() {
 }
 
 #[test]
+fn a_big_segment_samples_sooner() {
+    let p = Policy::default();
+    // Spread over segments of 200k: exact up to a million matches.
+    assert!(!p.samples(1_000_000, 200_000));
+    assert!(p.samples(1_000_001, 200_000));
+    // One big segment: exact up to 300k matches only.
+    assert!(!p.samples(300_000, 1_000_000));
+    assert!(p.samples(300_001, 640_000));
+    assert!(!p.samples(300_001, 300_000));
+    // In a pass: a one-segment index of 4,000 with a "big segment" of
+    // 1,000 samples a 2,000-match pass that the plain threshold wouldn't.
+    let docs = corpus(4_000);
+    let index = build(&docs, 1);
+    let params = |big| FacetParams {
+        policy: Policy {
+            sample_above: 1_000_000,
+            big_segment: big,
+            segment_sample_above: 512,
+        },
+        ..all_values()
+    };
+    let (_, l, got) = run(&index, "", &params(1_000));
+    assert!(l.total().value > 1_000);
+    assert!(got.sample_rate.is_some());
+    assert!(got.term(Facet::Type).unwrap().approx);
+    let (_, _, got) = run(&index, "", &params(10_000));
+    assert!(got.sample_rate.is_none());
+}
+
+#[test]
 fn large_counts_are_sampled_within_tolerance() {
     // 40,000 torrents in one segment, sampled with a 2,048-document
     // segment threshold, and "large" above 1,000 matches.
@@ -737,6 +767,7 @@ fn large_counts_are_sampled_within_tolerance() {
         policy: Policy {
             sample_above: 1_000,
             segment_sample_above: 2_048,
+            ..Policy::default()
         },
         ..all_values()
     };

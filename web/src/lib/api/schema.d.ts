@@ -1246,7 +1246,10 @@ export interface components {
              *     note); null when nothing was sampled.
              */
             sample_rate: number | null;
-            /** @description Some group was computed on a sample (above 1,000,000 matches). */
+            /**
+             * @description Some group was computed on a sample (above 1,000,000 matches, or
+             *     300,000 when a segment holds more than 300,000 torrents).
+             */
             sampled: boolean;
             /** Format: double */
             took_ms: number;

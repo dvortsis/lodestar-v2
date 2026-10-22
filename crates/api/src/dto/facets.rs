@@ -59,7 +59,8 @@ pub struct FacetsResponse {
     /// note); null when nothing was sampled.
     #[schema(required = true)]
     pub sample_rate: Option<f64>,
-    /// Some group was computed on a sample (above 1,000,000 matches).
+    /// Some group was computed on a sample (above 1,000,000 matches, or
+    /// 300,000 when a segment holds more than 300,000 torrents).
     pub sampled: bool,
     pub took_ms: f64,
     /// The search's result count, as `/search` reports it.
