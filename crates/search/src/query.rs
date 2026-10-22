@@ -296,6 +296,10 @@ const FIELDS: &[(&str, FieldKind)] = &[
     ("resolved", FieldKind::Tag(TagKey::Resolved)),
     ("adult", FieldKind::Tag(TagKey::Adult)),
     ("ambiguous", FieldKind::Flag("ambiguous")),
+    // Content filtering (§20.3).
+    ("hidden", FieldKind::Flag("hidden")),
+    ("demoted", FieldKind::Flag("demoted")),
+    ("flagged", FieldKind::Flag("flagged")),
     ("year", FieldKind::Num(NumField::Year)),
     ("s", FieldKind::Num(NumField::Season)),
     ("e", FieldKind::Num(NumField::Episode)),
@@ -1154,6 +1158,38 @@ fn date_text(t: i64) -> String {
 // ---- rendering -------------------------------------------------------------
 
 impl Node {
+    /// Whether any clause tests this flag.
+    pub fn mentions_flag(&self, flag: &str) -> bool {
+        match self {
+            Node::Flag { name, .. } => name == flag,
+            Node::And { of } | Node::Or { of } => of.iter().any(|n| n.mentions_flag(flag)),
+            Node::Not { of } | Node::File { of } => of.mentions_flag(flag),
+            _ => false,
+        }
+    }
+
+    /// The query with torrents a filter rule hid left out (§20.3), unless
+    /// it asks about hidden torrents itself.
+    pub fn without_hidden(self) -> Node {
+        if self.mentions_flag("hidden") {
+            return self;
+        }
+        let visible = Node::Flag {
+            name: "hidden".into(),
+            value: false,
+        };
+        match self {
+            Node::All => visible,
+            Node::And { mut of } => {
+                of.push(visible);
+                Node::And { of }
+            }
+            other => Node::And {
+                of: vec![other, visible],
+            },
+        }
+    }
+
     /// Whether the query has a `file:(…)` clause, so its results have
     /// matched files ([`SearchIndex::matched_files`]).
     ///
@@ -1587,6 +1623,13 @@ mod tests {
         );
         assert_eq!(parse("group:NTb").unwrap(), tag(TagKey::Group, &["ntb"]));
         assert_eq!(parse("has:nfo").unwrap(), tag(TagKey::Has, &["nfo"]));
+        assert_eq!(
+            parse("hidden:yes").unwrap(),
+            Node::Flag {
+                name: "hidden".into(),
+                value: true
+            }
+        );
         assert_eq!(parse("type:Adult").unwrap(), tag(TagKey::Type, &["adult"]));
         assert_eq!(
             parse("adult:scene,VR").unwrap(),
