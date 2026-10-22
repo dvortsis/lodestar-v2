@@ -796,7 +796,7 @@ Generated screens render from the schema with no screen-specific code beyond gro
 | General | update check (off by default), backup schedule, Backup & portability (§10.10.6), Reset all | `general`, `/system` | S-settings-1 |
 | Logging | events (Verbosity preset, each event on/off with its rate), data kinds (Private preset by default; identifying kinds time-limited), outputs (level and data kinds per output), a live preview with volume estimate, and rotation with a size preview, log files with download, delete (§10.10.12, §12.1) | `logging`, logs API | S-logs |
 | Security | password, sessions, API keys and feed tokens, trusted-proxy auth, secure cookies (read-only) | auth API (B12) | M-security-settings |
-| About | version, build, licences, data directory and sizes, a copyable diagnostics block (versions, OS, settings sources; no secrets, no torrent names), **Download diagnostics** (that block plus the last 24 h of logs, always with torrent details removed), links | `/system` | S-settings-2 |
+| About | version and build, data formats, this installation, updates (Check now), help and community links, "No telemetry, ever" with everything Lodestar connects to, diagnostics, licences and credits (§10.10.13) | `/system` | S-about |
 
 **Test connection** and **Send test** run on the server with the values on screen (`POST /settings/test`), through the SSRF guard. They save nothing, and the result appears inline ("Connected to qBittorrent 5.0.2" or "Refused: wrong password").
 
@@ -809,7 +809,7 @@ Generated screens render from the schema with no screen-specific code beyond gro
 - **`preferences` section** per account: theme, mode, density, motion, illustrations, shortcuts, language, time zone. It's validated like any other section.
 - **A `settings` SSE event** (`{section, revision}`) after every save. It carries no values; clients fetch them.
 - **`GET /settings/export`** and **`POST /settings/import`** (`dry_run=true` returns the diff).
-- **`GET /system`** reports the version, restart capability and pending restart fields. **`POST /system/restart`** restarts. The HTTP-address keep-or-revert timer lives here as well.
+- **`GET /system`** reports the version, restart capability and pending restart fields, plus everything About shows (§10.10.13): build details (commit, date, target, Rust version, UI build id, channel), data-format versions, deployment, OS and resources, uptime, data-directory sizes, and what Lodestar connects to. **`POST /system/update-check`** makes one request to GitHub's releases API through the egress settings, and caches the answer for 6 hours. **`POST /system/restart`** restarts. The HTTP-address keep-or-revert timer lives here as well.
 - **Server-side tests:**
   - secrets never appear in `GET`, export or diagnostics;
   - export never includes §20 state;
@@ -939,6 +939,92 @@ Stepped progress, with one primary action per step:
   - Every control is reachable by keyboard: `Space`, `/`, `End` (jump to latest), `Home`.
   - Level is shown as icon + text.
 - **Performance:** a separate lazy chunk of at most 12 KB gzipped. Holding 10,000 lines and taking 200 lines/s must keep INP under 100 ms.
+
+#### 10.10.13 About
+**Settings → About** (`/settings/about`, System group) is also linked from the overflow menu (§10.3). It answers four questions:
+- **What am I running?**
+- **Is there a newer version?**
+- **Where do I get help?**
+- **What does Lodestar connect to?**
+
+It needs a signed-in session, like the rest of Settings. Version details aren't shown to signed-out visitors, and `/healthz` doesn't carry them.
+
+- **Header** (§10.19):
+  - the horizontal lockup, light or dark to match the theme;
+  - the tagline, "Every node is a new discovery";
+  - one sentence on what Lodestar is, from the brand board's description edited to §10.14.
+
+  This is one of the few places the lockup appears. It's never decorative chrome elsewhere.
+- **Version:**
+  - **"Lodestar 0.5.2"** at display size, with the **channel** (stable or nightly) and the **release date**.
+  - **Build details** in mono:
+    - the commit (short hash, linked to that commit on GitHub);
+    - the build date and target (`x86_64-unknown-linux-musl`);
+    - the Rust version;
+    - the UI build id.
+  - **Copy version info** puts all of the above on the clipboard as plain text.
+  - **Interface mismatch:** if the UI loaded in this tab came from a different build than the server is running (a tab left open across an upgrade), a banner says "This page is from an older version of Lodestar · **Reload**". The same check runs on every page load, not only on About, because a stale UI against a newer API is a common source of confusing bugs.
+  - **What's new in this version:** the running release's notes, embedded in the binary at build time from `CHANGELOG.md`, so they read offline. **All release notes** links to GitHub Releases.
+- **Data formats:**
+  - the store schema version (the last migration applied);
+  - the search index schema and tokenizer versions (`v{schema}-t{tokenizer}`);
+  - whether a background rebuild is running, with its progress (§8).
+
+  These are the numbers a bug report needs, and the reason an upgrade might reindex.
+- **This installation:**
+  - how it's deployed: Docker (image tag and digest when the image sets them), Unraid, Windows service, Windows portable, Linux tarball or systemd;
+  - the OS, CPU cores, memory and time zone;
+  - when it started, and the uptime;
+  - the **data directory** (copyable), with sizes for the database, indexes, cold store and logs, and the free space left.
+  - A FUSE or network filesystem warning (§11) also shows here.
+  - From v0.6: each worker's and companion's version, flagging any that don't match the coordinator.
+- **Updates:**
+  - **Status:**
+    - "Update checks are off" (the default), or the last automatic result;
+    - **Check now**, which says first that it makes **one request to GitHub's releases API** through your egress settings (§5) and sends nothing about you;
+    - the result: "You're up to date", or "0.5.3 is available · What's new".
+  - **How to update, for this installation:**
+    - Docker: the `docker pull` and recreate commands;
+    - Unraid: "Apply update" on the Docker tab;
+    - Windows: the MSI download link;
+    - tarball: the download link and the `systemctl restart` line.
+
+    Lodestar never updates itself (§12: it takes a snapshot before any migration, and `lodestar rollback` exists).
+  - **Turn on automatic checks** links to Settings → General.
+- **Help and community:** each link opens in a new tab, with an external-link icon and "(opens in a new tab)" for screen readers, and `rel="noopener noreferrer"`. The URLs come from the build's `repository` field (`Cargo.toml`), so a fork points to its own repository:
+  - **GitHub repository**
+  - **Source code for this version:** the exact tag, or the commit for a nightly or a fork. This is the AGPL's offer of source to network users, once the licence is confirmed (`owner-decisions.md` §3).
+  - **Documentation** (`docs/` in the repository, and the Syntax guide in the app)
+  - **Releases and changelog**
+  - **Report a problem** opens a dialog first. It shows exactly what will be prefilled into a new GitHub issue: the version info and the diagnostics block, with no secrets and no torrent names (§12.1). It's sent only if you submit it on GitHub. Text too long for a URL is copied to the clipboard instead, with a note to paste it.
+  - **Request a feature** and **Discussions**
+  - **Report a security issue**, which links to the repository's private vulnerability reporting, not to public issues.
+- **Privacy: "No telemetry, ever."** Below that, a short list of **everything Lodestar connects to**, each with its current state and a link to its setting:
+  - the DHT and peers (on);
+  - the update check (off, or when it last ran);
+  - enabled sources and plugins (§18);
+  - blocklist subscriptions (§20.13);
+  - integrations and notification channels;
+  - the companion catalogue (§18.10);
+  - workers (§19).
+
+  Each row reads like "Blocklist subscriptions: 2 lists, refreshed daily from their publishers". Nothing on the list runs without your choice except the DHT, which is what Lodestar is.
+- **Diagnostics:**
+  - the copyable diagnostics block: versions, OS, deployment, settings sources and which settings were changed (names only, never values of secrets), the logging presets, and recent error counts;
+  - **Download diagnostics** (that block plus the last 24 h of logs, with torrent details and the opt-in kinds always removed; §12.1).
+- **Licences and credits:**
+  - **Lodestar's own licence**, with its full text. The recommendation is **AGPL-3.0-or-later**, waiting for the owner's confirmation (`docs/owner-decisions.md` §3). The brand artwork has its own notice.
+  - **Open-source components:** every Rust crate and npm package in the shipped build, with its version, licence and full licence text.
+    - The list is searchable and loads lazily: a content-hashed `licenses.json` generated at build time from `cargo metadata` and `package-lock.json`, with no new dependency.
+    - CI fails the build if a shipped component has a missing licence, or one outside the allowlist.
+  - **Fonts:** Atkinson Hyperlegible Next and Mono, © Braille Institute, SIL Open Font License (the licence travels with the font files, as the OFL requires).
+  - **Icons:** Phosphor (MIT).
+  - **Brand artwork:** credited per the brand pack.
+- **States:**
+  - **Loading:** a skeleton of the version block. Everything else on the screen comes from the same single `GET /system`.
+  - **If the update check fails,** the error says why ("GitHub didn't answer within 10 s") and how to retry. The rest of the screen stays usable.
+  - **If the server is unreachable,** About still shows the UI's own build id and version from the bundle, so you can tell what you're looking at.
+- **Performance:** About is part of the Settings chunk. `licenses.json` and the release notes load only when their sections are opened.
 
 ### 10.11 Component inventory (one canonical primitive per role)
 - **Controls and fields:** Button (primary / secondary / quiet / danger × dense / default, with a loading state), IconButton, Field (Input, Select, Combobox, Textarea, Checkbox, Radio, Toggle, Slider, RangeInput with units), SegmentedControl.
@@ -2355,6 +2441,20 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - `B-log2`: ring buffer, SSE, history and file API.
 
   The screens are a Sonnet slice, `S-logs`.
+
+**About screen (owner, 2026-10-22, §10.10.13):** the owner asked for an About screen with version information and links to GitHub. The earlier one-row entry is now a full specification:
+- **Version and build:** version, channel and release date; commit, build date, target, Rust and UI build id; Copy version info.
+- **Stale-tab check:** a mismatch between the UI and the server build is caught on every page load, not only on About.
+- **Embedded release notes** for the running version.
+- **Data formats and this installation:** schema and index versions, deployment, data sizes.
+- **Updates:** a manual **Check now** (one GitHub request; automatic checks stay off by default), plus update steps for each deployment. Lodestar never updates itself.
+- **Help and community links:** built from `Cargo.toml`'s `repository`. Report a problem shows what it will prefill before anything leaves.
+- **"No telemetry, ever"**, with a list of everything Lodestar connects to.
+- **Diagnostics.**
+- **Licences and credits:** generated at build from `cargo metadata` and `package-lock.json`, with a CI licence allowlist.
+- **About needs sign-in**, so the version isn't disclosed to anyone else.
+- **Licence:** the owner said Lodestar will stay open source. The recommendation is AGPL-3.0-or-later; see `owner-decisions.md` §3 until it's confirmed.
+- **Slices:** the screen is a Sonnet slice, `S-about`. The build metadata, the update check and the licence generation sit with B2c, which owns `/system`; the update check goes through the network stack and the SSRF guard.
 
 ## 17. Verification (once built)
 
