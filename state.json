@@ -216,13 +216,14 @@
    "merge": "d860168"
   },
   "W7e": {
-   "status": "changes_requested",
+   "status": "merged",
    "model": "sonnet",
    "session": "session_01KbNDuqr2bBED88auAfEkNp",
    "pr": 74,
    "attempt": 1,
    "review_rounds": 3,
-   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #74; reviewer started 16:45 | 17:10 r1 FIX: token classes (runner shared fix), dup groups, brush, null delta, dates, int axes. R2 FIX 17:55: computed-style test missing, x-axis tick overlap, showcase in prod (+1.83 kB; move to dev-routes after #76). 18:04 R2 fixes pushed 219eed7; waits on #80 and #76. 20:20 6ad522d dev-routes moved; computed-style tests red until #80 (owner baselines). Blocked on #80. 20:50 R3 FIX: brush external-selection commit, measured tick spacing, PR body. Verified all 6 specs pass with #80. 20:56 b6fc4b1 verified by runner -> APPROVED, merge after #80 lands (computed-style tests). | 22:35 #80 merged; asked W7e to merge main + fix playwright fail (run 39851958635) | 22:40 head ba77799 (main merged; playwright fail was #80 token dependency, now 499 pass). Merge on green."
+   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #74; reviewer started 16:45 | 17:10 r1 FIX: token classes (runner shared fix), dup groups, brush, null delta, dates, int axes. R2 FIX 17:55: computed-style test missing, x-axis tick overlap, showcase in prod (+1.83 kB; move to dev-routes after #76). 18:04 R2 fixes pushed 219eed7; waits on #80 and #76. 20:20 6ad522d dev-routes moved; computed-style tests red until #80 (owner baselines). Blocked on #80. 20:50 R3 FIX: brush external-selection commit, measured tick spacing, PR body. Verified all 6 specs pass with #80. 20:56 b6fc4b1 verified by runner -> APPROVED, merge after #80 lands (computed-style tests). | 22:35 #80 merged; asked W7e to merge main + fix playwright fail (run 39851958635) | 22:40 head ba77799 (main merged; playwright fail was #80 token dependency, now 499 pass). Merge on green.",
+   "merge": "8c1159e"
   },
   "W9": {
    "status": "running",
@@ -756,13 +757,14 @@
    "notes": "round 1 fixes pushed: REFERENCE_NS=60ms (stricter, derived from 3 runner measurements), per-pass calibration, docs \u00a720.8/\u00a716; awaiting OWNER sign-off before merge"
   },
   "R-docs": {
-   "status": "in_review",
+   "status": "merged",
    "model": "sonnet",
    "session": "session_019N5xwViePFBt7ZEYQrKaH8",
    "pr": 73,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "launched 15:59; carry-forwards runner-pr, runner-docs-pr, metrics-contract, contract-docs, themes table, integrations-readme (if X-email merged), unraid --user | PR #73; owner-file edits moved to runner PR #75 20:28 main (#86) merged; merge on green. | 22:42 conflicts (unraid xml from D-puid, \u00a716); asked session to merge main. Filter budget red = rule 2.18."
+   "notes": "launched 15:59; carry-forwards runner-pr, runner-docs-pr, metrics-contract, contract-docs, themes table, integrations-readme (if X-email merged), unraid --user | PR #73; owner-file edits moved to runner PR #75 20:28 main (#86) merged; merge on green. | 22:42 conflicts (unraid xml from D-puid, \u00a716); asked session to merge main. Filter budget red = rule 2.18.",
+   "merge": "24b6108"
   },
   "F-near": {
    "status": "review",
@@ -771,7 +773,7 @@
    "pr": 85,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "R1 FIX 19:30: hostile-name NEAR DoS (places*tokens^2); safety claim wrong (CSX-5 overrides/exceptions/allow/unless match more). Owner Q on re-preview of stored CSX-5 entries. 19:58 DoS fix e6f6e72; R2 review in flight. 20:25 R2 MERGE; asked main merge + threshold test; runner verifies then merges. 20:36 4c6de89 (main + threshold test ba5cdcb) verified by runner -> APPROVED, merge on green. Pre-release: CSX-5 re-preview question stays with owner (follow-up only if owner wants it). | 22:35 filter budget red on F-near (touches filter): core 11.8, 1% 41.0, 10% 51.3, 25% 64.0 = slow runner class (#48: 11.9/42.1/52.8/64.0); ratios match main -> no regression. Re-ran once (run 39859583901)."
+   "notes": "R1 FIX 19:30: hostile-name NEAR DoS (places*tokens^2); safety claim wrong (CSX-5 overrides/exceptions/allow/unless match more). Owner Q on re-preview of stored CSX-5 entries. 19:58 DoS fix e6f6e72; R2 review in flight. 20:25 R2 MERGE; asked main merge + threshold test; runner verifies then merges. 20:36 4c6de89 (main + threshold test ba5cdcb) verified by runner -> APPROVED, merge on green. Pre-release: CSX-5 re-preview question stays with owner (follow-up only if owner wants it). | 22:35 filter budget red on F-near (touches filter): core 11.8, 1% 41.0, 10% 51.3, 25% 64.0 = slow runner class (#48: 11.9/42.1/52.8/64.0); ratios match main -> no regression. Re-ran once (run 39859583901). | 23:03 runner merged main d3f39e2 (\u00a716); filter budget red twice (slow runner, ratios ok); waits on #97 normalized gate."
   },
   "D-puid": {
    "status": "merged",
@@ -988,9 +990,10 @@
   },
   "S-settings-polish": {},
   "runner-owner-rules": {
-   "status": "in_review",
+   "status": "merged",
    "pr": 99,
-   "notes": "r1 FIX applied verbatim bb4b544; merge on green"
+   "notes": "r1 FIX applied verbatim bb4b544; merge on green",
+   "merge": "55d90af"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
