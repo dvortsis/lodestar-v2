@@ -3403,7 +3403,8 @@
           },
           "expires_at": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "When it's released for refetching; 2^53 − 1 when it's held until you\nrelease it (held because of your own Is adult correction)."
           },
           "hash": {
             "type": "string"

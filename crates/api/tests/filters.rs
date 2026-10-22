@@ -1688,3 +1688,87 @@ async fn a_correction_relabelling_a_torrent_adult_meets_the_adult_only_core() {
     }
     assert!(f.api.held.contains(&raw), "refused at intake");
 }
+
+/// End to end (§20.9): an Is adult rule is added, the torrents it matches
+/// are re-queued, the writer's background pass relabels one adult and the
+/// Adult-only core holds it, and search no longer finds it.
+#[tokio::test]
+async fn an_is_adult_rule_takes_a_held_torrent_out_of_search() {
+    use lodestar_filter::TermSet;
+    use lodestar_pipeline::enrich::{Backfill, enrich_stored_with};
+    use std::sync::atomic::Ordering;
+    let f = fixture_with(Some(SearchIndex::in_memory().unwrap()));
+    let c = logged_in(&f).await;
+    f.api.engine.update_engine(|e| {
+        *e = Engine::new(Core::new(
+            Lists {
+                sexual: TermSet::of(&["lexa"]),
+                child_roles: TermSet::of(&["rolea"]),
+                codes: TermSet::of(&["codex"]),
+            },
+            CsList::default(),
+            Switches::default(),
+        ))
+    });
+    // Ten words apart: only the Adult-only CS-5a can catch them.
+    let name = "Holiday Rolea one two three four five six seven eight nine Lexa.mp4";
+    store_torrent(&f, name, 900 << 20);
+    store_torrent(&f, "Holiday Postcards.mp4", 900 << 20);
+    let index = f.api.index.as_ref().unwrap().index();
+    let catch_up = |store: &mut Store| {
+        let mut w = index.writer(15 << 20).unwrap();
+        w.catch_up(store, 100).unwrap();
+        w.commit().unwrap();
+        index.refresh().unwrap();
+    };
+    {
+        let mut store = f.api.store.lock().unwrap();
+        enrich_all(&mut store);
+        catch_up(&mut store);
+    }
+    let found = |q: &str| {
+        let node = lodestar_search::parse(q).unwrap();
+        let hits = index.search(&index.query(&node, 0), 50).unwrap().hits;
+        let mut names = index.names(&hits).unwrap();
+        names.sort();
+        names
+    };
+    assert_eq!(found("rolea").len(), 1, "stored and searchable");
+
+    let (status, _, body) = call(
+        &f.app,
+        post(
+            "/api/v1/classify/rules",
+            Some(&c),
+            json!({ "query": "rolea", "adult": true }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["queued"], json!(1));
+    assert!(
+        f.api.reenrich.swap(false, Ordering::AcqRel),
+        "pipeline told"
+    );
+
+    // The writer's background pass, as it runs it.
+    {
+        let mut store = f.api.store.lock().unwrap();
+        let ctx = Backfill {
+            filter: Some(&f.api.engine),
+            sealer: f.api.sealer.as_deref(),
+            quarantine_secs: f.api.quarantine_secs,
+        };
+        let b = enrich_stored_with(&mut store, 0, 100, &ctx)
+            .unwrap()
+            .unwrap();
+        assert!(!b.rejected);
+        assert_eq!(b.held.len(), 1);
+        let q = store.quarantined(10).unwrap();
+        assert_eq!(q.len(), 1);
+        assert_eq!(q[0].rule, "CS-5a");
+        catch_up(&mut store);
+    }
+    assert!(found("rolea").is_empty(), "held, so not found");
+    assert_eq!(found("holiday"), vec!["Holiday Postcards.mp4".to_string()]);
+}

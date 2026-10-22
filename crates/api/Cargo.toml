@@ -32,6 +32,7 @@ workspace = true
 
 [dev-dependencies]
 lodestar-bencode.workspace = true
+lodestar-pipeline.workspace = true
 tempfile = "3.27.0"
 tokio = { version = "1.54.0", features = ["rt", "macros", "sync", "time"] }
 tower = { version = "0.5", features = ["util"] }
