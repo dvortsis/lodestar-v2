@@ -26,13 +26,15 @@ mod rollups;
 mod worker;
 mod writer;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use lodestar_cluster::{Claim, Claimed, RestoredLease, WorkerId};
-use lodestar_filter::{Core, CoreRule, CsList, Engine, Handle, Lists, Origin, Sealer, Switches};
+use lodestar_filter::{
+    Core, CoreRule, CsList, Engine, Handle, HeldSet, Lists, Origin, Sealer, Switches,
+};
 use lodestar_peer_wire::FetchOptions;
 use lodestar_sources::pool::{self, PeerWireFetcher};
 use lodestar_sources::{
@@ -83,6 +85,9 @@ pub struct PipelineConfig {
     pub quarantine: Duration,
     /// How long filter hits are kept (0–30 days, §20.11).
     pub filter_hits: Duration,
+    /// Tombstoned and quarantined keys, shared with the API so a release
+    /// takes effect at once. The store's are added at start.
+    pub held: Arc<HeldSet>,
     /// The crawler warm-up window: torrents found this soon after the
     /// first run are flagged `BACKFILL` (§6).
     pub backfill: Duration,
@@ -103,6 +108,7 @@ impl Default for PipelineConfig {
             sealer: None,
             quarantine: Duration::from_secs(30 * 86_400),
             filter_hits: Duration::from_secs(30 * 86_400),
+            held: Arc::new(HeldSet::default()),
             backfill: Duration::from_secs(30 * 86_400),
             flush_every: Duration::from_secs(5),
             save_queue_every: Duration::from_secs(300),
@@ -121,42 +127,6 @@ pub fn default_filter() -> Handle {
         CsList::default(),
         Switches::default(),
     )))
-}
-
-/// Tombstoned and quarantined keys (§20.3): intake refuses them, so a
-/// dropped torrent isn't fetched again and again.
-#[derive(Debug, Default)]
-pub struct HeldSet(RwLock<HashSet<[u8; 20]>>);
-
-impl HeldSet {
-    pub fn contains(&self, hash: &[u8; 20]) -> bool {
-        self.0
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .contains(hash)
-    }
-
-    pub fn insert(&self, hash: [u8; 20]) {
-        self.0
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(hash);
-    }
-
-    pub fn remove(&self, hash: &[u8; 20]) {
-        self.0
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(hash);
-    }
-
-    pub fn len(&self) -> usize {
-        self.0.read().unwrap_or_else(|e| e.into_inner()).len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
 }
 
 /// Adds the store's filter state to the engine: CS-1 entries, CS-8
@@ -372,7 +342,7 @@ impl Pipeline {
         for note in config.filter.update_engine(|e| e.load_rules(&rule_set)) {
             tracing::warn!("filter: {note}");
         }
-        let held = Arc::new(HeldSet::default());
+        let held = config.held.clone();
         for (h, _) in &filter_state.held {
             held.insert(*h);
         }

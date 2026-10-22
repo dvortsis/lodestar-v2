@@ -539,7 +539,76 @@ impl Fixture {
             content_type,
         }
     }
+
+    /// The stored form (`filter_fixtures.tokens`): a version byte, the
+    /// content type, the file count (u16), then each text (name first) as
+    /// a token count (u32) and its tokens (pos u32, hash u64, num u16,
+    /// `u16::MAX` for none), little-endian. Hashes only: no names.
+    pub fn encode(&self) -> Vec<u8> {
+        let files = &self.files[..self.files.len().min(MAX_FILES)];
+        let mut out = vec![FIXTURE_V1, self.content_type.code()];
+        out.extend_from_slice(&(files.len() as u16).to_le_bytes());
+        for text in std::iter::once(&self.name).chain(files) {
+            let text = &text[..text.len().min(MAX_FIXTURE_TOKENS)];
+            out.extend_from_slice(&(text.len() as u32).to_le_bytes());
+            for t in text {
+                out.extend_from_slice(&t.pos.to_le_bytes());
+                out.extend_from_slice(&t.hash.to_le_bytes());
+                out.extend_from_slice(&t.num.unwrap_or(u16::MAX).to_le_bytes());
+            }
+        }
+        out
+    }
+
+    /// Reads [`Fixture::encode`]'s form; `None` for anything else.
+    pub fn decode(bytes: &[u8]) -> Option<Fixture> {
+        let mut r = bytes;
+        let mut take = |n: usize| -> Option<&[u8]> {
+            let (head, rest) = r.split_at_checked(n)?;
+            r = rest;
+            Some(head)
+        };
+        if take(1)? != [FIXTURE_V1] {
+            return None;
+        }
+        let content_type = ContentType::from_code(take(1)?[0])?;
+        let files = u16::from_le_bytes(take(2)?.try_into().ok()?) as usize;
+        if files > MAX_FILES {
+            return None;
+        }
+        let mut texts = Vec::with_capacity(files + 1);
+        for _ in 0..=files {
+            let n = u32::from_le_bytes(take(4)?.try_into().ok()?) as usize;
+            if n > MAX_FIXTURE_TOKENS {
+                return None;
+            }
+            let mut text = Vec::with_capacity(n);
+            for _ in 0..n {
+                let t = take(14)?;
+                let num = u16::from_le_bytes([t[12], t[13]]);
+                text.push(Token {
+                    pos: u32::from_le_bytes(t[0..4].try_into().ok()?),
+                    hash: u64::from_le_bytes(t[4..12].try_into().ok()?),
+                    num: (num != u16::MAX).then_some(num),
+                });
+            }
+            texts.push(text);
+        }
+        if !r.is_empty() {
+            return None;
+        }
+        let name = texts.remove(0);
+        Some(Fixture {
+            name,
+            files: texts,
+            content_type,
+        })
+    }
 }
+
+const FIXTURE_V1: u8 = 1;
+/// Tokens kept per text of a stored fixture.
+pub const MAX_FIXTURE_TOKENS: usize = 4096;
 
 #[derive(Debug, Clone)]
 pub struct Core {
