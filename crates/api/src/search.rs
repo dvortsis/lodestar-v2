@@ -138,7 +138,8 @@ async fn run_search(s: ApiState, p: SearchParams) -> ApiResult<axum::Json<Value>
     let sort = sort_param(p.sort.as_deref())?;
     let limit = p.limit.unwrap_or(50).clamp(1, MAX_LIMIT);
     let offset = p.offset.unwrap_or(0);
-    if offset + limit > MAX_WINDOW {
+    // `offset` is the client's: saturate rather than overflow.
+    if offset.saturating_add(limit) > MAX_WINDOW {
         return Err(ApiError::bad_request(
             "window_too_deep",
             format!("Results past {MAX_WINDOW} aren't paged; narrow the query."),

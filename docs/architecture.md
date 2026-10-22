@@ -1519,6 +1519,11 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Size:** `title_stem` costs about 3 B per torrent (words only, no norms). The torrent index is 408 B per torrent at 100k (budget 512). Schema v4.
 - **Name patterns** belong to the §20 rule engine (an M4 add-on), so M3 doesn't build them.
 
+**B0 decisions (API router split, error envelope):**
+- **One module per API domain** in `crates/api` (`auth`, `search`, `torrents`), each with `routes() -> Router<ApiState>`; `api::router` only merges them, one line per module. Session-protected routes are wrapped in `auth::protected`, whose guard reads its `Auth` from a request extension that only `api::router` installs, so a protected route mounted any other way fails closed (500), never open.
+- **One error envelope** for every `/api/v1` failure: `{ "error": { "code", "message", "field"?, "start"?, "end"? } }`. `code` is stable snake_case for clients to branch on, `message` a sentence for people, `field` the parameter at fault, `start`/`end` the byte span of a query syntax error. Extractor rejections (bad JSON, query or path; `field` is the serde path to the bad value) and unknown `/api/v1` paths (404) or methods (405) use it too, with house-style messages rather than serde's text. Status codes didn't change. The 401 keeps `setup_required` beside `error`, so the login screen needs no second request.
+- **`crates/lodestar/src/services.rs`** builds and wires every service of `serve` and owns the ordered shutdown (pipeline, then the live indexer); `main.rs` keeps only the CLI.
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.
@@ -2364,8 +2369,3 @@ Exceptions are how you correct false positives without switching rules off. Like
 - **Weakening changes:** unsubscribing, pausing or narrowing a list releases what it blocked. As with disabling a pack (§20.11), that shows the impact preview and effect warning and needs your password. Subscribing and refreshing need neither.
 - **Storage:** a `subscriptions` table (URL, kind, format, action, scope, schedule, ETag, last fetch, entry count, status) and `subscription_entries` (hashes and signatures; IP ranges are kept as a compact blob per list). Like everything in §20, no history of who changed what is kept.
 - **Verification:** golden parsers for every format, plus fuzz targets (they parse untrusted input); a fake list server in tests for conditional GETs, the size caps and the sanity gates; and a check that an IP-listed peer or node is never contacted by the DHT, the fetch pool or the scraper.
-
-**B0 decisions (API router split, error envelope):**
-- **One module per API domain** in `crates/api` (`auth`, `search`, `torrents`), each with `routes() -> Router<ApiState>`; `api::router` only merges them, one line per module. Session-protected routes are wrapped in `auth::protected`, whose guard reads its `Auth` from a request extension that only `api::router` installs, so a protected route mounted any other way fails closed (500), never open.
-- **One error envelope** for every `/api/v1` failure: `{ "error": { "code", "message", "field"?, "start"?, "end"? } }`. `code` is stable snake_case for clients to branch on, `message` a sentence for people, `field` the parameter at fault, `start`/`end` the byte span of a query syntax error. Extractor rejections (bad JSON, query or path) and unknown `/api/v1` paths use it too. Status codes didn't change. The 401 keeps `setup_required` beside `error`, so the login screen needs no second request.
-- **`crates/lodestar/src/services.rs`** builds and wires every service of `serve` and owns the ordered shutdown (pipeline, then the live indexer); `main.rs` keeps only the CLI.
