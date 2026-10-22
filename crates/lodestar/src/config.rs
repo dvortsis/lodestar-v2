@@ -319,9 +319,8 @@ impl Config {
         self.data_dir.join("lodestar.db")
     }
 
-    /// The index root: one directory per index version under it (§8).
-    pub fn index_root(&self) -> PathBuf {
-        self.data_dir.join("index")
+    pub fn index_path(&self) -> PathBuf {
+        lodestar_search::index_dir(&self.data_dir.join("index"))
     }
 
     pub fn store_config(&self) -> StoreConfig {

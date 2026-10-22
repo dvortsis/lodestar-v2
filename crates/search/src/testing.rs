@@ -1,6 +1,9 @@
 //! Test fixtures: an in-memory index filled with raw documents (no
-//! store), and a query that's slow on purpose, for cancellation.
+//! store), and queries that are slow on purpose or cancel partway, for
+//! cancellation.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use tantivy::indexer::NoMergePolicy;
@@ -8,6 +11,7 @@ use tantivy::query::{AllQuery, EnableScoring, Explanation, Query, Scorer, Weight
 use tantivy::{DocId, DocSet, Score, SegmentReader, TantivyDocument, Term};
 
 use crate::SearchIndex;
+use crate::cancel::CancelToken;
 use crate::index::Compiled;
 
 /// Torrent `i`'s name: every name has `Show{i}`; `Common` is in 9 of 10,
@@ -84,16 +88,54 @@ pub(crate) fn delete(index: &SearchIndex, ids: impl IntoIterator<Item = u64>) {
 pub(crate) fn slow(index: &SearchIndex, delay: Duration) -> Compiled {
     let _ = index;
     Compiled {
-        query: Box::new(SlowQuery { delay }),
+        query: Box::new(SlowQuery { delay, trip: None }),
         filters: Vec::new(),
         boosts: None,
         key: format!("slow{delay:?}"),
     }
 }
 
+/// Matches every document and cancels `token` on stepping to the
+/// `at`-th. The counter returned counts every step, so a test can see
+/// how far a search went after its cancel, whatever the clock does.
+pub(crate) fn tripwire(at: usize, token: &CancelToken) -> (Compiled, Arc<AtomicUsize>) {
+    let visits = Arc::new(AtomicUsize::new(0));
+    let trip = Trip {
+        visits: visits.clone(),
+        at,
+        token: token.clone(),
+    };
+    let compiled = Compiled {
+        query: Box::new(SlowQuery {
+            delay: Duration::ZERO,
+            trip: Some(trip),
+        }),
+        filters: Vec::new(),
+        boosts: None,
+        key: format!("tripwire{at}"),
+    };
+    (compiled, visits)
+}
+
+#[derive(Debug, Clone)]
+struct Trip {
+    visits: Arc<AtomicUsize>,
+    at: usize,
+    token: CancelToken,
+}
+
+impl Trip {
+    fn step(&self) {
+        if self.visits.fetch_add(1, Ordering::Relaxed) + 1 == self.at {
+            self.token.cancel();
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct SlowQuery {
     delay: Duration,
+    trip: Option<Trip>,
 }
 
 impl Query for SlowQuery {
@@ -101,6 +143,7 @@ impl Query for SlowQuery {
         Ok(Box::new(SlowWeight {
             inner: AllQuery.weight(scoring)?,
             delay: self.delay,
+            trip: self.trip.clone(),
         }))
     }
 }
@@ -108,6 +151,7 @@ impl Query for SlowQuery {
 struct SlowWeight {
     inner: Box<dyn Weight>,
     delay: Duration,
+    trip: Option<Trip>,
 }
 
 impl Weight for SlowWeight {
@@ -115,6 +159,7 @@ impl Weight for SlowWeight {
         Ok(Box::new(SlowScorer {
             inner: self.inner.scorer(reader, boost)?,
             delay: self.delay,
+            trip: self.trip.clone(),
         }))
     }
 
@@ -126,11 +171,15 @@ impl Weight for SlowWeight {
 struct SlowScorer {
     inner: Box<dyn Scorer>,
     delay: Duration,
+    trip: Option<Trip>,
 }
 
 impl DocSet for SlowScorer {
     fn advance(&mut self) -> DocId {
         spin(self.delay);
+        if let Some(t) = &self.trip {
+            t.step();
+        }
         self.inner.advance()
     }
 

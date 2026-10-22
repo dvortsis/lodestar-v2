@@ -69,7 +69,10 @@ impl Services {
         let db = config.db_path();
         let store_config = config.store_config();
         let search = config.search.enabled;
-        let index_root = config.index_root();
+        // The root holds one directory per index version (§8); this
+        // build's is the one `index_path` names.
+        let index_path = config.index_path();
+        let index_root = index_path.parent().unwrap_or(&index_path).to_path_buf();
         let heap = config.search.heap_mib.max(16) << 20;
         let filter = pipeline_config.filter.clone();
         let subs_config = config.subscriptions.clone();
