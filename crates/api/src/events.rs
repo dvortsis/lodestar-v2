@@ -28,7 +28,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -51,6 +51,7 @@ use crate::dto::events::{
     SettingsEvent, Topic, TorrentsEvent,
 };
 use crate::error::{ApiError, ApiResult};
+use crate::search::AdultVisibility;
 use crate::{ApiState, auth};
 
 /// This module's half of `/openapi.json`.
@@ -123,6 +124,9 @@ pub struct EventSources {
     pub crawler: Option<Arc<dyn CrawlerSource>>,
     /// The serving handle's rebuild progress: `rebuild`.
     pub rebuild: Option<SearchHandle>,
+    /// "Show adult content", read live when a `torrents` event is made:
+    /// the API state's own [`AdultVisibility`]. The default hides Adult.
+    pub adult: AdultVisibility,
 }
 
 impl std::fmt::Debug for EventSources {
@@ -131,6 +135,7 @@ impl std::fmt::Debug for EventSources {
             .field("commits", &self.commits)
             .field("crawler", &self.crawler.is_some())
             .field("rebuild", &self.rebuild)
+            .field("adult", &self.adult)
             .finish()
     }
 }
@@ -156,41 +161,59 @@ struct Slots {
     per_session: HashMap<u64, usize>,
 }
 
-/// Commits reported by the indexer thread, coalesced: the sink only adds
-/// to counters and wakes the hub, so it never blocks or allocates, and
-/// commits close together become one `torrents` event without losing
-/// any count.
+/// Commits reported by the indexer thread, coalesced: the sink adds to
+/// counters under a lock held for a few additions (never across a wait
+/// or an allocation) and wakes the hub, so it never blocks on a client,
+/// and commits close together become one `torrents` event without
+/// losing any count.
 #[derive(Debug, Default)]
 struct CommitFeed {
-    added: AtomicU64,
-    max_id: AtomicI64,
+    pending: Mutex<Pending>,
     wake: Notify,
 }
 
+/// What's been reported since the last [`CommitFeed::take`]. One lock
+/// keeps the counts and the watermark consistent: a take never sees a
+/// commit's Adult count without its total, or the reverse.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Pending {
+    /// Torrents new to the index...
+    added: u64,
+    /// ...and how many of those are Adult.
+    adult: u64,
+    /// The highest torrent id searchable; never reset.
+    max_id: i64,
+}
+
 impl CommitFeed {
-    /// The watermark first, then the count (Release): whoever sees the
-    /// count (Acquire) also sees the watermark that came with it.
     fn report(&self, c: Committed) {
-        self.max_id.fetch_max(c.max_torrent_id, Ordering::Relaxed);
-        self.added.fetch_add(c.docs_added, Ordering::Release);
+        {
+            let mut p = lock(&self.pending);
+            p.added += c.docs_added;
+            p.adult += c.adult_added;
+            p.max_id = p.max_id.max(c.max_torrent_id);
+        }
         self.wake.notify_one();
     }
 
-    /// What's new since `sent` (the totals last published), as one
-    /// event. A raised watermark alone is news too (`added: 0`), so an
-    /// event never stays behind the newest id it has seen.
-    fn take(&self, sent: &mut (u64, i64)) -> Option<TorrentsEvent> {
-        let added = self.added.load(Ordering::Acquire);
-        let max_id = self.max_id.load(Ordering::Relaxed);
-        if added <= sent.0 && max_id <= sent.1 {
-            return None;
-        }
-        let event = TorrentsEvent {
-            added: added - sent.0,
-            max_id: max_id.max(sent.1),
+    /// What's been reported since the last take, as one event, counted
+    /// under the visibility `adult_shown` has now: while Adult is hidden,
+    /// its torrents are left out of `added` (§20.9) and dropped, so
+    /// turning it on later doesn't announce them. When nothing visible
+    /// is new (nothing at all, or only hidden Adult), there's no event;
+    /// the watermark goes out with the next one.
+    fn take(&self, adult_shown: bool) -> Option<TorrentsEvent> {
+        let mut p = lock(&self.pending);
+        let added = if adult_shown {
+            p.added
+        } else {
+            p.added.saturating_sub(p.adult)
         };
-        *sent = (added, event.max_id);
-        Some(event)
+        (p.added, p.adult) = (0, 0);
+        (added > 0).then_some(TorrentsEvent {
+            added,
+            max_id: p.max_id,
+        })
     }
 }
 
@@ -349,6 +372,7 @@ impl EventHub {
             .commits
             .clone()
             .map(|hook| (hook, Arc::new(CommitFeed::default())));
+        let adult = sources.adult.clone();
         let hub = Arc::new(EventHub {
             config,
             epoch: format!("{epoch:016x}"),
@@ -367,6 +391,7 @@ impl EventHub {
             tasks.push(tokio::spawn(forward_commits(
                 Arc::downgrade(&hub),
                 feed.clone(),
+                adult,
                 hub.closed.subscribe(),
             )));
         }
@@ -638,13 +663,14 @@ impl futures_core::Stream for Frames {
     }
 }
 
-/// Turns reported commits into `torrents` events.
+/// Turns reported commits into `torrents` events, under the visibility
+/// of the moment each is made.
 async fn forward_commits(
     hub: std::sync::Weak<EventHub>,
     feed: Arc<CommitFeed>,
+    adult: AdultVisibility,
     mut closed: watch::Receiver<bool>,
 ) {
-    let mut sent = (0, 0);
     loop {
         tokio::select! {
             biased;
@@ -652,7 +678,9 @@ async fn forward_commits(
             () = feed.wake.notified() => {}
         }
         let Some(hub) = hub.upgrade() else { return };
-        if let Some(event) = feed.take(&mut sent) {
+        // Read outside the feed's lock: it may take the settings' own.
+        let shown = adult.shown();
+        if let Some(event) = feed.take(shown) {
             hub.publish(&Event::Torrents(event));
         }
     }
@@ -1088,11 +1116,7 @@ mod tests {
         // at once and take no memory.
         let start = std::time::Instant::now();
         for i in 1..=100_000 {
-            feed.report(Committed {
-                docs_added: 1,
-                max_torrent_id: i,
-                at: 0,
-            });
+            feed.report(commit(1, 0, i));
         }
         assert!(start.elapsed() < Duration::from_secs(2));
         let mut sub = h.subscribe(all(), None);
@@ -1154,34 +1178,108 @@ mod tests {
         assert!(!message.contains(&"é".repeat(65)), "{message}");
     }
 
-    /// The watermark is never left behind by a publish that ran between
-    /// a report's two updates, in either order.
-    #[test]
-    fn a_torrents_event_never_keeps_a_stale_max_id() {
-        let feed = CommitFeed::default();
-        let mut sent = (0, 0);
-        feed.report(Committed {
-            docs_added: 2,
-            max_torrent_id: 10,
+    fn commit(docs_added: u64, adult_added: u64, max_torrent_id: i64) -> Committed {
+        Committed {
+            docs_added,
+            adult_added,
+            max_torrent_id,
             at: 0,
-        });
-        // The count half of a report lands first, then a publish runs.
-        feed.added.fetch_add(3, Ordering::Release);
-        let first = feed.take(&mut sent).unwrap();
-        assert_eq!((first.added, first.max_id), (5, 10));
-        feed.max_id.fetch_max(13, Ordering::Relaxed);
-        let next = feed.take(&mut sent).unwrap();
-        assert_eq!((next.added, next.max_id), (0, 13));
-        // The watermark half first (as `report` does it).
-        feed.max_id.fetch_max(20, Ordering::Relaxed);
-        let ahead = feed.take(&mut sent).unwrap();
-        assert_eq!((ahead.added, ahead.max_id), (0, 20));
-        feed.added.fetch_add(4, Ordering::Release);
-        let rest = feed.take(&mut sent).unwrap();
-        assert_eq!((rest.added, rest.max_id), (4, 20));
-        // Nothing new, nothing sent; the totals add up.
-        assert!(feed.take(&mut sent).is_none());
-        assert_eq!(sent, (9, 20));
+        }
+    }
+
+    /// A take counts under the visibility it's given, never the one at
+    /// the report, and drops what it leaves out.
+    #[test]
+    fn a_take_counts_under_the_visibility_of_its_moment() {
+        let feed = CommitFeed::default();
+        assert_eq!(feed.take(false), None);
+        // Reported while hidden, taken while shown: all of it.
+        feed.report(commit(5, 2, 5));
+        let e = feed.take(true).unwrap();
+        assert_eq!((e.added, e.max_id), (5, 5));
+        // Taken while hidden: Adult left out, and not sent later either.
+        feed.report(commit(5, 2, 10));
+        let e = feed.take(false).unwrap();
+        assert_eq!((e.added, e.max_id), (3, 10));
+        assert_eq!(feed.take(true), None);
+        // Coalesced commits add up, each with its own Adult count.
+        feed.report(commit(4, 1, 14));
+        feed.report(commit(2, 2, 12));
+        let e = feed.take(false).unwrap();
+        assert_eq!((e.added, e.max_id), (3, 14));
+    }
+
+    /// Only hidden Adult is new: no event, and the watermark goes out
+    /// with the next one.
+    #[test]
+    fn hidden_adult_alone_sends_nothing() {
+        let feed = CommitFeed::default();
+        feed.report(commit(1, 0, 1));
+        assert_eq!(feed.take(false).unwrap().max_id, 1);
+        feed.report(commit(2, 2, 3));
+        assert_eq!(feed.take(false), None);
+        // Dropped, not held back for a later toggle.
+        assert_eq!(feed.take(true), None);
+        feed.report(commit(1, 0, 4));
+        let e = feed.take(false).unwrap();
+        assert_eq!((e.added, e.max_id), (1, 4));
+    }
+
+    /// The next `torrents` event a subscription gets, or `None` if none
+    /// comes within `wait`.
+    async fn next_torrents(sub: &mut Subscription, wait: Duration) -> Option<TorrentsEvent> {
+        match tokio::time::timeout(wait, sub.next()).await {
+            Err(_) => None,
+            Ok(Some(Item::Event(s))) => {
+                let text = std::str::from_utf8(&s.frame).unwrap();
+                let data = text.split("data: ").nth(1).unwrap().trim();
+                Some(serde_json::from_str(data).unwrap())
+            }
+            Ok(other) => panic!("{other:?}"),
+        }
+    }
+
+    /// Through the hub's own task, the setting read live from the same
+    /// kind of reader the API state holds.
+    #[tokio::test]
+    async fn the_hub_leaves_hidden_adult_out_of_torrents_events() {
+        let hook = Arc::new(CommitHook::default());
+        let (show, rx) = watch::channel(false);
+        let h = EventHub::start(
+            EventsConfig::default(),
+            EventSources {
+                commits: Some(hook.clone()),
+                adult: AdultVisibility::follow(move || *rx.borrow()),
+                ..EventSources::default()
+            },
+        );
+        let feed = h.commits.as_ref().unwrap().1.clone();
+        let mut sub = h.subscribe(all(), None);
+        let long = Duration::from_secs(5);
+        let short = Duration::from_millis(200);
+        // Hidden (the default): 3 non-adult and 2 adult send 3.
+        feed.report(commit(5, 2, 5));
+        let e = next_torrents(&mut sub, long).await.unwrap();
+        assert_eq!((e.added, e.max_id), (3, 5));
+        // Shown: the same commit sends 5.
+        show.send_replace(true);
+        feed.report(commit(5, 2, 10));
+        let e = next_torrents(&mut sub, long).await.unwrap();
+        assert_eq!((e.added, e.max_id), (5, 10));
+        // Hidden again: an all-Adult commit sends nothing...
+        show.send_replace(false);
+        feed.report(commit(2, 2, 12));
+        assert_eq!(next_torrents(&mut sub, short).await, None);
+        // ...and the next visible one carries the newest watermark.
+        feed.report(commit(1, 0, 13));
+        let e = next_torrents(&mut sub, long).await.unwrap();
+        assert_eq!((e.added, e.max_id), (1, 13));
+        h.close();
+    }
+
+    #[test]
+    fn hub_sources_default_to_adult_hidden() {
+        assert!(!EventSources::default().adult.shown());
     }
 
     /// A step of the property test.

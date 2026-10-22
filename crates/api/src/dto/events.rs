@@ -73,15 +73,18 @@ pub struct EventsQuery {
     pub topics: Option<String>,
 }
 
-/// `event: torrents`: torrents became searchable. Commits close together
-/// may arrive as one event.
+/// `event: torrents`: torrents you can see became searchable. Commits
+/// close together may arrive as one event. While "Show adult content" is
+/// off, Adult torrents are left out entirely: not counted, and a commit
+/// of only those sends no event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({ "added": 12, "max_id": 48211 }))]
 pub struct TorrentsEvent {
-    /// Torrents new to the index since the previous `torrents` event;
-    /// can be 0 when only `max_id` moved on.
+    /// Torrents new to the index since the previous `torrents` event,
+    /// leaving out Adult while it's hidden; at least 1.
     pub added: u64,
-    /// The highest torrent id searchable now.
+    /// The highest torrent id searchable now, of any class: searches
+    /// still apply the Adult visibility.
     pub max_id: i64,
 }
 
