@@ -1,7 +1,14 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import type uPlot from 'uplot';
-	import { formatCount, formatDate, formatDateTime, type MetricValue } from '$lib/format';
+	import {
+		formatCompact,
+		formatCount,
+		formatDate,
+		formatDateFull,
+		formatDateTime,
+		type MetricValue
+	} from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import {
 		buildData,
@@ -20,9 +27,18 @@
 		label: string;
 		/** Axis unit, shown beside the value axis. */
 		unit: string;
+		/** Legend and tooltip values: the exact metric formatter. */
 		format?: ValueFormatter;
+		/** Value-axis ticks; compact by default (`1.2K`). */
+		axisFormat?: ValueFormatter;
+		/** Series resolution. Day and week ticks show the date; hour ticks include the time. */
+		bucket?: 'hour' | 'day' | 'week';
+		/** Counts step by whole numbers on the value axis. Turn off for rates and ratios. */
+		integers?: boolean;
 		/** IANA time zone, the user's setting. */
 		timeZone?: string;
+		/** uPlot failed to load (offline, blocked chunk). The container stays empty. */
+		onerror?: (error: unknown) => void;
 		height?: number;
 		testid?: string;
 	}
@@ -32,7 +48,11 @@
 		label,
 		unit,
 		format = formatCount,
+		axisFormat = formatCompact,
+		bucket = 'day',
+		integers = true,
 		timeZone,
+		onerror,
 		height = 240,
 		testid = 'line-chart'
 	}: Props = $props();
@@ -45,21 +65,34 @@
 
 	const locale = $derived(currentLocale());
 	const fmt = $derived<LineFormat>({
+		axis: (v) => axisFormat(v as MetricValue, locale),
 		y: (v) => format(v as MetricValue, locale),
-		tick: (s) => formatDate(s, locale, { timeZone }),
-		full: (s) => formatDateTime(s, locale, { timeZone })
+		tick: (s) =>
+			bucket === 'hour'
+				? formatDateTime(s, locale, { timeZone })
+				: formatDate(s, locale, { timeZone }),
+		full: (s) => formatDateFull(s, locale, { timeZone, bucket })
 	});
+	// Anything that changes how the chart is built (not just what it plots) forces a rebuild.
+	const shape = $derived(
+		JSON.stringify([series.map((s) => [s.label, s.token]), unit, height, integers])
+	);
 
 	function destroy() {
 		plot?.destroy();
 		plot = undefined;
 	}
 
-	// Rebuild when data, formatting or the theme changes. Updates redraw in place; uPlot has no
-	// animation, so nothing re-animates (motion-ui) and reduced motion needs no special case.
+	// Rebuild only when the shape, the formatting or the theme changes. New samples go through
+	// setData and redraw in place; uPlot has no animation, so nothing re-animates (motion-ui) and
+	// reduced motion needs no special case.
 	$effect(() => {
-		void [times, series, fmt, unit, height];
+		void [shape, fmt];
 		create?.();
+	});
+	$effect(() => {
+		const data = buildData(times, series);
+		if (plot) plot.setData(data);
 	});
 
 	onMount(() => {
@@ -78,6 +111,7 @@
 					palette: readPalette(host, series),
 					format: fmt,
 					unit,
+					integers,
 					font: `${css.fontSize} ${css.fontFamily}`
 				}),
 				buildData(times, series),
@@ -95,7 +129,10 @@
 				create = () => mount(UPlot);
 				create();
 			},
-			() => (failed = true)
+			(error) => {
+				failed = true;
+				onerror?.(error);
+			}
 		);
 
 		const resize = new ResizeObserver(() => {

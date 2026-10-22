@@ -9,7 +9,14 @@
 		Sparkline,
 		type BrushRange
 	} from '$lib/charts';
-	import { formatBytes, formatDate, formatShare, sizeBinEdges } from '$lib/format';
+	import {
+		formatBytes,
+		formatCount,
+		formatDate,
+		formatShare,
+		RANGE_SEPARATOR,
+		sizeBinEdges
+	} from '$lib/format';
 
 	// Test-only showcase of the chart primitives with fixed data. Not linked anywhere.
 	const segments = [
@@ -44,12 +51,32 @@
 		n: seeders[i] == null ? '—' : String(seeders[i])
 	}));
 	let table = $state(false);
+
+	// Every chart ships with its table equivalent; the one toggle shows all of them.
+	const percent = (n: number) => formatShare(n);
+	const sum = segments.reduce((t, x) => t + x.value, 0);
+	const compRows = segments.map((x) => ({
+		group: x.label,
+		count: formatCount(x.value),
+		share: percent((x.value / sum) * 100)
+	}));
+	const histRows = counts.map((c, i) => ({
+		bin: `${bins.labels[i]}${RANGE_SEPARATOR}${bins.labels[i + 1]}`,
+		count: formatCount(c)
+	}));
 </script>
 
 <div
 	class="mx-auto flex max-w-(--manuscript-width) flex-col gap-8 bg-base-200 p-6 text-base-content"
 >
 	<h1 class="text-display font-semibold">Chart primitives</h1>
+	<button
+		type="button"
+		class="btn btn-sm self-start"
+		aria-pressed={table}
+		onclick={() => (table = !table)}
+		data-testid="line-toggle">View as table</button
+	>
 
 	<section class="grid grid-cols-2 gap-6" aria-label="KPIs">
 		<Kpi
@@ -80,6 +107,17 @@
 			summary="82% video, 9% audio, 3% documents, 2.5% archives, 2% images, 1% software, 0.5% other"
 			dominant="{formatShare(82)} video"
 			testid="compbar"
+		/>
+		<DataTableAlternative
+			caption="Composition by group"
+			columns={[
+				{ key: 'group', label: 'Group' },
+				{ key: 'count', label: 'Torrents', numeric: true },
+				{ key: 'share', label: 'Share', numeric: true }
+			]}
+			rows={compRows}
+			visible={table}
+			testid="compbar-table"
 		/>
 		<div class="flex flex-col gap-2">
 			<CategoryBar
@@ -119,6 +157,16 @@
 		>
 			{selection ? `${bins.labels[selection.from]} – ${bins.labels[selection.to]}` : 'No range'}
 		</p>
+		<DataTableAlternative
+			caption="Torrents by size"
+			columns={[
+				{ key: 'bin', label: 'Size' },
+				{ key: 'count', label: 'Torrents', numeric: true }
+			]}
+			rows={histRows}
+			visible={table}
+			testid="hist-table"
+		/>
 		<p class="text-small tabular-nums">{formatBytes(1048576)}</p>
 	</section>
 
@@ -131,13 +179,6 @@
 			timeZone="UTC"
 			testid="line"
 		/>
-		<button
-			type="button"
-			class="btn btn-sm self-start"
-			aria-pressed={table}
-			onclick={() => (table = !table)}
-			data-testid="line-toggle">View as table</button
-		>
 		<DataTableAlternative
 			caption="Seeders per day"
 			columns={[

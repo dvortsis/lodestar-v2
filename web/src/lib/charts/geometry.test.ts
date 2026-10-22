@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dragRange, moveEdge, nearestEdge } from './brush';
+import { clampRange, dragRange, moveEdge, nearestEdge } from './brush';
 import { buildData, buildOptions, readPalette } from './lineOptions';
 import { lengthPct, numeric } from './shared';
 import { sparkPath } from './sparkline';
@@ -45,6 +45,14 @@ describe('brush', () => {
 	});
 });
 
+describe('clampRange', () => {
+	it('fits a stored selection to a smaller bin count and drops it with no bins', () => {
+		expect(clampRange({ from: 2, to: 9 }, 5)).toEqual({ from: 2, to: 5 });
+		expect(clampRange({ from: 7, to: 9 }, 5)).toEqual({ from: 4, to: 5 });
+		expect(clampRange({ from: 0, to: 3 }, 0)).toBeNull();
+	});
+});
+
 describe('shared', () => {
 	it('keeps bar lengths finite and bounded', () => {
 		expect(lengthPct(5, 10)).toBe('50%');
@@ -62,6 +70,7 @@ describe('shared', () => {
 describe('line options', () => {
 	const series = [{ label: 'Seeders', values: [1, null, 3] }];
 	const format = {
+		axis: (v: number) => `${v}k`,
 		y: (v: number) => `${v}!`,
 		tick: (s: number) => `t${s}`,
 		full: (s: number) => `T${s}`
@@ -82,10 +91,26 @@ describe('line options', () => {
 	it('shows the unit on the value axis and formats ticks and legend values', () => {
 		expect(opts.axes?.[1]?.label).toBe('seeders');
 		const values = opts.axes?.[1]?.values as (u: unknown, s: number[]) => string[];
-		expect(values(null, [0, 5])).toEqual(['0!', '5!']);
+		expect(values(null, [0, 5])).toEqual(['0k', '5k']);
 		const full = opts.series?.[0]?.value as (u: unknown, v: number | null) => string;
 		expect(full(null, 9)).toBe('T9');
 		expect(full(null, null)).toBe('—');
+	});
+	it('steps counts by whole numbers only, unless told otherwise', () => {
+		const incrs = opts.axes?.[1]?.incrs as number[];
+		expect(incrs.every((n) => Number.isInteger(n))).toBe(true);
+		expect(incrs[0]).toBe(1);
+		const free = buildOptions({
+			width: 1,
+			height: 1,
+			series,
+			palette: { series: ['red'], text: 'gray', grid: 'silver' },
+			format,
+			unit: 'ratio',
+			font: '12px sans-serif',
+			integers: false
+		});
+		expect(free.axes?.[1]?.incrs).toBeUndefined();
 	});
 	it('starts the value scale at zero', () => {
 		const range = opts.scales?.y?.range as unknown as (
