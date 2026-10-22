@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Snippet } from 'svelte';
+	import { tick, type Snippet } from 'svelte';
 	import IconClose from '~icons/ph/x';
 	import { m } from '$lib/paraglide/messages.js';
 	import { FOCUS_RING, TARGET_MIN } from '../classes';
@@ -10,6 +10,11 @@
 		onremove?: () => void;
 		/** Accessible name of the remove button, e.g. "Remove filter: video". */
 		removeLabel?: string;
+		/**
+		 * Focus after removal: the next removable chip among this chip's siblings, else the previous
+		 * one, else this element (e.g. the query input). Without it focus would drop to <body>.
+		 */
+		fallbackFocus?: () => HTMLElement | null | undefined;
 		/** Selected/active filter tint. */
 		selected?: boolean;
 		class?: string;
@@ -19,17 +24,29 @@
 		children,
 		onremove,
 		removeLabel,
+		fallbackFocus,
 		selected = false,
 		class: className = ''
 	}: Props = $props();
 
 	let root: HTMLSpanElement | undefined = $state();
 
-	function onkeydown(event: KeyboardEvent) {
+	async function remove() {
 		if (!onremove) return;
+		// Pick the neighbour before the DOM changes; it is another chip, so it survives the removal.
+		const siblings = [...(root?.parentElement?.querySelectorAll('[data-chip-remove]') ?? [])];
+		const own = root?.querySelector('[data-chip-remove]') ?? null;
+		const at = siblings.indexOf(own as Element);
+		const neighbour = (siblings[at + 1] ?? siblings[at - 1]) as HTMLElement | undefined;
+		onremove();
+		await tick();
+		(neighbour ?? fallbackFocus?.())?.focus();
+	}
+
+	function onkeydown(event: KeyboardEvent) {
 		if (event.key === 'Backspace' || event.key === 'Delete') {
 			event.preventDefault();
-			onremove();
+			void remove();
 		}
 	}
 </script>
@@ -44,9 +61,10 @@
 	{#if onremove}
 		<button
 			type="button"
+			data-chip-remove
 			aria-label={removeLabel ?? m.common_remove()}
 			class="inline-flex size-6 items-center justify-center rounded-selector hover:bg-hover {FOCUS_RING} {TARGET_MIN}"
-			onclick={onremove}
+			onclick={remove}
 			{onkeydown}
 		>
 			<IconClose class="size-4" aria-hidden="true" />

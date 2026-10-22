@@ -84,6 +84,28 @@ test('toasts do not steal focus and dismiss from the keyboard', async ({ page, g
 	await page.keyboard.press('Enter');
 	await expect(page.getByTestId('toast')).toHaveCount(1);
 	await expect(trigger).toBeFocused();
-	await page.keyboard.press('Tab');
-	await page.keyboard.press('Tab');
+	await page.getByRole('button', { name: 'Dismiss' }).focus();
+	await page.keyboard.press('Enter');
+	await expect(page.getByTestId('toast')).toHaveCount(0);
+});
+
+test('toasts fit a 320 px viewport', async ({ page, go }) => {
+	await page.setViewportSize({ width: 320, height: 640 });
+	await go('/dev/ui/feedback');
+	await page.getByRole('button', { name: 'Toast error' }).click();
+	const box = (await page.getByTestId('toast').boundingBox())!;
+	expect(box.x).toBeGreaterThanOrEqual(0);
+	expect(box.x + box.width).toBeLessThanOrEqual(320);
+});
+
+test.describe('reduced motion', () => {
+	test.use({ motion: 'reduce' });
+	test('toasts appear without a fade', async ({ page, go }) => {
+		await go('/dev/ui/feedback');
+		await page.getByRole('button', { name: 'Toast info' }).click();
+		const duration = await page
+			.getByTestId('toast')
+			.evaluate((el) => getComputedStyle(el).animationDuration);
+		expect(duration).toBe('0s');
+	});
 });

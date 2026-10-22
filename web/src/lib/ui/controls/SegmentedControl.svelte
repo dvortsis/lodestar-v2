@@ -67,7 +67,9 @@
 <div
 	role="radiogroup"
 	aria-label={label}
-	class="inline-flex gap-0.5 rounded-field border border-field-border bg-base-100 p-0.5 {className}"
+	class="inline-flex gap-0.5 rounded-field border border-field-border bg-base-100 p-0.5 {dense
+		? 'min-h-(--control-height-dense)'
+		: 'min-h-(--control-height)'} {className}"
 >
 	{#each options as option, i (option.value)}
 		<button
@@ -77,9 +79,8 @@
 			aria-checked={option.value === value}
 			disabled={option.disabled}
 			tabindex={option.value === tabbable ? 0 : -1}
-			class="rounded-field px-3 text-body transition-colors duration-(--duration-fast) {dense
-				? 'h-(--control-height-dense)'
-				: 'h-(--control-height)'} {option.value === value
+			class="rounded-selector px-3 text-body transition-colors duration-(--duration-fast) {option.value ===
+			value
 				? 'border border-primary bg-selected font-medium text-base-content'
 				: 'border border-transparent text-muted-text hover:bg-hover'} disabled:opacity-60 {FOCUS_RING} {TARGET_MIN}"
 			onclick={() => !option.disabled && select(option.value)}

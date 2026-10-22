@@ -41,9 +41,18 @@ describe('Field', () => {
 		expect(input.getAttribute('aria-required')).toBe('true');
 	});
 
-	it('has the required marker as text, not colour or symbol alone', () => {
-		render(Field, { label: 'Name', required: true, requiredLabel: 'required', children: control });
-		expect(screen.getByText('(required)')).toBeTruthy();
+	it('announces required once: aria-required on the control, a visual-only marker', () => {
+		const { container } = render(Field, { label: 'Name', required: true, children: control });
+		expect(screen.getByLabelText(/Name/).getAttribute('aria-required')).toBe('true');
+		expect(container.querySelector('label [aria-hidden="true"]')!.textContent).toBe('*');
+		expect(container.querySelector('.sr-only')).toBeNull();
+	});
+
+	it('gives the control the label id for popups that need their own name', () => {
+		const { container } = render(Field, { label: 'Name', children: control });
+		const input = screen.getByLabelText('Name');
+		const label = container.querySelector('label')!;
+		expect(input.getAttribute('aria-labelledby')).toBe(label.id);
 	});
 
 	it('omits describedby and invalid when there is nothing to say', () => {
@@ -136,20 +145,20 @@ describe('RangeInput', () => {
 
 	it('shows both inputs, the unit and a formatted summary', () => {
 		render(RangeInput, { ...base, min: 1000, max: 2500 });
-		expect((screen.getByLabelText('Minimum size') as HTMLInputElement).value).toBe('1000');
+		expect((screen.getByLabelText('Minimum size (MiB)') as HTMLInputElement).value).toBe('1000');
 		expect(screen.getByTestId('range-summary').textContent!.trim()).toBe('1,000 to 2,500 MiB');
 	});
 
 	it('unbounded sides render an em dash, never 0', () => {
 		render(RangeInput, { ...base, min: null, max: 10 });
 		expect(screen.getByTestId('range-summary').textContent!.trim()).toBe('— to 10 MiB');
-		expect((screen.getByLabelText('Minimum size') as HTMLInputElement).value).toBe('');
+		expect((screen.getByLabelText('Minimum size (MiB)') as HTMLInputElement).value).toBe('');
 	});
 
 	it('reports changes and flags min > max', async () => {
 		const onchange = vi.fn();
 		render(RangeInput, { ...base, min: 1, max: 5, onchange, invalidMessage: 'Min exceeds max' });
-		const min = screen.getByLabelText('Minimum size');
+		const min = screen.getByLabelText('Minimum size (MiB)');
 		await fireEvent.input(min, { target: { value: '9' } });
 		expect(onchange).toHaveBeenLastCalledWith({ min: 9, max: 5 });
 		expect(min.getAttribute('aria-invalid')).toBe('true');
@@ -219,6 +228,30 @@ describe('Combobox', () => {
 		await fireEvent.keyDown(input, { key: 'Enter' });
 		expect(onselect).not.toHaveBeenCalled();
 		expect(screen.getByText('No matches')).toBeTruthy();
+	});
+
+	it('resets the highlight when the options change', async () => {
+		const { rerender } = render(Combobox, { options, label: 'Source' });
+		const input = screen.getByRole('combobox');
+		await fireEvent.keyDown(input, { key: 'ArrowDown' });
+		expect(input.getAttribute('aria-activedescendant')).toBeTruthy();
+		await rerender({ options: options.slice(0, 2), label: 'Source' });
+		expect(input.getAttribute('aria-activedescendant')).toBeNull();
+	});
+
+	it('names the list from the Field label and passes name/disabled through', () => {
+		render(Combobox, {
+			options,
+			'aria-labelledby': 'lbl',
+			name: 'source',
+			disabled: true
+		});
+		const input = screen.getByRole('combobox', { hidden: true }) as HTMLInputElement;
+		expect(input.name).toBe('source');
+		expect(input.disabled).toBe(true);
+		expect(screen.getByRole('listbox', { hidden: true }).getAttribute('aria-labelledby')).toBe(
+			'lbl'
+		);
 	});
 
 	it('mouse choice selects without losing focus', async () => {

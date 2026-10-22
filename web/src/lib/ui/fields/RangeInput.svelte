@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { formatCount } from '$lib/format';
+	import { DASH, formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import { FOCUS_RING, TARGET_MIN } from '../classes';
@@ -49,7 +49,13 @@
 	}
 
 	const summary = $derived(
-		`${min === null ? '—' : format(min)} ${m.common_to()} ${max === null ? '—' : format(max)}${unit ? ` ${unit}` : ''}`
+		m
+			.common_range_summary({
+				min: min === null ? DASH : format(min),
+				max: max === null ? DASH : format(max),
+				unit: unit ?? ''
+			})
+			.trim()
 	);
 </script>
 
@@ -61,11 +67,11 @@
 				type="number"
 				inputmode="decimal"
 				{step}
-				aria-label={field.text}
+				aria-label={unit ? `${field.text} (${unit})` : field.text}
 				aria-invalid={invalid ? true : undefined}
 				aria-describedby={invalid && invalidMessage ? `${uid}-error` : undefined}
 				value={field.key === 'min' ? (min ?? '') : (max ?? '')}
-				class="input w-(--compbar-max-width) border-field-border tabular-nums aria-invalid:border-error {dense
+				class="input min-w-0 flex-1 border-field-border tabular-nums aria-invalid:border-error {dense
 					? 'input-sm'
 					: ''} {FOCUS_RING} {TARGET_MIN}"
 				oninput={(e) => {

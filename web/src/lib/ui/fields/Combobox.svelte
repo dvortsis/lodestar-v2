@@ -27,6 +27,10 @@
 		/** Empty-list text; defaults to the shared "No matches". */
 		emptyLabel?: string;
 		onselect?: (option: ComboboxOption) => void;
+		name?: string;
+		disabled?: boolean;
+		/** The Field label's id; also names the popup list. */
+		'aria-labelledby'?: string;
 		'aria-describedby'?: string;
 		'aria-invalid'?: true;
 		'aria-required'?: true;
@@ -42,6 +46,8 @@
 		filter = true,
 		dense = false,
 		emptyLabel,
+		name,
+		disabled = false,
 		onselect,
 		class: className = '',
 		...aria
@@ -59,6 +65,12 @@
 			? options.filter((o) => o.label.toLowerCase().includes(value.toLowerCase()))
 			: options
 	);
+
+	// Stale highlight would point at a different option once the list changes.
+	$effect(() => {
+		void shown;
+		active = -1;
+	});
 
 	function choose(option: ComboboxOption | undefined) {
 		if (!option || option.disabled) return;
@@ -119,6 +131,8 @@
 		type="text"
 		role="combobox"
 		autocomplete="off"
+		{name}
+		{disabled}
 		aria-label={label}
 		aria-expanded={open}
 		aria-controls={listId}
@@ -143,9 +157,12 @@
 	<ul
 		id={listId}
 		role="listbox"
-		aria-label={label}
+		aria-label={aria['aria-labelledby'] ? undefined : label}
+		aria-labelledby={aria['aria-labelledby']}
 		hidden={!open}
-		class="absolute z-10 mt-1 max-h-(--art-height-large) w-full overflow-auto rounded-box border border-base-300 bg-base-100 p-1"
+		style:--combobox-max-height="calc(var(--row-height-comfortable) * 5)"
+		onmousedown={(e) => e.preventDefault()}
+		class="absolute z-10 mt-1 max-h-(--combobox-max-height) w-full overflow-auto rounded-box border border-base-300 bg-base-100 p-1"
 	>
 		{#each shown as option, i (option.value)}
 			<!-- mousedown keeps focus on the input; click would arrive after blur closed the list. -->
@@ -172,7 +189,7 @@
 				aria-selected="false"
 				class="px-3 py-2 text-body text-muted-text"
 			>
-				{emptyLabel ?? m.common_no_options()}
+				{emptyLabel ?? m.common_no_matches()}
 			</li>
 		{/each}
 	</ul>

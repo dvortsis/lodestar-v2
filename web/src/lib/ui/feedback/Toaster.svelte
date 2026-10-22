@@ -31,19 +31,25 @@
 		error: m.common_error
 	};
 
-	// Timers pause while the pointer or focus is inside the toast (WCAG 2.2.1).
+	// Timers pause while the pointer is over the toast or focus is inside it (WCAG 2.2.1); the
+	// countdown restarts only once both have left.
 	function timed(node: HTMLElement, item: ToastItem) {
 		let timer: ReturnType<typeof setTimeout> | undefined;
-		const start = () => {
-			if (item.timeout > 0) timer = setTimeout(() => toast.dismiss(item.id), item.timeout);
+		let hovered = false;
+		let focused = false;
+		const sync = () => {
+			clearTimeout(timer);
+			if (!hovered && !focused && item.timeout > 0) {
+				timer = setTimeout(() => toast.dismiss(item.id), item.timeout);
+			}
 		};
-		const stop = () => clearTimeout(timer);
-		start();
-		node.addEventListener('pointerenter', stop);
-		node.addEventListener('pointerleave', start);
-		node.addEventListener('focusin', stop);
-		node.addEventListener('focusout', start);
-		return { destroy: stop };
+		const on = (type: string, fn: () => void) => node.addEventListener(type, fn);
+		on('pointerenter', () => ((hovered = true), sync()));
+		on('pointerleave', () => ((hovered = false), sync()));
+		on('focusin', () => ((focused = true), sync()));
+		on('focusout', () => ((focused = false), sync()));
+		sync();
+		return { destroy: () => clearTimeout(timer) };
 	}
 </script>
 
@@ -54,7 +60,7 @@
 	aria-label={label ?? m.common_notifications()}
 	aria-live="polite"
 	aria-relevant="additions text"
-	class="pointer-events-none fixed right-4 bottom-4 z-50 flex w-full max-w-(--drawer-overlay-width-narrow) flex-col gap-2"
+	class="toaster pointer-events-none fixed inset-x-4 bottom-4 z-50 flex flex-col gap-2 large:left-auto"
 >
 	{#each toasts.items as item (item.id)}
 		{@const Icon = icons[item.kind]}
@@ -81,8 +87,19 @@
 
 <style>
 	/* Opacity only; the banner duration token is 0 under reduced motion, so it appears instantly. */
+	/* No toast token exists yet: the width is derived from the row height, the fade reuses the
+	   banner duration (0 under reduced motion). Listed as a token gap in the W7ab PR. */
+	.toaster {
+		--toast-width: calc(var(--row-height-comfortable) * 6);
+		--toast-duration: var(--duration-banner);
+	}
+	@media (min-width: 640px) {
+		.toaster {
+			width: var(--toast-width);
+		}
+	}
 	.toast-in {
-		animation: toast-in var(--duration-banner) var(--ease-out);
+		animation: toast-in var(--toast-duration) var(--ease-out);
 	}
 	@keyframes toast-in {
 		from {
