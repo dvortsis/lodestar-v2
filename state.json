@@ -188,10 +188,10 @@
    "notes": ""
   },
   "W5": {
-   "status": "running",
+   "status": "review",
    "model": "sonnet",
    "session": "session_01RL3YBaUPYXgdgK3wY2DRpG",
-   "pr": null,
+   "pr": 83,
    "attempt": 1,
    "review_rounds": 0,
    "notes": ""
@@ -203,7 +203,7 @@
    "pr": 76,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #76; reviewer started 16:45 | 17:10 r1 FIX: exclude dev routes from prod build (scope exception), toast timer, ticker 60s, + a11y items. R2 FIX 18:15: PR size reason; toast dismiss drops focus. Approved tokens --toast-width/--listbox-max-height in tokens.css. 18:10 R2 fixes 11d9b0d; R3 review in flight. 18:27 R3 FIX: Chip focus crosses groups; PR body stale. Runner verifies R4 itself."
+   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #76; reviewer started 16:45 | 17:10 r1 FIX: exclude dev routes from prod build (scope exception), toast timer, ticker 60s, + a11y items. R2 FIX 18:15: PR size reason; toast dismiss drops focus. Approved tokens --toast-width/--listbox-max-height in tokens.css. 18:10 R2 fixes 11d9b0d; R3 review in flight. 18:27 R3 FIX: Chip focus crosses groups; PR body stale. Runner verifies R4 itself. 18:50 R3 fixes bb80f6a verified by runner; asked one Toaster focus-steal fix, then merge on green."
   },
   "W7cd": {
    "status": "changes_requested",
@@ -764,19 +764,19 @@
    "notes": "launched 15:59; carry-forwards runner-pr, runner-docs-pr, metrics-contract, contract-docs, themes table, integrations-readme (if X-email merged), unraid --user | PR #73; owner-file edits moved to runner PR #75"
   },
   "F-near": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01Gn7rDcpkcoFRJjXXADJHQQ",
-   "pr": null,
+   "pr": 85,
    "attempt": 1,
    "review_rounds": 0,
    "notes": "launched 17:33; NEAR multi-token filter fix; avoid reclassify.rs/props.rs"
   },
   "D-puid": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01WpNDR3rzep43npFMCvj48Q",
-   "pr": null,
+   "pr": 84,
    "attempt": 1,
    "review_rounds": 0,
    "notes": "launched 17:33; PUID/PGID privilege drop; security review"
@@ -867,10 +867,13 @@
   "48": "review round 1: merge main (B0 layout), 10M exit evidence, scheduler fixes",
   "52": "MERGED by the filter session (self-merge again), conflicts with B0"
  },
- "heartbeats": 3,
+ "heartbeats": 4,
  "reviews_in_flight": {
   "70": "round 3 (f7fddd8)",
-  "71": "B6 round 2 (ee81535)"
+  "71": "B6 round 2 (ee81535)",
+  "83": "W5 R1 line-by-line",
+  "84": "D-puid R1 + security",
+  "85": "F-near R1"
  },
  "carry_forward": {
   "next-bans-touch": [
@@ -946,7 +949,7 @@
   "F1b #66: sign-off on calibrated filter budget (50us at reference runner speed, scale up to 1.6x on slower runners)"
  ],
  "launches_today": 8,
- "last_heartbeat": "2026-10-22T17:46Z",
+ "last_heartbeat": "2026-10-22T18:50Z",
  "owner_questions": [
   "F1 budget scope: gate covers cheaply-rejectable rule shapes (10% = 40.8 us on runner). Shapes the cheap check cannot decide cost more at 10% of rules (VM: NEAR/1 ~450-500, negation ~140, fuzzy ~125, prefix ~110 us; runner ~1.4x faster). Should those shapes be gated at 50 us too?",
   "Filter budget hardware: 50 us has no reference machine; gate now calibrated to the runner F1 measured on (10%=40.8 us), slower runners scale up to 1.6x. Confirm or set a reference machine.",
