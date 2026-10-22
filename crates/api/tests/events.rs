@@ -399,7 +399,45 @@ async fn bad_requests_get_the_envelope() {
         assert_eq!(body["error"]["code"], "unknown_topic");
         assert_eq!(body["error"]["field"], "topics");
     }
+    let (status, _, body) = call(
+        &f.app,
+        get(
+            "/api/v1/events?topics=torrents&topics=crawler",
+            &[("cookie", &cookie)],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "bad_parameter");
+    assert_eq!(body["error"]["field"], "topics");
     assert_eq!(f.hub.streams(), 0);
+}
+
+#[tokio::test]
+async fn a_stream_ends_with_its_session() {
+    let f = fixture(config());
+    let cookie = session(&f.auth);
+    let addr = serve(f.app.clone()).await;
+    let mut c = Conn::open(addr, "/api/v1/events", &[("Cookie", &cookie)]).await;
+    c.until(": keep-alive", SOON).await;
+    // A new password ends every other session, open streams included,
+    // at the next heartbeat (100 ms here).
+    f.auth
+        .change_password(
+            [127, 0, 0, 1].into(),
+            "correct horse battery",
+            "another fine password",
+        )
+        .unwrap();
+    let start = Instant::now();
+    c.until_closed(SOON).await;
+    let took = start.elapsed();
+    assert!(took < Duration::from_millis(500), "took {took:?}");
+    let start = Instant::now();
+    while f.hub.streams() != 0 {
+        assert!(start.elapsed() < SOON);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
 }
 
 #[tokio::test]

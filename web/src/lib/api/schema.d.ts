@@ -2033,7 +2033,8 @@ export interface components {
         TorrentsEvent: {
             /**
              * Format: int64
-             * @description Torrents new to the index since the previous `torrents` event.
+             * @description Torrents new to the index since the previous `torrents` event;
+             *     can be 0 when only `max_id` moved on.
              */
             added: number;
             /**

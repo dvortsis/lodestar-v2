@@ -71,7 +71,8 @@ pub struct EventsQuery {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({ "added": 12, "max_id": 48211 }))]
 pub struct TorrentsEvent {
-    /// Torrents new to the index since the previous `torrents` event.
+    /// Torrents new to the index since the previous `torrents` event;
+    /// can be 0 when only `max_id` moved on.
     pub added: u64,
     /// The highest torrent id searchable now.
     pub max_id: i64,
