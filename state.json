@@ -167,7 +167,7 @@
    "pr": 101,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": "launched 22:38; ext:m4-schema-settled satisfied (#32,#33 merged; no open PR edits MIGRATIONS) | 23:45 PR #101 head e80c7ba (IMMEDIATE via write_tx; after_user_delete stub to wire to #81). Reviewer started."
+   "notes": "launched 22:38; ext:m4-schema-settled satisfied (#32,#33 merged; no open PR edits MIGRATIONS) | 23:45 PR #101 head e80c7ba (IMMEDIATE via write_tx; after_user_delete stub to wire to #81). Reviewer started. | 23:52 review MERGE-with-fixes: paused column + channels, prune_alerts usize::MAX wipes all, scrub on text rewrite, pruning owners; polish. Sent."
   },
   "B6": {
    "status": "merged",
@@ -1112,8 +1112,7 @@
  },
  "heartbeats": 4,
  "reviews_in_flight": [
-  "88",
-  101
+  "88"
  ],
  "carry_forward": {
   "next-bans-touch": [
@@ -1193,7 +1192,8 @@
   "crawler_rate": "CrawlerEvent needs a server-computed ingest rate for the status pill (metrics.md:169) \u2014 from W9 review",
   "icons_weight": "Phosphor icons are regular weight but \u00a710.2 says Bold (predates W9; W7 primitives) \u2014 next UI slice touching icons",
   "skip_link": "Search slice: skip link label 'Skip to results' (\u00a710.13)",
-  "n_new_reset": "Future 'N new' consumer (search) must reset its count when the Adult setting changes (hidden tab queued frames not re-screened) \u2014 from #104 review"
+  "n_new_reset": "Future 'N new' consumer (search) must reset its count when the Adult setting changes (hidden tab queued frames not re-screened) \u2014 from #104 review",
+  "pruning_owners": "B9 runs prune_alerts; B11a/b runs 30-day prune_query_log (from #101 review)"
  },
  "blocked_on_owner": [
   "Modern DHT crawler architecture: waiting on an AskUserQuestion",
