@@ -5,15 +5,22 @@
 //! query class, end to end: parse, compile, search a page of 50 and load
 //! the hits' rows from SQLite, as the API does. With `--gate` it exits
 //! non-zero when a p95 target is missed.
+//!
+//! A second table runs the same classes the way `/search` does since
+//! B5a: a searcher lease (snapshot, count, stem tier) and its first page,
+//! then a page deep into the results through cursors. A third checks the
+//! count estimate (`total_approx`) against the exact count, gated at
+//! [`ESTIMATE_TOLERANCE`].
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use lodestar_bench::synth::Generator;
 use lodestar_metainfo::Info;
-use lodestar_search::{SearchIndex, Sort, index_dir, parse};
+use lodestar_search::{CancelToken, Lease, SearchIndex, Sort, Start, index_dir, parse};
 use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig};
 use rand::seq::IndexedRandom;
 use rand::{RngExt, SeedableRng};
@@ -23,6 +30,11 @@ use rand_chacha::ChaCha8Rng;
 const KEYWORD_P95: Duration = Duration::from_millis(30);
 /// §3: filter-only browse over the whole corpus, p95.
 const BROWSE_P95: Duration = Duration::from_millis(50);
+/// The deep-cursor class reads this many pages of 50 before timing one.
+const DEEP_PAGES: usize = 20;
+/// Largest relative error allowed of an estimated count
+/// (`lodestar_search` `count.rs`).
+const ESTIMATE_TOLERANCE: f64 = 0.05;
 
 const USAGE: &str = "\
 Usage: search-bench [--torrents N] [--queries N] [--dir PATH] [--seed S] [--gate]
@@ -409,7 +421,107 @@ fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
             println!("  {:<24} {fallbacks} widened by the stem tier", "");
         }
     }
+    ok &= api_path(a, &index, &reader, now)?;
     Ok(ok)
+}
+
+/// The classes as `/search` runs them: a lease and its first page (gated
+/// like the table above), a page [`DEEP_PAGES`] deep through cursors
+/// (reported), and the count estimates against exact counts (gated).
+fn api_path(
+    a: &Args,
+    index: &SearchIndex,
+    reader: &Store,
+    now: i64,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let index = Arc::new(index.clone());
+    let cancel = CancelToken::new();
+    let ms = |d: Duration| format!("{:.2}", d.as_secs_f64() * 1000.0);
+    println!(
+        "\n  as /search runs them: a searcher lease and its first page; then page {DEEP_PAGES} through cursors"
+    );
+    println!(
+        "  {:<24} {:>8} {:>8} {:>8} {:>10} {:>10}  target",
+        "class", "p50", "p95", "max", "deep p95", "estimated"
+    );
+    let mut ok = true;
+    let mut worst: f64 = 0.0;
+    for class in classes(a.seed, a.queries) {
+        let mut times = Vec::with_capacity(class.queries.len());
+        let mut deep = Vec::new();
+        let mut estimated = 0usize;
+        for (n, q) in class.queries.iter().enumerate() {
+            if class.cold {
+                index.clear_cache();
+            }
+            let started = Instant::now();
+            let ast = parse(q)?.without_hidden();
+            let lease = Lease::new(index.clone(), &ast, now, class.sort, &cancel)?;
+            let page = lease.page(Start::Offset(0), 50, &cancel)?;
+            for h in &page.hits {
+                reader.torrent(h.id as i64)?;
+            }
+            times.push(started.elapsed());
+            let total = lease.total();
+            if total.approx {
+                estimated += 1;
+                let exact = lease.exact_total(&cancel)?;
+                let err = (total.value as f64 - exact.value as f64).abs() / exact.value as f64;
+                worst = worst.max(err);
+            }
+            // Deep pages for a sample: each cursor page scans the
+            // matches again, so they cost about a first page each.
+            if n % 10 == 0 {
+                let mut next = page.next;
+                for _ in 1..DEEP_PAGES {
+                    let Some(p) = next else { break };
+                    next = lease.page(Start::After(p), 50, &cancel)?.next;
+                }
+                if let Some(p) = next {
+                    let started = Instant::now();
+                    let page = lease.page(Start::After(p), 50, &cancel)?;
+                    for h in &page.hits {
+                        reader.torrent(h.id as i64)?;
+                    }
+                    deep.push(started.elapsed());
+                }
+            }
+        }
+        times.sort();
+        deep.sort();
+        let p95 = pct(&times, 0.95);
+        let pass = class.target.is_none_or(|t| p95 <= t);
+        ok &= pass;
+        println!(
+            "  {:<24} {:>8} {:>8} {:>8} {:>10} {:>10}  {}",
+            class.name,
+            ms(pct(&times, 0.5)),
+            ms(p95),
+            ms(*times.last().expect("queries")),
+            if deep.is_empty() {
+                "—".to_string()
+            } else {
+                ms(pct(&deep, 0.95))
+            },
+            estimated,
+            match class.target {
+                Some(t) => format!(
+                    "p95 < {} ms {}",
+                    t.as_millis(),
+                    if pass { "PASS" } else { "FAIL" }
+                ),
+                None => "(not gated)".to_string(),
+            }
+        );
+    }
+    let pass = worst <= ESTIMATE_TOLERANCE;
+    println!(
+        "  count estimates: worst error {:.2}% (< {:.0}% {})",
+        worst * 100.0,
+        ESTIMATE_TOLERANCE * 100.0,
+        if pass { "PASS" } else { "FAIL" }
+    );
+    Ok(ok && pass)
 }
 
 fn main() -> ExitCode {
