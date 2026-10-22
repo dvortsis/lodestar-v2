@@ -209,7 +209,7 @@ the metric they quote (e.g. "Index lag 42 s" → `formatSpan`; "Disk full in
 | Alerts fired | Saved-search alerts that fired | `formatCount` | Exact | Event time |
 | Sends to download clients | Successful sends | `formatCount` | Exact | Event time |
 | Notifications delivered (`notifications_delivered`) | Notifications a channel accepted, counted once per notification, after any retries | `formatCount` | Exact | Event time |
-| Notifications failed (`notification_failures`) | Notifications that still failed after the last retry | `formatCount` | Exact | Event time |
+| Notifications failed (`notification_failures`) | Notifications that failed, after any retries | `formatCount` | Exact | Event time |
 
 ### 6.8 Stage detail pages (§10.9.5)
 

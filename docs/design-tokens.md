@@ -270,9 +270,7 @@ token. Container queries (row, drawer) use these same values.
 The CJK fallbacks are installed family names (what `fc-list` and the OS font
 pickers report), because a CSS family name must match one exactly: "Noto Sans
 CJK SC" is a real family, bare "Noto Sans CJK" is not. Use the SC, TC, JP or KR
-variant that matches the page language. Token names are unchanged. (§10.2 and
-`web/src/lib/theme/tokens.css` still say "Noto Sans CJK"; both need the same
-edit, which this slice doesn't own.)
+variant that matches the page language. Token names are unchanged.
 
 Mono is for hashes, file paths, query field tokens, the info-dict viewer and
 keyboard shortcuts (§10.2). No serif in app chrome.
