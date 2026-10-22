@@ -796,13 +796,14 @@
    "merge": "a81a2ca"
   },
   "B4b": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01SK5Ci2FahQUSGQuDVozi28",
    "pr": 87,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 19:18 after B17 merged."
+   "notes": "Launched 19:18 after B17 merged. | 23:16 merged; follow-up PR B4b-r2 for max_id leak, replay toggle, swap adult test",
+   "merge": "6347fb5"
   },
   "X-flakes": {
    "status": "review",
@@ -1100,7 +1101,6 @@
  "reviews_in_flight": [
   "89",
   "88",
-  "87",
   94,
   95,
   96
@@ -1179,7 +1179,8 @@
   "classify_adult_other": "R-relevance: XXX name with no year not classified Adult (detect returns None for base Other?) - reviewer of #94 checking on main",
   "cli_missing_apis": "M6-cli: reindex refuses (exit 3) while server runs; needs API rebuild endpoint + search 'rebuild this version while old serves' call",
   "privdrop_doc": "privdrop.rs Scope::DataDir doc comment lists only serve/import-bitmagnet; M6-cli adds backup/rollback/vacuum/reindex (next slice touching privdrop.rs)",
-  "V6-cluster2": "From #96 design review: before-auth handshake timeout + concurrent/per-IP connection caps (Acceptor reads ClientHello pre-auth); rate-limit renew (each adds 72h cluster.cert.* row); no .await under coordinator mutex (redeem/renew sync SQLite); maintain hourly (coordinator leaf expires 72h otherwise); re-seal cluster keys on SecretStore rotation; close open connections on revocation within one heartbeat (\u00a719.8); token via stdin/file not --token/LODESTAR_TOKEN; zero-overlap compromise CA rotation + CA expiry check in maintain; store compare_and_set helper (store-owned); consider small secrets crate (integrations pulls reqwest/lettre/tokio). Also from #96 security re-review: revocation, issued list and name-in-use live per-process in Coordinator memory, so a CLI revoke isn't seen by a running serve and two coordinators can redeem different tokens for one name; single PKI owner (CLI via server) or reload from DB."
+  "V6-cluster2": "From #96 design review: before-auth handshake timeout + concurrent/per-IP connection caps (Acceptor reads ClientHello pre-auth); rate-limit renew (each adds 72h cluster.cert.* row); no .await under coordinator mutex (redeem/renew sync SQLite); maintain hourly (coordinator leaf expires 72h otherwise); re-seal cluster keys on SecretStore rotation; close open connections on revocation within one heartbeat (\u00a719.8); token via stdin/file not --token/LODESTAR_TOKEN; zero-overlap compromise CA rotation + CA expiry check in maintain; store compare_and_set helper (store-owned); consider small secrets crate (integrations pulls reqwest/lettre/tokio). Also from #96 security re-review: revocation, issued list and name-in-use live per-process in Coordinator memory, so a CLI revoke isn't seen by a running serve and two coordinators can redeem different tokens for one name; single PKI owner (CLI via server) or reload from DB.",
+  "events_filter_hidden": "B4 'N new' counts filter-hidden torrents (flags::HIDDEN); design question: count visible-by-default only? (from #87 review)"
  },
  "blocked_on_owner": [
   "Modern DHT crawler architecture: waiting on an AskUserQuestion",
