@@ -1,0 +1,19 @@
+{
+  "recorded_from": "Built by hand from the ntfy publishing API documentation (docs.ntfy.sh/publish, server v2.x), not recorded: no ntfy server was available in the build session",
+  "note": "A user without write access to the topic: 403, final",
+  "request": {
+    "method": "POST",
+    "path": "/lodestar-alerts",
+    "query": null
+  },
+  "response": {
+    "status": 403,
+    "headers": [
+      [
+        "content-type",
+        "application/json"
+      ]
+    ],
+    "body": "{\"code\":40301,\"http\":403,\"error\":\"forbidden\",\"link\":\"https://ntfy.sh/docs/publish/#authentication\"}"
+  }
+}
