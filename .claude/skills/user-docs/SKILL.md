@@ -13,12 +13,18 @@ description: Lodestar's rules for user-facing documentation, layered on the owne
 3. `documentation-skills`, which supplies the process, format, voice and gates for everything this file doesn't say.
 
 ## 1. Get the skills
-**If your session lists them as skills** (`github-docs`, `material-composer`, `document-builder`, `slide-deck`, `training-material-designer`, sometimes with a prefix such as `anthropic-skills:`), invoke them directly. Otherwise, clone the collection:
+**If your session lists them as skills** (`github-docs`, `material-composer`, `document-builder`, `slide-deck`, `training-material-designer`, sometimes with a prefix such as `anthropic-skills:`), invoke them directly.
+
+**Their scripts** (the gates included) are in the installed skill's folder. In a cloud session that's under `~/.claude/skills/synced/`. Find it, or clone the collection when the skill isn't installed:
 ```bash
-git clone --depth 1 https://github.com/dvortsis/skills ../skills
-python3 ../skills/documentation-skills/skills/github-docs/scripts/preflight.py
+GD=$(dirname "$(dirname "$(find ~/.claude/skills -path '*github-docs/scripts/lint_docs.py' 2>/dev/null | head -1)")")
+[ -d "$GD/scripts" ] || { git clone --depth 1 https://github.com/dvortsis/skills ../skills; GD=../skills/documentation-skills/skills/github-docs; }
+python3 "$GD/scripts/preflight.py"
 ```
-Run each skill's scripts from its own folder, as its `SKILL.md` says. Don't copy them into this repository. The collection was checked on 2026-10-22 at `dvortsis/skills` commit `6556c8b`: preflight READY and self-test 45/45 for github-docs.
+- Run the scripts from the repository root, by their full path (`python3 "$GD/scripts/lint_docs.py" docs/user`), so `docs/user` resolves.
+- Don't copy the scripts into this repository.
+- The runner attaches `dvortsis/skills` to docs slices and their reviewers.
+- The collection was checked on 2026-10-22 at `dvortsis/skills` commit `6556c8b`: preflight READY and self-test 45/45 for github-docs.
 
 | Material | Skill |
 |---|---|
@@ -88,7 +94,8 @@ These come on top of github-docs' safe defaults; each goes where the reader meet
 - **Backups:** where they are, and how to restore one.
 
 ## 7. Gates
-- `docs_tool.py sync docs/user`, then `lint_docs.py docs/user --strict` until it reports 0 failed and every warning is fixed or explained.
+- From the repository root, run `python3 "$GD/scripts/docs_tool.py" sync docs/user`, then `python3 "$GD/scripts/lint_docs.py" docs/user --strict`, until it reports 0 failed and every warning is fixed or explained.
+- Before merge: `python3 "$GD/scripts/docs_tool.py" sync docs/user --check` must report nothing to change.
 - Put the `LINT:` line in the PR description.
 - Other materials pass `material-composer`'s gate and their renderer's gate.
 - Reviewers re-run the gates themselves (`runner/standards.md` §5, item 8).
