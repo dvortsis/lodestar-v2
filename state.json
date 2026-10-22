@@ -58,8 +58,8 @@
    "session": "session_01UxCJe2QQNeBEaCZrmcDRJi",
    "pr": 57,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": ""
+   "review_rounds": 1,
+   "notes": "round 1 approve; asked to fix 2 important: redact Debug on auth DTOs, \u00a716 deferred fields line; then merge"
   },
   "B2": {
    "status": "pending",
@@ -809,6 +809,10 @@
   "runner-pr": [
    "slices.yaml W1b title says 47 JSONs: is 23 families/46 themes; widen W1b owns",
    "docs/themes.md derived-token gates table still says 9 pending (W1c): all 48 pass now"
+  ],
+  "B1-polish": [
+   "golden: add stemmed:true and non-null hash_v2 fixtures",
+   "explicit operation_ids if not done in #57"
   ]
  },
  "blocked_on_owner": [
