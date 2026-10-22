@@ -233,13 +233,13 @@
    "notes": ""
   },
   "M-auth": {
-   "status": "pending",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01SLtBN2YZg1WidnV1PRro9w",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
-   "notes": ""
+   "notes": "Launched 21:33."
   },
   "S-search-1": {
    "status": "pending",
@@ -972,6 +972,10 @@
   {
    "at": "2026-10-22T20:52Z",
    "what": "daisyUI components menu, modal, drawer, footer excluded in app.css (in-house Bits UI overlays; saves ~1.4 kB CSS)."
+  },
+  {
+   "at": "2026-10-22T21:30Z",
+   "what": "Owner: make whatever CI/process changes improve efficiency. Runner PR #90: path-based CI, macOS nightly/full-ci, arm64 PR only on packaging changes, docs/decisions per-PR files (\u00a716 closed). main has no branch protection (owner confirmed)."
   }
  ],
  "open_issues": [
@@ -1095,5 +1099,11 @@
   "Release signing hygiene (owner actions): restrict the GitHub `release` environment to tags with a required reviewer (nightlies signed from main expose the key to any merged workflow change), and consider a separate nightly key trusted only on Nightly.",
   "Auto-update recovery key: compromise/rotation of the offline recovery key. Recommend: accepted risk (offline, password-protected; remedy = new build + manual update), no recovery-key rotation statement. Or design a self-signed sequenced recovery-key statement."
  ],
- "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)"
+ "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
+ "runner_prs_open": {
+  "80": "token classes: owner imported baselines b2b46df; CI running; merge on green",
+  "81": "secure-delete R4 fixes c9cf868 (PASSIVE+100ms TRUNCATE, purge always scrubs, release_many test); needs fresh review",
+  "90": "CI speed + docs/decisions; review fixes 77a2f6a; needs re-review"
+ },
+ "pull_forward": "After #90 merges: M6 packaging (WiX MSI, tarball, systemd, release matrix; sonnet). After B6: B5c, B7, tantivy delete force-merge. After F-near: F-perf. Relevance set (M8) any time. Install guide (docs/user) after UI unless owner wants earlier."
 }
