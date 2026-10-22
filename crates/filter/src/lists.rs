@@ -18,7 +18,7 @@ use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::{Arc, RwLock};
 
-use lodestar_store::Store;
+use lodestar_store::{FloorSource, Store};
 
 use crate::core::Action;
 use crate::engine::{Handle, ListLayer};
@@ -311,6 +311,74 @@ fn merge<T: Ord + Copy>(mut v: Vec<(T, T)>, next: impl Fn(T) -> Option<T>) -> Ve
     out
 }
 
+/// How many addresses of `r` the merged ranges `v` cover. Saturates, so
+/// an IPv6 count can't overflow.
+fn overlap<T>(v: &[(T, T)], r: (T, T)) -> T::Wide
+where
+    T: Ord + Copy + Widen,
+{
+    let start = v.partition_point(|&(_, b)| b < r.0);
+    let mut n = T::Wide::default();
+    for &(a, b) in &v[start..] {
+        if a > r.1 {
+            break;
+        }
+        n = T::add(n, T::span(a.max(r.0), b.min(r.1)));
+    }
+    n
+}
+
+/// Range sizes without overflow.
+trait Widen: Sized {
+    type Wide: Default + Copy;
+    fn span(a: Self, b: Self) -> Self::Wide;
+    fn add(x: Self::Wide, y: Self::Wide) -> Self::Wide;
+}
+
+impl Widen for u32 {
+    type Wide = u64;
+    fn span(a: u32, b: u32) -> u64 {
+        u64::from(b) - u64::from(a) + 1
+    }
+    fn add(x: u64, y: u64) -> u64 {
+        x + y
+    }
+}
+
+impl Widen for u128 {
+    type Wide = u128;
+    fn span(a: u128, b: u128) -> u128 {
+        (b - a).saturating_add(1)
+    }
+    fn add(x: u128, y: u128) -> u128 {
+        x.saturating_add(y)
+    }
+}
+
+/// IANA special-purpose IPv4 ranges that aren't globally reachable,
+/// sorted and disjoint.
+const V4_SPECIAL: &[(u32, u32)] = &[
+    v4(0, 0, 0, 0, 8),       // "this network"
+    v4(10, 0, 0, 0, 8),      // private
+    v4(100, 64, 0, 0, 10),   // carrier-grade NAT
+    v4(127, 0, 0, 0, 8),     // loopback
+    v4(169, 254, 0, 0, 16),  // link-local
+    v4(172, 16, 0, 0, 12),   // private
+    v4(192, 0, 0, 0, 24),    // protocol assignments
+    v4(192, 0, 2, 0, 24),    // documentation
+    v4(192, 168, 0, 0, 16),  // private
+    v4(198, 18, 0, 0, 15),   // benchmarking
+    v4(198, 51, 100, 0, 24), // documentation
+    v4(203, 0, 113, 0, 24),  // documentation
+    v4(224, 0, 0, 0, 4),     // multicast
+    v4(240, 0, 0, 0, 4),     // reserved and broadcast
+];
+
+const fn v4(a: u8, b: u8, c: u8, d: u8, len: u32) -> (u32, u32) {
+    let lo = u32::from_be_bytes([a, b, c, d]);
+    (lo, lo | (u32::MAX >> len))
+}
+
 fn find<T: Ord + Copy>(v: &[(T, T)], x: T) -> bool {
     let i = v.partition_point(|&(a, _)| a <= x);
     i > 0 && v[i - 1].1 >= x
@@ -360,6 +428,34 @@ impl IpSet {
             .map(|&(a, b)| u64::from(b) - u64::from(a) + 1)
             .sum();
         n as f64 / (1u64 << 32) as f64
+    }
+
+    /// The share of the public IPv4 space covered (0–1): the space minus
+    /// the special-purpose ranges that hold no DHT nodes (private,
+    /// loopback, link-local, documentation, multicast, reserved). This is
+    /// what a list costs the crawler, so the strictness assessment uses it.
+    pub fn v4_public_coverage(&self) -> f64 {
+        let size = |&(a, b): &(u32, u32)| u64::from(b) - u64::from(a) + 1;
+        let reserved: u64 = V4_SPECIAL.iter().map(size).sum();
+        let covered: u64 = self.v4.iter().map(size).sum();
+        let inside: u64 = V4_SPECIAL.iter().map(|r| overlap(&self.v4, *r)).sum();
+        (covered - inside) as f64 / ((1u64 << 32) - reserved) as f64
+    }
+
+    /// The share of IPv6 global unicast (`2000::/3`) covered (0–1).
+    pub fn v6_coverage(&self) -> f64 {
+        let lo = 0x2000u128 << 112;
+        let hi = lo | (u128::MAX >> 3);
+        let n = overlap(&self.v6, (lo, hi));
+        n as f64 / (hi - lo) as f64
+    }
+
+    pub fn v4_ranges(&self) -> usize {
+        self.v4.len()
+    }
+
+    pub fn v6_ranges(&self) -> usize {
+        self.v6.len()
     }
 
     /// Merged ranges.
@@ -460,14 +556,21 @@ pub fn apply(store: &Store, filter: &Handle, ips: &SharedIps) -> Result<(), Stri
                 }
             }
             _ => {
-                let hashes = data.map(|d| {
-                    Arc::new(
-                        d.chunks_exact(20)
-                            .map(|c| <[u8; 20]>::try_from(c).expect("20 bytes"))
-                            .collect::<HashSet<_>>(),
-                    )
+                let mut hashes = data.map(|d| {
+                    d.chunks_exact(20)
+                        .map(|c| <[u8; 20]>::try_from(c).expect("20 bytes"))
+                        .collect::<HashSet<_>>()
                 });
-                content.push((s, hashes));
+                // A floor-marked list only adds (owner's decision §2.7):
+                // what its publisher removed stays until you remove it in
+                // the app.
+                if let (true, Some(set)) = (s.floor, hashes.as_mut()) {
+                    let kept = store
+                        .pending_floor_of(&FloorSource::List(s.id))
+                        .map_err(|e| e.to_string())?;
+                    set.extend(kept);
+                }
+                content.push((s, hashes.map(Arc::new)));
             }
         }
     }
