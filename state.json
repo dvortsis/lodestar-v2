@@ -222,7 +222,7 @@
    "pr": 74,
    "attempt": 1,
    "review_rounds": 3,
-   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #74; reviewer started 16:45 | 17:10 r1 FIX: token classes (runner shared fix), dup groups, brush, null delta, dates, int axes. R2 FIX 17:55: computed-style test missing, x-axis tick overlap, showcase in prod (+1.83 kB; move to dev-routes after #76). 18:04 R2 fixes pushed 219eed7; waits on #80 and #76. 20:20 6ad522d dev-routes moved; computed-style tests red until #80 (owner baselines). Blocked on #80. 20:50 R3 FIX: brush external-selection commit, measured tick spacing, PR body. Verified all 6 specs pass with #80. 20:56 b6fc4b1 verified by runner -> APPROVED, merge after #80 lands (computed-style tests)."
+   "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #74; reviewer started 16:45 | 17:10 r1 FIX: token classes (runner shared fix), dup groups, brush, null delta, dates, int axes. R2 FIX 17:55: computed-style test missing, x-axis tick overlap, showcase in prod (+1.83 kB; move to dev-routes after #76). 18:04 R2 fixes pushed 219eed7; waits on #80 and #76. 20:20 6ad522d dev-routes moved; computed-style tests red until #80 (owner baselines). Blocked on #80. 20:50 R3 FIX: brush external-selection commit, measured tick spacing, PR body. Verified all 6 specs pass with #80. 20:56 b6fc4b1 verified by runner -> APPROVED, merge after #80 lands (computed-style tests). | 22:35 #80 merged; asked W7e to merge main + fix playwright fail (run 39851958635)"
   },
   "W9": {
    "status": "pending",
@@ -771,16 +771,17 @@
    "pr": 85,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "R1 FIX 19:30: hostile-name NEAR DoS (places*tokens^2); safety claim wrong (CSX-5 overrides/exceptions/allow/unless match more). Owner Q on re-preview of stored CSX-5 entries. 19:58 DoS fix e6f6e72; R2 review in flight. 20:25 R2 MERGE; asked main merge + threshold test; runner verifies then merges. 20:36 4c6de89 (main + threshold test ba5cdcb) verified by runner -> APPROVED, merge on green. Pre-release: CSX-5 re-preview question stays with owner (follow-up only if owner wants it)."
+   "notes": "R1 FIX 19:30: hostile-name NEAR DoS (places*tokens^2); safety claim wrong (CSX-5 overrides/exceptions/allow/unless match more). Owner Q on re-preview of stored CSX-5 entries. 19:58 DoS fix e6f6e72; R2 review in flight. 20:25 R2 MERGE; asked main merge + threshold test; runner verifies then merges. 20:36 4c6de89 (main + threshold test ba5cdcb) verified by runner -> APPROVED, merge on green. Pre-release: CSX-5 re-preview question stays with owner (follow-up only if owner wants it). | 22:35 filter budget red on F-near (touches filter): core 11.8, 1% 41.0, 10% 51.3, 25% 64.0 = slow runner class (#48: 11.9/42.1/52.8/64.0); ratios match main -> no regression. Re-ran once (run 39859583901)."
   },
   "D-puid": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01WpNDR3rzep43npFMCvj48Q",
    "pr": 84,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "R1 MERGE-quality 19:25; asked to fold in: chown only empty/marker dir, compose+operations docs, CAP hint, NO_NEW_PRIVS, CI root test step. Runner verifies delta. 19:48 hardening 19e6397 + main 87dabac verified by runner -> APPROVED, merge on green (filter budget = known flake; one rerun then main-merge). 20:39 green but dirty -> asked main merge."
+   "notes": "R1 MERGE-quality 19:25; asked to fold in: chown only empty/marker dir, compose+operations docs, CAP hint, NO_NEW_PRIVS, CI root test step. Runner verifies delta. 19:48 hardening 19e6397 + main 87dabac verified by runner -> APPROVED, merge on green (filter budget = known flake; one rerun then main-merge). 20:39 green but dirty -> asked main merge.",
+   "merge": "5a441e9"
   },
   "Q-docs": {
    "status": "merged",
@@ -984,6 +985,11 @@
    "status": "merged",
    "pr": 90,
    "merge": "15cf8f4"
+  },
+  "S-settings-polish": {},
+  "runner-owner-rules": {
+   "status": "in_review",
+   "pr": 99
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
