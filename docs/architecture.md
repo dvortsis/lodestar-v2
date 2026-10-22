@@ -1730,18 +1730,22 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 
 
 **Integrations crate decisions (download clients, notifications, secrets, SSRF guard):**
-- **HTTP stack:** reqwest 0.12 with rustls on `ring`. reqwest 0.13's rustls default pulls in `aws-lc-rs`, a C build that's heavier on Windows. System proxies are off for integrations: a proxy resolves names itself, which would bypass the guard.
+- **HTTP stack:** the workspace's: reqwest 0.13 with `rustls-no-provider` and the `ring` provider, the same build and trust store as the tracker scraper and the subscriptions fetcher. System proxies are off for integrations: a proxy resolves names itself, which would bypass the guard.
+  - The raw client doesn't leave `GuardedClient`.
+  - `crates/integrations/clippy.toml` forbids `RequestBuilder::send` and `Client::execute`, so every request in the crate passes the literal-IP check.
 - **SSRF policy (§12):**
   - Link-local, metadata (`169.254.169.254`, `fd00:ec2::254`, `100.100.100.200`) and reserved addresses are never reachable.
   - Notification endpoints never reach loopback, even with the per-channel private-range opt-in. Download clients may reach loopback, because companions bind to localhost (§18.10).
   - Carrier-grade NAT (`100.64.0.0/10`, Tailscale) counts as private.
-  - IPv4 embedded in IPv6 (mapped, compatible, NAT64, 6to4) is classified by its IPv4 address.
+  - IPv4 embedded in IPv6 (mapped, compatible, NAT64, 6to4) is classified by its IPv4 address. Local-use NAT64 (`64:ff9b:1::/48`) counts only in the /96 layout; any other layout is reserved.
+  - The IPv6 special-purpose blocks `2001:2::/48`, `2001:10::/28`, `3fff::/20` and `5f00::/16` are reserved.
   - A name with any disallowed answer is refused whole. Every new connection re-resolves and re-checks, which catches rebinding.
   - Only 307/308 redirects are followed, each hop checked; credentials headers are dropped across origins, and `https` → `http` is refused. Other 3xx responses would turn a POST into a GET and report a lost payload as delivered.
 - **Secrets at rest (§18.10):**
   - The per-install key lives in `secrets.key` in the data directory, outside the database.
   - Each secret is sealed with XChaCha20-Poly1305 under a random nonce, with the record's name as associated data, so a sealed value can't be moved between records.
-  - On Windows the key file's ACL is replaced through `icacls`, because the workspace forbids `unsafe` Win32 calls.
+  - On Windows the key file's ACL is replaced through `icacls` (by its absolute path), because the workspace forbids `unsafe` Win32 calls. It's applied before the key is written and re-applied on every read.
+  - **Rotation:** the key file holds several keys, each identified by an id, and every sealed value records its key's id. `rotate` adds a primary key, callers re-seal their records in their own transaction, and `retire_old_keys` drops the rest. The file always holds every key a stored record may use, so a crash mid-rotation loses nothing.
 - **qBittorrent "Send selected files":** the torrent is added paused, unselected files get priority 0 once the client has the metadata, and then the torrent starts. If a magnet's metadata doesn't arrive within 30 s, the torrent stays paused and the UI says the selection is pending, so nothing unwanted downloads.
 - **Webhook payload:** `lodestar.notification`, `schema_version` 1, with an `id` that stays the same across retries for deduplication. Private-source items are left out, and only their count is sent (§18.7).
 

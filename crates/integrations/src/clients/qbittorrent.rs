@@ -74,6 +74,8 @@ pub struct QBittorrent {
     session: Mutex<Option<Secret>>,
     metadata_wait: Duration,
     poll_interval: Duration,
+    /// Per request; uploads get more (see [`upload_timeout`]).
+    timeout: Duration,
 }
 
 impl fmt::Debug for QBittorrent {
@@ -131,12 +133,20 @@ impl QBittorrent {
             http,
             session: Mutex::new(None),
             metadata_wait: Duration::from_secs(30),
+            timeout: CLIENT_TIMEOUT,
             poll_interval: Duration::from_millis(500),
         })
     }
 
     /// How long to wait for a magnet's metadata before leaving a file
     /// selection [`Selection::Pending`], and how often to look.
+    /// The timeout for one request (default [`CLIENT_TIMEOUT`]). A
+    /// `.torrent` upload gets this plus time for its size.
+    pub fn with_timeout(mut self, timeout: Duration) -> QBittorrent {
+        self.timeout = timeout;
+        self
+    }
+
     pub fn with_metadata_wait(mut self, wait: Duration, poll: Duration) -> QBittorrent {
         self.metadata_wait = wait;
         self.poll_interval = poll;
@@ -156,7 +166,6 @@ impl QBittorrent {
     ) -> Result<reqwest::RequestBuilder, ClientError> {
         Ok(self
             .http
-            .http()
             .request(method, self.url(endpoint)?)
             .header(REFERER, self.referer.clone())
             .header(ORIGIN, self.origin.clone()))
@@ -174,11 +183,12 @@ impl QBittorrent {
             .map_err(|_| ClientError::Protocol("couldn't build the login"))?;
         let resp = self.http.send(req).await?;
         let status = resp.status().as_u16();
-        let cookie = resp
-            .headers()
-            .get(SET_COOKIE)
-            .and_then(|v| v.to_str().ok())
-            .map(session_cookie);
+        let cookie = pick_session_cookie(
+            resp.headers()
+                .get_all(SET_COOKIE)
+                .iter()
+                .filter_map(|v| v.to_str().ok()),
+        );
         let body = read_limited(resp, MAX_RESPONSE).await?;
         tracing::debug!(status, "qBittorrent login");
         if body.trim_ascii() == b"Fails." {
@@ -231,7 +241,10 @@ impl QBittorrent {
         cookie: &Secret,
         limit: usize,
     ) -> Result<(u16, Vec<u8>), ClientError> {
-        let mut rb = self.request(method.clone(), endpoint)?.query(query);
+        let mut rb = self
+            .request(method.clone(), endpoint)?
+            .query(query)
+            .timeout(self.timeout);
         if !cookie.is_empty() {
             let mut value = HeaderValue::from_str(cookie.expose())
                 .map_err(|_| ClientError::Protocol("the session cookie is malformed"))?;
@@ -242,6 +255,9 @@ impl QBittorrent {
             Body::Empty => rb,
             Body::Form(fields) => rb.form(fields),
             Body::Multipart(fields, file) => {
+                if let Some(bytes) = file {
+                    rb = rb.timeout(upload_timeout(self.timeout, bytes.len()));
+                }
                 let mut form = Form::new();
                 for (name, value) in fields {
                     form = form.text(*name, value.clone());
@@ -529,6 +545,36 @@ impl DownloadClient for QBittorrent {
     }
 }
 
+/// The session among a login's `Set-Cookie` headers: the first plausible
+/// cookie whose name has `SID` in it (`SID`, `QBT_SID_8080`), else the first
+/// plausible one. `None` when there are no headers (authentication is
+/// bypassed for this address); `Some(None)` when none is usable.
+fn pick_session_cookie<'a>(headers: impl Iterator<Item = &'a str>) -> Option<Option<Secret>> {
+    let mut any = false;
+    let mut first = None;
+    for header in headers {
+        any = true;
+        let Some(cookie) = session_cookie(header) else {
+            continue;
+        };
+        let name = cookie.expose().split('=').next().unwrap_or("");
+        if name.to_ascii_uppercase().contains("SID") {
+            return Some(Some(cookie));
+        }
+        first.get_or_insert(cookie);
+    }
+    any.then_some(first)
+}
+
+/// The slowest upload rate a `.torrent` upload is given time for.
+const UPLOAD_FLOOR_BYTES_PER_SEC: usize = 256 * 1024;
+
+/// The request timeout plus a second per 256 KiB of upload, so a 16 MiB
+/// `.torrent` over a slow link gets about a minute more.
+fn upload_timeout(base: Duration, bytes: usize) -> Duration {
+    base + Duration::from_secs((bytes / UPLOAD_FLOOR_BYTES_PER_SEC) as u64)
+}
+
 /// The `name=value` part of a `Set-Cookie` header, when it's a plausible
 /// session cookie.
 fn session_cookie(header: &str) -> Option<Secret> {
@@ -590,6 +636,33 @@ fn rejected(status: u16, body: &[u8]) -> ClientError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_session_is_picked_from_every_set_cookie_header() {
+        let pick = |h: &[&str]| {
+            pick_session_cookie(h.iter().copied()).map(|c| c.map(|c| c.expose().to_owned()))
+        };
+        assert_eq!(pick(&[]), None);
+        assert_eq!(
+            pick(&["lang=en; path=/", "SID=abc; HttpOnly"]),
+            Some(Some("SID=abc".into()))
+        );
+        assert_eq!(
+            pick(&["bad cookie", "QBT_SID_8080=xyz"]),
+            Some(Some("QBT_SID_8080=xyz".into()))
+        );
+        assert_eq!(pick(&["lang=en"]), Some(Some("lang=en".into())));
+        assert_eq!(pick(&["a b", "=x"]), Some(None));
+    }
+
+    #[test]
+    fn uploads_get_time_for_their_size() {
+        assert_eq!(upload_timeout(CLIENT_TIMEOUT, 1000), CLIENT_TIMEOUT);
+        assert_eq!(
+            upload_timeout(CLIENT_TIMEOUT, 16 << 20),
+            CLIENT_TIMEOUT + Duration::from_secs(64)
+        );
+    }
 
     #[test]
     fn session_cookies() {

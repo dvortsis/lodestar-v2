@@ -28,8 +28,8 @@
 use std::fmt;
 use std::time::Duration;
 
-use reqwest::Url;
 use reqwest::header::CONTENT_TYPE;
+use reqwest::{Method, Url};
 use serde_json::json;
 
 use super::{AttemptError, Channel, DeliveryError, Notification, Notifier, check_status};
@@ -128,8 +128,7 @@ impl Notifier for Webhook {
             })?;
             let req = self
                 .http
-                .http()
-                .post(self.url.clone())
+                .request(Method::POST, self.url.clone())
                 .header(CONTENT_TYPE, "application/json")
                 .header("X-Lodestar-Delivery", n.id())
                 .header("X-Lodestar-Schema", SCHEMA_VERSION.to_string())
