@@ -680,7 +680,7 @@
    "pr": 72,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "launched 14:40; owns compile.rs clause + settings content section | PR #72; reviewer started 16:45 | 17:10 r1 FIX: BaseQuery returns visibility conjuncts separately; merge main; \u00a716 qualifiers; utoipa responses."
+   "notes": "launched 14:40; owns compile.rs clause + settings content section | PR #72; reviewer started 16:45 | 17:10 r1 FIX: BaseQuery returns visibility conjuncts separately; merge main; \u00a716 qualifiers; utoipa responses. 17:48 merged main (557121f), no code change since 3e4d7b6."
   },
   "S-blocklists": {
    "status": "pending",
@@ -917,7 +917,8 @@
   "w7cd_s16": "Runner to add \u00a716 entries suggested in PR #78 (W7cd) after merge.",
   "reviewer_shared_target": "Do not share CARGO_TARGET_DIR across reviewer worktrees: test fixture paths (CARGO_MANIFEST_DIR) and workspace artifacts collide. One target per reviewer; clean up after.",
   "token_gap_toast": "W7ab: no toast width/duration token; local props from --row-height-comfortable and --duration-banner. Record in \u00a716 token gaps.",
-  "pr80_baselines": "#80 pushed web/e2e/.update-snapshots (ea3718c); import regenerated tokens-{light,dark} PNGs from the E2E artifact, remove marker, then merge."
+  "pr80_baselines": "#80 pushed web/e2e/.update-snapshots (ea3718c); import regenerated tokens-{light,dark} PNGs from the E2E artifact, remove marker, then merge.",
+  "sse_adult_count": "B17 found: B4's `torrents` SSE event counts every added torrent incl. Adult; with show_adult off, the 'N new' badge counts hidden Adult (\u00a720.9 'leave Adult out entirely'). Follow-up slice B4b after #72 merges: commit hook reports a non-adult count (class from the indexed doc), events.rs publishes the visible count per the live content.show_adult watch; test both settings. W5 needs no change (it shows the server count)."
  },
  "blocked_on_owner": [
   "Modern DHT crawler architecture: waiting on an AskUserQuestion",
