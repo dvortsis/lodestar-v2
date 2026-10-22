@@ -1,0 +1,34 @@
+**M4 implementation decisions (DHT scrape, BEP 33):**
+- **The filters follow the BEP exactly:**
+  - 256 bytes, m = 2048 and k = 2.
+  - Each IP is hashed with SHA-1 over its raw 4 or 16 bytes. Bytes 0–1 and 2–3, read little-endian, give two indexes mod 2048, and bit `i % 8` of byte `i / 8` is set.
+  - The estimate is `ln(c/m) / (k·ln(1−1/m))`. An empty filter is 0, and a full one saturates at about 7,800.
+  - The BEP's test vector (192.0.2.0–255 plus 2001:db8::–::3e7, estimate 1224.93) is a unit test, within ±0.01, so a wrong bit or byte order can't slip through.
+- **Answering scrapes:**
+  - The peer store keeps each announce's `seed` flag.
+  - A `get_peers` with `scrape=1` gets `BFsd` (seeds) and `BFpe` (other peers) over the live peers of both address families, but only for a hash we store. A node without the hash sends no filters, as libtorrent does.
+  - `noseed` leaves seeds out of `values`.
+  - Read-only nodes still answer nothing (BEP 43).
+- **Scrape lookups are their own kind:** a get_peers lookup with `scrape=1`. It has its own queue (1,024 requests, then refused), at most 16 at once, and its own completion: it never emits a `Lookup` harvest, so scrapes don't feed the fetch pool.
+- **Budget:**
+  - Scrapes get 10% of the query rate, paid when a lookup starts, at 20 queries a lookup. That's 1 lookup a second at Balanced, 0.25 at Low and 5 at Aggressive. The bucket always holds at least one token, so Low still scrapes.
+  - A scrape query refused by the global limiter puts its node back to "fresh" and resumes the lookup next tick. Failing it would end scrapes early with few filters, because throttled sends count as failures for other lookups.
+  - A scrape still running after 30 s answers with what it has.
+- **Merging:**
+  - The estimate ORs the filters of the K = 8 closest responders that sent any, and `responders` says how many that was.
+  - Responders without filters give up their slot to the next node, for the first K of them. A scrape therefore asks at most about 2K nodes, and nodes that don't store the hash can't crowd out the ones that do.
+  - `responders = 0` means no node near the hash stores it: "unknown", not "dead".
+- **Only counts leave the actor (§18.7):** `NodeHandle::scrape(hash) -> Option<DhtEstimate { seeds, peers, responders }>`. Peers learned by a scrape lookup are dropped with it.
+  - `None` means the queue was full or the node stopped.
+  - `Node::handle()` gives a cloneable handle. `DhtSource::node_handle()` publishes it while the node runs, for the scrape scheduler.
+- **Lookup bookkeeping:**
+  - Maintenance lookups are counted as all lookups minus get_peers and scrapes.
+  - The thin-table re-bootstrap waits only on non-scrape lookups, so steady scraping can't starve it.
+- **Metrics:** `scrapes_requested`, `scrapes_completed`, `scrapes_dropped` and `scrapes_with_responders` (in `Stats`; exported with slice 6).
+- **Tests:**
+  - unit tests for the filters (test vector, union, accuracy from 10 to 2,000 addresses);
+  - the peer store's seed handling;
+  - the lookup's merge and slot rules;
+  - the low-rate budget;
+  - a raw-client test of the answers (`scrape` off: no filters; on: correct filters; `noseed`; an unknown hash);
+  - an in-process network test. Four seeds and seven leechers on distinct loopback IPs announce to six nodes, and a crawler's `scrape` returns exactly 4 and 7. An unknown hash returns zero responders. It was stable over 8 repeated runs.
