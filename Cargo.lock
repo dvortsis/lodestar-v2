@@ -1313,6 +1313,8 @@ dependencies = [
  "lodestar-peer-wire",
  "lodestar-sources",
  "lodestar-store",
+ "lodestar-tracker-scrape",
+ "proptest",
  "tempfile",
  "tokio",
  "tracing",

@@ -1,5 +1,5 @@
-//! Hot columns (architecture §7): swarm stats and last-seen per torrent
-//! id, in memory, read and written without locks.
+//! Hot columns (architecture §7): swarm stats, last-seen and flags per
+//! torrent id, in memory, read and written without locks.
 //!
 //! Swarm stats change constantly; keeping them in the search index would
 //! mean re-indexing whole documents. Instead the scraper writes these
@@ -55,15 +55,25 @@ pub enum Col {
     Dht,
     /// Last DHT activity, unix seconds.
     LastSeen,
+    /// Bits from [`flags`]; [`NEVER`] reads as none set.
+    Flags,
+}
+
+/// Bits of the [`Col::Flags`] column. Values are persisted in snapshots:
+/// append only. User flags (§7: favourite, hidden, …) take bits from 8 up.
+pub mod flags {
+    /// The swarm-consistency check flagged fake seeding (§8).
+    pub const SUSPECT: u32 = 1 << 0;
 }
 
 impl Col {
-    pub const ALL: [Col; 5] = [
+    pub const ALL: [Col; 6] = [
         Col::Seeders,
         Col::Leechers,
         Col::Trackers,
         Col::Dht,
         Col::LastSeen,
+        Col::Flags,
     ];
 
     fn index(self) -> usize {
@@ -78,6 +88,7 @@ impl Col {
             Col::Trackers => "trackers.col",
             Col::Dht => "dht.col",
             Col::LastSeen => "last_seen.col",
+            Col::Flags => "flags.col",
         }
     }
 }
@@ -182,6 +193,24 @@ impl HotColumns {
         self.set(Col::Trackers, id, cap(s.trackers));
         self.set(Col::Dht, id, cap(s.dht));
         self.changed();
+    }
+
+    /// The torrent's [`flags`], none when unknown.
+    pub fn flags(&self, id: u64) -> u32 {
+        match self.get(Col::Flags, id) {
+            NEVER => 0,
+            f => f,
+        }
+    }
+
+    /// Sets or clears flag bits, writing only when they change.
+    pub fn set_flags(&self, id: u64, bits: u32, on: bool) {
+        let now = self.flags(id);
+        let next = if on { now | bits } else { now & !bits };
+        if next != now {
+            self.set(Col::Flags, id, next);
+            self.changed();
+        }
     }
 
     /// Records DHT activity at `at` (unix seconds); last-seen only moves
@@ -448,6 +477,19 @@ mod tests {
         let slow = HotColumns::with_epoch_every(Duration::from_secs(3600));
         slow.set_swarm(1, swarm(1));
         assert_eq!(slow.epoch(), 0, "period not up yet");
+    }
+
+    #[test]
+    fn flags_default_to_none_and_toggle() {
+        let hot = HotColumns::with_epoch_every(Duration::ZERO);
+        assert_eq!(hot.flags(3), 0);
+        hot.set_flags(3, flags::SUSPECT, true);
+        assert_eq!(hot.flags(3), flags::SUSPECT);
+        let e = hot.epoch();
+        hot.set_flags(3, flags::SUSPECT, true);
+        assert_eq!(hot.epoch(), e, "no change, no new epoch");
+        hot.set_flags(3, flags::SUSPECT, false);
+        assert_eq!(hot.flags(3), 0);
     }
 
     #[test]

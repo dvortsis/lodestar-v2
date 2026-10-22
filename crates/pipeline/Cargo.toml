@@ -13,6 +13,7 @@ lodestar-metainfo.workspace = true
 lodestar-peer-wire.workspace = true
 lodestar-sources.workspace = true
 lodestar-store.workspace = true
+lodestar-tracker-scrape.workspace = true
 lodestar-cluster.workspace = true
 lodestar-classify.workspace = true
 lodestar-filter.workspace = true
@@ -23,6 +24,8 @@ tracing = "0.1.44"
 workspace = true
 
 [dev-dependencies]
+lodestar-tracker-scrape = { workspace = true, features = ["testing"] }
+proptest = "1.11.0"
 lodestar-bencode.workspace = true
 lodestar-classify.workspace = true
 lodestar-filter.workspace = true
