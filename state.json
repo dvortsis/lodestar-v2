@@ -1,9 +1,9 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-10-22T21:39Z",
+  "updated_at": "2026-10-22T21:45Z",
   "launches": {
     "date": "2026-10-22",
-    "count": 23
+    "count": 25
   },
   "tags": {},
   "slices": {
@@ -170,13 +170,13 @@
       "notes": "waits ext:m4-schema-settled (M4 PR2 #48)"
     },
     "B6": {
-      "status": "changes_requested",
+      "status": "merged",
       "model": "opus",
       "session": "session_0113YcyKf7mgWsV9sNN3mNaW",
       "pr": 71,
       "attempt": 1,
       "review_rounds": 2,
-      "notes": "launched 14:40; not live.rs/compile.rs (B4/B17) | PR #71; reviewer started 16:45 | 17:15 r1 FIX: visibility via base(without_facet(user_ast)), merge main, category ranges, near-1M perf. 18:24 R1 all in (ee81535); R2 review in flight. 19:18 R2 MERGE at ee81535; must add B17 wiring + I1 lease precondition, I2 1M single-segment perf, I3 share selection, P2 bin cap before merge. 19:56 B17 wiring + I1/I2/I3/P2 pushed 3dd0eaf; R3 delta review in flight. 20:20 R3 MERGE at 3dd0eaf (polish deferred: lease.rs doc swap, adult_kind wording, Hours cap test, bin_of clamp, golden note). Merge on green. 20:45 243443a main merge only; merge on green."
+      "notes": "launched 14:40; not live.rs/compile.rs (B4/B17) | PR #71; reviewer started 16:45 | 17:15 r1 FIX: visibility via base(without_facet(user_ast)), merge main, category ranges, near-1M perf. 18:24 R1 all in (ee81535); R2 review in flight. 19:18 R2 MERGE at ee81535; must add B17 wiring + I1 lease precondition, I2 1M single-segment perf, I3 share selection, P2 bin cap before merge. 19:56 B17 wiring + I1/I2/I3/P2 pushed 3dd0eaf; R3 delta review in flight. 20:20 R3 MERGE at 3dd0eaf (polish deferred: lease.rs doc swap, adult_kind wording, Hours cap test, bin_of clamp, golden note). Merge on green. 20:45 243443a main merge only; merge on green. | 21:40 MERGED as 301199a."
     },
     "B16": {
       "status": "pending",
@@ -305,13 +305,13 @@
       "notes": ""
     },
     "B7": {
-      "status": "pending",
+      "status": "running",
       "model": "opus",
-      "session": null,
+      "session": "session_01QE5wiiZe5CM8pk9fT2tuBD",
       "pr": null,
-      "attempt": 0,
+      "attempt": 1,
       "review_rounds": 0,
-      "notes": ""
+      "notes": "Launched 21:41 after B6 merged."
     },
     "B12": {
       "status": "pending",
@@ -332,13 +332,13 @@
       "notes": ""
     },
     "B5c": {
-      "status": "ready",
+      "status": "running",
       "model": "opus",
-      "session": null,
+      "session": "session_016s5MgUbh76LeFpk3cmTmFT",
       "pr": null,
-      "attempt": 0,
+      "attempt": 1,
       "review_rounds": 0,
-      "notes": "deps met; held (crates/search busy with B6)"
+      "notes": "Launched 21:41 after B6 merged."
     },
     "B13": {
       "status": "changes_requested",
@@ -791,28 +791,28 @@
       "notes": "R1 FIX 18:30: test must extract examples from the page itself; planned UI marked; ranking step 1; table pipe. 18:44 R2 fixes aa0eaaf verified by runner (test reads page; 134 examples pass). Merge on green; Adult paragraph says (planned) -> update after B17 merges."
     },
     "B4b": {
-      "status": "running",
+      "status": "review",
       "model": "opus",
       "session": "session_01SK5Ci2FahQUSGQuDVozi28",
-      "pr": null,
+      "pr": 87,
       "attempt": 1,
       "review_rounds": 0,
       "notes": "Launched 19:18 after B17 merged."
     },
     "X-flakes": {
-      "status": "running",
+      "status": "review",
       "model": "opus",
       "session": "session_01DU5FDv74GuCpGhpTHM6Vte",
-      "pr": null,
+      "pr": 88,
       "attempt": 1,
       "review_rounds": 0,
       "notes": "Launched 19:40: rebuild rename (macOS), interrupted rebuild resume, NRT budget (Windows), uTP WSAENOBUFS."
     },
     "B2b": {
-      "status": "running",
+      "status": "review",
       "model": "opus",
       "session": "session_018cM4vT2o5voJrbVBmt6CZA",
-      "pr": null,
+      "pr": 89,
       "attempt": 1,
       "review_rounds": 0,
       "notes": "Launched 20:29 after #86 merged."
@@ -1065,7 +1065,10 @@
   },
   "heartbeats": 4,
   "reviews_in_flight": {
-    "81": "runner secure-delete R3 (d2263b9)"
+    "81": "R4 c9cf868",
+    "89": "B2b R1 (+security)",
+    "88": "X-flakes R1",
+    "87": "B4b R1 (+content safety)"
   },
   "carry_forward": {
     "next-bans-touch": [
