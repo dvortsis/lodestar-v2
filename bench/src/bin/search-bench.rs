@@ -363,17 +363,20 @@ fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
         // Warm caches the way a running server would be.
         for q in class.queries.iter().take(20) {
             let ast = parse(q)?;
-            index.search_page(&index.query(&ast, now), class.sort, 50, 0)?;
+            index.search_with_fallback(&ast, now, class.sort, 50, 0)?;
         }
         let mut times = Vec::with_capacity(class.queries.len());
         let mut total_hits = 0usize;
+        let mut fallbacks = 0usize;
         for q in &class.queries {
             if class.cold {
                 index.clear_cache();
             }
             let started = Instant::now();
             let ast = parse(q)?;
-            let results = index.search_page(&index.query(&ast, now), class.sort, 50, 0)?;
+            // As the API searches: with the stem tier when few match.
+            let (results, stemmed) = index.search_with_fallback(&ast, now, class.sort, 50, 0)?;
+            fallbacks += usize::from(stemmed);
             for h in &results.hits {
                 reader.torrent(h.id as i64)?;
             }
@@ -402,6 +405,9 @@ fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
                 None => "(not gated)".to_string(),
             }
         );
+        if fallbacks > 0 {
+            println!("  {:<24} {fallbacks} widened by the stem tier", "");
+        }
     }
     Ok(ok)
 }
