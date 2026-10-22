@@ -7,7 +7,7 @@
 //! **Per account.** Lodestar has one admin account, so there's one set,
 //! saved under `settings.preferences.<field>`. When accounts arrive, a
 //! migration moves those keys to the first account's; nothing else
-//! changes (architecture §16, B2b).
+//! changes (`docs/decisions/2026-10-22-B2b.md`).
 //!
 //! "Show adult content" isn't here: it's the server-wide
 //! `content.show_adult` (B17).
