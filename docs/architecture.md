@@ -1863,6 +1863,12 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Memory:** while a rebuild runs, two writers are active (live and build), each with the configured heap.
 - **Tests** use a version override in `ServingConfig`, and a hold point before finishing instead of timing, so they don't bump `SCHEMA_VERSION` or depend on speed.
 
+**X-email decisions (email channel, guarded TCP):**
+- **SMTP goes through the SSRF guard.** `net::connect_tcp` resolves a host once through the same `Resolve`, refuses the name if any answer is disallowed, and connects only to a checked address; literal hosts are normalised the way `Url` normalises an `http` host (`0x7f.1`, `2130706433`, bare IPv6) and checked without DNS. Plain and STARTTLS sessions run over its stream (`AsyncSmtpConnection::connect_with_transport`). An implicit-TLS session gives lettre the checked socket addresses (`net::resolve_tcp`) instead, because lettre starts TLS before the greeting only on a stream it connected itself; it connects to exactly those addresses and resolves nothing.
+- **`lettre` 0.11.23** (`default-features = false`; `builder`, `smtp-transport`, `tokio1`, `tokio1-rustls`, `ring`, `rustls-platform-verifier`). Certificates are checked by the platform verifier reqwest already uses; no aws-lc, OpenSSL or native-tls.
+- **Email rules:** STARTTLS is required, never opportunistic; certificates verify against the configured host name; credentials go only over TLS, or in plaintext to a plainly local host (`net::is_local_host`, moved from ntfy) with `allow_private`. Messages are `multipart/alternative` (plain text plus simple HTML: no images, remote resources or scripts), both parts base64, capped at 256 KiB. The `Message-ID` is derived from `Notification::id()`. 4xx replies, connection failures and timeouts are retryable; 5xx, a refused login and an unverifiable certificate are final. `DeliveryError::SmtpRejected { code }` carries the reply code.
+- **Shared text helpers** (`clean_line`, `clean_text`, `compose`, the truncation helpers, `format_bytes`, `web_link`) live in `notify/text.rs`; RSS's duplicate `web_link` is gone.
+
 ## 17. Verification (once built)
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.
