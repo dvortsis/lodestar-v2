@@ -131,6 +131,25 @@ pub struct Config {
     /// BEP 43: don't answer queries and ask others not to route to us.
     pub read_only: bool,
     pub harvest: HarvestConfig,
+    /// Addresses never contacted or answered: subscribed IP blocklists
+    /// (§20.13). Checked on every packet, so it must be cheap.
+    pub deny: Option<Deny>,
+}
+
+/// A live address check, shared with whoever keeps the lists current.
+#[derive(Clone)]
+pub struct Deny(pub Arc<dyn Fn(IpAddr) -> bool + Send + Sync>);
+
+impl Deny {
+    pub fn denies(&self, ip: IpAddr) -> bool {
+        (self.0)(ip)
+    }
+}
+
+impl std::fmt::Debug for Deny {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Deny")
+    }
 }
 
 impl Default for Config {
@@ -146,6 +165,7 @@ impl Default for Config {
             save_every: Duration::from_secs(600),
             read_only: false,
             harvest: HarvestConfig::default(),
+            deny: None,
         }
     }
 }
@@ -189,6 +209,8 @@ pub struct Stats {
     pub scrapes_dropped: AtomicU64,
     /// Scrapes that found at least one node storing the hash.
     pub scrapes_with_responders: AtomicU64,
+    /// Packets to or from a blocklisted address, not sent or ignored.
+    pub denied: AtomicU64,
 }
 
 impl Stats {
@@ -224,6 +246,7 @@ impl Stats {
             scrapes_completed: g(&self.scrapes_completed),
             scrapes_dropped: g(&self.scrapes_dropped),
             scrapes_with_responders: g(&self.scrapes_with_responders),
+            denied: g(&self.denied),
         }
     }
 }
@@ -255,6 +278,7 @@ pub struct StatsSnapshot {
     pub scrapes_completed: u64,
     pub scrapes_dropped: u64,
     pub scrapes_with_responders: u64,
+    pub denied: u64,
 }
 
 impl StatsSnapshot {

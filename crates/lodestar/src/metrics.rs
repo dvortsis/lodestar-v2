@@ -344,6 +344,12 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>) -> String {
             d.malformed_in,
         );
         o.one(
+            "dht_denied_total",
+            "counter",
+            "Packets to or from addresses on a subscribed IP blocklist.",
+            d.denied,
+        );
+        o.one(
             "dht_queries_in_total",
             "counter",
             "Queries received.",

@@ -5,6 +5,7 @@
 mod config;
 mod http;
 mod metrics;
+mod subscriptions;
 
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
@@ -14,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lodestar_filter::Sealer;
+use lodestar_filter::lists::SharedIps;
 use lodestar_pipeline::health::HealthHandle;
 use lodestar_pipeline::{DhtSource, HealthSetup, Pipeline, Rollups, metric};
 use lodestar_search::{LiveConfig, LiveIndexer, SearchIndex};
@@ -29,12 +31,14 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 const USAGE: &str = "\
 Usage: lodestar [serve|healthcheck] [--config <path>]
        lodestar import-bitmagnet <postgres-url> [--limit N] [--config <path>]
+       lodestar lists
 
 Commands:
   serve             Run the crawler, search, status page and metrics (default)
   healthcheck       Exit 0 if the local instance answers /healthz, 1 otherwise
   import-bitmagnet  Import a bitmagnet database (read-only, resumable); run
                     it while the server is stopped
+  lists             Show the blocklist catalog ([subscriptions] catalog keys)
 
 Options:
   --config <path>  config.toml (default: $LODESTAR_DATA_DIR/config.toml or
@@ -54,6 +58,7 @@ enum Command {
         url: String,
         limit: Option<u64>,
     },
+    Lists,
     Version,
     Help,
 }
@@ -75,7 +80,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
                 let n = args.next().ok_or("--limit needs a number")?;
                 limit = Some(n.parse().map_err(|_| format!("bad --limit {n:?}"))?);
             }
-            "serve" | "healthcheck" | "import-bitmagnet" if command.is_none() => {
+            "serve" | "healthcheck" | "import-bitmagnet" | "lists" if command.is_none() => {
                 command = Some(arg)
             }
             other if command.as_deref() == Some("import-bitmagnet") && !other.starts_with('-') => {
@@ -86,6 +91,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
     }
     Ok(match command.as_deref() {
         Some("healthcheck") => Command::Healthcheck(config),
+        Some("lists") => Command::Lists,
         Some("import-bitmagnet") => match positional.as_slice() {
             [url] => Command::ImportBitmagnet {
                 config,
@@ -114,6 +120,19 @@ fn main() -> ExitCode {
         }
         Command::Version => {
             println!("lodestar {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
+        Command::Lists => {
+            for e in subscriptions::CATALOG {
+                println!(
+                    "{}\n  {} ({})\n  {}\n  {}\n",
+                    e.key,
+                    e.name,
+                    e.format.as_str(),
+                    e.url,
+                    e.about
+                );
+            }
             ExitCode::SUCCESS
         }
         Command::Healthcheck(path) => match load(path) {
@@ -204,6 +223,14 @@ async fn serve(config: Config) -> Result<(), BoxError> {
     let key = seal_key(&config.data_dir.join("seal.key"))?;
     pipeline_config.sealer = Some(Arc::new(Sealer::new(&key)));
     let health = config.health_config()?;
+    // Subscribed IP lists (§20.13): one shared set, consulted by the fetch
+    // pool and the DHT before talking to anyone.
+    let ips = Arc::new(SharedIps::default());
+    let denied = {
+        let ips = ips.clone();
+        Arc::new(move |ip: IpAddr| ips.contains(ip))
+    };
+    pipeline_config.fetch.deny = Some(lodestar_peer_wire::Deny(denied.clone()));
     let db = config.db_path();
     let store_config = config.store_config();
     let search = config.search.enabled;
@@ -212,10 +239,18 @@ async fn serve(config: Config) -> Result<(), BoxError> {
     let hot_dir = config.data_dir.join("hot");
     let weights = config.ranking.weights();
     let suspect_penalty = config.ranking.suspect.clamp(0.0, 1.0);
+    let filter = pipeline_config.filter.clone();
+    let subs_config = config.subscriptions.clone();
+    let subs_ips = ips.clone();
     let (db2, store_config2, hot_dir2) = (db.clone(), store_config.clone(), hot_dir.clone());
-    let (store, reader, live, hot) = tokio::task::spawn_blocking(move || {
+    let (store, control, reader, live, hot) = tokio::task::spawn_blocking(move || {
         let (db, store_config) = (db2, store_config2);
         let mut store = Store::open(&db, store_config.clone())?;
+        // Settings and lists change through a second connection, so they
+        // never wait behind the ingest writer for long.
+        let mut control = Store::open(&db, store_config.clone())?;
+        subscriptions::sync_config(&mut control, &subs_config)?;
+        subscriptions::apply(&control, &filter, &subs_ips)?;
         // Swarm stats for search and the writer (§7): last run's snapshot,
         // or rebuilt from SQLite after a crash.
         let started = std::time::Instant::now();
@@ -258,7 +293,7 @@ async fn serve(config: Config) -> Result<(), BoxError> {
         } else {
             None
         };
-        Ok::<_, BoxError>((store, reader, live, hot))
+        Ok::<_, BoxError>((store, control, reader, live, hot))
     })
     .await??;
 
@@ -266,7 +301,9 @@ async fn serve(config: Config) -> Result<(), BoxError> {
     let mut dht_stats = None;
     let mut dht_node = None;
     if config.dht.enabled {
-        let dht = Arc::new(DhtSource::new(config.dht_config()));
+        let mut dht_config = config.dht_config();
+        dht_config.deny = Some(lodestar_dht::node::Deny(denied.clone()));
+        let dht = Arc::new(DhtSource::new(dht_config));
         dht_stats = Some(dht.stats_handle());
         dht_node = Some(dht.node_handle());
         plugins.push(dht);
@@ -293,7 +330,17 @@ async fn serve(config: Config) -> Result<(), BoxError> {
             config.http.bind
         );
     }
+    let filter = pipeline_config.filter.clone();
     let pipeline = Pipeline::start(pipeline_config, store, plugins).await?;
+    let control = Arc::new(Mutex::new(control));
+    let (stop_subscriptions, subscriptions_stopped) = tokio::sync::watch::channel(false);
+    let refresher = tokio::spawn(subscriptions::run(
+        control.clone(),
+        subscriptions::Limits::from_config(&config.subscriptions),
+        filter,
+        ips,
+        subscriptions_stopped,
+    ));
     let reader = Arc::new(Mutex::new(reader));
     let monitor = pipeline.monitor();
     let api = lodestar_api::ApiState {
@@ -329,6 +376,8 @@ async fn serve(config: Config) -> Result<(), BoxError> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     tracing::info!("shutting down: saving the queue and DHT state");
+    let _ = stop_subscriptions.send(true);
+    let _ = refresher.await;
     let mut store = pipeline.shutdown().await?;
     tokio::task::spawn_blocking(move || lodestar_pipeline::save_hot(&mut store, &hot, &hot_dir))
         .await??;
@@ -506,6 +555,7 @@ mod tests {
     #[test]
     fn parses_the_command_line() {
         assert_eq!(args(""), Ok(Command::Serve(None)));
+        assert_eq!(args("lists"), Ok(Command::Lists));
         assert_eq!(
             args("serve --config /x.toml"),
             Ok(Command::Serve(Some("/x.toml".into())))
