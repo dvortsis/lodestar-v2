@@ -194,7 +194,7 @@
    "pr": 83,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "R1 FIX 19:05: hidden-at-subscribe stream never closes (slot hog, queue growth); parsing stuck; typed wrapper gaps (202, required path/body, GET body); 401 halt; envelope extras (setup_required). 19:18 R2 FIX: PR body; aborted-conn test (given); abort-body test; superseded parse writes history; Retry-After 0 floor."
+   "notes": "R1 FIX 19:05: hidden-at-subscribe stream never closes (slot hog, queue growth); parsing stuck; typed wrapper gaps (202, required path/body, GET body); 401 halt; envelope extras (setup_required). 19:18 R2 FIX: PR body; aborted-conn test (given); abort-body test; superseded parse writes history; Retry-After 0 floor. 19:23 R2 fixes 300c35a verified by runner -> APPROVED, merge on green CI (include in 19:44 sweep)."
   },
   "W7ab": {
    "status": "changes_requested",
