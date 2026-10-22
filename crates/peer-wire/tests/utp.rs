@@ -156,13 +156,29 @@ async fn hostile_peers_fail_the_same_way_over_utp() {
     );
 }
 
+/// A TCP-only peer, and a UDP socket holding its port number that never
+/// answers. Unheld, that UDP port can go to another test's uTP peer
+/// (Windows hands ports out in sequence), which answers the SYN and fails
+/// the fetch at once (`early eof`, serving another torrent) instead of
+/// leaving it to time out.
+async fn tcp_only_peer(seed: Seed) -> (FakePeer, std::net::UdpSocket) {
+    for _ in 0..100 {
+        let peer =
+            FakePeer::spawn(vec![seed.clone()], Accept::Both, Behavior::Honest, vec![]).await;
+        if let Ok(silent) = std::net::UdpSocket::bind(peer.addr()) {
+            return (peer, silent);
+        }
+    }
+    panic!("no port free over both TCP and UDP");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn falls_back_to_tcp_when_utp_goes_unanswered() {
     let info = info_dict(500);
     let seed = Seed::v1(info.clone());
     let hash = InfoHash(seed.info_hash);
     // A TCP-only peer: nothing answers uTP on its port.
-    let peer = FakePeer::spawn(vec![seed], Accept::Both, Behavior::Honest, vec![]).await;
+    let (peer, _silent) = tcp_only_peer(seed).await;
     let o = FetchOptions {
         fallback_to_tcp: true,
         utp_fallback_after: Duration::from_millis(300),
