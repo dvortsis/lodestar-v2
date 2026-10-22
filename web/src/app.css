@@ -5,6 +5,10 @@
    all colour, and tokens.css sets the shape variables. */
 @plugin 'daisyui' {
 	themes: false;
+	/* Overlays are in-house on Bits UI (src/lib/ui/overlays), so daisyUI's menu, modal, drawer and
+	   footer components are never used; without this Tailwind matches the bare words (a `footer`
+	   prop, `--drawer-*` token names) and ships ~1.4 kB of their CSS. */
+	exclude: menu, modal, drawer, footer;
 }
 @import './lib/theme/tokens.css';
 @import './lib/theme/critical.css';

@@ -7,6 +7,7 @@ mod floor;
 mod http;
 mod metrics;
 mod ops;
+mod privdrop;
 mod services;
 mod settings;
 mod subscriptions;
@@ -115,6 +116,21 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // Root is dropped first: before the config file (in the data directory)
+    // is read, any socket is bound or any thread is spawned.
+    let scope = match command {
+        Command::Serve(_) | Command::ImportBitmagnet { .. } => Some(privdrop::Scope::DataDir),
+        Command::Healthcheck(_) => Some(privdrop::Scope::ProcessOnly),
+        Command::Lists | Command::Version | Command::Help => None,
+    };
+    let dropped = match scope.map(|s| privdrop::run(s, |k| std::env::var(k).ok())) {
+        Some(Ok(report)) => report,
+        Some(Err(e)) => {
+            eprintln!("PUID/PGID: {e}");
+            return ExitCode::FAILURE;
+        }
+        None => privdrop::Report::default(),
+    };
     let load = |path: Option<PathBuf>| Config::load(path.as_deref(), |k| std::env::var(k).ok());
     match command {
         Command::Help => {
@@ -160,6 +176,7 @@ fn main() -> ExitCode {
                 }
             };
             init_logging(&config.log);
+            dropped.log(&config.data_dir);
             let runtime = match tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
@@ -187,6 +204,7 @@ fn main() -> ExitCode {
                 }
             };
             init_logging(&config.log);
+            dropped.log(&config.data_dir);
             let runtime = match tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()

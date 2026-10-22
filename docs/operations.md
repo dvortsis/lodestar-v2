@@ -27,9 +27,13 @@ Environment variables the binary reads today:
 
 Everything else is in `config.toml` (`--config <path>`, or
 `$LODESTAR_DATA_DIR/config.toml`). Unknown keys are rejected. The variables
-override the file. `PUID`, `PGID` and `TZ` are handled by the container
-image, which doesn't exist yet **(planned)**; the Unraid templates already
-expose them.
+override the file.
+
+In Docker, `PUID` and `PGID` choose the user Lodestar runs as. The default,
+65532, is the safe choice; the Unraid template uses 99 and 100 (`nobody` and
+`users`). Leave them as they are. Never set either to 0: that's root, which
+is unsafe, and Lodestar refuses to start with it. `TZ` is accepted, but log
+timestamps are UTC today. Details: `packaging/docker/README.md`.
 
 ## 2. Installing
 
