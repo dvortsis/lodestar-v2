@@ -165,6 +165,10 @@ export class OpenApiMock {
 		}
 		this.seen.push({ op: op.id, request });
 		const override = this.overrides.get(op.id);
+		// The app shell opens the event stream on every page. A live stream is a response that stays
+		// open, so by default it is left pending (the status pill reads "Connecting"); a test that
+		// needs events overrides `getEvents` (see e2e/shell.test.ts, which serves a real stream).
+		if (op.id === 'getEvents' && override === undefined) return new Promise<void>(() => {});
 		let status: number, body: Json, headers: Record<string, string> | undefined;
 		const pick = (v: unknown) => {
 			if (

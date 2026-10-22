@@ -5,9 +5,7 @@
 import { ROUTES } from './support/routes';
 import { expect, test } from './support/test';
 
-// The routes are `<h1>` stubs with nothing focusable yet, so there is no focus behaviour to assert.
-// Drop the fixme once the shell lands (skip link / top bar): the body below is the check.
-test.fixme(true, 'no interactive UI yet (shell slice)');
+// The first Tab on every route lands on the skip link (the shell, W9), which must show a focus ring.
 
 for (const route of ROUTES) {
 	test(`keyboard: first Tab on ${route.name} lands on a visibly focused control`, async ({
