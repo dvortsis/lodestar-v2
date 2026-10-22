@@ -807,6 +807,114 @@
    "attempt": 1,
    "review_rounds": 0,
    "notes": "Launched 19:40: rebuild rename (macOS), interrupted rebuild resume, NRT budget (Windows), uTP WSAENOBUFS."
+  },
+  "B2b": {
+   "status": "running",
+   "model": "opus",
+   "session": "session_018cM4vT2o5voJrbVBmt6CZA",
+   "pr": null,
+   "attempt": 1,
+   "review_rounds": 0,
+   "notes": "Launched 20:29 after #86 merged."
+  },
+  "B2c": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": "from #86"
+  },
+  "M-settings-form": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": "from #86"
+  },
+  "S-settings-2": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": "from #86"
+  },
+  "M-security-settings": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": "from #86"
+  },
+  "B-log1": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": "from #86"
+  },
+  "B-log2": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": "from #86"
+  },
+  "S-logs": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": "from #86"
+  },
+  "S-about": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": "from #86"
+  },
+  "B-update": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": "from #86"
+  },
+  "S-updates": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": "from #86"
+  },
+  "S-doc-shots": {
+   "status": "pending",
+   "model": "sonnet",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": "from #86"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -834,7 +942,7 @@
    "title": "Modern DHT crawler architecture",
    "work": "content filter rule persistence and writer judging, migration V6"
   },
-  "session_01NpcZEgW1eEWwKES8bNP3Cd": "Owner's 'In-application settings screen' session \u2014 owner 18:59: runner now manages it. Branch claude/brave-newton-53jgly (planning \u00a710.10 Settings, \u00a712.1 logging, \u00a712.2 auto-update, About, AGPL LICENSE, packaging/keys, user-docs skill + documentation-skills, brand/brand.json, slices B2b/B2c/M-settings-form/S-settings-1/2/M-security-settings/B-log1/2/S-logs/S-about/B-update/S-updates/S-doc-shots). Asked it (19:00) for status of owner requests/open questions, merge main, open PR. Runner reviews + merges. 19:15 status: all owner requests done, none open; runner opened PR #86 (review in flight). Owner says GitHub `release` env + RELEASE_SIGNING_KEY secret set up (unverified). 19:33 #86 R1 FIX sent (key rotation hijack, logs vs B4 hub, security-fix default, rollback supervisor, docs gate cmd). 19:50 #86 R2 FIX (trust state outside snapshots, future-timestamp freeze, crash-safe rollback journal). 20:00 #86 R3 FIX: 3 blockers (store lock during rollback, trust floor/revocation on start, restore disk) + 'B-update must resolve' checklist; runner verifies R4 itself then merges. 20:05 #86 R3 fixes 43a674c verified by runner -> APPROVED, merge on green (in 20:16 sweep). After merge: add 12 new slices to state, launch B2b."
+  "session_01NpcZEgW1eEWwKES8bNP3Cd": "Owner's 'In-application settings screen' session \u2014 owner 18:59: runner now manages it. Branch claude/brave-newton-53jgly (planning \u00a710.10 Settings, \u00a712.1 logging, \u00a712.2 auto-update, About, AGPL LICENSE, packaging/keys, user-docs skill + documentation-skills, brand/brand.json, slices B2b/B2c/M-settings-form/S-settings-1/2/M-security-settings/B-log1/2/S-logs/S-about/B-update/S-updates/S-doc-shots). Asked it (19:00) for status of owner requests/open questions, merge main, open PR. Runner reviews + merges. 19:15 status: all owner requests done, none open; runner opened PR #86 (review in flight). Owner says GitHub `release` env + RELEASE_SIGNING_KEY secret set up (unverified). 19:33 #86 R1 FIX sent (key rotation hijack, logs vs B4 hub, security-fix default, rollback supervisor, docs gate cmd). 19:50 #86 R2 FIX (trust state outside snapshots, future-timestamp freeze, crash-safe rollback journal). 20:00 #86 R3 FIX: 3 blockers (store lock during rollback, trust floor/revocation on start, restore disk) + 'B-update must resolve' checklist; runner verifies R4 itself then merges. 20:05 #86 R3 fixes 43a674c verified by runner -> APPROVED, merge on green (in 20:16 sweep). After merge: add 12 new slices to state, launch B2b. 20:27 #86 MERGED c5f9b74. Session done."
  },
  "watch_policy": "Owner asked the runner to keep an eye on and manage these sessions: each heartbeat check status; report a pending permission prompt to the owner (runner cannot approve); nudge an idle session with remaining work; flag conflicts with slice ownership and migration order.",
  "migration_order": "V4 filter, V5 swarm, V6 subscriptions, V7 filter rules, V8 class_corrections (all merged), V9 class_rules (#52 open), V10 reserved M4 PR2, V11 next free (F1 if needed, then M5 B8). Runner assigns.",
@@ -962,7 +1070,6 @@
   "unenriched_adult_gap": "Unenriched imports/backfill aren't hidden by B17 (no type tag). Put in importer/backfill brief; consider raising with owner.",
   "sse_crawler_paused": "B4 SSE crawler event lacks `paused` (B14 asked to add if cheap).",
   "pr70_r3": "#70 MERGED fcf84d4 20:18.",
-  "slices_from_86": "After #86 merges: add B2b, B2c, M-settings-form, S-settings-2, M-security-settings, B-log1, B-log2, S-logs, S-about, B-update, S-updates, S-doc-shots to state.slices (pending). B2b + B-log1(after B2b) ready first. (#86 approved 20:05)",
   "near_followups": "F-near follow-ups: prefix/fuzzy words share the folded-join bug; NEAR ignores CSX-5 'Neutralize term'; plain word over-matches vs NEAR word; single-token NEAR quadratic window.",
   "skills_repo_for_docs": "Docs slices + their reviewers need dvortsis/skills (documentation-skills scripts): attach via create_session sources or add_repo.",
   "typed_held_reason": "Typed held-reason for subscriptions (instead of matching 'shrank' in sub.error) needs a schema change: fold into B8.",
