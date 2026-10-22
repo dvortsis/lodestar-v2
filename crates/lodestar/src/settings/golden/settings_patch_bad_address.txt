@@ -1,2 +1,2 @@
 422
-{"error":{"code":"invalid_setting","field":"http_bind","message":"Not a valid value: invalid socket address syntax."}}
+{"error":{"code":"invalid_setting","field":"http_bind","message":"Not a valid value: invalid socket address syntax.","section":"network"}}

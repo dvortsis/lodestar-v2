@@ -3,13 +3,14 @@
 //! Each section's own JSON schema, for generating its form, is served
 //! by `GET /settings` rather than written into this document: sections
 //! are registered by the server binary, which the API crate can't see.
-//! The envelope around them is typed here.
+//! The envelope around them is typed here, with the batch patch,
+//! preview, connection test, export and import bodies (§10.10.9).
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 
 /// Where a setting's effective value comes from, lowest to highest:
 /// the built-in default, `config.toml`, a change saved in the app, or a
@@ -116,6 +117,7 @@ pub struct SettingValue {
         }
     },
     "restart_required": ["timeout_secs"],
+    "revision": 4,
     "section": "crawler"
 }))]
 pub struct SectionValues {
@@ -123,6 +125,9 @@ pub struct SectionValues {
     /// Fields whose saved value differs from the running one: they take
     /// effect at the next restart.
     pub restart_required: Vec<String>,
+    /// Goes up by one with every save that changes the section. Send it
+    /// back as `if_revision` to refuse a save over someone else's.
+    pub revision: u64,
     pub section: String,
 }
 
@@ -131,7 +136,304 @@ pub struct SectionValues {
 /// out keep their values; an unknown field is refused. `null` resets a
 /// field: its saved value is removed, and the `config.toml` value or the
 /// default applies again.
+///
+/// Two keys aren't fields and are never saved: `if_revision` (the
+/// section's `revision` the edit started from; a save over a newer one is
+/// refused with `409 stale_revision`) and a section's confirmations
+/// (`content`'s `confirm_adult`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(transparent)]
-#[schema(value_type = Object, example = json!({ "intensity": "low", "timeout_secs": 12 }))]
+#[schema(value_type = Object, example = json!({ "if_revision": 3, "intensity": "low", "timeout_secs": 12 }))]
 pub struct SettingsPatch(pub Map<String, Value>);
+
+/// `PATCH /settings` and `POST /settings/preview`: patches for several
+/// sections, `{section: {field: value}}`, each as `PATCH
+/// /settings/{section}` takes it. Saved all together or not at all.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(transparent)]
+#[schema(value_type = Object, example = json!({
+    "crawler": { "if_revision": 3, "intensity": "low" },
+    "transport": { "if_revision": 0, "utp": true }
+}))]
+pub struct SettingsBatch(pub BTreeMap<String, SettingsPatch>);
+
+/// `PATCH /settings`: every patched section's new values.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct SettingsBatchValues {
+    pub sections: BTreeMap<String, SectionValues>,
+}
+
+/// A consequence the preview can put a number on, for the UI to format.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({ "name": "sockets", "value": 400 }))]
+pub struct PreviewEstimate {
+    /// What it measures: `sockets` (concurrent metadata fetches), `url`
+    /// (where the UI will be after a restart), `memory_mib`.
+    pub name: String,
+    pub value: Value,
+}
+
+/// Something worth knowing before saving; it doesn't stop the save.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({ "code": "search_stops", "message": "Search stops after the restart, until you turn it back on." }))]
+pub struct PreviewWarning {
+    /// A stable snake_case identifier.
+    pub code: String,
+    /// A sentence for people.
+    pub message: String,
+}
+
+/// One patched field, as it would be saved.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct FieldPreview {
+    pub estimates: Vec<PreviewEstimate>,
+    /// It would apply at the next restart; otherwise at once.
+    pub restart_required: bool,
+    /// The value it would have (null for a secret).
+    pub value: Value,
+    pub warnings: Vec<PreviewWarning>,
+}
+
+/// One section's patched fields.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct SectionPreview {
+    pub fields: BTreeMap<String, FieldPreview>,
+    /// The section's revision now.
+    pub revision: u64,
+}
+
+/// `POST /settings/preview`: what a `PATCH /settings` with the same body
+/// would do, without saving it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "sections": {
+        "crawler": {
+            "fields": {
+                "intensity": {
+                    "estimates": [{ "name": "sockets", "value": 100 }],
+                    "restart_required": false,
+                    "value": "low",
+                    "warnings": []
+                }
+            },
+            "revision": 3
+        }
+    }
+}))]
+pub struct SettingsPreview {
+    pub sections: BTreeMap<String, SectionPreview>,
+}
+
+/// A refused settings change: the API's error envelope, plus the
+/// `section` at fault and, for `409 stale_revision`, the current values
+/// of every section that changed meanwhile.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "error": {
+        "code": "invalid_setting",
+        "field": "timeout_secs",
+        "message": "Must be from 1 to 120.",
+        "section": "crawler"
+    }
+}))]
+pub struct SettingsErrorEnvelope {
+    /// On `409 stale_revision`: each stale section's values now, to merge
+    /// the edit with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub current: Option<BTreeMap<String, SectionValues>>,
+    pub error: SettingsErrorBody,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct SettingsErrorBody {
+    /// A stable snake_case identifier to branch on.
+    #[schema(example = "invalid_setting")]
+    pub code: String,
+    /// The field at fault.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub field: Option<String>,
+    /// A sentence for people. It never repeats a secret's value.
+    pub message: String,
+    /// The section at fault.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub section: Option<String>,
+}
+
+/// A download client a connection test can reach.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum DownloadClientKind {
+    Qbittorrent,
+    Transmission,
+    Deluge,
+    Rtorrent,
+    Aria2,
+}
+
+/// A download client's settings as the form has them, unsaved.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DownloadClientDraft {
+    pub client: DownloadClientKind,
+    /// The password (qBittorrent, Deluge, Transmission and rTorrent with
+    /// authentication) or the RPC secret (Aria2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false, write_only)]
+    pub password: Option<String>,
+    /// The client's address, as the form has it.
+    #[schema(example = "http://192.168.1.5:8080/")]
+    pub url: String,
+    /// The user name (qBittorrent; Transmission and rTorrent with
+    /// authentication).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub username: Option<String>,
+}
+
+impl std::fmt::Debug for DownloadClientDraft {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // No URL (it can carry credentials), no password.
+        f.debug_struct("DownloadClientDraft")
+            .field("client", &self.client)
+            .finish_non_exhaustive()
+    }
+}
+
+/// `POST /settings/test`: what to test, with the values on screen.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SettingsTest {
+    /// Log in to a download client and ask its version.
+    DownloadClient(DownloadClientDraft),
+}
+
+/// Why a connection test failed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({ "code": "bad_credentials", "message": "The client refused the user name or password." }))]
+pub struct SettingsTestFailure {
+    /// `bad_credentials`, `banned`, `origin_refused`, `session_refused`,
+    /// `address_refused`, `unreachable`, `rejected`, `timeout`, `blocked`,
+    /// `invalid`, `protocol` or `unsupported`.
+    pub code: String,
+    /// A sentence for people; never the URL or a credential.
+    pub message: String,
+}
+
+/// `POST /settings/test`: the result, shown beside the button. Nothing is
+/// saved either way.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({ "api_version": "2.9.3", "error": null, "ok": true, "version": "v4.6.3" }))]
+pub struct SettingsTestResult {
+    /// The client's API version, when it has one apart from its version.
+    #[schema(required = true)]
+    pub api_version: Option<String>,
+    /// Why it failed; null when `ok`.
+    #[schema(required = true)]
+    pub error: Option<SettingsTestFailure>,
+    pub ok: bool,
+    /// The client's version, as it reports it; null unless `ok`.
+    #[schema(required = true)]
+    pub version: Option<String>,
+}
+
+/// `GET /settings/export` parameters.
+#[derive(Debug, Clone, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ExportQuery {
+    /// Include the `preferences` section (off by default).
+    pub preferences: Option<bool>,
+}
+
+/// `POST /settings/import` parameters.
+#[derive(Debug, Clone, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ImportQuery {
+    /// Only report what the import would change (the diff); save nothing.
+    pub dry_run: Option<bool>,
+}
+
+/// `POST /settings/import`: a file from `GET /settings/export`.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SettingsImport {
+    /// The 18+ confirmation, needed when the file turns on an adult
+    /// setting (as `PATCH /settings/content` needs it).
+    #[serde(default)]
+    pub confirm_adult: bool,
+    /// The sections' revisions the dry run reported: the import is refused
+    /// with `409 stale_revision` if any changed since.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub revisions: Option<BTreeMap<String, u64>>,
+    /// The file's text (TOML), at most 64 KiB.
+    pub toml: String,
+}
+
+impl std::fmt::Debug for SettingsImport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SettingsImport")
+            .field("confirm_adult", &self.confirm_adult)
+            .field("revisions", &self.revisions)
+            .field("toml_bytes", &self.toml.len())
+            .finish()
+    }
+}
+
+/// One setting an import changes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ImportChange {
+    pub field: String,
+    /// The value now.
+    pub from: Value,
+    /// Where the value now comes from: to undo, send it back, or `null`
+    /// when this isn't `db`.
+    pub from_source: SettingSource,
+    /// It applies at the next restart.
+    pub restart_required: bool,
+    pub section: String,
+    pub to: Value,
+}
+
+/// A key in the file that an import leaves alone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ImportSkip {
+    /// The variable that sets it, for `set_by_environment`; null otherwise.
+    #[schema(required = true)]
+    pub env: Option<String>,
+    /// `section.field`, or the key as the file has it.
+    pub key: String,
+    /// `unknown` (no such setting), `read_only`, `secret` (never imported)
+    /// or `set_by_environment`.
+    pub reason: String,
+}
+
+/// `POST /settings/import`: the diff, and whether it was applied.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "applied": false,
+    "changes": [{
+        "field": "intensity",
+        "from": "balanced",
+        "from_source": "default",
+        "restart_required": false,
+        "section": "crawler",
+        "to": "low"
+    }],
+    "revisions": { "crawler": 3 },
+    "skipped": [{ "env": "LODESTAR_DHT_PORT", "key": "network.dht_port", "reason": "set_by_environment" }],
+    "unchanged": 2
+}))]
+pub struct ImportReport {
+    /// Saved (false on a dry run, or when nothing changes).
+    pub applied: bool,
+    pub changes: Vec<ImportChange>,
+    /// Every section's revision after the import: pass them back with
+    /// the real import to refuse it if anything changed after a dry run.
+    pub revisions: BTreeMap<String, u64>,
+    pub skipped: Vec<ImportSkip>,
+    /// Settings in the file that already have its value.
+    pub unchanged: u32,
+}
