@@ -37,7 +37,7 @@ The sources of truth, in order:
   - parsers also get property or fuzz tests;
   - UI primitives get keyboard and state tests;
   - formatters are tested byte-exact against `docs/metrics.md`.
-- **Decisions:** any choice that changes or clarifies the architecture gets a short entry at the end of `docs/architecture.md` §16, in the same PR.
+- **Decisions:** any choice that changes or clarifies the architecture gets a short entry in a new file under `docs/decisions/` (`<date>-<slice-id>.md`, see its README), in the same PR. §16 is closed to new entries.
 - **Commits and PRs:** an imperative subject of 72 characters or fewer, and a body that says why. No model identifiers anywhere.
 
 ## 3. UI design skills (`dvortsis/skills`, `ui-design-skills/skills/<name>/SKILL.md`)

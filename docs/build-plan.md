@@ -25,7 +25,7 @@ What the code shows (checked):
 
 The owner wants the rest of the application planned in detail through 1.0, with an outline after that. It should use as many helper agents as add value without trading away quality. So this plan covers both what gets built and how the work is cut, delegated and reviewed.
 
-`docs/architecture.md` stays the source of truth for *what* is built. This document covers *order and delegation*. When a slice changes a decision, the slice updates architecture.md (§16), not this file.
+`docs/architecture.md` stays the source of truth for *what* is built. This document covers *order and delegation*. When a slice changes a decision, the slice adds a file under `docs/decisions/`, not an edit to this file.
 
 ---
 
@@ -265,7 +265,7 @@ Each item is one PR of about 1,500 changed lines or fewer. **[M]** = main sessio
 - the reporting-overhead benchmark (§3);
 - a `design-review` pass with every blocking finding fixed;
 - Playwright breakpoints × themes × densities, plus reduced motion and keyboard-only, and Lighthouse budgets;
-- an "M5 decisions" entry in architecture.md §16.
+- an "M5 decisions" file in `docs/decisions/`.
 
 ### P3: M6 packaging
 - **[M]**
