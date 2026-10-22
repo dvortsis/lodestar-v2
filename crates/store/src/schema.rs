@@ -420,6 +420,10 @@ pub(crate) fn configure(conn: &Connection, mmap_size: u64) -> Result<()> {
     conn.pragma_update(None, "foreign_keys", true)?;
     conn.pragma_update(None, "mmap_size", mmap_size as i64)?;
     conn.pragma_update(None, "temp_store", "MEMORY")?;
+    // Deleted rows are zeroed, not left in free pages: a copy of the data
+    // folder (which also holds seal.key) mustn't yield purged quarantine
+    // names or deleted torrents (owner, 2026-10-22).
+    conn.pragma_update(None, "secure_delete", true)?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     Ok(())
 }

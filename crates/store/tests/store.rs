@@ -749,3 +749,38 @@ fn enrichment_is_stored_with_a_prepared_torrent_and_backfilled() {
     assert_eq!(log.len(), seq + 1);
     assert_eq!(log.last().unwrap().1, b);
 }
+
+#[test]
+fn deleted_rows_leave_no_trace_in_the_file() {
+    // secure_delete: a purged value is zeroed, not left in a free page that
+    // a copy of the data folder could recover.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.db");
+    let store = Store::open(&path, StoreConfig::default()).unwrap();
+    let conn = store.connection();
+    let secret = "purged-quarantine-name-7f3a9c";
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES ('probe', ?1)",
+        [secret],
+    )
+    .unwrap();
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+        .unwrap();
+    assert!(contains(&std::fs::read(&path).unwrap(), secret.as_bytes()));
+
+    conn.execute("DELETE FROM settings WHERE key = 'probe'", [])
+        .unwrap();
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+        .unwrap();
+    let file = std::fs::read(&path).unwrap();
+    assert!(
+        !contains(&file, secret.as_bytes()),
+        "the deleted value survived"
+    );
+    let wal = std::fs::read(dir.path().join("t.db-wal")).unwrap_or_default();
+    assert!(!contains(&wal, secret.as_bytes()), "the WAL kept the value");
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
