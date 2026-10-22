@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-10-22T14:41Z",
+  "updated_at": "2026-10-22T15:40Z",
   "launches": {
     "date": "2026-10-22",
     "count": 17
@@ -122,7 +122,7 @@
       "pr": 61,
       "attempt": 1,
       "review_rounds": 1,
-      "notes": "13:44: W6 pushed de6a17d (256 baselines, .update-snapshots removed) + main merge 43c57b8. Asked session how baselines were obtained (policy check). filter budget red (base red): re-run once after run 39789471408 completes (rerun refused while running). | 13:53 provenance OK: owner supplied zip (sha256 ebbfc84e\u2026 = artifact digest); e2e compared, 456 passed. Merge after CI + one budget re-run. | 14:19 budget re-run failed again (spent). Holding for F1b; commented on PR; owner pushed 14:19."
+      "notes": "13:44: W6 pushed de6a17d (256 baselines, .update-snapshots removed) + main merge 43c57b8. Asked session how baselines were obtained (policy check). filter budget red (base red): re-run once after run 39789471408 completes (rerun refused while running). | 13:53 provenance OK: owner supplied zip (sha256 ebbfc84e\u2026 = artifact digest); e2e compared, 456 passed. Merge after CI + one budget re-run. | 14:19 budget re-run failed again (spent). Holding for F1b; commented on PR; owner pushed 14:19. | 15:40 asked session to merge main (moved: #64,#67,#68) for fresh CI"
     },
     "W2": {
       "status": "merged",
@@ -152,13 +152,13 @@
       "notes": "round 1: no blocking in code; asked: de-flake cancellation timing tests, revert index_root rename (B2 owns config.rs), tolerance wording, periodic lease sweep, PR description; optional seal-key HMAC. Scope exceptions accepted. | 13:42: fixes at b05bd31; only filter budget red (51.5us, runner variance, base red) -> one re-run spent; round-2 verifier started. | 13:43 all 23 checks green (budget passed on re-run); awaiting verifier. | merged 14:12 as e2702bc. Polish carry: exact-count test still wall-clock (cancelled_after_30ms); sweep test upgrade() race window; sweeper spawn-failure join."
     },
     "B4": {
-      "status": "running",
+      "status": "in_review",
       "model": "opus",
       "session": "session_01VDuBzguUByMRWK2Af6LkX3",
-      "pr": null,
+      "pr": 69,
       "attempt": 1,
       "review_rounds": 0,
-      "notes": "launched 14:14 after B5a merged"
+      "notes": "launched 14:14 after B5a merged | PR #69 opened; reviewer (+security) started 15:40"
     },
     "B8": {
       "status": "pending",
@@ -734,7 +734,7 @@
       "pr": 63,
       "attempt": 1,
       "review_rounds": 1,
-      "notes": "round 1 fixes pushed af0a35e (transient drops, =? broken, private peer for plaintext auth, resolve timeout); merge on CI green (filter gate pending F1b); 12:50 one rerun of filter budget"
+      "notes": "round 1 fixes pushed af0a35e (transient drops, =? broken, private peer for plaintext auth, resolve timeout); merge on CI green (filter gate pending F1b); 12:50 one rerun of filter budget | 15:40 asked session to merge main for fresh CI"
     },
     "B5a-swapfix": {
       "status": "merged",
@@ -888,7 +888,7 @@
     "F1b #66: sign-off on calibrated filter budget (50us at reference runner speed, scale up to 1.6x on slower runners)"
   ],
   "launches_today": 8,
-  "last_heartbeat": "2026-10-22T14:41Z",
+  "last_heartbeat": "2026-10-22T15:40Z",
   "owner_questions": [
     "F1 budget scope: gate covers cheaply-rejectable rule shapes (10% = 40.8 us on runner). Shapes the cheap check cannot decide cost more at 10% of rules (VM: NEAR/1 ~450-500, negation ~140, fuzzy ~125, prefix ~110 us; runner ~1.4x faster). Should those shapes be gated at 50 us too?",
     "Filter budget hardware: 50 us has no reference machine; gate now calibrated to the runner F1 measured on (10%=40.8 us), slower runners scale up to 1.6x. Confirm or set a reference machine."
