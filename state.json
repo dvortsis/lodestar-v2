@@ -697,8 +697,8 @@
    "session": "session_01V5sNo28tD6bZx3CNFdYjWY",
    "pr": 55,
    "attempt": 1,
-   "review_rounds": 1,
-   "notes": "round-1 rework pushed 12e6290; openapi drift red -> told to regenerate; awaiting budget numbers"
+   "review_rounds": 2,
+   "notes": "round 2 FIX: engine unblocks hash store kept (item 4); stale PR description. Runner budget: core 8.9, 1% 32.9, 10% 40.8, 25% 48.1 us. Important: O(n^2) pending, require hashes on password remove, document gate scope"
   },
   "F2": {
    "status": "done_elsewhere",
@@ -857,5 +857,8 @@
   "Modern DHT crawler architecture: waiting on an AskUserQuestion"
  ],
  "launches_today": 6,
- "last_heartbeat": "2026-10-22T10:38Z"
+ "last_heartbeat": "2026-10-22T10:38Z",
+ "owner_questions": [
+  "F1 budget scope: gate covers cheaply-rejectable rule shapes (10% = 40.8 us on runner). Shapes the cheap check cannot decide cost more at 10% of rules (VM: NEAR/1 ~450-500, negation ~140, fuzzy ~125, prefix ~110 us; runner ~1.4x faster). Should those shapes be gated at 50 us too?"
+ ]
 }
