@@ -246,6 +246,40 @@ fn ten_thousand_rules(share: usize) -> Vec<lodestar_filter::UserRule> {
         .collect()
 }
 
+/// The runner's speed, from work that runs no Lodestar code: fold the
+/// torrent's name and file names to lower case, split them into words, hash
+/// the words into a set, look up the common words, and sort the hashes.
+/// It does the kinds of things the core does (strings, hashing, small
+/// allocations) in about the core's time, so a slower or busier runner
+/// slows it alike, and no change to the filter can move it.
+fn calibrate(name: &str, files: &[FileInfo], common: &[u64]) -> usize {
+    use std::hash::BuildHasher;
+    let hasher = std::hash::BuildHasherDefault::<std::hash::DefaultHasher>::default();
+    let mut words = std::collections::HashSet::with_hasher(hasher.clone());
+    let mut text = String::new();
+    let names = files
+        .iter()
+        .filter_map(|f| f.path.last().map(String::as_str));
+    for part in std::iter::once(name).chain(names) {
+        text.clear();
+        text.push_str(part);
+        text.make_ascii_lowercase();
+        for word in text.split(|c: char| !c.is_alphanumeric()) {
+            if !word.is_empty() {
+                words.insert(hasher.hash_one(word));
+            }
+        }
+    }
+    let found = common.iter().filter(|h| words.contains(*h)).count();
+    let mut sorted: Vec<u64> = words.into_iter().collect();
+    sorted.sort_unstable();
+    found + sorted.len()
+}
+
+/// [`calibrate`]'s time per torrent on the reference runner, in
+/// nanoseconds: the median of the CI runs §20.8 names.
+const CALIB_REF_NS: f64 = 6_000.0;
+
 /// §20.8 and the owner's budget (§1.6.6): under 50 µs per torrent at
 /// 10,000 rules. Ignored in debug test runs; CI runs it in release (the
 /// `filter budget` job): `cargo test --release -p lodestar-filter --test
@@ -256,12 +290,18 @@ fn ten_thousand_rules(share: usize) -> Vec<lodestar_filter::UserRule> {
 /// 25% of the rules built on words the torrents have. The budget holds
 /// the core, 1% and 10%; 25% is measured and reported, not held.
 ///
-/// The CI runner is authoritative. A slower machine (the build VM runs
-/// about 1.4 times slower) can fail the 10% case locally.
+/// The budget is in reference-runner microseconds (owner, 2026-10-22;
+/// §16). Hosted runners differ by about 2× in speed, so each timed pass
+/// follows a pass of [`calibrate`], and its time is divided by how much
+/// slower than [`CALIB_REF_NS`] that ran. The raw time and the runner's
+/// speed are printed beside it, so any machine, the build VM included,
+/// judges the same budget.
 #[test]
 #[ignore]
 fn budget() {
-    const BUDGET_US: u128 = 50;
+    const BUDGET_US: f64 = 50.0;
+    // Outside this, the measurement is wrong rather than the runner slow.
+    const SPEED: std::ops::RangeInclusive<f64> = 0.1..=10.0;
     let set = torrents(512);
     let classes: Vec<_> = set
         .iter()
@@ -290,36 +330,91 @@ fn budget() {
         })
         .collect();
     let files: usize = set.iter().map(|(_, f)| f.len()).sum();
+    let cpu = std::fs::read_to_string("/proc/cpuinfo")
+        .ok()
+        .and_then(|s| {
+            s.lines().find_map(|l| {
+                l.strip_prefix("model name")
+                    .map(|m| m.trim_start_matches([' ', '\t', ':']).to_owned())
+            })
+        })
+        .unwrap_or_else(|| "unknown".into());
     println!(
-        "{} torrents, {:.1} files each on average",
+        "{} torrents, {:.1} files each on average; CPU {cpu}",
         items.len(),
         files as f64 / items.len() as f64
     );
-    // A warm-up pass (the first judgment also builds the rule index),
-    // then the median of seven passes over the set, so one noisy pass on
-    // a shared runner doesn't decide. Each pass's mean is printed.
-    let time = |what: &str, f: &dyn Fn(usize)| {
+    let common: Vec<u64> = {
+        use std::hash::BuildHasher;
+        let hasher = std::hash::BuildHasherDefault::<std::hash::DefaultHasher>::default();
+        COMMON.iter().map(|w| hasher.hash_one(w)).collect()
+    };
+    let calib = |i: usize| {
+        let (name, files) = std::hint::black_box(&set[i]);
+        std::hint::black_box(calibrate(name, files, &common));
+    };
+    // Microseconds per torrent for one pass over the set.
+    let pass = |f: &dyn Fn(usize)| {
+        let start = Instant::now();
         (0..items.len()).for_each(f);
-        let mut passes: Vec<_> = (0..7)
+        start.elapsed().as_secs_f64() * 1e6 / items.len() as f64
+    };
+    // A warm-up pass (the first judgment also builds the rule index),
+    // then seven passes over the set, each after a calibration pass so a
+    // busy spell on a shared runner slows both. Medians decide, so one
+    // noisy pass doesn't. Returns reference-runner µs.
+    let median = |mut v: Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        v[v.len() / 2]
+    };
+    let time = |what: &str, f: &dyn Fn(usize)| {
+        pass(&calib);
+        pass(f);
+        // (µs per torrent, the calibration's µs per torrent) per pass.
+        let passes: Vec<(f64, f64)> = (0..7)
             .map(|_| {
-                let start = Instant::now();
-                (0..items.len()).for_each(f);
-                start.elapsed() / items.len() as u32
+                let c = pass(&calib);
+                (pass(f), c)
             })
             .collect();
-        println!("{what}: passes {passes:?}");
-        passes.sort();
-        let per = passes[3];
-        println!("{what}: {per:?} per torrent");
-        per
+        let show = |v: Vec<f64>| {
+            v.iter()
+                .map(|x| format!("{x:.1}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        println!(
+            "{what}: passes {} µs; calibration {} µs",
+            show(passes.iter().map(|p| p.0).collect()),
+            show(passes.iter().map(|p| p.1).collect()),
+        );
+        let raw = median(passes.iter().map(|p| p.0).collect());
+        // How many times the reference's time the runner takes.
+        let speed = median(passes.iter().map(|p| p.1 * 1e3 / CALIB_REF_NS).collect());
+        let normal = median(
+            passes
+                .iter()
+                .map(|(t, c)| t * CALIB_REF_NS / (c * 1e3))
+                .collect(),
+        );
+        println!(
+            "{what}: {normal:.1} µs per torrent on the reference runner \
+             ({raw:.1} µs here, at {speed:.2}× its time)"
+        );
+        assert!(
+            SPEED.contains(&speed),
+            "{what}: the runner took {speed:.2}× the reference's time to calibrate, \
+             outside {SPEED:?}; the measurement can't be trusted"
+        );
+        normal
     };
     let core = shipped();
     let mut over = Vec::new();
     let per = time("core", &|i| {
         std::hint::black_box(core.verdict(std::hint::black_box(&items[i])));
     });
-    if per.as_micros() >= BUDGET_US {
-        over.push(format!("core: {per:?}"));
+    if per >= BUDGET_US {
+        over.push(format!("core: {per:.1} µs"));
     }
 
     // The whole engine: the core, every pack, and 10,000 of your rules,
@@ -346,13 +441,16 @@ fn budget() {
                 "no rule of yours matches the set"
             );
         });
-        if per.as_micros() >= BUDGET_US {
+        if per >= BUDGET_US {
             if held {
-                over.push(format!("{what}: {per:?}"));
+                over.push(format!("{what}: {per:.1} µs"));
             } else {
                 println!("{what}: over {BUDGET_US} µs (reported, not held)");
             }
         }
     }
-    assert!(over.is_empty(), "over the {BUDGET_US} µs budget: {over:?}");
+    assert!(
+        over.is_empty(),
+        "over the {BUDGET_US} µs budget on the reference runner: {over:?}"
+    );
 }

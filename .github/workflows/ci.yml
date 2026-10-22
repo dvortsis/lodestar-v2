@@ -80,9 +80,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # The owner's budget: under 50 µs per torrent at 10,000 rules,
-      # measured in release on this runner. The test is ignored in debug
-      # runs.
+      # The owner's budget: under 50 µs per torrent at 10,000 rules, in
+      # release, scaled to the reference runner by a calibration pass so
+      # a slow hosted runner doesn't fail it (§20.8). The test is ignored
+      # in debug runs.
       - run: cargo test --release -p lodestar-filter --test props -- --ignored --nocapture budget
 
   importer:
