@@ -698,7 +698,7 @@
    "pr": 55,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "round 2 FIX: engine unblocks hash store kept (item 4); stale PR description. Runner budget: core 8.9, 1% 32.9, 10% 40.8, 25% 48.1 us. Important: O(n^2) pending, require hashes on password remove, document gate scope"
+   "notes": "round 2 fixes pushed (Settled{settled,unblocked}, desc rewritten, HashSets+cap, hashes required on password remove, NEAR 2x faster); merge on CI green"
   },
   "F2": {
    "status": "done_elsewhere",
@@ -851,6 +851,9 @@
   "flaky": [
    "2026-10-22 11:13 Windows: search/tests/rebuild.rs searches_keep_working_through_a_rebuild_and_the_swap timed out (rebuild never finished in 30s) on PR #61 run 39768313014. Hypothesis: SRWLock writer starvation by spinning readers of Serving RwLock. Routed to B5a to root-cause.",
    "11:22 failed again on PR #62 (job 119791380998): now consistent; asked B5a for a separate fix PR slice/B5a-swapfix first"
+  ],
+  "filter-followup": [
+   "NEAR quirk (pre-existing, #42): words that split into several tokens (1080p, x264) can never match inside NEAR; needs a fix in a filter slice"
   ]
  },
  "blocked_on_owner": [
