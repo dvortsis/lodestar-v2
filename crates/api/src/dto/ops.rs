@@ -325,8 +325,12 @@ pub enum ReachReason {
     Bootstrapping,
     /// Less than `min_window_s` since bootstrap or a restart of the check.
     Measuring,
-    /// Nodes we never queried are reaching us: the port is open.
+    /// Nodes we never queried are reaching us from at least 3 networks
+    /// (/24 or /64): the port is open.
     UnsolicitedQueries,
+    /// Some did, but from fewer than 3 networks: too little to call the
+    /// port open (a NAT can let a neighbour's query through).
+    FewUnsolicitedSources,
     /// None did in the window: the port looks closed to inbound packets.
     NoUnsolicitedQueries,
 }
@@ -339,10 +343,12 @@ pub enum PortMapping {
 }
 
 /// Our address as other DHT nodes see it: the BEP 42 `ip` key of their
-/// replies, one vote per node, the last 32 nodes.
+/// replies, one vote per network (/24 or /64), the last 32 networks,
+/// IPv4 and IPv6 tallied apart (the IPv4 consensus wins when both have
+/// one).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct ExternalAddress {
-    /// Voters naming the leading address.
+    /// Voting networks naming the leading address.
     pub agreeing: u32,
     /// The consensus address: at least 5 voters, and more than half of
     /// them, agree; null until they do.
@@ -368,6 +374,7 @@ pub struct ExternalAddress {
     "reachable": true,
     "reason": "unsolicited_queries",
     "unsolicited_queries": 37,
+    "unsolicited_sources": 21,
     "window_s": 600,
     "window_started_at": 1792677610
 }))]
@@ -392,6 +399,11 @@ pub struct NetworkCheck {
     /// Of `inbound_queries`, the ones from nodes we never queried.
     #[schema(required = true)]
     pub unsolicited_queries: Option<u64>,
+    /// The distinct networks (/24 or /64) those came from, counting at
+    /// most the 64 most recent; null until measuring. `reachable` needs
+    /// at least 3.
+    #[schema(required = true)]
+    pub unsolicited_sources: Option<u64>,
     /// The longest stretch of evidence looked at.
     pub window_s: u64,
     /// Unix seconds the window started (bootstrap or a restart); null

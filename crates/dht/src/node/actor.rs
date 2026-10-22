@@ -70,6 +70,9 @@ const SAMPLE_TIMEOUT_BACKOFF: Duration = Duration::from_secs(30 * 60);
 /// unsolicited: one generation lasts at least ~3 minutes at Aggressive,
 /// about the longest a home router keeps a UDP mapping open.
 const CONTACTED_CAPACITY: usize = 200_000;
+/// Distinct networks (/24 or /64) whose last unsolicited query is kept,
+/// newest first; the reachability check needs only a few.
+const UNSOLICITED_SOURCES: usize = 64;
 
 #[derive(Debug, Clone, Copy)]
 enum Purpose {
@@ -151,11 +154,32 @@ impl TokenBucket {
     }
 }
 
+/// A reporter's network: its /24 (IPv4) or /64 (IPv6). One network
+/// gets one say, so a few hosts in one range can't outvote the rest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct Network(u8, u64);
+
+fn network(ip: IpAddr) -> Network {
+    match ip.to_canonical() {
+        IpAddr::V4(v4) => {
+            let [a, b, c, _] = v4.octets();
+            Network(4, u64::from_be_bytes([0, 0, 0, 0, 0, a, b, c]))
+        }
+        IpAddr::V6(v6) => {
+            let o = v6.octets();
+            Network(6, u64::from_be_bytes(o[..8].try_into().expect("8 bytes")))
+        }
+    }
+}
+
 /// Majority vote over the external address other nodes report (BEP 42).
-/// One vote per reporter, the last [`ExternalIp::WINDOW`] reporters.
+/// One vote per reporting network, the last [`ExternalIp::WINDOW`] of
+/// them, tallied apart for IPv4 and IPv6 addresses so one family never
+/// dilutes the other's majority.
 #[derive(Default)]
 struct ExternalIp {
-    votes: VecDeque<(IpAddr, SocketAddr)>,
+    v4: VecDeque<(Network, SocketAddr)>,
+    v6: VecDeque<(Network, SocketAddr)>,
     current: Option<IpAddr>,
 }
 
@@ -165,10 +189,16 @@ impl ExternalIp {
 
     /// Records a report; returns the new address when the majority changes.
     fn vote(&mut self, reporter: IpAddr, reported: SocketAddr) -> Option<IpAddr> {
-        self.votes.retain(|(r, _)| *r != reporter);
-        self.votes.push_back((reporter, reported));
-        if self.votes.len() > Self::WINDOW {
-            self.votes.pop_front();
+        let reporter = network(reporter);
+        let votes = if reported.ip().to_canonical().is_ipv4() {
+            &mut self.v4
+        } else {
+            &mut self.v6
+        };
+        votes.retain(|(r, _)| *r != reporter);
+        votes.push_back((reporter, reported));
+        if votes.len() > Self::WINDOW {
+            votes.pop_front();
         }
         let t = self.tally();
         match t.ip {
@@ -180,11 +210,22 @@ impl ExternalIp {
         }
     }
 
+    /// The IPv4 majority if there is one, else the IPv6 one, else the
+    /// evidence of the family with more voters.
+    fn tally(&self) -> ExternalVotes {
+        let (v4, v6) = (Self::tally_of(&self.v4), Self::tally_of(&self.v6));
+        if v4.ip.is_some() || (v6.ip.is_none() && v4.voters >= v6.voters) {
+            v4
+        } else {
+            v6
+        }
+    }
+
     /// The leading address and its port, with the evidence. Ties go to
     /// the smaller value, so the answer doesn't depend on map order.
-    fn tally(&self) -> ExternalVotes {
+    fn tally_of(votes: &VecDeque<(Network, SocketAddr)>) -> ExternalVotes {
         let mut ips: HashMap<IpAddr, usize> = HashMap::new();
-        for (_, addr) in &self.votes {
+        for (_, addr) in votes {
             *ips.entry(addr.ip()).or_default() += 1;
         }
         let Some((best, n)) = ips
@@ -193,11 +234,11 @@ impl ExternalIp {
         else {
             return ExternalVotes::default();
         };
-        let majority = n >= Self::QUORUM && n * 2 > self.votes.len();
+        let majority = n >= Self::QUORUM && n * 2 > votes.len();
         let port = majority
             .then(|| {
                 let mut ports: HashMap<u16, usize> = HashMap::new();
-                for (_, addr) in self.votes.iter().filter(|(_, a)| a.ip() == best) {
+                for (_, addr) in votes.iter().filter(|(_, a)| a.ip() == best) {
                     *ports.entry(addr.port()).or_default() += 1;
                 }
                 ports
@@ -209,9 +250,35 @@ impl ExternalIp {
         ExternalVotes {
             ip: majority.then_some(best),
             port,
-            voters: self.votes.len(),
+            voters: votes.len(),
             agreeing: n,
         }
+    }
+}
+
+/// When each network last sent us an unsolicited query: the newest
+/// [`UNSOLICITED_SOURCES`] networks.
+#[derive(Default)]
+struct UnsolicitedFrom(HashMap<Network, Instant>);
+
+impl UnsolicitedFrom {
+    fn note(&mut self, ip: IpAddr, now: Instant) {
+        let net = network(ip);
+        if !self.0.contains_key(&net)
+            && self.0.len() >= UNSOLICITED_SOURCES
+            && let Some(oldest) = self.0.iter().min_by_key(|(_, t)| **t).map(|(n, _)| *n)
+        {
+            self.0.remove(&oldest);
+        }
+        self.0.insert(net, now);
+    }
+
+    /// How long ago each network's last unsolicited query was.
+    fn ages(&self, now: Instant) -> Vec<Duration> {
+        self.0
+            .values()
+            .map(|t| now.saturating_duration_since(*t))
+            .collect()
     }
 }
 
@@ -275,6 +342,7 @@ struct Actor {
     last_prune: Instant,
     /// IPs we've queried lately, to tell unsolicited queries apart.
     contacted: SeenFilter,
+    unsolicited_from: UnsolicitedFrom,
     /// The crawler's pause: no sampling, lookups, scrapes or harvests.
     paused: bool,
 }
@@ -344,6 +412,7 @@ pub(crate) async fn run(
         stalled: Vec::new(),
         last_prune: now,
         contacted: SeenFilter::new(CONTACTED_CAPACITY, 0.01),
+        unsolicited_from: UnsolicitedFrom::default(),
         paused: cfg.paused,
         cfg,
     };
@@ -463,6 +532,7 @@ impl Actor {
                     intensity: self.cfg.intensity,
                     paused: self.paused,
                     external: self.external.tally(),
+                    unsolicited_sources: self.unsolicited_from.ages(Instant::now()),
                 });
             }
             Command::SetPaused(paused) => {
@@ -615,7 +685,10 @@ impl Actor {
             return Sent::Failed;
         }
         Stats::inc(&self.stats.queries_out);
-        self.contacted.insert(&contact_key(to.ip()));
+        // Renewed on every query: a neighbour we talk to all the time must
+        // never age out, or its queries (which a NAT lets through, since
+        // we just talked to it) would read as unsolicited.
+        self.contacted.remember(&contact_key(to.ip()));
         *self.pending_addrs.entry(to).or_default() += 1;
         self.pending.insert(
             tid,
@@ -662,6 +735,7 @@ impl Actor {
                 Stats::inc(&self.stats.queries_in);
                 if !self.contacted.contains(&contact_key(from.ip())) {
                     Stats::inc(&self.stats.queries_in_unsolicited);
+                    self.unsolicited_from.note(from.ip(), Instant::now());
                 }
                 self.on_query(sockets, family, &msg, q, from);
             }
@@ -1429,18 +1503,23 @@ mod tests {
         for _ in 0..10 {
             assert_eq!(e.vote("1.1.1.1".parse().unwrap(), at(6881)), None);
         }
-        for i in 2..=4u8 {
+        // Nor do many hosts of one /24: one network, one vote.
+        for i in 2..=200u8 {
             assert_eq!(e.vote(IpAddr::from([1, 1, 1, i]), at(6881)), None);
+        }
+        assert_eq!(e.tally().voters, 1);
+        for i in 2..=4u8 {
+            assert_eq!(e.vote(IpAddr::from([1, 1, i, 1]), at(6881)), None);
         }
         assert_eq!(e.tally().ip, None, "4 reporters are short of quorum");
         assert_eq!(e.tally().voters, 4);
-        assert_eq!(e.vote("1.1.1.5".parse().unwrap(), at(40000)), Some(me));
+        assert_eq!(e.vote("1.1.5.1".parse().unwrap(), at(40000)), Some(me));
         // No change reported twice.
-        assert_eq!(e.vote("1.1.1.6".parse().unwrap(), at(6881)), None);
+        assert_eq!(e.vote("1.1.6.1".parse().unwrap(), at(6881)), None);
         // A minority liar doesn't flip it.
         let liar: SocketAddr = "198.51.100.1:1".parse().unwrap();
         for i in 10..13u8 {
-            assert_eq!(e.vote(IpAddr::from([2, 2, 2, i]), liar), None);
+            assert_eq!(e.vote(IpAddr::from([2, 2, i, 1]), liar), None);
         }
         assert_eq!(e.current, Some(me));
         assert_eq!(
@@ -1459,7 +1538,7 @@ mod tests {
         let mut e = ExternalIp::default();
         // Thousands of reporters keep only the last WINDOW votes.
         for i in 0..5000u32 {
-            let reporter = IpAddr::from(i.to_be_bytes());
+            let reporter = IpAddr::from((i << 8).to_be_bytes());
             let reported = SocketAddr::from(([10, 0, (i % 7) as u8, 1], 1));
             e.vote(reporter, reported);
         }
@@ -1469,6 +1548,59 @@ mod tests {
         assert_eq!((t.ip, t.port), (None, None));
         assert!(t.agreeing <= ExternalIp::WINDOW / 7 + 1);
         assert_eq!(ExternalIp::default().tally(), ExternalVotes::default());
+    }
+
+    #[test]
+    fn families_are_tallied_apart_and_v6_votes_per_64() {
+        let mut e = ExternalIp::default();
+        let me4: SocketAddr = "203.0.113.9:6881".parse().unwrap();
+        let me6: SocketAddr = "[2001:db8::9]:6881".parse().unwrap();
+        // Many IPv6 hosts of one /64 are one voter.
+        for i in 1..100u16 {
+            let r = IpAddr::from([0x2001, 0xdb8, 1, 1, 0, 0, 0, i]);
+            e.vote(r, me6);
+        }
+        assert_eq!(ExternalIp::tally_of(&e.v6).voters, 1);
+        // IPv6 reports don't dilute an IPv4 majority.
+        for i in 1..=5u16 {
+            e.vote(IpAddr::from([0x2001, 0xdb8, i + 1, 0, 0, 0, 0, 1]), me6);
+        }
+        for i in 1..=5u8 {
+            e.vote(IpAddr::from([9, 9, i, 1]), me4);
+        }
+        let t = e.tally();
+        assert_eq!((t.ip, t.voters, t.agreeing), (Some(me4.ip()), 5, 5));
+        // Without an IPv4 majority, the IPv6 one is reported.
+        let mut only6 = ExternalIp::default();
+        for i in 1..=5u16 {
+            only6.vote(IpAddr::from([0x2001, 0xdb8, i, 0, 0, 0, 0, 1]), me6);
+        }
+        assert_eq!(only6.tally().ip, Some(me6.ip()));
+        // A v4-mapped reporter counts as its IPv4 network.
+        assert_eq!(
+            network("::ffff:1.2.3.4".parse().unwrap()),
+            network("1.2.3.200".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn unsolicited_sources_are_distinct_networks_and_bounded() {
+        let mut u = UnsolicitedFrom::default();
+        let t0 = Instant::now();
+        // Many hosts of one /24 are one source, at its latest query.
+        for i in 1..50u8 {
+            u.note(IpAddr::from([5, 5, 5, i]), t0);
+        }
+        u.note("5.5.5.1".parse().unwrap(), t0 + Duration::from_secs(5));
+        assert_eq!(u.ages(t0 + Duration::from_secs(5)), vec![Duration::ZERO]);
+        // Bounded: the oldest networks make room for new ones.
+        for i in 0..200u32 {
+            let t = t0 + Duration::from_secs(10 + u64::from(i));
+            u.note(IpAddr::from((i << 8 | 0x0a00_0000).to_be_bytes()), t);
+        }
+        let ages = u.ages(t0 + Duration::from_secs(300));
+        assert_eq!(ages.len(), UNSOLICITED_SOURCES);
+        assert!(ages.iter().all(|a| *a <= Duration::from_secs(300 - 146)));
     }
 
     #[test]

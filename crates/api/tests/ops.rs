@@ -15,9 +15,9 @@ use axum::body::Body;
 use axum::extract::ConnectInfo;
 use axum::http::{Request, header};
 use lodestar_api::ops::{
-    BoxFuture, ConsentClass, CrawlerIntensity, CrawlerRuntime, DhtStatus, ExternalAddress,
-    FetchStatus, NetworkCheck, OpsApi, OpsError, PortMapping, ReachReason, RiskLevel, Source,
-    SourceHealth, SourceKind, SourcePatch, SourcePriority, SourceState, StatsResponse,
+    BoxFuture, ConsentClass, CrawlerRuntime, DhtStatus, ExternalAddress, FetchStatus, NetworkCheck,
+    OpsApi, OpsError, PortMapping, ReachReason, RiskLevel, Source, SourceHealth, SourceKind,
+    SourcePatch, SourcePriority, SourceState, StatsResponse,
 };
 use lodestar_api::settings::{
     SectionValues, SettingSource, SettingValue, SettingsApi, SettingsError, SettingsIndex,
@@ -31,7 +31,7 @@ use tower::ServiceExt;
 /// The registry's crawler section, as far as these routes read it.
 #[derive(Debug)]
 struct FakeSettings {
-    values: Mutex<BTreeMap<String, Value>>,
+    values: Arc<Mutex<BTreeMap<String, Value>>>,
     intensity_env: Option<String>,
 }
 
@@ -89,6 +89,8 @@ impl SettingsApi for FakeSettings {
 
 #[derive(Debug, Default)]
 struct FakeOps {
+    /// The settings' values, which `sync_crawler` applies.
+    values: Arc<Mutex<BTreeMap<String, Value>>>,
     paused: Mutex<bool>,
     calls: Mutex<Vec<String>>,
     sources: Mutex<Vec<Source>>,
@@ -163,18 +165,15 @@ impl OpsApi for FakeOps {
         }
     }
 
-    fn apply_paused(&self, paused: bool) -> BoxFuture<'_, Result<(), OpsError>> {
+    fn sync_crawler(&self) -> BoxFuture<'_, ()> {
         Box::pin(async move {
+            let values = self.values.lock().unwrap().clone();
+            let paused = values["paused"] == json!(true);
             *self.paused.lock().unwrap() = paused;
-            self.calls.lock().unwrap().push(format!("paused={paused}"));
-            Ok(())
-        })
-    }
-
-    fn note_intensity(&self, i: CrawlerIntensity) -> BoxFuture<'_, Result<(), OpsError>> {
-        Box::pin(async move {
-            self.calls.lock().unwrap().push(format!("intensity={i:?}"));
-            Ok(())
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("paused={paused} intensity={}", values["intensity"]));
         })
     }
 
@@ -246,6 +245,7 @@ impl OpsApi for FakeOps {
             reachable: Some(true),
             reason: ReachReason::UnsolicitedQueries,
             unsolicited_queries: Some(3),
+            unsolicited_sources: Some(3),
             window_s: 600,
             window_started_at: Some(1_699_999_970),
         }
@@ -265,6 +265,7 @@ impl OpsApi for FakeOps {
             reachable: None,
             reason: ReachReason::Measuring,
             unsolicited_queries: Some(0),
+            unsolicited_sources: Some(0),
             window_started_at: Some(1_700_000_100),
             ..self.network()
         })
@@ -286,14 +287,13 @@ fn fixture_with(ops: bool, intensity_env: Option<&str>) -> Fixture {
     let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
     let fake = Arc::new(FakeOps::default());
     *fake.sources.lock().unwrap() = vec![dht_source(), restricted_source()];
+    *fake.values.lock().unwrap() = [
+        ("intensity".to_string(), json!("balanced")),
+        ("paused".to_string(), json!(false)),
+    ]
+    .into();
     let settings = FakeSettings {
-        values: Mutex::new(
-            [
-                ("intensity".to_string(), json!("balanced")),
-                ("paused".to_string(), json!(false)),
-            ]
-            .into(),
-        ),
+        values: fake.values.clone(),
         intensity_env: intensity_env.map(String::from),
     };
     let app = Router::new().nest(
@@ -496,10 +496,10 @@ async fn crawler_controls() {
     assert_eq!(
         *f.ops.calls.lock().unwrap(),
         [
-            "paused=true",
-            "paused=true",
-            "paused=false",
-            "intensity=Low"
+            r#"paused=true intensity="balanced""#,
+            r#"paused=true intensity="balanced""#,
+            r#"paused=false intensity="balanced""#,
+            r#"paused=false intensity="low""#,
         ]
     );
 }

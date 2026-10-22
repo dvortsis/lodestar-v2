@@ -11,11 +11,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use lodestar_api::ops::{
-    BoxFuture, ConsentClass, CrawlerIntensity, CrawlerRuntime, DhtStatus, ExternalAddress,
-    FetchStatus, NetworkCheck, OpsApi, OpsError, PortMapping, ReachReason, RiskLevel, Source,
-    SourceHealth, SourceKind, SourcePatch, SourcePriority, SourceState, StatsResponse,
+    BoxFuture, ConsentClass, CrawlerRuntime, DhtStatus, ExternalAddress, FetchStatus, NetworkCheck,
+    OpsApi, OpsError, PortMapping, ReachReason, RiskLevel, Source, SourceHealth, SourceKind,
+    SourcePatch, SourcePriority, SourceState, StatsResponse,
 };
-use lodestar_dht::node::Intensity;
 use lodestar_pipeline::Monitor;
 use lodestar_pipeline::control::{
     self, Control, REACH_MIN_SECS, REACH_WINDOW_SECS, SourceChange, SourceError, SourceView,
@@ -24,6 +23,7 @@ use lodestar_sources::{Consent, Kind, Priority, Risk};
 use lodestar_store::SourceId;
 
 use crate::http::SearchState;
+use crate::settings::crawler::Crawler;
 
 /// What a source's `PATCH` changes now, and what waits for v0.6.
 const EDITABLE: [&str; 2] = ["enabled", "priority"];
@@ -37,6 +37,8 @@ type SizeCache = Arc<Mutex<Option<(Instant, Option<u64>)>>>;
 
 pub struct Ops {
     pub control: Control,
+    /// The registry's crawler section, applied by `sync_crawler`.
+    crawler: tokio::sync::watch::Receiver<Crawler>,
     pub monitor: Monitor,
     pub search: Option<SearchState>,
     pub data_dir: PathBuf,
@@ -54,12 +56,14 @@ impl std::fmt::Debug for Ops {
 impl Ops {
     pub fn new(
         control: Control,
+        crawler: tokio::sync::watch::Receiver<Crawler>,
         monitor: Monitor,
         search: Option<SearchState>,
         data_dir: PathBuf,
     ) -> Ops {
         Ops {
             control,
+            crawler,
             monitor,
             search,
             data_dir,
@@ -90,7 +94,7 @@ impl Ops {
         let now = crate::unix_now();
         let get = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
         let (harvested, fetched) = self.control.rates();
-        let writer_commit = get(&self.monitor.writer_stats().last_commit);
+        let last_stored = get(&self.monitor.writer_stats().last_stored);
         StatsResponse {
             data_bytes: None,
             // std can't ask for a volume's free space; the crate that can
@@ -98,9 +102,10 @@ impl Ops {
             disk_free_bytes: None,
             fetched_per_hour: fetched,
             harvested_per_hour: harvested,
-            index_lag_s: self.search.as_ref().and_then(|s| {
-                index_lag(writer_commit, s.stats.last_commit.load(Ordering::Relaxed))
-            }),
+            index_lag_s: self
+                .search
+                .as_ref()
+                .and_then(|s| index_lag(last_stored, s.stats.last_commit.load(Ordering::Relaxed))),
             paused: self.control.status().paused,
             queue_depth: get(&self.monitor.pool_stats().pending),
             searchable_torrents: self.search.as_ref().map(|s| s.index.index().num_docs()),
@@ -111,10 +116,16 @@ impl Ops {
     }
 }
 
-/// Seconds the index's last commit trails the store's; `None` when
-/// either hasn't committed since the start (0).
-fn index_lag(writer_commit: u64, index_commit: u64) -> Option<u64> {
-    (writer_commit > 0 && index_commit > 0).then(|| writer_commit.saturating_sub(index_commit))
+/// Seconds the index's last commit trails the store's last commit of
+/// new torrents: 0 once the index has caught up (it commits only when it
+/// has something new), and 0 when nothing new was stored since the
+/// start. `None` when torrents wait but the index hasn't committed yet.
+fn index_lag(last_stored: u64, index_commit: u64) -> Option<u64> {
+    match (last_stored, index_commit) {
+        (0, _) => Some(0),
+        (_, 0) => None,
+        (s, i) => Some(s.saturating_sub(i)),
+    }
 }
 
 /// Bytes in the files under `dir`, not following links; `None` if it
@@ -171,14 +182,6 @@ fn priority_back(p: SourcePriority) -> Priority {
         SourcePriority::Normal => Priority::Normal,
         SourcePriority::High => Priority::High,
         SourcePriority::Max => Priority::Max,
-    }
-}
-
-fn intensity(i: CrawlerIntensity) -> Intensity {
-    match i {
-        CrawlerIntensity::Low => Intensity::Low,
-        CrawlerIntensity::Balanced => Intensity::Balanced,
-        CrawlerIntensity::Aggressive => Intensity::Aggressive,
     }
 }
 
@@ -253,23 +256,14 @@ impl OpsApi for Ops {
         }
     }
 
-    fn apply_paused(&self, paused: bool) -> BoxFuture<'_, Result<(), OpsError>> {
+    fn sync_crawler(&self) -> BoxFuture<'_, ()> {
         Box::pin(async move {
             self.control
-                .set_paused(paused)
-                .await
-                .map(drop)
-                .map_err(internal)
-        })
-    }
-
-    fn note_intensity(&self, i: CrawlerIntensity) -> BoxFuture<'_, Result<(), OpsError>> {
-        Box::pin(async move {
-            self.control
-                .note_intensity(intensity(i))
-                .await
-                .map(drop)
-                .map_err(internal)
+                .sync(|| {
+                    let c = self.crawler.borrow();
+                    (c.paused, c.intensity.into())
+                })
+                .await;
         })
     }
 
@@ -346,9 +340,11 @@ fn network(n: control::NetworkCheck) -> NetworkCheck {
             control::ReachReason::Bootstrapping => ReachReason::Bootstrapping,
             control::ReachReason::Measuring => ReachReason::Measuring,
             control::ReachReason::UnsolicitedQueries => ReachReason::UnsolicitedQueries,
+            control::ReachReason::FewUnsolicitedSources => ReachReason::FewUnsolicitedSources,
             control::ReachReason::NoUnsolicitedQueries => ReachReason::NoUnsolicitedQueries,
         },
         unsolicited_queries: r.unsolicited,
+        unsolicited_sources: r.sources,
         window_s: REACH_WINDOW_SECS,
         window_started_at: n.window_started_at,
     }

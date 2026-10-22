@@ -68,11 +68,12 @@ pub struct CrawlerRuntime {
 /// What these routes ask of the running process.
 pub trait OpsApi: Send + Sync + fmt::Debug {
     fn crawler(&self) -> CrawlerRuntime;
-    /// Pauses or resumes the pipeline now and records it; a no-op when
-    /// it already is.
-    fn apply_paused(&self, paused: bool) -> BoxFuture<'_, Result<(), OpsError>>;
-    /// Records an intensity change (the node follows the registry).
-    fn note_intensity(&self, intensity: CrawlerIntensity) -> BoxFuture<'_, Result<(), OpsError>>;
+    /// Applies the registry's `crawler` section as it is *now* (pause,
+    /// and the intensity's event), after a save. It reads the section
+    /// under the same lock every change takes, so concurrent saves leave
+    /// the process as the registry says, whatever order they finish in.
+    /// Recording an event is best effort: the change applies regardless.
+    fn sync_crawler(&self) -> BoxFuture<'_, ()>;
     fn stats(&self) -> BoxFuture<'_, StatsResponse>;
     fn sources(&self) -> BoxFuture<'_, Result<Vec<Source>, OpsError>>;
     /// Applies `patch` (its not-yet-editable fields already refused).
@@ -267,7 +268,7 @@ pub(crate) async fn patch_crawler(
     let ops = ops(&s)?;
     let value = serde_json::to_value(body.intensity).map_err(internal)?;
     save(&s, "intensity", value).await?;
-    ops.note_intensity(body.intensity).await?;
+    ops.sync_crawler().await;
     status(&s).await.map(Json)
 }
 
@@ -279,7 +280,7 @@ async fn set_paused(
     same_origin_json(&headers)?;
     let ops = ops(&s)?;
     save(&s, "paused", Value::Bool(paused)).await?;
-    ops.apply_paused(paused).await?;
+    ops.sync_crawler().await;
     status(&s).await.map(Json)
 }
 

@@ -8,8 +8,9 @@
 //!   nodes (`NodeHandle::set_paused`), and the fetch pool starts no
 //!   fetches or lookups (`PoolHandle::set_paused`). What's in flight
 //!   finishes or times out; the writer and indexer go on. The paused
-//!   state itself is the settings registry's (`crawler.paused`): the
-//!   binary hands each change to [`Control::set_paused`].
+//!   state itself is the settings registry's (`crawler.paused`): after
+//!   each change the binary calls [`Control::sync`], which applies the
+//!   registry's value as it is then.
 //! - **Events:** every pause, resume and intensity change is an `events`
 //!   row ([`crate::event`]), written through the control connection.
 //! - **Rates and reachability** come from one sampler task reading the
@@ -25,7 +26,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use lodestar_dht::node::{ExternalVotes, Intensity, StatsSnapshot};
-use lodestar_sources::{Consent, Priority, Stage};
+use lodestar_sources::{Consent, Priority, SourcePlugin, Stage};
 use lodestar_store::{Event, SourceId, SourceState, Store, WriteBatch};
 use tokio::time::Instant;
 
@@ -45,6 +46,10 @@ pub const REACH_WINDOW_SECS: u64 = 600;
 /// ...and says nothing until the window has run this long after
 /// bootstrap (or a restart of the check).
 pub const REACH_MIN_SECS: u64 = 120;
+/// Distinct networks (/24 or /64) that must reach us unsolicited in the
+/// window before we call the port open: one stray query (a neighbour
+/// whose NAT mapping we can't see, a spoofed packet) isn't enough.
+pub const MIN_UNSOLICITED_SOURCES: u64 = 3;
 /// The check can be restarted at most this often.
 pub const RESTART_EVERY_SECS: u64 = 30;
 /// Samples kept: the longest window, plus one.
@@ -140,6 +145,9 @@ struct Samples {
     bootstrapped_at: Option<u64>,
     last_restart: Option<u64>,
     external: ExternalVotes,
+    /// When (sample time) each recent network last reached us
+    /// unsolicited, from the node's snapshot.
+    unsolicited_at: Vec<u64>,
 }
 
 impl Samples {
@@ -172,6 +180,7 @@ impl Samples {
             reason,
             inbound: None,
             unsolicited: None,
+            sources: None,
             measured_secs: 0,
         };
         if !dht_on {
@@ -195,10 +204,13 @@ impl Samples {
         let inbound = h.queries_in.saturating_sub(b.queries_in);
         let unsolicited = h.unsolicited.saturating_sub(b.unsolicited);
         let measured_secs = head.t - base;
+        let sources = self.unsolicited_at.iter().filter(|t| **t >= from).count() as u64;
         let (reachable, reason) = if head.t - start < REACH_MIN_SECS {
             (None, ReachReason::Measuring)
-        } else if unsolicited > 0 {
+        } else if sources >= MIN_UNSOLICITED_SOURCES {
             (Some(true), ReachReason::UnsolicitedQueries)
+        } else if sources > 0 {
+            (Some(false), ReachReason::FewUnsolicitedSources)
         } else {
             (Some(false), ReachReason::NoUnsolicitedQueries)
         };
@@ -207,6 +219,7 @@ impl Samples {
             reason,
             inbound: Some(inbound),
             unsolicited: Some(unsolicited),
+            sources: Some(sources),
             measured_secs,
         }
     }
@@ -221,8 +234,11 @@ pub enum ReachReason {
     Bootstrapping,
     /// Not long enough since bootstrap or a restart of the check.
     Measuring,
-    /// Nodes we never queried are reaching us.
+    /// Nodes we never queried are reaching us, from at least
+    /// [`MIN_UNSOLICITED_SOURCES`] networks.
     UnsolicitedQueries,
+    /// Some did, but from too few networks to tell.
+    FewUnsolicitedSources,
     /// None did in the window: the port looks closed to inbound packets.
     NoUnsolicitedQueries,
 }
@@ -236,6 +252,8 @@ pub struct Reachability {
     pub inbound: Option<u64>,
     /// Of those, from nodes we never queried.
     pub unsolicited: Option<u64>,
+    /// Distinct networks (/24 or /64) those came from.
+    pub sources: Option<u64>,
     /// Seconds the evidence covers.
     pub measured_secs: u64,
 }
@@ -366,18 +384,25 @@ impl Control {
         paused: bool,
         intensity: Intensity,
     ) -> Result<Control, Error> {
+        // A DHT whose stored state kept it from starting is off.
+        let dht = dht.filter(|d| {
+            let id = d.manifest().id;
+            monitor
+                .sources()
+                .iter()
+                .any(|s| s.plugin == id && s.enabled)
+        });
         // A pause that outlived a restart dates from the pause itself.
         let started_at = monitor.started_at();
         let since = {
             let store = store.clone();
             tokio::task::spawn_blocking(move || {
-                let events = store.lock().expect("store lock").events(0, i64::MAX)?;
+                let last = store
+                    .lock()
+                    .expect("store lock")
+                    .last_event(&[event::PAUSE, event::RESUME])?;
                 Ok::<_, Error>(
-                    events
-                        .iter()
-                        .rev()
-                        .find(|e| e.kind == event::PAUSE || e.kind == event::RESUME)
-                        .filter(|e| paused && e.kind == event::PAUSE)
+                    last.filter(|e| paused && e.kind == event::PAUSE)
                         .map_or(started_at, |e| e.at),
                 )
             })
@@ -419,42 +444,72 @@ impl Control {
         self.inner.epoch.elapsed().as_secs()
     }
 
+    /// Applies the crawler settings as they are *now*: `current` is read
+    /// under the same lock every change goes through, so after any number
+    /// of concurrent saves the last one to finish applies the newest
+    /// value, and the process never stays out of step with the registry.
+    /// Each change is recorded once ([`crate::event`]).
+    pub async fn sync(&self, current: impl FnOnce() -> (bool, Intensity)) {
+        let _one = self.inner.toggle.lock().await;
+        let (paused, intensity) = current();
+        self.apply_paused(paused).await;
+        self.apply_intensity(intensity).await;
+    }
+
     /// Pauses or resumes harvesting and fetching, and records it.
     /// Idempotent: `false` (and nothing recorded) when it already was.
-    pub async fn set_paused(&self, paused: bool) -> Result<bool, Error> {
+    pub async fn set_paused(&self, paused: bool) -> bool {
         let _one = self.inner.toggle.lock().await;
+        self.apply_paused(paused).await
+    }
+
+    /// Records an intensity change (the node takes it from the settings
+    /// registry). `false` when it's the one recorded last.
+    pub async fn note_intensity(&self, intensity: Intensity) -> bool {
+        let _one = self.inner.toggle.lock().await;
+        self.apply_intensity(intensity).await
+    }
+
+    /// With `toggle` held.
+    async fn apply_paused(&self, paused: bool) -> bool {
         if self.state().paused == paused {
-            return Ok(false);
+            return false;
         }
         self.inner.monitor.pool().set_paused(paused).await;
         if let Some(dht) = &self.inner.dht {
             dht.set_paused(paused);
         }
-        let now = unix_now();
         {
             let mut st = self.state();
             st.paused = paused;
-            st.since = now;
+            st.since = unix_now();
         }
-        let kind = if paused { event::PAUSE } else { event::RESUME };
-        self.record(kind, String::new()).await?;
         tracing::info!("crawler {}", if paused { "paused" } else { "resumed" });
-        Ok(true)
+        let kind = if paused { event::PAUSE } else { event::RESUME };
+        // The pause is applied either way; a lost event costs Insights a
+        // gap annotation, not the user their pause.
+        if let Err(e) = self.record(kind, String::new()).await {
+            tracing::error!("crawler: recording the pause event failed: {e}");
+        }
+        true
     }
 
-    /// Records an intensity change (the node takes it from the settings
-    /// registry). `false` when it's the one recorded last.
-    pub async fn note_intensity(&self, intensity: Intensity) -> Result<bool, Error> {
+    /// With `toggle` held.
+    async fn apply_intensity(&self, intensity: Intensity) -> bool {
         {
             let mut st = self.state();
             if st.intensity == intensity {
-                return Ok(false);
+                return false;
             }
             st.intensity = intensity;
         }
-        self.record(event::INTENSITY, intensity_name(intensity).into())
-            .await?;
-        Ok(true)
+        if let Err(e) = self
+            .record(event::INTENSITY, intensity_name(intensity).into())
+            .await
+        {
+            tracing::error!("crawler: recording the intensity event failed: {e}");
+        }
+        true
     }
 
     async fn record(&self, kind: u32, detail: String) -> Result<(), Error> {
@@ -501,8 +556,12 @@ impl Control {
     }
 
     /// Keys harvested and info dicts fetched per hour, over the last
-    /// [`RATE_WINDOW_SECS`]; `None` until enough has been sampled.
+    /// [`RATE_WINDOW_SECS`]; `None` until enough has been sampled, and
+    /// while paused (a gap, not a zero: §10.9).
     pub fn rates(&self) -> (Option<f64>, Option<f64>) {
+        if self.state().paused {
+            return (None, None);
+        }
         let s = self.inner.samples.lock().expect("samples lock");
         (s.per_hour(|x| x.received), s.per_hour(|x| x.fetched))
     }
@@ -529,9 +588,9 @@ impl Control {
                 return Err(last + RESTART_EVERY_SECS - now);
             }
             s.last_restart = Some(now);
+            // The ring stays: the rates read it too.
             s.window_from = now;
             s.bootstrapped_at = None;
-            s.ring.clear();
         }
         self.sample_now();
         Ok(self.network())
@@ -671,7 +730,14 @@ async fn sampler(inner: Weak<Inner>) {
         if let Some(node) = node
             && let Some(snap) = node.snapshot().await
         {
-            inner.samples.lock().expect("samples lock").external = snap.external;
+            let t = inner.epoch.elapsed().as_secs();
+            let mut s = inner.samples.lock().expect("samples lock");
+            s.external = snap.external;
+            s.unsolicited_at = snap
+                .unsolicited_sources
+                .iter()
+                .map(|age| t.saturating_sub(age.as_secs()))
+                .collect();
         }
     }
 }
@@ -702,7 +768,7 @@ mod tests {
         assert_eq!(ring.per_hour(|x| x.received), None, "under a minute");
         ring.push(s(60, 120, None));
         assert_eq!(ring.per_hour(|x| x.received), Some(7200.0));
-        // A paused crawler measures a real zero, not a gap.
+        // Nothing new is a real zero, not a gap (a pause is: `rates`).
         let mut idle = Samples::default();
         idle.push(s(0, 5, None));
         idle.push(s(90, 5, None));
@@ -732,6 +798,17 @@ mod tests {
         );
         assert_eq!((early.inbound, early.unsolicited), (Some(7), Some(2)));
         r.push(s(130, 0, Some((20, 2, 30))));
+        // Two networks aren't enough...
+        r.unsolicited_at = vec![40, 60];
+        let few = r.reachability(true);
+        assert_eq!(
+            (few.reachable, few.reason, few.sources),
+            (Some(false), ReachReason::FewUnsolicitedSources, Some(2))
+        );
+        // ...and one from before the window doesn't count.
+        r.unsolicited_at.push(5);
+        assert_eq!(r.reachability(true).sources, Some(2));
+        r.unsolicited_at.push(120);
         let open = r.reachability(true);
         assert_eq!(open.reachable, Some(true));
         assert_eq!(open.reason, ReachReason::UnsolicitedQueries);
@@ -750,10 +827,24 @@ mod tests {
         let mut a = Samples::default();
         a.push(s(0, 0, Some((0, 0, 5))));
         a.push(s(10, 0, Some((1, 1, 5))));
+        a.unsolicited_at = vec![10, 10, 10];
+        assert_eq!(a.reachability(true).reason, ReachReason::Measuring);
         for t in (20..=700).step_by(10) {
             a.push(s(t, 0, Some((1, 1, 5))));
         }
         assert_eq!(a.reachability(true).reachable, Some(false));
+
+        // Restarting the check keeps the samples the rates read.
+        let mut k = Samples::default();
+        for t in (0..=120).step_by(10) {
+            k.push(s(t, t * 10, Some((t, 0, 5))));
+        }
+        let before = k.per_hour(|x| x.received);
+        k.window_from = 120;
+        k.bootstrapped_at = None;
+        k.push(s(130, 1300, Some((130, 0, 5))));
+        assert!(before.is_some() && k.per_hour(|x| x.received).is_some());
+        assert_eq!(k.reachability(true).reason, ReachReason::Measuring);
     }
 
     #[test]

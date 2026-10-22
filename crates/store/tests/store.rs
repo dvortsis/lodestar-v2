@@ -438,6 +438,26 @@ fn counters_add_up_inside_writes() {
     assert_eq!(store.cohorts(0, i64::MAX).unwrap(), vec![cohort(8)]);
     assert_eq!(store.events(0, i64::MAX).unwrap(), events);
     assert_eq!(store.count().unwrap(), 1);
+    // The newest event of the asked kinds, by insertion order.
+    let ev = |at, kind| Event {
+        at,
+        kind,
+        detail: String::new(),
+    };
+    store
+        .write(&WriteBatch {
+            events: &[ev(10, 3), ev(5, 4), ev(20, 9)],
+            ..WriteBatch::default()
+        })
+        .unwrap();
+    assert_eq!(store.last_event(&[3, 4]).unwrap(), Some(ev(5, 4)));
+    assert_eq!(store.last_event(&[3]).unwrap(), Some(ev(10, 3)));
+    assert_eq!(
+        store.last_event(&[1]).unwrap().map(|e| e.at),
+        Some(1_692_000_000)
+    );
+    assert_eq!(store.last_event(&[42]).unwrap(), None);
+    assert_eq!(store.last_event(&[]).unwrap(), None);
 }
 
 #[test]

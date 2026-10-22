@@ -209,8 +209,10 @@ impl Services {
             index: SearchHandle::serving(s.clone()),
             stats: s.stats(),
         });
+        let paused_now = crawl.clone();
         let ops = Arc::new(ops::Ops::new(
             crawl,
+            settings.subscribe(),
             pipeline.monitor(),
             search_state.clone(),
             config.data_dir.clone(),
@@ -236,6 +238,7 @@ impl Services {
         // rebuild progress.
         let crawler = {
             let (monitor, dht) = (http.monitor.clone(), http.dht.clone());
+            let control = paused_now;
             move || {
                 let get = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
                 let p = monitor.pool_stats();
@@ -249,6 +252,7 @@ impl Services {
                     fetch_pending: get(&p.pending),
                     fetched: get(&p.fetched),
                     harvested: get(&monitor.intake_stats().received),
+                    paused: control.status().paused,
                     stored: get(&monitor.writer_stats().stored),
                     torrents: monitor.torrents(),
                 }

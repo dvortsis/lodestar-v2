@@ -325,10 +325,14 @@ pub struct Snapshot {
     pub paused: bool,
     /// What other nodes report as our address.
     pub external: ExternalVotes,
+    /// How long ago each of the most recent distinct networks (/24 or
+    /// /64, at most 64) last sent a query we didn't solicit.
+    pub unsolicited_sources: Vec<std::time::Duration>,
 }
 
 /// The external address other nodes say they see us at (the BEP 42 `ip`
-/// key of their replies), tallied over the last 32 distinct reporters.
+/// key of their replies), tallied over the last 32 distinct reporting
+/// networks (one vote per /24 or /64), IPv4 and IPv6 apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ExternalVotes {
     /// The majority address: set once at least 5 reporters agree and
@@ -337,9 +341,9 @@ pub struct ExternalVotes {
     /// The port most of those reporters saw (a NAT may rewrite it);
     /// `None` without a majority address.
     pub port: Option<u16>,
-    /// Distinct reporters in the window.
+    /// Distinct reporting networks in the window.
     pub voters: usize,
-    /// Reporters naming the leading address.
+    /// Reporting networks naming the leading address.
     pub agreeing: usize,
 }
 
