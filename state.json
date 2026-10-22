@@ -1003,10 +1003,11 @@
    "session": "session_01KNC8PugVKjddvhH6vT8qXN"
   },
   "B4b-r2": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01SK5Ci2FahQUSGQuDVozi28",
-   "notes": "follow-up of #87 review: max_id visible-only, replay toggle, swap adult test"
+   "notes": "follow-up of #87 review: max_id visible-only, replay toggle, swap adult test | 23:32 PR #104 (branch slice/B4b). Runner decision (\u00a72.19, content-safety strengthening): max_id null while Adult hidden. Reviewer started.",
+   "pr": 104
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -1106,7 +1107,8 @@
  "heartbeats": 4,
  "reviews_in_flight": [
   "88",
-  103
+  103,
+  104
  ],
  "carry_forward": {
   "next-bans-touch": [
