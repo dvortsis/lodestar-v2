@@ -20,6 +20,7 @@
 
 mod coordinator;
 mod dht;
+mod enrich;
 mod have;
 mod rollups;
 mod worker;
@@ -459,6 +460,8 @@ impl Pipeline {
         let lease_stats = coordinator.stats.clone();
         let writer = writer::Writer {
             store: Some(store),
+            backfill_after: 0,
+            backfill_done: false,
             cfg: writer::WriterConfig {
                 flush_every: config.flush_every,
                 batch_max: config.batch_max,

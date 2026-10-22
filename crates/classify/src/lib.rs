@@ -19,6 +19,7 @@ mod content;
 mod effective;
 pub mod ext;
 mod junk;
+mod record;
 mod structure;
 
 use std::collections::HashSet;
@@ -28,6 +29,7 @@ pub use content::ContentType;
 pub use effective::{Effective, ResolvedVia};
 pub use ext::Category;
 pub use junk::{Junk, JunkReason};
+pub use record::{ENRICHMENT_VERSION, Record, RecordError};
 pub use structure::Structure;
 
 /// Bumped whenever a change alters any classification, so stored

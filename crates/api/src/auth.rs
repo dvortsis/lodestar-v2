@@ -81,6 +81,9 @@ pub struct Auth {
     state: RwLock<State>,
     setup_token: Mutex<Option<String>>,
     limiter: Mutex<HashMap<IpAddr, (f64, Instant)>>,
+    /// Login attempts regained per second ([`REFILL_PER_SEC`]; tests set
+    /// 0 so slow hashing on a busy runner can't refill the bucket).
+    refill_per_sec: f64,
     secure_cookies: bool,
 }
 
@@ -125,6 +128,7 @@ impl Auth {
             }),
             setup_token: Mutex::new(token),
             limiter: Mutex::default(),
+            refill_per_sec: REFILL_PER_SEC,
             secure_cookies,
         })
     }
@@ -244,11 +248,12 @@ impl Auth {
         if limiter.len() >= LIMITER_MAX_IPS {
             // Forget IPs that have fully recovered.
             limiter.retain(|_, (tokens, at)| {
-                *tokens + now.duration_since(*at).as_secs_f64() * REFILL_PER_SEC < BURST
+                *tokens + now.duration_since(*at).as_secs_f64() * self.refill_per_sec < BURST
             });
         }
         let (tokens, at) = limiter.entry(ip).or_insert((BURST, now));
-        *tokens = (*tokens + now.duration_since(*at).as_secs_f64() * REFILL_PER_SEC).min(BURST);
+        *tokens =
+            (*tokens + now.duration_since(*at).as_secs_f64() * self.refill_per_sec).min(BURST);
         *at = now;
         if *tokens < 1.0 {
             return Err(AuthError::RateLimited);
@@ -485,7 +490,8 @@ mod tests {
 
     #[test]
     fn login_attempts_are_rate_limited() {
-        let (_dir, auth) = fresh();
+        let (_dir, mut auth) = fresh();
+        auth.refill_per_sec = 0.0;
         let token = auth.setup_token().unwrap();
         auth.setup(IP, &token, "correct horse battery").unwrap();
         // Setup used one attempt; four more fail on the password...

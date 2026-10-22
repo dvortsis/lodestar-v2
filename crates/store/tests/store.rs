@@ -692,3 +692,53 @@ fn a_prepared_fetch_upgrades_a_partial_import() {
     assert_eq!(row.flags & flags::FILES_PARTIAL, 0);
     assert_ne!(row.flags & flags::IMPORTED, 0);
 }
+
+fn enriched(version: i64, junk: u8) -> lodestar_store::Enriched {
+    lodestar_store::Enriched {
+        version,
+        content_type: 1,
+        junk_score: junk,
+        comp: vec![1, 1, 1, 5],
+        data: b"title\tShow".to_vec(),
+    }
+}
+
+#[test]
+fn enrichment_is_stored_with_a_prepared_torrent_and_backfilled() {
+    let mut store = mem();
+    // One torrent prepared with enrichment, one inserted without (an
+    // import, or stored before enrichment existed).
+    let raw = season("Show.S01", 2);
+    let info = Info::parse(&raw).unwrap();
+    let mut p = store.preparer().prepare(&info, Some(&raw)).unwrap();
+    p.enrichment = Some(enriched(7, 0));
+    let Inserted::New(a) = commit(&mut store, &p) else {
+        panic!()
+    };
+    assert_eq!(store.enrichment(a).unwrap(), Some(enriched(7, 0)));
+    let raw_b = season("Other", 1);
+    let info_b = Info::parse(&raw_b).unwrap();
+    let b = store.insert(&[new(&info_b, &raw_b)]).unwrap()[0].id();
+    assert_eq!(store.enrichment(b).unwrap(), None);
+
+    // The backfill scan finds the missing one, and the outdated one for a
+    // newer version.
+    assert_eq!(store.unenriched(0, 7, 10).unwrap(), vec![b]);
+    assert_eq!(store.unenriched(0, 8, 10).unwrap(), vec![a, b]);
+    assert_eq!(store.unenriched(a, 8, 10).unwrap(), vec![b]);
+
+    let seq = store.reindex_after(0, 100).unwrap().len();
+    assert_eq!(
+        store
+            .set_enrichments(&[(b, enriched(8, 40)), (999, enriched(8, 0))])
+            .unwrap(),
+        1,
+        "missing ids are skipped"
+    );
+    assert_eq!(store.enrichment(b).unwrap(), Some(enriched(8, 40)));
+    assert_eq!(store.unenriched(0, 8, 10).unwrap(), vec![a]);
+    // Re-enriched torrents are queued for re-indexing.
+    let log = store.reindex_after(0, 100).unwrap();
+    assert_eq!(log.len(), seq + 1);
+    assert_eq!(log.last().unwrap().1, b);
+}

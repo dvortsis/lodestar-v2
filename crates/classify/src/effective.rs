@@ -28,6 +28,16 @@ impl ResolvedVia {
             ResolvedVia::Structure => "structure",
         }
     }
+
+    pub fn from_name(name: &str) -> Option<ResolvedVia> {
+        [
+            ResolvedVia::File,
+            ResolvedVia::Folder,
+            ResolvedVia::Structure,
+        ]
+        .into_iter()
+        .find(|v| v.as_str() == name)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

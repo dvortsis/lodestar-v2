@@ -69,6 +69,14 @@ impl Structure {
         self.0 |= other.0;
     }
 
+    /// The fingerprint called `name` (as `has:` spells it).
+    pub fn from_name(name: &str) -> Option<Structure> {
+        Self::NAMED
+            .iter()
+            .find(|(_, n)| *n == name)
+            .map(|(s, _)| *s)
+    }
+
     /// The names of the fingerprints present, in a fixed order.
     pub fn names(self) -> impl Iterator<Item = &'static str> {
         Self::NAMED

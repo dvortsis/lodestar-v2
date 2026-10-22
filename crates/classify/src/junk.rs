@@ -60,6 +60,23 @@ impl JunkReason {
         }
     }
 
+    pub fn from_key(key: &str) -> Option<JunkReason> {
+        use JunkReason::*;
+        [
+            PaddingOnly,
+            Empty,
+            DoubleExtension,
+            Executable,
+            WebShortcut,
+            LureFile,
+            NameMismatch,
+            ArchiveForMedia,
+            TinyVideo,
+        ]
+        .into_iter()
+        .find(|r| r.as_str() == key)
+    }
+
     /// The "why" tooltip text (§10.14 voice: plain, specific).
     pub fn describe(self) -> &'static str {
         match self {
