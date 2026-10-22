@@ -277,7 +277,7 @@ Each item is one PR of about 1,500 changed lines or fewer. **[M]** = main sessio
   - WiX MSI via cargo-wix: service, firewall rules, opt-in Defender exclusion, Start-menu shortcut. Plus a portable zip.
   - A systemd unit, tarballs and the full `release.yml` matrix.
   - Smoke jobs: Docker; Windows MSI → service → `/healthz`; Linux tarball.
-  - `docs/operations.md`.
+  - **The user guide** (`docs/user/`, per the `user-docs` skill and owner's decision §2.14). Get started for Unraid, Docker, Windows and Linux, the common how-tos, and the explanations, with screenshots from `S-doc-shots` and Mermaid diagrams. `docs/operations.md` is rewritten for the same reader, or folded into the guide. It's written today for readers who already know Docker, ports and environment variables.
 - **Owner actions:** a code-signing certificate and the Unraid CA submission.
 
 ### P4: v0.6 (overlaps P3)

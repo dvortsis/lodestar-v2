@@ -286,6 +286,18 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
       - an offline, password-protected **recovery key** (`67922DDF005FD310`) that only signs key changes.
 
       The public keys are in `packaging/keys/`.
+14. **User documentation is written for moderately tech-savvy users, not experts** (owner, 2026-10-22, settings session: "add rules to write documentation for moderately-tech-savvy users, rather than users who actually know what they're doing. That means explaining things more, create/ provide diagrams and screenshots when possible").
+    - The rules are in the project skill `user-docs` (`.claude/skills/user-docs/SKILL.md`), referenced from `CLAUDE.md` and `runner/standards.md` §4b.
+    - **The rules:**
+      - explain why before how, and define every term on first use;
+      - one action per step, with a check after each change;
+      - per-platform sections;
+      - warnings, with the undo, before risky steps;
+      - "If something went wrong" on every guide;
+      - screenshots for every Lodestar screen a guide uses, captured automatically from fixture data;
+      - Mermaid diagrams for anything that flows or connects, each with a text equivalent.
+    - No ready-made skill fitted. The owner's `dvortsis/skills` covers UI design only, and its `infographic-design` informs the diagrams.
+    - **Scope:** the README, `docs/user/`, `docs/operations.md`, release notes and in-app help. Developer and contract docs are exempt.
 
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
