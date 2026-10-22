@@ -287,6 +287,19 @@ mod tests {
         (hook, seen)
     }
 
+    /// Only a hang takes this long. A 30 s deadline was a time budget
+    /// that a starved Windows CI runner missed (X-flakes).
+    const HANG: Duration = Duration::from_secs(300);
+
+    /// Waits until `done`, failing with `what` only on a hang.
+    fn eventually(what: &str, mut done: impl FnMut() -> bool) {
+        let start = Instant::now();
+        while !done() {
+            assert!(start.elapsed() < HANG, "{what}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
     /// Waits until the reports add up to `n` torrents.
     fn wait_for(seen: &Mutex<Vec<Committed>>, n: u64) -> Vec<Committed> {
         let start = Instant::now();
@@ -295,7 +308,7 @@ mod tests {
             if got.iter().map(|c| c.docs_added).sum::<u64>() >= n {
                 return got;
             }
-            assert!(start.elapsed() < Duration::from_secs(30), "{got:?}");
+            assert!(start.elapsed() < HANG, "{got:?}");
             std::thread::sleep(Duration::from_millis(5));
         }
     }
@@ -342,11 +355,9 @@ mod tests {
         for i in 0..3 {
             add(&mut writer, &format!("Unreported.{i}"));
         }
-        let start = Instant::now();
-        while index.watermark().unwrap() < 9 {
-            assert!(start.elapsed() < Duration::from_secs(30));
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        eventually("the watermark reaches 9", || {
+            index.watermark().unwrap() >= 9
+        });
         live.stop().unwrap();
         assert_eq!(seen.lock().unwrap().len(), 2);
     }
@@ -370,11 +381,9 @@ mod tests {
         lodestar_pipeline::enrich::enrich_stored(&mut writer, 0, 100)
             .unwrap()
             .unwrap();
-        let start = Instant::now();
-        while stats.commits.load(Ordering::Relaxed) == commits {
-            assert!(start.elapsed() < Duration::from_secs(30));
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        eventually("a commit for the re-index", || {
+            stats.commits.load(Ordering::Relaxed) != commits
+        });
         live.stop().unwrap();
         assert_eq!(seen.lock().unwrap().len(), 1);
     }
@@ -439,11 +448,7 @@ mod tests {
             })
         };
         hold.store(false, Ordering::Relaxed);
-        let start = Instant::now();
-        while serving.rebuilding() {
-            assert!(start.elapsed() < Duration::from_secs(30));
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        eventually("the rebuild finishes", || !serving.rebuilding());
         adding.join().unwrap();
         // After it: the new index's indexer reports to the same hook.
         add(&mut writer, "After.Swap");
