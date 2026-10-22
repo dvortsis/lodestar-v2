@@ -227,16 +227,22 @@ pub(crate) fn detect(
     let mut s = Signals::default();
     s.scan(name);
     if let Some(f) = largest {
-        s.scan(f.name());
+        // Every segment, so a tag on the folder counts when the torrent
+        // name is a hash and the file a bare `video.mp4`.
+        for segment in &f.path {
+            s.scan(segment);
+        }
     }
     let score = s.score(release);
     if score < ADULT_THRESHOLD {
         return None;
     }
+    // Every type gets its nearest kind, as an Is adult correction gives:
+    // a name with no known extension (Other) is a Scene, an Ebook is
+    // Comics. They need no more than the threshold, since the same
+    // signals and counters decide every type.
     let kind = match base {
         ContentType::Movie if s.scene_date => AdultKind::Scene,
-        // No adult kind fits: the torrent keeps its type.
-        ContentType::Ebook | ContentType::Other | ContentType::Adult => return None,
         _ => forced_kind(base),
     };
     let kind = match kind {
@@ -246,9 +252,8 @@ pub(crate) fn detect(
     Some((kind, score))
 }
 
-/// The adult kind for a torrent of type `base`. When you say a torrent is
-/// adult, the types detection leaves alone get the nearest kind too:
-/// Ebook as Comics, Other as Scene.
+/// The adult kind for a torrent of type `base`, the nearest one where no
+/// kind fits exactly: Ebook as Comics, Other as Scene.
 pub(crate) fn forced_kind(base: ContentType) -> AdultKind {
     match base {
         ContentType::Movie => AdultKind::Movie,
@@ -305,6 +310,37 @@ mod tests {
         assert!(score("Show.Porn.Milf.S01E02.1080p") < ADULT_THRESHOLD);
         assert_eq!(score("Sex.Education.S01.1080p.NF.WEB-DL"), 0);
         assert_eq!(score("Sex.and.the.City.2008.1080p"), 0);
+    }
+
+    #[test]
+    fn every_type_gets_a_kind() {
+        let at = |name: &str, base| {
+            detect(name, &lodestar_release_parser::parse(name), None, base).map(|(k, _)| k)
+        };
+        let name = "Lantern.Bay.Parody.XXX.1080p";
+        for base in ContentType::ALL {
+            assert_eq!(at(name, base), Some(forced_kind(base)), "{base:?}");
+        }
+        assert_eq!(at(name, ContentType::Other), Some(AdultKind::Scene));
+        assert_eq!(at(name, ContentType::Ebook), Some(AdultKind::Comics));
+        // VR words turn Other's Scene into VR, but not Ebook's Comics.
+        let vr = "Lantern.Bay.Parody.XXX.VR180.LR";
+        assert_eq!(at(vr, ContentType::Other), Some(AdultKind::Vr));
+        assert_eq!(at(vr, ContentType::Ebook), Some(AdultKind::Comics));
+        // Below the threshold nothing changes, whatever the type.
+        for base in ContentType::ALL {
+            assert_eq!(at("Irvine Welsh - Porno (2002)", base), None);
+        }
+    }
+
+    #[test]
+    fn largest_file_folders_count() {
+        let f = FileInfo::new(vec!["Some.Title.XXX.1080p".into(), "video.mp4".into()], 1);
+        let r = lodestar_release_parser::parse("a1b2c3d4");
+        assert!(detect("a1b2c3d4", &r, Some(&f), ContentType::Video).is_some());
+        // A counter on the folder counts too.
+        let f = FileInfo::new(vec!["Documentary".into(), "Porn.Milf.mp4".into()], 1);
+        assert!(detect("a1b2c3d4", &r, Some(&f), ContentType::Video).is_none());
     }
 
     #[test]
