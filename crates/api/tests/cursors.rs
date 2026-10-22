@@ -87,6 +87,7 @@ fn fixture(n: usize) -> Fixture {
             index: Some(index.clone().into()),
             reader: Arc::new(Mutex::new(reader)),
             filters: None,
+            settings: None,
         }),
     );
     let mut f = Fixture {
