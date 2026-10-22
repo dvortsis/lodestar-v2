@@ -272,7 +272,7 @@ impl Store {
             + tx.execute("DELETE FROM quarantine WHERE hash = ?1", [&hash[..]])?;
         tx.commit()?;
         if n > 0 {
-            self.scrub_wal()?;
+            self.scrub_wal();
         }
         Ok(n > 0)
     }
@@ -298,7 +298,7 @@ impl Store {
         }
         tx.commit()?;
         if !ids.is_empty() {
-            self.scrub_wal()?;
+            self.scrub_wal();
         }
         Ok(ids)
     }
@@ -378,8 +378,8 @@ impl Store {
         let purged = tx.execute("DELETE FROM quarantine WHERE expires_at <= ?1", [now])?;
         let hits = tx.execute("DELETE FROM filter_hits WHERE at < ?1", [hits_before])?;
         tx.commit()?;
-        if purged > 0 {
-            self.scrub_wal()?;
+        if purged > 0 || self.scrub_pending {
+            self.scrub_wal();
         }
         Ok((expired, hits))
     }
@@ -438,8 +438,8 @@ impl Store {
                 }
             }
         }
-        if deleted_any {
-            self.scrub_wal()?;
+        if deleted_any || self.scrub_pending {
+            self.scrub_wal();
         }
         Ok(total)
     }
@@ -447,12 +447,42 @@ impl Store {
     /// After deleting sealed names or torrents: secure_delete zeroes the
     /// freed pages in the main file, but the WAL still holds the frames
     /// written when the rows went in, until it's checkpointed and
-    /// truncated (owner decision: deleted data is overwritten). Best
-    /// effort: a reader holding an old snapshot can keep the WAL from
-    /// being truncated, and then the next checkpoint or the shutdown one
-    /// does it. A no-op for an in-memory store.
-    fn scrub_wal(&self) -> Result<()> {
-        self.checkpoint()
+    /// truncated (owner decision: deleted data is overwritten).
+    ///
+    /// Best effort, and it never fails the delete that already committed:
+    /// a reader holding an old snapshot keeps the WAL from being truncated
+    /// (SQLite waits out the busy timeout, then gives up), and so does an
+    /// I/O error. Either way `scrub_pending` is set, and the next delete or
+    /// the next purge (which runs on a timer) tries again; the shutdown
+    /// checkpoint truncates it too. A no-op for an in-memory store.
+    pub(crate) fn scrub_wal(&mut self) {
+        let done = self
+            .conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .is_ok_and(|busy| busy == 0);
+        self.scrub_pending = !done;
+    }
+
+    /// [`release`](Store::release) for many hashes in one transaction,
+    /// with one WAL scrub at the end rather than one per hash. Returns,
+    /// per hash, whether it was held.
+    pub fn release_many(&mut self, hashes: &[[u8; 20]]) -> Result<Vec<bool>> {
+        let tx = self.conn.transaction()?;
+        let mut had = Vec::with_capacity(hashes.len());
+        {
+            let mut tomb = tx.prepare_cached("DELETE FROM tombstones WHERE hash = ?1")?;
+            let mut quar = tx.prepare_cached("DELETE FROM quarantine WHERE hash = ?1")?;
+            for h in hashes {
+                had.push(tomb.execute([&h[..]])? + quar.execute([&h[..]])? > 0);
+            }
+        }
+        tx.commit()?;
+        if had.iter().any(|&h| h) {
+            self.scrub_wal();
+        }
+        Ok(had)
     }
 
     /// How many hashes each rule holds: `(rule, quarantined, tombstoned)`.

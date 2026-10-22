@@ -816,6 +816,55 @@ fn deleted_torrents_leave_no_trace_on_disk() {
     );
 }
 
+#[test]
+fn a_relabelled_torrent_held_back_leaves_no_trace_on_disk() {
+    // An Is-adult relabel (§20.9) that quarantines a stored torrent
+    // deletes it in `set_enrichments_at`: its name goes from the file and
+    // the WAL too.
+    use lodestar_store::{Filtered, Held, Refiled};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.db");
+    let mut store = Store::open(&path, StoreConfig::default()).unwrap();
+    let marker = "relabelled-torrent-marker-3e8a";
+    let raw = single(format!("Some.Name.{marker}").as_bytes(), vec![]);
+    let info = Info::parse(&raw).unwrap();
+    let [Inserted::New(id)] = store.insert(&[new(&info, &raw)]).unwrap()[..] else {
+        panic!("expected one new row");
+    };
+    let on_disk = || {
+        let mut all = std::fs::read(&path).unwrap();
+        all.extend(std::fs::read(dir.path().join("t.db-wal")).unwrap_or_default());
+        all
+    };
+    assert!(
+        contains(&on_disk(), marker.as_bytes()),
+        "the name was written"
+    );
+    let hashes = [info.primary_hash().0];
+    let refiled = Refiled {
+        id,
+        filtered: Filtered {
+            hashes: &hashes,
+            rule: "CS-5a+adult",
+            action: 4,
+            held: Some(Held::Quarantine),
+            sealed: Some(b"sealed"),
+            evidence: &[],
+            at: 10,
+            expires_at: 20,
+            adult_hold: true,
+        },
+        flags: 0,
+    };
+    let g = store.class_gen().unwrap();
+    store.set_enrichments_at(g, &[], &[refiled]).unwrap();
+    assert!(store.torrent(id).unwrap().is_none(), "the torrent is gone");
+    assert!(
+        !contains(&on_disk(), marker.as_bytes()),
+        "the relabelled torrent's name survived"
+    );
+}
+
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
