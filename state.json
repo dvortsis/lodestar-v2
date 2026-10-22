@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-22T06:53:00Z",
+ "updated_at": "2026-10-22T06:58:00Z",
  "launches": {
   "date": "2026-10-22",
   "count": 14
@@ -125,13 +125,13 @@
    "notes": ""
   },
   "W2": {
-   "status": "in_review",
+   "status": "merged",
    "model": "sonnet",
    "session": "session_01EFumqKZRWcv8y4PCvuGEV4",
    "pr": 50,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": ""
+   "notes": "approved round 1; playwright.config.ts edit accepted"
   },
   "W8": {
    "status": "merged",
@@ -719,10 +719,10 @@
    "notes": "built by the filter session in #52"
   },
   "W1c": {
-   "status": "running",
+   "status": "in_review",
    "model": "sonnet",
    "session": "session_013n3VVF4K4QtH4YeGKjACBY",
-   "pr": null,
+   "pr": 53,
    "attempt": 1,
    "review_rounds": 0,
    "notes": "gate-satisfying derivation for all 48 themes; reuses the W1 session"
@@ -788,10 +788,10 @@
   "#38 B0 r4",
   "#44 W3",
   "#41 W4",
-  "#50 W2",
   "#51 X-utp",
   "#49 X-integrations",
-  "#48 M4 PR2"
+  "#48 M4 PR2",
+  "#53 W1c"
  ],
  "carry_forward": {
   "D-docker": [
@@ -799,6 +799,13 @@
    "Templates reference ghcr.io/dvortsis/lodestar-v2:latest; update them if the registry differs",
    "Distroless has no shell: templates have no <Shell>",
    "\u00a74 data layout differs from the code (lodestar.db, index/, dht-state.bin, auth.json, seal.key, config.toml); operations.md follows the code"
+  ],
+  "next-bans-touch": [
+   "bans.mjs:241 accept '=' so class:pb-11={x} is caught",
+   "fonts.test.ts imports fontverter (transitive dep): comment or parse otherwise"
+  ],
+  "contract-docs": [
+   "design-tokens.md CJK fallback: use installed family names (\"Noto Sans CJK SC\" etc.) \u2014 \u00a710.2 wording to align"
   ]
  }
 }
