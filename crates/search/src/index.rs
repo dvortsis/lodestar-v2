@@ -118,6 +118,8 @@ pub struct SearchIndex {
     hot: Option<Arc<HotColumns>>,
     weights: RankWeights,
     penalty: Option<Penalty>,
+    /// Documents per parallel piece of a cold top-k ([`sorted`]).
+    sort_piece: u32,
     /// An older index serving during a rebuild whose schema differs from
     /// this build's: its fields are mapped by name, and documents built
     /// for this schema can't be written to it.
@@ -651,6 +653,7 @@ impl SearchIndex {
             hot: None,
             weights: RankWeights::default(),
             penalty: None,
+            sort_piece: sorted::PIECE_DOCS,
             read_only: false,
             missing: Arc::new([]),
         })
@@ -686,6 +689,15 @@ impl SearchIndex {
 
     pub fn with_penalty(mut self, penalty: Penalty) -> SearchIndex {
         self.penalty = Some(penalty);
+        self
+    }
+
+    /// Splits cold sorted searches into pieces of `docs` documents, for
+    /// tests: small indexes are otherwise one piece per segment.
+    #[doc(hidden)]
+    pub fn with_sort_pieces(mut self, docs: u32) -> SearchIndex {
+        self.sort_piece = docs.max(1);
+        self.cache.clear();
         self
     }
 
@@ -1052,6 +1064,7 @@ impl SearchIndex {
                     order,
                     hot,
                     offset..offset + limit,
+                    self.sort_piece,
                 )?;
                 (page.into_iter().map(|a| (0.0, a)).collect(), n)
             }

@@ -52,6 +52,10 @@ pub(crate) enum FastRange {
     /// time-of-day clause, checked on the candidates alone instead of
     /// scanning a segment for what to exclude.
     Not(Box<FastRange>),
+    /// Passes when any inner check does: an OR of checked clauses.
+    Any(Vec<FastRange>),
+    /// Passes when every inner check does.
+    All(Vec<FastRange>),
 }
 
 /// Wraps a collector, passing on only documents inside every range.
@@ -72,6 +76,8 @@ pub(crate) enum Check {
     /// The `discovered` column, the minutes and the zone offset.
     Time(Column<i64>, u16, u16, i32),
     Not(Box<Check>),
+    Any(Vec<Check>),
+    All(Vec<Check>),
 }
 
 /// Whether `minute` falls in `from..=to`, wrapping past midnight.
@@ -109,6 +115,8 @@ impl Check {
                 .first(doc)
                 .is_some_and(|t| in_time(minute_of_day(t, *offset), *from, *to)),
             Check::Not(inner) => !inner.passes(doc),
+            Check::Any(of) => of.iter().any(|c| c.passes(doc)),
+            Check::All(of) => of.iter().all(|c| c.passes(doc)),
         }
     }
 }
@@ -142,6 +150,8 @@ fn check(
             Check::Time(fast.i64("discovered")?, *from, *to, *offset)
         }
         FastRange::Not(inner) => Check::Not(Box::new(check(inner, reader, hot)?)),
+        FastRange::Any(of) => Check::Any(checks(of, reader, hot)?),
+        FastRange::All(of) => Check::All(checks(of, reader, hot)?),
     })
 }
 

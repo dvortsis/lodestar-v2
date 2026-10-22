@@ -288,6 +288,11 @@ fn always_lifted(n: &Node) -> bool {
         Node::Range { field, .. } => field.is_hot(),
         Node::Date { field, .. } => *field == DateField::Seen,
         Node::TimeOfDay { .. } => true,
+        // Combinations of them are one check too: `(seeders:>=5 |
+        // trackers:>=3)` is checked on the candidates, not run as a
+        // query that reads every document of the segment.
+        Node::Or { of } | Node::And { of } => !of.is_empty() && of.iter().all(always_lifted),
+        Node::Not { of } => always_lifted(of),
         _ => false,
     }
 }
@@ -381,6 +386,16 @@ fn fast_range(node: &Node, cx: &Cx<'_>, now: i64) -> Option<FastRange> {
             offset: cx.utc_offset,
         },
         Node::Not { of } if always_lifted(of) => FastRange::Not(Box::new(fast_range(of, cx, now)?)),
+        Node::Or { of } if always_lifted(node) => FastRange::Any(
+            of.iter()
+                .map(|n| fast_range(n, cx, now))
+                .collect::<Option<_>>()?,
+        ),
+        Node::And { of } if always_lifted(node) => FastRange::All(
+            of.iter()
+                .map(|n| fast_range(n, cx, now))
+                .collect::<Option<_>>()?,
+        ),
         Node::Share { by, cat, lo, hi } => {
             let c = category(cat)?;
             let fld = match by {
