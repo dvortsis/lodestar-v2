@@ -735,6 +735,15 @@
    "attempt": 1,
    "review_rounds": 0,
    "notes": "PR #63; reviewer (incl. security) started 11:41"
+  },
+  "B5a-swapfix": {
+   "status": "in_review",
+   "model": "opus",
+   "session": "session_01Uk4thMoRJwF3Rzg9SUrxUQ",
+   "pr": 65,
+   "attempt": 1,
+   "review_rounds": 0,
+   "notes": "runner opened PR #65 from B5a commit 223a0cc (rename retry, progress.error, Mutex pointer); reviewer started 11:48"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -850,7 +859,8 @@
   ],
   "flaky": [
    "2026-10-22 11:13 Windows: search/tests/rebuild.rs searches_keep_working_through_a_rebuild_and_the_swap timed out (rebuild never finished in 30s) on PR #61 run 39768313014. Hypothesis: SRWLock writer starvation by spinning readers of Serving RwLock. Routed to B5a to root-cause.",
-   "11:22 failed again on PR #62 (job 119791380998): now consistent; asked B5a for a separate fix PR slice/B5a-swapfix first"
+   "11:22 failed again on PR #62 (job 119791380998): now consistent; asked B5a for a separate fix PR slice/B5a-swapfix first",
+   "11:48 root cause per B5a: finishing rename refused on Windows (scanner holds files) -> Failed phase, rebuilding() stays true. Fix PR #65."
   ],
   "filter-followup": [
    "NEAR quirk (pre-existing, #42): words that split into several tokens (1080p, x264) can never match inside NEAR; needs a fix in a filter slice"
