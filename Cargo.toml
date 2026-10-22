@@ -24,6 +24,7 @@ lodestar-classify = { path = "crates/classify" }
 lodestar-filter = { path = "crates/filter" }
 lodestar-cluster = { path = "crates/cluster" }
 lodestar-api = { path = "crates/api" }
+lodestar-tracker-scrape = { path = "crates/tracker-scrape" }
 lodestar-sources-importers = { path = "crates/sources-importers" }
 
 [workspace.lints.rust]

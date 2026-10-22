@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use lodestar_classify::{ContentType, FileInfo};
 use lodestar_cluster::{Token, WorkerId};
-use lodestar_filter::{Engine, Handle, Hit, Item};
+use lodestar_filter::{Decision, Engine, Handle, Item};
 use lodestar_metainfo::{Info, InfoHash};
 use lodestar_sources::{FetchedKey, Funnel, FunnelCounts, Loss, Stage};
 use lodestar_store::{Prepared, Preparer, SourceId};
@@ -90,8 +90,10 @@ pub(crate) struct Results {
     pub files: Vec<FileInfo>,
     pub content_type: ContentType,
     /// The worker's filter verdict, and the rule-set version it used.
-    pub verdict: Option<Hit>,
+    pub verdict: Option<Decision>,
     pub version: u64,
+    /// Only private sources reported the key.
+    pub private_source: bool,
 }
 
 pub(crate) struct PrepareStage {
@@ -148,6 +150,7 @@ impl PrepareStage {
                             content_type: done.content_type,
                             verdict: done.verdict,
                             version: done.version,
+                            private_source: fk.private_source,
                         };
                         if out.send(r).await.is_err() {
                             return;
@@ -172,7 +175,7 @@ struct Done {
     torrent: Prepared,
     files: Vec<FileInfo>,
     content_type: ContentType,
-    verdict: Option<Hit>,
+    verdict: Option<Decision>,
     version: u64,
 }
 
@@ -180,7 +183,7 @@ struct Done {
 /// the floor's hash list is refused before parsing; every other verdict
 /// goes to the writer, which records it and re-checks it (§19.4).
 fn prepare_one(preparer: &mut Preparer, engine: &Engine, fk: &FetchedKey) -> Result<Done, Loss> {
-    if engine.core.blocked_hash(&[fk.key.0]).is_some() {
+    if engine.blocked_hash(&[fk.key.0]).is_some() {
         return Err(Loss::Blocked);
     }
     // Hashes to the key but isn't usable metainfo: invalid.
