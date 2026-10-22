@@ -314,6 +314,74 @@ async fn the_dht_plugin_runs_inside_the_pipeline() {
     assert!(state.exists(), "routing state saved");
 }
 
+/// A key only private sources reported is stored flagged, so it's never
+/// scraped publicly; a later public sighting clears the flag (§18.7).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn private_source_keys_are_flagged_until_seen_publicly() {
+    let seed = Seed::v1(info_dict("Members"));
+    let key = InfoHash(seed.info_hash);
+    let peer = FakePeer::spawn(vec![seed], Accept::Both, Behavior::Honest, vec![]).await;
+    let (private, private_tx) = scripted("private");
+    let (public, public_tx) = scripted("public");
+    let store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let pipeline = Pipeline::start(config(), store, vec![private, public])
+        .await
+        .unwrap();
+    let mut found = Found::key(key, 0).with_peers(vec![peer.addr()]);
+    found.private_source = true;
+    private_tx.send(found).await.unwrap();
+    until("stored", || {
+        pipeline.writer_stats().stored.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    // Wait for the commit to land before the rediscovery can find it.
+    until("have", || pipeline.have().contains(&key)).await;
+    public_tx.send(Found::key(key, 0)).await.unwrap();
+    until("rediscovery", || {
+        pipeline.writer_stats().rediscovered.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    let store = pipeline.shutdown().await.unwrap();
+    let id = store.find(&key).unwrap().unwrap();
+    assert_eq!(
+        store.torrent(id).unwrap().unwrap().flags & flags::PRIVATE_SOURCE,
+        0,
+        "the public sighting cleared it"
+    );
+}
+
+/// A private-source key stays flagged while only private sources see it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn private_source_flag_reaches_the_store() {
+    let seed = Seed::v1(info_dict("Members only"));
+    let key = InfoHash(seed.info_hash);
+    let peer = FakePeer::spawn(vec![seed], Accept::Both, Behavior::Honest, vec![]).await;
+    let (private, private_tx) = scripted("private");
+    let store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let pipeline = Pipeline::start(config(), store, vec![private])
+        .await
+        .unwrap();
+    let mut found = Found::key(key, 0).with_peers(vec![peer.addr()]);
+    found.private_source = true;
+    private_tx.send(found.clone()).await.unwrap();
+    until("stored", || {
+        pipeline.writer_stats().stored.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    until("have", || pipeline.have().contains(&key)).await;
+    private_tx.send(found).await.unwrap();
+    until("rediscovery", || {
+        pipeline.writer_stats().rediscovered.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    let store = pipeline.shutdown().await.unwrap();
+    let id = store.find(&key).unwrap().unwrap();
+    assert_ne!(
+        store.torrent(id).unwrap().unwrap().flags & flags::PRIVATE_SOURCE,
+        0
+    );
+}
+
 /// An import with an incomplete file list is re-fetched at startup and
 /// upgraded in place.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -411,9 +479,11 @@ async fn each_key_is_leased_and_counted_once() {
         pipeline.pool_stats().lost_count(Loss::NoPeers) == 1
     })
     .await;
+    // The pool counts a loss just before it ends the lease, so the lease
+    // may close a moment after the counter moves.
+    until("every lease ended", || stat(|s| &s.outstanding) == 0).await;
     assert_eq!(stat(|s| &s.granted), 2);
     assert_eq!(stat(|s| &s.held), 2);
-    assert_eq!(stat(|s| &s.outstanding), 0, "every lease ended");
     assert_eq!(stat(|s| &s.stale), 0);
     assert_eq!(pipeline.pool_stats().fetched.load(Ordering::Relaxed), 1);
 

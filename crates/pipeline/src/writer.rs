@@ -517,8 +517,12 @@ fn transaction(
                 torrent: &results.torrent,
                 discovered_at: lease.discovered_at,
                 metadata_at: results.metadata_at,
-                extra_flags: if lease.discovered_at < backfill_until {
+                extra_flags: (if lease.discovered_at < backfill_until {
                     flags::BACKFILL
+                } else {
+                    0
+                }) | if results.private_source {
+                    flags::PRIVATE_SOURCE
                 } else {
                     0
                 } | marks(committing[i].verdict.as_ref()),
@@ -534,18 +538,25 @@ fn transaction(
         .map(|&i| &committing[i])
         .map(|c| {
             (
-                c.results.key,
+                &c.results,
                 c.lease.sources | c.results.sources,
                 c.lease.source,
             )
         })
         .filter(|&(_, sources, first)| sources != bit(first))
-        .map(|(hash, sources, _)| Touch { hash, sources })
+        .map(|(r, sources, _)| Touch {
+            hash: r.key,
+            sources,
+            at: r.metadata_at,
+            public: !r.private_source,
+        })
         .collect();
     let extra = all_touches.len();
     all_touches.extend(touches.iter().map(|d| Touch {
         hash: d.found.key,
         sources: bit(d.source),
+        at: d.at,
+        public: !d.found.private_source,
     }));
     let written = store.write(&WriteBatch {
         prepared: &prepared,
