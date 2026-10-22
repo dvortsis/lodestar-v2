@@ -18,9 +18,10 @@ use std::collections::{BinaryHeap, HashMap};
 use std::sync::{Arc, Mutex};
 
 use lodestar_store::{Col, HotColumns, NEVER};
+use tantivy::columnar::Column;
 use tantivy::index::SegmentId;
 use tantivy::query::EnableScoring;
-use tantivy::{DocAddress, DocId, DocSet, Searcher, SegmentReader};
+use tantivy::{COLLECT_BLOCK_BUFFER_LEN, DocAddress, DocId, DocSet, Searcher, SegmentReader};
 
 use crate::filter;
 use crate::index::{Compiled, Result};
@@ -180,6 +181,45 @@ pub(crate) fn search(
     Ok((page, total))
 }
 
+/// Where one segment's sort values come from.
+enum Values {
+    I64(Column<i64>),
+    U64(Column<u64>),
+    /// The id column, read through the hot columns (`None`: no values).
+    Hot(Column<u64>, Option<Arc<HotColumns>>, Col),
+}
+
+impl Values {
+    /// The values of `docs` into `out`: a block at a time, so the column
+    /// reads (and the hot columns' random ones) overlap instead of
+    /// waiting on each other.
+    fn fill(&self, docs: &[DocId], out: &mut [Option<u64>]) {
+        match self {
+            Values::U64(col) => col.first_vals(docs, out),
+            Values::I64(col) => {
+                let mut tmp = [None; COLLECT_BLOCK_BUFFER_LEN];
+                col.first_vals(docs, &mut tmp[..docs.len()]);
+                for (o, v) in out.iter_mut().zip(&tmp) {
+                    *o = v.map(|v| v as u64);
+                }
+            }
+            Values::Hot(ids, hot, c) => {
+                let Some(hot) = hot else {
+                    out.fill(None);
+                    return;
+                };
+                ids.first_vals(docs, out);
+                for o in out.iter_mut() {
+                    *o = o.and_then(|id| {
+                        let v = hot.get(*c, id);
+                        (v != NEVER).then_some(u64::from(v))
+                    });
+                }
+            }
+        }
+    }
+}
+
 fn segment_top(
     weight: &dyn tantivy::query::Weight,
     reader: &SegmentReader,
@@ -190,79 +230,64 @@ fn segment_top(
     range: std::ops::Range<DocId>,
 ) -> tantivy::Result<SegmentTop> {
     let fast = reader.fast_fields();
-    let value: Box<dyn Fn(DocId) -> Option<u64>> = match order.by {
+    let values = match order.by {
         By::Fast {
             field,
             signed: true,
-        } => {
-            let col = fast.i64(field)?;
-            Box::new(move |doc| col.first(doc).map(|v| v as u64))
-        }
+        } => Values::I64(fast.i64(field)?),
         By::Fast {
             field,
             signed: false,
-        } => {
-            let col = fast.u64(field)?;
-            Box::new(move |doc| col.first(doc))
-        }
-        By::Hot(c) => {
-            let ids = fast.u64("id")?;
-            let hot = hot.cloned();
-            Box::new(move |doc| {
-                let hot = hot.as_ref()?;
-                let v = hot.get(c, ids.first(doc)?);
-                (v != NEVER).then_some(u64::from(v))
-            })
-        }
+        } => Values::U64(fast.u64(field)?),
+        By::Hot(c) => Values::Hot(fast.u64("id")?, hot.cloned(), c),
     };
     let signed = matches!(order.by, By::Fast { signed: true, .. });
     let checks = filter::checks(&query.filters, reader, hot)?;
     let alive = reader.alive_bitset();
     let mut heap: BinaryHeap<Reverse<Rank>> = BinaryHeap::with_capacity(k + 1);
     let mut count = 0;
-    let mut each = |docs: &[DocId]| {
-        for &doc in docs {
-            if alive.is_some_and(|a| !a.is_alive(doc)) || !checks.iter().all(|c| c.passes(doc)) {
-                continue;
-            }
-            count += 1;
-            if k == 0 {
-                continue;
-            }
-            let v = value(doc);
-            let mut key = v.map_or(0, |v| sortable(v, signed));
-            if !order.desc {
-                key = !key;
-            }
-            let rank = Rank {
-                present: v.is_some(),
-                value: key,
-                addr: Reverse((0, doc)),
-            };
-            if heap.len() < k {
-                heap.push(Reverse(rank));
-            } else if heap.peek().is_some_and(|worst| rank > worst.0) {
-                heap.pop();
-                heap.push(Reverse(rank));
-            }
-        }
-    };
     // This piece's documents only: seek to its start, stop at its end.
     let mut scorer = weight.scorer(reader, 1.0)?;
-    let mut doc = if scorer.doc() >= range.start {
-        scorer.doc()
-    } else {
-        scorer.seek(range.start)
-    };
-    let mut buf = [0; 64];
-    while doc < range.end {
-        let mut n = 0;
-        while doc < range.end && n < buf.len() {
-            buf[n] = doc;
-            n += 1;
-            doc = scorer.advance();
+    if scorer.doc() < range.start {
+        scorer.seek(range.start);
+    }
+    let mut buf = [0; COLLECT_BLOCK_BUFFER_LEN];
+    let mut kept = [0; COLLECT_BLOCK_BUFFER_LEN];
+    let mut vals = [None; COLLECT_BLOCK_BUFFER_LEN];
+    loop {
+        let n = scorer.fill_buffer(&mut buf);
+        let inside = buf[..n].partition_point(|d| *d < range.end);
+        let mut m = 0;
+        for &doc in &buf[..inside] {
+            if alive.is_none_or(|a| a.is_alive(doc)) && checks.iter().all(|c| c.passes(doc)) {
+                kept[m] = doc;
+                m += 1;
+            }
         }
-        each(&buf[..n]);
+        count += m;
+        if k > 0 && m > 0 {
+            values.fill(&kept[..m], &mut vals[..m]);
+            for (&doc, &v) in kept[..m].iter().zip(&vals[..m]) {
+                let mut key = v.map_or(0, |v| sortable(v, signed));
+                if !order.desc {
+                    key = !key;
+                }
+                let rank = Rank {
+                    present: v.is_some(),
+                    value: key,
+                    addr: Reverse((0, doc)),
+                };
+                if heap.len() < k {
+                    heap.push(Reverse(rank));
+                } else if heap.peek().is_some_and(|worst| rank > worst.0) {
+                    heap.pop();
+                    heap.push(Reverse(rank));
+                }
+            }
+        }
+        if inside < n || n < buf.len() {
+            break;
+        }
     }
     let top = heap
         .into_iter()
