@@ -296,6 +296,10 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
       - "If something went wrong" on every guide;
       - screenshots for every Lodestar screen a guide uses, captured automatically from fixture data;
       - Mermaid diagrams for anything that flows or connects, each with a text equivalent.
+    - **The audience, refined the same day:** someone who can install an app from the Unraid app store but may not know how to set it up. They may be unfamiliar with Docker's architecture, with Windows' security features and limits, and with good security and safety practice. *"This user should be guided, in a plain matter-of-fact way, without being too wordy."*
+      - Every choice shows its recommended, safe answer.
+      - Unsafe options are named plainly, with the alternative.
+      - Background stays brief, collapsed or linked.
     - No ready-made skill fitted. The owner's `dvortsis/skills` covers UI design only, and its `infographic-design` informs the diagrams.
     - **Scope:** the README, `docs/user/`, `docs/operations.md`, release notes and in-app help. Developer and contract docs are exempt.
 
