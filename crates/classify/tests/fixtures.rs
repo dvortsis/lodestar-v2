@@ -2,7 +2,7 @@
 //! should conclude. Written before the classifier was run on them; the
 //! first-run result is recorded in architecture §16.
 
-use lodestar_classify::{ContentType, FileInfo, JunkReason, ResolvedVia, classify};
+use lodestar_classify::{AdultKind, ContentType, FileInfo, JunkReason, ResolvedVia, classify};
 
 struct Fixture {
     name: &'static str,
@@ -394,5 +394,92 @@ fn fixtures() {
         FIXTURES.len() - failures.len(),
         FIXTURES.len()
     );
+    assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+}
+
+/// Adult detection (§20.9) on whole torrents: what it is, and what kind.
+/// `None` is a mainstream torrent that must stay out of Adult.
+type AdultFixture = (&'static str, Files, Option<AdultKind>);
+type Files = &'static [(&'static str, &'static str)];
+
+const ADULT: &[AdultFixture] = &[
+    (
+        "Somesite.24.01.15.Jane.Doe.Title.XXX.1080p.MP4-GRP",
+        &[("somesite.24.01.15.jane.doe.title.xxx.1080p.mp4", "1.4G")],
+        Some(AdultKind::Scene),
+    ),
+    (
+        "Brazzers - Some Title (2019) 1080p",
+        &[("Some Title (2019) 1080p.mp4", "3.2G")],
+        Some(AdultKind::Movie),
+    ),
+    (
+        "Some.Title.XXX.VR180.LR.2160p",
+        &[("Some.Title.XXX.VR180.LR.2160p.mp4", "8G")],
+        Some(AdultKind::Vr),
+    ),
+    (
+        "[Artist] Some Title (Hentai)",
+        &[
+            ("Some Title/001.jpg", "800K"),
+            ("Some Title/002.jpg", "800K"),
+            ("Some Title/003.jpg", "800K"),
+        ],
+        Some(AdultKind::Photos),
+    ),
+    (
+        "[Artist] Some Title [Hentai].cbz",
+        &[("[Artist] Some Title [Hentai].cbz", "60M")],
+        Some(AdultKind::Comics),
+    ),
+    (
+        "a1b2c3d4",
+        &[("Somesite.23.11.02.Jane.Doe.XXX.720p.mp4", "900M")],
+        Some(AdultKind::Scene),
+    ),
+    (
+        "xXx.2002.1080p.BluRay.x264-GRP",
+        &[("xXx.2002.1080p.BluRay.x264-GRP.mkv", "9G")],
+        None,
+    ),
+    (
+        "Sex.Education.S01.1080p.NF.WEB-DL.DDP5.1.x264-GRP",
+        &[
+            ("Sex.Education.S01E01.1080p.NF.WEB-DL.mkv", "1.5G"),
+            ("Sex.Education.S01E02.1080p.NF.WEB-DL.mkv", "1.5G"),
+        ],
+        None,
+    ),
+    (
+        "Sex.and.the.City.2008.1080p.BluRay.x264",
+        &[("Sex.and.the.City.2008.1080p.BluRay.x264.mkv", "10G")],
+        None,
+    ),
+    (
+        "Porno Graffitti - Romantist Egoist (2000) [FLAC]",
+        &[("01 - Track.flac", "30M"), ("02 - Track.flac", "30M")],
+        None,
+    ),
+    (
+        "Inside.the.Porn.Industry.Milf.Documentary.2019.720p",
+        &[("Inside.the.Porn.Industry.2019.720p.mp4", "1G")],
+        None,
+    ),
+];
+
+#[test]
+fn adult() {
+    let mut failures = Vec::new();
+    for (name, files, want) in ADULT {
+        let files: Vec<FileInfo> = files.iter().map(|(p, s)| file(p, s)).collect();
+        let c = classify(name, &files);
+        let is_adult = c.content_type == Adult;
+        if c.adult_kind != *want || is_adult != want.is_some() {
+            failures.push(format!(
+                "{name}: {:?} {:?} (confidence {}), want {want:?}",
+                c.content_type, c.adult_kind, c.confidence
+            ));
+        }
+    }
     assert!(failures.is_empty(), "\n{}", failures.join("\n"));
 }

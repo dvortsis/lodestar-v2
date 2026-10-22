@@ -25,10 +25,13 @@ pub enum ContentType {
     /// home video, unnamed packs).
     Video,
     Other,
+    /// Adult content of any kind; [`AdultKind`](crate::AdultKind) says
+    /// which (§20.9).
+    Adult,
 }
 
 impl ContentType {
-    pub const ALL: [ContentType; 11] = [
+    pub const ALL: [ContentType; 12] = [
         ContentType::Movie,
         ContentType::Tv,
         ContentType::Music,
@@ -40,6 +43,7 @@ impl ContentType {
         ContentType::Images,
         ContentType::Video,
         ContentType::Other,
+        ContentType::Adult,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -55,6 +59,7 @@ impl ContentType {
             ContentType::Images => "images",
             ContentType::Video => "video",
             ContentType::Other => "other",
+            ContentType::Adult => "adult",
         }
     }
 
@@ -221,9 +226,10 @@ mod tests {
         // Stored in `torrents.content_type`: never renumber.
         assert_eq!(ContentType::Movie.code(), 0);
         assert_eq!(ContentType::Other.code(), 10);
+        assert_eq!(ContentType::Adult.code(), 11);
         for t in ContentType::ALL {
             assert_eq!(ContentType::from_code(t.code()), Some(t));
         }
-        assert_eq!(ContentType::from_code(11), None);
+        assert_eq!(ContentType::from_code(12), None);
     }
 }
