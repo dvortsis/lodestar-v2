@@ -338,8 +338,9 @@ impl Store {
             for row in stmt.query_map(params![now, adult], |r| r.get::<_, Vec<u8>>(0))? {
                 expired.push(hash20(row?)?);
             }
+            // A tombstone another rule left stays as it is.
             tx.execute(
-                "INSERT OR REPLACE INTO tombstones (hash, rule, at)
+                "INSERT OR IGNORE INTO tombstones (hash, rule, at)
                  SELECT hash, rule, at FROM quarantine
                  WHERE expires_at <= ?1 AND substr(rule, -length(?2)) = ?2",
                 params![now, adult],
@@ -574,6 +575,42 @@ mod tests {
         let adult = s.tombstones_before(None, true, 10).unwrap();
         assert_eq!(adult.len(), 1);
         assert!(adult[0].adult_hold);
+    }
+
+    /// An adult hold's purge never replaces a tombstone another rule left:
+    /// switching that adult rule off later mustn't release a floor hold.
+    #[test]
+    fn the_purge_keeps_another_rules_tombstone() {
+        let mut s = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let h = [[7u8; 20]];
+        let row = |rule, held, adult_hold| Filtered {
+            hashes: &h,
+            rule,
+            action: 4,
+            held: Some(held),
+            sealed: None,
+            evidence: &[],
+            at: 10,
+            expires_at: 20,
+            adult_hold,
+        };
+        let tx = s.conn.transaction().unwrap();
+        write(
+            &tx,
+            &[
+                row("CS-1a", Held::Tombstone, false),
+                row("CS-5a", Held::Quarantine, true),
+            ],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        let (released, _) = s.purge_filter(100, 0).unwrap();
+        assert!(released.is_empty());
+        let t = s.tombstones(10).unwrap();
+        assert_eq!(t.len(), 1);
+        assert_eq!((t[0].rule.as_str(), t[0].adult_hold), ("CS-1a", false));
+        assert_eq!(s.release_rules(&["CS-5a".into()], |_| {}).unwrap(), 0);
+        assert_eq!(s.tombstones(10).unwrap().len(), 1, "the floor's stays");
     }
 
     /// Releasing a rule's holds runs in chunks and reports each, and a

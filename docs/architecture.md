@@ -2700,6 +2700,8 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
   - **Releasing what a rule holds:** switching off a core rule (that was on) or a pack, or removing your rule, releases its quarantine and tombstones, all of them rather than a capped page. It runs behind the same effect warning and password as the change itself.
     - It deletes in transactions of 10,000 rows, so ingest isn't kept waiting. A hash another rule still holds stays refused.
     - The preview counts every hold per rule in SQL, so its numbers match what's released.
+    - The engine stops applying the rule (or list) before anything is released, so a hash released early isn't held again by it. Unsubscribing from or pausing a list releases its quarantine as well as its tombstones, the same way.
+    - **No weakening without the password, even after a race:** a core switch or a held list version previewed while it didn't weaken filtering (so no password was asked), which weakens it by the time it's applied, is refused with 409 `changed_since_preview`, and the client previews again.
     - `quarantine` and `tombstones` have no index on `rule`, so this is a scan per rule. An index is noted for B8's migration.
   - **Tombstones:** `GET /filters/tombstones` (`adult`, `cursor`, `limit`) lists them newest first by hash and rule, with `adult_hold` marked.
   - **Config blocklists only add (owner's decision §2.7):**
