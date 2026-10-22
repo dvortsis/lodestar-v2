@@ -733,6 +733,92 @@ async fn classification_corrections_reclassify_the_stored_torrent() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+#[tokio::test]
+async fn every_filters_route_needs_a_session_and_errors_use_the_envelope() {
+    let f = fixture();
+    // Without a session, every filters route is a 401 in the envelope,
+    // whatever the method.
+    for (method, uri) in [
+        ("GET", "/api/v1/filters"),
+        ("GET", "/api/v1/filters/queue"),
+        ("GET", "/api/v1/filters/fixtures"),
+        ("POST", "/api/v1/filters/test"),
+        ("POST", "/api/v1/filters/preview"),
+        ("POST", "/api/v1/filters/apply"),
+        ("POST", "/api/v1/classify/correct"),
+        ("GET", "/api/v1/classify"),
+        ("POST", "/api/v1/classify/rules"),
+        ("POST", "/api/v1/classify/rules/remove"),
+        ("POST", "/api/v1/filters/preview/jobs"),
+        ("GET", "/api/v1/filters/preview/jobs/1"),
+        ("POST", "/api/v1/filters/preview/jobs/1/cancel"),
+        ("DELETE", "/api/v1/filters/apply"),
+    ] {
+        let req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        let (status, _, body) = call(&f.app, req).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {uri}");
+        assert_eq!(body["error"]["code"], json!("login_required"), "{uri}");
+    }
+
+    let c = logged_in(&f).await;
+    // A refused change: a stable code, a sentence and the field.
+    let (status, body) = apply(
+        &f,
+        &c,
+        json!({ "op": "add_rule", "query": "ext:exe", "action": "explode" }),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body["error"],
+        json!({
+            "code": "unknown_action",
+            "message": "The action must be flag, demote, hide, quarantine or drop.",
+            "field": "action",
+        })
+    );
+    // A bad draft query keeps its span.
+    let (_, body) = apply(
+        &f,
+        &c,
+        json!({ "op": "add_rule", "query": "sise:1", "action": "hide" }),
+        None,
+    )
+    .await;
+    assert_eq!(body["error"]["code"], json!("query_syntax"));
+    assert_eq!(
+        (&body["error"]["start"], &body["error"]["end"]),
+        (&json!(0), &json!(5))
+    );
+
+    // A weakening change: first the confirmation request, with the
+    // assessment beside the error, then a wrong password.
+    let change = json!({ "op": "core_switch", "rule": "CS-3a", "on": false });
+    let (status, body) = apply(&f, &c, change.clone(), None).await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED);
+    assert_eq!(
+        (&body["error"]["code"], &body["error"]["field"]),
+        (&json!("confirm_required"), &json!("password"))
+    );
+    assert!(body["assessment"]["warning"].is_string());
+    let (status, body) = apply(&f, &c, change, Some("not the password")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        body,
+        json!({ "error": {
+            "code": "bad_password",
+            "message": "That password is wrong.",
+            "field": "password",
+        } })
+    );
+}
+
 /// Stores a single-file torrent and returns its id and hash (hex).
 fn store_torrent(f: &Fixture, name: &str, size: i64) -> (i64, String) {
     let raw = to_vec(&OwnedValue::Dict(
@@ -795,9 +881,12 @@ async fn classification_rules_requeue_matching_torrents_and_corrections_are_fixt
     for q in ["type:movie lexb", "adult:scene", "-type:adult"] {
         let (status, _, body) = call(&f.app, rules(json!({ "query": q, "adult": true }))).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{q}: {body}");
+        assert_eq!(body["error"]["code"], json!("class_rule_tests_type"), "{q}");
+        assert_eq!(body["error"]["field"], json!("query"), "{q}");
     }
     let (status, _, body) = call(&f.app, rules(json!({ "query": "", "adult": true }))).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], json!("class_rule_needs_query"));
 
     let (status, _, body) = call(&f.app, rules(json!({ "query": "lexb", "adult": true }))).await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -852,8 +941,9 @@ async fn classification_rules_requeue_matching_torrents_and_corrections_are_fixt
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["queued"], json!(1));
     assert!(f.api.engine.current().class_rules.is_empty());
-    let (status, _, _) = call(&f.app, remove(rule)).await;
+    let (status, _, body) = call(&f.app, remove(rule)).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["code"], json!("class_rule_not_found"));
 }
 
 /// Enriches every stored torrent, as the pipeline's background pass does.
@@ -977,10 +1067,13 @@ async fn previews_run_as_background_jobs_with_progress() {
     }
     assert_eq!(state["state"], json!("failed"));
     assert_eq!(state["status"], json!(409));
+    assert!(state["error"]["code"].is_string(), "{state}");
+    assert!(state["error"]["message"].is_string(), "{state}");
 
     // Unknown jobs, and cancelling.
-    let (status, _, _) = call(&f.app, get("/api/v1/filters/preview/jobs/999", &c)).await;
+    let (status, _, body) = call(&f.app, get("/api/v1/filters/preview/jobs/999", &c)).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["code"], json!("preview_not_found"));
     let (status, _, _) = call(
         &f.app,
         post(
