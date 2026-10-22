@@ -121,8 +121,8 @@
    "session": "session_01QpHMCsgJt8gZPg3S2SnCGv",
    "pr": 61,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": "PR #61 (420 baselines); reviewer started 10:39"
+   "review_rounds": 1,
+   "notes": "round 1 FIX: e2e red (86 fail): rotating sample baselines, CI-generated baselines (pinned playwright container), mock example test; important: matrix trim, e2e typecheck, per-route mocks"
   },
   "W2": {
    "status": "merged",
@@ -818,7 +818,8 @@
   ],
   "B1-polish": [
    "golden: add stemmed:true and non-null hash_v2 fixtures",
-   "explicit operation_ids if not done in #57"
+   "explicit operation_ids if not done in #57",
+   "add OpenAPI examples to utoipa schemas (W6 mock defaults; 0/24 ops have examples)"
   ],
   "metrics-contract": [
    "metrics.md \u00a76.7: add notifications_delivered / notifications_failed (IntegrationMetrics already counts them)"
@@ -841,7 +842,8 @@
   ],
   "runner-docs-pr": [
    "\u00a716: X-notify decisions (Discord send without redirects; ntfy requires JSON with id on 2xx; ntfy credentials over http only to private hosts)",
-   "\u00a716/D-docker: STRIP/DEBUG override in image; \u00a74 data layout differs from code"
+   "\u00a716/D-docker: STRIP/DEBUG override in image; \u00a74 data layout differs from code",
+   "\u00a716: snapshot policy (key screens only; 46-theme set at bp1366; compact only densityAware routes; baselines generated in pinned playwright container)"
   ],
   "M4-48": [
    "#48 rewrites crates/search index/query/compile/filter/sorted; main has since gained B0,B1,B5b (+B5a soon): #48 needs a large merge of main before it can land"
