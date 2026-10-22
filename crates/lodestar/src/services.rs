@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use lodestar_filter::Sealer;
 use lodestar_filter::lists::SharedIps;
-use lodestar_pipeline::{DhtSource, Pipeline};
+use lodestar_pipeline::{Control, DhtSource, Pipeline};
 use lodestar_search::{LiveConfig, SearchHandle, Serving, ServingConfig};
 use lodestar_sources::SourcePlugin;
 use lodestar_store::Store;
@@ -25,7 +25,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::config::Config;
-use crate::{floor, http, settings, subscriptions};
+use crate::{floor, http, ops, settings, subscriptions};
 
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -66,7 +66,14 @@ impl Services {
             .await??
         };
         let config = &settings.effective_config(config);
+        // The crawler's pause (B14) outlives a restart: everything starts
+        // paused, so nothing is harvested or fetched before it applies.
+        let crawler = settings
+            .subscribe::<settings::crawler::Crawler>()
+            .borrow()
+            .clone();
         let mut pipeline_config = config.pipeline_config()?;
+        pipeline_config.pool.paused = crawler.paused;
         let key = seal_key(&config.data_dir.join("seal.key"))?;
         pipeline_config.sealer = Some(Arc::new(Sealer::new(&key)));
         // Subscribed IP lists (§20.13): one shared set, consulted by the
@@ -128,12 +135,15 @@ impl Services {
 
         let mut plugins: Vec<Arc<dyn SourcePlugin>> = Vec::new();
         let mut dht_stats = None;
+        let mut dht_source = None;
         if config.dht.enabled {
             let mut dht_config = config.dht_config();
             dht_config.deny = Some(lodestar_dht::node::Deny(denied.clone()));
+            dht_config.paused = crawler.paused;
             let dht = Arc::new(DhtSource::new(dht_config));
             dht_stats = Some(dht.stats_handle());
             settings::crawler::follow_intensity(settings.subscribe(), dht.node_handle());
+            dht_source = Some(dht.clone());
             plugins.push(dht);
         }
         let auth = Arc::new(
@@ -146,8 +156,8 @@ impl Services {
         if let Some(token) = auth.setup_token() {
             // §12: whoever can read the logs claims the instance.
             tracing::warn!(
-                "first run: open http://{}/ and enter setup token {token} to create the admin password",
-                config.http.bind
+                "first run: open {} and enter setup token {token} to create the admin password",
+                ops::ui_address(config.http.bind)
             );
         }
         let filter = pipeline_config.filter.clone();
@@ -157,6 +167,17 @@ impl Services {
         let quarantine_secs = pipeline_config.quarantine.as_secs() as i64;
         let pipeline = Pipeline::start(pipeline_config, store, plugins).await?;
         let control = Arc::new(Mutex::new(control));
+        // Pause, resume, sources and the network check (B14), applied
+        // however the registry's crawler section changes.
+        let crawl = Control::start(
+            pipeline.monitor(),
+            dht_source,
+            control.clone(),
+            crawler.paused,
+            crawler.intensity.into(),
+        )
+        .await?;
+        settings::crawler::follow_control(settings.subscribe(), crawl.clone());
         let search = serving.clone().map(SearchHandle::serving);
         let filters = Arc::new(lodestar_api::filters::FiltersApi {
             store: control.clone(),
@@ -178,12 +199,23 @@ impl Services {
             subscriptions_stopped,
         ));
         let reader = Arc::new(Mutex::new(reader));
+        let search_state = serving.as_ref().map(|s| http::SearchState {
+            index: SearchHandle::serving(s.clone()),
+            stats: s.stats(),
+        });
+        let ops = Arc::new(ops::Ops::new(
+            crawl,
+            pipeline.monitor(),
+            search_state.clone(),
+            config.data_dir.clone(),
+        ));
         let api = lodestar_api::ApiState {
             auth,
             index: search.clone(),
             reader: reader.clone(),
             filters: Some(filters),
             settings: Some(settings.clone()),
+            ops: Some(ops),
         };
         settings::log::follow(settings.subscribe());
         let http = http::AppState {
@@ -191,17 +223,14 @@ impl Services {
             dht: dht_stats,
             fetch: fetch_stats,
             reader,
-            search: serving.as_ref().map(|s| http::SearchState {
-                index: SearchHandle::serving(s.clone()),
-                stats: s.stats(),
-            }),
+            search: search_state,
         };
         let listener = TcpListener::bind(config.http.bind)
             .await
             .map_err(|e| format!("binding {}: {e}", config.http.bind))?;
         tracing::info!(
-            "UI on http://{}/, status page on /status (data in {})",
-            config.http.bind,
+            "UI on {}, status page on /status (data in {})",
+            ops::ui_address(config.http.bind),
             config.data_dir.display()
         );
         Ok(Services {

@@ -182,6 +182,130 @@
         ]
       }
     },
+    "/crawler": {
+      "get": {
+        "tags": [
+          "crawler"
+        ],
+        "summary": "The crawler: running or paused (and since when), its intensity, the\nDHT node and the fetch pool.",
+        "operationId": "getCrawler",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrawlerStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "crawler"
+        ],
+        "summary": "Sets the crawler's intensity at once: the same setting as\n`crawler.intensity` in `/settings/crawler`, refused the same way when\nan environment variable sets it.",
+        "operationId": "patchCrawler",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CrawlerPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrawlerStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/crawler/pause": {
+      "post": {
+        "tags": [
+          "crawler"
+        ],
+        "summary": "Pauses harvesting and metadata fetching. The DHT node keeps answering\nother nodes, fetches in flight finish, and indexing goes on. The\npause survives a restart. Pausing a paused crawler changes nothing.",
+        "operationId": "pauseCrawler",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrawlerStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/crawler/resume": {
+      "post": {
+        "tags": [
+          "crawler"
+        ],
+        "summary": "Resumes harvesting and fetching where they stopped.",
+        "operationId": "resumeCrawler",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrawlerStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/filters": {
       "get": {
         "tags": [
@@ -646,6 +770,62 @@
         "security": []
       }
     },
+    "/network/check": {
+      "get": {
+        "tags": [
+          "crawler"
+        ],
+        "summary": "The network check: our address as other DHT nodes see it, and\nwhether unsolicited inbound queries reach the DHT port.",
+        "operationId": "getNetworkCheck",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NetworkCheck"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "crawler"
+        ],
+        "summary": "Starts the reachability measurement again (after changing a port\nforward, say). At most once every 30 s (`429 rate_limited`).",
+        "operationId": "restartNetworkCheck",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NetworkCheck"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/openapi.json": {
       "get": {
         "tags": [
@@ -1049,6 +1229,116 @@
           }
         },
         "security": []
+      }
+    },
+    "/sources": {
+      "get": {
+        "tags": [
+          "crawler"
+        ],
+        "summary": "Every source plugin of this build: kind, consent class, stored state,\npriority and health.",
+        "operationId": "listSources",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/sources/{id}": {
+      "patch": {
+        "tags": [
+          "crawler"
+        ],
+        "summary": "Enables or disables a source, or sets its priority. A priority\napplies at once; enabling or disabling at the next start. Enabling a\n`restricted` or `overlay` source needs `\"consent\"` naming its class\n(`409 consent_required` otherwise). Agents, egress, purge and the\nschedule arrive in v0.6 (`409 not_editable`).",
+        "operationId": "patchSource",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The source's id, as `GET /sources` lists it.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourcePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Source"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/stats": {
+      "get": {
+        "tags": [
+          "crawler"
+        ],
+        "summary": "The global bar's summary: searchable and stored torrents, harvest\nand fetch rates, queue depth, index lag, disk, uptime. Unmeasurable\nvalues are null, never 0.",
+        "operationId": "getStats",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/torrents/{hash}": {
@@ -2650,6 +2940,105 @@
           }
         }
       },
+      "CrawlerPatch": {
+        "type": "object",
+        "description": "`PATCH /crawler`: the global bar's intensity control. The same\nsetting as `crawler.intensity` in `/settings/crawler`.",
+        "required": [
+          "intensity"
+        ],
+        "properties": {
+          "intensity": {
+            "type": "string",
+            "description": "How hard the crawler works (§5), as `/settings/crawler` has it.",
+            "enum": [
+              "low",
+              "balanced",
+              "aggressive"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "example": {
+          "intensity": "low"
+        }
+      },
+      "CrawlerStatus": {
+        "type": "object",
+        "description": "`GET /crawler`, and the answer to every crawler control.",
+        "required": [
+          "dht",
+          "fetch",
+          "intensity",
+          "intensity_env",
+          "paused",
+          "since",
+          "state"
+        ],
+        "properties": {
+          "dht": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DhtStatus",
+                "description": "Null when the DHT is off or hasn't started yet."
+              }
+            ]
+          },
+          "fetch": {
+            "$ref": "#/components/schemas/FetchStatus"
+          },
+          "intensity": {
+            "type": "string",
+            "description": "How hard the crawler works (§5), as `/settings/crawler` has it.",
+            "enum": [
+              "low",
+              "balanced",
+              "aggressive"
+            ]
+          },
+          "intensity_env": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The environment variable that sets the intensity, which then\ncan't be changed here; null when it can."
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "since": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds of the last pause or resume; the start when running\nsince then."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "running",
+              "paused"
+            ]
+          }
+        },
+        "example": {
+          "dht": {
+            "bootstrapped": true,
+            "outstanding": 212,
+            "routing_nodes": 3104
+          },
+          "fetch": {
+            "in_flight": 388,
+            "lookups": 120,
+            "queued": 15022
+          },
+          "intensity": "balanced",
+          "intensity_env": null,
+          "paused": false,
+          "since": 1792677600,
+          "state": "running"
+        }
+      },
       "Decision": {
         "type": "object",
         "required": [
@@ -2736,6 +3125,33 @@
           }
         }
       },
+      "DhtStatus": {
+        "type": "object",
+        "description": "The DHT node's state.",
+        "required": [
+          "bootstrapped",
+          "outstanding",
+          "routing_nodes"
+        ],
+        "properties": {
+          "bootstrapped": {
+            "type": "boolean",
+            "description": "It has a routing table to crawl from."
+          },
+          "outstanding": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Queries awaiting an answer.",
+            "minimum": 0
+          },
+          "routing_nodes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Nodes across its routing tables.",
+            "minimum": 0
+          }
+        }
+      },
       "ErrorBody": {
         "type": "object",
         "required": [
@@ -2817,6 +3233,74 @@
           "rule": {
             "type": "string",
             "description": "The rule it releases from."
+          }
+        }
+      },
+      "ExternalAddress": {
+        "type": "object",
+        "description": "Our address as other DHT nodes see it: the BEP 42 `ip` key of their\nreplies, one vote per node, the last 32 nodes.",
+        "required": [
+          "agreeing",
+          "ip",
+          "port",
+          "voters"
+        ],
+        "properties": {
+          "agreeing": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Voters naming the leading address.",
+            "minimum": 0
+          },
+          "ip": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The consensus address: at least 5 voters, and more than half of\nthem, agree; null until they do."
+          },
+          "port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The port most of those voters saw; null without a consensus.",
+            "minimum": 0
+          },
+          "voters": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "FetchStatus": {
+        "type": "object",
+        "description": "The metadata-fetch pool's state.",
+        "required": [
+          "in_flight",
+          "lookups",
+          "queued"
+        ],
+        "properties": {
+          "in_flight": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Fetches running now.",
+            "minimum": 0
+          },
+          "lookups": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Peer lookups out.",
+            "minimum": 0
+          },
+          "queued": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Keys waiting for a fetch slot or for peers.",
+            "minimum": 0
           }
         }
       },
@@ -3060,6 +3544,119 @@
               "null"
             ]
           }
+        }
+      },
+      "NetworkCheck": {
+        "type": "object",
+        "description": "`GET /network/check` and `POST /network/check`: the first-run\nwizard's network check and the dashboard's \"reachable\" flag. Every\nprobe is ordinary DHT traffic; no outside service is asked (§18.7).",
+        "required": [
+          "checked_at",
+          "external",
+          "inbound_queries",
+          "mapping",
+          "measured_s",
+          "min_window_s",
+          "reachable",
+          "reason",
+          "unsolicited_queries",
+          "window_s",
+          "window_started_at"
+        ],
+        "properties": {
+          "checked_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "external": {
+            "$ref": "#/components/schemas/ExternalAddress"
+          },
+          "inbound_queries": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "DHT queries received in the window; null until measuring.",
+            "minimum": 0
+          },
+          "mapping": {
+            "type": "string",
+            "description": "UPnP / NAT-PMP port mapping (§5). This build has neither.",
+            "enum": [
+              "unavailable"
+            ]
+          },
+          "measured_s": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds the evidence covers.",
+            "minimum": 0
+          },
+          "min_window_s": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`reachable` stays null until the window has run this long.",
+            "minimum": 0
+          },
+          "reachable": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether unsolicited inbound DHT queries arrive on the DHT port;\nnull is unknown."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why `reachable` reads as it does.",
+            "enum": [
+              "dht_off",
+              "bootstrapping",
+              "measuring",
+              "unsolicited_queries",
+              "no_unsolicited_queries"
+            ]
+          },
+          "unsolicited_queries": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Of `inbound_queries`, the ones from nodes we never queried.",
+            "minimum": 0
+          },
+          "window_s": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The longest stretch of evidence looked at.",
+            "minimum": 0
+          },
+          "window_started_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix seconds the window started (bootstrap or a restart); null\nbefore bootstrap."
+          }
+        },
+        "example": {
+          "checked_at": 1792681200,
+          "external": {
+            "agreeing": 14,
+            "ip": "203.0.113.9",
+            "port": 6881,
+            "voters": 16
+          },
+          "inbound_queries": 412,
+          "mapping": "unavailable",
+          "measured_s": 590,
+          "min_window_s": 120,
+          "reachable": true,
+          "reason": "unsolicited_queries",
+          "unsolicited_queries": 37,
+          "window_s": 600,
+          "window_started_at": 1792677610
         }
       },
       "OkResponse": {
@@ -4112,6 +4709,383 @@
           }
         }
       },
+      "Source": {
+        "type": "object",
+        "description": "One source plugin of this build.",
+        "required": [
+          "consent",
+          "consent_required",
+          "editable",
+          "enabled",
+          "health",
+          "id",
+          "kinds",
+          "name",
+          "not_yet_editable",
+          "plugin",
+          "priority",
+          "restart_required",
+          "risk",
+          "state",
+          "version"
+        ],
+        "properties": {
+          "consent": {
+            "type": "string",
+            "description": "What enabling a source requires (§18.7).",
+            "enum": [
+              "none",
+              "external",
+              "account",
+              "restricted",
+              "overlay"
+            ]
+          },
+          "consent_required": {
+            "type": "boolean",
+            "description": "Enabling it needs `\"consent\"` naming its class."
+          },
+          "editable": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields `PATCH /sources/{id}` changes now."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Its stored state is `enabled`."
+          },
+          "health": {
+            "$ref": "#/components/schemas/SourceHealth"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceKind"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "not_yet_editable": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields planned for the v0.6 sources epic (agents, egress, purge,\nschedule): listed so the UI can show them, refused by `PATCH`."
+          },
+          "plugin": {
+            "type": "string",
+            "description": "The manifest id."
+          },
+          "priority": {
+            "type": "string",
+            "description": "A source's share of the fetch pool (§18.4: weights 1 / 3 / 6 / 10).",
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "max"
+            ]
+          },
+          "restart_required": {
+            "type": "boolean",
+            "description": "Its stored state differs from what's running: it starts or stops\nat the next restart."
+          },
+          "risk": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "description": "A source's stored lifecycle state (§18.1).",
+            "enum": [
+              "enabled",
+              "paused",
+              "disabled",
+              "purged"
+            ]
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "SourceHealth": {
+        "type": "object",
+        "description": "How a source is doing.",
+        "required": [
+          "harvested_24h",
+          "last_error",
+          "last_run",
+          "running",
+          "stored_24h"
+        ],
+        "properties": {
+          "harvested_24h": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Keys it was first to report in the last 24 hours."
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it last stopped with an error; null when it didn't."
+          },
+          "last_run": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix seconds it last started; null when it hasn't run since the\nprocess started."
+          },
+          "running": {
+            "type": "boolean"
+          },
+          "stored_24h": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Of `harvested_24h`, the ones stored."
+          }
+        }
+      },
+      "SourceKind": {
+        "type": "string",
+        "enum": [
+          "discovery",
+          "importer",
+          "peer_finder",
+          "enrichment",
+          "network",
+          "output"
+        ]
+      },
+      "SourceList": {
+        "type": "object",
+        "description": "`GET /sources`.",
+        "required": [
+          "sources"
+        ],
+        "properties": {
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Source"
+            }
+          }
+        },
+        "example": {
+          "sources": [
+            {
+              "consent": "none",
+              "consent_required": false,
+              "editable": [
+                "enabled",
+                "priority"
+              ],
+              "enabled": true,
+              "health": {
+                "harvested_24h": 1840221,
+                "last_error": null,
+                "last_run": 1792677600,
+                "running": true,
+                "stored_24h": 30115
+              },
+              "id": 0,
+              "kinds": [
+                "discovery",
+                "peer_finder"
+              ],
+              "name": "Mainline DHT",
+              "not_yet_editable": [
+                "agents",
+                "egress",
+                "purge",
+                "schedule"
+              ],
+              "plugin": "dht",
+              "priority": "normal",
+              "restart_required": false,
+              "risk": "low",
+              "state": "enabled",
+              "version": "0.0.0"
+            }
+          ]
+        }
+      },
+      "SourcePatch": {
+        "type": "object",
+        "description": "`PATCH /sources/{id}`. Fields left out keep their values. A new\npriority applies at once; enabling or disabling takes effect at the\nnext start (`restart_required`).",
+        "properties": {
+          "agents": {
+            "description": "Not editable before v0.6: refused with `409 not_editable`."
+          },
+          "consent": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "What enabling a source requires (§18.7).",
+                "enum": [
+                  "none",
+                  "external",
+                  "account",
+                  "restricted",
+                  "overlay"
+                ]
+              }
+            ],
+            "description": "The consent class you agree to; needed to enable a source whose\nclass is `restricted` or `overlay`, and must be that class."
+          },
+          "egress": {
+            "description": "Not editable before v0.6: refused with `409 not_editable`."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "priority": {
+            "type": "string",
+            "description": "A source's share of the fetch pool (§18.4: weights 1 / 3 / 6 / 10).",
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "max"
+            ]
+          },
+          "purge": {
+            "description": "Not editable before v0.6: refused with `409 not_editable`."
+          },
+          "schedule": {
+            "description": "Not editable before v0.6: refused with `409 not_editable`."
+          }
+        },
+        "additionalProperties": false,
+        "example": {
+          "enabled": true,
+          "priority": "high"
+        }
+      },
+      "StatsResponse": {
+        "type": "object",
+        "description": "`GET /stats`: what the global bar and status pill show\n(`docs/metrics.md` §7.6).",
+        "required": [
+          "data_bytes",
+          "disk_free_bytes",
+          "fetched_per_hour",
+          "harvested_per_hour",
+          "index_lag_s",
+          "paused",
+          "queue_depth",
+          "searchable_torrents",
+          "stored_torrents",
+          "updated_at",
+          "uptime_s"
+        ],
+        "properties": {
+          "data_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Bytes the data directory holds (database, index, state).",
+            "minimum": 0
+          },
+          "disk_free_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Bytes free on the data directory's volume; null where this build\ncan't measure it.",
+            "minimum": 0
+          },
+          "fetched_per_hour": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Info dicts fetched per hour, over the last 5 minutes; null in the\nfirst minute."
+          },
+          "harvested_per_hour": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Keys the sources reported per hour, over the last 5 minutes; null\nin the first minute."
+          },
+          "index_lag_s": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Seconds the index trails the store's last commit; null when search\nis off or either hasn't committed since the start.",
+            "minimum": 0
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "queue_depth": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Keys queued or in flight in the fetch pool.",
+            "minimum": 0
+          },
+          "searchable_torrents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Documents in the search index; null when search is off.",
+            "minimum": 0
+          },
+          "stored_torrents": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds these numbers were read."
+          },
+          "uptime_s": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "example": {
+          "data_bytes": 9126805504,
+          "disk_free_bytes": null,
+          "fetched_per_hour": 1260.0,
+          "harvested_per_hour": 184320.0,
+          "index_lag_s": 2,
+          "paused": false,
+          "queue_depth": 15410,
+          "searchable_torrents": 2410388,
+          "stored_torrents": 2410391,
+          "updated_at": 1792681200,
+          "uptime_s": 86400
+        }
+      },
       "Strictness": {
         "type": "object",
         "description": "`POST /filters/strictness`: what the lists would block, and a warning\nmatched to it (§2.9, §20.13).",
@@ -4722,6 +5696,10 @@
     {
       "name": "settings",
       "description": "The runtime settings registry (§10.10, §11)."
+    },
+    {
+      "name": "crawler",
+      "description": "Stats, the crawler's controls, sources and the network check (§9, §10.9, §18.8)."
     },
     {
       "name": "meta",

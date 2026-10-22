@@ -1,0 +1,2 @@
+200
+{"checked_at":1700000100,"external":{"agreeing":6,"ip":"203.0.113.9","port":6881,"voters":7},"inbound_queries":0,"mapping":"unavailable","measured_s":0,"min_window_s":120,"reachable":null,"reason":"measuring","unsolicited_queries":0,"window_s":600,"window_started_at":1700000100}

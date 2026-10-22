@@ -6,6 +6,7 @@ mod config;
 mod floor;
 mod http;
 mod metrics;
+mod ops;
 mod services;
 mod settings;
 mod subscriptions;
