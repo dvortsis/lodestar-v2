@@ -3,13 +3,13 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::Info;
 use lodestar_search::{
-    Error, IndexVersion, LiveConfig, Rebuild, SearchIndex, Serving, ServingConfig,
+    Error, IndexVersion, LiveConfig, Rebuild, RebuildPhase, SearchIndex, Serving, ServingConfig,
 };
 use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig};
 
@@ -103,6 +103,16 @@ fn config(version: IndexVersion) -> ServingConfig {
     }
 }
 
+/// A config whose rebuild waits, once caught up, until the flag clears.
+fn held(version: IndexVersion) -> (ServingConfig, Arc<AtomicBool>) {
+    let hold = Arc::new(AtomicBool::new(true));
+    let config = ServingConfig {
+        hold_before_finish: Some(hold.clone()),
+        ..config(version)
+    };
+    (config, hold)
+}
+
 fn total(index: &SearchIndex, q: &str) -> usize {
     let node = lodestar_search::parse(q).unwrap();
     index.search(&index.query(&node, NOW), 10).unwrap().total
@@ -134,34 +144,45 @@ fn searches_keep_working_through_a_rebuild_and_the_swap() {
     let mut writer = store(dir.path(), n);
     build_complete(&root, OLD, &mut writer);
 
+    let (config, hold) = held(NEW);
     let serving =
-        Arc::new(Serving::open_or_rebuild(&root, &dir.path().join("s.db"), config(NEW)).unwrap());
+        Arc::new(Serving::open_or_rebuild(&root, &dir.path().join("s.db"), config).unwrap());
     let p = serving.progress().expect("rebuilding");
     assert_eq!((p.from, p.to, p.total), (OLD, NEW, n as u64));
+    assert!(p.unavailable.is_empty(), "same schema");
 
     let stop = Arc::new(AtomicBool::new(false));
+    // Searches each thread ran on the old index and on the new one.
+    let counts: Arc<[(AtomicUsize, AtomicUsize); 3]> = Arc::new(Default::default());
     let searchers: Vec<_> = (0..3)
-        .map(|_| {
-            let (serving, stop) = (serving.clone(), stop.clone());
+        .map(|i| {
+            let (serving, stop, counts) = (serving.clone(), stop.clone(), counts.clone());
             std::thread::spawn(move || {
-                let (mut during, mut after) = (0, 0);
                 while !stop.load(Ordering::Relaxed) {
                     let rebuilding = serving.rebuilding();
                     // Every answer, from either index, has every torrent.
                     assert_eq!(total(&serving.index(), "common movie"), n);
-                    if rebuilding { during += 1 } else { after += 1 }
+                    let c = if rebuilding {
+                        &counts[i].0
+                    } else {
+                        &counts[i].1
+                    };
+                    c.fetch_add(1, Ordering::Relaxed);
                 }
-                (during, after)
             })
         })
         .collect();
+    let all = |pick: fn(&(AtomicUsize, AtomicUsize)) -> &AtomicUsize| {
+        counts.iter().all(|c| pick(c).load(Ordering::Relaxed) > 0)
+    };
+    wait("searches run during the rebuild", || all(|c| &c.0));
+    assert!(serving.rebuilding());
+    hold.store(false, Ordering::Relaxed);
     wait("the rebuild finishes", || !serving.rebuilding());
-    // Some searches run against the new index too.
-    std::thread::sleep(Duration::from_millis(50));
+    wait("searches run after the swap", || all(|c| &c.1));
     stop.store(true, Ordering::Relaxed);
     for s in searchers {
-        let (during, after) = s.join().unwrap();
-        assert!(during > 0 && after > 0, "{during} during, {after} after");
+        s.join().unwrap();
     }
     let index = serving.index();
     assert_eq!(index.num_docs(), n as u64);
@@ -169,6 +190,63 @@ fn searches_keep_working_through_a_rebuild_and_the_swap() {
     assert_eq!(index.files_watermark().unwrap(), n as i64);
     wait("the old index is deleted", || {
         names_in(&root) == vec![NEW.dir_name()]
+    });
+}
+
+#[test]
+fn no_torrent_visible_before_the_swap_is_missing_after_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("index");
+    let n = 1000;
+    let mut writer = store(dir.path(), n);
+    build_complete(&root, OLD, &mut writer);
+    let (config, hold) = held(NEW);
+    let serving =
+        Arc::new(Serving::open_or_rebuild(&root, &dir.path().join("s.db"), config).unwrap());
+
+    // Torrents keep arriving through the swap; each search must see at
+    // least what the one before it saw.
+    let stop = Arc::new(AtomicBool::new(false));
+    let adder = {
+        let stop = stop.clone();
+        std::thread::spawn(move || {
+            let mut i = n;
+            while !stop.load(Ordering::Relaxed) {
+                add(&mut writer, movies(i..i + 5));
+                i += 5;
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            i
+        })
+    };
+    let searcher = {
+        let (serving, stop) = (serving.clone(), stop.clone());
+        std::thread::spawn(move || {
+            let (mut seen, mut searches) = (0, 0);
+            while !stop.load(Ordering::Relaxed) {
+                let now = total(&serving.index(), "common movie");
+                assert!(now >= seen, "{now} visible after {seen}");
+                seen = now;
+                searches += 1;
+            }
+            searches
+        })
+    };
+    // The old index takes new torrents while it serves.
+    wait("the old index follows the store", || {
+        total(&serving.index(), "common movie") > n
+    });
+    hold.store(false, Ordering::Relaxed);
+    wait("the rebuild finishes", || !serving.rebuilding());
+    let at_swap = total(&serving.index(), "common movie");
+    wait("the new index follows the store", || {
+        total(&serving.index(), "common movie") > at_swap
+    });
+    stop.store(true, Ordering::Relaxed);
+    let added = adder.join().unwrap();
+    assert!(searcher.join().unwrap() > 0);
+    wait("everything is indexed", || {
+        total(&serving.index(), "common movie") == added
     });
 }
 
@@ -183,7 +261,7 @@ fn an_interrupted_rebuild_resumes_from_its_watermarks() {
     let mut reader = Store::open_reader(dir.path().join("s.db"), StoreConfig::default()).unwrap();
     let mut b = Rebuild::open(&root, NEW, HEAP).unwrap();
     for _ in 0..10 {
-        b.step(&mut reader, 100).unwrap();
+        assert_eq!(b.step(&mut reader, 100).unwrap().added, 100);
     }
     b.commit().unwrap();
     // Uncommitted work is lost in the crash.
@@ -201,6 +279,100 @@ fn an_interrupted_rebuild_resumes_from_its_watermarks() {
     assert_eq!(total(&index, "common movie"), n);
     assert!(!building.exists());
     assert!(root.join(NEW.dir_name()).exists());
+}
+
+#[test]
+fn a_stopped_rebuild_resumes_at_the_next_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("index");
+    let n = 800;
+    let mut writer = store(dir.path(), n);
+    build_complete(&root, OLD, &mut writer);
+    let db = dir.path().join("s.db");
+
+    let (config, _hold) = held(NEW);
+    let serving = Serving::open_or_rebuild(&root, &db, config).unwrap();
+    wait("the build catches up", || {
+        serving.progress().is_some_and(|p| p.done == n as u64)
+    });
+    // Stopping commits the build; the old index still serves.
+    serving.shutdown().unwrap();
+    assert!(root.join(OLD.dir_name()).exists());
+
+    let (config, hold) = held(NEW);
+    let serving = Serving::open_or_rebuild(&root, &db, config).unwrap();
+    let p = serving.progress().unwrap();
+    assert_eq!(
+        (p.done, p.total),
+        (n as u64, n as u64),
+        "nothing rebuilt twice"
+    );
+    hold.store(false, Ordering::Relaxed);
+    wait("the rebuild finishes", || !serving.rebuilding());
+    assert_eq!(serving.index().num_docs(), n as u64);
+}
+
+#[test]
+fn a_failed_rebuild_keeps_the_old_index_serving() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("index");
+    let n = 300;
+    let mut writer = store(dir.path(), n);
+    build_complete(&root, OLD, &mut writer);
+    let db = dir.path().join("s.db");
+
+    let (cfg, hold) = held(NEW);
+    let serving = Serving::open_or_rebuild(&root, &db, cfg).unwrap();
+    wait("the build catches up", || {
+        serving.progress().is_some_and(|p| p.done == n as u64)
+    });
+    // Something in the way of the rename.
+    let blocker = root.join(NEW.dir_name());
+    std::fs::write(&blocker, "not a directory").unwrap();
+    hold.store(false, Ordering::Relaxed);
+    wait("the rebuild fails", || {
+        serving
+            .progress()
+            .is_some_and(|p| p.phase == RebuildPhase::Failed)
+    });
+    let old = serving.index();
+    assert_eq!(total(&old, "common movie"), n);
+    // The old index still follows the store.
+    add(&mut writer, ["Still.Followed.2013".to_string()]);
+    wait("the old index takes new torrents", || {
+        total(&serving.index(), "still followed") == 1
+    });
+    drop(old);
+    serving.shutdown().unwrap();
+
+    // Out of the way, the next start only needs the rename: the build
+    // was marked complete.
+    std::fs::remove_file(&blocker).unwrap();
+    let serving = Serving::open_or_rebuild(&root, &db, config(NEW)).unwrap();
+    assert!(!serving.rebuilding());
+    wait("it catches up", || {
+        total(&serving.index(), "common movie | still followed") == n + 1
+    });
+}
+
+#[test]
+fn an_older_index_that_fails_to_open_fails_the_start_and_is_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("index");
+    let mut writer = store(dir.path(), 100);
+    build_complete(&root, OLD, &mut writer);
+    let meta = root.join(OLD.dir_name()).join("meta.json");
+    let good = std::fs::read(&meta).unwrap();
+    std::fs::write(&meta, b"{ not json").unwrap();
+
+    let db = dir.path().join("s.db");
+    assert!(Serving::open_or_rebuild(&root, &db, config(NEW)).is_err());
+    assert_eq!(names_in(&root), vec![OLD.dir_name()], "nothing discarded");
+    // Readable again, it serves.
+    std::fs::write(&meta, good).unwrap();
+    let serving = Serving::open_or_rebuild(&root, &db, config(NEW)).unwrap();
+    assert_eq!(serving.progress().unwrap().from, OLD);
+    assert_eq!(total(&serving.index(), "common movie"), 100);
 }
 
 #[test]
@@ -237,32 +409,39 @@ fn after_the_swap_new_torrents_go_to_the_new_index_only() {
     let mut writer = store(dir.path(), n);
     build_complete(&root, OLD, &mut writer);
 
-    let serving = Serving::open_or_rebuild(&root, &dir.path().join("s.db"), config(NEW)).unwrap();
+    let (config, hold) = held(NEW);
+    let serving = Serving::open_or_rebuild(&root, &dir.path().join("s.db"), config).unwrap();
     let old = serving.index();
     // The old index follows the store while it serves.
     add(&mut writer, ["During.The.Rebuild.2011".to_string()]);
     wait("the old index takes new torrents", || {
         total(&old, "during rebuild") == 1
     });
+    hold.store(false, Ordering::Relaxed);
     wait("the rebuild finishes", || !serving.rebuilding());
     let new = serving.index();
     assert!(!Arc::ptr_eq(&old, &new));
     assert_eq!(total(&new, "during rebuild"), 1);
+    drop(new);
 
+    // The old indexer stopped before the swap, so this can only reach
+    // the new index.
     add(&mut writer, ["After.The.Swap.2012".to_string()]);
     wait("the new index takes new torrents", || {
         total(&serving.index(), "after swap") == 1
     });
-    // Two more commit intervals: the old index would have it by now.
-    std::thread::sleep(Duration::from_millis(300));
     assert_eq!(old.num_docs(), n as u64 + 1);
     assert_eq!(total(&old, "after swap"), 0);
     assert_eq!(
         serving.stats().watermark.load(Ordering::Relaxed),
         n as i64 + 2
     );
+    // Unmapped, the old directory can go (Windows needs that).
+    drop(old);
+    wait("the old index is deleted", || {
+        names_in(&root) == vec![NEW.dir_name()]
+    });
     serving.shutdown().unwrap();
-    assert_eq!(names_in(&root), vec![NEW.dir_name()]);
 }
 
 #[test]
