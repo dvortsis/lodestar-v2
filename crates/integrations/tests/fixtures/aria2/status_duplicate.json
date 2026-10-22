@@ -1,0 +1,31 @@
+{
+  "recorded_from": "aria2 1.37.0, aria2c --enable-rpc on Ubuntu 24.04",
+  "note": "aria2.tellStatus: the duplicate fails at once: errorCode 12",
+  "request": {
+    "method": "POST",
+    "path": "/jsonrpc",
+    "query": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "content-length",
+        "162"
+      ],
+      [
+        "expires",
+        "Thu, 22 Oct 2026 09:28:25 GMT"
+      ],
+      [
+        "cache-control",
+        "no-cache"
+      ],
+      [
+        "content-type",
+        "application/json-rpc"
+      ]
+    ],
+    "body": "{\"id\":\"10\",\"jsonrpc\":\"2.0\",\"result\":{\"errorCode\":\"12\",\"errorMessage\":\"InfoHash f16304349815c2941fe00ababb5fe4e9098e0ee4 is already registered.\",\"status\":\"error\"}}"
+  }
+}

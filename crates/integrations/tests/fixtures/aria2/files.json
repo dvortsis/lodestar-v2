@@ -1,0 +1,31 @@
+{
+  "recorded_from": "aria2 1.37.0, aria2c --enable-rpc on Ubuntu 24.04",
+  "note": "aria2.getFiles: the .torrent fixture's three files (1-based), two selected",
+  "request": {
+    "method": "POST",
+    "path": "/jsonrpc",
+    "query": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "content-length",
+        "504"
+      ],
+      [
+        "expires",
+        "Thu, 22 Oct 2026 09:28:25 GMT"
+      ],
+      [
+        "cache-control",
+        "no-cache"
+      ],
+      [
+        "content-type",
+        "application/json-rpc"
+      ]
+    ],
+    "body": "{\"id\":\"6\",\"jsonrpc\":\"2.0\",\"result\":[{\"completedLength\":\"0\",\"index\":\"1\",\"length\":\"4000\",\"path\":\"\\/tmp\\/lodestar-live\\/a2\\/Lodestar Fixture Pack\\/Disc 1\\/track01.flac\",\"selected\":\"true\",\"uris\":[]},{\"completedLength\":\"0\",\"index\":\"2\",\"length\":\"5000\",\"path\":\"\\/tmp\\/lodestar-live\\/a2\\/Lodestar Fixture Pack\\/Disc 1\\/track02.flac\",\"selected\":\"false\",\"uris\":[]},{\"completedLength\":\"0\",\"index\":\"3\",\"length\":\"1000\",\"path\":\"\\/tmp\\/lodestar-live\\/a2\\/Lodestar Fixture Pack\\/cover.jpg\",\"selected\":\"true\",\"uris\":[]}]}"
+  }
+}

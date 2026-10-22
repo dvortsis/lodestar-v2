@@ -1,0 +1,39 @@
+{
+  "recorded_from": "Built from Transmission's docs/rpc-spec.md for 2.94 (rpc-version 15); no daemon that old installs on Ubuntu 24.04. Headers are the 4.0.5 recording's.",
+  "note": "session-get from a daemon on rpc-version 15: no labels at all",
+  "request": {
+    "method": "POST",
+    "path": "/transmission/rpc",
+    "query": null
+  },
+  "response": {
+    "status": 200,
+    "headers": [
+      [
+        "server",
+        "Transmission"
+      ],
+      [
+        "x-frame-options",
+        "SAMEORIGIN"
+      ],
+      [
+        "content-security-policy",
+        "frame-ancestors 'self'"
+      ],
+      [
+        "access-control-allow-origin",
+        "*"
+      ],
+      [
+        "content-type",
+        "application/json; charset=UTF-8"
+      ],
+      [
+        "content-length",
+        "105"
+      ]
+    ],
+    "body": "{\"arguments\":{\"rpc-version\":15,\"rpc-version-minimum\":1,\"version\":\"2.94 (d8e60ee44f)\"},\"result\":\"success\"}"
+  }
+}
