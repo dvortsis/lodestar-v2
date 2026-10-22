@@ -133,11 +133,15 @@ pub enum Change {
     /// (owner's decision §2.7). They stay blocked until this: `remove`
     /// takes them out of the floor, which weakens it; otherwise they stay
     /// in it as ordinary CS-1b entries. `source` is a pending source's key
-    /// (`file:<path>`, `list:<id>`); without `hashes`, all of its entries
-    /// the assessment counted ([`Assessment::floor_entries`]).
+    /// (`file:<path>`, `list:<id>`).
+    ///
+    /// A removal confirmed with the password must name its entries: send
+    /// back the assessment's [`Assessment::floor_entries`], so the
+    /// password confirms what the warning listed. Keeping may leave
+    /// `hashes` out, which keeps what the assessment counted.
     ResolveFloorRemoval {
         source: String,
-        /// 40 hex digits each.
+        /// 40 hex digits each, at most 10,000.
         hashes: Option<Vec<String>>,
         #[serde(default)]
         remove: bool,
@@ -204,9 +208,9 @@ pub struct Assessment {
     #[schema(required = true)]
     pub neutralize: Option<Preview>,
     /// For a floor removal: the entries the warning counts, 40 hex digits
-    /// each (up to 1,000 shown). Applying settles exactly these, even if
-    /// more are pending by then; send them back as `hashes` to confirm
-    /// the same set in a later request.
+    /// each. A removal settles at most 10,000 at a time, so a longer
+    /// pending list goes in batches. Send these back as `hashes` to
+    /// confirm the removal with the password.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub floor_entries: Option<Vec<String>>,

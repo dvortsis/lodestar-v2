@@ -15,7 +15,7 @@
 //! locked floor, protective core actions, valid overrides and exceptions)
 //! hold on this server whatever a client sends.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -96,6 +96,9 @@ const REPLAY_SECS: i64 = 30 * 86_400;
 const PREVIEW_ROWS: usize = 100_000;
 /// Hashes listed per source of pending floor removals.
 const PENDING_HASHES: usize = 1_000;
+/// Floor entries one removal settles at most, and a request may name: a
+/// larger pending list is removed in batches, each confirmed.
+const MAX_FLOOR_BATCH: usize = 10_000;
 
 /// The filters routes (§20.7): all behind a session.
 pub fn routes() -> Router<ApiState> {
@@ -166,10 +169,17 @@ fn pending_chosen(
     source: &FloorSource,
     hashes: Option<&[String]>,
 ) -> ApiResult<Vec<[u8; 20]>> {
+    if hashes.is_some_and(|hs| hs.len() > MAX_FLOOR_BATCH) {
+        return Err(bad(
+            "too_many_hashes",
+            format!("Settle at most {MAX_FLOOR_BATCH} floor entries at a time."),
+        )
+        .field("hashes"));
+    }
     let pending = store.pending_floor_of(source).map_err(internal)?;
     let chosen: Vec<[u8; 20]> = match hashes {
         Some(hs) => {
-            let hs: Vec<[u8; 20]> = hs.iter().map(|h| hex20(h)).collect::<ApiResult<_>>()?;
+            let hs: HashSet<[u8; 20]> = hs.iter().map(|h| hex20(h)).collect::<ApiResult<_>>()?;
             pending.into_iter().filter(|p| hs.contains(p)).collect()
         }
         None => pending,
@@ -935,20 +945,30 @@ impl FiltersApi {
                 hashes,
                 remove,
             } => {
-                let chosen =
+                let mut chosen =
                     pending_chosen(&self.store(), &floor_source(source)?, hashes.as_deref())?;
-                a.floor_entries =
-                    Some(chosen.iter().take(PENDING_HASHES).map(|h| hex(h)).collect());
-                a.settles = Some(chosen.clone());
+                // A removal goes in batches the client can name back.
                 if *remove {
+                    chosen.truncate(MAX_FLOOR_BATCH);
+                }
+                a.floor_entries = Some(
+                    chosen
+                        .iter()
+                        .take(MAX_FLOOR_BATCH)
+                        .map(|h| hex(h))
+                        .collect(),
+                );
+                if *remove {
+                    let set: HashSet<&[u8; 20]> = chosen.iter().collect();
                     a.weakening = true;
                     a.preview.tombstones = snap
                         .tombstones
                         .iter()
-                        .filter(|t| chosen.contains(&t.0))
+                        .filter(|t| set.contains(&t.0))
                         .count();
                     a.preview.removed_from_floor = chosen.len();
                 }
+                a.settles = Some(chosen);
             }
             Change::Subscribe { floor, kind, .. } => {
                 if *floor && kind != "content" {
@@ -1500,31 +1520,38 @@ impl FiltersApi {
                 remove,
             } => {
                 let src = floor_source(source)?;
-                let chosen = pending_chosen(store, &src, hashes.as_deref())?;
-                let settled = store
+                // Without `hashes` (keeping only: a removal names them),
+                // what the assessment counted, not whatever is pending by
+                // now.
+                let chosen = match (hashes, &out.assessment.settles) {
+                    (None, Some(counted)) => counted.clone(),
+                    _ => pending_chosen(store, &src, hashes.as_deref())?,
+                };
+                let done = store
                     .resolve_pending_floor(&src, Some(&chosen), *remove, now)
                     .map_err(internal)?;
-                // The store holds the floor; the engine follows it. A
-                // list's own layer is rebuilt below.
-                self.engine.update(|c| {
-                    for h in &settled {
-                        match (&src, remove) {
-                            (FloorSource::File(_), true) => {
-                                if c.cs.hash(h) == Some(Origin::Imported) {
-                                    c.cs.remove_hash(h);
-                                }
+                // The store holds the floor; the engine follows it, for
+                // what actually left it (an entry another file lists
+                // stays). A list's own layer is rebuilt below.
+                self.engine.update(|c| match (&src, remove) {
+                    (FloorSource::File(_), true) => {
+                        for h in &done.unblocked {
+                            if c.cs.hash(h) == Some(Origin::Imported) {
+                                c.cs.remove_hash(h);
                             }
-                            (FloorSource::List(_), false) => c.cs.add_hash(*h, Origin::Imported),
-                            _ => {}
                         }
                     }
-                });
-                if *remove {
-                    for h in &settled {
-                        self.release(store, *h)?;
+                    (FloorSource::List(_), false) => {
+                        for h in &done.settled {
+                            c.cs.add_hash(*h, Origin::Imported);
+                        }
                     }
+                    _ => {}
+                });
+                for h in &done.unblocked {
+                    self.release(store, *h)?;
                 }
-                out.settled = Some(settled.len());
+                out.settled = Some(done.settled.len());
             }
             Change::Undo => self.undo(store)?,
         }
@@ -2467,25 +2494,24 @@ fn apply_change(
                 .field("password")
                 .assessment(assessment));
             }
-            Some(p) => auth.confirm(ip, p).map_err(|e| auth_error(e, "password"))?,
+            Some(p) => {
+                // The password confirms the entries the warning listed, so
+                // a removal names them: what's pending can have grown since.
+                if let Change::ResolveFloorRemoval {
+                    hashes: None,
+                    remove: true,
+                    ..
+                } = &body.change
+                {
+                    return Err(bad(
+                        "floor_removal_needs_hashes",
+                        "Name the entries to remove: send back the floor_entries the warning listed as hashes.",
+                    )
+                    .field("hashes"));
+                }
+                auth.confirm(ip, p).map_err(|e| auth_error(e, "password"))?
+            }
         }
     }
-    // A floor removal settles what its warning counted, not whatever is
-    // pending by the time it runs.
-    let change = match (&body.change, &assessment.settles) {
-        (
-            Change::ResolveFloorRemoval {
-                source,
-                hashes: None,
-                remove,
-            },
-            Some(chosen),
-        ) => Change::ResolveFloorRemoval {
-            source: source.clone(),
-            hashes: Some(chosen.iter().map(|h| hex(h)).collect()),
-            remove: *remove,
-        },
-        _ => body.change,
-    };
-    f.apply(&change, assessment, now).map(Json)
+    f.apply(&body.change, assessment, now).map(Json)
 }

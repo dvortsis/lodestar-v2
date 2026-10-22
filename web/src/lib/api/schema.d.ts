@@ -501,9 +501,9 @@ export interface components {
             confirm: boolean;
             /**
              * @description For a floor removal: the entries the warning counts, 40 hex digits
-             *     each (up to 1,000 shown). Applying settles exactly these, even if
-             *     more are pending by then; send them back as `hashes` to confirm
-             *     the same set in a later request.
+             *     each. A removal settles at most 10,000 at a time, so a longer
+             *     pending list goes in batches. Send these back as `hashes` to
+             *     confirm the removal with the password.
              */
             floor_entries?: string[];
             neutralize: null | components["schemas"]["Preview"];
@@ -760,7 +760,7 @@ export interface components {
             /** @enum {string} */
             op: "resolve_held";
         } | {
-            /** @description 40 hex digits each. */
+            /** @description 40 hex digits each, at most 10,000. */
             hashes?: string[] | null;
             /** @enum {string} */
             op: "resolve_floor_removal";

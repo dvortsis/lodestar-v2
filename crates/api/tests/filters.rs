@@ -1172,13 +1172,21 @@ async fn floor_entries_a_file_dropped_leave_only_with_the_password() {
     let (status, body) = apply(&f, &cookie, change.clone(), None).await;
     assert_eq!(status, StatusCode::PRECONDITION_REQUIRED, "{body}");
     assert!(f.api.engine.current().blocked_hash(&[b]).is_some());
+    // The password confirms the entries the warning listed, so a removal
+    // names them; without them it's refused before the password is read.
+    let (status, body) = apply(&f, &cookie, change.clone(), Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "floor_removal_needs_hashes");
+    assert!(f.api.engine.current().blocked_hash(&[b]).is_some());
+    let confirm = json!({ "op": "resolve_floor_removal", "source": "file:/config/blocked.txt",
+        "hashes": [hex(&b)], "remove": true });
     // A wrong password changes nothing: still blocked, still waiting.
-    let (status, body) = apply(&f, &cookie, change.clone(), Some("wrong password")).await;
+    let (status, body) = apply(&f, &cookie, confirm.clone(), Some("wrong password")).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
     assert!(f.api.engine.current().blocked_hash(&[b]).is_some());
     let o = overview(&f, &cookie).await;
     assert_eq!(o["pending_floor_removals"][0]["entries"], 1);
-    let (status, body) = apply(&f, &cookie, change.clone(), Some(PASSWORD)).await;
+    let (status, body) = apply(&f, &cookie, confirm.clone(), Some(PASSWORD)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["settled"], 1);
     assert_eq!(body["assessment"]["floor_entries"], json!([hex(&b)]));
@@ -1189,8 +1197,20 @@ async fn floor_entries_a_file_dropped_leave_only_with_the_password() {
     assert!(o["pending_floor_removals"].as_array().unwrap().is_empty());
 
     // Nothing left to settle.
-    let (status, _) = apply(&f, &cookie, change, Some(PASSWORD)).await;
+    let (status, _) = apply(&f, &cookie, confirm, Some(PASSWORD)).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+    // At most 10,000 named at a time.
+    let many: Vec<String> = (0..10_001u32).map(|i| format!("{i:040x}")).collect();
+    let (status, body) = apply(
+        &f,
+        &cookie,
+        json!({ "op": "resolve_floor_removal", "source": "file:/config/blocked.txt",
+            "hashes": many }),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "too_many_hashes");
     let (status, _) = apply(
         &f,
         &cookie,
@@ -1232,6 +1252,88 @@ async fn floor_entries_a_file_dropped_leave_only_with_the_password() {
     );
     let o = overview(&f, &cookie).await;
     assert_eq!(o["pending_floor_removals"][0]["hashes"], json!([hex(&c)]));
+}
+
+/// An entry another config file lists stays blocked when it's removed
+/// through the file that dropped it: in the store and in the running
+/// engine (§20.7).
+#[tokio::test]
+async fn removing_an_entry_another_file_lists_leaves_it_blocked() {
+    let f = fixture();
+    let cookie = logged_in(&f).await;
+    let h = [0xd4u8; 20];
+    {
+        let mut s = f.api.store.lock().unwrap();
+        // Start 1: a.txt lists it. Start 2: a.txt doesn't, b.txt does.
+        s.sync_floor_file("/config/a.txt", &[h], 1).unwrap();
+        assert_eq!(s.sync_floor_file("/config/a.txt", &[], 2).unwrap(), 1);
+        s.sync_floor_file("/config/b.txt", &[h], 2).unwrap();
+        let state = s.filter_state().unwrap();
+        f.api.engine.update(|c| {
+            for (h, _) in &state.cs_hashes {
+                c.cs.add_hash(*h, lodestar_filter::Origin::Imported);
+            }
+        });
+    }
+    let hex = |h: &[u8; 20]| h.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let change = json!({ "op": "resolve_floor_removal", "source": "file:/config/a.txt",
+        "hashes": [hex(&h)], "remove": true });
+    let (status, body) = apply(&f, &cookie, change, Some(PASSWORD)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["settled"], 1);
+    let kept = f
+        .api
+        .store
+        .lock()
+        .unwrap()
+        .filter_state()
+        .unwrap()
+        .cs_hashes
+        .iter()
+        .any(|(x, _)| *x == h);
+    assert!(kept, "the store keeps it");
+    assert!(
+        f.api.engine.current().blocked_hash(&[h]).is_some(),
+        "the engine still blocks it"
+    );
+}
+
+/// Keeping without naming entries settles what the assessment counted,
+/// even if more are pending by the time it's applied.
+#[tokio::test]
+async fn keeping_settles_what_was_counted() {
+    let f = fixture();
+    let (a, b) = ([0xa1u8; 20], [0xb2u8; 20]);
+    let sync = |hs: &[[u8; 20]], at| {
+        f.api
+            .store
+            .lock()
+            .unwrap()
+            .sync_floor_file("/config/blocked.txt", hs, at)
+            .unwrap()
+    };
+    sync(&[a, b], 1);
+    sync(&[b], 2);
+    let change: lodestar_api::filters::Change = serde_json::from_value(json!({
+        "op": "resolve_floor_removal", "source": "file:/config/blocked.txt" }))
+    .unwrap();
+    let now = lodestar_api_now();
+    let assessment = f.api.assess(&change, now).unwrap();
+    assert_eq!(assessment.floor_entries.as_ref().unwrap().len(), 1);
+    // `b` drops out too before the change runs.
+    sync(&[], 3);
+    let done = f.api.apply(&change, assessment, now).unwrap();
+    assert_eq!(done.settled, Some(1));
+    let pending = f
+        .api
+        .store
+        .lock()
+        .unwrap()
+        .pending_floor_of(&lodestar_store::FloorSource::File(
+            "/config/blocked.txt".into(),
+        ))
+        .unwrap();
+    assert_eq!(pending, [b], "not counted, so still waiting");
 }
 
 /// A floor-marked list's upstream removals wait too. Keeping them is

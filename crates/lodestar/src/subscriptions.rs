@@ -86,6 +86,18 @@ pub fn sync_config(store: &mut Store, c: &Subscriptions) -> Result<(), String> {
             ListAction::Drop => Action::Drop,
             ListAction::Quarantine => Action::Quarantine,
         };
+        // An existing list is kept as it is, so the config can't mark it
+        // as part of the floor: that's done in the app, with the password.
+        if l.floor {
+            let existing = store.subscriptions().map_err(|e| e.to_string())?;
+            if existing.iter().any(|s| s.url == l.url && !s.floor) {
+                tracing::warn!(
+                    "subscriptions: {} is already subscribed outside the floor; \
+                     `floor = true` in the config is ignored (mark it in the app)",
+                    l.url
+                );
+            }
+        }
         store
             .add_subscription(&NewSubscription {
                 url: &l.url,

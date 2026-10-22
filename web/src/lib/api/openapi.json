@@ -1113,7 +1113,7 @@
             "items": {
               "type": "string"
             },
-            "description": "For a floor removal: the entries the warning counts, 40 hex digits\neach (up to 1,000 shown). Applying settles exactly these, even if\nmore are pending by then; send them back as `hashes` to confirm\nthe same set in a later request."
+            "description": "For a floor removal: the entries the warning counts, 40 hex digits\neach. A removal settles at most 10,000 at a time, so a longer\npending list goes in batches. Send these back as `hashes` to\nconfirm the removal with the password."
           },
           "neutralize": {
             "oneOf": [
@@ -2217,7 +2217,7 @@
           },
           {
             "type": "object",
-            "description": "Settles floor entries a config file or a floor-marked list dropped\n(owner's decision §2.7). They stay blocked until this: `remove`\ntakes them out of the floor, which weakens it; otherwise they stay\nin it as ordinary CS-1b entries. `source` is a pending source's key\n(`file:<path>`, `list:<id>`); without `hashes`, all of its entries\nthe assessment counted ([`Assessment::floor_entries`]).",
+            "description": "Settles floor entries a config file or a floor-marked list dropped\n(owner's decision §2.7). They stay blocked until this: `remove`\ntakes them out of the floor, which weakens it; otherwise they stay\nin it as ordinary CS-1b entries. `source` is a pending source's key\n(`file:<path>`, `list:<id>`).\n\nA removal confirmed with the password must name its entries: send\nback the assessment's [`Assessment::floor_entries`], so the\npassword confirms what the warning listed. Keeping may leave\n`hashes` out, which keeps what the assessment counted.",
             "required": [
               "source",
               "op"
@@ -2231,7 +2231,7 @@
                 "items": {
                   "type": "string"
                 },
-                "description": "40 hex digits each."
+                "description": "40 hex digits each, at most 10,000."
               },
               "op": {
                 "type": "string",

@@ -57,6 +57,16 @@ impl FloorSource {
     }
 }
 
+/// What settling pending floor removals did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Settled {
+    /// The entries that left the source's pending list.
+    pub settled: Vec<[u8; 20]>,
+    /// Of those, the ones that left the floor: a removal leaves an entry
+    /// another config file lists, or that the floor holds otherwise.
+    pub unblocked: Vec<[u8; 20]>,
+}
+
 /// Floor entries a source dropped, still blocked until you decide.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingFloor {
@@ -239,15 +249,17 @@ impl Store {
     /// Settles pending floor removals: `hashes` (all of them when `None`)
     /// leave the source's pending list. With `remove` they leave the
     /// floor; otherwise they stay in it as ordinary imported entries, no
-    /// longer tied to the source. Returns the entries settled.
+    /// longer tied to the source. Returns the entries settled, and which
+    /// of them left the floor.
     pub fn resolve_pending_floor(
         &mut self,
         source: &FloorSource,
         hashes: Option<&[[u8; 20]]>,
         remove: bool,
         at: i64,
-    ) -> Result<Vec<[u8; 20]>> {
+    ) -> Result<Settled> {
         let tx = self.conn.transaction()?;
+        let mut unblocked = Vec::new();
         let key = pending_key(source);
         let mut pending = read(&tx, &key)?;
         let chosen: Set = match hashes {
@@ -273,7 +285,9 @@ impl Store {
                     let mut del =
                         tx.prepare_cached("DELETE FROM cs_hashes WHERE hash = ?1 AND origin = ?2")?;
                     for h in chosen.difference(&others) {
-                        del.execute(params![&h[..], IMPORTED])?;
+                        if del.execute(params![&h[..], IMPORTED])? > 0 {
+                            unblocked.push(*h);
+                        }
                     }
                 }
             }
@@ -288,10 +302,25 @@ impl Store {
                     add.execute(params![&h[..], IMPORTED, at])?;
                 }
             }
-            FloorSource::List(_) => {}
+            // Removed: what the floor still holds by hash stays blocked.
+            FloorSource::List(_) => {
+                for h in &chosen {
+                    let held: bool = tx.query_row(
+                        "SELECT EXISTS (SELECT 1 FROM cs_hashes WHERE hash = ?1)",
+                        [&h[..]],
+                        |r| r.get(0),
+                    )?;
+                    if !held {
+                        unblocked.push(*h);
+                    }
+                }
+            }
         }
         tx.commit()?;
-        Ok(chosen.into_iter().collect())
+        Ok(Settled {
+            settled: chosen.into_iter().collect(),
+            unblocked,
+        })
     }
 }
 
@@ -357,9 +386,18 @@ mod tests {
         assert_eq!(
             s.resolve_pending_floor(&src, Some(&[a, [7; 20]]), false, 30)
                 .unwrap(),
-            [a]
+            Settled {
+                settled: vec![a],
+                unblocked: vec![]
+            }
         );
-        assert_eq!(s.resolve_pending_floor(&src, None, true, 30).unwrap(), [b]);
+        assert_eq!(
+            s.resolve_pending_floor(&src, None, true, 30).unwrap(),
+            Settled {
+                settled: vec![b],
+                unblocked: vec![b]
+            }
+        );
         assert_eq!(cs(&s), [(a, IMPORTED), (mine, 0)]);
         assert!(s.pending_floor().unwrap().is_empty());
         // Settled entries aren't the file's any more.
@@ -385,7 +423,12 @@ mod tests {
         assert_eq!(s.sync_floor_file("b.txt", &[], 30).unwrap(), 1);
         let src = FloorSource::File("b.txt".into());
         assert_eq!(s.pending_floor_of(&src).unwrap(), [h]);
-        assert_eq!(s.resolve_pending_floor(&src, None, true, 40).unwrap(), [h]);
+        assert_eq!(
+            s.resolve_pending_floor(&src, None, true, 40)
+                .unwrap()
+                .unblocked,
+            [h]
+        );
         assert!(!cs(&s).contains(&(h, IMPORTED)), "removed");
 
         // A file that starts listing an entry after another dropped it:
@@ -395,8 +438,15 @@ mod tests {
         assert_eq!(s.sync_floor_file("a.txt", &[], 20).unwrap(), 1);
         s.sync_floor_file("b.txt", &[h], 20).unwrap();
         let src = FloorSource::File("a.txt".into());
-        assert_eq!(s.resolve_pending_floor(&src, None, true, 30).unwrap(), [h]);
-        assert!(cs(&s).contains(&(h, IMPORTED)), "b.txt still adds it");
+        assert_eq!(
+            s.resolve_pending_floor(&src, None, true, 30).unwrap(),
+            Settled {
+                settled: vec![h],
+                unblocked: vec![]
+            },
+            "settled, but b.txt still adds it"
+        );
+        assert!(cs(&s).contains(&(h, IMPORTED)));
         assert!(s.pending_floor().unwrap().is_empty());
     }
 
