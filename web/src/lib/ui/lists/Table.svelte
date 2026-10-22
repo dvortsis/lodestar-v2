@@ -8,6 +8,7 @@
 	import Popover from '../overlays/Popover.svelte';
 	import VirtualList from './VirtualList.svelte';
 	import type { Column, SortState } from './table-types';
+	import { defaultRowHeight, isCoarsePointer } from '../overlays/motion';
 	import '../overlays/overlays.css';
 	import './lists.css';
 
@@ -67,7 +68,7 @@
 	);
 	const selectable = $derived(!!onSelectedChange);
 	const tracks = $derived(
-		`${selectable ? 'var(--control-height-dense) ' : ''}${shown.map((c) => c.width ?? '1fr').join(' ')}`
+		`${selectable ? (isCoarsePointer() ? 'var(--target-min) ' : 'var(--control-height-dense) ') : ''}${shown.map((c) => c.width ?? '1fr').join(' ')}`
 	);
 
 	function nextSort(id: string): SortState {
@@ -190,7 +191,7 @@
 				aria-rowindex={1}
 				class="grid items-center border-b border-base-300 text-small font-medium text-muted-text"
 				style:grid-template-columns={tracks}
-				style:min-height={rowHeight ? `${rowHeight}px` : 'var(--row-height-compact)'}
+				style:min-height="{rowHeight ?? defaultRowHeight()}px"
 			>
 				{#if selectable}
 					<div role="columnheader" class="flex items-center justify-center">

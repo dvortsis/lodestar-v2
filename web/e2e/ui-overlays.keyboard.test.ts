@@ -1,7 +1,7 @@
 // W7cd: the overlay primitives on the test-only showcase (/dev/ui/overlays), keyboard-only, with
 // axe in Riverstone light and dark. The showcase is served because the Playwright build sets
 // VITE_DEV_ROUTES.
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import { expectNoA11yViolations } from './a11y';
 import { expect, test } from './support/test';
 
@@ -73,6 +73,13 @@ test('menu: arrows, typeahead and Enter select an item, focus returns to the tri
 	await kbd.tabTo(trigger);
 	await kbd.press('Enter');
 	await expect(page.getByRole('menuitem', { name: 'Favorite' })).toBeFocused();
+	// The highlighted item has a visible ring, not only a tint (§10.13).
+	const ring = await page.getByRole('menuitem', { name: 'Favorite' }).evaluate((e) => {
+		const s = getComputedStyle(e);
+		return { style: s.outlineStyle, width: parseFloat(s.outlineWidth) };
+	});
+	expect(ring.style).not.toBe('none');
+	expect(ring.width).toBeGreaterThanOrEqual(2);
 	await kbd.press('ArrowDown');
 	await expect(page.getByRole('menuitem', { name: 'Hide' })).toBeFocused();
 	await kbd.press('f');
@@ -82,21 +89,41 @@ test('menu: arrows, typeahead and Enter select an item, focus returns to the tri
 	await expect(trigger).toBeFocused();
 });
 
-test('popover is non-modal: Shift+Tab walks out of it', async ({ page, go, kbd }) => {
-	await go(PATH);
+async function openColumns(
+	page: Page,
+	kbd: { tabTo(l: Locator): Promise<number>; press(k: string): Promise<void> }
+) {
 	const trigger = page.getByRole('button', { name: 'Columns' });
 	await kbd.tabTo(trigger);
 	await kbd.press('Enter');
-	const panel = page.getByRole('dialog', { name: 'Columns' });
-	await expect(panel).toBeVisible();
-	// A trap would cycle inside the panel. Shift+Tab from its first control has an earlier page
-	// element to land on in any browser mode (Tab past the last control may go to browser chrome,
-	// which leaves document.activeElement unchanged in headed Chromium).
-	await panel.focus();
-	await kbd.press('Tab'); // the checkbox inside
-	expect(await panel.evaluate((p) => p.contains(document.activeElement))).toBe(true);
-	await kbd.press('Shift+Tab'); // back onto the (tabindex -1) panel is skipped
-	expect(await panel.evaluate((p) => p.contains(document.activeElement))).toBe(false);
+	const box = page.getByRole('dialog', { name: 'Columns' }).getByRole('checkbox', { name: 'Size' });
+	// Opening moves focus into the panel; wait for it, or a slow runner pulls focus after the keys.
+	await expect(box).toBeFocused();
+	return { trigger };
+}
+
+test('popover is non-modal: Tab from its last control continues after the trigger', async ({
+	page,
+	go,
+	kbd
+}) => {
+	await go(PATH);
+	await openColumns(page, kbd);
+	// The panel is portalled to the end of <body>: without the order fix Tab would leave the page,
+	// and a focus trap would cycle back to the checkbox.
+	await kbd.press('Tab');
+	await expect(page.getByRole('button', { name: 'Actions' })).toBeFocused();
+});
+
+test('popover is non-modal: Shift+Tab from its first control returns to the trigger', async ({
+	page,
+	go,
+	kbd
+}) => {
+	await go(PATH);
+	const { trigger } = await openColumns(page, kbd);
+	await kbd.press('Shift+Tab');
+	await expect(trigger).toBeFocused();
 });
 
 test('popover: Esc closes it and returns focus to the trigger', async ({ page, go, kbd }) => {

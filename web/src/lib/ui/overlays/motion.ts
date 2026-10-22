@@ -11,6 +11,16 @@ export function tokenPx(name: string, fallback: number): number {
 	return Number.isFinite(n) ? n : fallback;
 }
 
+export function isCoarsePointer(): boolean {
+	return typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+}
+
+/** Fixed row height: `--row-height-compact`, raised to `--target-min` under a coarse pointer. */
+export function defaultRowHeight(): number {
+	const compact = tokenPx('--row-height-compact', 36);
+	return isCoarsePointer() ? Math.max(compact, tokenPx('--target-min', 44)) : compact;
+}
+
 function tokenMs(name: string): number {
 	if (typeof document === 'undefined') return 0;
 	const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
