@@ -328,6 +328,8 @@ fn counts_reconcile_with_brute_force_and_the_index() {
         "type:movie,tv private:no",
         "common -private:yes v2:yes",
         "cat:video ext:mkv,flac -ext:exe",
+        "cat:audio=0 common",
+        "cat:video<60 cat:subtitle",
         "lang:ja lang:en has:nfo",
         "group:g3 | group:g4",
         "ambiguous:yes imported:no backfill:no",
@@ -384,6 +386,25 @@ fn own_clauses_are_top_level_and_single_field() {
     assert!(!Facet::V2.owns(&p("private:no")));
     assert!(Facet::Category.owns(&p("cat:video | cat:audio")));
     assert!(!Facet::Category.owns(&p("bytes:video>50")));
+    // Shares: "has some" is a selection, "has none" an exclusion, any
+    // other range a plain filter.
+    for (q, want) in [
+        ("cat:video", Some(false)),
+        ("cat:video>=80%", Some(false)),
+        ("cat:video=10..50", Some(false)),
+        ("cat:video=0", Some(true)),
+        ("-cat:video=0", Some(false)),
+        ("cat:video<50", None),
+        ("cat:video=0..100", None),
+    ] {
+        let n = p(q);
+        let got = Facet::Category.selection(&n).first().map(|(v, neg)| {
+            assert_eq!(v, "video");
+            *neg
+        });
+        assert_eq!(got, want, "{q}");
+        assert_eq!(Facet::Category.owns(&n), want.is_some(), "{q}");
+    }
     assert!(Facet::Has.owns(&p("has:nfo")));
     assert!(Facet::Adult.owns(&p("adult:scene,vr")));
     // Selections, with negations.

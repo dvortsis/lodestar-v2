@@ -579,6 +579,11 @@ fn facets_path(
     }
     // The whole corpus: the shared pass at its widest (sampled at scale).
     let browse = vec![String::new(); a.queries.min(50)];
+    // Browsing with selections: the widest disjunctive passes, each over
+    // most of the corpus (near the sampling threshold at 1M torrents).
+    let browse_selected: Vec<String> = (0..a.queries.min(50))
+        .map(|i| selections[i % selections.len()].to_string())
+        .collect();
     let ms = |d: Duration| format!("{:.2}", d.as_secs_f64() * 1000.0);
     println!("\n  /facets: a lease, then every term facet and histogram");
     println!(
@@ -590,6 +595,7 @@ fn facets_path(
         ("broad word", &broad),
         ("word + selections", &selected),
         ("browse everything", &browse),
+        ("browse + selections", &browse_selected),
     ] {
         let mut times = Vec::with_capacity(queries.len());
         let mut hits = 0usize;

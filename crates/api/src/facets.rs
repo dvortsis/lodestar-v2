@@ -193,14 +193,23 @@ async fn run_facets(
     let _guard = cancel.cancel_on_drop();
     tokio::task::spawn_blocking(move || {
         let started = Instant::now();
+        // The budget covers taking the lease (its count) too.
+        let budget = cancel.with_budget(BUDGET);
+        let timeout = |e: SearchError| match e {
+            SearchError::OutOfTime => ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "facets_timeout",
+                "Counting the facets took too long; narrow the search.",
+            ),
+            e => search_error(e),
+        };
         let lease = match cursor {
             Some(c) => search
                 .leases()
                 .get(&c.lease, client)
                 .map_err(|e| search_error(e).field("lease"))?,
             None => Arc::new(
-                Lease::new(search.index(), &shown, unix_now(), sort, &cancel)
-                    .map_err(search_error)?,
+                Lease::new(search.index(), &shown, unix_now(), sort, &budget).map_err(timeout)?,
             ),
         };
         let first_run = reader
@@ -213,21 +222,7 @@ async fn run_facets(
         // the user's query, so no facet's disjunction removes them. The
         // hidden-torrent clause in `shown` belongs to no facet.
         let filters: &[lodestar_search::Node] = &[];
-        let got = facets(
-            &lease,
-            &shown,
-            filters,
-            &params,
-            &cancel.with_budget(BUDGET),
-        )
-        .map_err(|e| match e {
-            SearchError::OutOfTime => ApiError::new(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "facets_timeout",
-                "Counting the facets took too long; narrow the search.",
-            ),
-            e => search_error(e),
-        })?;
+        let got = facets(&lease, &shown, filters, &params, &budget).map_err(timeout)?;
         let total = lease.total();
         Ok(axum::Json(response(
             &got,
