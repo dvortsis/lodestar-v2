@@ -11,9 +11,13 @@ mod live;
 pub mod query;
 pub mod schema;
 mod sorted;
+mod stem;
 pub mod tokenizer;
 
 pub use doc::{DocEnrichment, TorrentDoc, extension, flag_names};
-pub use index::{Compiled, Error, Hit, Indexer, Result, Results, SearchIndex, Sort, index_dir};
+pub use index::{
+    Compiled, Error, Hit, Indexer, Result, Results, STEM_FALLBACK_BELOW, SearchIndex, Sort,
+    index_dir,
+};
 pub use live::{IndexStats, LiveConfig, LiveIndexer};
 pub use query::{Node, ParseError, parse};
