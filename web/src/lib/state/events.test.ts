@@ -463,6 +463,28 @@ describe('hidden at subscribe', () => {
 		flushFrame();
 		expect(log).toEqual(['t15/15', 'c5']);
 	});
+
+	it('folds a null max_id (Adult hidden) to the newer event visibility', async () => {
+		const ev = make();
+		const s = stream();
+		fetchMock.mockResolvedValue(s.response());
+		const log: string[] = [];
+		ev.on('torrents', (d) => log.push(`t${d.added}/${d.max_id}`));
+		await tick();
+		setVisibility('hidden');
+		s.push(frame('torrents', { added: 1, max_id: 7 }, 'a-1'));
+		s.push(frame('torrents', { added: 2, max_id: null }, 'a-2'));
+		await tick();
+		setVisibility('visible');
+		flushFrame();
+		setVisibility('hidden');
+		s.push(frame('torrents', { added: 3, max_id: null }, 'a-3'));
+		s.push(frame('torrents', { added: 4, max_id: 9 }, 'a-4'));
+		await tick();
+		setVisibility('visible');
+		flushFrame();
+		expect(log).toEqual(['t3/null', 't7/9']);
+	});
 });
 
 describe('after a 401', () => {
@@ -618,5 +640,26 @@ describe('round 2', () => {
 		b.end();
 		await tick(5000);
 		expect(headersOf(2)['Last-Event-ID']).toBeUndefined();
+	});
+
+	it('keeps Last-Event-ID after a visibility resync', async () => {
+		const ev = make();
+		const a = stream();
+		fetchMock
+			.mockResolvedValueOnce(a.response())
+			.mockImplementation(async () => stream().response());
+		const resyncs: number[] = [];
+		ev.on('torrents', () => {}, { onResync: () => resyncs.push(1) });
+		await tick();
+		a.push(
+			frame('torrents', { added: 1, max_id: null }, 'v-1') +
+				frame('resync', { reason: 'visibility' })
+		);
+		await tick();
+		flushFrame();
+		expect(resyncs).toHaveLength(1);
+		a.end();
+		await tick(5000);
+		expect(headersOf(1)['Last-Event-ID']).toBe('v-1');
 	});
 });
