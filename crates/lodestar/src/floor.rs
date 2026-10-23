@@ -55,13 +55,34 @@ pub fn message(store: &Store, source: &FloorSource, n: usize) -> String {
     }
 }
 
+/// Logs one source's pending removals: the file's path or the list's id,
+/// never the list's name or the entries.
+pub fn log_pending(source: &FloorSource, n: usize) {
+    use crate::logging::events::FILTERS_FLOOR_PENDING;
+    use lodestar_log::{Count, Path, log_event};
+    match source {
+        FloorSource::File(path) => log_event!(
+            FILTERS_FLOOR_PENDING,
+            count = n,
+            source = "file",
+            path = Path::new(path.as_str())
+        ),
+        FloorSource::List(id) => log_event!(
+            FILTERS_FLOOR_PENDING,
+            count = n,
+            source = "list",
+            list = Count(*id as u64)
+        ),
+    }
+}
+
 /// Reports every source's pending floor removals once, and counts them.
 /// Returns the lines logged.
 pub fn report(store: &Store) -> Result<Vec<String>, String> {
     let mut lines = Vec::new();
     for p in store.pending_floor().map_err(|e| e.to_string())? {
         let line = message(store, &p.source, p.hashes.len());
-        tracing::warn!("{line}");
+        log_pending(&p.source, p.hashes.len());
         KEPT.fetch_add(p.hashes.len() as u64, Ordering::Relaxed);
         lines.push(line);
     }

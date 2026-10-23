@@ -1,0 +1,2 @@
+422
+{"error":{"code":"invalid_setting","field":"events","message":"app.start is required and can't be turned off.","section":"logging"}}
