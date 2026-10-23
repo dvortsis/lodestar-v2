@@ -1,0 +1,2 @@
+400
+{"error":{"code":"duplicate_hash","field":"hashes","message":"Each torrent may be in a comparison once."}}
