@@ -188,7 +188,10 @@ describe('Newest', () => {
 		await screen.findByText(/started again from the top/);
 		await waitFor(() => expect(calls).toBe(2));
 		// The restart lands once; it is not aborted by a re-armed load-more (no request loop).
-		await new Promise((r) => setTimeout(r, 150));
+		// The restarted list settles with the next page appended (a loop would keep aborting it).
+		await waitFor(() => expect(screen.getByTestId(`discover-row-${hash(99)}`)).toBeTruthy(), {
+			timeout: 10_000
+		});
 		expect(calls).toBe(2);
 		expect(discoverCalls().filter((q) => !q.cursor)).toHaveLength(2);
 		expect(screen.getByTestId(`discover-row-${hash(1)}`)).toBeTruthy();
@@ -261,7 +264,7 @@ describe('Newest', () => {
 		await view.rerender({ search: new URLSearchParams('type=tv') });
 		await screen.findByTestId(`discover-row-${hash(70)}`);
 		release();
-		await new Promise((r) => setTimeout(r, 50));
+		for (let i = 0; i < 10; i++) await tick(); // let the released page settle
 		expect(screen.queryByTestId(`discover-row-${hash(90)}`)).toBeNull();
 		expect(discoverCalls().every((q) => !q.cursor || !q.type)).toBe(true);
 		expect(discoverCalls().filter((q) => q.type)).toEqual([{ type: 'tv' }]);

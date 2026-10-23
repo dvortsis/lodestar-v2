@@ -101,7 +101,8 @@ test.describe('paging', () => {
 		await list.evaluate((el) => (el.scrollTop = el.scrollHeight));
 		await expect(page.getByTestId(`discover-row-${hash(60)}`)).toBeVisible();
 		// The last page had no cursor: no third request.
-		await page.waitForTimeout(300);
+		// ...and the load-more sentinel is gone, so nothing will ask for one.
+		await expect(list.locator('[role="presentation"][aria-hidden="true"]')).toHaveCount(0);
 		expect(mock.calls('getDiscover')).toHaveLength(2);
 	});
 
@@ -126,7 +127,8 @@ test.describe('paging', () => {
 		await list.evaluate((el) => (el.scrollTop = el.scrollHeight));
 		await expect(page.getByText("Couldn't load more torrents")).toBeVisible();
 		await expect(list.getByRole('option').first()).toBeVisible(); // stale rows stay
-		await page.waitForTimeout(400);
+		// hasMore is cleared: the sentinel that would re-ask is gone, so there is no retry loop.
+		await expect(list.locator('[role="presentation"][aria-hidden="true"]')).toHaveCount(0);
 		expect(mock.calls('getDiscover')).toHaveLength(2);
 		failing = false;
 		await page.getByRole('button', { name: 'Try again' }).click();
