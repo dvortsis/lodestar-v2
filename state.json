@@ -390,7 +390,7 @@
       "pr": 123,
       "attempt": 1,
       "review_rounds": 1,
-      "notes": "2026-10-23T06:59:39Z unblocked by B11a; brief drafting (Opus helper) | 2026-10-23T07:17:05Z launched (brief by Opus helper, runner-reviewed + trigger-cost and split lines; steward) | 2026-10-23T09:05:30Z PR #123 part 1/2 head 21d889b (~3.5k lines): V11, aggregation, compaction, repair. Trigger +25-35% bulk delete (over ~10%), kept; fresh reviewer launched (judging trigger design). Part 2 follows after merge. | 2026-10-23T09:26:35Z main moved (B9): services.rs conflict - fold into review verdict | 2026-10-23T09:30:45Z review MERGE; short round: repair window anchored at last activity (not now), prepare_cached at 3 delete sites, docs polish, merge main (B9). Trigger kept (runner decision; revisit with retention). | 2026-10-23T10:19:35Z 52f94a6: round done (last_activity anchor, prepare_cached +18%, docs, main B9); log_lint ok on merged tree; merged-tree verify vs 97fbb56 running | 2026-10-23T10:28:52Z part 1 merged #123 as e73e568 (merged-tree 820 tests ok); part 2 starting"
+      "notes": "2026-10-23T06:59:39Z unblocked by B11a; brief drafting (Opus helper) | 2026-10-23T07:17:05Z launched (brief by Opus helper, runner-reviewed + trigger-cost and split lines; steward) | 2026-10-23T09:05:30Z PR #123 part 1/2 head 21d889b (~3.5k lines): V11, aggregation, compaction, repair. Trigger +25-35% bulk delete (over ~10%), kept; fresh reviewer launched (judging trigger design). Part 2 follows after merge. | 2026-10-23T09:26:35Z main moved (B9): services.rs conflict - fold into review verdict | 2026-10-23T09:30:45Z review MERGE; short round: repair window anchored at last activity (not now), prepare_cached at 3 delete sites, docs polish, merge main (B9). Trigger kept (runner decision; revisit with retention). | 2026-10-23T10:19:35Z 52f94a6: round done (last_activity anchor, prepare_cached +18%, docs, main B9); log_lint ok on merged tree; merged-tree verify vs 97fbb56 running | 2026-10-23T10:28:52Z part 1 merged #123 as e73e568 (merged-tree 820 tests ok); part 2 starting | 2026-10-23T14:39:41Z part 2 stalled idle since 11:44 (ec91f0d pushed, self+security review clean, no PR); nudged: merge main, open PR, message runner"
     },
     "B10b": {
       "status": "merged",
@@ -1088,10 +1088,10 @@
       "review_rounds": 1
     },
     "runner-launch-cap": {
-      "status": "in_review",
+      "status": "merged",
       "pr": 106,
       "branch": "claude/zealous-lovelace-qv6e22",
-      "notes": "01:15 owner approved process change (verified \"Yes, I approve this change\"); PR now ~190 lines (merge-guard hook, steward skill, ci-ok, README rules, \u00a72.20/2.21 + code-signing deferral). Fresh reviewer started. Numbering conflict with #107 \u00a72.20/21. Before merge: create ~/.lodestar-runner in runner container."
+      "notes": "01:15 owner approved process change (verified \"Yes, I approve this change\"); PR now ~190 lines (merge-guard hook, steward skill, ci-ok, README rules, \u00a72.20/2.21 + code-signing deferral). Fresh reviewer started. Numbering conflict with #107 \u00a72.20/21. Before merge: create ~/.lodestar-runner in runner container. | 2026-10-23T14:39:41Z reconciled: merged"
     },
     "S-snapshots": {
       "status": "merged",
@@ -1103,10 +1103,10 @@
       "merge": "51d90a4"
     },
     "runner-delegated": {
-      "status": "approved",
+      "status": "merged",
       "pr": 107,
       "branch": "runner/delegated-decisions",
-      "notes": "3 review rounds -> MERGE; nits applied; merge on green"
+      "notes": "3 review rounds -> MERGE; nits applied; merge on green | 2026-10-23T14:39:41Z reconciled: merged"
     },
     "B-log1b": {
       "status": "pending",
@@ -1404,6 +1404,8 @@
     "heartbeat-1038": "open: #126 runner fix (review), #125 B-update PR1 (round 1 fixing), #92 P-release (c8962fd round 1), #91 waits #92, #103 W9 + #48 M4 owner-blocked; running: B11b part 2, B-log2; nothing newly ready",
     "heartbeat-1139": "open: #125 B-update PR1 (af3874e, round 1 in progress), #92 P-release (49fdebe, round 2), #91 waits #92, #103 W9 + #48 M4 owner-blocked; running: B11b part 2, B-log2; nothing newly ready",
     "heartbeat-1238": "open: #127 B-log2 part 1 (reviews running), #103 W9 + #48 M4 owner-blocked (M4 still on ExitPlanMode prompt; runner answer queued); running: B11b part 2, B-update PR2; nothing newly ready (B-log1b waits B-log2)",
-    "heartbeat-1338": "open: #127 B-log2 part 1 (round 1 fixing, 160a1bc), #103 W9 (d89aa6d, baselines), #48 M4 (da63255, merging main); running: B11b part 2, B-update PR2; nothing newly ready"
+    "heartbeat-1338": "open: #127 B-log2 part 1 (round 1 fixing, 160a1bc), #103 W9 (d89aa6d, baselines), #48 M4 (da63255, merging main); running: B11b part 2, B-update PR2; nothing newly ready",
+    "last_heartbeat": "2026-10-23T14:39:41Z",
+    "heartbeat_summary": "W9 is the bottleneck (most web slices wait on it); B-log1b ready but held until B-log2 finishes (shared logging/**, pipeline/** with M4)"
   }
 }
