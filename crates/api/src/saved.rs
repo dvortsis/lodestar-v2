@@ -38,6 +38,10 @@ pub fn routes() -> Router<ApiState> {
     )
 }
 
+/// Saved searches kept, paused ones included: each one runs against
+/// every commit's new torrents (B9), so the count bounds that work.
+pub(crate) const MAX_SAVED_SEARCHES: u64 = 1_000;
+
 fn not_found() -> ApiError {
     ApiError::new(
         StatusCode::NOT_FOUND,
@@ -167,6 +171,7 @@ pub(crate) async fn list(State(s): State<ApiState>) -> ApiResult<Json<Vec<SavedS
     responses(
         (status = 201, body = SavedSearchView),
         (status = 400, body = ErrorEnvelope, description = "`query_syntax` (with `start` and `end`), `q_and_ast`, `invalid_ast` or `unknown_sort`."),
+        (status = 409, body = ErrorEnvelope, description = "`too_many_saved_searches`: 1,000 are kept at most."),
         (status = 422, body = ErrorEnvelope, description = "`invalid_value`: the name or query isn't allowed."),
     )
 )]
@@ -183,6 +188,14 @@ pub(crate) async fn create(
     let adult = s.adult.shown();
     tokio::task::spawn_blocking(move || {
         let mut store = writer.lock().expect("user data lock");
+        // Every saved search percolates after every commit (B9).
+        if store.saved_search_count().map_err(internal)? >= MAX_SAVED_SEARCHES {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "too_many_saved_searches",
+                "You have the most saved searches Lodestar keeps (1,000); delete one first.",
+            ));
+        }
         let mark = watermark(&s, &store)?;
         let input = SavedSearchInput {
             name: &name,
