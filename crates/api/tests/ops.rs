@@ -328,7 +328,9 @@ fn fixture_with(ops: bool, intensity_env: Option<&str>) -> Fixture {
             filters: None,
             settings: Some(Arc::new(settings)),
             ops: ops.then(|| fake.clone() as Arc<dyn OpsApi>),
+            user_data: None,
             adult: Default::default(),
+            insights: None,
         }),
     );
     Fixture {

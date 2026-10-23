@@ -1,7 +1,8 @@
 //! `GET /events` (§9): the server-sent event stream. New torrents (from
-//! the live indexer's commit hook), crawler stats, rebuild progress and
-//! settings saves ([`EventHub::settings_saved`]) now; alerts (B9) and
-//! Insights deltas (B11a) are typed and reserved.
+//! the live indexer's commit hook), crawler stats, rebuild progress,
+//! settings saves ([`EventHub::settings_saved`]) and saved-search alerts
+//! ([`EventHub::alerts`], from the percolator); Insights deltas (B11a)
+//! are typed and reserved.
 //!
 //! **One hub per process.** [`EventHub::publish`] gives each event the id
 //! `<epoch>-<seq>` (a random per-process epoch, a monotonic sequence),
@@ -27,6 +28,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
+use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -47,12 +49,13 @@ use utoipa::OpenApi;
 
 use crate::dto::error::ErrorEnvelope;
 use crate::dto::events::{
-    CrawlerEvent, Event, EventsQuery, RebuildEvent, RebuildPhase, ResyncEvent, ResyncReason,
-    SettingsEvent, Topic, TorrentsEvent,
+    AlertsEvent, CrawlerEvent, Event, EventsQuery, RebuildEvent, RebuildPhase, ResyncEvent,
+    ResyncReason, SettingsEvent, Topic, TorrentsEvent,
 };
 use crate::error::{ApiError, ApiResult};
+use crate::extract::Peer;
 use crate::search::AdultVisibility;
-use crate::{ApiState, auth};
+use crate::{ApiState, Auth, auth};
 
 /// This module's half of `/openapi.json`.
 #[derive(OpenApi)]
@@ -513,6 +516,14 @@ impl EventHub {
         }))
     }
 
+    /// Publishes one saved search's `alerts` event. `adult_shown` says
+    /// whether it was counted while Adult was shown: such an event is
+    /// withheld from clients once Adult is hidden, replay included, as a
+    /// `torrents` event is.
+    pub fn alerts(&self, event: AlertsEvent, adult_shown: bool) -> Option<String> {
+        self.publish_tagged(&Event::Alerts(event), adult_shown)
+    }
+
     /// Takes a stream slot for `session`.
     pub fn acquire(self: &Arc<Self>, session: u64) -> Result<Slot, Refused> {
         if self.is_closed() {
@@ -854,14 +865,26 @@ fn topics_param(query: Option<&str>) -> ApiResult<Option<String>> {
 }
 
 /// The session, for the per-session cap. The guard has already checked
-/// it, so a request here always has one.
-fn session_of(headers: &HeaderMap) -> u64 {
-    let session = headers
-        .get_all(header::COOKIE)
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .find_map(|c| auth::cookie_value(c, auth::COOKIE))
-        .unwrap_or("");
+/// it, so a request here always has one: the session cookie, when it's
+/// valid (exactly what the guard accepts), or else the trusted proxy's
+/// user, counted per user and client address. An invalid cookie beside
+/// a proxy header is ignored, so it can't open a fresh bucket.
+fn session_of(auth: &Auth, headers: &HeaderMap, peer: IpAddr) -> u64 {
+    let first = headers.get(header::COOKIE).and_then(|v| v.to_str().ok());
+    let session = match first
+        .filter(|c| auth.verify(c))
+        .and_then(|c| auth::cookie_value(c, auth::COOKIE))
+    {
+        Some(c) => format!("cookie:{c}"),
+        None => {
+            let name = auth.proxy().header;
+            let user = headers
+                .get(name.as_str())
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            format!("proxy:{user}@{}", auth.client_ip(peer, headers))
+        }
+    };
     let d = Sha256::digest(session.as_bytes());
     u64::from_le_bytes(d[..8].try_into().expect("8 bytes"))
 }
@@ -909,6 +932,7 @@ fn session_of(headers: &HeaderMap) -> u64 {
 pub(crate) async fn events(
     State(s): State<ApiState>,
     hub: Option<Extension<Arc<EventHub>>>,
+    Peer(peer): Peer,
     headers: HeaderMap,
     RawQuery(query): RawQuery,
 ) -> ApiResult<Response> {
@@ -923,7 +947,7 @@ pub(crate) async fn events(
     let Some(Extension(hub)) = hub else {
         return Err(unavailable());
     };
-    let slot = match hub.acquire(session_of(&headers)) {
+    let slot = match hub.acquire(session_of(&s.auth, &headers, peer)) {
         Ok(slot) => slot,
         Err(Refused::Closed) => return Err(unavailable()),
         Err(Refused::Full | Refused::SessionFull) => {
@@ -940,15 +964,13 @@ pub(crate) async fn events(
         }
     };
     let last = headers.get("last-event-id").and_then(|v| v.to_str().ok());
-    // The guard's check, repeated at each heartbeat on the cookie it let
-    // in.
-    let cookie = headers
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
+    // The guard's check, repeated at each heartbeat on what it let in:
+    // the cookie, or a trusted proxy's user header from the same peer.
     let auth = s.auth.clone();
-    let body = hub.stream(slot, topics, last, move || auth.verify(&cookie));
+    let seen = headers.clone();
+    let body = hub.stream(slot, topics, last, move || {
+        auth::logged_in(&auth, &seen, peer)
+    });
     Ok((
         [
             (header::CONTENT_TYPE, "text/event-stream"),
@@ -1293,6 +1315,38 @@ mod tests {
         );
         let feed = h.commits.as_ref().unwrap().1.clone();
         (h, feed)
+    }
+
+    /// `alerts` events are screened as `torrents` ones are: one counted
+    /// while Adult was shown is withheld from a replay once it's hidden.
+    #[tokio::test]
+    async fn alerts_made_while_adult_was_shown_are_withheld_once_hidden() {
+        let (show, _) = watch::channel(true);
+        let (h, _) = adult_hub(&show);
+        let e = AlertsEvent {
+            alert: 9,
+            matched: 2,
+            max_id: 30,
+            notify: true,
+            saved_search: 4,
+        };
+        h.alerts(e, true).unwrap();
+        show.send_replace(false);
+        h.alerts(AlertsEvent { matched: 1, ..e }, false).unwrap();
+        let start = format!("{}-0", h.epoch());
+        let mut back = h.subscribe(Topic::Alerts.bit(), Some(&start));
+        let got: Vec<_> = std::iter::from_fn(|| back.try_next()).collect();
+        let [Item::Resync(ResyncReason::Visibility), Item::Event(s)] = got.as_slice() else {
+            panic!("{got:?}");
+        };
+        let frame = std::str::from_utf8(&s.frame).unwrap();
+        assert!(frame.contains("event: alerts\n"), "{frame}");
+        assert!(frame.contains(r#""matched":1"#), "{frame}");
+        // Shown again, both replay.
+        show.send_replace(true);
+        let mut again = h.subscribe(Topic::Alerts.bit(), Some(&start));
+        assert_eq!(std::iter::from_fn(|| again.try_next()).count(), 2);
+        h.close();
     }
 
     /// Through the hub's own task, the setting read live from the same

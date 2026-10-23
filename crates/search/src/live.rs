@@ -11,6 +11,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use lodestar_store::Store;
 
 use crate::index::{CatchUp, Result, SearchIndex};
+use crate::suggest::Titles;
 
 #[derive(Debug, Clone)]
 pub struct LiveConfig {
@@ -99,9 +100,14 @@ type Sink = Arc<dyn Fn(Committed) + Send + Sync>;
 /// The sink runs on the indexer's thread, after the commit, and must
 /// not block: hand the value off and return. With no sink set, a commit
 /// reports nothing.
+///
+/// It has two slots: the one [`CommitHook::set`] replaces (the SSE hub's)
+/// and any number [`CommitHook::add`] appends (Insights' searchable-time
+/// recorder, B11a), which `set` and `clear` leave alone.
 #[derive(Default)]
 pub struct CommitHook {
     sink: RwLock<Option<Sink>>,
+    extra: RwLock<Vec<Sink>>,
 }
 
 impl std::fmt::Debug for CommitHook {
@@ -111,7 +117,15 @@ impl std::fmt::Debug for CommitHook {
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .is_some();
-        f.debug_struct("CommitHook").field("set", &set).finish()
+        let extra = self
+            .extra
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len();
+        f.debug_struct("CommitHook")
+            .field("set", &set)
+            .field("extra", &extra)
+            .finish()
     }
 }
 
@@ -121,20 +135,36 @@ impl CommitHook {
         *self.sink.write().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(sink));
     }
 
-    /// Stops reporting.
+    /// Stops reporting to the sink [`CommitHook::set`] gave. Sinks
+    /// [`CommitHook::add`] gave keep theirs.
     pub fn clear(&self) {
         *self.sink.write().unwrap_or_else(PoisonError::into_inner) = None;
     }
 
-    /// Hands `c` to the sink, if any. The lock is held only to clone the
-    /// sink, never while it runs.
+    /// Also reports every later commit to `sink`, beside the one `set`
+    /// gave, for as long as the hook lives. The same rule applies: it
+    /// runs on the indexer's thread and must not block.
+    pub fn add(&self, sink: impl Fn(Committed) + Send + Sync + 'static) {
+        self.extra
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(Arc::new(sink));
+    }
+
+    /// Hands `c` to every sink. The locks are held only to clone the
+    /// sinks, never while they run.
     pub(crate) fn publish(&self, c: Committed) {
         let sink = self
             .sink
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
-        if let Some(sink) = sink {
+        let extra = self
+            .extra
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        for sink in sink.iter().chain(&extra) {
             sink(c);
         }
     }
@@ -170,6 +200,11 @@ impl LiveIndexer {
         hook: Arc<CommitHook>,
     ) -> Result<LiveIndexer> {
         let indexer = index.writer(config.heap_bytes)?;
+        // B7: the title FST follows this store, rebuilt off this thread.
+        let titles = index.titles().clone();
+        if let Some(path) = store.connection().path().filter(|p| !p.is_empty()) {
+            titles.follow(path.into());
+        }
         let stop = Arc::new(AtomicBool::new(false));
         stats.watermark.store(indexer.last_id(), Ordering::Relaxed);
         let (s, st) = (stop.clone(), stats.clone());
@@ -201,8 +236,7 @@ impl LiveIndexer {
                             &mut indexer,
                             &mut store,
                             &config,
-                            &st,
-                            &hook,
+                            (&st, &hook, &titles),
                             &s,
                             (&mut backoff, &mut reported),
                         )
@@ -253,8 +287,7 @@ fn follow(
     indexer: &mut crate::Indexer,
     store: &mut Store,
     config: &LiveConfig,
-    st: &IndexStats,
-    hook: &CommitHook,
+    (st, hook, titles): (&IndexStats, &CommitHook, &Arc<Titles>),
     stop: &AtomicBool,
     (backoff, reported): (&mut Duration, &mut i64),
 ) -> Result<()> {
@@ -273,6 +306,7 @@ fn follow(
             || (indexer.pending() > 0 && since.elapsed() >= config.commit_every);
         if due {
             commit(indexer, &mut pending, config, st, hook)?;
+            titles.committed();
             (*backoff, *reported) = (config.poll, indexer.last_id());
             since = Instant::now();
         }
@@ -285,6 +319,9 @@ fn follow(
             std::thread::sleep(config.poll);
         }
     }
+    // Stopping (a swap or shutdown): this index's titles no longer
+    // follow the store.
+    titles.unfollow();
     if indexer.pending() > 0 {
         commit(indexer, &mut pending, config, st, hook)?;
         *reported = indexer.last_id();
@@ -575,6 +612,30 @@ mod tests {
         });
         live.stop().unwrap();
         assert_eq!(seen.lock().unwrap().len(), 2);
+    }
+
+    /// A sink `add` gave runs beside the one `set` gave, and outlives
+    /// `set` replacing it and `clear`.
+    #[test]
+    fn added_sinks_report_beside_the_set_one() {
+        let (hook, seen) = collecting();
+        let extra = Arc::new(Mutex::new(Vec::new()));
+        let e = extra.clone();
+        hook.add(move |c| e.lock().unwrap().push(c));
+        let c = |n| Committed {
+            docs_added: n,
+            adult_added: 0,
+            max_torrent_id: n as i64,
+            at: 1,
+        };
+        hook.publish(c(1));
+        hook.set(|_| {});
+        hook.publish(c(2));
+        hook.clear();
+        hook.publish(c(3));
+        assert_eq!(*seen.lock().unwrap(), [c(1)]);
+        assert_eq!(*extra.lock().unwrap(), [c(1), c(2), c(3)]);
+        assert!(format!("{hook:?}").contains("extra: 1"));
     }
 
     #[test]

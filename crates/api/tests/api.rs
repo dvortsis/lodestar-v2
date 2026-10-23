@@ -87,7 +87,9 @@ fn fixture() -> Fixture {
             filters: None,
             settings: None,
             ops: None,
+            user_data: None,
             adult: Default::default(),
+            insights: None,
         }),
     );
     let hashes = infos
@@ -336,6 +338,32 @@ async fn errors_share_one_envelope() {
         get("/api/v1/settings", None),
         get("/api/v1/settings/crawler", None),
         get("/api/v1/settings/nope", None),
+        get("/api/v1/insights/overview", None),
+        get("/api/v1/insights/events?from=0&to=1", None),
+        get("/api/v1/user-items", None),
+        get("/api/v1/user-items/labels", None),
+        get(
+            "/api/v1/user-items/abababababababababababababababababababab",
+            None,
+        ),
+        get("/api/v1/collections", None),
+        get("/api/v1/collections/1", None),
+        post("/api/v1/collections/1/items", None, json!({})),
+        post("/api/v1/collections/1/items/remove", None, json!({})),
+        Request::put("/api/v1/collections/1/order")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{}"))
+            .unwrap(),
+        get("/api/v1/saved-searches", None),
+        get("/api/v1/saved-searches/1", None),
+        get("/api/v1/export", None),
+        get("/api/v1/jobs", None),
+        get("/api/v1/jobs/1", None),
+        get("/api/v1/saved-searches/1/alerts", None),
+        get("/api/v1/alerts/unread", None),
+        post("/api/v1/alerts/read", None, json!({ "through": 1 })),
+        get("/api/v1/feeds/1", None),
+        get("/api/v1/logs/catalog", None),
         Request::patch("/api/v1/settings/crawler")
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(r#"{"intensity":"low"}"#))
@@ -343,6 +371,34 @@ async fn errors_share_one_envelope() {
         Request::delete("/api/v1/settings/crawler")
             .body(Body::empty())
             .unwrap(),
+        get("/api/v1/keys", None),
+        post("/api/v1/keys", None, json!({})),
+        Request::delete("/api/v1/keys/1")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{}"))
+            .unwrap(),
+        post("/api/v1/keys/1/regenerate", None, json!({})),
+        post("/api/v1/keys/1/revoke", None, json!({})),
+        get("/api/v1/auth/proxy", None),
+        Request::put("/api/v1/auth/proxy")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"enabled":false}"#))
+            .unwrap(),
+        post("/api/v1/sessions/revoke-others", None, json!({})),
+        // A key or the proxy header alone is no session.
+        Request::get("/api/v1/search?q=x")
+            .header(
+                "x-api-key",
+                "lsk_AAAAAAAA_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            )
+            .body(Body::empty())
+            .unwrap(),
+        Request::get("/api/v1/search?q=x")
+            .header("remote-user", "admin")
+            .body(Body::empty())
+            .unwrap(),
+        get("/api/v1/system", None),
+        post("/api/v1/system/restart", None, json!({})),
     ] {
         let (status, _, body) = call(&f.app, req).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -492,7 +548,9 @@ async fn protected_routes_fail_closed_outside_the_router() {
         filters: None,
         settings: None,
         ops: None,
+        user_data: None,
         adult: Default::default(),
+        insights: None,
     });
     let (status, _, body) = call(&stray, get("/x", Some(&cookie))).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);

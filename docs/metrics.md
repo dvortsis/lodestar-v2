@@ -327,45 +327,73 @@ Counts are over exactly what `/search` returns for the same parameters.
 | `unavailable` | string[] | no | Groups this index can't serve: fields an older index lacks during a rebuild ("index rebuilding; … not yet available"), and `seeders`/`trackers` until M4 |
 | `canonical`, `took_ms` | as `/search` | no | — |
 
-### 7.5 Insights (planned; names fixed here)
+### 7.5 Insights (B11a)
 
-| Field | Type | Nullable | Metric |
-|---|---|---|---|
-| `range` | `{from: integer, to: integer, tz: string}` | no | Context bar |
-| `updated_at` | integer | no | "Last updated" |
-| `stages.{discover,fetch,understand,index,serve}` | integer | no | Stage strip (`discover` always ≈) |
-| `kpi.searchable` | integer | no | Searchable torrents |
-| `kpi.searchable_delta` | integer | yes: null without Compare | Δ |
-| `kpi.imported` | integer | no | Imported total |
-| `kpi.new_searchable` | integer | no | New searchable in range |
-| `kpi.yield` | number 0–1 | yes: null = no final cohort | End-to-end yield |
-| `kpi.time_to_searchable_p50_s`, `kpi.time_to_searchable_p95_s` | integer (seconds) | yes (as yield) | Time to searchable (≈) |
-| `kpi.health` | `{state: "running"\|"paused"\|"degraded", reason: string\|null}` | no | Health |
-| `trend[]` | `{at: integer, searchable: integer\|null, harvested: integer\|null}` | no | Movement; null = gap |
-| `annotations[]` | `{at: integer, kind: string, text: string}` | no | Annotations |
-| `funnel[]` | `{cohort: integer, final: boolean, stages: {harvested, peer_found, fetched, stored, searchable: integer}, losses: {<reason>: integer}, in_progress: integer}` | no | Funnel by cohort |
-| `serve` | `{searches: integer, zero_result_rate: number\|null, latency_p95_ms: number\|null, alerts_fired: integer, sends: integer}` | no | Serve |
-| `ingest_per_hour` | integer | no | Ingest rate |
-| `stale` | `{since: integer, reason: string}` | yes: null = fresh | Stale banner: > 2 min since the last rollup flush (§10.9.6) |
-| `segments` | object | no | Level 4; shape sketched below, **fields fixed in B11a/B11b** |
-| `exceptions[]` | `{kind: string, severity: "warning"\|"error", value: number\|null, unit: string\|null, since: integer, fix: {kind: "settings"\|"stage", target: string}}` | no (may be empty) | Level 5; `kind` ∈ `yield_below_baseline`, `nat_saturation`, `ephemeral_ports`, `port_unreachable`, `scrape_bans`, `index_lag`, `parser_confidence`, `disk_projection`, `cohort_stalled`, `network_path`; **names fixed in B11a/B11b** |
+`GET /insights/overview?range=24h|7d|30d|all|custom&from=&to=&compare=0|1`
+(default `7d`) and `GET /insights/events?from=&to=`. All **main** (B11a).
+Ranges are normalized to whole UTC hours ending with the current one, or
+to whole UTC days beyond 7 days or when the range reaches a compacted day
+(B11b, §7.7); `custom` takes Unix seconds and stops at the current hour. A
+bad `range`, `from`, `to` or `compare` is a `400` with `field`. Every
+number comes from the rollups (`rollup_hour`, `cohort_hour`, their daily
+twins `rollup_day` and `cohort_day`, `events`) or a snapshot the process
+keeps; none from `torrents` or the index.
 
-Comparison-period fields mirror the current ones under `previous` (same
-shape), present only when `compare=1`.
+| Field | Type | Nullable | Metric | Time base |
+|---|---|---|---|---|
+| `range` | `{bucket: "hour"\|"day", from: integer, to: integer, tz: "UTC"}` | no | Context bar; `bucket` is the trend's and funnel's: `day` past 7 days, and for any range reaching a compacted day (B11b); with Compare, both periods share it | — |
+| `updated_at` | integer | no | "Last updated" | — |
+| `stages.discover` | integer | no | Stage strip: first harvests in range (cohort harvested counts). Always ≈ | Event time (= cohort hour) |
+| `stages.fetch` | integer | **yes: null when the range starts before fetches were counted by event time** (`insights_state.funnel_events_since_hour`, the first whole hour after the V11 upgrade): unknown, never 0 | Stage strip: metadata fetched in range (`metric::FUNNEL_EVENTS`, dim `Fetched`; B11b) | Event time (the writer's flush, within 5 s) |
+| `stages.understand` | integer | no | Stage strip: newly stored (`metric::STORED`) | Event time |
+| `stages.index` | integer | yes: null when search is off | Stage strip (= `kpi.searchable`) | Snapshot |
+| `stages.serve` | integer | **yes: null until #48's search counters are read** | Stage strip | Event time |
+| `kpi.searchable` | integer | yes: null when search is off | Searchable torrents (`/stats`'s `searchable_torrents`) | Snapshot |
+| `kpi.searchable_delta` | integer | yes: null without Compare, for `all`, with search off, or with no snapshot from the previous period's end | Δ: `kpi.searchable` less `previous.kpi.searchable` (removals included) | Snapshot |
+| `kpi.imported` | integer | yes: null until the recorder's first read at start | Imported total: searchable torrents that were imported (`insights_state.imported`, kept exact by the store since B11b) | Snapshot |
+| `kpi.new_searchable` | integer | no | New searchable in range, imports included; 0 is real | Event time |
+| `kpi.yield` | number 0–1 | yes: null = no final cohort | End-to-end yield over final cohort hours; imports excluded | Discovery cohort |
+| `kpi.time_to_searchable_p50_s`, `kpi.time_to_searchable_p95_s` | integer (seconds) | yes (as yield) | Time to searchable over final cohort hours: the midpoint of the log bucket (edges ×1.1, within 5%) holding the rank. Always ≈ | Discovery cohort |
+| `kpi.health` | `{state: "running"\|"paused"\|"degraded", reason: "paused"\|"writer_stalled"\|"index_lag"\|null}` | no | Health: paused first, then stale, then index lag > 30 s | Snapshot |
+| `trend[]` | `{at: integer, searchable: integer\|null, harvested: integer\|null}` | no | Movement, one point per bucket from `range.from`. A count is **null where nothing was measured** (no coverage row: the crawler paused, or the server not running) and 0 where it was measured and was 0 | Event time |
+| `annotations[]` | `{at: integer, kind: string, text: string}` | no | At most the oldest 1,000 (`/insights/events` sets `truncated` when there were more). `kind` ∈ `restart`, `stopped`, `paused`, `resumed`, `intensity`; other event codes are skipped. `text` is the event's detail (the version, the new intensity), possibly empty | Event time |
+| `funnel[]` | `{cohort: integer, final: boolean, stages: {harvested, peer_found, fetched, stored, searchable: integer}, conversion: {peer_found, fetched, stored, searchable: number\|null}, losses: {<reason>: integer}, in_progress: integer}` | no | Funnel by cohort (hours up to 7 days, UTC days beyond; a day is final when all its hours are), cohorts with any count only. `losses` lists every reason (§6.4), 0 where none. `conversion` is each stage ÷ the one before, null when that is 0. `in_progress` = harvested − stored − lost, at least 0 | Discovery cohort |
+| `funnel_total` | `{cohorts, final_cohorts, in_progress: integer, stages, conversion, losses, loss_share: {<reason>: number\|null}}` | no | The funnel over the whole range; `loss_share` is each reason's share of all losses, null when nothing was lost | Discovery cohort |
+| `serve` | `{searches: integer\|null, zero_result_rate: number\|null, latency_p95_ms: number\|null, alerts_fired: integer\|null, sends: integer\|null}` | no | Serve. **Every field null until its counter exists:** searches and latency with #48, alerts with B9, sends with the integrations' counters | Event time |
+| `ingest_per_hour` | integer | **yes: null when the last full hour wasn't measured and stored nothing** | Ingest rate: newly stored in the last full UTC hour | Event time |
+| `stale` | `{since: integer, reason: "paused"\|"writer_stalled"}` | yes: null = fresh | Stale banner: > 120 s since the writer's last flush (`since`; the pipeline's start when there was none) | — |
+| `segments` | object, below | no | Level 4 | — |
+| `exceptions[]` | `{kind: string, severity: "warning"\|"error", value: number\|null, unit: string\|null, since: integer, fix: {kind: "settings"\|"stage", target: string}}` | no (may be empty) | Level 5, whatever the range. `kind` ∈ `index_lag` (> 30 s; an error past 600 s; `unit` `s`; fix: stage `index`) and `cohort_stalled` (hashes in progress, the crawler running ≥ 3,000 s in each of the last 2 full hours, and nothing stored in them; `unit` `torrents`; fix: stage `fetch`). The other kinds (`yield_below_baseline`, `nat_saturation`, `ephemeral_ports`, `port_unreachable`, `scrape_bans`, `parser_confidence`, `disk_projection`, `network_path`) are B11b's | Snapshot |
+| `previous` | `{range, stages: {discover, fetch, serve, understand}, kpi: {searchable, new_searchable, yield, time_to_searchable_p50_s, time_to_searchable_p95_s}, trend[], serve}` | **absent** without `compare=1` and for `all` | The period of equal length just before, for Compare. `previous.kpi.searchable` is the last hourly snapshot of the searchable count (`metric::SEARCHABLE`) in the day before the range starts (a compacted day's is its last hour's), null when there's none. `previous.stages.fetch` is null as `stages.fetch` | As the current fields |
 
-**`segments` sketch (deferred to B11a/B11b):**
+**Finality:** a cohort hour is final once it has ended with nothing in
+progress (harvested = stored + lost) and everything stored searchable, or
+once more than the 72 h retry horizon has passed since it ended.
+
+**`segments`** (rows sorted by value, descending, then key; **Adult left
+out entirely while "Show adult content" is off**):
 
 ```
 segments: {
-  by_group:        {key: string, searchable: integer}[],   // event time
-  by_content_type: {key: string, searchable: integer}[],   // event time
-  by_strategy:     {key: "bep51"|"passive"|"active", harvested: integer, searchable: integer, yield: number|null}[],  // cohort, final only
-  by_ip_family:    {key: "v4"|"v6", harvested: integer, searchable: integer, yield: number|null}[],          // cohort, final only
-  resolved_by:     {key: "files"|"folder"|"structure"|"plugin", count: integer}[]                         // event time
+  by_content_type: {key: string, searchable: integer}[],  // event time; key = content type, or "unclassified"
+  by_group:        {key: string, searchable: integer}[],  // event time; video (movie, tv, video), audio (music,
+                                                          // audiobook), documents (ebook, comic), software
+                                                          // (software, game), images, other, adult, unclassified
+  by_source:       {key: string, harvested: integer, searchable: integer, yield: number|null}[]
+                                                          // discovery cohort, final cohort hours; key = plugin name
 }
 ```
 
-Rows are sorted by the server (descending value, then key).
+Still B11b's: `by_strategy` and `by_ip_family` (the cohort table has no
+strategy or address-family dimension yet) and `resolved_by` (needs a
+resolution counter).
+
+**`GET /insights/events`:** `{annotations: Annotation[], paused: {from:
+integer, to: integer|null}[], truncated: boolean}`. `paused` lists the
+paused spans overlapping the range (one starting before it begins at its
+pause; `to` null while still paused), so the client draws gaps.
+`annotations` is the same list as the overview's, the oldest 1,000
+(`truncated` when there were more).
 
 ### 7.6 Stats, crawler and network check (B14)
 
@@ -406,3 +434,77 @@ samples of those counters every 10 s. All **main** (B14).
 | `sources[].health.harvested_24h`, `.stored_24h` | integer | no | Keys this source was first to report in the last 24 discovery cohorts, and of those, stored | `formatCount` | Discovery cohort |
 | `sources[].health.last_run` | integer | yes: null = not started this run | When it last started | `formatRelative` | — |
 | `sources[].health.last_error` | string | yes: null = no error | Why it last stopped | Text | — |
+
+### 7.7 Insights at daily grain, removals and repair (B11b)
+
+All **main** (B11b part 1). The stage pages, `export.csv`, the overview's
+Compare Δs and the `insights` SSE topic are B11b part 2 and will be added
+here.
+
+**Grains.** Hourly rows (`rollup_hour`, `cohort_hour`) are kept for 30
+days. A daily job folds whole UTC days that ended more than 30 days ago
+into `rollup_day` and `cohort_day` (`day` = Unix time / 86,400). Readers
+take the boundary (`insights_state.compacted_before_day`) in the same
+read transaction as the rows, so a running compaction never counts a day
+twice or drops one. Days below it are read at daily grain (a compacted
+day is final), so any range reaching one is bucketed by day. With
+Compare, when the previous window reaches a compacted day and the
+current one doesn't, both are bucketed by day: a custom range of 7 days
+or less then widens to whole UTC days. Late rows
+below the boundary (a clock set back, say) are read at once and folded
+the next night. Compaction loses nothing: every response over compacted
+days equals the one before compaction (§10.17, byte goldens).
+
+**Aggregation kinds** (`lodestar_pipeline::metric::aggregation`; every
+code has one, and a code with none is never compacted):
+
+| Code | Metric | Kind | Day value |
+|---|---|---|---|
+| 1–4 | harvested, rediscovered, dropped, stored | Sum | the hours' sum |
+| 5–9 | #48's scrape and search counters | Sum | the hours' sum |
+| 10 | `NEWLY_SEARCHABLE` | Sum | the hours' sum |
+| 11 | `TIME_TO_SEARCHABLE` (by cohort) | Sum | the cohort day's histogram |
+| 12 | `COVERAGE` | Sum | seconds measured in the day |
+| 13 | `SEARCHABLE` (gauge) | Last | the day's last hourly snapshot, never a sum |
+| 14 | `FUNNEL_EVENTS` | Sum | the hours' sum |
+| 15 | `REMOVED` | Sum | the hours' sum |
+| cohort rows | every stage and loss | Sum | the cohort day's counts |
+
+**New codes.**
+
+| Code | Name | Dim / key | Written by | Time base |
+|---|---|---|---|---|
+| 14 | `FUNNEL_EVENTS` | dim = `Stage` code, key = `Loss` code (0 for a stage reached) | the writer, from the funnel rows it flushes, at the flush hour | Event time (within the 5 s flush) |
+| 15 | `REMOVED` | dim = content type, or 255 `UNCLASSIFIED`; key 0 | the store's `torrents_removed` trigger, for a searchable torrent deleted by any path | Event time (the delete) |
+
+**`insights_state`** (one row each): `compacted_before_day`,
+`last_compaction_at` (Unix seconds, 0 = never), `funnel_events_since_hour`
+(the first hour metric 14 counts; buckets before it are unknown, never 0; 0 on a store created with V11)
+and `imported` (searchable imports: seeded at the V11 upgrade, raised by
+each searchable range, lowered by the trigger).
+
+**Removals** are lifecycle events (§10.9.3): a searchable torrent deleted
+(a filter relabel, `delete_torrents`, retention) is counted in
+`REMOVED`; the funnel's final cohorts never change. The Index page reads
+them (part 2).
+
+**`lodestar rollup --repair`** (offline; also run by the server at start
+after an unclean stop, over the 72 h before the store's last activity)
+recounts from `torrents` and `index_watermark_hour`, and never lowers a
+total (a per-type or per-source cell in a replaced hour follows the
+current classification; a raised Searchable cell replaces its cohort's
+histogram with midpoint approximations):
+
+| Rebuilt | From |
+|---|---|
+| Cohort Stored, by (cohort, source) | torrents' `discovered_at` hour and `first_source`, imports excluded |
+| `STORED` per hour, by source | `metadata_at` hour, imports excluded (the writer counts at the same hour since B11b) |
+| `NEWLY_SEARCHABLE` per hour, by type and import | the first watermark row covering each id |
+| Cohort Searchable and its `TIME_TO_SEARCHABLE` histogram | the same, the delay taken to the watermark hour's midpoint (≤ 30 min off) |
+| `imported` (the command only) | `count_flagged_searchable(IMPORTED)` |
+
+**Never rebuilt:** pre-storage counts (harvested, peer found, fetched,
+losses, keys reported, rediscovered, dropped, `FUNNEL_EVENTS`), coverage,
+gauges (`SEARCHABLE`) and torrents indexed before searchable time was
+tracked (hour 0). After compaction, hourly detail older than 30 days is
+gone: hour buckets, hourly finality and hourly repair.
