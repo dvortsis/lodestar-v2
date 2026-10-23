@@ -48,6 +48,7 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET", "/insights/index"),
     ("GET", "/insights/serve"),
     ("GET", "/insights/export.csv"),
+    ("GET", "/digest/preview"),
     ("GET", "/filters"),
     ("GET", "/filters/queue"),
     ("GET", "/filters/tombstones"),

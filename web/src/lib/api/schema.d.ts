@@ -367,6 +367,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/digest/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The digest as it would be sent now (§10.9.7). JSON only: the HTML is
+         *     shown by the client in `<iframe sandbox srcdoc>`, the text in a `<pre>`.
+         */
+        get: operations["getDigestPreview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/discover": {
         parameters: {
             query?: never;
@@ -3047,6 +3067,48 @@ export interface components {
             path: string;
             /** Format: int64 */
             size: number;
+        };
+        /**
+         * @description How much a digest covers.
+         * @enum {string}
+         */
+        DigestPeriod: "daily" | "weekly";
+        /**
+         * @description A digest as it would be sent now.
+         * @example {
+         *       "generated_at": 1800000000,
+         *       "html": "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Lodestar weekly digest: Jan 8, 2027 – Jan 15, 2027</title></head><body><h1>Lodestar weekly digest: Jan 8, 2027 – Jan 15, 2027</h1></body></html>",
+         *       "period": "weekly",
+         *       "range": {
+         *         "bucket": "hour",
+         *         "from": 1799395200,
+         *         "to": 1800000000,
+         *         "tz": "UTC"
+         *       },
+         *       "subject": "Lodestar weekly digest: Jan 8, 2027 – Jan 15, 2027",
+         *       "text": "Lodestar weekly digest: Jan 8, 2027 – Jan 15, 2027\n"
+         *     }
+         */
+        DigestPreview: {
+            /**
+             * Format: int64
+             * @description When the numbers were read (unix seconds): the overview's
+             *     `updated_at`.
+             */
+            generated_at: number;
+            /**
+             * @description A complete HTML document: no script, style, images or external
+             *     links. Show it only in `<iframe sandbox srcdoc>` (no
+             *     `allow-scripts`, no `allow-same-origin`).
+             */
+            html: string;
+            period: components["schemas"]["DigestPeriod"];
+            /** @description The overview range the digest read, as the server normalized it. */
+            range: components["schemas"]["InsightsRange"];
+            /** @description At most 120 characters. */
+            subject: string;
+            /** @description Plain UTF-8, at most 4,000 bytes. Show it in a `<pre>`. */
+            text: string;
         };
         DiscoverKpi: {
             /**
@@ -7764,6 +7826,32 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CrawlerStatus"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getDigestPreview: {
+        parameters: {
+            query?: {
+                /**
+                 * @description `daily` (the last 24 hours) or `weekly` (the last 7 days, the
+                 *     default).
+                 */
+                period?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DigestPreview"];
                 };
             };
             default: components["responses"]["Error"];
