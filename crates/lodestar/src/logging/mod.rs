@@ -33,11 +33,12 @@ mod ring;
 mod source;
 pub mod state;
 mod view;
+mod zip;
 
 use std::cell::Cell;
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock, RwLock};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
 use lodestar_log::{Catalogue, Component, Event, Kind, Level, Mask, Output, Record, Sink};
@@ -210,6 +211,18 @@ pub struct Runtime {
     folds: [Mutex<Table>; 2],
     /// Off only in tests that count identical lines.
     folding: AtomicBool,
+    /// When the current file last took a line (Unix millis; 0 none yet).
+    last_file_line: AtomicI64,
+    /// The rotate worker of the file opened this run, for deletions.
+    jobs: Mutex<Option<file::Jobs>>,
+}
+
+/// Whether file logging is writing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileStatus {
+    On,
+    Off,
+    Stopped,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -292,6 +305,8 @@ impl Runtime {
                 Mutex::new(Table::new(window)),
             ],
             folding: AtomicBool::new(true),
+            last_file_line: AtomicI64::new(0),
+            jobs: Mutex::new(None),
             refs: Refs::new(),
             console: Mutex::new(console),
             file: Mutex::new(FileState::Buffering {
@@ -389,6 +404,7 @@ impl Runtime {
                         }
                         self.last_alive
                             .store(sink.last_alive(), std::sync::atomic::Ordering::Relaxed);
+                        *lock(&self.jobs) = Some(sink.jobs());
                         let mut stopped = false;
                         for (line, flags) in &lines {
                             match sink.write(line, *flags) {
@@ -468,6 +484,8 @@ impl Runtime {
             FileState::Open(sink) => match sink.write(&line, flags) {
                 Ok(rotation) => {
                     lodestar_log::note_written(Output::File, len);
+                    self.last_file_line
+                        .store(Stamp::now().millis, Ordering::Relaxed);
                     notes.extend(rotation.map(Note::RotationFailed));
                 }
                 Err(e) => {
@@ -714,6 +732,83 @@ impl Runtime {
     /// The configured folder (it applies at a restart).
     pub fn configured_folder(&self) -> std::path::PathBuf {
         read(&self.applied).file.dir.clone()
+    }
+
+    pub fn file_status(&self) -> FileStatus {
+        match &*lock(&self.file) {
+            FileState::Open(_) => FileStatus::On,
+            FileState::Stopped => FileStatus::Stopped,
+            FileState::Off => FileStatus::Off,
+            FileState::Buffering { .. } => match read(&self.applied).file_enabled {
+                true => FileStatus::On,
+                false => FileStatus::Off,
+            },
+        }
+    }
+
+    /// When the current file last took a line (Unix millis; 0 none).
+    pub fn last_file_line(&self) -> i64 {
+        self.last_file_line.load(Ordering::Relaxed)
+    }
+
+    /// Deletes `names` in `dir`, and the current file with `current`:
+    /// rotated first under the writer's lock, so it's never touched
+    /// mid-write and no new line is lost (with no writer, moved aside
+    /// under the same lock, so one opening later starts a new file). On
+    /// the rotate worker when the file opened there this run, after the
+    /// compressions queued before it, so a file being compressed can't
+    /// come back as `.gz` after it's deleted; else here, under the same
+    /// checks.
+    pub(crate) fn delete_logs(
+        &self,
+        dir: &std::path::Path,
+        mut names: Vec<names::LogName>,
+        current: bool,
+        all: bool,
+    ) -> std::io::Result<file::Deleted> {
+        let jobs = lock(&self.jobs).clone().filter(|j| j.dir == dir);
+        // The writer's index when it has this folder, else read here.
+        let index = match &jobs {
+            Some(j) => j.index.clone(),
+            None => Arc::new(Mutex::new(file::Index::load(dir))),
+        };
+        let _inside = Inside::enter();
+        let mut skipped = Vec::new();
+        // "All" never sweeps a file rotated after this request.
+        let mut upto = names::LogName::parse(&format!(
+            "lodestar-{}.jsonl",
+            format::Stamp::now().compact()
+        ));
+        if current {
+            let mut file = lock(&self.file);
+            let aside = match &mut *file {
+                FileState::Open(sink) if self.folder.get().map(|d| d.as_path()) == Some(dir) => {
+                    sink.rotate_to_delete().map_err(|_| "failed")
+                }
+                // No writer in this folder: nothing is mid-write.
+                _ => file::set_aside(dir, &index).and_then(|n| n.ok_or("none")),
+            };
+            match aside.map(|n| names::LogName::parse(&n)) {
+                Ok(Some(rotated)) => {
+                    upto = Some(rotated.clone());
+                    names.push(rotated);
+                }
+                Ok(None) | Err("none") => {}
+                Err(why) => skipped.push((file::CURRENT.to_string(), why)),
+            }
+        }
+        let take = match all {
+            true => file::Take::All { upto },
+            false => file::Take::Details,
+        };
+        let mut done = match jobs.map(|j| j.delete(names.clone(), take.clone())) {
+            Some(Ok(d)) => d,
+            Some(Err(Some(e))) => return Err(e),
+            // No worker for this folder: nothing compresses in it.
+            Some(Err(None)) | None => file::delete(dir, &names, &take, &index),
+        };
+        done.skipped.extend(skipped);
+        Ok(done)
     }
 }
 
