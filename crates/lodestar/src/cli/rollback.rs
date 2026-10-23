@@ -25,6 +25,7 @@ use super::util::{
     schema_version, sync_dir, sync_file, torrent_count, unix_now, vacuum_into,
 };
 use crate::config::Config;
+use lodestar_store::snapshots::{self, RETAIN_DAYS};
 
 /// One `<stem>.pre-v<N>[.<k>].db` file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,7 +131,7 @@ pub fn run(config: &Config, options: Options<'_>) -> Outcome {
     let db = config.db_path();
     let all = snapshots(&db)?;
     let Some(wanted) = options.snapshot else {
-        list(&all);
+        list(&all, unix_now());
         return Ok(());
     };
     let snapshot = pick(&all, wanted)?.clone();
@@ -174,28 +175,49 @@ pub fn run(config: &Config, options: Options<'_>) -> Outcome {
     Ok(())
 }
 
-fn list(all: &[Snapshot]) {
+fn list(all: &[Snapshot], now: i64) {
     if all.is_empty() {
         println!("No migration snapshots. Lodestar takes one before each upgrade of the store.");
         return;
     }
     println!("Snapshots taken before each upgrade of the store:");
     for s in all {
-        let when = s
-            .modified
-            .map_or_else(|| "unknown time".into(), format_time);
         println!(
             "  {:<28} before v{}, {}, {}",
             s.name,
             s.version,
             format_bytes(s.bytes),
-            when
+            age(s.modified, now)
         );
     }
     println!(
         "Stop Lodestar, then run `lodestar rollback <name>` to restore one. The current store \
          is kept as a copy."
     );
+    println!(
+        "Lodestar deletes each snapshot {RETAIN_DAYS} days after it was taken, and removes \
+         expired quarantine and deleted torrents from them as it does from the store."
+    );
+}
+
+/// When a snapshot was taken, its age and when it's deleted.
+fn age(taken: Option<i64>, now: i64) -> String {
+    let Some(taken) = taken else {
+        return "unknown time".into();
+    };
+    let days = now.saturating_sub(taken).max(0) / 86_400;
+    let ago = match days {
+        0 => "today".to_string(),
+        1 => "1 day ago".to_string(),
+        n => format!("{n} days ago"),
+    };
+    let expires = snapshots::expires_at(taken);
+    let until = if now >= expires {
+        format!("past the {RETAIN_DAYS}-day window, deleted once Lodestar runs")
+    } else {
+        format!("deleted after {}", format_time(expires))
+    };
+    format!("taken {} ({ago}), {until}", format_time(taken))
 }
 
 /// `true` only for an explicit "yes".
@@ -379,5 +401,58 @@ mod tests {
         assert!(!ask("y\n"));
         assert!(!ask("no\n"));
         assert!(!ask(""));
+    }
+
+    #[test]
+    fn lists_age_and_expiry() {
+        let t = 1_800_000_000;
+        let day = 86_400;
+        assert_eq!(age(None, t), "unknown time");
+        assert_eq!(
+            age(Some(t), t + 3 * day + 5),
+            format!(
+                "taken {} (3 days ago), deleted after {}",
+                format_time(t),
+                format_time(t + 90 * day)
+            )
+        );
+        assert!(age(Some(t), t + 1).contains("(today)"));
+        assert!(age(Some(t), t + day).contains("(1 day ago)"));
+        assert!(
+            age(Some(t), t + 90 * day)
+                .ends_with("past the 90-day window, deleted once Lodestar runs")
+        );
+    }
+
+    /// The snapshot purge runs only on an open store, and a rollback
+    /// holds the store lock from before it reads the snapshot until the
+    /// restored file is in place: the server can't open the store
+    /// meanwhile, so it can't delete or rewrite the snapshot in use.
+    #[test]
+    fn a_rollback_in_progress_keeps_its_snapshot() {
+        use lodestar_store::{Store, StoreConfig};
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("lodestar.db");
+        let store = Store::open(&db, StoreConfig::default()).unwrap();
+        let snap = dir.path().join("lodestar.pre-v10.db");
+        store
+            .connection()
+            .execute("VACUUM INTO ?1", [snap.to_string_lossy()])
+            .unwrap();
+        drop(store);
+        let taken = snapshots::list(&db).unwrap()[0].taken_at.unwrap();
+        let expired = taken + snapshots::RETAIN_SECS;
+
+        let lock = StoreLock::acquire(&db).unwrap();
+        assert!(Store::open(&db, StoreConfig::default()).is_err());
+        assert!(snap.exists());
+        lock.release().unwrap();
+
+        let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        assert_eq!(
+            store.purge_snapshots(expired, 0).expired,
+            vec![snap.clone()]
+        );
+        assert!(!snap.exists());
     }
 }
