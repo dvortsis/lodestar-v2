@@ -177,8 +177,18 @@ mod scm {
         );
         let default_dir = super::default_data_dir(std::env::var("ProgramData").ok());
         // Before anything in it is read or written. A refusal can't be
-        // logged in the folder; the exit code (3) says it was refused.
-        let code = if acl::secure_dir(&default_dir, acl::icacls, acl::saved_sddl).is_err() {
+        // logged in the folder; the exit code (3) says it was refused. The
+        // folder's ACL names the service's own SID; without it, the check
+        // refuses the folder.
+        let own = acl::service_sid(name).ok();
+        let own = own.as_deref();
+        let secured = acl::secure_dir(
+            &default_dir,
+            |d, l| acl::icacls(d, l, own),
+            acl::saved_sddl,
+            own,
+        );
+        let code = if secured.is_err() {
             REFUSED
         } else {
             match serve(&default_dir, status, stop_rx) {
