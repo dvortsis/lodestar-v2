@@ -1068,7 +1068,7 @@ impl RuleList {
                 }
             }
         }
-        let mut at = Vec::new();
+        let mut at = Vec::with_capacity(64);
         for (w, mut bits) in marks.into_iter().enumerate() {
             while bits != 0 {
                 at.push(w as u32 * 64 + bits.trailing_zeros());
