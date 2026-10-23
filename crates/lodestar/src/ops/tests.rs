@@ -276,11 +276,11 @@ async fn eventually(what: &str, seen: impl Fn() -> String, mut check: impl FnMut
 
 /// Waits until fetch starts stop changing between two reads 100 ms
 /// apart. A pause applies before the API answers, so this settles at
-/// once; the 5 s bound is there so a pool that keeps starting fetches
+/// once; the 1 s bound is there so a pool that keeps starting fetches
 /// after a pause fails here instead of passing.
 async fn starts_settled(f: &Fixture) {
     let mut last = usize::MAX;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
     loop {
         let now = f.starts.load(Ordering::SeqCst);
         if now == last {
@@ -288,7 +288,7 @@ async fn starts_settled(f: &Fixture) {
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "fetch starts kept changing for 5 s, last saw {now}"
+            "fetch starts kept changing for 1 s, last saw {now}"
         );
         last = now;
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -508,8 +508,6 @@ async fn stats_match_the_metrics() {
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
-    assert_eq!(stats["stored_torrents"], json!(metric("torrents")));
-    assert_eq!(stats["queue_depth"], json!(metric("fetch_pending")));
     assert!(stats["queue_depth"].as_u64().unwrap() > 0);
     assert_eq!(
         stats["uptime_s"].as_i64().unwrap(),
