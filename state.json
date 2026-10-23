@@ -1317,6 +1317,6 @@
   "launch_template": "From now on, launch prompts use runner/README.md standing instructions (steward skill, message runner_session).",
   "106-adoption": "03:20 check: every in-flight slice branch contains d243361 except #48 (M4). M4 session is blocked in plan mode waiting on owner ExitPlanMode approval (owner notified). No PR merged by any session since 02:55; filter session merged nothing.",
   "metrics": "Since 02:55: review_rounds incremented on every FIX verdict (backfilled 02:58 by counting FIX verdicts in notes, approximate). New PRs record self_review {raised,fixed,left} from the PR description.",
-  "113": "03:35 PR #113 opened from owner-session commit 005065f (CI commit-back of E2E baselines; owner decision \"best practice\"). Fresh + security review running. After merge: W9 merges main, pushes with marker; CI commits baselines; W9 removes marker."
+  "113": "03:35 PR #113 opened from owner-session commit 005065f (CI commit-back of E2E baselines; owner decision \"best practice\"). Fresh + security review running. After merge: W9 merges main, pushes with marker; CI commits baselines; W9 removes marker. | 03:40 review MERGE; asked owner session for hardening (symlink refusal, head.sha checkout, [[=~]], dirname --, caps, env input, heading)."
  }
 }
