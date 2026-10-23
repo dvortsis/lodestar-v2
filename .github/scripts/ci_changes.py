@@ -151,7 +151,11 @@ def main() -> None:
     out["importer"] = str(needs({"lodestar-sources-importers"}, tested=True)).lower()
     # The logging hot-path bench: the log crate, or the binary's runtime.
     out["log_bench"] = str(
-        needs({"lodestar-log"}) or any(f.startswith("crates/lodestar/src/logging/") for f in changed)
+        needs({"lodestar-log"})
+        or any(
+            f.startswith("crates/lodestar/src/logging/") or f == "crates/lodestar/src/settings/logging.rs"
+            for f in changed
+        )
     ).lower()
     # A change under fuzz/ (a target, the harness, its lockfile) runs them all.
     fuzz_all = "lodestar-fuzz" in touched
