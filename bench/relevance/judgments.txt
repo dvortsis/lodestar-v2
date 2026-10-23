@@ -1,0 +1,917 @@
+# Graded judgments for the relevance suite (bench/README.md, "Relevance").
+#
+# `? query` as typed in the search box; `= rationale`, one line on what
+# the ideal results are and why; then grades:
+#   3  exactly what the query asks
+#   2  a right answer (another good release of it)
+#   1  related, acceptable further down
+#   0  judged not relevant (the same as unjudged)
+#   x  must never be shown (hidden Adult, a negated word, a scoped field)
+#
+# Judgments describe the ideal ranking, not today's: a family whose
+# ideal needs a phase-2 feature that hasn't landed (swarm priors, the
+# junk penalty) scores below 1 until it does.
+
+# ---- The Glass Orchard: release-name noise ---------------------------------
+? glass orchard
+= The 2019 film in a watchable release first; the sequel, CAM, soundtrack, novel and trailer after.
+3 go-1080 go-2160 go-web go-720
+2 go2
+1 go-cam go-ost go-book fest eb-pack
+
+? the glass orchard 2019
+= The year pins the 2019 film; the soundtrack shares the year but is music.
+3 go-1080 go-2160 go-web go-720
+1 go-cam go-ost fest
+
+? "glass orchard"
+= The phrase finds the same title as the bare words, in the same order of usefulness.
+3 go-1080 go-2160 go-web go-720
+2 go2
+1 go-cam go-ost go-book fest eb-pack
+
+? orchard glass
+= Reversed words still mean the film; adjacency matters less than both words being in the title.
+3 go-1080 go-2160 go-web go-720
+2 go2
+1 go-cam go-ost go-book fest eb-pack
+
+? glass orchard 2160p
+= Only the UHD release has 2160p.
+3 go-2160
+
+? glass orchard 1080p
+= The two 1080p releases of the 2019 film; the 1080p sequel after.
+3 go-1080 go-web
+1 go2 fest
+
+? glass orchard x265
+= The x265 encode.
+3 go-2160
+
+? glass orchard web-dl
+= Both WEB-DL releases, whatever their resolution; the WEB-DL shorts holding the trailer after.
+3 go-web go-720
+1 fest
+
+? glass orchard bluray
+= The film's Blu-ray releases; the sequel's Blu-ray is related.
+3 go-1080 go-2160
+1 go2
+
+? glass orchard -cam
+= Every release but the CAM, which the negation must remove.
+3 go-1080 go-2160 go-web go-720
+2 go2
+1 go-ost go-book fest eb-pack
+x go-cam
+
+? glass orchard soundtrack
+= The soundtrack album.
+3 go-ost
+
+? glass orchard flac
+= FLAC means the soundtrack.
+3 go-ost
+
+? glass orchard epub
+= The novel, alone or in the author's collection.
+3 go-book
+2 eb-pack
+
+? glass orchard ii
+= "II" names the sequel.
+3 go2
+
+? glass orchard 2
+= A user's "2" means the sequel, written "II" in its name.
+3 go2
+
+? glass orchard trailer
+= The trailer sits in a shorts compilation's files.
+3 fest
+
+? the glass orchard 2019 1080p bluray x264
+= A full scene-style name: the exact release first, the other 1080p ones next.
+3 go-1080
+2 go-web
+1 go-2160
+
+# ---- Harbor Lights: seasons and episodes -----------------------------------
+? harbor lights
+= The show: season packs and the complete set first, single episodes next, the 1958 film and lookalikes after.
+3 hl-complete hl-s01 hl-s02
+2 hl-s02-720 hl-s02e05 hl-s02e05-720 hl-s02e06 hl-s01e05 hl-s03e01 hl-2x05 hl-1958
+1 harbor-docu
+
+? harbor lights s02e05
+= That episode first, in any quality; the season packs that hold it next; other episodes are wrong.
+3 hl-s02e05 hl-s02e05-720
+2 hl-2x05 hl-s02 hl-s02-720 hl-complete
+0 hl-s01e05 hl-s02e06
+
+? harbor lights s02
+= Season 2 packs first, the complete set next, single season-2 episodes after.
+3 hl-s02 hl-s02-720
+2 hl-complete
+1 hl-s02e05 hl-s02e05-720 hl-s02e06 hl-2x05
+
+? harbor lights season 2
+= "Season 2" written out means the same as S02.
+3 hl-s02 hl-s02-720
+2 hl-complete
+1 hl-s02e05 hl-s02e05-720 hl-s02e06 hl-2x05
+
+? harbor lights s:2
+= The season field: season 2 packs, the S01-S03 span, then its episodes.
+3 hl-s02 hl-s02-720
+2 hl-complete
+1 hl-s02e05 hl-s02e05-720 hl-s02e06 hl-2x05
+
+? harbor lights s:2 e:5
+= Season and episode fields together pick one episode.
+3 hl-s02e05 hl-s02e05-720
+2 hl-2x05
+1 hl-s02 hl-s02-720 hl-complete
+
+? harbor lights 2x05
+= The 2x05 numbering is S02E05.
+3 hl-2x05
+2 hl-s02e05 hl-s02e05-720
+
+? harbor lights s03e01
+= The season 3 opener, then the complete set holding it.
+3 hl-s03e01
+2 hl-complete
+
+? harbor lights 1958
+= The 1958 film of the same name.
+3 hl-1958
+
+? harbor lights complete
+= The complete series pack.
+3 hl-complete
+
+? harbor lights 720p
+= The 720p season pack and episode; the 720p 1958 film is a different work.
+3 hl-s02-720 hl-s02e05-720
+1 hl-1958
+
+? "the lighthouse keeper"
+= The episode titled so, by name first, then the packs that contain it.
+3 hl-s02e05 hl-2x05
+2 hl-s02 hl-complete
+
+? lighthouse keeper
+= Unquoted: the same episode, ahead of anything with only one of the words.
+3 hl-s02e05 hl-2x05
+2 hl-s02 hl-complete
+
+? harbor lights night ferry
+= An episode title inside the show's name: S02E06 itself, then packs holding it.
+3 hl-s02e06
+2 hl-s02 hl-complete
+
+? harbor -lights
+= Harbor without lights: the seal documentary; the show and the lights documentary must go.
+3 seals
+x hl-s01e05 hl-s01 hl-s02e06 hl-s02 hl-s02-720 hl-s02e05-720 hl-s02e05 hl-2x05 hl-s03e01 hl-complete hl-1958 harbor-docu bg07 bg08
+
+? type:tv harbor lights
+= The show only; the 1958 film is a movie.
+3 hl-complete hl-s01 hl-s02
+2 hl-s02-720 hl-s02e05 hl-s02e05-720 hl-s02e06 hl-s01e05 hl-s03e01 hl-2x05
+x hl-1958 harbor-docu
+
+? type:movie harbor lights
+= The 1958 film; the lights documentary is a lookalike.
+3 hl-1958
+1 harbor-docu
+x hl-s02 hl-complete hl-s02e05
+
+? "harbor lights" s02e05
+= A quoted title with an episode code.
+3 hl-s02e05 hl-s02e05-720
+2 hl-2x05 hl-s02 hl-s02-720 hl-complete
+
+? undertow
+= Every Undertow: the S03E01 episode, the two songs, the 2001 film; none is clearly first.
+2 hl-s03e01 y2001 comp mer-mix
+1 hl-complete
+
+# ---- Years ------------------------------------------------------------------
+? blackwater 2021
+= The 2021 film in both releases; the 1984 film is a different work.
+3 bw-2021 bw-2021-2160
+
+? blackwater 1984
+= The 1984 film.
+3 bw-1984
+
+? blackwater
+= Both Blackwater films first, the rescue show after.
+3 bw-2021 bw-2021-2160 bw-1984
+1 bw-bay
+
+? blackwater year:2021
+= The year field picks the 2021 film.
+3 bw-2021 bw-2021-2160
+
+? blackwater year:1980..1990
+= A year range picks the 1984 film.
+3 bw-1984
+
+? summer of 1984
+= 1984 is in the title of a 2022 film.
+3 summer84 summer84-720
+
+? summer of 1984 2022
+= Title year and release year together.
+3 summer84 summer84-720
+
+? summer 1984 1080p
+= The 1080p release first.
+3 summer84
+
+? station 2001
+= A title that is a year: the 2017 film Station 2001.
+3 station2001
+
+? undertow road 2001
+= The 2001 film.
+3 y2001
+
+? 1984
+= A bare year: films titled with it first, the 1984 release year next.
+3 summer84 summer84-720 bg29
+2 bw-1984
+
+# ---- CJK --------------------------------------------------------------------
+? 星河旅人
+= The series first, its film sequel next.
+3 xh-series
+2 xh-movie
+
+? 星河
+= A partial title still finds the series and its film.
+3 xh-series
+2 xh-movie
+
+? 旅人
+= Every title with the word: the diary film is titled exactly so.
+3 lvren
+2 xh-series xh-movie hoshi-05
+
+? 星河旅人 1080p
+= Both titles are 1080p.
+3 xh-series xh-movie
+
+? 星河旅人 归途
+= The film's subtitle picks it.
+3 xh-movie
+
+? star river traveler
+= The series' English title.
+3 xh-series
+
+? 山海遗梦
+= The series by its Chinese title.
+3 shanhai
+
+? shan hai yi meng
+= The same series by its romanised title.
+3 shanhai
+
+? 山海
+= Half the title still finds it.
+3 shanhai
+
+? 夜明けの街
+= The Japanese film by its title.
+3 yoake
+
+? yoake no machi
+= The same film, romanised.
+3 yoake
+
+? 바다의 노래
+= The Korean series by its title.
+3 badaui
+
+? 바다의
+= The first word of the Korean title.
+3 badaui
+
+? 长河落日
+= The film by its title.
+3 changhe
+
+? 长河
+= Its first word finds it, not the series with 河 in another word.
+3 changhe
+
+? 星の旅人
+= The Japanese title of the anime.
+3 hoshi-05
+
+? hoshi no tabibito
+= The anime: the batch first, then episodes.
+3 hoshi-batch
+2 hoshi-05 hoshi-06
+
+? hoshi no tabibito 05
+= Episode 5, then the batch that holds it.
+3 hoshi-05
+2 hoshi-batch
+
+? hoshi no tabibito batch
+= The batch.
+3 hoshi-batch
+
+? hoshi no tabibito 1080p
+= The 1080p releases.
+3 hoshi-batch hoshi-05
+
+? 星空
+= The film titled with it.
+3 bg31
+
+# ---- Plurals and stems ------------------------------------------------------
+? knight ember hollow
+= A singular "knight" still means Knights of Ember Hollow, film and series.
+3 kn-ember kn-ember-s
+
+? knights of ember hollow
+= The exact title: film and series.
+3 kn-ember kn-ember-s
+
+? knights
+= Exact plurals first, the singular title after.
+3 kn-ember kn-ember-s
+2 knight-varrow
+
+? knight
+= The singular title first, the plural ones after.
+3 knight-varrow
+2 kn-ember kn-ember-s
+
+? last knight varrow
+= The film by its words.
+3 knight-varrow
+
+? paper lantern
+= The Paper Lantern Society exactly; Paper Lanterns by its plural.
+3 lantern-soc lanterns
+
+? paper lanterns
+= Paper Lanterns exactly; the Society by its singular; albums with "Paper Moons" and "Tin Lanterns" are not it.
+3 lanterns
+2 lantern-soc
+0 tv-paper tv-mp3 tv-disco
+
+? lanterns
+= The plural title, then singular ones and the song.
+3 lanterns
+2 lantern-soc bg33
+1 tv-paper tv-mp3 tv-disco
+
+? wolf tamsin ridge
+= The Wolf of Tamsin Ridge exactly, the Wolves film next.
+3 wolf
+2 wolves
+
+? wolves tamsin ridge
+= Wolves of Tamsin Ridge exactly, the Wolf film next.
+3 wolves
+2 wolf
+
+? tamsin ridge
+= Both Tamsin Ridge films.
+3 wolves wolf
+
+? clockmaker daughters
+= The possessive dropped, the film still matches.
+3 daughters
+
+? clockmakers daughters
+= Without the apostrophe.
+3 daughters
+
+? clockmaker's daughter
+= Possessive and singular: the same film.
+3 daughters
+
+? city of salt and brass
+= Singular "city" means Cities of Salt and Brass.
+3 cities
+
+? cities salt brass
+= Content words of the title.
+3 cities
+
+? sisters
+= Titles with sisters; the hentai collection is hidden.
+3 ms-film bg17
+x ms-hentai
+
+# ---- Compound tokens: Copper Canyon -----------------------------------------
+? copper canyon
+= Every release of the 2016 film first; the railway documentary is another work.
+3 cc-x264 cc-x265 cc-h264web cc-hevc cc-remux
+2 cc-webrip cc-dvd
+1 cc-rail
+
+? copper canyon x264
+= x264 encodes first; other H.264 video after.
+3 cc-x264 cc-webrip
+1 cc-h264web cc-remux cc-rail
+
+? copper canyon x265
+= The x265 encode first, the other HEVC release next.
+3 cc-x265
+2 cc-hevc
+
+? copper canyon h264
+= H.264 video: the WEB-DL first, x264 encodes and the AVC remux next.
+3 cc-h264web
+2 cc-x264 cc-webrip cc-remux
+1 cc-rail
+
+? copper canyon h.264
+= Written with the dot, the same as h264.
+3 cc-h264web
+2 cc-x264 cc-webrip cc-remux
+1 cc-rail
+
+? copper canyon web-dl
+= The two WEB-DL releases; the WEBRip is a different source.
+3 cc-h264web cc-hevc
+1 cc-webrip
+
+? copper canyon webdl
+= Written without the hyphen, the same as WEB-DL.
+3 cc-h264web cc-hevc
+1 cc-webrip
+
+? copper canyon web dl
+= Written with a space, the same as WEB-DL.
+3 cc-h264web cc-hevc
+1 cc-webrip
+
+? copper canyon dd+
+= DD+ audio: written DD+ first, as DDP next.
+3 cc-h264web
+2 cc-hevc
+
+? copper canyon ddp5.1
+= DDP5.1 audio: written so first, as DD+5.1 next.
+3 cc-hevc
+2 cc-h264web
+
+? copper canyon 5.1
+= The two 5.1 mixes; the 7.1 remux is not 5.1.
+3 cc-h264web cc-hevc
+
+? copper canyon 7.1
+= The 7.1 remux; the 5.1 Atmos release is not 7.1.
+3 cc-remux
+0 cc-hevc
+
+? copper canyon dts-hd
+= The DTS-HD remux.
+3 cc-remux
+
+? copper canyon 10bit
+= The 10-bit encode.
+3 cc-x265
+
+? copper canyon hevc
+= HEVC by name first, the x265 encode next.
+3 cc-hevc
+2 cc-x265
+
+? copper canyon remux
+= The remux.
+3 cc-remux
+
+? copper canyon xvid
+= The DVDRip in XviD.
+3 cc-dvd
+
+? copper canyon aac2.0
+= AAC 2.0 audio.
+3 cc-webrip
+
+? copper canyon 2160p
+= The UHD release.
+3 cc-hevc
+
+? copper canyon res:2160p
+= The resolution field: the UHD release.
+3 cc-hevc
+
+? codec:x265 copper canyon
+= The codec field for HEVC covers both HEVC releases.
+3 cc-x265 cc-hevc
+
+? copper canyon 1080p bluray
+= The 1080p Blu-ray releases: the encodes ahead of the 31 GB remux.
+3 cc-x264 cc-x265
+2 cc-remux
+
+? copper canyon atmos
+= The Atmos release.
+3 cc-hevc
+
+? copper canyon dvdrip
+= The DVDRip.
+3 cc-dvd
+
+? webrip copper
+= Word order and a source tag first.
+3 cc-webrip
+
+# ---- Title against path -----------------------------------------------------
+? meridian
+= Things titled Meridian (the film, the album, the discography holding it) above files that merely mention it.
+3 mer-film mer-album
+2 tv-disco
+1 mer-mix mer-walls mer-course
+
+? meridian 2020
+= The 2020 film; the 2020 wallpaper pack only mentions it in a file.
+3 mer-film
+1 mer-walls
+
+? meridian flac
+= The album, alone or in the discography.
+3 mer-album
+2 tv-disco
+
+? title:meridian
+= Scoped to titles: path-only matches must not appear.
+3 mer-film mer-album
+x mer-mix mer-walls mer-course tv-disco
+
+? kaia rowe meridian
+= The track by Kaia Rowe in the mix.
+3 mer-mix
+
+? meridian line
+= The track title, in a file only.
+3 mer-mix
+
+? meridian config
+= The course module, in files only.
+3 mer-course
+
+? sodium glow
+= The album titled so first, the mix that holds the track after.
+3 bg21
+1 mer-mix
+
+? glasswork
+= The song in two releases: the album that holds it, then the mix.
+2 bg22 mer-mix
+
+? long exposure
+= Pell Harbour's album first, the compilation holding the song after.
+3 bg22
+1 comp
+
+# ---- Junk and spam ----------------------------------------------------------
+? silent tide
+= The real releases; executable, archive and screensaver fakes never belong near the top.
+3 st-real st-real-720
+0 st-junk1 st-junk2 st-junk3
+
+? silent tide 2020 1080p
+= The real 1080p release; the fakes carry the same words.
+3 st-real
+0 st-junk1 st-junk2 st-junk3
+
+? silent tide 1080p bluray x264
+= Every word matches the fake too: the junk score has to put the real one first.
+3 st-real
+0 st-junk1
+
+? silent tide junk:<20
+= With a junk ceiling the fakes are filtered out.
+3 st-real st-real-720
+x st-junk1 st-junk3
+
+? silent tide 720p
+= The 720p WEB-DL.
+3 st-real-720
+
+# ---- Swarm health (null until the phase-2 priors land) ----------------------
+? ashfall protocol
+= The well-seeded 1080p copy first; the dead copy of the same release last.
+3 ash-live
+2 ash-mid
+1 ash-dead
+
+? ashfall protocol 1080p
+= Two copies of one release: the seeded one first.
+3 ash-live
+1 ash-dead
+
+? northwind express
+= The seeded copy first, the unscraped one next, the dead one last.
+3 nw-live
+2 nw-null
+1 nw-dead
+0 fest
+
+? northwind express 2018 1080p bluray
+= The same with the full release name.
+3 nw-live
+2 nw-null
+1 nw-dead
+
+? gilded cage s01
+= The live season pack over the near-dead one.
+3 gc-live
+1 gc-dead
+
+? gilded cage
+= The same pair by title.
+3 gc-live
+1 gc-dead
+
+# ---- Adult hidden by default ------------------------------------------------
+? velvet room
+= The mainstream thriller; the XXX releases sharing its words stay hidden.
+3 vr-film
+x vr-xxx vr-xxx2
+
+? the velvet room 2019 1080p
+= The thriller by its full name.
+3 vr-film
+x vr-xxx vr-xxx2
+
+? velvet room parody
+= Only Adult matches, and Adult is hidden: nothing to show.
+x vr-xxx2
+
+? type:adult
+= Asking for Adult while it's hidden shows nothing.
+x vr-xxx vr-xxx2 ms-hentai
+
+? xxx
+= The scene tag is Adult only: nothing to show.
+x vr-xxx vr-xxx2
+
+? moonlit sisters
+= The anime film; the hentai collection with the same title stays hidden.
+3 ms-film
+x ms-hentai
+
+? sex and dissent
+= A mainstream series whose title says "sex" is not Adult.
+3 sexdis
+
+? human sexuality documentary
+= A documentary about sexuality is not Adult.
+3 lovelab
+
+? velvet
+= Mainstream velvet titles only.
+3 vr-film bg16
+x vr-xxx vr-xxx2
+
+# ---- Music ------------------------------------------------------------------
+? tessa vane
+= Her releases: the discography and albums first, the compilation track after.
+3 tv-disco mer-album tv-paper tv-mp3
+1 comp
+
+? tessa vane paper moons
+= The album in both formats, then the discography that holds it.
+3 tv-paper tv-mp3
+2 tv-disco
+
+? tessa vane flac
+= FLAC releases only.
+3 tv-disco mer-album tv-paper
+
+? tessa vane 24-96
+= The hi-res release.
+3 tv-paper
+
+? tessa vane discography
+= The discography.
+3 tv-disco
+
+? tessa vane mp3
+= The MP3 album, then the MP3 compilation with her track.
+3 tv-mp3
+1 comp
+
+? paper moons ext:flac
+= FLAC files of the album, alone or in the discography.
+3 tv-paper
+2 tv-disco
+
+? tessa vane undertow
+= Her track on the compilation.
+3 comp
+
+? hollow pines granite hearts
+= The album; the unnamed folder holding it next.
+3 hp-album
+2 pines-folder
+
+? granite hearts
+= The album by name; the folder that holds it by its files.
+3 hp-album
+2 pines-folder
+
+? stoneworks
+= The track, in the album and in the unnamed folder.
+3 hp-album pines-folder
+
+? type:music tessa vane
+= Music only: her albums.
+3 tv-disco mer-album tv-paper tv-mp3
+1 comp
+
+? file:(ext:flac) tessa vane
+= A file clause: FLAC releases only.
+3 tv-disco mer-album tv-paper
+x tv-mp3 comp
+
+? tin lanterns
+= The song is on three releases.
+2 tv-paper tv-mp3 tv-disco
+
+# ---- Software ---------------------------------------------------------------
+? photoforge 2024
+= The 2024 release for Windows and macOS, then the plugins.
+3 pf-2024 pf-mac
+2 pf-plugins
+
+? photoforge 2024 x64
+= The Windows 2024 release first, the plugins after.
+3 pf-2024
+1 pf-plugins
+
+? photoforge macos
+= The macOS release.
+3 pf-mac
+
+? photoforge mac
+= "mac" means the macOS release.
+3 pf-mac
+
+? photoforge
+= The current release first; older, plugins and a course after.
+3 pf-2024 pf-mac
+2 pf-2023
+1 pf-plugins pf-course
+
+? photoforge v25.1.2
+= The exact version, both platforms.
+3 pf-2024 pf-mac
+
+? photoforge course
+= The video course.
+3 pf-course
+
+? type:software photoforge
+= Software only: the course is video.
+3 pf-2024 pf-mac
+2 pf-2023
+1 pf-plugins
+
+# ---- Books -------------------------------------------------------------------
+? mara ellison
+= Her books.
+3 eb-pack go-book bg24
+
+? mara ellison epub
+= Her EPUBs.
+3 eb-pack go-book bg24
+
+? winter ledger
+= The novel, alone and in the collection.
+3 bg24
+2 eb-pack
+
+? glass orchard ext:epub
+= The novel's EPUB, alone first, in the collection next.
+3 go-book
+2 eb-pack
+
+? tidepool data pipelines
+= The book.
+3 eb-tidepool
+
+? tidepool pdf
+= The book is a PDF.
+3 eb-tidepool
+
+# ---- Games -------------------------------------------------------------------
+? starlit frontier
+= The game's two releases first, the soundtrack after.
+3 sf-repack sf-iso
+1 sf-ost
+
+? starlit frontier repack
+= The repack.
+3 sf-repack
+
+? starlit frontier dlc
+= "DLC" means the edition with DLCs.
+3 sf-repack
+
+? starlit frontier v1.4.2
+= Both releases of that version.
+3 sf-repack sf-iso
+
+? starlit frontier ost
+= The soundtrack.
+3 sf-ost
+
+? starlitfrontier
+= Run together as in the ISO's file name.
+3 sf-iso sf-repack
+
+# ---- The query language ------------------------------------------------------
+? glass orchard | copper canyon
+= Either film: their good releases first, as each title's own query grades them.
+3 go-1080 go-2160 go-web go-720 cc-x264 cc-x265 cc-h264web cc-hevc cc-remux
+2 go2 cc-webrip cc-dvd
+1 go-cam go-ost go-book fest eb-pack cc-rail
+
+? copper canyon -x264
+= x264 encodes removed.
+3 cc-x265 cc-h264web cc-hevc cc-remux
+2 cc-dvd
+x cc-x264 cc-webrip cc-rail
+
+? copper NEAR/1 canyon
+= The two words side by side: every Copper Canyon.
+3 cc-x264 cc-x265 cc-h264web cc-hevc cc-remux
+2 cc-webrip cc-dvd
+1 cc-rail
+
+? copp* canyon
+= A prefix completes to copper.
+3 cc-x264 cc-x265 cc-h264web cc-hevc cc-remux
+2 cc-webrip cc-dvd
+1 cc-rail
+
+? ~coper canyon
+= A typo corrected by fuzzy matching.
+3 cc-x264 cc-x265 cc-h264web cc-hevc cc-remux
+2 cc-webrip cc-dvd
+1 cc-rail
+
+? group:kstrl copper canyon
+= The release group field.
+3 cc-x264
+
+? size:>20GB glass orchard
+= A size floor leaves the UHD release.
+3 go-2160
+
+? res:2160p glass orchard
+= The resolution field.
+3 go-2160
+
+? title:"glass orchard"
+= A title phrase: the trailer in a compilation's files must not match.
+3 go-1080 go-2160 go-web go-720
+2 go2
+1 go-cam go-ost go-book
+x fest eb-pack
+
+? glass orchard ext:mkv
+= MKV releases only.
+3 go-1080 go-2160 go-web
+2 go2
+1 go-cam fest
+
+? has:nfo glass orchard
+= Releases carrying an NFO.
+3 go-2160 go-web
+
+? (glass | copper) (orchard | canyon) 1080p
+= Grouping: 1080p releases of either film.
+3 go-1080 go-web cc-x264 cc-x265 cc-h264web cc-remux
+1 go2 fest
+
+? riverglass
+= The film by name first; the hash-named folder holding it next.
+3 rg-proper
+2 rg-hash
+
+? riverglass 1080p
+= Only the hash-named folder's file is 1080p.
+3 rg-hash
+
+? path:riverglass
+= In file paths: the hash-named folder; the single-file release's file is its name.
+3 rg-hash
+2 rg-proper
