@@ -146,6 +146,7 @@ fn fixture_with(torrents: &[T<'_>], search: bool, adult: bool) -> Fixture {
             ops: None,
             user_data: None,
             adult: AdultVisibility::follow(move || adult),
+            insights: None,
         }),
     );
     let hashes = infos
