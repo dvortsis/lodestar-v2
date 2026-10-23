@@ -26,6 +26,9 @@ pub struct FacetsRequest {
     pub sort: Option<String>,
     /// Include torrents a filter rule hid (§20.3), as `/search`.
     pub hidden: Option<bool>,
+    /// The user's zone for `time:`, in minutes east of UTC (−840 to
+    /// 840), as `/search`; 0 by default.
+    pub tz: Option<i32>,
     /// A search response's `next_cursor`: count the same index snapshot
     /// as its results. Send the same `q`, `sort` and `hidden` with it.
     /// Without one, the index serving now.
