@@ -29,8 +29,11 @@ impl Default for Transport {
 impl Section for Transport {
     const SECTION: &'static str = "transport";
     const FIELDS: &'static [Field] = &[
-        Field::new("utp").restart(),
-        Field::new("fallback_to_tcp").restart(),
+        Field::new("utp").restart().group("transport").keywords(),
+        Field::new("fallback_to_tcp")
+            .restart()
+            .group("transport")
+            .advanced(),
     ];
 
     /// No `config.toml` key backs these yet.

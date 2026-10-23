@@ -247,6 +247,17 @@ impl Credentials {
         Ok(())
     }
 
+    /// Seals the stored key again with `secrets`' primary key (a
+    /// secrets-key rotation on the worker: `SecretStore::rotate`, then
+    /// this, then `SecretStore::retire_old_keys`). `false` if the worker
+    /// hasn't joined.
+    pub fn reseal(dir: &Path, secrets: &SecretStore) -> Result<bool, ClusterError> {
+        match Credentials::load(dir, secrets)? {
+            Some(creds) => creds.save(dir, secrets).map(|()| true),
+            None => Ok(false),
+        }
+    }
+
     /// Reads `dir/credentials`, or `None` if the worker hasn't joined.
     pub fn load(dir: &Path, secrets: &SecretStore) -> Result<Option<Credentials>, ClusterError> {
         let text = match fs::read_to_string(Credentials::path(dir)) {
