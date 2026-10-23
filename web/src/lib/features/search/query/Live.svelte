@@ -1,20 +1,18 @@
 <script lang="ts">
 	// The query bar's lazy part (QueryBar loads it on the first interaction or a `q` in the URL):
-	// the editor, the search state, the parse-error line, the "couldn't check" banner and the
-	// active-filter strip (itself lazy until there is a chip). The URL is the state (§10.3): every
-	// write goes through W5, after `ensureSearchPath()`.
+	// the editor, the search state, the parse-error line and the "couldn't check" banner. The URL
+	// is the state (§10.3): every write goes through W5, after `ensureSearchPath()`.
 	import { onDestroy, onMount, untrack } from 'svelte';
 	import IconError from '~icons/ph/warning-circle';
 	import { page } from '$app/state';
 	import { m } from '$lib/paraglide/messages.js';
-	import { search, type Ast } from '$lib/state/search.svelte';
+	import { search } from '$lib/state/search.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import Button from '$lib/ui/controls/Button.svelte';
-	import { chipClauses, rootWithout, withoutFilters, type Clause } from './clauses';
 	import { attach, type Editor } from './editor';
 	import { ensureSearchPath } from './path';
 	import { errorRange } from './spans';
-	import type { SearchState, SyntaxComponent } from './types';
+	import type { SearchState } from './types';
 
 	interface Props {
 		el: HTMLElement;
@@ -40,7 +38,6 @@
 		ensureSearchPath();
 		void s.submit();
 	}
-
 
 	// The URL is the state: adopt outside changes (back/forward, a pasted link, a facet click).
 	// An empty query in an empty bar has nothing to adopt or parse: no request for the bare page.
@@ -97,62 +94,8 @@
 		else el.removeAttribute('aria-invalid');
 	});
 
-	// The strip explains the results, which still show the last query that parsed: keep its AST
-	// while an error is showing (W5 clears `ast` on an error).
-	let shown = $state.raw<Ast | null>(null);
-	$effect(() => {
-		const ast = s.ast;
-		if (ast) shown = ast;
-		else if (!s.parseError && !s.parsing) shown = null;
-	});
-	const clauses = $derived(chipClauses(shown));
-	const hidden = $derived(s.hidden);
-
-	let Strip = $state<typeof import('./FilterStrip.svelte').default>();
-	$effect(() => {
-		if ((clauses.length || hidden) && !Strip)
-			void import('./FilterStrip.svelte').then((mod) => (Strip = mod.default));
-	});
-
-	// Polite announcements ("Removed filter: …"). Cleared first so a repeat is read again.
-	let said = $state('');
-	function announce(text: string) {
-		said = '';
-		requestAnimationFrame(() => (said = text));
-	}
-
-	async function remove(clause: Clause) {
-		if (!shown) return;
-		ensureSearchPath();
-		await s.setAst(rootWithout(shown, clause.index));
-		announce(m.search_filters_removed({ label: clause.label.text }));
-	}
-
-	async function removeHidden(label: string) {
-		ensureSearchPath();
-		await s.setHidden(false);
-		announce(m.search_filters_removed({ label }));
-	}
-
-	async function clearAll() {
-		ensureSearchPath();
-		if (clauses.length) await s.setAst(withoutFilters(shown));
-		if (s.hidden) await s.setHidden(false);
-		announce(m.search_filters_cleared());
-	}
-
-	export function tryQuery(query: string) {
-		setText(query);
-		submit();
-		editor?.focusEnd();
-	}
-
 	export function focusEnd() {
 		editor?.focusEnd();
-	}
-
-	export async function loadSyntax(): Promise<SyntaxComponent> {
-		return (await import('./SyntaxPopover.svelte')).default;
 	}
 </script>
 
@@ -173,14 +116,3 @@
 		{/snippet}
 	</Banner>
 {/if}
-{#if Strip && (clauses.length || hidden)}
-	<Strip
-		{clauses}
-		{hidden}
-		{el}
-		onremove={remove}
-		onremovehidden={removeHidden}
-		onclear={clearAll}
-	/>
-{/if}
-<p class="sr-only" aria-live="polite">{said}</p>

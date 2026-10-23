@@ -4,27 +4,27 @@ The search screen (architecture §10.4). The page shell is `routes/search/+page.
 
 ## Who owns what
 
-| Path                                                | Slice       | What                                                                                   |
-| --------------------------------------------------- | ----------- | -------------------------------------------------------------------------------------- |
-| `query/`                                            | S-search-1  | The query bar and editor, the highlighter, the error line, the active-filter strip, Syntax popover |
-| `messages/{en,zh}.json`                             | all search  | One catalogue for the search family; each slice appends keys under its own sub-prefix  |
-| `routes/search/+page.svelte`                        | S-search-1  | The page shell; later slices get named mount lines in it                               |
-| facet rail, results list (folder of its own)        | S-search-2  | Mounted in `#search-rail` and `#results`                                               |
-| results toolbar                                     | S-search-3  | Mounted at the top of `#results`                                                       |
-| listbox (autocomplete)                              | S-search-4  | Attaches to the editor (see "The editor" below)                                        |
-| `features/detail/DetailHost.svelte`                 | S-detail    | Rendered in `#search-drawer` from a lazy glob                                          |
+| Path                                         | Slice      | What                                                                                               |
+| -------------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------- |
+| `query/`                                     | S-search-1 | The query bar and editor, the highlighter, the error line, the active-filter strip, Syntax popover |
+| `messages/{en,zh}.json`                      | all search | One catalogue for the search family; each slice appends keys under its own sub-prefix              |
+| `routes/search/+page.svelte`                 | S-search-1 | The page shell; later slices get named mount lines in it                                           |
+| facet rail, results list (folder of its own) | S-search-2 | Mounted in `#search-rail` and `#results`                                                           |
+| results toolbar                              | S-search-3 | Mounted at the top of `#results`                                                                   |
+| listbox (autocomplete)                       | S-search-4 | Attaches to the editor (see "The editor" below)                                                    |
+| `features/detail/DetailHost.svelte`          | S-detail   | Rendered in `#search-drawer` from a lazy glob                                                      |
 
 **Message sub-prefixes:** `search_page_*`, `search_query_*` and `search_filters_*` belong to S-search-1. Later slices use their own (`search_results_*`, `search_facets_*`, `search_toolbar_*`, …). Glossary terms come from the shared keys (`m.hidden_by_filters()`), never copies.
 
 ## Page regions
 
-Under the heading, the `<search>` landmark holds the bar, its message line and the strip. Below it, a grid with three regions (§10.15 tracks: one column below `x-large`, rail + results at `x-large`, rail + results + drawer from `xx-large`):
+Under the heading, the `<search>` landmark holds the bar and its message line (the strip joins it in S-search-1's second PR). Below it, a grid with three regions (§10.15 tracks: one column below `x-large`, rail + results at `x-large`, rail + results + drawer from `xx-large`):
 
-| id              | Filled by                 | Notes                                                                                         |
-| --------------- | ------------------------- | --------------------------------------------------------------------------------------------- |
-| `search-rail`   | S-search-2                | No landmark role until it has content.                                                        |
-| `results`       | S-search-3, then S-search-2 | Toolbar, then the list.                                                                     |
-| `search-drawer` | S-detail                  | `DetailHost.svelte` renders while `'detail' in page.state`; it positions itself per breakpoint. |
+| id              | Filled by                   | Notes                                                                                           |
+| --------------- | --------------------------- | ----------------------------------------------------------------------------------------------- |
+| `search-rail`   | S-search-2                  | No landmark role until it has content.                                                          |
+| `results`       | S-search-3, then S-search-2 | Toolbar, then the list.                                                                         |
+| `search-drawer` | S-detail                    | `DetailHost.svelte` renders while `'detail' in page.state`; it positions itself per breakpoint. |
 
 The grid's rule lives in `query/bar.css`, which loads with the first interaction: nothing paints in the regions before then. **The first slice that paints into a region on first load moves the rule into the route's own stylesheet** (and pays its bytes).
 

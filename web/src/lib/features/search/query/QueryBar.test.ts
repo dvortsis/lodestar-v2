@@ -75,7 +75,10 @@ function setup() {
 async function engage(editor: HTMLElement) {
 	await fireEvent.focusIn(editor);
 	editor.focus();
-	await waitFor(() => expect(document.querySelector('[aria-live="polite"]')).not.toBeNull());
+	// Live's message line replaces the static one.
+	await waitFor(() =>
+		expect(document.querySelector('#search-query-message.truncate')).not.toBeNull()
+	);
 }
 
 async function typeText(editor: HTMLElement, text: string) {
@@ -217,78 +220,5 @@ describe('the query bar', () => {
 		const { editor } = setup();
 		await waitFor(() => expect(editor.textContent).toBe('res:1080p'));
 		expect(editor.querySelector('.qt-value')?.textContent).toBe('1080p');
-	});
-});
-
-describe('the active-filter strip', () => {
-	it('renders chips from the AST and removes one through the server', async () => {
-		visit('/search?q=lantern+res%3A1080p');
-		const { editor } = setup();
-		const chip = await screen.findByRole('button', { name: 'Remove filter: Resolution: 1080p' });
-		expect(screen.getByRole('group', { name: 'Active filters' }).textContent).toContain(
-			'Resolution: 1080p'
-		);
-		// Free text stays in the bar: no chip for "lantern".
-		expect(screen.queryByRole('button', { name: /lantern/ })).toBeNull();
-		await fireEvent.click(chip);
-		await waitFor(() => expect(navCalls.at(-1)).toEqual({ url: '/search?q=lantern', push: true }));
-		expect(searchBodies.at(-1)).toMatchObject({ ast: word('lantern'), limit: 1 });
-		await waitFor(() =>
-			expect(document.querySelector('[aria-live="polite"]')?.textContent).toBe(
-				'Removed filter: Resolution: 1080p'
-			)
-		);
-		await waitFor(() => expect(document.activeElement).toBe(editor));
-		await waitFor(() => expect(screen.queryByRole('group', { name: 'Active filters' })).toBeNull());
-	});
-
-	it('keeps the chip and offers Retry when the removal fails', async () => {
-		visit('/search?q=res%3A1080p+res%3A2160p');
-		setup();
-		const chip = await screen.findByRole('button', { name: 'Remove filter: Resolution: 1080p' });
-		fetchMock.mockImplementationOnce(async () => {
-			throw new TypeError('Failed to fetch');
-		});
-		await fireEvent.click(chip);
-		const banner = await screen.findByRole('alert');
-		expect(banner.textContent).toContain("Couldn't change the filters");
-		expect(screen.getByRole('button', { name: 'Remove filter: Resolution: 1080p' })).toBeTruthy();
-		await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-		await waitFor(() =>
-			expect(navCalls.at(-1)).toEqual({ url: '/search?q=res%3A2160p', push: true })
-		);
-	});
-
-	it('keeps the last good chips while a syntax error shows', async () => {
-		visit('/search?q=res%3A1080p');
-		const { editor } = setup();
-		await screen.findByRole('button', { name: 'Remove filter: Resolution: 1080p' });
-		await typeText(editor, 'res:1080p (');
-		await fireEvent.keyDown(editor, { key: 'Enter' });
-		await waitFor(() => expect(editor.getAttribute('aria-invalid')).toBe('true'));
-		expect(screen.getByRole('button', { name: 'Remove filter: Resolution: 1080p' })).toBeTruthy();
-	});
-
-	it('shows the hidden=1 chip and removes it with setHidden', async () => {
-		visit('/search?hidden=1');
-		const { state } = setup();
-		const setHidden = vi.spyOn(state, 'setHidden');
-		const chip = await screen.findByRole('button', {
-			name: 'Remove filter: Including: Hidden by filters'
-		});
-		await fireEvent.click(chip);
-		expect(setHidden).toHaveBeenCalledWith(false);
-		await waitFor(() => expect(navCalls.at(-1)).toEqual({ url: '/search', push: true }));
-	});
-
-	it('Clear all keeps the free text and clears hidden', async () => {
-		visit('/search?q=lantern+res%3A1080p+res%3A2160p&hidden=1');
-		const { editor } = setup();
-		await screen.findByRole('button', { name: 'Remove filter: Resolution: 2160p' });
-		await fireEvent.click(screen.getByRole('button', { name: 'Clear all' }));
-		await waitFor(() => expect(navCalls.at(-1)?.url).toBe('/search?q=lantern'));
-		expect(searchBodies.at(-1)).toMatchObject({ ast: word('lantern') });
-		await waitFor(() => expect(screen.queryByRole('button', { name: 'Clear all' })).toBeNull());
-		await waitFor(() => expect(document.activeElement).toBe(editor));
 	});
 });
