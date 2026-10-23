@@ -1128,7 +1128,7 @@
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": "2026-10-23T07:34:04Z added by #120; needs brief from B-log1 review follow-ups | 2026-10-23T10:12:55Z deps merged; waits for B-log2 (logging/** overlap) and B11b (pipeline/**). Brief must include B-log1 review follow-ups (carry_forward) | 2026-10-23T17:15:19Z unblocked by B-log2; waits for M4 #48 (pipeline/** overlap); brief drafting | 2026-10-23T17:28:33Z brief committed (Opus helper + runner decisions: owns, main.rs after #128, bench gates, api.request template-only); held: launch freeze + after M4 | 2026-10-23T19:05:20Z launched (opus, auto mode)"
+      "notes": "2026-10-23T07:34:04Z added by #120; needs brief from B-log1 review follow-ups | 2026-10-23T10:12:55Z deps merged; waits for B-log2 (logging/** overlap) and B11b (pipeline/**). Brief must include B-log1 review follow-ups (carry_forward) | 2026-10-23T17:15:19Z unblocked by B-log2; waits for M4 #48 (pipeline/** overlap); brief drafting | 2026-10-23T17:28:33Z brief committed (Opus helper + runner decisions: owns, main.rs after #128, bench gates, api.request template-only); held: launch freeze + after M4 | 2026-10-23T19:05:20Z launched (opus, auto mode) | 2026-10-23T19:15:17Z asked to fix crates/log test-static race flake in PR 1"
     },
     "M4": {
       "status": "merged",
@@ -1150,7 +1150,7 @@
     },
     "fix-fixture-rollups": {
       "status": "review",
-      "notes": "2026-10-23T17:55:35Z investigation: fixture wrote only index_watermark_hour, not NEWLY_SEARCHABLE/TIME_TO_SEARCHABLE/imported; 24h matched only via unclean-stop 72h repair. Server correct. Runner applying patch (bench/src/fixture.rs record_searchable, FORMAT 2, tests) | 2026-10-23T18:04:25Z committed locally 1943fde on fix/fixture-searchable-rollups (worktree fx3); tests 7+4 pass; push after #48 | 2026-10-23T18:42:25Z merged main (M4), pushed 3cd7285; re-testing before PR",
+      "notes": "2026-10-23T17:55:35Z investigation: fixture wrote only index_watermark_hour, not NEWLY_SEARCHABLE/TIME_TO_SEARCHABLE/imported; 24h matched only via unclean-stop 72h repair. Server correct. Runner applying patch (bench/src/fixture.rs record_searchable, FORMAT 2, tests) | 2026-10-23T18:04:25Z committed locally 1943fde on fix/fixture-searchable-rollups (worktree fx3); tests 7+4 pass; push after #48 | 2026-10-23T18:42:25Z merged main (M4), pushed 3cd7285; re-testing before PR | 2026-10-23T19:15:17Z #142 test(ubuntu) red in lodestar_log declarations_start_as_normal_has_them (shared-static race, not this PR); re-run once; fix routed to B-log1b (owns crates/log)",
       "pr": 142,
       "catch_ups": 1
     },
