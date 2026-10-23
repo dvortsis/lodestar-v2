@@ -302,9 +302,13 @@ fn commit(
 ) -> Result<()> {
     #[cfg(test)]
     let fail = |n: &Option<Arc<AtomicU64>>| {
+        // Only the indexer thread counts down; the test only sets it.
         n.as_ref().is_some_and(|n| {
-            n.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
-                .is_ok()
+            let left = n.load(Ordering::Relaxed);
+            left > 0 && {
+                n.store(left - 1, Ordering::Relaxed);
+                true
+            }
         })
     };
     #[cfg(test)]
