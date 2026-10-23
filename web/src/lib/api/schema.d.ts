@@ -2407,8 +2407,10 @@ export interface components {
             trackers_reporting: number | null;
         };
         /**
-         * @description `event: torrents`: torrents became searchable. Commits close together
-         *     may arrive as one event.
+         * @description `event: torrents`: torrents you can see became searchable. Commits
+         *     close together may arrive as one event. While "Show adult content" is
+         *     off, Adult torrents are left out entirely: not counted, and a commit
+         *     of only those sends no event.
          * @example {
          *       "added": 12,
          *       "max_id": 48211
@@ -2417,13 +2419,14 @@ export interface components {
         TorrentsEvent: {
             /**
              * Format: int64
-             * @description Torrents new to the index since the previous `torrents` event;
-             *     can be 0 when only `max_id` moved on.
+             * @description Torrents new to the index since the previous `torrents` event,
+             *     leaving out Adult while it's hidden; at least 1.
              */
             added: number;
             /**
              * Format: int64
-             * @description The highest torrent id searchable now.
+             * @description The highest torrent id searchable now, of any class: searches
+             *     still apply the Adult visibility.
              */
             max_id: number;
         };
