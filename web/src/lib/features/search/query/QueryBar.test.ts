@@ -6,6 +6,8 @@ vi.mock('$app/state', async () => ({ page: (await import('./testing.svelte')).te
 const replaceState = vi.hoisted(() => vi.fn());
 vi.mock('$app/navigation', () => ({ goto: vi.fn(), replaceState }));
 
+import appHtml from '../../../../app.html?raw';
+import { m } from '$lib/paraglide/messages.js';
 import QueryBar from './QueryBar.svelte';
 import { navCalls, testNav, visit } from './testing.svelte';
 
@@ -111,7 +113,10 @@ describe('the query bar', () => {
 		expect(editor.hasAttribute('aria-invalid')).toBe(false);
 		// The placeholder is never the accessible name.
 		const placeholder = screen.getByText('Search by name, or add a filter such as res:1080p');
-		expect(placeholder.getAttribute('aria-hidden')).toBe('true');
+		expect(placeholder.closest('[aria-hidden="true"]')).not.toBeNull();
+		expect(screen.getByText('Search, or filter: res:1080p').parentElement).toBe(
+			placeholder.parentElement
+		);
 		// The search landmark (jsdom has no implicit role for <search>; the e2e spec checks the role).
 		const landmark = editor.closest('search')!;
 		expect(document.getElementById(landmark.getAttribute('aria-labelledby')!)?.textContent).toBe(
@@ -199,6 +204,7 @@ describe('the query bar', () => {
 		const before = message();
 		expect(before.className).toContain('text-small');
 		expect(before.textContent).toBe(' '); // holds the line before anything loads
+		expect(before.getAttribute('role')).toBe('status'); // a polite live region (WCAG 4.1.3)
 		await engage(editor);
 		expect(message().className).toContain('text-small');
 		expect(message().textContent).toBe('\u00a0'); // still one empty line once loaded
@@ -206,6 +212,7 @@ describe('the query bar', () => {
 		await fireEvent.keyDown(editor, { key: 'Enter' });
 		await waitFor(() => expect(message().textContent).toContain("missing ')'"));
 		expect(document.querySelectorAll('#search-query-message')).toHaveLength(1);
+		expect(message().getAttribute('role')).toBe('status');
 		// An error wraps rather than being cut (WCAG 1.4.10): no truncation.
 		expect(message().className).not.toContain('truncate');
 	});
@@ -223,5 +230,13 @@ describe('the query bar', () => {
 		const { editor } = setup();
 		await waitFor(() => expect(editor.textContent).toBe('res:1080p'));
 		expect(editor.querySelector('.qt-value')?.textContent).toBe('1080p');
+	});
+});
+
+describe('the static first-paint bar (app.html)', () => {
+	it('shows the same placeholders as the app’s bar', () => {
+		// The app's bar replaces it in place, so the two must read the same.
+		expect(appHtml).toContain(`>${m.search_query_placeholder_short()}</span`);
+		expect(appHtml).toMatch(new RegExp(`>\\s*${m.search_query_placeholder()}</span`));
 	});
 });

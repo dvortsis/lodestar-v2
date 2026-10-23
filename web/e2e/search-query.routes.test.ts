@@ -5,7 +5,7 @@ import type { Page, Request } from '@playwright/test';
 import type { components } from '../src/lib/api/schema';
 import { expectNoA11yViolations } from './a11y';
 import type { OpenApiMock } from './mock/openapi-mock';
-import { engage } from './support/events-server';
+import { interact } from './support/interact';
 import { expect, test } from './support/test';
 
 type Ast = components['schemas']['AstNode'];
@@ -102,6 +102,42 @@ test('a parse error is marked in the bar and explained under it', async ({ page,
 	await expectQuery(page, 'big "buck'); // the raw text stays in the URL
 });
 
+for (const [lang, composing, committed] of [
+	['zh', 'dian', '电影'],
+	['ja', 'にほん', '日本']
+] as const) {
+	test(`a parse answer during an IME composition (${lang}) leaves it intact`, async ({
+		page,
+		go,
+		mock
+	}) => {
+		// The server rejects the bare `name:` the user typed before composing.
+		mock.error('parseQuery', 400, 'query_syntax', 'name: needs a value', {
+			field: 'q',
+			start: 0,
+			end: 5
+		});
+		await go('/search');
+		await editor(page).click();
+		// The editor has loaded, so typing reaches the parse (before it loads, the text is adopted).
+		await expect(page.locator('#search-query-message[data-live]')).toBeAttached();
+		await page.keyboard.type('name:');
+		const cdp = await page.context().newCDPSession(page);
+		await cdp.send('Input.imeSetComposition', {
+			text: composing,
+			selectionStart: composing.length,
+			selectionEnd: composing.length
+		});
+		// The parse of "name:" answers (debounced) while the composition is open.
+		await expect(editor(page)).toHaveAttribute('aria-invalid', 'true');
+		await expect.poll(() => mock.calls('parseQuery').length).toBeGreaterThan(0);
+		await expect(editor(page)).toHaveText(`name:${composing}`);
+		await cdp.send('Input.insertText', { text: committed });
+		await expect(editor(page)).toHaveText(`name:${committed}`);
+		await expect(editor(page).locator('.qt-field')).toHaveText('name:');
+	});
+}
+
 test('Enter pushes the search; back and forward walk them', async ({ page, go }) => {
 	await go('/search');
 	await editor(page).click();
@@ -150,7 +186,7 @@ test('the bare page does not shift, and fetches nothing for the query', async ({
 		}).observe({ type: 'layout-shift', buffered: true });
 	});
 	await go('/search');
-	await engage(page); // the chrome and the bar's lazy part arrive
+	await interact(page, page.locator('#search-query-message[data-live]')); // the chrome and the bar's lazy part arrive
 	await expect(page.getByTestId('more-button')).toBeAttached();
 	expect(await page.evaluate(() => (window as unknown as { __cls: number }).__cls)).toBeLessThan(
 		0.001

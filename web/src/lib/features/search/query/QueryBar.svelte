@@ -29,6 +29,8 @@
 	let live = $state<LiveApi>();
 	/** Enter pressed before the editor loaded: submitted once it has. */
 	let pendingSubmit = false;
+	/** An IME composition is open (tracked from first paint, for an editor that loads mid-way). */
+	let composing = false;
 	let loading: Promise<unknown> | undefined;
 
 	function engage() {
@@ -84,6 +86,8 @@
 				class="block w-full overflow-x-auto rounded-field border border-field-border bg-base-100 px-4 text-body-lg {FOCUS_RING}"
 				style="height: var(--query-bar-height); padding-block: calc(var(--spacing) * 3 - var(--border)); white-space: pre; overflow-y: hidden; scrollbar-width: none"
 				oninput={() => (empty = !el?.textContent)}
+				oncompositionstart={() => (composing = true)}
+				oncompositionend={() => (composing = false)}
 				onkeydown={(e) => {
 					if (e.key === 'Enter' && !Live) {
 						e.preventDefault();
@@ -91,12 +95,15 @@
 					}
 				}}
 			></div>
-			<!-- The placeholder: never the accessible name (that is the label). -->
+			<!-- The placeholder: never the accessible name (that is the label). The short one fits a phone. -->
 			<span
 				aria-hidden="true"
 				hidden={!empty}
 				class="pointer-events-none absolute inset-0 truncate px-4 text-body-lg text-muted-text"
-				style="padding-block: calc(var(--spacing) * 3)">{m.search_query_placeholder()}</span
+				style="padding-block: calc(var(--spacing) * 3)"
+				><span class="medium:hidden">{m.search_query_placeholder_short()}</span><span
+					class="hidden medium:inline">{m.search_query_placeholder()}</span
+				></span
 			>
 		</div>
 	</div>
@@ -108,6 +115,7 @@
 			message={MESSAGE}
 			{onescape}
 			onempty={(v: boolean) => (empty = v)}
+			composing={() => composing}
 			takeSubmit={() => {
 				const was = pendingSubmit;
 				pendingSubmit = false;
@@ -116,6 +124,6 @@
 		/>
 	{:else}
 		<!-- The message line's place: one text-small line, always, so nothing shifts. -->
-		<p id={MESSAGE} class="text-small">&nbsp;</p>
+		<p id={MESSAGE} role="status" class="text-small">&nbsp;</p>
 	{/if}
 </search>
