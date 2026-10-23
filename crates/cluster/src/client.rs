@@ -165,7 +165,12 @@ pub async fn connect(
 pub enum WorkerEvent {
     Assign(Assign),
     /// Keys granted with no request waiting: leases that expired elsewhere,
-    /// or the answer to a claim whose caller timed out.
+    /// or the answer to a claim whose caller timed out. A key is handed
+    /// over once: a late answer leaves out keys already held under the
+    /// same token and keys a retried claim is still waiting for. (If the
+    /// late answer comes first, a retry's own answer repeats the key with
+    /// the same token, as the truthful answer to that claim; treat leases
+    /// by key and token.)
     Regranted(Vec<GrantItem>),
     /// Finish the leases held, report them, then call
     /// [`WorkerSession::drained`].
@@ -357,6 +362,8 @@ impl WorkerSession {
     }
 }
 
+type ClaimReply = oneshot::Sender<Vec<GrantItem>>;
+
 struct Driver {
     link: WorkerLink,
     clock: Arc<dyn Clock>,
@@ -365,7 +372,8 @@ struct Driver {
     leases: Arc<AtomicU32>,
     /// Leases held: key → fencing token.
     held: HashMap<[u8; 20], u64>,
-    claims: HashMap<u64, oneshot::Sender<Vec<GrantItem>>>,
+    /// Claims awaiting their reply, with the keys each asked for.
+    claims: HashMap<u64, (ClaimReply, Vec<[u8; 20]>)>,
     heartbeats: HashMap<u64, oneshot::Sender<HeartbeatAck>>,
     renewal: Option<oneshot::Sender<Result<JoinGrant, RenewRefusal>>>,
     next_batch: u64,
@@ -423,6 +431,14 @@ impl Driver {
         );
     }
 
+    /// Whether this grant is one the worker already holds.
+    fn holds(&self, item: &GrantItem) -> bool {
+        match *item {
+            GrantItem::Granted { key, token, .. } => self.held.get(&key) == Some(&token),
+            GrantItem::Denied { .. } => false,
+        }
+    }
+
     fn take_grants(&mut self, items: &[GrantItem]) {
         for item in items {
             if let GrantItem::Granted { key, token, .. } = *item {
@@ -456,13 +472,14 @@ impl Driver {
 
     async fn command(&mut self, cmd: Command) -> Step {
         // Requests whose caller gave up (timed out) wait for no reply.
-        self.claims.retain(|_, tx| !tx.is_closed());
+        self.claims.retain(|_, (tx, _)| !tx.is_closed());
         self.heartbeats.retain(|_, tx| !tx.is_closed());
         match cmd {
             Command::Claim(items, reply) => {
                 let batch = self.next_batch;
                 self.next_batch += 1;
-                self.claims.insert(batch, reply);
+                let keys = items.iter().map(|i| i.key).collect();
+                self.claims.insert(batch, (reply, keys));
                 self.stats.claimed += items.len() as u64;
                 self.send(ToCoordinator::Claim(ClaimBatch { batch, items }))
                     .await
@@ -534,14 +551,36 @@ impl Driver {
                 self.event(WorkerEvent::Regranted(items)).await
             }
             ToWorker::Grants(GrantBatch { batch, items }) => {
+                let known: Vec<bool> = items.iter().map(|i| self.holds(i)).collect();
                 self.take_grants(&items);
-                match self.claims.remove(&batch) {
-                    Some(reply) => {
-                        let _ = reply.send(items);
-                        Step::Continue
-                    }
-                    // Its caller timed out; the leases are still ours.
-                    None => self.event(WorkerEvent::Regranted(items)).await,
+                let late = match self.claims.remove(&batch) {
+                    Some((reply, _)) => match reply.send(items) {
+                        Ok(()) => return Step::Continue,
+                        Err(items) => items,
+                    },
+                    None => items,
+                };
+                // Its caller gave up, but the leases are ours: hand them
+                // over once. Keys already held under the same token were
+                // delivered before, and keys a retried claim is still
+                // waiting for will come with its reply.
+                let fresh: Vec<GrantItem> = late
+                    .into_iter()
+                    .zip(known)
+                    .filter(|(item, known)| {
+                        matches!(item, GrantItem::Granted { .. })
+                            && !known
+                            && !self
+                                .claims
+                                .values()
+                                .any(|(_, keys)| keys.contains(&item.key()))
+                    })
+                    .map(|(item, _)| item)
+                    .collect();
+                if fresh.is_empty() {
+                    Step::Continue
+                } else {
+                    self.event(WorkerEvent::Regranted(fresh)).await
                 }
             }
             ToWorker::Renewed(grant) => {
