@@ -924,7 +924,7 @@ fn escaped(c: char) -> bool {
 /// or CR, so a spreadsheet takes it as text rather than a formula; the
 /// characters [`escaped`] names written `\u{…}`; quoted when it holds a
 /// comma or a quote, with quotes doubled.
-fn csv_cell(text: &str) -> String {
+pub(crate) fn csv_cell(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 2);
     if text.starts_with(['=', '+', '-', '@', '\t', '\r']) {
         out.push('\'');

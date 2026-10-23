@@ -266,7 +266,7 @@ token. Container queries (row, drawer) use these same values.
 
 | Token | Value |
 |---|---|
-| `--font-sans` | `"Atkinson Hyperlegible Next", system-ui, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif` |
+| `--font-sans` | `"Atkinson Hyperlegible Next", "Atkinson Fallback", system-ui, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif` |
 | `--font-mono` | `"Atkinson Hyperlegible Mono", ui-monospace, monospace` |
 
 The CJK fallbacks are installed family names (what `fc-list` and the OS font

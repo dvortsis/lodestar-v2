@@ -40,17 +40,33 @@ pub use crate::dto::insights::{
     Annotation, Bucket, Conversion, EventsQuery, EventsResponse, Fix, FunnelCohort, FunnelStages,
     FunnelTotal, Health, HealthState, InsightsException, InsightsRange, Kpi, OverviewQuery,
     OverviewResponse, PausedSpan, PreviousKpi, PreviousPeriod, PreviousStages, SegmentCount,
-    SegmentYield, Segments, Serve, Severity, Stages, Stale, TrendPoint,
+    SegmentMover, SegmentYield, Segments, Serve, Severity, Stages, Stale, TrendPoint,
 };
 use crate::error::{ApiError, ApiResult, internal};
+
+mod csv;
+mod stages;
+
 use crate::extract::Query;
 use crate::ops::OpsApi;
 use crate::{ApiState, auth};
+#[allow(unused_imports)] // B11c's digest dates its lines with it.
+pub(crate) use csv::civil_from_days;
+pub(crate) use stages::{Stage, StagePage, stage_response};
 
 /// This module's half of `/openapi.json`.
 #[derive(OpenApi)]
 #[openapi(
-    paths(overview, events),
+    paths(
+        overview,
+        events,
+        stages::discover_page,
+        stages::fetch_page,
+        stages::understand_page,
+        stages::index_page,
+        stages::serve_page,
+        csv::export_csv
+    ),
     tags((name = "insights", description = "The Insights dashboard's rollups (§10.9)."))
 )]
 pub(crate) struct ApiDoc;
@@ -59,7 +75,13 @@ pub fn routes() -> Router<ApiState> {
     auth::protected(
         Router::new()
             .route("/insights/overview", get(overview))
-            .route("/insights/events", get(events)),
+            .route("/insights/events", get(events))
+            .route("/insights/discover", get(stages::discover_page))
+            .route("/insights/fetch", get(stages::fetch_page))
+            .route("/insights/understand", get(stages::understand_page))
+            .route("/insights/index", get(stages::index_page))
+            .route("/insights/serve", get(stages::serve_page))
+            .route("/insights/export.csv", get(csv::export_csv)),
     )
 }
 
@@ -67,6 +89,9 @@ pub fn routes() -> Router<ApiState> {
 pub mod codes {
     /// `rollup_hour.metric` (`lodestar_pipeline::metric`).
     pub mod metric {
+        pub const HARVESTED: u32 = 1;
+        pub const REDISCOVERED: u32 = 2;
+        pub const DROPPED: u32 = 3;
         pub const STORED: u32 = 4;
         pub const NEWLY_SEARCHABLE: u32 = 10;
         pub const TIME_TO_SEARCHABLE: u32 = 11;
@@ -86,6 +111,22 @@ pub mod codes {
     pub const STORED: u8 = 4;
     pub const SEARCHABLE: u8 = 5;
     pub const LOST: u8 = 6;
+    /// `Loss::Blocked`.
+    pub const BLOCKED: u8 = 7;
+
+    /// `rollup_hour.key` of `metric::HARVESTED` (`lodestar_pipeline::dht::
+    /// strategy`), by name.
+    pub const STRATEGIES: [(i64, &str); 5] = [
+        (0, "sample"),
+        (1, "get_peers"),
+        (2, "announce"),
+        (3, "lookup"),
+        (200, "refetch"),
+    ];
+
+    pub fn strategy_name(key: i64) -> Option<&'static str> {
+        STRATEGIES.iter().find(|(k, _)| *k == key).map(|(_, n)| *n)
+    }
 
     /// Stage names, by code.
     pub const STAGES: [(u8, &str); 6] = [
@@ -195,6 +236,19 @@ pub trait InsightsSource: Send + Sync + fmt::Debug {
     fn now(&self) -> i64 {
         crate::unix_now()
     }
+    /// What the stage pages read from the process beside `OpsApi`; all
+    /// null by default.
+    fn stage_snapshot(&self) -> StageSnapshot {
+        StageSnapshot::default()
+    }
+}
+
+/// [`InsightsSource::stage_snapshot`].
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct StageSnapshot {
+    /// DHT responses per query sent since the start (as `/metrics`'
+    /// `dht_reply_ratio`); `None` with the DHT off.
+    pub dht_reply_ratio: Option<f64>,
 }
 
 /// Recent overview responses, by normalized query and the flush they were
@@ -202,6 +256,8 @@ pub trait InsightsSource: Send + Sync + fmt::Debug {
 #[derive(Debug, Default)]
 pub struct OverviewCache {
     entries: Mutex<VecDeque<(CacheKey, Arc<OverviewResponse>)>>,
+    /// Stage pages, keyed the same way.
+    pages: Mutex<VecDeque<(stages::PageKey, Arc<StagePage>)>>,
     days: Mutex<Days>,
 }
 
@@ -211,7 +267,19 @@ pub struct OverviewCache {
 struct Days {
     generation: u64,
     days: BTreeMap<i64, Arc<DayRows>>,
+    /// The stage pages' sealed days: one metric's day, by (dim, key);
+    /// keyed (day's first hour, metric). [`LAST`] marks a gauge's entry
+    /// (its last snapshot, under (0, 0)).
+    metrics: BTreeMap<(i64, u32), MetricDay>,
 }
+
+/// Marks a gauge's entry in [`Days::metrics`].
+const LAST: u32 = 1 << 31;
+
+/// One metric's sealed day, by (dim, key).
+type MetricDay = Arc<BTreeMap<(u32, i64), i64>>;
+/// A metric's sealed days, by the day's first hour.
+type MetricDays = BTreeMap<i64, MetricDay>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CacheKey {
@@ -241,6 +309,20 @@ impl OverviewCache {
         entries.push_back((key, value));
     }
 
+    fn page(&self, key: &stages::PageKey) -> Option<Arc<StagePage>> {
+        let pages = self.pages.lock().unwrap_or_else(PoisonError::into_inner);
+        pages.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
+    }
+
+    fn put_page(&self, key: stages::PageKey, value: Arc<StagePage>) {
+        let mut pages = self.pages.lock().unwrap_or_else(PoisonError::into_inner);
+        pages.retain(|(k, _)| k != &key);
+        if pages.len() >= CACHE_ENTRIES {
+            pages.pop_front();
+        }
+        pages.push_back((key, value));
+    }
+
     /// How many responses it holds, for tests.
     pub fn len(&self) -> usize {
         self.entries
@@ -261,10 +343,17 @@ impl OverviewCache {
         {
             let mut days = self.days.lock().unwrap_or_else(PoisonError::into_inner);
             days.generation += 1;
-            let stale = days.days.split_off(&(hour.div_euclid(24) * 24));
+            let day = hour.div_euclid(24) * 24;
+            let stale = days.days.split_off(&day);
+            drop(stale);
+            let stale = days.metrics.split_off(&(day, 0));
             drop(stale);
         }
         self.entries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+        self.pages
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
@@ -275,6 +364,38 @@ impl OverviewCache {
     pub fn forget_days_before(&self, day: i64) {
         let mut days = self.days.lock().unwrap_or_else(PoisonError::into_inner);
         days.days = days.days.split_off(&(day * 24));
+        days.metrics = days.metrics.split_off(&(day * 24, 0));
+    }
+
+    /// The sealed days `from..to` of one metric (`metric | LAST` for a
+    /// gauge), by day: those it has, and the days it lacks.
+    fn metric_days(&self, metric: u32, from: i64, to: i64) -> (MetricDays, Vec<i64>) {
+        let days = self.days.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut have = BTreeMap::new();
+        let mut missing = Vec::new();
+        for d in (from..to).step_by(24) {
+            match days.metrics.get(&(d, metric)) {
+                Some(rows) => {
+                    have.insert(d, rows.clone());
+                }
+                None => missing.push(d),
+            }
+        }
+        (have, missing)
+    }
+
+    /// Keeps sealed metric days read under `generation`, unless a forget
+    /// came since.
+    fn keep_metric_days(&self, generation: u64, metric: u32, read: &MetricDays) {
+        let mut days = self.days.lock().unwrap_or_else(PoisonError::into_inner);
+        if days.generation != generation {
+            return;
+        }
+        for (&d, rows) in read {
+            days.metrics
+                .entry((d, metric))
+                .or_insert_with(|| rows.clone());
+        }
     }
 
     fn generation(&self) -> u64 {
@@ -324,6 +445,12 @@ pub fn warm(
         }
         let from = from.max(to - MAX_SPAN_HOURS);
         sealed_days(store, cache, generation, from, to)?;
+        let sealed = Sealed {
+            cache,
+            generation,
+            floor,
+        };
+        stages::warm_metrics(store, &sealed, from, to)?;
         Ok(cache.days())
     })
 }
@@ -1112,20 +1239,33 @@ fn sorted_counts(m: BTreeMap<String, u64>) -> Vec<SegmentCount> {
     v
 }
 
-fn segments(rows: &PeriodRows, c: &Cohorts, names: &BTreeMap<u8, String>, adult: bool) -> Segments {
+/// Counts by content type and by group, sorted, Adult left out entirely
+/// while it's hidden (§20.9).
+fn type_lists(
+    rows: impl Iterator<Item = (u32, u64)>,
+    adult: bool,
+) -> (Vec<SegmentCount>, Vec<SegmentCount>) {
     let mut types: BTreeMap<String, u64> = BTreeMap::new();
     let mut groups: BTreeMap<String, u64> = BTreeMap::new();
-    for r in &rows.newly_by_dim {
-        let (name, t) = type_name(r.dim);
-        // Left out entirely while Adult is hidden (§20.9).
+    for (dim, n) in rows {
+        let (name, t) = type_name(dim);
         if !adult && t == Some(ContentType::Adult) {
             continue;
         }
-        let n = r.value.max(0) as u64;
         *types.entry(name.clone()).or_default() += n;
         let group = t.map_or(name, |t| group_of(t).to_string());
         *groups.entry(group).or_default() += n;
     }
+    (sorted_counts(types), sorted_counts(groups))
+}
+
+fn segments(rows: &PeriodRows, c: &Cohorts, names: &BTreeMap<u8, String>, adult: bool) -> Segments {
+    let (by_content_type, by_group) = type_lists(
+        rows.newly_by_dim
+            .iter()
+            .map(|r| (r.dim, r.value.max(0) as u64)),
+        adult,
+    );
     let mut by_source: Vec<SegmentYield> = c
         .by_source
         .iter()
@@ -1146,8 +1286,8 @@ fn segments(rows: &PeriodRows, c: &Cohorts, names: &BTreeMap<u8, String>, adult:
             .then(a.key.cmp(&b.key))
     });
     Segments {
-        by_content_type: sorted_counts(types),
-        by_group: sorted_counts(groups),
+        by_content_type,
+        by_group,
         by_source,
     }
 }
@@ -1203,12 +1343,116 @@ fn stalled(rows: &NowRows, now_h: i64) -> Option<InsightsException> {
     })
 }
 
+fn delta(now: Option<u64>, then: Option<u64>) -> Option<i64> {
+    Some(now? as i64 - then? as i64)
+}
+
+/// `yield_below_baseline` compares the newest 24 cohort hours final by
+/// age (72–96 h ago) with the 7 days of cohort hours before them.
+const RECENT_TO_H: i64 = RETRY_HORIZON_HOURS;
+const BASELINE_FROM_H: i64 = RETRY_HORIZON_HOURS + 24 + 7 * 24;
+/// ... when the recent hours harvested at least this many keys, the
+/// baseline at least 7 times as many, ...
+const BASELINE_MIN_HARVESTED: u64 = 500;
+/// ... and the recent yield is below this share of the baseline's (an
+/// error below half of it).
+const BASELINE_WARN: f64 = 0.75;
+const BASELINE_ERROR: f64 = 0.5;
+
+/// `yield_below_baseline` (§10.9.2 level 5): end-to-end yield of the
+/// newest day of cohorts past the retry horizon (so every one is final)
+/// against the 7 days before it. `rows` are the cohort rows of both.
+fn yield_below_baseline(rows: &[CohortCount], now_h: i64) -> Option<InsightsException> {
+    let split = now_h - RECENT_TO_H - 24;
+    let (mut recent, mut base) = (Agg::default(), Agg::default());
+    for c in rows {
+        if c.cohort >= split {
+            recent.add(c);
+        } else {
+            base.add(c);
+        }
+    }
+    let (rh, bh) = (recent.get(codes::HARVESTED), base.get(codes::HARVESTED));
+    if rh < BASELINE_MIN_HARVESTED || bh < BASELINE_MIN_HARVESTED * 7 {
+        return None;
+    }
+    let recent_yield = ratio(recent.get(codes::SEARCHABLE), rh)?;
+    let base_yield = ratio(base.get(codes::SEARCHABLE), bh).filter(|&y| y > 0.0)?;
+    (recent_yield < base_yield * BASELINE_WARN).then(|| InsightsException {
+        fix: Fix {
+            kind: "stage".into(),
+            target: "fetch".into(),
+        },
+        kind: "yield_below_baseline".into(),
+        severity: if recent_yield < base_yield * BASELINE_ERROR {
+            Severity::Error
+        } else {
+            Severity::Warning
+        },
+        since: split * 3600,
+        unit: Some("ratio".into()),
+        value: Some(recent_yield),
+    })
+}
+
+/// The segment rows that moved most between `previous` and `current`
+/// (the digest's "top segment movers", §10.9.7): rows of `by_group` and
+/// `by_content_type` by |Δ|, largest first, ties by key (then list). A
+/// key missing on one side counts as 0 there; rows that didn't move are
+/// left out. At most `n`.
+#[cfg_attr(not(test), allow(dead_code))] // B11c's digest calls it.
+pub(crate) fn segment_movers(
+    current: &Segments,
+    previous: &Segments,
+    n: usize,
+) -> Vec<SegmentMover> {
+    let mut out = Vec::new();
+    for (list, now, then) in [
+        ("by_group", &current.by_group, &previous.by_group),
+        (
+            "by_content_type",
+            &current.by_content_type,
+            &previous.by_content_type,
+        ),
+    ] {
+        let mut keys: BTreeMap<&str, (u64, u64)> = BTreeMap::new();
+        for r in now {
+            keys.entry(&r.key).or_default().0 = r.searchable;
+        }
+        for r in then {
+            keys.entry(&r.key).or_default().1 = r.searchable;
+        }
+        for (key, (c, p)) in keys {
+            let delta = c as i64 - p as i64;
+            if delta != 0 {
+                out.push(SegmentMover {
+                    list,
+                    key: key.to_string(),
+                    current: c,
+                    previous: p,
+                    delta,
+                });
+            }
+        }
+    }
+    out.sort_by(|a, b| {
+        b.delta
+            .unsigned_abs()
+            .cmp(&a.delta.unsigned_abs())
+            .then_with(|| a.key.cmp(&b.key))
+            .then_with(|| a.list.cmp(b.list))
+    });
+    out.truncate(n);
+    out
+}
+
 /// Everything but the snapshot fields, which [`overview`] fills in. `st`
 /// is read in the caller's snapshot, which this one joins.
 #[allow(clippy::too_many_arguments)]
 fn build(
     store: &Store,
     cache: &OverviewCache,
+    generation: u64,
     floor: Option<i64>,
     st: &InsightsState,
     w: Window,
@@ -1219,7 +1463,7 @@ fn build(
     let now_h = now.div_euclid(3600);
     let sealed = Sealed {
         cache,
-        generation: cache.generation(),
+        generation,
         floor,
     };
     let compacted = st.compacted_before_day * 24;
@@ -1262,6 +1506,7 @@ fn build(
         let previous = prev.zip(prev_rows).map(|(pw, pr)| {
             let q = period(&pw, now_h, &pr, st);
             PreviousPeriod {
+                segments: segments(&pr, &q.cohorts, &names, adult),
                 kpi: PreviousKpi {
                     new_searchable: q.new_searchable,
                     searchable: searchable_then,
@@ -1286,7 +1531,13 @@ fn build(
                 a.truncate(MAX_ANNOTATIONS);
                 a
             },
-            exceptions: stalled(&now_rows, now_h).into_iter().collect(),
+            exceptions: stalled(&now_rows, now_h)
+                .into_iter()
+                .chain(yield_below_baseline(
+                    &store.cohorts(now_h - BASELINE_FROM_H, now_h - RECENT_TO_H)?,
+                    now_h,
+                ))
+                .collect(),
             funnel,
             funnel_total,
             ingest_per_hour: ingest,
@@ -1297,11 +1548,23 @@ fn build(
                 },
                 imported: None,
                 new_searchable: p.new_searchable,
+                new_searchable_delta: previous
+                    .as_ref()
+                    .map(|q| p.new_searchable as i64 - q.kpi.new_searchable as i64),
                 searchable: None,
                 searchable_delta: None,
+                time_to_searchable_p50_delta_s: previous
+                    .as_ref()
+                    .and_then(|q| delta(p.p50, q.kpi.time_to_searchable_p50_s)),
                 time_to_searchable_p50_s: p.p50,
+                time_to_searchable_p95_delta_s: previous
+                    .as_ref()
+                    .and_then(|q| delta(p.p95, q.kpi.time_to_searchable_p95_s)),
                 time_to_searchable_p95_s: p.p95,
                 yield_: p.yield_,
+                yield_delta: previous
+                    .as_ref()
+                    .and_then(|q| Some(p.yield_? - q.kpi.yield_?)),
             },
             previous,
             range: w.dto(),
@@ -1362,12 +1625,18 @@ struct Snapshot {
     started_at: i64,
 }
 
-fn apply_snapshot(r: &mut OverviewResponse, s: Snapshot) {
-    let last = s.last_flush.unwrap_or(s.started_at);
-    r.stale = (s.now - last > STALE_AFTER_S).then(|| Stale {
-        reason: if s.paused { "paused" } else { "writer_stalled" }.into(),
+/// Stale (§10.9.6): more than [`STALE_AFTER_S`] since the writer's last
+/// flush (the start, when there was none).
+fn stale_of(now: i64, paused: bool, last_flush: Option<i64>, started_at: i64) -> Option<Stale> {
+    let last = last_flush.unwrap_or(started_at);
+    (now - last > STALE_AFTER_S).then(|| Stale {
+        reason: if paused { "paused" } else { "writer_stalled" }.into(),
         since: last,
-    });
+    })
+}
+
+fn apply_snapshot(r: &mut OverviewResponse, s: Snapshot) {
+    r.stale = stale_of(s.now, s.paused, s.last_flush, s.started_at);
     let lagging = s.index_lag_s.filter(|&l| l > INDEX_LAG_S);
     r.kpi.health = match (s.paused, &r.stale, lagging) {
         (true, _, _) => Health {
@@ -1439,16 +1708,27 @@ pub(crate) async fn overview(
     State(s): State<ApiState>,
     Query(q): Query<OverviewQuery>,
 ) -> ApiResult<Json<OverviewResponse>> {
-    let compare = match q.compare {
-        None | Some(0) => false,
-        Some(1) => true,
+    Ok(Json(overview_response(&s, q).await?))
+}
+
+fn compare_flag(compare: Option<u8>) -> ApiResult<bool> {
+    match compare {
+        None | Some(0) => Ok(false),
+        Some(1) => Ok(true),
         Some(_) => {
-            return Err(
-                ApiError::bad_request("bad_parameter", "compare is 0 or 1.").field("compare")
-            );
+            Err(ApiError::bad_request("bad_parameter", "compare is 0 or 1.").field("compare"))
         }
-    };
-    let (ops, source) = sources(&s)?;
+    }
+}
+
+/// The overview as `GET /insights/overview` serves it (the digest, B11c,
+/// and the `insights` event read it too).
+pub(crate) async fn overview_response(
+    s: &ApiState,
+    q: OverviewQuery,
+) -> ApiResult<OverviewResponse> {
+    let compare = compare_flag(q.compare)?;
+    let (ops, source) = sources(s)?;
     let stats = ops.stats().await;
     let now = source.now();
     let snap = Snapshot {
@@ -1464,13 +1744,16 @@ pub(crate) async fn overview(
     let reader = s.reader.clone();
     let mut response = tokio::task::spawn_blocking(move || -> ApiResult<OverviewResponse> {
         let store = reader.lock().unwrap_or_else(PoisonError::into_inner);
+        // Before the snapshot begins, so sums read from it are never kept
+        // past a forget made meanwhile.
+        let generation = source.cache().generation();
         // The grain is decided by `compacted_before_day` read in the same
         // snapshot as the rows, so a compaction beside it can't make a
         // day count twice or not at all.
         store
             .read_snapshot(|store| {
                 Ok(overview_in_snapshot(
-                    store, &q, compare, now, adult, &*source,
+                    store, &q, compare, now, adult, &*source, generation,
                 ))
             })
             .map_err(internal)?
@@ -1478,7 +1761,7 @@ pub(crate) async fn overview(
     .await
     .map_err(internal)??;
     apply_snapshot(&mut response, snap);
-    Ok(Json(response))
+    Ok(response)
 }
 
 /// The overview's rollup part, inside the caller's read transaction.
@@ -1489,6 +1772,7 @@ fn overview_in_snapshot(
     now: i64,
     adult: bool,
     source: &dyn InsightsSource,
+    generation: u64,
 ) -> ApiResult<OverviewResponse> {
     let st = store.insights_state().map_err(internal)?;
     let compacted = st.compacted_before_day * 24;
@@ -1517,6 +1801,7 @@ fn overview_in_snapshot(
         build(
             store,
             source.cache(),
+            generation,
             source.seal_floor(),
             &st,
             w,
@@ -2062,6 +2347,74 @@ mod tests {
         )
         .unwrap();
         assert_eq!(period(&ranges[2], now_h, &rows, &late).fetch, None);
+    }
+
+    #[test]
+    fn segment_movers_rank_by_change() {
+        let count = |key: &str, searchable| SegmentCount {
+            key: key.into(),
+            searchable,
+        };
+        let seg = |groups: Vec<SegmentCount>, types: Vec<SegmentCount>| Segments {
+            by_content_type: types,
+            by_group: groups,
+            by_source: Vec::new(),
+        };
+        let now = seg(
+            vec![count("video", 50), count("audio", 5)],
+            vec![count("movie", 40), count("tv", 10)],
+        );
+        let then = seg(
+            vec![count("video", 30), count("audio", 5), count("images", 8)],
+            vec![count("movie", 20), count("tv", 10)],
+        );
+        let got: Vec<_> = segment_movers(&now, &then, 10)
+            .into_iter()
+            .map(|m| (m.list, m.key, m.current, m.previous, m.delta))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("by_content_type", "movie".into(), 40, 20, 20),
+                ("by_group", "video".into(), 50, 30, 20),
+                // Gone this period: 0 now.
+                ("by_group", "images".into(), 0, 8, -8),
+            ]
+        );
+        assert_eq!(segment_movers(&now, &then, 1).len(), 1);
+        assert!(segment_movers(&now, &now, 5).is_empty(), "nothing moved");
+    }
+
+    #[test]
+    fn yield_below_baseline_needs_volume_and_a_drop() {
+        let now_h = NOW / 3600;
+        let split = now_h - RECENT_TO_H - 24;
+        let rows = |recent: (i64, i64), base: (i64, i64)| {
+            vec![
+                row(split, codes::HARVESTED, 0, recent.0),
+                row(split, codes::SEARCHABLE, 0, recent.1),
+                row(split - 30, codes::HARVESTED, 0, base.0),
+                row(split - 30, codes::SEARCHABLE, 0, base.1),
+            ]
+        };
+        // 28% now against 40%: below 75% of the baseline is a warning,
+        // below half of it an error.
+        let e = yield_below_baseline(&rows((1000, 280), (7000, 2800)), now_h).unwrap();
+        assert_eq!(
+            (e.kind.as_str(), e.severity),
+            ("yield_below_baseline", Severity::Warning)
+        );
+        assert_eq!(e.value, Some(0.28));
+        assert_eq!(e.since, split * 3600);
+        let e = yield_below_baseline(&rows((1000, 150), (7000, 2800)), now_h).unwrap();
+        assert_eq!(e.severity, Severity::Error);
+        // Within 75% of the baseline: nothing.
+        assert!(yield_below_baseline(&rows((1000, 310), (7000, 2800)), now_h).is_none());
+        // Too few keys on either side: nothing.
+        assert!(yield_below_baseline(&rows((499, 0), (7000, 2800)), now_h).is_none());
+        assert!(yield_below_baseline(&rows((1000, 0), (3499, 2800)), now_h).is_none());
+        // A baseline that found nothing has nothing to fall below.
+        assert!(yield_below_baseline(&rows((1000, 0), (7000, 0)), now_h).is_none());
     }
 
     #[test]

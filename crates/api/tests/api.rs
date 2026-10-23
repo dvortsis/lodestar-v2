@@ -513,6 +513,12 @@ async fn errors_share_one_envelope() {
         get("/api/v1/settings/nope", None),
         get("/api/v1/insights/overview", None),
         get("/api/v1/insights/events?from=0&to=1", None),
+        get("/api/v1/insights/discover", None),
+        get("/api/v1/insights/fetch?reason=timed_out", None),
+        get("/api/v1/insights/understand", None),
+        get("/api/v1/insights/index", None),
+        get("/api/v1/insights/serve", None),
+        get("/api/v1/insights/export.csv?panel=trend", None),
         get("/api/v1/user-items", None),
         get("/api/v1/user-items/labels", None),
         get(
