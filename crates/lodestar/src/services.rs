@@ -108,7 +108,7 @@ impl Services {
         let subs_config = config.subscriptions.clone();
         let blocklist = config.blocklist_files()?;
         let subs_ips = ips.clone();
-        let (store, control, reader, serving) = tokio::task::spawn_blocking(move || {
+        let (store, control, user_data, reader, serving) = tokio::task::spawn_blocking(move || {
             let store = Store::open(&db, store_config.clone())?;
             // Settings and lists change through a second connection, so
             // they never wait behind the ingest writer for long.
@@ -118,6 +118,7 @@ impl Services {
             floor::sync_files(&mut control, &blocklist, crate::unix_now())?;
             floor::report(&control)?;
             subscriptions::apply(&control, &filter, &subs_ips)?;
+            let user_data = Store::open(&db, store_config.clone())?;
             let reader = Store::open_reader(&db, store_config.clone())?;
             // The index this build serves (rebuilt in the background from
             // an older one if need be); its indexer follows the store
@@ -139,7 +140,7 @@ impl Services {
             } else {
                 None
             };
-            Ok::<_, BoxError>((store, control, reader, serving))
+            Ok::<_, BoxError>((store, control, user_data, reader, serving))
         })
         .await??;
 
@@ -201,6 +202,7 @@ impl Services {
             quarantine_secs,
         });
         let (stop_subscriptions, subscriptions_stopped) = watch::channel(false);
+        let subscriptions_stopped = crate::fixture::unless_offline(subscriptions_stopped);
         let refresher = tokio::spawn(subscriptions::run(
             control.clone(),
             subscriptions::Limits::from_config(&config.subscriptions),
@@ -228,6 +230,7 @@ impl Services {
             filters: Some(filters),
             settings: Some(settings.clone()),
             ops: Some(ops),
+            user_data: Some(Arc::new(Mutex::new(user_data))),
             adult: settings::content::follow(settings.subscribe()),
         };
         settings::log::follow(settings.subscribe());

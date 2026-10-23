@@ -278,6 +278,7 @@ impl SystemApi for System {
                     logging: None,
                     recent_errors: None,
                 },
+                fixture: crate::fixture::active(),
                 host: info::host(),
                 repository: env!("CARGO_PKG_REPOSITORY").to_string(),
                 restart: self.restart.info(),

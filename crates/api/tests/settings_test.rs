@@ -41,6 +41,7 @@ fn fixture() -> Fixture {
             filters: None,
             settings: None,
             ops: None,
+            user_data: None,
             adult: Default::default(),
         }),
     );
