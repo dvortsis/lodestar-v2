@@ -24,9 +24,10 @@ The active-filter strip, its chips and the Syntax popover (architecture §10.4, 
 - **Year, season and episode are identifiers:** plain integers, not grouped ("2019", not "2,019").
 - **A `>` bound** is lowered by the server to `lo + 1` and shows as "at least" the formatted value ("Size: at least 4.00 GiB").
 - **The `hidden=1` chip** reads "Including: Hidden by filters". The colon keeps the glossary term as it is, rather than lowercasing it.
-- **Clear all** keeps the free text and clears `hidden`.
-  - W5 has no combined write, so with `hidden=1` it makes two history entries: `setAst`, then `setHidden`. Back from the cleared page lands on the free text with `hidden=1`, a state the user didn't see.
-  - Changing W5 is outside this slice, so the gap is raised with the runner rather than worked around. A unit test pins the two entries so the gap stays visible.
+- **Clear all** keeps the free text and clears `hidden` in **one history entry** (runner, 2026-10-23).
+  - W5's `setAst` takes `{ hidden }` and commits it with the new query: a named hook edit in `lib/state/search.svelte.ts`, since W5's slice is finished.
+  - Without it, Clear all made two entries, and Back landed on the free text with `hidden=1`, a state the user never saw.
+  - Tests: W5's unit test checks one entry, and the strip's test checks Clear all pushes once.
 - **Quick removals in a row all land.** Each one builds on the one in flight and finds its clause by node identity, so a press during the round trip doesn't bring the first chip back. A clause that's gone, after a new query, is left alone. One announcement names every removed filter once the last one lands.
 - **Removing a chip rewrites the bar** with the server's text for what's left. That includes a draft that wasn't parsed yet or had a syntax error. Undo brings the draft back.
 - **Removing:** a failed removal keeps the chip and shows an error banner with Retry. Focus moves to the next chip, else the editor (Chip's `fallbackFocus`), and a polite region says "Removed filter: {label}". It is a separate region from the message line, so a removal never replaces a parse error's text.
@@ -36,7 +37,7 @@ The active-filter strip, its chips and the Syntax popover (architecture §10.4, 
 
 - **The strip loads only once there's a chip,** and the Syntax popover on its first open. Neither is in `/search`'s first load. The bar's lazy part now also loads at once when the URL carries `hidden=1`, so that chip shows without an interaction.
 - **The Syntax button is on the first load,** as a plain button that loads the popover when pressed. `app.html`'s static bar has a matching inert button, so the editor's box stays the same from first paint (`boot-shell.routes.test.ts`, ≤ 1 px).
-- **The label code isn't a chunk of its own.** `clauses.ts` (the label messages and formatters) loads with the bar's lazy part on the first interaction, even with no chip, instead of with the strip as the brief's step 9 listed. The bare page's first load doesn't include it either way. Splitting it would add a request on the first chip for a few KB.
+- **The label code isn't a chunk of its own** (a deviation from the brief's step 9; the runner accepted it, 2026-10-23). `clauses.ts` (the label messages and formatters) loads with the bar's lazy part on the first interaction, even with no chip, instead of with the strip as the brief's step 9 listed. The bare page's first load doesn't include it either way. Splitting it would add a request on the first chip for a few KB.
 - **A late popover doesn't take focus.** The Syntax popover opens once its chunk has loaded, and only if focus is still on the button (or nowhere). If the user has started typing meanwhile, it stays closed. A chunk that fails to load leaves the button as it was.
 - **Measured on `/search`:** search JS 39.56 → 40.17 kB (`main` at 21cff90), CSS 19.83 kB unchanged, and Lighthouse 94,845 B (mobile LCP about 1.5 s, CLS 0). Every class the strip and popover use was already in the global sheet.
 
@@ -49,7 +50,6 @@ The active-filter strip, its chips and the Syntax popover (architecture §10.4, 
 
 ## Follow-ups
 
-- **W5:** one write that sets the AST and `hidden` together (Clear all).
 - **`/help/syntax`:** link it from the popover when it exists.
 - **Backend:** per-clause source text in `/parse`, so a chip can show the user's own clause.
 - **`time:`:** use the user's zone once the app sends `tz`.

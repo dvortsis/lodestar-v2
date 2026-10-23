@@ -153,8 +153,11 @@ export function createSearchState(nav: Nav = kitNav) {
 			await commit(canonical ?? t, true);
 		},
 
-		/** A structured edit (a removed chip, the Builder): the server prints it back as text. */
-		async setAst(next: Ast) {
+		/**
+		 * A structured edit (a removed chip, the Builder): the server prints it back as text.
+		 * `options.hidden` changes the flag in the same history entry (the strip's Clear all).
+		 */
+		async setAst(next: Ast, options: { hidden?: boolean } = {}) {
 			clearTimeout(timer);
 			parsing = true; // supersedes any parse in flight, so this call owns the flag
 			try {
@@ -179,7 +182,11 @@ export function createSearchState(nav: Nav = kitNav) {
 				parseError = null;
 				parsing = false;
 				text = r.canonical;
-				await commit(r.canonical, true);
+				await commit(
+					r.canonical,
+					true,
+					options.hidden === undefined ? {} : { hidden: options.hidden }
+				);
 			} catch (e) {
 				if (isAbort(e)) return; // a newer run owns `parsing`
 				parsing = false;
