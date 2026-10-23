@@ -312,7 +312,11 @@ impl Running {
 fn wait_until(what: &str, within: Duration, mut f: impl FnMut() -> bool) {
     let start = Instant::now();
     while !f() {
-        assert!(start.elapsed() < within, "{what}");
+        assert!(
+            start.elapsed() < within,
+            "{what} (after {} s)",
+            within.as_secs()
+        );
         std::thread::sleep(Duration::from_millis(200));
     }
 }
@@ -610,23 +614,31 @@ fn stops_and_restarts_in_probation_use_no_attempt() {
         &env.overrides(json!({"fault": format!("child:hang@{NEW}"), "probation_ms": 60_000})),
     );
     wait_until("no attempt charged", LONG, || attempts(&env) == 1);
-    std::thread::sleep(Duration::from_millis(500));
+    let pid = r.child.id();
+    wait_until("no child started", LONG, || children(pid).len() == 1);
     assert_eq!(r.stop(), 128 + 15, "the child's status passes through");
     assert_eq!(attempts(&env), 0, "the forwarded stop was refunded");
 
     let r = env.start(
         &env.overrides(json!({"fault": format!("child:restart@{NEW}"), "probation_ms": 60_000})),
     );
-    std::thread::sleep(Duration::from_secs(10));
+    // Until three children have run: two supervised restarts.
+    let pid = r.child.id();
+    let mut seen = std::collections::BTreeSet::new();
+    wait_until("fewer than two restarts", LONG, || {
+        seen.extend(children(pid));
+        seen.len() >= 3
+    });
+    // Checked and stopped while serving, not mid-start (when the
+    // attempt is between its refund and the next charge, or TERM can
+    // land before the child's handler).
+    wait_until("it didn't serve", LONG, || env.healthy());
     assert!(env.json("skipped").is_none(), "restarts aren't failures");
     assert_eq!(
         attempts(&env),
         1,
         "only the current run's attempt is charged"
     );
-    // Stopped while serving, not mid-start (when TERM can land before
-    // the child's handler).
-    wait_until("it didn't serve", LONG, || env.healthy());
     assert_eq!(r.stop(), 0);
 }
 
