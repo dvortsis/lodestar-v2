@@ -9,9 +9,11 @@
 		preview: Preview;
 		/** The same entry as Neutralize term; `preview` is then the Override column. */
 		neutralize?: Preview | null;
+		/** With both strengths: the one that will be applied. */
+		chosen?: 'override' | 'neutralize';
 	}
 
-	let { preview, neutralize = null }: Props = $props();
+	let { preview, neutralize = null, chosen }: Props = $props();
 
 	const columns = $derived(
 		neutralize
@@ -23,4 +25,4 @@
 	);
 </script>
 
-<PreviewTable caption={m.filters_flows_summary_title()} {columns} testid="impact" />
+<PreviewTable caption={m.filters_flows_summary_title()} {columns} testid="impact" {chosen} />
