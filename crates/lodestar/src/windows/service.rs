@@ -8,8 +8,9 @@
 //! ([`run_if_launched`]), and an ordinary run is told no at once.
 //!
 //! Started by the SCM, Lodestar:
-//! - first secures `%ProgramData%\Lodestar` ([`super::acl`]), and refuses
-//!   to start (service-specific exit code 3) if it can't;
+//! - first makes sure `%ProgramData%\Lodestar` is private
+//!   ([`super::acl`]), and refuses to start (service-specific exit code 3)
+//!   if it isn't;
 //! - keeps its data there unless `LODESTAR_DATA_DIR` or the config file
 //!   says otherwise, and runs from that folder, so relative paths in the
 //!   config land there;
@@ -177,7 +178,7 @@ mod scm {
         let default_dir = super::default_data_dir(std::env::var("ProgramData").ok());
         // Before anything in it is read or written. A refusal can't be
         // logged in the folder; the exit code (3) says it was refused.
-        let code = if acl::secure_dir(&default_dir, |d, l| acl::icacls(d, l, Some(name))).is_err() {
+        let code = if acl::secure_dir(&default_dir, acl::icacls, acl::saved_sddl).is_err() {
             REFUSED
         } else {
             match serve(&default_dir, status, stop_rx) {
