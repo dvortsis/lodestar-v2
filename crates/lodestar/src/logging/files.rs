@@ -74,11 +74,19 @@ impl IndexView {
                 details: true,
                 opt_in: true,
             },
-            true => self
-                .files
-                .get(&name.file_name())
-                .copied()
-                .unwrap_or_default(),
+            // With its `.jsonl`/`.gz` other self's: a file whose badge
+            // moved while it was compressed keeps it.
+            true => {
+                let get = |n: &LogName| self.files.get(&n.file_name()).copied().unwrap_or_default();
+                let f = get(name);
+                match name.sibling().map(|o| get(&o)) {
+                    Some(o) => Flags {
+                        details: f.details || o.details,
+                        opt_in: f.opt_in || o.opt_in,
+                    },
+                    None => f,
+                }
+            }
         }
     }
 }
@@ -228,10 +236,41 @@ fn open_capped(dir: &Path, name: &LogName, cap: u64) -> io::Result<Box<dyn BufRe
         // file holds (a bomb ends there, as history ends it).
         LogName::Rotated { gz: true, .. } => Box::new(BufReader::with_capacity(
             64 << 10,
-            MultiGzDecoder::new(BufReader::with_capacity(64 << 10, file)).take(cap),
+            Capped {
+                inner: MultiGzDecoder::new(BufReader::with_capacity(64 << 10, file)),
+                left: cap,
+            },
         )),
         LogName::Rotated { gz: false, .. } => Box::new(BufReader::with_capacity(64 << 10, file)),
     })
+}
+
+/// A decompressed file read up to `left` bytes; one that holds more is an
+/// error there, so a download fails and an archive member says it was cut
+/// short, rather than ending as if the file ended.
+struct Capped<R> {
+    inner: R,
+    left: u64,
+}
+
+impl<R: Read> Read for Capped<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.left == 0 {
+            return match self.inner.read(&mut [0u8; 1])? {
+                0 => Ok(0),
+                _ => Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "a log file larger than any Lodestar writes",
+                )),
+            };
+        }
+        let max = buf
+            .len()
+            .min(usize::try_from(self.left).unwrap_or(usize::MAX));
+        let n = self.inner.read(&mut buf[..max])?;
+        self.left -= n as u64;
+        Ok(n)
+    }
 }
 
 /// A download's file name: ASCII, from the typed name.
@@ -490,12 +529,26 @@ mod tests {
             .read_to_end(&mut all)
             .unwrap();
         assert_eq!(all.len(), 1_100_000);
-        // Never inflated past the cap, whatever it holds.
-        let mut capped = Vec::new();
-        open_capped(dir.path(), &gz, 4096)
+        // Never inflated past the cap: what's past it is an error, not an
+        // end.
+        let mut r = open_capped(dir.path(), &gz, 4096).unwrap();
+        let mut capped = vec![0u8; 8192];
+        let mut got = 0;
+        let e = loop {
+            match r.read(&mut capped[got..]) {
+                Ok(0) => panic!("ended as if whole"),
+                Ok(n) => got += n,
+                Err(e) => break e,
+            }
+        };
+        assert_eq!(got, 4096);
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData);
+        // Exactly at the cap is whole.
+        let mut all = Vec::new();
+        open_capped(dir.path(), &gz, 1_100_000)
             .unwrap()
-            .read_to_end(&mut capped)
+            .read_to_end(&mut all)
             .unwrap();
-        assert_eq!(capped.len(), 4096);
+        assert_eq!(all.len(), 1_100_000);
     }
 }

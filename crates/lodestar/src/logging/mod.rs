@@ -38,7 +38,7 @@ mod zip;
 use std::cell::Cell;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use std::sync::{Mutex, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
 use lodestar_log::{Catalogue, Component, Event, Kind, Level, Mask, Output, Record, Sink};
@@ -766,6 +766,12 @@ impl Runtime {
         current: bool,
         all: bool,
     ) -> std::io::Result<file::Deleted> {
+        let jobs = lock(&self.jobs).clone().filter(|j| j.dir == dir);
+        // The writer's index when it has this folder, else read here.
+        let index = match &jobs {
+            Some(j) => j.index.clone(),
+            None => Arc::new(Mutex::new(file::Index::load(dir))),
+        };
         let _inside = Inside::enter();
         let mut skipped = Vec::new();
         // "All" never sweeps a file rotated after this request.
@@ -780,7 +786,7 @@ impl Runtime {
                     sink.rotate_to_delete().map_err(|_| "failed")
                 }
                 // No writer in this folder: nothing is mid-write.
-                _ => file::set_aside(dir).and_then(|n| n.ok_or("none")),
+                _ => file::set_aside(dir, &index).and_then(|n| n.ok_or("none")),
             };
             match aside.map(|n| names::LogName::parse(&n)) {
                 Ok(Some(rotated)) => {
@@ -791,16 +797,15 @@ impl Runtime {
                 Err(why) => skipped.push((file::CURRENT.to_string(), why)),
             }
         }
-        let sweep = all.then_some(file::Sweep { upto });
-        let jobs = lock(&self.jobs).clone().filter(|j| j.dir == dir);
-        let mut done = match jobs.map(|j| j.delete(names.clone(), sweep.clone())) {
+        let take = match all {
+            true => file::Take::All { upto },
+            false => file::Take::Details,
+        };
+        let mut done = match jobs.map(|j| j.delete(names.clone(), take.clone())) {
             Some(Ok(d)) => d,
             Some(Err(Some(e))) => return Err(e),
             // No worker for this folder: nothing compresses in it.
-            Some(Err(None)) | None => {
-                let index = Mutex::new(file::Index::load(dir));
-                file::delete(dir, &names, sweep.as_ref(), &index)
-            }
+            Some(Err(None)) | None => file::delete(dir, &names, &take, &index),
         };
         done.skipped.extend(skipped);
         Ok(done)
