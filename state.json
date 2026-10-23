@@ -931,7 +931,7 @@
    "pr": 92,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 01:05 PR #92; told: env release/nightly on jobs, signing reqs in PR desc for B-update. | 01:27 d9b3ef0 MSI: ProgramData ACL inheritance removed, LocalService, firewall Private-only, Defender opt-in; PRESHUTDOWN left to M6-win. MSI smoke iterating. | 01:48 8d4f971 MSI: NT SERVICE\\Lodestar, empty folder + icacls matching acl.rs, PreShutdownDelay 60s, foreign-owner stop. Review when MSI smoke green."
+   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 01:05 PR #92; told: env release/nightly on jobs, signing reqs in PR desc for B-update. | 01:27 d9b3ef0 MSI: ProgramData ACL inheritance removed, LocalService, firewall Private-only, Defender opt-in; PRESHUTDOWN left to M6-win. MSI smoke iterating. | 01:48 8d4f971 MSI: NT SERVICE\\Lodestar, empty folder + icacls matching acl.rs, PreShutdownDelay 60s, foreign-owner stop. Review when MSI smoke green. | 02:17 secure-datadir.ps1 creates folder with SD; runner: marker trust on existing folder needs protected strict DACL + top-level owners (match M6-win). WiX smoke not green yet."
   },
   "M6-cli": {
    "status": "merged",
@@ -1034,7 +1034,7 @@
   "F-perf": {
    "status": "running",
    "model": "opus",
-   "notes": "owner 00:40 \"best user experience\" -> budget held on typical hardware (EPYC 7763 ref) via F-perf; #97 keeps fastest-runner ref as stopgap. Stacked on slice/F-near. | 01:50 draft PR #110; told F-near merged.",
+   "notes": "owner 00:40 \"best user experience\" -> budget held on typical hardware (EPYC 7763 ref) via F-perf; #97 keeps fastest-runner ref as stopgap. Stacked on slice/F-near. | 01:50 draft PR #110; told F-near merged. | 02:15 mixed set 46.4us (7763-scaled), shapes 35-42us, 10% 36.2us; draft #110 to be marked ready.",
    "session": "session_01JuPFjxS6u9KwGugz27C7KL",
    "pr": 110
   },
