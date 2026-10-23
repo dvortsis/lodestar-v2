@@ -87,6 +87,7 @@ fn fixture() -> Fixture {
             filters: None,
             settings: None,
             ops: None,
+            user_data: None,
             adult: Default::default(),
         }),
     );
@@ -343,6 +344,32 @@ async fn errors_share_one_envelope() {
         Request::delete("/api/v1/settings/crawler")
             .body(Body::empty())
             .unwrap(),
+        get("/api/v1/keys", None),
+        post("/api/v1/keys", None, json!({})),
+        Request::delete("/api/v1/keys/1")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{}"))
+            .unwrap(),
+        post("/api/v1/keys/1/regenerate", None, json!({})),
+        post("/api/v1/keys/1/revoke", None, json!({})),
+        get("/api/v1/auth/proxy", None),
+        Request::put("/api/v1/auth/proxy")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"enabled":false}"#))
+            .unwrap(),
+        post("/api/v1/sessions/revoke-others", None, json!({})),
+        // A key or the proxy header alone is no session.
+        Request::get("/api/v1/search?q=x")
+            .header(
+                "x-api-key",
+                "lsk_AAAAAAAA_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            )
+            .body(Body::empty())
+            .unwrap(),
+        Request::get("/api/v1/search?q=x")
+            .header("remote-user", "admin")
+            .body(Body::empty())
+            .unwrap(),
     ] {
         let (status, _, body) = call(&f.app, req).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -492,6 +519,7 @@ async fn protected_routes_fail_closed_outside_the_router() {
         filters: None,
         settings: None,
         ops: None,
+        user_data: None,
         adult: Default::default(),
     });
     let (status, _, body) = call(&stray, get("/x", Some(&cookie))).await;
