@@ -385,13 +385,14 @@
       "merge": "eb8266e"
     },
     "B11b": {
-      "status": "review",
+      "status": "merged",
       "model": "opus",
       "session": "session_01MHwrFHQEfii2sHpmGPEYz8",
       "pr": 130,
       "attempt": 1,
       "review_rounds": 1,
-      "notes": "2026-10-23T06:59:39Z unblocked by B11a; brief drafting (Opus helper) | 2026-10-23T07:17:05Z launched (brief by Opus helper, runner-reviewed + trigger-cost and split lines; steward) | 2026-10-23T09:05:30Z PR #123 part 1/2 head 21d889b (~3.5k lines): V11, aggregation, compaction, repair. Trigger +25-35% bulk delete (over ~10%), kept; fresh reviewer launched (judging trigger design). Part 2 follows after merge. | 2026-10-23T09:26:35Z main moved (B9): services.rs conflict - fold into review verdict | 2026-10-23T09:30:45Z review MERGE; short round: repair window anchored at last activity (not now), prepare_cached at 3 delete sites, docs polish, merge main (B9). Trigger kept (runner decision; revisit with retention). | 2026-10-23T10:19:35Z 52f94a6: round done (last_activity anchor, prepare_cached +18%, docs, main B9); log_lint ok on merged tree; merged-tree verify vs 97fbb56 running | 2026-10-23T10:28:52Z part 1 merged #123 as e73e568 (merged-tree 820 tests ok); part 2 starting | 2026-10-23T14:39:41Z part 2 stalled idle since 11:44 (ec91f0d pushed, self+security review clean, no PR); nudged: merge main, open PR, message runner | 2026-10-23T15:39:30Z running again after nudge (no PR yet) | 2026-10-23T15:40:02Z part 2 PR #130 head 74ceb91 (~6.4k, ~3.4k code/tests/docs), ci-ok green; windows flake in search live::tests re-run once (passed); fresh + security reviewers launched"
+      "notes": "2026-10-23T06:59:39Z unblocked by B11a; brief drafting (Opus helper) | 2026-10-23T07:17:05Z launched (brief by Opus helper, runner-reviewed + trigger-cost and split lines; steward) | 2026-10-23T09:05:30Z PR #123 part 1/2 head 21d889b (~3.5k lines): V11, aggregation, compaction, repair. Trigger +25-35% bulk delete (over ~10%), kept; fresh reviewer launched (judging trigger design). Part 2 follows after merge. | 2026-10-23T09:26:35Z main moved (B9): services.rs conflict - fold into review verdict | 2026-10-23T09:30:45Z review MERGE; short round: repair window anchored at last activity (not now), prepare_cached at 3 delete sites, docs polish, merge main (B9). Trigger kept (runner decision; revisit with retention). | 2026-10-23T10:19:35Z 52f94a6: round done (last_activity anchor, prepare_cached +18%, docs, main B9); log_lint ok on merged tree; merged-tree verify vs 97fbb56 running | 2026-10-23T10:28:52Z part 1 merged #123 as e73e568 (merged-tree 820 tests ok); part 2 starting | 2026-10-23T14:39:41Z part 2 stalled idle since 11:44 (ec91f0d pushed, self+security review clean, no PR); nudged: merge main, open PR, message runner | 2026-10-23T15:39:30Z running again after nudge (no PR yet) | 2026-10-23T15:40:02Z part 2 PR #130 head 74ceb91 (~6.4k, ~3.4k code/tests/docs), ci-ok green; windows flake in search live::tests re-run once (passed); fresh + security reviewers launched | 2026-10-23T16:17:36Z #130 fresh MERGE + security MERGE; no overlap with W9; merged as 57296e6. Slice done",
+      "merged_sha": "57296e6"
     },
     "B10b": {
       "status": "merged",
@@ -1374,6 +1375,16 @@
       "from": "B-log2",
       "what": "Windows custom log folder: owner/permission checks are Unix-only",
       "to": "win-hardening-followup"
+    },
+    "insights-csv-filtered-losses": {
+      "from": "B11b",
+      "what": "fetch.funnel CSV with reason= emits 9 empty loss columns (reads as null): drop undeclared columns or document in metrics \u00a77.7; totals over windows with no coverage read 0 not null (note in \u00a77.7); tests for non-null yield/ttS deltas and isolated Adult cache key; loss column name reason vs key; custom range floor at first_rollup_hour",
+      "to": "S-insights-2 backend prerequisite"
+    },
+    "win-search-meta-flake": {
+      "from": "B11b",
+      "what": "search live::tests::each_commit_reports_once... Access denied on Windows: watermark() reads meta.json during commit; make test tolerate transient PermissionDenied; check request paths calling load_metas without retry",
+      "to": "X-flakes follow-up"
     }
   },
   "blocked_on_owner": [],
