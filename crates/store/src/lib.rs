@@ -6,10 +6,14 @@
 //! blob codec with zstd dictionaries, batched writes and reads, source
 //! provenance and the shared id sequence (§18.5), Insights counters (§7),
 //! the persisted fetch queue (§5), and swarm health: scrape results,
-//! per-tracker detail, history and the tracker list (§7, M4). A single
-//! [`Store`] owns the one writer connection; the pipeline's writer task
-//! drives it.
+//! per-tracker detail, history and the tracker list (§7, M4), and M5's
+//! user data, API keys and reporting tables (saved searches and alerts,
+//! user items, collections, searchable time per hour, the opt-in query
+//! log). A single [`Store`] owns the one writer connection; the
+//! pipeline's writer task drives it.
 
+mod api_keys;
+mod collections;
 mod compress;
 pub mod filetree;
 mod filter;
@@ -17,13 +21,17 @@ mod floor;
 pub mod history;
 pub mod hot;
 mod insights;
+mod reporting;
 mod rules;
+mod saved;
 mod schema;
 mod settings;
 pub mod snapshots;
 mod sources;
 mod subscriptions;
 mod swarm;
+mod user_data;
+mod user_items;
 
 use std::fmt;
 use std::io;
@@ -34,6 +42,8 @@ use lodestar_metainfo::{
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
+pub use api_keys::{ApiKey, KeyCheck, KeyKind, NewApiKey};
+pub use collections::{Collection, CollectionItem};
 pub use compress::{BlobCodec, Codec, Compressed};
 pub use filetree::{CodecError, FileTree};
 pub use filter::{
@@ -43,13 +53,16 @@ pub use floor::{FloorSource, PendingFloor, Settled};
 pub use history::{History, trend};
 pub use hot::{Col, HotColumns, NEVER, SwarmHot};
 pub use insights::{CohortCount, Counter, Event};
+pub use reporting::{QueryCount, QueryLogEntry, QueryLogging, Resolved};
 pub use rules::{ClassCorrection, ExceptionRow, MARK_CHUNK, OverrideRow, RuleRow, RuleSet};
 pub use rusqlite;
+pub use saved::{Alert, SavedSearch, SavedSearchInput, SavedSearchSummary, SearchHits};
 pub use sources::{MAX_SOURCES, QueuedKey, SourceId, SourceRow, SourceState};
 pub use subscriptions::{NewSubscription, Refresh, Subscription};
 pub use swarm::{
     SwarmRow, SwarmUpdate, TrackerCounts, TrackerRow, TrackerSample, swarm_flags, tracker_state,
 };
+pub use user_items::{MAX_LABEL_CHARS, MAX_LABELS, UserItem, UserItemUpdate};
 
 /// Bits of the `torrents.flags` column. Values are persisted: append only.
 pub mod flags {
@@ -94,6 +107,12 @@ pub enum Error {
     Corrupt(&'static str),
     /// All 64 source ids are taken.
     TooManySources,
+    /// A value the store refuses (empty name, malformed label, out-of-range
+    /// hit); says which rule.
+    Invalid(&'static str),
+    /// A row the call names doesn't exist (say, adding an unknown torrent
+    /// to a collection).
+    NotFound(&'static str),
 }
 
 impl fmt::Display for Error {
@@ -108,6 +127,8 @@ impl fmt::Display for Error {
             ),
             Error::Corrupt(what) => write!(f, "corrupt store: {what}"),
             Error::TooManySources => write!(f, "all {MAX_SOURCES} source ids are in use"),
+            Error::Invalid(what) => write!(f, "invalid: {what}"),
+            Error::NotFound(what) => write!(f, "not found: {what}"),
         }
     }
 }
