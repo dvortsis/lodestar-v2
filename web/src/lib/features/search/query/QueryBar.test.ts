@@ -91,6 +91,9 @@ async function typeText(editor: HTMLElement, text: string) {
 	);
 }
 
+/** The strip's and the popover's chunks load on first use: a cold run can take a while. */
+const LAZY = { timeout: 10_000 };
+
 const message = () => document.getElementById('search-query-message')!;
 
 describe('the query bar', () => {
@@ -238,5 +241,110 @@ describe('the static first-paint bar (app.html)', () => {
 		// The app's bar replaces it in place, so the two must read the same.
 		expect(appHtml).toContain(`>${m.search_query_placeholder_short()}</span`);
 		expect(appHtml).toMatch(new RegExp(`>\\s*${m.search_query_placeholder()}</span`));
+	});
+});
+
+describe('the active-filter strip', () => {
+	it('renders chips from the AST and removes one through the server', async () => {
+		visit('/search?q=lantern+res%3A1080p');
+		const { editor } = setup();
+		const chip = await screen.findByRole(
+			'button',
+			{ name: 'Remove filter: Resolution: 1080p' },
+			LAZY
+		);
+		expect(screen.getByRole('group', { name: 'Active filters' }).textContent).toContain(
+			'Resolution: 1080p'
+		);
+		// Free text stays in the bar: no chip for "lantern".
+		expect(screen.queryByRole('button', { name: /lantern/ })).toBeNull();
+		await fireEvent.click(chip);
+		await waitFor(() => expect(navCalls.at(-1)).toEqual({ url: '/search?q=lantern', push: true }));
+		expect(searchBodies.at(-1)).toMatchObject({ ast: word('lantern'), limit: 1 });
+		await waitFor(() =>
+			expect(document.querySelector('[aria-live="polite"]')?.textContent).toBe(
+				'Removed filter: Resolution: 1080p'
+			)
+		);
+		await waitFor(() => expect(document.activeElement).toBe(editor));
+		await waitFor(() => expect(screen.queryByRole('group', { name: 'Active filters' })).toBeNull());
+	});
+
+	it('keeps the chip and offers Retry when the removal fails', async () => {
+		visit('/search?q=res%3A1080p+res%3A2160p');
+		setup();
+		const chip = await screen.findByRole(
+			'button',
+			{ name: 'Remove filter: Resolution: 1080p' },
+			LAZY
+		);
+		fetchMock.mockImplementationOnce(async () => {
+			throw new TypeError('Failed to fetch');
+		});
+		await fireEvent.click(chip);
+		const banner = await screen.findByRole('alert');
+		expect(banner.textContent).toContain("Couldn't change the filters");
+		expect(screen.getByRole('button', { name: 'Remove filter: Resolution: 1080p' })).toBeTruthy();
+		await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+		await waitFor(() =>
+			expect(navCalls.at(-1)).toEqual({ url: '/search?q=res%3A2160p', push: true })
+		);
+	});
+
+	it('keeps the last good chips while a syntax error shows', async () => {
+		visit('/search?q=res%3A1080p');
+		const { editor } = setup();
+		await screen.findByRole('button', { name: 'Remove filter: Resolution: 1080p' }, LAZY);
+		await typeText(editor, 'res:1080p (');
+		await fireEvent.keyDown(editor, { key: 'Enter' });
+		await waitFor(() => expect(editor.getAttribute('aria-invalid')).toBe('true'));
+		expect(screen.getByRole('button', { name: 'Remove filter: Resolution: 1080p' })).toBeTruthy();
+	});
+
+	it('shows the hidden=1 chip and removes it with setHidden', async () => {
+		visit('/search?hidden=1');
+		const { state } = setup();
+		const setHidden = vi.spyOn(state, 'setHidden');
+		const chip = await screen.findByRole(
+			'button',
+			{ name: 'Remove filter: Including: Hidden by filters' },
+			LAZY
+		);
+		await fireEvent.click(chip);
+		expect(setHidden).toHaveBeenCalledWith(false);
+		await waitFor(() => expect(navCalls.at(-1)).toEqual({ url: '/search', push: true }));
+	});
+
+	it('Clear all keeps the free text and clears hidden', async () => {
+		visit('/search?q=lantern+res%3A1080p+res%3A2160p&hidden=1');
+		const { editor } = setup();
+		await screen.findByRole('button', { name: 'Remove filter: Resolution: 2160p' }, LAZY);
+		await fireEvent.click(screen.getByRole('button', { name: 'Clear all' }));
+		await waitFor(() => expect(navCalls.at(-1)?.url).toBe('/search?q=lantern'));
+		expect(searchBodies.at(-1)).toMatchObject({ ast: word('lantern') });
+		await waitFor(() => expect(screen.queryByRole('button', { name: 'Clear all' })).toBeNull());
+		await waitFor(() => expect(document.activeElement).toBe(editor));
+	});
+});
+
+describe('the Syntax popover', () => {
+	it('opens on its button, and Try sets and submits an example', async () => {
+		const { editor } = setup();
+		await fireEvent.click(screen.getByRole('button', { name: 'Syntax' }));
+		// The panel is hidden from the role query while it positions (as in the overlays tests).
+		const dialog = await screen.findByLabelText(
+			'Search syntax',
+			{ selector: '[role="dialog"]' },
+			LAZY
+		);
+		expect(dialog.textContent).toContain('big buck bunny res:1080p');
+		await fireEvent.click(screen.getByRole('button', { name: 'Try big buck bunny res:1080p' }));
+		await waitFor(() =>
+			expect(navCalls.at(-1)).toEqual({ url: '/search?q=big+buck+bunny+res%3A1080p', push: true })
+		);
+		await waitFor(() => expect(editor.textContent).toBe('big buck bunny res:1080p'));
+		await waitFor(() =>
+			expect(screen.queryByLabelText('Search syntax', { selector: '[role="dialog"]' })).toBeNull()
+		);
 	});
 });
