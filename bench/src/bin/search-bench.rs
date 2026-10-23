@@ -783,7 +783,10 @@ fn suggest_path(
                 } else {
                     (w[i] as u8 + 1) as char
                 };
-                w.into_iter().collect()
+                // Typed (a space after it), not being typed.
+                let mut w: String = w.into_iter().collect();
+                w.push(' ');
+                w
             }),
         ),
         (
@@ -804,6 +807,7 @@ fn suggest_path(
                     })
                     .collect::<Vec<_>>()
                     .join(" ")
+                    + " "
             }),
         ),
         (

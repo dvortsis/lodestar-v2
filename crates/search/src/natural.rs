@@ -31,7 +31,7 @@ use crate::suggest::chip_nodes;
 
 /// Longest input read, in bytes.
 pub const MAX_NATURAL_BYTES: usize = 512;
-/// Most words read.
+/// Most tokens read (words, operators and brackets).
 pub const MAX_NATURAL_WORDS: usize = 32;
 
 /// Why a phrase wasn't read.
@@ -47,7 +47,9 @@ impl std::fmt::Display for NaturalError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             NaturalError::TooLong => write!(f, "longer than {MAX_NATURAL_BYTES} bytes"),
-            NaturalError::TooManyWords => write!(f, "more than {MAX_NATURAL_WORDS} words"),
+            NaturalError::TooManyWords => {
+                write!(f, "more than {MAX_NATURAL_WORDS} words and operators")
+            }
             NaturalError::Syntax => write!(f, "not a query the parser reads"),
         }
     }
@@ -81,6 +83,8 @@ pub struct Natural {
 /// lowercased, with its character range.
 #[derive(Debug, Clone)]
 struct W {
+    /// The token as written, untrimmed.
+    raw: String,
     orig: String,
     low: String,
     from: (usize, usize),
@@ -97,6 +101,7 @@ fn word(input: &str, t: &Raw) -> Option<W> {
     let lead = raw.find(trimmed).unwrap_or(0);
     let from = caret::chars(input, t.start + lead);
     Some(W {
+        raw: raw.to_owned(),
         orig: trimmed.to_owned(),
         low: trimmed.to_lowercase(),
         from: (from, from + trimmed.chars().count()),
@@ -684,10 +689,16 @@ fn read_run(w: &[W]) -> Read {
                 if LINKS.contains(&low) && near_used(j) {
                     continue;
                 }
-                let Some(n) = text_node(&w[j].orig) else {
-                    continue;
+                // Trimmed, or as written when trimming made it syntax
+                // (`NEAR,`): a plain token always stays.
+                let (kept, n) = match text_node(&w[j].orig) {
+                    Some(n) => (&w[j].orig, n),
+                    None => match text_node(&w[j].raw) {
+                        Some(n) => (&w[j].raw, n),
+                        None => continue,
+                    },
                 };
-                text.push(w[j].orig.clone());
+                text.push(kept.clone());
                 nodes.push(n);
                 continue;
             }

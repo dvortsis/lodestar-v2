@@ -330,9 +330,9 @@ fn adult_and_filter_hidden_titles_never_leak() {
         ["Dark Matter", "Darkly Hidden Thing"]
     );
     // Nor through "did you mean": the adult title's word isn't offered.
-    let got = suggest_at(&f.index, "darkets", PLAIN, 20);
+    let got = suggest_at(&f.index, "darkets ", PLAIN, 20);
     assert!(of_kind(&got, Kind::DidYouMean).is_empty(), "{got:?}");
-    let got = suggest_at(&f.index, "darkets", adult, 20);
+    let got = suggest_at(&f.index, "darkets ", adult, 20);
     assert_eq!(of_kind(&got, Kind::DidYouMean)[0].0, "darkest");
 }
 
@@ -365,14 +365,17 @@ fn did_you_mean_for_fields_and_rare_words() {
         ("res:1080p", "dark res:1080p")
     );
     assert_eq!(s.replace, (5, 14));
-    // A misspelling in a query that finds nothing.
-    let got = suggest_at(&f.index, "dark knigth", PLAIN, 8);
+    // A misspelling in a query that finds nothing, once it's typed.
+    let got = suggest_at(&f.index, "dark knigth ", PLAIN, 8);
     let s = got.iter().find(|s| s.kind == Kind::DidYouMean).unwrap();
     assert_eq!(
         (s.insert.as_str(), s.text.as_str()),
-        ("knight", "dark knight")
+        ("knight", "dark knight ")
     );
     assert_eq!(s.replace, (5, 11));
+    // Not the word still being typed (the caret at its end).
+    let got = suggest_at(&f.index, "dark knigth", PLAIN, 8);
+    assert!(of_kind(&got, Kind::DidYouMean).is_empty(), "{got:?}");
     // Nor the word being typed, while it starts a title.
     let got = suggest_at(&f.index, "the dark kni", PLAIN, 8);
     assert!(of_kind(&got, Kind::DidYouMean).is_empty(), "{got:?}");
@@ -382,10 +385,10 @@ fn did_you_mean_for_fields_and_rare_words() {
     );
     // Only the words nearest the caret are looked at (a fuzzy walk of
     // every dictionary each).
-    let far = "knigth qqqq wwww xxxx zzzz";
+    let far = "knigth wwww xxxx zzzz";
     let got = suggest_at(&f.index, far, PLAIN, 8);
     assert!(of_kind(&got, Kind::DidYouMean).is_empty(), "{got:?}");
-    let got = suggest_at(&f.index, &format!("knigth| {}", &far[7..]), PLAIN, 8);
+    let got = suggest_at(&f.index, &format!("knigth |{}", &far[7..]), PLAIN, 8);
     assert_eq!(of_kind(&got, Kind::DidYouMean)[0].0, "knight");
     // A query with enough hits gets none.
     let got = suggest_at(&f.index, "1080p", PLAIN, 8);

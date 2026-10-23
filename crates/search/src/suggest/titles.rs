@@ -49,8 +49,6 @@ pub const MIN_INTERVAL: Duration = Duration::from_secs(60);
 const MAX_TITLE_BYTES: usize = 160;
 /// Records read per query while building.
 const READ_CHUNK: usize = if cfg!(test) { 3 } else { 20_000 };
-/// Spellings tracked per title while building.
-const VARIANTS: usize = 4;
 
 /// What a request may see: which classes its counts add up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,18 +138,16 @@ impl std::fmt::Debug for TitleSet {
     }
 }
 
-#[derive(Default)]
-struct Agg {
-    counts: [u32; 4],
-    variants: Vec<(String, u32)>,
-}
+/// One spelling of a title while building: `fold \0 display`, the
+/// final key's form, so the build holds each spelling once.
+type Spelling = Box<[u8]>;
 
 impl TitleSet {
     /// Every title in `store`.
     pub fn build(store: &Store) -> Result<TitleSet> {
         let started = Instant::now();
         let adult = ContentType::Adult.code();
-        let mut by_key: HashMap<String, Agg> = HashMap::new();
+        let mut by_key: HashMap<Spelling, [u32; 4]> = HashMap::new();
         let mut torrents = 0u64;
         let mut seen: Vec<String> = Vec::new();
         // In chunks by id, each its own read: one statement over the whole
@@ -193,13 +189,12 @@ impl TitleSet {
                         continue;
                     }
                     let display = title.split_whitespace().collect::<Vec<_>>().join(" ");
-                    let agg = by_key.entry(key.clone()).or_default();
-                    agg.counts[c] = agg.counts[c].saturating_add(1);
-                    if let Some(v) = agg.variants.iter_mut().find(|(d, _)| *d == display) {
-                        v.1 += 1;
-                    } else if agg.variants.len() < VARIANTS {
-                        agg.variants.push((display, 1));
-                    }
+                    let mut k = Vec::with_capacity(key.len() + 1 + display.len());
+                    k.extend_from_slice(key.as_bytes());
+                    k.push(0);
+                    k.extend_from_slice(display.as_bytes());
+                    let counts = by_key.entry(k.into_boxed_slice()).or_default();
+                    counts[c] = counts[c].saturating_add(1);
                     seen.push(key);
                 }
             }
@@ -207,25 +202,9 @@ impl TitleSet {
                 break;
             }
         }
-        let mut entries: Vec<(Vec<u8>, usize, u64)> = by_key
-            .into_iter()
-            .map(|(key, agg)| {
-                // The most used spelling; the first seen on a tie.
-                let display = agg
-                    .variants
-                    .iter()
-                    .enumerate()
-                    .max_by_key(|(i, (_, n))| (*n, std::cmp::Reverse(*i)))
-                    .map(|(_, (d, _))| d.clone())
-                    .unwrap_or_default();
-                let folded = key.len();
-                let mut k = key.into_bytes();
-                k.push(0);
-                k.extend_from_slice(display.as_bytes());
-                (k, folded, pack(agg.counts))
-            })
-            .collect();
-        entries.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        let mut spellings: Vec<(Spelling, [u32; 4])> = by_key.into_iter().collect();
+        spellings.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        let entries = merge_spellings(spellings);
         let mut b = MapBuilder::memory();
         for (k, _, v) in &entries {
             b.insert(k, *v).map_err(fst_error)?;
@@ -323,6 +302,43 @@ impl TitleSet {
     }
 }
 
+/// One entry per title from its spellings, sorted: the counts added up
+/// and the most used spelling kept (the first in byte order on a tie).
+/// Spellings of a title are adjacent, sharing the folded key.
+fn merge_spellings(spellings: Vec<(Spelling, [u32; 4])>) -> Vec<(Spelling, usize, u64)> {
+    let folded_len = |k: &[u8]| k.iter().position(|b| *b == 0).unwrap_or(k.len());
+    let mut out: Vec<(Spelling, usize, u64)> = Vec::with_capacity(spellings.len());
+    let mut group: Option<(Spelling, u32, [u32; 4])> = None;
+    let finish = |g: (Spelling, u32, [u32; 4]), out: &mut Vec<(Spelling, usize, u64)>| {
+        let folded = folded_len(&g.0);
+        out.push((g.0, folded, pack(g.2)));
+    };
+    for (key, counts) in spellings {
+        let n: u32 = counts.iter().fold(0u32, |a, c| a.saturating_add(*c));
+        match &mut group {
+            Some((best, best_n, total)) if best[..folded_len(best)] == key[..folded_len(&key)] => {
+                for (t, c) in total.iter_mut().zip(counts) {
+                    *t = t.saturating_add(c);
+                }
+                if n > *best_n {
+                    *best = key;
+                    *best_n = n;
+                }
+            }
+            _ => {
+                if let Some(g) = group.take() {
+                    finish(g, &mut out);
+                }
+                group = Some((key, n, counts));
+            }
+        }
+    }
+    if let Some(g) = group {
+        finish(g, &mut out);
+    }
+    out
+}
+
 fn fst_error(e: tantivy_fst::Error) -> Error {
     Error::Io(std::io::Error::other(e.to_string()))
 }
@@ -344,7 +360,7 @@ type Big = (HashMap<Box<str>, [Box<[u32]>; 4]>, Vec<(Box<str>, u64)>);
 /// The precomputed rankings: every folded prefix (whole chars) shared by
 /// more than [`SCAN_CAP`] titles, with its best [`TOP`] per visibility.
 /// `entries` are sorted, `(key, folded length, counts)`.
-fn big_prefixes(entries: &[(Vec<u8>, usize, u64)]) -> Big {
+fn big_prefixes(entries: &[(Spelling, usize, u64)]) -> Big {
     let mut big = HashMap::new();
     let mut pinned: Vec<(Box<str>, u64)> = Vec::new();
     let mut pin_of: HashMap<usize, u32> = HashMap::new();
@@ -484,6 +500,12 @@ impl Titles {
         self.kick();
     }
 
+    /// Stops following: no more rebuilds (the live indexer is stopping).
+    /// The set built last keeps serving whoever still holds the index.
+    pub(crate) fn unfollow(&self) {
+        self.lock().source = None;
+    }
+
     /// A commit happened: rebuild when the interval allows.
     pub(crate) fn committed(self: &Arc<Self>) {
         self.lock().dirty = true;
@@ -555,7 +577,7 @@ mod tests {
     use super::*;
 
     fn set_of(titles: &[(&str, usize)]) -> TitleSet {
-        let mut entries: Vec<(Vec<u8>, usize, u64)> = titles
+        let mut entries: Vec<(Spelling, usize, u64)> = titles
             .iter()
             .map(|(t, class_)| {
                 let key = fold(t, false);
@@ -565,7 +587,7 @@ mod tests {
                 k.extend_from_slice(t.as_bytes());
                 let mut counts = [0; 4];
                 counts[*class_] = 1;
-                (k, folded, pack(counts))
+                (k.into_boxed_slice(), folded, pack(counts))
             })
             .collect();
         entries.sort_unstable_by(|a, b| a.0.cmp(&b.0));
@@ -638,11 +660,59 @@ mod tests {
         ];
         let set = TitleSet::build(&store_of(&names)).unwrap();
         assert_eq!(set.torrents(), 7);
-        // `Alpha` and `alpha` are one title, spelt as the first one seen.
+        // `Alpha` and `alpha` are one title, spelt as the first in byte
+        // order on a tie.
         assert_eq!(set.len(), 6);
         let alpha = set.lookup("alpha", PLAIN, 5);
         assert_eq!((alpha[0].display.as_str(), alpha[0].count), ("Alpha", 2));
         assert_eq!(set.lookup("foxtrot", PLAIN, 5).len(), 1);
+    }
+
+    #[test]
+    fn spellings_merge_into_one_title() {
+        let sp = |t: &str, c: [u32; 4]| -> (Spelling, [u32; 4]) {
+            let mut k = fold(t, false).into_bytes();
+            k.push(0);
+            k.extend_from_slice(t.as_bytes());
+            (k.into_boxed_slice(), c)
+        };
+        let mut all = vec![
+            sp("The Matrix", [1, 0, 0, 0]),
+            sp("the matrix", [2, 1, 0, 0]),
+            sp("THE MATRIX", [0, 0, 1, 0]),
+            sp("Matrix", [1, 0, 0, 0]),
+            sp("Ab", [1, 0, 0, 0]),
+            sp("ab", [1, 0, 0, 0]),
+        ];
+        all.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        let got: Vec<(String, u64)> = merge_spellings(all)
+            .into_iter()
+            .map(|(k, folded, packed)| {
+                (String::from_utf8(k[folded + 1..].to_vec()).unwrap(), packed)
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                // A tie: the first in byte order.
+                ("Ab".to_string(), pack([2, 0, 0, 0])),
+                ("Matrix".to_string(), pack([1, 0, 0, 0])),
+                // The most used spelling, every class added up.
+                ("the matrix".to_string(), pack([3, 1, 1, 0])),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unfollowed_set_never_rebuilds() {
+        let t = Arc::new(Titles::default());
+        t.follow(PathBuf::from("/nonexistent/lodestar-test.db"));
+        t.unfollow();
+        // A commit after the live indexer stopped starts nothing.
+        t.lock().running = false;
+        t.committed();
+        assert!(!t.lock().running);
+        assert!(t.current().is_none());
     }
 
     #[test]

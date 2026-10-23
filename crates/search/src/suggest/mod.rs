@@ -62,7 +62,7 @@ const MAX_COUNTED: usize = 48;
 /// Terms read per segment for a value prefix or a fuzzy word.
 const MAX_TERMS: usize = 4096;
 /// Words "did you mean" looks for corrections of, nearest the caret.
-const FUZZY_WORDS: usize = 4;
+const FUZZY_WORDS: usize = 2;
 /// Fuzzy candidates checked against the index per word.
 const FUZZY_CHECKED: usize = 4;
 /// Spare titles looked up beyond the limit, for those the existence
@@ -220,7 +220,10 @@ pub fn suggest(
             }
         }
     }
-    let mut dym = did_you_mean(&cx, &toks, caret, typing_title)?;
+    // The word the caret ends is still being typed: a prefix, not a
+    // misspelling (a title it starts is offered instead).
+    let typing = typing_title.or(at.token.filter(|&i| toks[i].end == caret));
+    let mut dym = did_you_mean(&cx, &toks, caret, typing)?;
     dym.append(&mut out);
     let mut out = dym;
     // One item per insertion, the first kept.
@@ -272,8 +275,13 @@ impl Cx<'_> {
 
     /// Whether the request may see any torrent `node` matches.
     fn exists(&self, node: Node) -> Result<bool> {
+        Ok(self.count_up_to(node, 1)? > 0)
+    }
+
+    /// Torrents the request may see that `node` matches, up to `n`.
+    fn count_up_to(&self, node: Node, n: usize) -> Result<usize> {
         let c = self.compiled(node);
-        Ok(count_up_to(&self.searcher, &c, 1, self.cancel)? > 0)
+        count_up_to(&self.searcher, &c, n, self.cancel)
     }
 
     /// `(term text, doc freq)` for terms of `field` starting with
@@ -490,8 +498,10 @@ fn titles(
             continue;
         }
         // The FST may be a build behind: a title hidden or purged since
-        // isn't offered.
-        if !cx.exists(node)? {
+        // isn't offered, and its count is never more than the torrents
+        // the request may see now (counted up to the FST's, so bounded).
+        let live = cx.count_up_to(node, t.count as usize)?;
+        if live == 0 {
             continue;
         }
         out.push(Suggestion {
@@ -499,7 +509,7 @@ fn titles(
             text: t.display,
             insert,
             replace,
-            count: Some(u64::from(t.count)),
+            count: Some(u64::from(t.count).min(live as u64)),
         });
     }
     Ok(out)
@@ -596,7 +606,7 @@ fn chips(
 
 // ---- did you mean -----------------------------------------------------------
 
-/// "Did you mean" items; the token `typing` (a title being typed) isn't
+/// "Did you mean" items; the token `typing` (the word being typed) isn't
 /// corrected.
 fn did_you_mean(
     cx: &Cx<'_>,

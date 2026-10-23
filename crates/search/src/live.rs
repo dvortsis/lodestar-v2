@@ -209,6 +209,9 @@ impl LiveIndexer {
                         std::thread::sleep(config.poll);
                     }
                 }
+                // Stopping (a swap or shutdown): this index's titles no
+                // longer follow the store.
+                titles.unfollow();
                 if indexer.pending() > 0 {
                     commit(&mut indexer, &mut new_docs)?;
                 }

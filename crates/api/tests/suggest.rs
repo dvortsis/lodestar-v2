@@ -102,6 +102,7 @@ fn fixture() -> Fixture {
             reader: Arc::new(Mutex::new(reader)),
             filters: None,
             settings: None,
+            ops: None,
             adult: AdultVisibility::follow(move || *rx.borrow()),
         }),
     );
@@ -214,7 +215,7 @@ async fn each_kind_of_item() {
         &f,
         &c,
         "suggest_did_you_mean",
-        &format!("/api/v1/suggest?q={}", encode("dark knigth")),
+        &format!("/api/v1/suggest?q={}", encode("dark knigth ")),
     )
     .await;
     // The caret in the middle; ranges in characters.
