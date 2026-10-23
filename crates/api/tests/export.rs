@@ -4,11 +4,13 @@
 //! bounded, the reader lock and backpressure, throttle, cap, pause,
 //! resume, cancel, the lease, and the jobs' limits and errors.
 
+use std::future::Future;
 use std::future::poll_fn;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
 use std::time::{Duration, Instant};
 
 use axum::body::{Body, BodyDataStream, Bytes};
@@ -947,6 +949,73 @@ async fn reads_are_throttled() {
 }
 
 #[tokio::test]
+async fn concurrent_exports_share_one_rate() {
+    let ts: Vec<T> = (0..150).map(|i| t(&format!("Filler.{i:04}.mkv"))).collect();
+    let f = fixture(
+        &ts,
+        Opts {
+            config: ExportConfig {
+                chunk: 25,
+                rows_per_sec: 500,
+                ..ExportConfig::default()
+            },
+            ..Opts::default()
+        },
+    );
+    let c = session(&f).await;
+    let started = Instant::now();
+    let (a, b) = tokio::join!(
+        export(&f, &c, "/api/v1/export?format=magnets", None),
+        export(&f, &c, "/api/v1/export?format=magnets", None),
+    );
+    let took = started.elapsed();
+    assert_eq!(lines(&a.1).len() + lines(&b.1).len(), 300);
+    // 300 rows between them at 500 a second, not 500 each.
+    assert!(took >= Duration::from_millis(550), "{took:?}");
+}
+
+#[tokio::test]
+async fn a_request_dropped_during_setup_frees_its_slot() {
+    let ts: Vec<T> = (0..50).map(|i| t(&format!("Filler.{i:04}.mkv"))).collect();
+    let f = fixture(&ts, Opts::default());
+    let c = session(&f).await;
+    let collection = {
+        let mut store = f.store.lock().unwrap();
+        let id = store.create_collection("Picks", None, 1).unwrap();
+        store.add_to_collection(id, &f.ids, 1).unwrap();
+        id
+    };
+    // More than the running limit, each dropped while its setup (the
+    // query's search, or counting the collection) is still under way.
+    for i in 0..6 {
+        let uri = if i % 2 == 0 {
+            "/api/v1/export?q=filler".to_string()
+        } else {
+            format!("/api/v1/export?collection={collection}")
+        };
+        let mut fut = Box::pin(f.app.clone().oneshot(get(&uri, Some(&c))));
+        let status = poll_fn(|cx| {
+            Poll::Ready(match fut.as_mut().poll(cx) {
+                Poll::Ready(r) => Some(r.unwrap().status()),
+                Poll::Pending => None,
+            })
+        })
+        .await;
+        // Pending: dropped mid-setup. A leaked slot shows up as a 429.
+        assert_ne!(status, Some(StatusCode::TOO_MANY_REQUESTS), "request {i}");
+        drop(fut);
+    }
+    // No job is left running.
+    let (_, list) = json_of(&f.app, get("/api/v1/jobs", Some(&c))).await;
+    for j in list["jobs"].as_array().unwrap() {
+        assert!(!j["finished_at"].is_null(), "a dropped setup left {j}");
+    }
+    // And a new export still gets a slot.
+    let (_, body) = export(&f, &c, "/api/v1/export?format=magnets", None).await;
+    assert_eq!(lines(&body).len(), 50);
+}
+
+#[tokio::test]
 async fn the_cap_truncates_and_says_so() {
     let ts: Vec<T> = (0..20).map(|i| t(&format!("Filler.{i:04}.mkv"))).collect();
     let config = ExportConfig {
@@ -1515,7 +1584,11 @@ async fn overhead() {
     async fn searches(f: &Fixture, c: &str, queries: &[&str], rounds: usize) -> Vec<f64> {
         let mut took = Vec::new();
         for i in 0..rounds {
-            let q = queries[i % queries.len()];
+            // A word nothing has, negated, keeps the results but makes each
+            // query new, so the result cache (B5c) doesn't answer it.
+            static NONCE: AtomicU64 = AtomicU64::new(0);
+            let nonce = NONCE.fetch_add(1, Ordering::Relaxed);
+            let q = format!("{} -zq{nonce}", queries[i % queries.len()]);
             let started = Instant::now();
             let (status, _) = json_of(
                 &f.app,
@@ -1564,46 +1637,53 @@ async fn overhead() {
     let stop = Arc::new(AtomicBool::new(false));
     let active = Arc::new(AtomicBool::new(false));
     let rows = Arc::new(AtomicU64::new(0));
-    let exporter = {
-        let (app, c, stop, active, rows) = (
-            f.app.clone(),
-            c.clone(),
-            stop.clone(),
-            active.clone(),
-            rows.clone(),
-        );
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            rt.block_on(async move {
-                while !stop.load(Ordering::SeqCst) {
-                    let resp = app
-                        .clone()
-                        .oneshot(get("/api/v1/export?format=csv", Some(&c)))
-                        .await
-                        .unwrap();
-                    let mut body = resp.into_body().into_data_stream();
-                    loop {
-                        while !active.load(Ordering::SeqCst) && !stop.load(Ordering::SeqCst) {
-                            tokio::time::sleep(Duration::from_millis(5)).await;
-                        }
-                        if stop.load(Ordering::SeqCst) {
-                            break;
-                        }
-                        match poll_fn(|cx| Pin::new(&mut body).poll_next(cx)).await {
-                            Some(piece) => {
-                                let n = piece.unwrap().iter().filter(|&&b| b == b'\n').count();
-                                rows.fetch_add(n as u64, Ordering::Relaxed);
+    // `LODESTAR_EXPORTS` runs several at once (they share one rate).
+    let exports: usize = std::env::var("LODESTAR_EXPORTS")
+        .ok()
+        .and_then(|r| r.parse().ok())
+        .unwrap_or(1);
+    let exporters: Vec<_> = (0..exports)
+        .map(|_| {
+            let (app, c, stop, active, rows) = (
+                f.app.clone(),
+                c.clone(),
+                stop.clone(),
+                active.clone(),
+                rows.clone(),
+            );
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                rt.block_on(async move {
+                    while !stop.load(Ordering::SeqCst) {
+                        let resp = app
+                            .clone()
+                            .oneshot(get("/api/v1/export?format=csv", Some(&c)))
+                            .await
+                            .unwrap();
+                        let mut body = resp.into_body().into_data_stream();
+                        loop {
+                            while !active.load(Ordering::SeqCst) && !stop.load(Ordering::SeqCst) {
+                                tokio::time::sleep(Duration::from_millis(5)).await;
                             }
-                            None => break,
+                            if stop.load(Ordering::SeqCst) {
+                                break;
+                            }
+                            match poll_fn(|cx| Pin::new(&mut body).poll_next(cx)).await {
+                                Some(piece) => {
+                                    let n = piece.unwrap().iter().filter(|&&b| b == b'\n').count();
+                                    rows.fetch_add(n as u64, Ordering::Relaxed);
+                                }
+                                None => break,
+                            }
                         }
                     }
-                }
+                })
             })
         })
-    };
+        .collect();
 
     // Warm up, then alternate quiet and busy windows so drift (the store
     // grows as ingest runs) falls on both alike.
@@ -1630,13 +1710,15 @@ async fn overhead() {
         }
     }
     stop.store(true, Ordering::SeqCst);
-    exporter.join().unwrap();
+    for e in exporters {
+        e.join().unwrap();
+    }
     let pct = |a: f64, b: f64| (b - a) / a * 100.0;
     let (q50, b50) = (quantile(&mut quiet_ms, 0.5), quantile(&mut busy_ms, 0.5));
     let (q95, b95) = (quantile(&mut quiet_ms, 0.95), quantile(&mut busy_ms, 0.95));
     let (qi, bi) = (quiet_in.0 / quiet_in.1, busy_in.0 / busy_in.1);
     println!(
-        "torrents: {n}, throttle {rows_per_sec} rows/s, {windows} alternating windows",
+        "torrents: {n}, throttle {rows_per_sec} rows/s, {exports} export(s), {windows} alternating windows",
         n = ts.len()
     );
     println!(

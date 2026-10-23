@@ -88,7 +88,8 @@ pub const MAX_HASHES: usize = 10_000;
 pub struct ExportConfig {
     /// Ids per chunk: one read transaction under the reader lock each.
     pub chunk: usize,
-    /// Rows read per second, at most (0: unthrottled).
+    /// Rows read per second by every running export together, at most
+    /// (0: unthrottled); the jobs registry paces them as one.
     pub rows_per_sec: u32,
     /// Rows one export writes, at most.
     pub cap: u64,
@@ -110,7 +111,7 @@ pub struct ExportConfig {
 pub const CHUNK: usize = 256;
 /// Ids a query's lease is paged for at once: 128 KiB of ids.
 pub const ID_PAGE: usize = 16_384;
-/// Rows read per second.
+/// Rows read per second, by all running exports together.
 pub const ROWS_PER_SEC: u32 = 2_000;
 /// Rows per export.
 pub const CAP: u64 = 1_000_000;
@@ -338,13 +339,14 @@ async fn start(
     let adult = export_adult.shown();
     // The slot first, so a request past the limit costs no search.
     let job = jobs.start(BackgroundJobKind::Export)?;
-    let (source, total, approx) = match resolve(&s, p, hidden, adult, &config).await {
-        Ok(r) => r,
-        Err(e) => {
-            jobs.discard(job.id());
-            return Err(e);
-        }
+    // Until the worker owns it, a failed setup or a request dropped
+    // mid-setup (the client went away) discards the job, freeing its
+    // slot.
+    let setup = Setup {
+        jobs: jobs.clone(),
+        id: Some(job.id()),
     };
+    let (source, total, approx) = resolve(&s, p, hidden, adult, &config).await?;
     job.set_total(total.min(config.cap), approx);
     job.set_export(ExportJob {
         cap: config.cap,
@@ -356,6 +358,7 @@ async fn start(
     let id = job.id();
     let worker = Worker {
         job,
+        jobs: jobs.clone(),
         reader: s.reader.clone(),
         adult: export_adult,
         started_adult: adult,
@@ -366,7 +369,29 @@ async fn start(
         complete: complete.clone(),
     };
     tokio::spawn(worker.run(source));
+    setup.disarm();
     respond(shape.format, id, rx, complete)
+}
+
+/// Discards a job whose setup didn't reach its worker.
+struct Setup {
+    jobs: Arc<Jobs>,
+    id: Option<u64>,
+}
+
+impl Setup {
+    /// The worker owns the job now (its `Finisher` ends it).
+    fn disarm(mut self) {
+        self.id = None;
+    }
+}
+
+impl Drop for Setup {
+    fn drop(&mut self) {
+        if let Some(id) = self.id {
+            self.jobs.discard(id);
+        }
+    }
 }
 
 /// The export's source, its row count and whether that's an estimate.
@@ -541,6 +566,7 @@ enum End {
 
 struct Worker {
     job: Arc<Job>,
+    jobs: Arc<Jobs>,
     reader: Arc<Mutex<Store>>,
     adult: AdultVisibility,
     started_adult: bool,
@@ -576,7 +602,6 @@ impl Worker {
 
     async fn export(&self, mut source: Source) -> Result<(), End> {
         let born = Instant::now();
-        let mut throttle = Throttle::new(self.config.rows_per_sec);
         let (mut rows, mut skipped) = (0u64, 0u64);
         if self.shape.format == ExportFormat::Csv {
             self.send(csv_header(&self.shape.fields)).await?;
@@ -632,7 +657,11 @@ impl Worker {
                 self.send(chunk.bytes).await?;
             }
             self.job.add(chunk.rows, chunk.skipped);
-            throttle.wait(chunk.rows + chunk.skipped).await;
+            // One budget for every running export (§1.6.4).
+            self.jobs
+                .pacer()
+                .wait(chunk.rows + chunk.skipped, self.config.rows_per_sec)
+                .await;
         }
         if self.shape.format == ExportFormat::Json {
             let trailer = serde_json::json!({
@@ -667,39 +696,6 @@ impl Worker {
                 Ok(Ok(())) => Ok(()),
             },
         }
-    }
-}
-
-/// Paces reads to `rows_per_sec`, without bursting after a pause or a
-/// slow client.
-struct Throttle {
-    per_row: Duration,
-    next: tokio::time::Instant,
-}
-
-impl Throttle {
-    fn new(rows_per_sec: u32) -> Throttle {
-        Throttle {
-            per_row: match rows_per_sec {
-                0 => Duration::ZERO,
-                r => Duration::from_secs(1) / r,
-            },
-            next: tokio::time::Instant::now(),
-        }
-    }
-
-    async fn wait(&mut self, rows: u64) {
-        if self.per_row.is_zero() {
-            return;
-        }
-        let now = tokio::time::Instant::now();
-        // Behind by more than a second (paused, or a slow client): start
-        // pacing again from now rather than catching up in a burst.
-        if now.saturating_duration_since(self.next) > Duration::from_secs(1) {
-            self.next = now;
-        }
-        self.next += self.per_row * u32::try_from(rows).unwrap_or(u32::MAX);
-        tokio::time::sleep_until(self.next).await;
     }
 }
 
@@ -1050,26 +1046,5 @@ mod tests {
                 .code(),
             "fields_unused"
         );
-    }
-
-    #[tokio::test]
-    async fn the_throttle_paces_rows_without_bursting() {
-        let mut t = Throttle::new(1000);
-        let start = Instant::now();
-        for _ in 0..10 {
-            t.wait(20).await;
-        }
-        let took = start.elapsed();
-        assert!(took >= Duration::from_millis(195), "{took:?}");
-        assert!(took < Duration::from_secs(2), "{took:?}");
-        // After a long stall it paces from now, not from where it was.
-        tokio::time::sleep(Duration::from_millis(1100)).await;
-        let resumed = Instant::now();
-        t.wait(100).await;
-        assert!(resumed.elapsed() >= Duration::from_millis(95));
-        let mut free = Throttle::new(0);
-        let start = Instant::now();
-        free.wait(1_000_000).await;
-        assert!(start.elapsed() < Duration::from_millis(50));
     }
 }
