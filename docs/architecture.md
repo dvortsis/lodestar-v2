@@ -1473,28 +1473,30 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
 - **Verification. Nothing runs that isn't signed:**
   - The **manifest** is signed with the current release key (Ed25519, minisign format).
     - It names its **channel** inside the signed body, and a manifest for a different channel than the one chosen is refused.
-    - **Every manifest published after a key rotation carries the key statements** that chain its key back to the recovery key, the weekly re-signs included. A client that was offline across the rotation can still verify.
+    - **Every manifest published after a key rotation carries the key statements** that chain its key back to the recovery key, and every freshness statement after a freshness-key rotation carries them too. A client that was offline across the rotation can still verify.
   - Each **artifact** (binary, MSI) is pinned in the manifest by SHA-256 and size, and checked after download. Windows artifacts are also Authenticode-signed (M6), and that signature is checked too.
   - **Built-in keys** (`packaging/keys/`, embedded at build; roles per `owner-decisions.md` §2.21):
-    - the **release key** (`02910813433E81E0`), the first key generation, signs stable manifests;
+    - the **release key** (`02910813433E81E0`), the first key generation, signs stable and beta manifests (both built from `v*` tags);
     - the **nightly key** signs nightly manifests and is trusted only on the Nightly channel;
     - the **freshness key** signs only freshness statements (channel, manifest hash, timestamp, expiry) for manifests already signed by the release or nightly key, never new content;
     - the release, nightly and freshness keys are all changed the same way, by a recovery-signed key statement;
     - the **recovery key** (`67922DDF005FD310`) is kept offline by the owner and signs nothing but key changes.
   - **Key changes need the recovery key:**
-    - A key-change statement names the new release key and carries a **sequence number** one higher than the last one published.
-    - It's accepted only with a valid **recovery-key signature**. The current release key may co-sign, but its signature alone is never enough.
-    - Accepting a statement **revokes the previous release key** for new installs.
+    - A key-change statement names the **role** (release, nightly or freshness) and the new key, and carries a **sequence number** one higher than the last one published (one sequence for all roles).
+    - It's accepted only with a valid **recovery-key signature**. The current key of that role may co-sign, but its signature alone is never enough.
+    - Accepting a statement **revokes the previous key of that role only**, for new installs.
     - A statement whose sequence number isn't higher than the last one accepted is refused.
-    - So a leaked release key can sign manifests until the owner rotates it, but it can never rotate to an attacker's key, and the rotation shuts it out.
+    - So a leaked key can do its role's job until the owner rotates it, but it can never rotate to an attacker's key, and the rotation shuts it out.
   - **The recovery key itself is an accepted risk.** It's offline and password-protected, and there's no protocol to rotate it.
     - If it's ever lost or compromised, the remedy is a new build with a new embedded key, which users install **by hand** once.
     - No rotation statement is designed (`owner-decisions.md` §2.21).
-  - **Time limits on manifests:**
+  - **Time limits on manifests and freshness statements:**
     - Versions only go up.
-    - A manifest whose timestamp is more than **1 day ahead** of the local clock is refused.
-    - A manifest's expiry may be at most **30 days** after its timestamp. Expired manifests are refused for new installs.
-    - The **high-water mark** (the newest manifest timestamp accepted) belongs to the current key generation, and older manifests are refused. Accepting a key statement resets the mark to the statement's date. A leaked key that signs a manifest dated 2099 is therefore refused as being in the future; and anything it got accepted before the rotation stops counting once the rotation lands.
+    - A manifest and a freshness statement each get the same checks: refused if dated more than **1 day ahead** of the local clock, and an expiry at most **30 days** after its own timestamp.
+    - A manifest is **current** while it, or its newest accepted freshness statement, hasn't expired. A manifest that isn't current is refused for new installs.
+    - A **freshness statement** is accepted only if the current freshness key signed it, its channel and manifest hash match the manifest, and the manifest itself verifies under a non-revoked key allowed on that channel. It extends expiry only.
+    - The **high-water mark** stays on the manifest's own signed timestamp (per channel), and older manifests are refused. A freshness statement for a manifest older than the mark is refused, so the freshness key can freeze updates but never roll them back.
+    - A release or nightly key rotation resets the high-water mark of the channels that key signs to the statement's date; a freshness-key rotation resets only the freshness mark. A leaked key that signs a manifest dated 2099 is therefore refused as being in the future; and anything it got accepted before the rotation stops counting once the rotation lands.
     - **If the local clock looks wrong in either direction,** the Updates screen says so instead of failing silently. That's when genuine manifests keep arriving from more than a day in the future, or when the clock is past the newest manifest's expiry while checks still succeed.
   - **Trust state lives outside the store.** `<data>/bin/trust.json` holds:
     - the accepted key statements (in full, with their signatures);
@@ -2830,7 +2832,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Manifest hygiene:**
   - the manifest signs its channel;
   - the highest accepted timestamp is stored, so an older signed manifest is refused;
-  - manifests are re-signed weekly before their 30-day expiry;
+  - a freshness statement is issued weekly for each channel's current manifest, before its 30-day expiry;
   - the check sends a fixed User-Agent with no version.
 - **One update check.** About uses the signed manifest; B2c no longer calls GitHub's releases API.
 - **Rollback is run by a supervisor:**
