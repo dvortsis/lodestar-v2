@@ -28,8 +28,18 @@ export const ROUTES: RouteCase[] = [
 	{ name: 'insights', path: '/insights' },
 	{ name: 'insights-stage', path: '/insights/harvest' },
 	{ name: 'compare', path: '/compare?h=aaaa,bbbb' },
-	{ name: 'login', path: '/login' },
-	{ name: 'setup', path: '/setup' },
+	{
+		name: 'login',
+		path: '/login',
+		heading: 'Sign in',
+		mock: (m) => m.on('getAuthStatus', { logged_in: false, setup_required: false })
+	},
+	{
+		name: 'setup',
+		path: '/setup',
+		heading: 'Set up Lodestar',
+		mock: (m) => m.on('getAuthStatus', { logged_in: false, setup_required: true })
+	},
 	{ name: 'welcome', path: '/welcome', key: true },
 	{ name: 'settings', path: '/settings/general', key: true },
 	{ name: 'torrent', path: `/t/${'0123456789abcdef'.repeat(2).padEnd(40, '0')}`, key: true }
