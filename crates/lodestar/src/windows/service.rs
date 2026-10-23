@@ -76,10 +76,10 @@ pub use scm::run_if_launched;
 mod scm {
     use std::ffi::OsString;
     use std::io::IsTerminal;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::process::ExitCode;
-    use std::sync::OnceLock;
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use std::sync::{Mutex, OnceLock};
     use std::time::Duration;
 
     use tokio::sync::watch;
@@ -151,9 +151,12 @@ mod scm {
         let (stop_tx, stop_rx) = watch::channel(false);
         let handler = move |control| match control {
             ServiceControl::Stop | ServiceControl::Shutdown | ServiceControl::Preshutdown => {
-                // Acknowledged at once, even while the store is opening.
+                // Acknowledged at once, even while the store is opening,
+                // and kept ticking from a thread of its own, which a long
+                // blocking open can't starve.
                 if let Some(status) = STATUS.get() {
                     stop_pending(*status);
+                    tick_while_stopping(*status);
                 }
                 let _ = stop_tx.send(true);
                 ServiceControlHandlerResult::NoError
@@ -175,30 +178,33 @@ mod scm {
                 | ServiceControlAccept::PRESHUTDOWN,
             0,
         );
-        let default_dir = super::default_data_dir(std::env::var("ProgramData").ok());
-        // Before anything in it is read or written. A refusal can't be
-        // logged in the folder; the exit code (3) says it was refused. The
-        // folder's ACL names the service's own SID; without it, the check
-        // refuses the folder.
+        // The folder's ACL names the service's own SID; without it, the
+        // check refuses the folder.
         let own = acl::service_sid(name).ok();
-        let own = own.as_deref();
-        let secured = acl::secure_dir(
-            &default_dir,
-            |d, l| acl::icacls(d, l, own),
-            acl::saved_sddl,
-            own,
-        );
-        let code = if secured.is_err() {
-            REFUSED
-        } else {
-            match serve(&default_dir, status, stop_rx) {
-                Ok(()) => {
-                    tracing::info!("service: stopped");
-                    0
-                }
-                Err(e) => {
-                    tracing::error!("service: stopped on an error: {e}");
-                    1
+        let code = match load(own.as_deref()) {
+            // Refused before anything was read or written in the default
+            // folder, so there's nowhere safe to log it: the exit code (3)
+            // says so.
+            None => REFUSED,
+            Some((config, data_dir)) => {
+                let _ = std::env::set_current_dir(&data_dir);
+                init_logging(
+                    &data_dir,
+                    config.as_ref().map_or("info", |c| c.log.as_str()),
+                );
+                tracing::info!("service: starting (data in {})", data_dir.display());
+                match config
+                    .map_err(BoxError::from)
+                    .and_then(|c| serve(&c, stop_rx))
+                {
+                    Ok(()) => {
+                        tracing::info!("service: stopped");
+                        0
+                    }
+                    Err(e) => {
+                        tracing::error!("service: stopped on an error: {e}");
+                        1
+                    }
                 }
             }
         };
@@ -211,64 +217,111 @@ mod scm {
         code
     }
 
-    fn report(
-        status: ServiceStatusHandle,
-        state: ServiceState,
-        accept: ServiceControlAccept,
-        code: u32,
-    ) {
-        let _ = status.set_service_status(ServiceStatus {
-            service_type: ServiceType::OWN_PROCESS,
-            current_state: state,
-            controls_accepted: accept,
-            exit_code: if code == 0 {
-                ServiceExitCode::NO_ERROR
-            } else {
-                ServiceExitCode::ServiceSpecific(code)
-            },
-            checkpoint: 0,
-            wait_hint: Duration::ZERO,
-            process_id: None,
-        });
-    }
-
-    /// Reports StopPending with the next checkpoint.
-    fn stop_pending(status: ServiceStatusHandle) {
-        let _ = status.set_service_status(ServiceStatus {
-            service_type: ServiceType::OWN_PROCESS,
-            current_state: ServiceState::StopPending,
-            controls_accepted: ServiceControlAccept::empty(),
-            exit_code: ServiceExitCode::NO_ERROR,
-            checkpoint: CHECKPOINT.fetch_add(1, Ordering::Relaxed),
-            wait_hint: STOP_WAIT_HINT,
-            process_id: None,
-        });
-    }
-
-    fn serve(
-        default_dir: &Path,
-        status: ServiceStatusHandle,
-        stop: watch::Receiver<bool>,
-    ) -> Result<(), BoxError> {
-        let default_dir = default_dir.to_path_buf();
-        let _ = std::env::set_current_dir(&default_dir);
+    /// The config and the data folder, with `%ProgramData%\Lodestar` made
+    /// private ([`acl`]) before anything in it is read, whenever it's used:
+    /// for the config file when neither `--config` nor `LODESTAR_DATA_DIR`
+    /// points elsewhere, and for the data when the config doesn't. `None`
+    /// when it's used and isn't private.
+    fn load(own: Option<&str>) -> Option<(Result<Config, String>, PathBuf)> {
+        let default_dir = super::default_data_dir(std::env::var("ProgramData").ok());
+        let secure = || acl::secure_dir(&default_dir, own, &acl::Windows { own_sid: own }).ok();
         let env = |k: &str| std::env::var(k).ok();
-        let path = CONFIG_PATH.get().cloned().flatten();
-        let path = super::config_path(path, &default_dir, env);
+        let explicit = CONFIG_PATH.get().cloned().flatten();
+        let elsewhere = explicit.is_some() || env("LODESTAR_DATA_DIR").is_some();
+        if !elsewhere {
+            secure()?;
+        }
+        let path = super::config_path(explicit, &default_dir, env);
         let config = Config::load(path.as_deref(), env)
             .map(|mut c| {
                 super::default_data_dir_unless_set(&mut c, &default_dir);
                 c
             })
             .map_err(|e| format!("config: {e}"));
-        let data_dir = config.as_ref().map_or(default_dir, |c| c.data_dir.clone());
-        init_logging(
-            &data_dir,
-            config.as_ref().map_or("info", |c| c.log.as_str()),
+        // A config that failed to load logs to the default folder.
+        let data_dir = config
+            .as_ref()
+            .map_or(default_dir.clone(), |c| c.data_dir.clone());
+        if elsewhere && data_dir == default_dir {
+            secure()?;
+        }
+        Some((config, data_dir))
+    }
+
+    /// Serialises status reports, so a progress tick never follows
+    /// Stopped; `true` once Stopped is reported.
+    static REPORTS: Mutex<bool> = Mutex::new(false);
+    static TICKING: AtomicBool = AtomicBool::new(false);
+
+    fn set_status(status: ServiceStatusHandle, next: ServiceStatus) {
+        let mut stopped = REPORTS.lock().unwrap_or_else(|e| e.into_inner());
+        if *stopped {
+            return;
+        }
+        *stopped = next.current_state == ServiceState::Stopped;
+        let _ = status.set_service_status(next);
+    }
+
+    fn report(
+        status: ServiceStatusHandle,
+        state: ServiceState,
+        accept: ServiceControlAccept,
+        code: u32,
+    ) {
+        set_status(
+            status,
+            ServiceStatus {
+                service_type: ServiceType::OWN_PROCESS,
+                current_state: state,
+                controls_accepted: accept,
+                exit_code: if code == 0 {
+                    ServiceExitCode::NO_ERROR
+                } else {
+                    ServiceExitCode::ServiceSpecific(code)
+                },
+                checkpoint: 0,
+                wait_hint: Duration::ZERO,
+                process_id: None,
+            },
         );
-        tracing::info!("service: starting (data in {})", data_dir.display());
-        let config = config?;
-        super::super::startup(&config);
+    }
+
+    /// Reports StopPending with the next checkpoint.
+    fn stop_pending(status: ServiceStatusHandle) {
+        set_status(
+            status,
+            ServiceStatus {
+                service_type: ServiceType::OWN_PROCESS,
+                current_state: ServiceState::StopPending,
+                controls_accepted: ServiceControlAccept::empty(),
+                exit_code: ServiceExitCode::NO_ERROR,
+                checkpoint: CHECKPOINT.fetch_add(1, Ordering::Relaxed),
+                wait_hint: STOP_WAIT_HINT,
+                process_id: None,
+            },
+        );
+    }
+
+    /// Reports progress every [`STOP_TICK`] until Stopped (once per process).
+    fn tick_while_stopping(status: ServiceStatusHandle) {
+        if TICKING.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let _ = std::thread::Builder::new()
+            .name("service-stopping".into())
+            .spawn(move || {
+                loop {
+                    std::thread::sleep(STOP_TICK);
+                    if *REPORTS.lock().unwrap_or_else(|e| e.into_inner()) {
+                        return;
+                    }
+                    stop_pending(status);
+                }
+            });
+    }
+
+    fn serve(config: &Config, stop: watch::Receiver<bool>) -> Result<(), BoxError> {
+        super::super::startup(config);
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()?;
@@ -278,19 +331,16 @@ mod scm {
             // blocking work finishes as the runtime drops, and SQLite
             // needs nothing more.
             let services = tokio::select! {
-                s = Services::start(&config) => s?,
-                () = stopped(&mut early, status) => return Ok(()),
+                s = Services::start(config) => s?,
+                () = stopped(&mut early) => return Ok(()),
             };
             let mut stop = stop;
-            services
-                .run(async move { stopped(&mut stop, status).await })
-                .await
+            services.run(async move { stopped(&mut stop).await }).await
         })
     }
 
-    /// Resolves once a stop is requested, then keeps reporting progress
-    /// to the SCM until the runtime ends.
-    async fn stopped(stop: &mut watch::Receiver<bool>, status: ServiceStatusHandle) {
+    /// Resolves once a stop is requested.
+    async fn stopped(stop: &mut watch::Receiver<bool>) {
         while !*stop.borrow_and_update() {
             if stop.changed().await.is_err() {
                 // The handler is gone; nothing can stop us later.
@@ -298,12 +348,6 @@ mod scm {
             }
         }
         tracing::info!("service: stopping");
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(STOP_TICK).await;
-                stop_pending(status);
-            }
-        });
     }
 
     /// The service's subscriber: the log file, no console.
