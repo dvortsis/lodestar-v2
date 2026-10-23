@@ -347,9 +347,53 @@ pub struct Jobs {
     next: AtomicU64,
     jobs: Mutex<HashMap<u64, Arc<Job>>>,
     closed: AtomicBool,
+    pacer: Pacer,
+}
+
+/// One read budget shared by every running job, so running several at
+/// once reads no faster than one (§1.6.4). Each job books the items it
+/// just read on one timeline and waits for its slot, so concurrent jobs
+/// share the rate in turn.
+#[derive(Debug)]
+pub(crate) struct Pacer {
+    next: Mutex<tokio::time::Instant>,
+}
+
+impl Default for Pacer {
+    fn default() -> Self {
+        Pacer {
+            next: Mutex::new(tokio::time::Instant::now()),
+        }
+    }
+}
+
+impl Pacer {
+    /// Books `items` at `per_sec` (0: unpaced) and waits for the time
+    /// they're due. Behind by more than a second (everything paused, or
+    /// slow clients), it paces from now rather than bursting to catch up.
+    pub(crate) async fn wait(&self, items: u64, per_sec: u32) {
+        if per_sec == 0 {
+            return;
+        }
+        let per_item = Duration::from_secs(1) / per_sec;
+        let due = {
+            let mut next = lock(&self.next);
+            let now = tokio::time::Instant::now();
+            if now.saturating_duration_since(*next) > Duration::from_secs(1) {
+                *next = now;
+            }
+            *next += per_item * u32::try_from(items).unwrap_or(u32::MAX);
+            *next
+        };
+        tokio::time::sleep_until(due).await;
+    }
 }
 
 impl Jobs {
+    pub(crate) fn pacer(&self) -> &Pacer {
+        &self.pacer
+    }
+
     /// The map, with the finished jobs past [`KEEP`] swept out.
     fn jobs(&self) -> MutexGuard<'_, HashMap<u64, Arc<Job>>> {
         let mut jobs = lock(&self.jobs);
@@ -703,6 +747,39 @@ mod tests {
             (err.status(), err.code()),
             (StatusCode::SERVICE_UNAVAILABLE, "shutting_down")
         );
+    }
+
+    #[tokio::test]
+    async fn the_pacer_shares_one_rate_and_never_bursts() {
+        let jobs = Arc::new(Jobs::default());
+        let start = Instant::now();
+        // Two jobs, 200 items each, at 1,000 a second between them.
+        let tasks: Vec<_> = (0..2)
+            .map(|_| {
+                let jobs = jobs.clone();
+                tokio::spawn(async move {
+                    for _ in 0..10 {
+                        jobs.pacer().wait(20, 1000).await;
+                    }
+                })
+            })
+            .collect();
+        for t in tasks {
+            t.await.unwrap();
+        }
+        let took = start.elapsed();
+        assert!(took >= Duration::from_millis(390), "{took:?}");
+        assert!(took < Duration::from_secs(3), "{took:?}");
+        // After a long idle stretch it paces from now, not from where it was.
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        let resumed = Instant::now();
+        jobs.pacer().wait(100, 1000).await;
+        let took = resumed.elapsed();
+        assert!(took >= Duration::from_millis(95), "{took:?}");
+        assert!(took < Duration::from_millis(600), "{took:?}");
+        let free = Instant::now();
+        jobs.pacer().wait(1_000_000, 0).await;
+        assert!(free.elapsed() < Duration::from_millis(50));
     }
 
     #[test]
