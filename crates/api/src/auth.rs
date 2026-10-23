@@ -26,6 +26,7 @@ mod limit;
 pub mod proxy;
 
 pub use guard::{Access, feed_token, key_or_session};
+pub(crate) use http::logged_in;
 pub(crate) use http::{ApiDoc, SessionAuth, auth_error};
 pub use http::{mount, protected, require_session, routes};
 pub use proxy::{PROXY_AUTH_ENV, ProxyConfig, ProxyError};
