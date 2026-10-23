@@ -1041,7 +1041,8 @@
   },
   "owner_questions": "Owner 2026-10-22 17:15: never stop monitoring/driving sessions to wait for an owner answer. Ask in the chat reply (and a push notification if the owner may be away), not with a blocking prompt; keep working on everything else meanwhile.",
   "filter_budget_owner_auth": "2026-10-22 22:20 owner authorised changing the filter budget gate",
-  "owner_2026_10_22_rules": "Owner in runner session 22:2x: 'Yes, I agree to 1 and 2'. (1) a check also red on main, or a known flake with a fix PR open, in code the PR doesn't touch, doesn't block merge; comment on PR. (2) runner decides refinements of owner decisions that don't reverse/loosen them, weaken security/content-safety, or change owner numbers; record in docs/decisions and flag to owner. Repo doc update (diff in scratchpad/owner-rules.diff) was denied by the permission classifier; owner to commit or allow."
+  "owner_2026_10_22_rules": "Owner in runner session 22:2x: 'Yes, I agree to 1 and 2'. (1) a check also red on main, or a known flake with a fix PR open, in code the PR doesn't touch, doesn't block merge; comment on PR. (2) runner decides refinements of owner decisions that don't reverse/loosen them, weaken security/content-safety, or change owner numbers; record in docs/decisions and flag to owner. Repo doc update (diff in scratchpad/owner-rules.diff) was denied by the permission classifier; owner to commit or allow.",
+  "merge_freeze_for_48": "Hold merges touching crates/api, crates/search, crates/lodestar until #48 lands (from when #48's next head is pushed)."
  },
  "watched_sessions": {
   "session_015F9H2aHowz7TJLffFYxUvf": {
@@ -1116,7 +1117,7 @@
   "33": "merged 05:51 by filter session (owner decisions follow-up requested)",
   "42": "MERGED 06:07 by the filter session despite the runner's request; packs on by default (contradicts owner \u00a72.8) and LODESTAR_BUDGET_US kept. Follow-up fix PR requested 06:14; owner told.",
   "47": "merged 06:19 by the filter session (V8 class_corrections)",
-  "48": "review round 1: merge main (B0 layout), 10M exit evidence, scheduler fixes",
+  "48": "00:36 owner asked to speed M4. Head 2960a2b green exc filter budget; session re-merging main (B13). Plan: on next head, 2 parallel reviewers (scrape/scheduler; search/hot/API); MERGE FREEZE on other crates/api|search|lodestar PRs until #48 lands.",
   "52": "MERGED by the filter session (self-merge again), conflicts with B0"
  },
  "heartbeats": 4,
