@@ -48,7 +48,7 @@
 	</p>
 {:else}
 	<ul class="ins-list" data-testid="insights-exceptions">
-		{#each rows as e, i (e.kind + i)}
+		{#each rows as e (e.kind + e.since)}
 			{@const href = fixHref(e.fix)}
 			<li class="ins-item" data-testid="insights-exception-{e.kind}" data-severity={e.severity}>
 				<div class="ins-item-main">
