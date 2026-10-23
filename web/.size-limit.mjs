@@ -2,6 +2,7 @@
 // Route budgets come from the SvelteKit build manifest (scripts/size-entries.mjs), so later
 // route chunks never count against the search route.
 import { existsSync, readFileSync } from 'node:fs';
+import { checkFirstLoad } from './scripts/first-load.mjs';
 import { routeFiles } from './scripts/size-entries.mjs';
 
 const search = routeFiles('/search');
@@ -33,6 +34,14 @@ const leaks = firstLoad.flatMap((file) =>
 if (leaks.length) {
 	throw new Error(`Brand rasters in the first-load set (§10.17):\n  ${leaks.join('\n  ')}`);
 }
+
+// §10.1: the search route's first load holds only modules it reaches itself (no other route's code,
+// no Svelte runtime only another route uses). scripts/first-load.mjs explains the rules.
+const strays = checkFirstLoad('/search', search.js);
+if (strays.length)
+	throw new Error(
+		`The search route's first load carries code it doesn't use:\n  ${strays.join('\n  ')}`
+	);
 
 const entry = (name, path, limit) => ({ name, path, limit, gzip: true, running: false });
 
