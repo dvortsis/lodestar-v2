@@ -307,7 +307,10 @@ async fn every_route_needs_a_session() {
         assert_eq!(status, 401, "{method} {path}: {body}");
         // Session only: an API key or a proxy header alone isn't one.
         for (name, value) in [
-            ("x-api-key", "lsk_AAAAAAAA_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+            (
+                "x-api-key",
+                "lsk_AAAAAAAA_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            ),
             ("remote-user", "admin"),
         ] {
             let mut r = req(method, path, None, true);
