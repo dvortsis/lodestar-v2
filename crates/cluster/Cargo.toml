@@ -1,6 +1,6 @@
 [package]
 name = "lodestar-cluster"
-description = "Coordinator and worker boundary: in-flight leases with fencing tokens (remote workers build on it)"
+description = "Coordinator and worker boundary: in-flight leases with fencing tokens, the cluster CA, mTLS and join tokens"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,8 +9,17 @@ publish.workspace = true
 repository.workspace = true
 
 [dependencies]
+lodestar-integrations = { path = "../integrations" }
 lodestar-metainfo.workspace = true
 lodestar-store.workspace = true
+# All four are already in the lockfile (rustls and its ring provider, as
+# the integrations and binary crates use them), so the cluster PKI adds no
+# new package: certificates are written by the small DER encoder in x509.rs
+# instead of pulling in rcgen.
+ring = "=0.17.14"
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std"] }
+subtle = "=2.6.1"
+zeroize = "=1.9.1"
 
 [lints]
 workspace = true

@@ -725,3 +725,46 @@ fn matching_ids_share_one_limit_across_segments() {
     let (exact, over) = index.matching_ids(&q, 6).unwrap();
     assert_eq!((exact.len(), over), (6, false));
 }
+
+/// B4b: the Adult count `catch_up_counted` reports for the "N new"
+/// banner is exactly what `type:adult` finds, and re-indexing (a later
+/// enrichment) adds to neither count.
+#[test]
+fn the_adult_count_matches_what_type_adult_finds() {
+    let adult = |n: &str| torrent(&format!("{n}.XXX.1080p"), &["scene.mp4"]);
+    let other = |n: &str| torrent(&format!("{n}.2019.1080p"), &["movie.mkv"]);
+    let mut store = store_with(&[
+        other("Big.Movie"),
+        adult("Studio.Scene"),
+        other("Other.Movie"),
+        adult("Another.Clip"),
+        other("Third.Movie"),
+    ]);
+    let (_, n) = lodestar_pipeline::enrich::enrich_stored(&mut store, 0, 100)
+        .unwrap()
+        .unwrap();
+    assert_eq!(n, 5);
+    let index = SearchIndex::in_memory().unwrap();
+    let mut w = index.writer(15 << 20).unwrap();
+    let (added, adult_added, _) = w.catch_up_counted(&mut store, 100).unwrap();
+    w.commit().unwrap();
+    assert_eq!((added, adult_added), (5, 2));
+    assert_eq!(names(&index, "type:adult").len(), adult_added);
+    assert_eq!(names(&index, "-type:adult").len(), added - adult_added);
+
+    // Not enriched yet: not Adult in the index either, so not counted.
+    add(&mut store, &[adult("Fresh.Clip"), other("Fresh.Movie")]);
+    let (added, adult_added, _) = w.catch_up_counted(&mut store, 100).unwrap();
+    w.commit().unwrap();
+    assert_eq!((added, adult_added), (2, 0));
+    assert_eq!(names(&index, "type:adult").len(), 2);
+    // Enriched later: re-indexed, so neither count moves, though search
+    // now finds it as Adult.
+    lodestar_pipeline::enrich::enrich_stored(&mut store, 5, 100)
+        .unwrap()
+        .unwrap();
+    let (added, adult_added, replayed) = w.catch_up_counted(&mut store, 100).unwrap();
+    w.commit().unwrap();
+    assert_eq!((added, adult_added, replayed), (0, 0, 2));
+    assert_eq!(names(&index, "type:adult").len(), 3);
+}
