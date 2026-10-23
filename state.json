@@ -1160,11 +1160,12 @@
       "notes": "2026-10-23T18:56:17Z owner-requested docs+settings PR; runner reviewed MERGE; waiting CI | 2026-10-23T19:00:53Z merged #145 as 8ad1971; runner re-read rules; landing_lane/catch_ups added"
     },
     "X-sleeps": {
-      "status": "running",
+      "status": "in_review",
       "model": "sonnet",
       "deps": [],
-      "notes": "2026-10-23T19:00:53Z queued (owner via #145 follow-ups): replace fixed sleeps that assume work finished with condition polls (deadline >=10 s, failure says what it saw) in 92 Rust sleeps across 32 test files (crates/**/tests*, tests.rs) and 5 web e2e waitForTimeout; leave writer-pacing sleeps; owns only touched test files; split by crate past ~1,500 lines. Launch when owner lifts launch freeze. | 2026-10-23T19:05:20Z launched (sonnet, auto mode)",
-      "session": "session_01EFQKtWTWkBGHK299HzziBZ"
+      "notes": "2026-10-23T19:00:53Z queued (owner via #145 follow-ups): replace fixed sleeps that assume work finished with condition polls (deadline >=10 s, failure says what it saw) in 92 Rust sleeps across 32 test files (crates/**/tests*, tests.rs) and 5 web e2e waitForTimeout; leave writer-pacing sleeps; owns only touched test files; split by crate past ~1,500 lines. Launch when owner lifts launch freeze. | 2026-10-23T19:05:20Z launched (sonnet, auto mode) | 2026-10-23T20:48Z #147 part 1 (bba6e5b) fresh review running; next parts as separate PRs after merge",
+      "session": "session_01EFQKtWTWkBGHK299HzziBZ",
+      "pr": 147
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
