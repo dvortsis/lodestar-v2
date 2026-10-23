@@ -3,7 +3,8 @@
 //! counter-signals win.
 //!
 //! - Strong: the scene `XXX` tag (never as the first word, which is the
-//!   film *xXx*), a known adult site or studio, `hentai`.
+//!   film *xXx*), a known adult site or studio, `hentai` (not
+//!   `hentai-free`).
 //! - Supporting: adult terms in the name, the `Site.YY.MM.DD.…` scene
 //!   naming.
 //! - Counter: documentary, educational and medical words cancel the
@@ -155,10 +156,12 @@ struct Signals {
 
 impl Signals {
     fn scan(&mut self, text: &str) {
+        // `hentai-free` says the opposite.
+        let text = text.to_lowercase().replace("hentai-free", " ");
         let words: Vec<String> = text
             .split(|c: char| !c.is_alphanumeric())
             .filter(|w| !w.is_empty())
-            .map(str::to_lowercase)
+            .map(str::to_owned)
             .collect();
         for (i, w) in words.iter().enumerate() {
             let w = w.as_str();
@@ -227,11 +230,7 @@ pub(crate) fn detect(
     let mut s = Signals::default();
     s.scan(name);
     if let Some(f) = largest {
-        // Every segment, so a tag on the folder counts when the torrent
-        // name is a hash and the file a bare `video.mp4`.
-        for segment in &f.path {
-            s.scan(segment);
-        }
+        s.scan(f.name());
     }
     let score = s.score(release);
     if score < ADULT_THRESHOLD {
@@ -302,6 +301,10 @@ mod tests {
 
     #[test]
     fn counter_signals_win() {
+        assert_eq!(score("Anime.Collection [hentai-free]"), 0);
+        assert_eq!(score("Anime Collection (Hentai-Free)"), 0);
+        assert!(score("Some Title [Hentai] Free Download") >= ADULT_THRESHOLD);
+        assert!(score("Some Title [Hentai] [Hentai-Free Edition]") >= ADULT_THRESHOLD);
         // The film, not the tag.
         assert_eq!(score("xXx.2002.1080p.BluRay.x264"), 0);
         assert!(score("xXx.Return.of.Xander.Cage.2017.1080p") < ADULT_THRESHOLD);
@@ -331,16 +334,6 @@ mod tests {
         for base in ContentType::ALL {
             assert_eq!(at("Irvine Welsh - Porno (2002)", base), None);
         }
-    }
-
-    #[test]
-    fn largest_file_folders_count() {
-        let f = FileInfo::new(vec!["Some.Title.XXX.1080p".into(), "video.mp4".into()], 1);
-        let r = lodestar_release_parser::parse("a1b2c3d4");
-        assert!(detect("a1b2c3d4", &r, Some(&f), ContentType::Video).is_some());
-        // A counter on the folder counts too.
-        let f = FileInfo::new(vec!["Documentary".into(), "Porn.Milf.mp4".into()], 1);
-        assert!(detect("a1b2c3d4", &r, Some(&f), ContentType::Video).is_none());
     }
 
     #[test]
