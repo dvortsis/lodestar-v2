@@ -1,0 +1,368 @@
+{
+ "packages": [
+  {
+   "name": "autocfg",
+   "version": "1.5.1",
+   "id": "registry+https://github.com/rust-lang/crates.io-index#autocfg@1.5.1",
+   "license": "Apache-2.0 OR MIT",
+   "license_file": null,
+   "repository": "https://github.com/cuviper/autocfg",
+   "manifest_path": "/nonexistent/registry/autocfg-1.5.1/Cargo.toml",
+   "source": "registry+https://github.com/rust-lang/crates.io-index",
+   "targets": [
+    {
+     "kind": [
+      "lib"
+     ],
+     "name": "autocfg"
+    },
+    {
+     "kind": [
+      "example"
+     ],
+     "name": "integers"
+    },
+    {
+     "kind": [
+      "example"
+     ],
+     "name": "nightly"
+    },
+    {
+     "kind": [
+      "example"
+     ],
+     "name": "paths"
+    },
+    {
+     "kind": [
+      "example"
+     ],
+     "name": "traits"
+    },
+    {
+     "kind": [
+      "example"
+     ],
+     "name": "versions"
+    },
+    {
+     "kind": [
+      "test"
+     ],
+     "name": "no_std"
+    },
+    {
+     "kind": [
+      "test"
+     ],
+     "name": "rustflags"
+    },
+    {
+     "kind": [
+      "test"
+     ],
+     "name": "tests"
+    },
+    {
+     "kind": [
+      "test"
+     ],
+     "name": "wrappers"
+    }
+   ]
+  },
+  {
+   "name": "cfg-if",
+   "version": "1.0.5",
+   "id": "registry+https://github.com/rust-lang/crates.io-index#cfg-if@1.0.5",
+   "license": "MIT OR Apache-2.0",
+   "license_file": null,
+   "repository": "https://github.com/rust-lang/cfg-if",
+   "manifest_path": "/nonexistent/registry/cfg-if-1.0.5/Cargo.toml",
+   "source": "registry+https://github.com/rust-lang/crates.io-index",
+   "targets": [
+    {
+     "kind": [
+      "lib"
+     ],
+     "name": "cfg_if"
+    },
+    {
+     "kind": [
+      "test"
+     ],
+     "name": "xcrate"
+    }
+   ]
+  },
+  {
+   "name": "itoa",
+   "version": "1.0.18",
+   "id": "registry+https://github.com/rust-lang/crates.io-index#itoa@1.0.18",
+   "license": "MIT OR Apache-2.0",
+   "license_file": null,
+   "repository": "https://github.com/dtolnay/itoa",
+   "manifest_path": "/nonexistent/registry/itoa-1.0.18/Cargo.toml",
+   "source": "registry+https://github.com/rust-lang/crates.io-index",
+   "targets": [
+    {
+     "kind": [
+      "lib"
+     ],
+     "name": "itoa"
+    },
+    {
+     "kind": [
+      "test"
+     ],
+     "name": "test"
+    },
+    {
+     "kind": [
+      "bench"
+     ],
+     "name": "bench"
+    }
+   ]
+  },
+  {
+   "name": "lodestar",
+   "version": "0.0.0",
+   "id": "path+file:///nonexistent/fixture/crates/lodestar#0.0.0",
+   "license": "AGPL-3.0-or-later",
+   "license_file": null,
+   "repository": null,
+   "manifest_path": "/nonexistent/fixture/crates/lodestar/Cargo.toml",
+   "source": null,
+   "targets": [
+    {
+     "kind": [
+      "lib"
+     ],
+     "name": "lodestar"
+    }
+   ]
+  },
+  {
+   "name": "lodestar-helper",
+   "version": "0.0.0",
+   "id": "path+file:///nonexistent/fixture/crates/helper#lodestar-helper@0.0.0",
+   "license": "AGPL-3.0-or-later",
+   "license_file": null,
+   "repository": null,
+   "manifest_path": "/nonexistent/fixture/crates/helper/Cargo.toml",
+   "source": null,
+   "targets": [
+    {
+     "kind": [
+      "lib"
+     ],
+     "name": "lodestar_helper"
+    }
+   ]
+  },
+  {
+   "name": "memchr",
+   "version": "2.8.3",
+   "id": "registry+https://github.com/rust-lang/crates.io-index#memchr@2.8.3",
+   "license": "Unlicense OR MIT",
+   "license_file": null,
+   "repository": "https://github.com/BurntSushi/memchr",
+   "manifest_path": "/nonexistent/registry/memchr-2.8.3/Cargo.toml",
+   "source": "registry+https://github.com/rust-lang/crates.io-index",
+   "targets": [
+    {
+     "kind": [
+      "lib"
+     ],
+     "name": "memchr"
+    }
+   ]
+  },
+  {
+   "name": "rustversion",
+   "version": "1.0.23",
+   "id": "registry+https://github.com/rust-lang/crates.io-index#rustversion@1.0.23",
+   "license": "MIT OR Apache-2.0",
+   "license_file": null,
+   "repository": "https://github.com/dtolnay/rustversion",
+   "manifest_path": "/nonexistent/registry/rustversion-1.0.23/Cargo.toml",
+   "source": "registry+https://github.com/rust-lang/crates.io-index",
+   "targets": [
+    {
+     "kind": [
+      "proc-macro"
+     ],
+     "name": "rustversion"
+    },
+    {
+     "kind": [
+      "test"
+     ],
+     "name": "compiletest"
+    },
+    {
+     "kind": [
+      "test"
+     ],
+     "name": "test_const"
+    },
+    {
+     "kind": [
+      "test"
+     ],
+     "name": "test_eval"
+    },
+    {
+     "kind": [
+      "test"
+     ],
+     "name": "test_parse"
+    },
+    {
+     "kind": [
+      "custom-build"
+     ],
+     "name": "build-script-build"
+    }
+   ]
+  }
+ ],
+ "workspace_members": [
+  "path+file:///nonexistent/fixture/crates/helper#lodestar-helper@0.0.0",
+  "path+file:///nonexistent/fixture/crates/lodestar#0.0.0"
+ ],
+ "workspace_default_members": [
+  "path+file:///nonexistent/fixture/crates/helper#lodestar-helper@0.0.0",
+  "path+file:///nonexistent/fixture/crates/lodestar#0.0.0"
+ ],
+ "resolve": {
+  "nodes": [
+   {
+    "id": "registry+https://github.com/rust-lang/crates.io-index#autocfg@1.5.1",
+    "dependencies": [],
+    "deps": [],
+    "features": []
+   },
+   {
+    "id": "registry+https://github.com/rust-lang/crates.io-index#cfg-if@1.0.5",
+    "dependencies": [],
+    "deps": [],
+    "features": []
+   },
+   {
+    "id": "registry+https://github.com/rust-lang/crates.io-index#itoa@1.0.18",
+    "dependencies": [],
+    "deps": [],
+    "features": []
+   },
+   {
+    "id": "path+file:///nonexistent/fixture/crates/lodestar#0.0.0",
+    "dependencies": [
+     "registry+https://github.com/rust-lang/crates.io-index#autocfg@1.5.1",
+     "registry+https://github.com/rust-lang/crates.io-index#cfg-if@1.0.5",
+     "registry+https://github.com/rust-lang/crates.io-index#itoa@1.0.18",
+     "path+file:///nonexistent/fixture/crates/helper#lodestar-helper@0.0.0",
+     "registry+https://github.com/rust-lang/crates.io-index#rustversion@1.0.23"
+    ],
+    "deps": [
+     {
+      "name": "autocfg",
+      "pkg": "registry+https://github.com/rust-lang/crates.io-index#autocfg@1.5.1",
+      "dep_kinds": [
+       {
+        "kind": "build",
+        "target": null
+       }
+      ]
+     },
+     {
+      "name": "cfg_if",
+      "pkg": "registry+https://github.com/rust-lang/crates.io-index#cfg-if@1.0.5",
+      "dep_kinds": [
+       {
+        "kind": null,
+        "target": null
+       }
+      ]
+     },
+     {
+      "name": "itoa",
+      "pkg": "registry+https://github.com/rust-lang/crates.io-index#itoa@1.0.18",
+      "dep_kinds": [
+       {
+        "kind": "dev",
+        "target": null
+       }
+      ]
+     },
+     {
+      "name": "lodestar_helper",
+      "pkg": "path+file:///nonexistent/fixture/crates/helper#lodestar-helper@0.0.0",
+      "dep_kinds": [
+       {
+        "kind": null,
+        "target": null
+       }
+      ]
+     },
+     {
+      "name": "rustversion",
+      "pkg": "registry+https://github.com/rust-lang/crates.io-index#rustversion@1.0.23",
+      "dep_kinds": [
+       {
+        "kind": null,
+        "target": null
+       }
+      ]
+     }
+    ],
+    "features": [
+     "web"
+    ]
+   },
+   {
+    "id": "path+file:///nonexistent/fixture/crates/helper#lodestar-helper@0.0.0",
+    "dependencies": [
+     "registry+https://github.com/rust-lang/crates.io-index#memchr@2.8.3"
+    ],
+    "deps": [
+     {
+      "name": "memchr",
+      "pkg": "registry+https://github.com/rust-lang/crates.io-index#memchr@2.8.3",
+      "dep_kinds": [
+       {
+        "kind": null,
+        "target": null
+       }
+      ]
+     }
+    ],
+    "features": []
+   },
+   {
+    "id": "registry+https://github.com/rust-lang/crates.io-index#memchr@2.8.3",
+    "dependencies": [],
+    "deps": [],
+    "features": [
+     "alloc",
+     "default",
+     "std"
+    ]
+   },
+   {
+    "id": "registry+https://github.com/rust-lang/crates.io-index#rustversion@1.0.23",
+    "dependencies": [],
+    "deps": [],
+    "features": []
+   }
+  ],
+  "root": null
+ },
+ "target_directory": "/nonexistent/fixture/target",
+ "build_directory": "/nonexistent/fixture/target",
+ "version": 1,
+ "workspace_root": "/nonexistent/fixture",
+ "metadata": null
+}

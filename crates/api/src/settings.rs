@@ -330,7 +330,7 @@ fn announce(hub: Option<&EventHub>, changed: &[(String, u64)]) {
 }
 
 /// [`SettingsApi::save`], then [`announce`], in one blocking step.
-fn save_and_announce(
+pub(crate) fn save_and_announce(
     api: &dyn SettingsApi,
     hub: Option<&EventHub>,
     batch: SettingsBatch,
