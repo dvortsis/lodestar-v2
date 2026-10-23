@@ -4,7 +4,7 @@
 	// a badge is icon + text, and its text is part of the link's name ("Network & VPN, 1 problem").
 	import { page } from '$app/state';
 	import { m } from '$lib/paraglide/messages.js';
-	import IconGear from '~icons/ph/gear';
+	import { onMount, type Component } from 'svelte';
 	import { GROUPS, type ResolvedScreen, type ScreenGroup } from './registry';
 
 	export interface Badge {
@@ -38,6 +38,14 @@
 		)
 	);
 	const current = $derived(page.params.section);
+
+	// The icons load after first paint; their slots hold the space, so nothing moves.
+	let table = $state.raw<typeof import('./icons')>();
+	onMount(() => {
+		void import('./icons').then((mod) => (table = mod));
+	});
+	const iconOf = (r: ResolvedScreen): Component | undefined =>
+		r.screen.icon ?? table?.ICONS[r.screen.id] ?? table?.FALLBACK;
 </script>
 
 <nav aria-label={m.settings_ui_nav_label()} class="settings-nav" data-testid="settings-nav">
@@ -46,7 +54,7 @@
 		<ul aria-labelledby="settings-nav-{g.group}">
 			{#each g.items as r (r.screen.id)}
 				{@const badge = badges[r.screen.id]}
-				{@const Icon = r.screen.icon ?? IconGear}
+				{@const Icon = iconOf(r)}
 				<li>
 					<!-- eslint-disable svelte/no-navigation-without-resolve -- no base path (svelte.config.js) -->
 					<a
@@ -56,7 +64,9 @@
 						data-testid="settings-nav-{r.screen.id}"
 						onclick={onnavigate}
 					>
-						<Icon class="settings-nav-icon" aria-hidden="true" />
+						<span class="settings-nav-icon">
+							{#if Icon}<Icon aria-hidden="true" />{/if}
+						</span>
 						<span class="settings-nav-label">
 							{r.screen.title()}{#if badge}<span class="sr-only">, {badge.label}</span>{/if}
 						</span>
@@ -122,10 +132,15 @@
 		outline: var(--focus-ring-width) solid var(--color-primary);
 		outline-offset: calc(var(--focus-ring-offset) * -1);
 	}
-	:global(.settings-nav-icon) {
+	.settings-nav-icon {
+		display: inline-flex;
 		flex: none;
 		width: var(--icon-size-nav);
 		height: var(--icon-size-nav);
+	}
+	.settings-nav-icon :global(svg) {
+		width: 100%;
+		height: 100%;
 	}
 	.settings-nav-label {
 		flex: 1;

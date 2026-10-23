@@ -31,14 +31,14 @@ export const screen: SettingsScreen = {
 
 ## Pieces
 
-| File | What |
-|---|---|
-| `registry.ts` | Types, discovery (`collect`, `registered`), order, `buildRegistry(index)` → `{ screens, get, fieldsFor, screenOf, doubleClaims }`, `fieldsFor(screen, index)` |
-| `state.svelte.ts` | The layout's shared state: the schema index, the registry resolved from it, `wide` (x-large) |
-| `SettingsShell.svelte` | The frame: two panes from x-large, list → detail below |
-| `SettingsNav.svelte` | The grouped links with icon, label and badge |
-| `ScreenHost.svelte` | `/settings/<id>`: finds the screen, loads it, moves focus to its `<h1>` |
-| `Overview.svelte` | `/settings` |
+| File                   | What                                                                                                                                                          |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `registry.ts`          | Types, discovery (`collect`, `registered`), order, `buildRegistry(index)` → `{ screens, get, fieldsFor, screenOf, doubleClaims }`, `fieldsFor(screen, index)` |
+| `state.svelte.ts`      | The layout's shared state: the schema index, the registry resolved from it, `wide` (x-large)                                                                  |
+| `SettingsShell.svelte` | The frame: two panes from x-large, list → detail below                                                                                                        |
+| `SettingsNav.svelte`   | The grouped links with icon, label and badge                                                                                                                  |
+| `ScreenHost.svelte`    | `/settings/<id>`: finds the screen, loads it, moves focus to its `<h1>`                                                                                       |
+| `Overview.svelte`      | `/settings`                                                                                                                                                   |
 
 Screens live in `../screens/`: `GeneratedScreen.svelte`, `SettingsGroups.svelte` (the groups and Advanced, for hand-built screens too: put it inside your own `<SettingsForm>`, call its `reveal(key)` from `onReveal`, and `await loadSettingMessages(sections)` before creating the form), Network's reachability panel and lockout dialog.
 
