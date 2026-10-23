@@ -173,7 +173,7 @@ test.describe('the list', () => {
 
 	test('pausing and resuming is a toggle with no confirmation', async ({ page, go, mock }) => {
 		listMocks(mock);
-		mock.on('patchSavedSearch', async (request) => ({
+		mock.on('patchSavedSearch', (request) => ({
 			status: 200,
 			body: { ...LANTERN, paused: (body(request) as { paused: boolean }).paused }
 		}));
@@ -431,7 +431,7 @@ test.describe('the dialogs', () => {
 		mock
 	}) => {
 		listMocks(mock);
-		mock.on('createSavedSearch', async (request) => ({
+		mock.on('createSavedSearch', (request) => ({
 			status: 201,
 			body: saved({ id: 9, name: 'Nature docs', ...(body(request) as object) })
 		}));

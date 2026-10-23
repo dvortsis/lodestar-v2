@@ -29,7 +29,7 @@ test('save alert: New alert, name, query, channels, Enter saves and opens it', a
 	mock
 }) => {
 	mock.on('listSavedSearches', [saved({ id: 1, name: 'Existing' })]);
-	mock.on('createSavedSearch', async (request) => ({
+	mock.on('createSavedSearch', (request) => ({
 		status: 201,
 		body: saved({ id: 9, ...(request.postDataJSON() as object), name: 'Nature docs' })
 	}));

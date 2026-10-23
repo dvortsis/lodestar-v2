@@ -1,3 +1,4 @@
+import type { components } from '../../src/lib/api/schema';
 import type { OpenApiMock } from '../mock/openapi-mock';
 
 // Every route the app has today, with sample params for the dynamic ones. A new route slice adds
@@ -60,7 +61,7 @@ export const ROUTES: RouteCase[] = [
 ];
 
 // What the Alerts routes' smoke runs load: one saved search with nothing unread.
-const SAVED_SEARCH = {
+const SAVED_SEARCH: components['schemas']['SavedSearchView'] = {
 	alert: true,
 	alerts: 0,
 	ast: { op: 'all' },
