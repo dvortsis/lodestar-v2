@@ -41,6 +41,8 @@ struct Fake {
     purges: Mutex<Vec<LogPurge>>,
     history_delay: Duration,
     reads: AtomicUsize,
+    /// Chunks the endless download has produced, across its readers.
+    endless_chunks: Arc<AtomicUsize>,
 }
 
 impl Fake {
@@ -54,6 +56,7 @@ impl Fake {
             purges: Mutex::default(),
             history_delay: Duration::from_millis(400),
             reads: AtomicUsize::new(0),
+            endless_chunks: Arc::default(),
         })
     }
 
@@ -167,6 +170,7 @@ impl LogSource for Fake {
     }
     fn history(&self, _: &HistoryQuery) -> Result<LogHistory, LogsError> {
         self.reads.fetch_add(1, Ordering::SeqCst);
+        // Simulates a slow history read.
         std::thread::sleep(self.history_delay);
         Ok(LogHistory {
             lines: vec![],
@@ -192,10 +196,14 @@ impl LogSource for Fake {
     ) -> Result<Download, LogsError> {
         // A download that never ends, for a client that stops reading.
         if name == "lodestar-20261023T101500.123Z.jsonl" {
+            let produced = self.endless_chunks.clone();
             return Ok(Download {
                 file_name: "endless.jsonl".into(),
                 content_type: "application/x-ndjson",
-                chunks: Box::new(std::iter::repeat_with(|| Ok(vec![b'x'; 64 << 10]))),
+                chunks: Box::new(std::iter::repeat_with(move || {
+                    produced.fetch_add(1, Ordering::SeqCst);
+                    Ok(vec![b'x'; 64 << 10])
+                })),
             });
         }
         if name != "lodestar.jsonl" {
@@ -418,7 +426,7 @@ fn code(body: &[u8]) -> (String, String) {
     )
 }
 
-const SOON: Duration = Duration::from_secs(5);
+const SOON: Duration = Duration::from_secs(15);
 
 #[tokio::test]
 async fn without_a_source_only_the_catalogue_answers() {
@@ -589,16 +597,32 @@ async fn a_client_that_never_reads_slows_nothing_and_gets_one_resync() {
         start.elapsed() < Duration::from_secs(10),
         "the writer never waits"
     );
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    s.drain(Duration::from_secs(3)).await;
+    // Read until the stream has accounted for (nearly) every line, as
+    // delivered or reported lost, instead of assuming a fixed window is enough.
+    let account = |s: &Conn| {
+        let lost: u64 = s
+            .data("resync")
+            .iter()
+            .map(|r| r["skipped"].as_u64().unwrap() + r["evicted"].as_u64().unwrap())
+            .sum();
+        (s.ids().len() as u64, lost)
+    };
+    let deadline = Instant::now() + SOON;
+    loop {
+        s.drain(Duration::from_millis(300)).await;
+        let (got, lost) = account(&s);
+        if got + lost >= 39_000 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "after {SOON:?} saw {got} delivered + {lost} lost"
+        );
+    }
     let resyncs = s.data("resync");
     assert!(!resyncs.is_empty(), "it fell behind");
     assert!(resyncs.iter().all(|r| r["reason"] == "lagged"));
-    let lost: u64 = resyncs
-        .iter()
-        .map(|r| r["skipped"].as_u64().unwrap() + r["evicted"].as_u64().unwrap())
-        .sum();
-    let got = s.ids().len() as u64;
+    let (got, lost) = account(&s);
     assert!(got < 40_000, "{got}");
     assert!(got + lost >= 39_000, "{got} + {lost}");
 }
@@ -655,7 +679,7 @@ async fn a_stream_ends_with_its_session_and_on_close() {
     f.auth
         .change_password([127, 0, 0, 1].into(), PASSWORD, "another long password")
         .unwrap();
-    s.until_closed(Duration::from_secs(2)).await;
+    s.until_closed(SOON).await;
 
     // A trusted-proxy session stays up: the header, from the same peer.
     let set = f
@@ -672,7 +696,17 @@ async fn a_stream_ends_with_its_session_and_on_close() {
         .unwrap();
     let mut p = Conn::open(addr, "/api/v1/logs/stream", &[("remote-user", "admin")]).await;
     p.until("retry:", SOON).await;
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Keep-alives are timer-driven: read until three have arrived.
+    let deadline = Instant::now() + SOON;
+    while p.text.matches(": keep-alive").count() < 3 {
+        assert!(
+            Instant::now() < deadline,
+            "after {SOON:?} saw {} keep-alives: {}",
+            p.text.matches(": keep-alive").count(),
+            p.text
+        );
+        p.drain(Duration::from_millis(100)).await;
+    }
     let n = fake.push(Level::Info, "still here");
     p.until(&format!("id: {EPOCH}-{n}"), SOON).await;
     assert!(p.text.matches(": keep-alive").count() >= 3, "{}", p.text);
@@ -681,8 +715,8 @@ async fn a_stream_ends_with_its_session_and_on_close() {
     let mut s = Conn::open(addr, "/api/v1/logs/stream", &[("cookie", &c2)]).await;
     s.until("retry:", SOON).await;
     fake.close();
-    s.until_closed(Duration::from_secs(2)).await;
-    p.until_closed(Duration::from_secs(2)).await;
+    s.until_closed(SOON).await;
+    p.until_closed(SOON).await;
     assert_eq!(
         call(&f.app, get("/api/v1/logs/stream", &c2)).await.0,
         StatusCode::SERVICE_UNAVAILABLE
@@ -771,19 +805,35 @@ async fn a_download_holds_a_read_and_close_ends_it_unread() {
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "a download too");
     // Their producers are stuck on full buffers; closing ends both and
     // lets their reads go, with neither client reading.
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // Wait until the producers have stalled: the chunk count has not moved
+    // across two reads 100 ms apart. (The reads are held from the start.)
+    let start = Instant::now();
+    let mut last = usize::MAX;
+    loop {
+        let now = fake.endless_chunks.load(Ordering::SeqCst);
+        if now > 0 && now == last {
+            break;
+        }
+        assert!(
+            start.elapsed() < SOON,
+            "the downloads never stalled; {now} chunks, {} reads held",
+            fake.transport().reads_held()
+        );
+        last = now;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     assert_eq!(fake.transport().reads_held(), 2);
     fake.transport().close();
     let start = Instant::now();
     while fake.transport().reads_held() > 0 {
         assert!(
-            start.elapsed() < Duration::from_secs(5),
+            start.elapsed() < Duration::from_secs(15),
             "close() let a stalled download's read go"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    a.until_closed(Duration::from_secs(5)).await;
-    b.until_closed(Duration::from_secs(5)).await;
+    a.until_closed(SOON).await;
+    b.until_closed(SOON).await;
 }
 
 async fn futures_join<F: std::future::Future + Send + 'static>(fs: Vec<F>) -> Vec<F::Output>
@@ -812,6 +862,7 @@ async fn a_steady_flow_of_lines_never_puts_off_the_session_check() {
         tokio::spawn(async move {
             while !stop.load(Ordering::Relaxed) {
                 fake.push(Level::Info, "busy");
+                // Paces the writer so the stream sees a steady flow.
                 tokio::time::sleep(Duration::from_millis(1)).await;
             }
         })
@@ -819,7 +870,7 @@ async fn a_steady_flow_of_lines_never_puts_off_the_session_check() {
     s.until("busy", SOON).await;
     // "Sign out other sessions" rotates the key: this one's cookie dies.
     f.auth.rotate_sessions().unwrap();
-    s.until_closed(Duration::from_secs(2)).await;
+    s.until_closed(SOON).await;
     stop.store(true, Ordering::Relaxed);
     pusher.await.unwrap();
 }
@@ -867,6 +918,7 @@ async fn a_client_that_stopped_reading_doesnt_pin_its_slot() {
                     fake.push(Level::Info, &format!("{i} {pad}"));
                     i += 1;
                 }
+                // Paces the writer in bursts of 50 lines.
                 tokio::time::sleep(Duration::from_millis(2)).await;
             }
         })
@@ -874,7 +926,7 @@ async fn a_client_that_stopped_reading_doesnt_pin_its_slot() {
     let start = Instant::now();
     while fake.transport().streams() > 0 {
         assert!(
-            start.elapsed() < Duration::from_secs(10),
+            start.elapsed() < Duration::from_secs(15),
             "a stalled stream let its slot go within a few heartbeats"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;

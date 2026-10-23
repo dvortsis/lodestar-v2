@@ -62,19 +62,32 @@ async fn tests_past_the_cap_are_refused_at_once() {
     // A server that accepts and never answers: each test holds its slot.
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let held = tokio::spawn(async move {
-        let mut open = Vec::new();
-        loop {
-            let (socket, _) = listener.accept().await.unwrap();
-            open.push(socket);
-        }
-    });
+    let accepted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let held = {
+        let accepted = accepted.clone();
+        tokio::spawn(async move {
+            let mut open = Vec::new();
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                open.push(socket);
+                accepted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        })
+    };
     let url = format!("http://{addr}/jsonrpc");
     let running: Vec<_> = (0..MAX_TESTS)
         .map(|_| tokio::spawn(app.clone().oneshot(request(&cookie, &url))))
         .collect();
-    // Let them start and take every slot; they then wait on the server.
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // Wait until each has connected to the server, so each holds a slot.
+    let start = std::time::Instant::now();
+    while accepted.load(std::sync::atomic::Ordering::SeqCst) < MAX_TESTS {
+        assert!(
+            start.elapsed() < Duration::from_secs(15),
+            "{} of {MAX_TESTS} connected",
+            accepted.load(std::sync::atomic::Ordering::SeqCst)
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     assert!(running.iter().all(|r| !r.is_finished()));
     // One more is refused at once.
     let refused = tokio::time::timeout(
