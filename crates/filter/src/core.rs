@@ -423,11 +423,20 @@ const FOLDERS: usize = 4;
 
 /// A folder's tokens, their flags, and the position after them.
 #[derive(Default)]
-struct Folder<'a> {
-    dirs: &'a [String],
+struct Folder {
     tokens: Vec<Token>,
     flags: Vec<u16>,
     end: u32,
+}
+
+/// Buffers for reading a torrent, kept between torrents.
+#[derive(Default)]
+struct Scratch {
+    tokens: Vec<Token>,
+    flags: Vec<u16>,
+    /// [`Core::signals`]' table.
+    at: Vec<u16>,
+    folders: Vec<Folder>,
 }
 
 const DENSE_POSITIONS: usize = 4096;
@@ -805,26 +814,47 @@ impl Core {
 
     fn patterns(&self, item: &Item, neutral: &TermSet) -> Vec<Hit> {
         thread_local! {
-            // Kept per thread: its word plans carry over between torrents.
-            static TOKENIZER: std::cell::RefCell<Tokenizer> = Default::default();
+            // Kept per thread: its word plans and buffers carry over
+            // between torrents.
+            static TOKENIZER: std::cell::RefCell<(Tokenizer, Scratch)> = Default::default();
         }
         TOKENIZER.with(|t| match t.try_borrow_mut() {
-            Ok(mut tok) => self.patterns_with(&mut tok, item, neutral),
-            Err(_) => self.patterns_with(&mut Tokenizer::default(), item, neutral),
+            Ok(mut t) => {
+                let (tok, scratch) = &mut *t;
+                self.patterns_with(tok, scratch, item, neutral)
+            }
+            Err(_) => self.patterns_with(
+                &mut Tokenizer::default(),
+                &mut Scratch::default(),
+                item,
+                neutral,
+            ),
         })
     }
 
-    fn patterns_with(&self, tok: &mut Tokenizer, item: &Item, neutral: &TermSet) -> Vec<Hit> {
-        let mut tokens = Vec::new();
-        let mut flags = Vec::new();
-        let mut at = Vec::new();
-        tok.text(item.name, &mut tokens);
-        self.flags_of(&tokens, &mut flags);
-        let mut texts = vec![(Field::Name, self.signals(&tokens, &flags, neutral, &mut at))];
+    fn patterns_with(
+        &self,
+        tok: &mut Tokenizer,
+        scratch: &mut Scratch,
+        item: &Item,
+        neutral: &TermSet,
+    ) -> Vec<Hit> {
+        let Scratch {
+            tokens,
+            flags,
+            at,
+            folders,
+        } = scratch;
+        tokens.clear();
+        flags.clear();
+        tok.text(item.name, tokens);
+        self.flags_of(tokens, flags);
+        let mut texts = vec![(Field::Name, self.signals(tokens, flags, neutral, at))];
         // Files in one folder share its tokens, and a few folders are
         // remembered: a season's episodes and subtitles alternate
         // between two.
-        let mut folders: Vec<Folder> = Vec::new();
+        let mut dirs_of: [&[String]; FOLDERS] = [&[]; FOLDERS];
+        let mut known = 0;
         let mut next = 0;
         for (i, f) in item.files.iter().take(MAX_FILES).enumerate() {
             let Some((name, dirs)) = f.path.split_last() else {
@@ -833,40 +863,38 @@ impl Core {
             if f.padding {
                 continue;
             }
-            let slot = match folders.iter().position(|d| d.dirs == dirs) {
+            let slot = match dirs_of[..known].iter().position(|d| *d == dirs) {
                 Some(slot) => slot,
                 None => {
-                    let mut d = Folder {
-                        dirs,
-                        ..Folder::default()
+                    let slot = if known < FOLDERS {
+                        known += 1;
+                        known - 1
+                    } else {
+                        let slot = next;
+                        next = (next + 1) % FOLDERS;
+                        slot
                     };
+                    if folders.len() <= slot {
+                        folders.resize_with(slot + 1, Folder::default);
+                    }
+                    let d = &mut folders[slot];
+                    dirs_of[slot] = dirs;
+                    d.tokens.clear();
+                    d.flags.clear();
                     tok.path(dirs, &mut d.tokens);
                     d.end = tok.pos();
                     self.flags_of(&d.tokens, &mut d.flags);
-                    if folders.len() < FOLDERS {
-                        folders.push(d);
-                        folders.len() - 1
-                    } else {
-                        let slot = next;
-                        folders[slot] = d;
-                        next = (next + 1) % FOLDERS;
-                        slot
-                    }
+                    slot
                 }
             };
-            let Folder {
-                tokens: folder_tokens,
-                flags: folder_flags,
-                end: folder_end,
-                ..
-            } = &folders[slot];
+            let d = &folders[slot];
             tokens.clear();
-            tokens.extend_from_slice(folder_tokens);
-            tok.continue_path(&[name], &mut tokens, 0, *folder_end);
+            tokens.extend_from_slice(&d.tokens);
+            tok.continue_path(&[name], tokens, 0, d.end);
             flags.clear();
-            flags.extend_from_slice(folder_flags);
-            self.flags_of(&tokens[folder_tokens.len()..], &mut flags);
-            let s = self.signals(&tokens, &flags, neutral, &mut at);
+            flags.extend_from_slice(&d.flags);
+            self.flags_of(&tokens[d.tokens.len()..], flags);
+            let s = self.signals(tokens, flags, neutral, at);
             if s.paired() {
                 texts.push((Field::File(i as u32), s));
             }
