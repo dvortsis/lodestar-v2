@@ -48,7 +48,13 @@ export type FlowState =
 			/** A 428 came back with a different warning or preview than the one shown. */
 			changed?: boolean;
 	  }
-	| { kind: 'applying'; change: Change; assessment: Assessment }
+	| {
+			kind: 'applying';
+			change: Change;
+			assessment: Assessment;
+			/** Carried from `confirm`, so a refused password keeps the "effect changed" notice. */
+			changed?: boolean;
+	  }
 	| { kind: 'done'; response: ApplyResponse; previewed: Assessment }
 	| { kind: 'failed'; error: ApiError; canRetry: boolean };
 
@@ -319,12 +325,21 @@ export function transition(ctx: Ctx, event: Event): Step {
 					kind: 'confirm',
 					change: s.change,
 					assessment: s.assessment,
-					error: 'empty'
+					error: 'empty',
+					...(s.changed ? { changed: true } : {})
 				};
 				return { ctx: { ...ctx, state }, effects: [] };
 			}
 			return {
-				ctx: { ...ctx, state: { kind: 'applying', change: s.change, assessment: s.assessment } },
+				ctx: {
+					...ctx,
+					state: {
+						kind: 'applying',
+						change: s.change,
+						assessment: s.assessment,
+						...(s.changed ? { changed: true } : {})
+					}
+				},
 				effects: [
 					{
 						type: 'apply',
@@ -363,7 +378,16 @@ export function transition(ctx: Ctx, event: Event): Step {
 			}
 			if (e.status === 401 && e.code === 'bad_password') {
 				return {
-					ctx: { ...ctx, state: { kind: 'confirm', change, assessment, error: 'bad_password' } },
+					ctx: {
+						...ctx,
+						state: {
+							kind: 'confirm',
+							change,
+							assessment,
+							error: 'bad_password',
+							...(s.changed ? { changed: true } : {})
+						}
+					},
 					effects: []
 				};
 			}

@@ -544,3 +544,26 @@ describe('the rate-limit lock', () => {
 		).toEqual(['apply']);
 	});
 });
+
+describe('the "effect changed" notice', () => {
+	it('stays through a wrong password and an empty one', () => {
+		const from = applying(strengthening());
+		const back = run(from, {
+			type: 'apply_error',
+			seq: from.seq,
+			error: err(428, 'confirm_required', { assessment: weakening() }),
+			now: T0
+		}).ctx;
+		expect(back.state).toMatchObject({ changed: true });
+		const empty = run(back, { type: 'confirm', password: '', now: T0 }).ctx;
+		expect(empty.state).toMatchObject({ error: 'empty', changed: true });
+		const sent = run(back, { type: 'confirm', password: 'wrong', now: T0 }).ctx;
+		const refused = run(sent, {
+			type: 'apply_error',
+			seq: sent.seq,
+			error: err(401, 'bad_password'),
+			now: T0
+		}).ctx;
+		expect(refused.state).toMatchObject({ error: 'bad_password', changed: true });
+	});
+});
