@@ -943,7 +943,7 @@ mod tests {
 
         let logged = logs.contents();
         assert!(
-            logged.contains("ntfy attempt"),
+            logged.contains("Notification attempt channel=ntfy"),
             "the capture works: {logged}"
         );
         for s in secrets {

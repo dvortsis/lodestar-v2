@@ -242,11 +242,13 @@ mod tests {
 
     #[test]
     fn identifying_kinds_and_opt_ins_warn() {
-        let mut l = Logging::default();
-        l.data = DataPreset::Full;
-        l.data_until = NOW + 3600;
-        l.peer_activity_until = NOW + 3600;
-        l.change_details_until = NOW + 86_400;
+        let mut l = Logging {
+            data: DataPreset::Full,
+            data_until: NOW + 3600,
+            peer_activity_until: NOW + 3600,
+            change_details_until: NOW + 86_400,
+            ..Logging::default()
+        };
         let p = preview(&l, NOW);
         assert_eq!(
             codes(&p),
@@ -277,11 +279,15 @@ mod tests {
 
     #[test]
     fn verbose_choices_warn() {
-        let mut l = Logging::default();
-        l.verbosity = Verbosity::Detailed;
+        let l = Logging {
+            verbosity: Verbosity::Detailed,
+            ..Logging::default()
+        };
         assert_eq!(codes(&preview(&l, NOW)), ["verbose_logs"]);
-        let mut l = Logging::default();
-        l.temporary_until = NOW + 1800;
+        let l = Logging {
+            temporary_until: NOW + 1800,
+            ..Logging::default()
+        };
         assert_eq!(codes(&preview(&l, NOW)), ["verbose_logs"]);
     }
 }

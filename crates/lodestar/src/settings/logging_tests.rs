@@ -51,6 +51,7 @@ fn fixture(file: Option<&str>, env: &[(&'static str, &'static str)]) -> Fixture 
             settings: Some(registry.clone()),
             ops: None,
             adult: Default::default(),
+            user_data: None,
         }),
     );
     Fixture {

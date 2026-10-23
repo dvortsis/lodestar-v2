@@ -833,7 +833,7 @@ mod tests {
         assert!(text.contains("https://discord.com/…"), "{text}");
         let logged = logs.contents();
         assert!(
-            logged.contains("discord attempt"),
+            logged.contains("Notification attempt channel=discord"),
             "the capture works: {logged}"
         );
         for secret in [TOKEN, "123456789012345678"] {
