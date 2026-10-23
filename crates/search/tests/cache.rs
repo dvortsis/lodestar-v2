@@ -275,6 +275,7 @@ fn readers_never_see_a_generation_older_than_the_last_commit() {
         add(&mut store, &names(10 + i..11 + i));
         commit(&mut store, &mut w);
         visible.store(11 + i, Ordering::Release);
+        // Paces the writer so readers overlap its commits.
         std::thread::sleep(Duration::from_millis(2));
     }
     stop.store(true, Ordering::Relaxed);
