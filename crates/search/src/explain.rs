@@ -19,8 +19,8 @@
 //! for them, and the API reports them as null. Under a field sort the
 //! order is the field's, and no hit has relevance components.
 
-use tantivy::query::{BoostQuery, EnableScoring, Query};
-use tantivy::{DocAddress, DocSet, Searcher};
+use tantivy::query::{BoostQuery, EnableScoring, Query, Weight};
+use tantivy::{DocId, DocSet, SegmentReader};
 
 use crate::cancel::CancelToken;
 use crate::compile;
@@ -63,7 +63,7 @@ pub struct Explained {
     pub score: f32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Parts {
     pub phase1: f32,
     /// Phase 2's name boosts, summed over the unfielded words (0 when
@@ -113,27 +113,50 @@ pub fn explain(lease: &Lease, limit: usize, cancel: &CancelToken) -> Result<Expl
         } else {
             (Vec::new(), Vec::new())
         };
-        for (h, addr) in page.hits.iter().zip(&addrs) {
+        // Each part's weight once; then per segment, one scorer per part
+        // walking that segment's hits in doc order (as `index::rerank`
+        // does), so the cost is a few seeks per hit.
+        let enable = EnableScoring::enabled_from_searcher(searcher);
+        let phase1 = lease.compiled().query.weight(enable)?;
+        let names = weights(&names, enable)?;
+        let titles = weights(&titles, enable)?;
+        let mut order: Vec<usize> = (0..addrs.len()).collect();
+        order.sort_unstable_by_key(|&i| addrs[i]);
+        let mut parts = vec![Parts::default(); addrs.len()];
+        let mut at = 0;
+        while at < order.len() {
             cancel.check()?;
-            let phase1 = score_at(searcher, lease.compiled().query.as_ref(), *addr)?;
-            let mut name = 0.0;
-            let mut title = 0.0;
-            for q in &names {
-                name += score_at(searcher, q.as_ref(), *addr)?;
+            let seg = addrs[order[at]].segment_ord;
+            let end = at
+                + order[at..]
+                    .iter()
+                    .take_while(|&&i| addrs[i].segment_ord == seg)
+                    .count();
+            let docs: Vec<(usize, DocId)> = order[at..end]
+                .iter()
+                .map(|&i| (i, addrs[i].doc_id))
+                .collect();
+            let reader = searcher.segment_reader(seg);
+            for (i, v) in scores(phase1.as_ref(), reader, &docs)? {
+                parts[i].phase1 = v;
             }
-            for q in &titles {
-                title += score_at(searcher, q.as_ref(), *addr)?;
+            for w in &names {
+                for (i, v) in scores(w.as_ref(), reader, &docs)? {
+                    parts[i].name += v;
+                }
             }
-            hits.push(Explained {
-                id: h.id,
-                parts: Some(Parts {
-                    phase1,
-                    name,
-                    title,
-                }),
-                score: h.score,
-            });
+            for w in &titles {
+                for (i, v) in scores(w.as_ref(), reader, &docs)? {
+                    parts[i].title += v;
+                }
+            }
+            at = end;
         }
+        hits.extend(page.hits.iter().zip(parts).map(|(h, p)| Explained {
+            id: h.id,
+            parts: Some(p),
+            score: h.score,
+        }));
     } else {
         hits.extend(page.hits.iter().map(|h| Explained {
             id: h.id,
@@ -168,18 +191,36 @@ fn boost_words(node: &Node) -> Vec<Vec<tokenizer::Tok>> {
         .collect()
 }
 
-/// `query`'s score of the document at `addr`, 0 when it doesn't match.
-fn score_at(searcher: &Searcher, query: &dyn Query, addr: DocAddress) -> Result<f32> {
-    let weight = query.weight(EnableScoring::enabled_from_searcher(searcher))?;
-    let mut scorer = weight.scorer(searcher.segment_reader(addr.segment_ord), 1.0)?;
-    if scorer.doc() < addr.doc_id {
-        scorer.seek(addr.doc_id);
+fn weights(queries: &[Q], enable: EnableScoring<'_>) -> Result<Vec<Box<dyn Weight>>> {
+    Ok(queries
+        .iter()
+        .map(|q| q.weight(enable))
+        .collect::<tantivy::Result<_>>()?)
+}
+
+/// `weight`'s score of each of `docs` (in doc order) in one segment, with
+/// one scorer; 0 where it doesn't match.
+fn scores(
+    weight: &dyn Weight,
+    reader: &SegmentReader,
+    docs: &[(usize, DocId)],
+) -> Result<Vec<(usize, f32)>> {
+    let mut scorer = weight.scorer(reader, 1.0)?;
+    let mut out = Vec::with_capacity(docs.len());
+    for &(i, doc) in docs {
+        if scorer.doc() < doc {
+            scorer.seek(doc);
+        }
+        out.push((
+            i,
+            if scorer.doc() == doc {
+                scorer.score()
+            } else {
+                0.0
+            },
+        ));
     }
-    Ok(if scorer.doc() == addr.doc_id {
-        scorer.score()
-    } else {
-        0.0
-    })
+    Ok(out)
 }
 
 #[cfg(test)]

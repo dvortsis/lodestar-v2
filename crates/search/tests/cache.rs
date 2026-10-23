@@ -13,7 +13,7 @@ use lodestar_search::{
     CacheConfig, CancelToken, FacetParams, FacetSpec, Lease, Node, Outcome, ResultCache,
     SearchIndex, SearchSpec, Sort, Start, parse,
 };
-use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig, flags};
+use lodestar_store::{Filtered, NewTorrent, Refiled, SourceId, Store, StoreConfig, flags};
 
 const NOW: i64 = 1_700_000_100;
 
@@ -156,9 +156,12 @@ fn requests_that_may_see_different_torrents_never_share() {
     assert_eq!(ids(&index, &cache, &other).1, Outcome::Miss);
 }
 
-/// A hide rule reaches stored torrents as a flag and a `reindex_log`
-/// entry (the filter engine's path, `Store::set_enrichments_at`); the
-/// index picks it up at its next commit, which is a new generation.
+/// A hide rule reaches stored torrents through the store's refiling
+/// path (`Store::set_enrichments_at`, as the filter engine and the
+/// `classify` corrections write it): the `hidden` mark and a
+/// `reindex_log` entry in one transaction. The index picks it up at its
+/// next commit, which is a new generation. A deletion (reported
+/// material, §20.5.2) goes the same way.
 #[test]
 fn a_filter_change_never_shows_what_it_hides() {
     let (mut store, index, mut w) = fixture(30);
@@ -168,40 +171,45 @@ fn a_filter_change_never_shows_what_it_hides() {
     let (before, _) = ids(&index, &cache, &s);
     let gone = before[0];
     assert_eq!(ids(&index, &cache, &s).1, Outcome::Hit);
-    let hide = |store: &mut Store, id: u64, on: bool| {
-        let sql = if on {
-            "UPDATE torrents SET flags = flags | ?1 WHERE id = ?2"
-        } else {
-            "UPDATE torrents SET flags = flags & ~?1 WHERE id = ?2"
-        };
-        let c = store.connection();
-        c.execute(sql, (flags::HIDDEN, id as i64)).unwrap();
-        c.execute(
-            "INSERT INTO reindex_log (torrent_id) VALUES (?1)",
-            [id as i64],
-        )
-        .unwrap();
+    let hash = store.torrent(gone as i64).unwrap().unwrap().info_hash.0;
+    let hashes = [hash];
+    let refiled = Refiled {
+        id: gone as i64,
+        filtered: Filtered {
+            hashes: &hashes,
+            rule: "U-1",
+            action: 3,
+            held: None,
+            sealed: None,
+            evidence: &[],
+            at: NOW,
+            expires_at: 0,
+            adult_hold: false,
+        },
+        flags: flags::HIDDEN,
     };
-    hide(&mut store, gone, true);
+    let generation = store.class_gen().unwrap();
+    let written = store
+        .set_enrichments_at(generation, &[], &[refiled])
+        .unwrap();
+    assert!(written.is_some());
+    // Before the commit the index hasn't changed: still the cached page,
+    // as the uncached path would show it.
+    assert_eq!(ids(&index, &cache, &s).1, Outcome::Hit);
     commit(&mut store, &mut w);
     let (after, o) = ids(&index, &cache, &s);
     assert_eq!(o, Outcome::Miss);
     assert!(!after.contains(&gone), "{after:?}");
     assert_eq!(after.len(), before.len() - 1);
-    // Released again: it's back, from a miss.
-    hide(&mut store, gone, false);
-    commit(&mut store, &mut w);
-    let (back, o) = ids(&index, &cache, &s);
+    // With hidden torrents asked for, it's there: another scope.
+    let shown = parse("night").unwrap();
+    let (all, o) = ids(&index, &cache, &spec(&shown, "hidden=true"));
     assert_eq!(o, Outcome::Miss);
-    assert!(back.contains(&gone));
-    // A deletion (reported material, §20.5.2) likewise.
-    let hash = {
-        let row = store.torrent(gone as i64).unwrap().unwrap();
-        row.info_hash.0
-    };
-    store.delete_torrents(&[hash]).unwrap();
+    assert!(all.contains(&gone));
+    // Deleted, it's gone from that too, from a miss.
+    store.delete_torrents(&hashes).unwrap();
     commit(&mut store, &mut w);
-    let (deleted, o) = ids(&index, &cache, &s);
+    let (deleted, o) = ids(&index, &cache, &spec(&shown, "hidden=true"));
     assert_eq!(o, Outcome::Miss);
     assert!(!deleted.contains(&gone));
 }
@@ -334,7 +342,7 @@ fn facets_are_cached_per_generation_and_shared_with_a_searchs_lease() {
     assert_eq!(cache.facets(&index, &fs, &c).unwrap().1, Outcome::Hit);
     // The same facets on a search's lease of this snapshot: a hit.
     let (search, _) = cache.search(&index, &spec(&node, ""), &c).unwrap();
-    let (b, o) = cache.facets_on(&search.lease, &fs, &c).unwrap();
+    let (b, o) = cache.facets_on(&index, &search.lease, &fs, &c).unwrap();
     assert_eq!((o, &b.facets), (Outcome::Hit, &a.facets));
     // Other parameters are other entries.
     let hide = FacetParams::new(Default::default(), None, true);
@@ -348,7 +356,12 @@ fn facets_are_cached_per_generation_and_shared_with_a_searchs_lease() {
     let (fresh, o) = cache.facets(&index, &fs, &c).unwrap();
     assert_eq!((o, fresh.total.value), (Outcome::Miss, 40));
     // The old lease still reads its snapshot (and its own count).
-    let (old, _) = cache.facets_on(&search.lease, &fs, &c).unwrap();
+    let (old, o) = cache.facets_on(&index, &search.lease, &fs, &c).unwrap();
+    assert_eq!(
+        o,
+        Outcome::Miss,
+        "an older lease is counted without the cache"
+    );
     assert_eq!(old.total.value, 30);
 }
 

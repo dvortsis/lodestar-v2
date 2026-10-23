@@ -2,10 +2,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::*;
+use crate::facets::FacetParams;
 use crate::index::Error;
 use crate::testing::{append, delete, index_with};
 
 const NOW: i64 = 1_700_000_100;
+/// One snapshot order for keys made by hand: none is ever older.
+const SEEN: Seen = Seen { index: 0, id: 0 };
 
 fn key(what: &str, at: &Generation) -> Key {
     Key {
@@ -45,7 +48,7 @@ fn a_hit_needs_the_same_key_and_generation() {
     let g1 = generation(&index);
     let lru: Lru<u32> = Lru::new(CacheConfig::default());
     let c = CancelToken::new();
-    let get = |k: &Key, v| lru.get_or_compute(k.clone(), &c, |k| computed(v, k, 10));
+    let get = |k: &Key, v| lru.get_or_compute(k.clone(), SEEN, true, &c, |k| computed(v, k, 10));
     assert_eq!(get(&key("a", &g1), 1).unwrap(), (1, Outcome::Miss));
     assert_eq!(get(&key("a", &g1), 2).unwrap(), (1, Outcome::Hit));
     assert_eq!(get(&key("b", &g1), 3).unwrap(), (3, Outcome::Miss));
@@ -72,7 +75,7 @@ fn bounds_hold_in_entries_and_bytes_least_recently_used_first() {
     let lru: Lru<u32> = Lru::new(config(3, 1_000));
     let c = CancelToken::new();
     let get = |w: &str, bytes| {
-        lru.get_or_compute(key(w, &g), &c, |k| computed(0, k, bytes))
+        lru.get_or_compute(key(w, &g), SEEN, true, &c, |k| computed(0, k, bytes))
             .unwrap()
             .1
     };
@@ -108,7 +111,7 @@ fn identical_misses_compute_once() {
     const FOLLOWERS: usize = 3;
     let outcomes: Vec<Outcome> = std::thread::scope(|s| {
         let lead = s.spawn(|| {
-            lru.get_or_compute(k.clone(), &CancelToken::new(), |key| {
+            lru.get_or_compute(k.clone(), SEEN, true, &CancelToken::new(), |key| {
                 computes.fetch_add(1, Ordering::Relaxed);
                 // Hold the flight until every follower waits on it: the
                 // map and the leader hold it, plus one per follower.
@@ -132,7 +135,7 @@ fn identical_misses_compute_once() {
         let followers: Vec<_> = (0..FOLLOWERS)
             .map(|_| {
                 s.spawn(|| {
-                    lru.get_or_compute(k.clone(), &CancelToken::new(), |key| {
+                    lru.get_or_compute(k.clone(), SEEN, true, &CancelToken::new(), |key| {
                         computes.fetch_add(1, Ordering::Relaxed);
                         computed(8, key, 10)
                     })
@@ -160,7 +163,7 @@ fn a_failed_leader_lets_the_waiters_compute() {
     let k = key("q", &g);
     std::thread::scope(|s| {
         let lead = s.spawn(|| {
-            lru.get_or_compute(k.clone(), &CancelToken::new(), |key| {
+            lru.get_or_compute(k.clone(), SEEN, true, &CancelToken::new(), |key| {
                 let start = Instant::now();
                 while lock(&lru.inner)
                     .flights
@@ -177,7 +180,9 @@ fn a_failed_leader_lets_the_waiters_compute() {
             std::thread::yield_now();
         }
         let follower = s.spawn(|| {
-            lru.get_or_compute(k.clone(), &CancelToken::new(), |key| computed(9, key, 10))
+            lru.get_or_compute(k.clone(), SEEN, true, &CancelToken::new(), |key| {
+                computed(9, key, 10)
+            })
         });
         assert!(matches!(lead.join().unwrap(), Err(Error::Cancelled)));
         assert_eq!(follower.join().unwrap().unwrap(), (9, Outcome::Miss));
@@ -202,7 +207,7 @@ fn entries_go_after_their_ttl_and_when_swept_or_cleared() {
     });
     let c = CancelToken::new();
     let get = |w: &str| {
-        lru.get_or_compute(key(w, &g), &c, |k| computed(0, k, 10))
+        lru.get_or_compute(key(w, &g), SEEN, true, &c, |k| computed(0, k, 10))
             .unwrap()
             .1
     };
@@ -213,7 +218,7 @@ fn entries_go_after_their_ttl_and_when_swept_or_cleared() {
 
     let lru: Lru<u32> = Lru::new(CacheConfig::default());
     let get = |w: &str, at: &Generation| {
-        lru.get_or_compute(key(w, at), &c, |k| computed(0, k, 10))
+        lru.get_or_compute(key(w, at), SEEN, true, &c, |k| computed(0, k, 10))
             .unwrap()
             .1
     };
@@ -239,7 +244,7 @@ fn turned_off_it_keeps_nothing() {
     });
     let c = CancelToken::new();
     for _ in 0..2 {
-        let got = lru.get_or_compute(key("a", &g), &c, |k| computed(1, k, 10));
+        let got = lru.get_or_compute(key("a", &g), SEEN, true, &c, |k| computed(1, k, 10));
         assert_eq!(got.unwrap(), (1, Outcome::Miss));
     }
     assert_eq!(lru.stats().entries, 0);
@@ -309,4 +314,68 @@ fn relative_dates_are_keyed_by_the_second() {
         cache.search(&index, &spec(NOW + 9), &c).unwrap().1,
         Outcome::Hit
     );
+}
+
+#[test]
+fn an_older_leases_facets_never_retire_the_serving_generations() {
+    let (index, _) = index_with(100, 1);
+    let index = Arc::new(index);
+    let cache = ResultCache::default();
+    let node = crate::parse("common").unwrap();
+    let params = FacetParams::default();
+    let spec = FacetSpec {
+        query: &node,
+        node: &node,
+        filters: &[],
+        params: &params,
+        scope: "",
+        sort: Sort::Relevance,
+        now: NOW,
+    };
+    let c = CancelToken::new();
+    let old = Arc::new(Lease::new(index.clone(), &node, NOW, Sort::Relevance, &c).unwrap());
+    append(&index, 101..110, 110);
+    assert_eq!(cache.facets(&index, &spec, &c).unwrap().1, Outcome::Miss);
+    assert_eq!(cache.facets(&index, &spec, &c).unwrap().1, Outcome::Hit);
+    // The lease from before the commit: counted on its own snapshot,
+    // without the cache, twice.
+    for _ in 0..2 {
+        let (got, o) = cache.facets_on(&index, &old, &spec, &c).unwrap();
+        assert_eq!(o, Outcome::Miss);
+        assert_eq!(got.total, old.total());
+    }
+    // The serving generation's entry is still there.
+    assert_eq!(cache.facets(&index, &spec, &c).unwrap().1, Outcome::Hit);
+    assert_eq!(cache.stats().facets.retired, 0);
+    // A lease of the serving snapshot shares it.
+    let now = Arc::new(Lease::new(index.clone(), &node, NOW, Sort::Relevance, &c).unwrap());
+    assert_eq!(
+        cache.facets_on(&index, &now, &spec, &c).unwrap().1,
+        Outcome::Hit
+    );
+    // And a lookup on a searcher older than the latest one seen doesn't
+    // move the cache back to it.
+    let stale = Seen::of(&index, &old.searcher().clone());
+    let latest = Seen::of(&index, &index.searcher());
+    assert!(stale.before(&latest) && !latest.before(&stale));
+}
+
+#[test]
+fn a_search_with_a_file_clause_isnt_kept() {
+    let (index, _) = index_with(20, 1);
+    let index = Arc::new(index);
+    let cache = ResultCache::default();
+    let node = crate::parse("common file:(ext:mkv)").unwrap();
+    let spec = SearchSpec {
+        node: &node,
+        scope: "",
+        sort: Sort::Relevance,
+        limit: 10,
+        now: NOW,
+    };
+    let c = CancelToken::new();
+    for _ in 0..2 {
+        assert_eq!(cache.search(&index, &spec, &c).unwrap().1, Outcome::Miss);
+    }
+    assert_eq!(cache.stats().search.entries, 0);
 }
