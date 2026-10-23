@@ -175,6 +175,65 @@ impl fmt::Debug for JoinToken {
     }
 }
 
+/// Why a token couldn't be read from stdin or a file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenInputError {
+    Io(std::io::ErrorKind),
+    /// No token in the input.
+    Empty,
+    /// More than a token's worth of input.
+    TooLong,
+    Format(TokenFormatError),
+}
+
+impl fmt::Display for TokenInputError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TokenInputError::Io(kind) => write!(f, "couldn't read the join token: {kind}"),
+            TokenInputError::Empty => f.write_str("no join token in the input"),
+            TokenInputError::TooLong => f.write_str("the input is longer than a join token"),
+            TokenInputError::Format(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for TokenInputError {}
+
+/// The most input [`read_join_token`] reads: a token, a newline and some
+/// whitespace.
+const MAX_TOKEN_INPUT: usize = 1024;
+
+/// Reads a join token from stdin or a file: the first non-blank line,
+/// trimmed. A token on the command line or in the environment would show
+/// in process listings and shell history (§13), so `lodestar worker` takes
+/// it from `--token-file <path>` or `--token-file -` (stdin) instead. Every
+/// buffer it passes through is zeroed.
+pub fn read_join_token(source: impl std::io::Read) -> Result<JoinToken, TokenInputError> {
+    use std::io::Read;
+    let mut buf = Zeroizing::new(Vec::with_capacity(MAX_TOKEN_INPUT + 1));
+    source
+        .take(MAX_TOKEN_INPUT as u64 + 1)
+        .read_to_end(&mut buf)
+        .map_err(|e| TokenInputError::Io(e.kind()))?;
+    if buf.len() > MAX_TOKEN_INPUT {
+        return Err(TokenInputError::TooLong);
+    }
+    let text = std::str::from_utf8(&buf)
+        .map_err(|_| TokenInputError::Format(TokenFormatError::Encoding))?;
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .ok_or(TokenInputError::Empty)?;
+    JoinToken::parse(line).map_err(TokenInputError::Format)
+}
+
+/// [`read_join_token`] from a file (a Docker secret, say).
+pub fn read_join_token_file(path: &std::path::Path) -> Result<JoinToken, TokenInputError> {
+    let file = std::fs::File::open(path).map_err(|e| TokenInputError::Io(e.kind()))?;
+    read_join_token(file)
+}
+
 /// Constant-time equality of two token hashes.
 pub(crate) fn hashes_match(a: &[u8; 32], b: &[u8; 32]) -> bool {
     a.ct_eq(b).into()
