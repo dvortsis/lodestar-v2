@@ -13,6 +13,17 @@ pub mod swarm_flags {
     /// One tracker reports a swarm that the DHT and every other tracker
     /// don't see: the fake-seeding signature (§8).
     pub const SUSPECT: u32 = 1;
+    /// Unanswered rounds in a row (0–15), in bits 8–11. The store counts
+    /// them; an answered round's flags replace them, so the count resets.
+    pub const UNREACHED_SHIFT: u32 = 8;
+    pub const UNREACHED_MASK: u32 = 0xf << UNREACHED_SHIFT;
+
+    // `apply` spells the mask as 3840 and the shift as 8 in SQL.
+    const _: () = assert!(UNREACHED_MASK == 3840 && UNREACHED_SHIFT == 8);
+
+    pub fn unreached(flags: u32) -> u8 {
+        ((flags & UNREACHED_MASK) >> UNREACHED_SHIFT) as u8
+    }
 }
 
 /// One tracker's answer for a torrent.
@@ -224,8 +235,9 @@ pub(crate) fn apply(tx: &Connection, u: &SwarmUpdate) -> Result<bool> {
         tx.prepare_cached(
             "INSERT INTO swarm (torrent_id, seeders, leechers, completed, trackers_reporting,
                  trackers_checked, dht_seeds, dht_peers, last_scrape_at, next_scrape_at, flags)
-             VALUES (?1, 0, 0, 0, 0, 0, NULL, NULL, ?2, ?3, 0)
-             ON CONFLICT (torrent_id) DO UPDATE SET next_scrape_at = excluded.next_scrape_at",
+             VALUES (?1, 0, 0, 0, 0, 0, NULL, NULL, ?2, ?3, 256)
+             ON CONFLICT (torrent_id) DO UPDATE SET next_scrape_at = excluded.next_scrape_at,
+                 flags = (flags & ~3840) | (min(((flags >> 8) & 15) + 1, 15) << 8)",
         )?
         .execute(params![u.torrent_id, u.at, u.next_scrape_at])?;
         return Ok(true);
@@ -295,6 +307,10 @@ pub(crate) fn apply(tx: &Connection, u: &SwarmUpdate) -> Result<bool> {
 /// Torrents a scrape must never reach: a public tracker or DHT scrape
 /// would leak the hash (§18.7).
 const NEVER_SCRAPED: i64 = flags::PRIVATE | flags::PRIVATE_SOURCE;
+/// A `swarm` row as hot columns need it: id, seeders, leechers, trackers
+/// reporting, the DHT estimate, flags, and whether anyone answered.
+type HotRow = (i64, u32, u32, u32, Option<u32>, i64, bool);
+
 /// Rows per statement when loading hot columns.
 const LOAD_CHUNK: i64 = 10_000;
 
@@ -499,10 +515,11 @@ impl Store {
         let mut loaded = 0u64;
         let mut after = 0i64;
         loop {
-            let rows: Vec<(i64, u32, u32, u32, Option<u32>)> = conn
+            let rows: Vec<HotRow> = conn
                 .prepare_cached(
                     "SELECT torrent_id, seeders, leechers, trackers_reporting,
-                            dht_seeds + dht_peers
+                            dht_seeds + dht_peers, flags,
+                            trackers_checked > 0 OR dht_seeds IS NOT NULL
                      FROM swarm WHERE torrent_id > ?1 ORDER BY torrent_id LIMIT ?2",
                 )?
                 .query_map(params![after, LOAD_CHUNK], |r| {
@@ -513,6 +530,8 @@ impl Store {
                         u32_col(r, 2)?,
                         u32_col(r, 3)?,
                         dht.map(|v| u32::try_from(v).unwrap_or(NEVER - 1)),
+                        r.get(5)?,
+                        r.get(6)?,
                     ))
                 })?
                 .collect::<rusqlite::Result<_>>()?;
@@ -520,20 +539,25 @@ impl Store {
                 break;
             };
             after = last;
-            for (id, seeders, leechers, trackers, dht) in rows {
+            for (id, seeders, leechers, trackers, dht, flags, answered) in rows {
                 let Ok(id) = u64::try_from(id) else { continue };
+                // A first scrape nobody answered still reads as never
+                // scraped.
+                if !answered {
+                    continue;
+                }
+                if flags & i64::from(swarm_flags::SUSPECT) != 0 {
+                    hot.set_flags(id, crate::hot::flags::SUSPECT, true);
+                }
                 hot.set_swarm(
                     id,
                     SwarmHot {
                         seeders,
                         leechers,
                         trackers,
-                        dht: dht.unwrap_or(0),
+                        dht: dht.unwrap_or(NEVER),
                     },
                 );
-                if dht.is_none() {
-                    hot.set(Col::Dht, id, NEVER);
-                }
                 loaded += 1;
             }
         }

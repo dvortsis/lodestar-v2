@@ -151,6 +151,7 @@ export function planRestore(
 		}
 		// Edits staged since the page loaded are newer than the draft's: they stay.
 		const fields: Record<string, FieldModel> = { ...cur.fields };
+		const restored: string[] = [];
 		for (const name of names) {
 			const spec = specOf(section, name);
 			const f = Object.hasOwn(cur.fields, name) ? cur.fields[name] : undefined;
@@ -167,7 +168,8 @@ export function planRestore(
 				plan.dropped++;
 				continue;
 			}
-			if (f.mine !== undefined) continue;
+			if (f.mine !== undefined) continue; // edited since the page loaded: that edit stays
+			restored.push(name);
 			// As staged then: saved was the draft's base (a reset's base was a saved value).
 			const source = mine === RESET ? 'db' : f.saved.source;
 			fields[name] = {
@@ -185,7 +187,8 @@ export function planRestore(
 		});
 		plan.sections[section] = out.state;
 		plan.conflicts.push(...out.conflicts.map((n) => `${section}.${n}`));
-		plan.fields += names.filter((n) => out.state.fields[n]?.mine !== undefined).length;
+		// Only what the draft brings back: not edits made since, nor ones the merge found settled.
+		plan.fields += restored.filter((n) => out.state.fields[n]?.mine !== undefined).length;
 	}
 	return plan;
 }

@@ -230,6 +230,36 @@ describe('saving', () => {
 		expect(form.dirtyCount).toBe(2);
 	});
 
+	it('keeps an edit back to the old value made while the save was in flight', async () => {
+		const release = server.hold('PATCH /settings');
+		form.set('crawler.intensity', 'low');
+		const saving = form.save();
+		await flush();
+		form.set('crawler.intensity', 'balanced'); // the value saved before this save
+		release();
+		await saving;
+		expect(form.field('crawler.intensity')).toMatchObject({
+			value: 'balanced',
+			saved: 'low',
+			dirty: true
+		});
+		expect(await form.save()).toMatchObject({ ok: true });
+		expect(patches()[1]!.body).toEqual({ crawler: { if_revision: 4, intensity: 'balanced' } });
+	});
+
+	it('treats a stale refusal with a malformed current as a conflict, without throwing', async () => {
+		server.next('PATCH /settings', {
+			status: 409,
+			body: {
+				error: { code: 'stale_revision', message: 'x' },
+				current: { crawler: { revision: 'nope' }, transport: null, network: [] }
+			}
+		});
+		form.set('crawler.intensity', 'low');
+		expect(await form.save()).toEqual({ ok: false, reason: 'conflict' });
+		expect(form.field('crawler.intensity')).toMatchObject({ value: 'low', dirty: true });
+	});
+
 	it('returns nothing with nothing to save', async () => {
 		expect(await form.save()).toEqual({ ok: false, reason: 'nothing' });
 		expect(patches()).toHaveLength(0);
@@ -463,7 +493,30 @@ describe('saving', () => {
 });
 
 describe('gates', () => {
-	it('fails closed for privacy with no handler: nothing is sent', async () => {
+	it.each(['privacy', 'security', 'destructive', 'disruptive'] as const)(
+		'fails closed for %s with no handler: nothing is sent',
+		async (danger) => {
+			const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+			server.sections.set('gate', values('gate', 1, { f: sv(false) }));
+			const f = open({
+				id: `gate-${danger}`,
+				fields: [spec('gate.f', { kind: 'boolean', danger })]
+			});
+			await flush();
+			f.set('gate.f', true);
+			expect(await f.save()).toEqual({ ok: false, reason: 'refused' });
+			expect(patches()).toHaveLength(0);
+			expect(server.requests('POST', '/settings/preview')).toHaveLength(0);
+			expect(f.errors).toEqual([{ message: expect.stringMatching(/confirmation/) }]);
+			expect(error).toHaveBeenCalledWith(expect.stringContaining('gate.f'));
+			// With a handler it goes through, after the preview.
+			f.gate(danger, async () => true);
+			expect(await f.save()).toMatchObject({ ok: true });
+			expect(patches()).toHaveLength(1);
+		}
+	);
+
+	it('fails closed for privacy among other fields: nothing is sent', async () => {
 		const error = vi.spyOn(console, 'error').mockImplementation(() => {});
 		form.set('logging.data', 'full');
 		form.set('crawler.intensity', 'low');
@@ -1044,10 +1097,36 @@ describe('instant mode', () => {
 		expect(patches()).toHaveLength(1);
 	});
 
+	it('sends a secret only on an explicit commit, and clears it', async () => {
+		inst.set('secrets.token', 'hun');
+		inst.set('secrets.token', SECRET);
+		vi.advanceTimersByTime(1_000);
+		await flush();
+		expect(patches()).toHaveLength(0); // never half-typed
+		expect(await inst.save()).toMatchObject({ ok: true });
+		expect(patches().map((p) => p.body)).toEqual([{ secrets: { if_revision: 1, token: SECRET } }]);
+		expect(inst.field('secrets.token').dirty).toBe(false);
+		expect(await inst.save()).toEqual({ ok: false, reason: 'nothing' });
+	});
+
+	it('keeps a double toggle: the change back is sent after the first', async () => {
+		const release = server.hold('PATCH /settings');
+		inst.set('transport.utp', false);
+		await flush();
+		inst.set('transport.utp', true); // back, while the first is in flight
+		release();
+		await flush();
+		await flush();
+		expect(patches().map((p) => p.body)).toEqual([
+			{ transport: { if_revision: 7, utp: false } },
+			{ transport: { if_revision: 8, utp: true } }
+		]);
+		expect(inst.field('transport.utp')).toMatchObject({ value: true, dirty: false });
+	});
+
 	it('offers no Undo for a secret', async () => {
 		inst.set('secrets.token', SECRET);
-		vi.advanceTimersByTime(300);
-		await flush();
+		await inst.save();
 		expect(patches()).toHaveLength(1);
 		expect(inst.field('secrets.token').undoUntil).toBeUndefined();
 		expect(await inst.undo('secrets.token')).toEqual({ ok: false, reason: 'nothing' });
