@@ -26,6 +26,9 @@ impl FakeClock {
     fn advance(&self, secs: u64) {
         self.0.fetch_add(secs, Ordering::SeqCst);
     }
+    fn back(&self, secs: u64) {
+        self.0.fetch_sub(secs, Ordering::SeqCst);
+    }
 }
 
 impl Clock for FakeClock {
@@ -185,6 +188,7 @@ fn pending(new: SocketAddr, previous: Previous, state: Pending, deadline: Option
         new: json!(new.to_string()),
         state,
         deadline,
+        serving: None,
     }
 }
 
@@ -498,18 +502,17 @@ async fn an_environment_bind_never_arms_it() {
         local(free_port()),
         &[("LODESTAR_HTTP_BIND", env_text.as_str())],
     );
-    // A stale record from before the variable was set is dropped.
-    put(
-        &config,
-        &pending(
-            local(free_port()),
-            Previous::Reset,
-            Pending::AwaitingConfirmation,
-            Some(T0),
-        ),
+    // A record from before the variable was set waits, untouched, for
+    // the variable to go.
+    let waiting = pending(
+        local(free_port()),
+        Previous::Reset,
+        Pending::AwaitingConfirmation,
+        Some(T0),
     );
+    put(&config, &waiting);
     let run = start(&config, FakeClock::at(T0 + 1), RestartMethod::Reexec).await;
-    assert_eq!(stored(&config), None);
+    assert_eq!(stored(&config), Some(waiting.clone()));
     assert_eq!(run.address.change(), None);
     assert_eq!(run.address.inner.lock().unwrap().serving, env);
     // The registry refuses the save, and the follower records nothing.
@@ -524,7 +527,32 @@ async fn an_environment_bind_never_arms_it() {
             .is_err()
     );
     run.address.saved();
-    assert_eq!(stored(&config), None);
+    assert_eq!(stored(&config), Some(waiting));
+}
+
+/// Recovered with `LODESTAR_HTTP_BIND`, then the variable removed: the
+/// bad saved address still gets its timer, rather than binding with none.
+#[tokio::test]
+async fn removing_the_environment_bind_brings_the_timer_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = local(free_port());
+    let new = local(free_port());
+    let rescue = local(free_port()).to_string();
+    let with_env = config(dir.path(), base, &[("LODESTAR_HTTP_BIND", rescue.as_str())]);
+    save_bind(
+        &registry(&config(dir.path(), base, &[])),
+        json!(new.to_string()),
+    );
+    put(
+        &with_env,
+        &pending(new, Previous::Reset, Pending::AwaitingRestart, None),
+    );
+    drop(start(&with_env, FakeClock::at(T0), RestartMethod::Reexec).await);
+    let without = config(dir.path(), base, &[]);
+    let run = start(&without, FakeClock::at(T0 + 10), RestartMethod::Reexec).await;
+    let change = run.address.change().unwrap();
+    assert_eq!(change.state, AddressState::AwaitingConfirmation);
+    assert_eq!(change.deadline, Some(T0 + 10 + WINDOW_SECS));
 }
 
 #[test]
@@ -533,7 +561,21 @@ fn decisions_at_start() {
     let r = |state, deadline| pending(new, Previous::Reset, state, deadline);
     assert_eq!(
         decide(&r(Pending::AwaitingRestart, None), true, new, T0),
-        Decision::Clear("LODESTAR_HTTP_BIND sets the address")
+        Decision::Leave
+    );
+    // A deadline from a clock that has since gone back is never more than
+    // a window away.
+    assert_eq!(
+        decide(
+            &r(Pending::AwaitingConfirmation, Some(T0 + 86_400)),
+            false,
+            new,
+            T0
+        ),
+        Decision::Bind {
+            new,
+            deadline: Some(T0 + WINDOW_SECS)
+        }
     );
     assert!(matches!(
         decide(&r(Pending::AwaitingRestart, None), false, local(9001), T0),
@@ -716,4 +758,106 @@ async fn a_revert_that_cant_be_saved_restarts_so_the_start_reverts() {
     assert_eq!(next.address.inner.lock().unwrap().serving, base);
     assert_eq!(stored(&config), None);
     assert_eq!(effective(&config), (base, SettingSource::File));
+}
+
+#[tokio::test]
+async fn a_clock_behind_at_start_clamps_the_deadline() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config(dir.path(), local(free_port()), &[]);
+    let new = local(free_port());
+    save_bind(&registry(&config), json!(new.to_string()));
+    // Stored under a clock a year ahead of this boot's.
+    put(
+        &config,
+        &pending(
+            new,
+            Previous::Reset,
+            Pending::AwaitingConfirmation,
+            Some(T0 + 365 * 86_400),
+        ),
+    );
+    let run = start(&config, FakeClock::at(T0), RestartMethod::Reexec).await;
+    assert_eq!(
+        run.address.change().unwrap().deadline,
+        Some(T0 + WINDOW_SECS)
+    );
+    assert_eq!(stored(&config).unwrap().deadline, Some(T0 + WINDOW_SECS));
+}
+
+#[tokio::test]
+async fn a_clock_that_goes_back_while_running_still_reverts() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config(dir.path(), local(free_port()), &[]);
+    let new = local(free_port());
+    save_bind(&registry(&config), json!(new.to_string()));
+    // A second of the window left.
+    put(
+        &config,
+        &pending(
+            new,
+            Previous::Reset,
+            Pending::AwaitingConfirmation,
+            Some(T0 + 1),
+        ),
+    );
+    let run = start(&config, FakeClock::at(T0), RestartMethod::Reexec).await;
+    run.address.start(run.registry.subscribe());
+    // NTP puts the clock a day back: the wall-clock deadline is now a day
+    // away, but the window, measured on the monotonic clock, still ends.
+    run.clock.back(86_400);
+    tokio::time::timeout(Duration::from_secs(5), run.restart.requested())
+        .await
+        .expect("reverted when the monotonic window ran out");
+    assert_eq!(stored(&config), None);
+}
+
+#[tokio::test]
+async fn a_record_that_cant_be_stored_is_flagged() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config(dir.path(), local(free_port()), &[]);
+    let clock = FakeClock::at(T0);
+    let prepared = prepare(&config, clock.as_ref()).await;
+    let store = store(&config);
+    let registry = Arc::new(Registry::load(&config, store.clone()).unwrap());
+    let running = registry.effective_config(&config);
+    let (_listener, bound) = bind(prepared, &running, &store, clock.as_ref())
+        .await
+        .unwrap();
+    // Writes through a read-only connection fail.
+    let read_only = Arc::new(Mutex::new(
+        Store::open_reader(config.db_path(), StoreConfig::default()).unwrap(),
+    ));
+    let run = start_with(
+        bound,
+        &running,
+        read_only,
+        registry,
+        clock,
+        RestartMethod::Reexec,
+    );
+    save_bind(&run.registry, json!(local(free_port()).to_string()));
+    run.address.saved();
+    let change = run.address.change().unwrap();
+    assert_eq!(change.state, AddressState::AwaitingRestart);
+    assert!(!change.stored);
+    assert_eq!(stored(&config), None);
+}
+
+#[test]
+fn the_health_check_probes_the_address_served_after_a_failed_revert() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = local(free_port());
+    let config = config(dir.path(), base, &[]);
+    let (new, previous) = (local(free_port()), local(free_port()));
+    save_bind(&registry(&config), json!(new.to_string()));
+    assert_eq!(health_bind(&config), new);
+    let mut record = pending(
+        new,
+        Previous::Saved(json!(previous.to_string())),
+        Pending::AwaitingConfirmation,
+        Some(T0),
+    );
+    record.serving = Some(json!(previous.to_string()));
+    put(&config, &record);
+    assert_eq!(health_bind(&config), previous);
 }

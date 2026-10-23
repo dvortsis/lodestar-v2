@@ -62,6 +62,8 @@ impl Services {
     pub async fn start(config: &Config) -> Result<Services, BoxError> {
         std::fs::create_dir_all(&config.data_dir)
             .map_err(|e| format!("creating {}: {e}", config.data_dir.display()))?;
+        // `/system`'s start time, whichever entry point runs this (B2c).
+        system::Restart::global().started();
         // A pending HTTP-address change, before the registry loads (B2c).
         let address = system::address::prepare(config, &system::address::SystemClock).await;
         // The settings registry (§11) over its own connection: saved
@@ -285,10 +287,11 @@ impl Services {
         );
         let (listener, bound) =
             system::address::bind(address, config, &control, &system::address::SystemClock).await?;
+        let served = bound.serving;
         let system = system::System::start(config, bound, &api, &settings, control, &events);
         tracing::info!(
             "UI on {}, status page on /status (data in {})",
-            ops::ui_address(config.http.bind),
+            ops::ui_address(served),
             config.data_dir.display()
         );
         Ok(Services {

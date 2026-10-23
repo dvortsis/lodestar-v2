@@ -112,6 +112,10 @@ pub struct Record {
     pub state: Pending,
     /// Unix seconds, once awaiting confirmation.
     pub deadline: Option<u64>,
+    /// The address served instead, when a revert at start couldn't be
+    /// saved: what `lodestar healthcheck` probes until it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serving: Option<Value>,
 }
 
 impl Record {
@@ -159,7 +163,9 @@ fn read(store: &Store, kind: Kind) -> Option<Record> {
     }
 }
 
-fn write(store: &mut Store, kind: Kind, record: Option<&Record>) {
+/// Stores (or removes) the record; false, logged at ERROR, if that failed:
+/// the protection then lasts only until the process ends.
+fn write(store: &mut Store, kind: Kind, record: Option<&Record>) -> bool {
     let key = kind.key();
     let result = match record {
         Some(r) => {
@@ -168,14 +174,39 @@ fn write(store: &mut Store, kind: Kind, record: Option<&Record>) {
         }
         None => store.update_settings_text(&[], &[&key]),
     };
-    if let Err(e) = result {
-        tracing::error!("address: saving the pending change: {e}");
+    match result {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::error!(
+                "address: storing the pending address change failed ({e}); it won't survive a \
+                 restart"
+            );
+            false
+        }
     }
+}
+
+/// Where `lodestar healthcheck` probes: the address served instead after a
+/// start-time revert that couldn't be saved, else the effective bind.
+pub fn health_bind(config: &Config) -> SocketAddr {
+    let effective = network::effective_bind(config);
+    if config.layers.in_env(BIND_ENV) {
+        return effective;
+    }
+    Store::open_reader(config.db_path(), config.store_config())
+        .ok()
+        .and_then(|s| read(&s, Kind::HttpBind))
+        .and_then(|r| r.serving)
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or(effective)
 }
 
 /// What to do with a stored record at start.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Decision {
+    /// The environment sets the address: leave the record as it is, so
+    /// it applies again once the variable is removed.
+    Leave,
     /// It no longer applies.
     Clear(&'static str),
     /// Its deadline passed: go back before binding.
@@ -189,7 +220,7 @@ enum Decision {
 
 fn decide(record: &Record, env_set: bool, effective: SocketAddr, now: u64) -> Decision {
     if env_set {
-        return Decision::Clear("LODESTAR_HTTP_BIND sets the address");
+        return Decision::Leave;
     }
     let Some(new) = record.new_addr() else {
         return Decision::Clear("the new address isn't readable");
@@ -199,7 +230,13 @@ fn decide(record: &Record, env_set: bool, effective: SocketAddr, now: u64) -> De
     }
     match (record.state, record.deadline) {
         (Pending::AwaitingConfirmation, Some(d)) if now >= d => Decision::Revert,
-        (Pending::AwaitingConfirmation, deadline) => Decision::Bind { new, deadline },
+        // Never more than a window away: a deadline stored under a clock
+        // that has since gone back (no RTC, a local-time RTC put right by
+        // NTP) would otherwise sit hours or years ahead.
+        (Pending::AwaitingConfirmation, deadline) => Decision::Bind {
+            new,
+            deadline: deadline.map(|d| d.min(now + WINDOW_SECS)),
+        },
         (Pending::AwaitingRestart, _) => Decision::Bind {
             new,
             deadline: None,
@@ -266,6 +303,13 @@ pub async fn prepare(config: &Config, clock: &dyn Clock) -> Prepared {
     let effective = network::effective_bind(config);
     let now = clock.now();
     match decide(&record, env_set, effective, now) {
+        Decision::Leave => {
+            tracing::info!(
+                "address: LODESTAR_HTTP_BIND sets the address; the pending change waits until \
+                 it's removed"
+            );
+            Prepared::nothing(config)
+        }
         Decision::Clear(why) => {
             tracing::info!("address: dropping the pending address change: {why}");
             let _ = blocking(store, move |s| write(s, Kind::HttpBind, None)).await;
@@ -326,13 +370,17 @@ async fn revert_at_start(
 ) -> Prepared {
     let previous = record.previous_addr(config.http.bind);
     let nothing = Prepared::nothing(config);
+    let record_copy = record.clone();
     let config = config.clone();
-    let saved = tokio::task::spawn_blocking(move || {
-        let store = Arc::new(Mutex::new(store));
-        let registry = Registry::load(&config, store.clone()).map_err(|e| e.to_string())?;
-        save_previous(&registry, None, &record)?;
-        write(&mut store.lock().expect("store lock"), Kind::HttpBind, None);
-        Ok::<_, String>(())
+    let saved = tokio::task::spawn_blocking({
+        let config = config.clone();
+        move || {
+            let store = Arc::new(Mutex::new(store));
+            let registry = Registry::load(&config, store.clone()).map_err(|e| e.to_string())?;
+            save_previous(&registry, None, &record)?;
+            write(&mut store.lock().expect("store lock"), Kind::HttpBind, None);
+            Ok::<_, String>(())
+        }
     })
     .await
     .map_err(|e| e.to_string())
@@ -344,8 +392,16 @@ async fn revert_at_start(
         },
         Err(e) => {
             // The record stays, so the next start tries again; this run
-            // binds the previous address regardless.
+            // binds the previous address regardless, and says so for the
+            // health check.
             tracing::error!("address: saving the previous address failed: {e}");
+            if let Ok(mut store) = Store::open(config.db_path(), config.store_config()) {
+                let record = Record {
+                    serving: Some(Value::String(previous.to_string())),
+                    ..record_copy
+                };
+                write(&mut store, Kind::HttpBind, Some(&record));
+            }
             Prepared {
                 reverted: Some((new, previous)),
                 fallback: Some(previous),
@@ -386,7 +442,10 @@ fn save_previous(
 #[derive(Debug)]
 pub struct Bound {
     base: SocketAddr,
-    serving: SocketAddr,
+    /// The address actually served (`services.rs` logs it).
+    pub serving: SocketAddr,
+    /// Whether the record was stored; false: it won't survive a restart.
+    stored: bool,
     record: Option<Record>,
     reverted: Option<(SocketAddr, SocketAddr)>,
 }
@@ -406,19 +465,22 @@ pub async fn bind(
         reverted,
         fallback,
     } = prepared;
+    let mut stored = true;
     let (listener, record) = match listener {
         Some((listener, record)) if record.new_addr() == Some(config.http.bind) => {
+            let latest = clock.now() + WINDOW_SECS;
             let record = Record {
-                deadline: Some(record.deadline.unwrap_or(clock.now() + WINDOW_SECS)),
+                deadline: Some(record.deadline.map_or(latest, |d| d.min(latest))),
+                serving: None,
                 ..record
             };
-            let (store, stored) = (store.clone(), record.clone());
-            tokio::task::spawn_blocking(move || {
+            let (store, copy) = (store.clone(), record.clone());
+            stored = tokio::task::spawn_blocking(move || {
                 write(
                     &mut store.lock().expect("store lock"),
                     Kind::HttpBind,
-                    Some(&stored),
-                );
+                    Some(&copy),
+                )
             })
             .await?;
             tracing::warn!(
@@ -439,7 +501,7 @@ pub async fn bind(
                 );
                 let store = store.clone();
                 tokio::task::spawn_blocking(move || {
-                    write(&mut store.lock().expect("store lock"), Kind::HttpBind, None);
+                    write(&mut store.lock().expect("store lock"), Kind::HttpBind, None)
                 })
                 .await?;
             }
@@ -467,6 +529,7 @@ pub async fn bind(
             serving,
             record,
             reverted,
+            stored,
         },
     ))
 }
@@ -501,6 +564,12 @@ struct Inner {
     /// The last revert this run: (from, to).
     reverted: Option<(SocketAddr, SocketAddr)>,
     serving: SocketAddr,
+    /// When the window began on the monotonic clock, and its length then:
+    /// a revert is due when either clock says so, so a wall clock that
+    /// goes back can't hold it off.
+    armed: Option<(std::time::Instant, u64)>,
+    /// The last write of the record failed.
+    unstored: bool,
 }
 
 /// Why a revert runs.
@@ -521,6 +590,12 @@ impl Address {
         clock: Arc<dyn Clock>,
     ) -> Address {
         let seen = current(settings.as_ref());
+        let armed = bound
+            .record
+            .as_ref()
+            .filter(|r| r.state == Pending::AwaitingConfirmation)
+            .and_then(|r| r.deadline)
+            .map(|d| (std::time::Instant::now(), d.saturating_sub(clock.now())));
         Address {
             store,
             settings,
@@ -534,6 +609,8 @@ impl Address {
                 seen,
                 reverted: bound.reverted,
                 serving: bound.serving,
+                armed,
+                unstored: !bound.stored,
             }),
             changed: Notify::new(),
             tick: TICK_SECS,
@@ -544,12 +621,31 @@ impl Address {
         self.inner.lock().expect("address lock")
     }
 
-    fn persist(&self, record: Option<&Record>) {
-        write(
+    /// Stores the record, noting a failure for `/system`.
+    fn persist(&self, inner: &mut Inner, record: Option<&Record>) -> bool {
+        let ok = write(
             &mut self.store.lock().expect("store lock"),
             Kind::HttpBind,
             record,
         );
+        inner.unstored = !ok && record.is_some();
+        ok
+    }
+
+    /// Whether the window has run out, by the wall clock or the monotonic
+    /// one.
+    fn due(&self, inner: &Inner, now: u64) -> bool {
+        let Some(record) = inner
+            .record
+            .as_ref()
+            .filter(|r| r.state == Pending::AwaitingConfirmation)
+        else {
+            return false;
+        };
+        record.deadline.is_some_and(|d| now >= d)
+            || inner
+                .armed
+                .is_some_and(|(at, secs)| at.elapsed() >= Duration::from_secs(secs))
     }
 
     /// `/system`'s `address_change`.
@@ -568,6 +664,7 @@ impl Address {
                     Pending::AwaitingRestart => AddressState::AwaitingRestart,
                     Pending::AwaitingConfirmation => AddressState::AwaitingConfirmation,
                 },
+                stored: !inner.unstored,
                 url: ui_address(new),
             });
         }
@@ -576,6 +673,7 @@ impl Address {
             kind: KeepOrRevertKind::HttpBind,
             previous_url: ui_address(to),
             state: AddressState::Reverted,
+            stored: true,
             url: ui_address(from),
         })
     }
@@ -625,6 +723,7 @@ impl Address {
                 new: json(addr),
                 state: Pending::AwaitingRestart,
                 deadline: None,
+                serving: None,
                 ..r
             }),
             None => Some(Record {
@@ -636,10 +735,12 @@ impl Address {
                 new: json(addr),
                 state: Pending::AwaitingRestart,
                 deadline: None,
+                serving: None,
             }),
         };
-        self.persist(record.as_ref());
+        self.persist(&mut inner, record.as_ref());
         inner.record = record;
+        inner.armed = None;
         drop(inner);
         self.changed.notify_waiters();
     }
@@ -649,9 +750,16 @@ impl Address {
         let mut inner = self.lock();
         match &inner.record {
             Some(r) if r.state == Pending::AwaitingConfirmation => {
+                // Kept only once that's stored: a record left behind would
+                // revert the kept address at the next start.
+                if !self.persist(&mut inner, None) {
+                    return Err(SystemError::Internal(
+                        "storing the kept address failed".into(),
+                    ));
+                }
                 tracing::info!("address: kept {}", ui_address(inner.serving));
-                self.persist(None);
                 inner.record = None;
+                inner.armed = None;
                 drop(inner);
                 self.changed.notify_waiters();
                 Ok(AddressOutcome {
@@ -674,11 +782,7 @@ impl Address {
         let Some(record) = inner.record.clone() else {
             return Err(SystemError::NoAddressChange);
         };
-        let now = self.clock.now();
-        if why == Why::Expired
-            && (record.state != Pending::AwaitingConfirmation
-                || record.deadline.is_none_or(|d| now < d))
-        {
+        if why == Why::Expired && !self.due(&inner, self.clock.now()) {
             return Err(SystemError::NoAddressChange);
         }
         let previous = record.previous_addr(self.base);
@@ -688,7 +792,10 @@ impl Address {
         // as a change of its own.
         inner.seen = current(self.settings.as_ref());
         inner.record = None;
-        self.persist(None);
+        inner.armed = None;
+        // If this fails, the stale record names an address the registry no
+        // longer holds, so the next start drops it.
+        self.persist(&mut inner, None);
         let restarting = match record.state {
             // Never applied: undoing the save is enough.
             Pending::AwaitingRestart => {
@@ -751,13 +858,22 @@ impl Address {
         }
     }
 
-    fn deadline(&self) -> Option<u64> {
+    /// The seconds until the window runs out by either clock, while a
+    /// change awaits confirmation; 0 once it has.
+    fn remaining(&self) -> Option<u64> {
         let inner = self.lock();
-        inner
+        let record = inner
             .record
             .as_ref()
-            .filter(|r| r.state == Pending::AwaitingConfirmation)
-            .and_then(|r| r.deadline)
+            .filter(|r| r.state == Pending::AwaitingConfirmation)?;
+        let wall = record.deadline.map(|d| d.saturating_sub(self.clock.now()));
+        let mono = inner
+            .armed
+            .map(|(at, secs)| secs.saturating_sub(at.elapsed().as_secs()));
+        match (wall, mono) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
     }
 
     async fn run_timer(self: Arc<Self>) {
@@ -765,26 +881,24 @@ impl Address {
             let notified = self.changed.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            match self.deadline() {
+            match self.remaining() {
                 None => notified.await,
-                Some(deadline) => {
-                    let now = self.clock.now();
-                    if now >= deadline {
-                        let me = self.clone();
-                        let reverted = tokio::task::spawn_blocking(move || me.expire())
-                            .await
-                            .unwrap_or(false);
-                        if !reverted {
-                            // A failed save: try again in a minute.
-                            tokio::time::sleep(Duration::from_secs(60)).await;
-                        }
-                        continue;
+                Some(0) => {
+                    let me = self.clone();
+                    let reverted = tokio::task::spawn_blocking(move || me.expire())
+                        .await
+                        .unwrap_or(false);
+                    if !reverted {
+                        // A failed save: try again in a minute.
+                        tokio::time::sleep(Duration::from_secs(60)).await;
                     }
+                }
+                Some(left) => {
                     tokio::select! {
-                        // Never one long sleep: the deadline is wall-clock
-                        // time, which may jump (a host without a clock
-                        // corrected by NTP after boot, a suspend).
-                        _ = tokio::time::sleep(Duration::from_secs((deadline - now).min(self.tick))) => {}
+                        // Never one long sleep: the wall clock may jump (a
+                        // host without a clock put right by NTP after boot,
+                        // a suspend), so it's read again at least every tick.
+                        _ = tokio::time::sleep(Duration::from_secs(left.min(self.tick))) => {}
                         _ = notified => {}
                     }
                 }

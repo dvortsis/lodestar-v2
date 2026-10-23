@@ -83,7 +83,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Command::Healthcheck => match load(config_path) {
-            Ok(config) => match healthcheck(settings::network::effective_bind(&config)) {
+            Ok(config) => match healthcheck(system::address::health_bind(&config)) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {
                     eprintln!("unhealthy: {e}");
@@ -167,7 +167,6 @@ async fn serve(config: Config) -> Result<(), BoxError> {
     // both take the same graceful shutdown. A signal wins, even during a
     // restart's shutdown.
     let restart = system::Restart::global();
-    restart.started();
     let (signalled, mut stopped) = tokio::sync::watch::channel(false);
     tokio::spawn(async move {
         shutdown_signal().await;

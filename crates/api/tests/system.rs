@@ -41,6 +41,7 @@ fn pending() -> AddressChange {
         kind: KeepOrRevertKind::HttpBind,
         previous_url: "http://<this host's address>:8090/".into(),
         state: AddressState::AwaitingConfirmation,
+        stored: true,
         url: "http://192.168.1.5:8191/".into(),
     }
 }
@@ -304,6 +305,16 @@ async fn every_route_needs_a_session() {
     ] {
         let (status, body) = send(&f, req(method, path, None, true)).await;
         assert_eq!(status, 401, "{method} {path}: {body}");
+        // Session only: an API key or a proxy header alone isn't one.
+        for (name, value) in [
+            ("x-api-key", "lsk_AAAAAAAA_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+            ("remote-user", "admin"),
+        ] {
+            let mut r = req(method, path, None, true);
+            r.headers_mut().insert(name, value.parse().unwrap());
+            let (status, body) = send(&f, r).await;
+            assert_eq!(status, 401, "{method} {path} with {name}: {body}");
+        }
     }
     assert_eq!(restarts(&f), 0);
 }

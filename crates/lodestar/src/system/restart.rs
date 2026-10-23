@@ -37,6 +37,9 @@ pub struct Restart {
     /// When `serve` began, and this run's measured time to listening.
     started: OnceLock<(Instant, u64)>,
     start_secs: AtomicU64,
+    /// Why this run can't restart itself after all (a temporary fixture,
+    /// which is deleted when the process ends).
+    refused: OnceLock<String>,
 }
 
 /// What a restart takes when nothing has been measured yet.
@@ -50,6 +53,7 @@ impl Restart {
             method,
             started: OnceLock::new(),
             start_secs: AtomicU64::new(0),
+            refused: OnceLock::new(),
         }
     }
 
@@ -59,8 +63,9 @@ impl Restart {
         GLOBAL.get_or_init(|| Arc::new(Restart::new(METHOD)))
     }
 
-    /// Marks the start of `serve`: the clock for [`Restart::listening`] and
-    /// `/system`'s `started_at`.
+    /// Marks the start of the services (`Services::start`, whichever entry
+    /// point runs them): the clock for [`Restart::listening`] and
+    /// `/system`'s `started_at`. Only the first call counts.
     pub fn started(&self) {
         let _ = self
             .started
@@ -90,17 +95,30 @@ impl Restart {
         }
     }
 
+    /// This run can't restart itself, for `why` (shown as the hint).
+    pub fn refuse(&self, why: impl Into<String>) {
+        let _ = self.refused.set(why.into());
+    }
+
     pub fn available(&self) -> bool {
-        self.method == RestartMethod::Reexec
+        self.method == RestartMethod::Reexec && self.refused.get().is_none()
     }
 
     pub fn info(&self) -> RestartInfo {
         let available = self.available();
+        let hint = match self.refused.get() {
+            Some(why) => Some(why.clone()),
+            None => (!available).then(|| HINT.to_string()),
+        };
         RestartInfo {
             available,
             estimated_seconds: self.estimated_seconds(),
-            hint: (!available).then(|| HINT.to_string()),
-            method: self.method,
+            hint,
+            method: if available {
+                self.method
+            } else {
+                RestartMethod::Manual
+            },
         }
     }
 
@@ -149,13 +167,29 @@ const HINT: &str = "Restart Lodestar the way you started it: restart the Lodesta
 pub fn reexec() -> std::io::Error {
     use std::os::unix::process::CommandExt;
     let exe = match std::env::current_exe() {
-        Ok(exe) => exe,
+        Ok(exe) => program(exe, |p| p.is_file()),
         Err(e) => return e,
     };
     tracing::info!("restarting: {}", exe.display());
     std::process::Command::new(exe)
         .args(std::env::args_os().skip(1))
         .exec()
+}
+
+/// What to exec. After the binary was replaced on disk (an in-place
+/// upgrade), Linux names the running one `<path> (deleted)`: run what's
+/// installed at `<path>` now, or else the running image itself.
+#[cfg(unix)]
+fn program(
+    exe: std::path::PathBuf,
+    exists: impl Fn(&std::path::Path) -> bool,
+) -> std::path::PathBuf {
+    let text = exe.to_string_lossy();
+    match text.strip_suffix(" (deleted)") {
+        Some(installed) if exists(std::path::Path::new(installed)) => installed.into(),
+        Some(_) => "/proc/self/exe".into(),
+        None => exe,
+    }
 }
 
 /// Windows can't restart in place yet ([`RestartMethod::Manual`]): the
@@ -202,6 +236,34 @@ mod tests {
         let info = r.info();
         assert!(info.available && info.hint.is_none());
         assert_eq!(info.estimated_seconds, DEFAULT_ESTIMATE_SECS);
+    }
+
+    #[test]
+    fn a_refused_run_reports_why() {
+        let r = Restart::new(RestartMethod::Reexec);
+        r.refuse("A temporary fixture is deleted when Lodestar stops.");
+        r.refuse("only the first reason counts");
+        let info = r.info();
+        assert!(!info.available && !r.available());
+        assert_eq!(info.method, RestartMethod::Manual);
+        assert_eq!(
+            info.hint.as_deref(),
+            Some("A temporary fixture is deleted when Lodestar stops.")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_upgraded_binary_is_run_from_its_path() {
+        use std::path::{Path, PathBuf};
+        let same = program(PathBuf::from("/usr/bin/lodestar"), |_| true);
+        assert_eq!(same, Path::new("/usr/bin/lodestar"));
+        let installed = program(PathBuf::from("/usr/bin/lodestar (deleted)"), |p| {
+            p == Path::new("/usr/bin/lodestar")
+        });
+        assert_eq!(installed, Path::new("/usr/bin/lodestar"));
+        let gone = program(PathBuf::from("/opt/lodestar (deleted)"), |_| false);
+        assert_eq!(gone, Path::new("/proc/self/exe"));
     }
 
     #[test]
