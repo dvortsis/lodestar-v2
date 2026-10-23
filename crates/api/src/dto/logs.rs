@@ -309,3 +309,94 @@ pub enum LogFrame {
     Resync(LogResync),
     Purge(LogPurge),
 }
+
+/// Whether file logging is writing now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LogFileState {
+    On,
+    Off,
+    /// Stopped by a full disk until a restart.
+    Stopped,
+    /// No folder to read: `reason` says why.
+    Unavailable,
+}
+
+/// One log file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct LogFileInfo {
+    pub compressed: bool,
+    /// The file being written now.
+    pub current: bool,
+    /// Written while a data kind that identifies torrents or people, or
+    /// an opt-in, was on: "Contains torrent details".
+    pub details: bool,
+    /// The first readable line's time.
+    #[schema(required = true)]
+    pub from: Option<String>,
+    pub name: String,
+    /// Written while an opt-in was on.
+    pub opt_in: bool,
+    /// Bytes on disk.
+    pub size: u64,
+    /// Its rotation time, or for the current file its last line.
+    #[schema(required = true)]
+    pub to: Option<String>,
+}
+
+/// `GET /logs/files`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct LogFiles {
+    pub files: Vec<LogFileInfo>,
+    /// The logs folder; null when there's none to read.
+    #[schema(required = true)]
+    pub folder: Option<String>,
+    /// `false`: the folder's details index couldn't be read, so every file
+    /// counts as having details.
+    pub index_readable: bool,
+    /// Why nothing is listed (`unavailable`): `not_opened`, `not_a_folder`,
+    /// `not_private` or `unreadable`.
+    #[schema(required = true)]
+    pub reason: Option<String>,
+    pub state: LogFileState,
+}
+
+/// A download's format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LogFormat {
+    Jsonl,
+    Text,
+}
+
+/// Which files `DELETE /logs/files` deletes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LogFilesWhich {
+    All,
+    /// Those containing torrent details (or written under an opt-in).
+    Details,
+}
+
+/// `DELETE /logs/files`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DeleteLogFiles {
+    pub which: LogFilesWhich,
+}
+
+/// A file `DELETE /logs/files` left.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct LogFileSkipped {
+    pub name: String,
+    /// `not_a_regular_file` or `failed`.
+    pub reason: String,
+}
+
+/// What `DELETE /logs/files` did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct LogFilesDeleted {
+    pub bytes: u64,
+    pub deleted: u64,
+    pub skipped: Vec<LogFileSkipped>,
+}
