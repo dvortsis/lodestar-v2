@@ -227,13 +227,13 @@
    "merge": "8c1159e"
   },
   "W9": {
-   "status": "blocked",
+   "status": "review",
    "model": "sonnet",
    "session": "session_01HpQ4gCiiJq5eRwciaE8Lus",
    "pr": 103,
    "attempt": 0,
    "review_rounds": 1,
-   "notes": "launched 22:38; deps W7ab,W7cd,W5,W3 merged | 23:40 review FIX: .update-snapshots marker must not merge (commit CI baselines), size reason; SSE-only reachability lockout, Enter hijack, metrics.md cite, safeNext control chars; polish. | 00:47 code findings fixed; lhci mobile fails (109KB/2.66s vs 102400B/2500ms; main 83KB/2.41s). Runner: keep budgets (owner best-UX), do (c) defer stream + (b) vite.config/app.html/font fixes allowed; report if still over. Baselines import pending. | 00:59 c5d0549: lhci passes locally (97.7KB, LCP 2.4s, CLS 0) via deferred stream/chrome/toaster + font preload moved after first frame; awaiting baselines import + marker removal. Then runner verifies delta (shared-file edits) and merges on green. Carry: recheck FOUT/CLS when Search lands. | 01:33 E2E run 39881347868 green, artifact 12470864759 (snapshot-baselines). BLOCKED: proxy denies productionresultssa9.blob.core.windows.net for all sessions. Asked owner: allow host or import artifact (as b2b46df). W9 waits with marker. | 02:30 main+M-auth merged, installAuthHandlers adopted, handoff.ts removed; marker kept; new E2E run will upload fresh baselines (artifact id changes: owner should import the newest)."
+   "notes": "launched 22:38; deps W7ab,W7cd,W5,W3 merged | 23:40 review FIX: .update-snapshots marker must not merge (commit CI baselines), size reason; SSE-only reachability lockout, Enter hijack, metrics.md cite, safeNext control chars; polish. | 00:47 code findings fixed; lhci mobile fails (109KB/2.66s vs 102400B/2500ms; main 83KB/2.41s). Runner: keep budgets (owner best-UX), do (c) defer stream + (b) vite.config/app.html/font fixes allowed; report if still over. Baselines import pending. | 00:59 c5d0549: lhci passes locally (97.7KB, LCP 2.4s, CLS 0) via deferred stream/chrome/toaster + font preload moved after first frame; awaiting baselines import + marker removal. Then runner verifies delta (shared-file edits) and merges on green. Carry: recheck FOUT/CLS when Search lands. | 01:33 E2E run 39881347868 green, artifact 12470864759 (snapshot-baselines). BLOCKED: proxy denies productionresultssa9.blob.core.windows.net for all sessions. Asked owner: allow host or import artifact (as b2b46df). W9 waits with marker. | 02:30 main+M-auth merged, installAuthHandlers adopted, handoff.ts removed; marker kept; new E2E run will upload fresh baselines (artifact id changes: owner should import the newest). | 03:00 owner decision (via owner session): CI commit-back job for baselines (best practice; no host allowlist). W9 may edit e2e.yml + web/e2e/README.md. Needs fresh review + /security-review of workflow delta. No longer waiting on owner."
   },
   "M-auth": {
    "status": "merged",
