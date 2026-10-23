@@ -891,7 +891,7 @@ fn rebuild_and_swap(
 }
 
 /// Torrents stored with ids in `(after, upto]`.
-fn stored_between(store: &Store, mut after: i64, upto: i64) -> Result<u64> {
+pub(crate) fn stored_between(store: &Store, mut after: i64, upto: i64) -> Result<u64> {
     let mut n = 0;
     while after < upto {
         let ids = store.ids_after(after, 10_000)?;
