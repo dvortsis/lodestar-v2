@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T07:47:23Z",
+ "updated_at": "2026-10-23T07:52:19Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -972,7 +972,7 @@
    "pr": 92,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 01:05 PR #92; told: env release/nightly on jobs, signing reqs in PR desc for B-update. | 01:27 d9b3ef0 MSI: ProgramData ACL inheritance removed, LocalService, firewall Private-only, Defender opt-in; PRESHUTDOWN left to M6-win. MSI smoke iterating. | 01:48 8d4f971 MSI: NT SERVICE\\Lodestar, empty folder + icacls matching acl.rs, PreShutdownDelay 60s, foreign-owner stop. Review when MSI smoke green. | 02:17 secure-datadir.ps1 creates folder with SD; runner: marker trust on existing folder needs protected strict DACL + top-level owners (match M6-win). WiX smoke not green yet. | 2026-10-23T06:38:50Z heartbeat: session idle since 04:29 on usage limit (reset); woken to merge main + fix MSI job | 2026-10-23T06:48:04Z MSI 1603 root cause: service SID lookup at install; now derives S-1-5-80 SID; release matrix no-fixture; cleared to change Dockerfile features (scope exception); asked for SID unit test (TrustedInstaller) | 2026-10-23T07:09:40Z 6098bf5: ps1 own-SID owner, recreate non-private empty folder, link scan fail-closed; asked for smoke case; security review after Windows MSI smoke green"
+   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 01:05 PR #92; told: env release/nightly on jobs, signing reqs in PR desc for B-update. | 01:27 d9b3ef0 MSI: ProgramData ACL inheritance removed, LocalService, firewall Private-only, Defender opt-in; PRESHUTDOWN left to M6-win. MSI smoke iterating. | 01:48 8d4f971 MSI: NT SERVICE\\Lodestar, empty folder + icacls matching acl.rs, PreShutdownDelay 60s, foreign-owner stop. Review when MSI smoke green. | 02:17 secure-datadir.ps1 creates folder with SD; runner: marker trust on existing folder needs protected strict DACL + top-level owners (match M6-win). WiX smoke not green yet. | 2026-10-23T06:38:50Z heartbeat: session idle since 04:29 on usage limit (reset); woken to merge main + fix MSI job | 2026-10-23T06:48:04Z MSI 1603 root cause: service SID lookup at install; now derives S-1-5-80 SID; release matrix no-fixture; cleared to change Dockerfile features (scope exception); asked for SID unit test (TrustedInstaller) | 2026-10-23T07:09:40Z 6098bf5: ps1 own-SID owner, recreate non-private empty folder, link scan fail-closed; asked for smoke case; security review after Windows MSI smoke green | 2026-10-23T07:52:19Z told: SYSTEM Add-Content to Temp log follows links -> CreateNew random file / no reparse / MSI log; escape names"
   },
   "M6-cli": {
    "status": "merged",
@@ -985,13 +985,13 @@
    "merge": "953ff83"
   },
   "M6-win": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01CqsN771NrbwFdVvvzXpoLm",
    "pr": 98,
    "attempt": 1,
    "review_rounds": 3,
-   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 01:35 review FIX sent: stale vs M6-cli cli::parse (won't compile), ProgramData ACL inherited (Users RW: auth.json/setup token/config plant) -> icacls lockdown + test; important: StopPending during start, SCM dispatcher only for service argv, PowerShell trade-off doc, SO_LINGER widens \u00a711 doc. P-release told MSI reqs. | 01:58 1384865 fixes (acl.rs icacls lockdown, try_parse_from hook, StopPending). Delta reviewer started (ACL TOCTOU/junction). P-release asked to switch MSI to NT SERVICE\\Lodestar. | 02:00 19b0278 switched to LocalService (crossed msgs); runner decided NT SERVICE\\Lodestar (matches #92 8d4f971), DACL check must refuse LocalService. Hold pushes until delta review findings. | 02:05 NT SERVICE\\Lodestar via sc showsid, DACL check only SYSTEM/Admins/own SID; held locally pending delta review. | 02:20 delta review 3d7c19b FIX: owner unchecked + plantable marker (junction via MSI window/LocalSystem), /T walk as SYSTEM before refusal, SDDL NULL DACL/OA/D: parse; I1 create-with-ACL, I2 CI as virtual account. P-release told PermissionEx at CreateFolder. | 2026-10-23T06:14:33Z 6bd4661 windows test red: acl take-over leaves LA ACE (acl.rs:810); told session | 2026-10-23T06:53:24Z f189463 ready, CI all green incl real-Windows ACL + service tests; delta review 3 started | 2026-10-23T07:05:59Z delta 3 FIX: B1' take-over under LocalSystem (held-handle attack) -> runner design call: service never takes over, refuses + 'repair'; I2 own-SID owner for created folder; I3 path compare; I4 /L junction test; I5 log refusal reason. P-release told: own-SID owner + recreate non-private folder | 2026-10-23T07:47:23Z 73d5c31 round 4: take-over removed, own-SID owner, same_dir, junction test, refusal log; CI green; delta review 4 started"
+   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 01:35 review FIX sent: stale vs M6-cli cli::parse (won't compile), ProgramData ACL inherited (Users RW: auth.json/setup token/config plant) -> icacls lockdown + test; important: StopPending during start, SCM dispatcher only for service argv, PowerShell trade-off doc, SO_LINGER widens \u00a711 doc. P-release told MSI reqs. | 01:58 1384865 fixes (acl.rs icacls lockdown, try_parse_from hook, StopPending). Delta reviewer started (ACL TOCTOU/junction). P-release asked to switch MSI to NT SERVICE\\Lodestar. | 02:00 19b0278 switched to LocalService (crossed msgs); runner decided NT SERVICE\\Lodestar (matches #92 8d4f971), DACL check must refuse LocalService. Hold pushes until delta review findings. | 02:05 NT SERVICE\\Lodestar via sc showsid, DACL check only SYSTEM/Admins/own SID; held locally pending delta review. | 02:20 delta review 3d7c19b FIX: owner unchecked + plantable marker (junction via MSI window/LocalSystem), /T walk as SYSTEM before refusal, SDDL NULL DACL/OA/D: parse; I1 create-with-ACL, I2 CI as virtual account. P-release told PermissionEx at CreateFolder. | 2026-10-23T06:14:33Z 6bd4661 windows test red: acl take-over leaves LA ACE (acl.rs:810); told session | 2026-10-23T06:53:24Z f189463 ready, CI all green incl real-Windows ACL + service tests; delta review 3 started | 2026-10-23T07:05:59Z delta 3 FIX: B1' take-over under LocalSystem (held-handle attack) -> runner design call: service never takes over, refuses + 'repair'; I2 own-SID owner for created folder; I3 path compare; I4 /L junction test; I5 log refusal reason. P-release told: own-SID owner + recreate non-private folder | 2026-10-23T07:47:23Z 73d5c31 round 4: take-over removed, own-SID owner, same_dir, junction test, refusal log; CI green; delta review 4 started | 2026-10-23T07:52:19Z delta 4 MERGE; merged #98 as 384f1f9 (Linux merged-tree check ok; Windows via CI)"
   },
   "R-relevance": {
    "status": "merged",
@@ -1327,7 +1327,8 @@
   "B11b-gauge-13": "B11b daily compaction/rollup --repair must treat metric 13 (SEARCHABLE) as a gauge (keep last per day, never sum) - from B11a #116",
   "flake-stats-metrics": "lodestar ops::tests::stats_match_the_metrics (ops/tests.rs:445, queue_depth /stats vs /metrics after pause) failed once under parallel load (B11a report 06:34); candidate for a flake fix slice if it recurs in CI",
   "release-features-licences": "P-release/Dockerfile must build --no-default-features --features web (no fixture) so licences inventory matches what ships (rand_chacha unlisted today) - from B2c review | P-release #92 now covers release matrix + Dockerfile",
-  "docs-LODESTAR_LOG": "Docs follow-up: docs/operations.md:26 and packaging/docker/README.md:72 must say setting LODESTAR_LOG makes the logging section read-only (from B-log1 review)"
+  "docs-LODESTAR_LOG": "Docs follow-up: docs/operations.md:26 and packaging/docker/README.md:72 must say setting LODESTAR_LOG makes the logging section read-only (from B-log1 review)",
+  "win-hardening-followup": "Windows service hardening follow-up (from M6-win delta 4, admin-only/low): same_dir should canonicalize the parent and compare final name (8.3, \\\\?\\, UNC, trailing dot); compute config 'elsewhere' via same_dir for --config and LODESTAR_DATA_DIR; refusal log open with FILE_FLAG_OPEN_REPARSE_POINT + regular-file check, doc says untrusted (or event log); acl.rs:10-11 comment names SYSTEM/Administrators"
  },
  "blocked_on_owner": [],
  "launches_today": 17,
