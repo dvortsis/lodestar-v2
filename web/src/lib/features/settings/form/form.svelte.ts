@@ -147,6 +147,7 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 	let previewTimer: ReturnType<typeof setTimeout> | undefined;
 	let draftData: Draft | null = null;
 	let inFlight: Set<string> | null = null; // sections of the save in flight
+	let failedOp: 'save' | 'undo' = 'save'; // what Retry re-runs
 	let held = new Map<string, number>(); // events held during it
 	let destroyed = false;
 	let announceSeq = 0;
@@ -159,6 +160,9 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 	const previewSlot = latest();
 
 	const specOf = (section: string, name: string) => byKey.get(`${section}.${name}`);
+	/** A section by a name from outside (an event, a caller's key): own properties only. */
+	const sec = (section: string): SectionState | undefined =>
+		Object.hasOwn(sections, section) ? sections[section] : undefined;
 	const inForm = (section: string, name: string) => byKey.has(`${section}.${name}`);
 
 	function announce(text: string) {
@@ -240,7 +244,13 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 	function offerDraft() {
 		const d = readDraft(opts.id);
 		if (!d) return;
-		const plan = planRestore(d, sections, specOf);
+		let plan: ReturnType<typeof planRestore>;
+		try {
+			plan = planRestore(d, sections, specOf);
+		} catch {
+			clearDraft(opts.id); // a draft that can't be read turns drafts off, nothing else
+			return;
+		}
 		if (plan.fields === 0) {
 			clearDraft(opts.id);
 			return;
@@ -254,7 +264,7 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 	function field(key: FieldKey): FieldState {
 		const spec = byKey.get(key);
 		const [section, name] = splitKey(key);
-		const f = sections[section]?.fields[name];
+		const f = spec ? sec(section)?.fields[name] : undefined;
 		if (!spec || !f) {
 			return {
 				spec: spec ?? placeholderSpec(key),
@@ -308,7 +318,7 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 	function set(key: FieldKey, value: unknown) {
 		const spec = byKey.get(key);
 		const [section, name] = splitKey(key);
-		const s = sections[section];
+		const s = spec ? sec(section) : undefined;
 		if (!spec || !s) return;
 		const next = stage(s, name, value, spec);
 		if (next === s) return;
@@ -333,7 +343,7 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 	function blur(key: FieldKey) {
 		const spec = byKey.get(key);
 		const [section, name] = splitKey(key);
-		const f = sections[section]?.fields[name];
+		const f = spec ? sec(section)?.fields[name] : undefined;
 		if (!spec || !f) return;
 		setFieldError(key, isDirty(f) ? validate(spec, f.mine) : undefined);
 	}
@@ -347,8 +357,9 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 		fieldErrors = {};
 		previewErrors = {};
 		formErrors = [];
-		if (useDrafts) clearDraft(opts.id);
 		clearTimeout(draftTimer);
+		// An offered draft stays until the user restores or discards it.
+		if (useDrafts && !draftOffer) clearDraft(opts.id);
 		if (status === 'save-error' || status === 'offline') status = 'ready';
 		saveError = undefined;
 		schedulePreview();
@@ -356,7 +367,7 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 
 	function resolve(key: FieldKey, pick: 'mine' | 'theirs') {
 		const [section, name] = splitKey(key);
-		const s = sections[section];
+		const s = byKey.has(key) ? sec(section) : undefined;
 		if (!s) return;
 		setSection(resolveField(s, name, pick));
 		scheduleDraft();
@@ -581,6 +592,7 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 		let secrets = false;
 		for (const key of batchKeys(sent)) {
 			const [section, name] = splitKey(key);
+			if (!inForm(section, name)) continue; // a confirmation key (`confirm_adult`)
 			if (specOf(section, name)?.writeOnly) {
 				secrets = true;
 				continue;
@@ -592,12 +604,14 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 			batch[section][name] = before.source === 'db' ? before.value : null;
 		}
 		undoSkipsSecrets = secrets;
-		if (Object.keys(batch).length === 0 && !secrets) {
+		if (Object.keys(batch).length === 0) {
+			// Nothing to undo (a secret only): no Undo is offered, "Saved" still shows for a while.
 			undoBatch = null;
 			undoUntil = null;
+			undoTimer = setTimeout(endUndo, UNDO_MS);
 			return;
 		}
-		undoBatch = Object.keys(batch).length ? batch : null;
+		undoBatch = batch;
 		undoUntil = Date.now() + UNDO_MS;
 		undoTimer = setTimeout(endUndo, UNDO_MS);
 	}
@@ -655,7 +669,9 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 		}
 		const batch = formBatch();
 		if (Object.keys(batch).length === 0) return { ok: false, reason: 'nothing' };
-		const keys = batchKeys(batch) as FieldKey[];
+		// The draft is stored before anything is sent: a 401's redirect or a crash keeps it.
+		writeNow();
+		const keys = batchKeys(batch).filter((k) => byKey.has(k)) as FieldKey[];
 		// Validate every dirty field.
 		const errors: Record<string, string> = { ...fieldErrors };
 		let invalid = false;
@@ -676,6 +692,7 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 		}
 		const sent = new Set(Object.keys(batch));
 		inFlight = sent;
+		failedOp = 'save';
 		status = 'saving';
 		try {
 			const gated = await runGates(batch, keys);
@@ -694,7 +711,7 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 			if (useDrafts) {
 				if (dirtyKeys().length === 0) {
 					clearTimeout(draftTimer);
-					clearDraft(opts.id);
+					if (!draftOffer) clearDraft(opts.id);
 				} else writeNow();
 			}
 			announce(
@@ -744,13 +761,22 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 	}
 
 	async function undo(key?: FieldKey): Promise<SaveResult> {
-		if (mode === 'instant') return key ? undoInstant(key) : { ok: false, reason: 'nothing' };
+		if (mode === 'instant') {
+			if (!key) return { ok: false, reason: 'nothing' };
+			const run = instantChain.then(() => {
+				const spec = byKey.get(key);
+				return spec ? holding(spec.section, () => undoInstant(key)) : undoInstant(key);
+			});
+			instantChain = run;
+			return run;
+		}
 		if (inFlight) return { ok: false, reason: 'busy' };
 		const batch = undoBatch;
 		if (!batch || undoUntil === null || Date.now() > undoUntil)
 			return { ok: false, reason: 'nothing' };
 		const sent = new Set(Object.keys(batch));
 		inFlight = sent;
+		failedOp = 'undo';
 		status = 'saving';
 		try {
 			const r = await send(batch);
@@ -815,7 +841,22 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 		else instantTimers.set(spec.key, setTimeout(run, DEBOUNCE_MS));
 	}
 
-	async function sendInstant(spec: FieldSpec, retried = false): Promise<SaveResult> {
+	/** Runs an instant-mode send with its section's events held, like a staged save's. */
+	async function holding<T>(section: string, f: () => Promise<T>): Promise<T> {
+		const sent = new Set([section]);
+		inFlight = sent;
+		try {
+			return await f();
+		} finally {
+			afterSend(sent);
+		}
+	}
+
+	function sendInstant(spec: FieldSpec): Promise<SaveResult> {
+		return holding(spec.section, () => sendInstantNow(spec));
+	}
+
+	async function sendInstantNow(spec: FieldSpec, retried = false): Promise<SaveResult> {
 		const { section, name, key } = spec;
 		const s = sections[section];
 		const f = s?.fields[name];
@@ -827,12 +868,19 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 		}
 		const prev = f.saved;
 		const batch: Batch = { [section]: { if_revision: s.revision, [name]: wire(f.mine) } };
+		// Danger classes gate instant changes too, and fail closed the same way.
+		const gated = await runGates(batch, [key]);
+		if (gated) {
+			const now = sections[section];
+			if (now) setSection(stage(now, name, undefined, spec));
+			return gated;
+		}
 		const r = await send(batch);
 		if (destroyed) return { ok: false, reason: 'cancelled' };
 		if (r.ok) {
 			applyResponse(r.batch, r.values);
 			savedRecently = {};
-			offerInstantUndo(key, prev);
+			if (!spec.writeOnly) offerInstantUndo(key, prev); // a secret's old value is never known
 			announce(m.settings_form_announce_changed());
 			return { ok: true, restart: [] };
 		}
@@ -843,7 +891,7 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 			const cur = sections[section];
 			if (v && cur) {
 				setSection({ ...cur, revision: v.revision, restart: v.restart_required });
-				return sendInstant(spec, true);
+				return sendInstantNow(spec, true);
 			}
 		}
 		// Put the old value back, with the error inline.
@@ -919,7 +967,7 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 		try {
 			const v = await slotFor(section).run((signal) => getSection(section, signal));
 			if (destroyed) return;
-			const s = sections[section];
+			const s = sec(section);
 			if (!s) return;
 			if (inFlight?.has(section)) {
 				// Our own save's response is authoritative; look again after it.
@@ -934,7 +982,7 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 	}
 
 	function received(e: SettingsEvent) {
-		const s = sections[e.section];
+		const s = sec(e.section);
 		if (!s || e.revision <= s.revision) return;
 		if (inFlight?.has(e.section)) {
 			held.set(e.section, Math.max(held.get(e.section) ?? 0, e.revision));
@@ -951,7 +999,17 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 
 	async function retry() {
 		if (status === 'load-error') return load();
-		if (status === 'offline' || status === 'save-error') await save();
+		if (status !== 'offline' && status !== 'save-error') return;
+		if (failedOp === 'save') {
+			await save();
+			return;
+		}
+		const r = await undo();
+		if (!r.ok && r.reason === 'nothing') {
+			// Undo's window closed while offline: there's nothing left to retry.
+			status = 'ready';
+			saveError = undefined;
+		}
 	}
 
 	function destroy() {

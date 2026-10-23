@@ -3,6 +3,7 @@ import { asValues, merge, resolve } from './merge';
 import { sv, values } from './testing';
 import type { SettingValue } from './types';
 import {
+	differs,
 	dirtyNames,
 	equal,
 	fromValues,
@@ -157,10 +158,21 @@ describe('the merge, as a property', () => {
 
 	type Case = { s: SectionState; theirs: ReturnType<typeof values>; touched: Map<string, Staged> };
 
+	const locked = (v: SettingValue) => v.source === 'env' || v.read_only;
+
 	function gen(): Case {
 		const n = 1 + Math.floor(r() * 6);
 		const fields: Record<string, SettingValue> = {};
-		for (let i = 0; i < n; i++) fields[`f${i}`] = sv(value(), source());
+		for (let i = 0; i < n; i++) {
+			// Some start locked (env-set or read-only): they never take an edit.
+			const roll = r();
+			fields[`f${i}`] =
+				roll < 0.1
+					? sv(value(), 'env', { env: 'LODESTAR_F', read_only: true })
+					: roll < 0.15
+						? sv(value(), 'default', { read_only: true })
+						: sv(value(), source());
+		}
 		let s = start(fields);
 		const touched = new Map<string, Staged>();
 		for (const name of Object.keys(fields)) {
@@ -168,6 +180,7 @@ describe('the merge, as a property', () => {
 			const mine = r() < 0.2 ? RESET : value();
 			s = stage(s, name, mine);
 			if (s.fields[name]!.mine !== undefined) touched.set(name, s.fields[name]!.mine);
+			else if (!locked(fields[name]!)) expect(differs(mine, fields[name]!)).toBe(false);
 		}
 		const tf: Record<string, SettingValue> = {};
 		for (const [name, f] of Object.entries(fields)) {
@@ -182,12 +195,11 @@ describe('the merge, as a property', () => {
 		return { s, theirs: values('crawler', 3 + Math.floor(r() * 5), tf), touched };
 	}
 
-	const locked = (v: SettingValue) => v.source === 'env' || v.read_only;
 	const matches = (mine: Staged, t: SettingValue) =>
 		mine === RESET ? t.source !== 'db' : equal(mine, t.value);
 
 	it('holds over 2,000 seeded cases', () => {
-		const seen = { conflicts: 0, locked: 0, removed: 0, kept: 0, resets: 0 };
+		const seen = { conflicts: 0, locked: 0, removed: 0, kept: 0, resets: 0, lockedStart: 0 };
 		for (let i = 0; i < 2000; i++) {
 			const { s, theirs, touched } = gen();
 			const out = merge(s, theirs);
@@ -195,6 +207,10 @@ describe('the merge, as a property', () => {
 			seen.locked += out.locked.length;
 			seen.removed += out.removed.length;
 			seen.resets += [...touched.values()].filter((v) => v === RESET).length;
+			seen.lockedStart += Object.values(s.fields).filter((f) => locked(f.saved)).length;
+			for (const [name, f] of Object.entries(s.fields)) {
+				if (locked(f.saved)) expect(touched.has(name), `case ${i}`).toBe(false);
+			}
 			seen.kept += Object.values(out.state.fields).filter((f) => f.mine && !f.conflict).length;
 			const st = out.state;
 			const ctx = `case ${i}`;
@@ -239,11 +255,13 @@ describe('the merge, as a property', () => {
 			// (d) after Keep mine on every conflict, dirty = fields where mine ≠ theirs
 			let kept = st;
 			for (const name of out.conflicts) kept = resolve(kept, name, 'mine');
-			const expectDirty = Object.keys(kept.fields).filter((name) => {
-				const mine = kept.fields[name]!.mine;
-				return mine !== undefined && !matches(mine, theirs.fields[name]!);
+			// Expected from the generator's inputs, not from the merged state.
+			const expectDirty = [...touched].filter(([name, mine]) => {
+				const t = theirs.fields[name];
+				return t !== undefined && !locked(t) && !matches(mine, t);
 			});
-			expect(dirtyNames(kept).sort(), ctx).toEqual(expectDirty.sort());
+			expect(dirtyNames(kept).sort(), ctx).toEqual(expectDirty.map(([n]) => n).sort());
+			for (const [name, mine] of expectDirty) expect(kept.fields[name]!.mine, ctx).toBe(mine);
 			// …and Use theirs on every conflict leaves none of them dirty
 			let taken = st;
 			for (const name of out.conflicts) taken = resolve(taken, name, 'theirs');

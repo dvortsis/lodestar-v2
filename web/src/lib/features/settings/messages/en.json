@@ -32,6 +32,6 @@
 	"settings_form_announce_updated": "Updated elsewhere.",
 	"settings_form_announce_merged": "These settings were changed elsewhere. Your changes are kept; review them and save again.",
 	"settings_form_announce_conflicts": "Some settings were changed elsewhere. Choose which value to keep, then save again.",
-	"settings_form_announce_removed": "{count} settings no longer exist and were left out of your changes.",
+	"settings_form_announce_removed": "Settings that no longer exist were left out of your changes: {count}.",
 	"settings_form_announce_secret_removed": "Removed."
 }

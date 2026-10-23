@@ -75,7 +75,7 @@ export function writeDraft(id: string, draft: Draft | null): boolean {
 			return true;
 		}
 		const text = JSON.stringify(draft);
-		if (text.length > DRAFT_MAX_BYTES) {
+		if (new TextEncoder().encode(text).length > DRAFT_MAX_BYTES) {
 			devWarn(`the draft for "${id}" is over 64 KiB; it isn't kept`);
 			store.removeItem(DRAFT_PREFIX + id);
 			return false;
@@ -144,7 +144,7 @@ export function planRestore(
 	const plan: RestorePlan = { sections: { ...current }, fields: 0, dropped: 0, conflicts: [] };
 	for (const [section, d] of Object.entries(draft.sections)) {
 		const names = [...new Set([...Object.keys(d.mine), ...d.reset])];
-		const cur = current[section];
+		const cur = Object.hasOwn(current, section) ? current[section] : undefined;
 		if (!cur) {
 			plan.dropped += names.length;
 			continue;
@@ -153,7 +153,7 @@ export function planRestore(
 		const fields: Record<string, FieldModel> = { ...cur.fields };
 		for (const name of names) {
 			const spec = specOf(section, name);
-			const f = cur.fields[name];
+			const f = Object.hasOwn(cur.fields, name) ? cur.fields[name] : undefined;
 			const mine: Staged = d.reset.includes(name) ? RESET : d.mine[name];
 			const ok =
 				spec &&

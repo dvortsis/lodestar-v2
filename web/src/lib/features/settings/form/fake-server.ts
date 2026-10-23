@@ -14,7 +14,7 @@ export function fakeServer(initial: SectionValues[]) {
 	/** Canned replies for the next requests to a route (`PATCH /settings`), in order. */
 	const queued = new Map<string, (Reply | ((body: unknown) => Reply))[]>();
 	/** Hold the next request to a route until `release()`. */
-	const holds = new Map<string, { release: () => void }[]>();
+	const holds = new Map<string, { release: () => void; applied: boolean }[]>();
 	let previewReply: (body: Record<string, Record<string, unknown>>) => Reply = (body) => ({
 		status: 200,
 		body: {
@@ -99,9 +99,12 @@ export function fakeServer(initial: SectionValues[]) {
 		const body = init.body === undefined ? undefined : JSON.parse(String(init.body));
 		calls.push({ method, path, body });
 		const hold = holds.get(`${method} ${path}`)?.shift();
-		if (hold) await new Promise<void>((r) => (hold.release = r));
+		const wait = () => new Promise<void>((r) => (hold!.release = r));
+		if (hold && !hold.applied) await wait();
 		if (init.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 		const reply = route(method, path, body);
+		// `applied`: the server has saved, only the response is late (its event can come first).
+		if (hold?.applied) await wait();
 		if (reply.status === 0) throw new TypeError('Failed to fetch');
 		const headers = new Headers(reply.headers);
 		return {
@@ -127,8 +130,8 @@ export function fakeServer(initial: SectionValues[]) {
 		next(route: string, ...replies: (Reply | ((body: unknown) => Reply))[]) {
 			queued.set(route, [...(queued.get(route) ?? []), ...replies]);
 		},
-		hold(route: string) {
-			const h = { release: () => {} };
+		hold(route: string, opts: { applied?: boolean } = {}) {
+			const h = { release: () => {}, applied: opts.applied ?? false };
 			holds.set(route, [...(holds.get(route) ?? []), h]);
 			return () => h.release();
 		},
