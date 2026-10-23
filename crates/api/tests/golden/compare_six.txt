@@ -1,0 +1,2 @@
+400
+{"error":{"code":"compare_count","field":"hashes","message":"Compare takes 2 to 5 torrents; this asked for 6."}}
