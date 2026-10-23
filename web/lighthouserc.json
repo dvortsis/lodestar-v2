@@ -14,6 +14,9 @@
 		},
 		"assert": {
 			"assertions": {
+				"first-contentful-paint": ["warn", { "maxNumericValue": 1, "aggregationMethod": "median" }],
+				"speed-index": ["warn", { "maxNumericValue": 1, "aggregationMethod": "median" }],
+				"interactive": ["warn", { "maxNumericValue": 1, "aggregationMethod": "median" }],
 				"largest-contentful-paint": [
 					"error",
 					{ "maxNumericValue": 2500, "aggregationMethod": "median" }
