@@ -145,6 +145,7 @@ fn fixture(ts: &[T], o: Opts) -> Fixture {
                 ops: None,
                 adult: AdultVisibility::follow(move || shown.load(Ordering::SeqCst)),
                 user_data: None,
+                insights: None,
             }),
         )
         .layer(Extension(o.config))
