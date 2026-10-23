@@ -212,6 +212,7 @@ fn fixture_with(method: Option<RestartMethod>) -> Fixture {
         settings: None,
         ops: None,
         user_data: None,
+        insights: None,
         adult: Default::default(),
     });
     let system = method.map(|method| {

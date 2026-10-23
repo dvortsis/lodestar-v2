@@ -39,6 +39,8 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET", "/torrents/{hash}/siblings"),
     ("POST", "/compare"),
     ("GET", "/discover"),
+    ("GET", "/insights/overview"),
+    ("GET", "/insights/events"),
     ("GET", "/filters"),
     ("GET", "/filters/queue"),
     ("GET", "/filters/tombstones"),
@@ -248,6 +250,7 @@ fn app_with_keys() -> (tempfile::TempDir, Router, Arc<Auth>, Arc<Mutex<Store>>) 
             ops: None,
             user_data: Some(store.clone()),
             adult: Default::default(),
+            insights: None,
         }),
     );
     (dir, app, auth, store)

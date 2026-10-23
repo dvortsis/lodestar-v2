@@ -171,6 +171,7 @@ async fn fixture() -> Fixture {
             ops: Some(ops.clone()),
             user_data: None,
             adult: Default::default(),
+            insights: None,
         }),
     );
     Fixture {

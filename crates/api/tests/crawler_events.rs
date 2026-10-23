@@ -181,6 +181,7 @@ fn fixture() -> Fixture {
                 settings: Some(Arc::new(settings)),
                 ops: Some(Arc::new(FakeOps)),
                 user_data: None,
+                insights: None,
                 adult: Default::default(),
             }),
         )
@@ -344,6 +345,7 @@ async fn without_a_hub_the_controls_still_work() {
             })),
             ops: Some(Arc::new(FakeOps)),
             user_data: None,
+            insights: None,
             adult: Default::default(),
         }),
     );
