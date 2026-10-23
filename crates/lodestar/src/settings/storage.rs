@@ -27,10 +27,14 @@ impl Section for Storage {
         Field::new("mmap_mib")
             .file("store.mmap_mib")
             .restart()
-            .range(0, 65_536),
+            .range(0, 65_536)
+            .group("database")
+            .advanced()
+            .unit("mebibytes"),
         Field::new("archive_raw")
             .file("store.archive_raw")
-            .restart(),
+            .restart()
+            .group("database"),
     ];
 
     fn from_config(config: &Config) -> Self {

@@ -25,7 +25,11 @@ impl Env {
     }
 }
 
-fn config(dir: &Path, file: Option<&str>, env: &[(&'static str, &'static str)]) -> Config {
+pub(super) fn config(
+    dir: &Path,
+    file: Option<&str>,
+    env: &[(&'static str, &'static str)],
+) -> Config {
     let env = Env(env.to_vec());
     let path = file.map(|text| {
         let p = dir.join("config.toml");
@@ -35,17 +39,17 @@ fn config(dir: &Path, file: Option<&str>, env: &[(&'static str, &'static str)]) 
     Config::load(path.as_deref(), |k| env.get(k)).unwrap()
 }
 
-fn open(dir: &Path) -> Arc<Mutex<Store>> {
+pub(super) fn open(dir: &Path) -> Arc<Mutex<Store>> {
     Arc::new(Mutex::new(
         Store::open(dir.join("t.db"), StoreConfig::default()).unwrap(),
     ))
 }
 
-fn registry(dir: &Path, config: &Config) -> Registry {
+pub(super) fn registry(dir: &Path, config: &Config) -> Registry {
     Registry::load(config, open(dir)).unwrap()
 }
 
-fn patch(v: Value) -> SettingsPatch {
+pub(super) fn patch(v: Value) -> SettingsPatch {
     match v {
         Value::Object(m) => SettingsPatch(m),
         _ => panic!("a patch is an object"),
@@ -139,7 +143,8 @@ fn every_section_reports_every_field() {
             "transport",
             "storage",
             "search",
-            "content"
+            "content",
+            "preferences"
         ]
     );
     for s in &index.sections {
@@ -472,7 +477,7 @@ fn a_partial_patch_leaves_other_fields_alone() {
         r.store
             .lock()
             .unwrap()
-            .settings_with_prefix(KEY_PREFIX)
+            .settings_with_prefix("settings.crawler.")
             .unwrap(),
         vec![(
             "settings.crawler.intensity".to_string(),
@@ -733,7 +738,17 @@ fn filtering_state_is_out_of_reach() {
     );
     assert_eq!(store.setting_text("packs").unwrap().as_deref(), Some("{}"));
     assert_eq!(store.setting_i64("first_run_at").unwrap(), Some(1));
-    assert_eq!(store.settings_with_prefix(KEY_PREFIX).unwrap().len(), 1);
+    // The value and the section's revision.
+    assert_eq!(
+        store.settings_with_prefix(KEY_PREFIX).unwrap(),
+        [
+            ("settings.crawler#revision".to_string(), "1".to_string()),
+            (
+                "settings.crawler.intensity".to_string(),
+                "\"low\"".to_string()
+            )
+        ]
+    );
 }
 
 #[test]
@@ -873,7 +888,7 @@ async fn null_resets_a_field_to_the_file_or_default() {
         r.store
             .lock()
             .unwrap()
-            .settings_with_prefix(KEY_PREFIX)
+            .settings_with_prefix("settings.crawler.")
             .unwrap(),
         vec![
             (
@@ -901,14 +916,17 @@ async fn null_resets_a_field_to_the_file_or_default() {
         .patch("crawler", patch(json!({ "encryption": null })))
         .unwrap();
     assert!(out.restart_required.is_empty());
-    assert!(
+    // No value is saved; only the section's revision, which counted every
+    // save that changed it (and not the reset that changed nothing).
+    assert_eq!(
         r.store
             .lock()
             .unwrap()
             .settings_with_prefix(KEY_PREFIX)
-            .unwrap()
-            .is_empty()
+            .unwrap(),
+        [("settings.crawler#revision".to_string(), "4".to_string())]
     );
+    assert_eq!(out.revision, 4);
     // It survives a restart as reset.
     let r = registry(dir.path(), &c);
     assert_eq!(field(&r, "crawler", "timeout_secs").1, SettingSource::File);
@@ -966,7 +984,7 @@ fn the_healthcheck_probes_the_bind_the_server_uses() {
 }
 
 /// Runs `f` with a subscriber that records what it logs, and returns that.
-fn logs(f: impl FnOnce()) -> String {
+pub(super) fn logs(f: impl FnOnce()) -> String {
     #[derive(Clone, Default)]
     struct Buf(Arc<Mutex<Vec<u8>>>);
     impl std::io::Write for Buf {
