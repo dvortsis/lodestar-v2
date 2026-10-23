@@ -24,12 +24,30 @@ A key change is a signed statement. It names the key's **role** (release, nightl
 - **A statement whose sequence number isn't higher than the last one accepted is refused,** so an old statement can't be replayed.
 - **Installed copies keep this trust state** (the accepted statements, the sequence number, the revoked keys, and the newest manifest time seen) in `<data>/bin/trust.json`. It sits outside the database and every snapshot, so rolling back a failed update never undoes a revocation. Each Lodestar build also embeds the key statements published before it was built, so deleting `trust.json` can't undo a revocation that build knows about.
 
-To rotate:
-1. Generate a new key pair (`minisign -G -W`).
-2. Write the key-change statement: the new public key, the next sequence number and the date.
-3. Sign the statement with the **recovery** key, and with the old release key too if it's still trusted.
-4. Publish the statement with the next release. **From then on, every manifest carries the statements** that chain its key to the recovery key, and every freshness statement after a freshness-key rotation carries them too, so a copy that was offline across the rotation can still verify.
+To rotate (the formats are in `crates/update/README.md`):
+1. Generate a new key pair (`minisign -G -W`). Keep the new `.pub` file's second line, the base64 key line.
+2. Write the key-change statement as a file, for example `statement.json`. It is one JSON object with exactly these fields:
+
+   ```json
+   {"type": "lodestar-key", "seq": 1, "role": "release", "key": "RWQ…the new key line…", "timestamp": 1790000000}
+   ```
+
+   - `seq` is one higher than the last statement published (the first is 1; one sequence for all roles).
+   - `role` is `release`, `nightly` or `freshness`.
+   - `timestamp` is the current time in Unix seconds (`date +%s`). Installed copies refuse a statement dated more than a day ahead of their clock.
+   - The key must never have been used before, by any role.
+3. Sign the file with the **recovery** key, with a prehashed signature (the default; never `-l`):
+
+   ```sh
+   minisign -S -s lodestar-recovery.key -m statement.json -t 'lodestar key statement'
+   ```
+
+   This writes `statement.json.minisig`. Check it with `minisign -V -p lodestar-recovery.pub -m statement.json`. A co-signature with the old key (the same command with the old key and `-x statement.json.cosig`) is optional and never enough on its own.
+4. Publish the statement with the next release: the release workflow puts `{"body": <base64 of statement.json, byte for byte>, "minisig": <the .minisig text>, "cosig": <optional>}` into the `statements` of every manifest, after all earlier statements: every document carries the whole chain from `seq` 1, in order. **From then on, every manifest carries the statements** that chain its key to the recovery key, and every freshness statement after a freshness-key rotation carries them too, so a copy that was offline across the rotation can still verify. Never change a published statement's bytes: a different statement with a sequence number already accepted is refused as equivocation.
 5. Replace the role's `.pub` file and its CI secret. For a release or nightly rotation, re-sign each affected channel's current manifest with the new key; for a freshness rotation, issue new freshness statements with the new key.
+6. Append the published statement to `crates/update/keys/statements.json`, so later builds embed it and deleting `trust.json` can't undo the revocation. Leave the `.pub` copies in `crates/update/keys/` as they are: they are the first key generation, and the statements carry every change after it. A test fails unless each `.pub` file here is its role's current key in the embedded chain.
+
+When the owner first creates the nightly or freshness key, the default is simpler: add its `.pub` file here, copy it into `crates/update/keys/`, and change that role's `None` in `crates/update/src/keys.rs` to its `include_str!` (one line). That makes it part of the first generation, with no statement. The choice is final for that key: a key introduced by a statement can't later be embedded as generation 0.
 
 ## The recovery key: an accepted risk
 
