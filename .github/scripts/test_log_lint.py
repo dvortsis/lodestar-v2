@@ -253,7 +253,13 @@ class Paths(unittest.TestCase):
                     "crates/a/src/lib.rs": "fn f() {}\n",
                 })
                 self.assertEqual(len(log_lint.run(root, [])), 1, manifest)
-        # Dev-dependencies, under a target too, and `tracing` by its name.
+        # Dev-dependencies, under a target too, `tracing` by its name, and
+        # a dependency named `log` that is another crate.
+        root = self.tree({
+            "crates/a/Cargo.toml": '[dependencies]\nlog = { package = "x", version = "1" }\n',
+            "crates/a/src/lib.rs": "fn f() {}\n",
+        })
+        self.assertEqual(log_lint.run(root, []), [])
         root = self.tree({
             "crates/a/Cargo.toml": (
                 '[dependencies]\ntracing = "0.1"\n'
