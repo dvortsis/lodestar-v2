@@ -300,13 +300,12 @@ async fn record(
             // days' sums are out of date. Read them again.
             let sealed = api::sealed_hour(crate::unix_now(), insights.seal_floor());
             let stale = r.first_cohort.filter(|&c| c < sealed);
-            if r.imported > 0 {
-                // Only onto a count that's in.
-                let _ = insights
+            // Only onto a count that's in. The recorder is the only
+            // writer, so the check and the add can't interleave.
+            if r.imported > 0 && insights.imported.load(Ordering::Acquire) >= 0 {
+                insights
                     .imported
-                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
-                        (n >= 0).then(|| n + r.imported as i64)
-                    });
+                    .fetch_add(r.imported as i64, Ordering::AcqRel);
             }
             insights.bump();
             if let Some(c) = stale {
