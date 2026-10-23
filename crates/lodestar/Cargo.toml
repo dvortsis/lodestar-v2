@@ -13,11 +13,19 @@ default-run = "lodestar"
 [dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json"] }
 clap = { version = "4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
+# Rotated log files are gzip-compressed (B-log1, architecture §12.1).
+flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
+# The log's per-run reference key (OS RNG) and its keyed hash.
+getrandom = "0.3.4"
+hmac = "0.13.0"
 lodestar-api.workspace = true
 # `serve --fixture`'s data set (src/fixture.rs), behind `fixture`.
 lodestar-bench = { path = "../../bench", optional = true }
 lodestar-dht.workspace = true
 lodestar-filter.workspace = true
+# The log folder's Windows ACL (`secret::restrict_dir_acl`).
+lodestar-integrations.workspace = true
+lodestar-log.workspace = true
 lodestar-peer-wire.workspace = true
 lodestar-pipeline.workspace = true
 lodestar-search.workspace = true
@@ -29,6 +37,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 mimalloc = { version = "0.1", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.11.0"
 tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
 toml = { version = "0.9", default-features = false, features = ["parse", "serde"] }
 tracing = "0.1.44"

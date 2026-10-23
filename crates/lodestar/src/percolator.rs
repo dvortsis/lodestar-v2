@@ -139,9 +139,9 @@ pub fn run_once(
                 // it catches up from where it was.
                 run.unreadable += 1;
                 if seen.unreadable.insert(s.id) {
-                    tracing::warn!(
-                        "percolator: saved search {} has a query this build can't read; skipped",
-                        s.id
+                    lodestar_log::log_event!(
+                        crate::logging::events::ALERTS_SEARCH_UNREADABLE,
+                        saved_search = lodestar_log::Count(s.id.unsigned_abs())
                     );
                 }
             }
@@ -200,23 +200,20 @@ pub fn run_once(
             // `internal` logged the store error behind it. The alerts
             // are recorded and show in the list and the badge; only the
             // live event is lost.
-            Err(_) => tracing::warn!("percolator: announcing new alerts failed"),
+            Err(_) => lodestar_log::log_event!(crate::logging::events::ALERTS_ANNOUNCE_FAILED),
         }
     }
     if let Some(e) = failed {
         return Err(e.into());
     }
     if run.searches > 0 || run.unreadable > 0 {
-        let mut per: BTreeMap<i64, usize> = BTreeMap::new();
-        for a in &run.created {
-            *per.entry(a.saved_search_id).or_default() += 1;
-        }
-        tracing::debug!(
-            "percolator: {} searches up to {through}, {} alerts {per:?}, {} unreadable{}",
-            run.searches,
-            run.alerts,
-            run.unreadable,
-            if run.more { ", more to do" } else { "" }
+        lodestar_log::log_event!(
+            crate::logging::events::ALERTS_RUN,
+            searches = lodestar_log::Count(run.searches as u64),
+            through = lodestar_log::Count(through.unsigned_abs()),
+            alerts = lodestar_log::Count(run.alerts as u64),
+            unreadable = lodestar_log::Count(run.unreadable as u64),
+            more = run.more
         );
     }
     Ok(run)
@@ -226,8 +223,14 @@ pub fn run_once(
 fn prune(store: &mut Store, keep: usize) {
     match store.prune_alerts(keep) {
         Ok(0) => {}
-        Ok(n) => tracing::info!("percolator: pruned {n} old alerts"),
-        Err(e) => tracing::warn!("percolator: pruning alerts failed: {e}"),
+        Ok(n) => lodestar_log::log_event!(
+            crate::logging::events::ALERTS_PRUNED,
+            alerts = lodestar_log::Count(n as u64)
+        ),
+        Err(e) => lodestar_log::log_event!(
+            crate::logging::events::ALERTS_PRUNE_FAILED,
+            error = lodestar_log::Error::new(&e)
+        ),
     }
 }
 
@@ -263,7 +266,10 @@ pub fn spawn(
                     Ok(w) => {
                         wake.through.fetch_max(w, Ordering::Relaxed);
                     }
-                    Err(e) => tracing::warn!("percolator: reading the index watermark: {e}"),
+                    Err(e) => lodestar_log::log_event!(
+                        crate::logging::events::ALERTS_WATERMARK_FAILED,
+                        error = lodestar_log::Error::new(&e)
+                    ),
                 }
                 prune(&mut lock(&store), keep);
             })
@@ -322,22 +328,30 @@ pub fn spawn(
                         searches.dedup();
                         searches.sort_unstable();
                         searches.dedup();
-                        tracing::info!(
-                            "percolator: {} new alerts across {} saved searches ({} events) in {} ms",
-                            run.alerts,
-                            searches.len(),
-                            run.events,
-                            took.as_millis()
+                        lodestar_log::log_event!(
+                            crate::logging::events::ALERTS_FOUND,
+                            alerts = lodestar_log::Count(run.alerts as u64),
+                            searches = lodestar_log::Count(searches.len() as u64),
+                            events = lodestar_log::Count(run.events as u64),
+                            took_ms = lodestar_log::Count(took.as_millis() as u64)
                         );
                     }
                     run.more
                 }
                 Ok((Err(e), _)) => {
-                    tracing::warn!("percolator: a run failed: {e}; retrying");
+                    lodestar_log::log_event!(
+                        crate::logging::events::ALERTS_RUN_FAILED,
+                        panicked = false,
+                        error = lodestar_log::Error::new(&e)
+                    );
                     retry(&mut stopped, &wake, config.retry).await
                 }
                 Err(e) => {
-                    tracing::warn!("percolator: a run panicked: {e}; retrying");
+                    lodestar_log::log_event!(
+                        crate::logging::events::ALERTS_RUN_FAILED,
+                        panicked = true,
+                        error = lodestar_log::Error::new(&e)
+                    );
                     retry(&mut stopped, &wake, config.retry).await
                 }
             };
@@ -943,9 +957,9 @@ mod tests {
         assert_eq!(run.unreadable, 1);
         prune(&mut s.store, 0);
         let log = String::from_utf8(LOG.lock().unwrap().clone()).unwrap();
-        let line = format!("saved search {broken} has a query");
+        let line = format!("saved_search={broken} event=\"alerts.search_unreadable\"");
         assert_eq!(log.matches(&line).count(), 1, "{log}");
-        assert!(log.contains("pruned 1 old alerts"), "{log}");
+        assert!(log.contains("alerts=1 event=\"alerts.pruned\""), "{log}");
         // No name, query or torrent name: each holds `Zq7`.
         assert!(!log.contains("Zq7"), "{log}");
     }

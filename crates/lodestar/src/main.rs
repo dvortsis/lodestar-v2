@@ -10,6 +10,7 @@ mod floor;
 mod fsdetect;
 mod http;
 mod insights;
+mod logging;
 mod metrics;
 mod ops;
 mod percolator;
@@ -61,7 +62,8 @@ fn main() -> ExitCode {
         | Command::Backup(_)
         | Command::Rollback(_)
         | Command::Vacuum
-        | Command::Reindex => Some(privdrop::Scope::DataDir),
+        | Command::Reindex
+        | Command::Rollup(_) => Some(privdrop::Scope::DataDir),
         Command::Healthcheck | Command::Stats(_) => Some(privdrop::Scope::ProcessOnly),
         Command::Lists => None,
     };

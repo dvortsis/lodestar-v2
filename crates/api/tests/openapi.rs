@@ -108,6 +108,7 @@ const ROUTES: &[(&str, &str)] = &[
     ("POST", "/alerts/read"),
     ("GET", "/alerts/unread"),
     ("GET", "/feeds/{id}"),
+    ("GET", "/logs/catalog"),
     ("GET", "/openapi.json"),
 ];
 const OPEN: [&str; 5] = ["/auth", "/setup", "/login", "/logout", "/openapi.json"];

@@ -104,8 +104,10 @@ pub struct Stages {
     /// Unique hashes harvested in the range (first harvests: the cohorts'
     /// harvested counts). Always approximate (≈).
     pub discover: u64,
-    /// Metadata retrieved in the range, by event time. Null until the
-    /// pipeline counts fetches by event time (B11b).
+    /// Metadata retrieved in the range, by event time (the writer's
+    /// flush). Null when the range starts before fetches were counted by
+    /// event time (the first whole hour after the upgrade that added it):
+    /// unknown, not 0.
     #[schema(required = true)]
     pub fetch: Option<u64>,
     /// Searchable torrents now; null when search is off.
@@ -124,7 +126,7 @@ pub struct Stages {
 pub struct Kpi {
     pub health: Health,
     /// Searchable torrents that were imported (bitmagnet import), part of
-    /// `searchable`; null until the count taken at start is in.
+    /// `searchable`; null until Insights' state is read at start.
     #[schema(required = true)]
     pub imported: Option<u64>,
     /// Torrents that first became searchable in the range, imports

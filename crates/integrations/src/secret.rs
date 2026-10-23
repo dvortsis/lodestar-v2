@@ -513,10 +513,11 @@ fn tighten_permissions(path: &Path, file: &File) -> io::Result<()> {
     // mount is never touched. A loose one that can't be tightened is an
     // error: the key is exposed.
     if mode & 0o077 != 0 {
-        tracing::warn!(
-            path = %path.display(),
-            mode = format_args!("{:o}", mode & 0o777),
-            "the secrets key was readable by other users; restricting it to 0600"
+        lodestar_log::log_event!(
+            crate::log_events::SECRET_KEY_TIGHTENED,
+            path = lodestar_log::Path::new(path),
+            // Its octal digits read as a number: 644, not 420.
+            mode = lodestar_log::Count(format!("{:o}", mode & 0o777).parse().unwrap_or_default())
         );
         file.set_permissions(fs::Permissions::from_mode(0o600))?;
     }
@@ -531,10 +532,10 @@ fn tighten_permissions(path: &Path, file: &File) -> io::Result<()> {
 #[cfg(windows)]
 fn tighten_permissions(path: &Path, _file: &File) -> io::Result<()> {
     if let Err(e) = restrict_acl(path) {
-        tracing::warn!(
-            path = %path.display(),
-            error = %e,
-            "couldn't re-apply the secrets key's restricted ACL"
+        lodestar_log::log_event!(
+            crate::log_events::SECRET_KEY_ACL_FAILED,
+            path = lodestar_log::Path::new(path),
+            error = lodestar_log::Error::new(&e)
         );
     }
     Ok(())
@@ -548,6 +549,48 @@ fn tighten_permissions(_path: &Path, _file: &File) -> io::Result<()> {
 #[cfg(not(windows))]
 fn restrict_acl(_path: &Path) -> io::Result<()> {
     Ok(())
+}
+
+/// [`restrict_acl`] for a folder, inherited by every file made in it
+/// (the log folder, which holds the first-run setup token). Elsewhere
+/// the folder's mode does this.
+#[cfg(not(windows))]
+pub fn restrict_dir_acl(_dir: &Path) -> io::Result<()> {
+    Ok(())
+}
+
+/// [`restrict_acl`] for a folder, inherited by every file made in it
+/// (the log folder, which holds the first-run setup token). Only for a
+/// folder the caller just created: it replaces the folder's ACL. `/L`
+/// acts on a link itself, never on the folder it points to.
+#[cfg(windows)]
+pub fn restrict_dir_acl(dir: &Path) -> io::Result<()> {
+    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+    let icacls = Path::new(&root).join("System32").join("icacls.exe");
+    let status = std::process::Command::new(icacls)
+        .arg(dir)
+        .args([
+            "/inheritance:r",
+            "/grant:r",
+            "*S-1-3-4:(OI)(CI)F",
+            "*S-1-5-18:(OI)(CI)F",
+            "*S-1-5-32-544:(OI)(CI)F",
+            "/L",
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            match status.code() {
+                Some(code) => format!("icacls exited with {code}"),
+                None => "icacls failed".to_owned(),
+            },
+        ))
+    }
 }
 
 /// Replaces the file's ACL with full control for its owner, `SYSTEM` and

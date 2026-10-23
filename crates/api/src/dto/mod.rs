@@ -26,6 +26,7 @@ pub mod filters;
 pub mod insights;
 pub mod jobs;
 pub mod keys;
+pub mod logs;
 pub mod ops;
 pub mod saved;
 pub mod search;

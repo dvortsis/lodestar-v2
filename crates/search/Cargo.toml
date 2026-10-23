@@ -10,6 +10,7 @@ repository.workspace = true
 
 [dependencies]
 lodestar-classify.workspace = true
+lodestar-log.workspace = true
 lodestar-metainfo.workspace = true
 lodestar-release-parser.workspace = true
 lodestar-store.workspace = true
