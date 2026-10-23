@@ -18,6 +18,35 @@ pub mod metric {
     pub const DROPPED: u32 = 3;
     /// Torrents newly stored (dim = source that found them first).
     pub const STORED: u32 = 4;
+    // 5–9 are taken by #48 (M4's scrape and search counters).
+    /// Torrents that became searchable, by event time: the hour of the
+    /// `index_watermark_hour` row that first covers them (dim = content
+    /// type code, or `lodestar_store::UNCLASSIFIED`; key = 1 for imports,
+    /// else 0). Written by `Store::record_searchable` (B11a).
+    pub const NEWLY_SEARCHABLE: u32 = 10;
+    /// First harvest → searchable, as a `lodestar_store::log_bucket`
+    /// histogram of seconds. **By discovery cohort:** `hour` is the
+    /// cohort, not the event (dim = 0, key = bucket). Imports aren't
+    /// counted.
+    pub const TIME_TO_SEARCHABLE: u32 = 11;
+    /// Seconds each hour was measured, so a quiet hour reads 0 and an
+    /// unmeasured one (paused, not running) a gap (key = 0; dim =
+    /// [`coverage::INDEX`] or [`coverage::CRAWL`]).
+    pub const COVERAGE: u32 = 12;
+    /// Searchable torrents (the index's document count), a gauge: the
+    /// last snapshot in each hour, every 30 s (dim = 0, key = 0). Insights'
+    /// Compare reads it as the count at a period's end.
+    pub const SEARCHABLE: u32 = 13;
+
+    /// [`COVERAGE`] dims.
+    pub mod coverage {
+        /// Searchable time was being recorded: the server ran with
+        /// search on and the crawler not paused (a paused stretch is a
+        /// gap on the trend, §10.9.3).
+        pub const INDEX: u32 = 0;
+        /// The crawler ran, not paused.
+        pub const CRAWL: u32 = 1;
+    }
 }
 
 #[derive(Debug, Default)]

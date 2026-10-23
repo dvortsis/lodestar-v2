@@ -210,6 +210,7 @@ fn fixture() -> Fixture {
                 ops: None,
                 user_data: Some(store.clone()),
                 adult: visibility,
+                insights: None,
             }),
         )
         .layer(Extension(hub.clone()));

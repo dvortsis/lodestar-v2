@@ -230,6 +230,7 @@ fn fixture() -> Fixture {
                 Store::open(&db, StoreConfig::default()).unwrap(),
             ))),
             adult: Default::default(),
+            insights: None,
         }),
     );
     let hashes = infos
@@ -1207,6 +1208,7 @@ async fn filters_without_an_index_or_filters() {
                 ops: None,
                 user_data: None,
                 adult: Default::default(),
+                insights: None,
             }),
         )
     };
