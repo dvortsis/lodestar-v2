@@ -232,7 +232,7 @@
    "pr": 103,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": "launched 22:38; deps W7ab,W7cd,W5,W3 merged | 23:40 review FIX: .update-snapshots marker must not merge (commit CI baselines), size reason; SSE-only reachability lockout, Enter hijack, metrics.md cite, safeNext control chars; polish."
+   "notes": "launched 22:38; deps W7ab,W7cd,W5,W3 merged | 23:40 review FIX: .update-snapshots marker must not merge (commit CI baselines), size reason; SSE-only reachability lockout, Enter hijack, metrics.md cite, safeNext control chars; polish. | 00:47 code findings fixed; lhci mobile fails (109KB/2.66s vs 102400B/2500ms; main 83KB/2.41s). Runner: keep budgets (owner best-UX), do (c) defer stream + (b) vite.config/app.html/font fixes allowed; report if still over. Baselines import pending."
   },
   "M-auth": {
    "status": "running",
