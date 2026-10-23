@@ -138,11 +138,20 @@ pub fn run(config: &Config, options: Options<'_>) -> Outcome {
                     index.display()
                 );
             }
-            println!(
-                "Now start the Lodestar version that used schema v{} (the release before the \
-                 upgrade). This version would upgrade the store again at its next start.",
-                r.schema
-            );
+            if snapshot.version.is_some() {
+                println!(
+                    "Now start the Lodestar version that used schema v{} (the release before \
+                     the upgrade). This version would upgrade the store again at its next \
+                     start.",
+                    r.schema
+                );
+            } else {
+                println!(
+                    "This undid an earlier rollback. Now start the Lodestar version that used \
+                     schema v{} (the one you ran before that rollback).",
+                    r.schema
+                );
+            }
         }
     }
     Ok(())
@@ -153,7 +162,14 @@ fn list(all: &[Snapshot], now: i64) {
         println!("No migration snapshots. Lodestar takes one before each upgrade of the store.");
         return;
     }
-    println!("Snapshots taken before each upgrade of the store:");
+    if all.iter().any(|s| s.version.is_none()) {
+        println!(
+            "Snapshots taken before each upgrade of the store, and copies of the store earlier \
+             rollbacks kept:"
+        );
+    } else {
+        println!("Snapshots taken before each upgrade of the store:");
+    }
     for s in all {
         let what = s.version.map_or_else(
             || "kept by a rollback".to_string(),
@@ -414,10 +430,9 @@ mod tests {
         lock.release().unwrap();
 
         let mut store = Store::open(&db, StoreConfig::default()).unwrap();
-        assert_eq!(
-            store.purge_snapshots(expired, 0).expired,
-            vec![snap.clone()]
-        );
+        let gone = store.purge_snapshots(expired, 0).expired;
+        assert_eq!(gone.len(), 1);
+        assert_eq!(gone[0].path, snap);
         assert!(!snap.exists());
     }
 }

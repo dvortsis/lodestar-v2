@@ -56,6 +56,12 @@ const TAKEN_MARGIN: i64 = 86_400;
 /// just before the pass may commit just after it.
 const RECHECK_MARGIN: i64 = 600;
 
+/// A full pass runs at least this often, and whenever the clock went back
+/// since the last pass: a hold recorded with a time older than the last
+/// pass less [`RECHECK_MARGIN`] (the clock stepped back, or the machine
+/// slept between reading the time and committing) is still found.
+const FULL_EVERY: i64 = 86_400;
+
 /// How long opening a snapshot waits for a lock. Nothing else should hold
 /// one (see the module docs); this only keeps a stray `sqlite3` shell from
 /// stalling the writer.
@@ -89,6 +95,16 @@ pub struct Snapshot {
     pub kind: Kind,
     /// When it was taken (Unix seconds): its modification time.
     pub taken_at: Option<i64>,
+}
+
+impl Kind {
+    /// What it is, for the log.
+    pub fn describe(self) -> &'static str {
+        match self {
+            Kind::PreMigration { .. } => "migration snapshot",
+            Kind::BeforeRollback => "rollback copy",
+        }
+    }
 }
 
 impl Snapshot {
@@ -200,6 +216,9 @@ pub(crate) struct Plan {
     /// Drop logged searches the live store pruned or cleared
     /// (`query_log`, v10+).
     query_log: bool,
+    /// Drop API keys, feed tokens, saved searches and collections the
+    /// live store deleted, and revoke the keys it revoked (v10+).
+    user_data: bool,
 }
 
 impl Plan {
@@ -223,6 +242,7 @@ impl Plan {
                 torrents: true,
                 filter: false,
                 query_log: false,
+                user_data: false,
             }),
             // V4 adds cs_hashes, tombstones, quarantine (hash, rule,
             // sealed, at, expires_at) and filter_hits (at), unchanged
@@ -233,18 +253,22 @@ impl Plan {
                 torrents: true,
                 filter: true,
                 query_log: false,
+                user_data: false,
             }),
             // V10 adds your data (saved searches, alerts, marks,
             // collections), API keys and the query log. Alerts, marks and
             // collection entries cascade from torrents. The query log is
             // pruned oldest first, so what the live store pruned is what's
-            // older than its oldest row. Deleted or changed searches,
-            // marks, notes and keys leave no trace to match a snapshot
-            // against: they go with the snapshot at 90 days.
+            // older than its oldest row. `api_keys`, `saved_searches` and
+            // `collections` have AUTOINCREMENT ids, so a snapshot row
+            // whose id the live store has issued but no longer holds was
+            // deleted there. Edited searches, marks and notes leave no
+            // trace: they go with the snapshot at 90 days.
             10..=Self::KNOWN_THROUGH => Some(Plan {
                 torrents: true,
                 filter: true,
                 query_log: true,
+                user_data: true,
             }),
             _ => None,
         }
@@ -255,7 +279,7 @@ impl Plan {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct PurgeReport {
     /// Snapshots deleted for age.
-    pub expired: Vec<PathBuf>,
+    pub expired: Vec<Snapshot>,
     /// Snapshots that had something purged.
     pub purged: Vec<PathBuf>,
     /// Torrents deleted from snapshots.
@@ -264,6 +288,9 @@ pub struct PurgeReport {
     pub quarantine: usize,
     /// Logged searches deleted.
     pub query_log: usize,
+    /// API keys, saved searches and collections deleted, and keys
+    /// revoked.
+    pub user_data: usize,
     /// Snapshots skipped or failed, and why; for the log.
     pub warnings: Vec<String>,
 }
@@ -281,18 +308,24 @@ struct Mark {
     taken_at: Option<i64>,
     /// The `now` of the last complete pass.
     through: i64,
+    /// The `now` of the last full pass.
+    full_at: i64,
 }
 
 impl Marks {
     /// The oldest hold recorded at or after which `snap` still needs a
-    /// lookup.
-    fn since(&self, snap: &Snapshot) -> i64 {
+    /// lookup at `now`, and whether that's a full pass.
+    fn since(&self, snap: &Snapshot, now: i64) -> (i64, bool) {
         let taken = snap.taken_at.map_or(i64::MIN, held_since);
         match self.0.get(&snap.path) {
-            Some(m) if m.taken_at == snap.taken_at => {
-                taken.max(m.through.saturating_sub(RECHECK_MARGIN))
+            Some(m)
+                if m.taken_at == snap.taken_at
+                    && now >= m.through
+                    && now.saturating_sub(m.full_at) < FULL_EVERY =>
+            {
+                (taken.max(m.through.saturating_sub(RECHECK_MARGIN)), false)
             }
-            _ => taken,
+            _ => (taken, true),
         }
     }
 }
@@ -311,7 +344,17 @@ struct Live {
     /// The oldest logged search, `(at, id)`; `None` when the log is
     /// empty (cleared, or never on).
     oldest_query: Option<(i64, i64)>,
+    /// Per table in [`USER_TABLES`]: the highest id it has issued
+    /// (`sqlite_sequence`) and the ids it holds.
+    user_ids: Vec<(i64, HashSet<i64>)>,
+    /// Revoked API keys and feed tokens: id and when.
+    revoked: HashMap<i64, i64>,
 }
+
+/// V10 tables with AUTOINCREMENT ids whose deleted rows a snapshot loses.
+/// Deleting a saved search also takes its alerts and feed tokens
+/// (`ON DELETE CASCADE`).
+const USER_TABLES: [&str; 3] = ["api_keys", "saved_searches", "collections"];
 
 impl Live {
     /// Holds recorded before `since` (other than `reported`) aren't read.
@@ -347,11 +390,34 @@ impl Live {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
+        let mut user_ids = Vec::with_capacity(USER_TABLES.len());
+        for table in USER_TABLES {
+            let seq: i64 = conn
+                .query_row(
+                    "SELECT seq FROM sqlite_sequence WHERE name = ?1",
+                    [table],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .unwrap_or(0);
+            let mut stmt = conn.prepare(&format!("SELECT id FROM {table}"))?;
+            let ids = stmt
+                .query_map([], |r| r.get(0))?
+                .collect::<rusqlite::Result<HashSet<i64>>>()?;
+            user_ids.push((seq, ids));
+        }
+        let mut stmt =
+            conn.prepare("SELECT id, revoked_at FROM api_keys WHERE revoked_at IS NOT NULL")?;
+        let revoked = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<HashMap<i64, i64>>>()?;
         Ok(Live {
             sealed,
             reported,
             held,
             oldest_query,
+            user_ids,
+            revoked,
         })
     }
 }
@@ -398,10 +464,14 @@ impl Store {
                 ));
             }
             if gone {
-                report.expired.push(snap.path);
+                report.expired.push(snap);
             }
         }
-        let Some(since) = keep.iter().map(|s| self.snapshot_marks.since(s)).min() else {
+        let Some(since) = keep
+            .iter()
+            .map(|s| self.snapshot_marks.since(s, now).0)
+            .min()
+        else {
             return report;
         };
         let live = match Live::read(&self.conn, since) {
@@ -414,18 +484,15 @@ impl Store {
             }
         };
         for snap in keep {
-            let since = self.snapshot_marks.since(&snap);
+            let (since, full) = self.snapshot_marks.since(&snap, now);
             match purge_one(&snap, &live, since, now, hits_before) {
                 Ok(Outcome::Skipped(why)) => report.warnings.push(why),
                 Ok(Outcome::Unchanged) => {}
-                Ok(Outcome::Purged {
-                    torrents,
-                    quarantine,
-                    query_log,
-                }) => {
-                    report.torrents += torrents;
-                    report.quarantine += quarantine;
-                    report.query_log += query_log;
+                Ok(Outcome::Purged(n)) => {
+                    report.torrents += n.torrents;
+                    report.quarantine += n.quarantine;
+                    report.query_log += n.query_log;
+                    report.user_data += n.user_data;
                     report.purged.push(snap.path.clone());
                 }
                 Err(e) => {
@@ -436,11 +503,16 @@ impl Store {
                     continue;
                 }
             }
+            let full_at = match self.snapshot_marks.0.get(&snap.path) {
+                Some(m) if !full => m.full_at,
+                _ => now,
+            };
             self.snapshot_marks.0.insert(
                 snap.path,
                 Mark {
                     taken_at: snap.taken_at,
                     through: now,
+                    full_at,
                 },
             );
         }
@@ -451,11 +523,15 @@ impl Store {
 enum Outcome {
     Skipped(String),
     Unchanged,
-    Purged {
-        torrents: usize,
-        quarantine: usize,
-        query_log: usize,
-    },
+    Purged(Counts),
+}
+
+#[derive(Debug, Default)]
+struct Counts {
+    torrents: usize,
+    quarantine: usize,
+    query_log: usize,
+    user_data: usize,
 }
 
 /// Deletes a snapshot and any side file SQLite left beside it: whether
@@ -607,7 +683,35 @@ fn purge_one(
     } else {
         0
     };
-    if ids.is_empty() && unsealed.is_empty() && expiring == 0 && hits == 0 && logged == 0 {
+    // Deleted by id, and revoked since.
+    let mut gone_user: Vec<(&str, i64)> = Vec::new();
+    let mut revoke = Vec::new();
+    if plan.user_data {
+        for (table, (seq, held)) in USER_TABLES.iter().zip(&live.user_ids) {
+            let mut stmt = conn.prepare(&format!("SELECT id FROM {table} WHERE id <= ?1"))?;
+            for id in stmt.query_map([seq], |r| r.get::<_, i64>(0))? {
+                let id = id?;
+                if !held.contains(&id) {
+                    gone_user.push((table, id));
+                }
+            }
+        }
+        let mut stmt = conn.prepare("SELECT id FROM api_keys WHERE revoked_at IS NULL")?;
+        for id in stmt.query_map([], |r| r.get::<_, i64>(0))? {
+            let id = id?;
+            if let Some(at) = live.revoked.get(&id) {
+                revoke.push((id, *at));
+            }
+        }
+    }
+    if ids.is_empty()
+        && unsealed.is_empty()
+        && expiring == 0
+        && hits == 0
+        && logged == 0
+        && gone_user.is_empty()
+        && revoke.is_empty()
+    {
         if folded {
             restore_time(conn);
         }
@@ -620,7 +724,7 @@ fn purge_one(
     conn.pragma_update(None, "foreign_keys", true)?;
     let mode: String = conn.pragma_update_and_check(None, "journal_mode", "WAL", |r| r.get(0))?;
     let wal = mode.eq_ignore_ascii_case("wal");
-    let result = (|| -> rusqlite::Result<(usize, usize, usize)> {
+    let result = (|| -> rusqlite::Result<Counts> {
         let tx = crate::begin_write(&mut conn)?;
         let mut torrents = 0;
         for id in &ids {
@@ -655,8 +759,23 @@ fn purge_one(
                 [log_at, log_id],
             )?;
         }
+        let mut user_data = 0;
+        for (table, id) in &gone_user {
+            user_data += tx.execute(&format!("DELETE FROM {table} WHERE id = ?1"), [id])?;
+        }
+        for (id, at) in &revoke {
+            user_data += tx.execute(
+                "UPDATE api_keys SET revoked_at = ?2 WHERE id = ?1 AND revoked_at IS NULL",
+                [id, at],
+            )?;
+        }
         tx.commit()?;
-        Ok((torrents, quarantine, query_log))
+        Ok(Counts {
+            torrents,
+            quarantine,
+            query_log,
+            user_data,
+        })
     })();
     if wal {
         // Copies the new pages into the file and empties the WAL, then
@@ -665,12 +784,7 @@ fn purge_one(
         let _ = conn.pragma_update(None, "journal_mode", "DELETE");
     }
     restore_time(conn);
-    let (torrents, quarantine, query_log) = result?;
-    Ok(Outcome::Purged {
-        torrents,
-        quarantine,
-        query_log,
-    })
+    Ok(Outcome::Purged(result?))
 }
 
 fn set_modified(path: &Path, secs: i64) -> std::io::Result<()> {
@@ -694,6 +808,10 @@ mod tests {
     fn contains(path: &Path, marker: &[u8]) -> bool {
         let hay = std::fs::read(path).unwrap();
         hay.windows(marker.len()).any(|w| w == marker)
+    }
+
+    fn paths(snaps: &[Snapshot]) -> Vec<PathBuf> {
+        snaps.iter().map(|s| s.path.clone()).collect()
     }
 
     fn quick_check(path: &Path) {
@@ -822,6 +940,7 @@ mod tests {
             assert!(plan.torrents);
             assert_eq!(plan.filter, v >= 4, "v{v}");
             assert_eq!(plan.query_log, v >= 10, "v{v}");
+            assert_eq!(plan.user_data, v >= 10, "v{v}");
         }
         assert_eq!(Plan::for_version(0), None);
         assert_eq!(Plan::for_version(latest + 1), None);
@@ -1022,7 +1141,7 @@ mod tests {
         let r = store.purge_snapshots(T + RETAIN_SECS - 1, 0);
         assert!(r.expired.is_empty() && old.exists());
         let r = store.purge_snapshots(T + RETAIN_SECS, 0);
-        assert_eq!(r.expired, vec![old.clone()]);
+        assert_eq!(paths(&r.expired), vec![old.clone()]);
         assert!(!old.exists() && !side(&old, "-journal").exists());
         assert!(new.exists());
         assert_eq!(list(&db).unwrap().len(), 1);
@@ -1142,7 +1261,7 @@ mod tests {
         assert!(!contains(&kept, sealed));
         quick_check(&kept);
         let r = store.purge_snapshots(T + RETAIN_SECS, 0);
-        assert_eq!(r.expired, vec![pre, kept.clone()]);
+        assert_eq!(paths(&r.expired), vec![pre, kept.clone()]);
         assert!(!kept.exists());
     }
 
@@ -1192,7 +1311,7 @@ mod tests {
         let snap = take(&store, &db, 10, T);
         std::fs::create_dir(side(&snap, "-shm")).unwrap();
         let r = store.purge_snapshots(T + RETAIN_SECS, 0);
-        assert_eq!(r.expired, vec![snap.clone()]);
+        assert_eq!(paths(&r.expired), vec![snap.clone()]);
         assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
         assert!(r.warnings[0].contains("-shm"), "{:?}", r.warnings);
         assert!(!snap.exists());
@@ -1229,6 +1348,111 @@ mod tests {
         assert_eq!(r.query_log, 1, "{r:?}");
         assert!(!contains(&snap, b"logged-search-kept-marker-0a7e"));
         quick_check(&snap);
+    }
+
+    /// A hold recorded with a time older than the last pass (the clock
+    /// stepped back, or the machine slept before committing) is found by
+    /// the full pass that runs when the clock went back, and by the daily
+    /// one.
+    #[test]
+    fn full_passes_catch_holds_behind_the_mark() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db) = live(dir.path());
+        for id in 1..=2u8 {
+            insert_torrent(store.connection(), i64::from(id), [id; 20], "t");
+        }
+        let tomb = |store: &Store, h: u8, at: i64| {
+            store
+                .connection()
+                .execute(
+                    "INSERT INTO tombstones (hash, rule, at) VALUES (?1, 'FK-4', ?2)",
+                    params![&[h; 20][..], at],
+                )
+                .unwrap();
+        };
+        take(&store, &db, 10, T);
+        let now = T + 10 * DAY;
+        assert_eq!(store.purge_snapshots(now, 0), PurgeReport::default());
+
+        // Behind the mark: the next incremental pass misses it...
+        tomb(&store, 1, now - 2 * RECHECK_MARGIN);
+        assert_eq!(store.purge_snapshots(now + 3600, 0).torrents, 0);
+        // ...the daily full pass finds it.
+        assert_eq!(store.purge_snapshots(now + FULL_EVERY, 0).torrents, 1);
+
+        // The clock went back: a full pass at once.
+        tomb(&store, 2, now);
+        assert_eq!(store.purge_snapshots(now + FULL_EVERY - 60, 0).torrents, 1);
+    }
+
+    /// Restoring a V10 snapshot mustn't bring back API keys, feed tokens,
+    /// saved searches or collections deleted live, nor keys revoked live.
+    #[test]
+    fn deleted_and_revoked_user_data_follows_the_live_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db) = live(dir.path());
+        let c = store.connection();
+        for (id, prefix) in [(1, "keyprefixa1"), (2, "keyprefixb2"), (3, "keyprefixc3")] {
+            c.execute(
+                "INSERT INTO api_keys (id, kind, name, prefix, hash, scopes, created_at)
+                 VALUES (?1, 0, ?2, ?2, zeroblob(32), 1, 0)",
+                params![id, prefix],
+            )
+            .unwrap();
+        }
+        for (id, name) in [(1, "saved-search-gone-marker-9c1f"), (2, "kept-search")] {
+            c.execute(
+                "INSERT INTO saved_searches (id, name, query, ast, alert, rss, watermark,
+                     created_at, updated_at)
+                 VALUES (?1, ?2, 'q', '{}', 0, 1, 0, 0, 0)",
+                params![id, name],
+            )
+            .unwrap();
+        }
+        // A feed token for the search that goes: it goes with it.
+        c.execute(
+            "INSERT INTO api_keys (id, kind, name, prefix, hash, scopes, saved_search_id,
+                 created_at)
+             VALUES (4, 1, 'feed', 'feedtoken4', zeroblob(32), 1, 1, 0)",
+            [],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO collections (id, name, created_at, updated_at)
+             VALUES (1, 'collection-gone-marker-4e0b', 0, 0)",
+            [],
+        )
+        .unwrap();
+        let snap = take(&store, &db, 11, T);
+        c.execute_batch(
+            "DELETE FROM api_keys WHERE id = 1;
+             UPDATE api_keys SET revoked_at = 77 WHERE id = 2;
+             DELETE FROM saved_searches WHERE id = 1;
+             DELETE FROM collections WHERE id = 1;",
+        )
+        .unwrap();
+
+        let r = store.purge_snapshots(T + DAY, 0);
+        assert_eq!(r.warnings, Vec::<String>::new());
+        // Keys 1 and 4 (the feed token went live with its search), key 2
+        // revoked, the search and the collection.
+        assert_eq!(r.user_data, 5, "{r:?}");
+        assert!(!contains(&snap, b"keyprefixa1"));
+        assert!(!contains(&snap, b"feedtoken4"));
+        assert!(!contains(&snap, b"saved-search-gone-marker-9c1f"));
+        assert!(!contains(&snap, b"collection-gone-marker-4e0b"));
+        let conn = Connection::open(&snap).unwrap();
+        let keys: Vec<(i64, Option<i64>)> = conn
+            .prepare("SELECT id, revoked_at FROM api_keys ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(keys, vec![(2, Some(77)), (3, None)]);
+        drop(conn);
+        quick_check(&snap);
+        assert_eq!(store.purge_snapshots(T + DAY + 1, 0).user_data, 0);
     }
 
     /// The hourly cost with many holds (the review's measure): 200k
