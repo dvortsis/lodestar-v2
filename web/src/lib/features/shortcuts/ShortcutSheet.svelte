@@ -10,6 +10,7 @@
 	import Dialog from '$lib/ui/overlays/Dialog.svelte';
 	import { toggleSingleKeys } from './toggle';
 	import Keycap from './Keycap.svelte';
+	import { shown } from './keyname';
 	import { sheet } from './sheet.svelte';
 	import type { Route } from '$lib/shell/nav';
 	import './shortcuts.css';
@@ -49,7 +50,7 @@
 				{m.shortcuts_sheet_conflict({
 					first: titleOf(c.ids[0]!),
 					second: c.ids.slice(1).map(titleOf).join(', '),
-					key: c.combo
+					key: shown(c.combo)
 				})}
 			</Banner>
 		{/each}

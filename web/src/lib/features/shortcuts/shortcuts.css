@@ -29,7 +29,7 @@
 }
 .sc-link:focus-visible {
 	outline: var(--focus-ring-width) solid var(--color-primary);
-	outline-offset: 2px;
+	outline-offset: var(--focus-ring-offset);
 }
 
 .sc-row {

@@ -13,6 +13,7 @@ vi.mock('$lib/api/client', async (orig) => ({
 }));
 vi.mock('$lib/state/events.svelte', () => ({
 	events: {
+		status: 'live',
 		on: (_topic: string, h: (d: unknown) => void) => {
 			handlers.settings = h;
 			return () => (handlers.settings = undefined);
@@ -135,6 +136,29 @@ describe('startShortcuts', () => {
 		handlers.settings?.({ section: 'preferences', revision: 2 });
 		await flush();
 		expect(get).toHaveBeenCalledTimes(2);
+	});
+
+	it('ignores stored remaps of anything but the remappable actions, and a + key', async () => {
+		const off = [
+			keys.register({ id: 'palette.open', title: 'Palette', keys: ['mod+k'], run: () => {} }),
+			keys.register({ id: 'results.previous', title: 'Previous', run: () => {} })
+		];
+		vi.spyOn(console, 'warn').mockImplementation(() => {});
+		get.mockResolvedValue(
+			sectionOf(true, { 'palette.open': 'p', 'results.next': '+', 'results.previous': 'p' })
+		);
+		stop = startShortcuts();
+		await vi.waitFor(() => expect(info('results.previous')?.keys).toEqual(['p']));
+		expect(info('palette.open')?.keys).toEqual(['ctrl+k']);
+		off.forEach((f) => f());
+	});
+
+	it('asks the server nothing on the sign-in screen until the stream is live', async () => {
+		history.pushState({}, '', '/login');
+		stop = startShortcuts();
+		expect(get).not.toHaveBeenCalled();
+		await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(1));
+		history.pushState({}, '', '/');
 	});
 
 	it('keeps the cached state, quietly, when the fetch fails', async () => {

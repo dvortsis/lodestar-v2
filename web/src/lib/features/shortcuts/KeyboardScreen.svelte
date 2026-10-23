@@ -91,8 +91,11 @@
 		}
 	}
 
-	/** The row a server message names: it starts with an action id. */
-	const rowOf = (message: string) => ACTION_IDS.find((id) => message.startsWith(id)) ?? '';
+	/** The row a server message names: the first remappable action it mentions. */
+	const rowOf = (message: string) =>
+		ACTION_IDS.filter((id) => message.includes(id)).sort(
+			(a, b) => message.indexOf(a) - message.indexOf(b)
+		)[0] ?? '';
 
 	async function save() {
 		const body: Record<string, unknown> = { if_revision: revision };
@@ -150,7 +153,7 @@
 			<p class="sc-text sc-help" id="shortcuts-single-help">{m.shortcuts_single_help()}</p>
 			{#if locks.shortcuts}<p class="sc-text sc-help">{locks.shortcuts}</p>{/if}
 			{#each Object.values(errors.shortcuts) as message (message)}
-				<p class="sc-text sc-help">{message}</p>
+				<p class="sc-text sc-help" role="alert">{message}</p>
 			{/each}
 		</section>
 		<section aria-labelledby="shortcuts-keys-heading">
