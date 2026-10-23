@@ -203,7 +203,7 @@
    "session": "session_01PZaAbtPHeB2SiUMG9VFpth",
    "pr": 76,
    "attempt": 1,
-   "review_rounds": 2,
+   "review_rounds": 3,
    "notes": "launched 16:01 after W6 merged; only W7ab adds common_* keys | PR #76; reviewer started 16:45 | 17:10 r1 FIX: exclude dev routes from prod build (scope exception), toast timer, ticker 60s, + a11y items. R2 FIX 18:15: PR size reason; toast dismiss drops focus. Approved tokens --toast-width/--listbox-max-height in tokens.css. 18:10 R2 fixes 11d9b0d; R3 review in flight. 18:27 R3 FIX: Chip focus crosses groups; PR body stale. Runner verifies R4 itself. 18:50 R3 fixes bb80f6a verified by runner; asked one Toaster focus-steal fix, then merge on green. Merged fdf7263 20:18."
   },
   "W7cd": {
@@ -232,7 +232,7 @@
    "session": "session_01HpQ4gCiiJq5eRwciaE8Lus",
    "pr": 103,
    "attempt": 0,
-   "review_rounds": 0,
+   "review_rounds": 1,
    "notes": "launched 22:38; deps W7ab,W7cd,W5,W3 merged | 23:40 review FIX: .update-snapshots marker must not merge (commit CI baselines), size reason; SSE-only reachability lockout, Enter hijack, metrics.md cite, safeNext control chars; polish. | 00:47 code findings fixed; lhci mobile fails (109KB/2.66s vs 102400B/2500ms; main 83KB/2.41s). Runner: keep budgets (owner best-UX), do (c) defer stream + (b) vite.config/app.html/font fixes allowed; report if still over. Baselines import pending. | 00:59 c5d0549: lhci passes locally (97.7KB, LCP 2.4s, CLS 0) via deferred stream/chrome/toaster + font preload moved after first frame; awaiting baselines import + marker removal. Then runner verifies delta (shared-file edits) and merges on green. Carry: recheck FOUT/CLS when Search lands. | 01:33 E2E run 39881347868 green, artifact 12470864759 (snapshot-baselines). BLOCKED: proxy denies productionresultssa9.blob.core.windows.net for all sessions. Asked owner: allow host or import artifact (as b2b46df). W9 waits with marker. | 02:30 main+M-auth merged, installAuthHandlers adopted, handoff.ts removed; marker kept; new E2E run will upload fresh baselines (artifact id changes: owner should import the newest)."
   },
   "M-auth": {
@@ -241,7 +241,7 @@
    "session": "session_01SLtBN2YZg1WidnV1PRro9w",
    "pr": 93,
    "attempt": 1,
-   "review_rounds": 0,
+   "review_rounds": 1,
    "notes": "Launched 21:33. | 01:50 PR #93 7f49b18 (web only); reviewer started (security). filter budget red: \u00a72.18 (no Rust). | 02:03 review FIX: safeNext returns normalised //evil.com for /.//evil.com etc -> post-resolve check + tests + toNext catch; polish. Merge before W9; W9 told to adopt installAuthHandlers/next.ts. | 02:10 4ae343d delta verified by runner (post-resolve // check, 729-combo test, toNext fallback, polish). APPROVED; merge on green before W9. | 02:35 MERGED 8db37c8 (CI fully green). W9 told to merge main and adopt installAuthHandlers/next.ts.",
    "merge": "8db37c8"
   },
@@ -314,7 +314,7 @@
    "session": "session_01QE5wiiZe5CM8pk9fT2tuBD",
    "pr": 102,
    "attempt": 1,
-   "review_rounds": 0,
+   "review_rounds": 1,
    "notes": "Launched 21:41 after B6 merged. | 01:50 PR #102 41231f7 conflicts live.rs; asked main merge + relevance gate; review on new head. | 01:52 c764a4f main merged (relevance PASS); reviewer started. | 02:45 review FIX: natural phrasing inverts negations/field syntax (-cam -> includes CAM) -> strict-lex first + meaning-preserving prop test; important: did-you-mean cost, FST peak RSS/10M plan, swap-path test."
   },
   "B12": {
@@ -816,7 +816,7 @@
    "session": "session_01DU5FDv74GuCpGhpTHM6Vte",
    "pr": 88,
    "attempt": 1,
-   "review_rounds": 0,
+   "review_rounds": 3,
    "notes": "Launched 19:40: rebuild rename (macOS), interrupted rebuild resume, NRT budget (Windows), uTP WSAENOBUFS. | 23:08 review FIX: live.rs HANG=300s widens timeout; real cause likely LiveIndexer thread exits on commit error (production bug). Asked root-cause fix. | 23:58 re-review FIX at 88c8871: report lost when reload fails post-commit (publish gap), backoff reset only after commit, indexed_total recount; plus fuzz res:<64 digits> 65-byte stored form (found on B14 CI). Sent. | 00:49 delta review a51c7ca: live indexer OK; FIX bare_res empty -> \"p\" regression (one line). Runner verifies next delta itself. Note #97 ported old res hunk -> trivial conflict. | 00:56 13b753d (fetch_update deprecation on rust 1.99 fixed); bare_res empty fix still pending. | 01:22 f0560e4 delta verified by runner (bare_res non-empty + must-fail cases, idle backoff reset). Approved; live.rs conflict with main (#104) -> asked main merge. Merge on green. | 01:28 d9700cf main merged (CatchUp read in follow(), verified by runner). Approved; merge on green."
   },
   "B2b": {
@@ -942,7 +942,7 @@
    "session": "session_01FathNdcyDX2ZjCqYnfipQs",
    "pr": 95,
    "attempt": 1,
-   "review_rounds": 0,
+   "review_rounds": 1,
    "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 22:53 head bd40bcb (main+D-puid merged, drop scopes per subcommand) | 23:30 review FIX: Windows sync_file needs write access; -journal delete sharing violation; restore docs (reindex, auth.json); run maintenance_runs_as_puid under sudo in CI (allowed ci.yml edit); polish. | 23:36 head 467c3db: all review items done; merge on green (Windows CI must pass: proves sync_file/journal fixes).",
    "merge": "953ff83"
   },
@@ -952,7 +952,7 @@
    "session": "session_01CqsN771NrbwFdVvvzXpoLm",
    "pr": 98,
    "attempt": 1,
-   "review_rounds": 0,
+   "review_rounds": 2,
    "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 01:35 review FIX sent: stale vs M6-cli cli::parse (won't compile), ProgramData ACL inherited (Users RW: auth.json/setup token/config plant) -> icacls lockdown + test; important: StopPending during start, SCM dispatcher only for service argv, PowerShell trade-off doc, SO_LINGER widens \u00a711 doc. P-release told MSI reqs. | 01:58 1384865 fixes (acl.rs icacls lockdown, try_parse_from hook, StopPending). Delta reviewer started (ACL TOCTOU/junction). P-release asked to switch MSI to NT SERVICE\\Lodestar. | 02:00 19b0278 switched to LocalService (crossed msgs); runner decided NT SERVICE\\Lodestar (matches #92 8d4f971), DACL check must refuse LocalService. Hold pushes until delta review findings. | 02:05 NT SERVICE\\Lodestar via sc showsid, DACL check only SYSTEM/Admins/own SID; held locally pending delta review. | 02:20 delta review 3d7c19b FIX: owner unchecked + plantable marker (junction via MSI window/LocalSystem), /T walk as SYSTEM before refusal, SDDL NULL DACL/OA/D: parse; I1 create-with-ACL, I2 CI as virtual account. P-release told PermissionEx at CreateFolder."
   },
   "R-relevance": {
@@ -961,7 +961,7 @@
    "session": "session_01HedMy8BMpmR1uFHZkW2HsR",
    "pr": 94,
    "attempt": 1,
-   "review_rounds": 0,
+   "review_rounds": 1,
    "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 23:06 review FIX: gate relevance job on bench, tol 0.001, ratchet warn, forbidden marks, shown()->with_filters. | 23:26 160ff67 all review items done (verified gating); merge on green.",
    "merge": "4fc30fe"
   },
@@ -971,7 +971,7 @@
    "session": "session_016PSd1TREK3Wjy3haR5ZVux",
    "pr": 96,
    "attempt": 1,
-   "review_rounds": 0,
+   "review_rounds": 1,
    "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 22:36 security review FIX: TLS1.3 resumption skips client verify (revocation/expiry) + 3 low; sent to session. Design reviewer still running. | 22:48 head 473b125 security fixes; sec reviewer re-verifying delta | 23:10 design review: no blocking code; Windows red = rebuild.rs known flake (#88) -> \u00a72.18. Asked important 1-3 + polish. | 23:12 security re-review MERGE at 473b125. Waiting on design-review important fixes. | 23:19 eeb9704 design items done; runner reviewed redeem_again delta (needs secret match first, returns cert only, same key + unexpired + unrevoked): OK. Merge on green (Windows rebuild.rs flake = \u00a72.18).",
    "merge": "6927fe1"
   },
@@ -981,7 +981,7 @@
    "session": "session_01HkZAMVce8znDed5m6X2aoQ",
    "pr": 91,
    "attempt": 1,
-   "review_rounds": 0,
+   "review_rounds": 2,
    "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 01:20 review FIX sent: PUID/PGID stale since D-puid, compose user: key, backup/restore stale since M6-cli (wal/shm, reindex, auth.json), setup-token line; important: Get-FileHash case, no :latest yet, backup share private, glossary, SECURE_COOKIES, setup.facts regen. | 01:22 0404375 all review items done; sent P-release checksum details (SHA256SUMS, .minisig, minisign verify) to fold in; delta review after next push. | 01:40 delta review 640a136 FIX: update stops before docker-exec backup; API keys/sign-out not built (runner relay error); compose uncomment breaks YAML indent; restore cp -a; .sha256 not on release; id=0; decisions planned list. Merge after #92. | 01:30 15e2626 delta verified by runner; APPROVED (polish: update-checks planned). Merge after #92 + green CI; re-check ch4 vs #92 final. | 01:31 head 4b900c6 (polish done). Approved; merge after #92."
   },
   "F-budget": {
@@ -991,7 +991,8 @@
    "notes": "owner chose 'Normalise' in-session (per-pass calibration, scale [0.4,3.0], ref-runner us). PR #97 draft; temp sample workflow to be removed; supersedes #66 (close on merge). | 00:19 #97 ready 03c25c8 (CALIB_REF 7.4us, sample 8 runners, slowed legs fail, ported res:360). Reviewer started. | 00:33 review FIX: calibration median skewed by noise (use min, untrusted if before/after differ >15%, SPEED 0.4-2.0); doc re-derivation; cross-CPU 1.25x; budget-not-regression. Flag reference=fastest runner to owner (\u00a72.19). | 00:45 c77ad52 blocking fix verified by runner (min of before/after fastest pass, drift<=15%, SPEED 0.4-2.0, REF 7.2us). Approved pending stopgap/F-perf note in decisions + green CI. Then merge #85 F-near, close #66. | 00:45 b0e2589 stopgap note added (docs only). Approved; merge on green (filter budget check itself must pass on this head). | 02:08 b0e2589 filter budget PASSED on its own head; only fuzz(query) queued. | 02:25 MERGED 6f1e8d8 (CI fully green). #66 closed superseded; F-perf told.",
    "pr": 97,
    "branch": "claude/affectionate-hawking-uhztfw",
-   "merge": "6f1e8d8"
+   "merge": "6f1e8d8",
+   "review_rounds": 1
   },
   "runner-ci-speed": {
    "status": "merged",
@@ -1003,7 +1004,8 @@
    "status": "merged",
    "pr": 99,
    "notes": "r1 FIX applied verbatim bb4b544; merge on green",
-   "merge": "55d90af"
+   "merge": "55d90af",
+   "review_rounds": 1
   },
   "C-adult-other": {
    "status": "merged",
@@ -1011,7 +1013,8 @@
    "notes": "from #94 review: detect returns None for Other/Ebook at full score (content safety false negative) | 01:22 PR #105 ad0d24a ready; reviewer started (content safety). filter budget red = runner speed (\u00a72.18 candidate). \u00a72.19 refinement: Other->Scene, Ebook->Comics at threshold; flag to owner. | 01:40 review FIX: unrequested folder scan loosens Adult (counter-words in folders) + xxx-per-segment false positives -> remove, regression fixtures. Ebook threshold 60 kept (flag owner \u00a72.19 with edge cases). | 02:08 0cb0393 delta verified by runner (folder scan removed, regression fixtures, hentai-free pre-split). APPROVED; merge on green (\u00a72.18 for filter budget). | 02:55 MERGED edcf944 (\u00a72.18 filter budget, old gate).",
    "session": "session_01KNC8PugVKjddvhH6vT8qXN",
    "pr": 105,
-   "merge": "edcf944"
+   "merge": "edcf944",
+   "review_rounds": 1
   },
   "B4b-r2": {
    "status": "merged",
@@ -1019,7 +1022,8 @@
    "session": "session_01SK5Ci2FahQUSGQuDVozi28",
    "notes": "follow-up of #87 review: max_id visible-only, replay toggle, swap adult test | 23:32 PR #104 (branch slice/B4b). Runner decision (\u00a72.19, content-safety strengthening): max_id null while Adult hidden. Reviewer started. | 23:43 review FIX at ce2fd15: null max_id not landed yet; sent full plan + I1 (keep lastId on visibility resync) + I2 note. | 23:43 5ee6501 null max_id landed; I1 lastId pending. | 23:49 5f56396: B1 per plan, I1/I2/B1.8/polish done; runner verified fold. Approved; merge on green.",
    "pr": 104,
-   "merge": "501353f"
+   "merge": "501353f",
+   "review_rounds": 1
   },
   "runner-secure-delete": {
    "status": "merged",
@@ -1033,7 +1037,8 @@
    "model": "opus",
    "notes": "pull-forward after V6-cluster1 merge (owner: run as many as possible); brief includes #96 carry-forwards | 01:50 PR #108 1ff314c, CI queued; review after current reviews (disk). | 02:10 container restart; reviewers relaunched: M-auth, B5c, M6-win delta; V6-cluster2 review started. | 02:06 review FIX: flaky caps test (permit release race), revoke of disconnected worker keeps leases, revoked worker can be granted mid-claim, reconnect cancels drain; polish. | 02:42 delta d00eb8c FIX: late claim reply dropped (closed sender not pruned) -> verified fix + test; important: outcome is_current strands leases, retried claim double-grant dedupe; polish. | 02:47 ccb4957 runner-verified; one fix: prune closed claims before dedupe (two timed-out claims strand K). Then approved. | 02:50 2f90a63 closed-claims prune + test. APPROVED; merge on green. | 02:48 82ebee4 (+#106 merge, no Rust change). Approved; merge on green.",
    "session": "session_01LvbsfQSKGCGby7T8r4xoNw",
-   "pr": 108
+   "pr": 108,
+   "review_rounds": 2
   },
   "F-perf": {
    "status": "review",
@@ -1053,7 +1058,8 @@
    "model": "opus",
    "notes": "owner-delegated decision 2026-10-23: purge + 90-day expiry for migration snapshots | 01:31 PR #109 f596b13 ready; reviewer started (security pass). | 02:00 review FIX: reported hash pre-existing in cs_hashes (added_at) missed -> origin 0/1 full lookup + test; important: incremental per-snapshot mark (0.96s/snapshot/tick @200k tombstones blocks ingest), before-rollback copies in list, one name parser. | 02:58 delta review MERGE at 60f4452; asked: main(+#106), I1 clock full-pass, I2 purge deleted/revoked api_keys + saved_searches/collections by id, I3 size line, polish. Runner verifies delta then merges.",
    "session": "session_01KNQRrRWSAMYLC5vJRhERho",
-   "pr": 109
+   "pr": 109,
+   "review_rounds": 1
   },
   "runner-delegated": {
    "status": "approved",
@@ -1291,6 +1297,7 @@
   "sweep": "02:07 sweep: nothing fully complete yet; background CI waiter running for 79,101,97,88,105,106.",
   "heartbeat": "02:39 heartbeat: no new PRs; reviews/waiters in flight.",
   "launch_template": "From now on, launch prompts use runner/README.md standing instructions (steward skill, message runner_session).",
-  "106-adoption": "filter session (01N83...) and settings session (01Npc...) have no open branches; acknowledged steward. B2b, V6-cluster2, DOC-install merged #106."
+  "106-adoption": "filter session (01N83...) and settings session (01Npc...) have no open branches; acknowledged steward. B2b, V6-cluster2, DOC-install merged #106.",
+  "metrics": "Since 02:55: review_rounds incremented on every FIX verdict (backfilled 02:58 by counting FIX verdicts in notes, approximate). New PRs record self_review {raised,fixed,left} from the PR description."
  }
 }
