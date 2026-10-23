@@ -77,24 +77,33 @@ fn lower_or_equal_sequence_statements_are_refused_unless_identical() {
         Err(Error::Equivocation)
     );
     assert_eq!(
-        chain.clone().extend(&[equal], Some(T)),
+        chain.clone().extend(&[s1.clone(), equal], Some(T)),
         Err(Error::Equivocation)
     );
-    // Out of order is refused, and so is a reused key.
+    // Out of order is refused, a tail that doesn't start at 1 is a gap,
+    // and a reused key is refused.
     assert_eq!(
-        chain.clone().extend(&[s2.clone(), s1.clone()], Some(T)),
+        chain
+            .clone()
+            .extend(&[s1.clone(), s2.clone(), s1.clone()], Some(T)),
         Err(Error::BadDocument)
+    );
+    assert_eq!(
+        chain.clone().extend(std::slice::from_ref(&s2), Some(T)),
+        Err(Error::Gap)
     );
     let reuse = statement(&t.recovery, 3, Role::Freshness, &t.release.public(), T);
     assert_eq!(
-        chain.clone().extend(&[reuse], Some(T)),
+        chain
+            .clone()
+            .extend(&[s1.clone(), s2.clone(), reuse], Some(T)),
         Err(Error::KeyReused)
     );
     // A failed extension leaves the chain unchanged.
     let s3 = statement(&t.recovery, 3, Role::Freshness, &k7.public(), T);
     let bad = statement(&t.release, 4, Role::Release, &TestKey::new(9).public(), T);
     assert_eq!(
-        chain.extend(&[s3, bad], Some(T)),
+        chain.extend(&[s1, s2, s3, bad], Some(T)),
         Err(Error::NotRecoverySigned)
     );
     assert_eq!(chain.seq(), 2);
@@ -255,7 +264,7 @@ fn trust_survives_and_rejects_tampering() {
         with_statements(m, std::slice::from_ref(&rot))
     });
     let state = checked_state(&envelope(&m, None), &emb, &TrustState::default(), T + 20);
-    let bytes = state.to_bytes();
+    let bytes = state.to_bytes().unwrap();
     assert_eq!(TrustState::load(&bytes, &emb).unwrap(), state);
 
     // Dropping the statement, editing `revoked` or `seq`, or an unknown
@@ -497,4 +506,53 @@ fn a_freshness_statement_cannot_revoke_its_manifests_key() {
     .unwrap();
     assert_eq!(c.freshness, crate::Freshness::Refused(Error::RevokedKey));
     assert_eq!(c.next.seq, 0);
+}
+
+#[test]
+fn merge_and_load_refuse_what_does_not_extend() {
+    let t = trust();
+    let emb = t.embedded(vec![]);
+    let s = |seq, k: u8| {
+        statement(
+            &t.recovery,
+            seq,
+            Role::Release,
+            &TestKey::new(k).public(),
+            T,
+        )
+    };
+    let old = TrustState {
+        seq: 1,
+        statements: vec![s(1, 5)],
+        ..TrustState::default()
+    };
+    // A higher sequence whose statements don't extend the old ones loses.
+    let other = TrustState {
+        seq: 2,
+        statements: vec![s(1, 6), s(2, 7)],
+        ..TrustState::default()
+    };
+    assert_eq!(TrustState::merge(&old, other), old);
+    let longer = TrustState {
+        seq: 2,
+        statements: vec![s(1, 5), s(2, 7)],
+        ..TrustState::default()
+    };
+    assert_eq!(TrustState::merge(&old, longer.clone()), longer);
+    // A channel named twice is damage.
+    let dup = br#"{"format":1,"seq":0,"statements":[],"revoked":[],"channels":{"stable":{"hwm_ts":5,"hwm_sha256":null,"fresh_ts":0,"fresh_sha256":null},"stable":{"hwm_ts":1,"hwm_sha256":null,"fresh_ts":0,"fresh_sha256":null}}}"#;
+    assert_eq!(TrustState::load(dup, &emb), Err(Error::TrustDamaged));
+    assert!(TrustState::load(&dup.replace_second_stable(), &emb).is_ok());
+}
+
+trait ReplaceSecond {
+    fn replace_second_stable(&self) -> Vec<u8>;
+}
+
+impl ReplaceSecond for [u8] {
+    fn replace_second_stable(&self) -> Vec<u8> {
+        let s = std::str::from_utf8(self).unwrap();
+        let i = s.rfind("\"stable\"").unwrap();
+        format!("{}\"beta\"{}", &s[..i], &s[i + 8..]).into_bytes()
+    }
 }

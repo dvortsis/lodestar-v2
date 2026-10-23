@@ -34,7 +34,8 @@ fn verify_twice(env: &[u8], channel: Channel) {
         let again = check(env, channel, NOW, emb, &c.next).expect("a refetch verifies");
         assert_eq!(again.manifest, c.manifest);
         assert_eq!(TrustState::merge(&c.next, again.next.clone()), again.next);
-        let reloaded = TrustState::load(&c.next.to_bytes(), emb).expect("a written state loads");
+        let reloaded = TrustState::load(&c.next.to_bytes().expect("serialises"), emb)
+            .expect("a written state loads");
         assert_eq!(reloaded, c.next);
     }
 }

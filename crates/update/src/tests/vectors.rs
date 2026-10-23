@@ -117,7 +117,7 @@ fn cases() -> Vec<Case> {
         Expect::Err(Error::LegacySignature),
     ));
     v.push(case(
-        "wrong_key_number",
+        "unknown_key",
         envelope(
             &signed_manifest(&TestKey::new(9), Channel::Stable, T, "0.5.3"),
             None,

@@ -6,8 +6,8 @@
 //! exactly one above the current sequence (one sequence for all roles).
 //! Accepting it revokes the previous key of that role only. A document's
 //! statements at or below the current sequence must equal the accepted
-//! ones byte for byte; a different one is equivocation, and a skip is a
-//! gap. Both refuse the whole extension.
+//! ones byte for byte; a different one is equivocation, and a skip (or a
+//! list that doesn't start at 1) is a gap. Both refuse the whole extension.
 
 use crate::doc::{self, MAX_STATEMENT, MAX_STATEMENTS, SignedStatement, StatementBody};
 use crate::keys::Embedded;
@@ -141,8 +141,10 @@ impl Chain {
         &self.accepted[from..]
     }
 
-    /// Extends the chain with a document's statements, in ascending
-    /// `seq` order. All or nothing. Returns how many were new.
+    /// Extends the chain with a document's statements: the whole chain,
+    /// from `seq` 1 in ascending order (so any verifier can follow it,
+    /// whatever its own sequence). All or nothing. Returns how many were
+    /// new.
     pub fn extend(
         &mut self,
         statements: &[SignedStatement],
@@ -162,6 +164,9 @@ impl Chain {
             }
             // A statement we already hold is known by its bytes.
             if let Some(known) = next.accepted.iter().find(|a| a.body == body) {
+                if last == 0 && known.seq != 1 {
+                    return Err(Error::Gap);
+                }
                 if known.seq <= last {
                     return Err(Error::BadDocument);
                 }
@@ -176,6 +181,10 @@ impl Chain {
                 e => e,
             })?;
             let parsed = StatementBody::parse(&body)?;
+            // A document carries the whole chain, from seq 1.
+            if last == 0 && parsed.seq != 1 {
+                return Err(Error::Gap);
+            }
             if parsed.seq <= last {
                 return Err(Error::BadDocument);
             }

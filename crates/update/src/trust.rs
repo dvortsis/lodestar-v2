@@ -60,7 +60,34 @@ pub struct TrustState {
     /// The revoked keys (minisign base64 lines), derived from the
     /// statements; kept for people reading the file and checked on load.
     pub revoked: Vec<String>,
+    #[serde(deserialize_with = "unique_channels")]
     pub channels: BTreeMap<Channel, Marks>,
+}
+
+/// The channel map, refusing a channel named twice.
+fn unique_channels<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<BTreeMap<Channel, Marks>, D::Error> {
+    struct Unique;
+    impl<'de> serde::de::Visitor<'de> for Unique {
+        type Value = BTreeMap<Channel, Marks>;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a map of channels")
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(
+            self,
+            mut map: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut out = BTreeMap::new();
+            while let Some((c, m)) = map.next_entry::<Channel, Marks>()? {
+                if out.insert(c, m).is_some() {
+                    return Err(serde::de::Error::custom("duplicate channel"));
+                }
+            }
+            Ok(out)
+        }
+    }
+    d.deserialize_map(Unique)
 }
 
 impl Default for TrustState {
@@ -98,10 +125,10 @@ impl TrustState {
     }
 
     /// The bytes to write (pretty JSON, with a final newline).
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = serde_json::to_vec_pretty(self).unwrap_or_default();
+    pub fn to_bytes(&self) -> Result<Vec<u8>, Error> {
+        let mut out = serde_json::to_vec_pretty(self).map_err(|_| Error::TrustDamaged)?;
         out.push(b'\n');
-        out
+        Ok(out)
     }
 
     /// The chain these statements make from the embedded generation 0
@@ -173,9 +200,11 @@ impl TrustState {
 
     /// The forward-only merge: `new` replaces `old` only if its sequence
     /// is higher, or equal with the same statements and no channel's
-    /// marks lower. Otherwise `old` stays.
+    /// marks lower, and its statements extend the old ones. Otherwise
+    /// `old` stays.
     pub fn merge(old: &TrustState, new: TrustState) -> TrustState {
-        let forward = new.seq > old.seq
+        let extends = new.statements.starts_with(&old.statements);
+        let forward = (new.seq > old.seq && extends)
             || (new.seq == old.seq
                 && new.statements == old.statements
                 && old
