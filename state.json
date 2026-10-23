@@ -1017,6 +1017,11 @@
    "branch": "runner/secure-delete",
    "notes": "r5 MERGE 23:36; runner added decisions file 67fc001; merge on green. B8 told begin_write rule.",
    "merge": "aa799fa"
+  },
+  "V6-cluster2": {
+   "status": "launching",
+   "model": "opus",
+   "notes": "pull-forward after V6-cluster1 merge (owner: run as many as possible); brief includes #96 carry-forwards"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
