@@ -4,4 +4,5 @@
 //! realistic info dictionaries. It feeds the M0 size report and, later, the
 //! 10M-torrent search benchmarks.
 
+pub mod fixture;
 pub mod synth;

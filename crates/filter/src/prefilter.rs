@@ -17,6 +17,8 @@
 //! goes through the tokenizer itself. Queries that no text narrows
 //! (sizes, extensions, prefixes, negations) are always looked at.
 
+use std::cell::OnceCell;
+
 use lodestar_classify::FileInfo;
 use lodestar_search::query::TextField;
 use lodestar_search::tokenizer::{MAX_TOKEN_BYTES, TokKind, tokenize};
@@ -26,7 +28,7 @@ use lodestar_search::{DocEnrichment, Node};
 pub(crate) type Tags<'a, 't> = &'a dyn Fn() -> &'t IdSet;
 
 use crate::hash::{IdMap, IdSet, fmix64, fnv_byte, fnv_start, term_hash};
-use crate::matcher::{Compiled, compile};
+use crate::matcher::{Compiled, Spelled, compile, gate};
 use crate::rules::UserRule;
 
 /// What a query can't match without.
@@ -38,6 +40,75 @@ pub(crate) enum Need {
     Never,
     /// One of these keys must be in the torrent.
     Any(Vec<u64>),
+}
+
+/// A second condition a rule can't match without, checked while its
+/// rules are marked, so the commonest shapes on common words (`"mkv
+/// 1080p"`, `1080p size:>3TB`, `x264 type:software`, `x264 -1080p`,
+/// `webd*`, `~matrx`) are turned away without reading the rule. Each
+/// answers a clause every match needs, from what the torrent has: some
+/// as the cheap check would ([`crate::matcher`]), some exactly from its
+/// distinct token texts, compared byte for byte. So a gate says *no*
+/// only where the full match must.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Gate {
+    None,
+    /// The torrent's size (`size:`) within these, inclusive.
+    Size(u64, u64),
+    /// A file's size within these (`file:(… size:…)`).
+    FileSize(u64, u64),
+    /// This tag.
+    Tag(u64),
+    /// These two token texts in a row (a phrase's first two words).
+    Pair(u64, u64),
+    /// Not the word, clause `i` of the rule set's gate clauses: a word
+    /// anywhere, so a negated word the torrent has turns the rule away
+    /// (unless it's a neutralized word, which never counts).
+    Lacks(u32),
+    /// Some token text starts with the prefix of clause `i`.
+    Prefix(u32),
+    /// Some token text could be within the fuzzy word of clause `i`'s
+    /// distance, by its length and characters.
+    Fuzzy(u32),
+    /// The NEAR of clause `i` could be here: each word, and close enough
+    /// by the nearness the scan recorded.
+    Near(u32),
+    /// The titles have the word of clause `i`.
+    Title(u32),
+}
+
+impl Gate {
+    /// Of two gates a rule has, whether this one is the better: cheaper
+    /// to check, and turning more away.
+    fn rank(self) -> u8 {
+        match self {
+            Gate::None => 0,
+            Gate::Pair(..) => 1,
+            Gate::Prefix(_) | Gate::Fuzzy(_) | Gate::Near(_) => 2,
+            Gate::Lacks(_) | Gate::Title(_) => 3,
+            Gate::Tag(_) => 4,
+            Gate::Size(..) | Gate::FileSize(..) => 5,
+        }
+    }
+
+    /// The gate clause it reads, if any: its answer is the same for
+    /// every rule that shares the clause.
+    fn clause(self) -> Option<u32> {
+        match self {
+            Gate::Lacks(i) | Gate::Prefix(i) | Gate::Fuzzy(i) | Gate::Near(i) | Gate::Title(i) => {
+                Some(i)
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn better(self, other: Gate) -> Gate {
+        if other.rank() > self.rank() {
+            other
+        } else {
+            self
+        }
+    }
 }
 
 /// How rare a need looks: the shortest of its texts, or 0 for words
@@ -220,10 +291,36 @@ pub(crate) struct DocKeys {
     starts: Bloom,
     /// Each distinct token text, for prefixes and fuzzy words.
     vocabulary: Vocabulary,
+    /// The vocabulary by its texts' first two, three and four characters'
+    /// keys, sorted, made on first use: a prefix reads only the texts that
+    /// start like it.
+    by_start: [OnceCell<Vec<(u64, u32)>>; 3],
+    /// How close a rule set's NEAR terms came, when the scan was given
+    /// them.
+    near: Option<Nearness>,
+    /// The characters ([`char_set`]) of the texts of each length, made on
+    /// first use.
+    by_length: OnceCell<Vec<u64>>,
+    /// The two-character pairs the texts have, made on first use.
+    char_pairs: OnceCell<CharPairs>,
+    /// [`DocKeys::by_chars`].
+    by_chars: OnceCell<(Vec<u32>, Vec<u32>)>,
+    /// [`DocKeys::length_windows`].
+    lengths: OnceCell<[[u64; LENGTHS]; 2]>,
 }
 
 impl DocKeys {
+    #[cfg(test)]
     pub(crate) fn new(name: &str, files: &[FileInfo]) -> DocKeys {
+        DocKeys::with_near(name, files, None)
+    }
+
+    /// [`DocKeys::new`], recording how close `near`'s terms come.
+    pub(crate) fn with_near(
+        name: &str,
+        files: &[FileInfo],
+        near: Option<&std::sync::Arc<NearTerms>>,
+    ) -> DocKeys {
         let bytes = name.len()
             + files
                 .iter()
@@ -235,28 +332,39 @@ impl DocKeys {
             out: IdMap::with_capacity_and_hasher(256, Default::default()),
             pairs: Bloom::for_text(bytes),
             starts: Bloom::for_text(bytes),
-            vocabulary: Vocabulary::default(),
+            // Room for a typical torrent's distinct texts, so they're
+            // rarely moved as they grow.
+            vocabulary: Vocabulary {
+                buf: String::with_capacity(bytes.min(4096)),
+                words: Vec::with_capacity(128),
+            },
             seen: [const { None }; SEEN],
             at: At::default(),
+            near: near.map(|terms| Nearness {
+                terms: terms.clone(),
+                closest: IdMap::default(),
+                overflow: false,
+            }),
+            recent: Recent::default(),
+            near_words: Vec::new(),
         };
         scan.text(name);
         // A path's segments are joined by '/', which never joins tokens,
         // so each segment is scanned on its own, continuing the path's
-        // positions. Folders shared with the previous file add nothing
-        // new, so the scan picks up where the folder ended.
-        let mut folder: (&[String], At) = (&[], At::default());
+        // positions. Folders already scanned add nothing new, so the scan
+        // picks up where the longest of them ended (a season's episodes
+        // and their subtitles alternate between two folders).
+        let mut folders = Folders::default();
         for f in files.iter().take(crate::MAX_FILES) {
             let Some((file, dirs)) = f.path.split_last() else {
                 continue;
             };
-            if dirs != folder.0 {
-                scan.at = At::default();
-                for seg in dirs {
-                    scan.text(seg);
-                }
-                folder = (dirs, scan.at);
-            } else {
-                scan.at = folder.1;
+            let (known, at) = folders.longest(dirs, &mut scan.recent);
+            scan.at = at;
+            for k in known..dirs.len() {
+                scan.text(&dirs[k]);
+                let recent = scan.near.is_some().then_some(&scan.recent);
+                folders.add(&dirs[..=k], scan.at, recent);
             }
             scan.text(file);
         }
@@ -265,13 +373,153 @@ impl DocKeys {
             pairs: scan.pairs,
             starts: scan.starts,
             vocabulary: scan.vocabulary,
+            by_start: Default::default(),
+            near: scan.near,
+            by_length: OnceCell::new(),
+            char_pairs: OnceCell::new(),
+            by_chars: OnceCell::new(),
+            lengths: OnceCell::new(),
         }
     }
 
     /// Each distinct token text of the name and the paths.
+    #[cfg(test)]
     pub(crate) fn vocabulary(&self) -> impl Iterator<Item = &str> {
         let v = &self.vocabulary;
         v.words.iter().map(|w| v.text(w))
+    }
+
+    /// The distinct token texts that could start with `prefix`, whose
+    /// [`start_key`] is `key`: those whose first characters' key is the
+    /// same (every text for a prefix of fewer than two characters).
+    pub(crate) fn vocabulary_starting(
+        &self,
+        prefix: &str,
+        key: Option<u64>,
+    ) -> impl Iterator<Item = &str> + '_ {
+        let v = &self.vocabulary;
+        let run: &[(u64, u32)] = match key {
+            None => &[],
+            Some(key) => {
+                let n = prefix.chars().count().clamp(2, 4) - 2;
+                let sorted = self.by_start[n].get_or_init(|| sorted_starts(v, n));
+                let from = sorted.partition_point(|e| e.0 < key);
+                let to = sorted.partition_point(|e| e.0 <= key);
+                &sorted[from..to]
+            }
+        };
+        let every = key.is_none();
+        v.words
+            .iter()
+            .filter(move |_| every)
+            .chain(run.iter().map(|&(_, i)| &v.words[i as usize]))
+            .map(|w| v.text(w))
+    }
+
+    /// Whether some token text could be within `distance` edits of a word
+    /// `chars` long with characters `has`. An edit drops at most one of
+    /// the word's characters (or folded character bits), so such a text
+    /// lacks at most `distance` of them, and so do all the texts of its
+    /// length together.
+    pub(crate) fn could_be_near(&self, word: &[char], has: u64, distance: usize) -> bool {
+        near_in(self.by_length(), word.len(), has, distance)
+            && pairs_could(self.char_pairs(), char_pairs(word), word.len(), distance)
+    }
+
+    /// The characters of the texts of each length and those within one
+    /// edit of it (`[0]`), or two (`[1]`), lengths past the table's end
+    /// together at its last, made on first use.
+    fn length_windows(&self) -> &[[u64; LENGTHS]; 2] {
+        self.lengths.get_or_init(|| {
+            let mut by = [0u64; LENGTHS];
+            for (n, &u) in self.by_length().iter().enumerate() {
+                by[n.min(LENGTHS - 1)] |= u;
+            }
+            let mut w = [[0u64; LENGTHS]; 2];
+            for (d, window) in w.iter_mut().enumerate() {
+                for (n, slot) in window.iter_mut().enumerate() {
+                    let lo = n.saturating_sub(d + 1);
+                    let hi = (n + d + 2).min(LENGTHS);
+                    *slot = by[lo..hi].iter().fold(0, |u, &x| u | x);
+                }
+            }
+            w
+        })
+    }
+
+    /// The two-character pairs the token texts have, made on first use.
+    fn char_pairs(&self) -> &CharPairs {
+        self.char_pairs.get_or_init(|| {
+            let v = &self.vocabulary;
+            crate::work::tick(v.buf.len());
+            let mut have: CharPairs = Box::new([0; NO_PAIR as usize + 1]);
+            for w in &v.words {
+                let text = v.text(w);
+                if text.is_ascii() {
+                    // Most texts: classes read from a table.
+                    for p in text.as_bytes().windows(2) {
+                        let (a, b) = (
+                            ASCII_CLASS[usize::from(p[0])],
+                            ASCII_CLASS[usize::from(p[1])],
+                        );
+                        have[usize::from(a) * 64 + usize::from(b)] = 1;
+                    }
+                    continue;
+                }
+                let mut chars = text.chars();
+                let Some(mut a) = chars.next() else { continue };
+                for b in chars {
+                    have[(char_class(a) * 64 + char_class(b)) as usize] = 1;
+                    a = b;
+                }
+            }
+            have
+        })
+    }
+
+    /// The characters ([`char_set`]) of the texts of each length.
+    fn by_length(&self) -> &[u64] {
+        self.by_length.get_or_init(|| {
+            let v = &self.vocabulary;
+            crate::work::tick(v.words.len());
+            let lengths = v.words.iter().map(|w| w.chars as usize + 1).max();
+            let mut out = vec![0u64; lengths.unwrap_or(0)];
+            for w in &v.words {
+                out[w.chars as usize] |= w.has;
+            }
+            out
+        })
+    }
+
+    /// How close the rule set's NEAR terms came, if recorded.
+    pub(crate) fn nearness(&self) -> Option<&Nearness> {
+        self.near.as_ref()
+    }
+
+    /// Whether some token text starts with `prefix`, whose [`start_key`]
+    /// is `key`: [`DocKeys::vocabulary_starting`] for one answer.
+    pub(crate) fn has_prefix(&self, prefix: &str, key: u64) -> bool {
+        self.texts_starting(start_index(prefix), key)
+            .any(|t| t.starts_with(prefix))
+    }
+
+    /// The token texts whose first `n + 2` characters' key is `key`.
+    fn texts_starting(&self, n: usize, key: u64) -> impl Iterator<Item = &str> {
+        let v = &self.vocabulary;
+        let sorted = self.by_start[n].get_or_init(|| sorted_starts(v, n));
+        let from = sorted.partition_point(|e| e.0 < key);
+        sorted[from..]
+            .iter()
+            .take_while(move |e| e.0 == key)
+            .map(|&(_, i)| v.text(&v.words[i as usize]))
+    }
+
+    /// Whether `text`, whose hash is `hash`, is one of the token texts,
+    /// compared byte for byte.
+    pub(crate) fn has_exact(&self, hash: u64, text: &str) -> bool {
+        self.text
+            .get(&hash)
+            .is_some_and(|&i| self.vocabulary.find(i, Piece::Str(text)).is_ok())
     }
 
     /// The distinct token texts within `distance` characters of `chars`
@@ -284,13 +532,46 @@ impl DocKeys {
         distance: usize,
     ) -> impl Iterator<Item = &str> {
         let v = &self.vocabulary;
-        v.words
-            .iter()
-            .filter(move |w| {
-                (w.chars as usize).abs_diff(chars) <= distance
-                    && ((w.has ^ has).count_ones() as usize) <= 2 * distance
-            })
+        let (order, starts) = self.by_chars();
+        // Only the lengths within the distance.
+        let lo = starts.get(chars.saturating_sub(distance)).copied();
+        let hi = starts.get(chars + distance + 1).copied();
+        let run = match (lo, hi) {
+            (Some(lo), hi) => &order[lo as usize..hi.map_or(order.len(), |h| h as usize)],
+            (None, _) => &[],
+        };
+        crate::work::tick(run.len() + 1);
+        run.iter()
+            .map(|&i| &v.words[i as usize])
+            .filter(move |w| ((w.has ^ has).count_ones() as usize) <= 2 * distance)
             .map(|w| v.text(w))
+    }
+
+    /// The vocabulary in order of length, and where each length starts
+    /// in it, made on first use.
+    fn by_chars(&self) -> (&[u32], &[u32]) {
+        let (order, starts) = self.by_chars.get_or_init(|| {
+            let v = &self.vocabulary;
+            crate::work::tick(v.words.len());
+            // A counting sort: lengths are few and small.
+            let longest = v.words.iter().map(|w| w.chars as usize).max().unwrap_or(0);
+            let mut starts = vec![0u32; longest + 2];
+            for w in &v.words {
+                starts[w.chars as usize + 1] += 1;
+            }
+            for k in 1..starts.len() {
+                starts[k] += starts[k - 1];
+            }
+            let mut next = starts.clone();
+            let mut order = vec![0u32; v.words.len()];
+            for (i, w) in v.words.iter().enumerate() {
+                let at = &mut next[w.chars as usize];
+                order[*at as usize] = i as u32;
+                *at += 1;
+            }
+            (order, starts)
+        });
+        (order, starts)
     }
 
     /// Whether some token text could start with the text [`start_key`]
@@ -329,6 +610,288 @@ impl DocKeys {
 pub(crate) fn tag_keys(e: Option<&DocEnrichment>) -> IdSet {
     e.map(|e| e.tags.iter().map(|t| tag_key(t)).collect())
         .unwrap_or_default()
+}
+
+/// The widest NEAR window (`words + slop - 1` positions) a torrent's scan
+/// records nearness for. Wider NEARs are left to the full match.
+pub(crate) const MAX_WINDOW: u32 = 8;
+
+/// The token texts a rule set's NEAR words are made of, and the widest
+/// window among them: a torrent's scan records how close each two of
+/// these come, so a NEAR whose words never come within its window is
+/// turned away without reading the paths (§20.8).
+#[derive(Debug, Default)]
+pub(crate) struct NearTerms {
+    /// Each term's number.
+    terms: IdMap<u32>,
+    /// The pairs of terms some NEAR asks about ([`both`]): its first
+    /// word's against each other word's. Only these are recorded.
+    pairs: IdSet,
+    /// The same pairs by the terms' numbers, as a bit matrix, for up to
+    /// [`MATRIX_TERMS`] terms: one bit test per pair while scanning.
+    matrix: Vec<u64>,
+    window: u32,
+}
+
+/// Terms [`NearTerms::matrix`] is kept for (8 KiB of bits).
+const MATRIX_TERMS: usize = 256;
+
+impl NearTerms {
+    /// The number of term `h`, added if it's new.
+    fn term(&mut self, h: u64) -> u32 {
+        let n = self.terms.len() as u32;
+        *self.terms.entry(h).or_insert(n)
+    }
+
+    /// Asks about terms `a` and `b`, both added.
+    fn ask(&mut self, a: u64, b: u64) {
+        self.term(a);
+        self.term(b);
+        self.pairs.insert(both(a, b));
+    }
+
+    /// Lays the asked pairs out as a matrix, when there are few terms.
+    fn seal(&mut self) {
+        let n = self.terms.len();
+        if n > MATRIX_TERMS {
+            return;
+        }
+        self.matrix = vec![0; (n * n).div_ceil(64)];
+        let terms: Vec<(u64, u32)> = self.terms.iter().map(|(&h, &i)| (h, i)).collect();
+        for &(a, i) in &terms {
+            for &(b, j) in &terms {
+                if self.pairs.contains(&both(a, b)) {
+                    let bit = i as usize * n + j as usize;
+                    self.matrix[bit / 64] |= 1 << (bit % 64);
+                }
+            }
+        }
+    }
+
+    /// Whether terms numbered `i` and `j` (hashes `a`, `b`) are asked
+    /// about.
+    #[inline]
+    fn asks(&self, i: u32, j: u32, a: u64, b: u64) -> bool {
+        if self.matrix.is_empty() {
+            return self.pairs.contains(&both(a, b));
+        }
+        let bit = i as usize * self.terms.len() + j as usize;
+        self.matrix[bit / 64] & (1 << (bit % 64)) != 0
+    }
+}
+
+impl NearTerms {
+    /// The terms of the NEARs among `queries` whose window is at most
+    /// [`MAX_WINDOW`], or `None` without any.
+    pub(crate) fn of<'q>(queries: impl Iterator<Item = &'q Compiled>) -> Option<NearTerms> {
+        let mut near = NearTerms::default();
+        for q in queries {
+            crate::matcher::near_words(q, &mut |words, span| {
+                if span >= 1 && span - 1 <= MAX_WINDOW {
+                    let Some((first, rest)) = words.split_first() else {
+                        return;
+                    };
+                    for w in rest {
+                        for &x in first {
+                            for &y in w {
+                                near.ask(x, y);
+                            }
+                        }
+                    }
+                    for &h in words.iter().flatten() {
+                        near.term(h);
+                    }
+                    near.window = near.window.max(span - 1);
+                }
+            });
+        }
+        near.seal();
+        (!near.terms.is_empty()).then_some(near)
+    }
+}
+
+/// Positions an occurrence may come behind the furthest seen. Each word's
+/// are noted in position order, but a join's compound sits at the
+/// previous word's first position, after that word's later parts: a word
+/// a join takes has at most four letters, which split into at most three
+/// parts (`aBcD` is `a`, `Bc`, `D`), so it lags at most two. One more to
+/// spare.
+const LAG: u32 = 3;
+
+/// Occurrences [`Recent`] keeps: the window's positions, the lag's and
+/// one more, at most four tokens each (a word or part, its whole form, a
+/// plus and a join), with room to spare.
+const RECENT: usize = 4 * (MAX_WINDOW as usize + LAG as usize + 1) + 4;
+
+/// Recent occurrences of the NEAR terms in the text being scanned, kept
+/// in place so copying it for a folder allocates nothing.
+#[derive(Debug, Clone, Copy)]
+struct Recent {
+    /// Each occurrence: its term, the term's number, its position.
+    ring: [(u64, u32, u32); RECENT],
+    len: usize,
+    furthest: u32,
+}
+
+impl Default for Recent {
+    fn default() -> Recent {
+        Recent {
+            ring: [(0, 0, 0); RECENT],
+            len: 0,
+            furthest: 0,
+        }
+    }
+}
+
+impl Recent {
+    fn get(&self) -> &[(u64, u32, u32)] {
+        &self.ring[..self.len]
+    }
+
+    fn clear(&mut self) {
+        self.len = 0;
+        self.furthest = 0;
+    }
+
+    /// Copies `other`'s occurrences, not its spare room.
+    fn copy(&mut self, other: &Recent) {
+        self.ring[..other.len].copy_from_slice(other.get());
+        self.len = other.len;
+        self.furthest = other.furthest;
+    }
+}
+
+/// The order-free key of two terms.
+fn both(a: u64, b: u64) -> u64 {
+    pair(a.min(b), a.max(b))
+}
+
+/// The closest each two of a rule set's NEAR terms came in one text.
+#[derive(Debug)]
+pub(crate) struct Nearness {
+    terms: std::sync::Arc<NearTerms>,
+    closest: IdMap<u8>,
+    /// More occurrences in a window than [`RECENT`] can hold (a text the
+    /// tokenizer gives more tokens a position): nothing is told from the
+    /// nearness then.
+    overflow: bool,
+}
+
+impl Nearness {
+    /// Whether nearness was recorded for this term: if not, nothing can
+    /// be told from it.
+    /// The number of term `h`, if it's one.
+    fn id(&self, h: u64) -> Option<u32> {
+        self.terms.terms.get(&h).copied()
+    }
+
+    pub(crate) fn covers(&self, h: u64) -> bool {
+        self.terms.terms.contains_key(&h)
+    }
+
+    pub(crate) fn window(&self) -> u32 {
+        self.terms.window
+    }
+
+    /// Whether terms `a` and `b` came within `d` positions of each other
+    /// in one text, for terms it [`covers`](Nearness::covers) and `d` up
+    /// to its window. A term is within 0 of itself wherever it is, and a
+    /// pair no NEAR of the rule set asks about isn't recorded, so it may
+    /// be anywhere.
+    pub(crate) fn within(&self, a: u64, b: u64, d: u32) -> bool {
+        let key = both(a, b);
+        a == b
+            || self.overflow
+            || !self.terms.pairs.contains(&key)
+            || self.closest.get(&key).is_some_and(|&c| u32::from(c) <= d)
+    }
+
+    /// Notes an occurrence of `h` at `pos` in the text `recent` follows;
+    /// `known` is its term's number when the caller has it.
+    fn occur(&mut self, recent: &mut Recent, h: u64, pos: u32, known: Option<u32>) {
+        let Some(id) = known.or_else(|| self.terms.terms.get(&h).copied()) else {
+            return;
+        };
+        let w = self.terms.window;
+        crate::work::tick(recent.len + 1);
+        for &(x, xid, q) in recent.get() {
+            let d = pos.abs_diff(q);
+            if d > w || !self.terms.asks(xid, id, x, h) {
+                continue;
+            }
+            let c = self.closest.entry(both(x, h)).or_insert(u8::MAX);
+            *c = (*c).min(d as u8);
+        }
+        recent.furthest = recent.furthest.max(pos);
+        // An occurrence still to come lies at most LAG before the
+        // furthest, so anything further back than the window is done.
+        // Not quite in position order (compounds come late), so any entry
+        // may be the one to go.
+        let keep = recent.furthest.saturating_sub(w + LAG);
+        if recent.get().iter().any(|e| e.2 < keep) {
+            let mut n = 0;
+            for i in 0..recent.len {
+                if recent.ring[i].2 >= keep {
+                    recent.ring[n] = recent.ring[i];
+                    n += 1;
+                }
+            }
+            recent.len = n;
+        }
+        if recent.len == RECENT {
+            self.overflow = true;
+            return;
+        }
+        recent.ring[recent.len] = (h, id, pos);
+        recent.len += 1;
+    }
+}
+
+/// Folders a scan remembers, and how deep: deeper ones continue from
+/// their remembered start, so a path costs a comparison of at most its
+/// first [`FOLDER_DEPTH`] segments against each, whatever its depth.
+const FOLDERS: usize = 8;
+const FOLDER_DEPTH: usize = 4;
+
+/// Folders already scanned, with where the scan stood after each, and
+/// its recent NEAR terms when it records them.
+#[derive(Default)]
+struct Folders<'a> {
+    seen: [(&'a [String], At); FOLDERS],
+    recent: Vec<Recent>,
+    next: usize,
+}
+
+impl<'a> Folders<'a> {
+    /// How many of `dirs`' first segments were scanned as a folder, and
+    /// where the scan stood after them, into `recent` too (the start of
+    /// a path for none).
+    fn longest(&self, dirs: &[String], recent: &mut Recent) -> (usize, At) {
+        for k in (1..=dirs.len().min(FOLDER_DEPTH)).rev() {
+            if let Some(i) = self.seen.iter().position(|(f, _)| *f == &dirs[..k]) {
+                if let Some(r) = self.recent.get(i) {
+                    recent.copy(r);
+                }
+                return (k, self.seen[i].1);
+            }
+        }
+        recent.clear();
+        (0, At::default())
+    }
+
+    /// Remembers a folder; `recent` only when the scan records nearness.
+    fn add(&mut self, folder: &'a [String], at: At, recent: Option<&Recent>) {
+        if folder.len() <= FOLDER_DEPTH {
+            self.seen[self.next] = (folder, at);
+            if let Some(r) = recent {
+                if self.recent.is_empty() {
+                    self.recent = vec![Recent::default(); FOLDERS];
+                }
+                self.recent[self.next].copy(r);
+            }
+            self.next = (self.next + 1) % FOLDERS;
+        }
+    }
 }
 
 /// Slots of the word cache.
@@ -395,12 +958,74 @@ pub(crate) fn char_set(text: &str) -> u64 {
 }
 
 fn char_bit(c: char) -> u64 {
-    let bit = match c {
+    1 << char_class(c)
+}
+
+/// A character's bit in [`char_set`]: letters and digits each their own,
+/// others folded onto the rest.
+fn char_class(c: char) -> u32 {
+    match c {
         'a'..='z' => c as u32 - 'a' as u32,
         '0'..='9' => 26 + c as u32 - '0' as u32,
         _ => 36 + c as u32 % 28,
+    }
+}
+
+/// [`char_class`] of each ASCII character.
+const ASCII_CLASS: [u8; 128] = {
+    let mut t = [0u8; 128];
+    let mut c = 0;
+    while c < 128 {
+        t[c] = match c as u8 {
+            b'a'..=b'z' => c as u8 - b'a',
+            b'0'..=b'9' => 26 + c as u8 - b'0',
+            _ => 36 + (c % 28) as u8,
+        };
+        c += 1;
+    }
+    t
+};
+
+/// The two-character pairs ([`char_class`] each) of a word, as indexes
+/// into a [`CharPairs`] set.
+pub(crate) fn char_pairs(word: &[char]) -> impl Iterator<Item = u16> + '_ {
+    word.windows(2)
+        .map(|p| (char_class(p[0]) * 64 + char_class(p[1])) as u16)
+}
+
+/// Which two-character pairs some token text has, one byte each (1 if
+/// so), so a gate adds them up with one read apiece. The last slot,
+/// [`NO_PAIR`], is never set.
+type CharPairs = Box<[u8; NO_PAIR as usize + 1]>;
+
+/// A pair slot that's never had, for a word with fewer pairs than a
+/// [`FuzzyGate`] holds.
+const NO_PAIR: u16 = 64 * 64;
+
+/// Whether a text within `distance` edits of a word `len` characters long
+/// whose pairs are `pairs` could be among texts with these pairs. An edit
+/// changes at most two of the word's pairs, so such a text keeps at least
+/// `len - 1 - 2 × distance` of them (the q-gram lemma), every one among
+/// the texts'.
+fn pairs_could(
+    have: &CharPairs,
+    pairs: impl Iterator<Item = u16>,
+    len: usize,
+    distance: usize,
+) -> bool {
+    let Some(need) = len.checked_sub(1 + 2 * distance).filter(|&n| n > 0) else {
+        return true;
     };
-    1 << bit
+    let mut kept = 0;
+    for p in pairs {
+        if have[usize::from(p)] != 0 {
+            kept += 1;
+            if kept >= need {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Distinct token texts, compared byte for byte, so two texts whose hashes
@@ -413,62 +1038,176 @@ struct Vocabulary {
 
 #[derive(Debug, Clone, Copy)]
 struct Entry {
-    hash: u64,
     start: u32,
     end: u32,
     chars: u32,
     has: u64,
+    starts: Starts,
+    /// The next entry with the same hash, or [`NONE`]: texts whose hashes
+    /// collide are chained, so a crafted collision costs its own chain,
+    /// not a scan of every text.
+    next: u32,
 }
+
+const NONE: u32 = u32::MAX;
 
 impl Vocabulary {
     fn text(&self, w: &Entry) -> &str {
         &self.buf[w.start as usize..w.end as usize]
     }
 
-    fn push(&mut self, hash: u64, text: &str) -> u32 {
+    /// Adds a text, lowercased from ASCII `pieces` or as it is, after
+    /// entry `after` of the same hash, and its starts to `starts`.
+    fn push(&mut self, text: Piece<'_>, after: u32, starts: &mut Bloom) -> u32 {
         let start = self.buf.len();
-        self.buf.push_str(text);
+        let (chars, has, keys) = match text {
+            Piece::Ascii(pieces) => {
+                // Pieces of ASCII text, at most a token long between them.
+                let mut low = [0u8; MAX_TOKEN_BYTES];
+                let mut n = 0;
+                for &c in pieces.iter().flat_map(|p| p.iter()) {
+                    low[n] = c.to_ascii_lowercase();
+                    n += 1;
+                }
+                let low = &low[..n];
+                self.buf
+                    .push_str(std::str::from_utf8(low).expect("ASCII text"));
+                let keys = add_starts(starts, low.iter().copied());
+                let has = low.iter().fold(0, |m, &c| m | char_bit(char::from(c)));
+                (n, has, keys)
+            }
+            Piece::Str(t) => {
+                self.buf.push_str(t);
+                let keys = if t.is_ascii() {
+                    add_starts(starts, t.bytes())
+                } else {
+                    add_starts_str(starts, t)
+                };
+                (t.chars().count(), char_set(t), keys)
+            }
+        };
+        let i = self.words.len() as u32;
         self.words.push(Entry {
-            hash,
             start: start as u32,
             end: self.buf.len() as u32,
-            chars: text.chars().count() as u32,
-            has: char_set(text),
+            chars: chars as u32,
+            has,
+            starts: keys,
+            next: NONE,
         });
-        (self.words.len() - 1) as u32
+        if after != NONE {
+            self.words[after as usize].next = i;
+        }
+        i
     }
 
-    /// Whether `text`, whose hash is `hash`, is entry `i`'s text or that
-    /// of another entry with that hash.
-    fn has(&self, i: u32, hash: u64, text: &str) -> bool {
-        self.text(&self.words[i as usize]) == text
-            || self
-                .words
-                .iter()
-                .any(|w| w.hash == hash && self.text(w) == text)
+    /// Whether `text` is in the chain of same-hash entries from `i`, or
+    /// else the chain's last entry, to add it after.
+    fn find(&self, mut i: u32, text: Piece<'_>) -> Result<(), u32> {
+        loop {
+            let w = &self.words[i as usize];
+            if text.is(self.text(w)) {
+                return Ok(());
+            }
+            if w.next == NONE {
+                return Err(i);
+            }
+            i = w.next;
+        }
+    }
+}
+
+/// A token text: lowercase ASCII from pieces in any case, or a text
+/// already folded.
+#[derive(Clone, Copy)]
+enum Piece<'a> {
+    Ascii(&'a [&'a [u8]]),
+    Str(&'a str),
+}
+
+impl Piece<'_> {
+    fn is(self, text: &str) -> bool {
+        match self {
+            Piece::Str(t) => t == text,
+            Piece::Ascii(pieces) => {
+                let mut rest = text.as_bytes();
+                pieces.iter().all(|p| {
+                    let Some((head, tail)) = rest.split_at_checked(p.len()) else {
+                        return false;
+                    };
+                    rest = tail;
+                    head.eq_ignore_ascii_case(p)
+                }) && rest.is_empty()
+            }
+        }
     }
 }
 
 /// Adds a token's first two, three and four characters, from its
 /// lowercase ASCII bytes.
-fn add_starts(out: &mut Bloom, text: impl Iterator<Item = u8>) {
+fn add_starts(out: &mut Bloom, text: impl Iterator<Item = u8>) -> Starts {
+    let mut keys = [0; 3];
     let mut h = fnv_start() ^ 0x5354_4152_5453;
     for (n, b) in text.take(4).enumerate() {
         h = fnv_byte(h, b);
         if n >= 1 {
-            out.insert(fmix64(h));
+            keys[n - 1] = fmix64(h);
+            out.insert(keys[n - 1]);
         }
     }
+    keys
 }
 
 /// [`add_starts`] for any token text, by characters.
-fn add_starts_str(out: &mut Bloom, text: &str) {
+fn add_starts_str(out: &mut Bloom, text: &str) -> Starts {
+    let mut keys = [0; 3];
     let chars = text.chars().count();
     for n in 2..=chars.min(4) {
         let end = text.char_indices().nth(n).map_or(text.len(), |(i, _)| i);
-        out.insert(starts_hash(text[..end].bytes()));
+        keys[n - 2] = starts_hash(text[..end].bytes());
+        out.insert(keys[n - 2]);
     }
+    keys
 }
+
+/// [`DocKeys::could_be_near`] on the texts' characters by length.
+fn near_in(by_length: &[u64], chars: usize, has: u64, distance: usize) -> bool {
+    let lo = chars.saturating_sub(distance);
+    (lo..chars + distance + 1).any(|n| {
+        by_length
+            .get(n)
+            .is_some_and(|&u| (has & !u).count_ones() as usize <= distance)
+    })
+}
+
+/// Which of [`DocKeys::by_start`]'s lists a prefix's [`start_key`] is in:
+/// its first two, three or four characters.
+fn start_index(prefix: &str) -> usize {
+    let n = if prefix.is_ascii() {
+        prefix.len()
+    } else {
+        prefix.chars().count()
+    };
+    n.clamp(2, 4) - 2
+}
+
+/// The vocabulary's texts by the key of their first `n + 2` characters.
+fn sorted_starts(v: &Vocabulary, n: usize) -> Vec<(u64, u32)> {
+    crate::work::tick(v.words.len());
+    let mut s: Vec<(u64, u32)> = v
+        .words
+        .iter()
+        .enumerate()
+        .filter(|(_, w)| w.chars as usize >= n + 2)
+        .map(|(i, w)| (w.starts[n], i as u32))
+        .collect();
+    s.sort_unstable();
+    s
+}
+
+/// A text's [`start_key`]s of its first two, three and four characters,
+/// 0 where it has fewer.
+type Starts = [u64; 3];
 
 /// The key of token `b` at the position after token `a`.
 pub(crate) fn pair(a: u64, b: u64) -> u64 {
@@ -481,6 +1220,11 @@ pub(crate) fn pair(a: u64, b: u64) -> u64 {
 struct Word {
     full: u64,
     split: Option<(u64, u64, u64)>,
+    /// Its positions: its parts, or 1.
+    width: u32,
+    /// Its tokens among the NEAR terms, with their positions in it: a run
+    /// of [`Scan::near_words`].
+    near: (u32, u32),
 }
 
 /// The tokens at one position: at most the word or its first part, its
@@ -516,6 +1260,8 @@ struct At {
     last: Few,
     before: Few,
     second: Option<u64>,
+    /// The position the next word takes.
+    pos: u32,
 }
 
 /// Collects a torrent's keys, and every pair of tokens at neighbouring
@@ -530,6 +1276,11 @@ struct Scan<'a> {
     vocabulary: Vocabulary,
     seen: [Option<(&'a [u8], Word)>; SEEN],
     at: At,
+    near: Option<Nearness>,
+    /// The NEAR terms' recent occurrences in the text being scanned.
+    recent: Recent,
+    /// Words' NEAR terms ([`Word::near`]).
+    near_words: Vec<(u64, u32, u32)>,
 }
 
 fn pairs(out: &mut Bloom, a: &[u64], b: &[u64]) {
@@ -542,31 +1293,39 @@ fn pairs(out: &mut Bloom, a: &[u64], b: &[u64]) {
 
 impl<'a> Scan<'a> {
     /// Adds one token of ASCII text, at most [`MAX_TOKEN_BYTES`] long, from
-    /// its pieces: its key, its starts, and its text.
+    /// its pieces: its key, and its text and starts when it's new.
     fn token(&mut self, hash: u64, pieces: &[&[u8]]) {
-        let mut low = [0u8; MAX_TOKEN_BYTES];
-        let mut n = 0;
-        for c in pieces.iter().flat_map(|p| p.iter()) {
-            low[n] = c.to_ascii_lowercase();
-            n += 1;
-        }
-        let low = &low[..n];
-        add_starts(&mut self.starts, low.iter().copied());
-        self.add_text(hash, std::str::from_utf8(low).expect("ASCII"));
+        self.add_text(hash, Piece::Ascii(pieces));
     }
 
-    /// A token text's key, and its text when it's new.
-    fn add_text(&mut self, hash: u64, text: &str) {
+    /// Notes a word's token `h`, `off` positions into it, if it's a NEAR
+    /// term.
+    fn near_term(&mut self, h: u64, off: u32) {
+        if let Some(id) = self.near.as_ref().and_then(|n| n.id(h)) {
+            self.near_words.push((h, off, id));
+        }
+    }
+
+    /// Notes an occurrence of `h` at `pos` for the NEAR terms; `known` is
+    /// its term's number when the caller has it.
+    fn occur(&mut self, h: u64, pos: u32, known: Option<u32>) {
+        if let Some(n) = &mut self.near {
+            n.occur(&mut self.recent, h, pos, known);
+        }
+    }
+
+    /// A token text's key, and its text and starts when it's new.
+    fn add_text(&mut self, hash: u64, text: Piece<'_>) {
         use std::collections::hash_map::Entry as Slot;
         match self.out.entry(hash) {
             Slot::Vacant(v) => {
-                v.insert(self.vocabulary.push(hash, text));
+                v.insert(self.vocabulary.push(text, NONE, &mut self.starts));
             }
             // Almost always the same text again; a different one whose
             // hash collides is kept as well.
             Slot::Occupied(o) => {
-                if !self.vocabulary.has(*o.get(), hash, text) {
-                    self.vocabulary.push(hash, text);
+                if let Err(last) = self.vocabulary.find(*o.get(), text) {
+                    self.vocabulary.push(text, last, &mut self.starts);
                 }
             }
         }
@@ -588,8 +1347,8 @@ impl<'a> Scan<'a> {
         };
         let fits = |len: usize| len > 0 && len <= MAX_TOKEN_BYTES;
         let alnum = |c: u8| ALNUM[c as usize];
-        // The previous word, for joins.
-        let mut prev: Option<(usize, usize)> = None;
+        // The previous word, for joins, and its first position.
+        let mut prev: Option<(usize, usize, u32)> = None;
         let mut i = 0;
         while i < b.len() {
             if !alnum(b[i]) {
@@ -602,6 +1361,7 @@ impl<'a> Scan<'a> {
             }
             let e = i;
             let word = &b[s..e];
+            let p = self.at.pos;
             let slot = slot(word);
             let w = match &self.seen[slot] {
                 Some((seen, w)) if same(seen, word) => *w,
@@ -610,10 +1370,13 @@ impl<'a> Scan<'a> {
                     // one part when it doesn't: its text is a key either
                     // way. Its own pairs are added once.
                     let full = fmix64(hash(fnv_start(), word));
+                    let near_from = self.near_words.len() as u32;
                     if fits(word.len()) {
                         self.token(full, &[word]);
+                        self.near_term(full, 0);
                     }
                     let mut split = None;
+                    let mut width = 1;
                     if word.len() <= MAX_SPLIT_CHARS && cuts(word).next().is_some() {
                         let (mut first, mut second, mut last) = (0, 0, 0);
                         let mut from = 0;
@@ -621,7 +1384,9 @@ impl<'a> Scan<'a> {
                             let h = fmix64(hash(fnv_start(), &word[from..cut]));
                             if fits(cut - from) {
                                 self.token(h, &[&word[from..cut]]);
+                                self.near_term(h, n as u32);
                             }
+                            width = n as u32 + 1;
                             match n {
                                 0 => first = h,
                                 1 => {
@@ -638,7 +1403,13 @@ impl<'a> Scan<'a> {
                         }
                         split = Some((first, second, last));
                     }
-                    let w = Word { full, split };
+                    let near = (near_from, self.near_words.len() as u32);
+                    let w = Word {
+                        full,
+                        split,
+                        width,
+                        near,
+                    };
                     self.seen[slot] = Some((word, w));
                     w
                 }
@@ -650,12 +1421,14 @@ impl<'a> Scan<'a> {
                 first.push(p0);
             }
             // A trailing plus: DD+, C++.
+            let mut plus_at = None;
             if b.get(e) == Some(&b'+') {
                 let pluses = b[e..].iter().take_while(|&&c| c == b'+').count();
                 if pluses <= 2 {
                     let plus = fmix64(hash(hash(fnv_start(), word), &b[e..e + pluses]));
                     if fits(word.len() + pluses) {
                         self.token(plus, &[word, &b[e..e + pluses]]);
+                        plus_at = Some(plus);
                     }
                     first.push(plus);
                     if let Some((_, p1, _)) = w.split {
@@ -668,7 +1441,7 @@ impl<'a> Scan<'a> {
             pairs(&mut self.pairs, last.get(), first.get());
             // Joined to the previous word by a single '.' or '-': the
             // compound sits at the previous word's first position.
-            if let Some((ps, pe)) = prev {
+            if let Some((ps, pe, pp)) = prev {
                 if s == pe + 1
                     && matches!(b[pe], b'.' | b'-')
                     && pe - ps <= 4
@@ -678,6 +1451,7 @@ impl<'a> Scan<'a> {
                     let joined = fmix64(hash(hash(fnv_start(), &b[ps..pe]), word));
                     if fits(pe - ps + word.len()) {
                         self.token(joined, &[&b[ps..pe], word]);
+                        self.occur(joined, pp, None);
                     }
                     pairs(&mut self.pairs, self.at.before.get(), &[joined]);
                     match self.at.second {
@@ -693,7 +1467,24 @@ impl<'a> Scan<'a> {
                     }
                 }
             }
-            prev = Some((s, e));
+            // The word's NEAR terms, in position order: the plus sits at
+            // its first position.
+            if self.near.is_some() {
+                let (from, to) = w.near;
+                for k in from..to {
+                    let (h, off, id) = self.near_words[k as usize];
+                    if off > 0 {
+                        if let Some(plus) = plus_at.take() {
+                            self.occur(plus, p, None);
+                        }
+                    }
+                    self.occur(h, p + off, Some(id));
+                }
+                if let Some(plus) = plus_at {
+                    self.occur(plus, p, None);
+                }
+            }
+            prev = Some((s, e, p));
             self.at = At {
                 before: last,
                 second: w.split.map(|(_, p1, _)| p1),
@@ -701,6 +1492,7 @@ impl<'a> Scan<'a> {
                     Some((.., pl)) => Few::one(pl),
                     None => first,
                 },
+                pos: p + w.width,
             };
         }
     }
@@ -709,34 +1501,54 @@ impl<'a> Scan<'a> {
     fn other(&mut self, text: &str) {
         let toks = tokenize(text);
         for t in &toks {
-            add_starts_str(&mut self.starts, &t.text);
-            self.add_text(term_hash(&t.text), &t.text);
+            self.add_text(term_hash(&t.text), Piece::Str(&t.text));
         }
         let mut by_pos: Vec<(usize, u64)> = toks
             .iter()
             .map(|t| (t.position, term_hash(&t.text)))
             .collect();
         by_pos.sort_unstable();
-        let Some(&(lo, _)) = by_pos.first() else {
+        crate::work::tick(by_pos.len());
+        // Runs of tokens at one position, in order.
+        let runs: Vec<(usize, &[(usize, u64)])> = by_pos
+            .chunk_by(|a, b| a.0 == b.0)
+            .map(|run| (run[0].0, run))
+            .collect();
+        let hashes = |run: &[(usize, u64)]| -> Vec<u64> { run.iter().map(|t| t.1).collect() };
+        let Some(&(_, first)) = runs.first() else {
             return;
         };
-        let at_pos =
-            |p: usize| -> Vec<u64> { by_pos.iter().filter(|t| t.0 == p).map(|t| t.1).collect() };
-        let hi = by_pos[by_pos.len() - 1].0;
-        pairs(&mut self.pairs, self.at.last.get(), &at_pos(lo));
-        for p in lo..hi {
-            pairs(&mut self.pairs, &at_pos(p), &at_pos(p + 1));
+        // The segment's positions continue the path's. A word with no
+        // token (too long) still takes a position, so this may fall short
+        // of the tokenizer's position, which only brings occurrences
+        // closer: nearness is never missed.
+        let base = self.at.pos;
+        if self.near.is_some() {
+            for &(pos, h) in &by_pos {
+                self.occur(h, base + pos as u32, None);
+            }
+        }
+        pairs(&mut self.pairs, self.at.last.get(), &hashes(first));
+        for w in runs.windows(2) {
+            let ((p, a), (q, b)) = (w[0], w[1]);
+            if q == p + 1 {
+                crate::work::tick(a.len() * b.len());
+                pairs(&mut self.pairs, &hashes(a), &hashes(b));
+            }
         }
         // No join reaches across segments, so only the last position
         // carries over; it holds at most a part, its word and a plus.
         let mut last = Few::default();
-        for h in at_pos(hi).into_iter().take(4) {
+        let (_, end) = runs[runs.len() - 1];
+        for &(_, h) in end.iter().take(4) {
             last.push(h);
         }
+        let (end_pos, _) = runs[runs.len() - 1];
         self.at = At {
             last,
             before: self.at.last,
             second: None,
+            pos: base + end_pos as u32 + 1,
         };
     }
 }
@@ -814,6 +1626,114 @@ fn joins(a: &[u8], sep: u8, b: &[u8]) -> bool {
     }
 }
 
+/// A set of keys that may answer *yes* for a key it doesn't have, never
+/// *no* for one it has: one bit per key, eight bits or more per key.
+#[derive(Debug, Default)]
+struct KeyFilter {
+    bits: Vec<u64>,
+}
+
+impl KeyFilter {
+    fn of<'a>(keys: impl ExactSizeIterator<Item = &'a u64>) -> KeyFilter {
+        let n = (keys.len() * 8).next_power_of_two().clamp(1 << 10, 1 << 22);
+        let mut f = KeyFilter {
+            bits: vec![0; n / 64],
+        };
+        for k in keys {
+            let i = f.bit(*k);
+            f.bits[i / 64] |= 1 << (i % 64);
+        }
+        f
+    }
+
+    /// Keys are mixed hashes, so their high bits are as good as any.
+    fn bit(&self, key: u64) -> usize {
+        (key >> 32) as usize & (self.bits.len() * 64 - 1)
+    }
+
+    fn may_have(&self, key: u64) -> bool {
+        let i = self.bit(key);
+        self.bits[i / 64] & (1 << (i % 64)) != 0
+    }
+}
+
+/// The clauses gates read, each kept once.
+#[derive(Debug, Default)]
+pub(crate) struct Clauses {
+    pub(crate) list: Vec<Compiled>,
+    /// Each clause's index, by its whole form.
+    seen: std::collections::HashMap<String, u32>,
+}
+
+impl Clauses {
+    /// The index of `c`, added if it's new.
+    pub(crate) fn add(&mut self, c: &Compiled) -> u32 {
+        let key = format!("{c:?}");
+        *self.seen.entry(key).or_insert_with(|| {
+            self.list.push(c.clone());
+            self.list.len() as u32 - 1
+        })
+    }
+}
+
+/// Texts' lengths [`FuzzyGate`] reads, longer ones together at the last.
+const LENGTHS: usize = 72;
+
+/// A fuzzy word's gate laid out to check many in a row: its rule, its
+/// characters ([`char_set`]), length and distance, and its first eight
+/// character pairs. An edit changes at most two of any of its pairs, so
+/// of those eight at least `8 - 2 × distance` stay. For distances of one
+/// and two (all a fuzzy word has); a word longer than the table reads as
+/// its last length, which only lets more through.
+#[derive(Debug, Clone, Copy)]
+struct FuzzyGate {
+    has: u64,
+    pairs: [u16; 8],
+    rule: u32,
+    chars: u8,
+    distance: u8,
+    npairs: u8,
+}
+
+impl FuzzyGate {
+    fn new(rule: u32, word: &[char], has: u64, distance: u8) -> FuzzyGate {
+        let mut pairs = [NO_PAIR; 8];
+        let mut npairs = 0;
+        for (slot, p) in pairs.iter_mut().zip(char_pairs(word)) {
+            *slot = p;
+            npairs += 1;
+        }
+        FuzzyGate {
+            has,
+            pairs,
+            rule,
+            chars: word.len().min(LENGTHS - 1) as u8,
+            distance,
+            npairs,
+        }
+    }
+
+    /// [`DocKeys::could_be_near`], loosened to the characters of all the
+    /// lengths within the distance together (`windows[d - 1]`), and without
+    /// branching on the answers: whether each passes is close to a coin
+    /// toss.
+    #[inline]
+    fn could(&self, windows: &[[u64; LENGTHS]; 2], have: &CharPairs) -> bool {
+        let d = usize::from(self.distance);
+        let missing = self.has & !windows[d - 1][usize::from(self.chars)];
+        // At most d of the word's characters missing (d is 1 or 2).
+        let one = missing & missing.wrapping_sub(1);
+        let two = one & one.wrapping_sub(1);
+        let near = if d == 1 { one == 0 } else { two == 0 };
+        let kept: usize = self
+            .pairs
+            .iter()
+            .map(|&p| usize::from(have[usize::from(p)]))
+            .sum();
+        near & (kept + 2 * d >= usize::from(self.npairs))
+    }
+}
+
 /// Your rules, indexed by what they need. Rebuilt whenever the list is
 /// changed (any mutable access), so it never goes stale.
 #[derive(Debug, Clone, Default)]
@@ -824,13 +1744,25 @@ pub struct RuleList {
 
 #[derive(Debug, Default)]
 struct RuleIndex {
-    /// Rules nothing narrows, by position.
-    always: Vec<u32>,
-    by_key: IdMap<Vec<u32>>,
+    /// Rules nothing narrows, by position, with their gates.
+    always: Vec<(u32, Gate)>,
+    /// Of those, the fuzzy words' gates laid out to check in a row: the
+    /// rule, the word's length, distance and characters.
+    always_fuzzy: Vec<FuzzyGate>,
+    /// And the prefixes', by start key: the key, which of the
+    /// vocabulary's start lists it's in, the rule and the prefix.
+    always_prefix: Vec<(u64, usize, u32, Box<str>)>,
+    by_key: IdMap<Vec<(u32, Gate)>>,
+    /// One bit per key of [`RuleIndex::by_key`], so most of a torrent's
+    /// texts, which no rule names, skip the map: it fits a small cache,
+    /// and the map of 10,000 rules doesn't.
+    filter: KeyFilter,
     /// Each rule's query and `unless`, compiled.
     compiled: Vec<(Compiled, Option<Compiled>)>,
-    /// Each rule's switch, read without touching the rule.
-    enabled: Vec<bool>,
+    /// The clauses gates read ([`Gate::Lacks`] and the like), each once.
+    clauses: Clauses,
+    /// The rules' NEAR terms, whose nearness a torrent's scan records.
+    near: Option<std::sync::Arc<NearTerms>>,
 }
 
 impl RuleList {
@@ -838,24 +1770,60 @@ impl RuleList {
         self.index.get_or_init(|| {
             let mut ix = RuleIndex::default();
             for (i, r) in self.rules.iter().enumerate() {
-                ix.compiled
-                    .push((compile(&r.query), r.unless.as_ref().map(compile)));
-                ix.enabled.push(r.enabled);
+                let query = compile(&r.query);
+                let g = gate(&query, &mut ix.clauses);
+                ix.compiled.push((query, r.unless.as_ref().map(compile)));
+                let i = i as u32;
+                // A switch changes the list, which builds the index again,
+                // so rules switched off are simply left out.
+                if !r.enabled {
+                    continue;
+                }
                 match need(&r.query) {
-                    Need::Always => ix.always.push(i as u32),
+                    Need::Always => match (g, g.clause().map(|c| &ix.clauses.list[c as usize])) {
+                        (
+                            Gate::Fuzzy(_),
+                            Some(Compiled::Fuzzy {
+                                word: Spelled { chars, has },
+                                distance,
+                                ..
+                            }),
+                        ) if (1..=2).contains(distance) => ix
+                            .always_fuzzy
+                            .push(FuzzyGate::new(i, chars, *has, *distance)),
+                        (
+                            Gate::Prefix(_),
+                            Some(Compiled::Prefix {
+                                start: Some(k),
+                                prefix,
+                                ..
+                            }),
+                        ) => ix
+                            .always_prefix
+                            .push((*k, start_index(prefix), i, prefix.clone())),
+                        _ => ix.always.push((i, g)),
+                    },
                     Need::Never => {}
                     Need::Any(keys) => {
                         for k in keys {
                             let v = ix.by_key.entry(k).or_default();
-                            if v.last() != Some(&(i as u32)) {
-                                v.push(i as u32);
+                            if v.last().is_none_or(|l| l.0 != i) {
+                                v.push((i, g));
                             }
                         }
                     }
                 }
             }
+            ix.always_prefix.sort_unstable_by_key(|e| (e.0, e.1));
+            ix.filter = KeyFilter::of(ix.by_key.keys());
+            ix.near = NearTerms::of(ix.compiled.iter().map(|(q, _)| q)).map(std::sync::Arc::new);
             ix
         })
+    }
+
+    /// The rules' NEAR terms ([`NearTerms`]), if any rule has a NEAR.
+    pub(crate) fn near_terms(&self) -> Option<&std::sync::Arc<NearTerms>> {
+        self.index().near.as_ref()
     }
 
     /// Rule `i`'s query and `unless`, compiled.
@@ -865,25 +1833,73 @@ impl RuleList {
     }
 
     /// The positions of the switched-on rules that could match a torrent
-    /// with these keys, in order.
-    pub(crate) fn candidates(&self, keys: &DocKeys, tags: Tags<'_, '_>) -> Vec<u32> {
+    /// with these keys and passing `gates`, in order.
+    pub(crate) fn candidates(
+        &self,
+        keys: &DocKeys,
+        tags: Tags<'_, '_>,
+        gates: impl Fn(Gate, &[Compiled]) -> bool,
+    ) -> Vec<u32> {
         let ix = self.index();
         // Marked by position, then read in order.
         let mut marks = vec![0u64; self.rules.len().div_ceil(64)];
-        let mut mark = |i: u32| {
-            if ix.enabled[i as usize] {
+        // Fuzzy words nothing narrows, by their bounds alone. Whether each
+        // passes is close to a coin toss, so the tests are all taken and
+        // combined without branching on them.
+        if !ix.always_fuzzy.is_empty() {
+            let windows = keys.length_windows();
+            let have = keys.char_pairs();
+            for g in &ix.always_fuzzy {
+                let pass = g.could(windows, have);
+                marks[g.rule as usize / 64] |= u64::from(pass) << (g.rule % 64);
+            }
+        }
+        // Each gate clause's answer: unknown, no or yes.
+        let memo = vec![std::cell::Cell::new(0u8); ix.clauses.list.len()];
+        let mut mark = |&(i, g): &(u32, Gate)| {
+            let pass = match g.clause() {
+                None => g == Gate::None || gates(g, &ix.clauses.list),
+                // Rules often share a clause (`-sample`): answered once.
+                Some(c) => {
+                    let m = &memo[c as usize];
+                    if m.get() == 0 {
+                        m.set(1 + u8::from(gates(g, &ix.clauses.list)));
+                    }
+                    m.get() == 2
+                }
+            };
+            if pass {
                 marks[i as usize / 64] |= 1 << (i % 64);
             }
         };
-        ix.always.iter().for_each(|&i| mark(i));
-        if !ix.by_key.is_empty() {
-            for k in keys.text.keys().chain(tags()) {
-                if let Some(rules) = ix.by_key.get(k) {
-                    rules.iter().for_each(|&i| mark(i));
+        ix.always.iter().for_each(&mut mark);
+        // Prefixes sharing a start key share its lookup.
+        for run in ix.always_prefix.chunk_by(|a, b| (a.0, a.1) == (b.0, b.1)) {
+            let (key, n, ..) = run[0];
+            if !keys.could_start(key) {
+                continue;
+            }
+            for (_, _, i, prefix) in run {
+                if !prefix.is_empty()
+                    && keys
+                        .texts_starting(n, key)
+                        .any(|t| t.starts_with(&**prefix))
+                {
+                    mark(&(*i, Gate::None));
                 }
             }
         }
-        let mut at = Vec::new();
+        if !ix.by_key.is_empty() {
+            for k in keys.text.keys().chain(tags()) {
+                if !ix.filter.may_have(*k) {
+                    continue;
+                }
+                if let Some(rules) = ix.by_key.get(k) {
+                    rules.iter().for_each(&mut mark);
+                }
+            }
+        }
+        let mut at = Vec::with_capacity(64);
         for (w, mut bits) in marks.into_iter().enumerate() {
             while bits != 0 {
                 at.push(w as u32 * 64 + bits.trailing_zeros());
@@ -972,7 +1988,7 @@ mod tests {
                 "[A-Za-z]{1,6}([._\\- +]{1,2}[A-Za-z0-9+]{1,6}){0,5}|[0-9]{1,3}[.\\-][0-9]{1,3}|\\PC{0,12}|[a-zA-Z0-9.+-]{0,30}",
                 1..6,
             ),
-            layout in prop::collection::vec((0usize..6, 0usize..6, 0usize..3), 0..8),
+            layout in prop::collection::vec((0usize..6, 0usize..6, 0usize..7), 0..10),
         ) {
             // Files built from the segments, often sharing folders.
             let files: Vec<FileInfo> = layout
@@ -1018,6 +2034,100 @@ mod tests {
                             "{:?} then {:?} in {:?}", a.text, b.text, text
                         );
                     }
+                }
+            }
+        }
+
+        /// Every two tokens of a text within the window, by the tokenizer's
+        /// positions, are recorded at most that far apart: camelCase and
+        /// acronym joins (`xYz-dl`, `eAC-3`), pluses, digits and shared
+        /// folders included.
+        #[test]
+        fn nearness_covers_the_tokenizers(
+            name in "([a-zA-Z]{1,4}|[A-Z]{2}[a-z]|[0-9]{1,3}|eAC|xYz|aBcD|DD|5)([ .\\-_+]{1,2}([a-zA-Z]{1,4}|[0-9]{1,3}|aBcD|xYz)){0,10}|\\PC{0,20}",
+            segs in prop::collection::vec("([a-zA-Z]{1,4}|[0-9]{1,2}|aBcD|xYz)([ .\\-+]{1,2}([a-zA-Z]{1,4}|[0-9]{1,2}|eAC)){0,6}", 1..4),
+            layout in prop::collection::vec((0usize..4, 0usize..4, 0usize..3), 0..5),
+        ) {
+            let files: Vec<FileInfo> = layout
+                .iter()
+                .map(|&(a, b, depth)| {
+                    let mut path: Vec<String> =
+                        (0..depth).map(|d| segs[(a + d) % segs.len()].clone()).collect();
+                    path.push(segs[b % segs.len()].clone());
+                    FileInfo::new(path, 1)
+                })
+                .collect();
+            let texts: Vec<String> = std::iter::once(name.clone())
+                .chain(files.iter().map(|f| f.path.join("/")))
+                .collect();
+            // Every token a NEAR term, every pair asked.
+            let mut near = NearTerms { window: MAX_WINDOW, ..NearTerms::default() };
+            for t in &texts {
+                let toks = tokenize(t);
+                for a in &toks {
+                    for b in &toks {
+                        near.ask(term_hash(&a.text), term_hash(&b.text));
+                    }
+                }
+            }
+            near.seal();
+            let near = std::sync::Arc::new(near);
+            let keys = DocKeys::with_near(&name, &files, Some(&near));
+            let n = keys.nearness().unwrap();
+            for t in &texts {
+                let toks = tokenize(t);
+                for a in &toks {
+                    for b in &toks {
+                        let d = a.position.abs_diff(b.position) as u32;
+                        if d <= MAX_WINDOW {
+                            prop_assert!(
+                                n.within(term_hash(&a.text), term_hash(&b.text), d),
+                                "{:?}@{} and {:?}@{} in {:?}", a.text, a.position, b.text, b.position, t
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        /// The fuzzy gate, laid out or not, never turns away a fuzzy word
+        /// the full match finds: one or two edits of a text there, of
+        /// any length.
+        #[test]
+        fn fuzzy_gates_never_turn_a_match_away(
+            name in "([a-z0-9]{1,9}[ .]){1,12}",
+            word in "[a-z0-9]{1,10}",
+            edits in prop::collection::vec((0usize..3, 0usize..12, "[a-z0-9]"), 0..3),
+            take in 0usize..12,
+        ) {
+            // Often a word within a few edits of one the name has.
+            let mut word: Vec<char> = word.chars().collect();
+            if let Some(t) = name.split([' ', '.']).filter(|t| !t.is_empty()).nth(take) {
+                word = t.chars().collect();
+                for (kind, at, c) in &edits {
+                    let c = c.chars().next().unwrap();
+                    let at = *at % (word.len() + 1);
+                    match kind {
+                        0 if at < word.len() => word[at] = c,
+                        1 => word.insert(at, c),
+                        _ if at < word.len() && word.len() > 1 => {
+                            word.remove(at);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            let text: String = word.iter().collect();
+            let keys = DocKeys::new(&name, &[]);
+            for distance in [1u8, 2] {
+                let found = keys
+                    .vocabulary()
+                    .any(|t| crate::matcher::edit_distance_of(t, &word) <= usize::from(distance));
+                let has = char_set(&text);
+                if found {
+                    prop_assert!(keys.could_be_near(&word, has, usize::from(distance)), "{text} in {name}");
+                    let g = FuzzyGate::new(0, &word, has, distance);
+                    prop_assert!(g.could(keys.length_windows(), keys.char_pairs()), "laid out: {text} in {name}");
                 }
             }
         }
@@ -1076,6 +2186,88 @@ mod tests {
         assert_eq!(n("ext:exe"), Need::Always);
     }
 
+    /// A long name with other than ASCII goes through the tokenizer, and
+    /// its pairs are read position by position, in proportion to its
+    /// length (§6): four times the name, four times the steps.
+    #[test]
+    fn hostile_other_text_costs_in_proportion() {
+        let name = |n: usize| "Ünï cödé 16yo ".repeat(n);
+        let steps = |n: usize| crate::work::counted(|| DocKeys::new(&name(n), &[])).1;
+        let (small, big) = (steps(500), steps(2_000));
+        assert!(
+            big <= 5 * small,
+            "{small} steps, then {big} on four times the name"
+        );
+        // Pairs still cover every neighbour.
+        let keys = DocKeys::new(&name(3), &[]);
+        let toks = tokenize(&name(3));
+        for a in &toks {
+            for b in toks.iter().filter(|b| b.position == a.position + 1) {
+                assert!(keys.could_follow(term_hash(&a.text), term_hash(&b.text)));
+            }
+        }
+    }
+
+    /// Past [`MATRIX_TERMS`] terms the pairs asked are read from their
+    /// set, not a matrix, with the same answers.
+    #[test]
+    fn many_near_terms_read_their_pairs() {
+        // Letters only, so each word is one token at one position.
+        let letter = |n: usize| char::from(b'a' + (n % 26) as u8);
+        let words: Vec<String> = (0..MATRIX_TERMS + 10)
+            .map(|i| format!("q{}{}", letter(i / 26), letter(i)))
+            .collect();
+        let mut near = NearTerms {
+            window: 2,
+            ..NearTerms::default()
+        };
+        for w in words.windows(2) {
+            near.ask(term_hash(&w[0]), term_hash(&w[1]));
+        }
+        near.seal();
+        assert!(near.matrix.is_empty());
+        let name = words.join(" ");
+        let near = std::sync::Arc::new(near);
+        let keys = DocKeys::with_near(&name, &[], Some(&near));
+        let n = keys.nearness().unwrap();
+        let h = |i: usize| term_hash(&words[i]);
+        assert!(n.within(h(5), h(6), 1));
+        assert!(n.within(h(6), h(5), 1));
+        assert!(!n.within(h(5), h(6), 0));
+        // Not asked: may be anywhere.
+        assert!(n.within(h(5), h(9), 0));
+    }
+
+    /// Texts whose hashes collide are chained, each kept and found by
+    /// its bytes, in any case.
+    #[test]
+    fn ascii_classes_are_the_characters_classes() {
+        for c in 0u8..128 {
+            assert_eq!(
+                u32::from(ASCII_CLASS[usize::from(c)]),
+                char_class(char::from(c))
+            );
+        }
+    }
+
+    #[test]
+    fn colliding_texts_are_chained() {
+        let mut v = Vocabulary::default();
+        let mut starts = Bloom::for_text(0);
+        let a = v.push(Piece::Str("alpha"), NONE, &mut starts);
+        assert_eq!(v.find(a, Piece::Ascii(&[b"ALPHA"])), Ok(()));
+        assert_eq!(v.find(a, Piece::Ascii(&[b"AL", b"pha"])), Ok(()));
+        assert_eq!(v.find(a, Piece::Ascii(&[b"alph"])), Err(a));
+        assert_eq!(v.find(a, Piece::Ascii(&[b"alphas"])), Err(a));
+        // As if "beta" had alpha's hash.
+        let b = v.push(Piece::Ascii(&[b"BETA"]), a, &mut starts);
+        assert_eq!(v.find(a, Piece::Str("beta")), Ok(()));
+        assert_eq!(v.find(a, Piece::Str("gamma")), Err(b));
+        assert_eq!(v.text(&v.words[b as usize]), "beta");
+        assert!(starts.contains(start_key("be").unwrap()));
+        assert!(starts.contains(start_key("alph").unwrap()));
+    }
+
     #[test]
     fn segments_match_the_joined_path() {
         let f = FileInfo::new(
@@ -1085,6 +2277,77 @@ mod tests {
         let keys = DocKeys::new("", std::slice::from_ref(&f));
         let keys: IdSet = keys.text.keys().copied().collect();
         assert_eq!(keys, tokenizer_keys(&f.path.join("/")));
+    }
+
+    #[test]
+    fn gates() {
+        let g =
+            |q: &str| crate::matcher::gate(&compile(&parse(q).unwrap()), &mut Clauses::default());
+        let k = |t: &str| term_hash(t);
+        const GB: u64 = 1 << 30;
+        assert_eq!(g("x264 size:>3GB"), Gate::Size(3 * GB + 1, u64::MAX));
+        assert_eq!(g("file:(x264 size:<1GB)"), Gate::FileSize(0, GB - 1));
+        assert_eq!(g("x264 type:software"), Gate::Tag(tag_key("type:software")));
+        assert_eq!(g("\"mkv sample\""), Gate::Pair(k("mkv"), k("sample")));
+        // A phrase's first two tokens: `1080p` is `1080` and `p`.
+        assert_eq!(g("\"1080p mkv\""), Gate::Pair(k("1080"), k("p")));
+        assert_eq!(
+            g("mkv \"1080p x264\" size:>1GB"),
+            Gate::Size(GB + 1, u64::MAX)
+        );
+        assert_eq!(g("webdz*"), Gate::Prefix(0));
+        // Nothing every match needs, or nothing the gate can read.
+        assert_eq!(g("x264 | size:>3GB"), Gate::None);
+        assert_eq!(g("-(size:>3GB)"), Gate::None);
+        assert_eq!(g("title:\"mkv 1080p\""), Gate::None);
+        assert_eq!(g("x264 (type:software | type:movie)"), Gate::None);
+        assert_eq!(g("x264"), Gate::None);
+        // A negated word anywhere, and fuzzy words outside titles.
+        assert_eq!(g("x264 -1080p"), Gate::Lacks(0));
+        assert_eq!(g("x264 -path:1080p"), Gate::None);
+        assert_eq!(g("~matrx"), Gate::Fuzzy(0));
+        assert_eq!(g("title:~matrx"), Gate::None);
+        assert_eq!(g("x264 size:>3GB -1080p"), Gate::Size(3 * GB + 1, u64::MAX));
+    }
+
+    /// Rules are turned away by their gates as the cheap check would.
+    #[test]
+    fn gated_rules_are_met_only_when_they_pass() {
+        let rule = |id: u32, q: &str| UserRule {
+            id,
+            query: parse(q).unwrap(),
+            action: crate::Action::Hide,
+            enabled: true,
+            shadow_until: None,
+            unless: None,
+        };
+        let list = RuleList::from(vec![
+            rule(1, "x264 size:>3GB"),
+            rule(2, "\"1080p x264\""),
+            rule(3, "\"x264 1080p\""),
+            rule(4, "file:(x264 size:<1MB)"),
+            rule(5, "size:<1GB"),
+            rule(6, "sho*"),
+            rule(7, "shx*"),
+        ]);
+        let ids = |size: u64| {
+            let files = [FileInfo::new(vec!["Show.1080p.x264.mkv".into()], size)];
+            let item = crate::core::Item {
+                hashes: &[[0; 20]],
+                name: "Show.1080p.x264",
+                files: &files,
+                content_type: lodestar_classify::ContentType::Video,
+            };
+            let doc = crate::matcher::Doc::new(&item, None);
+            doc.candidates(&list, &[])
+                .iter()
+                .map(|&i| list[i as usize].id)
+                .collect::<Vec<_>>()
+        };
+        // `"x264 1080p"` passes its gate (`x` then `264`), and the cheap
+        // check turns it away.
+        assert_eq!(ids(4 << 30), [1, 2, 3, 6]);
+        assert_eq!(ids(1 << 19), [2, 3, 4, 5, 6]);
     }
 
     #[test]
@@ -1105,7 +2368,7 @@ mod tests {
         ]);
         let keys = DocKeys::new("Alpha.Gamma", &[]);
         let ids = |l: &RuleList| {
-            l.candidates(&keys, &|| &NO_TAGS)
+            l.candidates(&keys, &|| &NO_TAGS, |_, _| true)
                 .iter()
                 .map(|&i| l[i as usize].id)
                 .collect::<Vec<_>>()

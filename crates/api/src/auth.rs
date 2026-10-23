@@ -8,27 +8,45 @@
 //!   a random salt, stored in `auth.json` in the data directory (0600).
 //! - **Sessions** are stateless signed cookies: an expiry and a nonce,
 //!   HMAC-SHA256'd with a random 256-bit key from the same file.
-//!   Changing the password rotates the key, which ends every session.
+//!   Changing the password, or signing out other sessions, rotates the
+//!   key, which ends every session.
 //! - **Login attempts** are rate-limited per IP; Argon2 makes each one
 //!   slow anyway.
+//! - **Fresh-password confirmation** ([`require_fresh_password`], §20.11):
+//!   one check every confirming route calls. Asked every time, never
+//!   remembered, rate-limited like a login.
+//! - **Trusted reverse-proxy header auth** ([`ProxyConfig`]), off by
+//!   default; see [`proxy`].
+//! - **API keys and feed tokens** are checked by [`key_or_session`] and
+//!   [`feed_token`] on the routes that opt in (see [`crate::keys`]).
 
+mod guard;
 mod http;
+mod limit;
+pub mod proxy;
 
+pub use guard::{Access, feed_token, key_or_session};
 pub(crate) use http::{ApiDoc, SessionAuth, auth_error};
-pub use http::{protected, require_session, routes};
+pub use http::{mount, protected, require_session, routes};
+pub use proxy::{PROXY_AUTH_ENV, ProxyConfig, ProxyError};
 
-use std::collections::HashMap;
 use std::io;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, RwLock};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use argon2::{Algorithm, Argon2, Params, Version};
+use axum::http::{HeaderMap, StatusCode};
 use hmac::{Hmac, KeyInit, Mac};
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+
+use crate::error::{ApiError, ApiResult, internal};
+use limit::Buckets;
+use proxy::Proxy;
 
 pub const COOKIE: &str = "lodestar_session";
 pub const MIN_PASSWORD_CHARS: usize = 10;
@@ -38,6 +56,15 @@ const SESSION_TTL: Duration = Duration::from_secs(30 * 86_400);
 const BURST: f64 = 5.0;
 const REFILL_PER_SEC: f64 = 1.0 / 12.0;
 const LIMITER_MAX_IPS: usize = 10_000;
+/// Failed key checks per IP: a burst of 10, then one every 6 s. A
+/// 256-bit secret can't be guessed; this only keeps a misbehaving client
+/// from making the server do lookups for nothing.
+pub const KEY_FAIL_BURST: f64 = 10.0;
+pub const KEY_FAIL_REFILL_PER_SEC: f64 = 1.0 / 6.0;
+/// Requests per key: a burst of 300, then 5 a second (18,000 an hour),
+/// well above what *arr polling and searches send.
+pub const KEY_BURST: f64 = 300.0;
+pub const KEY_REFILL_PER_SEC: f64 = 5.0;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthError {
@@ -72,12 +99,16 @@ struct AuthFile {
     password: Option<String>,
     /// Hex, 32 bytes.
     session_key: String,
+    /// Absent until first changed, so older files load unchanged.
+    #[serde(default, skip_serializing_if = "ProxyConfig::is_default")]
+    proxy: ProxyConfig,
 }
 
 #[derive(Debug)]
 struct State {
     password: Option<String>,
     key: [u8; 32],
+    proxy: Proxy,
 }
 
 #[derive(Debug)]
@@ -85,10 +116,14 @@ pub struct Auth {
     path: PathBuf,
     state: RwLock<State>,
     setup_token: Mutex<Option<String>>,
-    limiter: Mutex<HashMap<IpAddr, (f64, Instant)>>,
-    /// Login attempts regained per second ([`REFILL_PER_SEC`]; tests set
-    /// 0 so slow hashing on a busy runner can't refill the bucket).
-    refill_per_sec: f64,
+    /// Login, setup, password and fresh-password attempts, per IP.
+    login: Buckets<IpAddr>,
+    /// Failed API key and feed token checks, per IP.
+    pub(crate) key_failures: Buckets<IpAddr>,
+    /// Requests per key id.
+    pub(crate) key_requests: Buckets<i64>,
+    /// [`PROXY_AUTH_ENV`] is set: proxy auth is off for this run.
+    proxy_forced_off: AtomicBool,
     secure_cookies: bool,
 }
 
@@ -107,6 +142,7 @@ impl Auth {
                 let f = AuthFile {
                     password: None,
                     session_key: hex(&random::<32>()),
+                    proxy: ProxyConfig::default(),
                 };
                 write_private(path, &f)?;
                 f
@@ -125,17 +161,111 @@ impl Auth {
                 .collect::<Vec<_>>()
                 .join("-")
         });
+        // A hand-edited section that doesn't check out loads as off: the
+        // safe side, and the server still starts.
+        let proxy = Proxy::compile(file.proxy).unwrap_or_else(|e| {
+            tracing::warn!(
+                "auth.json: the trusted-proxy settings are invalid ({}); proxy auth is off",
+                e.field
+            );
+            Proxy::default()
+        });
         Ok(Auth {
             path: path.to_path_buf(),
             state: RwLock::new(State {
                 password: file.password,
                 key,
+                proxy,
             }),
             setup_token: Mutex::new(token),
-            limiter: Mutex::default(),
-            refill_per_sec: REFILL_PER_SEC,
+            login: Buckets::new(BURST, REFILL_PER_SEC, LIMITER_MAX_IPS),
+            key_failures: Buckets::new(KEY_FAIL_BURST, KEY_FAIL_REFILL_PER_SEC, LIMITER_MAX_IPS),
+            key_requests: Buckets::new(KEY_BURST, KEY_REFILL_PER_SEC, crate::keys::MAX_KEYS),
+            proxy_forced_off: AtomicBool::new(false),
             secure_cookies,
         })
+    }
+
+    /// Stops every limiter refilling, so tests that empty a bucket don't
+    /// depend on how fast the machine runs them. Tests only.
+    #[doc(hidden)]
+    pub fn without_refill(mut self) -> Auth {
+        self.login.refill = 0.0;
+        self.key_failures.refill = 0.0;
+        self.key_requests.refill = 0.0;
+        self
+    }
+
+    /// Applies [`PROXY_AUTH_ENV`]'s value: `off` (any case) turns proxy
+    /// auth off for this run without touching the saved settings. Called
+    /// where [`Auth::load`] runs. Returns whether it applied.
+    pub fn apply_proxy_override(&self, value: Option<&str>) -> bool {
+        let Some(v) = value.map(str::trim).filter(|v| !v.is_empty()) else {
+            return false;
+        };
+        let off = v.eq_ignore_ascii_case("off");
+        if off {
+            self.proxy_forced_off.store(true, Ordering::Relaxed);
+        } else {
+            // Someone locked out typed `false` or `0`: say why nothing
+            // changed rather than leave them guessing.
+            tracing::warn!("{PROXY_AUTH_ENV} is set but not to `off`, so it changes nothing");
+        }
+        off
+    }
+
+    /// Whether [`PROXY_AUTH_ENV`] turned proxy auth off for this run.
+    pub fn proxy_forced_off(&self) -> bool {
+        self.proxy_forced_off.load(Ordering::Relaxed)
+    }
+
+    /// The saved trusted-proxy settings (what the screen shows; see
+    /// [`Auth::proxy_forced_off`] for whether they apply).
+    pub fn proxy(&self) -> ProxyConfig {
+        self.state.read().expect("auth lock").proxy.config.clone()
+    }
+
+    /// Checks, saves and applies new trusted-proxy settings, returning
+    /// them in canonical form. It asks for no password: the route does
+    /// ([`require_fresh_password`]), and a keep-or-revert timer restoring
+    /// the previous value calls this directly.
+    pub fn set_proxy(&self, config: ProxyConfig) -> Result<ProxyConfig, SetProxyError> {
+        let proxy = Proxy::compile(config).map_err(SetProxyError::Invalid)?;
+        if proxy.config.enabled && proxy.has_wide_range() {
+            tracing::warn!(
+                "trusted-proxy auth trusts a range wider than /16 (IPv6 /48): every host in it can sign in"
+            );
+        }
+        let mut state = self.state.write().expect("auth lock");
+        let previous = std::mem::replace(&mut state.proxy, proxy);
+        if let Err(e) = self.save(&state) {
+            state.proxy = previous;
+            return Err(SetProxyError::Storage(e));
+        }
+        Ok(state.proxy.config.clone())
+    }
+
+    /// Whether the trusted-proxy user header signs this request in (see
+    /// [`proxy`]): `peer` is the TCP peer, not [`crate::ClientIp`].
+    pub fn proxy_signs_in(&self, peer: IpAddr, headers: &HeaderMap) -> bool {
+        if self.proxy_forced_off() {
+            return false;
+        }
+        let state = self.state.read().expect("auth lock");
+        state.password.is_some() && state.proxy.signs_in(peer, headers)
+    }
+
+    /// The client's address for per-client limits: the TCP peer, or
+    /// behind a trusted proxy the forwarded client (see [`proxy`]).
+    pub fn client_ip(&self, peer: IpAddr, headers: &HeaderMap) -> IpAddr {
+        if self.proxy_forced_off() {
+            return proxy::canonical(peer);
+        }
+        self.state
+            .read()
+            .expect("auth lock")
+            .proxy
+            .client_ip(peer, headers)
     }
 
     /// The one-time token to print at startup, while setup is pending.
@@ -181,9 +311,9 @@ impl Auth {
         Ok(self.cookie(&state.key))
     }
 
-    /// Checks the password again for one change that weakens filtering
-    /// (§20.11): asked every time, never remembered, rate-limited like a
-    /// login.
+    /// Checks the password again for one confirmed change (§20.11): asked
+    /// every time, never remembered, rate-limited like a login. Routes
+    /// call [`require_fresh_password`], which also answers a missing one.
     pub fn confirm(&self, ip: IpAddr, password: &str) -> Result<(), AuthError> {
         self.allow(ip)?;
         let state = self.state.read().expect("auth lock");
@@ -211,6 +341,23 @@ impl Auth {
         state.password = Some(hash_password(new));
         state.key = random::<32>();
         self.save(&state)?;
+        Ok(self.cookie(&state.key))
+    }
+
+    /// Ends every session but the caller's: rotates the session key and
+    /// returns a new cookie for this browser. Confirm the password first
+    /// ([`require_fresh_password`]).
+    pub fn rotate_sessions(&self) -> Result<String, AuthError> {
+        let mut state = self.state.write().expect("auth lock");
+        if state.password.is_none() {
+            return Err(AuthError::NotSetUp);
+        }
+        let previous = state.key;
+        state.key = random::<32>();
+        if let Err(e) = self.save(&state) {
+            state.key = previous;
+            return Err(e);
+        }
         Ok(self.cookie(&state.key))
     }
 
@@ -263,33 +410,72 @@ impl Auth {
     }
 
     fn allow(&self, ip: IpAddr) -> Result<(), AuthError> {
-        let mut limiter = self.limiter.lock().expect("limiter lock");
-        let now = Instant::now();
-        if limiter.len() >= LIMITER_MAX_IPS {
-            // Forget IPs that have fully recovered.
-            limiter.retain(|_, (tokens, at)| {
-                *tokens + now.duration_since(*at).as_secs_f64() * self.refill_per_sec < BURST
-            });
-        }
-        let (tokens, at) = limiter.entry(ip).or_insert((BURST, now));
-        *tokens =
-            (*tokens + now.duration_since(*at).as_secs_f64() * self.refill_per_sec).min(BURST);
-        *at = now;
-        if *tokens < 1.0 {
-            return Err(AuthError::RateLimited);
-        }
-        *tokens -= 1.0;
-        Ok(())
+        self.login.take(ip).map_err(|_| AuthError::RateLimited)
     }
 
     fn save(&self, state: &State) -> Result<(), AuthError> {
         let file = AuthFile {
             password: state.password.clone(),
             session_key: hex(&state.key),
+            proxy: state.proxy.config.clone(),
         };
         write_private(&self.path, &file)
             .map_err(|e| AuthError::Storage(format!("saving auth: {e}")))
     }
+}
+
+/// Why [`Auth::set_proxy`] refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SetProxyError {
+    Invalid(ProxyError),
+    Storage(AuthError),
+}
+
+/// The fresh-password check (§20.11) every confirming route calls:
+/// changes that weaken filtering, and the Security screen's password,
+/// auth-mode, proxy, key and sign-out-others changes (§10.10.7).
+///
+/// - no password (`None` or empty): `428 confirm_required`, `field:
+///   "password"`, and no attempt is spent;
+/// - a wrong one: `401 bad_password`, `field: "password"`;
+/// - too many attempts from `ip`: `429 rate_limited` (the login bucket);
+/// - not set up: `409 not_set_up`.
+///
+/// Nothing is remembered between calls, and the password is never
+/// logged. It runs Argon2: call it on the blocking pool, or use
+/// [`confirm_fresh_password`] from async code. Proxy-header auth doesn't
+/// skip it.
+pub fn require_fresh_password(auth: &Auth, ip: IpAddr, password: Option<&str>) -> ApiResult<()> {
+    match password {
+        None | Some("") => Err(confirm_required()),
+        Some(p) => auth.confirm(ip, p).map_err(|e| auth_error(e, "password")),
+    }
+}
+
+/// [`require_fresh_password`] on the blocking pool.
+pub async fn confirm_fresh_password(
+    auth: &Arc<Auth>,
+    ip: IpAddr,
+    password: Option<String>,
+) -> ApiResult<()> {
+    // Answer a missing password without a trip to the pool.
+    if password.as_deref().is_none_or(str::is_empty) {
+        return Err(confirm_required());
+    }
+    let auth = auth.clone();
+    tokio::task::spawn_blocking(move || require_fresh_password(&auth, ip, password.as_deref()))
+        .await
+        .map_err(internal)?
+}
+
+/// The 428 a confirming route answers until the password comes along.
+pub fn confirm_required() -> ApiError {
+    ApiError::new(
+        StatusCode::PRECONDITION_REQUIRED,
+        "confirm_required",
+        "Confirm this change with your password.",
+    )
+    .field("password")
 }
 
 fn check_strength(password: &str) -> Result<(), AuthError> {
@@ -511,7 +697,7 @@ mod tests {
     #[test]
     fn login_attempts_are_rate_limited() {
         let (_dir, mut auth) = fresh();
-        auth.refill_per_sec = 0.0;
+        auth.login.refill = 0.0;
         let token = auth.setup_token().unwrap();
         auth.setup(IP, &token, "correct horse battery").unwrap();
         // Setup used one attempt; four more fail on the password...
@@ -541,6 +727,97 @@ mod tests {
         ));
         assert!(!verify_password("garbage", "x"));
         assert!(!verify_password("argon2id$v=19$m=8,t=1,p=1$00$00", "x"));
+    }
+
+    #[test]
+    fn older_files_load_and_a_bad_proxy_section_loads_as_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("auth.json");
+        let key = "ab".repeat(32);
+        std::fs::write(
+            &path,
+            format!(r#"{{"password":null,"session_key":"{key}"}}"#),
+        )
+        .unwrap();
+        let auth = Auth::load(&path, false).unwrap();
+        assert_eq!(auth.proxy(), ProxyConfig::default());
+        // Saving without a proxy change keeps the file as it was shaped.
+        let token = auth.setup_token().unwrap();
+        auth.setup(IP, &token, "correct horse battery").unwrap();
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("proxy"));
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        v["proxy"] = serde_json::json!({ "enabled": true, "trusted": ["0.0.0.0/0"] });
+        std::fs::write(&path, v.to_string()).unwrap();
+        let auth = Auth::load(&path, false).unwrap();
+        assert!(!auth.proxy().enabled, "refused on load: off");
+        assert!(auth.login(IP, "correct horse battery").is_ok());
+    }
+
+    #[test]
+    fn set_proxy_saves_and_refuses_bad_values() {
+        let (dir, auth) = fresh();
+        let bad = ProxyConfig {
+            enabled: true,
+            ..ProxyConfig::default()
+        };
+        assert!(matches!(
+            auth.set_proxy(bad),
+            Err(SetProxyError::Invalid(_))
+        ));
+        let saved = auth
+            .set_proxy(ProxyConfig {
+                enabled: true,
+                trusted: vec!["10.0.0.7/8".into()],
+                ..ProxyConfig::default()
+            })
+            .unwrap();
+        assert_eq!(saved.trusted, ["10.0.0.0/8"]);
+        let again = Auth::load(&dir.path().join("auth.json"), false).unwrap();
+        assert_eq!(again.proxy(), saved);
+    }
+
+    #[test]
+    fn the_fresh_password_check() {
+        let (_dir, mut auth) = fresh();
+        auth.login.refill = 0.0;
+        let token = auth.setup_token().unwrap();
+        auth.setup(IP, &token, "correct horse battery").unwrap();
+        for missing in [None, Some("")] {
+            let e = require_fresh_password(&auth, IP, missing).unwrap_err();
+            assert_eq!(
+                (e.status(), e.code()),
+                (StatusCode::PRECONDITION_REQUIRED, "confirm_required")
+            );
+            assert_eq!(e.error_body().field.as_deref(), Some("password"));
+        }
+        assert!(require_fresh_password(&auth, IP, Some("correct horse battery")).is_ok());
+        let e = require_fresh_password(&auth, IP, Some("wrong wrong wrong")).unwrap_err();
+        assert_eq!(
+            (e.status(), e.code()),
+            (StatusCode::UNAUTHORIZED, "bad_password")
+        );
+        // Setup, one right and one wrong: two attempts left. Missing ones
+        // spent nothing.
+        for _ in 0..2 {
+            require_fresh_password(&auth, IP, Some("wrong wrong wrong")).unwrap_err();
+        }
+        let e = require_fresh_password(&auth, IP, Some("correct horse battery")).unwrap_err();
+        assert_eq!(
+            (e.status(), e.code()),
+            (StatusCode::TOO_MANY_REQUESTS, "rate_limited")
+        );
+    }
+
+    #[test]
+    fn rotating_sessions_ends_the_old_ones() {
+        let (_dir, auth) = fresh();
+        assert_eq!(auth.rotate_sessions(), Err(AuthError::NotSetUp));
+        let token = auth.setup_token().unwrap();
+        let old = header(&auth.setup(IP, &token, "correct horse battery").unwrap());
+        let new = header(&auth.rotate_sessions().unwrap());
+        assert!(!auth.verify(&old) && auth.verify(&new));
     }
 
     #[cfg(unix)]

@@ -169,6 +169,7 @@ async fn fixture() -> Fixture {
             filters: None,
             settings: Some(registry.clone()),
             ops: Some(ops.clone()),
+            user_data: None,
             adult: Default::default(),
         }),
     );

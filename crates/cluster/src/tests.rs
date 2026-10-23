@@ -657,16 +657,17 @@ fn a_grant_for_someone_else_is_refused() {
     // A renewal answer for another worker.
     let mine = c.join("mine", T0);
     let theirs = c.join("theirs", T0);
-    let Outcome::Done(Some(peer)) = c.connect(&theirs, T0) else {
+    let later = T0 + RENEW_MIN_INTERVAL_SECS;
+    let Outcome::Done(Some(peer)) = c.connect(&theirs, later) else {
         panic!("refused");
     };
     let renewal = mine.begin_renewal().unwrap();
     let grant = c
         .coord
-        .renew(&mut c.store, &peer, &renewal.public_key(), T0)
+        .renew(&mut c.store, &peer, &renewal.public_key(), later)
         .unwrap();
     assert!(matches!(
-        mine.renewed(renewal, grant, T0),
+        mine.renewed(renewal, grant, later),
         Err(ClusterError::BadGrant)
     ));
 }
@@ -1014,8 +1015,193 @@ fn renewal_uses_the_record_not_the_callers_identity() {
         panic!("refused");
     };
     peer.name = "admin".into();
-    let grant = c.coord.renew(&mut c.store, &peer, &[1; 32], T0).unwrap();
+    let later = T0 + RENEW_MIN_INTERVAL_SECS;
+    let grant = c.coord.renew(&mut c.store, &peer, &[1; 32], later).unwrap();
     assert_eq!(grant.name, "nas");
+}
+
+#[test]
+fn renewal_is_rate_limited_except_onto_a_new_ca() {
+    let mut c = cluster(1);
+    let creds = c.join("nas", T0);
+    let Outcome::Done(Some(peer)) = c.connect(&creds, T0) else {
+        panic!("refused");
+    };
+    let soon = T0 + RENEW_MIN_INTERVAL_SECS - 1;
+    assert!(matches!(
+        c.coord.renew(&mut c.store, &peer, &[1; 32], soon),
+        Err(ClusterError::TooSoon)
+    ));
+    let rows = |c: &Cluster| c.store.settings_with_prefix("cluster.cert.").unwrap().len();
+    assert_eq!(rows(&c), 1, "a refused renewal adds no record");
+    let at = T0 + RENEW_MIN_INTERVAL_SECS;
+    c.coord.renew(&mut c.store, &peer, &[1; 32], at).unwrap();
+    assert!(matches!(
+        c.coord.renew(&mut c.store, &peer, &[2; 32], at + 60),
+        Err(ClusterError::TooSoon)
+    ));
+    assert_eq!(rows(&c), 2);
+
+    // During a rotation, a worker on the old CA renews at once, once.
+    let mut c = cluster(2);
+    let creds = c.join("nas", T0);
+    c.coord
+        .rotate_ca(&mut c.store, &c.secrets, T0 + 10)
+        .unwrap();
+    let Outcome::Done(Some(peer)) = c.connect(&creds, T0 + 20) else {
+        panic!("refused");
+    };
+    assert!(peer.renew_now);
+    c.coord
+        .renew(&mut c.store, &peer, &[1; 32], T0 + 20)
+        .unwrap();
+    assert!(matches!(
+        c.coord.renew(&mut c.store, &peer, &[1; 32], T0 + 30),
+        Err(ClusterError::TooSoon)
+    ));
+}
+
+#[test]
+fn reload_picks_up_another_process_and_keeps_the_tls_handles() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db.sqlite");
+    let secrets = SecretStore::from_key(&[1; 32]);
+    let mut store_a = Store::open(&path, StoreConfig::default()).unwrap();
+    let mut a = Coordinator::open(&mut store_a, &secrets, T0).unwrap();
+    let mut store_b = Store::open(&path, StoreConfig::default()).unwrap();
+    let mut b = Coordinator::open(&mut store_b, &secrets, T0).unwrap();
+    let tls = a.tls().with_time_provider(Arc::new(At(T0))).unwrap();
+
+    // A token from b redeems at a once a has reloaded.
+    let token = b.create_join_token(&mut store_b, "nas", T0).unwrap();
+    let joining = Joining::new(token).unwrap();
+    assert!(matches!(
+        a.redeem(&mut store_a, joining.token(), &joining.public_key(), T0),
+        Err(JoinError::Unknown)
+    ));
+    assert!(a.reload(&store_a, &secrets).unwrap());
+    assert!(!a.reload(&store_a, &secrets).unwrap(), "nothing changed");
+    let grant = a
+        .redeem(&mut store_a, joining.token(), &joining.public_key(), T0)
+        .unwrap();
+    let creds = joining.finish(grant, T0).unwrap();
+    let Outcome::Done(Some(peer)) = handshake(&tls, creds.client_config(at(T0)).unwrap()) else {
+        panic!("refused");
+    };
+    assert!(tls.still_valid(&peer));
+
+    // b revokes it; a's existing handle sees it after a reload.
+    b.reload(&store_b, &secrets).unwrap();
+    assert_eq!(b.revoke(&mut store_b, creds.worker()).unwrap(), 1);
+    assert!(tls.still_valid(&peer), "not before the reload");
+    assert!(a.reload(&store_a, &secrets).unwrap());
+    assert!(!tls.still_valid(&peer));
+    assert!(refused_cert(&handshake(&tls, creds.client_config(at(T0)).unwrap())).is_some());
+
+    // b rotates the CA; a follows, and still opens.
+    b.rotate_ca(&mut store_b, &secrets, T0 + 5).unwrap();
+    assert!(a.reload(&store_a, &secrets).unwrap());
+    assert_eq!(a.ca_certificates(), b.ca_certificates());
+
+    // A corrupt row: the reload fails and a keeps what it had.
+    store_b
+        .set_settings_text(&[("cluster.bogus", "v9")])
+        .unwrap();
+    assert!(a.reload(&store_a, &secrets).is_err());
+    assert_eq!(a.ca_certificates().len(), 2);
+}
+
+#[test]
+fn expired_identities_no_longer_stand() {
+    let mut c = cluster(1);
+    let creds = c.join("nas", T0);
+    let Outcome::Done(Some(peer)) = c.connect(&creds, T0) else {
+        panic!("refused");
+    };
+    assert!(c.tls(T0 + LEAF_LIFETIME_SECS).still_valid(&peer));
+    assert!(!c.tls(T0 + LEAF_LIFETIME_SECS + 1).still_valid(&peer));
+    let mut forged = peer.clone();
+    forged.serial[0] ^= 1;
+    assert!(!c.tls(T0).still_valid(&forged));
+}
+
+#[test]
+fn cluster_keys_are_resealed_when_the_secrets_key_rotates() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut secrets = SecretStore::open_or_create(dir.path()).unwrap();
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let mut coord = Coordinator::open(&mut store, &secrets, T0).unwrap();
+    coord.rotate_ca(&mut store, &secrets, T0).unwrap();
+    let creds_dir = dir.path().join("cluster");
+    let worker = c_join(&mut coord, &mut store, T0);
+    worker.save(&creds_dir, &secrets).unwrap();
+
+    secrets.rotate().unwrap();
+    coord.reseal(&mut store, &secrets).unwrap();
+    assert!(Credentials::reseal(&creds_dir, &secrets).unwrap());
+    secrets.retire_old_keys().unwrap();
+
+    let secrets = SecretStore::open_or_create(dir.path()).unwrap();
+    assert_eq!(secrets.key_count(), 1);
+    Coordinator::open(&mut store, &secrets, T0).unwrap();
+    assert!(Credentials::load(&creds_dir, &secrets).unwrap().is_some());
+    assert!(!Credentials::reseal(&dir.path().join("none"), &secrets).unwrap());
+}
+
+#[test]
+fn without_a_reseal_retiring_the_old_key_strands_the_ca() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut secrets = SecretStore::open_or_create(dir.path()).unwrap();
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    Coordinator::open(&mut store, &secrets, T0).unwrap();
+    secrets.rotate().unwrap();
+    secrets.retire_old_keys().unwrap();
+    assert!(Coordinator::open(&mut store, &secrets, T0).is_err());
+}
+
+fn c_join(coord: &mut Coordinator, store: &mut Store, now: i64) -> Credentials {
+    let token = coord.create_join_token(store, "nas", now).unwrap();
+    let joining = Joining::new(token).unwrap();
+    let grant = coord
+        .redeem(store, joining.token(), &joining.public_key(), now)
+        .unwrap();
+    joining.finish(grant, now).unwrap()
+}
+
+#[test]
+fn join_tokens_are_read_from_stdin_or_a_file() {
+    let mut c = cluster(1);
+    let token = c.coord.create_join_token(&mut c.store, "nas", T0).unwrap();
+    let text = token.expose();
+    let input = format!("\n   {}  \r\n", text.as_str());
+    let read = read_join_token(input.as_bytes()).unwrap();
+    assert_eq!(read.expose().as_str(), text.as_str());
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("token");
+    std::fs::write(&path, format!("{}\n", text.as_str())).unwrap();
+    assert_eq!(
+        read_join_token_file(&path).unwrap().expose().as_str(),
+        text.as_str()
+    );
+
+    assert_eq!(
+        read_join_token(&b"\n \n"[..]).unwrap_err(),
+        TokenInputError::Empty
+    );
+    assert_eq!(
+        read_join_token(&vec![b'a'; 2000][..]).unwrap_err(),
+        TokenInputError::TooLong
+    );
+    let typo = format!("{}x", &text[..text.len() - 1]);
+    assert!(matches!(
+        read_join_token(typo.as_bytes()),
+        Err(TokenInputError::Format(_))
+    ));
+    assert!(matches!(
+        read_join_token_file(&dir.path().join("missing")),
+        Err(TokenInputError::Io(std::io::ErrorKind::NotFound))
+    ));
 }
 
 #[test]
