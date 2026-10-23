@@ -48,5 +48,10 @@
 	"shell_cmd_go": "Go to {destination}",
 	"shell_cmd_section_navigate": "Navigate",
 	"shell_cmd_section_general": "General",
-	"shell_cmd_palette": "Open command palette"
+	"shell_cmd_palette": "Open command palette",
+	"shell_fallback_error_title": "Something went wrong",
+	"shell_fallback_not_found_title": "Page not found",
+	"shell_fallback_error_code": "Error {status}",
+	"shell_fallback_home": "Go to Search",
+	"shell_fallback_retry": "Try again"
 }

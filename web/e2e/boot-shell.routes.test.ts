@@ -286,6 +286,8 @@ test('Ctrl/Cmd+K as the very first key is taken from the browser, not just repla
 	go
 }) => {
 	await go('/search');
+	// The listener is Shell's: it exists once the app has mounted (and taken #boot away).
+	await expect(page.locator('#boot')).toHaveCount(0);
 	await page.evaluate(() => {
 		(window as unknown as { __k: boolean[] }).__k = [];
 		window.addEventListener('keydown', (e) => {
@@ -296,4 +298,36 @@ test('Ctrl/Cmd+K as the very first key is taken from the browser, not just repla
 	await page.keyboard.press('Control+k');
 	expect(await page.evaluate(() => (window as unknown as { __k: boolean[] }).__k)).toEqual([true]);
 	await expect(page.getByRole('dialog')).toBeVisible();
+});
+
+test.describe('the error screen when its chunk cannot load', () => {
+	// The screen and its parts are the only shared chunks that carry these strings; the stub
+	// (nodes/1) with its fallback is left alone.
+	const abortErrorView = (page: Page) =>
+		page.route('**/_app/immutable/chunks/*.js', async (route) => {
+			const response = await route.fetch();
+			const body = await response.text();
+			if (/state-screen|empty_state_explore/.test(body)) return route.abort();
+			return route.fulfill({ response, body });
+		});
+
+	test('a missing page still shows the heading and the way home', async ({ page, go }) => {
+		await abortErrorView(page);
+		await go('/nope-probe');
+		await expect(page.getByTestId('state-screen')).toBeVisible();
+		await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
+		await expect(page.getByRole('link', { name: 'Go to Search' })).toBeVisible();
+	});
+	test('a failed navigation shows the error, the code and both actions', async ({ page, go }) => {
+		await go('/search');
+		await expect(page.getByTestId('more-button')).toBeAttached();
+		await abortErrorView(page);
+		// The destination's own chunk fails too, as it does when the server has gone.
+		await page.route('**/_app/immutable/nodes/*.js', (route) => route.abort());
+		await page.getByRole('link', { name: 'Discover' }).first().click();
+		await expect(page.getByRole('heading', { name: 'Something went wrong' })).toBeVisible();
+		await expect(page.getByText('Error 500')).toBeVisible();
+		await expect(page.getByRole('link', { name: 'Go to Search' })).toBeVisible();
+		await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible();
+	});
 });

@@ -29,13 +29,19 @@
 	const typing = (el: HTMLElement) =>
 		el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName);
 	onMount(() => {
+		// The palette's modifier is Cmd on a Mac and Ctrl elsewhere (Ctrl+K in a Mac text field deletes
+		// to the end of the line); the same rule as lib/keys/combo.ts.
+		const mac = /mac|iphone|ipad/i.test(
+			(navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData
+				?.platform ?? navigator.platform
+		);
 		const first = (e: KeyboardEvent) => {
 			// Holding Ctrl or Shift is the start of a combo, not the key to replay.
 			if (['Control', 'Shift', 'Alt', 'Meta', 'AltGraph'].includes(e.key)) return;
 			removeEventListener('keydown', first, true);
 			// The palette key is taken here, not left to the registry that loads on this very press:
 			// by then the browser has already used Ctrl/Cmd+K itself (the address bar).
-			if (!bare && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+			if (!bare && (mac ? e.metaKey : e.ctrlKey) && e.key.toLowerCase() === 'k') {
 				e.preventDefault();
 				shell.paletteOpen = true;
 				return;
