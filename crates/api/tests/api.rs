@@ -356,6 +356,9 @@ async fn errors_share_one_envelope() {
             .unwrap(),
         get("/api/v1/saved-searches", None),
         get("/api/v1/saved-searches/1", None),
+        get("/api/v1/export", None),
+        get("/api/v1/jobs", None),
+        get("/api/v1/jobs/1", None),
         Request::patch("/api/v1/settings/crawler")
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(r#"{"intensity":"low"}"#))
