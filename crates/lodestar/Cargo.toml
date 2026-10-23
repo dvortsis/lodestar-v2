@@ -77,3 +77,6 @@ tower = { version = "0.5.3", features = ["util"] }
 lodestar-classify.workspace = true
 lodestar-metainfo.workspace = true
 tempfile = "3.27.0"
+
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8.1"

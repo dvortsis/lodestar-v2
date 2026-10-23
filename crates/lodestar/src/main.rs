@@ -20,6 +20,7 @@ mod subscriptions;
 mod web;
 #[cfg(test)]
 mod web_build;
+mod windows;
 
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
@@ -38,6 +39,9 @@ use crate::services::{BoxError, Services};
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() -> ExitCode {
+    if let Some(code) = windows::hook() {
+        return code;
+    }
     let cli = cli::parse();
     let config_path = cli.config;
     let command = cli.command.unwrap_or(Command::Serve { fixture: None });
