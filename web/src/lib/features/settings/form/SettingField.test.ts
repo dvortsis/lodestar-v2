@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import SettingField from './SettingField.svelte';
 import { fakeServer } from './testing/fake-server';
+import { dismissAll } from './dialogs';
 import { createSettingsForm, type SettingsForm } from './form.svelte';
 import { spec, sv, values } from './testing/values';
 import type { FieldKey, FieldSpec } from './types';
@@ -62,6 +63,11 @@ const initial = () => [
 let server: ReturnType<typeof fakeServer>;
 let form: SettingsForm;
 
+// The lazily loaded dialog and menu, transformed once up front rather than inside a test's timeout.
+beforeAll(async () => {
+	await Promise.all([import('./ConfirmDialog.svelte'), import('./FieldMenu.svelte')]);
+});
+
 beforeEach(async () => {
 	vi.spyOn(console, 'warn').mockImplementation(() => {});
 	sessionStorage.clear();
@@ -72,6 +78,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+	dismissAll();
 	form.destroy();
 	vi.unstubAllGlobals();
 	vi.restoreAllMocks();
@@ -143,10 +150,7 @@ describe('SettingField', () => {
 
 	it('offers Reset only for a value saved in the app, and shows the keys', async () => {
 		show('crawler.timeout_secs');
-		await fireEvent.pointerDown(screen.getByRole('button', { name: 'Options for timeout_secs' }), {
-			button: 0,
-			pointerType: 'mouse'
-		});
+		await fireEvent.click(screen.getByRole('button', { name: 'Options for timeout_secs' }));
 		const items = await screen.findAllByRole('menuitem');
 		expect(items.map((i) => i.textContent?.trim())).toEqual([
 			'Reset to default',
@@ -160,20 +164,14 @@ describe('SettingField', () => {
 
 	it('hides Reset for a default, file or locked value', async () => {
 		show('network.http_bind');
-		await fireEvent.pointerDown(screen.getByRole('button', { name: 'Options for http_bind' }), {
-			button: 0,
-			pointerType: 'mouse'
-		});
+		await fireEvent.click(screen.getByRole('button', { name: 'Options for http_bind' }));
 		const items = await screen.findAllByRole('menuitem');
 		expect(items.map((i) => i.textContent?.trim())).toEqual(['Copy link to this setting']);
 	});
 
 	it('shows config.toml key and variable on request', async () => {
 		show('crawler.timeout_secs');
-		await fireEvent.pointerDown(screen.getByRole('button', { name: 'Options for timeout_secs' }), {
-			button: 0,
-			pointerType: 'mouse'
-		});
+		await fireEvent.click(screen.getByRole('button', { name: 'Options for timeout_secs' }));
 		await fireEvent.click(await screen.findByRole('menuitem', { name: /Show config.toml/ }));
 		expect((await screen.findByTestId('field-keys')).textContent).toContain('fetch.timeout_secs');
 	});

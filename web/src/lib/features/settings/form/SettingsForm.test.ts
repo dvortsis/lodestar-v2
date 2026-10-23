@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { keys } from '$lib/keys';
+import { dismissAll } from './dialogs';
 import { createSettingsForm, type SettingsForm } from './form.svelte';
 import FormHarness from './testing/FormHarness.svelte';
 import { fakeServer } from './testing/fake-server';
@@ -25,6 +26,11 @@ const SPECS: FieldSpec[] = [
 let server: ReturnType<typeof fakeServer>;
 let form: SettingsForm;
 
+// The lazily loaded dialog and menu, transformed once up front rather than inside a test's timeout.
+beforeAll(async () => {
+	await Promise.all([import('./ConfirmDialog.svelte'), import('./FieldMenu.svelte')]);
+});
+
 beforeEach(async () => {
 	vi.spyOn(console, 'warn').mockImplementation(() => {});
 	sessionStorage.clear();
@@ -40,6 +46,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+	dismissAll();
 	vi.unstubAllGlobals();
 	vi.restoreAllMocks();
 });

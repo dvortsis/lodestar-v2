@@ -7,7 +7,8 @@
 	import Field from '$lib/ui/fields/Field.svelte';
 	import Toggle from '$lib/ui/fields/Toggle.svelte';
 	import Mono from '$lib/ui/labels/Mono.svelte';
-	import Menu, { type MenuItem } from '$lib/ui/overlays/Menu.svelte';
+	import type { MenuItem } from '$lib/ui/overlays/Menu.svelte';
+	import type { Component } from 'svelte';
 	import { toast } from '$lib/ui/feedback/toasts.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import IconRestart from '~icons/ph/arrows-clockwise';
@@ -71,6 +72,20 @@
 	]);
 	let showKeys = $state(false);
 
+	// The menu loads when it's first opened; until then a plain button stands in for its trigger.
+	type FieldMenuProps = {
+		items: MenuItem[];
+		label: string;
+		onSelect: (id: string) => void;
+		open?: boolean;
+	};
+	let FieldMenu = $state<Component<FieldMenuProps, object, 'open'>>();
+	let menuOpen = $state(false);
+	async function openMenu() {
+		FieldMenu ??= (await import('./FieldMenu.svelte')).default;
+		menuOpen = true;
+	}
+
 	async function copy(text: string, done: string) {
 		try {
 			await navigator.clipboard.writeText(text);
@@ -117,13 +132,23 @@
 						{/if}
 					</label>
 				{/if}
-				<Menu items={menu} onSelect={onMenu} label={m.settings_form_menu_label({ label })}>
-					{#snippet trigger({ props })}
-						<IconButton {...props} dense label={m.settings_form_menu_label({ label })}>
-							<IconMenu />
-						</IconButton>
-					{/snippet}
-				</Menu>
+				{#if FieldMenu}
+					<FieldMenu
+						items={menu}
+						onSelect={onMenu}
+						label={m.settings_form_menu_label({ label })}
+						bind:open={menuOpen}
+					/>
+				{:else}
+					<IconButton
+						dense
+						label={m.settings_form_menu_label({ label })}
+						aria-haspopup="menu"
+						onclick={openMenu}
+					>
+						<IconMenu />
+					</IconButton>
+				{/if}
 			</div>
 			{@const controlProps = { ...cp, 'aria-labelledby': ownLabel ? undefined : labelId }}
 			{#if hasAuto}

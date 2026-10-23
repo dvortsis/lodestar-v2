@@ -13,18 +13,33 @@ export interface Question {
 /** Long enough for the closing animation and focus restore before the dialog is removed. */
 const UNMOUNT_MS = 400;
 
+const open = new Set<{ app: object; resolve: (id: string | null) => void }>();
+
 export async function ask(q: Question): Promise<string | null> {
 	const { default: ConfirmDialog } = await import('./ConfirmDialog.svelte');
 	return new Promise((resolve) => {
-		const app = mount(ConfirmDialog, {
+		const entry = { app: {}, resolve };
+		entry.app = mount(ConfirmDialog, {
 			target: document.body,
 			props: {
 				...q,
 				onclose: (id: string | null) => {
 					resolve(id);
-					setTimeout(() => void unmount(app), UNMOUNT_MS);
+					setTimeout(() => {
+						if (open.delete(entry)) void unmount(entry.app);
+					}, UNMOUNT_MS);
 				}
 			}
 		});
+		open.add(entry);
 	});
+}
+
+/** Closes every open question unanswered (tests, and a screen torn down mid-question). */
+export function dismissAll(): void {
+	for (const entry of open) {
+		open.delete(entry);
+		entry.resolve(null);
+		void unmount(entry.app);
+	}
 }

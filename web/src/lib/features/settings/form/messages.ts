@@ -27,14 +27,16 @@ function warnOnce(id: string, message: string) {
 /** The field's label; its `name` when the message is missing. */
 export function fieldLabel(spec: FieldSpec): string {
 	const text = settingText(spec.labelKey);
-	if (text === undefined) warnOnce(spec.labelKey, `no message for ${spec.labelKey}`);
+	if (import.meta.env.DEV && text === undefined)
+		warnOnce(spec.labelKey, `no message for ${spec.labelKey}`);
 	return text ?? spec.name;
 }
 
 /** The field's help; undefined (no help shown) when the message is missing. */
 export function fieldHelp(spec: FieldSpec): string | undefined {
 	const text = settingText(spec.helpKey);
-	if (text === undefined) warnOnce(spec.helpKey, `no message for ${spec.helpKey}`);
+	if (import.meta.env.DEV && text === undefined)
+		warnOnce(spec.helpKey, `no message for ${spec.helpKey}`);
 	return text;
 }
 
@@ -50,6 +52,6 @@ const UNITS: Record<string, () => string> = {
 export function unitText(unit: string | undefined): string | undefined {
 	if (unit === undefined) return undefined;
 	const f = UNITS[unit];
-	if (!f) warnOnce(`unit:${unit}`, `unknown x-unit "${unit}"`);
+	if (import.meta.env.DEV && !f) warnOnce(`unit:${unit}`, `unknown x-unit "${unit}"`);
 	return f ? f() : unit;
 }

@@ -1,6 +1,6 @@
 <script lang="ts">
-	// The fallback for a shape the form can't read (§10.10.4), so a new server setting is never
-	// invisible: its value as JSON, staged once it parses.
+	// The fallback for a shape the form can't read (§10.10.4), so a new server setting still
+	// shows up: its value as JSON, staged once it parses.
 	import Textarea from '$lib/ui/fields/Textarea.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import type { SettingsForm } from './form.svelte';
