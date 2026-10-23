@@ -77,6 +77,9 @@ pub struct Natural {
     pub chips: Vec<NaturalChip>,
     /// The words kept as text.
     pub text: Vec<String>,
+    /// The character ranges of every word a rule read, merged values'
+    /// included (a chip's `from` is its first word's).
+    pub read: Vec<(usize, usize)>,
 }
 
 /// A word of the input: as written (outer punctuation trimmed) and
@@ -95,9 +98,8 @@ struct W {
 fn word(input: &str, t: &Raw) -> Option<W> {
     let raw = &input[t.start..t.end];
     let trimmed = raw.trim_matches(|c: char| "[]{},.;:!?'".contains(c));
-    if trimmed.is_empty() {
-        return None;
-    }
+    // All punctuation (`!`): kept as written, for no rule to read.
+    let trimmed = if trimmed.is_empty() { raw } else { trimmed };
     let lead = raw.find(trimmed).unwrap_or(0);
     let from = caret::chars(input, t.start + lead);
     Some(W {
@@ -143,6 +145,14 @@ const LINKS: &[&str] = &[
 /// Articles, dropped only before a recognised word (`the 90s`): before
 /// text they're part of it (`the office`).
 const ARTICLES: &[&str] = &["the", "a", "an"];
+
+/// Whether a word is one the rules may drop (a linking or request
+/// word), for tests that check no other word is lost.
+#[doc(hidden)]
+pub fn is_filler(word: &str) -> bool {
+    let w = word.to_lowercase();
+    LINKS.contains(&w.as_str()) || ASKS.contains(&w.as_str())
+}
 
 /// Words that ask for a search, dropped at the start.
 const ASKS: &[&str] = &["find", "search", "show", "get", "me", "all", "any", "some"];
@@ -538,6 +548,101 @@ fn recognised(word: &str) -> Option<Made> {
 
 /// Reads `input` as natural phrasing.
 pub fn natural(input: &str) -> Result<Natural, NaturalError> {
+    let (pieces, chips, text, read, strict) = build(input)?;
+    // The pieces read together as the proposal; should they not (a rule
+    // emptied a run between operators), the query stands as typed.
+    match query::parse(&join(&pieces, None)) {
+        Ok(ast) => Ok(Natural {
+            canonical: ast.to_query(),
+            ast,
+            chips,
+            text,
+            read,
+        }),
+        Err(_) => Ok(Natural {
+            canonical: strict.to_query(),
+            ast: strict,
+            chips: Vec::new(),
+            text: Vec::new(),
+            read: Vec::new(),
+        }),
+    }
+}
+
+/// A piece of the proposal: a run of plain words as the rules read it
+/// (empty when they dropped every word), or syntax as written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Piece {
+    Run {
+        /// The words as written.
+        text: String,
+        /// The rules' reading of them; empty when they dropped them all.
+        read: String,
+    },
+    Syntax(String),
+}
+
+/// The proposal's pieces, in order, with each run's text replaced by
+/// `placeholder(i)` when one is given: what the tests compare the
+/// proposal's structure with.
+#[doc(hidden)]
+pub fn pieces(input: &str) -> Result<Vec<Piece>, NaturalError> {
+    Ok(build(input)?.0)
+}
+
+/// The pieces as query text, each run `i` as `placeholder(i)` if given.
+#[doc(hidden)]
+pub fn join(pieces: &[Piece], placeholder: Option<&dyn Fn(usize) -> String>) -> String {
+    let mut run = 0;
+    let mut out: Vec<String> = Vec::new();
+    for p in pieces {
+        match p {
+            Piece::Syntax(s) => out.push(s.clone()),
+            Piece::Run { read, .. } => {
+                match placeholder {
+                    Some(f) => out.push(f(run)),
+                    None if !read.is_empty() => out.push(read.clone()),
+                    None => {}
+                }
+                run += 1;
+            }
+        }
+    }
+    out.join(" ")
+}
+
+/// The field a clause is on, for merging values and for leaving a
+/// field the query already names alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Key {
+    Tag(TagKey),
+    Ext,
+    Num(NumField),
+    Date,
+    Flag(String),
+}
+
+fn key_of(node: &Node) -> Option<Key> {
+    Some(match node {
+        Node::Tag { key, .. } => Key::Tag(*key),
+        Node::Ext { .. } => Key::Ext,
+        Node::Range { field, .. } => Key::Num(*field),
+        Node::Date { .. } => Key::Date,
+        Node::Flag { name, .. } => Key::Flag(name.clone()),
+        Node::Not { of } => return key_of(of),
+        _ => return None,
+    })
+}
+
+type Built = (
+    Vec<Piece>,
+    Vec<NaturalChip>,
+    Vec<String>,
+    Vec<(usize, usize)>,
+    Node,
+);
+
+fn build(input: &str) -> Result<Built, NaturalError> {
     if input.len() > MAX_NATURAL_BYTES {
         return Err(NaturalError::TooLong);
     }
@@ -546,48 +651,83 @@ pub fn natural(input: &str) -> Result<Natural, NaturalError> {
         return Err(NaturalError::TooManyWords);
     }
     let strict = query::parse(input).map_err(|_| NaturalError::Syntax)?;
-    let mut pieces: Vec<String> = Vec::new();
-    let mut chips = Vec::new();
-    let mut text = Vec::new();
+    // Segments in order: runs of plain words (with the top-level AND
+    // group they're in, between `OR`s) and syntax as written. Each group
+    // also notes the fields its own top-level syntax names.
+    enum Seg {
+        /// The words, their group, and the text they span.
+        Run(Vec<W>, usize, String),
+        Syntax(String),
+    }
+    let mut segs: Vec<Seg> = Vec::new();
+    let mut taken: Vec<Vec<Key>> = vec![Vec::new()];
     let mut i = 0;
     while i < toks.len() {
+        let group = taken.len() - 1;
         if plain(input, &toks, i) {
             let mut run = Vec::new();
+            let start = toks[i].start;
             while i < toks.len() && plain(input, &toks, i) {
                 run.extend(word(input, &toks[i]));
                 i += 1;
             }
-            let read = read_run(&run);
-            chips.extend(read.chips);
-            text.extend(read.text);
-            if !read.nodes.is_empty() {
-                pieces.push(and(read.nodes).to_query());
+            let span = input[start..toks[i - 1].end].to_owned();
+            segs.push(Seg::Run(run, group, span));
+            continue;
+        }
+        // Syntax, verbatim: up to the next plain word.
+        let start = toks[i].start;
+        while i < toks.len() && !plain(input, &toks, i) {
+            let t = &toks[i];
+            let text = &input[t.start..t.end];
+            if t.depth == 0 {
+                if t.kind == RawKind::Bar || (t.kind == RawKind::Word && text == "OR") {
+                    taken.push(Vec::new());
+                } else if t.kind == RawKind::Word {
+                    if let Some(k) = query::parse(text).ok().as_ref().and_then(key_of) {
+                        taken.last_mut().expect("a group").push(k);
+                    }
+                }
             }
-        } else {
-            // Syntax, verbatim: up to the next plain word.
-            let start = toks[i].start;
-            while i < toks.len() && !plain(input, &toks, i) {
-                i += 1;
+            i += 1;
+        }
+        segs.push(Seg::Syntax(input[start..toks[i - 1].end].to_owned()));
+    }
+    // The rules, one AND group at a time, over all its runs together.
+    let mut rendered: Vec<String> = vec![String::new(); segs.len()];
+    let mut chips = Vec::new();
+    let mut text = Vec::new();
+    let mut read_words = Vec::new();
+    for (g, keys) in taken.iter().enumerate() {
+        let idx: Vec<usize> = (0..segs.len())
+            .filter(|&j| matches!(&segs[j], Seg::Run(_, gr, _) if *gr == g))
+            .collect();
+        let runs: Vec<&[W]> = idx
+            .iter()
+            .map(|&j| match &segs[j] {
+                Seg::Run(w, ..) => w.as_slice(),
+                Seg::Syntax(_) => unreachable!("runs only"),
+            })
+            .collect();
+        let read = read_group(&runs, keys);
+        chips.extend(read.chips);
+        text.extend(read.text);
+        read_words.extend(read.read);
+        for (j, nodes) in idx.into_iter().zip(read.nodes) {
+            if !nodes.is_empty() {
+                rendered[j] = and(nodes).to_query();
             }
-            pieces.push(input[start..toks[i - 1].end].to_owned());
         }
     }
-    // The pieces read together as the proposal; should they not (a rule
-    // emptied a run between operators), the query stands as typed.
-    match query::parse(&pieces.join(" ")) {
-        Ok(ast) => Ok(Natural {
-            canonical: ast.to_query(),
-            ast,
-            chips,
-            text,
-        }),
-        Err(_) => Ok(Natural {
-            canonical: strict.to_query(),
-            ast: strict,
-            chips: Vec::new(),
-            text: Vec::new(),
-        }),
-    }
+    let pieces = segs
+        .into_iter()
+        .zip(rendered)
+        .map(|(seg, r)| match seg {
+            Seg::Run(_, _, text) => Piece::Run { text, read: r },
+            Seg::Syntax(s) => Piece::Syntax(s),
+        })
+        .collect();
+    Ok((pieces, chips, text, read_words, strict))
 }
 
 fn and(mut nodes: Vec<Node>) -> Node {
@@ -598,122 +738,171 @@ fn and(mut nodes: Vec<Node>) -> Node {
     }
 }
 
-/// What the rules made of a run of plain words.
+/// What the rules made of the runs of one AND group.
 struct Read {
-    nodes: Vec<Node>,
+    /// Each run's clauses and kept words, in order.
+    nodes: Vec<Vec<Node>>,
     chips: Vec<NaturalChip>,
     text: Vec<String>,
+    /// The words the rules read.
+    read: Vec<(usize, usize)>,
 }
 
-/// The rules over one run of plain words.
-fn read_run(w: &[W]) -> Read {
-    // Each word: recognised (a slot in `parts`) or text.
+/// Values of one field, merged across the group at the first one's
+/// place.
+struct Merged {
+    key: Key,
+    values: Vec<String>,
+    from: (usize, usize),
+}
+
+/// The rules over the runs of one AND group. A rule on a field the
+/// group's own syntax already names (`-type:tv tv shows`) is left as
+/// text; keyword values of one field merge across runs (`movies -x tv
+/// shows` is `type:movie,tv -x`).
+fn read_group(runs: &[&[W]], taken: &[Key]) -> Read {
+    // Each word: recognised (a clause, or a slot in `merged`) or text.
     enum Part {
         Text(usize),
         Clause(Node, (usize, usize)),
-        /// Values of a field, merged at the first one's place.
-        Merged(MergeKey, Vec<String>, (usize, usize)),
+        Merged(usize),
     }
-    #[derive(Clone, PartialEq, Eq)]
-    enum MergeKey {
-        Tag(TagKey),
-        Ext,
-    }
-    let mut parts: Vec<Part> = Vec::new();
-    // Whether each word was used by a rule.
-    let mut used = vec![false; w.len()];
-    let mut i = 0;
-    while i < w.len() {
-        let Some((n, made)) = rule(&w[i..]) else {
-            parts.push(Part::Text(i));
-            i += 1;
-            continue;
-        };
-        let from = (w[i].from.0, w[i + n - 1].from.1);
-        used[i..i + n].iter_mut().for_each(|u| *u = true);
-        let (key, value) = match made {
-            Made::Node(node) => {
-                parts.push(Part::Clause(node, from));
+    let mut merged: Vec<Merged> = Vec::new();
+    let mut read = Vec::new();
+    let mut all_parts: Vec<(Vec<Part>, Vec<bool>)> = Vec::new();
+    for w in runs {
+        let mut parts: Vec<Part> = Vec::new();
+        let mut used = vec![false; w.len()];
+        let mut i = 0;
+        while i < w.len() {
+            let Some((n, made)) = rule(&w[i..]) else {
+                parts.push(Part::Text(i));
+                i += 1;
+                continue;
+            };
+            let key = match &made {
+                Made::Node(node) => key_of(node),
+                Made::Tag(k, _) => Some(Key::Tag(*k)),
+                Made::Ext(_) => Some(Key::Ext),
+            };
+            if key.as_ref().is_some_and(|k| taken.contains(k)) {
+                // The query names this field itself: these words stay
+                // text rather than contradict or widen it.
+                parts.extend((i..i + n).map(Part::Text));
                 i += n;
                 continue;
             }
-            Made::Tag(k, v) => (MergeKey::Tag(k), v),
-            Made::Ext(e) => (MergeKey::Ext, e),
-        };
-        match parts
-            .iter_mut()
-            .find(|p| matches!(p, Part::Merged(k, ..) if *k == key))
-        {
-            Some(Part::Merged(_, values, _)) => {
-                if !values.contains(&value) {
-                    values.push(value);
+            let from = (w[i].from.0, w[i + n - 1].from.1);
+            used[i..i + n].iter_mut().for_each(|u| *u = true);
+            read.extend(w[i..i + n].iter().map(|x| x.from));
+            let value = match made {
+                Made::Node(node) => {
+                    parts.push(Part::Clause(node, from));
+                    i += n;
+                    continue;
+                }
+                Made::Tag(_, v) | Made::Ext(v) => v,
+            };
+            let key = key.expect("a keyword field");
+            match merged.iter_mut().find(|m| m.key == key) {
+                Some(m) => {
+                    if !m.values.contains(&value) {
+                        m.values.push(value);
+                    }
+                }
+                None => {
+                    merged.push(Merged {
+                        key,
+                        values: vec![value],
+                        from,
+                    });
+                    parts.push(Part::Merged(merged.len() - 1));
                 }
             }
-            _ => parts.push(Part::Merged(key, vec![value], from)),
+            i += n;
         }
-        i += n;
+        all_parts.push((parts, used));
     }
-    // Linking words beside a recognised word, and asks at the start, go.
-    let near_used = |j: usize| {
-        let mut k = j;
-        let before = loop {
-            if k == 0 {
-                break false;
-            }
-            k -= 1;
-            if used[k] {
-                break true;
-            }
-            if !LINKS.contains(&w[k].low.as_str()) {
-                break false;
-            }
-        };
-        let after = (j + 1..w.len())
-            .find(|&k| used[k] || !LINKS.contains(&w[k].low.as_str()))
-            .is_some_and(|k| used[k]);
-        after || (before && !ARTICLES.contains(&w[j].low.as_str()))
+    let mut out = Read {
+        nodes: Vec::new(),
+        chips: Vec::new(),
+        text: Vec::new(),
+        read,
     };
-    let any_used = used.iter().any(|u| *u);
-    let mut leading = true;
-    let mut nodes = Vec::new();
-    let mut chips = Vec::new();
-    let mut text = Vec::new();
-    for p in parts {
-        let node = match p {
-            Part::Text(j) => {
-                let low = w[j].low.as_str();
-                if leading && any_used && ASKS.contains(&low) {
-                    continue;
+    for (w, (parts, used)) in runs.iter().zip(all_parts) {
+        // Linking words beside a recognised word, and asks at the start,
+        // go.
+        let near_used = |j: usize| {
+            let mut k = j;
+            let before = loop {
+                if k == 0 {
+                    break false;
                 }
-                leading = false;
-                if LINKS.contains(&low) && near_used(j) {
-                    continue;
+                k -= 1;
+                if used[k] {
+                    break true;
                 }
-                // Trimmed, or as written when trimming made it syntax
-                // (`NEAR,`): a plain token always stays.
-                let (kept, n) = match text_node(&w[j].orig) {
-                    Some(n) => (&w[j].orig, n),
-                    None => match text_node(&w[j].raw) {
-                        Some(n) => (&w[j].raw, n),
-                        None => continue,
-                    },
-                };
-                text.push(kept.clone());
-                nodes.push(n);
-                continue;
-            }
-            Part::Clause(node, from) => (node, from),
-            Part::Merged(MergeKey::Tag(key), any, from) => (Node::Tag { key, any }, from),
-            Part::Merged(MergeKey::Ext, any, from) => (Node::Ext { any }, from),
+                if !LINKS.contains(&w[k].low.as_str()) {
+                    break false;
+                }
+            };
+            let after = (j + 1..w.len())
+                .find(|&k| used[k] || !LINKS.contains(&w[k].low.as_str()))
+                .is_some_and(|k| used[k]);
+            after || (before && !ARTICLES.contains(&w[j].low.as_str()))
         };
-        leading = false;
-        chips.push(NaturalChip {
-            text: node.0.to_query(),
-            from: node.1,
-        });
-        nodes.push(node.0);
+        let any_used = used.iter().any(|u| *u);
+        let mut leading = true;
+        let mut nodes = Vec::new();
+        for p in parts {
+            let (node, from) = match p {
+                Part::Text(j) => {
+                    let low = w[j].low.as_str();
+                    if leading && any_used && ASKS.contains(&low) {
+                        continue;
+                    }
+                    leading = false;
+                    if LINKS.contains(&low) && near_used(j) {
+                        continue;
+                    }
+                    // Trimmed, or as written when trimming made it syntax
+                    // (`NEAR,`): a plain token always stays.
+                    let (kept, n) = match text_node(&w[j].orig) {
+                        Some(n) => (&w[j].orig, n),
+                        None => match text_node(&w[j].raw) {
+                            Some(n) => (&w[j].raw, n),
+                            None => continue,
+                        },
+                    };
+                    out.text.push(kept.clone());
+                    nodes.push(n);
+                    continue;
+                }
+                Part::Clause(node, from) => (node, from),
+                Part::Merged(m) => {
+                    let m = &merged[m];
+                    let node = match &m.key {
+                        Key::Tag(key) => Node::Tag {
+                            key: *key,
+                            any: m.values.clone(),
+                        },
+                        _ => Node::Ext {
+                            any: m.values.clone(),
+                        },
+                    };
+                    (node, m.from)
+                }
+            };
+            leading = false;
+            out.chips.push(NaturalChip {
+                text: node.to_query(),
+                from,
+            });
+            nodes.push(node);
+        }
+        out.nodes.push(nodes);
     }
-    Read { nodes, chips, text }
+    out
 }
 
 /// A word kept as text, if the parser reads it as itself once trimmed
