@@ -12,6 +12,7 @@
 	import { applyPrefs, narrow, type Prefs } from './boot';
 	import { ACTION_IDS } from './catalog';
 	import type { KeyMap } from './capture';
+	import { shown } from './keyname';
 	import ShortcutsField from './ShortcutsField.svelte';
 	import './shortcuts.css';
 
@@ -34,6 +35,8 @@
 	let saving = $state(false);
 	let stale = $state(false);
 	let failed = $state(false);
+	let locked = $state(false);
+	let nothing = $state(false);
 	let errors = $state<Record<Name, Record<string, string>>>({ shortcuts: {}, shortcut_keys: {} });
 
 	const same = (a: Prefs[Name], b: Prefs[Name]) =>
@@ -100,8 +103,12 @@
 	async function save() {
 		const body: Record<string, unknown> = { if_revision: revision };
 		for (const n of NAMES) if (!locks[n] && changed(n)) body[n] = draft[n];
+		if (!dirty) {
+			nothing = true;
+			return;
+		}
 		saving = true;
-		stale = failed = false;
+		nothing = stale = failed = locked = false;
 		errors = { shortcuts: {}, shortcut_keys: {} };
 		try {
 			const res = await api.patch('/settings/{section}', {
@@ -119,14 +126,17 @@
 			} else if (e.code === 'invalid_setting') {
 				const name: Name = e.field === 'shortcuts' ? 'shortcuts' : 'shortcut_keys';
 				errors[name] = { [name === 'shortcuts' ? '' : rowOf(e.message)]: e.message };
-			} else if (e.status === 409) await load(true);
-			else failed = e.status !== 401;
+			} else if (e.status === 409) {
+				await load(true);
+				locked = true;
+			} else failed = e.status !== 401;
 		} finally {
 			saving = false;
 		}
 	}
 
 	function cancel() {
+		nothing = false;
 		draft = $state.snapshot(saved) as Prefs;
 		errors = { shortcuts: {}, shortcut_keys: {} };
 		stale = failed = false;
@@ -142,6 +152,7 @@
 		<Banner kind="error">{m.shortcuts_load_failed()}</Banner>
 	{:else if status === 'ready'}
 		{#if stale}<Banner kind="info">{m.shortcuts_stale()}</Banner>{/if}
+		{#if locked}<Banner kind="warning">{m.shortcuts_read_only_banner()}</Banner>{/if}
 		{#if failed}<Banner kind="error">{m.shortcuts_save_failed()}</Banner>{/if}
 		<section>
 			<Toggle
@@ -150,7 +161,9 @@
 				disabled={!!locks.shortcuts}
 				aria-describedby="shortcuts-single-help"
 			/>
-			<p class="sc-text sc-help" id="shortcuts-single-help">{m.shortcuts_single_help()}</p>
+			<p class="sc-text sc-help" id="shortcuts-single-help">
+				{m.shortcuts_single_help({ palette: shown('mod+k') })}
+			</p>
 			{#if locks.shortcuts}<p class="sc-text sc-help">{locks.shortcuts}</p>{/if}
 			{#each Object.values(errors.shortcuts) as message (message)}
 				<p class="sc-text sc-help" role="alert">{message}</p>
@@ -167,10 +180,11 @@
 			/>
 		</section>
 		<div class="sc-buttons">
-			<Button variant="primary" disabled={!dirty} loading={saving} onclick={() => void save()}>
+			<Button variant="primary" loading={saving} onclick={() => void save()}>
 				{m.shortcuts_save()}
 			</Button>
-			<Button disabled={!dirty || saving} onclick={cancel}>{m.shortcuts_cancel()}</Button>
+			<Button disabled={saving} onclick={cancel}>{m.shortcuts_cancel()}</Button>
 		</div>
+		<p class="sc-text" role="status">{nothing && !dirty ? m.shortcuts_nothing_to_save() : ''}</p>
 	{/if}
 </div>

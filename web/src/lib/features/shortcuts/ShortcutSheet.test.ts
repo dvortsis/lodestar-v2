@@ -103,6 +103,8 @@ describe('ShortcutSheet', () => {
 		await fireEvent.click(within(dialog).getByRole('button', { name: 'Turn on' }));
 		await vi.waitFor(() => expect(keys.singleKeys).toBe(true));
 		expect(patch.mock.calls[0]![1].body).toEqual({ shortcuts: true });
+		// The banner with the button is gone: focus stays in the dialog.
+		await vi.waitFor(() => expect(document.activeElement).toBe(dialog));
 	});
 
 	it('links to the Keyboard settings screen', async () => {

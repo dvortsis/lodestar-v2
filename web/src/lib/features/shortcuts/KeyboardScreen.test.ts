@@ -52,7 +52,7 @@ describe('KeyboardScreen', () => {
 		expect((toggle as HTMLInputElement).checked).toBe(true);
 		expect(toggle.getAttribute('aria-describedby')).toBe('shortcuts-single-help');
 		expect(screen.getByTestId('shortcuts-field')).toBeTruthy();
-		expect(save().hasAttribute('disabled')).toBe(true);
+		expect(save().hasAttribute('disabled')).toBe(false);
 	});
 
 	it('saves only what changed, with if_revision, and applies it at once', async () => {
@@ -67,7 +67,25 @@ describe('KeyboardScreen', () => {
 		});
 		await vi.waitFor(() => expect(keys.singleKeys).toBe(false));
 		expect(toasts.items.map((t) => t.text)).toContain('Keyboard settings saved');
-		expect(save().hasAttribute('disabled')).toBe(true);
+		expect(save().hasAttribute('disabled')).toBe(false);
+	});
+
+	it('Save with nothing changed is a no-op with a short status', async () => {
+		render(KeyboardScreen);
+		await screen.findByRole('switch');
+		await fireEvent.click(save());
+		expect(patch).not.toHaveBeenCalled();
+		expect(screen.getByText('Nothing to save.')).toBeTruthy();
+	});
+
+	it('says so when a save is refused because the setting is locked', async () => {
+		render(KeyboardScreen);
+		await fireEvent.click(await screen.findByRole('switch'));
+		patch.mockRejectedValueOnce(new ApiError(409, 'read_only', 'locked'));
+		await fireEvent.click(save());
+		expect(
+			await screen.findByText("These settings are locked, so your change wasn't saved.")
+		).toBeTruthy();
 	});
 
 	it('sends a remap, and Cancel throws the edits away', async () => {
@@ -76,7 +94,6 @@ describe('KeyboardScreen', () => {
 		await screen.findByRole('switch');
 		await fireEvent.click(screen.getByRole('button', { name: 'Change the key for Next result' }));
 		await press('n');
-		expect(save().hasAttribute('disabled')).toBe(false);
 		await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 		expect(screen.getByTestId('shortcut-key-results.next').textContent).toContain('J');
 		await fireEvent.click(screen.getByRole('button', { name: 'Change the key for Next result' }));

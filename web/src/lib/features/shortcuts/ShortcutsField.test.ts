@@ -51,7 +51,7 @@ describe('ShortcutsField', () => {
 
 	it.each([
 		['J', { shiftKey: true }, 'Use a key without Shift'],
-		['k', { ctrlKey: true }, 'Use a key without Ctrl, Alt or Cmd'],
+		['k', { ctrlKey: true }, 'Use a key without Ctrl, Alt or Win'],
 		[' ', {}, 'Use a key that shows a character'],
 		['​', {}, 'Use a key that shows a character'],
 		['́', {}, 'Use a key that shows a character']
@@ -158,6 +158,13 @@ describe('ShortcutsField', () => {
 		const row = screen.getByTestId('shortcut-row-results.next');
 		expect(row.textContent).toContain('results.next: bad');
 		expect(screen.getByText('whole field')).toBeTruthy();
+	});
+
+	it('links a row error to its Change button', () => {
+		setup({}, { errors: { 'results.next': 'results.next: bad' } });
+		const button = change('Next result');
+		const id = button.getAttribute('aria-describedby')!;
+		expect(document.getElementById(id)?.textContent).toContain('results.next: bad');
 	});
 
 	it('disables every control when locked', () => {

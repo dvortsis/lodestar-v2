@@ -1,6 +1,7 @@
 <script lang="ts">
 	// The keyboard shortcut sheet (§10.16): every command that has a key, grouped by section, the
 	// ones on this screen first. Opened by `?` through boot.ts; it stays mounted once loaded.
+	import { tick } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { keys, type CommandInfo } from '$lib/keys';
 	import { isSingleKey } from '$lib/keys/combo';
@@ -26,6 +27,13 @@
 	const here = $derived(group(withKeys.filter((c) => c.active)));
 	const elsewhere = $derived(withKeys.filter((c) => !c.active));
 	const off = (c: CommandInfo) => !keys.singleKeys && c.keys.every(isSingleKey);
+	// "Turn on" removes its own banner: keep focus inside the dialog.
+	async function turnOn() {
+		await toggleSingleKeys();
+		await tick();
+		const dialog = document.querySelector<HTMLElement>('[data-testid="shortcut-sheet"]');
+		dialog?.closest<HTMLElement>('[role="dialog"]')?.focus();
+	}
 	const href = resolve('/settings/keyboard' as Route);
 </script>
 
@@ -39,9 +47,7 @@
 			<Banner kind="info">
 				{m.shortcuts_sheet_off_notice()}
 				{#snippet action()}
-					<Button dense onclick={() => void toggleSingleKeys()}
-						>{m.shortcuts_sheet_turn_on()}</Button
-					>
+					<Button dense onclick={() => void turnOn()}>{m.shortcuts_sheet_turn_on()}</Button>
 				{/snippet}
 			</Banner>
 		{/if}

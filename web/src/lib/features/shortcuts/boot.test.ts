@@ -5,7 +5,11 @@ import { toasts } from '$lib/ui/feedback/toasts.svelte';
 
 const get = vi.hoisted(() => vi.fn());
 const patch = vi.hoisted(() => vi.fn());
-const handlers = vi.hoisted(() => ({ settings: undefined as ((d: unknown) => void) | undefined }));
+const handlers = vi.hoisted(() => ({
+	settings: undefined as ((d: unknown) => void) | undefined,
+	resync: undefined as (() => void) | undefined,
+	status: 'live'
+}));
 
 vi.mock('$lib/api/client', async (orig) => ({
 	...(await orig<typeof import('$lib/api/client')>()),
@@ -13,9 +17,12 @@ vi.mock('$lib/api/client', async (orig) => ({
 }));
 vi.mock('$lib/state/events.svelte', () => ({
 	events: {
-		status: 'live',
-		on: (_topic: string, h: (d: unknown) => void) => {
+		get status() {
+			return handlers.status;
+		},
+		on: (_topic: string, h: (d: unknown) => void, opts?: { onResync?: () => void }) => {
 			handlers.settings = h;
+			handlers.resync = opts?.onResync;
 			return () => (handlers.settings = undefined);
 		}
 	}
@@ -42,6 +49,7 @@ beforeEach(() => {
 	patch.mockReset();
 	toasts.items = [];
 	keys.setSingleKeys(true);
+	handlers.status = 'live';
 });
 afterEach(() => {
 	stop?.();
@@ -153,12 +161,35 @@ describe('startShortcuts', () => {
 		off.forEach((f) => f());
 	});
 
-	it('asks the server nothing on the sign-in screen until the stream is live', async () => {
-		history.pushState({}, '', '/login');
+	it('fetches again after a resync, which covers a change made while the stream was down', async () => {
 		stop = startShortcuts();
-		expect(get).not.toHaveBeenCalled();
-		await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(1));
-		history.pushState({}, '', '/');
+		await vi.waitFor(() => expect(handlers.resync).toBeDefined());
+		await flush();
+		const before = get.mock.calls.length;
+		handlers.resync!();
+		await flush();
+		expect(get.mock.calls.length).toBe(before + 1);
+	});
+
+	describe('without a live stream', () => {
+		beforeEach(() => vi.useFakeTimers());
+		afterEach(() => vi.useRealTimers());
+
+		it('asks the server nothing on the sign-in screen, which opens no stream', () => {
+			handlers.status = 'stopped';
+			stop = startShortcuts();
+			vi.advanceTimersByTime(10_001);
+			expect(get).not.toHaveBeenCalled();
+		});
+
+		it('falls back to asking after a while when the stream is blocked', () => {
+			handlers.status = 'connecting';
+			stop = startShortcuts();
+			vi.advanceTimersByTime(9_000);
+			expect(get).not.toHaveBeenCalled();
+			vi.advanceTimersByTime(1_100);
+			expect(get).toHaveBeenCalledTimes(1);
+		});
 	});
 
 	it('keeps the cached state, quietly, when the fetch fails', async () => {
