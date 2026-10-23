@@ -577,10 +577,9 @@ pub fn apply(store: &Store, filter: &Handle, ips: &SharedIps) -> Result<(), Stri
     let set = IpSet::union(&ip_sets);
     let coverage = set.v4_coverage();
     if coverage > BROAD {
-        tracing::warn!(
-            "subscribed IP lists block {:.0}% of IPv4 addresses; the crawler will see \
-             correspondingly less of the DHT",
-            coverage * 100.0
+        lodestar_log::log_event!(
+            crate::log_events::FILTERS_IP_LISTS_BROAD,
+            percent = (coverage * 100.0).round() as u64
         );
     }
     ips.replace(set);
