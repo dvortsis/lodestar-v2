@@ -440,7 +440,7 @@
       "pr": 133,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": "2026-10-23T06:59:39Z unblocked by B11a; brief drafting (Opus helper) | 2026-10-23T07:17:05Z brief committed; HOLD until B11b merges (needs public overview_response from B11b); slices.yaml deps to gain B11b | 2026-10-23T16:18:01Z launched (Sonnet; brief committed; security-review required) | 2026-10-23T17:08:50Z PR #133 head 15783d6; fresh + security reviewers launched"
+      "notes": "2026-10-23T06:59:39Z unblocked by B11a; brief drafting (Opus helper) | 2026-10-23T07:17:05Z brief committed; HOLD until B11b merges (needs public overview_response from B11b); slices.yaml deps to gain B11b | 2026-10-23T16:18:01Z launched (Sonnet; brief committed; security-review required) | 2026-10-23T17:08:50Z PR #133 head 15783d6; fresh + security reviewers launched | 2026-10-23T17:38:01Z fresh MERGE + security MERGE; merged-tree verify vs main (overlap api tests + generated openapi) running"
     },
     "S-search-4": {
       "status": "pending",
@@ -1441,6 +1441,16 @@
       "from": "B-log1b brief",
       "what": "add crates/log/**, system/**, search index/live.rs, filter lists.rs, api request_log.rs etc. to B-log1b owns",
       "to": "next runner slices.yaml PR"
+    },
+    "digest-stall-hours": {
+      "from": "B11c",
+      "what": "digest.rs:519 hard-codes \"for 2 hours\" copying insights.rs STALL_HOURS; make it pub(crate) and use it; also text \"And N more\" via format_count",
+      "to": "next insights/digest touch"
+    },
+    "s-insights-3-digest-iframe": {
+      "from": "B11c",
+      "what": "S-insights-3 brief: show digest preview in <iframe sandbox srcdoc> without allow-scripts/allow-same-origin; keep root-relative links inert or rewrite",
+      "to": "S-insights-3 brief"
     }
   },
   "blocked_on_owner": [],
