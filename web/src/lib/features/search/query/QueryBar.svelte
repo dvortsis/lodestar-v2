@@ -45,7 +45,7 @@
 	// A query (or `hidden=1`) in the URL needs its text, checks and chips now: a pasted link, back.
 	$effect(() => {
 		const p = page.url.searchParams;
-		if (p.get('q') || p.has('hidden')) void engage();
+		if (p.get('q') || p.get('hidden') === '1') void engage();
 	});
 
 	/** `/` (search.focus): focus with the caret at the end. */
@@ -64,9 +64,18 @@
 		return live;
 	}
 
-	async function openSyntax() {
-		syntaxOpen = true;
-		Syntax = await (await ready())?.loadSyntax();
+	async function openSyntax(event: MouseEvent) {
+		const button = event.currentTarget as HTMLElement;
+		let loaded: SyntaxComponent | undefined;
+		try {
+			loaded = await (await ready())?.loadSyntax();
+		} catch {
+			return; // the chunk didn't load: the button stays, and a press tries again
+		}
+		// Open only if the user is still at the button: a slow load mustn't pull focus from typing.
+		const still = document.activeElement === button || document.activeElement === document.body;
+		Syntax = loaded;
+		if (still) syntaxOpen = true;
 	}
 
 	async function tryQuery(query: string) {
@@ -133,7 +142,7 @@
 				type="button"
 				class="btn btn-ghost {FOCUS_RING} {TARGET_MIN}"
 				aria-haspopup="dialog"
-				onclick={() => void openSyntax()}>{m.search_query_syntax()}</button
+				onclick={(e) => void openSyntax(e)}>{m.search_query_syntax()}</button
 			>
 		{/if}
 	</div>

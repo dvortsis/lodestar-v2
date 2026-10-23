@@ -64,7 +64,7 @@ describe('labels: every AST op', () => {
 		expect(text({ op: 'range', field: 'files', lo: 10_000, hi: null })).toBe(
 			'Files: at least 10,000'
 		);
-		expect(text({ op: 'range', field: 'junk', lo: null, hi: 19 })).toBe('Junk: at most 19');
+		expect(text({ op: 'range', field: 'junk', lo: null, hi: 19 })).toBe('Junk score: at most 19');
 		// Identifiers: never grouped.
 		expect(text({ op: 'range', field: 'year', lo: 2019, hi: 2021 })).toBe('Year: 2019 to 2021');
 		expect(text({ op: 'range', field: 'season', lo: 2, hi: 2 })).toBe('Season: 2');
@@ -99,6 +99,10 @@ describe('labels: every AST op', () => {
 		expect(text({ op: 'tag', key: 'type', any: ['movie', 'tv'] })).toBe('Type: Movie, TV');
 		expect(text({ op: 'tag', key: 'adult', any: ['vr'] })).toBe('Adult type: VR');
 		expect(text({ op: 'tag', key: 'codec', any: ['h265'] })).toBe('Video codec: h265');
+		// A bare `cat:video` (1–100%) reads as "has some"; `bytes:` keeps its percentage.
+		expect(text({ op: 'share', by: 'count', cat: 'video', lo: 1, hi: 100 })).toBe(
+			'Has Video files'
+		);
 		expect(text({ op: 'share', by: 'count', cat: 'video', lo: 80, hi: 100 })).toBe(
 			'Video files: at least 80%'
 		);
@@ -146,6 +150,11 @@ describe('labels: every AST op', () => {
 		expect(shown.length).toBeLessThanOrEqual(81);
 		expect(shown.endsWith('…')).toBe(true);
 		expect(l.text).toContain('.ext29');
+		// The cut never splits an emoji (a surrogate pair): "Release group: " + 64 x lands mid-emoji.
+		const emoji = label({ op: 'tag', key: 'group', any: ['x'.repeat(64) + '😀'.repeat(10)] });
+		const cut = emoji.parts.map((p) => (typeof p === 'string' ? p : p.mono)).join('');
+		expect(cut.endsWith('…')).toBe(true);
+		expect(/[\uD800-\uDBFF]…$/.test(cut)).toBe(false);
 	});
 
 	it('swarm counts, last seen and the time of day (#48)', () => {
@@ -157,8 +166,8 @@ describe('labels: every AST op', () => {
 		expect(text({ op: 'range', field: 'dht', lo: 1200, hi: null })).toBe(
 			'DHT estimate: at least 1,200'
 		);
-		expect(text({ op: 'date', field: 'seen', from: { ago: 86_400 }, to: null })).toMatch(
-			/^Last seen in the last /
+		expect(text({ op: 'date', field: 'seen', from: { ago: 86_400 }, to: null })).toBe(
+			'Last seen in the last 24 hr'
 		);
 		expect(text({ op: 'time_of_day', from: 22 * 60, to: 2 * 60 })).toBe(
 			'Discovered between 22:00 and 02:00 UTC'
