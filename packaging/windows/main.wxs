@@ -132,22 +132,22 @@
     <!-- ===== Custom actions ===== -->
     <!-- Let the service account (LocalService, S-1-5-19) write the data folder. -->
     <CustomAction Id="GrantDataAccess" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="check"
-                  ExeCommand="&quot;[SystemFolder]icacls.exe&quot; &quot;[DATAFOLDER].&quot; /grant *S-1-5-19:(OI)(CI)M" />
+                  ExeCommand="&quot;[System64Folder]icacls.exe&quot; &quot;[DATAFOLDER].&quot; /grant *S-1-5-19:(OI)(CI)M" />
 
     <!-- Opt-in only: runs when the box is ticked. Failure (Defender off or managed by
          another product) does not stop the install. -->
     <CustomAction Id="AddDefenderExclusion" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="ignore"
-                  ExeCommand="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;Add-MpPreference -ExclusionPath '[DATAFOLDER].'&quot;" />
+                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;Add-MpPreference -ExclusionPath '[DATAFOLDER].'&quot;" />
     <CustomAction Id="RemoveDefenderExclusion" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="ignore"
-                  ExeCommand="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;Remove-MpPreference -ExclusionPath '[DATAFOLDER].'&quot;" />
+                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;Remove-MpPreference -ExclusionPath '[DATAFOLDER].'&quot;" />
 
     <!-- Only when asked: REMOVE_DATA=1 on the uninstall command line. -->
     <CustomAction Id="RemoveDataFolder" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="ignore"
-                  ExeCommand="&quot;[SystemFolder]cmd.exe&quot; /c rmdir /s /q &quot;[DATAFOLDER].&quot;" />
+                  ExeCommand="&quot;[System64Folder]cmd.exe&quot; /c rmdir /s /q &quot;[DATAFOLDER].&quot;" />
 
     <!-- The service reads these on start: where its data lives. -->
     <CustomAction Id="SetServiceEnvironment" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="ignore"
-                  ExeCommand="&quot;[SystemFolder]reg.exe&quot; add HKLM\SYSTEM\CurrentControlSet\Services\Lodestar /v Environment /t REG_MULTI_SZ /d &quot;LODESTAR_DATA_DIR=[DATAFOLDER].&quot; /f" />
+                  ExeCommand="&quot;[System64Folder]reg.exe&quot; add HKLM\SYSTEM\CurrentControlSet\Services\Lodestar /v Environment /t REG_MULTI_SZ /d &quot;LODESTAR_DATA_DIR=[DATAFOLDER].&quot; /f" />
 
     <InstallExecuteSequence>
       <Custom Action="GrantDataAccess" After="InstallFiles">NOT Installed</Custom>
