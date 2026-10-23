@@ -2,7 +2,15 @@
 // The licences plugin (scripts/licenses.ts): the SPDX evaluator, which packages a module graph
 // ships, the document it builds, and a real Vite build that emits licenses-<hash>.json and
 // resolves `virtual:licenses` to its URL.
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -15,8 +23,10 @@ import {
 	bundledPackages,
 	evaluate,
 	licenses,
+	nodeFs,
 	packageOf,
 	parseSpdx,
+	repositoryOf,
 	sha256
 } from './licenses.ts';
 
@@ -108,6 +118,12 @@ describe('SPDX evaluator', () => {
 		fails('MIT WITH', 'exception');
 	});
 
+	it('fails WITH when its exception is refused', () => {
+		fails('Apache-2.0 WITH Commons-Clause', 'Commons-Clause (refused exception)');
+		fails('MIT AND (Apache-2.0 WITH commons-clause)', 'refused exception');
+		ok('Apache-2.0 WITH Commons-Clause OR MIT');
+	});
+
 	it('reads the slash form as OR', () => {
 		ok('MIT/Apache-2.0');
 		ok('Apache-2.0 / MIT / MPL-2.0');
@@ -159,21 +175,25 @@ describe('packageOf', () => {
 });
 
 /** An in-memory file system: path -> content. */
-function memFs(all: Record<string, string | undefined>): Fs {
+/** `links` maps a symlink's path to its target. */
+function memFs(all: Record<string, string | undefined>, links: Record<string, string> = {}): Fs {
 	// An undefined value deletes a default file.
 	const files = Object.fromEntries(
 		Object.entries(all).filter((e): e is [string, string] => e[1] !== undefined)
 	);
+	const real = (p: string) => links[p] ?? p;
 	return {
-		exists: (p) => p in files,
+		exists: (p) => real(p) in files,
 		read: (p) => {
-			if (!(p in files)) throw new Error(`ENOENT ${p}`);
-			return files[p]!;
+			if (!(real(p) in files)) throw new Error(`ENOENT ${p}`);
+			return files[real(p)]!;
 		},
 		files: (dir) =>
 			Object.keys(files)
-				.filter((p) => dirname(p) === dir)
-				.map((p) => p.slice(dir.length + 1))
+				.filter((p) => dirname(p) === dir && !(p in links))
+				.map((p) => p.slice(dir.length + 1)),
+		isFile: (p) => p in files && !(p in links),
+		realpath: real
 	};
 }
 
@@ -192,24 +212,28 @@ function pkg(name: string, version: string, extra: Record<string, unknown> = {})
 
 function inputs(
 	over: Partial<Inputs> = {},
-	files: Record<string, string | undefined> = {}
+	files: Record<string, string | undefined> = {},
+	links: Record<string, string> = {}
 ): Inputs {
-	const fs = memFs({
-		'/w/node_modules/svelte/package.json': pkg('svelte', '5.0.0', { license: 'MIT' }),
-		'/w/node_modules/svelte/LICENSE.md': MIT,
-		'/w/node_modules/bits-ui/package.json': pkg('bits-ui', '2.0.0', {
-			license: 'MIT',
-			repository: { url: 'git+https://github.com/huntabyte/bits-ui.git' }
-		}),
-		'/w/node_modules/bits-ui/LICENSE': 'bits licence\n',
-		'/w/node_modules/bits-ui/license.js': 'export {}',
-		'/w/node_modules/svelte-toolbelt/package.json': pkg('svelte-toolbelt', '0.10.6'),
-		'/w/node_modules/svelte-toolbelt/LICENSE': MIT,
-		'/w/node_modules/eslint/package.json': pkg('eslint', '9.0.0', { license: 'MIT' }),
-		'/w/node_modules/daisyui/package.json': pkg('daisyui', '5.0.0', { license: 'MIT' }),
-		'/w/node_modules/daisyui/LICENSE': 'daisy\n',
-		...files
-	});
+	const fs = memFs(
+		{
+			'/w/node_modules/svelte/package.json': pkg('svelte', '5.0.0', { license: 'MIT' }),
+			'/w/node_modules/svelte/LICENSE.md': MIT,
+			'/w/node_modules/bits-ui/package.json': pkg('bits-ui', '2.0.0', {
+				license: 'MIT',
+				repository: { url: 'git+https://github.com/huntabyte/bits-ui.git' }
+			}),
+			'/w/node_modules/bits-ui/LICENSE': 'bits licence\n',
+			'/w/node_modules/bits-ui/license.js': 'export {}',
+			'/w/node_modules/svelte-toolbelt/package.json': pkg('svelte-toolbelt', '0.10.6'),
+			'/w/node_modules/svelte-toolbelt/LICENSE': MIT,
+			'/w/node_modules/eslint/package.json': pkg('eslint', '9.0.0', { license: 'MIT' }),
+			'/w/node_modules/daisyui/package.json': pkg('daisyui', '5.0.0', { license: 'MIT' }),
+			'/w/node_modules/daisyui/LICENSE': 'daisy\n',
+			...files
+		},
+		links
+	);
 	return {
 		root: ROOT,
 		packages: [],
@@ -370,6 +394,130 @@ describe('buildDocument', () => {
 			)
 		);
 		expect(problems[0]).toContain('daisyui 5.0.0: ships no licence text');
+	});
+
+	it('reads only regular licence files inside the package folder', () => {
+		const packages = bundledPackages(GRAPH, ROOT);
+		const secret = '/home/me/.npmrc';
+		const files = { [secret]: '//registry.npmjs.org/:_authToken=secret\n' };
+		const escape = { ...toolbelt, file: '../../../home/me/.npmrc' };
+		const out = buildDocument(inputs({ packages, overrides: { missing: [escape] } }, files));
+		expect(out.problems).toContain(
+			"svelte-toolbelt 0.10.6: licence file '../../../home/me/.npmrc' is outside the package folder; not read"
+		);
+		const absolute = { ...toolbelt, file: secret };
+		expect(
+			buildDocument(inputs({ packages, overrides: { missing: [absolute] } }, files)).problems
+		).toContain(
+			`svelte-toolbelt 0.10.6: licence file '${secret}' is outside the package folder; not read`
+		);
+		// A symlinked LICENSE, named by the override or found in the folder, is refused.
+		const link = { '/w/node_modules/bits-ui/LICENSE-LINK': secret };
+		const linked = buildDocument(
+			inputs({ packages, overrides: { missing: [{ ...toolbelt, file: 'LICENSE-LINK' }] } }, files, {
+				...link,
+				'/w/node_modules/svelte-toolbelt/LICENSE-LINK': secret
+			})
+		);
+		expect(linked.problems).toEqual([
+			"svelte-toolbelt 0.10.6: licence file 'LICENSE-LINK' is a symlink or not a regular file; not read"
+		]);
+		expect(JSON.stringify(linked.doc)).not.toContain('secret');
+		// A path that resolves outside through a symlinked folder is refused too.
+		const viaDir = buildDocument(
+			inputs(
+				{ packages, overrides: { missing: [{ ...toolbelt, file: 'sub/LICENSE' }] } },
+				{ ...files, '/w/node_modules/svelte-toolbelt/sub/LICENSE': 'x\n' },
+				{ '/w/node_modules/svelte-toolbelt/sub/LICENSE': secret }
+			)
+		);
+		expect(viaDir.problems[0]).toContain("'sub/LICENSE' is a symlink");
+	});
+
+	it('requires a version on every missing and file texts override', () => {
+		const packages = bundledPackages(GRAPH, ROOT);
+		const unpinned = { ...toolbelt, version: undefined };
+		expect(
+			buildDocument(inputs({ packages, overrides: { missing: [unpinned] } })).problems
+		).toEqual(['svelte-toolbelt 0.10.6: overrides.json `missing` entry has no `version`']);
+		const extra = { name: 'daisyUI', package: 'daisyui', license: 'MIT' };
+		const text = { ecosystem: 'npm', name: 'daisyui', file: 'licenses/texts/daisy.txt' };
+		const { problems } = buildDocument(
+			inputs(
+				{ overrides: { extra: [extra], texts: [text] } },
+				{ '/w/node_modules/daisyui/LICENSE': undefined, '/w/licenses/texts/daisy.txt': 'd\n' }
+			)
+		);
+		expect(problems).toEqual(['daisyui 5.0.0: overrides.json `texts` entry has no `version`']);
+	});
+
+	it('keeps only http(s) repository URLs', () => {
+		expect(repositoryOf({ repository: 'javascript:alert(1)' })).toBe('');
+		expect(repositoryOf({ repository: 'gitlab:x/y' })).toBe('');
+		expect(repositoryOf({ repository: 'lukeed/clsx' })).toBe('https://github.com/lukeed/clsx');
+		expect(repositoryOf({ repository: 'github:x/y' })).toBe('https://github.com/x/y');
+		expect(repositoryOf({ repository: { url: 'git+ssh://git@github.com/x/y.git' } })).toBe('');
+		expect(repositoryOf({ repository: { url: 'git+https://github.com/x/y.git' } })).toBe(
+			'https://github.com/x/y'
+		);
+		expect(repositoryOf({ homepage: 'http://example.org/' })).toBe('http://example.org/');
+		const packages = bundledPackages(GRAPH, ROOT);
+		const { doc } = buildDocument(
+			inputs(
+				{ packages, overrides: { missing: [toolbelt] } },
+				{
+					'/w/node_modules/bits-ui/package.json': pkg('bits-ui', '2.0.0', {
+						license: 'MIT',
+						repository: 'javascript:alert(1)'
+					})
+				}
+			)
+		);
+		expect(doc.npm[0]!.repository).toBe('');
+	});
+
+	it('flags an extra whose package declares no licence', () => {
+		const extra = { name: 'daisyUI', package: 'daisyui', license: 'MIT' };
+		const { problems } = buildDocument(
+			inputs(
+				{ overrides: { extra: [extra] } },
+				{ '/w/node_modules/daisyui/package.json': pkg('daisyui', '5.0.0') }
+			)
+		);
+		expect(problems).toEqual([
+			"overrides.json `extra` daisyUI: daisyui now says no licence, reviewed as 'MIT'"
+		]);
+	});
+
+	it('refuses real symlinks on disk', () => {
+		const tmp = mkdtempSync(join(tmpdir(), 'licenses-fs-'));
+		try {
+			const pkgDir = join(tmp, 'node_modules', 'evil').replace(/\\/g, '/');
+			mkdirSync(pkgDir, { recursive: true });
+			writeFileSync(join(tmp, 'secret.txt'), 'token=secret\n');
+			writeFileSync(join(pkgDir, 'package.json'), pkg('evil', '1.0.0', { license: 'MIT' }));
+			writeFileSync(join(pkgDir, 'LICENSE'), 'MIT text\n');
+			symlinkSync(join(tmp, 'secret.txt'), join(pkgDir, 'LICENSE-LINK'));
+			expect(nodeFs.files(pkgDir).sort()).toEqual(['LICENSE', 'package.json']);
+			expect(nodeFs.isFile(`${pkgDir}/LICENSE-LINK`)).toBe(false);
+			expect(nodeFs.isFile(`${pkgDir}/LICENSE`)).toBe(true);
+			const evil = { ecosystem: 'npm', name: 'evil', version: '1.0.0', file: 'LICENSE-LINK' };
+			const { doc, problems } = buildDocument(
+				inputs({
+					root: tmp.replace(/\\/g, '/'),
+					packages: [{ name: 'evil', dir: pkgDir }],
+					overrides: { missing: [{ ...evil, license: 'MIT' }] },
+					fs: nodeFs
+				})
+			);
+			expect(problems).toContain(
+				"evil 1.0.0: licence file 'LICENSE-LINK' is a symlink or not a regular file; not read"
+			);
+			expect(doc.npm[0]!.texts).toEqual({ LICENSE: sha256('MIT text\n') });
+			expect(JSON.stringify(doc)).not.toContain('secret');
+		} finally {
+			rmSync(tmp, { recursive: true, force: true });
+		}
 	});
 
 	it('adds reviewed extras that are not in the module graph', () => {

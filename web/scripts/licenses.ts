@@ -12,7 +12,7 @@
 //
 // Node built-ins only (no new dependency). The SPDX evaluator mirrors licenses.py's.
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, posix } from 'node:path';
 import type { Plugin, ResolvedConfig } from 'vite';
@@ -145,6 +145,10 @@ export function evaluate(expr: string, allow: AllowList): Verdict {
 			const results = node.items.map(walk);
 			return node.op === 'or' ? results.some(Boolean) : results.every(Boolean);
 		}
+		if (node.op === 'with' && refused.has(node.exception.toUpperCase())) {
+			failed.push(`${node.id} WITH ${node.exception} (refused exception)`);
+			return false;
+		}
 		const ident = DEPRECATED[node.id] ?? node.id;
 		const key = ident.toUpperCase();
 		if (allowed.has(key)) return true;
@@ -241,8 +245,12 @@ const NOT_TEXT = /\.(js|cjs|mjs|ts|d\.ts|json|map|css|svelte)$/i;
 export interface Fs {
 	exists(path: string): boolean;
 	read(path: string): string;
-	/** File names (not folders) directly in `dir`. */
+	/** Regular files (not folders or symlinks) directly in `dir`. */
 	files(dir: string): string[];
+	/** A regular file, not a symlink or anything else. */
+	isFile(path: string): boolean;
+	/** The path with every symlink resolved. */
+	realpath(path: string): string;
 }
 
 export const nodeFs: Fs = {
@@ -250,11 +258,19 @@ export const nodeFs: Fs = {
 	read: (p) => readFileSync(p, 'utf8'),
 	files: (dir) => {
 		try {
-			return readdirSync(dir).filter((f) => statSync(join(dir, f)).isFile());
+			return readdirSync(dir).filter((f) => lstatSync(join(dir, f)).isFile());
 		} catch {
 			return [];
 		}
-	}
+	},
+	isFile: (p) => {
+		try {
+			return lstatSync(p).isFile();
+		} catch {
+			return false;
+		}
+	},
+	realpath: (p) => realpathSync(p).replace(/\\/g, '/')
 };
 
 export interface LockEntry {
@@ -352,12 +368,19 @@ export interface Inputs {
 
 export const sha256 = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex');
 
-function repositoryOf(pkg: Record<string, unknown>): string {
+/** The package's repository (or homepage) as an http(s) URL, else empty: the page links to it.
+ * npm's `owner/repo` and `github:owner/repo` shorthands mean GitHub; anything else that isn't
+ * http(s) (`javascript:`, `git@…`, `gitlab:…`) is dropped. */
+export function repositoryOf(pkg: Record<string, unknown>): string {
 	const repo = pkg.repository;
 	const url = typeof repo === 'string' ? repo : (repo as { url?: string } | undefined)?.url;
-	return (url ?? (typeof pkg.homepage === 'string' ? pkg.homepage : ''))
+	const cleaned = (url ?? (typeof pkg.homepage === 'string' ? pkg.homepage : ''))
+		.trim()
 		.replace(/^git\+/, '')
 		.replace(/\.git$/, '');
+	const github = /^(?:github:)?([\w.-]+\/[\w.-]+)$/.exec(cleaned);
+	if (github) return `https://github.com/${github[1]}`;
+	return /^https?:\/\/\S+$/i.test(cleaned) ? cleaned : '';
 }
 
 /** Build the licences document and list every problem (a missing or disallowed licence, a stale
@@ -377,13 +400,30 @@ export function buildDocument(input: Inputs): {
 	const used = new Set<string>();
 	const root = input.root.replace(/\\/g, '/');
 
-	const store = (dir: string, extraFile?: string): Texts => {
+	/** Licence texts in a package folder. Only regular files inside it are read: a name that
+	 * leaves it, or a symlink, is reported, so nothing else reaches the public asset. */
+	const store = (dir: string, label: string, extraFile?: string): Texts => {
 		const names = fs.files(dir).filter((f) => TEXT_FILE.test(f) && !NOT_TEXT.test(f));
 		if (extraFile && !names.includes(extraFile)) names.push(extraFile);
 		const out: Texts = {};
+		const refuse = (name: string, why: string) =>
+			problems.push(`${label}: licence file '${name}' ${why}; not read`);
 		for (const name of names.sort()) {
+			if (posix.isAbsolute(name) || /^[a-z]:/i.test(name) || /(^|[\\/])\.\.([\\/]|$)/.test(name)) {
+				refuse(name, 'is outside the package folder');
+				continue;
+			}
 			const path = `${dir}/${name}`;
 			if (!fs.exists(path)) continue;
+			if (!fs.isFile(path)) {
+				refuse(name, 'is a symlink or not a regular file');
+				continue;
+			}
+			const base = fs.realpath(dir);
+			if (!fs.realpath(path).startsWith(`${base}/`)) {
+				refuse(name, 'is outside the package folder');
+				continue;
+			}
 			const text = fs.read(path).replace(/\r\n/g, '\n');
 			const h = sha256(text);
 			texts[h] = text;
@@ -403,7 +443,8 @@ export function buildDocument(input: Inputs): {
 		entry.texts = found;
 		if (o) {
 			usedTexts.add(entry.name);
-			if (o.version && o.version !== entry.version)
+			if (!o.version) problems.push(`${label}: overrides.json \`texts\` entry has no \`version\``);
+			else if (o.version !== entry.version)
 				problems.push(
 					`${label}: overrides.json \`texts\` was reviewed for ${o.version}; check the new version's files and update it`
 				);
@@ -460,7 +501,11 @@ export function buildDocument(input: Inputs): {
 		const override = missing.get(ref.name);
 		if (override) {
 			used.add(ref.name);
-			if (override.version && override.version !== version)
+			if (!override.version)
+				problems.push(
+					`${ref.name} ${version}: overrides.json \`missing\` entry has no \`version\``
+				);
+			else if (override.version !== version)
 				problems.push(
 					`${ref.name} ${version}: overrides.json \`missing\` was reviewed for ${override.version}; check the new version's licence and update it`
 				);
@@ -475,7 +520,7 @@ export function buildDocument(input: Inputs): {
 			license = override.license;
 			entry.license_source = 'override';
 		}
-		textsFor(entry, store(ref.dir, override?.file));
+		textsFor(entry, store(ref.dir, `${ref.name} ${version}`, override?.file));
 		if (!license) {
 			problems.push(
 				`${ref.name} ${version}: no licence field; add a reviewed \`missing\` entry to web/licenses/overrides.json`
@@ -510,9 +555,9 @@ export function buildDocument(input: Inputs): {
 			continue;
 		}
 		const declared = typeof pkg.license === 'string' ? pkg.license : undefined;
-		if (declared && declared !== extra.license)
+		if (declared !== extra.license)
 			problems.push(
-				`overrides.json \`extra\` ${extra.name}: ${extra.package} now says '${declared}', reviewed as '${extra.license}'`
+				`overrides.json \`extra\` ${extra.name}: ${extra.package} now says ${declared ? `'${declared}'` : 'no licence'}, reviewed as '${extra.license}'`
 			);
 		const verdict = evaluate(extra.license, input.allow);
 		if (!verdict.ok)
@@ -527,7 +572,7 @@ export function buildDocument(input: Inputs): {
 			texts: {},
 			extra: { component: extra.name, note: extra.note ?? '' }
 		};
-		textsFor(entry, store(dir));
+		textsFor(entry, store(dir, `${entry.name} ${entry.version}`));
 		npm.push(entry);
 	}
 

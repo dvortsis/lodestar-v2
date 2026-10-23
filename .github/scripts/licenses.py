@@ -188,9 +188,9 @@ class Policy:
 
     def evaluate(self, expr: str) -> Verdict:
         """`OR` passes if any branch passes, `AND` needs every branch, and
-        `X WITH exception` passes when X does. Identifiers match without
-        regard to case, as SPDX specifies; deprecated ones are read as their
-        current form first."""
+        `X WITH exception` passes when X does, unless the exception is refused.
+        Identifiers match without regard to case, as SPDX specifies;
+        deprecated ones are read as their current form first."""
         try:
             tree = parse(expr)
         except SpdxError as e:
@@ -205,6 +205,9 @@ class Policy:
             if kind == "and":
                 results = [walk(n) for n in node[1]]
                 return all(results)
+            if kind == "with" and node[2].upper() in self.refused:
+                failed.append(f"{node[1]} WITH {node[2]} (refused exception)")
+                return False
             ident = canonical(node[1])
             key = ident.upper()
             if key in self.allowed:
@@ -260,23 +263,54 @@ def shipped(meta: dict, root: str = ROOT_PACKAGE) -> list[dict]:
     return [packages[i] for i in seen]
 
 
-def text_files(package: dict) -> dict[str, str]:
-    """Licence texts in the package folder: file name -> text."""
+def text_files(package: dict, problems: list[str] | None = None) -> dict[str, str]:
+    """Licence texts in the package folder: file name -> text.
+
+    Only regular files inside the folder are read: a `license-file` that
+    leaves it (`..`, an absolute path) or any symlink is refused and reported,
+    so a crafted crate can't copy another file into the public rust.json."""
     folder = Path(package["manifest_path"]).parent
+    label = f"{package['name']} {package['version']}"
     out: dict[str, str] = {}
+
+    def refuse(name: str, why: str) -> None:
+        if problems is not None:
+            problems.append(f"{label}: licence file {name!r} {why}; not read")
+
+    if not folder.is_dir():
+        return out
+    base = folder.resolve()
     names = [package["license_file"]] if package.get("license_file") else []
-    if folder.is_dir():
-        names += sorted(
-            f.name
-            for f in folder.iterdir()
-            if f.is_file() and TEXT_FILE.match(f.name) and f.suffix.lower() not in NOT_TEXT
-        )
-    for name in names:
-        path = folder / name
-        if name not in out and path.is_file():
+    names += sorted(
+        f.name
+        for f in folder.iterdir()
+        if TEXT_FILE.match(f.name)
+        and f.suffix.lower() not in NOT_TEXT
+        and (f.is_symlink() or f.is_file())
+    )
+    for name in dict.fromkeys(names):
+        rel = Path(name)
+        path = folder / rel
+        if rel.is_absolute() or ".." in rel.parts:
+            refuse(name, "is outside the package folder")
+            continue
+        # A symlink anywhere between the folder and the file could point anywhere.
+        if any((folder / Path(*rel.parts[: i + 1])).is_symlink() for i in range(len(rel.parts))):
+            refuse(name, "is a symlink")
+            continue
+        if not path.resolve().is_relative_to(base):
+            refuse(name, "is outside the package folder")
+            continue
+        if path.is_file():
             raw = path.read_bytes().decode("utf-8", errors="replace")
             out[name] = raw.replace("\r\n", "\n")
     return out
+
+
+def http_url(url: str | None) -> str:
+    """The URL when it is http(s), else empty: the page links to it."""
+    url = (url or "").strip()
+    return url if re.match(r"https?://[^\s]+$", url, re.IGNORECASE) else ""
 
 
 def sha256(text: str) -> str:
@@ -345,11 +379,13 @@ def generate(
         p = entry["package"]
         expr = p.get("license")
         override = missing.get(name)
-        files = text_files(p)
+        files = text_files(p, problems)
         record: dict = {"name": name, "version": version}
         if override is not None:
             used_overrides.add(name)
-            if override.get("version") not in (None, version):
+            if not override.get("version"):
+                problems.add(f"{name} {version}: overrides.json `missing` entry has no `version`")
+            elif override.get("version") != version:
                 problems.add(
                     f"{name} {version}: overrides.json `missing` was reviewed for "
                     f"{override['version']}; check the new version's licence and update it"
@@ -365,7 +401,9 @@ def generate(
         donor_entry = donors.get(name)
         if donor_entry is not None:
             used_donors.add(name)
-            if donor_entry.get("version") not in (None, version):
+            if not donor_entry.get("version"):
+                problems.add(f"{name} {version}: overrides.json `texts` entry has no `version`")
+            elif donor_entry.get("version") != version:
                 problems.add(
                     f"{name} {version}: overrides.json `texts` was reviewed for "
                     f"{donor_entry['version']}; check the new version's files and update it"
@@ -397,7 +435,7 @@ def generate(
                         "not in the build"
                     )
                 else:
-                    files = text_files(donor)
+                    files = text_files(donor, problems)
                     record["texts_from"] = f"{donor['name']} {donor['version']}"
         if not files:
             problems.add(
@@ -418,7 +456,7 @@ def generate(
             if not verdict.ok:
                 problems.add(f"{name} {version}: licence {expr!r} {verdict.reason}")
         record["license"] = expr
-        record["repository"] = p.get("repository") or ""
+        record["repository"] = http_url(p.get("repository"))
         if any("proc-macro" in t["kind"] for t in p["targets"]):
             record["proc_macro"] = True
         record["targets"] = [t for t in TARGETS if t in entry["targets"]] + sorted(
