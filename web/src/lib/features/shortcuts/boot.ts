@@ -5,7 +5,6 @@
 import { mount, unmount } from 'svelte';
 import { api, latest } from '$lib/api/client';
 import { events } from '$lib/state/events.svelte';
-import { isBareRoute } from '$lib/shell/chrome';
 import { keys } from '$lib/keys';
 import { m } from '$lib/paraglide/messages.js';
 import { ACTION_IDS } from './actions';
@@ -121,8 +120,9 @@ export function startShortcuts(): () => void {
 		fetched = true;
 	};
 	// Not before the shell's stream is live: a request that succeeds tells the shell the server is
-	// up. A blocked stream falls back to a timer, except on the sign-in screens (no session).
-	const timer = isBareRoute(location.pathname) ? undefined : setTimeout(fetchOnce, FALLBACK_MS);
+	// up. A blocked stream falls back to a timer; the sign-in screens open no stream (`stopped`)
+	// and have no session to ask.
+	const timer = setTimeout(() => events.status !== 'stopped' && fetchOnce(), FALLBACK_MS);
 	const offs = [
 		keys.register({
 			id: 'help.shortcuts',
@@ -140,9 +140,14 @@ export function startShortcuts(): () => void {
 		}),
 		onceLive(() => {
 			fetchOnce();
-			return events.on('settings', (e) => {
-				if (e.section === 'preferences') void refresh();
-			});
+			return events.on(
+				'settings',
+				(e) => {
+					if (e.section === 'preferences') void refresh();
+				},
+				// A change made while the stream was down is only found by asking.
+				{ onResync: () => void refresh() }
+			);
 		})
 	];
 	return () => {

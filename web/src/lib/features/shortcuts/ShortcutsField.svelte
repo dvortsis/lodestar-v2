@@ -18,6 +18,7 @@
 		type KeyMap,
 		type Refusal
 	} from './capture';
+	import { isMacPlatform } from '$lib/keys/combo';
 	import Keycap from './Keycap.svelte';
 	import { keyNameFor } from './keyname';
 	import './shortcuts.css';
@@ -38,7 +39,10 @@
 
 	const REFUSALS: Record<Refusal, () => string> = {
 		shift: () => m.shortcuts_err_shift(),
-		modifier: () => m.shortcuts_err_modifier(),
+		modifier: () =>
+			m.shortcuts_err_modifier({
+				modifiers: isMacPlatform() ? 'Ctrl, Option or Cmd' : 'Ctrl, Alt or Win'
+			}),
 		blank: () => m.shortcuts_err_not_visible(),
 		plus: () => m.shortcuts_err_plus()
 	};
@@ -139,6 +143,7 @@
 						{disabled}
 						aria-pressed={capturing === id}
 						aria-label={m.shortcuts_change_label({ action: title })}
+						aria-describedby={msg ? `sc-err-${id}` : undefined}
 						data-testid="shortcut-change-{id}"
 						onclick={() => (capturing === id ? stop() : begin(id))}
 						onblur={() => capturing === id && stop()}
@@ -184,7 +189,7 @@
 					</p>
 				{/if}
 				{#if msg}
-					<p class="sc-note sc-bad" role="alert">
+					<p class="sc-note sc-bad" role="alert" id="sc-err-{id}">
 						<IconError aria-hidden="true" /><span>{msg}</span>
 					</p>
 				{/if}
