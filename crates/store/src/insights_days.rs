@@ -480,6 +480,21 @@ impl Store {
         repair(&self.conn, opts)
     }
 
+    /// When the store last saw activity (unix seconds): the end of the
+    /// newest hour any rollup row was written for (coverage is written
+    /// every 30 s while the server runs), or the newest torrent's
+    /// `metadata_at`, whichever is later. Two primary-key ends. `None` on
+    /// an empty store.
+    pub fn last_activity(&self) -> Result<Option<i64>> {
+        Ok(self.conn.query_row(
+            "SELECT max(coalesce((SELECT (max(hour) + 1) * 3600 FROM rollup_hour), -1),
+                        coalesce((SELECT metadata_at FROM torrents ORDER BY id DESC LIMIT 1), -1))",
+            [],
+            |r| r.get::<_, i64>(0),
+        )?)
+        .map(|t| (t >= 0).then_some(t))
+    }
+
     /// Whether the last start/stop event of `kinds` (`start`, `stop`) is a
     /// start: the server didn't stop cleanly.
     pub fn stopped_uncleanly(&self, start: u32, stop: u32) -> Result<bool> {
@@ -556,8 +571,10 @@ impl Repaired {
 ///   above what's stored; an hour's rows of a metric are replaced only
 ///   where the recount's total is above the stored total; a cohort's
 ///   histogram is replaced only when one of its Searchable cells is
-///   raised. Deletions since lower a recount, and final cohorts never
-///   change, so nothing is ever lowered.
+///   raised (with the recount's midpoint delays). Deletions since lower a
+///   recount, and final cohorts never change, so no total is ever
+///   lowered (a cell inside a replaced hour follows the current
+///   classification).
 /// - Reads `torrents` in id chunks of 20,000, each in its own read
 ///   transaction, then writes in one `BEGIN IMMEDIATE` transaction.
 pub fn repair_rollups(conn: &Connection, opts: RepairOptions) -> Result<Repaired> {
@@ -1573,6 +1590,16 @@ mod tests {
         })
         .unwrap();
         assert!(!s.stopped_uncleanly(1, 2).unwrap());
+    }
+
+    #[test]
+    fn the_last_activity_is_the_newest_rollup_hour_or_torrent() {
+        let mut s = store();
+        assert_eq!(s.last_activity().unwrap(), None);
+        torrent(&s, 5, 0, H * 3600 + 10, None, None, 0);
+        assert_eq!(s.last_activity().unwrap(), Some(H * 3600 + 10));
+        s.add_counters(&[c(H + 3, 12, 1, 0, 30)]).unwrap();
+        assert_eq!(s.last_activity().unwrap(), Some((H + 4) * 3600));
     }
 
     fn imported(s: &Store) -> i64 {

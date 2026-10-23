@@ -731,8 +731,12 @@ fn purge_one(
     let result = (|| -> rusqlite::Result<Counts> {
         let tx = crate::begin_write(&mut conn)?;
         let mut torrents = 0;
-        for id in &ids {
-            torrents += tx.execute("DELETE FROM torrents WHERE id = ?1", [id])?;
+        {
+            // Cached: the delete carries Insights' trigger (V11).
+            let mut delete = tx.prepare_cached("DELETE FROM torrents WHERE id = ?1")?;
+            for id in &ids {
+                torrents += delete.execute([id])?;
+            }
         }
         let mut quarantine = 0;
         if plan.filter {

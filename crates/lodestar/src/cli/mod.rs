@@ -101,11 +101,12 @@ pub enum Command {
     /// Rebuilds, for the window: stored and searchable counts per discovery
     /// cohort, newly stored and newly searchable per hour, the
     /// time-to-searchable histogram, and the imported total. It only raises
-    /// counts. Lodestar runs it by itself over the last 72 hours when it
-    /// starts after an unclean stop.
+    /// totals. Lodestar runs it by itself over the 72 hours before the
+    /// last activity when it starts after an unclean stop.
     ///
-    /// Lost for good: counts from before storage (keys harvested, peers
-    /// found, metadata fetched, losses, drops), coverage and the hourly
+    /// Lost for good: counts from before storage (keys harvested, keys
+    /// reported and rediscovered, peers found, metadata fetched, losses,
+    /// drops), coverage and the hourly
     /// searchable snapshots, and torrents indexed before searchable time
     /// was tracked. Hourly detail older than 30 days is folded into days,
     /// so those days are repaired at daily grain.

@@ -469,14 +469,17 @@ async fn compact(
 /// `lodestar rollup --repair` by itself at start, on the writer's store
 /// before the pipeline takes it (nothing else writes rollups yet), when
 /// the last run didn't stop cleanly: the newest start/stop event is a
-/// start. It recounts what was stored in the last 72 h (the cohorts and
-/// hours from then on), which takes seconds, not a full scan.
+/// start. It recounts what was stored in the 72 h before the store's last
+/// activity (the crash, not now: a box that lost power Friday and starts
+/// Tuesday repairs Friday), which takes seconds, not a full scan.
 pub fn repair_after_unclean_stop(store: &mut Store) -> lodestar_store::Result<Option<Repaired>> {
     use lodestar_pipeline::event;
     if !store.stopped_uncleanly(event::START, event::STOP)? {
         return Ok(None);
     }
-    let since_hour = crate::unix_now().div_euclid(3600) - AUTO_REPAIR_HOURS;
+    let now = crate::unix_now();
+    let last = store.last_activity()?.map_or(now, |t| t.min(now));
+    let since_hour = last.div_euclid(3600) - AUTO_REPAIR_HOURS;
     store
         .repair_rollups(RepairOptions {
             codes: REPAIR_CODES,
@@ -706,6 +709,33 @@ mod tests {
             )
             .unwrap();
         assert_eq!(stored, 1, "only the torrent from the last 72 h");
+
+        // Power lost 5 days ago, started now: the window ends at the
+        // store's last activity, not at now.
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let crash = now - 5 * 86_400;
+        store
+            .connection()
+            .execute_batch(&format!(
+                "INSERT INTO torrents (id, info_hash, name, size, piece_len, piece_count,
+                     file_count, info_size, flags, discovered_at, metadata_at, last_seen_at,
+                     first_source)
+                 VALUES (1, randomblob(20), 'a', 0, 0, 0, 0, 0, 0, {t}, {t}, {t}, 0);",
+                t = crash - 600,
+            ))
+            .unwrap();
+        store
+            .write(&WriteBatch {
+                events: &[Event {
+                    at: crash - 86_400,
+                    kind: event::START,
+                    detail: String::new(),
+                }],
+                ..WriteBatch::default()
+            })
+            .unwrap();
+        let r = repair_after_unclean_stop(&mut store).unwrap().unwrap();
+        assert_eq!((r.scanned, r.cohorts_stored), (1, 1), "{r:?}");
     }
 
     /// The recorder compacts once its first delay has passed, and the run

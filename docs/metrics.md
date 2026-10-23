@@ -447,7 +447,10 @@ into `rollup_day` and `cohort_day` (`day` = Unix time / 86,400). Readers
 take the boundary (`insights_state.compacted_before_day`) in the same
 read transaction as the rows, so a running compaction never counts a day
 twice or drops one. Days below it are read at daily grain (a compacted
-day is final), so any range reaching one is bucketed by day. Late rows
+day is final), so any range reaching one is bucketed by day. With
+Compare, when the previous window reaches a compacted day and the
+current one doesn't, both are bucketed by day: a custom range of 7 days
+or less then widens to whole UTC days. Late rows
 below the boundary (a clock set back, say) are read at once and folded
 the next night. Compaction loses nothing: every response over compacted
 days equals the one before compaction (§10.17, byte goldens).
@@ -486,8 +489,11 @@ each searchable range, lowered by the trigger).
 them (part 2).
 
 **`lodestar rollup --repair`** (offline; also run by the server at start
-after an unclean stop, over the last 72 h) recounts from `torrents` and
-`index_watermark_hour`, and only ever raises a count:
+after an unclean stop, over the 72 h before the store's last activity)
+recounts from `torrents` and `index_watermark_hour`, and never lowers a
+total (a per-type or per-source cell in a replaced hour follows the
+current classification; a raised Searchable cell replaces its cohort's
+histogram with midpoint approximations):
 
 | Rebuilt | From |
 |---|---|
