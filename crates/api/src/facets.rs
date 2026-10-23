@@ -27,7 +27,7 @@ use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{Json, Query, same_origin_json};
 use crate::search::{
     Visibility, base_query, client_of, fingerprint, open_cursor, request_ast, scope_of,
-    search_error, sort_param, unix_now,
+    search_error, sort_param, tz_param, unix_now,
 };
 use crate::{ApiState, auth};
 
@@ -56,6 +56,7 @@ pub fn routes() -> Router<ApiState> {
         ("q" = Option<String>, Query, description = "The query text, as `/search` takes it."),
         ("sort" = Option<String>, Query, description = "The search's sort; checked against `lease`."),
         ("hidden" = Option<bool>, Query, description = "Include torrents a filter rule hid (§20.3)."),
+        ("tz" = Option<i32>, Query, description = "The user's zone for `time:`, in minutes east of UTC (−840 to 840), as `/search`."),
         ("lease" = Option<String>, Query, description = "A search's `next_cursor`: count its index snapshot. Send the same `q`, `sort` and `hidden`."),
         ("limit.{facet}" = Option<usize>, Query, description = "Values listed for one facet (`limit.ext=20`): 1–100, 8 by default."),
     ),
@@ -109,6 +110,7 @@ fn from_params(p: BTreeMap<String, String>) -> ApiResult<FacetsRequest> {
             "q" => r.q = Some(v),
             "sort" => r.sort = Some(v),
             "lease" => r.lease = Some(v),
+            "tz" => r.tz = Some(v.parse().map_err(|_| bad_parameter(k))?),
             "hidden" => {
                 r.hidden = Some(match v.as_str() {
                     "true" | "1" => true,
@@ -170,6 +172,7 @@ async fn run_facets(
     let ast = request_ast(p.ast, p.q)?;
     let sort = sort_param(p.sort.as_deref())?;
     let limits = limits(&p.limits)?;
+    let tz = tz_param(p.tz)?;
     let visibility = Visibility {
         hidden: p.hidden.unwrap_or(false),
         adult: s.adult.shown(),
@@ -234,6 +237,7 @@ async fn run_facets(
             scope: &scope_of(visibility),
             sort,
             now: unix_now(),
+            utc_offset: tz * 60,
         };
         let (cache, serving) = (search.cache(), search.index());
         let (got, _) = match &lease {

@@ -78,8 +78,10 @@ pub struct SearchRequest {
     /// could produce.
     #[schema(value_type = Option<AstNode>)]
     pub ast: Option<Node>,
-    /// `relevance` (the default), or `discovered`, `size` or `files` with
-    /// an optional `+` (ascending) or `-` (descending, the default).
+    /// `relevance` (the default), or `discovered`, `size`, `files`,
+    /// `seeders`, `leechers`, `trackers` or `seen` with an optional `+`
+    /// (ascending) or `-` (descending, the default). Never-scraped
+    /// torrents sort last either way.
     #[schema(example = "-discovered")]
     pub sort: Option<String>,
     /// Results per page: 1–200, 50 by default.
@@ -88,6 +90,9 @@ pub struct SearchRequest {
     pub offset: Option<usize>,
     /// Include torrents a filter rule hid (§20.3).
     pub hidden: Option<bool>,
+    /// The user's zone for `time:`, in minutes east of UTC (−840 to 840);
+    /// 0 by default.
+    pub tz: Option<i32>,
     /// The previous page's `next_cursor`, to read the next page from the
     /// same index snapshot. Send the same `q` (or `ast`), `sort` and
     /// `hidden` with it.
@@ -230,6 +235,8 @@ pub struct SearchHit {
     /// Null = never scraped.
     #[schema(required = true)]
     pub last_scrape_at: Option<i64>,
+    /// The latest DHT sighting.
+    pub last_seen_at: i64,
     /// Null = never scraped.
     #[schema(required = true)]
     pub leechers: Option<u32>,
@@ -251,7 +258,11 @@ pub struct SearchHit {
     /// Null = never scraped.
     #[schema(required = true)]
     pub seeders: Option<u32>,
+    /// No tracker reported: the counts are the DHT's estimate (show ≈).
+    pub seeders_approx: bool,
     pub size: u64,
+    /// One tracker reports a swarm nothing else sees (§8): fake seeding.
+    pub swarm_suspect: bool,
     /// The resolved title; null = not resolved.
     #[schema(required = true)]
     pub title: Option<String>,
@@ -265,18 +276,20 @@ pub struct SearchHit {
 }
 
 /// How a first page was ranked (`?explain=1`, architecture §8). Field
-/// names are stable. Relevance is `phase1 + phase2.name + phase2.title`
-/// (to float rounding); the other features and the priors aren't part of
-/// ranking yet and are null.
+/// names are stable. Relevance is `(phase1 + phase2.name + phase2.title)`
+/// times each of `priors` (to float rounding); a prior the ranking
+/// doesn't apply is null, and counts as 1. The other phase-2 features
+/// aren't part of ranking yet and are null.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct SearchExplain {
     /// One per hit, in the hits' order.
     pub hits: Vec<ExplainHit>,
     /// `relevance`, or the field the hits are sorted by (`discovered`,
-    /// `size`, `files`), when no hit has relevance parts.
+    /// `size`, `files`, `seeders`, `leechers`, `trackers`, `seen`), when
+    /// no hit has relevance parts.
     pub ranked_by: String,
     /// Whether phase 2 re-ranked the phase-1 candidates: the query has
-    /// unfielded words.
+    /// unfielded words, or the server ranks with the swarm priors.
     pub two_phase: bool,
     pub weights: ExplainWeights,
 }
@@ -333,8 +346,9 @@ pub struct ExplainPhase2 {
     pub title: f64,
 }
 
-/// The quality priors (§8), multiplied onto relevance once ranking has
-/// them (with swarm health, M4); until then each is null.
+/// The quality priors (§8), multipliers on relevance from swarm health
+/// (M4): null when the ranking doesn't apply them (no swarm data served,
+/// or a field sort).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct ExplainPriors {
     #[schema(required = true)]
@@ -456,6 +470,13 @@ pub enum AstNode {
         lo: u8,
         hi: u8,
     },
+    /// The time of day a torrent was discovered, in minutes after
+    /// midnight, inclusive; `from > to` wraps past midnight. The search's
+    /// `tz` applies.
+    TimeOfDay {
+        from: u16,
+        to: u16,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -478,6 +499,10 @@ pub enum AstNumField {
     Season,
     Episode,
     Junk,
+    Seeders,
+    Leechers,
+    Trackers,
+    Dht,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -506,6 +531,8 @@ pub enum AstShareBy {
 #[serde(rename_all = "snake_case")]
 pub enum AstDateField {
     Discovered,
+    /// Last seen in the DHT.
+    Seen,
 }
 
 /// One end of a date range: seconds before the search (`ago`), or a Unix
@@ -535,6 +562,7 @@ mod tests {
         "type:movie,tv res:4K hdr:dv codec:x265 audio:DD+ lang:fr group:NTb has:nfo resolved:files adult:scene",
         "file:(ext:flac size:>50MB) -file:sample",
         "cat:video>=80% bytes:video=10..50",
+        "seeders:>=5 leechers:<10 trackers:3.. dht:>0 seen:<7d time:22:00..02:00",
     ];
 
     #[test]
@@ -553,8 +581,24 @@ mod tests {
             assert_eq!(again, node, "{q}");
         }
         let all = [
-            "all", "and", "date", "ext", "file", "flag", "fuzzy", "hash", "near", "not", "or",
-            "phrase", "prefix", "range", "share", "tag", "word",
+            "all",
+            "and",
+            "date",
+            "ext",
+            "file",
+            "flag",
+            "fuzzy",
+            "hash",
+            "near",
+            "not",
+            "or",
+            "phrase",
+            "prefix",
+            "range",
+            "share",
+            "tag",
+            "time_of_day",
+            "word",
         ];
         assert_eq!(ops.into_iter().collect::<Vec<_>>(), all.map(String::from));
     }

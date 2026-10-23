@@ -331,6 +331,8 @@ fn fixture_with(ops: bool, intensity_env: Option<&str>) -> Fixture {
             user_data: None,
             adult: Default::default(),
             insights: None,
+            hot: None,
+            events: None,
         }),
     );
     Fixture {

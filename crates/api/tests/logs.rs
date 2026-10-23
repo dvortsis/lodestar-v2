@@ -256,6 +256,8 @@ fn fixture(source: Option<Arc<Fake>>) -> Fixture {
             user_data: None,
             adult: Default::default(),
             insights: None,
+            hot: None,
+            events: None,
         }),
     );
     if let Some(s) = source {

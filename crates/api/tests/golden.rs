@@ -224,6 +224,8 @@ fn fixture() -> Fixture {
             index: Some(index.into()),
             reader: Arc::new(Mutex::new(reader)),
             filters: Some(api.clone()),
+            hot: None,
+            events: None,
             settings: None,
             ops: None,
             user_data: Some(Arc::new(Mutex::new(
@@ -632,7 +634,7 @@ async fn search_and_parse_endpoints() {
     golden(
         &f,
         "search_unknown_sort",
-        get("/api/v1/search?q=x&sort=seeders", c),
+        get("/api/v1/search?q=x&sort=popularity", c),
     )
     .await;
     golden(
@@ -1204,6 +1206,8 @@ async fn filters_without_an_index_or_filters() {
                     Store::open_reader(&db, StoreConfig::default()).unwrap(),
                 )),
                 filters,
+                hot: None,
+                events: None,
                 settings: None,
                 ops: None,
                 user_data: None,

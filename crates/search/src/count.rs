@@ -251,7 +251,7 @@ impl<'a> Matcher<'a> {
     ) -> tantivy::Result<Matcher<'a>> {
         Ok(Matcher {
             docs: weight.scorer(reader, 1.0)?,
-            checks: filter::checks(&compiled.filters, reader)?,
+            checks: filter::checks(&compiled.filters, reader, compiled.hot.as_ref())?,
             alive: reader.alive_bitset(),
             cancel,
             since_check: 0,
