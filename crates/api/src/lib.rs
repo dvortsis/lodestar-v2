@@ -42,6 +42,7 @@ mod saved;
 mod search;
 pub mod settings;
 mod suggest;
+pub mod system;
 mod torrents;
 mod user_items;
 
@@ -103,6 +104,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(collections::routes())
         .merge(saved::routes())
         .merge(jobs::routes())
+        .merge(system::routes())
         .merge(openapi::routes())
         // What `auth::protected` checks sessions against.
         .layer(Extension(auth::SessionAuth::of(&state)))

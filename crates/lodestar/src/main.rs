@@ -16,6 +16,7 @@ mod privdrop;
 mod services;
 mod settings;
 mod subscriptions;
+mod system;
 mod web;
 #[cfg(test)]
 mod web_build;
@@ -88,7 +89,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Command::Healthcheck => match load(config_path) {
-            Ok(config) => match healthcheck(settings::network::effective_bind(&config)) {
+            Ok(config) => match healthcheck(system::address::health_bind(&config)) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {
                     eprintln!("unhealthy: {e}");
@@ -168,7 +169,29 @@ fn init_logging(filter: &str) {
 }
 
 async fn serve(config: Config) -> Result<(), BoxError> {
-    Services::start(&config).await?.run(shutdown_signal()).await
+    // Stop on a signal, or restart when asked (`POST /system/restart`):
+    // both take the same graceful shutdown. A signal wins, even during a
+    // restart's shutdown.
+    let restart = system::Restart::global();
+    let (signalled, mut stopped) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        let _ = signalled.send(true);
+    });
+    let mut signal = stopped.clone();
+    let stop = async move {
+        tokio::select! {
+            _ = signal.changed() => {}
+            () = restart.requested() => {}
+        }
+    };
+    Services::start(&config).await?.run(stop).await?;
+    if restart.was_requested() && !*stopped.borrow_and_update() {
+        // Returns only if the exec failed: exit non-zero, so a restart
+        // policy takes over.
+        return Err(format!("restarting: {}", system::restart::reexec()).into());
+    }
+    Ok(())
 }
 
 /// `lodestar import-bitmagnet`: everything from a bitmagnet database into
