@@ -434,13 +434,13 @@
       }
     },
     "B11c": {
-      "status": "running",
+      "status": "review",
       "model": "sonnet",
       "session": "session_012e8PrH9usRM4twmna4anjC",
-      "pr": null,
+      "pr": 133,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": "2026-10-23T06:59:39Z unblocked by B11a; brief drafting (Opus helper) | 2026-10-23T07:17:05Z brief committed; HOLD until B11b merges (needs public overview_response from B11b); slices.yaml deps to gain B11b | 2026-10-23T16:18:01Z launched (Sonnet; brief committed; security-review required)"
+      "notes": "2026-10-23T06:59:39Z unblocked by B11a; brief drafting (Opus helper) | 2026-10-23T07:17:05Z brief committed; HOLD until B11b merges (needs public overview_response from B11b); slices.yaml deps to gain B11b | 2026-10-23T16:18:01Z launched (Sonnet; brief committed; security-review required) | 2026-10-23T17:08:50Z PR #133 head 15783d6; fresh + security reviewers launched"
     },
     "S-search-4": {
       "status": "pending",
