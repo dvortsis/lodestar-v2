@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T06:36:24Z",
+ "updated_at": "2026-10-23T06:38:50Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -909,7 +909,7 @@
    "pr": null,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "from #86 | 05:02 launched after B2b merge (brief by Opus helper, runner-reviewed; steward from start)."
+   "notes": "from #86 | 05:02 launched after B2b merge (brief by Opus helper, runner-reviewed; steward from start). | 2026-10-23T06:38:50Z heartbeat: fixing self-review items, PR not yet open"
   },
   "B-log2": {
    "status": "pending",
@@ -972,7 +972,7 @@
    "pr": 92,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 01:05 PR #92; told: env release/nightly on jobs, signing reqs in PR desc for B-update. | 01:27 d9b3ef0 MSI: ProgramData ACL inheritance removed, LocalService, firewall Private-only, Defender opt-in; PRESHUTDOWN left to M6-win. MSI smoke iterating. | 01:48 8d4f971 MSI: NT SERVICE\\Lodestar, empty folder + icacls matching acl.rs, PreShutdownDelay 60s, foreign-owner stop. Review when MSI smoke green. | 02:17 secure-datadir.ps1 creates folder with SD; runner: marker trust on existing folder needs protected strict DACL + top-level owners (match M6-win). WiX smoke not green yet."
+   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 01:05 PR #92; told: env release/nightly on jobs, signing reqs in PR desc for B-update. | 01:27 d9b3ef0 MSI: ProgramData ACL inheritance removed, LocalService, firewall Private-only, Defender opt-in; PRESHUTDOWN left to M6-win. MSI smoke iterating. | 01:48 8d4f971 MSI: NT SERVICE\\Lodestar, empty folder + icacls matching acl.rs, PreShutdownDelay 60s, foreign-owner stop. Review when MSI smoke green. | 02:17 secure-datadir.ps1 creates folder with SD; runner: marker trust on existing folder needs protected strict DACL + top-level owners (match M6-win). WiX smoke not green yet. | 2026-10-23T06:38:50Z heartbeat: session idle since 04:29 on usage limit (reset); woken to merge main + fix MSI job"
   },
   "M6-cli": {
    "status": "merged",
@@ -1320,7 +1320,7 @@
  },
  "blocked_on_owner": [],
  "launches_today": 16,
- "last_heartbeat": "2026-10-22T20:39Z",
+ "last_heartbeat": "2026-10-23T06:38:50Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
  "runner_prs_open": {
