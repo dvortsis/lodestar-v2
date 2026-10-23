@@ -438,7 +438,7 @@ pub fn render_search(out: &mut String, docs: u64, stats: &lodestar_search::Index
     o.one(
         "search_indexed_total",
         "counter",
-        "Torrents indexed since start.",
+        "Torrents indexed or re-indexed since start, counted at commit.",
         get(&stats.indexed),
     );
     o.one(
@@ -450,7 +450,7 @@ pub fn render_search(out: &mut String, docs: u64, stats: &lodestar_search::Index
     o.one(
         "search_errors_total",
         "counter",
-        "Indexer read errors.",
+        "Indexer errors (store reads and commits); each is retried.",
         get(&stats.errors),
     );
     o.one(
