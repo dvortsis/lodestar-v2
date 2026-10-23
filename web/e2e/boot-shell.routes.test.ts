@@ -207,7 +207,9 @@ test('keyboard focus survives the swap: Tab before the app loads, same stop afte
 	release();
 	await expect(page.locator('#boot')).toHaveCount(0);
 	await expect(page.getByRole('link', { name: 'Skip to main content' })).toBeFocused();
-	// And in the bar: the next Tab lands on the brand, then the destinations, as before.
+	// And in the bar: the next Tab lands on the brand, then the destinations, as before. The full bar
+	// replaces the static one after the first frame; wait for it so the Tab does not race that swap.
+	await expect(page.getByTestId('more-button')).toBeAttached();
 	await page.keyboard.press('Tab');
 	await expect(page.getByRole('link', { name: 'Lodestar, home' })).toBeFocused();
 });
