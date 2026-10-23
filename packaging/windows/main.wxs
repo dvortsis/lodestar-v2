@@ -33,7 +33,8 @@
              Manufacturer="Lodestar"
              InstallerVersion="500"
              Compressed="yes"
-             InstallScope="perMachine" />
+             InstallScope="perMachine"
+             Platform="x64" />
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of Lodestar is already installed." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
