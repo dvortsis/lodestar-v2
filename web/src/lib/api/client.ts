@@ -9,6 +9,7 @@ const AUTH_PAGES = ['/login', '/setup'];
 
 export type ErrorBody = components['schemas']['ErrorBody'];
 type ErrorEnvelope = components['schemas']['ErrorEnvelope'];
+type SettingsErrorEnvelope = components['schemas']['SettingsErrorEnvelope'];
 
 export class ApiError extends Error {
 	readonly status: number;
@@ -23,12 +24,17 @@ export class ApiError extends Error {
 	readonly setupRequired?: boolean;
 	/** On a 428 from `POST /filters/apply`: the warning to show first (envelope top level). */
 	readonly assessment?: ErrorEnvelope['assessment'];
+	/** A refused settings change: the section at fault. */
+	readonly section?: string;
+	/** On a 409 `stale_revision`: each stale section's values now (envelope top level). */
+	readonly current?: SettingsErrorEnvelope['current'];
 	constructor(
 		status: number,
 		code: string,
 		message: string,
 		extra: Pick<ErrorBody, 'field' | 'start' | 'end'> &
-			Pick<ErrorEnvelope, 'setup_required' | 'assessment'> & { retryAfter?: number } = {}
+			Pick<ErrorEnvelope, 'setup_required' | 'assessment'> &
+			Pick<SettingsErrorEnvelope, 'current'> & { section?: string; retryAfter?: number } = {}
 	) {
 		super(message);
 		this.name = 'ApiError';
@@ -40,6 +46,8 @@ export class ApiError extends Error {
 		this.retryAfter = extra.retryAfter;
 		this.setupRequired = extra.setup_required;
 		this.assessment = extra.assessment;
+		this.section = extra.section;
+		this.current = extra.current;
 	}
 }
 
@@ -72,7 +80,9 @@ export function parseRetryAfter(value: string | null, now = Date.now()): number 
 /** Turns a non-2xx response into an `ApiError` (envelope, or `http_<status>` for other bodies). */
 export async function errorFromResponse(res: Response): Promise<ApiError> {
 	const retryAfter = parseRetryAfter(res.headers.get('Retry-After'));
-	let body: Partial<Omit<ErrorEnvelope, 'error'>> & { error?: Partial<ErrorBody> } = {};
+	let body: Partial<Omit<ErrorEnvelope, 'error'>> &
+		Pick<SettingsErrorEnvelope, 'current'> & { error?: Partial<ErrorBody> & { section?: string } } =
+		{};
 	try {
 		body = (await res.json()) ?? {};
 	} catch (x) {
@@ -87,7 +97,9 @@ export async function errorFromResponse(res: Response): Promise<ApiError> {
 			end: e.end,
 			retryAfter,
 			setup_required: body.setup_required,
-			assessment: body.assessment
+			assessment: body.assessment,
+			section: e.section,
+			current: body.current
 		});
 	}
 	return new ApiError(res.status, `http_${res.status}`, res.statusText, { retryAfter });
