@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::Info;
-use lodestar_search::natural::natural;
+use lodestar_search::natural::{Piece, natural};
 use lodestar_search::query::TagKey;
 use lodestar_search::suggest::{self, Kind, Request, Shown, Suggestion};
 use lodestar_search::{CancelToken, LiveConfig, LiveIndexer, Node, SearchIndex, parse};
@@ -347,6 +347,18 @@ fn smart_chips_reuse_the_recognisers() {
     assert_eq!(chip("2008"), [("year:2008".to_string(), Some(2))]);
     assert_eq!(chip("movie"), [("type:movie".to_string(), Some(4))]);
     assert!(chip("knight").is_empty());
+    // Only a token that is the value alone: a release name isn't a chip.
+    for name in [
+        "Naruto.S01E02.1080p",
+        "naruto.1080p",
+        "x265,naruto",
+        "flac/naruto",
+        "naruto\u{3000}1080p",
+        "4k\u{a0}movies",
+    ] {
+        assert!(chip(name).is_empty(), "{name}");
+    }
+    assert_eq!(chip("h.264"), [("codec:h264".to_string(), Some(5))]);
     // Negated: the `-` stays.
     let got = suggest_at(&f.index, "-x265", PLAIN, 8);
     let s = got.iter().find(|s| s.kind == Kind::Chip).unwrap();
@@ -707,7 +719,7 @@ const NATURAL: &[(&str, &str)] = &[
     ("-cam 4k", "-cam res:2160p"),
     ("-x265 movies", "-x265 type:movie"),
     ("!cam", "-cam"),
-    ("movies -type:tv", "type:movie -type:tv"),
+    ("movies -type:tv", "movies -type:tv"),
     ("res:1080p movies", "res:1080p type:movie"),
     ("ext:mkv,avi", "ext:mkv,avi"),
     ("a OR b", "a | b"),
@@ -719,6 +731,25 @@ const NATURAL: &[(&str, &str)] = &[
     ("dark NEAR knight 4k", "dark NEAR/5 knight res:2160p"),
     ("(4k | 1080p) movies", "(4k | 1080p) type:movie"),
     ("naruto (2002)", "naruto 2002"),
+    // A token with more in it than one value isn't a chip: a pasted
+    // release name keeps all its text.
+    ("Naruto.S01E02.1080p", "Naruto.S01E02.1080p"),
+    ("the.matrix.1999.1080p", "the.matrix.1999.1080p"),
+    ("naruto.1080p", "naruto.1080p"),
+    ("x265,naruto", "x265,naruto"),
+    ("flac/naruto", "flac/naruto"),
+    ("naruto\u{3000}1080p", "naruto\u{3000}1080p"),
+    ("進撃の巨人\u{3000}4k", "進撃の巨人\u{3000}4k"),
+    ("4k\u{a0}movies", "4k\u{a0}movies"),
+    ("dd5.1 h.264", "audio:ac3 codec:h264"),
+    // A field the query names itself is left alone; values of one field
+    // merge across the AND group.
+    ("-type:tv tv shows", "-type:tv tv shows"),
+    ("movies -type:movie", "movies -type:movie"),
+    ("-ext:mkv mkv files", "-ext:mkv mkv files"),
+    ("res:1080p 4k", "res:1080p 4k"),
+    ("movies -x tv shows", "type:movie,tv -x"),
+    ("x ! y", "x ! y"),
     ("naruto [2002]", "naruto year:2002"),
     (
         "720p x264 tv series episodes 1 to 10",
@@ -796,17 +827,68 @@ const SYNTAX: &[&str] = &[
     "~knigth",
     "comput*",
     "-\"cam rip\"",
+    "-(4k | x)",
+    "OR",
+    "|",
+    "AND",
+    "NEAR",
+    "NEAR/3",
+    "year:2001",
+    "-ext:mkv",
 ];
 
-/// Whether `want` is `n` or one of its parts.
-fn contains(n: &Node, want: &Node) -> bool {
-    if n == want {
-        return true;
+/// `n` with each placeholder word `zzrun{i}` replaced by `run(i)`
+/// (`None`: dropped).
+fn substitute(n: &Node, run: &dyn Fn(usize) -> Option<Node>) -> Option<Node> {
+    Some(match n {
+        Node::Word { word, .. } if word.starts_with("zzrun") => {
+            return run(word[5..].parse().unwrap());
+        }
+        Node::And { of } => Node::And {
+            of: of.iter().filter_map(|c| substitute(c, run)).collect(),
+        },
+        Node::Or { of } => Node::Or {
+            of: of.iter().filter_map(|c| substitute(c, run)).collect(),
+        },
+        Node::Not { of } => Node::Not {
+            of: Box::new(substitute(of, run)?),
+        },
+        n => n.clone(),
+    })
+}
+
+/// Nested ANDs (and ORs) spliced into their parents, one-clause ones
+/// unwrapped, empty ones dropped.
+fn flat(n: Option<Node>) -> Option<Node> {
+    fn splice(of: Vec<Node>, and: bool) -> Vec<Node> {
+        let mut out = Vec::new();
+        for c in of.into_iter().filter_map(|c| flat(Some(c))) {
+            match c {
+                Node::And { of } if and => out.extend(of),
+                Node::Or { of } if !and => out.extend(of),
+                Node::All => {}
+                c => out.push(c),
+            }
+        }
+        out
     }
-    match n {
-        Node::And { of } | Node::Or { of } => of.iter().any(|c| contains(c, want)),
-        Node::Not { of } | Node::File { of } => contains(of, want),
-        _ => false,
+    let wrap = |mut of: Vec<Node>, and: bool| match of.len() {
+        0 => None,
+        1 => of.pop(),
+        _ => Some(if and {
+            Node::And { of }
+        } else {
+            Node::Or { of }
+        }),
+    };
+    match n? {
+        Node::And { of } => wrap(splice(of, true), true),
+        Node::Or { of } => wrap(splice(of, false), false),
+        Node::Not { of } => Some(Node::Not {
+            of: Box::new(flat(Some(*of))?),
+        }),
+        Node::All => None,
+        n => Some(n),
     }
 }
 
@@ -894,33 +976,90 @@ proptest! {
         }
     }
 
-    /// A token already in query syntax means the same after natural
-    /// phrasing: its parsed node is in the proposal as it was.
+    /// Natural phrasing changes only what its plain runs say, never the
+    /// query's structure: the proposal is the strict parse with each run
+    /// replaced by its reading (nested ANDs flattened), and that skeleton
+    /// is the strict parse's.
     #[test]
     fn natural_keeps_explicit_syntax(
         parts in prop::collection::vec(
             prop_oneof![
-                prop::sample::select(SYNTAX.to_vec()).prop_map(|s| (s.to_owned(), true)),
-                vocabulary().prop_map(|w| (w, false)),
+                prop::sample::select(SYNTAX.to_vec()).prop_map(str::to_owned),
+                vocabulary(),
             ],
-            1..8,
+            1..9,
         ),
     ) {
-        let phrase: Vec<&str> = parts.iter().map(|(p, _)| p.as_str()).collect();
-        let phrase = phrase.join(" ");
+        let phrase = parts.join(" ");
         let Ok(n) = natural(&phrase) else {
             // Not a query: `/parse` answers it with the syntax error.
             prop_assert!(parse(&phrase).is_err(), "{}", phrase);
             return Ok(());
         };
-        // What the strict parse makes of each syntax token (a `NEAR`
-        // may absorb a fielded word), natural phrasing keeps.
         let strict = parse(&phrase).unwrap();
-        for (p, _) in parts.iter().filter(|(_, syntax)| *syntax) {
-            let node = parse(p).unwrap();
-            if contains(&strict, &node) {
-                prop_assert!(contains(&n.ast, &node), "{} lost {} in {}", phrase, p, n.canonical);
-            }
+        let pieces = lodestar_search::natural::pieces(&phrase).unwrap();
+        let ph = |i: usize| format!("zzrun{i}");
+        let Ok(skeleton) = parse(&lodestar_search::natural::join(&pieces, Some(&ph))) else {
+            return Err(TestCaseError::fail(format!("no skeleton for {phrase}")));
+        };
+        let runs: Vec<(String, String)> = pieces
+            .iter()
+            .filter_map(|p| match p {
+                Piece::Run { text, read } => Some((text.clone(), read.clone())),
+                Piece::Syntax(_) => None,
+            })
+            .collect();
+        // The skeleton with the runs as written is the strict parse.
+        let as_written = substitute(&skeleton, &|i| parse(&runs[i].0).ok());
+        prop_assert_eq!(flat(as_written), flat(Some(strict.clone())), "{}", phrase);
+        // With the runs as read, it's the proposal (unless it fell back
+        // to the query as typed).
+        if lodestar_search::query::parse(&lodestar_search::natural::join(&pieces, None)).is_ok() {
+            let as_read = substitute(&skeleton, &|i| {
+                (!runs[i].1.is_empty()).then(|| parse(&runs[i].1).unwrap())
+            });
+            prop_assert_eq!(flat(as_read), flat(Some(n.ast.clone())), "{}", phrase);
+        } else {
+            prop_assert_eq!(&n.ast, &strict);
+        }
+    }
+
+    /// No plain word is lost: each is kept as text, in a chip's range,
+    /// or a linking word the rules may drop.
+    #[test]
+    fn natural_loses_no_word(
+        words in prop::collection::vec(
+            prop_oneof![
+                prop::sample::select(vec![
+                    "4k", "1080p", "movies", "tv", "shows", "from", "2020", "over", "10gb",
+                    "x265", "flac", "mkv", "french", "season", "2", "naruto.1080p",
+                    "Naruto.S01E02.1080p", "x265,naruto", "flac/naruto", "4k\u{a0}movies",
+                    "naruto\u{3000}1080p", "the", "and", "!", "dolby", "vision", "dd5.1",
+                ])
+                .prop_map(str::to_owned),
+                "[a-z0-9.,/]{1,10}",
+            ],
+            1..10,
+        ),
+    ) {
+        let phrase = words.join(" ");
+        let Ok(n) = natural(&phrase) else {
+            // `/x` is regex syntax: not a query yet.
+            prop_assert!(parse(&phrase).is_err(), "{}", phrase);
+            return Ok(());
+        };
+        let mut at = 0;
+        for w in &words {
+            let start = at;
+            at += w.chars().count() + 1;
+            let end = start + w.chars().count();
+            let in_chip = n.read.iter().any(|r| r.0 < end && start < r.1);
+            let trimmed = w.trim_matches(|c: char| "[]{},.;:!?'".contains(c));
+            let kept = n.text.iter().any(|t| t == w || t == trimmed);
+            prop_assert!(
+                kept || in_chip || lodestar_search::natural::is_filler(trimmed),
+                "{:?} lost from {:?}: {}", w, phrase, n.canonical
+            );
         }
     }
 

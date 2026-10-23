@@ -65,6 +65,9 @@ const MAX_TERMS: usize = 4096;
 const FUZZY_WORDS: usize = 2;
 /// Fuzzy candidates checked against the index per word.
 const FUZZY_CHECKED: usize = 4;
+/// A title's live count is checked up to this many torrents per offered
+/// title: a keystroke never walks a huge title's whole match list.
+const LIVE_CAP: usize = 1000;
 /// Spare titles looked up beyond the limit, for those the existence
 /// check drops.
 const TITLE_SPARE: usize = 4;
@@ -499,17 +502,24 @@ fn titles(
         }
         // The FST may be a build behind: a title hidden or purged since
         // isn't offered, and its count is never more than the torrents
-        // the request may see now (counted up to the FST's, so bounded).
-        let live = cx.count_up_to(node, t.count as usize)?;
+        // the request may see now. That's counted up to the FST's count
+        // or [`LIVE_CAP`]: past the cap the FST's count stands.
+        let cap = (t.count as usize).min(LIVE_CAP);
+        let live = cx.count_up_to(node, cap)?;
         if live == 0 {
             continue;
         }
+        let count = if live < cap {
+            live as u64
+        } else {
+            u64::from(t.count)
+        };
         out.push(Suggestion {
             kind: Kind::Title,
             text: t.display,
             insert,
             replace,
-            count: Some(u64::from(t.count).min(live as u64)),
+            count: Some(count),
         });
     }
     Ok(out)
@@ -536,24 +546,8 @@ pub fn chip_nodes(word: &str) -> Vec<Node> {
             });
         }
     }
-    let parsed = lodestar_release_parser::parse(&format!("A [{word}]"));
-    let fields = parsed.fields();
-    for (key, release_key) in [
-        (TagKey::Res, "res"),
-        (TagKey::Codec, "vcodec"),
-        (TagKey::Hdr, "hdr"),
-        (TagKey::Audio, "acodec"),
-        (TagKey::Lang, "lang"),
-    ] {
-        // Two-letter language codes are mostly ordinary words (`it`).
-        if key == TagKey::Lang && lower.chars().count() < 3 {
-            continue;
-        }
-        if fields.iter().any(|(k, _)| *k == release_key) {
-            if let Some(v) = query::tag_value(key, word) {
-                out.push(Node::Tag { key, any: vec![v] });
-            }
-        }
+    if let Some(node) = release_chip(word, &lower) {
+        out.push(node);
     }
     if lower.len() <= 10
         && lower.bytes().all(|b| b.is_ascii_alphanumeric())
@@ -574,6 +568,49 @@ pub fn chip_nodes(word: &str) -> Vec<Node> {
     // Only forms the parser reads back as themselves.
     out.retain(|n| query::parse(&n.to_query()).ok().as_ref() == Some(n));
     out
+}
+
+/// The keys a release-parser chip may be, as the parser names them.
+const CHIP_KEYS: [(TagKey, &str); 5] = [
+    (TagKey::Res, "res"),
+    (TagKey::Codec, "vcodec"),
+    (TagKey::Hdr, "hdr"),
+    (TagKey::Audio, "acodec"),
+    (TagKey::Lang, "lang"),
+];
+
+/// `word` as one keyword value, when it's that value and nothing else:
+/// read as the release parser reads `A [word]`, the title must stay `A`
+/// and the only field it sets must be one of [`CHIP_KEYS`] (with the
+/// channels an audio codec carries, `dd5.1`). So a token with more in it
+/// (`Naruto.S01E02.1080p`, `x265,naruto`, `naruto\u{3000}1080p`) is no chip:
+/// it would lose the rest of its text.
+fn release_chip(word: &str, lower: &str) -> Option<Node> {
+    if word.chars().any(|c| c.is_whitespace() && !c.is_ascii()) {
+        return None;
+    }
+    let parsed = lodestar_release_parser::parse(&format!("A [{word}]"));
+    if parsed.title != "A" {
+        return None;
+    }
+    let fields = parsed.fields();
+    let mut found = None;
+    for (k, _) in fields.iter().filter(|(k, _)| *k != "title") {
+        match CHIP_KEYS.iter().find(|(_, rk)| rk == k) {
+            Some((key, _)) if found.is_none() => found = Some(*key),
+            None if *k == "channels" => {}
+            _ => return None,
+        }
+    }
+    let key = found?;
+    if fields.iter().any(|(k, _)| *k == "channels") && key != TagKey::Audio {
+        return None;
+    }
+    // Two-letter language codes are mostly ordinary words (`it`).
+    if key == TagKey::Lang && lower.chars().count() < 3 {
+        return None;
+    }
+    query::tag_value(key, word).map(|v| Node::Tag { key, any: vec![v] })
 }
 
 fn chips(
