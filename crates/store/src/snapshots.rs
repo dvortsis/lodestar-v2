@@ -197,20 +197,24 @@ pub(crate) struct Plan {
     /// Expire quarantine, clear sealed names and old filter hits
     /// (`quarantine`, `tombstones`, `filter_hits`, v4+).
     filter: bool,
+    /// Drop logged searches the live store pruned or cleared
+    /// (`query_log`, v10+).
+    query_log: bool,
 }
 
 impl Plan {
     /// The newest schema version this table knows. A new migration must
     /// say here what its schema means for the purge.
-    pub(crate) const KNOWN_THROUGH: i64 = 9;
+    pub(crate) const KNOWN_THROUGH: i64 = 10;
 
     /// Per schema version (see the PR's table and `docs/decisions`):
     ///
-    /// | version | torrents | quarantine, tombstones, filter hits |
-    /// |---|---|---|
-    /// | 1–3 | purged | absent |
-    /// | 4–9 | purged | purged |
-    /// | other | skipped with a warning | skipped |
+    /// | version | torrents | quarantine, tombstones, filter hits | query log |
+    /// |---|---|---|---|
+    /// | 1–3 | purged | absent | absent |
+    /// | 4–9 | purged | purged | absent |
+    /// | 10 | purged | purged | purged |
+    /// | other | skipped with a warning | skipped | skipped |
     pub(crate) fn for_version(version: i64) -> Option<Plan> {
         match version {
             // V1 torrents; V2 provenance, Insights, fetch queue; V3
@@ -218,15 +222,29 @@ impl Plan {
             1..=3 => Some(Plan {
                 torrents: true,
                 filter: false,
+                query_log: false,
             }),
             // V4 adds cs_hashes, tombstones, quarantine (hash, rule,
             // sealed, at, expires_at) and filter_hits (at), unchanged
-            // since. V5–V9 add swarm, subscription, rule and
-            // classification tables; the swarm and correction rows cascade
-            // from torrents.
-            4..=Self::KNOWN_THROUGH => Some(Plan {
+            // since but for V10's indexes. V5–V9 add swarm, subscription,
+            // rule and classification tables; the swarm and correction
+            // rows cascade from torrents.
+            4..=9 => Some(Plan {
                 torrents: true,
                 filter: true,
+                query_log: false,
+            }),
+            // V10 adds your data (saved searches, alerts, marks,
+            // collections), API keys and the query log. Alerts, marks and
+            // collection entries cascade from torrents. The query log is
+            // pruned oldest first, so what the live store pruned is what's
+            // older than its oldest row. Deleted or changed searches,
+            // marks, notes and keys leave no trace to match a snapshot
+            // against: they go with the snapshot at 90 days.
+            10 => Some(Plan {
+                torrents: true,
+                filter: true,
+                query_log: true,
             }),
             _ => None,
         }
@@ -244,6 +262,8 @@ pub struct PurgeReport {
     pub torrents: usize,
     /// Quarantine rows ended (expired) or sealed names cleared.
     pub quarantine: usize,
+    /// Logged searches deleted.
+    pub query_log: usize,
     /// Snapshots skipped or failed, and why; for the log.
     pub warnings: Vec<String>,
 }
@@ -288,6 +308,9 @@ struct Live {
     /// The other holds (imported CS-1 entries, tombstones, quarantine)
     /// with when they were recorded.
     held: Vec<([u8; 20], i64)>,
+    /// The oldest logged search, `(at, id)`; `None` when the log is
+    /// empty (cleared, or never on).
+    oldest_query: Option<(i64, i64)>,
 }
 
 impl Live {
@@ -317,10 +340,18 @@ impl Live {
             let (h, at) = row?;
             held.extend(hash(h).map(|h| (h, at)));
         }
+        let oldest_query = conn
+            .query_row(
+                "SELECT at, id FROM query_log ORDER BY at, id LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
         Ok(Live {
             sealed,
             reported,
             held,
+            oldest_query,
         })
     }
 }
@@ -390,9 +421,11 @@ impl Store {
                 Ok(Outcome::Purged {
                     torrents,
                     quarantine,
+                    query_log,
                 }) => {
                     report.torrents += torrents;
                     report.quarantine += quarantine;
+                    report.query_log += query_log;
                     report.purged.push(snap.path.clone());
                 }
                 Err(e) => {
@@ -418,7 +451,11 @@ impl Store {
 enum Outcome {
     Skipped(String),
     Unchanged,
-    Purged { torrents: usize, quarantine: usize },
+    Purged {
+        torrents: usize,
+        quarantine: usize,
+        query_log: usize,
+    },
 }
 
 /// Deletes a snapshot and any side file SQLite left beside it: whether
@@ -559,7 +596,18 @@ fn purge_one(
             |r| r.get(0),
         )?;
     }
-    if ids.is_empty() && unsealed.is_empty() && expiring == 0 && hits == 0 {
+    // Rows before the live log's oldest (all of them if it's empty).
+    let (log_at, log_id) = live.oldest_query.unwrap_or((i64::MAX, i64::MAX));
+    let logged = if plan.query_log {
+        conn.query_row(
+            "SELECT count(*) FROM query_log WHERE (at, id) < (?1, ?2)",
+            [log_at, log_id],
+            |r| r.get::<_, i64>(0),
+        )?
+    } else {
+        0
+    };
+    if ids.is_empty() && unsealed.is_empty() && expiring == 0 && hits == 0 && logged == 0 {
         if folded {
             restore_time(conn);
         }
@@ -572,7 +620,7 @@ fn purge_one(
     conn.pragma_update(None, "foreign_keys", true)?;
     let mode: String = conn.pragma_update_and_check(None, "journal_mode", "WAL", |r| r.get(0))?;
     let wal = mode.eq_ignore_ascii_case("wal");
-    let result = (|| -> rusqlite::Result<(usize, usize)> {
+    let result = (|| -> rusqlite::Result<(usize, usize, usize)> {
         let tx = crate::begin_write(&mut conn)?;
         let mut torrents = 0;
         for id in &ids {
@@ -600,8 +648,15 @@ fn purge_one(
             quarantine += tx.execute("DELETE FROM quarantine WHERE expires_at <= ?1", [now])?;
             tx.execute("DELETE FROM filter_hits WHERE at < ?1", [hits_before])?;
         }
+        let mut query_log = 0;
+        if plan.query_log {
+            query_log = tx.execute(
+                "DELETE FROM query_log WHERE (at, id) < (?1, ?2)",
+                [log_at, log_id],
+            )?;
+        }
         tx.commit()?;
-        Ok((torrents, quarantine))
+        Ok((torrents, quarantine, query_log))
     })();
     if wal {
         // Copies the new pages into the file and empties the WAL, then
@@ -610,10 +665,11 @@ fn purge_one(
         let _ = conn.pragma_update(None, "journal_mode", "DELETE");
     }
     restore_time(conn);
-    let (torrents, quarantine) = result?;
+    let (torrents, quarantine, query_log) = result?;
     Ok(Outcome::Purged {
         torrents,
         quarantine,
+        query_log,
     })
 }
 
@@ -765,6 +821,7 @@ mod tests {
             let plan = Plan::for_version(v).unwrap();
             assert!(plan.torrents);
             assert_eq!(plan.filter, v >= 4, "v{v}");
+            assert_eq!(plan.query_log, v >= 10, "v{v}");
         }
         assert_eq!(Plan::for_version(0), None);
         assert_eq!(Plan::for_version(latest + 1), None);
@@ -1139,6 +1196,39 @@ mod tests {
         assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
         assert!(r.warnings[0].contains("-shm"), "{:?}", r.warnings);
         assert!(!snap.exists());
+    }
+
+    /// The live store prunes its query log oldest first, or clears it;
+    /// the snapshot loses the same searches.
+    #[test]
+    fn logged_searches_follow_the_live_prune_and_clear() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db) = live(dir.path());
+        let log = |store: &Store, at: i64, q: &str| {
+            store
+                .connection()
+                .execute(
+                    "INSERT INTO query_log (at, query, results, latency_us) VALUES (?1, ?2, 0, 1)",
+                    params![at, q],
+                )
+                .unwrap();
+        };
+        log(&store, T - 2 * DAY, "logged-search-old-marker-61d2");
+        log(&store, T - DAY, "logged-search-kept-marker-0a7e");
+        let snap = take(&store, &db, 11, T);
+        store.prune_query_log(T - DAY, 1000).unwrap();
+        let r = store.purge_snapshots(T + DAY, 0);
+        assert_eq!(r.query_log, 1, "{r:?}");
+        assert!(!contains(&snap, b"logged-search-old-marker-61d2"));
+        assert!(contains(&snap, b"logged-search-kept-marker-0a7e"));
+
+        store.clear_query_log().unwrap();
+        // A search logged after the clear doesn't keep the old ones.
+        log(&store, T + 2 * DAY, "new");
+        let r = store.purge_snapshots(T + 3 * DAY, 0);
+        assert_eq!(r.query_log, 1, "{r:?}");
+        assert!(!contains(&snap, b"logged-search-kept-marker-0a7e"));
+        quick_check(&snap);
     }
 
     /// The hourly cost with many holds (the review's measure): 200k

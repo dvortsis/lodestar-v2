@@ -199,9 +199,11 @@ doesn't write those snapshots yet **(planned)**. `cold.db` and the
     days.
   - **Snapshots get the same clean-up as the database.** Every hour while
     it runs, Lodestar also removes from the snapshots (and the copies
-    rollbacks keep) the expired
-    quarantine entries (with their hidden names) and the torrents an abuse
-    report or a filter deleted, so a snapshot can't bring them back.
+    rollbacks keep) the expired quarantine entries (with their hidden
+    names), the torrents an abuse report or a filter deleted, and searches
+    removed from the search log, so a snapshot can't bring them back.
+    Other changes to your own data, such as a deleted note or saved
+    search, stay in a snapshot until it is deleted.
   - `lodestar stats` shows how many snapshots there are and their total
     size.
 - **`lodestar backup`, using SQLite's online backup (planned).** Until then,
