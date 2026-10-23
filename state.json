@@ -342,7 +342,7 @@
    "pr": 100,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:41 after B6 merged. | 01:50 PR #100 544a76f; reviewer started (cache key incl. visibility/epoch; overlap with #48 explain/cache_key). | 02:15 review MERGE (no blocking); asked main merge + important (facet lease thrash, lease heap bytes, explain cost) + polish in one push; runner verifies delta then merges. Merges before #48; M4 told: tz in key, hot-column epoch, single explain shape."
+   "notes": "Launched 21:41 after B6 merged. | 01:50 PR #100 544a76f; reviewer started (cache key incl. visibility/epoch; overlap with #48 explain/cache_key). | 02:15 review MERGE (no blocking); asked main merge + important (facet lease thrash, lease heap bytes, explain cost) + polish in one push; runner verifies delta then merges. Merges before #48; M4 told: tz in key, hot-column epoch, single explain shape. | 02:50 67f6649 delta verified by runner (Seen ordering, facets_on serving check, file-clause searches uncached, explain per-segment, polish). APPROVED; merge on green."
   },
   "B13": {
    "status": "merged",
