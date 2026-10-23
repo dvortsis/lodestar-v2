@@ -528,6 +528,15 @@ jobs:
         with:
           key: package-windows
 
+      # Built from source, not downloaded: this job builds and signs the Windows files.
+      - name: Install cargo-wix
+        shell: pwsh
+        # The build cache can bring back an earlier copy, so only install when the pinned version is not there.
+        run: |
+          if (-not ((cargo wix --version 2>$null) -match '0\.3\.9')) { cargo install --locked --force cargo-wix --version 0.3.9 }
+          if ($LASTEXITCODE -ne 0) { throw 'installing cargo-wix failed' }
+
+
       - name: Unit test (service SID derivation)
         shell: pwsh
         run: packaging/windows/test-service-sid.ps1
@@ -558,15 +567,6 @@ jobs:
           $wix = Get-ChildItem 'C:\Program Files (x86)\WiX Toolset v3*\bin' -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $wix) { throw 'WiX Toolset 3 is not on this runner image' }
           $wix.FullName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      # Built from source, not downloaded: this job builds and signs the Windows files.
-      - name: Install cargo-wix
-        shell: pwsh
-        # The build cache can bring back an earlier copy, so only install when the pinned version is not there.
-        run: |
-          if (-not ((cargo wix --version 2>$null) -match '0\.3\.9')) { cargo install --locked --force cargo-wix --version 0.3.9 }
-          if ($LASTEXITCODE -ne 0) { throw 'installing cargo-wix failed' }
-
 
       - name: MSI
         shell: pwsh

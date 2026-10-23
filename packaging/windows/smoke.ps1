@@ -192,6 +192,12 @@ if ($Msi) {
     Assert $up 'after the upgrade the service was not running (no /healthz on 8090)'
     Stop-Service Lodestar
     Remove-Item "$dataDir\upgrade-check.txt"
+    # An explicit WEB_FIREWALL=0 on an upgrade beats the remembered choice.
+    Invoke-Msiexec @('/x', "`"$UpgradeMsi`"", '/qn', '/norestart', '/l*v', "`"$logs\msi-untick-uninstall.log`"") 'uninstall before the untick check'
+    Invoke-Msiexec @('/i', "`"$Msi`"", '/qn', '/norestart', 'WEB_FIREWALL=1', '/l*v', "`"$logs\msi-untick-install.log`"") 'install with the web rule (untick check)'
+    Assert ($null -ne (Get-NetFirewallRule -DisplayName 'Lodestar web UI*' -ErrorAction SilentlyContinue)) 'the web rule is missing before the untick check'
+    Invoke-Msiexec @('/i', "`"$UpgradeMsi`"", '/qn', '/norestart', 'WEB_FIREWALL=0', '/l*v', "`"$logs\msi-untick-upgrade.log`"") 'upgrade with WEB_FIREWALL=0'
+    Assert ($null -eq (Get-NetFirewallRule -DisplayName 'Lodestar web UI*' -ErrorAction SilentlyContinue)) 'the remembered web rule survived an upgrade with WEB_FIREWALL=0'
     # Back to the first version for the rest of the checks.
     Invoke-Msiexec @('/x', "`"$UpgradeMsi`"", '/qn', '/norestart', '/l*v', "`"$logs\msi-upgrade-uninstall.log`"") 'uninstall of the upgraded product'
     Invoke-Msiexec @('/i', "`"$Msi`"", '/qn', '/norestart', '/l*v', "`"$logs\msi-install-again.log`"") 'install again after the upgrade check'
