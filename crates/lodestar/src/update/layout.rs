@@ -328,14 +328,13 @@ mod tests {
     fn a_fifo_or_an_oversize_file_is_damage_not_a_hang() {
         let data = tempfile::tempdir().unwrap();
         let bin = Bin::open(data.path()).unwrap();
-        rustix::fs::mknodat(
-            rustix::fs::CWD,
-            bin.path("pending"),
-            rustix::fs::FileType::Fifo,
-            rustix::fs::Mode::from_raw_mode(0o600),
-            0,
-        )
-        .unwrap();
+        // rustix has no mknodat/mkfifoat on macOS, and the workspace forbids
+        // unsafe, so the FIFO comes from mkfifo(1), which every Unix ships.
+        let made = std::process::Command::new("mkfifo")
+            .arg(bin.path("pending"))
+            .status()
+            .unwrap();
+        assert!(made.success(), "mkfifo failed: {made}");
         assert!(bin.read::<serde_json::Value>("pending").is_err());
         fs::write(bin.path("active"), vec![b' '; MAX_STATE as usize + 1]).unwrap();
         let e = bin.read::<serde_json::Value>("active").unwrap_err();
