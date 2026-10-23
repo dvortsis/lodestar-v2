@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T08:15:57Z",
+ "updated_at": "2026-10-23T08:28:33Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -351,7 +351,7 @@
    "pr": 121,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "2026-10-23T06:26:11Z unblocked by B12; brief being drafted by Opus helper | 2026-10-23T06:36:24Z launched after B12 merge (brief by Opus helper, runner-reviewed; steward from start) | 2026-10-23T08:15:57Z PR #121 head 2d9509d (~4.4k lines); self-review 1 blocking fixed; fresh + security reviewers launched"
+   "notes": "2026-10-23T06:26:11Z unblocked by B12; brief being drafted by Opus helper | 2026-10-23T06:36:24Z launched after B12 merge (brief by Opus helper, runner-reviewed; steward from start) | 2026-10-23T08:15:57Z PR #121 head 2d9509d (~4.4k lines); self-review 1 blocking fixed; fresh + security reviewers launched | 2026-10-23T08:28:33Z security review MERGE w/ important: per-search percolation cost unbounded (segment skip by id max, cancel in collector, cap searches, bench); feed/list unbounded scan under reader lock (SQL predicate + LIMIT). Owner flag: feed follows content.show_adult (\u00a72.19)."
   },
   "B5c": {
    "status": "merged",
@@ -868,7 +868,7 @@
    "pr": 117,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "from #86 | 05:02 launched after B2b merge (brief by Opus helper, runner-reviewed; steward from start). | 2026-10-23T06:09:01Z PR #117 head f1e0457 (~13k lines, mostly generated); fresh + security reviewers launched | 2026-10-23T06:16:19Z security review MERGE w/ 2 important (licence_file path escape -> credential leak into rust.json; deadline not capped vs clock-behind-after-reboot) + 8 polish; requiring 1-2 (+cheap polish) after fresh review returns | 2026-10-23T06:40:44Z round 1 FIX (both reviewers MERGE-with-important): licence path escape, deadline clamp vs clock, HTTP_BIND trap, refused WITH bypass, fixture restart, started() placement + 8 cheap; merge main | 2026-10-23T06:56:15Z 0296fa5 round-1 fixes (14 items) + main merged; delta review started | 2026-10-23T06:59:51Z delta 0296fa5 APPROVED; asked to merge main (B11a conflicts); merge on green | 2026-10-23T07:09:40Z 4076936: main 23a1b77 merged; merge on green | 2026-10-23T07:34:04Z main moved (B10b) -> conflicts; told to HOLD until B7 merges, then merge main once | 2026-10-23T07:39:51Z told to merge main (B10b+B7) now | 2026-10-23T07:47:23Z d0a65ad: main bfaebd3 (B10b+B7) merged; merge on green | 2026-10-23T08:15:57Z 48bcc1e: main incl M6-win merged; rust.json +2 Windows crates; merge on green",
+   "notes": "from #86 | 05:02 launched after B2b merge (brief by Opus helper, runner-reviewed; steward from start). | 2026-10-23T06:09:01Z PR #117 head f1e0457 (~13k lines, mostly generated); fresh + security reviewers launched | 2026-10-23T06:16:19Z security review MERGE w/ 2 important (licence_file path escape -> credential leak into rust.json; deadline not capped vs clock-behind-after-reboot) + 8 polish; requiring 1-2 (+cheap polish) after fresh review returns | 2026-10-23T06:40:44Z round 1 FIX (both reviewers MERGE-with-important): licence path escape, deadline clamp vs clock, HTTP_BIND trap, refused WITH bypass, fixture restart, started() placement + 8 cheap; merge main | 2026-10-23T06:56:15Z 0296fa5 round-1 fixes (14 items) + main merged; delta review started | 2026-10-23T06:59:51Z delta 0296fa5 APPROVED; asked to merge main (B11a conflicts); merge on green | 2026-10-23T07:09:40Z 4076936: main 23a1b77 merged; merge on green | 2026-10-23T07:34:04Z main moved (B10b) -> conflicts; told to HOLD until B7 merges, then merge main once | 2026-10-23T07:39:51Z told to merge main (B10b+B7) now | 2026-10-23T07:47:23Z d0a65ad: main bfaebd3 (B10b+B7) merged; merge on green | 2026-10-23T08:15:57Z 48bcc1e: main incl M6-win merged; rust.json +2 Windows crates; merge on green | 2026-10-23T08:28:33Z 48bcc1e windows red: B10b export test race (a_request_dropped_during_setup_frees_its_slot); B2c re-ran once; B10b session asked for fix PR fix/export-dropped-slot-race",
    "self_review": {
     "raised": 6,
     "fixed": 6,
@@ -1354,7 +1354,8 @@
   "Process: B7 (#102) exceeded review_rounds_before_escalation (now 4 FIX rounds on natural phrasing). Runner chose not to park: fix scope narrowed each round; if another blocking round, natural phrasing is split into a follow-up slice and /suggest merges without it. Owner may prefer parking.",
   "\u00a72.19 (B10b #115): exports include Adult only per content.export_adult (\u00a720.9/B17), not the \"Show adult content\" view setting; until wired, no Adult is exported.",
   "Licences (B2c): \u00a72.12 allowlist silent on Unicode-DFS-2016, Unlicense alone, CDLA-Permissive-2.0, LLVM exception, and whether LGPL-3.0 counts in the GPL/AGPL family. B2c may add permissive ones as flagged \u00a72.19 entries; stops on copyleft/unlicensed.",
-  "\u00a72.19 (B11a #116) docs/metrics.md \u00a77.5 contract made nullable \"until source exists\": stages.fetch (B11b), stages.index & kpi.searchable (null with search off), stages.serve and serve.* (until #48 / B9 / integrations), kpi.imported, ingest_per_hour (unmeasured hour), previous = reduced shape. Additions: range.bucket, funnel[].conversion, funnel_total, /insights/events, segments.by_source."
+  "\u00a72.19 (B11a #116) docs/metrics.md \u00a77.5 contract made nullable \"until source exists\": stages.fetch (B11b), stages.index & kpi.searchable (null with search off), stages.serve and serve.* (until #48 / B9 / integrations), kpi.imported, ingest_per_hour (unmeasured hour), previous = reduced shape. Additions: range.bucket, funnel[].conversion, funnel_total, /insights/events, segments.by_source.",
+  "2026-10-23T08:28:33Z B9: RSS feed's Adult rule follows content.show_adult (no separate feed adult setting; \u00a72.19 refinement) - veto if outside readers should never get Adult"
  ],
  "decisions_log": [
   "2026-10-23 00:40 owner: 'Go with whatever makes for the best user experience' re filter budget reference -> staged: #97 fastest-runner ref now; F-perf moves ref to EPYC 7763 (typical) when engine meets it.",
