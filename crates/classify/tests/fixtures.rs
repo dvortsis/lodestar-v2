@@ -529,12 +529,6 @@ const ADULT: &[AdultFixture] = &[
         ],
         Some(AdultKind::Movie),
     ),
-    // The tag only on the folder of the largest file.
-    (
-        "a1b2c3d4",
-        &[("Lantern.Bay.Parody.XXX.1080p/video.mp4", "1G")],
-        Some(AdultKind::Movie),
-    ),
     // Ebooks.
     (
         "Jane Doe - Lantern Bay Nights [Hentai] [EPUB]",
@@ -587,9 +581,54 @@ const ADULT: &[AdultFixture] = &[
         &[("xXx.State.of.the.Union.2005.Soundtrack.zip", "120M")],
         None,
     ),
+    // Only the name and the largest file's name are read, never its
+    // folders: a counter on a folder doesn't pull a tagged torrent out
+    // of Adult, and a tag on a folder doesn't pull a mainstream one in.
     (
-        "a1b2c3d4",
-        &[("Documentary/Porn.Milf.Archive.Footage.1080p", "2G")],
+        "Some.Title.XXX.1080p.MP4-GRP",
+        &[("Massage Therapy/scene.mp4", "1G")],
+        Some(AdultKind::Movie),
+    ),
+    (
+        "Brazzers Collection 2023",
+        &[("Doctor Adventures - Medical Exam/scene01.mp4", "1G")],
+        Some(AdultKind::Movie),
+    ),
+    (
+        "Some.Site.Pack.XXX",
+        &[
+            ("Anatomy Lesson/clip.mp4", "1G"),
+            ("Health Club Fun/clip.mp4", "900M"),
+        ],
+        Some(AdultKind::Scene),
+    ),
+    (
+        "Vin Diesel Collection",
+        &[(
+            "03. xXx Return of Xander Cage (2017)/xXx.Return.of.Xander.Cage.2017.1080p.mkv",
+            "9G",
+        )],
+        None,
+    ),
+    (
+        "Danny Brown Discography",
+        &[("2011 - XXX/02 - Radio Song.flac", "30M")],
+        None,
+    ),
+    ("My Music", &[("Artist - XXX (Album)/01.flac", "30M")], None),
+    (
+        "Photos 2020",
+        &[("2020 Trip/Day 1 xxx/IMG_001.raw", "25M")],
+        None,
+    ),
+    (
+        "Backup",
+        &[("Brazzers Contract Scans/contract.pdf", "2M")],
+        None,
+    ),
+    (
+        "Anime.Collection [hentai-free]",
+        &[("Anime.Collection.Episode.01.mkv", "1G")],
         None,
     ),
 ];
