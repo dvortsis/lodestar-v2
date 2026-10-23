@@ -37,6 +37,8 @@ pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 pub struct Services {
     /// The API's state (auth, index, reader), as `/api/v1` sees it.
     pub api: lodestar_api::ApiState,
+    /// Export's own adult setting, followed live (§20.9).
+    pub export_adult: lodestar_api::export::ExportAdult,
     /// The status page's and metrics' state.
     pub http: http::AppState,
     /// `/api/v1/events`: the live stream's hub.
@@ -315,6 +317,7 @@ impl Services {
             config.data_dir.display()
         );
         Ok(Services {
+            export_adult: settings::content::follow_export(settings.subscribe()),
             api,
             http,
             events,
@@ -335,20 +338,28 @@ impl Services {
     ) -> Result<(), BoxError> {
         let Services {
             api,
+            export_adult,
             http,
             events,
             handles,
             listener,
         } = self;
+        // Exports and other background jobs (§9): one registry, closed at
+        // shutdown so open downloads end rather than hold it.
+        let jobs = Arc::new(lodestar_api::jobs::Jobs::default());
         let app = http::router(http, api)
             .layer(Extension(events.clone()))
+            .layer(Extension(jobs.clone()))
+            .layer(Extension(export_adult))
             .into_make_service_with_connect_info::<SocketAddr>();
         // Open streams never end on their own: closing the hub ends them,
-        // so the graceful shutdown doesn't wait on them.
+        // and closing the jobs ends open exports, so the graceful
+        // shutdown doesn't wait on them.
         let hub = events.clone();
         let signal = async move {
             signal.await;
             hub.close();
+            jobs.close();
         };
         axum::serve(listener, app)
             .with_graceful_shutdown(signal)

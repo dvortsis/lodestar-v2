@@ -92,6 +92,13 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET", "/saved-searches/{id}"),
     ("PATCH", "/saved-searches/{id}"),
     ("DELETE", "/saved-searches/{id}"),
+    ("GET", "/export"),
+    ("POST", "/export"),
+    ("GET", "/jobs"),
+    ("GET", "/jobs/{id}"),
+    ("POST", "/jobs/{id}/pause"),
+    ("POST", "/jobs/{id}/resume"),
+    ("POST", "/jobs/{id}/cancel"),
     ("GET", "/openapi.json"),
 ];
 const OPEN: [&str; 5] = ["/auth", "/setup", "/login", "/logout", "/openapi.json"];
