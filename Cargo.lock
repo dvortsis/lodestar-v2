@@ -1615,6 +1615,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tantivy",
+ "tantivy-fst",
  "tempfile",
  "tracing",
  "unicode-normalization",
