@@ -443,6 +443,27 @@ impl Store {
         Ok(())
     }
 
+    /// Sets gauges in `rollup_hour`: each row replaces the value at its
+    /// key instead of adding to it (Insights' hourly snapshots: the last
+    /// write in an hour is the hour's value).
+    pub fn set_gauges(&mut self, gauges: &[Counter]) -> Result<()> {
+        if gauges.is_empty() {
+            return Ok(());
+        }
+        let tx = crate::begin_write(&mut self.conn)?;
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT INTO rollup_hour (hour, metric, dim, key, value) VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT DO UPDATE SET value = excluded.value",
+            )?;
+            for g in gauges {
+                stmt.execute(params![g.hour, g.metric, g.dim, g.key, g.value])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Runs `f` inside one read transaction, so every query in it sees
     /// the same snapshot. Inside a transaction already, it just runs `f`.
     pub fn read_snapshot<T>(&self, f: impl FnOnce(&Store) -> Result<T>) -> Result<T> {
@@ -885,6 +906,13 @@ mod tests {
         ])
         .unwrap();
         s.add_counters(&[c(H, 4, 0, 0, 1)]).unwrap();
+        // Gauges replace, counters add.
+        s.set_gauges(&[c(H + 7, 13, 0, 0, 50)]).unwrap();
+        s.set_gauges(&[c(H + 7, 13, 0, 0, 42)]).unwrap();
+        assert_eq!(
+            s.rollup_sums(13, H, H + 8, RollupBy::Total).unwrap()[0].value,
+            42
+        );
         let pick = |by| -> Vec<(i64, u32, i64, i64)> {
             s.rollup_sums(4, H, H + 5, by)
                 .unwrap()
@@ -997,7 +1025,46 @@ mod tests {
     /// a table (§10.9: ≤ 50 ms whatever the index size).
     #[test]
     fn overview_reads_use_indexes() {
-        let s = store();
+        // A year of hourly rows, so the planner sees a table of that size.
+        let mut s = store();
+        let mut counters = Vec::new();
+        let mut cohorts_rows = Vec::new();
+        let src = SourceId::from_sql(0).unwrap();
+        for h in H - 365 * 24..H {
+            for metric in [1, 4, 10, 11, 12] {
+                for key in 0..4 {
+                    counters.push(Counter {
+                        hour: h,
+                        metric,
+                        dim: 0,
+                        key,
+                        value: 1,
+                    });
+                }
+            }
+            for (stage, reason) in [(1, 0), (4, 0), (5, 0), (6, 1), (6, 9)] {
+                cohorts_rows.push(CohortCount {
+                    cohort: h,
+                    source: src,
+                    stage,
+                    reason,
+                    count: 1,
+                });
+            }
+        }
+        s.add_counters(&counters).unwrap();
+        s.write(&crate::WriteBatch {
+            cohorts: &cohorts_rows,
+            events: &(0..2000)
+                .map(|i| Event {
+                    at: H * 3600 - i * 4000,
+                    kind: 3 + (i % 3) as u32,
+                    detail: String::new(),
+                })
+                .collect::<Vec<_>>(),
+            ..crate::WriteBatch::default()
+        })
+        .unwrap();
         let plan = |sql: &str, params: &[i64]| -> String {
             let mut stmt = s
                 .conn
@@ -1020,6 +1087,10 @@ mod tests {
              WHERE cohort >= ?1 AND cohort < ?2 GROUP BY b, source, stage, reason";
         let events =
             "SELECT at, kind, detail FROM events WHERE at >= ?1 AND at < ?2 ORDER BY at, id";
+        // `cohorts()` as prepared, for the recent hours.
+        let raw = "SELECT cohort, source, stage, reason, count FROM cohort_hour
+             WHERE cohort >= ?1 AND cohort < ?2
+             ORDER BY cohort, source, stage, reason";
         let before = "SELECT at, kind, detail FROM events WHERE at < ? AND kind IN (?, ?)
              ORDER BY at DESC, id DESC LIMIT 1";
         let watermarks =
@@ -1036,6 +1107,11 @@ mod tests {
             (
                 cohorts,
                 &[1, 2, 24][..],
+                "SEARCH cohort_hour USING PRIMARY KEY (cohort>? AND cohort<?)",
+            ),
+            (
+                raw,
+                &[1, 2][..],
                 "SEARCH cohort_hour USING PRIMARY KEY (cohort>? AND cohort<?)",
             ),
             (

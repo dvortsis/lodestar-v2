@@ -139,6 +139,8 @@ pub struct Follow {
     pub index: Option<(Arc<CommitHook>, Arc<IndexStats>)>,
     /// Whether the crawler is paused now.
     pub paused: Box<dyn Fn() -> bool + Send + Sync>,
+    /// Documents in the index now; `None` with search off.
+    pub searchable: Box<dyn Fn() -> Option<u64> + Send + Sync>,
     /// How often coverage is added ([`TICK`]).
     pub tick: Duration,
 }
@@ -227,8 +229,22 @@ async fn run(
                 let now = crate::unix_now();
                 let rows = coverage_rows(covered_to, now, follow.index.is_some(), !(follow.paused)());
                 covered_to = now;
+                // The hour's searchable snapshot: the last one in it wins.
+                let gauge: Vec<Counter> = (follow.searchable)()
+                    .map(|n| Counter {
+                        hour: now.div_euclid(3600),
+                        metric: metric::SEARCHABLE,
+                        dim: 0,
+                        key: 0,
+                        value: i64::try_from(n).unwrap_or(i64::MAX),
+                    })
+                    .into_iter()
+                    .collect();
                 let r;
-                (store, r) = blocking(store, move |s| s.add_counters(&rows)).await?;
+                (store, r) = blocking(store, move |s| {
+                    s.add_counters(&rows).and_then(|()| s.set_gauges(&gauge))
+                })
+                .await?;
                 match r {
                     Ok(()) => insights.bump(),
                     Err(e) => tracing::warn!("insights: coverage not recorded: {e}"),
@@ -425,6 +441,7 @@ mod tests {
             metric::TIME_TO_SEARCHABLE
         );
         assert_eq!(codes::metric::COVERAGE, metric::COVERAGE);
+        assert_eq!(codes::metric::SEARCHABLE, metric::SEARCHABLE);
         assert_eq!(codes::metric::COVERAGE_INDEX, coverage::INDEX);
         assert_eq!(codes::metric::COVERAGE_CRAWL, coverage::CRAWL);
     }
@@ -446,6 +463,7 @@ mod tests {
             store: StoreConfig::default(),
             index: Some((hook, stats.clone())),
             paused: Box::new(|| false),
+            searchable: Box::new(|| Some(7)),
             tick: TICK,
         };
         let task = {
@@ -500,6 +518,7 @@ mod tests {
                 store: StoreConfig::default(),
                 index: None,
                 paused: Box::new(|| false),
+                searchable: Box::new(|| None),
                 tick: Duration::from_millis(50),
             },
             stop,
