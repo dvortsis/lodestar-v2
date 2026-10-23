@@ -47,6 +47,12 @@ fn serves_status_and_stops_cleanly() {
     let dir = tempfile::tempdir().unwrap();
     let port = free_port();
     let bind = format!("127.0.0.1:{port}");
+    // Scrape a local tracker nothing listens on, never the public list.
+    std::fs::write(
+        dir.path().join("config.toml"),
+        "[scrape]\ntrackers = [\"udp://127.0.0.1:9\"]\n",
+    )
+    .unwrap();
     let env = |c: &mut Command| {
         c.env("LODESTAR_DATA_DIR", dir.path())
             .env("LODESTAR_HTTP_BIND", &bind)
@@ -137,7 +143,21 @@ fn serves_status_and_stops_cleanly() {
         "{metrics}"
     );
     assert!(metrics.contains("lodestar_search_docs 0"), "{metrics}");
+    assert!(
+        metrics.contains("# TYPE lodestar_scrape_rounds_total counter"),
+        "{metrics}"
+    );
+    assert!(
+        metrics.contains("lodestar_tracker_health{tracker=\"1\"}"),
+        "{metrics}"
+    );
+    assert!(
+        !metrics.contains("127.0.0.1:9"),
+        "no tracker URLs in metrics"
+    );
     assert!(status.contains("\"search\":{"), "{status}");
+    assert!(status.contains("\"swarm\":{"), "{status}");
+    assert!(status.contains("udp://127.0.0.1:9"), "{status}");
     // `/` is the UI (or its stub) under the strict policy; the status page
     // moved to `/status` with its own.
     let page = get(port, "/").unwrap();
@@ -222,6 +242,10 @@ fn serves_status_and_stops_cleanly() {
     assert!(dir.path().join("dht-state.bin").exists());
     assert!(dir.path().join("lodestar.db").exists());
     assert!(dir.path().join("index").is_dir(), "search index created");
+    assert!(
+        dir.path().join("hot").join("seeders.col").exists(),
+        "hot columns saved at shutdown"
+    );
 
     // Nothing listening any more: the health check fails.
     let mut check = Command::new(env!("CARGO_BIN_EXE_lodestar"));

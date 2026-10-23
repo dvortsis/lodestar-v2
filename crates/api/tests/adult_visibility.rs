@@ -22,7 +22,7 @@ use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_classify::Correction;
 use lodestar_metainfo::Info;
 use lodestar_search::SearchIndex;
-use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig};
+use lodestar_store::{HotColumns, NewTorrent, SourceId, Store, StoreConfig, SwarmHot};
 use serde_json::{Value, json};
 use tokio::sync::watch;
 use tower::ServiceExt;
@@ -91,6 +91,12 @@ impl Fixture {
 }
 
 fn fixture() -> Fixture {
+    fixture_with(None)
+}
+
+/// With `seeders`, per torrent in `NAMES` order (`None`: never scraped),
+/// the index and the API read swarm health from hot columns (§7).
+fn fixture_with(seeders: Option<[Option<u32>; 5]>) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("t.db");
     let mut store = Store::open(&db, StoreConfig::default()).unwrap();
@@ -120,7 +126,25 @@ fn fixture() -> Fixture {
                 .collect()
         })
         .collect();
-    let index = SearchIndex::in_memory().unwrap();
+    let hot = seeders.map(|seeders| {
+        let hot = Arc::new(HotColumns::new());
+        for (i, s) in seeders.into_iter().enumerate() {
+            if let Some(seeders) = s {
+                let swarm = SwarmHot {
+                    seeders,
+                    leechers: 1,
+                    trackers: 1,
+                    dht: lodestar_store::NEVER,
+                };
+                hot.set_swarm(i as u64 + 1, swarm);
+            }
+        }
+        hot
+    });
+    let index = match &hot {
+        Some(hot) => SearchIndex::in_memory().unwrap().with_hot(hot.clone()),
+        None => SearchIndex::in_memory().unwrap(),
+    };
     let (show, rx) = watch::channel(false);
     let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
     let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
@@ -136,6 +160,8 @@ fn fixture() -> Fixture {
             ops: None,
             insights: None,
             user_data: None,
+            hot,
+            events: None,
         }),
     );
     let mut f = Fixture {
@@ -595,4 +621,72 @@ async fn unauthenticated_requests_get_401() {
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri}");
         assert!(!body.to_string().contains("adult_hidden"));
     }
+}
+
+/// Hit names in the order served.
+fn ordered(body: &Value) -> Vec<String> {
+    body["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["name"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[tokio::test]
+async fn swarm_sorts_and_filters_leave_hidden_adult_out() {
+    // The adult torrent 0 has the most seeders; torrent 4 was never
+    // scraped.
+    let f = fixture_with(Some([Some(500), Some(5), Some(50), Some(20), None]));
+    let c = session(&f).await;
+    let by_seeders = |shown: bool| {
+        let order: &[usize] = if shown { &[0, 2, 3, 1, 4] } else { &[2, 3, 4] };
+        order
+            .iter()
+            .map(|&i| NAMES[i].to_string())
+            .collect::<Vec<_>>()
+    };
+    for shown in [false, true] {
+        f.show.send(shown).unwrap();
+        let (status, body) = json_call(&f.app, get("/api/v1/search?sort=-seeders", &c)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(ordered(&body), by_seeders(shown), "shown={shown}");
+        // A swarm filter, its count and its facets: Adult only when shown.
+        let q = encode("seeders:>10");
+        let (_, search) = json_call(&f.app, get(&format!("/api/v1/search?q={q}"), &c)).await;
+        let want: &[usize] = if shown { &[0, 2, 3] } else { &[2, 3] };
+        assert_eq!(names(&search), sorted(want), "shown={shown}");
+        assert_eq!(search["total"], want.len(), "shown={shown}");
+        let (status, facets) = json_call(&f.app, get(&format!("/api/v1/facets?q={q}"), &c)).await;
+        assert_eq!(status, StatusCode::OK, "{facets}");
+        assert_eq!(facets["total"], search["total"], "shown={shown}");
+        let types = facet(&facets, "type");
+        assert_eq!(
+            types.iter().any(|(v, _)| v == "adult"),
+            shown,
+            "shown={shown}: {types:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn facets_read_time_of_day_in_the_users_zone_as_search_does() {
+    // Every torrent was discovered at 22:13 UTC (00:13 at UTC+2).
+    let f = fixture();
+    let c = session(&f).await;
+    let q = encode("time:22:00..23:00");
+    for (tz, want) in [(0, 3), (120, 0)] {
+        let (_, search) =
+            json_call(&f.app, get(&format!("/api/v1/search?q={q}&tz={tz}"), &c)).await;
+        assert_eq!(search["total"], want, "search tz={tz}");
+        let (status, facets) =
+            json_call(&f.app, get(&format!("/api/v1/facets?q={q}&tz={tz}"), &c)).await;
+        assert_eq!(status, StatusCode::OK, "{facets}");
+        assert_eq!(facets["total"], want, "facets tz={tz}");
+    }
+    let (status, body) = json_call(&f.app, get("/api/v1/facets?tz=900", &c)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "bad_tz", "{body}");
+    let (status, _) = json_call(&f.app, get("/api/v1/facets?tz=east", &c)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }

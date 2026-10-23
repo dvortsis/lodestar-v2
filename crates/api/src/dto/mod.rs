@@ -17,6 +17,7 @@ pub mod alerts;
 pub mod auth;
 pub mod collections;
 pub mod compare;
+pub mod digest;
 pub mod discover;
 pub mod error;
 pub mod events;

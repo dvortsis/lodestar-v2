@@ -1,7 +1,7 @@
 //! `/logs` end to end through the router, over a fake [`LogSource`]: the
 //! stream over a real socket (headers, `retry:`, cursors and resyncs,
-//! backpressure, purges, caps, the session ending, shutdown), and
-//! history's parameters and read limit.
+//! backpressure, purges, caps, the session ending, shutdown), history's
+//! parameters and read limit, downloads' headers, and deletion's guards.
 //! The real source's semantics (the ring, masks, files) are tested in
 //! `crates/lodestar/src/logging`.
 
@@ -15,8 +15,9 @@ use axum::http::{Request, StatusCode, header};
 use axum::{Extension, Router};
 use lodestar_api::auth::ProxyConfig;
 use lodestar_api::logs::{
-    HistoryQuery, LineFilter, LogComponent, LogDataKind, LogHistory, LogLevel, LogLine, LogPurge,
-    LogSource, LogStreamConfig, LogsError, RingRead, Transport,
+    Download, HistoryQuery, LineFilter, LogComponent, LogDataKind, LogFiles, LogFilesDeleted,
+    LogFilesWhich, LogFormat, LogHistory, LogLevel, LogLine, LogPurge, LogSource, LogStreamConfig,
+    LogsError, RingRead, Transport,
 };
 use lodestar_api::{ApiState, Auth, router};
 use lodestar_log::{Component, Level};
@@ -174,6 +175,61 @@ impl LogSource for Fake {
             unreadable: 0,
         })
     }
+    fn files(&self) -> LogFiles {
+        LogFiles {
+            files: vec![],
+            folder: None,
+            index_readable: true,
+            reason: Some("not_opened".into()),
+            state: lodestar_api::logs::LogFileState::Unavailable,
+        }
+    }
+    fn download(
+        &self,
+        name: &str,
+        format: LogFormat,
+        redact: Option<bool>,
+    ) -> Result<Download, LogsError> {
+        // A download that never ends, for a client that stops reading.
+        if name == "lodestar-20261023T101500.123Z.jsonl" {
+            return Ok(Download {
+                file_name: "endless.jsonl".into(),
+                content_type: "application/x-ndjson",
+                chunks: Box::new(std::iter::repeat_with(|| Ok(vec![b'x'; 64 << 10]))),
+            });
+        }
+        if name != "lodestar.jsonl" {
+            return Err(LogsError::NotFound);
+        }
+        let redact = redact.unwrap_or(true);
+        Ok(Download {
+            file_name: format!(
+                "lodestar{}.{}",
+                if redact { "-redacted" } else { "" },
+                if format == LogFormat::Text {
+                    "txt"
+                } else {
+                    "jsonl"
+                }
+            ),
+            content_type: if format == LogFormat::Text {
+                "text/plain; charset=utf-8"
+            } else {
+                "application/x-ndjson"
+            },
+            chunks: Box::new((0..3).map(|_| Ok(b"{\"a\":1}\n".to_vec()))),
+        })
+    }
+    fn archive(&self, _: LogFormat, _: Option<bool>) -> Result<Download, LogsError> {
+        Err(LogsError::Unavailable)
+    }
+    fn delete(&self, _: LogFilesWhich) -> Result<LogFilesDeleted, LogsError> {
+        Ok(LogFilesDeleted {
+            bytes: 10,
+            deleted: 1,
+            skipped: vec![],
+        })
+    }
 }
 
 struct Fixture {
@@ -200,6 +256,8 @@ fn fixture(source: Option<Arc<Fake>>) -> Fixture {
             user_data: None,
             adult: Default::default(),
             insights: None,
+            hot: None,
+            events: None,
         }),
     );
     if let Some(s) = source {
@@ -366,11 +424,23 @@ const SOON: Duration = Duration::from_secs(5);
 async fn without_a_source_only_the_catalogue_answers() {
     let f = fixture(None);
     let c = session(&f.auth);
-    for uri in ["/api/v1/logs", "/api/v1/logs/stream"] {
+    for uri in [
+        "/api/v1/logs",
+        "/api/v1/logs/stream",
+        "/api/v1/logs/files",
+        "/api/v1/logs/files/lodestar.jsonl",
+        "/api/v1/logs/archive.zip",
+    ] {
         let (status, _, body) = call(&f.app, get(uri, &c)).await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{uri}");
         assert_eq!(code(&body).0, "logs_unavailable");
     }
+    let del = Request::delete("/api/v1/logs/files")
+        .header(header::COOKIE, &c)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"which":"all"}"#))
+        .unwrap();
+    assert_eq!(call(&f.app, del).await.0, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         call(&f.app, get("/api/v1/logs/catalog", &c)).await.0,
         StatusCode::OK
@@ -681,6 +751,41 @@ async fn at_most_two_file_reads_at_once() {
     assert_eq!(code(&busy[0].2).0, "logs_busy");
 }
 
+#[tokio::test]
+async fn a_download_holds_a_read_and_close_ends_it_unread() {
+    let fake = Fake::new(config(), 100);
+    let f = fixture(Some(fake.clone()));
+    let c = session(&f.auth);
+    let addr = serve(f.app.clone()).await;
+    const ENDLESS: &str = "/api/v1/logs/files/lodestar-20261023T101500.123Z.jsonl";
+    // Two downloads whose clients never read take both reads.
+    let mut a = Conn::open(addr, ENDLESS, &[("cookie", &c)]).await;
+    let mut b = Conn::open(addr, ENDLESS, &[("cookie", &c)]).await;
+    a.until("200 OK", SOON).await;
+    b.until("200 OK", SOON).await;
+    let (status, h, body) = call(&f.app, get("/api/v1/logs", &c)).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(h[header::RETRY_AFTER], "2");
+    assert_eq!(code(&body).0, "logs_busy");
+    let (status, ..) = call(&f.app, get("/api/v1/logs/files/lodestar.jsonl", &c)).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "a download too");
+    // Their producers are stuck on full buffers; closing ends both and
+    // lets their reads go, with neither client reading.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(fake.transport().reads_held(), 2);
+    fake.transport().close();
+    let start = Instant::now();
+    while fake.transport().reads_held() > 0 {
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "close() let a stalled download's read go"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    a.until_closed(Duration::from_secs(5)).await;
+    b.until_closed(Duration::from_secs(5)).await;
+}
+
 async fn futures_join<F: std::future::Future + Send + 'static>(fs: Vec<F>) -> Vec<F::Output>
 where
     F::Output: Send + 'static,
@@ -812,4 +917,111 @@ async fn a_resumed_stream_gets_the_purges_it_missed() {
     s.until("retry:", SOON).await;
     // `through` is b, which it has: the purge reaches it, so it comes.
     s.until("event: purge", SOON).await;
+}
+
+#[tokio::test]
+async fn downloads_carry_their_headers_and_never_echo_a_name() {
+    let fake = Fake::new(config(), 100);
+    let f = fixture(Some(fake));
+    let c = session(&f.auth);
+    let (status, h, body) = call(
+        &f.app,
+        get("/api/v1/logs/files/lodestar.jsonl?format=text", &c),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(h[header::CONTENT_TYPE], "text/plain; charset=utf-8");
+    assert_eq!(
+        h[header::CONTENT_DISPOSITION],
+        "attachment; filename=\"lodestar-redacted.txt\""
+    );
+    assert_eq!(h[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    assert_eq!(h[header::CACHE_CONTROL], "no-store");
+    assert_eq!(body, b"{\"a\":1}\n".repeat(3));
+    let (_, h, _) = call(
+        &f.app,
+        get("/api/v1/logs/files/lodestar.jsonl?redact=false", &c),
+    )
+    .await;
+    assert_eq!(h[header::CONTENT_TYPE], "application/x-ndjson");
+    assert_eq!(
+        h[header::CONTENT_DISPOSITION],
+        "attachment; filename=\"lodestar.jsonl\""
+    );
+    for name in [
+        "..%2f..%2fetc%2fpasswd",
+        "%00",
+        "evil%22name",
+        "x%E2%80%AEy",
+    ] {
+        let (status, _, body) = call(&f.app, get(&format!("/api/v1/logs/files/{name}"), &c)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{name}");
+        assert_eq!(code(&body), ("log_file_not_found".into(), "name".into()));
+        let text = String::from_utf8_lossy(&body);
+        assert!(!text.contains("passwd") && !text.contains("evil"), "{text}");
+    }
+    let (status, _, body) = call(
+        &f.app,
+        get("/api/v1/logs/files/lodestar.jsonl?format=zip", &c),
+    )
+    .await;
+    assert_eq!(
+        (status, code(&body).1),
+        (StatusCode::BAD_REQUEST, "format".into())
+    );
+}
+
+#[tokio::test]
+async fn deleting_needs_a_same_origin_json_request() {
+    let fake = Fake::new(config(), 100);
+    let f = fixture(Some(fake));
+    let c = session(&f.auth);
+    let del = |origin: Option<&str>, ct: &str, body: &str| {
+        let mut b = Request::delete("/api/v1/logs/files")
+            .header(header::COOKIE, &c)
+            .header(header::HOST, "lodestar.local")
+            .header(header::CONTENT_TYPE, ct);
+        if let Some(o) = origin {
+            b = b.header(header::ORIGIN, o);
+        }
+        b.body(Body::from(body.to_string())).unwrap()
+    };
+    let (status, _, body) = call(
+        &f.app,
+        del(
+            Some("https://evil.example"),
+            "application/json",
+            r#"{"which":"all"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(
+        (status, code(&body).0),
+        (StatusCode::FORBIDDEN, "cross_origin".into())
+    );
+    let (status, ..) = call(&f.app, del(None, "text/plain", r#"{"which":"all"}"#)).await;
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    let (status, ..) = call(&f.app, del(None, "application/json", r#"{"which":"some"}"#)).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let (status, _, body) = call(
+        &f.app,
+        del(
+            Some("http://lodestar.local"),
+            "application/json",
+            r#"{"which":"details"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let v: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        v,
+        serde_json::json!({"bytes": 10, "deleted": 1, "skipped": []})
+    );
+    // No session: 401, whatever the body.
+    let anon = Request::delete("/api/v1/logs/files")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"which":"all"}"#))
+        .unwrap();
+    assert_eq!(call(&f.app, anon).await.0, StatusCode::UNAUTHORIZED);
 }
