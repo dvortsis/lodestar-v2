@@ -1,0 +1,2 @@
+422
+{"error":{"code":"invalid_setting","field":"window","message":"\"04:00-04:00\" starts and ends at the same time","section":"updates"}}

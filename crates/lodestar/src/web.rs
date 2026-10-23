@@ -699,9 +699,11 @@ mod tests {
             );
         }
         if BUILT {
-            // The theme pre-paint script and SvelteKit's bootstrap.
+            // The theme pre-paint script, the static boot shell's nav
+            // script (app.html) and SvelteKit's bootstrap.
             assert!(page.contains("id=\"prepaint\""));
-            assert_eq!(found.scripts.len(), 2, "{found:?}");
+            assert!(page.contains("data-boot-nav"));
+            assert_eq!(found.scripts.len(), 3, "{found:?}");
             // SvelteKit's visually hidden route announcer.
             assert!(
                 attrs.iter().any(|a| a.starts_with("position: absolute;")),
