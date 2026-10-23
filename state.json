@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T06:38:50Z",
+ "updated_at": "2026-10-23T06:40:44Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -867,8 +867,8 @@
    "session": "session_019JSHNmjWkJEYfg8YsfJ7wG",
    "pr": 117,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": "from #86 | 05:02 launched after B2b merge (brief by Opus helper, runner-reviewed; steward from start). | 2026-10-23T06:09:01Z PR #117 head f1e0457 (~13k lines, mostly generated); fresh + security reviewers launched | 2026-10-23T06:16:19Z security review MERGE w/ 2 important (licence_file path escape -> credential leak into rust.json; deadline not capped vs clock-behind-after-reboot) + 8 polish; requiring 1-2 (+cheap polish) after fresh review returns",
+   "review_rounds": 1,
+   "notes": "from #86 | 05:02 launched after B2b merge (brief by Opus helper, runner-reviewed; steward from start). | 2026-10-23T06:09:01Z PR #117 head f1e0457 (~13k lines, mostly generated); fresh + security reviewers launched | 2026-10-23T06:16:19Z security review MERGE w/ 2 important (licence_file path escape -> credential leak into rust.json; deadline not capped vs clock-behind-after-reboot) + 8 polish; requiring 1-2 (+cheap polish) after fresh review returns | 2026-10-23T06:40:44Z round 1 FIX (both reviewers MERGE-with-important): licence path escape, deadline clamp vs clock, HTTP_BIND trap, refused WITH bypass, fixture restart, started() placement + 8 cheap; merge main",
    "self_review": {
     "raised": 6,
     "fixed": 6,
@@ -1316,7 +1316,8 @@
   "filter_polish": "Next filter brief: IdHasher seeding; prefilter/Nearness/always_fuzzy doc fixes; widen early_stop proptest to 66+ chars and multibyte; mixed-set headroom only ~13% on 7763.",
   "b11a_followups": "B11a follow-ups: \u00a71.6.4 dashboard-open bench gate in CI; insights SSE topic; persisted import counter (no full scan per start); \u00a76.3 annotation kinds (upgrade/import/reindex/network change).",
   "B11b-gauge-13": "B11b daily compaction/rollup --repair must treat metric 13 (SEARCHABLE) as a gauge (keep last per day, never sum) - from B11a #116",
-  "flake-stats-metrics": "lodestar ops::tests::stats_match_the_metrics (ops/tests.rs:445, queue_depth /stats vs /metrics after pause) failed once under parallel load (B11a report 06:34); candidate for a flake fix slice if it recurs in CI"
+  "flake-stats-metrics": "lodestar ops::tests::stats_match_the_metrics (ops/tests.rs:445, queue_depth /stats vs /metrics after pause) failed once under parallel load (B11a report 06:34); candidate for a flake fix slice if it recurs in CI",
+  "release-features-licences": "P-release/Dockerfile must build --no-default-features --features web (no fixture) so licences inventory matches what ships (rand_chacha unlisted today) - from B2c review"
  },
  "blocked_on_owner": [],
  "launches_today": 16,
