@@ -47,6 +47,7 @@ fn fixture() -> Fixture {
             reader: Arc::new(Mutex::new(reader)),
             filters: None,
             settings: Some(registry),
+            ops: None,
             adult: Default::default(),
         }),
     );
