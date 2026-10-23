@@ -854,20 +854,29 @@ impl<'a> Scan<'a> {
             .map(|t| (t.position, term_hash(&t.text)))
             .collect();
         by_pos.sort_unstable();
-        let Some(&(lo, _)) = by_pos.first() else {
+        crate::work::tick(by_pos.len());
+        // Runs of tokens at one position, in order.
+        let runs: Vec<(usize, &[(usize, u64)])> = by_pos
+            .chunk_by(|a, b| a.0 == b.0)
+            .map(|run| (run[0].0, run))
+            .collect();
+        let hashes = |run: &[(usize, u64)]| -> Vec<u64> { run.iter().map(|t| t.1).collect() };
+        let Some(&(_, first)) = runs.first() else {
             return;
         };
-        let at_pos =
-            |p: usize| -> Vec<u64> { by_pos.iter().filter(|t| t.0 == p).map(|t| t.1).collect() };
-        let hi = by_pos[by_pos.len() - 1].0;
-        pairs(&mut self.pairs, self.at.last.get(), &at_pos(lo));
-        for p in lo..hi {
-            pairs(&mut self.pairs, &at_pos(p), &at_pos(p + 1));
+        pairs(&mut self.pairs, self.at.last.get(), &hashes(first));
+        for w in runs.windows(2) {
+            let ((p, a), (q, b)) = (w[0], w[1]);
+            if q == p + 1 {
+                crate::work::tick(a.len() * b.len());
+                pairs(&mut self.pairs, &hashes(a), &hashes(b));
+            }
         }
         // No join reaches across segments, so only the last position
         // carries over; it holds at most a part, its word and a plus.
         let mut last = Few::default();
-        for h in at_pos(hi).into_iter().take(4) {
+        let (_, end) = runs[runs.len() - 1];
+        for &(_, h) in end.iter().take(4) {
             last.push(h);
         }
         self.at = At {
@@ -1259,6 +1268,28 @@ mod tests {
         );
         assert_eq!(n("group:grp"), Need::Any(vec![tag_key("group:grp")]));
         assert_eq!(n("ext:exe"), Need::Always);
+    }
+
+    /// A long name with other than ASCII goes through the tokenizer, and
+    /// its pairs are read position by position, in proportion to its
+    /// length (§6): four times the name, four times the steps.
+    #[test]
+    fn hostile_other_text_costs_in_proportion() {
+        let name = |n: usize| "Ünï cödé 16yo ".repeat(n);
+        let steps = |n: usize| crate::work::counted(|| DocKeys::new(&name(n), &[])).1;
+        let (small, big) = (steps(500), steps(2_000));
+        assert!(
+            big <= 5 * small,
+            "{small} steps, then {big} on four times the name"
+        );
+        // Pairs still cover every neighbour.
+        let keys = DocKeys::new(&name(3), &[]);
+        let toks = tokenize(&name(3));
+        for a in &toks {
+            for b in toks.iter().filter(|b| b.position == a.position + 1) {
+                assert!(keys.could_follow(term_hash(&a.text), term_hash(&b.text)));
+            }
+        }
     }
 
     /// Texts whose hashes collide are chained, each kept and found by
