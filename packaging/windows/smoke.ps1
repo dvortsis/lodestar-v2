@@ -121,6 +121,19 @@ if ($Msi) {
   Assert (-not (Test-Path "$installDir\lodestar.exe")) 'refused install left files behind'
   Rename-Item "$dataDir\marker.off" '.lodestar-secured'
 
+  # --- the marker alone is not trusted: inherited ACL, or a foreign-owned entry, must stop it ---
+  $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
+  & $icacls $dataDir /inheritance:e | Out-Null
+  Assert ($LASTEXITCODE -eq 0) 'could not re-enable inheritance for the test'
+  $p = Start-Process msiexec.exe -ArgumentList @('/i', "`"$Msi`"", '/qn', '/norestart', '/l*v', "`"$logs\msi-refused2.log`"") -Wait -PassThru
+  Assert ($p.ExitCode -ne 0) 'install went ahead on a folder with inherited permissions'
+  & $icacls $dataDir /inheritance:r | Out-Null
+  & $icacls "$dataDir\keep-me.txt" /setowner '*S-1-5-32-545' | Out-Null
+  Assert ($LASTEXITCODE -eq 0) 'could not set a foreign owner for the test'
+  $p = Start-Process msiexec.exe -ArgumentList @('/i', "`"$Msi`"", '/qn', '/norestart', '/l*v', "`"$logs\msi-refused3.log`"") -Wait -PassThru
+  Assert ($p.ExitCode -ne 0) 'install went ahead with a file owned by Users'
+  & $icacls "$dataDir\keep-me.txt" /setowner '*S-1-5-32-544' | Out-Null
+
   # --- reinstall with the Defender box ticked, uninstall with REMOVE_DATA=1 ---
   Invoke-Msiexec @('/i', "`"$Msi`"", '/qn', '/norestart', 'DEFENDER_EXCLUSION=1', '/l*v', "`"$logs\msi-install2.log`"") 'reinstall'
   if (Get-Command Get-MpPreference -ErrorAction SilentlyContinue) {
