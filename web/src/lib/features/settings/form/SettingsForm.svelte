@@ -2,7 +2,8 @@
 	// Everything a form needs that's tied to a component's lifetime (§10.10.5): the error summary,
 	// the draft and network banners, the one polite live region, the save bar, ⌘/Ctrl+S, the leave
 	// guard, the `settings` subscription and the default disruptive confirmation. The screen puts
-	// its groups and `SettingField`s in `children`.
+	// its groups and `SettingField`s in `children`. The bar, the summary and the questions load
+	// when they're first needed.
 	import { beforeNavigate, goto } from '$app/navigation';
 	import { events } from '$lib/state/events.svelte';
 	import Button from '$lib/ui/controls/Button.svelte';
@@ -10,14 +11,13 @@
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
-	import { onDestroy, tick, untrack, type Snippet } from 'svelte';
-	import IconRestart from '~icons/ph/arrows-clockwise';
-	import IconCheck from '~icons/ph/check-circle';
-	import { ask } from './dialogs';
-	import type { SettingsForm } from './form.svelte';
+	import { onDestroy, untrack, type Snippet } from 'svelte';
+	import { loadControls } from './controls.svelte';
+	import { lazyPart } from './lazy.svelte';
+	import { preloadSettingsForm, type SettingsForm } from './form.svelte';
 	import { hardNavigate, leaveDecision } from './leave';
-	import { fieldLabel } from './messages';
-	import type { FieldKey, GateContext } from './types';
+	import type { FieldKey } from './types';
+	import { widgetFor } from './widgets';
 
 	interface Props {
 		form: SettingsForm;
@@ -41,14 +41,13 @@
 		children
 	}: Props = $props();
 
-	let summary = $state<HTMLElement>();
 	let summaryShown = $state(false);
+	let summaryFocus = $state(0);
 	let bypass = false;
 
-	const unsaved = $derived(form.dirtyCount > 0);
 	const barShown = $derived(
 		saveBar &&
-			(unsaved ||
+			(form.dirtyCount > 0 ||
 				form.status === 'saving' ||
 				form.status === 'saved' ||
 				form.status === 'save-error' ||
@@ -56,7 +55,35 @@
 				form.undoUntil !== null)
 	);
 	const count = $derived(formatCount(form.dirtyCount, currentLocale()));
-	const retrySeconds = $derived(form.saveError?.retryAfter);
+
+	// From the edit chunk, which the form loads with the first edit.
+	const edit = () => import('./edit');
+	const BarPart = lazyPart(() => edit().then((mod) => mod.SaveBar));
+	const SummaryPart = lazyPart(() => edit().then((mod) => mod.ErrorSummary));
+	const NoticePart = lazyPart(() => edit().then((mod) => mod.FormNotice));
+	const notice = $derived(form.status === 'offline' || form.status === 'save-error');
+	$effect(() => BarPart.want(barShown));
+	$effect(() => SummaryPart.want(summaryShown));
+	$effect(() => NoticePart.want(notice));
+
+	// After the first view, while the browser is idle: the edit chunk (and instant mode), so the
+	// first edit finds it in place, even if the connection drops meanwhile.
+	const shown = $derived(form.status !== 'loading' && form.status !== 'load-error');
+	$effect(() => {
+		if (!shown) return;
+		const go = () => void preloadSettingsForm(form.mode === 'instant').catch(() => {});
+		if (typeof requestIdleCallback !== 'function') {
+			const t = setTimeout(go, 500);
+			return () => clearTimeout(t);
+		}
+		const id = requestIdleCallback(go, { timeout: 2000 });
+		return () => cancelIdleCallback(id);
+	});
+
+	// The fields' on-demand controls load with the values, so they're in place at first paint.
+	$effect(() => {
+		void loadControls(form.specs.map(widgetFor));
+	});
 
 	// --- saving ------------------------------------------------------------------------------
 
@@ -71,7 +98,7 @@
 			if (last.result.ok) summaryShown = false;
 			else if (form.errors.length) {
 				summaryShown = true;
-				void tick().then(() => summary?.focus());
+				summaryFocus = last.id;
 			}
 		});
 	});
@@ -80,91 +107,13 @@
 	const asking = new AbortController();
 	onDestroy(() => asking.abort());
 
-	async function discard() {
-		// One change is cheap to redo; more than one asks first.
-		if (form.dirtyCount > 1) {
-			const answer = await ask(
-				{
-					title: m.settings_form_discard_title({ count }),
-					body: [m.settings_form_discard_body()],
-					actions: [
-						{ id: 'keep', label: m.settings_form_keep_editing() },
-						{ id: 'discard', label: m.settings_form_discard(), variant: 'danger' }
-					],
-					initial: 'keep'
-				},
-				asking.signal
-			);
-			if (answer !== 'discard') return;
-		}
-		form.discard();
-		summaryShown = false;
-	}
-
-	const CONTROL_SELECTORS = [
-		'input:checked',
-		'[role="radio"][aria-checked="true"]',
-		'input, select, textarea, [role="radio"], button'
-	];
-
-	async function reveal(key: FieldKey) {
-		await onReveal?.(key);
-		await tick();
-		// The field's control, never its header (the ⋯ menu): the label's target, else the checked
-		// option, else the first control inside the field's control area.
-		const root = document.getElementById(key);
-		const area = root?.querySelector<HTMLElement>('[data-control]');
-		const label = root?.querySelector<HTMLLabelElement>('label[for]');
-		const control =
-			(label?.htmlFor ? document.getElementById(label.htmlFor) : null) ??
-			// In order of preference (a selector list would match in document order instead).
-			CONTROL_SELECTORS.map((q) => area?.querySelector<HTMLElement>(q)).find(Boolean);
-		root?.scrollIntoView?.({ block: 'center' });
-		control?.focus();
-	}
-
 	// --- the default disruptive confirmation (§10.10.7) --------------------------------------
-
-	function effectLines(c: GateContext): string[] {
-		const lines: string[] = [];
-		for (const key of c.fields) {
-			const [section, name] = [key.slice(0, key.indexOf('.')), key.slice(key.indexOf('.') + 1)];
-			const p = c.preview.sections[section]?.fields[name];
-			for (const e of p?.estimates ?? []) {
-				if (e.name === 'url' && typeof e.value === 'string') {
-					lines.push(m.settings_form_disruptive_url({ url: e.value }));
-				}
-			}
-			for (const w of p?.warnings ?? []) lines.push(w.message);
-		}
-		return [...new Set(lines)];
-	}
 
 	// A fallback: a screen's own disruptive handler (Network's lockout dialog, §10.10.6) wins.
 	$effect(() =>
-		form.defaultGate('disruptive', async (c) => {
-			const labels = c.fields
-				.map((k) => form.specs.find((s) => s.key === k))
-				.filter((s) => s !== undefined)
-				.map((s) => fieldLabel(s));
-			const effects = effectLines(c);
-			const answer = await ask(
-				{
-					title: m.settings_form_disruptive_title(),
-					body: [
-						m.settings_form_disruptive_fields({ fields: labels.join(', ') }),
-						...(effects.length ? effects : [m.settings_form_disruptive_generic()])
-					],
-					actions: [
-						{ id: 'cancel', label: m.settings_form_cancel() },
-						{ id: 'save', label: m.settings_form_save(), variant: 'primary' }
-					],
-					initial: 'cancel'
-				},
-				asking.signal
-			);
-			return answer === 'save';
-		})
+		form.defaultGate('disruptive', async (c) =>
+			(await edit()).askDisruptive(form, c, asking.signal)
+		)
 	);
 
 	// --- events ------------------------------------------------------------------------------
@@ -191,11 +140,11 @@
 
 	// --- the bar never covers the focused field (§10.10.5) -----------------------------------
 
-	let bar = $state<HTMLElement>();
+	let barEl = $state<HTMLElement>();
 	function onfocusin(e: FocusEvent) {
-		if (!bar || !(e.target instanceof HTMLElement) || bar.contains(e.target)) return;
+		if (!barEl || !(e.target instanceof HTMLElement) || barEl.contains(e.target)) return;
 		const target = e.target.getBoundingClientRect();
-		const top = bar.getBoundingClientRect().top;
+		const top = barEl.getBoundingClientRect().top;
 		// The ramp's 4 (16 px at the default root size) of air between the control and the bar.
 		const air = parseFloat(getComputedStyle(document.documentElement).fontSize);
 		const hidden = target.bottom + air - top;
@@ -253,19 +202,7 @@
 
 	/** Asks Save / Discard / Keep editing, then continues to `to` the way the user was going. */
 	async function confirmLeave(to: URL, unload: boolean) {
-		const answer = await ask(
-			{
-				title: m.settings_form_leave_title(),
-				body: [m.settings_form_leave_body({ count })],
-				actions: [
-					{ id: 'keep', label: m.settings_form_keep_editing() },
-					{ id: 'discard', label: m.settings_form_discard() },
-					{ id: 'save', label: m.settings_form_save(), variant: 'primary' }
-				],
-				initial: 'save'
-			},
-			asking.signal
-		);
+		const answer = await (await edit()).askLeave(count, asking.signal);
 		if (answer === 'save') {
 			// Nothing to save any more (a merge or ⌘S settled it meanwhile) is as good as saved.
 			const r = await save();
@@ -295,32 +232,8 @@
 	{onkeydown}
 	{onfocusin}
 >
-	{#if summaryShown && form.errors.length}
-		<div class="rounded-box border border-error p-4" data-testid="error-summary">
-			<h2 bind:this={summary} tabindex="-1" class="text-title font-semibold">
-				{m.settings_form_summary_title()}
-			</h2>
-			<ul class="mt-2 flex flex-col gap-1">
-				{#each form.errors as e, i (e.key ?? `form-${i}`)}
-					<li>
-						{#if e.key}
-							{@const key = e.key}
-							{@const spec = form.specs.find((s) => s.key === key)}
-							<a
-								class="link inline-flex items-center text-error pointer-coarse:min-h-(--target-min)"
-								href="#{key}"
-								onclick={(ev) => {
-									ev.preventDefault();
-									void reveal(key);
-								}}>{spec ? `${fieldLabel(spec)}: ` : ''}{e.message}</a
-							>
-						{:else}
-							<span class="text-error">{e.message}</span>
-						{/if}
-					</li>
-				{/each}
-			</ul>
-		</div>
+	{#if summaryShown && form.errors.length && SummaryPart.part}
+		<SummaryPart.part {form} focusId={summaryFocus} {onReveal} />
 	{/if}
 
 	{#if form.draft}
@@ -343,29 +256,14 @@
 		</Banner>
 	{/if}
 
-	{#if form.status === 'offline'}
-		<Banner kind="warning">
-			<span data-testid="offline-text"
-				>{retrySeconds
-					? m.settings_form_busy({ seconds: formatCount(retrySeconds, currentLocale()) })
-					: m.settings_form_offline()}</span
-			>
-			{#snippet action()}
-				<Button dense onclick={() => void form.retry()}>{m.settings_form_retry()}</Button>
-			{/snippet}
-		</Banner>
-	{:else if form.status === 'save-error'}
-		<Banner kind="error">
-			{m.settings_form_error_server()}
-			{#snippet action()}
-				<Button dense onclick={() => void form.retry()}>{m.settings_form_retry()}</Button>
-			{/snippet}
-		</Banner>
+	{#if notice && NoticePart.part}
+		<NoticePart.part {form} />
 	{/if}
 
 	{#if form.status === 'loading'}
 		<p class="text-muted-text" aria-busy="true">{m.settings_form_loading()}</p>
 	{:else if form.status === 'load-error'}
+		<!-- Inline: a form that couldn't load may not reach the edit chunk either. -->
 		<Banner kind="error">
 			{m.settings_form_load_error()}
 			{#snippet action()}
@@ -381,45 +279,13 @@
 		{#key form.announcement?.id}{form.announcement?.text ?? ''}{/key}
 	</div>
 
-	{#if barShown}
-		<div
-			class="ls-bar sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-3 border-t border-base-300 bg-base-100 py-2"
-			data-testid="save-bar"
-			bind:this={bar}
-		>
-			<p class="flex flex-wrap items-center gap-2 text-body" data-testid="save-bar-status">
-				{#if form.status === 'saving'}
-					{m.settings_form_saving()}
-				{:else if unsaved}
-					{form.dirtyCount === 1
-						? m.settings_form_unsaved_one()
-						: m.settings_form_unsaved({ count })}
-				{:else if form.status === 'saved' || form.undoUntil !== null}
-					<span class="inline-flex items-center gap-1">
-						{#if form.restartPending.length}
-							<IconRestart class="size-(--icon-size-row) shrink-0" aria-hidden="true" />
-						{:else}
-							<IconCheck class="size-(--icon-size-row) shrink-0 text-success" aria-hidden="true" />
-						{/if}
-						{form.restartPending.length ? m.settings_form_saved_restart() : m.settings_form_saved()}
-					</span>
-					{#if form.undoSkipsSecrets}
-						<span class="text-small text-muted-text">{m.settings_form_undo_secrets()}</span>
-					{/if}
-				{/if}
-			</p>
-			<div class="flex items-center gap-2">
-				{#if unsaved}
-					<Button onclick={discard}>{m.settings_form_discard()}</Button>
-					<!-- Never disabled: with errors, Save shows the summary (§10.10.5). -->
-					<Button variant="primary" loading={form.status === 'saving'} onclick={() => void save()}
-						>{m.settings_form_save()}</Button
-					>
-				{:else if form.undoUntil !== null}
-					<Button onclick={() => void form.undo()}>{m.settings_form_undo()}</Button>
-				{/if}
-			</div>
-		</div>
+	{#if barShown && BarPart.part}
+		<BarPart.part
+			{form}
+			signal={asking.signal}
+			ondiscard={() => (summaryShown = false)}
+			bind:el={barEl}
+		/>
 	{/if}
 </div>
 
@@ -427,10 +293,5 @@
 	/* While the bar shows, the column keeps room for it under the last field. */
 	.ls-form-bar {
 		padding-bottom: calc(var(--spacing) * 4);
-	}
-	@media (pointer: coarse) {
-		.ls-bar {
-			min-height: var(--target-min);
-		}
 	}
 </style>

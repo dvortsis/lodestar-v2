@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { onLoginRequired } from '$lib/api/client';
 import { DRAFT_PREFIX } from './draft';
 import { fakeServer, flush } from './testing/fake-server';
-import { createSettingsForm, type SettingsForm } from './form.svelte';
+import { createSettingsForm, preloadSettingsForm, type SettingsForm } from './form.svelte';
 import { clearIndexCache } from './schema';
 import { spec, sv, values } from './testing/values';
 import type { FieldSpec, GateContext } from './types';
@@ -60,6 +60,9 @@ function open(over: Partial<Parameters<typeof createSettingsForm>[0]> = {}) {
 	forms.push(f);
 	return f;
 }
+
+// The parts loaded on demand are loaded up front here; `lazy.test.ts` covers loading them.
+beforeAll(() => preloadSettingsForm());
 
 beforeEach(async () => {
 	vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'], now: 1_000_000 });

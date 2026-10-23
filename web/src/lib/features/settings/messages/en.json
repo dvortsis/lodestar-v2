@@ -18,6 +18,8 @@
 	"settings_form_error_socket_addr": "Enter an address and a port, like 0.0.0.0:8090 or [::]:8090.",
 	"settings_form_error_url": "Enter a web address that starts with http:// or https://.",
 	"settings_form_error_host": "Enter a host name or an IP address, like nas.local or 192.168.1.5.",
+	"settings_form_error_time_range": "Enter a start and an end in 24-hour time, like 03:00-05:00. A window can run past midnight, like 22:00-02:00.",
+	"settings_form_error_time_range_same": "The window starts and ends at the same time. Choose a different end.",
 	"settings_form_error_needs_confirmation": "This change needs a confirmation this screen can't show, so nothing was saved. Make it from its own Settings screen.",
 	"settings_form_error_schema": "This screen and Lodestar don't agree about a setting, so nothing was saved. Reload the page, then try again.",
 	"settings_form_error_server": "Lodestar couldn't save the change. Your changes are kept; try again.",
