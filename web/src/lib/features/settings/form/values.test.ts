@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { spec, sv, values } from './testing';
+import { spec, sv, values } from './testing/values';
 import {
 	applySaved,
 	buildBatch,
@@ -7,7 +7,9 @@ import {
 	discardAll,
 	equal,
 	fromValues,
+	differs,
 	isDirty,
+	JsonDraft,
 	RESET,
 	stage
 } from './values';
@@ -195,5 +197,14 @@ describe('editing a conflict', () => {
 	it('never resets a secret', () => {
 		const s0 = fromValues(values('c', 3, { token: sv(null, 'db') }));
 		expect(stage(s0, 'token', RESET, spec('c.token', { writeOnly: true }))).toBe(s0);
+	});
+});
+
+describe('text that doesn’t parse as JSON', () => {
+	it('always differs from a saved value', () => {
+		const s0 = fromValues(values('c', 1, { m: sv({ a: 1 }) }));
+		const s = stage(s0, 'm', new JsonDraft('{"a": 1'));
+		expect(dirtyNames(s)).toEqual(['m']);
+		expect(differs(new JsonDraft(''), sv(''))).toBe(true);
 	});
 });

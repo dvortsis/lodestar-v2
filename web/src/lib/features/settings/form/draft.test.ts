@@ -8,7 +8,7 @@ import {
 	readDraft,
 	writeDraft
 } from './draft';
-import { spec, sv, values } from './testing';
+import { spec, sv, values } from './testing/values';
 import type { FieldSpec } from './types';
 import { dirtyNames, fromValues, RESET, stage, type SectionState } from './values';
 

@@ -9,7 +9,7 @@
 import { merge } from './merge';
 import { devWarn } from './schema';
 import type { FieldSpec } from './types';
-import { validate } from './validate';
+import { JsonDraft, validate } from './validate';
 import {
 	dirtyNames,
 	isLocked,
@@ -56,6 +56,7 @@ export function draftOf(
 			const f = s.fields[name]!;
 			const spec = specOf(section, name);
 			if (!spec || spec.writeOnly || spec.readOnly || isLocked(f.saved)) continue;
+			if (f.mine instanceof JsonDraft) continue; // half-typed JSON: nothing to restore
 			const d = (out[section] ??= { revision: s.revision, base: {}, mine: {}, reset: [] });
 			d.base[name] = f.base;
 			if (f.mine === RESET) d.reset.push(name);
@@ -76,7 +77,7 @@ export function writeDraft(id: string, draft: Draft | null): boolean {
 		}
 		const text = JSON.stringify(draft);
 		if (new TextEncoder().encode(text).length > DRAFT_MAX_BYTES) {
-			devWarn(`the draft for "${id}" is over 64 KiB; it isn't kept`);
+			if (import.meta.env.DEV) devWarn(`the draft for "${id}" is over 64 KiB; it isn't kept`);
 			store.removeItem(DRAFT_PREFIX + id);
 			return false;
 		}

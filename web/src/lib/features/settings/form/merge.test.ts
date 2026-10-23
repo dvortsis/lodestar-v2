@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { asValues, merge, resolve } from './merge';
-import { sv, values } from './testing';
+import { sv, values } from './testing/values';
 import type { SettingValue } from './types';
 import {
 	differs,
