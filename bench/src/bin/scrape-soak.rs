@@ -1,7 +1,8 @@
-//! Scrape soak (§16 M4 exit): the scrape scheduler working flat out on a
-//! stored corpus, against in-process fake trackers, while the process's
-//! resident memory is sampled. Memory must stay flat: lanes, rounds and
-//! per-tracker state are all bounded, so a long run may not grow.
+//! Scrape soak (M4 exit, `docs/decisions/2026-10-22-M4.md`): the scrape
+//! scheduler working flat out on a stored corpus, against in-process fake
+//! trackers, while the process's resident memory is sampled. Memory must
+//! stay flat: lanes, rounds and per-tracker state are all bounded, so a
+//! long run may not grow.
 //!
 //! Point it at a `search-bench --dir` corpus (its `bench.db`); the run
 //! writes swarm rows into it.

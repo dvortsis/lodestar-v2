@@ -277,7 +277,7 @@ omitted). Times are Unix seconds. Status: **main** = served on `main` today;
 | `swarm_suspect` | boolean | no | Suspect swarm (`swarm_flags::SUSPECT`) | M4 |
 | `score` | number | no | Relevance (hits only) | main |
 | `matched_files` | integer[] | omitted unless the query has a file clause | Matched-file positions | main |
-| `explain` | `{text, seeders, freshness, trackers, junk, penalty, score}` (numbers) | omitted unless `explain=true` on a relevance search | Score breakdown: the text score and each re-ranker multiplier (architecture §16 M4) | M4 |
+| `explain` | `{text, seeders, freshness, trackers, junk, penalty, score}` (numbers) | omitted unless `explain=true` on a relevance search | Score breakdown: the text score and each re-ranker multiplier (`docs/decisions/2026-10-22-M4.md`) | M4 |
 
 "Never scraped" means: no `swarm` row, or a row with `trackers_checked = 0`
 and no DHT estimate. The six nullable swarm fields (`seeders`,
