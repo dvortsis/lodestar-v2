@@ -362,8 +362,8 @@ pub struct Windows<'a> {
 #[cfg(windows)]
 impl Windows<'_> {
     fn powershell(&self, script: &str, dir: &Path) -> io::Result<String> {
-        let mut cmd = super::system32_command(r"WindowsPowerShell\v1.0\powershell.exe")
-            .ok_or_else(|| io::Error::other("SystemRoot isn't set"))?;
+        let mut cmd =
+            super::powershell_command().ok_or_else(|| io::Error::other("SystemRoot isn't set"))?;
         let out = cmd
             .args([
                 "-NoLogo",

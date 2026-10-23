@@ -61,8 +61,7 @@ pub fn get(pid: u32) -> Result<String, String> {
 
 #[cfg(windows)]
 fn run(script: &str) -> Result<String, String> {
-    let mut cmd = super::system32_command(r"WindowsPowerShell\v1.0\powershell.exe")
-        .ok_or("SystemRoot isn't set")?;
+    let mut cmd = super::powershell_command().ok_or("SystemRoot isn't set")?;
     let out = cmd
         .args([
             "-NoLogo",
