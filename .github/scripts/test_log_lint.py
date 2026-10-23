@@ -235,6 +235,79 @@ class Paths(unittest.TestCase):
         self.assertEqual(log_lint.grown(None, ["c.rs"]), [])
         self.assertIsNone(log_lint.listed_in("X = 1\n"))
 
+    def test_every_dependency_table_is_walked(self):
+        for manifest in [
+            '[target.\'cfg(target_os = "windows")\'.dependencies.log]\nversion = "0.4"\n',
+            '[target.\'cfg(unix)\'.build-dependencies]\nlog = "0.4"\n',
+            '[build-dependencies]\nlog = "0.4"\n',
+            'dependencies = { log = "0.4" }\n',
+            '[dependencies]\nx = { package = "log", version = "0.4" }\n',
+            '[target.\'cfg(windows)\'.dependencies]\nt = { package = "tracing", version = "0.1" }\n',
+            'build-dependencies = { t = { package = "tracing" } }\n',
+            '[dependencies]\nwslog = { workspace = true }\n',
+        ]:
+            with self.subTest(manifest=manifest):
+                root = self.tree({
+                    "Cargo.toml": '[workspace.dependencies]\nwslog = { package = "log", version = "0.4" }\n',
+                    "crates/a/Cargo.toml": manifest,
+                    "crates/a/src/lib.rs": "fn f() {}\n",
+                })
+                self.assertEqual(len(log_lint.run(root, [])), 1, manifest)
+        # Dev-dependencies, under a target too, `tracing` by its name, and
+        # a dependency named `log` that is another crate.
+        root = self.tree({
+            "crates/a/Cargo.toml": '[dependencies]\nlog = { package = "x", version = "1" }\n',
+            "crates/a/src/lib.rs": "fn f() {}\n",
+        })
+        self.assertEqual(log_lint.run(root, []), [])
+        root = self.tree({
+            "crates/a/Cargo.toml": (
+                '[dependencies]\ntracing = "0.1"\n'
+                '[target.\'cfg(unix)\'.dev-dependencies]\nlog = "0.4"\n'
+                '[dev-dependencies]\nt = { package = "tracing" }\n'
+            ),
+            "crates/a/src/lib.rs": "fn f() {}\n",
+        })
+        self.assertEqual(log_lint.run(root, []), [])
+
+    def test_the_bench_manifest_is_checked(self):
+        root = self.tree({"bench/Cargo.toml": '[dependencies]\nlog = "0.4"\n'})
+        self.assertEqual(len(log_lint.run(root, [])), 1)
+
+    def test_an_unparseable_manifest_fails_closed(self):
+        root = self.tree({"crates/a/Cargo.toml": "[dependencies\nlog = \n", "crates/a/src/lib.rs": "fn f() {}\n"})
+        got = log_lint.run(root, [])
+        self.assertEqual(len(got), 1, got)
+        self.assertIn("doesn't parse", got[0])
+
+    def test_an_unreadable_base_list_fails_closed(self):
+        exempt = {("crates/log/src/dispatch.rs", "tracing"): "x"}
+        ok = 'NOT_YET_SWEPT = ["a.rs"]\nEXEMPT = {("crates/log/src/dispatch.rs", "tracing"): "x"}\n'
+        self.assertEqual(log_lint.against_base(ok, ["a.rs"], exempt), [])
+        # No script at the base: nothing to compare.
+        self.assertEqual(log_lint.against_base(None, ["a.rs"], exempt), [])
+        for source in [
+            "NOT_YET_SWEPT = sorted(FILES)\nEXEMPT = {}\n",
+            'EXEMPT = {}\n',
+            "NOT_YET_SWEPT = [\n",
+            'NOT_YET_SWEPT = ["a.rs"]\nEXEMPT = dict(x=1)\n',
+        ]:
+            with self.subTest(source=source):
+                self.assertNotEqual(log_lint.against_base(source, ["a.rs"], exempt), [], source)
+
+    def test_exempt_may_not_grow_against_the_base(self):
+        base = 'NOT_YET_SWEPT = []\nEXEMPT = {("a.rs", "tracing"): "why"}\n'
+        self.assertEqual(log_lint.against_base(base, [], {("a.rs", "tracing"): "why"}), [])
+        self.assertEqual(log_lint.against_base(base, [], {}), [])
+        got = log_lint.against_base(base, [], {("a.rs", "tracing"): "why", ("b.rs", "tracing"): "new"})
+        self.assertEqual(len(got), 1, got)
+        self.assertIn("EXEMPT", got[0])
+
+    def test_a_base_that_doesnt_resolve_fails(self):
+        root = Path(__file__).resolve().parents[2]
+        with self.assertRaises(log_lint.BaseUnreadable):
+            log_lint.base_source(root, "refs/heads/no-such-branch-for-log-lint")
+
     def test_the_repository_is_clean(self):
         root = Path(__file__).resolve().parents[2]
         self.assertEqual(log_lint.run(root), [])

@@ -45,6 +45,7 @@ jobs:
       bench: ${{ steps.c.outputs.bench }}
       filter: ${{ steps.c.outputs.filter }}
       importer: ${{ steps.c.outputs.importer }}
+      log_bench: ${{ steps.c.outputs.log_bench }}
       fuzz: ${{ steps.c.outputs.fuzz }}
     steps:
       - uses: actions/checkout@v4
@@ -188,6 +189,22 @@ jobs:
       # release, scaled to the reference runner by a calibration workload
       # (§20.8). The test is ignored in debug runs.
       - run: cargo test --release -p lodestar-filter --test props -- --ignored --nocapture budget
+
+  log-bench:
+    name: logging hot path (B-log1b)
+    needs: changes
+    if: needs.changes.outputs.log_bench == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # An event that's off costs at most 5 ns, and 8 threads on adjacent
+      # events at most twice that; prints (c), (d) and the default_on
+      # verdicts (crates/lodestar/src/logging/bench.rs).
+      - env:
+          LODESTAR_LOG_BENCH_GATE: "1"
+        run: cargo test --release -p lodestar --bin lodestar logging::bench -- --ignored --nocapture --test-threads=1
 
   importer:
     name: bitmagnet importer (PostgreSQL)

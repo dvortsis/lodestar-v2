@@ -17,6 +17,7 @@ pub mod logfile;
 pub mod ports;
 pub mod priority;
 pub mod service;
+pub mod temp_log;
 
 use std::process::ExitCode;
 
