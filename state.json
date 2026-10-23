@@ -473,13 +473,13 @@
       "notes": ""
     },
     "S-compare": {
-      "status": "review",
+      "status": "merged",
       "model": "sonnet",
       "session": "session_019pb4Nm949Ek47p7KFYxL5X",
       "pr": 137,
       "attempt": 0,
       "review_rounds": 1,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:25:00Z PR #137 head 343c6fb; fresh reviewer launched | 2026-10-23T17:55:35Z review FIX: own() ignores dynamic imports (reports 591 B; real ~22.7 KB). Rule: entries = measured+10% (<=45 KB \u00a710.1), 15 KB target w/ reason; refinements accepted; polish; merge main | 2026-10-23T18:04:25Z fixes committed locally (own() dynamic closure, Compare 22.74/25 KB); lhci 102,421 with main merged -> waits for #132 then push | 2026-10-23T21:56Z released 1st of 4: merge main, re-measure (size-limit guard, lhci), push once | 2026-10-23T22:08Z pushed 0048234 (main+#132): Compare own 25.96 KB/28 (measured+10%), lhci 93,956; delta runner-checked; merge on green",
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:25:00Z PR #137 head 343c6fb; fresh reviewer launched | 2026-10-23T17:55:35Z review FIX: own() ignores dynamic imports (reports 591 B; real ~22.7 KB). Rule: entries = measured+10% (<=45 KB \u00a710.1), 15 KB target w/ reason; refinements accepted; polish; merge main | 2026-10-23T18:04:25Z fixes committed locally (own() dynamic closure, Compare 22.74/25 KB); lhci 102,421 with main merged -> waits for #132 then push | 2026-10-23T21:56Z released 1st of 4: merge main, re-measure (size-limit guard, lhci), push once | 2026-10-23T22:08Z pushed 0048234 (main+#132): Compare own 25.96 KB/28 (measured+10%), lhci 93,956; delta runner-checked; merge on green | 2026-10-23T22:17Z #137 merged 458104a",
       "catch_ups": 1
     },
     "S-discover": {
@@ -499,7 +499,7 @@
       "pr": 138,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:37:17Z PR #138 head 857f236; search JS 39.51->40.68 (lazy runtime hoisted into shared chunk); held until S-search-1 chunking fix; fixture check requested; review after re-measure | 2026-10-23T17:46:20Z fixture check done via API (no screenshots: embedded UI predates branch)",
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:37:17Z PR #138 head 857f236; search JS 39.51->40.68 (lazy runtime hoisted into shared chunk); held until S-search-1 chunking fix; fixture check requested; review after re-measure | 2026-10-23T17:46:20Z fixture check done via API (no screenshots: embedded UI predates branch) | 2026-10-23T22:17Z released 2nd of 4",
       "catch_ups": 0
     },
     "S-insights-1": {
