@@ -7,6 +7,7 @@
 //! `LODESTAR_BLESS=1 cargo test -p lodestar-api --test insights` rewrites
 //! them (read the diff before committing it).
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
@@ -166,6 +167,7 @@ impl InsightsSource for FakeSource {
 
 struct Fixture {
     app: Router,
+    state: ApiState,
     auth: Arc<Auth>,
     ops: Arc<FakeOps>,
     source: Arc<FakeSource>,
@@ -194,22 +196,21 @@ fn fixture_with(insights: bool) -> Fixture {
     });
     let adult = Arc::new(AtomicBool::new(false));
     let shown = adult.clone();
-    let app = Router::new().nest(
-        "/api/v1",
-        router(ApiState {
-            auth: auth.clone(),
-            index: None,
-            reader: Arc::new(Mutex::new(reader)),
-            filters: None,
-            settings: None,
-            ops: Some(ops.clone() as Arc<dyn OpsApi>),
-            adult: AdultVisibility::follow(move || shown.load(Ordering::Relaxed)),
-            insights: insights.then(|| source.clone() as Arc<dyn InsightsSource>),
-            user_data: None,
-        }),
-    );
+    let state = ApiState {
+        auth: auth.clone(),
+        index: None,
+        reader: Arc::new(Mutex::new(reader)),
+        filters: None,
+        settings: None,
+        ops: Some(ops.clone() as Arc<dyn OpsApi>),
+        adult: AdultVisibility::follow(move || shown.load(Ordering::Relaxed)),
+        insights: insights.then(|| source.clone() as Arc<dyn InsightsSource>),
+        user_data: None,
+    };
+    let app = Router::new().nest("/api/v1", router(state.clone()));
     Fixture {
         app,
+        state,
         auth,
         ops,
         source,
@@ -361,6 +362,20 @@ fn story(f: &Fixture) {
             counter(done, 14, u32::from(FETCHED), 0, 5),
             counter(open, 14, u32::from(FETCHED), 0, 2),
             counter(open, 14, u32::from(LOST), 9, 1),
+            counter(done, 14, u32::from(LOST), 2, 1),
+            counter(done, 14, u32::from(LOST), 7, 1),
+            // Keys reported (metric 1: dim = source, key = strategy),
+            // rediscovered (2) and dropped (3): the Discover page.
+            counter(done, 1, 0, 0, 60),
+            counter(done, 1, 0, 1, 20),
+            counter(done, 1, 1, 0, 5),
+            counter(open, 1, 0, 0, 30),
+            counter(open, 1, 0, 200, 2),
+            counter(done, 2, 0, 0, 12),
+            counter(open, 3, 0, 0, 1),
+            // Removals (15, by type): the Index page; one Adult.
+            counter(NOW_H - 1, 15, MOVIE as u32, 0, 2),
+            counter(NOW_H - 1, 15, ADULT as u32, 0, 1),
         ],
         &[
             Event {
@@ -396,6 +411,14 @@ fn story(f: &Fixture) {
         "UPDATE insights_state SET value = ?1 WHERE key = 'funnel_events_since_hour'",
         [NOW_H - 48],
     )
+    .unwrap();
+    // The searchable count's hourly snapshots (a gauge), one in the day
+    // before the 7-day range starts.
+    s.set_gauges(&[
+        counter(NOW_H - 180, 13, 0, 0, 900),
+        counter(NOW_H - 3, 13, 0, 0, 995),
+        counter(NOW_H - 1, 13, 0, 0, 1000),
+    ])
     .unwrap();
     // Coverage: the last 30 hours, but not the paused 2.
     let running: Vec<i64> = (NOW_H - 29..=NOW_H)
@@ -498,6 +521,12 @@ async fn every_route_needs_a_session() {
     for uri in [
         "/api/v1/insights/overview",
         "/api/v1/insights/events?from=0&to=10",
+        "/api/v1/insights/discover",
+        "/api/v1/insights/fetch",
+        "/api/v1/insights/understand",
+        "/api/v1/insights/index",
+        "/api/v1/insights/serve",
+        "/api/v1/insights/export.csv?panel=trend",
     ] {
         let (status, body) = send(&f, get(uri, None)).await;
         assert_eq!(status, 401, "{uri}");
@@ -512,6 +541,8 @@ async fn without_insights_it_is_unavailable() {
     for uri in [
         "/api/v1/insights/overview",
         "/api/v1/insights/events?from=0&to=10",
+        "/api/v1/insights/fetch",
+        "/api/v1/insights/export.csv?panel=index.trend",
     ] {
         let (status, body) = send(&f, get(uri, Some(&cookie))).await;
         assert_eq!(status, 503, "{uri}");
@@ -542,6 +573,29 @@ async fn bad_parameters_name_their_field() {
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["error"]["code"], code, "{query}");
         assert_eq!(v["error"]["field"], field, "{query}");
+    }
+    // The stage pages and the export take the overview's range rules,
+    // plus `reason` and `panel`.
+    for (path, query, field) in [
+        ("discover", "range=1y", "range"),
+        ("fetch", "reason=lost", "reason"),
+        ("fetch", "reason=", "reason"),
+        ("index", "reason=Timed_Out", "reason"),
+        ("serve", "compare=3", "compare"),
+        ("understand", "range=custom&from=10", "to"),
+        ("export.csv", "", "panel"),
+        ("export.csv", "panel=fetch", "panel"),
+        ("export.csv", "panel=trend&range=1y", "range"),
+        ("export.csv", "panel=fetch.trend&compare=2", "compare"),
+    ] {
+        let (status, body) = send(
+            &f,
+            get(&format!("/api/v1/insights/{path}?{query}"), Some(&cookie)),
+        )
+        .await;
+        assert_eq!(status, 400, "{path}?{query}: {body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["error"]["field"], field, "{path}?{query}");
     }
     for (query, field) in [
         ("from=5&to=5", "to"),
@@ -1165,7 +1219,7 @@ async fn a_year_of_rollups_answers_within_budget() {
     let warmed = lodestar_api::insights::warm(&f.store(), &f.source.cache, NOW, None).unwrap();
     eprintln!("warm ({warmed} days): {:?}", cold.elapsed());
     assert!(warmed >= 355);
-    let queries = [
+    let mut queries: Vec<String> = [
         "range=24h",
         "range=7d",
         "range=7d&compare=1",
@@ -1173,13 +1227,23 @@ async fn a_year_of_rollups_answers_within_budget() {
         "range=30d&compare=1",
         "range=all",
         "range=all&compare=1",
-    ];
+    ]
+    .iter()
+    .map(|q| format!("overview?{q}"))
+    .collect();
+    // Every stage page, at the ranges that read the most.
+    for stage in ["discover", "fetch", "understand", "index", "serve"] {
+        for q in ["range=7d&compare=1", "range=30d&compare=1", "range=all"] {
+            queries.push(format!("{stage}?{q}"));
+        }
+    }
+    queries.push("fetch?range=30d&reason=timed_out".into());
     let timed = |label: &'static str| {
-        let (f, cookie) = (&f, &cookie);
+        let (f, cookie, queries) = (&f, &cookie, &queries);
         async move {
             let mut bodies = Vec::new();
             for query in queries {
-                let uri = format!("/api/v1/insights/overview?{query}");
+                let uri = format!("/api/v1/insights/{query}");
                 for i in 0..3 {
                     // A new flush each time: never a cached response.
                     f.touched();
@@ -1189,13 +1253,21 @@ async fn a_year_of_rollups_answers_within_budget() {
                     eprintln!("{label} {query}: {took:?}");
                     assert_eq!(status, 200);
                     let v: Value = serde_json::from_str(&body).unwrap();
-                    assert!(v["kpi"]["yield"].as_f64().is_some(), "{query}");
-                    assert!(
-                        v["annotations"].as_array().unwrap().len() <= 1000,
-                        "{query}"
-                    );
+                    if query.starts_with("overview") {
+                        assert!(v["kpi"]["yield"].as_f64().is_some(), "{query}");
+                        assert!(
+                            v["annotations"].as_array().unwrap().len() <= 1000,
+                            "{query}"
+                        );
+                    }
                     // The budget holds in release builds; others only report.
-                    if !cfg!(debug_assertions) {
+                    // Stage pages are held to it over what a running store
+                    // has: hourly rows for 30 days, the rest compacted. A
+                    // year still hourly (before the first compaction, which
+                    // runs 10 minutes after the upgrade) only reports.
+                    if !cfg!(debug_assertions)
+                        && (label == "compacted" || query.starts_with("overview"))
+                    {
                         assert!(took.as_millis() <= 50, "{label} {query}: {took:?}");
                     }
                     if i == 0 {
@@ -1246,4 +1318,369 @@ async fn a_year_of_rollups_answers_within_budget() {
     .await;
     assert_eq!(v["range"]["bucket"], "day");
     assert_eq!(v["trend"].as_array().unwrap().len(), 4);
+}
+
+/// Every stage page, against its golden: 24 h, Compare, a `reason`, and
+/// 30 days. The story's numbers read back, nulls where nothing was
+/// measured or counted, and Adult left out of per-type lists.
+#[tokio::test]
+async fn stage_goldens() {
+    let f = fixture();
+    story(&f);
+    let cookie = session(&f).await;
+    let mut pages = BTreeMap::new();
+    for (name, uri) in [
+        ("discover_24h", "discover?range=24h"),
+        ("discover_7d_compare", "discover?range=7d&compare=1"),
+        ("fetch_24h", "fetch?range=24h"),
+        ("fetch_24h_timed_out", "fetch?range=24h&reason=timed_out"),
+        ("fetch_7d", "fetch?range=7d"),
+        ("understand_24h", "understand?range=24h"),
+        ("index_24h", "index?range=24h"),
+        ("index_30d_compare", "index?range=30d&compare=1"),
+        ("serve_24h", "serve?range=24h"),
+    ] {
+        let v = golden(&f, &cookie, name, &format!("/api/v1/insights/{uri}")).await;
+        pages.insert(name, v);
+    }
+    let d = &pages["discover_24h"];
+    assert_eq!(d["kpi"]["reported"], 117);
+    assert_eq!(d["kpi"]["rediscovered"], 12);
+    assert_eq!(d["kpi"]["dropped"], 1);
+    assert_eq!(
+        d["kpi"]["harvested"], 17,
+        "first harvests, as the overview's"
+    );
+    assert_eq!(d["kpi"]["dht_nodes"], Value::Null, "the DHT is off");
+    assert_eq!(d["by_ip_family"], Value::Null);
+    assert_eq!(
+        d["by_strategy"],
+        json!([{"key": "sample", "reported": 95}, {"key": "get_peers", "reported": 20},
+               {"key": "refetch", "reported": 2}])
+    );
+    assert_eq!(d["by_source"][0]["key"], "dht");
+    // The paused hours are gaps; a measured quiet hour is 0.
+    let at = |v: &Value, h: i64| -> Value {
+        v["trend"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["at"] == (NOW_H - h) * 3600)
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(at(d, 9)["reported"], Value::Null, "paused");
+    assert_eq!(at(d, 12)["reported"], 0, "measured, nothing");
+    let fe = &pages["fetch_24h"];
+    assert_eq!(fe["kpi"]["fetched"], 7);
+    assert_eq!(fe["kpi"]["lost"], 3);
+    assert_eq!(fe["kpi"]["queue_depth"], 0, "a snapshot");
+    assert_eq!(fe["kpi"]["fetch_latency_p50_ms"], Value::Null);
+    assert_eq!(fe["losses"][0]["count"], 1);
+    let t = &pages["fetch_24h_timed_out"];
+    assert_eq!(t["reason"], "timed_out");
+    assert_eq!(t["kpi"]["lost"], 1);
+    assert_eq!(t["losses"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        t["funnel_total"]["losses"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .collect::<Vec<_>>(),
+        ["timed_out"]
+    );
+    // Fetches have been counted for two days only: a week's are unknown.
+    let w = &pages["fetch_7d"];
+    assert_eq!(w["kpi"]["fetched"], Value::Null);
+    assert_eq!(w["losses"], Value::Null);
+    assert_eq!(at(w, 100)["fetched"], Value::Null, "before counting began");
+    let u = &pages["understand_24h"];
+    assert_eq!(u["kpi"]["stored"], 6, "the 80 h old cohort is outside");
+    assert_eq!(u["kpi"]["blocked"], 1);
+    assert_eq!(u["kpi"]["parser_confidence"], Value::Null);
+    let keys = |v: &Value| -> Vec<String> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["key"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert!(!keys(&u["by_content_type"]).contains(&"adult".to_string()));
+    assert!(!keys(&u["by_group"]).contains(&"adult".to_string()));
+    let i = &pages["index_24h"];
+    assert_eq!(i["kpi"]["searchable"], 1000);
+    assert_eq!(i["kpi"]["removed"], 3, "totals count Adult (allowed)");
+    assert_eq!(
+        i["removed_by_type"],
+        json!([{"key": "movie", "removed": 2}])
+    );
+    assert_eq!(at(i, 1)["searchable"], 1000);
+    assert_eq!(at(i, 3)["searchable"], 995);
+    assert_eq!(at(i, 2)["searchable"], Value::Null, "no snapshot that hour");
+    assert_eq!(i["kpi"]["disk_free_bytes"], Value::Null);
+    let c = &pages["index_30d_compare"];
+    assert_eq!(c["range"]["bucket"], "day");
+    assert_eq!(c["previous"]["range"]["to"], c["range"]["from"]);
+    let sv = &pages["serve_24h"];
+    assert_eq!(sv["kpi"]["searches"], Value::Null);
+    assert_eq!(sv["top_queries"], Value::Null);
+    assert!(
+        sv["trend"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["searches"].is_null())
+    );
+    // With Adult shown, it's listed.
+    f.adult.store(true, Ordering::Relaxed);
+    f.touched();
+    let i = json_get(&f, &cookie, "/api/v1/insights/index?range=24h").await;
+    assert_eq!(
+        i["removed_by_type"],
+        json!([{"key": "movie", "removed": 2}, {"key": "adult", "removed": 1}])
+    );
+}
+
+/// The overview's Compare deltas and previous segments.
+#[tokio::test]
+async fn compare_adds_deltas_and_previous_segments() {
+    let f = fixture();
+    story(&f);
+    let cookie = session(&f).await;
+    let v = json_get(&f, &cookie, "/api/v1/insights/overview?range=7d&compare=1").await;
+    let k = &v["kpi"];
+    let p = &v["previous"]["kpi"];
+    assert_eq!(
+        k["new_searchable_delta"],
+        k["new_searchable"].as_i64().unwrap() - p["new_searchable"].as_i64().unwrap()
+    );
+    assert_eq!(k["searchable_delta"], 100, "1,000 now, 900 then");
+    // No final cohort in the previous week: nothing to subtract.
+    assert_eq!(k["yield_delta"], Value::Null);
+    assert_eq!(k["time_to_searchable_p50_delta_s"], Value::Null);
+    assert!(v["previous"]["segments"]["by_group"].is_array());
+    let day = json_get(&f, &cookie, "/api/v1/insights/overview?range=24h").await;
+    for field in [
+        "new_searchable_delta",
+        "yield_delta",
+        "time_to_searchable_p50_delta_s",
+        "time_to_searchable_p95_delta_s",
+    ] {
+        assert_eq!(day["kpi"][field], Value::Null, "{field} without compare");
+    }
+}
+
+async fn send_full(f: &Fixture, mut req: Request<Body>) -> (u16, axum::http::HeaderMap, String) {
+    req.extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([10, 9, 0, 1], 1))));
+    let resp = f.app.clone().oneshot(req).await.unwrap();
+    let status = resp.status().as_u16();
+    let headers = resp.headers().clone();
+    let bytes = axum::body::to_bytes(resp.into_body(), 16 << 20)
+        .await
+        .unwrap();
+    (status, headers, String::from_utf8(bytes.to_vec()).unwrap())
+}
+
+/// Every panel's CSV against its golden, the attachment headers, and
+/// the CSV holding the JSON's numbers.
+#[tokio::test]
+async fn export_goldens() {
+    let f = fixture();
+    story(&f);
+    let cookie = session(&f).await;
+    for panel in [
+        "trend",
+        "funnel",
+        "losses",
+        "segments.by_group",
+        "segments.by_content_type",
+        "segments.by_source",
+        "exceptions",
+        "annotations",
+        "discover.trend",
+        "discover.by_source",
+        "discover.by_strategy",
+        "fetch.trend",
+        "fetch.losses",
+        "fetch.funnel",
+        "understand.trend",
+        "understand.by_content_type",
+        "understand.by_group",
+        "index.trend",
+        "index.removed_by_type",
+        "serve.trend",
+    ] {
+        let uri = format!("/api/v1/insights/export.csv?panel={panel}&range=24h");
+        let (status, headers, body) = send_full(&f, get(&uri, Some(&cookie))).await;
+        assert_eq!(status, 200, "{panel}: {body}");
+        assert_eq!(
+            headers[header::CONTENT_TYPE],
+            "text/csv; charset=utf-8; header=present"
+        );
+        assert_eq!(
+            headers[header::CONTENT_DISPOSITION],
+            format!(
+                "attachment; filename=\"lodestar-insights-{panel}-{}-{}.csv\"",
+                (NOW_H - 23) * 3600,
+                (NOW_H + 1) * 3600
+            )
+            .as_str()
+        );
+        assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+        assert_eq!(headers["x-content-type-options"], "nosniff");
+        assert!(
+            body.ends_with("\r\n") && body.starts_with("period"),
+            "{panel}"
+        );
+        assert_eq!(
+            body.matches("\r\n").count(),
+            body.matches('\n').count(),
+            "{panel}: every line ends with CRLF"
+        );
+        // A range with nothing in it has the same header: each panel
+        // declares every column its rows carry.
+        let empty =
+            format!("/api/v1/insights/export.csv?panel={panel}&range=custom&from=3600&to=7200");
+        let (status, _, none) = send_full(&f, get(&empty, Some(&cookie))).await;
+        assert_eq!(status, 200, "{panel}: {none}");
+        assert_eq!(
+            none.lines().next(),
+            body.lines().next(),
+            "{panel}: the header depends on the rows"
+        );
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/golden")
+            .join(format!("insights_export_{}.txt", panel.replace('.', "_")));
+        if std::env::var_os("LODESTAR_BLESS").is_some() {
+            std::fs::write(&path, &body).unwrap();
+        } else {
+            let want = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                panic!("{}: {e} (bless with LODESTAR_BLESS=1)", path.display())
+            });
+            // Git may check the golden out with LF line ends; the body's
+            // are checked apart.
+            assert_eq!(
+                body.replace("\r\n", "\n"),
+                want.replace("\r\n", "\n"),
+                "{panel}: the CSV changed"
+            );
+        }
+    }
+    // With Compare, the previous period's rows follow, marked.
+    let (_, _, body) = send_full(
+        &f,
+        get(
+            "/api/v1/insights/export.csv?panel=index.trend&range=24h&compare=1",
+            Some(&cookie),
+        ),
+    )
+    .await;
+    let periods: Vec<&str> = body
+        .lines()
+        .skip(1)
+        .map(|l| l.split(',').next().unwrap())
+        .collect();
+    assert_eq!(periods.iter().filter(|p| **p == "current").count(), 24);
+    assert_eq!(periods.iter().filter(|p| **p == "previous").count(), 24);
+    // The CSV's numbers are the JSON's: nulls empty, never 0.
+    let json = json_get(&f, &cookie, "/api/v1/insights/fetch?range=7d").await;
+    let (_, _, csv) = send_full(
+        &f,
+        get(
+            "/api/v1/insights/export.csv?panel=fetch.trend&range=7d",
+            Some(&cookie),
+        ),
+    )
+    .await;
+    let header: Vec<&str> = csv.lines().next().unwrap().split(',').collect();
+    assert_eq!(header, ["period", "at", "at_utc", "fetched", "lost"]);
+    for (line, point) in csv.lines().skip(1).zip(json["trend"].as_array().unwrap()) {
+        let cells: Vec<&str> = line.split(',').collect();
+        assert_eq!(cells[1], point["at"].to_string());
+        let want = |v: &Value| {
+            if v.is_null() {
+                String::new()
+            } else {
+                v.to_string()
+            }
+        };
+        assert_eq!(cells[3], want(&point["fetched"]));
+        assert_eq!(cells[4], want(&point["lost"]));
+    }
+    // Adult is left out of a per-type CSV while hidden.
+    let (_, _, csv) = send_full(
+        &f,
+        get(
+            "/api/v1/insights/export.csv?panel=index.removed_by_type&range=24h",
+            Some(&cookie),
+        ),
+    )
+    .await;
+    assert!(!csv.contains("adult"), "{csv}");
+}
+
+/// `insights` events (§10.9.6): the default overview's stage strip, sent
+/// every `insights_every` only while someone listens, with the nullable
+/// stages as `null`.
+#[tokio::test]
+async fn insights_events_go_out_only_while_someone_listens() {
+    use lodestar_api::events::{EventHub, EventSources, EventsConfig};
+    let f = fixture();
+    story(&f);
+    let cookie = session(&f).await;
+    let every = std::time::Duration::from_millis(100);
+    let hub = EventHub::start(
+        EventsConfig {
+            insights_every: every,
+            ..EventsConfig::default()
+        },
+        EventSources {
+            insights: Some(f.state.clone()),
+            ..EventSources::default()
+        },
+    );
+    // Several ticks with nobody listening: nothing is built or sent.
+    tokio::time::sleep(every * 4).await;
+    let app = Router::new()
+        .nest("/api/v1", router(f.state.clone()))
+        .layer(axum::Extension(hub.clone()));
+    let mut req = get("/api/v1/events?topics=insights", Some(&cookie));
+    req.extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([10, 9, 0, 1], 1))));
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let mut body = resp.into_body().into_data_stream();
+    let mut text = String::new();
+    let start = Instant::now();
+    while text.matches("event: insights").count() < 2 {
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(5),
+            "{text}"
+        );
+        let next = std::future::poll_fn(|cx| {
+            futures_core::Stream::poll_next(std::pin::Pin::new(&mut body), cx)
+        });
+        let chunk = tokio::time::timeout(std::time::Duration::from_secs(5), next)
+            .await
+            .expect("an event")
+            .expect("open")
+            .unwrap();
+        text.push_str(std::str::from_utf8(&chunk).unwrap());
+    }
+    // The first event published is the first one sent: none went out
+    // while nobody listened.
+    assert!(
+        text.contains(&format!("id: {}-1\nevent: insights\n", hub.epoch())),
+        "{text}"
+    );
+    let data = text.lines().find_map(|l| l.strip_prefix("data: ")).unwrap();
+    let v: Value = serde_json::from_str(data).unwrap();
+    assert_eq!(v["updated_at"], NOW);
+    // The 7-day range starts before fetches were counted: null, not 0.
+    assert_eq!(v["stages"]["fetch"], Value::Null);
+    assert_eq!(v["stages"]["serve"], Value::Null);
+    assert_eq!(v["stages"]["index"], 1000);
+    assert_eq!(v["stages"]["discover"], 27, "the week's first harvests");
+    hub.close();
 }

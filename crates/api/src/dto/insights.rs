@@ -132,6 +132,10 @@ pub struct Kpi {
     /// Torrents that first became searchable in the range, imports
     /// included. Event time; 0 is real.
     pub new_searchable: u64,
+    /// `new_searchable` less `previous.kpi.new_searchable`; null without
+    /// `compare=1` (and for `all`).
+    #[schema(required = true)]
+    pub new_searchable_delta: Option<i64>,
     /// Documents in the search index now; null when search is off.
     #[schema(required = true)]
     pub searchable: Option<u64>,
@@ -145,13 +149,24 @@ pub struct Kpi {
     /// Null when no cohort in the range is final.
     #[schema(required = true)]
     pub time_to_searchable_p50_s: Option<u64>,
+    /// `time_to_searchable_p50_s` less the previous period's, seconds;
+    /// null without `compare=1` or when either side is null.
+    #[schema(required = true)]
+    pub time_to_searchable_p50_delta_s: Option<i64>,
     #[schema(required = true)]
     pub time_to_searchable_p95_s: Option<u64>,
+    /// As `time_to_searchable_p50_delta_s`, for p95.
+    #[schema(required = true)]
+    pub time_to_searchable_p95_delta_s: Option<i64>,
     /// Searchable ÷ harvested over the final cohorts in the range, 0–1.
     /// Imports excluded. Null when no cohort in the range is final.
     #[serde(rename = "yield")]
     #[schema(required = true)]
     pub yield_: Option<f64>,
+    /// `yield` less the previous period's, in ratio points (−1 to 1); null
+    /// without `compare=1` or when either side is null.
+    #[schema(required = true)]
+    pub yield_delta: Option<f64>,
 }
 
 /// Health (§10.9.2): running, paused or degraded, with the reason.
@@ -358,6 +373,9 @@ pub struct Fix {
 pub struct PreviousPeriod {
     pub kpi: PreviousKpi,
     pub range: InsightsRange,
+    /// The previous period's segments, in the same shape and with the
+    /// same Adult rule.
+    pub segments: Segments,
     pub serve: Serve,
     pub stages: PreviousStages,
     pub trend: Vec<TrendPoint>,
@@ -412,4 +430,485 @@ pub struct PausedSpan {
     /// When it resumed; null while still paused.
     #[schema(required = true)]
     pub to: Option<i64>,
+}
+
+/// A segment row whose count moved most between the previous period and
+/// this one (the digest's "top segment movers", §10.9.7). Not served
+/// directly: B11c reads [`crate::insights::segment_movers`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SegmentMover {
+    /// `by_group` or `by_content_type`.
+    pub list: &'static str,
+    pub key: String,
+    pub current: u64,
+    pub previous: u64,
+    /// `current − previous`.
+    pub delta: i64,
+}
+
+/// `GET /insights/{stage}`: the overview's range parameters, plus
+/// `reason`.
+#[derive(Debug, Clone, Default, Deserialize, IntoParams)]
+#[serde(default)]
+#[into_params(parameter_in = Query)]
+pub struct StageQuery {
+    /// As the overview's.
+    pub range: Option<String>,
+    pub from: Option<i64>,
+    pub to: Option<i64>,
+    /// `1` adds `previous`.
+    pub compare: Option<u8>,
+    /// A loss reason's name (`docs/metrics.md` §6.4: `no_peers`, …,
+    /// `unreachable`): the Fetch page's losses and funnel show only that
+    /// reason (the drill-through from a funnel loss, §10.9.4). Accepted
+    /// and checked on every stage; only Fetch reads it.
+    pub reason: Option<String>,
+}
+
+/// One bin of a distribution (parser confidence, junk score).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct HistogramBin {
+    pub count: u64,
+    /// The bin's edges.
+    pub hi: f64,
+    pub lo: f64,
+}
+
+/// A logged query and how often it ran (Serve, when query logging is on).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct QueryRow {
+    pub count: u64,
+    pub query: String,
+    /// Of those runs, how many found nothing.
+    pub zero: u64,
+}
+
+/// `GET /insights/discover` (§10.9.5, `docs/metrics.md` §6.8, §7.7).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct DiscoverResponse {
+    /// Yield by IPv4 / IPv6. Null until leases carry the address family.
+    #[schema(required = true)]
+    pub by_ip_family: Option<Vec<SegmentYield>>,
+    /// Keys reported, rediscovered and dropped, by the source that
+    /// reported them. Event time.
+    pub by_source: Vec<DiscoverSource>,
+    /// Keys reported, by harvest strategy (BEP 51 sample, get_peers,
+    /// announce, lookup, refetch). Event time: volume, not yield.
+    pub by_strategy: Vec<StrategyCount>,
+    pub kpi: DiscoverKpi,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub previous: Option<DiscoverPrevious>,
+    pub range: InsightsRange,
+    #[schema(required = true)]
+    pub stale: Option<Stale>,
+    pub trend: Vec<DiscoverPoint>,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct DiscoverKpi {
+    /// BEP 51 sample yield. Null until the DHT counts samples.
+    #[schema(required = true)]
+    pub bep51_sample_yield: Option<f64>,
+    /// Nodes in the routing tables now; null with the DHT off. Snapshot.
+    #[schema(required = true)]
+    pub dht_nodes: Option<u64>,
+    /// Keys dropped because the pipeline was full. Event time.
+    pub dropped: u64,
+    /// First harvests (the cohorts' harvested counts). Always ≈.
+    pub harvested: u64,
+    /// Virtual-ID keyspace coverage. Null until the crawler reports it.
+    #[schema(required = true)]
+    pub keyspace_coverage: Option<f64>,
+    /// Keys stored already, seen again. Event time.
+    pub rediscovered: u64,
+    /// DHT responses per query sent since the start (the NAT-saturation
+    /// signal); null with the DHT off. Snapshot.
+    #[schema(required = true)]
+    pub reply_ratio: Option<f64>,
+    /// Keys the sources reported. Event time.
+    pub reported: u64,
+    /// The seen filter's load factor. Null until the filter reports it.
+    #[schema(required = true)]
+    pub seen_filter_load: Option<f64>,
+}
+
+/// One bucket; a count is null where nothing was measured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DiscoverPoint {
+    pub at: i64,
+    #[schema(required = true)]
+    pub dropped: Option<u64>,
+    /// First harvests in the bucket's cohorts.
+    #[schema(required = true)]
+    pub harvested: Option<u64>,
+    #[schema(required = true)]
+    pub rediscovered: Option<u64>,
+    #[schema(required = true)]
+    pub reported: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DiscoverSource {
+    pub dropped: u64,
+    /// The source's plugin name.
+    pub key: String,
+    pub rediscovered: u64,
+    pub reported: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct StrategyCount {
+    /// `sample`, `get_peers`, `announce`, `lookup`, `refetch`, or
+    /// `strategy_<n>`.
+    pub key: String,
+    pub reported: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct DiscoverPrevious {
+    /// Snapshot fields are null here.
+    pub kpi: DiscoverKpi,
+    pub range: InsightsRange,
+    pub trend: Vec<DiscoverPoint>,
+}
+
+/// `GET /insights/fetch`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct FetchResponse {
+    /// The discovery-cohort funnel, as the overview's (with `reason`, only
+    /// that loss).
+    pub funnel: Vec<FunnelCohort>,
+    pub funnel_total: FunnelTotal,
+    pub kpi: FetchKpi,
+    /// Losses by reason, by event time, most first; null when the range
+    /// starts before fetches were counted by event time.
+    #[schema(required = true)]
+    pub losses: Option<Vec<LossCount>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub previous: Option<FetchPrevious>,
+    pub range: InsightsRange,
+    /// The `reason` filter, as asked; null for all.
+    #[schema(required = true)]
+    pub reason: Option<String>,
+    #[schema(required = true)]
+    pub stale: Option<Stale>,
+    pub trend: Vec<FetchPoint>,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct FetchKpi {
+    /// Ephemeral-port pressure (Windows). Null until counted.
+    #[schema(required = true)]
+    pub ephemeral_port_pressure: Option<f64>,
+    /// Fetch latency percentiles. Null until a fetch latency histogram
+    /// exists.
+    #[schema(required = true)]
+    pub fetch_latency_p50_ms: Option<u64>,
+    #[schema(required = true)]
+    pub fetch_latency_p95_ms: Option<u64>,
+    /// Info dicts fetched in the range, by event time; null when the range
+    /// starts before they were counted so.
+    #[schema(required = true)]
+    pub fetched: Option<u64>,
+    /// Fetches running now. Snapshot.
+    #[schema(required = true)]
+    pub in_flight: Option<u64>,
+    /// Per-IP limiter rejections. Null until counted.
+    #[schema(required = true)]
+    pub limiter_rejections: Option<u64>,
+    /// Keys lost in the range (with `reason`, for that reason only), by
+    /// event time; null as `fetched`.
+    #[schema(required = true)]
+    pub lost: Option<u64>,
+    /// MSE (encrypted) share of successful fetches. Null until counted.
+    #[schema(required = true)]
+    pub mse_share: Option<f64>,
+    /// Age of the oldest queued key. Null until the pool reports it.
+    #[schema(required = true)]
+    pub queue_age_s: Option<u64>,
+    /// Keys queued or in flight now. Snapshot.
+    #[schema(required = true)]
+    pub queue_depth: Option<u64>,
+    /// uTP share of successful fetches. Null until counted.
+    #[schema(required = true)]
+    pub utp_share: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct FetchPoint {
+    pub at: i64,
+    #[schema(required = true)]
+    pub fetched: Option<u64>,
+    #[schema(required = true)]
+    pub lost: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct LossCount {
+    pub count: u64,
+    /// The reason's name (§6.4).
+    pub key: String,
+    /// Of all losses in the range.
+    #[schema(required = true)]
+    pub share: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct FetchPrevious {
+    pub kpi: FetchKpi,
+    pub range: InsightsRange,
+    pub trend: Vec<FetchPoint>,
+}
+
+/// `GET /insights/understand`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct UnderstandResponse {
+    /// Newly searchable by content type and group, as the overview's
+    /// segments (Adult left out while hidden). Event time.
+    pub by_content_type: Vec<SegmentCount>,
+    pub by_group: Vec<SegmentCount>,
+    pub kpi: UnderstandKpi,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub previous: Option<UnderstandPrevious>,
+    pub range: InsightsRange,
+    #[schema(required = true)]
+    pub stale: Option<Stale>,
+    pub trend: Vec<UnderstandPoint>,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct UnderstandKpi {
+    /// Dropped by a blocklist or filter rule before storage (counts only),
+    /// by event time; null as `fetch.kpi.fetched`.
+    #[schema(required = true)]
+    pub blocked: Option<u64>,
+    /// Junk score distribution. Null until scores are rolled up.
+    #[schema(required = true)]
+    pub junk_distribution: Option<Vec<HistogramBin>>,
+    /// Torrents that became searchable in the range. Event time.
+    pub newly_searchable: u64,
+    /// Parser confidence distribution. Null until rolled up.
+    #[schema(required = true)]
+    pub parser_confidence: Option<Vec<HistogramBin>>,
+    /// Recent "Fix parse" corrections. Null until counted.
+    #[schema(required = true)]
+    pub recent_corrections: Option<u64>,
+    /// Ambiguous names resolved ÷ ambiguous. Null until a resolution
+    /// counter exists.
+    #[schema(required = true)]
+    pub resolution_rate: Option<f64>,
+    /// Torrents newly stored in the range. Event time.
+    pub stored: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct UnderstandPoint {
+    pub at: i64,
+    #[schema(required = true)]
+    pub blocked: Option<u64>,
+    #[schema(required = true)]
+    pub stored: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct UnderstandPrevious {
+    pub kpi: UnderstandKpi,
+    pub range: InsightsRange,
+    pub trend: Vec<UnderstandPoint>,
+}
+
+/// `GET /insights/index`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct IndexResponse {
+    pub kpi: IndexKpi,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub previous: Option<IndexPrevious>,
+    pub range: InsightsRange,
+    /// Searchable torrents deleted in the range (a lifecycle event,
+    /// §10.9.3), by content type, Adult left out while hidden. Event time.
+    pub removed_by_type: Vec<RemovedCount>,
+    #[schema(required = true)]
+    pub stale: Option<Stale>,
+    /// Per-tracker health. Null until it's rolled up.
+    #[schema(required = true)]
+    pub trackers: Option<Vec<TrackerHealth>>,
+    pub trend: Vec<IndexPoint>,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct IndexKpi {
+    /// Bytes in the data directory. Snapshot.
+    #[schema(required = true)]
+    pub data_bytes: Option<u64>,
+    /// Free bytes on its volume: always null in this build.
+    #[schema(required = true)]
+    pub disk_free_bytes: Option<u64>,
+    /// File-index coverage (smart mode). Null until measured.
+    #[schema(required = true)]
+    pub file_index_coverage: Option<f64>,
+    /// NRT commit lag (as `/stats`). Snapshot.
+    #[schema(required = true)]
+    pub index_lag_s: Option<u64>,
+    /// Segment merges. Null until the index reports them.
+    #[schema(required = true)]
+    pub merges: Option<u64>,
+    /// Torrents that became searchable in the range. Event time.
+    pub new_searchable: u64,
+    /// Days until the disk is full. Null while free space is unknown.
+    #[schema(required = true)]
+    pub projection_days: Option<u64>,
+    /// A background rebuild's phase (`building`, `finishing`, `swapping`,
+    /// `failed`); null when none runs. Snapshot.
+    #[schema(required = true)]
+    pub rebuild: Option<String>,
+    /// Searchable torrents deleted in the range. Event time.
+    pub removed: u64,
+    /// Share of torrents with a swarm row. Null until rolled up.
+    #[schema(required = true)]
+    pub scrape_coverage: Option<f64>,
+    /// Median age of scrape data. Null until rolled up.
+    #[schema(required = true)]
+    pub scrape_freshness_s: Option<u64>,
+    /// Documents in the index now; null with search off. Snapshot.
+    #[schema(required = true)]
+    pub searchable: Option<u64>,
+    /// Index segments now. Null until the index reports them.
+    #[schema(required = true)]
+    pub segments: Option<u64>,
+    /// Database, index and file-index sizes against the §3 budget. Null
+    /// until each part is measured.
+    #[schema(required = true)]
+    pub sizes: Option<IndexSizes>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct IndexSizes {
+    pub database_bytes: u64,
+    pub file_index_bytes: u64,
+    pub index_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct TrackerHealth {
+    /// `scheme://host:port` only: a URL path or query can carry a passkey.
+    pub key: String,
+    pub reporting: u64,
+    /// `ok`, `backoff`, `down` or `banned`.
+    pub state: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct IndexPoint {
+    pub at: i64,
+    #[schema(required = true)]
+    pub new_searchable: Option<u64>,
+    #[schema(required = true)]
+    pub removed: Option<u64>,
+    /// The bucket's last searchable snapshot (a gauge: the last hour's);
+    /// null with none.
+    #[schema(required = true)]
+    pub searchable: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct RemovedCount {
+    /// Content type, or `unclassified`.
+    pub key: String,
+    pub removed: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct IndexPrevious {
+    pub kpi: IndexKpi,
+    pub range: InsightsRange,
+    pub trend: Vec<IndexPoint>,
+}
+
+/// `GET /insights/serve`. Every count is null until the search, alert,
+/// notification and send counters exist.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ServeResponse {
+    pub kpi: ServeKpi,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub previous: Option<ServePrevious>,
+    pub range: InsightsRange,
+    #[schema(required = true)]
+    pub stale: Option<Stale>,
+    /// Most frequent queries, only with query logging on (it's off by
+    /// default, and nothing logs queries yet): null.
+    #[schema(required = true)]
+    pub top_queries: Option<Vec<QueryRow>>,
+    #[schema(required = true)]
+    pub top_zero_result_queries: Option<Vec<QueryRow>>,
+    pub trend: Vec<ServePoint>,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ServeKpi {
+    #[schema(required = true)]
+    pub alerts_fired: Option<u64>,
+    #[schema(required = true)]
+    pub cancel_rate: Option<f64>,
+    #[schema(required = true)]
+    pub facet_sampling_rate: Option<f64>,
+    #[schema(required = true)]
+    pub latency_p50_ms: Option<f64>,
+    #[schema(required = true)]
+    pub latency_p95_ms: Option<f64>,
+    #[schema(required = true)]
+    pub notification_failures: Option<u64>,
+    #[schema(required = true)]
+    pub notifications_delivered: Option<u64>,
+    #[schema(required = true)]
+    pub searches: Option<u64>,
+    #[schema(required = true)]
+    pub sends: Option<u64>,
+    #[schema(required = true)]
+    pub zero_result_rate: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ServePoint {
+    pub at: i64,
+    #[schema(required = true)]
+    pub searches: Option<u64>,
+    #[schema(required = true)]
+    pub zero_results: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ServePrevious {
+    pub kpi: ServeKpi,
+    pub range: InsightsRange,
+    pub trend: Vec<ServePoint>,
+}
+
+/// `GET /insights/export.csv`.
+#[derive(Debug, Clone, Default, Deserialize, IntoParams)]
+#[serde(default)]
+#[into_params(parameter_in = Query)]
+pub struct ExportQuery {
+    /// The panel: `trend`, `funnel`, `losses`, `segments.by_group`,
+    /// `segments.by_content_type`, `segments.by_source`, `exceptions`,
+    /// `annotations` (the overview's), or a stage's `<stage>.trend` and
+    /// tables (`discover.by_source`, `discover.by_strategy`,
+    /// `fetch.losses`, `fetch.funnel`, `understand.by_content_type`,
+    /// `understand.by_group`, `index.removed_by_type`, `serve.trend`, …).
+    pub panel: Option<String>,
+    pub range: Option<String>,
+    pub from: Option<i64>,
+    pub to: Option<i64>,
+    /// `1` adds the previous period's rows (`period` = `previous`) where
+    /// the panel has them.
+    pub compare: Option<u8>,
 }
