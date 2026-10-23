@@ -1,0 +1,21 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"settings_form_unit_seconds": "秒",
+	"settings_form_unit_mebibytes": "MiB",
+	"settings_form_unit_connections": "个连接",
+	"settings_form_unit_files": "个文件",
+	"settings_form_unit_days": "天",
+	"settings_form_error_between": "必须介于 {min} 和 {max} 之间。",
+	"settings_form_error_between_unit": "必须介于 {min} 和 {max} {unit}之间。",
+	"settings_form_error_at_least": "不能小于 {min}。",
+	"settings_form_error_at_least_unit": "不能小于 {min} {unit}。",
+	"settings_form_error_at_most": "不能大于 {max}。",
+	"settings_form_error_at_most_unit": "不能大于 {max} {unit}。",
+	"settings_form_error_number": "请输入一个数字。",
+	"settings_form_error_integer": "请输入一个整数。",
+	"settings_form_error_enum": "请选择其中一个选项。",
+	"settings_form_announce_saved": "已保存。",
+	"settings_form_announce_changed": "已更改。",
+	"settings_form_announce_undone": "已撤销。",
+	"settings_form_announce_secret_removed": "已移除。"
+}

@@ -65,6 +65,7 @@ pub use reporting::{QueryCount, QueryLogEntry, QueryLogging, Resolved};
 pub use rules::{ClassCorrection, ExceptionRow, MARK_CHUNK, OverrideRow, RuleRow, RuleSet};
 pub use rusqlite;
 pub use saved::{Alert, SavedSearch, SavedSearchInput, SavedSearchSummary, SearchHits};
+pub use schema::latest_schema_version;
 pub use sources::{MAX_SOURCES, QueuedKey, SourceId, SourceRow, SourceState};
 pub use subscriptions::{NewSubscription, Refresh, Subscription};
 pub use swarm::{

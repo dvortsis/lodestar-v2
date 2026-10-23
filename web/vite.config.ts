@@ -5,12 +5,15 @@ import { paraglideVitePlugin } from '@inlang/paraglide-js';
 import { defineConfig } from 'vitest/config';
 import { mergeMessages } from './scripts/messages.ts';
 import { licenses } from './scripts/licenses.ts';
+import { chunkGraph, firstLoadGraph, svelteBarrel, vendorGroup } from './scripts/first-load.mjs';
 
 // Dev, build and test all need messages/*.json; the merge is idempotent and cheap.
 const merged = mergeMessages(import.meta.dirname);
 if (merged.errors.length) throw new Error(merged.errors.join('\n'));
 
 export default defineConfig({
+	// The search route's first load carries only what it uses (scripts/first-load.mjs, §10.1).
+	build: { rolldownOptions: { output: { codeSplitting: { groups: [vendorGroup()] } } } },
 	plugins: [
 		paraglideVitePlugin({
 			project: './project.inlang',
@@ -21,6 +24,9 @@ export default defineConfig({
 		tailwindcss(),
 		sveltekit(),
 		licenses(),
+		chunkGraph(),
+		svelteBarrel(),
+		firstLoadGraph(),
 		Icons({ compiler: 'svelte' })
 	],
 	resolve: process.env.VITEST ? { conditions: ['browser'] } : undefined,

@@ -32,9 +32,9 @@ Slice status moves through `pending → ready → running → in_review → merg
 ## Other sessions the runner watches
 **Every session that writes code on this repository is either a runner slice or registered with the runner** (§2.22). That includes sessions the owner starts. When the runner finds one, it adds a slice entry to `state.json` for it: its owned paths, its place in `migration_order`, and the tag `lodestar-runner`. It also points the session to `.claude/skills/steward/SKILL.md`. The hook stops such a session merging, so its PRs reach `main` through the runner's review like any slice's.
 
-The owner asked the runner to keep an eye on the M4 sessions ("M4 continuation" and the content-filter session titled "Modern DHT crawler architecture"). On every heartbeat the runner:
+The owner asked the runner to keep an eye on the M4 sessions ("M4 continuation" and the content-filter session titled "Modern DHT crawler architecture"). On every wake, not only the heartbeat, the runner:
 - checks their status;
-- tells the owner about any pending permission prompt, which it can't answer;
+- tells the owner about any pending permission prompt at once, with a push notification, since it can't answer it (step 3 below);
 - nudges an idle session that still has work left;
 - flags conflicts with slice ownership or migration order. The current agreed order is in `state.json` under `migration_order`; M5's migration comes after all of M4's.
 
@@ -58,6 +58,7 @@ The list lives in `state.json` under `watched_sessions`.
    - **Failed session or turn:** send the session one message to resume. If it fails a second time, mark the slice `attempt+1` and relaunch it as below.
    - **PR open and the session idle:** move the slice to `in_review`.
    - **Red CI or a merge conflict:** the slice handles these itself (`steward` skill §3). Step in only when the session is idle and the PR has sat red or conflicted for more than 30 minutes; then send it one message with the failing job.
+   - **Waiting on a permission prompt** (`status_bucket` blocked, with a pending action in its summary), whether a slice or a watched session: send the owner a push notification at once, naming the session and what it's waiting on. The runner can't answer the prompt, and the owner may not see it otherwise. Notify once per prompt.
 4. **Review every `in_review` slice whose CI is green on its head:**
    - Spawn a **fresh Opus reviewer**: an `Agent` subagent, Opus, in the background. It gets only the diff, the brief, the spec sections and the whole of `runner/standards.md` (§1–§5), never the runner's own opinion.
    - It reports blocking, important and polish findings.
@@ -66,6 +67,14 @@ The list lives in `state.json` under `watched_sessions`.
    - **No blocking findings:** check freshness, then merge with a merge commit.
      - **Fresh enough:** the PR's head already contains `main`, or nothing merged since its merge base touches the same area. The areas are: Rust, as `.github/scripts/ci_changes.py` defines it (`crates/**`, `Cargo.*`, `bench/**`, `fuzz/**`, `rust-toolchain*`, `.cargo/**`, `web/src/lib/api/openapi.json`); the rest of `web/**`; and `.github/**`. Docs-only changes never overlap.
      - **Not fresh enough:** bring `main` in first, with `update_pull_request_branch` (a merge commit), and merge once CI is green on the new head. This is the substitute for a merge queue, which GitHub offers only on repositories owned by an organization.
+     - **The landing lane** (owner, 2026-10-23, `docs/owner-decisions.md` §2.24) extends the freshness rule above. It stops a reviewed PR from chasing a fast `main`, as #48 did for 36 hours.
+       - **Entry:** a PR enters when it has passed review but isn't fresh enough, and either it has already needed two catch-up merges or it has more than ~1,500 changed lines. Count catch-ups per slice in `state.json` (`catch_ups`).
+       - **On entry:** record the lane in `state.json` (`landing_lane`: PR, areas, entered at) and run `update_pull_request_branch` at once. Ask the running slices whose areas overlap to hold their pushes, so the Actions queue is free for it.
+       - **While it's in the lane:** merge nothing else that overlaps its areas. Docs-only PRs can still merge, and so does a step 2 revert or fix for a red `main`. The lane PR then brings `main` in again.
+       - **One PR at a time:** only one PR is in the lane; pick the critical-path PR first.
+       - **Exit:** the PR leaves the lane when it merges, or when a failure turns out to be its own. Then the others resume while it's fixed. Once it's green, it re-enters, waiting its turn if another PR holds the lane.
+       - **After 2 hours held:** tell the owner what's holding it.
+       - **After exit:** tell the slices that held their pushes to resume.
    - **After merging:** set the slice to `merged`, unsubscribe from its PR, and archive its session (`archive_session`). Pass important and polish findings to the next slice that touches those files.
 5. **Retry limits:**
    - A **Sonnet or Haiku** slice that fails review twice is relaunched **on Opus** on the same branch. That's the "weak output is redone on Opus" rule.
@@ -77,7 +86,8 @@ The list lives in `state.json` under `watched_sessions`.
    - docs-only slices don't count towards either limit;
    - at most `max_launches_per_day` new sessions;
    - **never two running slices whose `owns` overlap.** Every slice records its decisions in its own new file under `docs/decisions/`, so no two slices share a decisions file (§16 is closed to new entries);
-   - **order:** critical-path core slices first, then the slices that unblock the most others.
+   - **order:** critical-path core slices first, then the slices that unblock the most others;
+   - **size:** a slice estimated at more than ~3,000 changed lines is split before launch: into sequential slices, or into parallel ones against interfaces fixed first. Each PR then lands between other merges instead of chasing `main` (§2.24). Between ~1,500 and ~3,000 lines, keep the slice whole when splitting would cut through an interface that isn't fixed yet.
 8. **Expand epics.**
    - When an `epic` entry's deps are merged, the runner (Opus) reads the relevant architecture sections and the code as it now stands.
    - It writes that epic's slices into `slices.yaml`, opens a PR, reviews it and merges it.
@@ -94,7 +104,7 @@ Use `create_session` with these settings:
 - **model:** the slice's `model`
 - **tags:** `["lodestar-runner", "slice:<id>"]`
 - **title:** `<id>: <title>`
-- **permission mode:** inherited, so the runner must itself run in **Auto**
+- **permission mode:** inherited, so the runner must itself run in **Auto**. Never launch in Plan, because a Plan-mode session stops for approvals nobody is watching.
 - **prompt:** the brief, followed by the standing instructions below
 
 **Standing instructions for every slice session:**
@@ -115,6 +125,8 @@ When a PR conflicts with `main` only in `docs/architecture.md` §16, the runner 
 ## Notifying the owner
 Send a push notification only for:
 - a parked slice;
+- a session waiting on a permission prompt (step 3);
+- a landing lane held for more than 2 hours (step 4);
 - an external blocker that needs the owner (the Unraid submission, a policy question);
 - a milestone exit gate (v0.5, M5, …) being met.
 

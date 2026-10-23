@@ -15,9 +15,12 @@ lodestar-metainfo.workspace = true
 lodestar-pipeline.workspace = true
 lodestar-search.workspace = true
 lodestar-store.workspace = true
+# The scrape soak runs against the in-process fake trackers.
+lodestar-tracker-scrape = { workspace = true, features = ["testing"] }
 rand = "0.10.3"
 rand_chacha = "0.10.0"
 tempfile = "3.27.0"
+tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros", "time"] }
 
 [lints]
 workspace = true
