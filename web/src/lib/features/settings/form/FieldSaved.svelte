@@ -1,18 +1,21 @@
 <script lang="ts">
 	// What the last save did to a field (§10.10.4's status line): "Saved" (or "applies after a
-	// restart"), or in instant mode "Changed" with its Undo. Loaded with the first save.
+	// restart"), or in instant mode "Changed" with its Undo; and a staged reset's line.
 	import Button from '$lib/ui/controls/Button.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import IconCheck from '~icons/ph/check-circle';
 	import type { SettingsForm } from './form.svelte';
 	import type { FieldKey } from './types';
 
-	let { form, key, part }: { form: SettingsForm; key: FieldKey; part: 'saved' | 'undo' } = $props();
+	let { form, key, part }: { form: SettingsForm; key: FieldKey; part: 'saved' | 'undo' | 'reset' } =
+		$props();
 
 	const f = $derived(form.field(key));
 </script>
 
-{#if part === 'saved'}
+{#if part === 'reset'}
+	{m.settings_form_pending_reset()}
+{:else if part === 'saved'}
 	<span class="inline-flex items-center gap-1 text-success">
 		<IconCheck class="size-(--icon-size-row) shrink-0" aria-hidden="true" />
 		<span class="text-base-content">

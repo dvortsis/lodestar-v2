@@ -4,11 +4,13 @@
 import { ApiError } from '$lib/api/client';
 import { m } from '$lib/paraglide/messages.js';
 import { DEBOUNCE_MS, UNDO_MS, without, type Engine } from './form.svelte';
-// The pipeline through its chunk's entry, so instant mode reuses that chunk rather than split it.
-import { applyResponse, holding, runGates, sectionValues, send, validate } from './edit';
+import { sectionValues } from './merge';
+import { announce, applyResponse, holding, runGates, send } from './saving';
+import { validate } from './validate';
 import { getSection, type Batch } from './requests';
 import type { FieldKey, FieldSpec, SaveResult, SectionValues, SettingValue } from './types';
-import { isDirty, stage, wire } from './values';
+import { wire } from './batch';
+import { isDirty, stage } from './values';
 
 /** Kinds whose change is sent at once rather than debounced. */
 const NOW = new Set(['boolean', 'enum']);
@@ -71,7 +73,7 @@ export function createInstant(e: Engine): Instant {
 		if (r.ok) {
 			applied(r.batch, r.values);
 			if (!spec.writeOnly) offerUndo(key, prev); // a secret's old value is never known
-			e.announce(m.settings_form_announce_changed());
+			announce(e, m.settings_form_announce_changed());
 			return { ok: true, restart: [] };
 		}
 		const err = 'error' in r ? r.error : undefined;
@@ -128,7 +130,7 @@ export function createInstant(e: Engine): Instant {
 			if ('cancelled' in r) return { ok: false, reason: 'cancelled' };
 			const err = r.error;
 			if (err instanceof ApiError && err.code === 'stale_revision') {
-				e.announce(m.settings_form_announce_undo_stale());
+				announce(e, m.settings_form_announce_undo_stale());
 				void e.refetch(spec.section, true);
 				return { ok: false, reason: 'conflict' };
 			}
@@ -136,7 +138,7 @@ export function createInstant(e: Engine): Instant {
 			return { ok: false, reason: 'refused' };
 		}
 		applied(r.batch, r.values);
-		e.announce(m.settings_form_announce_undone());
+		announce(e, m.settings_form_announce_undone());
 		return { ok: true, restart: [] };
 	}
 

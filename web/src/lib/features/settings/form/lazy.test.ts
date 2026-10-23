@@ -1,5 +1,5 @@
-// The parts the engine loads on demand (form.svelte.ts's header): each test starts from a fresh
-// module graph, so nothing is loaded yet, and records which chunks load and when.
+// The parts the engine loads on demand (form.svelte.ts's header): instant mode and previews.
+// Each test starts from a fresh module graph, so nothing is loaded yet, and records which load.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DRAFT_PREFIX } from './draft-store';
 import type { SettingsForm } from './form.svelte';
@@ -10,9 +10,9 @@ import type { FieldSpec } from './types';
 const loads: string[] = [];
 let failing = new Set<string>();
 
-/** Records each on-demand module as it's evaluated (`preview` comes with `edit` too). */
+/** Records each on-demand module as it's evaluated. */
 function spyOnLoads() {
-	for (const name of ['edit', 'instant', 'preview']) {
+	for (const name of ['instant', 'preview']) {
 		vi.doMock(`./${name}`, async (original: () => Promise<unknown>) => {
 			if (failing.has(name)) throw new Error(`${name} failed to load`);
 			loads.push(name);
@@ -74,61 +74,17 @@ describe('a staged section', { timeout: 20_000 }, () => {
 		expect(loaded()).toEqual([]);
 	});
 
-	it('loads the edit chunk with the first edit, and saves through it', async () => {
-		const form = await open({ drafts: false }); // no draft write to load it instead
+	it('saves, writes drafts and merges events without loading anything', async () => {
+		const form = await open();
 		form.set('crawler.intensity', 'low');
-		expect(form.dirtyCount).toBe(1); // staged at once, before the chunk arrives
-		await until(() => expect(loaded()).toEqual(['edit', 'preview']));
+		form.blur('crawler.intensity');
+		expect(sessionStorage.getItem(DRAFT_PREFIX + 'lazy')).toBeNull(); // the draft's debounce
 		expect(await form.save()).toEqual({ ok: true, restart: [] });
 		expect(patches()).toEqual([{ crawler: { if_revision: 3, intensity: 'low' } }]);
-		expect(loaded()).toEqual(['edit', 'preview']); // once
-	});
-
-	it('writes the draft once the chunk is in', async () => {
-		const form = await open();
-		form.set('crawler.timeout_secs', 30);
-		await until(() => expect(sessionStorage.getItem(DRAFT_PREFIX + 'lazy')).toContain('30'));
-		expect(form.dirtyCount).toBe(1);
-	});
-
-	it('validates on blur once the chunk is in', async () => {
-		const form = await open();
-		form.set('crawler.timeout_secs', 500);
-		form.blur('crawler.timeout_secs'); // before the chunk: checked when it arrives
-		await until(() =>
-			expect(form.field('crawler.timeout_secs').error).toMatch(/between 1 and 120/)
-		);
-	});
-
-	it('loads it with the values to offer a stored draft', async () => {
-		sessionStorage.setItem(
-			DRAFT_PREFIX + 'lazy',
-			JSON.stringify({
-				v: 1,
-				at: 1,
-				sections: {
-					crawler: {
-						revision: 3,
-						base: { intensity: 'balanced' },
-						mine: { intensity: 'low' },
-						reset: []
-					}
-				}
-			})
-		);
-		const form = await open();
-		expect(loaded()).toEqual(['edit', 'preview']);
-		expect(form.draft).toEqual({ fields: 1, dropped: 0 }); // offered with the first view
-		form.restoreDraft();
-		expect(form.field('crawler.intensity')).toMatchObject({ value: 'low', dirty: true });
-	});
-
-	it('loads it to merge an event that arrives before any edit', async () => {
-		const form = await open();
-		const revision = server.change('crawler', { intensity: { value: 'aggressive', source: 'db' } });
+		const revision = server.change('crawler', { timeout_secs: { value: 30, source: 'db' } });
 		form.received({ section: 'crawler', revision });
-		await until(() => expect(form.field('crawler.intensity').value).toBe('aggressive'));
-		expect(loaded()).toEqual(['edit', 'preview']);
+		await until(() => expect(form.field('crawler.timeout_secs').value).toBe(30));
+		expect(loaded()).toEqual([]);
 	});
 
 	it('loads previews on their own, during the first one’s debounce', async () => {
@@ -136,17 +92,6 @@ describe('a staged section', { timeout: 20_000 }, () => {
 		await until(() => expect(server.requests('POST', '/settings/preview')).toHaveLength(1));
 		expect(loaded()).toEqual(['preview']);
 		expect(form.dirtyCount).toBe(0);
-	});
-
-	it('reports a chunk that fails to load as a network failure, and tries again', async () => {
-		failing = new Set(['edit']);
-		const form = await open();
-		form.set('crawler.intensity', 'low');
-		expect(await form.save()).toEqual({ ok: false, reason: 'network' });
-		expect(patches()).toEqual([]);
-		failing = new Set();
-		expect(await form.save()).toEqual({ ok: true, restart: [] });
-		expect(loaded()).toEqual(['edit', 'preview']);
 	});
 });
 
@@ -156,7 +101,7 @@ describe('an instant section', { timeout: 20_000 }, () => {
 		expect(loaded()).toEqual([]);
 		form.set('transport.utp', false);
 		await until(() => expect(patches()).toEqual([{ transport: { if_revision: 7, utp: false } }]));
-		expect(loaded()).toEqual(['edit', 'instant', 'preview']);
+		expect(loaded()).toEqual(['instant']);
 		expect(form.field('transport.utp')).toMatchObject({ value: false, dirty: false });
 		expect(await form.undo('transport.utp')).toMatchObject({ ok: true });
 	});

@@ -2,7 +2,7 @@
 // height until the control arrives, then the control, working. This file's module graph is its
 // own, so none of them has loaded when it starts.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/svelte';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import SettingField from './SettingField.svelte';
 import { loadControls } from './controls.svelte';
 import { createSettingsForm, type SettingsForm } from './form.svelte';
@@ -15,7 +15,9 @@ const SPECS = [
 	spec('crawler.trackers', { kind: 'string-list' }),
 	spec('crawler.extra', { kind: 'map' }),
 	spec('secrets.token', { writeOnly: true }),
-	spec('crawler.intensity', { kind: 'enum', enum: ['low', 'balanced'] })
+	spec('crawler.intensity', { kind: 'enum', enum: ['low', 'balanced'] }),
+	spec('crawler.encryption', { kind: 'enum', enum: ['prefer', 'require', 'off'], widget: 'radio' }),
+	spec('crawler.timeout_secs', { kind: 'integer', minimum: 1, maximum: 120 })
 ];
 
 let form: SettingsForm;
@@ -27,7 +29,9 @@ beforeEach(async () => {
 		values('crawler', 1, {
 			trackers: sv(['udp://a']),
 			extra: sv({ a: 1 }),
-			intensity: sv('low')
+			intensity: sv('low'),
+			encryption: sv('prefer'),
+			timeout_secs: sv(12)
 		}),
 		values('secrets', 1, { token: sv(null, 'db') })
 	]);
@@ -73,6 +77,24 @@ describe('a control loaded on demand', { timeout: 20_000 }, () => {
 		show('secrets.token');
 		expect(document.querySelector('[data-placeholder]')).not.toBeNull();
 		await until(() => expect(screen.getByTestId('secret-status').textContent).toMatch(/Set/));
+	});
+
+	it('holds a radio group’s place with a row per option, then shows the options', async () => {
+		show('crawler.encryption');
+		const box = document.querySelector<HTMLElement>('[data-placeholder]')!;
+		expect(box.children).toHaveLength(3);
+		await until(() => expect(screen.getAllByRole('radio')).toHaveLength(3));
+		expect(document.querySelector('[data-placeholder]')).toBeNull();
+	});
+
+	it('loads a number on demand; a segmented control shares the radio group’s file', async () => {
+		show('crawler.timeout_secs');
+		show('crawler.intensity'); // ChoiceControl came with the radio group above
+		expect(document.querySelectorAll('[data-placeholder]')).toHaveLength(1);
+		const input = await screen.findByLabelText('timeout_secs', {}, { timeout: 10_000 });
+		await fireEvent.input(input, { target: { value: '30' } });
+		expect(form.field('crawler.timeout_secs').value).toBe(30);
+		await until(() => expect(screen.getByRole('radio', { name: 'balanced' })).toBeTruthy());
 	});
 
 	it('loads only what a form’s fields need, once', async () => {

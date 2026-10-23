@@ -44,7 +44,9 @@ beforeAll(async () => {
 		import('./ConfirmDialog.svelte'),
 		import('./FieldMenu.svelte'),
 		preloadSettingsForm(),
-		...(['secret', 'chips', 'json'] as const).map((w) => loadControl(w))
+		...(['number', 'slider', 'choice', 'secret', 'chips', 'json'] as const).map((w) =>
+			loadControl(w)
+		)
 	]);
 });
 

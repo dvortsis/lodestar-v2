@@ -1,6 +1,5 @@
 <script lang="ts">
 	// The pinned save bar (§10.10.5): what's unsaved or just saved, Discard and Save, or Undo.
-	// Loaded by `SettingsForm.svelte` when it first shows.
 	import Button from '$lib/ui/controls/Button.svelte';
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
@@ -15,11 +14,27 @@
 		/** Closes questions this bar asked (the form's own signal). */
 		signal: AbortSignal;
 		ondiscard: () => void;
-		/** The bar's element, so the form can keep focused fields clear of it. */
-		el?: HTMLElement;
 	}
 
-	let { form, signal, ondiscard, el = $bindable() }: Props = $props();
+	let { form, signal, ondiscard }: Props = $props();
+
+	// The bar never covers the focused field (§10.10.5): a field focused behind it scrolls clear,
+	// with the ramp's 4 (16 px at the default root size) of air.
+	let el = $state<HTMLElement>();
+	$effect(() => {
+		const root = el?.parentElement;
+		if (!el || !root) return;
+		const bar = el;
+		function onfocusin(e: FocusEvent) {
+			if (!(e.target instanceof HTMLElement) || bar.contains(e.target)) return;
+			const air = parseFloat(getComputedStyle(document.documentElement).fontSize);
+			const hidden =
+				e.target.getBoundingClientRect().bottom + air - bar.getBoundingClientRect().top;
+			if (hidden > 0) window.scrollBy({ top: hidden });
+		}
+		root.addEventListener('focusin', onfocusin);
+		return () => root.removeEventListener('focusin', onfocusin);
+	});
 
 	const unsaved = $derived(form.dirtyCount > 0);
 	const count = $derived(formatCount(form.dirtyCount, currentLocale()));
