@@ -59,6 +59,15 @@ pub fn init_with_writer(log: &str, console: Box<dyn Write + Send>) {
         let _ = FILTER.set(handle);
     }
     std::panic::set_hook(Box::new(|info| {
+        // A panic while this thread writes a line may hold the runtime's
+        // locks: a fixed line straight to stderr, never a hang.
+        if logging::in_sink() {
+            let _ = writeln!(
+                std::io::stderr(),
+                "Lodestar crashed while writing a log line"
+            );
+            return;
+        }
         // The message can hold anything (a name, a path): only where it
         // happened is written.
         match info.location() {
@@ -74,6 +83,9 @@ pub fn reload<S>(handle: &reload::Handle<EnvFilter, S>, filter: &str) -> Result<
     let filter = parse(filter)?;
     handle.reload(filter).map_err(|e| e.to_string())
 }
+
+/// How often `follow` re-applies with no change: the heartbeat.
+const HEARTBEAT: i64 = 60;
 
 /// Why a state is applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,9 +128,10 @@ fn report(switched: &[Switched], why: Why) {
     }
 }
 
-/// Deadlines that passed while Lodestar wasn't running: their kinds are
-/// off, and the start says so.
-fn expired_while_down(l: &Logging, now: i64) -> Vec<Switched> {
+/// Deadlines that passed while Lodestar wasn't running (after `since`,
+/// the previous run's last heartbeat, 0 unknown): their kinds are off,
+/// and the start says so once.
+fn expired_while_down(l: &Logging, now: i64, since: i64) -> Vec<Switched> {
     let mut deadlines: Vec<(Kind, i64)> = vec![
         (Kind::PeerActivity, l.peer_activity_until),
         (Kind::FilterChange, l.change_details_until),
@@ -140,7 +153,7 @@ fn expired_while_down(l: &Logging, now: i64) -> Vec<Switched> {
     }
     deadlines
         .into_iter()
-        .filter(|(_, until)| *until > 0 && *until <= now)
+        .filter(|(_, until)| *until > since.max(0) && *until <= now)
         .map(|(kind, _)| Switched {
             kind,
             on: false,
@@ -180,9 +193,13 @@ pub fn follow_with(
                 let switched = rt.apply(applied);
                 if why == Why::Start {
                     rt.open_file();
-                    report(&expired_while_down(&section, now), Why::Deadline);
+                    report(
+                        &expired_while_down(&section, now, rt.last_alive()),
+                        Why::Deadline,
+                    );
                 }
                 report(&switched, why);
+                rt.heartbeat(now);
             }
             if labels != Some(now_labels) {
                 log_event!(
@@ -192,12 +209,14 @@ pub fn follow_with(
                 );
                 labels = Some(now_labels);
             }
-            let wake = next.map(|n| {
-                let secs = (n - unix_now()).max(0) as u64;
+            // At most a minute: the heartbeat, and a wall clock that jumps
+            // can't keep a kind on past its deadline for long.
+            let secs = next.map_or(HEARTBEAT, |n| (n - unix_now()).clamp(0, HEARTBEAT)) as u64;
+            let wake = Some(
                 tokio::time::Instant::now()
                     + std::time::Duration::from_secs(secs)
-                    + std::time::Duration::from_millis(50)
-            });
+                    + std::time::Duration::from_millis(50),
+            );
             tokio::select! {
                 changed = rx.changed() => {
                     if changed.is_err() {
@@ -267,7 +286,11 @@ mod tests {
         };
         l.kinds.insert("url".into(), now - 5);
         l.kinds.insert("query".into(), UNTIL_OFF);
-        let mut kinds: Vec<Kind> = expired_while_down(&l, now)
+        assert!(
+            expired_while_down(&l, now, now).is_empty(),
+            "already reported"
+        );
+        let mut kinds: Vec<Kind> = expired_while_down(&l, now, 0)
             .into_iter()
             .map(|s| s.kind)
             .collect();

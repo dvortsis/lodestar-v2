@@ -140,6 +140,30 @@ enum Note {
 thread_local! {
     /// Set while the runtime reports on itself: those lines skip the file.
     static NOTING: Cell<bool> = const { Cell::new(false) };
+    /// Set while this thread is inside the runtime (holding its locks).
+    static IN_SINK: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether this thread is writing a line now: a panic here must not log
+/// through the runtime, whose locks it may hold.
+pub fn in_sink() -> bool {
+    IN_SINK.with(Cell::get)
+}
+
+/// Marks this thread as inside the runtime until dropped.
+struct Inside(bool);
+
+impl Inside {
+    fn enter() -> Inside {
+        Inside(IN_SINK.with(|c| c.replace(true)))
+    }
+}
+
+impl Drop for Inside {
+    fn drop(&mut self) {
+        let was = self.0;
+        IN_SINK.with(|c| c.set(was));
+    }
 }
 
 /// The outputs.
@@ -150,6 +174,11 @@ pub struct Runtime {
     applied: RwLock<Applied>,
     /// When the last file error was reported (one a minute at most).
     file_error_at: Mutex<Option<std::time::Instant>>,
+    /// The folder the file first opened in: a new one applies at a restart.
+    folder: OnceLock<std::path::PathBuf>,
+    /// When the previous run was last alive, from the index (Unix seconds;
+    /// 0 unknown), read when the file opens.
+    last_alive: std::sync::atomic::AtomicI64,
     /// The process's runtime: its state is the events' switches and the
     /// catalogue's status. A test's own runtime leaves both alone.
     installed: std::sync::atomic::AtomicBool,
@@ -212,6 +241,8 @@ impl Runtime {
             applied: RwLock::new(applied),
             file_error_at: Mutex::new(None),
             installed: std::sync::atomic::AtomicBool::new(false),
+            folder: OnceLock::new(),
+            last_alive: std::sync::atomic::AtomicI64::new(0),
         }
     }
 
@@ -272,8 +303,12 @@ impl Runtime {
             if !applied.file_enabled {
                 *file = FileState::Off;
             } else {
-                match FileSink::open(applied.file.clone()) {
+                let mut cfg = applied.file.clone();
+                cfg.dir = self.folder.get_or_init(|| cfg.dir.clone()).clone();
+                match FileSink::open(cfg) {
                     Ok(mut sink) => {
+                        self.last_alive
+                            .store(sink.last_alive(), std::sync::atomic::Ordering::Relaxed);
                         let mut stopped = false;
                         for (line, flags) in &lines {
                             match sink.write(line, *flags) {
@@ -308,6 +343,20 @@ impl Runtime {
         }
         drop(file);
         self.note(notes);
+    }
+
+    /// When the previous run was last alive (0 unknown).
+    pub fn last_alive(&self) -> i64 {
+        self.last_alive.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Records in the index that this run is alive at `now`, so the next
+    /// start knows which deadlines passed while it was stopped.
+    pub fn heartbeat(&self, now: i64) {
+        let _inside = Inside::enter();
+        if let FileState::Open(sink) = &mut *lock(&self.file) {
+            sink.alive(now);
+        }
     }
 
     fn write_console(&self, line: &str) {
@@ -395,6 +444,7 @@ impl Runtime {
 
     /// A line the code didn't type, already through the `tracing` filter.
     pub fn record_untyped(&self, u: &Untyped) {
+        let _inside = Inside::enter();
         let a = read(&self.applied);
         let stamp = Stamp::now();
         let console = (u.level <= a.console_level).then(|| match a.console_json {
@@ -435,6 +485,7 @@ fn write_note(e: WriteError) -> Note {
 
 impl Sink for Runtime {
     fn record(&self, r: &Record<'_>) {
+        let _inside = Inside::enter();
         let a = read(&self.applied);
         let stamp = Stamp::now();
         let reference = self.reference();

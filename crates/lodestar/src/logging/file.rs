@@ -55,6 +55,9 @@ impl Flags {
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Index {
     pub files: BTreeMap<String, Flags>,
+    /// When the run writing here was last alive (Unix seconds).
+    #[serde(default)]
+    pub alive_at: i64,
     #[serde(skip)]
     path: PathBuf,
 }
@@ -194,6 +197,8 @@ pub struct FileSink {
     worker: Worker,
     /// No rotation before this, after one failed.
     retry_at: Option<Instant>,
+    /// The index's `alive_at` when this opened: the previous run's.
+    last_alive: i64,
     #[cfg(test)]
     pub fail_rotation: bool,
 }
@@ -206,6 +211,18 @@ fn private(o: &mut OpenOptions) -> &mut OpenOptions {
     o
 }
 
+fn last_byte(path: &Path) -> io::Result<Option<u8>> {
+    use std::io::{Seek, SeekFrom};
+    let mut f = File::open(path)?;
+    if f.seek(SeekFrom::End(0))? == 0 {
+        return Ok(None);
+    }
+    f.seek(SeekFrom::End(-1))?;
+    let mut b = [0u8; 1];
+    f.read_exact(&mut b)?;
+    Ok(Some(b[0]))
+}
+
 fn open_append(path: &Path) -> io::Result<File> {
     private(OpenOptions::new().create(true).append(true)).open(path)
 }
@@ -214,13 +231,18 @@ impl FileSink {
     /// Opens (or creates) the current file in `cfg.dir`, compresses
     /// rotated files a previous run left uncompressed, and prunes.
     pub fn open(cfg: FileConfig) -> io::Result<FileSink> {
-        fs::create_dir_all(&cfg.dir)?;
+        let mut dirs = fs::DirBuilder::new();
+        dirs.recursive(true);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut dirs, 0o700);
+        dirs.create(&cfg.dir)?;
         let path = cfg.dir.join(CURRENT);
         let index = Arc::new(Mutex::new(Index::load(&cfg.dir)));
         let worker = Worker::start(index.clone());
         let file = open_append(&path)?;
         let meta = file.metadata()?;
         let flags = lock(&index).files.get(CURRENT).copied().unwrap_or_default();
+        let last_alive = lock(&index).alive_at;
         let mut sink = FileSink {
             path,
             size: meta.len(),
@@ -230,10 +252,17 @@ impl FileSink {
             flags,
             worker,
             retry_at: None,
+            last_alive,
             cfg,
             #[cfg(test)]
             fail_rotation: false,
         };
+        // A line a full disk cut short last time ends here, so the next
+        // starts on its own.
+        if sink.size > 0 && last_byte(&sink.path)? != Some(b'\n') {
+            sink.file.write_all(b"\n")?;
+            sink.size += 1;
+        }
         for name in rotated(&sink.cfg.dir)? {
             if name.ends_with(".jsonl") {
                 sink.worker.send(Job::Compress(name, sink.cfg.clone()));
@@ -246,6 +275,20 @@ impl FileSink {
         }
         sink.worker.send(Job::Prune(sink.cfg.clone()));
         Ok(sink)
+    }
+
+    /// The previous run's last heartbeat (0 unknown).
+    pub fn last_alive(&self) -> i64 {
+        self.last_alive
+    }
+
+    /// Notes in the index that this run is alive at `now`.
+    pub fn alive(&mut self, now: i64) {
+        let mut index = lock(&self.index);
+        if index.alive_at != now {
+            index.alive_at = now;
+            let _ = index.save();
+        }
     }
 
     /// New size, count, age and cap limits (the folder stays until a
@@ -312,9 +355,15 @@ impl FileSink {
         let name = self.rotated_name();
         let to = self.cfg.dir.join(&name);
         fs::rename(&self.path, &to)?;
-        // On a failure the renamed file stays open: lines go on there, and
-        // the next rotation tries again.
-        self.file = open_append(&self.path)?;
+        match open_append(&self.path) {
+            Ok(f) => self.file = f,
+            Err(e) => {
+                // Put it back, so lines go on in the current file and a
+                // prune never takes them.
+                let _ = fs::rename(&to, &self.path);
+                return Err(e);
+            }
+        }
         self.size = 0;
         self.opened = SystemTime::now();
         self.flags = Flags::default();

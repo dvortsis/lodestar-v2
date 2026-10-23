@@ -516,7 +516,8 @@ fn tighten_permissions(path: &Path, file: &File) -> io::Result<()> {
         lodestar_log::log_event!(
             crate::log_events::SECRET_KEY_TIGHTENED,
             path = lodestar_log::Path::new(path),
-            mode = lodestar_log::Count(u64::from(mode & 0o777))
+            // Its octal digits read as a number: 644, not 420.
+            mode = lodestar_log::Count(format!("{:o}", mode & 0o777).parse().unwrap_or_default())
         );
         file.set_permissions(fs::Permissions::from_mode(0o600))?;
     }
