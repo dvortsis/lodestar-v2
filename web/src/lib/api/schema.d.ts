@@ -3288,7 +3288,7 @@ export interface components {
             /**
              * Format: int64
              * @description Searchable torrents that were imported (bitmagnet import), part of
-             *     `searchable`; null until the count taken at start is in.
+             *     `searchable`; null until Insights' state is read at start.
              */
             imported: number | null;
             /**
@@ -4776,8 +4776,10 @@ export interface components {
             discover: number;
             /**
              * Format: int64
-             * @description Metadata retrieved in the range, by event time. Null until the
-             *     pipeline counts fetches by event time (B11b).
+             * @description Metadata retrieved in the range, by event time (the writer's
+             *     flush). Null when the range starts before fetches were counted by
+             *     event time (the first whole hour after the upgrade that added it):
+             *     unknown, not 0.
              */
             fetch: number | null;
             /**
