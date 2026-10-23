@@ -366,6 +366,12 @@ pub struct Store {
     conn: Connection,
     codec: BlobCodec,
     config: StoreConfig,
+    /// A WAL scrub after a delete couldn't finish (a reader held an old
+    /// snapshot): the next delete or purge tries again. When another
+    /// connection's purge finishes the scrub (they share the WAL), this
+    /// stays true until this store's next delete. That's harmless: it
+    /// costs one extra checkpoint.
+    scrub_pending: bool,
 }
 
 impl Store {
@@ -389,7 +395,7 @@ impl Store {
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
         conn.pragma_update(None, "mmap_size", config.mmap_size as i64)?;
-        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        conn.busy_timeout(schema::BUSY_TIMEOUT)?;
         schema::check_current(&conn)?;
         Store::load(conn, config)
     }
@@ -426,6 +432,7 @@ impl Store {
             conn,
             codec,
             config,
+            scrub_pending: false,
         })
     }
 
@@ -465,13 +472,14 @@ impl Store {
             conn,
             codec,
             config,
+            scrub_pending: _,
         } = self;
         let own: Vec<Prepared> = batch
             .torrents
             .iter()
             .map(|t| prepare(codec, config.archive_raw, t.info, t.raw_info))
             .collect::<Result<_>>()?;
-        let tx = conn.transaction()?;
+        let tx = begin_write(conn)?;
         let mut out = Vec::with_capacity(batch.torrents.len());
         for (t, p) in batch.torrents.iter().zip(&own) {
             let pt = PreparedTorrent {
@@ -580,7 +588,7 @@ impl Store {
     /// Sets the enrichment of stored torrents in one transaction and
     /// queues them for re-indexing. Ids no longer stored are skipped.
     pub fn set_enrichments(&mut self, batch: &[(i64, Enriched)]) -> Result<usize> {
-        let tx = self.conn.transaction()?;
+        let tx = begin_write(&mut self.conn)?;
         let done = enrich_rows(&tx, batch)?;
         tx.commit()?;
         Ok(done)
@@ -604,15 +612,16 @@ impl Store {
         batch: &[(i64, Enriched)],
         refiled: &[Refiled<'_>],
     ) -> Result<Option<usize>> {
-        let tx = self.conn.transaction()?;
+        let tx = begin_write(&mut self.conn)?;
         if rules::class_gen(&tx)? != generation {
             return Ok(None);
         }
         let done = enrich_rows(&tx, batch)?;
         let mut filtered: Vec<Filtered<'_>> = Vec::with_capacity(refiled.len());
+        let mut deleted = false;
         for r in refiled {
             if r.filtered.held.is_some() {
-                tx.execute("DELETE FROM torrents WHERE id = ?1", [r.id])?;
+                deleted |= tx.execute("DELETE FROM torrents WHERE id = ?1", [r.id])? > 0;
                 tx.execute("INSERT INTO reindex_log (torrent_id) VALUES (?1)", [r.id])?;
             } else if r.flags != 0 {
                 let marked = tx.execute(
@@ -628,6 +637,9 @@ impl Store {
         }
         filter::write(&tx, &filtered)?;
         tx.commit()?;
+        if deleted {
+            self.scrub_wal();
+        }
         Ok(Some(done))
     }
 
@@ -1176,6 +1188,17 @@ const FIND_BY_HASH: &str = "SELECT id FROM torrents WHERE info_hash = ?1
      SELECT id FROM torrents
      WHERE info_hash_v2 IS NOT NULL AND substr(info_hash_v2, 1, 20) = ?1
      LIMIT 1";
+
+/// Begins a write transaction, taking the write lock up front (`BEGIN
+/// IMMEDIATE`) and waiting for it up to the busy timeout. A deferred one
+/// that reads first would get SQLITE_BUSY at once when its first write
+/// finds another connection holding the lock (a WAL scrub's checkpoint,
+/// say): SQLite doesn't wait to upgrade a read to a write. New write
+/// transactions should use this whether or not they read first; it costs
+/// nothing measurable and removes the trap.
+pub(crate) fn begin_write(conn: &mut Connection) -> rusqlite::Result<rusqlite::Transaction<'_>> {
+    conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+}
 
 pub(crate) fn find_any(
     conn: &Connection,
