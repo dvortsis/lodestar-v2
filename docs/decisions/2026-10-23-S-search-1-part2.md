@@ -38,7 +38,7 @@ The active-filter strip, its chips and the Syntax popover (architecture §10.4, 
 - **The Syntax button is on the first load,** as a plain button that loads the popover when pressed. `app.html`'s static bar has a matching inert button, so the editor's box stays the same from first paint (`boot-shell.routes.test.ts`, ≤ 1 px).
 - **The label code isn't a chunk of its own.** `clauses.ts` (the label messages and formatters) loads with the bar's lazy part on the first interaction, even with no chip, instead of with the strip as the brief's step 9 listed. The bare page's first load doesn't include it either way. Splitting it would add a request on the first chip for a few KB.
 - **A late popover doesn't take focus.** The Syntax popover opens once its chunk has loaded, and only if focus is still on the button (or nowhere). If the user has started typing meanwhile, it stays closed. A chunk that fails to load leaves the button as it was.
-- **Measured on `/search`:** search JS 39.62 → 40.14 kB, CSS 19.83 kB unchanged, and Lighthouse 94,806 B (mobile LCP about 1.5 s, CLS 0). Every class the strip and popover use was already in the global sheet.
+- **Measured on `/search`:** search JS 39.56 → 40.17 kB (`main` at 21cff90), CSS 19.83 kB unchanged, and Lighthouse 94,845 B (mobile LCP about 1.5 s, CLS 0). Every class the strip and popover use was already in the global sheet.
 
 ## The Syntax popover
 
