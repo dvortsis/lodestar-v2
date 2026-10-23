@@ -259,7 +259,7 @@
       "pr": 132,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus (runner: perf + contenteditable)); brief committed 576d67a with runner addendum | 2026-10-23T17:07:42Z blocked draft #132: bare /search 104,825 B > 102,400, LCP 3.03s. Runner decision: defer Shell Chrome chunk to first interaction/idle/30s (auth handlers stay eager, 401 spec), static bar in app.html #boot-main (+236 B); assigned Shell.svelte edit; keep W9 focus/CLS/first-key specs; INP check"
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus (runner: perf + contenteditable)); brief committed 576d67a with runner addendum | 2026-10-23T17:07:42Z blocked draft #132: bare /search 104,825 B > 102,400, LCP 3.03s. Runner decision: defer Shell Chrome chunk to first interaction/idle/30s (auth handlers stay eager, 401 spec), static bar in app.html #boot-main (+236 B); assigned Shell.svelte edit; keep W9 focus/CLS/first-key specs; INP check | 2026-10-23T17:26:28Z told: interaction that loads Chrome must count as engaged (whenEngaged attached late), spec for single first key"
     },
     "S-search-2": {
       "status": "pending",
@@ -574,8 +574,8 @@
       "session": "session_016cp8XLoMXn6BdcZs7uwRnr",
       "pr": 134,
       "attempt": 0,
-      "review_rounds": 0,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:11:13Z PR #134 head 913bcdb (~2.1k, half tests; boot 1.79 KB vs 1.5 target; CSS unchanged); fresh reviewer launched (incl. interplay with S-search-1's deferred Chrome)"
+      "review_rounds": 1,
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:11:13Z PR #134 head 913bcdb (~2.1k, half tests; boot 1.79 KB vs 1.5 target; CSS unchanged); fresh reviewer launched (incl. interplay with S-search-1's deferred Chrome) | 2026-10-23T17:26:28Z review FIX: boot.ts imports shell/chrome (search first load +0.09 KB); onResync; conflict text; focus after Turn on; Save disabled; aria-describedby; polish"
     },
     "S-e2e": {
       "status": "pending",
@@ -1124,7 +1124,7 @@
       "status": "review",
       "session": "session_015F9H2aHowz7TJLffFYxUvf",
       "pr": 48,
-      "notes": " | 2026-10-23T12:30:06Z owner asked runner to answer M4's plan-approval question: approved, with updated main facts (B5c adaptation now, V11 taken by B11b, log_lint, fixture OFFLINE gate, export swarm fields, ApiState literals) | 2026-10-23T13:39:57Z plan approved by owner; #48 head da63255 (merging main) | 2026-10-23T14:35:59Z da63255 code-complete; only red is openapi drift job's licences.py --check (rust.json stale after pipeline+lodestar-log). M4 session blocked on owner ExitPlanMode for the licence regen; fresh review launched on da63255 in parallel | 2026-10-23T14:55:59Z fresh review FIX at da63255: B1 main merge breaks api tests (logs.rs ApiState literal lacks hot/events); B2 late-answer test; I1 dup explain param; fixture all-or-none; operations.md \u00a79 vs metrics \u00a77; NaN in [ranking]; open_hot I/O fallback. Runner decisions: tracker-hash rollup deferred; 10M cold sorts 60ms accepted (cached+keyword \u00a73 met); percolation time: UTC | 2026-10-23T15:06:25Z owner approved licence-regen plan; M4 running (merging main). Owner delegated M4 management + plan acceptance to runner | 2026-10-23T15:32:27Z 2540997 FIX items pushed (main to #127), CI running; owner asked M4 for a best-practice self-review (small push may follow); delta review launched | 2026-10-23T16:06:36Z ac3bb9f: owner-requested self-review (new torrents' hot last-seen bug, SegmentSets cold-sort perf, Skipped rounds, failed-search rollups); delta reviewer extended | 2026-10-23T16:34:02Z delta MERGE at ac3bb9f (all FIX items + self-review verified); needs main merge (insights.rs ApiState literal conflict from #130); asked to merge main, regenerate, green, report",
+      "notes": " | 2026-10-23T12:30:06Z owner asked runner to answer M4's plan-approval question: approved, with updated main facts (B5c adaptation now, V11 taken by B11b, log_lint, fixture OFFLINE gate, export swarm fields, ApiState literals) | 2026-10-23T13:39:57Z plan approved by owner; #48 head da63255 (merging main) | 2026-10-23T14:35:59Z da63255 code-complete; only red is openapi drift job's licences.py --check (rust.json stale after pipeline+lodestar-log). M4 session blocked on owner ExitPlanMode for the licence regen; fresh review launched on da63255 in parallel | 2026-10-23T14:55:59Z fresh review FIX at da63255: B1 main merge breaks api tests (logs.rs ApiState literal lacks hot/events); B2 late-answer test; I1 dup explain param; fixture all-or-none; operations.md \u00a79 vs metrics \u00a77; NaN in [ranking]; open_hot I/O fallback. Runner decisions: tracker-hash rollup deferred; 10M cold sorts 60ms accepted (cached+keyword \u00a73 met); percolation time: UTC | 2026-10-23T15:06:25Z owner approved licence-regen plan; M4 running (merging main). Owner delegated M4 management + plan acceptance to runner | 2026-10-23T15:32:27Z 2540997 FIX items pushed (main to #127), CI running; owner asked M4 for a best-practice self-review (small push may follow); delta review launched | 2026-10-23T16:06:36Z ac3bb9f: owner-requested self-review (new torrents' hot last-seen bug, SegmentSets cold-sort perf, Skipped rounds, failed-search rollups); delta reviewer extended | 2026-10-23T16:34:02Z delta MERGE at ac3bb9f (all FIX items + self-review verified); needs main merge (insights.rs ApiState literal conflict from #130); asked to merge main, regenerate, green, report | 2026-10-23T17:26:28Z 9446743 green but main moved (#129): logs_catalog.txt golden conflict; asked to re-merge, bless, check new ApiState literals",
       "review_rounds": 1
     },
     "fix-log-deadline-flake": {
@@ -1426,6 +1426,11 @@
       "from": "M4",
       "what": "IdsWeight/CheckWeight copy segment bitset per piece (~25 MB copying per cold search at 10M); share via Arc",
       "to": "F-perf"
+    },
+    "shell-settings-topic": {
+      "from": "S-keys review",
+      "what": "status.svelte/shell start() should subscribe crawler+rebuild+settings together and hand settings events to shortcuts boot (one stream open, no reconnect)",
+      "to": "next lib/shell slice"
     }
   },
   "blocked_on_owner": [],
