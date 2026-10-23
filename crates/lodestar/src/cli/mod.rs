@@ -20,7 +20,7 @@ mod reindex;
 mod rollback;
 mod rollup;
 mod stats;
-mod util;
+pub(crate) mod util;
 mod vacuum;
 
 use std::path::{Path, PathBuf};
@@ -66,6 +66,9 @@ pub enum Command {
         /// DIR); any other folder is refused
         #[arg(long, value_name = "DIR", num_args = 0..=1)]
         fixture: Option<Option<PathBuf>>,
+        /// Run as the supervisor's child (set by the supervisor, §12.2)
+        #[arg(long, hide = true, conflicts_with = "fixture")]
+        child: bool,
     },
     /// Exit 0 if the local instance answers /healthz, 1 otherwise
     Healthcheck,
@@ -129,6 +132,11 @@ pub struct RollbackArgs {
     /// Restore without asking
     #[arg(long)]
     pub yes: bool,
+    /// Roll a self-installed update back to the version before it
+    /// (server stopped), through the same journal the supervisor uses;
+    /// asks first unless --yes
+    #[arg(long, conflicts_with = "snapshot")]
+    pub update: bool,
 }
 
 #[derive(Debug, Args, PartialEq, Eq)]
@@ -185,6 +193,7 @@ pub fn run(command: Command, config_path: Option<&Path>, dropped: &privdrop::Rep
                 rollback::Options {
                     snapshot: a.snapshot.as_deref(),
                     yes: a.yes,
+                    update: a.update,
                 },
             ),
         ),
@@ -233,7 +242,10 @@ mod tests {
             .map_err(|e| e.kind())
     }
 
-    const SERVE: Command = Command::Serve { fixture: None };
+    const SERVE: Command = Command::Serve {
+        fixture: None,
+        child: false,
+    };
 
     fn cmd(s: &str) -> (Option<PathBuf>, Option<Command>) {
         let c = args(s).unwrap();
@@ -247,13 +259,15 @@ mod tests {
         assert_eq!(
             cmd("serve --fixture").1,
             Some(Command::Serve {
-                fixture: Some(None)
+                fixture: Some(None),
+                child: false
             })
         );
         assert_eq!(
             cmd("serve --fixture /tmp/fx --config c.toml").1,
             Some(Command::Serve {
-                fixture: Some(Some("/tmp/fx".into()))
+                fixture: Some(Some("/tmp/fx".into())),
+                child: false
             })
         );
         assert_eq!(cmd("--config /x.toml"), (Some("/x.toml".into()), None));
@@ -312,7 +326,8 @@ mod tests {
             cmd("rollback").1,
             Some(Command::Rollback(RollbackArgs {
                 snapshot: None,
-                yes: false
+                yes: false,
+                update: false
             }))
         );
         assert_eq!(
@@ -321,7 +336,8 @@ mod tests {
                 Some("c.toml".into()),
                 Some(Command::Rollback(RollbackArgs {
                     snapshot: Some("lodestar.pre-v4.db".into()),
-                    yes: true
+                    yes: true,
+                    update: false
                 }))
             )
         );
@@ -354,6 +370,23 @@ mod tests {
             args("rollup --repair --since 90").err(),
             Some(ErrorKind::ValueValidation)
         );
+        assert_eq!(
+            cmd("rollback --update").1,
+            Some(Command::Rollback(RollbackArgs {
+                snapshot: None,
+                yes: false,
+                update: true
+            }))
+        );
+        assert!(args("rollback v4 --update").is_err());
+        assert_eq!(
+            cmd("serve --child").1,
+            Some(Command::Serve {
+                fixture: None,
+                child: true
+            })
+        );
+        assert!(args("serve --fixture --child").is_err());
         assert!(args("vacuum --yes").is_err());
         assert!(args("rollback a b").is_err());
     }
