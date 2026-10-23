@@ -556,7 +556,8 @@ CREATE INDEX tombstones_rule ON tombstones (rule);
 ///   compaction running beside a read never double-counts or drops a
 ///   day), `last_compaction_at` (unix seconds, 0 = never),
 ///   `funnel_events_since_hour` (the first hour fetches are counted by
-///   event time, metric 14: earlier buckets are unknown, not 0) and
+///   event time, metric 14: earlier buckets are unknown, not 0; 0 on a
+///   store with no history yet) and
 ///   `imported` (searchable imported torrents, kept exact from here on).
 /// - `imported` is seeded with the same count `count_flagged_searchable`
 ///   makes (flag 32 = `flags::IMPORTED`, up to the highest searchable
@@ -596,8 +597,12 @@ CREATE TABLE insights_state (
 INSERT INTO insights_state (key, value) VALUES
     ('compacted_before_day', 0),
     ('last_compaction_at', 0),
-    -- The first whole hour after the upgrade: the current one is partial.
-    ('funnel_events_since_hour', unixepoch() / 3600 + 1),
+    -- The first whole hour after the upgrade (the current one is
+    -- partial); on a new store, from the start.
+    ('funnel_events_since_hour', CASE
+        WHEN EXISTS (SELECT 1 FROM torrents) OR EXISTS (SELECT 1 FROM cohort_hour)
+            OR EXISTS (SELECT 1 FROM rollup_hour)
+        THEN unixepoch() / 3600 + 1 ELSE 0 END),
     ('imported', (SELECT count(*) FROM torrents WHERE flags & 32 != 0
         AND id <= (SELECT coalesce(max(last_id), 0) FROM index_watermark_hour)));
 
@@ -1021,6 +1026,18 @@ mod tests {
             .query_row("SELECT unixepoch() / 3600", [], |r| r.get(0))
             .unwrap();
         assert!((now_h..=now_h + 2).contains(&state("funnel_events_since_hour")));
+        // A new store has nothing uncounted: fetches count from the start.
+        let mut fresh = Connection::open_in_memory().unwrap();
+        configure(&fresh, 0).unwrap();
+        migrate_with(&mut fresh, None, MIGRATIONS).unwrap();
+        let since: i64 = fresh
+            .query_row(
+                "SELECT value FROM insights_state WHERE key = 'funnel_events_since_hour'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(since, 0);
         // Id 3 isn't searchable: no removal. Id 1 is, and imported.
         conn.execute_batch("DELETE FROM torrents WHERE id IN (1, 3)")
             .unwrap();

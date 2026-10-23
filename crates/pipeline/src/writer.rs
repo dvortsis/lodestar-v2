@@ -351,7 +351,10 @@ impl Writer {
                 .record(lease.cohort, lease.source, Stage::Stored, None);
             if new {
                 self.stats.stored.fetch_add(1, Ordering::Relaxed);
-                self.rollups.add(now, metric::STORED, lease.source, 0, 1);
+                // At the fetch's time, as `torrents.metadata_at` holds it,
+                // so `rollup --repair` recounts the same hours (B11b).
+                self.rollups
+                    .add(c.results.metadata_at, metric::STORED, lease.source, 0, 1);
             } else {
                 self.stats.existing.fetch_add(1, Ordering::Relaxed);
             }

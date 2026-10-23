@@ -18,7 +18,8 @@ pub mod metric {
     pub const REDISCOVERED: u32 = 2;
     /// Keys dropped because the pipeline was full (dim = source).
     pub const DROPPED: u32 = 3;
-    /// Torrents newly stored (dim = source that found them first).
+    /// Torrents newly stored (dim = source that found them first), at the
+    /// hour of their `metadata_at` (the fetch, seconds before the commit).
     pub const STORED: u32 = 4;
     // 5–9 are taken by #48 (M4's scrape and search counters).
     /// Torrents that became searchable, by event time: the hour of the

@@ -70,6 +70,9 @@ const COMPACT_EVERY_S: i64 = 86_400;
 pub const KEEP_HOURLY_DAYS: i64 = 30;
 /// A compaction step gives the loop back after this long.
 const COMPACT_BUDGET: Duration = Duration::from_secs(1);
+/// Free pages handed back per tick after a run, so no one vacuum holds
+/// the write lock or fills the WAL (4 MB at 16 KB pages).
+const VACUUM_CHUNK: u64 = 256;
 /// The query log keeps 30 days (§10.9.5) and at most this many rows.
 const QUERY_LOG_DAYS: i64 = 30;
 pub const QUERY_LOG_ROWS: u64 = 100_000;
@@ -376,20 +379,32 @@ struct Compaction {
     from: i64,
     /// A run is under way, cut short by its budget.
     running: bool,
-    /// Pages the run has freed so far.
+    /// Free pages the runs gave up, still to hand back.
     freed: u64,
     unknown_logged: bool,
 }
 
 /// One compaction step, when one is due: a budgeted call, and when the
-/// run is done, the query log's prune and an `incremental_vacuum` of what
-/// the run freed.
+/// run is done, the query log's prune. Between runs, each tick hands back
+/// up to [`VACUUM_CHUNK`] of the pages they freed.
 async fn compact(
     insights: &Arc<Insights>,
-    store: Store,
+    mut store: Store,
     c: &mut Compaction,
     now: i64,
 ) -> Result<Store, BoxError> {
+    if !c.running && c.freed > 0 {
+        let n = c.freed.min(VACUUM_CHUNK);
+        let r;
+        (store, r) = blocking(store, move |s| s.incremental_vacuum(n)).await?;
+        match r {
+            Ok(()) => c.freed -= n,
+            Err(e) => {
+                tracing::warn!("insights: giving back free pages failed: {e}");
+                c.freed = 0;
+            }
+        }
+    }
     let (store, due) = blocking(store, move |s| s.insights_state()).await?;
     let due = match due {
         Ok(st) => c.running || now - st.last_compaction_at >= COMPACT_EVERY_S,
@@ -434,12 +449,9 @@ async fn compact(
         insights.bump();
     }
     if r.done {
-        let freed = std::mem::take(&mut c.freed);
         let pruned;
         (store, pruned) = blocking(store, move |s| {
-            let pruned = s.prune_query_log(now - QUERY_LOG_DAYS * 86_400, QUERY_LOG_ROWS);
-            let vacuumed = s.incremental_vacuum(freed);
-            pruned.and_then(|n| vacuumed.map(|()| n))
+            s.prune_query_log(now - QUERY_LOG_DAYS * 86_400, QUERY_LOG_ROWS)
         })
         .await?;
         match pruned {
@@ -684,6 +696,7 @@ mod tests {
             .unwrap();
         let r = repair_after_unclean_stop(&mut store).unwrap().unwrap();
         assert_eq!((r.cohorts_stored, r.hours_stored), (1, 1), "{r:?}");
+        assert_eq!(r.scanned, 1, "only ids stored in the last 72 h are read");
         let stored: i64 = store
             .connection()
             .query_row(
