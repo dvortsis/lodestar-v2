@@ -359,6 +359,10 @@ fn smart_chips_reuse_the_recognisers() {
         assert!(chip(name).is_empty(), "{name}");
     }
     assert_eq!(chip("h.264"), [("codec:h264".to_string(), Some(5))]);
+    // Nor two values in one token, nor a bare number.
+    for word in ["ita.eng", "x264.x265", "flac.mp3", "720", "300", "007"] {
+        assert!(chip(word).is_empty(), "{word}");
+    }
     // Negated: the `-` stays.
     let got = suggest_at(&f.index, "-x265", PLAIN, 8);
     let s = got.iter().find(|s| s.kind == Kind::Chip).unwrap();
@@ -750,6 +754,32 @@ const NATURAL: &[(&str, &str)] = &[
     ("res:1080p 4k", "res:1080p 4k"),
     ("movies -x tv shows", "type:movie,tv -x"),
     ("x ! y", "x ! y"),
+    // Two values in one token aren't one value.
+    ("ita.eng", "ita.eng"),
+    ("french.german", "french.german"),
+    ("french-german", "french-german"),
+    ("eng.fre", "eng.fre"),
+    ("hdr.dv", "hdr.dv"),
+    ("aac.dts", "aac.dts"),
+    ("flac.mp3", "flac.mp3"),
+    ("x264.x265", "x264.x265"),
+    ("dts-hd.ma", "audio:dts-hd-ma"),
+    // Numbers aren't extensions.
+    ("300 movies", "300 type:movie"),
+    ("the 100", "the 100"),
+    ("007 movies", "007 type:movie"),
+    // An explicit AND means all of them: nothing merges across it.
+    ("movies AND tv shows", "type:movie type:tv"),
+    ("4k AND 1080p", "res:2160p res:1080p"),
+    ("movies -x AND tv shows", "type:movie -x type:tv"),
+    ("4k AND x265 AND 1080p", "res:2160p codec:h265 res:1080p"),
+    // A field the group names in brackets counts too.
+    ("-(type:tv) tv shows", "-type:tv tv shows"),
+    ("(-type:tv) tv shows", "-type:tv tv shows"),
+    ("-(ext:mkv) mkv files", "-ext:mkv mkv files"),
+    ("4k -(res:1080p) 1080p", "4k -res:1080p 1080p"),
+    ("x OR (type:tv) tv shows", "x | type:tv tv shows"),
+    ("Naruto[1080p]", "Naruto[1080p]"),
     ("naruto [2002]", "naruto year:2002"),
     (
         "720p x264 tv series episodes 1 to 10",
@@ -1035,6 +1065,7 @@ proptest! {
                     "x265", "flac", "mkv", "french", "season", "2", "naruto.1080p",
                     "Naruto.S01E02.1080p", "x265,naruto", "flac/naruto", "4k\u{a0}movies",
                     "naruto\u{3000}1080p", "the", "and", "!", "dolby", "vision", "dd5.1",
+                    "ita.eng", "x264.x265", "300", "720", "h.264", "hevc", "1080i",
                 ])
                 .prop_map(str::to_owned),
                 "[a-z0-9.,/]{1,10}",
@@ -1060,6 +1091,31 @@ proptest! {
                 kept || in_chip || lodestar_search::natural::is_filler(trimmed),
                 "{:?} lost from {:?}: {}", w, phrase, n.canonical
             );
+            // A word read alone into a keyword chip is that value and
+            // nothing more: the release parser reads it as exactly that.
+            if let Some(c) = n.chips.iter().find(|c| c.from == (start, end)) {
+                let (field, values) = c.text.split_once(':').unwrap();
+                let values: Vec<&str> = values.split(',').collect();
+                if field == "ext" {
+                    prop_assert!(
+                        trimmed.bytes().any(|b| b.is_ascii_alphabetic()),
+                        "{:?} read as an extension", w
+                    );
+                }
+                if ["res", "codec", "hdr", "audio", "lang"].contains(&field) {
+                    let fields = |x: &str| {
+                        let mut f = lodestar_release_parser::parse(&format!("A [{x}]")).fields();
+                        f.retain(|(k, _)| !matches!(*k, "title" | "channels"));
+                        f
+                    };
+                    // One field, one value, and it's the chip's.
+                    let mine = fields(trimmed);
+                    prop_assert!(
+                        mine.len() == 1 && values.contains(&mine[0].1.to_lowercase().as_str()),
+                        "{:?} read as {} ({:?})", w, c.text, mine
+                    );
+                }
+            }
         }
     }
 

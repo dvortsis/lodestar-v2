@@ -98,8 +98,14 @@ struct W {
 fn word(input: &str, t: &Raw) -> Option<W> {
     let raw = &input[t.start..t.end];
     let trimmed = raw.trim_matches(|c: char| "[]{},.;:!?'".contains(c));
-    // All punctuation (`!`): kept as written, for no rule to read.
-    let trimmed = if trimmed.is_empty() { raw } else { trimmed };
+    // All punctuation (`!`), or a bracket trimmed off one side only
+    // (`Naruto[1080p]`): kept as written.
+    let unpaired = |o: char, c: char| trimmed.matches(o).count() != trimmed.matches(c).count();
+    let trimmed = if trimmed.is_empty() || unpaired('[', ']') || unpaired('{', '}') {
+        raw
+    } else {
+        trimmed
+    };
     let lead = raw.find(trimmed).unwrap_or(0);
     let from = caret::chars(input, t.start + lead);
     Some(W {
@@ -655,12 +661,14 @@ fn build(input: &str) -> Result<Built, NaturalError> {
     // group they're in, between `OR`s) and syntax as written. Each group
     // also notes the fields its own top-level syntax names.
     enum Seg {
-        /// The words, their group, and the text they span.
-        Run(Vec<W>, usize, String),
+        /// The words, their group, the text they span, and their merge
+        /// scope (an explicit `AND` starts a new one).
+        Run(Vec<W>, usize, String, usize),
         Syntax(String),
     }
     let mut segs: Vec<Seg> = Vec::new();
     let mut taken: Vec<Vec<Key>> = vec![Vec::new()];
+    let mut scope = 0;
     let mut i = 0;
     while i < toks.len() {
         let group = taken.len() - 1;
@@ -672,7 +680,7 @@ fn build(input: &str) -> Result<Built, NaturalError> {
                 i += 1;
             }
             let span = input[start..toks[i - 1].end].to_owned();
-            segs.push(Seg::Run(run, group, span));
+            segs.push(Seg::Run(run, group, span, scope));
             continue;
         }
         // Syntax, verbatim: up to the next plain word.
@@ -680,13 +688,19 @@ fn build(input: &str) -> Result<Built, NaturalError> {
         while i < toks.len() && !plain(input, &toks, i) {
             let t = &toks[i];
             let text = &input[t.start..t.end];
-            if t.depth == 0 {
-                if t.kind == RawKind::Bar || (t.kind == RawKind::Word && text == "OR") {
-                    taken.push(Vec::new());
-                } else if t.kind == RawKind::Word {
-                    if let Some(k) = query::parse(text).ok().as_ref().and_then(key_of) {
-                        taken.last_mut().expect("a group").push(k);
-                    }
+            let top = t.depth == 0;
+            if top && (t.kind == RawKind::Bar || (t.kind == RawKind::Word && text == "OR")) {
+                taken.push(Vec::new());
+                scope += 1;
+            } else if top && t.kind == RawKind::Word && text == "AND" {
+                // "All of" these: values either side aren't merged into
+                // "any of".
+                scope += 1;
+            } else if t.kind == RawKind::Word {
+                // A field named anywhere in the group, in brackets too
+                // (`-(type:tv)`).
+                if let Some(k) = query::parse(text).ok().as_ref().and_then(key_of) {
+                    taken.last_mut().expect("a group").push(k);
                 }
             }
             i += 1;
@@ -700,12 +714,12 @@ fn build(input: &str) -> Result<Built, NaturalError> {
     let mut read_words = Vec::new();
     for (g, keys) in taken.iter().enumerate() {
         let idx: Vec<usize> = (0..segs.len())
-            .filter(|&j| matches!(&segs[j], Seg::Run(_, gr, _) if *gr == g))
+            .filter(|&j| matches!(&segs[j], Seg::Run(_, gr, ..) if *gr == g))
             .collect();
-        let runs: Vec<&[W]> = idx
+        let runs: Vec<(&[W], usize)> = idx
             .iter()
             .map(|&j| match &segs[j] {
-                Seg::Run(w, ..) => w.as_slice(),
+                Seg::Run(w, _, _, scope) => (w.as_slice(), *scope),
                 Seg::Syntax(_) => unreachable!("runs only"),
             })
             .collect();
@@ -723,7 +737,7 @@ fn build(input: &str) -> Result<Built, NaturalError> {
         .into_iter()
         .zip(rendered)
         .map(|(seg, r)| match seg {
-            Seg::Run(_, _, text) => Piece::Run { text, read: r },
+            Seg::Run(_, _, text, _) => Piece::Run { text, read: r },
             Seg::Syntax(s) => Piece::Syntax(s),
         })
         .collect();
@@ -752,6 +766,8 @@ struct Read {
 /// place.
 struct Merged {
     key: Key,
+    /// The runs it merges across: none past an explicit `AND`.
+    scope: usize,
     values: Vec<String>,
     from: (usize, usize),
 }
@@ -759,8 +775,8 @@ struct Merged {
 /// The rules over the runs of one AND group. A rule on a field the
 /// group's own syntax already names (`-type:tv tv shows`) is left as
 /// text; keyword values of one field merge across runs (`movies -x tv
-/// shows` is `type:movie,tv -x`).
-fn read_group(runs: &[&[W]], taken: &[Key]) -> Read {
+/// shows` is `type:movie,tv -x`), but never across an explicit `AND`.
+fn read_group(runs: &[(&[W], usize)], taken: &[Key]) -> Read {
     // Each word: recognised (a clause, or a slot in `merged`) or text.
     enum Part {
         Text(usize),
@@ -770,7 +786,7 @@ fn read_group(runs: &[&[W]], taken: &[Key]) -> Read {
     let mut merged: Vec<Merged> = Vec::new();
     let mut read = Vec::new();
     let mut all_parts: Vec<(Vec<Part>, Vec<bool>)> = Vec::new();
-    for w in runs {
+    for &(w, scope) in runs {
         let mut parts: Vec<Part> = Vec::new();
         let mut used = vec![false; w.len()];
         let mut i = 0;
@@ -804,7 +820,7 @@ fn read_group(runs: &[&[W]], taken: &[Key]) -> Read {
                 Made::Tag(_, v) | Made::Ext(v) => v,
             };
             let key = key.expect("a keyword field");
-            match merged.iter_mut().find(|m| m.key == key) {
+            match merged.iter_mut().find(|m| m.key == key && m.scope == scope) {
                 Some(m) => {
                     if !m.values.contains(&value) {
                         m.values.push(value);
@@ -813,6 +829,7 @@ fn read_group(runs: &[&[W]], taken: &[Key]) -> Read {
                 None => {
                     merged.push(Merged {
                         key,
+                        scope,
                         values: vec![value],
                         from,
                     });
@@ -829,7 +846,7 @@ fn read_group(runs: &[&[W]], taken: &[Key]) -> Read {
         text: Vec::new(),
         read,
     };
-    for (w, (parts, used)) in runs.iter().zip(all_parts) {
+    for (&(w, _), (parts, used)) in runs.iter().zip(all_parts) {
         // Linking words beside a recognised word, and asks at the start,
         // go.
         let near_used = |j: usize| {
