@@ -334,7 +334,6 @@ impl Writer {
         self.stats
             .last_commit
             .store(unix_now() as u64, Ordering::Relaxed);
-        let now = unix_now();
         // The have-filter learns the keys before their leases end, so a
         // rediscovery in between is held, never claimed and fetched again.
         for (_, _, hashes) in &outcome.stored {
