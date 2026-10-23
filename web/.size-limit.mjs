@@ -29,6 +29,15 @@ if (leaks.length) {
 
 const entry = (name, path, limit) => ({ name, path, limit, gzip: true, running: false });
 
+// A route's own JS and CSS: what its first visit loads beyond the search route's first load.
+const own = (route) => {
+	const files = routeFiles(route);
+	return [
+		...files.js.filter((f) => !search.js.includes(f)),
+		...files.css.filter((f) => !search.css.includes(f))
+	];
+};
+
 export default [
 	entry('Search route JS (initial)', search.js, '45 KB'),
 	entry('CSS', search.css, '20 KB'),
@@ -41,7 +50,12 @@ export default [
 	// Latin subset of Atkinson Hyperlegible Next, fetched at first layout; a preload costs LCP (§10.1).
 	entry('Fonts on first paint', firstPaintFonts, '35 KB'),
 	// Mono loads lazily and is never preloaded (§10.1).
-	entry('Mono font (lazy)', monoFonts, '25 KB')
+	entry('Mono font (lazy)', monoFonts, '25 KB'),
+	// Route budgets (runner decision, owner's §10.1 headroom rules): each route's own JS + CSS.
+	entry('Compare route (own JS + CSS)', own('/compare'), '15 KB'),
+	entry('Discover route (own JS + CSS)', own('/discover'), '15 KB'),
+	entry('Alerts route (own JS + CSS)', own('/alerts'), '15 KB'),
+	entry('Alert route (own JS + CSS)', own('/alerts/[id]'), '15 KB')
 	// Placeholders for later slices. Fill `path` from the manifest when the chunk exists:
 	//   Detail-drawer chunk    <= 15 KB
 	//   Insights chunk (uPlot) <= 45 KB
