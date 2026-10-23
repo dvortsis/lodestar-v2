@@ -319,7 +319,9 @@ mod tests {
             file_folder: dir.path().display().to_string(),
             ..Logging::default()
         };
-        l.kinds.insert("name".into(), unix_now() + 1);
+        // Deadlines are whole seconds, so +2 leaves at least a second before it passes: the first
+        // check can't land after it, wherever in the second the test starts.
+        l.kinds.insert("name".into(), unix_now() + 2);
         let (_tx, rx) = watch::channel(l);
         let task = follow_with(rx, Some(rt), |_| Ok(()));
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
@@ -328,7 +330,10 @@ mod tests {
             dir.path().join(crate::logging::CURRENT).exists(),
             "the file opened"
         );
-        tokio::time::sleep(std::time::Duration::from_millis(2_200)).await;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while rt.applied().file_mask.has(Kind::Name) && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
         assert!(!rt.applied().file_mask.has(Kind::Name), "off with no save");
         task.abort();
     }
