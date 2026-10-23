@@ -1128,9 +1128,9 @@
       "review_rounds": 1
     },
     "fix-log-deadline-flake": {
-      "status": "review",
+      "status": "merged",
       "pr": 131,
-      "notes": "2026-10-23T17:05:44Z runner PR: deadline +2 and poll; local 12 passed x3"
+      "notes": "2026-10-23T17:05:44Z runner PR: deadline +2 and poll; local 12 passed x3 | 2026-10-23T17:30:11Z CI green, merged #131 as 86f4c75"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
