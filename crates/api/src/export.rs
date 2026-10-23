@@ -11,9 +11,12 @@
 //! counts in `skipped` and nothing says which or why: an unknown hash
 //! and a withheld one look the same.
 //!
-//! **Adult** is read when the export starts, and again before each
-//! chunk: turning it off mid-export withholds Adult from the next chunk
-//! on; turning it on adds none (the query was run without it).
+//! **Adult** follows export's own setting, [`ExportAdult`] (§20.9), not
+//! "Show adult content"; without it, as until the server wires
+//! `export_adult`, exports never include Adult. It's read when the
+//! export starts, and again before each chunk: turning it off mid-export
+//! withholds Adult from the next chunk on; turning it on adds none (the
+//! query was run without it).
 //!
 //! **Streamed, chunked, throttled** (§15's WAL risk): ids come a chunk at
 //! a time (a page of the export's own searcher lease, a slice of the
@@ -68,6 +71,13 @@ use crate::{AdultVisibility, ApiState, discover, torrents};
 )]
 pub(crate) struct ApiDoc;
 
+/// Whether exports include Adult: the `content` section's own
+/// `export_adult` (§20.9: each output has its own adult setting, off by
+/// default), followed live. The server layers it over the router as an
+/// `Extension`; without one, as now, exports never include Adult.
+#[derive(Clone, Debug, Default)]
+pub struct ExportAdult(pub AdultVisibility);
+
 /// Hashes one export takes, at most (the bulk selection).
 pub const MAX_HASHES: usize = 10_000;
 
@@ -98,6 +108,8 @@ pub struct ExportConfig {
 
 /// Rows per chunk.
 pub const CHUNK: usize = 256;
+/// Ids a query's lease is paged for at once: 128 KiB of ids.
+pub const ID_PAGE: usize = 16_384;
 /// Rows read per second.
 pub const ROWS_PER_SEC: u32 = 2_000;
 /// Rows per export.
@@ -151,7 +163,7 @@ pub fn routes() -> Router<ApiState> {
                 ("Cache-Control" = String, description = "`no-store`."),
             )
         ),
-        (status = 400, body = ErrorEnvelope, description = "A bad parameter, as `/search`'s, or `one_source`, `unknown_field`, `fields_unused`, `sort_unused`, `ast_needs_post`, `hashes_need_post`."),
+        (status = 400, body = ErrorEnvelope, description = "A bad parameter, as `/search`'s, or `one_source`, `unknown_field`, `fields_unused`, `sort_unused`; `ast` or `hashes` in the query string is a `bad_parameter` (POST them)."),
         (status = 404, body = ErrorEnvelope, description = "`collection_not_found`."),
         (status = 429, body = ErrorEnvelope, description = "`too_many_jobs`: four jobs are running or paused."),
         (status = 503, body = ErrorEnvelope, description = "`search_disabled` (a query while search is off), or `shutting_down`."),
@@ -161,6 +173,7 @@ pub(crate) async fn export_get(
     State(s): State<ApiState>,
     Extension(jobs): Extension<Arc<Jobs>>,
     config: Option<Extension<ExportConfig>>,
+    adult: Option<Extension<ExportAdult>>,
     Query(p): Query<ExportRequest>,
 ) -> ApiResult<Response> {
     if p.ast.is_some() {
@@ -171,7 +184,8 @@ pub(crate) async fn export_get(
             ApiError::bad_request("hashes_need_post", "Send hashes with POST.").field("hashes"),
         );
     }
-    start(s, jobs, config.map(|c| c.0).unwrap_or_default(), p).await
+    let adult = adult.map(|a| a.0.0).unwrap_or_default();
+    start(s, jobs, config.map(|c| c.0).unwrap_or_default(), adult, p).await
 }
 
 /// Downloads a query's results (text or AST), a selection of up to
@@ -208,20 +222,26 @@ pub(crate) async fn export_post(
     State(s): State<ApiState>,
     Extension(jobs): Extension<Arc<Jobs>>,
     config: Option<Extension<ExportConfig>>,
+    adult: Option<Extension<ExportAdult>>,
     headers: HeaderMap,
     Json(p): Json<ExportRequest>,
 ) -> ApiResult<Response> {
     same_origin_json(&headers)?;
-    start(s, jobs, config.map(|c| c.0).unwrap_or_default(), p).await
+    let adult = adult.map(|a| a.0.0).unwrap_or_default();
+    start(s, jobs, config.map(|c| c.0).unwrap_or_default(), adult, p).await
 }
 
 /// Where an export's ids come from, and how far it has read.
 enum Source {
     /// The export's own lease: not in the registry, so its expiry and
     /// eviction can't end an export (`max_life` bounds it instead).
+    /// Ids are taken from the lease [`ID_PAGE`] at a time (a page after
+    /// a position scans every match, so few large pages cost far less
+    /// than many small ones) and read a chunk at a time from `ids`.
     Query {
         lease: Arc<Lease>,
         next: Option<Start>,
+        ids: std::collections::VecDeque<i64>,
     },
     Hashes {
         hashes: Vec<InfoHash>,
@@ -237,7 +257,7 @@ enum Source {
 impl Source {
     fn exhausted(&self) -> bool {
         match self {
-            Source::Query { next, .. } => next.is_none(),
+            Source::Query { next, ids, .. } => next.is_none() && ids.is_empty(),
             Source::Hashes { hashes, at } => *at >= hashes.len(),
             Source::Collection { done, .. } => *done,
         }
@@ -294,6 +314,7 @@ async fn start(
     s: ApiState,
     jobs: Arc<Jobs>,
     config: ExportConfig,
+    export_adult: AdultVisibility,
     p: ExportRequest,
 ) -> ApiResult<Response> {
     let shape = shape(&p)?;
@@ -314,9 +335,50 @@ async fn start(
         .field("sort"));
     }
     let hidden = p.hidden.unwrap_or(false);
-    let adult = s.adult.shown();
+    let adult = export_adult.shown();
+    // The slot first, so a request past the limit costs no search.
+    let job = jobs.start(BackgroundJobKind::Export)?;
+    let (source, total, approx) = match resolve(&s, p, hidden, adult, &config).await {
+        Ok(r) => r,
+        Err(e) => {
+            jobs.discard(job.id());
+            return Err(e);
+        }
+    };
+    job.set_total(total.min(config.cap), approx);
+    job.set_export(ExportJob {
+        cap: config.cap,
+        format: shape.format,
+        truncated: false,
+    });
+    let (tx, rx) = mpsc::channel(config.queue.max(1));
+    let complete = Arc::new(AtomicBool::new(false));
+    let id = job.id();
+    let worker = Worker {
+        job,
+        reader: s.reader.clone(),
+        adult: export_adult,
+        started_adult: adult,
+        hidden,
+        shape: shape.clone(),
+        config,
+        tx,
+        complete: complete.clone(),
+    };
+    tokio::spawn(worker.run(source));
+    respond(shape.format, id, rx, complete)
+}
+
+/// The export's source, its row count and whether that's an estimate.
+async fn resolve(
+    s: &ApiState,
+    p: ExportRequest,
+    hidden: bool,
+    adult: bool,
+    config: &ExportConfig,
+) -> ApiResult<(Source, u64, bool)> {
     let reader = s.reader.clone();
-    let (source, total, approx) = if let Some(list) = p.hashes {
+    Ok(if let Some(list) = p.hashes {
         if list.len() > MAX_HASHES {
             return Err(ApiError::bad_request(
                 "too_many_hashes",
@@ -372,36 +434,22 @@ async fn start(
             Source::Query {
                 lease: Arc::new(lease),
                 next: Some(Start::Offset(0)),
+                ids: std::collections::VecDeque::new(),
             },
             total.value as u64,
             total.approx,
         )
-    };
+    })
+}
 
-    let job = jobs.start(BackgroundJobKind::Export)?;
-    job.set_total(total.min(config.cap), approx);
-    job.set_export(ExportJob {
-        cap: config.cap,
-        format: shape.format,
-        truncated: false,
-    });
-    let (tx, rx) = mpsc::channel(config.queue.max(1));
-    let complete = Arc::new(AtomicBool::new(false));
-    let id = job.id();
-    let worker = Worker {
-        job,
-        reader: s.reader.clone(),
-        adult: s.adult.clone(),
-        started_adult: adult,
-        hidden,
-        shape: shape.clone(),
-        config,
-        tx,
-        complete: complete.clone(),
-    };
-    tokio::spawn(worker.run(source));
-
-    let (content_type, ext) = match shape.format {
+/// The streamed response for job `id`.
+fn respond(
+    format: ExportFormat,
+    id: u64,
+    rx: mpsc::Receiver<Result<Bytes, io::Error>>,
+    complete: Arc<AtomicBool>,
+) -> ApiResult<Response> {
+    let (content_type, ext) = match format {
         ExportFormat::Csv => ("text/csv; charset=utf-8; header=present", "csv"),
         ExportFormat::Json => ("application/x-ndjson", "ndjson"),
         ExportFormat::Magnets => ("text/plain; charset=utf-8", "txt"),
@@ -540,17 +588,20 @@ impl Worker {
                 self.job.mark_truncated();
                 break;
             }
-            self.job
-                .checkpoint(self.config.pause_limit)
-                .await
-                .map_err(|stop| match stop {
-                    Stop::Cancelled => End::Cancelled,
-                    Stop::PauseExpired => End::Failed(ApiError::new(
-                        StatusCode::REQUEST_TIMEOUT,
-                        "pause_expired",
-                        "The export was paused for too long; start it again.",
-                    )),
-                })?;
+            // While paused, a client that goes away ends it too.
+            let stopped = tokio::select! {
+                biased;
+                () = self.tx.closed() => return Err(End::Gone),
+                stopped = self.job.checkpoint(self.config.pause_limit) => stopped,
+            };
+            stopped.map_err(|stop| match stop {
+                Stop::Cancelled => End::Cancelled,
+                Stop::PauseExpired => End::Failed(ApiError::new(
+                    StatusCode::REQUEST_TIMEOUT,
+                    "pause_expired",
+                    "The export was paused for too long; start it again.",
+                )),
+            })?;
             if born.elapsed() >= self.config.max_life {
                 return Err(End::Failed(ApiError::new(
                     StatusCode::REQUEST_TIMEOUT,
@@ -677,13 +728,18 @@ fn read_chunk(
 ) -> ApiResult<Chunk> {
     // A query's ids come from its lease, outside the lock.
     let ids: Option<Vec<i64>> = match source {
-        Source::Query { lease, next } => {
-            let start = next.take().expect("not exhausted");
-            let page = lease
-                .page(start, want, cancel)
-                .map_err(search::search_error)?;
-            *next = page.next.map(Start::After);
-            Some(page.hits.iter().map(|h| h.id as i64).collect())
+        Source::Query { lease, next, ids } => {
+            if ids.len() < want
+                && let Some(start) = next.take()
+            {
+                let page = lease
+                    .page(start, ID_PAGE, cancel)
+                    .map_err(search::search_error)?;
+                *next = page.next.map(Start::After);
+                ids.extend(page.hits.iter().map(|h| h.id as i64));
+            }
+            let n = want.min(ids.len());
+            Some(ids.drain(..n).collect())
         }
         _ => None,
     };

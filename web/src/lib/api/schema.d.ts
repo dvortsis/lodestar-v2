@@ -1135,8 +1135,8 @@ export interface components {
             kind: components["schemas"]["BackgroundJobKind"];
             /**
              * Format: double
-             * @description Items per second while running (paused time left out); null
-             *     before the first items.
+             * @description Items read per second (`done` and `skipped`), paused time left
+             *     out; null before the first items.
              */
             rate: number | null;
             /**
@@ -3763,7 +3763,7 @@ export interface operations {
                     "text/plain": string;
                 };
             };
-            /** @description A bad parameter, as `/search`'s, or `one_source`, `unknown_field`, `fields_unused`, `sort_unused`, `ast_needs_post`, `hashes_need_post`. */
+            /** @description A bad parameter, as `/search`'s, or `one_source`, `unknown_field`, `fields_unused`, `sort_unused`; `ast` or `hashes` in the query string is a `bad_parameter` (POST them). */
             400: {
                 headers: {
                     [name: string]: unknown;

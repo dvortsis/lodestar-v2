@@ -635,7 +635,7 @@
             }
           },
           "400": {
-            "description": "A bad parameter, as `/search`'s, or `one_source`, `unknown_field`, `fields_unused`, `sort_unused`, `ast_needs_post`, `hashes_need_post`.",
+            "description": "A bad parameter, as `/search`'s, or `one_source`, `unknown_field`, `fields_unused`, `sort_unused`; `ast` or `hashes` in the query string is a `bad_parameter` (POST them).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3248,7 +3248,7 @@
               "null"
             ],
             "format": "double",
-            "description": "Items per second while running (paused time left out); null\nbefore the first items."
+            "description": "Items read per second (`done` and `skipped`), paused time left\nout; null before the first items."
           },
           "skipped": {
             "type": "integer",
