@@ -38,4 +38,5 @@ A Settings screen has the owner's 45 KB route budget (§10.1), and the engine is
 - A lazy file imports shared code from the eager files, never the other way round: an eager import of a lazy file makes it eager. `lazy-imports.test.ts` fails on one; add a new on-demand file to its list.
 - The `index.ts` barrel exports only what screens use; a re-export there keeps its module in the first view.
 - Rolldown pays about 400 B gz per chunk, so group what loads together into one entry (as `menu.ts` does) rather than many small ones.
-- A chunk that fails to load can't be retried (browsers keep the failure), so every lazy path has a visible fallback: the control's "couldn't load" line, or instant mode putting the value back with it.
+- A chunk that fails to load can't be retried (browsers keep the failure), so every lazy path has a visible fallback: the "couldn't load" line in a control's place, under a previewed field or a field whose menu didn't load, or instant mode putting the value back with it.
+- A new on-demand file also goes in `settingsOnDemand` in `web/.size-limit.mjs`, so the screen route's entry stops at it and "Settings controls (on demand)" gates it.

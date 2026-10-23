@@ -1,5 +1,5 @@
 // The form's own questions (§10.10.5, §10.10.7): discard, leave, and the default disruptive
-// confirmation. Loaded when one is first asked.
+// confirmation. The dialog itself (`ConfirmDialog.svelte`) loads when one is first asked.
 import { m } from '$lib/paraglide/messages.js';
 import { formatCount } from '$lib/format';
 import { currentLocale } from '$lib/i18n/locale.svelte';

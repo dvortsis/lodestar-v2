@@ -7,7 +7,7 @@
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import { m } from '$lib/paraglide/messages.js';
-	import { onDestroy, untrack, type Snippet } from 'svelte';
+	import { onDestroy, tick, untrack, type Snippet } from 'svelte';
 	import { loadControls } from './controls.svelte';
 	import DraftBanner from './DraftBanner.svelte';
 	import ErrorSummary from './ErrorSummary.svelte';
@@ -74,8 +74,11 @@
 	});
 
 	// The fields' on-demand controls load with the values, so they're in place at first paint.
+	// After a tick, so a screen's own widgets have registered and a field isn't taken for one
+	// that falls back to the JSON control.
 	$effect(() => {
-		void loadControls(form.specs.map(widgetFor));
+		const specs = form.specs;
+		void tick().then(() => loadControls(specs.map(widgetFor)));
 	});
 
 	// --- saving ------------------------------------------------------------------------------
