@@ -213,7 +213,7 @@
 			bind:this={fileInput}
 			type="file"
 			accept=".toml,application/toml,text/plain"
-			class="file-input w-full border-field-border"
+			class="import-file"
 			onchange={pick}
 			data-testid="settings-import-file"
 		/>
@@ -284,3 +284,16 @@
 	</div>
 </div>
 {#if adult && AdultDialog}<AdultDialog confirm={adult} />{/if}
+
+<style>
+	.import-file {
+		display: block;
+		width: 100%;
+		min-height: var(--control-height);
+		padding: calc(var(--spacing) * 2);
+		border: var(--border) solid var(--color-base-300);
+		border-radius: var(--radius-field);
+		background: var(--color-base-100);
+		color: var(--color-base-content);
+	}
+</style>
