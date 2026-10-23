@@ -107,17 +107,17 @@ Updates are off until you choose them, because checking contacts GitHub. In-app 
 
 To update by hand:
 
-1. Stop the container.
-2. Take a backup ([section 3.7](#37-back-up-and-restore)). It is your rollback.
+1. Take a backup while Lodestar runs ([section 3.7](#37-back-up-and-restore)). It is your rollback.
+2. Stop the container.
 3. Pull the new image and start the container.
    **Result:** The container starts, and the old data is intact.
 
-## 3.6 Handle API keys and content filters
+## 3.6 Know what protects the content filters and API keys
 <!-- index: API keys; content filters; child-safety core -->
 
-API keys let other apps, such as Torznab clients, talk to Lodestar. Create one key per app. If a key leaks, regenerate it. Never reuse the admin password as a key.
-
 The child-safety core of the content filters is always on. A change that would weaken protection asks for your password and shows a plain-language warning first.
+
+API keys, which let other apps such as Torznab clients talk to Lodestar, are **(planned)**. When they arrive, create one key per app and regenerate any key that leaks. Never use the admin password as a key.
 
 ## 3.7 Back up and restore
 <!-- index: backup; restore; seal.key; data folder -->
@@ -127,11 +127,14 @@ The child-safety core of the content filters is always on. A change that would w
 | File in the backup | What it holds |
 |---|---|
 | `lodestar.db` | The database. It is the source of truth. |
-| `auth.json` | The admin password hash, sessions and API keys. |
+| `auth.json` | The admin password hash and the key that signs sessions. |
 | `seal.key` | The key that unlocks stored secrets. |
 | `config.toml` | Your settings file, if you made one. |
 
 The search index isn't in the backup. Lodestar rebuilds it from the database.
+
+> [!WARNING]
+> The backup holds `seal.key` and `auth.json`. Keep it on a private share. Never place it on a share that is public over SMB.
 
 To back up on Unraid:
 
@@ -141,9 +144,10 @@ To back up on Unraid:
     docker exec Lodestar /lodestar backup
     ```
 
-   With Compose, run `docker exec lodestar /lodestar backup` on the Docker host.
+   With Compose, run `docker exec lodestar /lodestar backup` on the Docker host. Lodestar must be running.
    **Result:** The command prints `Backup written to` and the folder name.
-2. Copy that folder off the [cache pool](glossary.md#cache-pool). Replace `<backup-folder>` with the name printed and `<share>` with a share you already have:
+
+2. Copy that folder off the [cache pool](glossary.md#cache-pool). Replace `<backup-folder>` with the name printed and `<share>` with a private share you already have:
 
     ```bash
     cp -a /mnt/cache/appdata/lodestar/backups/<backup-folder> /mnt/user/<share>/
@@ -151,17 +155,27 @@ To back up on Unraid:
 
    **Result:** The copy finishes without an error.
 
-> [!WARNING]
-> The backup holds `seal.key` and `auth.json`. Keep the folder on a private share. Never place it on a share that is public over SMB.
+To restore on Unraid:
 
-To restore:
+1. On the Docker tab, select the **Lodestar** icon, then **Stop**.
+2. Open the Unraid terminal. Delete the old write-ahead files and the old search index, which doesn't match the restored database and would show the wrong torrents. Check the path before you run it:
 
-1. Stop Lodestar.
-2. In the data folder, delete `lodestar.db-wal` and `lodestar.db-shm` if they exist, and delete the `index` folder. The old index doesn't match the restored database and would show the wrong torrents.
-3. Copy the files from the backup folder into the data folder, replacing the ones there. Skip `README.txt`.
-4. Start Lodestar.
+    ```bash
+    rm -f /mnt/cache/appdata/lodestar/lodestar.db-wal /mnt/cache/appdata/lodestar/lodestar.db-shm
+    rm -rf /mnt/cache/appdata/lodestar/index
+    ```
+
+3. Copy the files from the backup. Replace `<share>` and `<backup-folder>` as before. Add `config.toml` to the list only if the backup has one:
+
+    ```bash
+    cd /mnt/user/<share>/<backup-folder>
+    cp -a lodestar.db seal.key auth.json /mnt/cache/appdata/lodestar/
+    ```
+
+   The `-a` keeps the files' owner and permissions. If the backup came from another server, also run `chown 99:100 /mnt/cache/appdata/lodestar/lodestar.db /mnt/cache/appdata/lodestar/seal.key /mnt/cache/appdata/lodestar/auth.json`.
+4. On the Docker tab, select the **Lodestar** icon, then **Start**.
    **Result:** Lodestar rebuilds the search index on start.
-5. Sign out all sessions and create new API keys. A restored `auth.json` brings back sessions and keys that you may have revoked since the backup.
+5. Change the admin password when the app offers it **(planned)**. A restored `auth.json` brings back the sessions that were valid when the backup was taken. They last up to 30 days. Changing the password ends them.
 
 You can also copy the whole data folder while Lodestar is stopped. That copy includes the index, so step 2 doesn't apply when you restore it.
 
@@ -169,7 +183,7 @@ You can also copy the whole data folder while Lodestar is stopped. That copy inc
 
 1. A friend wants to open Lodestar from work. What do you set up, and what do you not do?
 2. What does forwarding UDP `6881` tell DHT peers?
-3. Why must a backup stay on a private share, and what do you do after a restore?
+3. Why must a backup stay on a private share, and what does a restore bring back that you should know about?
 
 > [!TIP]
 > **Key takeaways**

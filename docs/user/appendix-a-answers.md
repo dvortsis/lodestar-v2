@@ -18,7 +18,7 @@ Answers to the questions at the end of each chapter, in the same order.
 
 1. Set up a VPN such as WireGuard or Tailscale and connect through it. Don't forward port `8090` or use the router's DMZ.
 2. It shows your public IP address to DHT peers.
-3. The backup holds `seal.key` and `auth.json`, so a public share would expose secrets. After a restore, sign out all sessions and create new API keys, because the restored `auth.json` brings back keys you may have revoked.
+3. The backup holds `seal.key` and `auth.json`, so a public share would expose secrets. A restore also brings back the sessions valid at backup time, which last up to 30 days. Changing the password ends them, once the app offers that **(planned)**.
 
 <!-- nav:start -->
 ---

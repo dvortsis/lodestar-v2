@@ -186,9 +186,16 @@ To keep the data in a folder you own instead:
     ```
 
    **Result:** The output shows `uid=` and `gid=` numbers, for example `1000`.
-2. In `docker-compose.yml`, remove the `#` before `PUID` and `PGID` and replace the values with your numbers. Never use `0`.
-3. Replace `- lodestar-data:/data` with `- ./data:/data`.
-4. Make the folder and start Lodestar:
+2. If `id` printed `uid=0`, you are in a root shell. Skip this step and keep `PUID` and `PGID` commented out, or use the numbers of a non-root account. Never use `0`.
+3. In `docker-compose.yml`, change the two commented lines under `environment:` to the lines below, with your numbers. Delete the `#` and the space after it, so `PUID` lines up with `TZ`:
+
+    ```yaml
+          PUID: "1000"
+          PGID: "1000"
+    ```
+
+4. Replace `- lodestar-data:/data` with `- ./data:/data`.
+5. Make the folder and start Lodestar:
 
     ```bash
     mkdir data && docker compose up -d
