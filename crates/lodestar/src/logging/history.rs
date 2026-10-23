@@ -150,22 +150,6 @@ fn unbase64url(s: &str) -> Option<Vec<u8>> {
 /// The longest cursor (`/logs` refuses longer ones first).
 const MAX_CURSOR: usize = 512;
 
-/// Opens a listed file: a rotated `.jsonl` compressed since the listing
-/// is its `.gz`, with the same lines at the same offsets.
-fn open_listed(dir: &std::path::Path, name: &LogName) -> std::io::Result<(LogName, std::fs::File)> {
-    match open_regular(&name.path(dir)) {
-        Ok(f) => Ok((name.clone(), f)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => match name.compressed() {
-            Some(gz) => {
-                let f = open_regular(&gz.path(dir))?;
-                Ok((gz, f))
-            }
-            None => Err(e),
-        },
-        Err(e) => Err(e),
-    }
-}
-
 /// A file's first-line fingerprint, to know the current file again.
 fn head_of(dir: &std::path::Path, name: &LogName) -> u64 {
     let Ok(mut f) = open_regular(&name.path(dir)) else {
@@ -289,7 +273,7 @@ pub fn page_capped(
                 break;
             }
         }
-        let opened = open_listed(dir, &name);
+        let opened = files::open_listed(dir, &name);
         let Ok((opened_as, mut f)) = opened else {
             unreadable += 1;
             idx += 1;
@@ -459,7 +443,7 @@ fn locate(
                 Some(i) => (i, Some(offset)),
                 // Not listed, but there (a scan can miss a file being
                 // compressed): read it, then go on to the older ones.
-                None if open_listed(dir, name).is_ok() => {
+                None if files::open_listed(dir, name).is_ok() => {
                     listed.insert(
                         older,
                         Listed {
@@ -530,9 +514,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let plain = LogName::parse("lodestar-20261023T101500.123Z.jsonl").unwrap();
         std::fs::write(plain.compressed().unwrap().path(dir.path()), "x").unwrap();
-        let (name, _) = open_listed(dir.path(), &plain).unwrap();
+        let (name, _) = files::open_listed(dir.path(), &plain).unwrap();
         assert_eq!(name, plain.compressed().unwrap());
-        assert!(open_listed(dir.path(), &LogName::Current).is_err());
+        assert!(files::open_listed(dir.path(), &LogName::Current).is_err());
     }
 
     #[test]

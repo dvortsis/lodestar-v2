@@ -25,6 +25,11 @@ pub const ARCHIVE_MAX: u64 = (3 << 30) + (3 << 28);
 const OFFSET_MAX: u64 = 0xFFE0_0000;
 
 const TRUNCATED: &[u8] = b"[truncated: a zip member holds at most 4 GiB]\n";
+const UNREADABLE_REST: &[u8] = b"[unreadable: the rest of this file couldn't be read]\n";
+
+const NO_ROOM: &str = "left out: the archive reached its size limit";
+const NOT_OPENED: &str = "left out: it couldn't be opened (deleted, or unreadable)";
+const CUT_SHORT: &str = "cut short: the rest couldn't be read";
 
 struct Central {
     name: String,
@@ -52,6 +57,9 @@ pub struct ZipWriter {
     open: Option<Open>,
     time: u16,
     date: u16,
+    /// [`ARCHIVE_MAX`] and [`OFFSET_MAX`] (tests lower them).
+    archive_max: u64,
+    offset_max: u64,
 }
 
 /// MS-DOS time and date of `millis` (UTC).
@@ -74,6 +82,8 @@ impl ZipWriter {
             open: None,
             time,
             date,
+            archive_max: ARCHIVE_MAX,
+            offset_max: OFFSET_MAX,
         }
     }
 
@@ -82,9 +92,14 @@ impl ZipWriter {
         self.offset += b.len() as u64;
     }
 
+    /// The last member ended.
+    fn last_name(&self) -> Option<String> {
+        self.entries.last().map(|e| e.name.clone())
+    }
+
     /// Whether another member may start.
     pub fn room(&self) -> bool {
-        self.offset < ARCHIVE_MAX
+        self.offset < self.archive_max
     }
 
     /// Starts a member (ASCII names only).
@@ -127,7 +142,7 @@ impl ZipWriter {
         // Within the member's limit, and the archive's offsets in 32 bits
         // (deflate never grows data by much; the slack covers that and the
         // central directory).
-        let room = (MEMBER_MAX - m.size).min(OFFSET_MAX.saturating_sub(self.offset));
+        let room = (MEMBER_MAX - m.size).min(self.offset_max.saturating_sub(self.offset));
         let (take, full) = match data.len() as u64 > room {
             true => (room as usize, true),
             false => (data.len(), false),
@@ -233,7 +248,8 @@ pub struct ZipStream {
     w: ZipWriter,
     members: VecDeque<(String, Opener)>,
     current: Option<Content>,
-    left_out: Vec<String>,
+    /// Files left out or cut short, and why.
+    left_out: Vec<(String, &'static str)>,
     done: bool,
 }
 
@@ -252,10 +268,20 @@ impl ZipStream {
         loop {
             if let Some(content) = &mut self.current {
                 match content.next() {
-                    Some(chunk) => {
-                        if !self.w.write(&chunk?)? {
+                    Some(Ok(chunk)) => {
+                        if !self.w.write(&chunk)? {
                             self.current = None;
                             self.w.end()?;
+                        }
+                    }
+                    // A file that fails partway (a corrupt `.gz`) ends its
+                    // member with a line saying so; the archive goes on.
+                    Some(Err(_)) => {
+                        self.current = None;
+                        self.w.write(UNREADABLE_REST)?;
+                        self.w.end()?;
+                        if let Some(name) = self.w.last_name() {
+                            self.left_out.push((name, CUT_SHORT));
                         }
                     }
                     None => {
@@ -265,23 +291,27 @@ impl ZipStream {
                 }
             } else if let Some((name, open)) = self.members.pop_front() {
                 if !self.w.room() {
-                    self.left_out.push(name);
+                    self.left_out.push((name, NO_ROOM));
                     continue;
                 }
-                // A file deleted or rotated away meanwhile is left out.
                 match open() {
                     Ok(content) => {
                         self.w.start(&name);
                         self.current = Some(content);
                     }
-                    Err(_) => continue,
+                    // Deleted meanwhile, or unreadable: named, not silent.
+                    Err(_) => self.left_out.push((name, NOT_OPENED)),
                 }
             } else if !self.done {
                 if !self.left_out.is_empty() {
                     self.w.start("archive-incomplete.txt");
                     let text = format!(
-                        "The archive reached its size limit; these files were left out. Download them one at a time:\n{}\n",
-                        self.left_out.join("\n")
+                        "Some log files aren't whole in this archive. Download them one at a time:\n{}\n",
+                        self.left_out
+                            .iter()
+                            .map(|(name, why)| format!("{name}: {why}"))
+                            .collect::<Vec<_>>()
+                            .join("\n")
                     );
                     self.w.write(text.as_bytes())?;
                     self.w.end()?;
@@ -379,7 +409,13 @@ mod tests {
         .concat();
         let members = read(&zip);
         let names: Vec<&str> = members.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(names, ["a.jsonl", "empty.txt", "big.txt"]);
+        assert_eq!(
+            names,
+            ["a.jsonl", "empty.txt", "big.txt", "archive-incomplete.txt"]
+        );
+        assert!(
+            String::from_utf8_lossy(&members[3].1).contains(&format!("gone.txt: {NOT_OPENED}"))
+        );
         assert_eq!(members[0].1, b"{\"x\":1}\n{\"x\":2}\n");
         assert!(members[1].1.is_empty());
         assert_eq!(members[2].1.len(), big.len() * 2);
@@ -398,5 +434,79 @@ mod tests {
         assert!(!w.write(b"more").unwrap(), "the rest is dropped");
         let m = w.open.as_ref().unwrap();
         assert_eq!(m.size, MEMBER_MAX - 10 + 5 + TRUNCATED.len() as u64);
+    }
+
+    fn zip_of(s: ZipStream) -> Vec<(String, Vec<u8>)> {
+        read(&s.collect::<io::Result<Vec<Vec<u8>>>>().unwrap().concat())
+    }
+
+    #[test]
+    fn files_past_the_limit_or_unreadable_are_named_not_silent() {
+        let failing: Opener = Box::new(|| {
+            Ok(
+                Box::new([Ok(b"first\n".to_vec()), Err(io::Error::other("corrupt"))].into_iter())
+                    as Content,
+            )
+        });
+        let mut s = ZipStream::new(
+            0,
+            vec![
+                ("cut.jsonl".into(), failing),
+                (
+                    "gone.jsonl".into(),
+                    Box::new(|| Err(io::Error::other("gone"))),
+                ),
+                ("a.jsonl".into(), content(vec!["a\n"])),
+                ("b.jsonl".into(), content(vec!["b\n"])),
+            ],
+        );
+        // Room for the first members only.
+        s.w.archive_max = 1;
+        let members = zip_of(s);
+        let names: Vec<&str> = members.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["cut.jsonl", "archive-incomplete.txt"]);
+        assert_eq!(
+            members[0].1,
+            [b"first\n".as_slice(), UNREADABLE_REST].concat()
+        );
+        let note = String::from_utf8(members[1].1.clone()).unwrap();
+        for line in [
+            format!("cut.jsonl: {CUT_SHORT}"),
+            format!("a.jsonl: {NO_ROOM}"),
+            format!("b.jsonl: {NO_ROOM}"),
+        ] {
+            assert!(note.contains(&line), "{note}");
+        }
+        // `gone` came after the limit was reached: it was never opened.
+        assert!(note.contains("gone.jsonl: left out"), "{note}");
+    }
+
+    #[test]
+    fn a_member_stops_before_the_offsets_pass_32_bits() {
+        // Lines deflate can't shrink, so the offsets track what's written.
+        let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+        let text: String = (0..4000)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                format!("{x:016x}{:016x}\n", x.rotate_left(29))
+            })
+            .collect();
+        let text: &'static str = Box::leak(text.into_boxed_str());
+        let mut s = ZipStream::new(0, vec![("big.jsonl".into(), content(vec![text]))]);
+        s.w.offset_max = 50_000;
+        let zip = s.collect::<io::Result<Vec<Vec<u8>>>>().unwrap().concat();
+        assert!(zip.len() < 50_000 + (1 << 16), "{}", zip.len());
+        let members = read(&zip);
+        let body = &members[0].1;
+        assert!(body.ends_with(TRUNCATED));
+        let kept = &body[..body.len() - TRUNCATED.len()];
+        assert!(
+            kept.len() > 30_000 && kept.len() < text.len(),
+            "{}",
+            kept.len()
+        );
+        assert!(text.as_bytes().starts_with(kept) && kept.ends_with(b"\n"));
     }
 }

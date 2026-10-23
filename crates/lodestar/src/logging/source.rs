@@ -310,7 +310,9 @@ impl LogSource for Logs {
             .filter(|l| l.name != LogName::Current)
             .map(|l| l.name.clone())
             .collect();
-        let done = rt.delete_logs(&folder.dir, names, current, which == LogFilesWhich::All);
+        let done = rt
+            .delete_logs(&folder.dir, names, current, which == LogFilesWhich::All)
+            .map_err(LogsError::Internal)?;
         lodestar_log::log_event!(
             events::LOGGING_FILES_DELETED,
             count = done.deleted,

@@ -192,10 +192,30 @@ pub fn first_ts(dir: &Path, name: &LogName) -> Option<String> {
     lodestar_api::logs::parse_rfc3339(ts).map(|_| ts.to_string())
 }
 
+/// Opens a listed file: a rotated `.jsonl` compressed since the listing
+/// is its `.gz`, with the same lines at the same offsets.
+pub fn open_listed(dir: &Path, name: &LogName) -> io::Result<(LogName, std::fs::File)> {
+    match open_regular(&name.path(dir)) {
+        Ok(f) => Ok((name.clone(), f)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => match name.compressed() {
+            Some(gz) => {
+                let f = open_regular(&gz.path(dir))?;
+                Ok((gz, f))
+            }
+            None => Err(e),
+        },
+        Err(e) => Err(e),
+    }
+}
+
 /// A reader of `name`'s bytes as written (decompressed), up to its
 /// length now: the current file to its last whole line.
 pub fn open_plain(dir: &Path, name: &LogName) -> io::Result<Box<dyn BufRead + Send>> {
-    let mut file = open_regular(&name.path(dir))?;
+    open_capped(dir, name, read::MAX_PLAIN)
+}
+
+fn open_capped(dir: &Path, name: &LogName, cap: u64) -> io::Result<Box<dyn BufRead + Send>> {
+    let (name, mut file) = open_listed(dir, name)?;
     Ok(match name {
         LogName::Current => {
             let len = file.metadata()?.len();
@@ -208,7 +228,7 @@ pub fn open_plain(dir: &Path, name: &LogName) -> io::Result<Box<dyn BufRead + Se
         // file holds (a bomb ends there, as history ends it).
         LogName::Rotated { gz: true, .. } => Box::new(BufReader::with_capacity(
             64 << 10,
-            MultiGzDecoder::new(BufReader::with_capacity(64 << 10, file)).take(read::MAX_PLAIN),
+            MultiGzDecoder::new(BufReader::with_capacity(64 << 10, file)).take(cap),
         )),
         LogName::Rotated { gz: false, .. } => Box::new(BufReader::with_capacity(64 << 10, file)),
     })
@@ -452,5 +472,30 @@ mod tests {
             download_name(&LogName::Current, LogFormat::Text, true),
             "lodestar-redacted.txt"
         );
+    }
+
+    #[test]
+    fn a_compressed_file_is_read_whole_bounded_and_found_after_compression() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let plain = LogName::parse("lodestar-20261023T101500.123Z.jsonl").unwrap();
+        let gz = plain.compressed().unwrap();
+        // Compressed after the listing: the `.jsonl` asked for is its `.gz`.
+        let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        e.write_all(&b"0123456789\n".repeat(100_000)).unwrap();
+        std::fs::write(gz.path(dir.path()), e.finish().unwrap()).unwrap();
+        let mut all = Vec::new();
+        open_plain(dir.path(), &plain)
+            .unwrap()
+            .read_to_end(&mut all)
+            .unwrap();
+        assert_eq!(all.len(), 1_100_000);
+        // Never inflated past the cap, whatever it holds.
+        let mut capped = Vec::new();
+        open_capped(dir.path(), &gz, 4096)
+            .unwrap()
+            .read_to_end(&mut capped)
+            .unwrap();
+        assert_eq!(capped.len(), 4096);
     }
 }

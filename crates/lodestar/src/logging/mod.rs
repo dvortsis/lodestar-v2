@@ -753,46 +753,57 @@ impl Runtime {
 
     /// Deletes `names` in `dir`, and the current file with `current`:
     /// rotated first under the writer's lock, so it's never touched
-    /// mid-write and no new line is lost. On the rotate worker when the
-    /// file opened there this run, so a file being compressed can't come
-    /// back as `.gz` after it's deleted; else here, under the same checks.
+    /// mid-write and no new line is lost (with no writer, moved aside
+    /// under the same lock, so one opening later starts a new file). On
+    /// the rotate worker when the file opened there this run, after the
+    /// compressions queued before it, so a file being compressed can't
+    /// come back as `.gz` after it's deleted; else here, under the same
+    /// checks.
     pub(crate) fn delete_logs(
         &self,
         dir: &std::path::Path,
         mut names: Vec<names::LogName>,
         current: bool,
         all: bool,
-    ) -> file::Deleted {
+    ) -> std::io::Result<file::Deleted> {
         let _inside = Inside::enter();
         let mut skipped = Vec::new();
-        let mut upto = None;
+        // "All" never sweeps a file rotated after this request.
+        let mut upto = names::LogName::parse(&format!(
+            "lodestar-{}.jsonl",
+            format::Stamp::now().compact()
+        ));
         if current {
             let mut file = lock(&self.file);
-            match &mut *file {
+            let aside = match &mut *file {
                 FileState::Open(sink) if self.folder.get().map(|d| d.as_path()) == Some(dir) => {
-                    match sink.rotate().ok().and_then(|n| names::LogName::parse(&n)) {
-                        Some(rotated) => {
-                            upto = Some(rotated.clone());
-                            names.push(rotated);
-                        }
-                        None => skipped.push((file::CURRENT.to_string(), "failed")),
-                    }
+                    sink.rotate_to_delete().map_err(|_| "failed")
                 }
                 // No writer in this folder: nothing is mid-write.
-                _ => names.push(names::LogName::Current),
+                _ => file::set_aside(dir).and_then(|n| n.ok_or("none")),
+            };
+            match aside.map(|n| names::LogName::parse(&n)) {
+                Ok(Some(rotated)) => {
+                    upto = Some(rotated.clone());
+                    names.push(rotated);
+                }
+                Ok(None) | Err("none") => {}
+                Err(why) => skipped.push((file::CURRENT.to_string(), why)),
             }
         }
         let sweep = all.then_some(file::Sweep { upto });
         let jobs = lock(&self.jobs).clone().filter(|j| j.dir == dir);
-        let mut done = match jobs.and_then(|j| j.delete(names.clone(), sweep.clone())) {
-            Some(d) => d,
-            None => {
+        let mut done = match jobs.map(|j| j.delete(names.clone(), sweep.clone())) {
+            Some(Ok(d)) => d,
+            Some(Err(Some(e))) => return Err(e),
+            // No worker for this folder: nothing compresses in it.
+            Some(Err(None)) | None => {
                 let index = Mutex::new(file::Index::load(dir));
                 file::delete(dir, &names, sweep.as_ref(), &index)
             }
         };
         done.skipped.extend(skipped);
-        done
+        Ok(done)
     }
 }
 
