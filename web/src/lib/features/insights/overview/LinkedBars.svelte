@@ -37,12 +37,11 @@
 	let { items, max, label, ordered = false, describedby, testid }: Props = $props();
 </script>
 
-<svelte:element
+{#snippet rows()}
 	this={ordered ? 'ol' : 'ul'}
-	class="ins-list"
-	aria-label={label}
+	class="ins-list" aria-label={label}
 	data-testid={testid}
->
+	>
 	{#each items as item (item.key)}
 		<li class="ins-item" data-testid="{testid}-{item.key}">
 			<div class="ins-item-row">
@@ -80,4 +79,10 @@
 			</div>
 		</li>
 	{/each}
-</svelte:element>
+{/snippet}
+
+{#if ordered}
+	<ol class="ins-list" aria-label={label} data-testid={testid}>{@render rows()}</ol>
+{:else}
+	<ul class="ins-list" aria-label={label} data-testid={testid}>{@render rows()}</ul>
+{/if}
