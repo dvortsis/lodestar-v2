@@ -83,7 +83,7 @@ The list lives in `state.json` under `watched_sessions`.
    - It writes that epic's slices into `slices.yaml`, opens a PR, reviews it and merges it.
    - Later phases are planned this way, with current knowledge, not guessed now.
 9. **Clear the polish backlog.** When `carry_forward` holds more than 15 items, launch one polish slice for the items whose files no running slice owns.
-10. **Save state.** Push `state.json`, then schedule the next one-off check.
+10. **Save state.** Push `state.json` on every wake, even when nothing changed: the watchdog reads the age of the newest commit. Then schedule the next one-off check.
     - Keep `state.json` small: status fields plus a one-line latest note per slice.
     - The history goes in `log/<id>.md` on the same branch, which the runner reads only when it needs the detail.
 
