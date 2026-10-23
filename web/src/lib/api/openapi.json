@@ -2845,6 +2845,152 @@
         "security": []
       }
     },
+    "/logs": {
+      "get": {
+        "tags": [
+          "logs"
+        ],
+        "summary": "History, newest first: the ring buffer, then the log files (the\ncurrent one read backwards, then the rotated ones by their time).\nLines are shown through the data kinds in force now: a field whose kind\nis off reads `[hidden]`, and lines of an opt-in that's off are left out.\nA page cut short by the read cap says `more` with a cursor.",
+        "operationId": "getLogHistory",
+        "parameters": [
+          {
+            "name": "level",
+            "in": "query",
+            "description": "The least severe level shown (default trace).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "components",
+            "in": "query",
+            "description": "A comma-separated list of components; all when absent.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "text",
+            "in": "query",
+            "description": "A case-insensitive substring of the line as shown, at most 200 characters.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "RFC 3339 UTC: lines at or after it.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "description": "RFC 3339 UTC: lines at or before it.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Lines per page: 1 to 1,000, default 200.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The previous page's `next_cursor`, with the same filters.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogHistory"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A bad parameter (`bad_parameter`, `unknown_component`) or a cursor from other filters (`bad_cursor`), with `field`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session (`login_required`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Log files are being read already (`logs_busy`).",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                },
+                "description": "Seconds to wait."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not served here (`logs_unavailable`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/logs/catalog": {
       "get": {
         "tags": [
@@ -2859,6 +3005,150 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/LogCatalog"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/logs/stream": {
+      "get": {
+        "tags": [
+          "logs"
+        ],
+        "summary": "The live log.",
+        "description": "Each frame is `id: <epoch>-<seq>` (none on `resync` and `purge`),\n`event: line | resync | purge` and `data:` its payload (`LogFrame`).\nSend the last id back as `Last-Event-ID` (`EventSource` does) or\n`after` to resume without a gap while it's still in the ring. A comment\nevery 15 s keeps the connection open, and the session is checked again\neach time; `retry:` is 5 s.",
+        "operationId": "getLogStream",
+        "parameters": [
+          {
+            "name": "level",
+            "in": "query",
+            "description": "The least severe level shown: error, warn, info, debug or trace (default).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "components",
+            "in": "query",
+            "description": "A comma-separated list of components (`LogComponent`); all when absent.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "text",
+            "in": "query",
+            "description": "A case-insensitive substring of the line as shown, at most 200 characters.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "The id to resume after, when there's no `Last-Event-ID`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "description": "The last `id:` received; wins over `after`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The stream: one `LogFrame` per frame (`event:` names the variant, `data:` holds its payload).",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`no-store`."
+              },
+              "X-Accel-Buffering": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`no`, so a proxy doesn't buffer it."
+              }
+            },
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogFrame"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A bad filter (`bad_parameter`, `unknown_component`), with `field`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session (`login_required`); keys and feed tokens can't read logs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many log streams, in all or for this session (`too_many_streams`).",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                },
+                "description": "Seconds to wait."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not served here, or shutting down (`logs_unavailable`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -10058,6 +10348,139 @@
           }
         }
       },
+      "LogField": {
+        "type": "object",
+        "description": "One field of a log line.",
+        "required": [
+          "kind",
+          "name",
+          "value"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/LogFieldKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/LogValue"
+          }
+        }
+      },
+      "LogFieldKind": {
+        "type": "string",
+        "description": "What a field of a log line carries: a data kind, an error (its kind,\nand its message only for plain error types), a label the code wrote, or\na field of a line the code didn't type.",
+        "enum": [
+          "hash",
+          "name",
+          "path",
+          "url",
+          "query",
+          "client",
+          "peer",
+          "size",
+          "peer_activity",
+          "filter_changes",
+          "error",
+          "label",
+          "untyped"
+        ]
+      },
+      "LogFrame": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "event"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/LogLine"
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "line"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "event"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/LogResync"
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "resync"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "event"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/LogPurge"
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "purge"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "One frame of `GET /logs/stream`: `event:` names the variant, `data:`\nholds its payload."
+      },
+      "LogHistory": {
+        "type": "object",
+        "description": "`GET /logs`: a page of history, newest first.",
+        "required": [
+          "lines",
+          "more",
+          "next_cursor",
+          "unreadable"
+        ],
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogLine"
+            }
+          },
+          "more": {
+            "type": "boolean",
+            "description": "More may be older than this page (a page cut short by the read cap\nsays so too)."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass back as `cursor` for the next page; null at the end."
+          },
+          "unreadable": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Lines skipped because they were over 1 MiB or not the file's JSON\nshape.",
+            "minimum": 0
+          }
+        }
+      },
       "LogKind": {
         "type": "object",
         "description": "One data kind and its switch.",
@@ -10129,6 +10552,92 @@
           "debug",
           "trace"
         ]
+      },
+      "LogLine": {
+        "type": "object",
+        "description": "One log line, as the live log, the history and the stream show it:\nthrough the data kinds in force now.",
+        "required": [
+          "component",
+          "event",
+          "fields",
+          "id",
+          "level",
+          "msg",
+          "opt_in",
+          "repeated",
+          "target",
+          "truncated",
+          "ts"
+        ],
+        "properties": {
+          "component": {
+            "$ref": "#/components/schemas/LogComponent"
+          },
+          "event": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The catalogued event's id; null for a line the code didn't type."
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogField"
+            },
+            "description": "In the order written."
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`<epoch>-<seq>`; null for a line an older build wrote."
+          },
+          "level": {
+            "$ref": "#/components/schemas/LogLevel"
+          },
+          "msg": {
+            "type": "string"
+          },
+          "opt_in": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LogDataKind",
+                "description": "The opt-in the line belongs to: when it turns off, the line goes."
+              }
+            ]
+          },
+          "repeated": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LogRepeated",
+                "description": "A summary of folded lines."
+              }
+            ]
+          },
+          "target": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The `tracing` target of a line the code didn't type."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "A value was cut to fit the ring's per-line limit (16 KiB); the\nfile has it whole."
+          },
+          "ts": {
+            "type": "string",
+            "description": "RFC 3339, UTC, with milliseconds."
+          }
+        }
       },
       "LogOutput": {
         "type": "object",
@@ -10206,6 +10715,97 @@
           }
         }
       },
+      "LogPurge": {
+        "type": "object",
+        "description": "`event: purge`: data kinds turned off. In lines up to `through`, set\nthose kinds' values to `[hidden]`, and drop lines whose `opt_in` is\nlisted.",
+        "required": [
+          "kinds",
+          "through"
+        ],
+        "properties": {
+          "kinds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogDataKind"
+            }
+          },
+          "through": {
+            "type": "string",
+            "description": "The id of the newest line it applies to."
+          }
+        }
+      },
+      "LogRepeated": {
+        "type": "object",
+        "description": "A fold summary: identical lines that came within the window after the\nfirst one, counted rather than written.",
+        "required": [
+          "count",
+          "first",
+          "seconds"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "first": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The id of the first line, when the output gave it one."
+          },
+          "seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The window, in seconds.",
+            "minimum": 0
+          }
+        }
+      },
+      "LogResync": {
+        "type": "object",
+        "description": "`event: resync`: continue from the newest lines; reload `GET /logs`\nfor what was skipped.",
+        "required": [
+          "evicted",
+          "reason",
+          "skipped"
+        ],
+        "properties": {
+          "evicted": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Lines that left the ring unseen (whether they matched is unknown);\n`lagged` only.",
+            "minimum": 0
+          },
+          "reason": {
+            "$ref": "#/components/schemas/LogResyncReason"
+          },
+          "skipped": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Matching lines skipped, still readable through `GET /logs`;\n`lagged` only.",
+            "minimum": 0
+          }
+        }
+      },
+      "LogResyncReason": {
+        "type": "string",
+        "description": "Why the live log asks the client to catch up.",
+        "enum": [
+          "restarted",
+          "expired",
+          "malformed",
+          "lagged"
+        ]
+      },
       "LogTemporary": {
         "type": "object",
         "description": "A timed verbosity (\"Detailed for 30 minutes\").",
@@ -10224,6 +10824,26 @@
             "description": "`detailed` or `everything`…"
           }
         }
+      },
+      "LogValue": {
+        "oneOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          {
+            "type": "integer",
+            "format": "int64"
+          },
+          {
+            "type": "string"
+          }
+        ],
+        "description": "A field's value as shown: text (`[hidden]`, `ref:…` or the value), a\nnumber or a flag."
       },
       "LoginRequest": {
         "type": "object",
