@@ -558,7 +558,7 @@
       "pr": 136,
       "attempt": 0,
       "review_rounds": 1,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus); brief committed 576d67a with runner addendum | 2026-10-23T17:23:23Z part 1/2 PR #136 head ef29faa; one combined fresh+security reviewer (usage saving) | 2026-10-23T17:37:32Z review MERGE (no security findings); short round: onclose fires twice + tests; polish. Runner checks delta directly | 2026-10-23T17:56:15Z 6e05ddd fixes (onclose once + tests, polish), green; held by merge freeze"
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus); brief committed 576d67a with runner addendum | 2026-10-23T17:23:23Z part 1/2 PR #136 head ef29faa; one combined fresh+security reviewer (usage saving) | 2026-10-23T17:37:32Z review MERGE (no security findings); short round: onclose fires twice + tests; polish. Runner checks delta directly | 2026-10-23T17:56:15Z 6e05ddd fixes (onclose once + tests, polish), green; held by merge freeze | 2026-10-23T18:42:25Z part 1 #136 merged as 2a24c6d; part 2 may push"
     },
     "S-filters": {
       "status": "pending",
@@ -1123,11 +1123,12 @@
       "notes": "2026-10-23T07:34:04Z added by #120; needs brief from B-log1 review follow-ups | 2026-10-23T10:12:55Z deps merged; waits for B-log2 (logging/** overlap) and B11b (pipeline/**). Brief must include B-log1 review follow-ups (carry_forward) | 2026-10-23T17:15:19Z unblocked by B-log2; waits for M4 #48 (pipeline/** overlap); brief drafting | 2026-10-23T17:28:33Z brief committed (Opus helper + runner decisions: owns, main.rs after #128, bench gates, api.request template-only); held: launch freeze + after M4"
     },
     "M4": {
-      "status": "review",
+      "status": "merged",
       "session": "session_015F9H2aHowz7TJLffFYxUvf",
       "pr": 48,
-      "notes": " | 2026-10-23T12:30:06Z owner asked runner to answer M4's plan-approval question: approved, with updated main facts (B5c adaptation now, V11 taken by B11b, log_lint, fixture OFFLINE gate, export swarm fields, ApiState literals) | 2026-10-23T13:39:57Z plan approved by owner; #48 head da63255 (merging main) | 2026-10-23T14:35:59Z da63255 code-complete; only red is openapi drift job's licences.py --check (rust.json stale after pipeline+lodestar-log). M4 session blocked on owner ExitPlanMode for the licence regen; fresh review launched on da63255 in parallel | 2026-10-23T14:55:59Z fresh review FIX at da63255: B1 main merge breaks api tests (logs.rs ApiState literal lacks hot/events); B2 late-answer test; I1 dup explain param; fixture all-or-none; operations.md \u00a79 vs metrics \u00a77; NaN in [ranking]; open_hot I/O fallback. Runner decisions: tracker-hash rollup deferred; 10M cold sorts 60ms accepted (cached+keyword \u00a73 met); percolation time: UTC | 2026-10-23T15:06:25Z owner approved licence-regen plan; M4 running (merging main). Owner delegated M4 management + plan acceptance to runner | 2026-10-23T15:32:27Z 2540997 FIX items pushed (main to #127), CI running; owner asked M4 for a best-practice self-review (small push may follow); delta review launched | 2026-10-23T16:06:36Z ac3bb9f: owner-requested self-review (new torrents' hot last-seen bug, SegmentSets cold-sort perf, Skipped rounds, failed-search rollups); delta reviewer extended | 2026-10-23T16:34:02Z delta MERGE at ac3bb9f (all FIX items + self-review verified); needs main merge (insights.rs ApiState literal conflict from #130); asked to merge main, regenerate, green, report | 2026-10-23T17:26:28Z 9446743 green but main moved (#129): logs_catalog.txt golden conflict; asked to re-merge, bless, check new ApiState literals",
-      "review_rounds": 1
+      "notes": " | 2026-10-23T12:30:06Z owner asked runner to answer M4's plan-approval question: approved, with updated main facts (B5c adaptation now, V11 taken by B11b, log_lint, fixture OFFLINE gate, export swarm fields, ApiState literals) | 2026-10-23T13:39:57Z plan approved by owner; #48 head da63255 (merging main) | 2026-10-23T14:35:59Z da63255 code-complete; only red is openapi drift job's licences.py --check (rust.json stale after pipeline+lodestar-log). M4 session blocked on owner ExitPlanMode for the licence regen; fresh review launched on da63255 in parallel | 2026-10-23T14:55:59Z fresh review FIX at da63255: B1 main merge breaks api tests (logs.rs ApiState literal lacks hot/events); B2 late-answer test; I1 dup explain param; fixture all-or-none; operations.md \u00a79 vs metrics \u00a77; NaN in [ranking]; open_hot I/O fallback. Runner decisions: tracker-hash rollup deferred; 10M cold sorts 60ms accepted (cached+keyword \u00a73 met); percolation time: UTC | 2026-10-23T15:06:25Z owner approved licence-regen plan; M4 running (merging main). Owner delegated M4 management + plan acceptance to runner | 2026-10-23T15:32:27Z 2540997 FIX items pushed (main to #127), CI running; owner asked M4 for a best-practice self-review (small push may follow); delta review launched | 2026-10-23T16:06:36Z ac3bb9f: owner-requested self-review (new torrents' hot last-seen bug, SegmentSets cold-sort perf, Skipped rounds, failed-search rollups); delta reviewer extended | 2026-10-23T16:34:02Z delta MERGE at ac3bb9f (all FIX items + self-review verified); needs main merge (insights.rs ApiState literal conflict from #130); asked to merge main, regenerate, green, report | 2026-10-23T17:26:28Z 9446743 green but main moved (#129): logs_catalog.txt golden conflict; asked to re-merge, bless, check new ApiState literals | 2026-10-23T18:42:25Z delta ac3bb9f..6f41f4c checked by runner (merges + literals + golden + ported test fix), CI green; verdict posted on PR; merged #48 as 035ca7f. M4 DONE",
+      "review_rounds": 1,
+      "merged_sha": "035ca7f"
     },
     "fix-log-deadline-flake": {
       "status": "merged",
@@ -1135,13 +1136,13 @@
       "notes": "2026-10-23T17:05:44Z runner PR: deadline +2 and poll; local 12 passed x3 | 2026-10-23T17:30:11Z CI green, merged #131 as 86f4c75"
     },
     "fix-log-delete-flake": {
-      "status": "review",
+      "status": "closed",
       "pr": 141,
-      "notes": "2026-10-23T17:55:35Z runner PR: wait for rotations instead of 200 ms sleep (Windows flake on #48)"
+      "notes": "2026-10-23T17:55:35Z runner PR: wait for rotations instead of 200 ms sleep (Windows flake on #48) | 2026-10-23T18:42:25Z closed: #48 ported equivalent"
     },
     "fix-fixture-rollups": {
       "status": "running",
-      "notes": "2026-10-23T17:55:35Z investigation: fixture wrote only index_watermark_hour, not NEWLY_SEARCHABLE/TIME_TO_SEARCHABLE/imported; 24h matched only via unclean-stop 72h repair. Server correct. Runner applying patch (bench/src/fixture.rs record_searchable, FORMAT 2, tests) | 2026-10-23T18:04:25Z committed locally 1943fde on fix/fixture-searchable-rollups (worktree fx3); tests 7+4 pass; push after #48"
+      "notes": "2026-10-23T17:55:35Z investigation: fixture wrote only index_watermark_hour, not NEWLY_SEARCHABLE/TIME_TO_SEARCHABLE/imported; 24h matched only via unclean-stop 72h repair. Server correct. Runner applying patch (bench/src/fixture.rs record_searchable, FORMAT 2, tests) | 2026-10-23T18:04:25Z committed locally 1943fde on fix/fixture-searchable-rollups (worktree fx3); tests 7+4 pass; push after #48 | 2026-10-23T18:42:25Z merged main (M4), pushed 3cd7285; re-testing before PR"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -1472,6 +1473,31 @@
       "from": "M-settings-form",
       "what": "lazy-load instant mode out of the settings engine",
       "to": "settings follow-up"
+    },
+    "m4-docs-swarm": {
+      "from": "M4 #48",
+      "what": "docs/user swarm-health pages",
+      "to": "own slice (after launch freeze lifts)"
+    },
+    "m4-b6-swarm-buckets": {
+      "from": "M4 #48",
+      "what": "B6 swarm facet buckets (seeders/trackers) now that hot columns exist",
+      "to": "own slice (after launch freeze lifts)"
+    },
+    "m4-web-tz": {
+      "from": "M4 #48",
+      "what": "web app sends tz for time:",
+      "to": "own slice (after launch freeze lifts)"
+    },
+    "m4-saved-search-tz": {
+      "from": "M4 #48",
+      "what": "saved-search tz + matching torrents scraped after percolation",
+      "to": "own slice (after launch freeze lifts)"
+    },
+    "m4-banned-late-columns": {
+      "from": "M4 #48",
+      "what": "Banned/Late tracker columns on status",
+      "to": "own slice (after launch freeze lifts)"
     }
   },
   "blocked_on_owner": [],
@@ -1545,8 +1571,12 @@
     "review_policy": "2026-10-23T17:27:56Z owner: tighter review rule. New PRs: one fresh reviewer (combined fresh+security where security is required). Small deltas/fix rounds: resume the existing reviewer or runner checks the diff directly; no new reviewer agents.",
     "owner_decision_insights_budget": "2026-10-23T17:34:45Z owner: Insights budget = first view <=45 KB (uPlot and below-fold lazy); runner total cap 65 KB. Needs a docs/decisions entry (S-insights-1 records it).",
     "route_budget_rule": "2026-10-23T17:45:34Z runner: per-route hard limit = \u00a710.1 45 KB route JS (beyond shell, gz); 15 KB own JS+CSS is a target needing a one-line reason if exceeded",
-    "merge_freeze": "2026-10-23T17:56:15Z merge freeze until #48 (M4 2/2) merges: relayed from owner's session_01DDEhacHac1WPa8byNBPXKY ('M4 completion strategy'), adopted by runner. No merges to main (slices, polish, runner PRs incl #141, fixture fix). Slices keep working, hold pushes. After #48: delta review since da63255 (already reviewed ac3bb9f) + post verdict on PR, merge, lift freeze, mark ext:m4-* satisfied, create follow-up slices for #48's list.",
+    "merge_freeze": "LIFTED 2026-10-23T18:42:25Z after #48 merged (035ca7f). Merge in order: #136 done -> #132 -> others re-measure; release pushes one or two at a time to keep CI free.",
     "merge_order_after_m4": "#48 -> #132 (S-search-1 chunk fix) -> #136 -> #135 -> fixture fix -> S-compare/S-alerts/S-detail/S-discover re-measure -> #128 B-update",
     "owner_decision_settings_budget": "2026-10-23T18:40:51Z owner: Settings route budget 45 KB like other routes (\u00a710.10.11's 20 KB replaced); engine <=22 KB"
+  },
+  "ext": {
+    "m4-swarm-fields": "satisfied 035ca7f",
+    "m4-done": "satisfied 035ca7f"
   }
 }
