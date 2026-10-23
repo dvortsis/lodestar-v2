@@ -930,7 +930,7 @@
    "pr": null,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:38 (\"run as many feature sessions as possible\")."
+   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 01:05 PR #92; told: env release/nightly on jobs, signing reqs in PR desc for B-update."
   },
   "M6-cli": {
    "status": "merged",
@@ -1210,7 +1210,7 @@
   "pr70_r3": "#70 MERGED fcf84d4 20:18.",
   "near_followups": "F-near follow-ups: prefix/fuzzy words share the folded-join bug; NEAR ignores CSX-5 'Neutralize term'; plain word over-matches vs NEAR word; single-token NEAR quadratic window.",
   "skills_repo_for_docs": "Docs slices + their reviewers need dvortsis/skills (documentation-skills scripts): attach via create_session sources or add_repo.",
-  "typed_held_reason": "Typed held-reason for subscriptions (instead of matching 'shrank' in sub.error) needs a schema change: fold into B8.",
+  "typed_held_reason": "Typed reason for held blocklist versions (subscriptions; currently string-matches 'shrank') -> next store migration slice",
   "word_file_clause_1M": "search-bench 'word + file clause' misses 30 ms target at 1M (45 ms/5 seg, 108 ms/1 seg); gated at 200k. Track for M8 10M perf gates / B5c cache.",
   "filter_quadratic": "F-perf follow-up (security): prefilter.rs Scan::other at_pos quadratic on non-ASCII; matcher.rs sequence() quadratic (phrases, multi-part words); NEAR per-place window scan -> precompute per-word place lists + binary search; cache sorted tokens per text. Launch after F-near merges.",
   "b6_polish": "B6 polish deferred: lease.rs now() doc on node(); adult_kind stale-tag wording (unreachable today); Hours 2^16 cap test with real column; bin_of i64 clamp at import; golden note (BM25 avg length).",
@@ -1226,7 +1226,8 @@
   "pruning_owners": "B9 runs prune_alerts; B11a/b runs 30-day prune_query_log (from #101 review)",
   "privdrop_flake": "privdrop.rs drops_to_puid_and_pgid_before_anything_runs failed once under full workspace run ('expected the runtime's threads'); from #84; reported by F-budget session",
   "pin_toolchain": "rust-toolchain.toml is unpinned stable; 1.99 deprecations broke clippy on #88. Consider pinning (affects CALIB_REF_NS too).",
-  "font_fout": "W9 moved Atkinson font preload after first frame (FOUT swap); recheck CLS/LCP when Search screens land"
+  "font_fout": "W9 moved Atkinson font preload after first frame (FOUT swap); recheck CLS/LCP when Search screens land",
+  "B-update_signing": "Owner-delegated 2026-10-23 (\u00a72.21): separate stable/nightly signing keys; installs trust nightly key only on Nightly channel; RELEASE_SIGNING_KEY (tags, release env w/ owner reviewer) + NIGHTLY_SIGNING_KEY (nightly env); public keys in packaging/keys/; channel-scoped trust in verifier (\u00a712.2). P-release adds environments to jobs."
  },
  "blocked_on_owner": [],
  "launches_today": 8,
