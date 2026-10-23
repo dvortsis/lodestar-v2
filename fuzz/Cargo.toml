@@ -21,6 +21,9 @@ lodestar-search = { path = "../crates/search" }
 lodestar-store = { path = "../crates/store" }
 lodestar-tracker-scrape = { path = "../crates/tracker-scrape" }
 lodestar-update = { path = "../crates/update", features = ["testing"] }
+base64 = "=0.22.1"
+semver = "=1.0.28"
+serde_json = "1.0.154"
 lodestar-utp = { path = "../crates/utp" }
 
 # Each target is a separate binary; see README.md for running them.

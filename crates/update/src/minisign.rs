@@ -202,7 +202,6 @@ impl Signature {
     }
 
     /// The signature file, as minisign writes it.
-    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn to_file(&self, untrusted: &str) -> String {
         let mut sig = Vec::with_capacity(74);
         sig.extend_from_slice(b"ED");

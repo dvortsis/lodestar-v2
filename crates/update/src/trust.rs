@@ -15,7 +15,7 @@ use crate::chain::Chain;
 use crate::doc::{self, Sha256, SignedStatement};
 use crate::keys::Embedded;
 use crate::minisign::PublicKey;
-use crate::{Channel, Error, Role};
+use crate::{Channel, Error, MAX_AHEAD, Role};
 
 /// `trust.json` is at most 256 KiB.
 pub const MAX_TRUST: usize = 256 * 1024;
@@ -57,8 +57,11 @@ pub struct TrustState {
     pub format: u64,
     pub seq: u64,
     pub statements: Vec<SignedStatement>,
-    /// The revoked keys (minisign base64 lines), derived from the
-    /// statements; kept for people reading the file and checked on load.
+    /// The revoked keys (minisign base64 lines). Each build derives the
+    /// revocations its own generation 0 implies and keeps these as well,
+    /// so a build with other generation-0 keys (an older image, a
+    /// rollback) still honours every revocation a newer one recorded.
+    /// Extra entries only add revocations.
     pub revoked: Vec<String>,
     #[serde(deserialize_with = "unique_channels")]
     pub channels: BTreeMap<Channel, Marks>,
@@ -113,8 +116,9 @@ pub struct OverlayMark {
 
 impl TrustState {
     /// Parses `trust.json` and checks it against the embedded root: every
-    /// statement verifies in sequence and `seq` and `revoked` agree with
-    /// them. Anything else is `TrustDamaged`, which blocks installs.
+    /// statement verifies in sequence, `seq` agrees with them and each
+    /// `revoked` entry is a key. Anything else is `TrustDamaged`, which
+    /// blocks installs.
     pub fn load(bytes: &[u8], embedded: &Embedded) -> Result<Self, Error> {
         if bytes.len() > MAX_TRUST {
             return Err(Error::TrustDamaged);
@@ -133,19 +137,59 @@ impl TrustState {
 
     /// The chain these statements make from the embedded generation 0
     /// (statements alone, without the embedded ones), checked against
-    /// `seq` and `revoked`.
+    /// `seq`.
     pub fn chain(&self, embedded: &Embedded) -> Result<Chain, Error> {
-        if self.format != TRUST_FORMAT {
+        if self.format != TRUST_FORMAT
+            || self.revoked.len() > MAX_REVOKED
+            || self
+                .revoked
+                .iter()
+                .any(|k| PublicKey::from_base64(k).is_err())
+        {
             return Err(Error::TrustDamaged);
         }
         let mut chain = Chain::genesis(embedded);
         chain
             .extend(&self.statements, None)
             .map_err(|_| Error::TrustDamaged)?;
-        if chain.seq() != self.seq || revoked_lines(&chain) != self.revoked {
+        if chain.seq() != self.seq {
             return Err(Error::TrustDamaged);
         }
         Ok(chain)
+    }
+
+    /// Marks more than a day ahead of `now` can't be honest (every mark is
+    /// a verified timestamp, accepted at most a day ahead), so they count
+    /// as damage rather than freezing updates until that date.
+    pub fn marks_plausible(&self, now: u64) -> Result<(), Error> {
+        let limit = now.saturating_add(MAX_AHEAD);
+        if self
+            .channels
+            .values()
+            .any(|m| m.hwm_ts > limit || m.fresh_ts > limit)
+        {
+            return Err(Error::TrustDamaged);
+        }
+        Ok(())
+    }
+
+    fn reset(&mut self, role: Role, timestamp: u64) {
+        match role {
+            Role::Release | Role::Nightly => {
+                for c in role.channels() {
+                    let m = self.channels.entry(*c).or_default();
+                    m.hwm_ts = timestamp;
+                    m.hwm_sha256 = None;
+                }
+            }
+            Role::Freshness => {
+                for c in Channel::ALL {
+                    let m = self.channels.entry(c).or_default();
+                    m.fresh_ts = timestamp;
+                    m.fresh_sha256 = None;
+                }
+            }
+        }
     }
 
     /// The state for a chain that extends this one: the statements past
@@ -156,28 +200,13 @@ impl TrustState {
     pub fn advance(&self, chain: &Chain) -> TrustState {
         let mut next = self.clone();
         for a in chain.since(self.seq) {
-            match a.role {
-                Role::Release | Role::Nightly => {
-                    for c in a.role.channels() {
-                        let m = next.channels.entry(*c).or_default();
-                        m.hwm_ts = a.timestamp;
-                        m.hwm_sha256 = None;
-                    }
-                }
-                Role::Freshness => {
-                    for c in Channel::ALL {
-                        let m = next.channels.entry(c).or_default();
-                        m.fresh_ts = a.timestamp;
-                        m.fresh_sha256 = None;
-                    }
-                }
-            }
+            next.reset(a.role, a.timestamp);
         }
         if chain.seq() > self.seq {
             next.seq = chain.seq();
             next.statements = chain.signed();
-            next.revoked = revoked_lines(chain);
         }
+        next.revoked = union(&self.revoked, &revoked_lines(chain));
         next
     }
 
@@ -198,23 +227,60 @@ impl TrustState {
         Ok(state)
     }
 
-    /// The forward-only merge: `new` replaces `old` only if its sequence
-    /// is higher, or equal with the same statements and no channel's
-    /// marks lower, and its statements extend the old ones. Otherwise
-    /// `old` stays.
+    /// The forward-only merge of a new state (from a check) into the one
+    /// on disk. Statements must extend the old ones. With a higher
+    /// sequence, the old marks take only the resets of the new statements
+    /// (a rotation's reset is intended: it lets a client a leaked key froze
+    /// recover), then each mark is the later of the two, so a check that
+    /// started from a stale state can't lower a channel the rotation
+    /// doesn't govern. With the same sequence, the old state stays unless
+    /// no mark is lower. Revocations are the union.
     pub fn merge(old: &TrustState, new: TrustState) -> TrustState {
-        let extends = new.statements.starts_with(&old.statements);
-        let forward = (new.seq > old.seq && extends)
-            || (new.seq == old.seq
-                && new.statements == old.statements
+        if !new.statements.starts_with(&old.statements) || new.seq < old.seq {
+            return old.clone();
+        }
+        if new.seq == old.seq {
+            let forward = new.statements == old.statements
                 && old
                     .channels
                     .iter()
-                    .all(|(c, m)| new.channels.get(c).is_some_and(|n| n.not_lower_than(m))));
-        if forward { new } else { old.clone() }
+                    .all(|(c, m)| new.channels.get(c).is_some_and(|n| n.not_lower_than(m)));
+            let mut out = if forward { new } else { old.clone() };
+            out.revoked = union(&out.revoked, &old.revoked);
+            return out;
+        }
+        let mut base = old.clone();
+        let Some(added) = usize::try_from(old.seq)
+            .ok()
+            .and_then(|from| new.statements.get(from..))
+        else {
+            return old.clone();
+        };
+        for s in added {
+            let Some(body) = statement_body(s) else {
+                return old.clone();
+            };
+            base.reset(body.role, body.timestamp);
+        }
+        for (c, n) in &new.channels {
+            let m = base.channels.entry(*c).or_default();
+            if n.hwm_ts >= m.hwm_ts {
+                m.hwm_ts = n.hwm_ts;
+                m.hwm_sha256 = n.hwm_sha256;
+            }
+            if n.fresh_ts >= m.fresh_ts {
+                m.fresh_ts = n.fresh_ts;
+                m.fresh_sha256 = n.fresh_sha256;
+            }
+        }
+        base.seq = new.seq;
+        base.statements = new.statements;
+        base.revoked = union(&old.revoked, &new.revoked);
+        base
     }
 
-    /// Whether this state's statements revoke `key`.
+    /// Whether this state revokes `key` (its stored revocations; `check`
+    /// also refuses keys the embedded chain revokes).
     pub fn revokes(&self, key: &PublicKey) -> bool {
         self.revoked.contains(&key.to_base64())
     }
@@ -227,4 +293,25 @@ impl TrustState {
 
 fn revoked_lines(chain: &Chain) -> Vec<String> {
     chain.revoked().iter().map(PublicKey::to_base64).collect()
+}
+
+/// At most this many revoked keys: one per statement, and a few more a
+/// build with other generation-0 keys may have recorded.
+pub const MAX_REVOKED: usize = crate::chain::MAX_CHAIN + 3;
+
+fn union(a: &[String], b: &[String]) -> Vec<String> {
+    let mut out = a.to_vec();
+    for k in b {
+        if !out.contains(k) {
+            out.push(k.clone());
+        }
+    }
+    out
+}
+
+/// A stored statement's body (its signature was verified when it was
+/// accepted, and is again on load).
+fn statement_body(s: &SignedStatement) -> Option<crate::doc::StatementBody> {
+    let (body, _) = doc::decode(&s.body, &s.minisig, crate::doc::MAX_STATEMENT).ok()?;
+    crate::doc::StatementBody::parse(&body).ok()
 }

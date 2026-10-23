@@ -9,6 +9,9 @@
 //! ones byte for byte; a different one is equivocation, and a skip (or a
 //! list that doesn't start at 1) is a gap. Both refuse the whole extension.
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
+
 use crate::doc::{self, MAX_STATEMENT, MAX_STATEMENTS, SignedStatement, StatementBody};
 use crate::keys::Embedded;
 use crate::minisign::{PublicKey, Signature};
@@ -21,7 +24,9 @@ pub struct Accepted {
     pub role: Role,
     pub key: PublicKey,
     pub timestamp: u64,
-    /// The statement as it was carried, signatures included.
+    /// The statement, normalised: the body re-encoded, the recovery
+    /// signature with a fixed untrusted comment, no cosig. What a state
+    /// stores is never padded by whoever carried it.
     pub signed: SignedStatement,
     body: Vec<u8>,
 }
@@ -164,13 +169,7 @@ impl Chain {
             }
             // A statement we already hold is known by its bytes.
             if let Some(known) = next.accepted.iter().find(|a| a.body == body) {
-                if last == 0 && known.seq != 1 {
-                    return Err(Error::Gap);
-                }
-                if known.seq <= last {
-                    return Err(Error::BadDocument);
-                }
-                last = known.seq;
+                last = in_order(last, known.seq)?;
                 continue;
             }
             if sig.key_number() != next.recovery.number() {
@@ -181,19 +180,15 @@ impl Chain {
                 e => e,
             })?;
             let parsed = StatementBody::parse(&body)?;
-            // A document carries the whole chain, from seq 1.
-            if last == 0 && parsed.seq != 1 {
-                return Err(Error::Gap);
-            }
-            if parsed.seq <= last {
-                return Err(Error::BadDocument);
-            }
-            last = parsed.seq;
+            last = in_order(last, parsed.seq)?;
             if parsed.seq <= next.seq() {
                 return Err(Error::Equivocation);
             }
             if parsed.seq != next.seq() + 1 {
                 return Err(Error::Gap);
+            }
+            if next.accepted.len() >= MAX_CHAIN {
+                return Err(Error::BadDocument);
             }
             if now.is_some_and(|now| parsed.timestamp > now.saturating_add(MAX_AHEAD)) {
                 return Err(Error::Ahead);
@@ -207,7 +202,11 @@ impl Chain {
                 role: parsed.role,
                 key,
                 timestamp: parsed.timestamp,
-                signed: s.clone(),
+                signed: SignedStatement {
+                    body: STANDARD.encode(&body),
+                    minisig: sig.to_file("signature from the Lodestar recovery key"),
+                    cosig: None,
+                },
                 body,
             });
             added += 1;
@@ -224,4 +223,20 @@ impl Chain {
             .chain(self.accepted.iter().map(|a| a.key))
             .any(|k| k.key() == key.key() || k.number() == key.number())
     }
+}
+
+/// The most statements a chain holds over its life (one per rotation of
+/// any role). A document can't carry more, and `trust.json` always fits.
+pub const MAX_CHAIN: usize = MAX_STATEMENTS;
+
+/// The next position in a document's list: exactly one after the last,
+/// starting at 1. Going back is malformed; skipping ahead is a gap.
+fn in_order(last: u64, seq: u64) -> Result<u64, Error> {
+    if seq <= last {
+        return Err(Error::BadDocument);
+    }
+    if seq != last + 1 {
+        return Err(Error::Gap);
+    }
+    Ok(seq)
 }

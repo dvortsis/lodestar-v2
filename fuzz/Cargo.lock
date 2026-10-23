@@ -374,9 +374,9 @@ dependencies = [
 
 [[package]]
 name = "ctutils"
-version = "0.4.5"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38d28fb6aa7dd680b3ffd1a3e64e115c177bdba63c0ae7f9cd48129ff05c4fa0"
+checksum = "7d5515a3834141de9eafb9717ad39eea8247b5674e6066c404e8c4b365d2a29e"
 dependencies = [
  "cmov",
 ]
@@ -1214,6 +1214,7 @@ dependencies = [
 name = "lodestar-fuzz"
 version = "0.0.0"
 dependencies = [
+ "base64 0.22.1",
  "libfuzzer-sys",
  "lodestar-bencode",
  "lodestar-classify",
@@ -1227,6 +1228,8 @@ dependencies = [
  "lodestar-tracker-scrape",
  "lodestar-update",
  "lodestar-utp",
+ "semver",
+ "serde_json",
 ]
 
 [[package]]
@@ -1236,6 +1239,7 @@ dependencies = [
  "chacha20poly1305",
  "getrandom 0.3.4",
  "lettre",
+ "lodestar-log",
  "quick-xml",
  "reqwest",
  "rustls",
@@ -1244,6 +1248,13 @@ dependencies = [
  "tokio",
  "tracing",
  "zeroize",
+]
+
+[[package]]
+name = "lodestar-log"
+version = "0.0.0"
+dependencies = [
+ "tracing",
 ]
 
 [[package]]
@@ -1266,6 +1277,7 @@ name = "lodestar-search"
 version = "0.0.0"
 dependencies = [
  "lodestar-classify",
+ "lodestar-log",
  "lodestar-metainfo",
  "lodestar-release-parser",
  "lodestar-store",

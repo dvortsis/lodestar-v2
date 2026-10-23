@@ -106,6 +106,7 @@ pub fn check(
 ) -> Result<Checked, Error> {
     let envelope = Envelope::parse(envelope)?;
     let mut chain = state.chain(embedded)?;
+    state.marks_plausible(now)?;
     chain.extend(&embedded.statements, None)?;
     let role = channel.role();
 
