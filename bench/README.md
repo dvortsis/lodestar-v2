@@ -86,3 +86,101 @@ in the PR description (`docs/decisions/2026-10-22-R-relevance.md`):
 ```sh
 cargo run --release -p lodestar-bench --bin relevance -- --write-baseline
 ```
+
+## Fixture backend
+
+`lodestar serve --fixture [DIR]` runs the real server over a data
+directory with known contents (build plan §1.3 seam 2). Screens, e2e
+tests, the v0.5 exit and the user-doc screenshots use it instead of the
+W6 mock. `lodestar_bench::fixture` builds it; the server only adds
+`auth.json` and `seal.key`, as on any first start.
+
+```sh
+# A temporary fixture, removed when the server stops cleanly:
+LODESTAR_FIXTURE_PASSWORD='correct horse battery' lodestar serve --fixture
+
+# A kept one: built on the first run, reused after that.
+lodestar serve --fixture /tmp/lodestar-fixture
+```
+
+- **Offline.** The DHT is off and locked off, and blocklist files,
+  subscriptions and their refresher are off. With no DHT there's no peer
+  finder, so nothing is fetched.
+- **Local.** It binds `127.0.0.1:8090` unless `--config` or
+  `LODESTAR_HTTP_BIND` names another address, and warns if that address
+  isn't loopback. `data/config.toml` and `$LODESTAR_DATA_DIR` are never
+  read.
+- **Safe with `DIR`.** It builds in an empty or new folder and reuses
+  one that holds a `fixture.json` of the current format. It refuses
+  anything else with exit status 3 and writes nothing, so it can't touch
+  a real install. Delete the folder to rebuild after `FORMAT` changes.
+- **Sign-in.** The setup token is printed as on any first start. With
+  `LODESTAR_FIXTURE_PASSWORD` set, that password claims the instance
+  first. There's no built-in password.
+
+### What it holds
+
+- **About 250 hand-specified torrents.** Twenty films in four versions
+  each (The Lantern Keeper has six, for siblings and Compare), series
+  packs and episodes, albums, ebooks, audiobooks, software, games, photo
+  sets and comics.
+- **2,000 generated torrents.** These come from `synth::Generator` with
+  a fixed seed. The generator's real release-group and tracker names are
+  replaced with invented ones (`fixture::sanitize`).
+- **Six imports** from a bitmagnet source.
+- **Edge cases, each a known count:** Adult (detected, and one by an Is
+  adult correction), filter-hidden, private-source, pure v2 and hybrid
+  with padding files, a GBK name, a 1,200-file pack, and two ambiguous
+  names resolved by their files.
+- **Swarm health:** never scraped, scraped zero, every seeders and
+  trackers bucket, DHT-only, a suspect swarm, an unanswered first scrape
+  and 10–14 days of history.
+- **Insights over 35 days:** `rollup_hour`, `cohort_hour` (final and
+  incomplete cohorts, every loss reason), `events` (start, stop,
+  intensity, pause, resume) and `index_watermark_hour`.
+- **User data:** three saved searches (alerting, RSS-only, paused) with
+  read and unread alerts, user items and two ordered collections. There
+  are no API keys.
+
+Every name is invented. Every timestamp is an offset from the anchor,
+the build time rounded down to the hour. The crawler is quiet for six
+hours after the 24 h, 72 h and 7 d marks, so "24 h", "7 d",
+`discovered:<7d` and cohort finality match the manifest for six hours
+after the build.
+
+### The manifest
+
+`fixture.json` sits beside the database. The builder computes it from
+its own specification, never by asking the index or the API, so tests
+can compare the API against it. Content types come from the stored
+classification, which is the index's input. It holds:
+
+- `format`, `anchor`, `seed`;
+- `counts`: total, stored, searchable, visible, and each edge case;
+- `queries`: totals, plus every `type` and `ext` facet value, for
+  browse, `lantern`, `type:movie` and `ext:mkv`, each with Adult hidden
+  and shown, and for browse with `hidden=true`. Facets are disjunctive:
+  each ignores the query's own clause on it;
+- `discover`: Newest per tab, with its total and first five hashes;
+- `swarm`: never-scraped and populated counts, and the buckets over
+  browse;
+- `cohorts`: per hour and source, the stages, losses, `in_progress`
+  and `final`;
+- `rollups`, `events`, `saved_searches`, `user_items`, `collections`;
+- `torrents`: every hand-specified torrent with its id, hash, name,
+  size, files, type, flags and swarm values (`null` when never scraped).
+
+`bench/tests/fixture.rs` checks the builder: two builds give the same
+data, the counts match `COUNT(*)`, and every edge case is there.
+`crates/lodestar/tests/fixture.rs` checks the real binary against the
+manifest.
+
+### Pointing the web e2e at it
+
+Build the UI (`npm run build` in `web/`), then `cargo build -p
+lodestar`, which embeds `web/build`. Then start `lodestar serve
+--fixture` on a free port with `LODESTAR_HTTP_BIND` and
+`LODESTAR_FIXTURE_PASSWORD`. Make that Playwright's `webServer.command`,
+with `baseURL` the same address, and don't install the OpenAPI mock for
+those projects. Tests read expected numbers and hashes from the
+manifest, never from the code.
