@@ -1373,6 +1373,7 @@ dependencies = [
  "clap",
  "flate2",
  "lodestar-api",
+ "lodestar-bench",
  "lodestar-classify",
  "lodestar-dht",
  "lodestar-filter",

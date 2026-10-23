@@ -36,6 +36,72 @@
         "security": []
       }
     },
+    "/auth/proxy": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "The trusted reverse-proxy header settings (§12). `forced_off` says\n`LODESTAR_PROXY_AUTH=off` turned them off for this run.",
+        "operationId": "getProxyAuth",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProxySettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Changes the trusted reverse-proxy header settings. Needs the password\n(428 `confirm_required` without it).",
+        "operationId": "putProxyAuth",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProxyUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProxySettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/classify": {
       "get": {
         "tags": [
@@ -1733,6 +1799,227 @@
         ]
       }
     },
+    "/keys": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Every API key and feed token, oldest first: never a secret.",
+        "operationId": "listKeys",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Makes an API key or feed token. Needs the password (428\n`confirm_required` without it). The secret is in this response only.",
+        "operationId": "createKey",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateKeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Made; `secret` is shown this once.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedKey"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/keys/{id}": {
+      "delete": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Deletes a key or token and its hash.",
+        "operationId": "deleteKey",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The key's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Any JSON, such as `{}`.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/keys/{id}/regenerate": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Replaces a key's secret: the old one stops working at once. The key\nkeeps its name, kind, scopes, feed and expiry, under a new id and\nprefix. Needs the password (428 `confirm_required` without it).",
+        "operationId": "regenerateKey",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The key's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Replaced; `secret` is shown this once.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedKey"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/keys/{id}/revoke": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Revokes a key or token: it stops working and stays listed as revoked.\nRevoking one already revoked changes nothing.",
+        "operationId": "revokeKey",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The key's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Any JSON, such as `{}`.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyInfo"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/login": {
       "post": {
         "tags": [
@@ -2383,6 +2670,53 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/sessions/revoke-others": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Signs out every other browser: rotates the session key and sets a new\ncookie for this one. Needs the password (428 `confirm_required`\nwithout it).",
+        "operationId": "revokeOtherSessions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Every other session ended; a new session cookie is set.",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The new session cookie."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
                 }
               }
             }
@@ -5399,6 +5733,16 @@
           }
         }
       },
+      "ConfirmRequest": {
+        "type": "object",
+        "description": "`POST /sessions/revoke-others`, and any other change that only needs\nthe password (§20.11). `Debug` redacts it.",
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "The admin password, every time. Without it the answer is 428\n`confirm_required`."
+          }
+        }
+      },
       "Conversion": {
         "type": "object",
         "description": "Each stage ÷ the one before, 0–1; null when the one before is 0.",
@@ -5700,6 +6044,61 @@
           "paused": false,
           "since": 1792677600,
           "state": "running"
+        }
+      },
+      "CreateKeyRequest": {
+        "type": "object",
+        "description": "`POST /keys`. `Debug` redacts the password.",
+        "required": [
+          "kind",
+          "name"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds, in the future; absent: never expires."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/KeyKind"
+          },
+          "name": {
+            "type": "string",
+            "description": "1–200 characters."
+          },
+          "password": {
+            "type": "string",
+            "description": "The admin password (428 `confirm_required` without it)."
+          },
+          "saved_search_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "A feed token's saved search; absent: every feed. API keys take\nnone."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KeyScope"
+            },
+            "description": "An API key's scopes, at least one. A feed token takes none (it\nreads feeds only)."
+          }
+        }
+      },
+      "CreatedKey": {
+        "type": "object",
+        "description": "`POST /keys` and `POST /keys/{id}/regenerate`: the key and, this once,\nits secret. `Debug` redacts the secret.",
+        "required": [
+          "key",
+          "secret"
+        ],
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/KeyInfo"
+          },
+          "secret": {
+            "type": "string",
+            "description": "The whole secret (`lsk_…` or `lsf_…`). Shown only now: Lodestar\nkeeps its hash, not the secret."
+          }
         }
       },
       "Decision": {
@@ -7415,6 +7814,139 @@
           }
         }
       },
+      "KeyInfo": {
+        "type": "object",
+        "description": "A key or token as listed: never its secret or hash.",
+        "required": [
+          "created_at",
+          "expires_at",
+          "id",
+          "kind",
+          "last_used_at",
+          "name",
+          "prefix",
+          "revoked_at",
+          "saved_search_id",
+          "scopes",
+          "status"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds."
+          },
+          "expires_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix seconds; null: never expires."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/KeyKind"
+          },
+          "last_used_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix seconds, written at most once a minute; null: never used."
+          },
+          "name": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string",
+            "description": "The secret's public start, to tell keys apart."
+          },
+          "revoked_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix seconds; null: not revoked."
+          },
+          "saved_search_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "A feed token's saved search; null: every feed (or an API key)."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KeyScope"
+            }
+          },
+          "status": {
+            "$ref": "#/components/schemas/KeyStatus"
+          }
+        },
+        "example": {
+          "created_at": 1700000000,
+          "expires_at": null,
+          "id": 3,
+          "kind": "api_key",
+          "last_used_at": 1700000600,
+          "name": "Prowlarr",
+          "prefix": "lsk_Q7f2bX9a",
+          "revoked_at": null,
+          "saved_search_id": null,
+          "scopes": [
+            "torznab"
+          ],
+          "status": "active"
+        }
+      },
+      "KeyKind": {
+        "type": "string",
+        "enum": [
+          "api_key",
+          "feed_token"
+        ]
+      },
+      "KeyList": {
+        "type": "object",
+        "description": "`GET /keys`, oldest first.",
+        "required": [
+          "keys"
+        ],
+        "properties": {
+          "keys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KeyInfo"
+            }
+          }
+        }
+      },
+      "KeyScope": {
+        "type": "string",
+        "description": "What a key may reach (see `keys::scope`). A route opts in to one.",
+        "enum": [
+          "search",
+          "torznab",
+          "feeds"
+        ]
+      },
+      "KeyStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "expired",
+          "revoked"
+        ]
+      },
       "Kpi": {
         "type": "object",
         "description": "The KPI row (§10.9.2 level 1, `docs/metrics.md` §6.2).",
@@ -8348,6 +8880,87 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          }
+        }
+      },
+      "ProxySettings": {
+        "type": "object",
+        "description": "`GET` and `PUT /auth/proxy`: trusted reverse-proxy header auth.",
+        "required": [
+          "allowed_users",
+          "enabled",
+          "forced_off",
+          "header",
+          "trusted"
+        ],
+        "properties": {
+          "allowed_users": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Empty: any user the proxy names."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "forced_off": {
+            "type": "boolean",
+            "description": "`LODESTAR_PROXY_AUTH=off` turned proxy auth off for this run; the\nsaved settings shown here don't apply until it's removed."
+          },
+          "header": {
+            "type": "string",
+            "description": "The header the proxy names the signed-in user in."
+          },
+          "trusted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The proxies whose header is believed, as canonical CIDRs."
+          }
+        },
+        "example": {
+          "allowed_users": [],
+          "enabled": true,
+          "forced_off": false,
+          "header": "Remote-User",
+          "trusted": [
+            "172.17.0.1/32"
+          ]
+        }
+      },
+      "ProxyUpdate": {
+        "type": "object",
+        "description": "`PUT /auth/proxy`. `Debug` redacts the password.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "allowed_users": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "At most 64 user names; empty allows any."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "header": {
+            "type": "string",
+            "description": "Defaults to `Remote-User`."
+          },
+          "password": {
+            "type": "string",
+            "description": "The admin password (428 `confirm_required` without it)."
+          },
+          "trusted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "IP addresses or CIDR ranges, at most 64. Required to turn it on."
           }
         }
       },
