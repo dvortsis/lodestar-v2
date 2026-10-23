@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T10:12:55Z",
+ "updated_at": "2026-10-23T10:19:35Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -390,7 +390,7 @@
    "pr": 123,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "2026-10-23T06:59:39Z unblocked by B11a; brief drafting (Opus helper) | 2026-10-23T07:17:05Z launched (brief by Opus helper, runner-reviewed + trigger-cost and split lines; steward) | 2026-10-23T09:05:30Z PR #123 part 1/2 head 21d889b (~3.5k lines): V11, aggregation, compaction, repair. Trigger +25-35% bulk delete (over ~10%), kept; fresh reviewer launched (judging trigger design). Part 2 follows after merge. | 2026-10-23T09:26:35Z main moved (B9): services.rs conflict - fold into review verdict | 2026-10-23T09:30:45Z review MERGE; short round: repair window anchored at last activity (not now), prepare_cached at 3 delete sites, docs polish, merge main (B9). Trigger kept (runner decision; revisit with retention)."
+   "notes": "2026-10-23T06:59:39Z unblocked by B11a; brief drafting (Opus helper) | 2026-10-23T07:17:05Z launched (brief by Opus helper, runner-reviewed + trigger-cost and split lines; steward) | 2026-10-23T09:05:30Z PR #123 part 1/2 head 21d889b (~3.5k lines): V11, aggregation, compaction, repair. Trigger +25-35% bulk delete (over ~10%), kept; fresh reviewer launched (judging trigger design). Part 2 follows after merge. | 2026-10-23T09:26:35Z main moved (B9): services.rs conflict - fold into review verdict | 2026-10-23T09:30:45Z review MERGE; short round: repair window anchored at last activity (not now), prepare_cached at 3 delete sites, docs polish, merge main (B9). Trigger kept (runner decision; revisit with retention). | 2026-10-23T10:19:35Z 52f94a6: round done (last_activity anchor, prepare_cached +18%, docs, main B9); log_lint ok on merged tree; merged-tree verify vs 97fbb56 running"
   },
   "B10b": {
    "status": "merged",
@@ -939,13 +939,13 @@
    "notes": "from #86"
   },
   "B-update": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01S3vvLdWsMTnhxizee1srHu",
-   "pr": null,
+   "pr": 125,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "from #86 | 2026-10-23T08:45:08Z unblocked by B2c; brief drafting (Opus helper); main.rs overlap with B-log1 #119 noted | 2026-10-23T09:08:06Z launched (brief by Opus helper, runner-reviewed): 3 PRs (trust core crate / supervisor+rollback / check+policy+API) | 2026-10-23T09:30:45Z PR1 ~3.8k lines (1.75k code, ~40% tests): runner agreed one PR with stated reason"
+   "notes": "from #86 | 2026-10-23T08:45:08Z unblocked by B2c; brief drafting (Opus helper); main.rs overlap with B-log1 #119 noted | 2026-10-23T09:08:06Z launched (brief by Opus helper, runner-reviewed): 3 PRs (trust core crate / supervisor+rollback / check+policy+API) | 2026-10-23T09:30:45Z PR1 ~3.8k lines (1.75k code, ~40% tests): runner agreed one PR with stated reason | 2026-10-23T10:19:35Z PR #125 (1/3 trust core) head ee5ae29 (~4k incl vectors); self-review 0 blocking; fresh + security reviewers launched"
   },
   "S-updates": {
    "status": "pending",
