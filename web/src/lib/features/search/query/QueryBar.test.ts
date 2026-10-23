@@ -181,13 +181,15 @@ describe('the query bar', () => {
 	});
 
 	it('never shows an error for an empty query', async () => {
-		const { editor } = setup();
+		const { state, editor } = setup();
 		await engage(editor);
 		fetchMock.mockImplementation(async () => {
 			throw new TypeError('Failed to fetch');
 		});
 		await fireEvent.keyDown(editor, { key: 'Enter' });
-		await new Promise((r) => setTimeout(r, 20));
+		// The empty query's parse has failed: the state holds the error, the page shows none.
+		await waitFor(() => expect(state.parseError).not.toBeNull());
+		expect(state.parsing).toBe(false);
 		expect(screen.queryByRole('alert')).toBeNull();
 		expect(message().textContent?.trim()).toBe('');
 	});
