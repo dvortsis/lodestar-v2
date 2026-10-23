@@ -58,6 +58,15 @@ The Settings form engine (architecture §10.10.1, §10.10.4, §10.10.5, §10.10.
 - **Component styles use token variables in plain `<style>` blocks** without `@reference`: they use no `@apply`, and svelte-check warns on the at-rule.
 - **The showcase is `/dev/settings-form`** (`?sections=`, `?mode=instant`, `?id=`), laid out the way S-settings-1 lays out a screen, with an Advanced disclosure that `onReveal` opens.
 
+## Budget (owner's decision, 2026-10-23)
+- **The Settings route follows §10.1's 45 KB per route** (gzipped, the shell excluded), replacing §10.10.11's 20 KB, and **the engine's target is ≤ 22 KB** (the brief had 10 KB). The owner chose this over splitting the engine further, which would have put async seams on the merge and draft restore.
+- **Measured** with `VITE_DEV_ROUTES=1 npm run build`, gzipped, the files `/dev/settings-form` loads beyond `/search`'s:
+  - the engine (store, `SettingField`, `SettingsForm`, the built-in controls and their messages), less the showcase page: **≈ 21.1 KB**;
+  - shared code the route also needs: **≈ 18.1 KB**: the field primitives (`Field`, `Input`, `Toggle`, `Radio`, `Select`, `Slider`, `Textarea`, `SegmentedControl`, `Button`, `Chip`, `Mono`), the API client, the events client and `svelte/reactivity`;
+  - kept lazy: the field menu (Bits UI and floating positioning, about 33 KB), the confirmation dialog, and `$lib/keys`. Dev-only warning text is compiled out.
+- **No `size-limit` entry yet:** nothing in a production build imports the engine, and a dev route can't be an entry (`routeFiles` throws when the route is absent). S-settings-1's Settings-route entry gates it. `.size-limit.js` is a shared file in any case.
+- **Follow-up:** load instant mode only on Preferences screens (a lazy split of `sendInstant`/`undoInstant`).
+
 ## Recorded now, built in part 2
 - **The error summary takes focus, and its links lead to the fields** (the GOV.UK reading of §10.10.5's "then focus moves to the first field with an error", confirmed by the runner).
 - **Discard asks nothing for one change and confirms for more**, since one change is cheap to redo.
