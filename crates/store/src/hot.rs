@@ -1,5 +1,5 @@
-//! Hot columns (architecture §7): swarm stats and last-seen per torrent
-//! id, in memory, read and written without locks.
+//! Hot columns (architecture §7): swarm stats, last-seen and flags per
+//! torrent id, in memory, read and written without locks.
 //!
 //! Swarm stats change constantly; keeping them in the search index would
 //! mean re-indexing whole documents. Instead the scraper writes these
@@ -55,15 +55,25 @@ pub enum Col {
     Dht,
     /// Last DHT activity, unix seconds.
     LastSeen,
+    /// Bits from [`flags`]; [`NEVER`] reads as none set.
+    Flags,
+}
+
+/// Bits of the [`Col::Flags`] column. Values are persisted in snapshots:
+/// append only. User flags (§7: favourite, hidden, …) take bits from 8 up.
+pub mod flags {
+    /// The swarm-consistency check flagged fake seeding (§8).
+    pub const SUSPECT: u32 = 1 << 0;
 }
 
 impl Col {
-    pub const ALL: [Col; 5] = [
+    pub const ALL: [Col; 6] = [
         Col::Seeders,
         Col::Leechers,
         Col::Trackers,
         Col::Dht,
         Col::LastSeen,
+        Col::Flags,
     ];
 
     fn index(self) -> usize {
@@ -78,6 +88,7 @@ impl Col {
             Col::Trackers => "trackers.col",
             Col::Dht => "dht.col",
             Col::LastSeen => "last_seen.col",
+            Col::Flags => "flags.col",
         }
     }
 }
@@ -173,14 +184,46 @@ impl HotColumns {
         }
     }
 
-    /// Writes a torrent's swarm columns. Values are capped one below
-    /// [`NEVER`], so a real count is never mistaken for "never scraped".
+    /// Writes a torrent's swarm columns. Counts are capped one below
+    /// [`NEVER`], so a real count is never mistaken for "never scraped";
+    /// a `dht` of [`NEVER`] means "no estimate" and stays unknown.
     pub fn set_swarm(&self, id: u64, s: SwarmHot) {
         let cap = |v: u32| v.min(NEVER - 1);
         self.set(Col::Seeders, id, cap(s.seeders));
         self.set(Col::Leechers, id, cap(s.leechers));
         self.set(Col::Trackers, id, cap(s.trackers));
-        self.set(Col::Dht, id, cap(s.dht));
+        let dht = if s.dht == NEVER { NEVER } else { cap(s.dht) };
+        self.set(Col::Dht, id, dht);
+        self.changed();
+    }
+
+    /// The torrent's [`flags`], none when unknown.
+    pub fn flags(&self, id: u64) -> u32 {
+        match self.get(Col::Flags, id) {
+            NEVER => 0,
+            f => f,
+        }
+    }
+
+    /// Sets or clears flag bits, writing only when they change. Other
+    /// bits written at the same time are kept: it's a compare-exchange,
+    /// not a load and a store.
+    pub fn set_flags(&self, id: u64, bits: u32, on: bool) {
+        let Some(slot) = self.slot_mut(Col::Flags, id) else {
+            return;
+        };
+        let mut cur = slot.load(Ordering::Relaxed);
+        loop {
+            let now = if cur == NEVER { 0 } else { cur };
+            let next = if on { now | bits } else { now & !bits };
+            if next == now {
+                return;
+            }
+            match slot.compare_exchange_weak(cur, next, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => break,
+                Err(seen) => cur = seen,
+            }
+        }
         self.changed();
     }
 
@@ -418,6 +461,16 @@ mod tests {
         let hot = HotColumns::new();
         hot.set_swarm(1, swarm(NEVER));
         assert_eq!(hot.get(Col::Seeders, 1), NEVER - 1);
+        // But "no DHT estimate" stays unknown.
+        hot.set_swarm(
+            2,
+            SwarmHot {
+                dht: NEVER,
+                ..swarm(3)
+            },
+        );
+        assert_eq!(hot.get(Col::Dht, 2), NEVER);
+        assert_eq!(hot.get(Col::Seeders, 2), 3);
     }
 
     #[test]
@@ -448,6 +501,19 @@ mod tests {
         let slow = HotColumns::with_epoch_every(Duration::from_secs(3600));
         slow.set_swarm(1, swarm(1));
         assert_eq!(slow.epoch(), 0, "period not up yet");
+    }
+
+    #[test]
+    fn flags_default_to_none_and_toggle() {
+        let hot = HotColumns::with_epoch_every(Duration::ZERO);
+        assert_eq!(hot.flags(3), 0);
+        hot.set_flags(3, flags::SUSPECT, true);
+        assert_eq!(hot.flags(3), flags::SUSPECT);
+        let e = hot.epoch();
+        hot.set_flags(3, flags::SUSPECT, true);
+        assert_eq!(hot.epoch(), e, "no change, no new epoch");
+        hot.set_flags(3, flags::SUSPECT, false);
+        assert_eq!(hot.flags(3), 0);
     }
 
     #[test]
@@ -533,5 +599,26 @@ mod tests {
         bytes.truncate(bytes.len() - 3);
         fs::write(&path, &bytes).unwrap();
         assert!(HotColumns::load(dir.path(), 42).unwrap().is_none());
+    }
+
+    #[test]
+    fn concurrent_flag_writers_keep_each_others_bits() {
+        let hot = Arc::new(HotColumns::new());
+        let threads: Vec<_> = (0..8u32)
+            .map(|b| {
+                let hot = hot.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..2000 {
+                        hot.set_flags(7, 1 << b, true);
+                        hot.set_flags(7, 1 << (b + 8), true);
+                        hot.set_flags(7, 1 << (b + 8), false);
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        assert_eq!(hot.flags(7), 0xff);
     }
 }

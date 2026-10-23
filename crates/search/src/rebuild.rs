@@ -349,6 +349,39 @@ fn max_id(store: &Store) -> Result<i64> {
     Ok(hi)
 }
 
+/// What every served index ranks and filters with beyond its own fields
+/// (§7, §8): the hot columns, the priors' weights and the penalty hook.
+#[derive(Clone, Default)]
+pub struct Ranking {
+    pub hot: Option<Arc<lodestar_store::HotColumns>>,
+    pub weights: crate::RankWeights,
+    pub penalty: Option<crate::Penalty>,
+}
+
+impl std::fmt::Debug for Ranking {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Ranking")
+            .field("hot", &self.hot.is_some())
+            .field("weights", &self.weights)
+            .field("penalty", &self.penalty.is_some())
+            .finish()
+    }
+}
+
+impl Ranking {
+    /// `index` with these attached.
+    pub fn apply(&self, index: SearchIndex) -> SearchIndex {
+        let mut index = index.with_weights(self.weights);
+        if let Some(hot) = &self.hot {
+            index = index.with_hot(hot.clone());
+        }
+        if let Some(p) = &self.penalty {
+            index = index.with_penalty(p.clone());
+        }
+        index
+    }
+}
+
 /// Settings for [`Serving::open_or_rebuild`].
 #[derive(Debug, Clone)]
 pub struct ServingConfig {
@@ -365,6 +398,8 @@ pub struct ServingConfig {
     pub version: IndexVersion,
     /// The searcher leases cursors read through ([`Serving::leases`]).
     pub leases: LeaseConfig,
+    /// Applied to every index served, the one a rebuild swaps in too.
+    pub ranking: Ranking,
     /// The result cache's bounds ([`Serving::cache`]).
     pub cache: CacheConfig,
     /// Tests only: while set, a rebuild that has caught up waits before
@@ -394,6 +429,7 @@ impl Default for ServingConfig {
             rebuild_commit_docs: 50_000,
             version: IndexVersion::CURRENT,
             leases: LeaseConfig::default(),
+            ranking: Ranking::default(),
             cache: CacheConfig::default(),
             hold_before_finish: None,
             hold_before_start: None,
@@ -540,6 +576,7 @@ impl Serving {
             }
             (SearchIndex::open(&final_dir)?, true)
         };
+        let serving = config.ranking.apply(serving);
 
         // Opened before any thread starts, so a broken store or directory
         // fails the start cleanly.
@@ -853,7 +890,7 @@ fn rebuild_and_swap(
         return Ok(None);
     }
     shared.set_phase(RebuildPhase::Swapping);
-    let new = SearchIndex::open(&final_dir)?;
+    let new = config.ranking.apply(SearchIndex::open(&final_dir)?);
     // The old live indexer stops (committing) before the new index's
     // last catch-up, so everything readers could see in the old index is
     // in the new one when they move.

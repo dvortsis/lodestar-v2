@@ -244,7 +244,9 @@ impl TrustState {
         else {
             return old.clone();
         };
+        // A state whose `seq` disagrees with its statements is never written.
         if new.seq < old.seq
+            || new.seq != new_bodies.len() as u64
             || !new_bodies.starts_with(&old_bodies)
             || (new.seq == old.seq && new_bodies != old_bodies)
         {

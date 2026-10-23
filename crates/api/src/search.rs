@@ -29,12 +29,15 @@ use crate::dto::search::{
 use crate::dto::suggest::CharRange;
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{Json, Query, same_origin_json};
-use crate::{ApiState, auth, torrents};
+use crate::{ApiState, INTEREST_TOP, auth, swarm, torrents};
 
 /// This module's half of `/openapi.json`.
 #[derive(OpenApi)]
 #[openapi(paths(parse_query, search_get, search_post))]
 pub(crate) struct ApiDoc;
+
+/// The widest real UTC offsets, in minutes.
+const TZ_RANGE: std::ops::RangeInclusive<i32> = -14 * 60..=14 * 60;
 
 /// Results per page, at most.
 pub const MAX_LIMIT: usize = 200;
@@ -250,11 +253,19 @@ pub(crate) fn sort_param(s: Option<&str>) -> ApiResult<Sort> {
         "+size" => Sort::Size { desc: false },
         "files" | "-files" => Sort::Files { desc: true },
         "+files" => Sort::Files { desc: false },
+        "seeders" | "-seeders" => Sort::Seeders { desc: true },
+        "+seeders" => Sort::Seeders { desc: false },
+        "leechers" | "-leechers" => Sort::Leechers { desc: true },
+        "+leechers" => Sort::Leechers { desc: false },
+        "trackers" | "-trackers" => Sort::Trackers { desc: true },
+        "+trackers" => Sort::Trackers { desc: false },
+        "seen" | "-seen" => Sort::Seen { desc: true },
+        "+seen" => Sort::Seen { desc: false },
         other => {
             return Err(ApiError::bad_request(
                 "unknown_sort",
                 format!(
-                    "Unknown sort {other:?}: use relevance, discovered, size or files, with + or - for the order."
+                    "Unknown sort {other:?}: use relevance, discovered, size, files, seeders, leechers, trackers or seen, with + or - for the order."
                 ),
             )
             .field("sort"));
@@ -270,10 +281,11 @@ pub(crate) fn sort_param(s: Option<&str>) -> ApiResult<Sort> {
     tag = "search",
     params(
         ("q" = Option<String>, Query, description = "The query text; empty browses everything."),
-        ("sort" = Option<String>, Query, description = "`relevance` (the default), or `discovered`, `size` or `files` with an optional `+` (ascending) or `-` (descending, the default)."),
+        ("sort" = Option<String>, Query, description = "`relevance` (the default), or `discovered`, `size`, `files`, `seeders`, `leechers`, `trackers` or `seen` with an optional `+` (ascending) or `-` (descending, the default). Never-scraped torrents sort last either way."),
         ("limit" = Option<usize>, Query, description = "Results per page: 1–200, 50 by default."),
         ("offset" = Option<usize>, Query, description = "`offset + limit` may not pass 10,000. Not with `cursor`."),
         ("hidden" = Option<bool>, Query, description = "Include torrents a filter rule hid (§20.3)."),
+        ("tz" = Option<i32>, Query, description = "The user's zone for `time:`, in minutes east of UTC (−840 to 840); 0 by default."),
         ("cursor" = Option<String>, Query, description = "The previous page's `next_cursor`; send the same `q`, `sort` and `hidden` with it. An expired one is a 410 `cursor_expired`, a tampered one a 400 `bad_cursor`."),
         ("exact" = Option<bool>, Query, description = "`1` or `true`: count every match exactly, within a time budget."),
         ("explain" = Option<bool>, Query, description = "`1` or `true`: explain each hit's score (`explain` in the response). First page only, at most 100 hits."),
@@ -324,6 +336,7 @@ async fn run_search(
     };
     let ast = request_ast(p.ast, p.q)?;
     let sort = sort_param(p.sort.as_deref())?;
+    let tz = tz_param(p.tz)?;
     let explain = p.explain.unwrap_or(false);
     let mut limit = p.limit.unwrap_or(50).clamp(1, MAX_LIMIT);
     if explain {
@@ -351,6 +364,7 @@ async fn run_search(
         )
         .field("offset"));
     }
+    let (hot, events) = (s.hot.clone(), s.events.clone());
     let visibility = Visibility {
         hidden: p.hidden.unwrap_or(false),
         adult: s.adult.shown(),
@@ -373,6 +387,14 @@ async fn run_search(
     let _guard = cancel.cancel_on_drop();
     tokio::task::spawn_blocking(move || {
         let started = Instant::now();
+        // A search that fails while running counts in the Serve rollups as
+        // failed. A bad or expired cursor isn't a failed search.
+        let failed = |e: lodestar_search::Error| {
+            if let Some(ev) = &events {
+                ev.searched(started.elapsed(), None);
+            }
+            search_error(e)
+        };
         // A first page comes from the result cache (§8) unless it's
         // explained, which bypasses it.
         let mut cached = None;
@@ -396,11 +418,12 @@ async fn run_search(
                     sort,
                     limit,
                     now: unix_now(),
+                    utc_offset: tz * 60,
                 };
                 let (got, _) = search
                     .cache()
                     .search(&search.index(), &spec, &cancel)
-                    .map_err(search_error)?;
+                    .map_err(failed)?;
                 let lease = got.lease.clone();
                 cached = Some(got);
                 (lease, Start::Offset(0), 0, None)
@@ -408,27 +431,34 @@ async fn run_search(
             None => {
                 // The index serving now, once for this request; the lease
                 // keeps it for the pages after.
-                let lease = Lease::new(search.index(), &shown, unix_now(), sort, &cancel)
-                    .map_err(search_error)?;
+                let lease =
+                    Lease::new_at(search.index(), &shown, unix_now(), tz * 60, sort, &cancel)
+                        .map_err(failed)?;
                 (Arc::new(lease), Start::Offset(offset), offset as u64, None)
             }
         };
         let total = if exact {
-            lease.exact_total(&cancel).map_err(search_error)?
+            lease.exact_total(&cancel).map_err(failed)?
         } else {
             lease.total()
         };
-        let (page, explained) = match &cached {
-            Some(c) => (c.page.clone(), None),
+        let paged = match &cached {
+            Some(c) => Ok((c.page.clone(), None)),
             None if explain => {
-                let e = lodestar_search::explain(&lease, limit, &cancel).map_err(search_error)?;
-                (e.page.clone(), Some(e))
+                lodestar_search::explain(&lease, limit, &cancel).map(|e| (e.page.clone(), Some(e)))
             }
-            None => (
-                lease.page(start, limit, &cancel).map_err(search_error)?,
-                None,
-            ),
+            None => lease.page(start, limit, &cancel).map(|p| (p, None)),
         };
+        let (page, explained) = paged.map_err(failed)?;
+        if let Some(ev) = &events {
+            ev.searched(started.elapsed(), Some(total.value));
+        }
+        // The first screenful is what people look at: scrape it soon.
+        if let (Some(ev), 0) = (&events, served) {
+            for h in page.hits.iter().take(INTEREST_TOP) {
+                ev.interest(h.id as i64);
+            }
+        }
         // A lease is kept only when there's a next page to read from it.
         let next_cursor = page.next.map(|position| {
             let lease_id = id.unwrap_or_else(|| search.leases().insert(lease.clone(), client));
@@ -442,7 +472,7 @@ async fn run_search(
         });
         let store = reader.lock().expect("reader lock");
         let mut hits: Vec<SearchHit> = Vec::with_capacity(page.hits.len());
-        for h in &page.hits {
+        for h in page.hits.iter() {
             // A torrent deleted since indexing just drops out of the page.
             if let Some(row) = store.torrent(h.id as i64).map_err(internal)? {
                 let enrichment = store.enrichment(row.id).map_err(internal)?;
@@ -463,7 +493,8 @@ async fn run_search(
                 } else {
                     None
                 };
-                let mut hit = torrents::hit(&row, h.score, matched_files);
+                let swarm = swarm::summary(&store, hot.as_deref(), &row).map_err(internal)?;
+                let mut hit = torrents::hit(&row, h.score, matched_files, swarm);
                 enrich(&mut hit, enrichment);
                 hits.push(hit);
             }
@@ -486,6 +517,20 @@ async fn run_search(
     })
     .await
     .map_err(internal)?
+}
+
+/// A request's `tz`, minutes east of UTC (0 when absent). `/facets`
+/// takes it too, so `time:` counts the hours `/search` returns.
+pub(crate) fn tz_param(tz: Option<i32>) -> ApiResult<i32> {
+    let tz = tz.unwrap_or(0);
+    if !TZ_RANGE.contains(&tz) {
+        return Err(ApiError::bad_request(
+            "bad_tz",
+            "tz is minutes east of UTC, from -840 to 840.",
+        )
+        .field("tz"));
+    }
+    Ok(tz)
 }
 
 /// What a search may see besides its query, for the result cache's key:
@@ -512,11 +557,11 @@ fn explanation(e: &Explanation, served: &[SearchHit]) -> SearchExplain {
                 title: f64::from(p.title),
             }),
             priors: ExplainPriors {
-                freshness: None,
-                junk: None,
-                seeders: None,
-                swarm_consistency: None,
-                trackers: None,
+                freshness: x.priors.map(|p| f64::from(p.freshness)),
+                junk: x.priors.map(|p| f64::from(p.junk)),
+                seeders: x.priors.map(|p| f64::from(p.seeders)),
+                swarm_consistency: x.priors.map(|p| f64::from(p.swarm_consistency)),
+                trackers: x.priors.map(|p| f64::from(p.trackers)),
             },
             score: f64::from(x.score),
         })
@@ -526,6 +571,10 @@ fn explanation(e: &Explanation, served: &[SearchHit]) -> SearchExplain {
         Sort::Discovered { .. } => "discovered",
         Sort::Size { .. } => "size",
         Sort::Files { .. } => "files",
+        Sort::Seeders { .. } => "seeders",
+        Sort::Leechers { .. } => "leechers",
+        Sort::Trackers { .. } => "trackers",
+        Sort::Seen { .. } => "seen",
     };
     SearchExplain {
         hits,

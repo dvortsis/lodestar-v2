@@ -17,6 +17,8 @@
 //!   file (disk full, a failed rotation) is written after its locks are
 //!   released, and never to the file it's about.
 
+#[cfg(test)]
+mod bench;
 mod entry;
 pub mod events;
 mod file;
@@ -65,7 +67,9 @@ pub static CATALOGUES: &[&Catalogue] = &[
     &events::CATALOGUE,
     &lodestar_api::log_events::CATALOGUE,
     &lodestar_api::log_events::INTEGRATIONS,
+    &lodestar_pipeline::log_events::CATALOGUE,
     &lodestar_search::log_events::CATALOGUE,
+    &crate::update::log_events::CATALOGUE,
 ];
 
 /// A registered event by id.
@@ -77,13 +81,17 @@ pub fn find(id: &str) -> Option<&'static Event> {
 }
 
 /// Every first-party `tracing` target and its component, most specific
-/// first (the untyped lines' levels follow their component's).
+/// first (the untyped lines' levels follow their component's). Every
+/// workspace crate has an entry (`tests::targets_cover_every_crate`).
 pub const TARGETS: &[(&str, Component)] = &[
     ("lodestar::subscriptions", Component::Filters),
     ("lodestar::floor", Component::Filters),
     ("lodestar_api::auth", Component::Auth),
     ("lodestar", Component::System),
     ("lodestar_log", Component::System),
+    ("lodestar_update", Component::System),
+    // The fixture generator, linked into `serve --fixture`.
+    ("lodestar_bench", Component::System),
     ("lodestar_api", Component::Api),
     ("lodestar_dht", Component::Dht),
     ("lodestar_peer_wire", Component::Fetch),

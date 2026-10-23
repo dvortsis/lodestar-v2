@@ -2,6 +2,7 @@
 // button, the palette and the overflow menu are all reachable and operable from the keyboard.
 import { liveEvents, openPaletteWithKey } from './support/events-server';
 import { expect, test } from './support/test';
+import { crawlerFixture, overviewFixture } from '../src/lib/features/insights/overview/fixtures';
 
 // The shell registers its shortcuts and opens its stream when the browser is idle (≤ 1 s after load).
 const ready = (page: import('@playwright/test').Page) =>
@@ -65,8 +66,10 @@ test('every stop on the top bar shows a visible focus ring', async ({ page, go, 
 test('Enter on a destination navigates, marks it current and moves focus to main', async ({
 	page,
 	go,
-	kbd
+	kbd,
+	mock
 }) => {
+	mock.on('listSavedSearches', []);
 	await go('/search');
 	await kbd.tabTo(page.getByRole('link', { name: 'Alerts' }));
 	await kbd.press('Enter');
@@ -133,8 +136,11 @@ test.describe('narrow screens', () => {
 	test('the menu button opens the destinations, Escape closes them and returns focus', async ({
 		page,
 		go,
-		kbd
+		kbd,
+		mock
 	}) => {
+		mock.on('getInsightsOverview', overviewFixture());
+		mock.on('getCrawler', crawlerFixture());
 		await go('/search');
 		const button = page.getByTestId('menu-button');
 		await kbd.tabTo(button);
@@ -146,7 +152,8 @@ test.describe('narrow screens', () => {
 		await expect(page).toHaveURL(/\/insights/);
 		await expect(page.getByRole('navigation', { name: 'Main' })).toHaveCount(0);
 
-		await kbd.tabTo(button);
+		// Insights has many tab stops, so Tab would not wrap back to the bar within the limit.
+		await button.focus();
 		await kbd.press('Enter');
 		await kbd.press('Escape');
 		await expect(button).toHaveAttribute('aria-expanded', 'false');
