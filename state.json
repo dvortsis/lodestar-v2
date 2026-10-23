@@ -180,13 +180,13 @@
    "notes": "launched 14:40; not live.rs/compile.rs (B4/B17) | PR #71; reviewer started 16:45 | 17:15 r1 FIX: visibility via base(without_facet(user_ast)), merge main, category ranges, near-1M perf. 18:24 R1 all in (ee81535); R2 review in flight. 19:18 R2 MERGE at ee81535; must add B17 wiring + I1 lease precondition, I2 1M single-segment perf, I3 share selection, P2 bin cap before merge. 19:56 B17 wiring + I1/I2/I3/P2 pushed 3dd0eaf; R3 delta review in flight. 20:20 R3 MERGE at 3dd0eaf (polish deferred: lease.rs doc swap, adult_kind wording, Hours cap test, bin_of clamp, golden note). Merge on green. 20:45 243443a main merge only; merge on green. | 21:40 MERGED as 301199a."
   },
   "B16": {
-   "status": "pending",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01E3eCWFkpTCtz9Ve8QSGuvA",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
-   "notes": ""
+   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed)."
   },
   "W5": {
    "status": "merged",
@@ -300,13 +300,13 @@
    "notes": ""
   },
   "B11a": {
-   "status": "pending",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01Rg3cvfHbL2g5dSqoPL3qLq",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
-   "notes": ""
+   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed)."
   },
   "B7": {
    "status": "review",
@@ -318,13 +318,13 @@
    "notes": "Launched 21:41 after B6 merged. | 01:50 PR #102 41231f7 conflicts live.rs; asked main merge + relevance gate; review on new head. | 01:52 c764a4f main merged (relevance PASS); reviewer started. | 02:45 review FIX: natural phrasing inverts negations/field syntax (-cam -> includes CAM) -> strict-lex first + meaning-preserving prop test; important: did-you-mean cost, FST peak RSS/10M plan, swap-path test."
   },
   "B12": {
-   "status": "pending",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01RNKiUPUDPTqDXniLQ7ApU1",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
-   "notes": ""
+   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed)."
   },
   "B9": {
    "status": "pending",
@@ -374,13 +374,13 @@
    "notes": ""
   },
   "B10b": {
-   "status": "pending",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_018gReKT5Ef1ESyRwSB6wkhg",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
-   "notes": ""
+   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed)."
   },
   "B15": {
    "status": "merged_elsewhere",
@@ -392,13 +392,13 @@
    "notes": "#47 merged by the filter session 06:19"
   },
   "B10a": {
-   "status": "pending",
+   "status": "running",
    "model": "sonnet",
-   "session": null,
+   "session": "session_012Zx7Sqy3qDZQ8VUnW41wvd",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
-   "notes": ""
+   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed)."
   },
   "B11c": {
    "status": "pending",
@@ -1252,10 +1252,12 @@
   "windows_acl": "auth.json (crates/api/src/auth.rs:424) and services.rs:326 0600 modes are cfg(unix) only: Windows needs an ACL on data files (M6-win locks the default folder; custom data dirs on Windows still inherit). Next auth/security slice.",
   "b4b_swap_test_waits": "crates/search/src/live.rs the_swap_reports_its_adult_torrents (#104) uses two fixed 30 s waits (pattern X-flakes removed elsewhere); convert to condition waits in the next slice touching live.rs.",
   "adult_hash_names": "Adult detection for opaque/hash torrent names (folder signals): corpus-backed slice; positive-only folder signals; numbered/year prefixes before xxx (#105 review).",
-  "backup_unused_mut_windows": "crates/lodestar/src/cli/backup.rs:132 unused mut shows only on Windows clippy (M6-win note)."
+  "backup_unused_mut_windows": "crates/lodestar/src/cli/backup.rs:132 unused mut shows only on Windows clippy (M6-win note).",
+  "slices_yaml_B12_owns": "runner/slices.yaml B12 owns should add crates/api/src/auth/**, ClientIp in extract.rs, services.rs wiring (brief grants them). Fix in next runner PR.",
+  "apistate_user_data": "B12 and B10a both add identical ApiState.user_data field + None in test literals; second to merge drops duplicates."
  },
  "blocked_on_owner": [],
- "launches_today": 8,
+ "launches_today": 13,
  "last_heartbeat": "2026-10-22T20:39Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
