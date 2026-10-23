@@ -58,9 +58,14 @@ describe('openDetail', () => {
 		expect(pushState).not.toHaveBeenCalled();
 	});
 
-	it('pushes anyway when replace is asked but nothing is open', () => {
-		openDetail(H2, { replace: true });
+	it('replaces whenever a drawer is open, so one Back leaves it', () => {
+		openDetail(H1);
+		page.state = { detail: { hash: H1 } };
+		openDetail(H2); // no replace flag: still one entry per drawer session
 		expect(pushState).toHaveBeenCalledTimes(1);
+		expect(replaceState).toHaveBeenCalledWith(`/t/${H2}?q=ubuntu`, { detail: { hash: H2 } });
+		closeDetail();
+		expect(back).toHaveBeenCalledTimes(1);
 	});
 
 	it('remembers where focus returns', () => {

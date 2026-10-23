@@ -8,6 +8,17 @@ import { m } from '$lib/paraglide/messages.js';
 import { cacheDetail, cachedDetail } from './cache';
 import { manual } from './manual.svelte';
 
+let manualMounted = false;
+
+/** Show the manual field, mounting it once on demand (the `c` key can run with no drawer open). */
+async function showManual(magnet: string) {
+	manual.magnet = magnet;
+	if (manualMounted) return;
+	manualMounted = true;
+	const [{ mount }, mod] = await Promise.all([import('svelte'), import('./ManualMagnet.svelte')]);
+	mount(mod.default, { target: document.body });
+}
+
 export async function magnetFor(hash: string): Promise<string | null> {
 	const cached = cachedDetail(hash);
 	const detail = cached ?? (await api.get('/torrents/{hash}', { path: { hash } }));
@@ -34,7 +45,7 @@ export async function copyMagnet(source: { magnet: string } | { hash: string }) 
 	}
 	const result = await copyText(magnet);
 	if (result === 'copied') toast.push({ kind: 'success', text: m.detail_magnet_copied() });
-	else manual.magnet = magnet;
+	else await showManual(magnet);
 	return result;
 }
 

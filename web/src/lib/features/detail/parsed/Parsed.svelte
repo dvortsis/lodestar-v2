@@ -4,6 +4,7 @@
 	// section is mounted, on first scroll near). Resolution, codecs, languages, group and edition are not
 	// served yet, so they have no rows rather than a "—" that would claim they were measured.
 	import { api, isAbort, latest } from '$lib/api/client';
+	import { showBidi } from '$lib/util/bidi';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import type { SearchHit } from '../cache';
@@ -62,7 +63,7 @@
 		<dt>{m.resolved_title()}</dt>
 		<dd data-testid="detail-parsed-title">
 			{#if hit?.title}
-				<span>{hit.title}</span>
+				<span>{showBidi(hit.title)}</span>
 				<span class="text-small text-muted-text" data-testid="detail-parsed-provenance"
 					>{hit.resolved_via
 						? m.detail_resolved_via({ method: resolvedVia(hit.resolved_via) })

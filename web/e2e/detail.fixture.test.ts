@@ -82,27 +82,56 @@ test('an Adult torrent with Adult hidden gives the adult_hidden state', async ({
 	await expect(page.getByTestId('detail-adult-hidden')).toBeVisible();
 });
 
-test("the server's CSP allows a same-origin module worker and has no blob: source", async ({
-	page
-}) => {
-	// The fixture has no torrent above the 2,000-file worker threshold, so check the policy the
-	// worker runs under: script-src 'self' (worker-src falls back to it), and a module worker from a
-	// same-origin script starts without a violation.
-	const res = await page.goto('/search');
+test("the real tree worker starts under the server's CSP and answers a build", async ({ page }) => {
+	// The fixture has no torrent above the 2,000-file worker threshold, so start the shipped worker
+	// directly: find its URL in the tree chunk the page loads, then post it a small build.
+	const pack = manifest().torrents.find((t) => t.name.startsWith('Field Recordings Archive'))!;
+	const res = await page.goto(`/t/${pack.hash}`);
 	const csp = res!.headers()['content-security-policy'] ?? '';
 	expect(csp).toContain("script-src 'self'");
 	expect(csp).not.toContain('blob:');
-	const result = await page.evaluate(async () => {
-		const violations: string[] = [];
-		document.addEventListener('securitypolicyviolation', (e) =>
-			violations.push(e.violatedDirective)
-		);
-		const src = document.querySelector<HTMLLinkElement>('link[rel="modulepreload"]')?.href;
-		if (!src) return { started: false, violations };
-		const worker = new Worker(src, { type: 'module' });
-		await new Promise((r) => setTimeout(r, 500));
-		worker.terminate();
-		return { started: true, violations };
+	await expect(page.getByTestId('detail-file-tree')).toHaveAttribute('aria-busy', 'false', {
+		timeout: 20_000
 	});
-	expect(result.violations).toEqual([]);
+	const outcome = await page.evaluate(async () => {
+		const scripts = performance
+			.getEntriesByType('resource')
+			.map((e) => e.name)
+			.filter((u) => u.endsWith('.js'));
+		let workerUrl: string | undefined;
+		for (const u of scripts) {
+			const m = (await (await fetch(u)).text()).match(/workers\/tree\.worker-[\w-]+\.js/);
+			if (m) {
+				workerUrl = new URL('/_app/immutable/' + m[0], location.origin).href;
+				break;
+			}
+		}
+		if (!workerUrl) return { error: 'no worker url found' };
+		return await new Promise<{ error?: string; nodes?: number }>((resolve) => {
+			const violation = (e: SecurityPolicyViolationEvent) =>
+				resolve({ error: e.violatedDirective });
+			document.addEventListener('securitypolicyviolation', violation);
+			// A deadline, not a pause: resolves the moment the worker answers.
+			const deadline = setTimeout(() => resolve({ error: 'no answer in 10 s' }), 10_000);
+			const worker = new Worker(workerUrl!, { type: 'module' });
+			worker.onerror = (e) => resolve({ error: String(e.message || 'worker error') });
+			worker.onmessage = (e) => {
+				clearTimeout(deadline);
+				resolve({ nodes: e.data.nodes.length });
+			};
+			worker.postMessage({ type: 'append', files: [{ path: 'a/b.txt', size: 1, attrs: [] }] });
+			worker.postMessage({
+				type: 'build',
+				seq: 1,
+				options: {
+					showPadding: false,
+					filter: '',
+					matched: [],
+					locale: 'en',
+					labels: { executable: 'x', symlink: 'y' }
+				}
+			});
+		});
+	});
+	expect(outcome).toEqual({ nodes: 2 });
 });

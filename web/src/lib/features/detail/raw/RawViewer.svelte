@@ -4,6 +4,7 @@
 	// strings are cut with "Show all", long lists with a count, and depth is limited. Not mounted in
 	// the drawer yet (no endpoint serves an info dict); the dev harness and tests use it.
 	import IconCaretRight from '~icons/ph/caret-right';
+	import { showBidi } from '$lib/util/bidi';
 	import { m } from '$lib/paraglide/messages.js';
 
 	interface Props {
@@ -32,7 +33,12 @@
 	const entries = (v: object): [string, unknown][] =>
 		Array.isArray(v) ? v.map((x, i) => [String(i), x]) : Object.entries(v);
 	const scalar = (v: unknown): string =>
-		typeof v === 'string' ? JSON.stringify(v) : v === undefined ? 'undefined' : String(v);
+		typeof v === 'string' ? showBidi(JSON.stringify(v)) : v === undefined ? 'undefined' : String(v);
+	/** A key as shown: bidi controls made visible, long keys cut. */
+	const shown = (k: string) => {
+		const t = showBidi(k);
+		return t.length > 80 ? t.slice(0, 80) + '…' : t;
+	};
 </script>
 
 {#snippet node(v: unknown, name: string, path: string, depth: number)}
@@ -50,7 +56,7 @@
 					class="size-(--icon-size-row) {isOpen ? 'rotate-90' : ''}"
 					aria-hidden="true"
 				/>
-				<span>{name}</span>
+				<span>{shown(name)}</span>
 				<span class="text-muted-text"
 					>{Array.isArray(v) ? `[${list.length}]` : `{${list.length}}`}</span
 				>
@@ -63,7 +69,7 @@
 				{:else}
 					<ul>
 						{#each more.has(path) ? list : list.slice(0, maxItems) as [k, child] (k)}
-							{@render node(child, k, `${path}.${k}`, depth + 1)}
+							{@render node(child, k, `${path}\u0001${k}`, depth + 1)}
 						{/each}
 					</ul>
 					{#if !more.has(path) && list.length > maxItems}
@@ -78,7 +84,7 @@
 				{/if}
 			{/if}
 		{:else if typeof v === 'string' && v.length > maxString && !full.has(path)}
-			<span>{name}: {JSON.stringify(v.slice(0, maxString))}…</span>
+			<span>{shown(name)}: {showBidi(JSON.stringify(v.slice(0, maxString)))}…</span>
 			<span class="text-muted-text"> ({m.detail_raw_truncated({ count: String(v.length) })})</span>
 			<button
 				type="button"
@@ -88,7 +94,7 @@
 				{m.detail_raw_show_all()}
 			</button>
 		{:else}
-			<span>{name}: {scalar(v)}</span>
+			<span>{shown(name)}: {scalar(v)}</span>
 		{/if}
 	</li>
 {/snippet}

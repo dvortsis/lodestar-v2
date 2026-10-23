@@ -27,9 +27,11 @@ describe('Summary (swarm fields)', () => {
 			hit: null
 		});
 		expect(text('detail-seeders')).toMatch(/^≈\s*120$/);
+		expect(text('detail-leechers')).toMatch(/^≈\s*4$/);
 		unmount();
 		render(Summary, { detail: torrentDetail({ seeders_approx: false }), hit: null });
 		expect(text('detail-seeders')).toBe('120');
+		expect(text('detail-leechers')).toBe('4');
 	});
 	it('labels suspect seeders with text and an icon', () => {
 		render(Summary, { detail: torrentDetail({ swarm_suspect: true }), hit: null });

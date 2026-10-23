@@ -45,6 +45,9 @@
 				data-testid="open-b"
 				onclick={() => openDetail(B, { replace: true })}>Swap to torrent B</button
 			>
+			<button type="button" class="btn" data-testid="push-b" onclick={() => openDetail(B)}
+				>Open torrent B (no replace)</button
+			>
 			<button type="button" class="btn" data-testid="close" onclick={closeDetail}>Close</button>
 		</div>
 		<section aria-labelledby="h-raw" class="flex flex-col gap-2">

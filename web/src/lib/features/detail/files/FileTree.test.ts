@@ -26,17 +26,25 @@ const detail = (total: number, held = 500) =>
 class FakeWorker {
 	static made: Array<{ url: string; options: WorkerOptions | undefined; worker: FakeWorker }> = [];
 	onmessage: ((e: MessageEvent) => void) | null = null;
+	onerror: ((e: Event) => void) | null = null;
+	onmessageerror: ((e: Event) => void) | null = null;
 	terminated = false;
+	static mode: 'ok' | 'crash' | 'manual' = 'ok';
+	/** Replies held back in 'manual' mode, released one by one. */
+	held: Array<() => void> = [];
+	posted: WorkerRequest[] = [];
 	private builder = createTreeBuilder();
 	constructor(url: URL | string, options?: WorkerOptions) {
 		FakeWorker.made.push({ url: String(url), options, worker: this });
+		if (FakeWorker.mode === 'crash') queueMicrotask(() => this.onerror?.(new Event('error')));
 	}
 	postMessage(message: WorkerRequest) {
+		this.posted.push(message);
 		const out = this.builder.handle(message);
-		if (out)
-			queueMicrotask(
-				() => !this.terminated && this.onmessage?.({ data: out.reply } as MessageEvent)
-			);
+		if (!out || FakeWorker.mode === 'crash') return;
+		const deliver = () => !this.terminated && this.onmessage?.({ data: out.reply } as MessageEvent);
+		if (FakeWorker.mode === 'manual') this.held.push(deliver);
+		else queueMicrotask(deliver);
 	}
 	terminate() {
 		this.terminated = true;
@@ -47,6 +55,7 @@ beforeAll(() => stubLayout());
 beforeEach(() => {
 	get.mockReset();
 	FakeWorker.made = [];
+	FakeWorker.mode = 'ok';
 	vi.stubGlobal('Worker', FakeWorker);
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -183,5 +192,49 @@ describe('FileTree', () => {
 		});
 		await waitFor(() => expect(rows()).toHaveLength(1));
 		expect(rows()[0]!.textContent).toContain('other.txt');
+	});
+
+	it('falls back to a main-thread build when the worker fails, never showing "no files"', async () => {
+		FakeWorker.mode = 'crash';
+		get.mockResolvedValue({ files: [], offset: 500, total: 2500 });
+		render(FileTree, { detail: detail(2500, 500) });
+		await waitFor(() => expect(root().dataset.treeWorker).toBe('false'), { timeout: 10_000 });
+		await waitFor(() => expect(rows().length).toBeGreaterThan(0), { timeout: 10_000 });
+		expect(FakeWorker.made[0]!.worker.terminated).toBe(true);
+		expect(screen.queryByTestId('detail-file-tree-empty')).toBeNull();
+	});
+
+	it('keeps one build in flight and folds pages that arrive meanwhile into the next', async () => {
+		FakeWorker.mode = 'manual';
+		get.mockImplementation(async (_p: string, o: { query: { offset: number } }) => ({
+			files: files(1000, o.query.offset),
+			offset: o.query.offset,
+			total: 3500
+		}));
+		render(FileTree, { detail: detail(3500, 500) });
+		const { worker } = FakeWorker.made[0]!;
+		await waitFor(() => expect(get).toHaveBeenCalledTimes(3), { timeout: 10_000 });
+		await waitFor(() => expect(root().getAttribute('aria-busy')).toBe('false'), {
+			timeout: 10_000
+		});
+		const builds = () => worker.posted.filter((m) => m.type === 'build').length;
+		// three pages and the first batch arrived while the first build was still out: one build posted
+		expect(builds()).toBe(1);
+		worker.held.shift()!(); // the first reply releases exactly one more build, for everything since
+		await waitFor(() => expect(builds()).toBe(2), { timeout: 10_000 });
+		worker.held.shift()!();
+		await waitFor(() => expect(rows().length).toBeGreaterThan(0), { timeout: 10_000 });
+		expect(builds()).toBe(2);
+	});
+
+	it('shows names with bidirectional controls as markers', async () => {
+		const spoof = torrentDetail({
+			file_list: [{ path: 'invoice\u202Efdp.exe', size: 1, attrs: [] }],
+			file_list_total: 1
+		});
+		render(FileTree, { detail: spoof });
+		await waitFor(() => expect(rows()).toHaveLength(1));
+		expect(rows()[0]!.textContent).toContain('invoice<U+202E>fdp.exe');
+		expect(rows()[0]!.textContent).not.toContain('\u202E');
 	});
 });

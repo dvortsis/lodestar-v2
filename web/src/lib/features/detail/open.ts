@@ -11,7 +11,7 @@ export interface OpenOptions {
 	hit?: SearchHit;
 	/** Where focus goes on close (the invoking row). */
 	returnFocus?: () => HTMLElement | null | undefined;
-	/** Replace the history entry (j/k moving through results) instead of pushing one. */
+	/** Replace the history entry even with no drawer open. A drawer that is already open always replaces. */
 	replace?: boolean;
 }
 
@@ -23,7 +23,9 @@ export function openDetail(hash: string, options: OpenOptions = {}) {
 	if (options.returnFocus) returnTarget = options.returnFocus;
 	// The query string rides along so the mounted search page keeps reading its query.
 	const url = `${resolve('/t/[hash]', { hash })}${page.url.search}`;
-	if (options.replace && page.state.detail) {
+	// One history entry per drawer session: a second torrent replaces the first, so Back or Esc
+	// always leaves the drawer.
+	if (page.state.detail || options.replace) {
 		// eslint-disable-next-line svelte/no-navigation-without-resolve -- resolve() above, plus the query
 		replaceState(url, { detail: { hash } });
 	} else {

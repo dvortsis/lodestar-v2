@@ -1,6 +1,7 @@
 // Turns the server's decoded file list into the Tree's flat, pre-ordered nodes. Pure: no DOM and no
 // Svelte, so the same code runs in the worker (tree.worker.ts) and in the tests.
 import { formatBytes } from '$lib/format';
+import { showBidi } from '$lib/util/bidi';
 import type { FlatNode } from '$lib/ui/lists/tree-model';
 
 export interface FileInput {
@@ -110,7 +111,7 @@ export function buildNodes(files: readonly FileInput[], options: BuildOptions): 
 			nodes.push({
 				id: d.id,
 				depth,
-				name: d.name,
+				name: showBidi(d.name),
 				dir: true,
 				size: formatBytes(d.size, options.locale)
 			});
@@ -125,7 +126,7 @@ export function buildNodes(files: readonly FileInput[], options: BuildOptions): 
 			const node: FlatNode = {
 				id: f.id,
 				depth,
-				name: f.name,
+				name: showBidi(f.name),
 				dir: false,
 				size: extras ? `${extras} · ${bytes}` : bytes
 			};
