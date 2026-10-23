@@ -6,9 +6,7 @@
 	import IconButton from '$lib/ui/controls/IconButton.svelte';
 	import Field from '$lib/ui/fields/Field.svelte';
 	import Toggle from '$lib/ui/fields/Toggle.svelte';
-	import Mono from '$lib/ui/labels/Mono.svelte';
-	import type { MenuItem } from '$lib/ui/overlays/Menu.svelte';
-	import { untrack, type Component } from 'svelte';
+	import { untrack } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import IconRestart from '~icons/ph/arrows-clockwise';
 	import IconMenu from '~icons/ph/dots-three';
@@ -19,8 +17,9 @@
 	import Control from './Control.svelte';
 	import LazyControl from './LazyControl.svelte';
 	import { lazyPart } from './lazy.svelte';
-	import { automaticNumber, automaticValue, estimatePart } from './display';
-	import type { SettingsForm } from './form.svelte';
+	import FieldConflict from './FieldConflict.svelte';
+	import FieldSaved from './FieldSaved.svelte';
+	import { loadedPreview, type SettingsForm } from './form.svelte';
 	import { fieldHelp, fieldLabel } from './messages';
 	import { fieldAnchor } from './schema';
 	import type { FieldKey } from './types';
@@ -49,7 +48,6 @@
 	const hasAuto = $derived(spec.auto !== undefined && !spec.writeOnly);
 	let manual = $state(false);
 	const automatic = $derived(hasAuto && !manual && f.value === spec.auto);
-	const effective = $derived(automaticValue(f));
 	// A `<label for>` only where one control takes the id: radio groups, segmented controls, a
 	// secret and registered widgets are labelled by the label's id instead.
 	const singleControl = $derived(
@@ -72,39 +70,20 @@
 		manual = !on;
 		if (on) form.set(key, spec.auto);
 		else {
-			const n = automaticNumber(f);
+			const n = Preview.part?.automaticNumber(f);
 			// Pre-filled with the effective value; empty (and invalid) when there's none.
 			form.set(key, n ?? (typeof spec.auto === 'number' ? '' : f.value));
 		}
 	}
 
 	const readOnly = $derived(f.locked && f.env === null);
-	const menu = $derived<MenuItem[]>([
-		...(f.source === 'db' && !f.locked && !spec.writeOnly
-			? [{ id: 'reset', label: m.settings_form_menu_reset() }]
-			: []),
-		{ id: 'link', label: m.settings_form_menu_copy_link() },
-		...(spec.config || spec.env ? [{ id: 'keys', label: m.settings_form_menu_show_keys() }] : [])
-	]);
 	let showKeys = $state(false);
-	// A conflict and what a save did come with the edit chunk, when they first show.
-	const edit = () => import('./edit');
-	const Conflict = lazyPart(() => edit().then((mod) => mod.FieldConflict));
-	const Saved = lazyPart(() => edit().then((mod) => mod.FieldSaved));
-	$effect(() => Conflict.want(f.conflict));
-	$effect(() => Saved.want(f.savedRecently || f.undoUntil));
 
 	// The menu loads when it's first opened; until then a plain button stands in for its trigger.
-	type FieldMenuProps = {
-		items: MenuItem[];
-		label: string;
-		onSelect: (id: string) => void;
-		open?: boolean;
-	};
-	let FieldMenu = $state<Component<FieldMenuProps, object, 'open'>>();
+	let menuParts = $state<typeof import('./menu')>();
 	let menuOpen = $state(false);
 	async function openMenu() {
-		FieldMenu ??= (await import('./FieldMenu.svelte')).default;
+		menuParts ??= await import('./menu');
 		menuOpen = true;
 	}
 
@@ -130,15 +109,9 @@
 		} else if (id === 'keys') showKeys = !showKeys;
 	}
 
-	const estimates = $derived(
-		(f.preview?.estimates ?? []).flatMap((e) => {
-			const part = estimatePart(e);
-			return part ? [part] : [];
-		})
-	);
-	// With Automatic on, its one estimate is shown beside the switch instead.
-	const previewParts = $derived(automatic && effective ? [] : estimates);
-	const warnings = $derived(f.preview?.warnings ?? []);
+	// What a preview says loads with the preview's code, which every preview has loaded.
+	const Preview = lazyPart(() => import('./preview'), loadedPreview);
+	$effect(() => Preview.want(f.preview));
 </script>
 
 <div id={fieldAnchor(key)} class="ls-field flex flex-col gap-2" data-field={key}>
@@ -159,9 +132,9 @@
 						<span class="ls-marker" role="img" aria-label={m.setting_changed()}></span>
 					{/if}
 				</span>
-				{#if FieldMenu}
-					<FieldMenu
-						items={menu}
+				{#if menuParts}
+					<menuParts.FieldMenu
+						field={f}
 						onSelect={onMenu}
 						label={m.settings_form_menu_label({ label })}
 						bind:open={menuOpen}
@@ -189,10 +162,8 @@
 							disabled={f.locked}
 							onchange={(e) => setAutomatic(e.currentTarget.checked)}
 						/>
-						{#if automatic && effective}
-							<span class="text-small text-muted-text" data-testid="automatic-value">
-								{m.settings_form_automatic_value({ value: effective })}
-							</span>
+						{#if automatic && f.preview && Preview.part}
+							<Preview.part.FieldPreview field={f} automatic part="automatic" />
 						{/if}
 					</div>
 				{/if}
@@ -201,7 +172,7 @@
 						{@const Widget = choice.component}
 						<Widget {form} {key} {controlProps} {dense} />
 					{:else if choice.builtin === 'secret'}
-						<LazyControl widget="secret" {form} {key} {controlProps} {label} {dense} />
+						<LazyControl builtin="secret" {form} {key} {controlProps} {label} {dense} />
 					{:else}
 						<Control
 							{form}
@@ -218,27 +189,14 @@
 		{/snippet}
 	</Field>
 
-	{#if previewParts.length || warnings.length}
-		<p class="flex flex-wrap items-center gap-x-4 gap-y-1 text-small text-muted-text">
-			{#each previewParts as p (p.testid)}
-				<span data-testid={p.testid}>
-					{p.text}
-					{#if p.mono}<Mono>{p.mono}</Mono>{/if}
-				</span>
-			{/each}
-			{#each warnings as w (w.code)}
-				<span class="inline-flex items-center gap-1 text-warning">
-					<IconWarning class="size-(--icon-size-row) shrink-0" aria-hidden="true" />
-					<span class="text-base-content">{w.message}</span>
-				</span>
-			{/each}
-		</p>
+	{#if f.preview && Preview.part}
+		<Preview.part.FieldPreview field={f} {automatic} part="lines" />
 	{/if}
 
-	{#if f.conflict && Conflict.part}
+	{#if f.conflict}
 		<div class="flex flex-wrap items-center gap-2 text-small" data-testid="conflict">
 			<IconWarning class="size-(--icon-size-row) shrink-0 text-warning" aria-hidden="true" />
-			<Conflict.part {form} {key} />
+			<FieldConflict {form} {key} />
 		</div>
 	{/if}
 
@@ -252,14 +210,14 @@
 	{#if f.pendingReset}
 		<p class="flex items-center gap-1 text-small text-muted-text">
 			<IconRestart class="size-(--icon-size-row) shrink-0" aria-hidden="true" />
-			{m.settings_form_pending_reset()}
+			<FieldSaved {form} {key} part="reset" />
 		</p>
 	{/if}
 
 	<!-- Status line: only what applies (§10.10.4). -->
 	<div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-small text-muted-text">
 		{#if f.savedRecently}
-			{#if Saved.part}<Saved.part {form} {key} part="saved" />{/if}
+			<FieldSaved {form} {key} part="saved" />
 		{:else if spec.restartRequired && !f.locked}
 			<span class="inline-flex items-center gap-1">
 				<IconRestart class="size-(--icon-size-row) shrink-0" aria-hidden="true" />
@@ -298,22 +256,13 @@
 				{m.setting_file()}
 			</span>
 		{/if}
-		{#if f.undoUntil && Saved.part}
-			<Saved.part {form} {key} part="undo" />
+		{#if f.undoUntil}
+			<FieldSaved {form} {key} part="undo" />
 		{/if}
 	</div>
 
-	{#if showKeys}
-		<dl class="grid grid-cols-2 gap-x-4 gap-y-1 text-small" data-testid="field-keys">
-			{#if spec.config}
-				<dt class="text-muted-text">{m.settings_form_config_key()}</dt>
-				<dd><Mono>{spec.config}</Mono></dd>
-			{/if}
-			{#if spec.env}
-				<dt class="text-muted-text">{m.settings_form_env_var()}</dt>
-				<dd><Mono>{spec.env}</Mono></dd>
-			{/if}
-		</dl>
+	{#if showKeys && menuParts}
+		<menuParts.FieldKeys {spec} />
 	{/if}
 </div>
 

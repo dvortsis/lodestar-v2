@@ -4,7 +4,7 @@
 import { formatCount } from '$lib/format';
 import { currentLocale } from '$lib/i18n/locale.svelte';
 import { m } from '$lib/paraglide/messages.js';
-import { unitText } from './messages';
+import { unitText } from './units';
 import type { FieldSpec } from './types';
 import { JsonDraft, RESET, type Staged } from './values';
 

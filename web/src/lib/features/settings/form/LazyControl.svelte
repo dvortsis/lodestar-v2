@@ -1,32 +1,30 @@
 <script lang="ts">
 	// A control that loads on demand (`controls.svelte.ts`). Until it arrives, a hidden box of
-	// the height it renders at when empty holds its place, so nothing below moves.
+	// the height it renders at holds its place, so nothing below moves.
 	import { m } from '$lib/paraglide/messages.js';
 	import {
 		controlFailed,
 		controlOf,
+		lazyOf,
 		loadControl,
-		type LazyControlProps,
-		type LazyWidget
+		type LazyControlProps
 	} from './controls.svelte';
 
-	interface Props extends LazyControlProps {
-		widget: LazyWidget;
-	}
+	let props: LazyControlProps = $props();
 
-	let { widget, ...props }: Props = $props();
-
-	const Loaded = $derived(controlOf(widget));
+	const file = $derived(lazyOf(props.builtin) ?? 'json');
+	const Loaded = $derived(controlOf(file));
+	const options = $derived(props.form.field(props.key).spec.enum?.length ?? 0);
 	$effect(() => {
-		void loadControl(widget);
+		void loadControl(file);
 	});
 </script>
 
 {#if Loaded}
 	<Loaded {...props} />
-{:else if controlFailed(widget)}
+{:else if controlFailed(file)}
 	<p class="text-small text-error">{m.settings_form_chunk_failed()}</p>
-{:else if widget === 'json'}
+{:else if props.builtin === 'json'}
 	<!-- The JSON fallback's own textarea, four rows of Mono. -->
 	<textarea
 		class="ls-placeholder textarea w-full font-mono"
@@ -35,8 +33,16 @@
 		aria-hidden="true"
 		tabindex="-1"
 		data-placeholder></textarea>
+{:else if props.builtin === 'radio'}
+	<!-- One row per option, as the radio group lays them out. -->
+	<div class="ls-placeholder flex flex-col gap-1" aria-hidden="true" data-placeholder>
+		{#each { length: options }, i (i)}
+			<span class="ls-row text-body pointer-coarse:min-h-(--target-min)">&nbsp;</span>
+		{/each}
+	</div>
 {:else}
-	<!-- One control row: the chip list's input, or the secret's buttons (the same height). -->
+	<!-- One control row: an input, a select, a segmented control or a slider with its number,
+	     a chip list's input or a secret's buttons all share the control height. -->
 	<div
 		class="ls-placeholder input w-full {props.dense
 			? 'input-sm'
@@ -49,5 +55,9 @@
 <style>
 	.ls-placeholder {
 		visibility: hidden;
+	}
+	.ls-row {
+		display: block;
+		min-height: calc(var(--spacing) * 6);
 	}
 </style>

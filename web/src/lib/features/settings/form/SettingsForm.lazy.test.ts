@@ -1,6 +1,5 @@
-// SettingsForm with nothing preloaded: the bar and the summary come with the edit chunk, and
-// the summary takes focus once per failed save. `SettingsForm.test.ts` covers the rest with the
-// chunk in place; `SettingsForm.offline.test.ts` covers a chunk that can't load.
+// SettingsForm with nothing preloaded: the bar shows with the first edit, and the summary takes
+// focus once per failed save, not when it comes back while a field is fixed.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { createSettingsForm, type SettingsForm } from './form.svelte';

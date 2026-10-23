@@ -1,6 +1,6 @@
 <script lang="ts">
-	// A field's conflict (§10.10.5): what's saved now, Keep mine or Use theirs. Loaded by
-	// `SettingField.svelte` with the first conflict; its row and icon are the field's.
+	// A field's conflict (§10.10.5): what's saved now, Keep mine or Use theirs. Its row and icon
+	// are `SettingField.svelte`'s.
 	import Button from '$lib/ui/controls/Button.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import { displayValue } from './display';

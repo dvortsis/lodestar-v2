@@ -1,9 +1,7 @@
-// The save pipeline (§10.10.5), loaded with a form's first edit (or a stored draft, a `settings`
-// event, a save): what a section's first view never runs. Every save goes through it: busy →
-// nothing → validate → gates → one PATCH /settings for the whole batch (atomic across sections)
-// → apply, or map the refusal. Also Undo, the merge, drafts and validation, all on the form's
-// `Engine` (`form.svelte.ts`).
-import { ApiError, isAbort } from '$lib/api/client';
+// The save pipeline (§10.10.5). Every save goes through it: busy → nothing → validate → gates →
+// one PATCH /settings for the whole batch (atomic across sections) → apply, or map the refusal.
+// Also Undo, the merge, drafts and validation, all on the form's `Engine` (`form.svelte.ts`).
+import { ApiError, isAbort, latest } from '$lib/api/client';
 import { formatCount } from '$lib/format';
 import { currentLocale } from '$lib/i18n/locale.svelte';
 import { m } from '$lib/paraglide/messages.js';
@@ -11,24 +9,43 @@ import { planRestore, readDraft } from './draft';
 import { clearDraft } from './draft-store';
 import { UNDO_MS, type Engine, type Sections } from './form.svelte';
 import { merge, resolve as resolveField, sectionValues } from './merge';
-import { errorKey, errorSection } from './preview';
-import { patchBatch, previewBatch, type Batch } from './requests';
+import { getSection, patchBatch, previewBatch, type Batch } from './requests';
 import {
 	splitKey,
 	type Danger,
 	type FieldKey,
 	type SaveResult,
 	type SectionValues,
-	type SettingsPreview
+	type SettingsEvent,
+	type SettingsPreview,
+	type SettingValue
 } from './types';
 import { validate } from './validate';
-import { applySaved, batchKeys, buildBatch, discardAll, isDirty, stage } from './values';
+import { applySaved, batchKeys, buildBatch, discardAll } from './batch';
+import { isDirty, stage } from './values';
 
 /** Gates run in this order, strictest first; one cancel stops the save. */
 const GATE_ORDER: readonly Danger[] = ['security', 'destructive', 'privacy', 'disruptive'];
 
 export type Sent = { ok: true; values: Record<string, SectionValues>; batch: Batch };
 export type Failed = { ok: false; error: unknown; batch: Batch } | { ok: false; cancelled: true };
+
+/** The latest polite announcement for the form's live region. */
+export function announce(e: Engine, text: string) {
+	e.announcement = { id: ++e.announceSeq, text };
+}
+
+const gateFor = (e: Engine, d: Danger) => e.gates.get(d) ?? e.fallbackGates.get(d);
+
+/** The form's fields with something to save or to settle. */
+function dirtyKeys(e: Engine): FieldKey[] {
+	return e.specs
+		.filter((s) => {
+			const f = e.sections[s.section]?.fields[s.name];
+			return f !== undefined && (isDirty(f) || f.conflict !== undefined);
+		})
+		.map((s) => s.key);
+}
 
 function devError(message: string) {
 	if (import.meta.env.DEV) console.error(`settings: ${message}`);
@@ -41,6 +58,28 @@ export function recheck(e: Engine, key: FieldKey) {
 	const f = spec ? e.sec(section)?.fields[name] : undefined;
 	if (!spec || !f) return;
 	e.setFieldError(key, isDirty(f) ? validate(spec, f.mine) : undefined);
+}
+
+/** The note on a field whose edit the merge dropped because it's now locked. */
+export function lockedNote(saved: SettingValue): string {
+	return saved.env
+		? m.settings_form_note_locked_env({ variable: saved.env })
+		: m.settings_form_note_locked();
+}
+
+/** The section a refusal names, or the batch's only one. */
+export function errorSection(err: ApiError, batch: Batch): string | undefined {
+	if (err.section) return err.section;
+	const names = Object.keys(batch);
+	return names.length === 1 ? names[0] : undefined;
+}
+
+/** The form's field a refusal names, if any. */
+export function errorKey(e: Engine, err: ApiError, batch: Batch): FieldKey | undefined {
+	const section = errorSection(err, batch);
+	if (!section || !err.field) return undefined;
+	const key = `${section}.${err.field}` as FieldKey;
+	return e.byKey.has(key) ? key : undefined;
 }
 
 // --- drafts --------------------------------------------------------------------------------
@@ -60,7 +99,7 @@ export function offerDraft(e: Engine) {
 		return;
 	}
 	e.draftData = d;
-	e.draftOffer = { fields: plan.fields, dropped: plan.dropped };
+	e.draft = { fields: plan.fields, dropped: plan.dropped };
 }
 
 export function restoreDraft(e: Engine) {
@@ -68,15 +107,15 @@ export function restoreDraft(e: Engine) {
 	const plan = planRestore(e.draftData, e.sections, e.specOf);
 	e.sections = plan.sections;
 	e.draftData = null;
-	e.draftOffer = null;
-	if (plan.conflicts.length) e.announce(m.settings_form_announce_conflicts());
+	e.draft = null;
+	if (plan.conflicts.length) announce(e, m.settings_form_announce_conflicts());
 	e.writeNow();
 	e.schedulePreview();
 }
 
 export function dropDraft(e: Engine) {
 	e.draftData = null;
-	e.draftOffer = null;
+	e.draft = null;
 	clearDraft(e.id);
 	e.writeNow();
 }
@@ -92,7 +131,7 @@ export function discard(e: Engine) {
 	e.previewErrors = {};
 	e.formErrors = [];
 	clearTimeout(e.draftTimer);
-	if (e.useDrafts && !e.draftOffer) clearDraft(e.id);
+	if (e.useDrafts && !e.draft) clearDraft(e.id);
 	if (e.status === 'save-error' || e.status === 'offline') e.status = 'ready';
 	e.saveError = undefined;
 	e.schedulePreview();
@@ -140,7 +179,7 @@ export function mergeCurrent(
 	if (removed) {
 		said.push(m.settings_form_announce_removed({ count: formatCount(removed, currentLocale()) }));
 	}
-	if (said.length) e.announce(said.join(' '));
+	if (said.length) announce(e, said.join(' '));
 	e.scheduleDraft();
 	e.schedulePreview();
 }
@@ -156,6 +195,41 @@ function clearSecrets(e: Engine) {
 		next[spec.section] = stage(s, spec.name, undefined, spec);
 	}
 	if (next) e.sections = next;
+}
+
+// --- events --------------------------------------------------------------------------------
+
+function slotFor(e: Engine, section: string) {
+	let slot = e.fetchSlots.get(section);
+	if (!slot) e.fetchSlots.set(section, (slot = latest()));
+	return slot;
+}
+
+/**
+ * Refetches a section and merges it. `force` also applies the same revision (env and read-only
+ * changes don't move it) and says nothing about unchanged-looking updates.
+ */
+export async function refetch(e: Engine, section: string, force: boolean): Promise<void> {
+	const v = await slotFor(e, section).run((signal) => getSection(section, signal));
+	if (e.destroyed) return;
+	const s = e.sec(section);
+	if (!s) return;
+	if (e.inFlight?.has(section)) {
+		// Our own save's response is authoritative; look again after it.
+		e.held.set(section, Math.max(e.held.get(section) ?? 0, v.revision));
+		return;
+	}
+	if (v.revision < s.revision || (v.revision === s.revision && !force)) return;
+	mergeCurrent(e, { [section]: v }, force ? 'silent' : 'event');
+}
+
+/** A newer `settings` event: held during our own save, else refetched. */
+export function received(e: Engine, ev: SettingsEvent) {
+	if (e.inFlight?.has(ev.section)) {
+		e.held.set(ev.section, Math.max(e.held.get(ev.section) ?? 0, ev.revision));
+		return;
+	}
+	void e.refetch(ev.section);
 }
 
 // --- sending -------------------------------------------------------------------------------
@@ -356,7 +430,7 @@ async function saveNow(e: Engine): Promise<SaveResult> {
 	}
 	e.formErrors = [];
 	if (e.conflicts.length) {
-		e.announce(m.settings_form_announce_conflicts());
+		announce(e, m.settings_form_announce_conflicts());
 		return { ok: false, reason: 'conflict' };
 	}
 	const batch = buildBatch(e.sections, e.inForm);
@@ -401,12 +475,13 @@ async function saveNow(e: Engine): Promise<SaveResult> {
 			e.status = 'saved';
 			e.saveError = undefined;
 			if (e.useDrafts) {
-				if (e.dirtyKeys().length === 0) {
+				if (dirtyKeys(e).length === 0) {
 					clearTimeout(e.draftTimer);
-					if (!e.draftOffer) clearDraft(e.id);
+					if (!e.draft) clearDraft(e.id);
 				} else e.writeNow();
 			}
-			e.announce(
+			announce(
+				e,
 				restart.length ? m.settings_form_announce_saved_restart() : m.settings_form_announce_saved()
 			);
 			e.schedulePreview();
@@ -425,7 +500,7 @@ export async function runGates(
 ): Promise<SaveResult | undefined> {
 	const kinds = GATE_ORDER.filter((d) => keys.some((k) => e.byKey.get(k)?.danger === d));
 	if (kinds.length === 0) return undefined;
-	const missing = kinds.filter((d) => !e.gateFor(d));
+	const missing = kinds.filter((d) => !gateFor(e, d));
 	if (missing.length) {
 		const fields = keys.filter((k) => missing.includes(e.byKey.get(k)!.danger!));
 		if (import.meta.env.DEV)
@@ -445,7 +520,7 @@ export async function runGates(
 		const fields = keys.filter((k) => e.byKey.get(k)!.danger === d);
 		let ok = false;
 		try {
-			ok = await e.gateFor(d)!({ fields, preview: p });
+			ok = await gateFor(e, d)!({ fields, preview: p });
 		} catch {
 			ok = false;
 		}
@@ -475,7 +550,7 @@ export async function undo(e: Engine): Promise<SaveResult> {
 			if (err instanceof ApiError && err.code === 'stale_revision') {
 				// Never merge an Undo: say so and show what's there now.
 				endUndo(e);
-				e.announce(m.settings_form_announce_undo_stale());
+				announce(e, m.settings_form_announce_undo_stale());
 				for (const s of sent) void e.refetch(s, true);
 				return { ok: false, reason: 'conflict' };
 			}
@@ -487,7 +562,7 @@ export async function undo(e: Engine): Promise<SaveResult> {
 			.filter((s) => e.sections[s.section]?.restart.includes(s.name))
 			.map((s) => s.key);
 		e.status = 'ready';
-		e.announce(m.settings_form_announce_undone());
+		announce(e, m.settings_form_announce_undone());
 		e.schedulePreview();
 		return { ok: true, restart: [] };
 	});
@@ -507,7 +582,7 @@ export async function removeSecret(e: Engine, key: FieldKey): Promise<SaveResult
 			return 'cancelled' in r ? { ok: false, reason: 'cancelled' } : refused(e, r.error, r.batch);
 		applyResponse(e, r.batch, r.values);
 		e.savedRecently = {};
-		e.announce(m.settings_form_announce_secret_removed());
+		announce(e, m.settings_form_announce_secret_removed());
 		return { ok: true, restart: [] };
 	});
 }

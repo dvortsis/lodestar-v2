@@ -3,7 +3,7 @@
 	// typed: text that isn't a number is staged as is, so validation can say so.
 	import Input from '$lib/ui/fields/Input.svelte';
 	import type { SettingsForm } from './form.svelte';
-	import { unitText } from './messages';
+	import { unitText } from './units';
 	import type { FieldKey } from './types';
 	import type { FieldControlProps } from './widgets';
 

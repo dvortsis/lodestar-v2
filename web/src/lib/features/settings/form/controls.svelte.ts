@@ -1,6 +1,6 @@
-// The built-in controls a section's first view rarely needs (secrets, chip lists, the JSON
-// fallback) load per type, the first time a field of that type renders or a form lists one.
-// Until then `LazyControl.svelte` holds their space.
+// Every built-in control but the toggle and the text input loads per type: the first time a
+// field of that type renders, or as soon as a form knows its fields (`SettingsForm.svelte`
+// starts them while the values load). Until then `LazyControl.svelte` holds their space.
 // The Map and Set are bookkeeping nothing renders; `loaded` is the reactive state.
 /* eslint-disable svelte/prefer-svelte-reactivity */
 import type { Component } from 'svelte';
@@ -14,21 +14,30 @@ export interface LazyControlProps {
 	key: FieldKey;
 	controlProps: FieldControlProps;
 	label: string;
+	/** The control `widgetFor` picked (one file serves segmented, radio and select). */
+	builtin: BuiltinWidget;
 	dense?: boolean;
 }
 
 const LOADERS: Record<string, () => Promise<{ default: Component<LazyControlProps> }>> = {
+	number: () => import('./NumberControl.svelte'),
+	slider: () => import('./SliderControl.svelte'),
+	choice: () => import('./ChoiceControl.svelte'),
 	secret: () => import('./SecretControl.svelte'),
 	chips: () => import('./ChipsControl.svelte'),
 	json: () => import('./JsonControl.svelte')
 };
-export type LazyWidget = 'secret' | 'chips' | 'json';
+export type LazyWidget = 'number' | 'slider' | 'choice' | 'secret' | 'chips' | 'json';
 
 const loaded = $state<Partial<Record<LazyWidget, Component<LazyControlProps>>>>({});
 const failed = $state<Partial<Record<LazyWidget, true>>>({});
 const loading = new Map<LazyWidget, Promise<void>>();
 
-export const isLazy = (w: BuiltinWidget): w is LazyWidget => Object.hasOwn(LOADERS, w);
+/** The file that renders a built-in control; undefined for the toggle and the text input. */
+export function lazyOf(w: BuiltinWidget): LazyWidget | undefined {
+	if (w === 'segmented' || w === 'radio' || w === 'select') return 'choice';
+	return Object.hasOwn(LOADERS, w) ? (w as LazyWidget) : undefined;
+}
 
 /** Starts loading a control, once. */
 export function loadControl(w: LazyWidget): Promise<void> {
@@ -57,6 +66,9 @@ export const controlFailed = (w: LazyWidget) => failed[w] === true;
 /** Starts loading the controls these widget choices need. */
 export function loadControls(choices: Iterable<WidgetChoice>): Promise<void> {
 	const wanted = new Set<LazyWidget>();
-	for (const c of choices) if ('builtin' in c && isLazy(c.builtin)) wanted.add(c.builtin);
+	for (const c of choices) {
+		const w = 'builtin' in c ? lazyOf(c.builtin) : undefined;
+		if (w) wanted.add(w);
+	}
 	return Promise.all([...wanted].map(loadControl)).then(() => {});
 }

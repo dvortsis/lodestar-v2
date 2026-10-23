@@ -2,20 +2,20 @@
 	// Everything a form needs that's tied to a component's lifetime (§10.10.5): the error summary,
 	// the draft and network banners, the one polite live region, the save bar, ⌘/Ctrl+S, the leave
 	// guard, the `settings` subscription and the default disruptive confirmation. The screen puts
-	// its groups and `SettingField`s in `children`. The bar, the summary and the questions load
-	// when they're first needed.
+	// its groups and `SettingField`s in `children`.
 	import { beforeNavigate, goto } from '$app/navigation';
-	import { events } from '$lib/state/events.svelte';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
-	import { formatCount } from '$lib/format';
-	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import { onDestroy, untrack, type Snippet } from 'svelte';
 	import { loadControls } from './controls.svelte';
-	import { lazyPart } from './lazy.svelte';
+	import DraftBanner from './DraftBanner.svelte';
+	import ErrorSummary from './ErrorSummary.svelte';
+	import FormNotice from './FormNotice.svelte';
+	import SaveBar from './SaveBar.svelte';
 	import { preloadSettingsForm, type SettingsForm } from './form.svelte';
-	import { hardNavigate, leaveDecision } from './leave';
+	import { leaveDecision } from './leave';
+	import { askDisruptive, askToLeave } from './questions';
 	import type { FieldKey } from './types';
 	import { widgetFor } from './widgets';
 
@@ -55,26 +55,15 @@
 				form.status === 'offline' ||
 				form.undoUntil !== null)
 	);
-	const count = $derived(formatCount(form.dirtyCount, currentLocale()));
 
-	// From the edit chunk, which the form loads with the first edit.
-	const edit = () => import('./edit');
-	const BarPart = lazyPart(() => edit().then((mod) => mod.SaveBar));
-	const SummaryPart = lazyPart(() => edit().then((mod) => mod.ErrorSummary));
-	const NoticePart = lazyPart(() => edit().then((mod) => mod.FormNotice));
 	const notice = $derived(form.status === 'offline' || form.status === 'save-error');
-	$effect(() => BarPart.want(barShown));
-	$effect(() => SummaryPart.want(summaryShown));
-	$effect(() => NoticePart.want(notice));
-	// The edit chunk didn't load: nothing more can be saved from this page until a reload.
-	const partFailed = $derived(BarPart.failed || SummaryPart.failed || NoticePart.failed);
 
-	// After the first view, while the browser is idle: the edit chunk (and instant mode), so the
-	// first edit finds it in place, even if the connection drops meanwhile.
+	// Instant mode loads with the first change; once the browser is idle after the first view it
+	// loads anyway, so the first change finds it in place.
 	const shown = $derived(form.status !== 'loading' && form.status !== 'load-error');
 	$effect(() => {
-		if (!shown) return;
-		const go = () => void preloadSettingsForm(form.mode === 'instant').catch(() => {});
+		if (!shown || form.mode !== 'instant') return;
+		const go = () => void preloadSettingsForm().catch(() => {});
 		if (typeof requestIdleCallback !== 'function') {
 			const t = setTimeout(go, 500);
 			return () => clearTimeout(t);
@@ -113,17 +102,25 @@
 	// --- the default disruptive confirmation (§10.10.7) --------------------------------------
 
 	// A fallback: a screen's own disruptive handler (Network's lockout dialog, §10.10.6) wins.
-	$effect(() =>
-		form.defaultGate('disruptive', async (c) =>
-			(await edit()).askDisruptive(form, c, asking.signal)
-		)
-	);
+	$effect(() => form.defaultGate('disruptive', (c) => askDisruptive(form, c, asking.signal)));
 
 	// --- events ------------------------------------------------------------------------------
 
-	$effect(() =>
-		events.on('settings', (e) => form.received(e), { onResync: () => void form.resync() })
-	);
+	// The events stream loads after the first view: nothing has changed elsewhere before it's open.
+	$effect(() => {
+		let off: (() => void) | undefined;
+		let gone = false;
+		void import('$lib/state/events.svelte').then(({ events }) => {
+			if (gone) return;
+			off = events.on('settings', (e) => form.received(e), {
+				onResync: () => void form.resync()
+			});
+		});
+		return () => {
+			gone = true;
+			off?.();
+		};
+	});
 
 	// --- ⌘/Ctrl+S ----------------------------------------------------------------------------
 
@@ -141,46 +138,20 @@
 		if (!e.repeat) void save();
 	}
 
-	// --- the bar never covers the focused field (§10.10.5) -----------------------------------
-
-	let barEl = $state<HTMLElement>();
-	function onfocusin(e: FocusEvent) {
-		if (!barEl || !(e.target instanceof HTMLElement) || barEl.contains(e.target)) return;
-		const target = e.target.getBoundingClientRect();
-		const top = barEl.getBoundingClientRect().top;
-		// The ramp's 4 (16 px at the default root size) of air between the control and the bar.
-		const air = parseFloat(getComputedStyle(document.documentElement).fontSize);
-		const hidden = target.bottom + air - top;
-		if (hidden > 0) window.scrollBy({ top: hidden });
-	}
-
 	$effect(() => {
 		if (!shortcut) return;
 		let off: (() => void) | undefined;
 		let gone = false;
 		// Loaded on demand, as the shell does (W9): the registry never enters a static import.
-		void import('$lib/keys').then(({ keys }) => {
-			if (gone) return;
-			const scope = `settings-form:${form.id}`;
-			const pop = keys.pushScope(scope);
-			let unregister: (() => void) | undefined;
-			try {
-				unregister = keys.register({
-					id: `settings.save.${form.id}`,
-					title: () => m.settings_form_save(),
-					keys: ['mod+s'],
-					scope,
-					allowInInput: true,
-					run: () => void save()
-				});
-			} catch {
-				// Another form on the page registered first; this one still saves from its own keys.
-			}
-			off = () => {
-				unregister?.();
-				pop();
-			};
-		});
+		void import('./save-key')
+			.then(({ registerSaveKey }) => registerSaveKey(form.id, () => void save()))
+			.then(
+				(unregister) => {
+					if (gone) unregister();
+					else off = unregister;
+				},
+				() => {}
+			);
 		return () => {
 			gone = true;
 			off?.();
@@ -205,34 +176,15 @@
 
 	/** Asks Save / Discard / Keep editing, then continues to `to` the way the user was going. */
 	async function confirmLeave(to: URL, unload: boolean) {
-		let parts: Awaited<ReturnType<typeof edit>>;
-		try {
-			parts = await edit();
-		} catch {
-			// The dialog can't load: leave as a full page load, so the browser's own prompt asks.
-			hardNavigate(to.href);
-			return;
-		}
-		const answer = await parts.askLeave(count, asking.signal);
-		if (answer === 'save') {
-			// Nothing to save any more (a merge or ⌘S settled it meanwhile) is as good as saved.
-			const r = await save();
-			if (!r.ok && r.reason !== 'nothing') return;
-		} else if (answer === 'discard') form.discard();
-		else return;
-		// Another site, or a link that reloads the page: the router can't take it there. Nothing is
-		// unsaved by now, so the unload passes the guard without a bypass.
-		if (unload || to.origin !== location.origin) {
-			hardNavigate(to.href);
-			return;
-		}
-		bypass = true;
-		try {
-			// eslint-disable-next-line svelte/no-navigation-without-resolve -- the router's own target, already resolved
-			await goto(to.href);
-		} finally {
-			bypass = false;
-		}
+		await askToLeave(form, to, unload, asking.signal, async (href) => {
+			bypass = true;
+			try {
+				// eslint-disable-next-line svelte/no-navigation-without-resolve -- the router's own target, already resolved
+				await goto(href);
+			} finally {
+				bypass = false;
+			}
+		});
 	}
 </script>
 
@@ -241,10 +193,9 @@
 	class:ls-form-bar={barShown}
 	role="presentation"
 	{onkeydown}
-	{onfocusin}
 >
-	{#if summaryShown && form.errors.length && SummaryPart.part}
-		<SummaryPart.part
+	{#if summaryShown && form.errors.length}
+		<ErrorSummary
 			{form}
 			focusId={summaryFocus}
 			focused={summaryFocused}
@@ -254,42 +205,16 @@
 	{/if}
 
 	{#if form.draft}
-		<Banner kind="info" title={m.settings_form_draft_title()}>
-			<span data-testid="draft-text"
-				>{form.draft.dropped
-					? m.settings_form_draft_dropped({
-							count: formatCount(form.draft.dropped, currentLocale())
-						})
-					: m.settings_form_draft_body()}</span
-			>
-			{#snippet action()}
-				<div class="flex gap-2">
-					<Button dense onclick={() => form.dropDraft()}>{m.settings_form_discard()}</Button>
-					<Button dense variant="primary" onclick={() => form.restoreDraft()}
-						>{m.settings_form_restore()}</Button
-					>
-				</div>
-			{/snippet}
-		</Banner>
+		<DraftBanner {form} />
 	{/if}
 
-	{#if partFailed}
-		<Banner kind="warning">
-			<span data-testid="part-failed">{m.settings_form_chunk_failed()}</span>
-			{#snippet action()}
-				<Button dense onclick={() => location.reload()}>{m.settings_form_reload()}</Button>
-			{/snippet}
-		</Banner>
-	{/if}
-
-	{#if notice && NoticePart.part}
-		<NoticePart.part {form} />
+	{#if notice}
+		<FormNotice {form} />
 	{/if}
 
 	{#if form.status === 'loading'}
 		<p class="text-muted-text" aria-busy="true">{m.settings_form_loading()}</p>
 	{:else if form.status === 'load-error'}
-		<!-- Inline: a form that couldn't load may not reach the edit chunk either. -->
 		<Banner kind="error">
 			{m.settings_form_load_error()}
 			{#snippet action()}
@@ -305,13 +230,8 @@
 		{#key form.announcement?.id}{form.announcement?.text ?? ''}{/key}
 	</div>
 
-	{#if barShown && BarPart.part}
-		<BarPart.part
-			{form}
-			signal={asking.signal}
-			ondiscard={() => (summaryShown = false)}
-			bind:el={barEl}
-		/>
+	{#if barShown}
+		<SaveBar {form} signal={asking.signal} ondiscard={() => (summaryShown = false)} />
 	{/if}
 </div>
 

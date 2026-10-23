@@ -1,6 +1,6 @@
 <script lang="ts">
 	// The banner after a save that couldn't reach the server, or that it refused with an error
-	// (§10.10.5), with Retry. Part of the edit chunk, which every save has loaded.
+	// (§10.10.5), with Retry.
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import { formatCount } from '$lib/format';

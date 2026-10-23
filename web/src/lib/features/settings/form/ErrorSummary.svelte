@@ -1,7 +1,7 @@
 <script lang="ts">
 	// The error summary (§10.10.5), shown after a save that failed with errors: each links to its
-	// field. Loaded by `SettingsForm.svelte` when it first shows. It takes focus once per failed
-	// save, never because it came back while the user fixes a field (an error that returns).
+	// field. It takes focus once per failed save, never because it came back while the user fixes
+	// a field (an error that returns, which mounts it again).
 	import { m } from '$lib/paraglide/messages.js';
 	import { tick, untrack } from 'svelte';
 	import type { SettingsForm } from './form.svelte';

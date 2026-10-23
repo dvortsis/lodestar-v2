@@ -1,7 +1,10 @@
 // The form's own questions (§10.10.5, §10.10.7): discard, leave, and the default disruptive
 // confirmation. Loaded when one is first asked.
 import { m } from '$lib/paraglide/messages.js';
+import { formatCount } from '$lib/format';
+import { currentLocale } from '$lib/i18n/locale.svelte';
 import { ask } from './dialogs';
+import { hardNavigate } from './leave';
 import type { SettingsForm } from './form.svelte';
 import { fieldLabel } from './messages';
 import type { GateContext } from './types';
@@ -20,7 +23,31 @@ export const askDiscard = (count: string, signal: AbortSignal) =>
 		signal
 	);
 
-export const askLeave = (count: string, signal: AbortSignal) =>
+/**
+ * Asks Save / Discard / Keep editing before leaving with unsaved changes, then continues to
+ * `to` the way the user was going: `navigate` (the router, past the guard) or a full page load.
+ */
+export async function askToLeave(
+	form: SettingsForm,
+	to: URL,
+	unload: boolean,
+	signal: AbortSignal,
+	navigate: (href: string) => Promise<void>
+): Promise<void> {
+	const answer = await askLeave(formatCount(form.dirtyCount, currentLocale()), signal);
+	if (answer === 'save') {
+		// Nothing to save any more (a merge or ⌘S settled it meanwhile) is as good as saved.
+		const r = await form.save();
+		if (!r.ok && r.reason !== 'nothing') return;
+	} else if (answer === 'discard') form.discard();
+	else return;
+	// Another site, or a link that reloads the page: the router can't take it there. Nothing is
+	// unsaved by now, so the unload passes the guard without a bypass.
+	if (unload || to.origin !== location.origin) hardNavigate(to.href);
+	else await navigate(to.href);
+}
+
+const askLeave = (count: string, signal: AbortSignal) =>
 	ask(
 		{
 			title: m.settings_form_leave_title(),

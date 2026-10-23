@@ -4,23 +4,9 @@
 import { ApiError, isAbort } from '$lib/api/client';
 import type { Engine } from './form.svelte';
 import { previewBatch, type Batch } from './requests';
-import type { FieldKey } from './types';
-import { buildBatch, isLocked, JsonDraft } from './values';
-
-/** The section a refusal names, or the batch's only one. */
-export function errorSection(err: ApiError, batch: Batch): string | undefined {
-	if (err.section) return err.section;
-	const names = Object.keys(batch);
-	return names.length === 1 ? names[0] : undefined;
-}
-
-/** The form's field a refusal names, if any. */
-export function errorKey(e: Engine, err: ApiError, batch: Batch): FieldKey | undefined {
-	const section = errorSection(err, batch);
-	if (!section || !err.field) return undefined;
-	const key = `${section}.${err.field}` as FieldKey;
-	return e.byKey.has(key) ? key : undefined;
-}
+import { errorKey } from './saving';
+import { buildBatch } from './batch';
+import { isLocked, JsonDraft } from './values';
 
 function previewBody(e: Engine): Batch {
 	const batch = buildBatch(
@@ -60,3 +46,6 @@ export async function runPreview(e: Engine) {
 		e.previewErrors = key && err instanceof ApiError ? { [key]: err.message } : {};
 	}
 }
+
+export { default as FieldPreview } from './FieldPreview.svelte';
+export { automaticNumber } from './display';
