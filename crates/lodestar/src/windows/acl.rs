@@ -300,7 +300,9 @@ pub fn private_sddl(own_sid: Option<&str>) -> String {
 }
 
 /// The `icacls` runs that take a folder over, each a list of arguments
-/// after the path. `/L` acts on a link itself, never its target, and
+/// after the path: the owner, then a reset to inherited entries only
+/// (dropping every explicit one, which `/grant:r` alone leaves), then the
+/// protected ACL. `/L` acts on a link itself, never its target, and
 /// there's no `/T`: nothing beneath the folder is touched.
 pub fn take_over_steps(own_sid: Option<&str>) -> Vec<Vec<String>> {
     let strings = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
@@ -312,7 +314,11 @@ pub fn take_over_steps(own_sid: Option<&str>) -> Vec<Vec<String>> {
     ]);
     grant.extend(own_sid.map(|sid| format!("*{sid}:(OI)(CI)F")));
     grant.extend(strings(&["/L", "/Q"]));
-    vec![strings(&["/setowner", "*S-1-5-32-544", "/L", "/Q"]), grant]
+    vec![
+        strings(&["/setowner", "*S-1-5-32-544", "/L", "/Q"]),
+        strings(&["/reset", "/L", "/Q"]),
+        grant,
+    ]
 }
 
 /// The service SID in `sc showsid` output (its labels are translated; the
@@ -709,8 +715,9 @@ mod tests {
     fn takes_over_the_folder_alone() {
         let steps = take_over_steps(Some(OWN));
         assert_eq!(steps[0], ["/setowner", "*S-1-5-32-544", "/L", "/Q"]);
+        assert_eq!(steps[1], ["/reset", "/L", "/Q"]);
         assert_eq!(
-            steps[1],
+            steps[2],
             [
                 "/inheritance:r",
                 "/grant:r",
@@ -722,7 +729,7 @@ mod tests {
             ]
         );
         assert!(steps.iter().flatten().all(|a| a != "/T"));
-        assert_eq!(take_over_steps(None)[1].len(), 6);
+        assert_eq!(take_over_steps(None)[2].len(), 6);
         assert_eq!(
             private_sddl(Some(OWN)),
             "D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;S-1-5-80-1-2-3-4-5)"

@@ -66,7 +66,12 @@ where
 {
     use clap::Parser;
     let cli = crate::cli::Cli::try_parse_from(args).ok()?;
-    matches!(cli.command, None | Some(crate::cli::Command::Serve)).then_some(cli.config)
+    // `serve --fixture` serves test data offline: never a service start.
+    matches!(
+        cli.command,
+        None | Some(crate::cli::Command::Serve { fixture: None })
+    )
+    .then_some(cli.config)
 }
 
 #[cfg(windows)]
@@ -393,6 +398,7 @@ mod tests {
             command("--config c.toml serve"),
             Some(Some("c.toml".into()))
         );
+        assert_eq!(command("serve --fixture"), None);
         for other in [
             "healthcheck",
             "backup",
