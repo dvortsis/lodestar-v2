@@ -38,10 +38,6 @@
 </script>
 
 {#snippet rows()}
-	this={ordered ? 'ol' : 'ul'}
-	class="ins-list" aria-label={label}
-	data-testid={testid}
-	>
 	{#each items as item (item.key)}
 		<li class="ins-item" data-testid="{testid}-{item.key}">
 			<div class="ins-item-row">
