@@ -1,6 +1,6 @@
 // The query bar from the keyboard alone (S-search-1; §10.13, §10.16): `/` as the very first key
-// focuses the bar (the shell replays it once the key registry has loaded), then type, Enter, Tab
-// to a chip, Delete, focus to the next chip and then back to the bar, and Esc clears.
+// focuses the bar (the shell replays it once the key registry has loaded), then type, Enter, and
+// Esc clears (undo brings it back). The chips' Tab and Delete flow arrives with the strip.
 import type { Request } from '@playwright/test';
 import type { components } from '../src/lib/api/schema';
 import { expect, test } from './support/test';
@@ -18,41 +18,11 @@ const toAst = (q: string): Ast => {
 		});
 	return of.length === 0 ? { op: 'all' } : of.length === 1 ? of[0]! : { op: 'and', of };
 };
-const print = (ast: Ast): string =>
-	(ast.op === 'and' ? ast.of : ast.op === 'all' ? [] : [ast])
-		.map((n) =>
-			n.op === 'word'
-				? n.word
-				: n.op === 'tag'
-					? `res:${n.any[0]}`
-					: n.op === 'ext'
-						? `ext:${n.any[0]}`
-						: ''
-		)
-		.join(' ');
-
-test('/ focuses the bar, Enter searches, chips go with Delete, Esc clears', async ({
-	page,
-	go,
-	mock,
-	kbd
-}) => {
+test('/ focuses the bar, Enter searches, Esc clears', async ({ page, go, mock, kbd }) => {
 	mock.on('parseQuery', (request: Request) => {
 		const q = new URL(request.url()).searchParams.get('q') ?? '';
 		return { ast: toAst(q), canonical: q.trim() };
 	});
-	mock.on('searchPost', (request: Request) => ({
-		canonical: print((request.postDataJSON() as { ast: Ast }).ast),
-		hits: [],
-		limit: 1,
-		next_cursor: null,
-		notices: [],
-		offset: 0,
-		stemmed: false,
-		took_ms: 1,
-		total: 0,
-		total_approx: false
-	}));
 	await go('/search');
 	const bar = page.getByRole('combobox', { name: 'Search torrents' });
 
@@ -66,22 +36,12 @@ test('/ focuses the bar, Enter searches, chips go with Delete, Esc clears', asyn
 		.poll(() => new URL(page.url()).searchParams.get('q'))
 		.toBe('lantern res:1080p ext:mkv');
 
-	const first = page.getByRole('button', { name: 'Remove filter: Resolution: 1080p' });
-	const second = page.getByRole('button', { name: 'Remove filter: Extension: .mkv' });
-	await kbd.tabTo(first);
-	await kbd.press('Delete');
-	await expect(first).toHaveCount(0);
-	await expect(second).toBeFocused(); // the next chip
-	await expect.poll(() => new URL(page.url()).searchParams.get('q')).toBe('lantern ext:mkv');
-	await kbd.press('Delete');
-	await expect(second).toHaveCount(0);
-	await expect(bar).toBeFocused(); // no chips left: back to the bar
-	await expect(bar).toHaveText('lantern');
+	await expect(bar).toBeFocused();
 
 	await kbd.press('Escape');
 	await expect(bar).toHaveText('');
 	await kbd.press('Control+z'); // undo brings it back
-	await expect(bar).toHaveText('lantern');
+	await expect(bar).toHaveText('lantern res:1080p ext:mkv');
 });
 
 test('/ focuses the bar again from elsewhere on the page, with the caret at the end', async ({
@@ -94,7 +54,7 @@ test('/ focuses the bar again from elsewhere on the page, with the caret at the 
 	await go('/search?q=bunny');
 	const bar = page.getByRole('combobox', { name: 'Search torrents' });
 	await expect(bar).toHaveText('bunny');
-	await kbd.tabTo(page.getByRole('button', { name: 'Syntax' }));
+	await kbd.tabTo(page.getByRole('link', { name: 'Discover' })); // focus elsewhere on the page
 	await kbd.press('/');
 	await expect(bar).toBeFocused();
 	await page.keyboard.type('x');
