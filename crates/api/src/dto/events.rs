@@ -66,16 +66,23 @@ pub struct EventsQuery {
     pub topics: Option<String>,
 }
 
-/// `event: torrents`: torrents became searchable. Commits close together
-/// may arrive as one event.
+/// `event: torrents`: torrents you can see became searchable. Commits
+/// close together may arrive as one event. While "Show adult content" is
+/// off, Adult torrents are left out entirely: not counted, and a commit
+/// of only those sends no event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({ "added": 12, "max_id": 48211 }))]
 pub struct TorrentsEvent {
-    /// Torrents new to the index since the previous `torrents` event;
-    /// can be 0 when only `max_id` moved on.
+    /// Torrents new to the index since the previous `torrents` event,
+    /// leaving out Adult while it's hidden; at least 1.
     pub added: u64,
-    /// The highest torrent id searchable now.
-    pub max_id: i64,
+    /// The highest torrent id searchable now, while Adult is shown.
+    /// **Null while Adult is hidden:** ids are sequential, so any real id
+    /// sent beside an exact `added` would show, in its gap from the last
+    /// one, how many hidden torrents arrived. To find what's new, use the
+    /// newest id among your own results (or a cursor), not this.
+    #[schema(required = true)]
+    pub max_id: Option<i64>,
 }
 
 /// `event: crawler`: the same counters as the status page and
@@ -183,6 +190,9 @@ pub enum ResyncReason {
     Malformed,
     /// The client fell behind and events were skipped.
     Lagged,
+    /// "Show adult content" was turned off after events that counted
+    /// Adult were sent; they're withheld rather than replayed.
+    Visibility,
 }
 
 /// `event: resync`: events were missed; refetch what the page shows, then
@@ -258,7 +268,7 @@ mod tests {
     fn the_frame_name_and_data_match_the_tagged_schema() {
         let e = Event::Torrents(TorrentsEvent {
             added: 3,
-            max_id: 9,
+            max_id: Some(9),
         });
         let tagged = serde_json::to_value(&e).unwrap();
         assert_eq!(tagged["event"], e.name());
@@ -267,6 +277,12 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&e.data()).unwrap()
         );
         assert_eq!(e.data(), r#"{"added":3,"max_id":9}"#);
+        // Hidden Adult: the key stays, null.
+        let hidden = Event::Torrents(TorrentsEvent {
+            added: 3,
+            max_id: None,
+        });
+        assert_eq!(hidden.data(), r#"{"added":3,"max_id":null}"#);
         let r = Event::Resync(ResyncEvent {
             reason: ResyncReason::Lagged,
         });

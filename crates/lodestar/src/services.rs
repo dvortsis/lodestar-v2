@@ -232,6 +232,7 @@ impl Services {
                 commits: serving.as_ref().map(|s| s.commit_hook().clone()),
                 crawler: Some(Arc::new(crawler)),
                 rebuild: search.clone(),
+                adult: api.adult.clone(),
             },
         );
         let listener = TcpListener::bind(config.http.bind)
