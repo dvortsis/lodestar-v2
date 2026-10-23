@@ -1,3 +1,4 @@
+import { HASHES, response } from '../../src/lib/features/compare/testing';
 import type { OpenApiMock } from '../mock/openapi-mock';
 
 // Every route the app has today, with sample params for the dynamic ones. A new route slice adds
@@ -27,7 +28,12 @@ export const ROUTES: RouteCase[] = [
 	{ name: 'alert-detail', path: '/alerts/1' },
 	{ name: 'insights', path: '/insights' },
 	{ name: 'insights-stage', path: '/insights/harvest' },
-	{ name: 'compare', path: '/compare?h=aaaa,bbbb' },
+	{
+		name: 'compare',
+		path: `/compare?h=${HASHES[0]},${HASHES[1]}`,
+		heading: 'Compare',
+		mock: (m) => m.on('compareTorrents', response(2))
+	},
 	{
 		name: 'login',
 		path: '/login',
