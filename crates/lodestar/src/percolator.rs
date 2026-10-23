@@ -158,11 +158,19 @@ pub fn run_once(
             torrent_ids: &m.torrent_ids,
         });
     }
+    let mut failed = None;
     for (end, hits) in &by_end {
-        run.created
-            .extend(store.record_percolation(*end, hits, now)?);
+        match store.record_percolation(*end, hits, now) {
+            Ok(created) => run.created.extend(created),
+            Err(e) => {
+                failed = Some(e);
+                break;
+            }
+        }
     }
     run.alerts = run.created.len();
+    // Announced even when a later transaction failed: the earlier ones
+    // are committed and already show in the list and the badge.
     if let Some((hub, adult)) = hub
         && !run.created.is_empty()
     {
@@ -171,6 +179,9 @@ pub fn run_once(
             // `announce` logged it; the alerts are recorded either way.
             Err(_) => tracing::warn!("percolator: announcing new alerts failed"),
         }
+    }
+    if let Some(e) = failed {
+        return Err(e.into());
     }
     if run.searches > 0 || run.unreadable > 0 {
         let mut per: BTreeMap<i64, usize> = BTreeMap::new();
@@ -276,9 +287,15 @@ pub fn spawn(
             more = match ran {
                 Ok((Ok(run), took)) => {
                     if run.alerts > 0 {
+                        let mut searches: Vec<i64> =
+                            run.created.iter().map(|a| a.saved_search_id).collect();
+                        searches.dedup();
+                        searches.sort_unstable();
+                        searches.dedup();
                         tracing::info!(
-                            "percolator: {} new alerts across {} saved searches in {} ms",
+                            "percolator: {} new alerts across {} saved searches ({} events) in {} ms",
                             run.alerts,
+                            searches.len(),
                             run.events,
                             took.as_millis()
                         );
@@ -698,70 +715,82 @@ mod tests {
     }
 
     /// The log names saved-search ids and counts, never a query or a
-    /// torrent name.
+    /// torrent name. The capture is the process's global subscriber, so
+    /// every thread's events reach it (a thread-local one races other
+    /// tests' scoped subscribers over each callsite's cached interest);
+    /// the secrets are spelled so no other test logs them.
     #[test]
     fn logs_carry_no_query_or_name() {
+        use std::sync::OnceLock;
+
         use tracing_subscriber::fmt::MakeWriter;
 
-        #[derive(Clone, Default)]
-        struct Buf(Arc<Mutex<Vec<u8>>>);
+        static LOG: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+        struct Buf;
         impl std::io::Write for Buf {
             fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().unwrap().extend_from_slice(b);
+                LOG.lock().unwrap().extend_from_slice(b);
                 Ok(b.len())
             }
             fn flush(&mut self) -> std::io::Result<()> {
                 Ok(())
             }
         }
-        impl<'a> MakeWriter<'a> for Buf {
+        struct MakeBuf;
+        impl<'a> MakeWriter<'a> for MakeBuf {
             type Writer = Buf;
             fn make_writer(&'a self) -> Buf {
-                self.clone()
+                Buf
             }
         }
-
-        let buf = Buf::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::TRACE)
-            .with_writer(buf.clone())
-            .finish();
-        tracing::subscriber::with_default(subscriber, || {
-            let mut s = setup(0);
-            add(&mut s.store, &["Secret.Torrent.Name".to_string()]);
-            index_all(&s.index, &mut s.store);
-            save(&mut s.store, "mine", "Secret", 0);
-            s.store
-                .create_saved_search(
-                    &SavedSearchInput {
-                        name: "broken",
-                        query: "PrivateQueryText",
-                        ast: r#"{"op":"PrivateQueryText"}"#,
-                        sort: None,
-                        alert: true,
-                        rss: false,
-                        channels: 0,
-                        paused: false,
-                    },
-                    0,
-                    0,
-                )
-                .unwrap();
-            let run = run_once(&s.index, &mut s.store, None, 1, &quick(), NOW).unwrap();
-            assert_eq!((run.alerts, run.unreadable), (1, 1));
-            prune(&mut s.store, 0);
+        static ONCE: OnceLock<()> = OnceLock::new();
+        ONCE.get_or_init(|| {
+            let subscriber = tracing_subscriber::fmt()
+                .with_ansi(false)
+                .with_max_level(tracing::Level::TRACE)
+                .with_writer(MakeBuf)
+                .finish();
+            tracing::subscriber::set_global_default(subscriber).expect("no other global");
         });
-        let log = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
-        assert!(log.contains("saved search 2"), "{log}");
-        assert!(log.contains("pruned 1"), "{log}");
-        for secret in ["Secret", "PrivateQueryText", "mine", "broken"] {
-            assert!(!log.contains(secret), "{secret} in {log}");
-        }
+
+        let mut s = setup(0);
+        add(&mut s.store, &["Zq7SecretTorrent.1080p".to_string()]);
+        index_all(&s.index, &mut s.store);
+        save(&mut s.store, "Zq7MineSearch", "Zq7SecretTorrent", 0);
+        let broken = s
+            .store
+            .create_saved_search(
+                &SavedSearchInput {
+                    name: "Zq7BrokenSearch",
+                    query: "Zq7PrivateQueryText",
+                    ast: r#"{"op":"Zq7PrivateQueryText"}"#,
+                    sort: None,
+                    alert: true,
+                    rss: false,
+                    channels: 0,
+                    paused: false,
+                },
+                0,
+                0,
+            )
+            .unwrap();
+        let run = run_once(&s.index, &mut s.store, None, 1, &quick(), NOW).unwrap();
+        assert_eq!((run.alerts, run.unreadable), (1, 1));
+        prune(&mut s.store, 0);
+        let log = String::from_utf8(LOG.lock().unwrap().clone()).unwrap();
+        assert!(
+            log.contains(&format!("saved search {broken} has a query")),
+            "{log}"
+        );
+        assert!(log.contains("pruned 1 old alerts"), "{log}");
+        // No name, query or torrent name: each holds `Zq7`.
+        assert!(!log.contains("Zq7"), "{log}");
     }
 
-    /// The task over a live index: a commit becomes alerts and an event
-    /// within the 5 s target (§3), here with 200 active searches; and
-    /// in fixture mode it never starts.
+    /// The task over a live index: a commit becomes alerts within the
+    /// 5 s target (§3), here with 200 active searches; and in fixture
+    /// mode it never starts. (What the events carry is tested with
+    /// `announce`, in the API's `tests/alerts.rs`.)
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_task_turns_commits_into_alerts_quickly() {
         use lodestar_api::events::{EventSources, EventsConfig};
