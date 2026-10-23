@@ -104,7 +104,12 @@ impl Store {
     /// end of `hour` (unix time / 3600, at least 1). Both columns only
     /// grow: an id at or below one already recorded changes nothing, and
     /// an hour before the latest recorded (a clock set back) is counted in
-    /// the latest instead. Returns whether it wrote.
+    /// the latest instead. Returns whether it wrote. The same upsert as
+    /// [`Store::record_searchable`]'s, which also counts what the range
+    /// made searchable; this one moves only the watermark. **It doesn't add
+    /// the range's imports to `insights_state.imported`**, so ids it covers
+    /// leave that total short (until `rollup --repair` recounts it): the
+    /// recorder uses `record_searchable`.
     pub fn record_index_watermark(&mut self, hour: i64, last_id: i64) -> Result<bool> {
         if hour < 1 || last_id < 0 {
             return Err(Error::Invalid(
@@ -112,19 +117,9 @@ impl Store {
             ));
         }
         let tx = crate::begin_write(&mut self.conn)?;
-        let (max_hour, max_id): (i64, i64) = tx.query_row(
-            "SELECT coalesce(max(hour), 0), coalesce(max(last_id), 0) FROM index_watermark_hour",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )?;
-        if last_id <= max_id {
+        if crate::insights::raise_watermark(&tx, hour, last_id, i64::MAX)?.is_none() {
             return Ok(false);
         }
-        tx.execute(
-            "INSERT INTO index_watermark_hour (hour, last_id) VALUES (?1, ?2)
-             ON CONFLICT (hour) DO UPDATE SET last_id = excluded.last_id",
-            params![hour.max(max_hour).max(1), last_id],
-        )?;
         tx.commit()?;
         Ok(true)
     }
