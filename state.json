@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T10:28:52Z",
+ "updated_at": "2026-10-23T10:39:30Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -1335,7 +1335,6 @@
   "percolate-cancel-scan": "Percolator: in-scan cancel only stops collecting, not the scorer (tantivy default_collect_segment has no early exit); use a scorer loop with fill_buffer like lease.rs and count raw docs; fix the B9 decisions-file claim (from B9 delta review)",
   "slices-yaml-B-log1b-system": "Runner PR: add crates/lodestar/src/system/** to B-log1b owns (B2c's system/{address,restart}.rs are in NOT_YET_SWEPT)",
   "B-log1b-extra": "B-log1b also: raw \" < > ` space in URL passwords, url::Url Debug password, planted index.json restricted:true (check owner/ACL), scrub_text quadratic on long lines, lint inline target-table log dep, restart.rs:173 exe path as Path field",
-  "events-proxy-heartbeat": "Fix /events heartbeat re-check: only checks cookie (auth.verify(&cookie)), so trusted-proxy sessions drop after ~15 s; re-check cookie or proxy like /logs/stream (from B-log2 brief)",
   "B-log1b-folding": "B-log1b: flood folding only folds identical lines, so distinct-line floods (new hash per DHT harvest) aren't reduced; high-volume events stay default_on: false until its bench decides"
  },
  "blocked_on_owner": [],
@@ -1390,6 +1389,7 @@
   "heartbeat-0838": "open: #121 B9 round 1, #119 B-log1 delta 2, #117 B2c windows (export test race; fix PR requested from B10b session), #92 P-release CI, #91 waits #92, #103/#48 owner",
   "fix-export-race": "2026-10-23T08:59:12Z #122 merged (reviewed APPROVE, CI green). Follow-up: export worker pacer wait doesn't select on tx.closed()",
   "slices-yaml-124": "2026-10-23T09:15:07Z #124 merged: B-update owns crates/update/** + fuzz target; B-log1b owns windows/**",
-  "heartbeat-0938": "open: #123 B11b (eba938a, round), #119 B-log1 (3542db1, round 3), #92 P-release (86910cf, round 1), #91 waits #92, #103 W9 + #48 M4 owner-blocked; running: B-update PR1; nothing new ready"
+  "heartbeat-0938": "open: #123 B11b (eba938a, round), #119 B-log1 (3542db1, round 3), #92 P-release (86910cf, round 1), #91 waits #92, #103 W9 + #48 M4 owner-blocked; running: B-update PR1; nothing new ready",
+  "fix-events-proxy": "2026-10-23T10:39:30Z runner PR #126 fix/events-proxy-heartbeat (heartbeat uses guard's logged_in; per-client cap for proxy sessions; regression test fails on main); reviewer running"
  }
 }
