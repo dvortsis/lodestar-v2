@@ -1,7 +1,8 @@
 //! `GET /events` (§9): the server-sent event stream. New torrents (from
-//! the live indexer's commit hook), crawler stats, rebuild progress and
-//! settings saves ([`EventHub::settings_saved`]) now; alerts (B9) and
-//! Insights deltas (B11a) are typed and reserved.
+//! the live indexer's commit hook), crawler stats, rebuild progress,
+//! settings saves ([`EventHub::settings_saved`]) and saved-search alerts
+//! ([`EventHub::alerts`], from the percolator); Insights deltas (B11a)
+//! are typed and reserved.
 //!
 //! **One hub per process.** [`EventHub::publish`] gives each event the id
 //! `<epoch>-<seq>` (a random per-process epoch, a monotonic sequence),
@@ -47,8 +48,8 @@ use utoipa::OpenApi;
 
 use crate::dto::error::ErrorEnvelope;
 use crate::dto::events::{
-    CrawlerEvent, Event, EventsQuery, RebuildEvent, RebuildPhase, ResyncEvent, ResyncReason,
-    SettingsEvent, Topic, TorrentsEvent,
+    AlertsEvent, CrawlerEvent, Event, EventsQuery, RebuildEvent, RebuildPhase, ResyncEvent,
+    ResyncReason, SettingsEvent, Topic, TorrentsEvent,
 };
 use crate::error::{ApiError, ApiResult};
 use crate::search::AdultVisibility;
@@ -511,6 +512,14 @@ impl EventHub {
             revision,
             section: section.to_string(),
         }))
+    }
+
+    /// Publishes one saved search's `alerts` event. `adult_shown` says
+    /// whether it was counted while Adult was shown: such an event is
+    /// withheld from clients once Adult is hidden, replay included, as a
+    /// `torrents` event is.
+    pub fn alerts(&self, event: AlertsEvent, adult_shown: bool) -> Option<String> {
+        self.publish_tagged(&Event::Alerts(event), adult_shown)
     }
 
     /// Takes a stream slot for `session`.
@@ -1293,6 +1302,38 @@ mod tests {
         );
         let feed = h.commits.as_ref().unwrap().1.clone();
         (h, feed)
+    }
+
+    /// `alerts` events are screened as `torrents` ones are: one counted
+    /// while Adult was shown is withheld from a replay once it's hidden.
+    #[tokio::test]
+    async fn alerts_made_while_adult_was_shown_are_withheld_once_hidden() {
+        let (show, _) = watch::channel(true);
+        let (h, _) = adult_hub(&show);
+        let e = AlertsEvent {
+            alert: 9,
+            matched: 2,
+            max_id: 30,
+            notify: true,
+            saved_search: 4,
+        };
+        h.alerts(e, true).unwrap();
+        show.send_replace(false);
+        h.alerts(AlertsEvent { matched: 1, ..e }, false).unwrap();
+        let start = format!("{}-0", h.epoch());
+        let mut back = h.subscribe(Topic::Alerts.bit(), Some(&start));
+        let got: Vec<_> = std::iter::from_fn(|| back.try_next()).collect();
+        let [Item::Resync(ResyncReason::Visibility), Item::Event(s)] = got.as_slice() else {
+            panic!("{got:?}");
+        };
+        let frame = std::str::from_utf8(&s.frame).unwrap();
+        assert!(frame.contains("event: alerts\n"), "{frame}");
+        assert!(frame.contains(r#""matched":1"#), "{frame}");
+        // Shown again, both replay.
+        show.send_replace(true);
+        let mut again = h.subscribe(Topic::Alerts.bit(), Some(&start));
+        assert_eq!(std::iter::from_fn(|| again.try_next()).count(), 2);
+        h.close();
     }
 
     /// Through the hub's own task, the setting read live from the same
