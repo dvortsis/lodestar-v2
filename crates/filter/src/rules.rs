@@ -67,7 +67,7 @@ impl ClassRules {
         if self.is_empty() {
             return None;
         }
-        doc.candidates(&self.list)
+        doc.candidates(&self.list, &[])
             .into_iter()
             .rev()
             .find(|&i| doc.matches_compiled(self.list.compiled(i).0, &[]))
