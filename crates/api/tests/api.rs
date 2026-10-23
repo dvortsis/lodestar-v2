@@ -372,6 +372,13 @@ async fn errors_share_one_envelope() {
         get("/api/v1/logs/catalog", None),
         get("/api/v1/logs", None),
         get("/api/v1/logs/stream", None),
+        get("/api/v1/logs/files", None),
+        get("/api/v1/logs/files/lodestar.jsonl", None),
+        get("/api/v1/logs/archive.zip", None),
+        Request::delete("/api/v1/logs/files")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"which":"all"}"#))
+            .unwrap(),
         Request::patch("/api/v1/settings/crawler")
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(r#"{"intensity":"low"}"#))
