@@ -11,8 +11,8 @@
   What it does (architecture section 11):
     - installs lodestar.exe to C:\Program Files\Lodestar
     - keeps data in C:\ProgramData\Lodestar (created on install, kept on uninstall)
-    - registers the "Lodestar" Windows service, started by hand for now (see README)
-    - opens 8090/tcp (web UI) and 6881/udp (DHT), program-scoped, private networks only
+    - registers the "Lodestar" Windows service (delayed automatic start) and starts it
+    - opens 6881/udp (DHT), program-scoped, private networks only; 8090/tcp (web UI) only if asked
     - Start-menu shortcut that opens the web UI
     - optional, off by default: a Windows Defender exclusion for the data folder
     - uninstall keeps the data unless run with REMOVE_DATA=1
@@ -50,6 +50,13 @@
     <Property Id="DEFENDER_EXCLUSION" Secure="yes" />
     <!-- `WEB_FIREWALL=1` also lets other PCs on private networks reach the web page (8090/tcp). -->
     <Property Id="WEB_FIREWALL" Secure="yes" />
+    <!-- An upgrade (also a silent one run by the updater) keeps the web rule if it was chosen
+         before: the FirewallWeb component writes this value, and the search below turns it back
+         into WEB_FIREWALL. -->
+    <Property Id="WEB_FIREWALL_PREV">
+      <RegistrySearch Id="WebFirewallPrev" Root="HKLM" Key="Software\Lodestar" Name="FirewallWeb" Type="raw" Win64="yes" />
+    </Property>
+    <SetProperty Id="WEB_FIREWALL" Value="1" After="AppSearch" Sequence="both">WEB_FIREWALL_PREV = "#1" AND NOT WEB_FIREWALL</SetProperty>
     <!-- `msiexec /x lodestar.msi REMOVE_DATA=1` also deletes the data folder. -->
     <Property Id="REMOVE_DATA" Secure="yes" />
 
@@ -105,7 +112,7 @@
                               ThirdFailureActionType="none" RestartServiceDelayInSeconds="60"
                               ResetPeriodInDays="1" />
         </ServiceInstall>
-        <ServiceControl Id="LodestarServiceControl" Name="Lodestar" Stop="both" Remove="uninstall" Wait="yes" />
+        <ServiceControl Id="LodestarServiceControl" Name="Lodestar" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
       </Component>
 
     </DirectoryRef>
@@ -161,8 +168,8 @@
          existing folder is a link, has a foreign owner, holds files Lodestar did
          not secure, or contains a link. The MSI's ACL is what the service later
          verifies (windows/acl.rs). See secure-datadir.ps1. -->
-    <CustomAction Id="SecureDataFolder" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="check"
-                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]secure-datadir.ps1&quot; -Path &quot;[DataFolderDir].&quot;" />
+    <CustomAction Id="SetSecureDataFolder" Property="SecureDataFolder" Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]secure-datadir.ps1&quot; -Path &quot;[DataFolderDir].&quot;" />
+    <CustomAction Id="SecureDataFolder" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Return="check" Impersonate="no" />
 
     <!-- Take privileges away from the service: with the defaults it also holds SeImpersonate
          and SeCreateGlobal, which turn a bug in the code that reads untrusted network data into
@@ -172,16 +179,16 @@
 
     <!-- Opt-in only: runs when the box is ticked. Failure (Defender off or managed by
          another product) does not stop the install. -->
-    <CustomAction Id="AddDefenderExclusion" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="ignore"
-                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;Add-MpPreference -ExclusionPath '[DataFolderDir].'&quot;" />
-    <CustomAction Id="RemoveDefenderExclusionRollback" Directory="TARGETDIR" Execute="rollback" Impersonate="no" Return="ignore"
-                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;Remove-MpPreference -ExclusionPath '[DataFolderDir].'&quot;" />
-    <CustomAction Id="RemoveDefenderExclusion" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="ignore"
-                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;Remove-MpPreference -ExclusionPath '[DataFolderDir].'&quot;" />
+    <CustomAction Id="SetAddDefenderExclusion" Property="AddDefenderExclusion" Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;Add-MpPreference -ExclusionPath '[DataFolderDir]'&quot;" />
+    <CustomAction Id="AddDefenderExclusion" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Return="ignore" Impersonate="no" />
+    <CustomAction Id="SetRemoveDefenderExclusionRollback" Property="RemoveDefenderExclusionRollback" Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;Remove-MpPreference -ExclusionPath '[DataFolderDir]'&quot;" />
+    <CustomAction Id="RemoveDefenderExclusionRollback" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="rollback" Return="ignore" Impersonate="no" />
+    <CustomAction Id="SetRemoveDefenderExclusion" Property="RemoveDefenderExclusion" Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;Remove-MpPreference -ExclusionPath '[DataFolderDir]'&quot;" />
+    <CustomAction Id="RemoveDefenderExclusion" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Return="ignore" Impersonate="no" />
 
     <!-- Only when asked: REMOVE_DATA=1 on the uninstall command line. -->
-    <CustomAction Id="RemoveDataFolder" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="ignore"
-                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]remove-datadir.ps1&quot; -Path &quot;[DataFolderDir].&quot;" />
+    <CustomAction Id="SetRemoveDataFolder" Property="RemoveDataFolder" Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]remove-datadir.ps1&quot; -Path &quot;[DataFolderDir].&quot;" />
+    <CustomAction Id="RemoveDataFolder" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Return="ignore" Impersonate="no" />
 
     <!-- SYSTEM runs scripts from, and the service runs the program from, the install folder, and a
          folder outside Program Files can be writable by other users. Only the default is allowed. -->
@@ -193,17 +200,24 @@
       <!-- A condition does not expand [Property] inside a quoted string, hence the property above. -->
       <Custom Action="WrongInstallFolder" After="SetDefaultInstallDir">NOT Installed AND NOT (INSTALLFOLDER = DEFAULTINSTALLDIR)</Custom>
       <Custom Action="ServicePrivileges" After="InstallServices">NOT Installed</Custom>
-      <!-- Also on Repair, which is how an administrator fixes a refused data folder. -->
-      <Custom Action="SecureDataFolder" After="ServicePrivileges">NOT (REMOVE="ALL")</Custom>
+      <!-- Also on Repair, which is how an administrator fixes a refused data folder. The scripts run
+           through WixQuietExec64, so no console window opens on a desktop and their output lands in
+           the MSI log. -->
+      <Custom Action="SetSecureDataFolder" After="ServicePrivileges">NOT (REMOVE="ALL")</Custom>
+      <Custom Action="SecureDataFolder" After="SetSecureDataFolder">NOT (REMOVE="ALL")</Custom>
       <!-- The exclusion goes in last, after the folder is known to be ours, and comes out again
            if a later step rolls the install back. -->
-      <Custom Action="RemoveDefenderExclusionRollback" After="SecureDataFolder">NOT Installed AND DEFENDER_EXCLUSION="1"</Custom>
-      <Custom Action="AddDefenderExclusion" After="RemoveDefenderExclusionRollback">NOT Installed AND DEFENDER_EXCLUSION="1"</Custom>
-      <Custom Action="RemoveDefenderExclusion" Before="RemoveFiles">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+      <Custom Action="SetRemoveDefenderExclusionRollback" After="SecureDataFolder">NOT Installed AND DEFENDER_EXCLUSION="1"</Custom>
+      <Custom Action="RemoveDefenderExclusionRollback" After="SetRemoveDefenderExclusionRollback">NOT Installed AND DEFENDER_EXCLUSION="1"</Custom>
+      <Custom Action="SetAddDefenderExclusion" After="RemoveDefenderExclusionRollback">NOT Installed AND DEFENDER_EXCLUSION="1"</Custom>
+      <Custom Action="AddDefenderExclusion" After="SetAddDefenderExclusion">NOT Installed AND DEFENDER_EXCLUSION="1"</Custom>
+      <Custom Action="SetRemoveDefenderExclusion" Before="RemoveDefenderExclusion">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+      <Custom Action="RemoveDefenderExclusion" Before="SetRemoveDataFolder">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+      <Custom Action="SetRemoveDataFolder" Before="RemoveDataFolder">REMOVE="ALL" AND REMOVE_DATA="1" AND NOT UPGRADINGPRODUCTCODE</Custom>
       <Custom Action="RemoveDataFolder" Before="RemoveFiles">REMOVE="ALL" AND REMOVE_DATA="1" AND NOT UPGRADINGPRODUCTCODE</Custom>
     </InstallExecuteSequence>
 
-    <!-- ===== Wizard: Welcome, Licence, Folder, Options (new), Ready ===== -->
+    <!-- ===== Wizard: Welcome, Licence, Options, Ready (no folder page) ===== -->
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
     <WixVariable Id="WixUILicenseRtf" Value="$(env.LODESTAR_LICENSE_RTF)" />
 

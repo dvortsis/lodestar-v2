@@ -467,9 +467,10 @@ jobs:
           sudo ln -s /opt/ziglang/zig /usr/local/bin/zig
           zig version
 
-      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2
-        with:
-          tool: cargo-zigbuild@0.24.0
+      # Built from source, like the Dockerfile does: no third-party binary goes into a release build.
+      - name: Install cargo-zigbuild
+        run: cargo install --locked cargo-zigbuild@0.24.0
+
 
       - name: Build
         # Without the `fixture` feature (`serve --fixture` test data): not for releases.
@@ -557,9 +558,11 @@ jobs:
           if (-not $wix) { throw 'WiX Toolset 3 is not on this runner image' }
           $wix.FullName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2
-        with:
-          tool: cargo-wix@0.3.9
+      # Built from source, not downloaded: this job builds and signs the Windows files.
+      - name: Install cargo-wix
+        shell: pwsh
+        run: cargo install --locked cargo-wix --version 0.3.9
+
 
       - name: MSI
         shell: pwsh
