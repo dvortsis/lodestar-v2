@@ -55,7 +55,7 @@
 </script>
 
 <div class="restarting" role="alertdialog" aria-modal="true" aria-labelledby="restarting-title">
-	<div class="restarting-card" data-testid="settings-restarting" data-phase={flow.phase}>
+	<div class="restarting-panel" data-testid="settings-restarting" data-phase={flow.phase}>
 		{#if flow.phase === 'timeout'}
 			<IconWarn class="restarting-icon" aria-hidden="true" />
 			<h2 id="restarting-title" class="text-title font-semibold">
@@ -104,7 +104,7 @@
 		padding: calc(var(--spacing) * 4);
 		background: var(--color-base-100);
 	}
-	.restarting-card {
+	.restarting-panel {
 		display: flex;
 		flex-direction: column;
 		align-items: flex-start;

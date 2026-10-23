@@ -6,7 +6,8 @@
 	import { m } from '$lib/paraglide/messages.js';
 	import { onMount, type Component } from 'svelte';
 	import type { Badge } from './badges';
-	import { GROUPS, type ResolvedScreen, type ScreenGroup } from './registry';
+	import { groupHeading } from './groups';
+	import { GROUPS, type ResolvedScreen } from './registry';
 
 	interface Props {
 		screens: readonly ResolvedScreen[];
@@ -16,14 +17,6 @@
 	}
 
 	let { screens, badges = {}, onnavigate }: Props = $props();
-
-	const heading: Record<ScreenGroup, () => string> = {
-		preferences: m.settings_ui_group_preferences,
-		crawling: m.settings_ui_group_crawling,
-		library: m.settings_ui_group_library,
-		connections: m.settings_ui_group_connections,
-		system: m.settings_ui_group_system
-	};
 
 	const groups = $derived(
 		GROUPS.map((g) => ({ group: g, items: screens.filter((s) => s.screen.group === g) })).filter(
@@ -43,7 +36,7 @@
 
 <nav aria-label={m.settings_ui_nav_label()} class="settings-nav" data-testid="settings-nav">
 	{#each groups as g (g.group)}
-		<h2 class="settings-nav-heading" id="settings-nav-{g.group}">{heading[g.group]()}</h2>
+		<h2 class="settings-nav-heading" id="settings-nav-{g.group}">{groupHeading[g.group]()}</h2>
 		<ul aria-labelledby="settings-nav-{g.group}">
 			{#each g.items as r (r.screen.id)}
 				{@const badge = badges[r.screen.id]}
@@ -122,7 +115,9 @@
 		font-weight: 600;
 	}
 	.settings-nav-link:focus-visible {
-		outline: var(--focus-ring-width) solid var(--color-primary);
+		outline-style: solid;
+		outline-width: var(--focus-ring-width);
+		outline-color: var(--color-primary);
 		outline-offset: calc(var(--focus-ring-offset) * -1);
 	}
 	.settings-nav-icon {

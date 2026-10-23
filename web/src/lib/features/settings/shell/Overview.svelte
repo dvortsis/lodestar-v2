@@ -16,6 +16,7 @@
 	import type { FieldKey } from '../form/types';
 	import { focusHeading } from './focus';
 	import SettingsNav from './SettingsNav.svelte';
+	import SettingsSearch from './SettingsSearch.svelte';
 	import { useSettings } from './state.svelte';
 
 	const settings = useSettings();
@@ -59,6 +60,8 @@
 		<h1 tabindex="-1" class="text-display font-semibold outline-none">{m.settings_ui_title()}</h1>
 		<p class="text-body text-muted-text">{m.settings_ui_overview_purpose()}</p>
 	</header>
+
+	{#if !settings.wide}<SettingsSearch />{/if}
 
 	{#if settings.systemStatus === 'failed'}
 		<!-- When the schema failed too, the layout's banner already offers Retry for both. -->

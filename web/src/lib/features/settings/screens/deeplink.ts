@@ -3,7 +3,7 @@
 // `getElementById`, never as a selector.
 import type { FieldKey } from '../form/types';
 
-/** How long the highlight stays; the stylesheet fades it, or holds an outline under reduced motion. */
+/** How long the highlight stays; the stylesheet fades it, or holds a static ring under reduced motion. */
 export const HIGHLIGHT_MS = 2000;
 
 /** The field a URL hash names, when this form has it. */

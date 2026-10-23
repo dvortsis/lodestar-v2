@@ -133,7 +133,9 @@
 		}
 	}
 	.settings-advanced-summary:focus-visible {
-		outline: var(--focus-ring-width) solid var(--color-primary);
+		outline-style: solid;
+		outline-width: var(--focus-ring-width);
+		outline-color: var(--color-primary);
 		outline-offset: var(--focus-ring-offset);
 	}
 	.settings-advanced-body {
@@ -142,9 +144,11 @@
 		gap: calc(var(--spacing) * 4);
 		margin-top: calc(var(--spacing) * 2);
 	}
-	/* A deep link's target: fades in, then out; under reduced motion it holds a static outline. */
+	/* A deep link's target: fades in, then out; under reduced motion it holds a static ring. */
 	:global([data-field][data-highlight]) {
-		outline: var(--focus-ring-width) solid var(--color-primary);
+		outline-style: solid;
+		outline-width: var(--focus-ring-width);
+		outline-color: var(--color-primary);
 		outline-offset: var(--focus-ring-offset);
 		animation: settings-highlight 2s var(--ease-out);
 	}

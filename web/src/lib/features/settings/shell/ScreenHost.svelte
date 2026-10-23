@@ -10,7 +10,6 @@
 	import Skeleton from '$lib/ui/feedback/Skeleton.svelte';
 	import { tick, type Component } from 'svelte';
 	import GeneratedScreen from '../screens/GeneratedScreen.svelte';
-	import NetworkScreen from '../screens/NetworkScreen.svelte';
 	import { focusHeading } from './focus';
 	import { useSettings } from './state.svelte';
 
@@ -20,11 +19,22 @@
 	const resolved = $derived(settings.registry.get(id));
 	const load = $derived(resolved?.screen.load);
 
-	/** Generated screens that add something of their own. */
-	const EXTRAS: Record<string, Component<{ resolved: NonNullable<typeof resolved> }>> = {
-		network: NetworkScreen
+	/** Generated screens that add something of their own, loaded with the screen. */
+	type Extra = Component<{ resolved: NonNullable<typeof resolved> }>;
+	const EXTRAS: Record<string, () => Promise<{ default: Component<never> }>> = {
+		network: () => import('../screens/NetworkScreen.svelte'),
+		general: () => import('../screens/GeneralScreen.svelte')
 	};
-	const Extras = $derived(EXTRAS[id]);
+	let Extras = $state.raw<Extra>();
+	$effect(() => {
+		const loader = Object.hasOwn(EXTRAS, id) ? EXTRAS[id] : undefined;
+		Extras = undefined;
+		if (!loader) return;
+		let live = true;
+		void loader().then((mod) => live && (Extras = mod.default as unknown as Extra));
+		return () => (live = false);
+	});
+	const wantsExtras = $derived(Object.hasOwn(EXTRAS, id));
 
 	let Loaded = $state.raw<Component>();
 	let failed = $state(false);
@@ -51,7 +61,10 @@
 		void settle();
 	});
 	const present = $derived(
-		resolved !== undefined && (load ? Loaded !== undefined : settings.status === 'ready')
+		resolved !== undefined &&
+			(load
+				? Loaded !== undefined
+				: settings.status === 'ready' && (!wantsExtras || Extras !== undefined))
 	);
 	$effect(() => {
 		if (present) void settle();
@@ -80,8 +93,8 @@
 	{:else if settings.status !== 'ready'}
 		<!-- A generated screen's fields come from the schema: wait for it (the layout offers Retry). -->
 		<div aria-busy={settings.status === 'loading'}><Skeleton lines={3} /></div>
-	{:else if Extras}
-		<Extras {resolved} />
+	{:else if wantsExtras}
+		{#if Extras}<Extras {resolved} />{:else}<Skeleton lines={3} />{/if}
 	{:else}
 		<GeneratedScreen {resolved} />
 	{/if}

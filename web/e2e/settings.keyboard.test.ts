@@ -66,4 +66,26 @@ test.describe('keyboard: settings', () => {
 		await expect.poll(() => system.posts).toEqual(['restart']);
 		await expect(page.getByTestId('settings-restart-banner')).toHaveCount(0, { timeout: 15_000 });
 	});
+
+	test('searches with / and chooses a result', async ({ page, go, kbd }) => {
+		await go('/settings/storage');
+		await expect(
+			page.getByRole('heading', { level: 1, name: 'Storage & retention' })
+		).toBeFocused();
+		await kbd.press('/');
+		const box = page.getByRole('combobox', { name: 'Search settings' });
+		await expect(box).toBeFocused();
+		await page.keyboard.type('fetch timeout');
+		await expect(page.getByRole('option').first()).toContainText('Fetch timeout');
+		await kbd.press('Enter');
+		await expect(page.getByLabel('Fetch timeout', { exact: true })).toBeFocused();
+	});
+
+	test('does not take / while typing in a field', async ({ page, go, kbd }) => {
+		await go('/settings/network');
+		await kbd.tabTo(page.getByLabel('Web address', { exact: true }), 80);
+		await page.keyboard.type('/');
+		await expect(page.getByLabel('Web address', { exact: true })).toBeFocused();
+		await expect(page.getByRole('combobox', { name: 'Search settings' })).not.toBeFocused();
+	});
 });

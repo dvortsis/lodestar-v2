@@ -18,6 +18,7 @@
 	import SettingsFormView from '../form/SettingsForm.svelte';
 	import type { ResolvedScreen } from '../shell/registry';
 	import { useSettings } from '../shell/state.svelte';
+	import ConfigDisclosure from './ConfigDisclosure.svelte';
 	import SettingsGroups from './SettingsGroups.svelte';
 
 	interface Props {
@@ -113,6 +114,7 @@
 				{changedOnly}
 				after={afterGroup}
 			/>
+			<ConfigDisclosure {form} specs={form.specs} />
 			{@render footer?.()}
 		</SettingsFormView>
 	{:else}

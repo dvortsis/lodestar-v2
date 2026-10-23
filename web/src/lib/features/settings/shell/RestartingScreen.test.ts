@@ -126,10 +126,10 @@ describe('the Restarting state', () => {
 		await vi.advanceTimersByTimeAsync(5_000);
 		expect(calls).toEqual([]);
 		expect(assign).not.toHaveBeenCalled();
-		const card = screen.getByTestId('settings-restarting');
-		expect(card.textContent).toContain('javascript:alert(1)');
-		expect(card.textContent).toContain('Open it yourself');
-		expect(card.querySelector('a')).toBeNull();
+		const panel = screen.getByTestId('settings-restarting');
+		expect(panel.textContent).toContain('javascript:alert(1)');
+		expect(panel.textContent).toContain('Open it yourself');
+		expect(panel.querySelector('a')).toBeNull();
 		expect(flow.phase).toBe('waiting');
 	});
 });

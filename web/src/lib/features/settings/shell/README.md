@@ -42,6 +42,10 @@ export const screen: SettingsScreen = {
 
 Screens live in `../screens/`: `GeneratedScreen.svelte`, `SettingsGroups.svelte` (the groups and Advanced, for hand-built screens too: put it inside your own `<SettingsForm>`, call its `reveal(key)` from `onReveal`, and `await loadSettingMessages(sections)` before creating the form), Network's reachability panel and lockout dialog.
 
+## Adding an Overview row
+
+A screen's `attention(ctx)` returns `AttentionItem`s (`severity`, one `action` with an `href` or a `run`); the shell runs every screen's provider in parallel, orders the rows and puts a "{n} problem(s)" badge on the screen of each `problem`. A provider that throws is skipped, never hiding the others. Keep providers cheap: they run on every Settings page load and after every `settings` event.
+
 ## Messages
 
 Server messages (labels, help, options, keywords, groups) are split by section and load on demand (`loadSettingMessages` in `form/messages.ts`; `form/message-map.gen.ts` writes the units). After adding a key to `messages/en.json`, run `node --experimental-strip-types src/lib/features/settings/form/message-map.gen.ts`. The screens' own strings are `settings_ui_*`.

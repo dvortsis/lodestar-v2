@@ -12,6 +12,7 @@
 	import type { Component, Snippet } from 'svelte';
 	import { flow } from './flow.svelte';
 	import SettingsNav from './SettingsNav.svelte';
+	import SettingsSearch from './SettingsSearch.svelte';
 	import { createSettingsState, provideSettings } from './state.svelte';
 
 	let { children }: { children: Snippet } = $props();
@@ -25,6 +26,38 @@
 			onResync: () => void settings.refreshSystem()
 		})
 	);
+
+	// `/` focuses the search box while on a Settings page. The key registry loads on demand (as the
+	// shell does), and its scope is popped with the page.
+	$effect(() => {
+		let off: (() => void) | undefined;
+		let gone = false;
+		void import('$lib/keys').then(({ keys }) => {
+			if (gone) return;
+			const pop = keys.pushScope('settings');
+			let unregister: (() => void) | undefined;
+			try {
+				unregister = keys.register({
+					id: 'settings.search.focus',
+					title: () => m.settings_ui_search_focus(),
+					keys: ['/'],
+					scope: 'settings',
+					palette: false,
+					run: () => document.getElementById('settings-search')?.focus()
+				});
+			} catch {
+				// Registered already (a hot reload); the page still works without the key.
+			}
+			off = () => {
+				unregister?.();
+				pop();
+			};
+		});
+		return () => {
+			gone = true;
+			off?.();
+		};
+	});
 
 	// The banners and the restarting state load only when there is something to show.
 	let Banners = $state.raw<Component>();
@@ -43,6 +76,7 @@
 <div class="settings-frame" data-wide={settings.wide || undefined}>
 	{#if settings.wide}
 		<div class="settings-pane">
+			<SettingsSearch />
 			<SettingsNav screens={settings.registry.screens} badges={settings.badges} />
 		</div>
 	{/if}

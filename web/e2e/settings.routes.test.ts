@@ -312,6 +312,174 @@ test.describe('restart and the address check', () => {
 	});
 });
 
+test.describe('search', () => {
+	test.use({ viewport: { width: 1366, height: 900 } });
+	test.beforeEach(async ({ mock }) => {
+		backendWith().attach(mock);
+		new SystemBackend().attach(mock);
+	});
+
+	test('jumps to an Advanced field and focuses it', async ({ page, go }) => {
+		await go('/settings/storage');
+		const box = page.getByRole('combobox', { name: 'Search settings' });
+		await box.fill('fetch timeout');
+		const result = page.getByRole('option').first();
+		await expect(result).toContainText('Fetch timeout');
+		await expect(result).toContainText('Crawling › Crawler › Advanced');
+		await result.click();
+		await expect(page).toHaveURL(/\/settings\/crawler(\?.*)?#crawler\.timeout_secs$/);
+		await expect(page.getByLabel('Fetch timeout', { exact: true })).toBeFocused();
+		await expect(page.getByTestId('advanced-fetching')).toHaveAttribute('open', '');
+	});
+
+	test('says nothing matches and links to the user guide', async ({ page, go }) => {
+		await go('/settings');
+		await page.getByRole('combobox', { name: 'Search settings' }).fill('qqqqq');
+		await expect(page.getByTestId('settings-search-none')).toContainText(
+			"No setting matches 'qqqqq'"
+		);
+		await expect(page.getByRole('link', { name: 'Search the user guide instead' })).toHaveAttribute(
+			'target',
+			'_blank'
+		);
+	});
+
+	test('on a phone the box is on the list page', async ({ page, go }) => {
+		await page.setViewportSize({ width: 390, height: 800 });
+		await go('/settings');
+		await page.getByRole('combobox', { name: 'Search settings' }).fill('intensity');
+		await page.getByRole('option').first().click();
+		await expect(h1(page, 'Crawler')).toBeVisible();
+	});
+});
+
+test.describe('backup and reset', () => {
+	test.use({ viewport: { width: 1366, height: 900 } });
+	let backend: SettingsBackend;
+	test.beforeEach(async ({ mock }) => {
+		backend = backendWith((values) => {
+			// Two values saved in the app, one of them in Preferences, which Reset all leaves alone.
+			Object.assign(values.find((v) => v.section === 'crawler')!.fields.timeout_secs!, {
+				source: 'db',
+				value: 30
+			});
+			Object.assign(values.find((v) => v.section === 'preferences')!.fields.theme!, {
+				source: 'db',
+				value: 'nord'
+			});
+		}).attach(mock);
+		new SystemBackend().attach(mock);
+	});
+
+	test('exports a file', async ({ page, go }) => {
+		await page.route('**/api/v1/settings/export*', (route) =>
+			route.fulfill({
+				status: 200,
+				contentType: 'application/toml',
+				body: 'dht.intensity = "low"\n'
+			})
+		);
+		await go('/settings/general');
+		const download = page.waitForEvent('download');
+		await page.getByTestId('settings-export').click();
+		expect((await download).suggestedFilename()).toBe('lodestar-settings.toml');
+	});
+
+	test('imports with a diff, applies it and undoes it', async ({ page, go, mock }) => {
+		const report = (applied: boolean) => ({
+			applied,
+			changes: [
+				{
+					section: 'crawler',
+					field: 'intensity',
+					from: 'balanced',
+					from_source: 'default',
+					restart_required: false,
+					to: 'low'
+				}
+			],
+			revisions: { crawler: applied ? 2 : 1 },
+			skipped: [
+				{ key: 'network.dht_port', reason: 'set_by_environment', env: 'LODESTAR_DHT_PORT' }
+			],
+			unchanged: 3
+		});
+		const bodies: unknown[] = [];
+		mock.on('importSettings', (r) => {
+			const dry = new URL(r.url()).searchParams.get('dry_run') === 'true';
+			bodies.push({ dry, body: r.postDataJSON() });
+			return { status: 200, body: report(!dry) } as never;
+		});
+		await go('/settings/general');
+		await page.getByTestId('settings-import-file').setInputFiles({
+			name: 'lodestar-settings.toml',
+			mimeType: 'application/toml',
+			buffer: Buffer.from('dht.intensity = "low"\n')
+		});
+		await expect(page.getByTestId('settings-import-counts')).toHaveText(
+			'1 changes · 1 skipped · 3 already set'
+		);
+		await expect(page.getByTestId('settings-import-change-crawler.intensity')).toContainText(
+			'Intensity: Balanced → Low'
+		);
+		expect(bodies).toEqual([{ dry: true, body: { toml: 'dht.intensity = "low"\n' } }]);
+		await page.getByTestId('settings-import-apply').click();
+		await expect(page.getByTestId('settings-import-message')).toContainText('Imported 1 changes.');
+		expect(bodies[1]).toEqual({
+			dry: false,
+			body: { toml: 'dht.intensity = "low"\n', revisions: { crawler: 1 } }
+		});
+		await page.getByTestId('settings-import-undo').click();
+		await expect.poll(() => backend.patches.length).toBe(1);
+		expect(backend.patches[0]).toEqual({ crawler: { if_revision: 2, intensity: null } });
+	});
+
+	test('shows a file over 64 KiB as too large without sending it', async ({ page, go, mock }) => {
+		let sent = 0;
+		mock.on('importSettings', () => {
+			sent++;
+			return { status: 200, body: {} } as never;
+		});
+		await go('/settings/general');
+		await page.getByTestId('settings-import-file').setInputFiles({
+			name: 'big.toml',
+			mimeType: 'application/toml',
+			buffer: Buffer.alloc(64 * 1024 + 1, 'a')
+		});
+		await expect(page.getByTestId('settings-import-message')).toContainText('over 64 KiB');
+		expect(sent).toBe(0);
+	});
+
+	test('resets all saved settings in one change after a confirmation', async ({ page, go }) => {
+		await go('/settings/general');
+		await page.getByTestId('settings-reset-all').click();
+		const dialog = page.getByRole('dialog', { name: 'Reset all settings?' });
+		await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused();
+		await dialog.getByRole('button', { name: /^Reset \d+ saved settings$/ }).click();
+		await expect.poll(() => backend.patches.length).toBe(1);
+		expect(Object.keys(backend.patches[0]!)).toEqual(['crawler']);
+		expect(
+			Object.values(backend.patches[0]!).every((p) =>
+				Object.entries(p).every(([k, v]) => k === 'if_revision' || v === null)
+			)
+		).toBe(true);
+	});
+});
+
+test.describe('config.toml', () => {
+	test.use({ viewport: { width: 1366, height: 900 } });
+	test('shows the screen’s values that are not defaults', async ({ page, go, mock }) => {
+		backendWith((values) => {
+			const crawler = values.find((v) => v.section === 'crawler')!;
+			Object.assign(crawler.fields.timeout_secs!, { source: 'db', value: 30 });
+		}).attach(mock);
+		new SystemBackend().attach(mock);
+		await go('/settings/crawler');
+		await page.getByText('View as config.toml').click();
+		await expect(page.getByTestId('settings-config-toml')).toContainText('fetch.timeout_secs = 30');
+	});
+});
+
 for (const mode of ['light', 'dark'] as const) {
 	for (const [width, screens] of [
 		[
