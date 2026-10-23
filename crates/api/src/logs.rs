@@ -310,15 +310,17 @@ fn busy() -> Response {
     res
 }
 
-/// Runs `f` on the blocking pool with one of the file reads held.
+/// Runs `f` on the blocking pool with one of the file reads held. `Err`
+/// is the response to send instead (`logs_busy` with its `Retry-After`,
+/// or the error).
 async fn with_read<T: Send + 'static>(
     s: &Arc<dyn LogSource>,
     f: impl FnOnce(&dyn LogSource) -> Result<T, LogsError> + Send + 'static,
-) -> Result<Result<T, ApiError>, Response> {
+) -> Result<T, Box<Response>> {
     let permit = match s.transport().read() {
         Ok(p) => p,
-        Err(Refused::Busy) => return Err(busy()),
-        Err(Refused::Closed) => return Err(unavailable().into_response()),
+        Err(Refused::Busy) => return Err(Box::new(busy())),
+        Err(Refused::Closed) => return Err(Box::new(unavailable().into_response())),
     };
     let s = s.clone();
     let joined = tokio::task::spawn_blocking(move || {
@@ -326,10 +328,10 @@ async fn with_read<T: Send + 'static>(
         f(&*s)
     })
     .await;
-    Ok(match joined {
-        Ok(r) => r.map_err(ApiError::from),
-        Err(e) => Err(internal(e)),
-    })
+    match joined {
+        Ok(r) => r.map_err(|e| Box::new(ApiError::from(e).into_response())),
+        Err(e) => Err(Box::new(internal(e).into_response())),
+    }
 }
 
 fn level(l: Level) -> LogLevel {
@@ -538,7 +540,7 @@ pub(crate) async fn history(handle: Handle, RawQuery(query): RawQuery) -> ApiRes
         cursor,
     };
     match with_read(&s, move |s| s.history(&q)).await {
-        Ok(page) => Ok(([(header::CACHE_CONTROL, "no-store")], Json(page?)).into_response()),
-        Err(res) => Ok(res),
+        Ok(page) => Ok(([(header::CACHE_CONTROL, "no-store")], Json(page)).into_response()),
+        Err(res) => Ok(*res),
     }
 }
