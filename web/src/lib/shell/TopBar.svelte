@@ -33,7 +33,7 @@
 
 	// Esc closes the disclosure and returns focus to its button.
 	function onkeydown(e: KeyboardEvent) {
-		if (e.key === 'Escape' && navOpen) {
+		if (e.key === 'Escape' && navOpen && !e.defaultPrevented) {
 			navOpen = false;
 			document.getElementById('menu-button')?.focus();
 		}

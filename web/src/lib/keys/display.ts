@@ -28,5 +28,5 @@ export function formatCombo(spec: string, mac = isMacPlatform()): string {
 		shift: ['⇧', 'Shift']
 	};
 	if (mac) return [...parts.map((p) => sym[p]![0]), shown].join('');
-	return [...parts.map((p) => (p === 'meta' ? 'Meta' : sym[p]![1])), shown].join('+');
+	return [...parts.map((p) => sym[p]![1]), shown].join('+');
 }

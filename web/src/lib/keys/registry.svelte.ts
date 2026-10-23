@@ -89,8 +89,38 @@ export function isEditable(target: EventTarget | null): boolean {
 	return /^(textbox|searchbox|combobox)$/.test(target.getAttribute('role') ?? '');
 }
 
-const CONTROL =
-	'a[href], button, summary, [role="button"], [role="link"], [role="menuitem"], [role="option"], [role="tab"], [role="checkbox"], [role="switch"]';
+const CONTROL = [
+	'a[href]',
+	'button',
+	'summary',
+	'select',
+	// Non-text inputs: Space toggles a checkbox, Enter submits a form.
+	'input[type="checkbox"]',
+	'input[type="radio"]',
+	'input[type="submit"]',
+	'input[type="button"]',
+	'input[type="reset"]',
+	'input[type="image"]',
+	'input[type="file"]',
+	'input[type="range"]',
+	'input[type="color"]',
+	...[
+		'button',
+		'link',
+		'menuitem',
+		'menuitemcheckbox',
+		'menuitemradio',
+		'option',
+		'tab',
+		'checkbox',
+		'radio',
+		'switch',
+		'slider',
+		'spinbutton',
+		'treeitem',
+		'gridcell'
+	].map((r) => `[role="${r}"]`)
+].join(', ');
 
 /** True when Enter or Space on the target already does something (activates it). */
 const onControl = (target: EventTarget | null) =>
@@ -211,9 +241,12 @@ export function createKeys(options: KeysOptions = {}) {
 
 	/** Handles a keydown; true when a command ran (the event is then default-prevented). */
 	function handle(event: KeyboardEvent): boolean {
-		if (event.defaultPrevented || event.isComposing) return false;
+		if (event.defaultPrevented || event.isComposing || !event.key) return false;
+		const combo = comboFromEvent(event);
+		// Holding Ctrl+K must not toggle the palette over and over.
+		if (event.repeat && hasCommandModifier(combo)) return false;
 		const hit = find(
-			comboFromEvent(event),
+			combo,
 			isEditable(event.target),
 			inOverlay(event.target),
 			onControl(event.target)

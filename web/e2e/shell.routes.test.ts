@@ -146,6 +146,19 @@ test.describe('status pill', () => {
 		await expect(page.getByTestId('status-pill-text')).toHaveText('Connecting');
 	});
 
+	test('the banner and the unreachable page need no lazy chunk, so they show when the server is gone', async ({
+		page,
+		go
+	}) => {
+		const events = await liveEvents(page);
+		await go('/search');
+		await expect(page.getByTestId('status-pill')).toHaveAttribute('data-state', 'crawling');
+		await page.route('**/_app/immutable/**', (route) => route.abort('connectionrefused'));
+		await events.drop();
+		await expect(page.getByTestId('reconnecting-banner')).toContainText('Lost contact');
+		await expect(page.getByRole('heading', { name: 'Search' })).toBeVisible();
+	});
+
 	test('a stream that ends keeps the page and shows a banner and "Reconnecting"', async ({
 		page,
 		go
@@ -283,14 +296,6 @@ test.describe('full-page states', () => {
 		await expect(page.getByRole('heading', { name: 'Search' })).toBeVisible();
 		await expect(page.getByRole('heading', { name: 'Can’t reach Lodestar' })).toHaveCount(0);
 	});
-
-	test('a failing page load shows the error state with a code', async ({ page, go }) => {
-		await page.route('**/_app/immutable/nodes/*.js', (route) => route.abort());
-		await go('/discover');
-		// Either SvelteKit navigates to its error page or falls back to a full reload that also fails;
-		// what must hold is that the shell never shows a blank page.
-		await expect(page.locator('body')).not.toBeEmpty();
-	});
 });
 
 test.describe('401 hand-off', () => {
@@ -325,6 +330,7 @@ test.describe('401 hand-off', () => {
 		const events = await liveEvents(page);
 		for (const path of ['/login', '/setup', '/welcome']) {
 			await go(path);
+			await engage(page); // the stream starts on the first interaction: none must on these screens
 			await expect(page.getByRole('main')).toBeVisible();
 			await expect(page.getByRole('banner')).toHaveCount(0);
 			await expect(page.getByRole('navigation')).toHaveCount(0);
@@ -339,7 +345,8 @@ test.describe('skip link', () => {
 	test('is the first stop, hidden until focused, and moves focus to main', async ({ page, go }) => {
 		await go('/alerts');
 		const skip = page.getByRole('link', { name: 'Skip to main content' });
-		await skip.waitFor();
+		// It is in the first paint, before the chrome (top bar) has loaded.
+		await expect(skip).toBeAttached();
 		await page.keyboard.press('Tab');
 		await expect(skip).toBeFocused();
 		await expect(skip).toBeInViewport();

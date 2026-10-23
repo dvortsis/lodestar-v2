@@ -112,9 +112,22 @@ describe('connectionKind', () => {
 			'ok'
 		);
 	});
+	it('does not flicker across retries: connecting with the last error is the same outage', () => {
+		const kinds = (['offline', 'connecting', 'offline', 'connecting'] as const).map((stream) =>
+			connectionKind({ stream, error: err, everLive: false })
+		);
+		expect(kinds).toEqual(['unreachable', 'unreachable', 'unreachable', 'unreachable']);
+		const banner = (['offline', 'connecting'] as const).map((stream) =>
+			connectionKind({ stream, error: err, everLive: true })
+		);
+		expect(banner).toEqual(['reconnecting', 'reconnecting']);
+		// A first connect has no error yet, and a live stream clears it.
+		expect(connectionKind({ stream: 'connecting', error: undefined, everLive: false })).toBe('ok');
+		expect(connectionKind({ stream: 'live', error: undefined, everLive: true })).toBe('ok');
+	});
 	it('is a banner once it had answered, and fine in every other stream state', () => {
 		expect(connectionKind({ stream: 'offline', error: err, everLive: true })).toBe('reconnecting');
-		for (const stream of ['connecting', 'live', 'busy', 'stopped'] as const) {
+		for (const stream of ['live', 'busy', 'stopped'] as const) {
 			expect(connectionKind({ stream, error: err, everLive: false })).toBe('ok');
 		}
 	});

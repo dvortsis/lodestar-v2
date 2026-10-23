@@ -9,6 +9,7 @@
 	import IconWarning from '~icons/ph/warning';
 	import IconOffline from '~icons/ph/wifi-slash';
 	import IconUnknown from '~icons/ph/circle-dashed';
+	import IconConnecting from '~icons/ph/dots-three';
 	import { resolve } from '$app/paths';
 	import { m } from '$lib/paraglide/messages.js';
 	import { formatCompact, formatCount } from '$lib/format';
@@ -21,7 +22,7 @@
 
 	const icons: Record<PillKind, Component> = {
 		unknown: IconUnknown,
-		connecting: IconUnknown,
+		connecting: IconConnecting,
 		reconnecting: IconOffline,
 		busy: IconWarning,
 		crawling: IconBroadcast,

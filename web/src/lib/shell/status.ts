@@ -71,7 +71,10 @@ export function connectionKind(input: {
 	/** Some other request got an answer (REST works even if the stream is held up). */
 	restOk?: boolean;
 }): ConnectionKind {
-	if (input.stream !== 'offline') return 'ok';
+	// A retry is `connecting` with the last failure still recorded: it is the same outage, not a
+	// fresh start, so the state must not flicker (and the page must not remount) on every attempt.
+	const retrying = input.stream === 'connecting' && input.error !== undefined;
+	if (input.stream !== 'offline' && !retrying) return 'ok';
 	if (input.restOk && !input.everLive) return 'ok';
 	if (input.everLive) return 'reconnecting';
 	return input.error ? 'unreachable' : 'ok';
