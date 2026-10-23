@@ -242,21 +242,19 @@ impl DocKeys {
         scan.text(name);
         // A path's segments are joined by '/', which never joins tokens,
         // so each segment is scanned on its own, continuing the path's
-        // positions. Folders shared with the previous file add nothing
-        // new, so the scan picks up where the folder ended.
-        let mut folder: (&[String], At) = (&[], At::default());
+        // positions. Folders already scanned add nothing new, so the scan
+        // picks up where the longest of them ended (a season's episodes
+        // and their subtitles alternate between two folders).
+        let mut folders = Folders::default();
         for f in files.iter().take(crate::MAX_FILES) {
             let Some((file, dirs)) = f.path.split_last() else {
                 continue;
             };
-            if dirs != folder.0 {
-                scan.at = At::default();
-                for seg in dirs {
-                    scan.text(seg);
-                }
-                folder = (dirs, scan.at);
-            } else {
-                scan.at = folder.1;
+            let (known, at) = folders.longest(dirs);
+            scan.at = at;
+            for k in known..dirs.len() {
+                scan.text(&dirs[k]);
+                folders.add(&dirs[..=k], scan.at);
             }
             scan.text(file);
         }
@@ -329,6 +327,39 @@ impl DocKeys {
 pub(crate) fn tag_keys(e: Option<&DocEnrichment>) -> IdSet {
     e.map(|e| e.tags.iter().map(|t| tag_key(t)).collect())
         .unwrap_or_default()
+}
+
+/// Folders a scan remembers, and how deep: deeper ones continue from
+/// their remembered start, so a path costs a comparison of at most its
+/// first [`FOLDER_DEPTH`] segments against each, whatever its depth.
+const FOLDERS: usize = 8;
+const FOLDER_DEPTH: usize = 4;
+
+/// Folders already scanned, with where the scan stood after each.
+#[derive(Default)]
+struct Folders<'a> {
+    seen: [(&'a [String], At); FOLDERS],
+    next: usize,
+}
+
+impl<'a> Folders<'a> {
+    /// How many of `dirs`' first segments were scanned as a folder, and
+    /// where the scan stood after them (the start of a path for none).
+    fn longest(&self, dirs: &[String]) -> (usize, At) {
+        for k in (1..=dirs.len().min(FOLDER_DEPTH)).rev() {
+            if let Some((_, at)) = self.seen.iter().find(|(f, _)| *f == &dirs[..k]) {
+                return (k, *at);
+            }
+        }
+        (0, At::default())
+    }
+
+    fn add(&mut self, folder: &'a [String], at: At) {
+        if folder.len() <= FOLDER_DEPTH {
+            self.seen[self.next] = (folder, at);
+            self.next = (self.next + 1) % FOLDERS;
+        }
+    }
 }
 
 /// Slots of the word cache.
@@ -413,39 +444,95 @@ struct Vocabulary {
 
 #[derive(Debug, Clone, Copy)]
 struct Entry {
-    hash: u64,
     start: u32,
     end: u32,
     chars: u32,
     has: u64,
+    /// The next entry with the same hash, or [`NONE`]: texts whose hashes
+    /// collide are chained, so a crafted collision costs its own chain,
+    /// not a scan of every text.
+    next: u32,
 }
+
+const NONE: u32 = u32::MAX;
 
 impl Vocabulary {
     fn text(&self, w: &Entry) -> &str {
         &self.buf[w.start as usize..w.end as usize]
     }
 
-    fn push(&mut self, hash: u64, text: &str) -> u32 {
+    /// Adds a text, lowercased from ASCII `pieces` or as it is, after
+    /// entry `after` of the same hash, and its starts to `starts`.
+    fn push(&mut self, text: Piece<'_>, after: u32, starts: &mut Bloom) -> u32 {
         let start = self.buf.len();
-        self.buf.push_str(text);
+        match text {
+            Piece::Ascii(pieces) => {
+                for p in pieces {
+                    self.buf
+                        .extend(p.iter().map(|c| char::from(c.to_ascii_lowercase())));
+                }
+            }
+            Piece::Str(t) => self.buf.push_str(t),
+        }
+        let text = &self.buf[start..];
+        if text.is_ascii() {
+            add_starts(starts, text.bytes());
+        } else {
+            add_starts_str(starts, text);
+        }
+        let i = self.words.len() as u32;
         self.words.push(Entry {
-            hash,
             start: start as u32,
             end: self.buf.len() as u32,
             chars: text.chars().count() as u32,
             has: char_set(text),
+            next: NONE,
         });
-        (self.words.len() - 1) as u32
+        if after != NONE {
+            self.words[after as usize].next = i;
+        }
+        i
     }
 
-    /// Whether `text`, whose hash is `hash`, is entry `i`'s text or that
-    /// of another entry with that hash.
-    fn has(&self, i: u32, hash: u64, text: &str) -> bool {
-        self.text(&self.words[i as usize]) == text
-            || self
-                .words
-                .iter()
-                .any(|w| w.hash == hash && self.text(w) == text)
+    /// Whether `text` is in the chain of same-hash entries from `i`, or
+    /// else the chain's last entry, to add it after.
+    fn find(&self, mut i: u32, text: Piece<'_>) -> Result<(), u32> {
+        loop {
+            let w = &self.words[i as usize];
+            if text.is(self.text(w)) {
+                return Ok(());
+            }
+            if w.next == NONE {
+                return Err(i);
+            }
+            i = w.next;
+        }
+    }
+}
+
+/// A token text: lowercase ASCII from pieces in any case, or a text
+/// already folded.
+#[derive(Clone, Copy)]
+enum Piece<'a> {
+    Ascii(&'a [&'a [u8]]),
+    Str(&'a str),
+}
+
+impl Piece<'_> {
+    fn is(self, text: &str) -> bool {
+        match self {
+            Piece::Str(t) => t == text,
+            Piece::Ascii(pieces) => {
+                let mut rest = text.as_bytes();
+                pieces.iter().all(|p| {
+                    let Some((head, tail)) = rest.split_at_checked(p.len()) else {
+                        return false;
+                    };
+                    rest = tail;
+                    head.eq_ignore_ascii_case(p)
+                }) && rest.is_empty()
+            }
+        }
     }
 }
 
@@ -542,31 +629,23 @@ fn pairs(out: &mut Bloom, a: &[u64], b: &[u64]) {
 
 impl<'a> Scan<'a> {
     /// Adds one token of ASCII text, at most [`MAX_TOKEN_BYTES`] long, from
-    /// its pieces: its key, its starts, and its text.
+    /// its pieces: its key, and its text and starts when it's new.
     fn token(&mut self, hash: u64, pieces: &[&[u8]]) {
-        let mut low = [0u8; MAX_TOKEN_BYTES];
-        let mut n = 0;
-        for c in pieces.iter().flat_map(|p| p.iter()) {
-            low[n] = c.to_ascii_lowercase();
-            n += 1;
-        }
-        let low = &low[..n];
-        add_starts(&mut self.starts, low.iter().copied());
-        self.add_text(hash, std::str::from_utf8(low).expect("ASCII"));
+        self.add_text(hash, Piece::Ascii(pieces));
     }
 
-    /// A token text's key, and its text when it's new.
-    fn add_text(&mut self, hash: u64, text: &str) {
+    /// A token text's key, and its text and starts when it's new.
+    fn add_text(&mut self, hash: u64, text: Piece<'_>) {
         use std::collections::hash_map::Entry as Slot;
         match self.out.entry(hash) {
             Slot::Vacant(v) => {
-                v.insert(self.vocabulary.push(hash, text));
+                v.insert(self.vocabulary.push(text, NONE, &mut self.starts));
             }
             // Almost always the same text again; a different one whose
             // hash collides is kept as well.
             Slot::Occupied(o) => {
-                if !self.vocabulary.has(*o.get(), hash, text) {
-                    self.vocabulary.push(hash, text);
+                if let Err(last) = self.vocabulary.find(*o.get(), text) {
+                    self.vocabulary.push(text, last, &mut self.starts);
                 }
             }
         }
@@ -709,8 +788,7 @@ impl<'a> Scan<'a> {
     fn other(&mut self, text: &str) {
         let toks = tokenize(text);
         for t in &toks {
-            add_starts_str(&mut self.starts, &t.text);
-            self.add_text(term_hash(&t.text), &t.text);
+            self.add_text(term_hash(&t.text), Piece::Str(&t.text));
         }
         let mut by_pos: Vec<(usize, u64)> = toks
             .iter()
@@ -972,7 +1050,7 @@ mod tests {
                 "[A-Za-z]{1,6}([._\\- +]{1,2}[A-Za-z0-9+]{1,6}){0,5}|[0-9]{1,3}[.\\-][0-9]{1,3}|\\PC{0,12}|[a-zA-Z0-9.+-]{0,30}",
                 1..6,
             ),
-            layout in prop::collection::vec((0usize..6, 0usize..6, 0usize..3), 0..8),
+            layout in prop::collection::vec((0usize..6, 0usize..6, 0usize..7), 0..10),
         ) {
             // Files built from the segments, often sharing folders.
             let files: Vec<FileInfo> = layout
@@ -1074,6 +1152,26 @@ mod tests {
         );
         assert_eq!(n("group:grp"), Need::Any(vec![tag_key("group:grp")]));
         assert_eq!(n("ext:exe"), Need::Always);
+    }
+
+    /// Texts whose hashes collide are chained, each kept and found by
+    /// its bytes, in any case.
+    #[test]
+    fn colliding_texts_are_chained() {
+        let mut v = Vocabulary::default();
+        let mut starts = Bloom::for_text(0);
+        let a = v.push(Piece::Str("alpha"), NONE, &mut starts);
+        assert_eq!(v.find(a, Piece::Ascii(&[b"ALPHA"])), Ok(()));
+        assert_eq!(v.find(a, Piece::Ascii(&[b"AL", b"pha"])), Ok(()));
+        assert_eq!(v.find(a, Piece::Ascii(&[b"alph"])), Err(a));
+        assert_eq!(v.find(a, Piece::Ascii(&[b"alphas"])), Err(a));
+        // As if "beta" had alpha's hash.
+        let b = v.push(Piece::Ascii(&[b"BETA"]), a, &mut starts);
+        assert_eq!(v.find(a, Piece::Str("beta")), Ok(()));
+        assert_eq!(v.find(a, Piece::Str("gamma")), Err(b));
+        assert_eq!(v.text(&v.words[b as usize]), "beta");
+        assert!(starts.contains(start_key("be").unwrap()));
+        assert!(starts.contains(start_key("alph").unwrap()));
     }
 
     #[test]
