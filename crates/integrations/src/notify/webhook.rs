@@ -143,7 +143,12 @@ impl Notifier for Webhook {
             // Drain a little of the answer so the connection can be reused;
             // its content is never used or logged.
             let _ = read_limited(resp, 64 * 1024).await;
-            tracing::debug!(status = status.as_u16(), url = %redact(&self.url), "webhook attempt");
+            lodestar_log::log_event!(
+                crate::log_events::NOTIFY_ATTEMPT,
+                channel = "webhook",
+                status = lodestar_log::Count(status.as_u16().into()),
+                url = lodestar_log::Url::new(&redact(&self.url))
+            );
             checked
         })
     }

@@ -227,7 +227,12 @@ impl Notifier for Discord {
             let headers = resp.headers().clone();
             let checked = check_status(status, &headers);
             let body = read_limited(resp, MAX_ANSWER_BYTES).await;
-            tracing::debug!(status = status.as_u16(), url = %redact(&self.url), "discord attempt");
+            lodestar_log::log_event!(
+                crate::log_events::NOTIFY_ATTEMPT,
+                channel = "discord",
+                status = lodestar_log::Count(status.as_u16().into()),
+                url = lodestar_log::Url::new(&redact(&self.url))
+            );
             match checked {
                 Err(mut e) => {
                     if status == StatusCode::TOO_MANY_REQUESTS {
@@ -828,7 +833,7 @@ mod tests {
         assert!(text.contains("https://discord.com/…"), "{text}");
         let logged = logs.contents();
         assert!(
-            logged.contains("discord attempt"),
+            logged.contains("Notification attempt channel=discord"),
             "the capture works: {logged}"
         );
         for secret in [TOKEN, "123456789012345678"] {

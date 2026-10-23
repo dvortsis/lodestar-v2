@@ -33,6 +33,16 @@ pub enum Intensity {
     Aggressive,
 }
 
+impl Intensity {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Intensity::Low => "low",
+            Intensity::Balanced => "balanced",
+            Intensity::Aggressive => "aggressive",
+        }
+    }
+}
+
 /// Message stream encryption for metadata fetches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
@@ -222,7 +232,10 @@ pub fn follow_intensity(
                 let handle = node.lock().expect("dht handle lock").clone();
                 match handle {
                     Some(h) if h.set_intensity(want.into()).await => {
-                        tracing::info!("settings: crawler intensity is now {want:?}");
+                        lodestar_log::log_event!(
+                            crate::logging::events::SETTINGS_INTENSITY,
+                            intensity = want.name()
+                        );
                         applied = want;
                     }
                     // Not started yet, or restarting.
