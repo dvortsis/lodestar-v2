@@ -2,7 +2,7 @@
 // which ends the stream, so the page's `fetch` for `/api/v1/events` is replaced (before any page
 // script runs) by one that answers with a stream the test controls: `send` writes a frame, `drop`
 // ends the connection cleanly. Each new connection (a reconnect) gets the initial snapshot again.
-import type { Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 import type { components } from '../../src/lib/api/schema';
 
 export type Crawler = components['schemas']['CrawlerEvent'];
@@ -127,4 +127,16 @@ export async function liveEvents(
 			}),
 		requests: () => page.evaluate(() => window.__sse?.requests ?? [])
 	};
+}
+
+/**
+ * Opens the command palette with a key press, retrying until the shell's shortcuts exist (they
+ * register a moment after the chrome mounts). Never presses again once the palette is open.
+ */
+export async function openPaletteWithKey(page: Page, press: () => Promise<void>) {
+	const dialog = page.getByRole('dialog', { name: 'Command palette' });
+	await expect(async () => {
+		if (!(await dialog.isVisible())) await press();
+		await expect(dialog).toBeVisible({ timeout: 800 });
+	}).toPass({ timeout: 10_000 });
 }

@@ -18,15 +18,6 @@
 	let Toaster = $state<typeof import('$lib/ui/feedback/Toaster.svelte').default>();
 	let Palette = $state<typeof import('./CommandPalette.svelte').default>();
 
-	function idleCancelable(cb: () => void): () => void {
-		if (typeof requestIdleCallback === 'function') {
-			const id = requestIdleCallback(cb, { timeout: 1000 });
-			return () => cancelIdleCallback(id);
-		}
-		const id = setTimeout(cb, 200);
-		return () => clearTimeout(id);
-	}
-
 	function loadToaster() {
 		if (!Toaster)
 			void import('$lib/ui/feedback/Toaster.svelte').then((mod) => (Toaster = mod.default));
@@ -61,17 +52,13 @@
 
 	onMount(() => {
 		const detach = keys.attach(window);
-		// Not needed to paint the page. The client and the stream arrive together; from then on a
-		// 401 on any request goes to `handleLoginRequired` (the stream's own 401 covers the gap).
-		const cancelIdle = idleCancelable(() => {
-			void import('./commands').then((commands) => {
-				if (!disposed) offCommands = commands.registerShellCommands();
-			});
-			// A 401 on any request goes to /login or /setup from the start: this is small and does not
-			// wait for the stream. M-auth's hook owns W5's single `onLoginRequired` slot.
-			void import('$lib/features/auth/session.svelte').then((auth) => {
-				if (!disposed) uninstallAuth = auth.installAuthHandlers();
-			});
+		// The shortcuts and the 401 redirect start as soon as the chrome mounts: both are small and
+		// neither waits for the stream. M-auth's hook owns W5's single `onLoginRequired` slot.
+		void import('./commands').then((commands) => {
+			if (!disposed) offCommands = commands.registerShellCommands();
+		});
+		void import('$lib/features/auth/session.svelte').then((auth) => {
+			if (!disposed) uninstallAuth = auth.installAuthHandlers();
 		});
 		// The stream, the API client and the pill are the heaviest part and are not needed to read the
 		// page: they start with the first interaction, or a few seconds after load, whichever is first.
@@ -91,7 +78,6 @@
 		});
 		return () => {
 			disposed = true;
-			cancelIdle();
 			stopWaiting();
 			detach();
 			offCommands?.();

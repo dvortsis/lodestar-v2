@@ -1,6 +1,6 @@
 // The shell with no pointer (architecture §10.13, §10.16): the skip link, the top bar, the menu
 // button, the palette and the overflow menu are all reachable and operable from the keyboard.
-import { liveEvents } from './support/events-server';
+import { liveEvents, openPaletteWithKey } from './support/events-server';
 import { expect, test } from './support/test';
 
 // The shell registers its shortcuts and opens its stream when the browser is idle (≤ 1 s after load).
@@ -82,7 +82,7 @@ test('Ctrl+K opens the palette, typing filters, Enter runs, and the page changes
 }) => {
 	await go('/search');
 	await ready(page);
-	await kbd.press('Control+k');
+	await openPaletteWithKey(page, () => kbd.press('Control+k'));
 	const input = page.getByRole('combobox', { name: 'Type a command' });
 	await expect(input).toBeFocused();
 	await page.keyboard.type('disc');
@@ -101,7 +101,7 @@ test('arrow keys move through the palette and Escape closes it, returning focus'
 	await ready(page);
 	const first = page.getByRole('link', { name: 'Search', exact: true });
 	await kbd.tabTo(first);
-	await kbd.press('Control+k');
+	await openPaletteWithKey(page, () => kbd.press('Control+k'));
 	const input = page.getByRole('combobox', { name: 'Type a command' });
 	await expect(input).toHaveAttribute('aria-activedescendant', 'palette-option-0');
 	await kbd.press('ArrowDown');

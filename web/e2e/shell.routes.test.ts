@@ -2,7 +2,7 @@
 // status pill, the command palette, the full-page states and the 401 hand-off. Keyboard-only flows
 // are in shell.keyboard.test.ts. Name ends in `routes.test.ts` so the `core` project runs it.
 import { expectNoA11yViolations } from './a11y';
-import { crawlerEvent, engage, liveEvents } from './support/events-server';
+import { crawlerEvent, engage, liveEvents, openPaletteWithKey } from './support/events-server';
 import { expect, test } from './support/test';
 
 const nav = (page: import('@playwright/test').Page) =>
@@ -206,9 +206,8 @@ test.describe('command palette', () => {
 			document.getElementById('main')!.append(input);
 			input.focus();
 		});
-		await page.keyboard.press('Control+k');
+		await openPaletteWithKey(page, () => page.keyboard.press('Control+k'));
 		const dialog = page.getByRole('dialog', { name: 'Command palette' });
-		await expect(dialog).toBeVisible();
 		await page.keyboard.press('Control+k');
 		await expect(dialog).toBeHidden();
 	});
