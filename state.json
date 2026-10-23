@@ -856,13 +856,13 @@
    "merge": "1274bd7"
   },
   "B2c": {
-   "status": "pending",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_019JSHNmjWkJEYfg8YsfJ7wG",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
-   "notes": "from #86"
+   "notes": "from #86 | 05:02 launched after B2b merge (brief by Opus helper, runner-reviewed; steward from start)."
   },
   "M-settings-form": {
    "status": "pending",
@@ -892,13 +892,13 @@
    "notes": "from #86"
   },
   "B-log1": {
-   "status": "pending",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01XozmKRGVgpR4VBVHX678yW",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
-   "notes": "from #86"
+   "notes": "from #86 | 05:02 launched after B2b merge (brief by Opus helper, runner-reviewed; steward from start)."
   },
   "B-log2": {
    "status": "pending",
@@ -1298,10 +1298,12 @@
   "b9_feed_access": "B9 feed handlers must call Access::reaches_feed (B12).",
   "request_log_redaction": "When api.request / URI logging lands, redact apikey and token query values (B12).",
   "release_no_fixture": "Release builds (Docker, MSI, release.yml) should build --no-default-features --features web; Docker smoke with web,fixture (B16 review). Route to P-release or packaging follow-up.",
-  "searchbench_reused_dir": "search-bench NRT check fails on a reused --dir (seeded torrents dedupe); make it fresh or reseed (B7 note)."
+  "searchbench_reused_dir": "search-bench NRT check fails on a reused --dir (seeded torrents dedupe); make it fresh or reseed (B7 note).",
+  "blog1_new_crate": "B-log1 adds crates/log (lodestar-log) for log_event!; update slices.yaml owns in next runner PR.",
+  "blog1b": "B-log1b follow-up: sweep remaining call sites (pipeline, search, filter/lists.rs, api/auth/http.rs, lodestar main/services) listed in B-log1 brief; pipeline worker logs fetch key."
  },
  "blocked_on_owner": [],
- "launches_today": 13,
+ "launches_today": 15,
  "last_heartbeat": "2026-10-22T20:39Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
@@ -1322,7 +1324,8 @@
   "\u00a72.19 (B10a #111): saved-search alert counts count shown torrents only; collection position/next_after are among shown entries; reorder keeps withheld entries in their slots.",
   "\u00a72.19 (B12 #112): key \"reveal\" replaced by regenerate; a bad X-Forwarded-For entry ends the walk at the peer (safer than skipping); revoke/delete need no password; at most 500 keys/tokens; login limiter map strictly bounded with overflow bucket.",
   "Process: B7 (#102) exceeded review_rounds_before_escalation (now 4 FIX rounds on natural phrasing). Runner chose not to park: fix scope narrowed each round; if another blocking round, natural phrasing is split into a follow-up slice and /suggest merges without it. Owner may prefer parking.",
-  "\u00a72.19 (B10b #115): exports include Adult only per content.export_adult (\u00a720.9/B17), not the \"Show adult content\" view setting; until wired, no Adult is exported."
+  "\u00a72.19 (B10b #115): exports include Adult only per content.export_adult (\u00a720.9/B17), not the \"Show adult content\" view setting; until wired, no Adult is exported.",
+  "Licences (B2c): \u00a72.12 allowlist silent on Unicode-DFS-2016, Unlicense alone, CDLA-Permissive-2.0, LLVM exception, and whether LGPL-3.0 counts in the GPL/AGPL family. B2c may add permissive ones as flagged \u00a72.19 entries; stops on copyleft/unlicensed."
  ],
  "decisions_log": [
   "2026-10-23 00:40 owner: 'Go with whatever makes for the best user experience' re filter budget reference -> staged: #97 fastest-runner ref now; F-perf moves ref to EPYC 7763 (typical) when engine meets it.",
