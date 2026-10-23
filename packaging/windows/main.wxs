@@ -73,6 +73,7 @@
     <DirectoryRef Id="INSTALLFOLDER">
       <Component Id="ProgramFiles" Guid="2D5B2E5C-6B34-4F0F-9D54-3D1A3F8E9A01" Win64="yes">
         <File Id="LodestarExe" Name="lodestar.exe" Source="$(var.CargoTargetBinDir)\lodestar.exe" KeyPath="yes" />
+        <File Id="SecureDataDir" Name="secure-datadir.ps1" Source="$(env.LODESTAR_PACKAGING)\windows\secure-datadir.ps1" />
       </Component>
 
       <!-- The service. Started by hand (Start="demand") until the service
@@ -105,10 +106,11 @@
       </Component>
     </DirectoryRef>
 
-    <!-- Data folder: created, never removed by the installer itself. -->
+    <!-- Data folder: created by SecureDataFolder below, with its final permissions
+         (not by CreateFolder, which would leave it with ProgramData's inherited
+         rights for a while). Never removed by the installer itself. -->
     <DirectoryRef Id="DATAFOLDER">
       <Component Id="DataFolder" Guid="2D5B2E5C-6B34-4F0F-9D54-3D1A3F8E9A03" Win64="yes">
-        <CreateFolder />
         <RegistryValue Root="HKLM" Key="Software\Lodestar" Name="DataFolder" Type="string" Value="[DATAFOLDER]" KeyPath="yes" />
       </Component>
     </DirectoryRef>
@@ -140,20 +142,13 @@
     </DirectoryRef>
 
     <!-- ===== Custom actions ===== -->
-    <!-- Lock the data folder down, matching windows/acl.rs in the service (M6-win):
-         no inherited rights (ProgramData gives Users read/write), full control for
-         SYSTEM (S-1-5-18), Administrators (S-1-5-32-544) and the service's own
-         virtual account NT SERVICE\Lodestar, which exists once the service is
-         registered. The folder is created empty; the service takes over the tree
-         itself on first start and refuses a non-empty folder it did not secure. -->
-    <CustomAction Id="GrantDataAccess" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="check"
-                  ExeCommand="&quot;[System64Folder]icacls.exe&quot; &quot;[DATAFOLDER].&quot; /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F &quot;NT SERVICE\Lodestar:(OI)(CI)F&quot;" />
-
-    <!-- Stop, rather than adopt, a data folder that already exists but is owned by
-         someone else (a user could have planted files in it). Immediate, so the
-         message shows in the install log: owner must be SYSTEM or Administrators. -->
-    <CustomAction Id="CheckDataFolderOwner" Directory="TARGETDIR" Execute="immediate" Return="check"
-                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;if (Test-Path -LiteralPath '[DATAFOLDER].') { $sid = New-Object System.Security.Principal.SecurityIdentifier 'S-1-5-18'; $o = (New-Object System.Security.Principal.NTAccount (Get-Acl -LiteralPath '[DATAFOLDER].').Owner).Translate($sid.GetType()).Value; if ($o -notin 'S-1-5-18','S-1-5-32-544') { Write-Host ('LODESTAR INSTALL STOPPED: [DATAFOLDER] already exists and is owned by ' + $o + ', not SYSTEM or Administrators. Check it, move it away, then install again.'); exit 1 } }&quot;" />
+    <!-- Create or re-check the data folder with its final permissions, after the
+         service exists so NT SERVICE\Lodestar resolves. Stops the install if an
+         existing folder is a link, has a foreign owner, holds files Lodestar did
+         not secure, or contains a link. The MSI's ACL is what the service later
+         verifies (windows/acl.rs). See secure-datadir.ps1. -->
+    <CustomAction Id="SecureDataFolder" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="check"
+                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]secure-datadir.ps1&quot; -Path &quot;[DATAFOLDER].&quot;" />
 
     <!-- Opt-in only: runs when the box is ticked. Failure (Defender off or managed by
          another product) does not stop the install. -->
@@ -167,8 +162,7 @@
                   ExeCommand="&quot;[System64Folder]cmd.exe&quot; /c rmdir /s /q &quot;[DATAFOLDER].&quot;" />
 
     <InstallExecuteSequence>
-      <Custom Action="CheckDataFolderOwner" After="CostFinalize">NOT Installed</Custom>
-      <Custom Action="GrantDataAccess" After="InstallServices">NOT Installed</Custom>
+      <Custom Action="SecureDataFolder" After="InstallServices">NOT Installed</Custom>
             <Custom Action="AddDefenderExclusion" After="InstallFiles">NOT Installed AND DEFENDER_EXCLUSION="1"</Custom>
       <Custom Action="RemoveDefenderExclusion" Before="RemoveFiles">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
       <Custom Action="RemoveDataFolder" Before="RemoveFiles">REMOVE="ALL" AND REMOVE_DATA="1" AND NOT UPGRADINGPRODUCTCODE</Custom>

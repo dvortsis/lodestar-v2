@@ -105,12 +105,21 @@ if ($Msi) {
   Test-Serve "$installDir\lodestar.exe" (Join-Path ([IO.Path]::GetTempPath()) 'lodestar-msi-data')
 
   # --- uninstall keeps data ---
+  # What the service leaves behind once it has run: its marker plus data.
+  Set-Content -Path "$dataDir\.lodestar-secured" -Value 'secured'
   Set-Content -Path "$dataDir\keep-me.txt" -Value 'user data'
   Invoke-Msiexec @('/x', "`"$Msi`"", '/qn', '/norestart', '/l*v', "`"$logs\msi-uninstall.log`"") 'uninstall'
   Assert (-not (Test-Path "$installDir\lodestar.exe")) 'lodestar.exe left behind after uninstall'
   Assert ($null -eq (Get-CimInstance Win32_Service -Filter "Name='Lodestar'")) 'service left behind after uninstall'
   Assert ($null -eq (Get-NetFirewallRule -DisplayName 'Lodestar*' -ErrorAction SilentlyContinue)) 'firewall rules left behind'
   Assert (Test-Path "$dataDir\keep-me.txt") 'uninstall deleted the data folder; it must keep it'
+
+  # --- a non-empty folder Lodestar did not secure must stop the install ---
+  Rename-Item "$dataDir\.lodestar-secured" 'marker.off'
+  $p = Start-Process msiexec.exe -ArgumentList @('/i', "`"$Msi`"", '/qn', '/norestart', '/l*v', "`"$logs\msi-refused.log`"") -Wait -PassThru
+  Assert ($p.ExitCode -ne 0) 'install went ahead on a non-empty folder that was never secured'
+  Assert (-not (Test-Path "$installDir\lodestar.exe")) 'refused install left files behind'
+  Rename-Item "$dataDir\marker.off" '.lodestar-secured'
 
   # --- reinstall with the Defender box ticked, uninstall with REMOVE_DATA=1 ---
   Invoke-Msiexec @('/i', "`"$Msi`"", '/qn', '/norestart', 'DEFENDER_EXCLUSION=1', '/l*v', "`"$logs\msi-install2.log`"") 'reinstall'
