@@ -417,7 +417,7 @@ pub fn log_folder(dir: &Path) -> Result<(), String> {
     let ops = Windows { own_sid: own };
     let sddl = ops
         .powershell(FOLDER_SCRIPT, dir)
-        .map_err(|e| format!("its permissions couldn't be read ({})", e.kind()))?;
+        .map_err(|e| format!("its permissions couldn't be read ({e})"))?;
     let sddl = sddl.trim();
     if sddl.is_empty() {
         return Err("it's a link or junction".into());

@@ -1392,6 +1392,7 @@ mod tests {
         let made = tmp.path().join("made");
         assert_eq!(folder(&made).unwrap(), Folder::Private);
         assert_eq!(Index::load(&made).restricted, Some(true));
+        assert_eq!(crate::windows::acl::log_folder(&made), Ok(()));
         fs::write(made.join(INDEX), "{corrupt").unwrap();
         let rebuilt = Index::load(&made);
         assert_eq!(rebuilt.restricted, None, "unknown, never false");

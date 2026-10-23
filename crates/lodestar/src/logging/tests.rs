@@ -433,7 +433,14 @@ fn every_declared_catalogue_is_registered() {
     rust_files(&root.join("bench/src"), &mut files);
     let mut declared = Vec::new();
     for f in files {
-        let rel = f.strip_prefix(&root).unwrap().display().to_string();
+        // `/`-separated on every OS.
+        let rel = f
+            .strip_prefix(&root)
+            .unwrap()
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/");
         // `lodestar-log`'s own docs and tests declare examples, and
         // test-only files their own.
         let name = f.file_name().unwrap().to_string_lossy();
