@@ -245,24 +245,33 @@ fn netsh(args: &[&str]) -> Option<String> {
 #[cfg(windows)]
 pub fn check(max_sockets: usize) {
     for family in [Family::V4, Family::V6] {
+        use crate::logging::events::{
+            WINDOWS_PORTS_LOW, WINDOWS_PORTS_OK, WINDOWS_PORTS_UNREADABLE,
+        };
         match query(family) {
-            Some(range) => {
-                if let Some(w) = assess(family, range, max_sockets) {
-                    tracing::warn!("ports: {w}");
-                } else {
-                    tracing::debug!(
-                        "ports: {} dynamic range {}–{}, {} available",
-                        family.netsh(),
-                        range.start,
-                        range.end(),
-                        range.available()
+            Some(range) => match assess(family, range, max_sockets) {
+                Some(w) => {
+                    let (fix_start, fix_count) = w.fix().unwrap_or((0, 0));
+                    lodestar_log::log_event!(
+                        WINDOWS_PORTS_LOW,
+                        family = family.netsh(),
+                        available = range.available(),
+                        excluded = range.excluded,
+                        needed = w.needed,
+                        max_sockets = max_sockets,
+                        fix_start = fix_start,
+                        fix_count = fix_count
                     );
                 }
-            }
-            None => tracing::debug!(
-                "ports: couldn't read the {} dynamic port range",
-                family.netsh()
-            ),
+                None => lodestar_log::log_event!(
+                    WINDOWS_PORTS_OK,
+                    family = family.netsh(),
+                    start = range.start,
+                    end = range.end(),
+                    available = range.available()
+                ),
+            },
+            None => lodestar_log::log_event!(WINDOWS_PORTS_UNREADABLE, family = family.netsh()),
         }
     }
 }
