@@ -278,7 +278,7 @@ impl Engine {
         {
             return None;
         }
-        for i in doc.candidates(&self.rules) {
+        for i in doc.candidates(&self.rules, neutral_words) {
             let (query, unless) = self.rules.compiled(i);
             if !doc.matches_compiled(query, neutral_words)
                 || unless.is_some_and(|u| doc.matches_compiled(u, &[]))
@@ -321,7 +321,7 @@ impl Engine {
     #[doc(hidden)]
     pub fn rule_counts(&self, item: &Item, facts: Option<&Facts>) -> (usize, usize) {
         let doc = Doc::new(item, facts).with_near(self.rules.near_terms());
-        let candidates = doc.candidates(&self.rules);
+        let candidates = doc.candidates(&self.rules, &[]);
         let full = candidates
             .iter()
             .filter(|&&i| doc.could_match(self.rules.compiled(i).0))

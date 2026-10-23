@@ -266,9 +266,10 @@ fn rules(pick: impl Fn(usize) -> Option<String>) -> Vec<lodestar_filter::UserRul
 /// full match, and matching nothing.
 #[derive(Debug, Clone, Copy)]
 enum Shape {
-    /// Two common words always further apart than one token.
+    /// Two common words always further apart than two tokens.
     Near,
-    /// A common word, without a word every torrent has.
+    /// A common word, without a word every torrent has (`mkv`, the only
+    /// one, so these share their negated word, as `-sample` rules do).
     Negation,
     /// A made-up word within one or two edits of nothing.
     Fuzzy,
@@ -278,7 +279,7 @@ enum Shape {
     Title,
 }
 
-/// Pairs of the set's words never within two tokens of each other.
+/// Pairs of the set's words never within three tokens of each other.
 const FAR: &[(&str, &str)] = &[
     ("mkv", "1080p"),
     ("mkv", "720p"),
@@ -286,14 +287,13 @@ const FAR: &[(&str, &str)] = &[
     ("nfo", "web"),
     ("sample", "x264"),
     ("mkv", "bluray"),
-    ("srt", "hevc"),
-    ("subs", "atmos"),
+    ("srt", "1080p"),
+    ("sample", "2160p"),
 ];
 
-/// Prefixes of letters only (a prefix with digits splits), whose first
-/// four the set's words have.
+/// Starts of the set's words, letters only (a prefix with digits splits).
 const LETTER_PREFIXES: &[&str] = &[
-    "webdz", "blurx", "samplz", "hevcq", "atmox", "subsx", "truehx", "webrx",
+    "webd", "blur", "samp", "hevc", "atmo", "subs", "true", "webr",
 ];
 
 impl Shape {
@@ -307,15 +307,24 @@ impl Shape {
 
     fn rule(self, i: usize) -> String {
         match self {
+            // 32 different NEARs: a pair, either way round, one or two
+            // apart.
             Shape::Near => {
                 let (a, b) = FAR[i / 7 % FAR.len()];
-                format!("{a} NEAR/1 {b}")
+                let (a, b) = if i / 3 % 2 == 0 { (a, b) } else { (b, a) };
+                format!("{a} NEAR/{} {b}", 1 + i / 11 % 2)
             }
             Shape::Negation => format!("{} -mkv", common(i)),
             // Half short (one edit), half long (two).
             Shape::Fuzzy if i % 2 == 0 => format!("~qz{}", i % 997),
             Shape::Fuzzy => format!("~{}", unique(i, "f")),
-            Shape::Prefix => format!("{}*", LETTER_PREFIXES[i / 7 % LETTER_PREFIXES.len()]),
+            // Hundreds of different prefixes, each starting like a word
+            // the set has, then with letters none has there.
+            Shape::Prefix => {
+                let base = LETTER_PREFIXES[i / 7 % LETTER_PREFIXES.len()];
+                let letter = |n: usize| char::from(b'a' + (n % 26) as u8);
+                format!("{base}{}{}*", ["x", "z", "q"][i % 3], letter(i / 3))
+            }
             Shape::Title => format!("title:{}", common(i)),
         }
     }
@@ -400,8 +409,12 @@ const CALIB_REF_NS: f64 = 10_700.0;
 ///
 /// Each pass judges every torrent of a varied set once, so caches warm
 /// only as they would on ingest. The engine is measured with 1%, 10% and
-/// 25% of the rules built on words the torrents have. The budget holds
-/// the core, 1% and 10%; 25% is measured and reported, not held.
+/// 25% of the rules built on words the torrents have, with a mixed set
+/// that adds the shapes the cheap check can't decide ([`mixed_rules`]),
+/// and with 10% of each such shape ([`Shape`]). The budget holds the
+/// core, 1%, 10% and the mixed set; 25% and each shape at 10% are
+/// measured and reported, not held. Every rule shape counts (§2.21,
+/// owner-delegated, 2026-10-23).
 ///
 /// The budget is in reference-runner microseconds (owner, 2026-10-22;
 /// `docs/decisions/2026-10-22-filter-budget.md`). Hosted runners differ
