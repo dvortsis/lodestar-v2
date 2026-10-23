@@ -182,6 +182,7 @@ fn service_sid(name: &str) -> String {
 /// A folder's security descriptor in SDDL.
 fn sddl(path: &Path) -> String {
     let out = Command::new("powershell.exe")
+        .env_remove("PSModulePath")
         .args(["-NoProfile", "-NonInteractive", "-Command"])
         .arg(format!("(Get-Acl -LiteralPath '{}').Sddl", path.display()))
         .output()
@@ -253,6 +254,7 @@ fn runs_as_a_service() {
     let pid = field(&sc(&["queryex", &service.name]), "PID").expect("a PID");
     let priority = wait_for(Duration::from_secs(30), || {
         let out = Command::new("powershell.exe")
+            .env_remove("PSModulePath")
             .args(["-NoProfile", "-NonInteractive", "-Command"])
             .arg(format!("(Get-Process -Id {pid}).PriorityClass"))
             .output()

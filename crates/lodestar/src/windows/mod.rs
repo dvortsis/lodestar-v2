@@ -86,3 +86,13 @@ fn system32_command(relative: &str) -> Option<std::process::Command> {
     cmd.creation_flags(NO_WINDOW);
     Some(cmd)
 }
+
+/// Windows PowerShell 5.1 from System32, with its own module path: one
+/// inherited from PowerShell 7 (a parent shell, a CI runner) points at
+/// modules 5.1 can't load, and `Get-Acl` then fails to autoload.
+#[cfg(windows)]
+fn powershell_command() -> Option<std::process::Command> {
+    let mut cmd = system32_command(r"WindowsPowerShell\v1.0\powershell.exe")?;
+    cmd.env_remove("PSModulePath");
+    Some(cmd)
+}
