@@ -134,6 +134,7 @@ fn fixture() -> Fixture {
             settings: None,
             adult: AdultVisibility::follow(move || *rx.borrow()),
             ops: None,
+            insights: None,
         }),
     );
     let mut f = Fixture {

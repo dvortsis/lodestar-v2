@@ -49,6 +49,7 @@ fn fixture() -> Fixture {
             settings: Some(registry),
             ops: None,
             adult: Default::default(),
+            insights: None,
         }),
     );
     Fixture {

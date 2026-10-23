@@ -51,7 +51,10 @@ pub use filter::{
 pub use floor::{FloorSource, PendingFloor, Settled};
 pub use history::{History, trend};
 pub use hot::{Col, HotColumns, NEVER, SwarmHot};
-pub use insights::{CohortCount, Counter, Event};
+pub use insights::{
+    CohortCount, Counter, Event, RollupBy, Searchable, SearchableCodes, UNCLASSIFIED, log_bucket,
+    log_bucket_bounds,
+};
 pub use reporting::{QueryCount, QueryLogEntry, QueryLogging, Resolved};
 pub use rules::{ClassCorrection, ExceptionRow, MARK_CHUNK, OverrideRow, RuleRow, RuleSet};
 pub use rusqlite;

@@ -88,6 +88,7 @@ fn fixture() -> Fixture {
             settings: None,
             ops: None,
             adult: Default::default(),
+            insights: None,
         }),
     );
     let hashes = infos
@@ -336,6 +337,8 @@ async fn errors_share_one_envelope() {
         get("/api/v1/settings", None),
         get("/api/v1/settings/crawler", None),
         get("/api/v1/settings/nope", None),
+        get("/api/v1/insights/overview", None),
+        get("/api/v1/insights/events?from=0&to=1", None),
         Request::patch("/api/v1/settings/crawler")
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(r#"{"intensity":"low"}"#))
@@ -493,6 +496,7 @@ async fn protected_routes_fail_closed_outside_the_router() {
         settings: None,
         ops: None,
         adult: Default::default(),
+        insights: None,
     });
     let (status, _, body) = call(&stray, get("/x", Some(&cookie))).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);

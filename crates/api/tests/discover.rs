@@ -142,6 +142,7 @@ fn fixture_with(torrents: &[T<'_>], search: bool, adult: bool) -> Fixture {
             settings: None,
             ops: None,
             adult: AdultVisibility::follow(move || adult),
+            insights: None,
         }),
     );
     Fixture {

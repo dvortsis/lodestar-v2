@@ -170,6 +170,7 @@ async fn fixture() -> Fixture {
             settings: Some(registry.clone()),
             ops: Some(ops.clone()),
             adult: Default::default(),
+            insights: None,
         }),
     );
     Fixture {
