@@ -230,16 +230,20 @@ impl Auth {
     /// the previous value calls this directly.
     pub fn set_proxy(&self, config: ProxyConfig) -> Result<ProxyConfig, SetProxyError> {
         let proxy = Proxy::compile(config).map_err(SetProxyError::Invalid)?;
-        if proxy.config.enabled && proxy.has_wide_range() {
-            lodestar_log::log_event!(log_events::AUTH_PROXY_WIDE_RANGE);
-        }
+        let wide = proxy.config.enabled && proxy.has_wide_range();
         let mut state = self.state.write().expect("auth lock");
         let previous = std::mem::replace(&mut state.proxy, proxy);
         if let Err(e) = self.save(&state) {
             state.proxy = previous;
             return Err(SetProxyError::Storage(e));
         }
-        Ok(state.proxy.config.clone())
+        let saved = state.proxy.config.clone();
+        drop(state);
+        // Once it applies, and outside the lock.
+        if wide {
+            lodestar_log::log_event!(log_events::AUTH_PROXY_WIDE_RANGE);
+        }
+        Ok(saved)
     }
 
     /// Whether the trusted-proxy user header signs this request in (see
@@ -766,6 +770,46 @@ mod tests {
         let auth = Auth::load(&path, false).unwrap();
         assert!(!auth.proxy().enabled, "refused on load: off");
         assert!(auth.login(IP, "correct horse battery").is_ok());
+    }
+
+    /// The proxy settings' warnings: a section that loads as off, an
+    /// override that isn't `off`, and a wide range once it's saved. Each
+    /// event fires only here, so its counter says it was logged.
+    #[test]
+    fn proxy_warnings_are_logged() {
+        use log_events::{
+            AUTH_PROXY_OVERRIDE_IGNORED, AUTH_PROXY_SETTINGS_INVALID, AUTH_PROXY_WIDE_RANGE,
+        };
+        let count = |e: &lodestar_log::Event| e.count();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("auth.json");
+        let key = "ab".repeat(32);
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"password":null,"session_key":"{key}","proxy":{{"enabled":true,"trusted":["0.0.0.0/0"]}}}}"#
+            ),
+        )
+        .unwrap();
+        let before = count(&AUTH_PROXY_SETTINGS_INVALID::EVENT);
+        let auth = Auth::load(&path, false).unwrap();
+        assert!(count(&AUTH_PROXY_SETTINGS_INVALID::EVENT) > before);
+
+        let before = count(&AUTH_PROXY_OVERRIDE_IGNORED::EVENT);
+        assert!(!auth.apply_proxy_override(Some("false")));
+        assert!(count(&AUTH_PROXY_OVERRIDE_IGNORED::EVENT) > before);
+        let before = count(&AUTH_PROXY_OVERRIDE_IGNORED::EVENT);
+        assert!(auth.apply_proxy_override(Some("OFF")));
+        assert_eq!(count(&AUTH_PROXY_OVERRIDE_IGNORED::EVENT), before);
+
+        let before = count(&AUTH_PROXY_WIDE_RANGE::EVENT);
+        auth.set_proxy(ProxyConfig {
+            enabled: true,
+            trusted: vec!["10.0.0.0/8".into()],
+            ..ProxyConfig::default()
+        })
+        .unwrap();
+        assert!(count(&AUTH_PROXY_WIDE_RANGE::EVENT) > before);
     }
 
     #[test]
