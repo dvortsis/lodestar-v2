@@ -604,25 +604,7 @@ impl<'a> Doc<'a> {
                     Tri::No
                 }
             }
-            Compiled::Range { field, lo, hi } => {
-                let inside = |v: u64| lo.is_none_or(|l| v >= l) && hi.is_none_or(|h| v <= h);
-                if in_file && *field == NumField::Size {
-                    // The sizes `file:(…)` reads lie between these, so a
-                    // range that misses them misses every file.
-                    let (min, max) = self.content().file_sizes;
-                    let reachable = lo.is_none_or(|l| l <= max) && hi.is_none_or(|h| h >= min);
-                    let any = reachable
-                        && self
-                            .item
-                            .files
-                            .iter()
-                            .take(crate::MAX_FILES)
-                            .any(|f| !f.padding && inside(f.size));
-                    if any { Tri::Maybe } else { Tri::No }
-                } else {
-                    Tri::of(self.any_number(*field, None, inside))
-                }
-            }
+            Compiled::Range { field, lo, hi } => self.check_range(*field, *lo, *hi, in_file),
             Compiled::Ext { any } => {
                 let has = self
                     .exts()
@@ -647,6 +629,27 @@ impl<'a> Doc<'a> {
             },
             Compiled::Leaf(node) => Tri::of(self.leaf(node)),
             _ => Tri::Maybe,
+        }
+    }
+
+    /// The cheap check of a numeric range.
+    fn check_range(&self, field: NumField, lo: Option<u64>, hi: Option<u64>, in_file: bool) -> Tri {
+        let inside = |v: u64| lo.is_none_or(|l| v >= l) && hi.is_none_or(|h| v <= h);
+        if in_file && field == NumField::Size {
+            // The sizes `file:(…)` reads lie between these, so a
+            // range that misses them misses every file.
+            let (min, max) = self.content().file_sizes;
+            let reachable = lo.is_none_or(|l| l <= max) && hi.is_none_or(|h| h >= min);
+            let any = reachable
+                && self
+                    .item
+                    .files
+                    .iter()
+                    .take(crate::MAX_FILES)
+                    .any(|f| !f.padding && inside(f.size));
+            if any { Tri::Maybe } else { Tri::No }
+        } else {
+            Tri::of(self.any_number(field, None, inside))
         }
     }
 
