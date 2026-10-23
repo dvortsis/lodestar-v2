@@ -189,7 +189,7 @@ pub fn page_capped(
     let epoch = rt.epoch().to_string();
     let fp = fingerprint(q);
     let ring = rt.ring();
-    let (head, oldest) = ring.bounds();
+    let (head, _) = ring.bounds();
     let pos = match &q.cursor {
         None => Pos::Ring { before: head + 1 },
         Some(c) => decode(c, &epoch, fp).ok_or(LogsError::BadCursor)?,
@@ -208,19 +208,24 @@ pub fn page_capped(
             if before > head + 1 {
                 return Err(LogsError::BadCursor);
             }
-            let (got, next): (Vec<Arc<Entry>>, Option<u64>) =
+            let (got, next): (Vec<Arc<Entry>>, Result<u64, u64>) =
                 ring.before(before, q.limit, |e| shown(e).is_some());
             lines.extend(got.iter().filter_map(|e| shown(e)));
-            if let Some(next) = next {
-                let cursor = encode(&epoch, fp, &Pos::Ring { before: next });
-                return Ok(LogHistory {
-                    lines,
-                    more: true,
-                    next_cursor: Some(cursor),
-                    unreadable,
-                });
+            match next {
+                Ok(next) => {
+                    let cursor = encode(&epoch, fp, &Pos::Ring { before: next });
+                    return Ok(LogHistory {
+                        lines,
+                        more: true,
+                        next_cursor: Some(cursor),
+                        unreadable,
+                    });
+                }
+                // The lowest sequence the ring still covered when it was
+                // last looked at: lines evicted during the walk are read
+                // from the files.
+                Err(covered) => (covered, None),
             }
-            (before.min(oldest), None)
         }
         Pos::File {
             below,
@@ -237,8 +242,10 @@ pub fn page_capped(
             unreadable,
         });
     };
+    // A folder that can't be listed (gone, unmounted) has no files: the
+    // ring's lines still come back.
     let listed: Vec<Listed> = files::list(dir)
-        .map_err(LogsError::Internal)?
+        .unwrap_or_default()
         .into_iter()
         .filter(|l| l.regular)
         .collect();
@@ -262,19 +269,32 @@ pub fn page_capped(
             end = None;
             continue;
         };
+        // A file that can't be read is counted and passed over, never an
+        // error: one damaged file mustn't block every page that reaches it.
         let len = match &l.name {
             LogName::Current => {
                 let n = f.metadata().map(|m| m.len()).unwrap_or(0);
-                read::whole_lines(&mut f, n).map_err(LogsError::Internal)?
+                read::whole_lines(&mut f, n)
             }
-            n => read::plain_len(&mut f, n.gz()).map_err(LogsError::Internal)?,
+            n => read::plain_len(&mut f, n.gz()),
+        };
+        let Ok(len) = len else {
+            unreadable += 1;
+            idx += 1;
+            end = None;
+            continue;
         };
         let start = end.map_or(len, |e: u64| e.min(len));
         let head_fp = match l.name {
             LogName::Current => head_of(dir, &l.name),
             _ => 0,
         };
-        let mut r = read::backward(f, l.name.gz(), start).map_err(LogsError::Internal)?;
+        let Ok(mut r) = read::backward(f, l.name.gz(), start) else {
+            unreadable += 1;
+            idx += 1;
+            end = None;
+            continue;
+        };
         let mut at = start;
         loop {
             if cost + r.cost() >= cap {
@@ -291,8 +311,13 @@ pub fn page_capped(
                     unreadable,
                 });
             }
-            let Some(raw) = r.prev().map_err(LogsError::Internal)? else {
-                break;
+            let raw = match r.prev() {
+                Ok(Some(raw)) => raw,
+                Ok(None) => break,
+                Err(_) => {
+                    unreadable += 1;
+                    break;
+                }
             };
             at = raw.start;
             let Some(bytes) = raw.bytes else {

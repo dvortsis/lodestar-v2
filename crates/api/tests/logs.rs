@@ -677,3 +677,51 @@ where
     }
     out
 }
+
+#[tokio::test]
+async fn a_steady_flow_of_lines_never_puts_off_the_session_check() {
+    let fake = Fake::new(config(), 5000);
+    let f = fixture(Some(fake.clone()));
+    let c = session(&f.auth);
+    let addr = serve(f.app.clone()).await;
+    let mut s = Conn::open(addr, "/api/v1/logs/stream", &[("cookie", &c)]).await;
+    s.until("retry:", SOON).await;
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let pusher = {
+        let (fake, stop) = (fake.clone(), stop.clone());
+        tokio::spawn(async move {
+            while !stop.load(Ordering::Relaxed) {
+                fake.push(Level::Info, "busy");
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+    };
+    s.until("busy", SOON).await;
+    // "Sign out other sessions" rotates the key: this one's cookie dies.
+    f.auth.rotate_sessions().unwrap();
+    s.until_closed(Duration::from_secs(2)).await;
+    stop.store(true, Ordering::Relaxed);
+    pusher.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_last_event_id_that_isnt_text_is_malformed_and_wins() {
+    let fake = Fake::new(config(), 100);
+    let f = fixture(Some(fake.clone()));
+    let c = session(&f.auth);
+    let addr = serve(f.app.clone()).await;
+    let a = fake.push(Level::Info, "a");
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let mut req = format!(
+        "GET /api/v1/logs/stream?after={EPOCH}-{a} HTTP/1.1\r\nHost: {addr}\r\ncookie: {c}\r\nlast-event-id: "
+    )
+    .into_bytes();
+    req.extend_from_slice(b"\xff\xfe\r\n\r\n");
+    stream.write_all(&req).await.unwrap();
+    let mut s = Conn {
+        stream,
+        text: String::new(),
+    };
+    s.until("event: resync", SOON).await;
+    assert_eq!(s.data("resync")[0]["reason"], "malformed");
+}

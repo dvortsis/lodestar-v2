@@ -37,6 +37,7 @@ use super::{
 };
 use crate::dto::error::ErrorEnvelope;
 use crate::error::{ApiError, ApiResult};
+use crate::extract::Peer;
 use crate::{ApiState, Auth, auth};
 
 /// What a cursor names.
@@ -66,16 +67,15 @@ pub(crate) fn parse_id(epoch: &str, id: &str) -> Cursor {
     seq.parse().map_or(Cursor::Malformed, Cursor::Ours)
 }
 
-/// The session's key for the per-session cap: a hash of the session
-/// cookie, or of the proxy user for a trusted-proxy session. Never logged.
-fn session_of(auth: &Auth, headers: &HeaderMap) -> u64 {
-    let cookie = headers
-        .get_all(header::COOKIE)
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .find(|c| auth.verify(c))
-        .and_then(|c| auth::cookie_value(c, auth::COOKIE));
-    let key = match cookie {
+/// The session's key for the per-session cap, as `/events` counts it: the
+/// session cookie when it's valid (what the guard accepts), else the
+/// trusted proxy's user per client address. Hashed; never logged.
+fn session_of(auth: &Auth, headers: &HeaderMap, peer: IpAddr) -> u64 {
+    let first = headers.get(header::COOKIE).and_then(|v| v.to_str().ok());
+    let key = match first
+        .filter(|c| auth.verify(c))
+        .and_then(|c| auth::cookie_value(c, auth::COOKIE))
+    {
         Some(c) => format!("cookie:{c}"),
         None => {
             let name = auth.proxy().header;
@@ -83,22 +83,11 @@ fn session_of(auth: &Auth, headers: &HeaderMap) -> u64 {
                 .get(name.as_str())
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("");
-            format!("proxy:{user}")
+            format!("proxy:{user}@{}", auth.client_ip(peer, headers))
         }
     };
     let d = Sha256::digest(key.as_bytes());
     u64::from_le_bytes(d[..8].try_into().expect("8 bytes"))
-}
-
-/// Whether what let the stream in still does: the cookie, or the proxy
-/// header from the same TCP peer.
-fn still_signed_in(auth: &Auth, headers: &HeaderMap, peer: IpAddr) -> bool {
-    headers
-        .get_all(header::COOKIE)
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .any(|c| auth.verify(c))
-        || auth.proxy_signs_in(peer, headers)
 }
 
 fn frame(id: Option<&str>, event: &str, data: &str) -> Bytes {
@@ -188,11 +177,22 @@ async fn run(
     {
         return;
     }
-    let start = tokio::time::Instant::now() + config.heartbeat;
-    let mut beat = tokio::time::interval_at(start, config.heartbeat);
-    beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // The session is checked again on this clock, whatever else is
+    // happening: a steady flow of lines must never put it off.
+    let mut next_beat = tokio::time::Instant::now() + config.heartbeat;
     let mut closed_wait = closed.clone();
     'outer: loop {
+        if tokio::time::Instant::now() >= next_beat {
+            // Expired, or the password changed (which ends every other
+            // session): the stream ends with the session.
+            if !signed_in() {
+                return;
+            }
+            if !send(&out, &closed, Bytes::from_static(b": keep-alive\n\n")).await {
+                return;
+            }
+            next_beat = tokio::time::Instant::now() + config.heartbeat;
+        }
         wake.borrow_and_update();
         let (g, purges) = source.purges_since(generation);
         generation = g;
@@ -218,7 +218,7 @@ async fn run(
         for (seq, line) in read.lines {
             // A purge since the read: its frame first, and these lines
             // again as the ring has them now.
-            if source.generation() != generation {
+            if source.generation() != generation || tokio::time::Instant::now() >= next_beat {
                 continue 'outer;
             }
             let id = format!("{epoch}-{seq}");
@@ -229,25 +229,12 @@ async fn run(
             cursor = seq;
         }
         cursor = cursor.max(read.head);
-        let beat_now = tokio::select! {
+        tokio::select! {
             biased;
             _ = closed_wait.wait_for(|c| *c) => return,
             () = out.closed() => return,
-            changed = wake.changed() => match changed {
-                Ok(()) => false,
-                Err(_) => return,
-            },
-            _ = beat.tick() => true,
-        };
-        if beat_now {
-            // Expired, signed out, or the password changed: the stream
-            // ends with the session.
-            if !signed_in() {
-                return;
-            }
-            if !send(&out, &closed, Bytes::from_static(b": keep-alive\n\n")).await {
-                return;
-            }
+            () = tokio::time::sleep_until(next_beat) => {}
+            changed = wake.changed() => if changed.is_err() { return },
         }
     }
 }
@@ -297,15 +284,18 @@ async fn run(
 pub(crate) async fn stream(
     State(s): State<ApiState>,
     handle: Handle,
+    Peer(peer): Peer,
     headers: HeaderMap,
-    extensions: axum::http::Extensions,
     RawQuery(query): RawQuery,
 ) -> ApiResult<Response> {
     let p = params::parse(query.as_deref())?;
     let filter = params::filter(&p)?;
     let source = source(handle)?;
     let auth = s.auth.clone();
-    let slot = match source.transport().acquire(session_of(&auth, &headers)) {
+    let slot = match source
+        .transport()
+        .acquire(session_of(&auth, &headers, peer))
+    {
         Ok(slot) => slot,
         Err(Refused::Closed) => return Err(unavailable()),
         Err(Refused::Busy) => {
@@ -320,14 +310,15 @@ pub(crate) async fn stream(
             return Ok(res);
         }
     };
-    let start = headers
-        .get("last-event-id")
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_string)
-        .or_else(|| p.get("after").cloned());
-    let peer = crate::extract::peer_ip(&extensions);
+    // The header wins even when it isn't text: that's a malformed cursor.
+    let start = match headers.get("last-event-id") {
+        Some(v) => Some(v.to_str().unwrap_or("").to_string()),
+        None => p.get("after").cloned(),
+    };
     let (out, rx) = mpsc::channel(source.transport().config().queue.max(1));
-    let signed_in = move || still_signed_in(&auth, &headers, peer);
+    // The guard's check, repeated at each heartbeat on what it let in:
+    // the cookie, or a trusted proxy's user header from the same peer.
+    let signed_in = move || auth::logged_in(&auth, &headers, peer);
     tokio::spawn(run(source, filter, start, out, signed_in));
     Ok((
         [
