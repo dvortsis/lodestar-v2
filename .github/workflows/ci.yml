@@ -114,6 +114,13 @@ jobs:
           if grep -q skipping privdrop.log; then
             echo "::error::the root-only tests skipped"; exit 1
           fi
+          # The maintenance commands drop root too (tests/cli.rs).
+          cli=$(cargo test -p lodestar --test cli --no-run --message-format=json \
+            | jq -r 'select(.profile.test == true and .target.name == "cli") | .executable')
+          sudo "$cli" maintenance_runs_as_puid --exact --nocapture 2>&1 | tee cli-root.log
+          if grep -q skipping cli-root.log || ! grep -q "1 passed" cli-root.log; then
+            echo "::error::the root-only CLI test skipped"; exit 1
+          fi
 
   size-budget:
     name: size budget (§3)
