@@ -11,6 +11,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use lodestar_store::Store;
 
 use crate::index::{CatchUp, Result, SearchIndex};
+use crate::suggest::Titles;
 
 #[derive(Debug, Clone)]
 pub struct LiveConfig {
@@ -199,6 +200,11 @@ impl LiveIndexer {
         hook: Arc<CommitHook>,
     ) -> Result<LiveIndexer> {
         let indexer = index.writer(config.heap_bytes)?;
+        // B7: the title FST follows this store, rebuilt off this thread.
+        let titles = index.titles().clone();
+        if let Some(path) = store.connection().path().filter(|p| !p.is_empty()) {
+            titles.follow(path.into());
+        }
         let stop = Arc::new(AtomicBool::new(false));
         stats.watermark.store(indexer.last_id(), Ordering::Relaxed);
         let (s, st) = (stop.clone(), stats.clone());
@@ -230,8 +236,7 @@ impl LiveIndexer {
                             &mut indexer,
                             &mut store,
                             &config,
-                            &st,
-                            &hook,
+                            (&st, &hook, &titles),
                             &s,
                             (&mut backoff, &mut reported),
                         )
@@ -282,8 +287,7 @@ fn follow(
     indexer: &mut crate::Indexer,
     store: &mut Store,
     config: &LiveConfig,
-    st: &IndexStats,
-    hook: &CommitHook,
+    (st, hook, titles): (&IndexStats, &CommitHook, &Arc<Titles>),
     stop: &AtomicBool,
     (backoff, reported): (&mut Duration, &mut i64),
 ) -> Result<()> {
@@ -302,6 +306,7 @@ fn follow(
             || (indexer.pending() > 0 && since.elapsed() >= config.commit_every);
         if due {
             commit(indexer, &mut pending, config, st, hook)?;
+            titles.committed();
             (*backoff, *reported) = (config.poll, indexer.last_id());
             since = Instant::now();
         }
@@ -314,6 +319,9 @@ fn follow(
             std::thread::sleep(config.poll);
         }
     }
+    // Stopping (a swap or shutdown): this index's titles no longer
+    // follow the store.
+    titles.unfollow();
     if indexer.pending() > 0 {
         commit(indexer, &mut pending, config, st, hook)?;
         *reported = indexer.last_id();
