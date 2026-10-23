@@ -21,6 +21,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/proxy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The trusted reverse-proxy header settings (§12). `forced_off` says
+         *     `LODESTAR_PROXY_AUTH=off` turned them off for this run.
+         */
+        get: operations["getProxyAuth"];
+        /**
+         * Changes the trusted reverse-proxy header settings. Needs the password
+         *     (428 `confirm_required` without it).
+         */
+        put: operations["putProxyAuth"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/classify": {
         parameters: {
             query?: never;
@@ -699,6 +723,85 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every API key and feed token, oldest first: never a secret. */
+        get: operations["listKeys"];
+        put?: never;
+        /**
+         * Makes an API key or feed token. Needs the password (428
+         *     `confirm_required` without it). The secret is in this response only.
+         */
+        post: operations["createKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/keys/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Deletes a key or token and its hash. */
+        delete: operations["deleteKey"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/keys/{id}/regenerate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replaces a key's secret: the old one stops working at once. The key
+         *     keeps its name, kind, scopes, feed and expiry, under a new id and
+         *     prefix. Needs the password (428 `confirm_required` without it).
+         */
+        post: operations["regenerateKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/keys/{id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revokes a key or token: it stops working and stays listed as revoked.
+         *     Revoking one already revoked changes nothing.
+         */
+        post: operations["revokeKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/login": {
         parameters: {
             query?: never;
@@ -868,6 +971,27 @@ export interface paths {
          *     `"explain": true` (as `GET`'s `explain`).
          */
         post: operations["searchPost"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sessions/revoke-others": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Signs out every other browser: rotates the session key and sets a new
+         *     cookie for this one. Needs the password (428 `confirm_required`
+         *     without it).
+         */
+        post: operations["revokeOtherSessions"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1924,6 +2048,17 @@ export interface components {
              */
             pct_files: number;
         };
+        /**
+         * @description `POST /sessions/revoke-others`, and any other change that only needs
+         *     the password (§20.11). `Debug` redacts it.
+         */
+        ConfirmRequest: {
+            /**
+             * @description The admin password, every time. Without it the answer is 428
+             *     `confirm_required`.
+             */
+            password?: string;
+        };
         CoreRuleState: {
             action: string;
             /** @description Part of the locked floor: can't be switched off. */
@@ -2077,6 +2212,42 @@ export interface components {
             since: number;
             /** @enum {string} */
             state: "running" | "paused";
+        };
+        /** @description `POST /keys`. `Debug` redacts the password. */
+        CreateKeyRequest: {
+            /**
+             * Format: int64
+             * @description Unix seconds, in the future; absent: never expires.
+             */
+            expires_at?: number;
+            kind: components["schemas"]["KeyKind"];
+            /** @description 1–200 characters. */
+            name: string;
+            /** @description The admin password (428 `confirm_required` without it). */
+            password?: string;
+            /**
+             * Format: int64
+             * @description A feed token's saved search; absent: every feed. API keys take
+             *     none.
+             */
+            saved_search_id?: number;
+            /**
+             * @description An API key's scopes, at least one. A feed token takes none (it
+             *     reads feeds only).
+             */
+            scopes?: components["schemas"]["KeyScope"][];
+        };
+        /**
+         * @description `POST /keys` and `POST /keys/{id}/regenerate`: the key and, this once,
+         *     its secret. `Debug` redacts the secret.
+         */
+        CreatedKey: {
+            key: components["schemas"]["KeyInfo"];
+            /**
+             * @description The whole secret (`lsk_…` or `lsf_…`). Shown only now: Lodestar
+             *     keeps its hash, not the secret.
+             */
+            secret: string;
         };
         Decision: {
             action: string;
@@ -2807,6 +2978,72 @@ export interface components {
             status?: number;
         };
         /**
+         * @description A key or token as listed: never its secret or hash.
+         * @example {
+         *       "created_at": 1700000000,
+         *       "expires_at": null,
+         *       "id": 3,
+         *       "kind": "api_key",
+         *       "last_used_at": 1700000600,
+         *       "name": "Prowlarr",
+         *       "prefix": "lsk_Q7f2bX9a",
+         *       "revoked_at": null,
+         *       "saved_search_id": null,
+         *       "scopes": [
+         *         "torznab"
+         *       ],
+         *       "status": "active"
+         *     }
+         */
+        KeyInfo: {
+            /**
+             * Format: int64
+             * @description Unix seconds.
+             */
+            created_at: number;
+            /**
+             * Format: int64
+             * @description Unix seconds; null: never expires.
+             */
+            expires_at: number | null;
+            /** Format: int64 */
+            id: number;
+            kind: components["schemas"]["KeyKind"];
+            /**
+             * Format: int64
+             * @description Unix seconds, written at most once a minute; null: never used.
+             */
+            last_used_at: number | null;
+            name: string;
+            /** @description The secret's public start, to tell keys apart. */
+            prefix: string;
+            /**
+             * Format: int64
+             * @description Unix seconds; null: not revoked.
+             */
+            revoked_at: number | null;
+            /**
+             * Format: int64
+             * @description A feed token's saved search; null: every feed (or an API key).
+             */
+            saved_search_id: number | null;
+            scopes: components["schemas"]["KeyScope"][];
+            status: components["schemas"]["KeyStatus"];
+        };
+        /** @enum {string} */
+        KeyKind: "api_key" | "feed_token";
+        /** @description `GET /keys`, oldest first. */
+        KeyList: {
+            keys: components["schemas"]["KeyInfo"][];
+        };
+        /**
+         * @description What a key may reach (see `keys::scope`). A route opts in to one.
+         * @enum {string}
+         */
+        KeyScope: "search" | "torznab" | "feeds";
+        /** @enum {string} */
+        KeyStatus: "active" | "expired" | "revoked";
+        /**
          * @description One label in use.
          * @example {
          *       "count": 3,
@@ -3094,6 +3331,44 @@ export interface components {
             code: string;
             /** @description A sentence for people. */
             message: string;
+        };
+        /**
+         * @description `GET` and `PUT /auth/proxy`: trusted reverse-proxy header auth.
+         * @example {
+         *       "allowed_users": [],
+         *       "enabled": true,
+         *       "forced_off": false,
+         *       "header": "Remote-User",
+         *       "trusted": [
+         *         "172.17.0.1/32"
+         *       ]
+         *     }
+         */
+        ProxySettings: {
+            /** @description Empty: any user the proxy names. */
+            allowed_users: string[];
+            enabled: boolean;
+            /**
+             * @description `LODESTAR_PROXY_AUTH=off` turned proxy auth off for this run; the
+             *     saved settings shown here don't apply until it's removed.
+             */
+            forced_off: boolean;
+            /** @description The header the proxy names the signed-in user in. */
+            header: string;
+            /** @description The proxies whose header is believed, as canonical CIDRs. */
+            trusted: string[];
+        };
+        /** @description `PUT /auth/proxy`. `Debug` redacts the password. */
+        ProxyUpdate: {
+            /** @description At most 64 user names; empty allows any. */
+            allowed_users?: string[];
+            enabled: boolean;
+            /** @description Defaults to `Remote-User`. */
+            header?: string;
+            /** @description The admin password (428 `confirm_required` without it). */
+            password?: string;
+            /** @description IP addresses or CIDR ranges, at most 64. Required to turn it on. */
+            trusted?: string[];
         };
         QuarantineEntry: {
             /**
@@ -4578,6 +4853,50 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    getProxyAuth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProxySettings"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putProxyAuth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProxyUpdate"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProxySettings"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getClassify: {
         parameters: {
             query?: never;
@@ -5870,6 +6189,135 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    listKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description Made; `secret` is shown this once. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedKey"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The key's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        /** @description Any JSON, such as `{}`. */
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    regenerateKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The key's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfirmRequest"];
+            };
+        };
+        responses: {
+            /** @description Replaced; `secret` is shown this once. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedKey"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    revokeKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The key's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        /** @description Any JSON, such as `{}`. */
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyInfo"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     login: {
         parameters: {
             query?: never;
@@ -6271,6 +6719,33 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SearchResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    revokeOtherSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfirmRequest"];
+            };
+        };
+        responses: {
+            /** @description Every other session ended; a new session cookie is set. */
+            200: {
+                headers: {
+                    /** @description The new session cookie. */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
                 };
             };
             default: components["responses"]["Error"];

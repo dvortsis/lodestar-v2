@@ -23,6 +23,7 @@ pub mod export;
 pub mod facets;
 pub mod filters;
 pub mod jobs;
+pub mod keys;
 pub mod ops;
 pub mod saved;
 pub mod search;
