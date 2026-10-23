@@ -93,7 +93,9 @@ cargo run --release -p lodestar-bench --bin relevance -- --write-baseline
 directory with known contents (build plan §1.3 seam 2). Screens, e2e
 tests, the v0.5 exit and the user-doc screenshots use it instead of the
 W6 mock. `lodestar_bench::fixture` builds it; the server only adds
-`auth.json` and `seal.key`, as on any first start.
+`auth.json` and `seal.key`, as on any first start. It's in the
+binary through the default-on `fixture` feature of `lodestar` (about
+3 MB); `--no-default-features` builds leave it out.
 
 ```sh
 # A temporary fixture, removed when the server stops cleanly:
@@ -120,7 +122,7 @@ lodestar serve --fixture /tmp/lodestar-fixture
 
 ### What it holds
 
-- **About 250 hand-specified torrents.** Twenty films in four versions
+- **About 200 hand-specified torrents.** Twenty films in four versions
   each (The Lantern Keeper has six, for siblings and Compare), series
   packs and episodes, albums, ebooks, audiobooks, software, games, photo
   sets and comics.

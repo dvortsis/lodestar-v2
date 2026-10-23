@@ -8,7 +8,7 @@
 //! and search APIs only (the sequence `search-bench` uses: insert, enrich,
 //! index), so it stays valid across migrations. It holds:
 //!
-//! - **Torrents:** about 250 hand-specified ones (several versions of one
+//! - **Torrents:** about 200 hand-specified ones (several versions of one
 //!   title for siblings and Compare, every content type, every edge case
 //!   below) and [`GENERATED`] from [`Generator`] with a fixed seed. Every
 //!   name is invented: the generator's real release-group and tracker
