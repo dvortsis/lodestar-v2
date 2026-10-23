@@ -143,4 +143,25 @@ impl Store {
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
+
+    /// The newest event of one of `kinds`, if any. It walks the table
+    /// back from the newest row and stops at the first match.
+    pub fn last_event(&self, kinds: &[u32]) -> Result<Option<Event>> {
+        if kinds.is_empty() {
+            return Ok(None);
+        }
+        let marks = vec!["?"; kinds.len()].join(", ");
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT at, kind, detail FROM events WHERE kind IN ({marks}) ORDER BY id DESC LIMIT 1"
+        ))?;
+        let mut rows = stmt.query(rusqlite::params_from_iter(kinds))?;
+        Ok(match rows.next()? {
+            Some(r) => Some(Event {
+                at: r.get(0)?,
+                kind: r.get(1)?,
+                detail: r.get(2)?,
+            }),
+            None => None,
+        })
+    }
 }

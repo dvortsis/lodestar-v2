@@ -1,0 +1,2 @@
+200
+{"data_bytes":1073741824,"disk_free_bytes":null,"fetched_per_hour":1260.0,"harvested_per_hour":null,"index_lag_s":0,"paused":true,"queue_depth":93,"searchable_torrents":null,"stored_torrents":2410391,"updated_at":1700000100,"uptime_s":100}
