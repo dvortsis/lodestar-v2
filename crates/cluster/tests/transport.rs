@@ -507,6 +507,8 @@ async fn connection_caps_refuse_the_excess_before_authentication() {
         drop((_a, _b, _c));
         until(&c.server, |s| s.handshaking == 0).await;
         let nas = c.join("nas").await;
+        // The join connection holds its slot until it has closed.
+        until(&c.server, |s| s.handshaking == 0).await;
         let a = c.session(&nas).await;
         a.heartbeat().await.unwrap();
         // An authenticated session doesn't hold a pre-auth slot.
@@ -788,6 +790,138 @@ async fn discovery_times_are_corrected_by_the_measured_offset() {
         let lease = c.server.lease(&InfoHash(key(1))).unwrap();
         assert_eq!(lease.discovered_at, c.clock.now_secs());
         assert_eq!(lease.holder, fast.worker());
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn revoking_a_disconnected_worker_returns_its_leases() {
+    guard(async {
+        let c = coordinator(config()).await;
+        let nas = c.join("nas").await;
+        let pi = c.join("pi").await;
+        let mut b = c.local().await;
+
+        // Through the server.
+        let a = c.session(&nas).await;
+        token_of(&a.claim(found(&*c.clock, &[1])).await.unwrap()[0]);
+        drop(a);
+        until(&c.server, |s| {
+            s.workers
+                .iter()
+                .all(|w| w.worker != nas.worker() || !w.connected)
+        })
+        .await;
+        c.server.revoke(nas.worker()).await.unwrap();
+        let WorkerEvent::Regranted(items) = event(&mut b).await else {
+            panic!("no re-grant");
+        };
+        assert_eq!(items[0].key(), key(1));
+
+        // From another process, picked up by the next tick.
+        let p = c.session(&pi).await;
+        token_of(&p.claim(found(&*c.clock, &[2])).await.unwrap()[0]);
+        drop(p);
+        until(&c.server, |s| {
+            s.workers
+                .iter()
+                .all(|w| w.worker != pi.worker() || !w.connected)
+        })
+        .await;
+        let (mut cli, mut store, _secrets) = c.other_process();
+        cli.revoke(&mut store, pi.worker()).unwrap();
+        drop((cli, store));
+        b.heartbeat().await.unwrap();
+        c.server.tick().await;
+        let WorkerEvent::Regranted(items) = event(&mut b).await else {
+            panic!("no re-grant");
+        };
+        assert_eq!(items[0].key(), key(2));
+        let s = c.server.snapshot();
+        assert_eq!((s.leases, s.pending, s.regrants), (2, 0, 2));
+        assert_eq!(b.leases(), 2);
+    })
+    .await;
+}
+
+/// A store check that waits until the test lets it go.
+struct HeldCheck {
+    entered: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+}
+
+impl StoredKeys for HeldCheck {
+    fn stored(&self, keys: &[InfoHash]) -> Vec<bool> {
+        if let Some(tx) = self.entered.lock().unwrap().take() {
+            let _ = tx.send(());
+        }
+        let _ = self.release.lock().unwrap().recv();
+        vec![false; keys.len()]
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_claim_waiting_on_the_store_check_gets_nothing_once_revoked() {
+    guard(async {
+        let (entered_tx, entered) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = std::sync::mpsc::channel();
+        let check = HeldCheck {
+            entered: std::sync::Mutex::new(Some(entered_tx)),
+            release: std::sync::Mutex::new(release_rx),
+        };
+        let c = coordinator_with(config(), Some(Arc::new(check))).await;
+        let nas = c.join("nas").await;
+        let a = Arc::new(c.session(&nas).await);
+        let claiming = {
+            let a = a.clone();
+            let items = found(&*c.clock, &[1]);
+            tokio::spawn(async move { a.claim(items).await })
+        };
+        entered.await.unwrap();
+        c.server.revoke(nas.worker()).await.unwrap();
+        release.send(()).unwrap();
+        // Either the denial arrives before the stop, or the session ends
+        // first; never a grant.
+        if let Ok(items) = claiming.await.unwrap() {
+            assert_eq!(
+                items[0],
+                GrantItem::Denied {
+                    key: key(1),
+                    reason: DenyReason::Draining
+                }
+            );
+        }
+        let s = c.server.snapshot();
+        assert_eq!((s.harvested, s.leases, s.pending), (0, 0, 0));
+        assert!(c.server.lease(&InfoHash(key(1))).is_none());
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_drain_survives_a_reconnect_until_resumed() {
+    guard(async {
+        let c = coordinator(config()).await;
+        let nas = c.join("nas").await;
+        let mut a = c.session(&nas).await;
+        assert!(c.server.drain(nas.worker()));
+        assert_eq!(event(&mut a).await, WorkerEvent::Drain);
+        drop(a);
+
+        let mut a = c.session(&nas).await;
+        assert_eq!(event(&mut a).await, WorkerEvent::Drain, "asked again");
+        let denied = a.claim(found(&*c.clock, &[1])).await.unwrap();
+        assert!(matches!(
+            denied[0],
+            GrantItem::Denied {
+                reason: DenyReason::Draining,
+                ..
+            }
+        ));
+
+        assert!(c.server.resume(nas.worker()));
+        assert!(!c.server.resume(nas.worker()));
+        token_of(&a.claim(found(&*c.clock, &[1])).await.unwrap()[0]);
     })
     .await;
 }

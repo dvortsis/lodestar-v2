@@ -168,6 +168,16 @@ struct Fleet {
     pending: VecDeque<(InfoHash, Lease)>,
 }
 
+impl Fleet {
+    /// Whether `peer`'s session is still its worker's registered one.
+    fn is_current(&self, peer: &Peer) -> bool {
+        self.workers
+            .get(&peer.worker)
+            .and_then(|s| s.session.as_ref())
+            .is_some_and(|s| s.id == peer.session)
+    }
+}
+
 #[derive(Default)]
 struct Gate {
     total: usize,
@@ -245,6 +255,9 @@ struct Peer {
     worker: WorkerId,
     /// `None` for the built-in local worker, which has no certificate.
     identity: Option<PeerIdentity>,
+    /// Set once the session is registered. Claims, outcomes and heartbeats
+    /// count only while it is still the worker's current session.
+    session: u64,
 }
 
 /// The coordinator's cluster server: the listener, every session, the
@@ -288,7 +301,8 @@ impl Drop for Permit {
 }
 
 enum Accepted {
-    Joined,
+    /// A join connection whose request has been read in full.
+    Join(BoxIo, Zeroizing<Vec<u8>>),
     Cluster(CoordinatorLink, PeerIdentity),
 }
 
@@ -300,6 +314,30 @@ enum Flow {
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Reads a join connection's one request: a big-endian `u32` length (at
+/// most [`MAX_JOIN_REQUEST`]) and the frame.
+async fn read_join(tls: &mut BoxIo) -> Option<Zeroizing<Vec<u8>>> {
+    let len = usize::try_from(tls.read_u32().await.ok()?).ok()?;
+    if len > MAX_JOIN_REQUEST {
+        return None;
+    }
+    let mut buf = Zeroizing::new(vec![0u8; len]);
+    tls.read_exact(&mut buf).await.ok()?;
+    Some(buf)
+}
+
+async fn write_join(mut tls: BoxIo, reply: &JoinReply) {
+    let Ok(bytes) = frame::encode(reply) else {
+        return;
+    };
+    let Ok(len) = u32::try_from(bytes.len()) else {
+        return;
+    };
+    let _ = tls.write_u32(len).await;
+    let _ = tls.write_all(&bytes).await;
+    let _ = tls.shutdown().await;
 }
 
 /// One address's key for the per-IP cap: IPv4 as is, IPv6 by its /64 (one
@@ -398,12 +436,17 @@ impl ClusterServer {
             .await
             .unwrap_or(Err(ClusterError::Corrupt("the PKI task failed")))?;
         let mut fleet = lock(&self.fleet);
+        // Connected or not, its leases go back now (§19.6).
+        let leases = fleet.leases.evict(worker);
+        fleet.pending.extend(leases);
         self.sweep(&mut fleet, self.clock.now_ms());
         Ok(n)
     }
 
     /// Asks a worker to drain: it gets no new leases, finishes the ones it
-    /// holds, says `Drained` and is stopped. `false` if it isn't connected.
+    /// holds, says `Drained` and is stopped. The drain stands across
+    /// reconnects (it's asked for again after `Welcome`) until
+    /// [`resume`](Self::resume). `false` if the worker isn't connected.
     pub fn drain(&self, worker: WorkerId) -> bool {
         let mut fleet = lock(&self.fleet);
         let Some(state) = fleet.workers.get_mut(&worker) else {
@@ -419,6 +462,16 @@ impl ClusterServer {
             slot.stop(StopReason::Protocol);
         }
         true
+    }
+
+    /// Ends a drain: the worker may claim again. `false` if it wasn't
+    /// draining.
+    pub fn resume(&self, worker: WorkerId) -> bool {
+        let mut fleet = lock(&self.fleet);
+        let Some(state) = fleet.workers.get_mut(&worker) else {
+            return false;
+        };
+        std::mem::replace(&mut state.draining, false)
     }
 
     pub fn snapshot(&self) -> FleetSnapshot {
@@ -541,12 +594,22 @@ impl ClusterServer {
         match timeout(self.config.handshake_timeout, self.handshake(tcp)).await {
             Err(_) => bump(&self.counters.handshake_timeouts),
             Ok(None) => bump(&self.counters.handshake_failures),
-            Ok(Some(Accepted::Joined)) => {}
+            Ok(Some(Accepted::Join(tls, request))) => {
+                // The redeem runs to completion once the request is in: a
+                // timeout here would spend the token and drop the grant.
+                // (A worker whose reply is lost anyway can ask again with
+                // the same key, cluster1.) Writing the reply is bounded.
+                let reply = self.answer_join(&request).await;
+                drop(request);
+                let _ = timeout(self.config.handshake_timeout, write_join(tls, &reply)).await;
+                drop(permit);
+            }
             Ok(Some(Accepted::Cluster(link, identity))) => {
                 drop(permit);
                 let peer = Peer {
                     worker: identity.worker,
                     identity: Some(identity),
+                    session: 0,
                 };
                 self.session(link, peer).await;
             }
@@ -560,8 +623,9 @@ impl ClusterServer {
         let config = self.tls.config_for(&start.client_hello())?;
         let tls = start.into_stream(config).await.ok()?;
         if tls.get_ref().1.alpn_protocol() == Some(ALPN_JOIN) {
-            self.join(tls).await;
-            return Some(Accepted::Joined);
+            let mut tls = Box::new(tls) as BoxIo;
+            let request = read_join(&mut tls).await?;
+            return Some(Accepted::Join(tls, request));
         }
         // Authenticated before anything else is read.
         let identity = self.tls.identify(tls.get_ref().1)?;
@@ -586,27 +650,10 @@ impl ClusterServer {
         Some(Accepted::Cluster(Link::ws(ws), identity))
     }
 
-    /// A join connection: one length-prefixed request, one reply. Every
-    /// refusal is the same `Refused`.
-    async fn join<S>(&self, mut tls: S)
-    where
-        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-    {
-        let Ok(len) = tls.read_u32().await else {
-            return;
-        };
-        let Ok(len) = usize::try_from(len) else {
-            return;
-        };
-        if len > MAX_JOIN_REQUEST {
-            return;
-        }
-        let mut buf = Zeroizing::new(vec![0u8; len]);
-        if tls.read_exact(&mut buf).await.is_err() {
-            return;
-        }
+    /// The answer to a join request. Every refusal is the same `Refused`.
+    async fn answer_join(&self, request: &[u8]) -> JoinReply {
         bump(&self.counters.join_requests);
-        let reply = match frame::decode_join_request(&buf) {
+        match frame::decode_join_request(request) {
             Ok(req) if req.major == PROTOCOL_MAJOR => {
                 let text = Zeroizing::new(req.token);
                 match JoinToken::parse(&text) {
@@ -615,16 +662,7 @@ impl ClusterServer {
                 }
             }
             _ => JoinReply::Refused,
-        };
-        let Ok(bytes) = frame::encode(&reply) else {
-            return;
-        };
-        let Ok(len) = u32::try_from(bytes.len()) else {
-            return;
-        };
-        let _ = tls.write_u32(len).await;
-        let _ = tls.write_all(&bytes).await;
-        let _ = tls.shutdown().await;
+        }
     }
 
     async fn redeem(&self, token: JoinToken, public_key: [u8; 32]) -> JoinReply {
@@ -661,6 +699,7 @@ impl ClusterServer {
                 Peer {
                     worker: WorkerId::LOCAL,
                     identity: None,
+                    session: 0,
                 },
             )
             .await;
@@ -672,7 +711,7 @@ impl ClusterServer {
         self.config.heartbeat * self.config.heartbeat_timeout_beats.max(1)
     }
 
-    async fn session(self: Arc<Self>, mut link: CoordinatorLink, peer: Peer) {
+    async fn session(self: Arc<Self>, mut link: CoordinatorLink, mut peer: Peer) {
         let hello = match timeout(self.config.handshake_timeout, link.recv()).await {
             Ok(Ok(Some(ToCoordinator::Hello(hello)))) => hello,
             _ => {
@@ -697,9 +736,11 @@ impl ClusterServer {
         }
 
         let id = self.next_session.fetch_add(1, Ordering::Relaxed);
+        peer.session = id;
         let (ctl_tx, mut ctl) = mpsc::channel(self.config.session_queue.max(1));
         let (stop_tx, mut stop) = mpsc::channel(1);
         let now_ms = self.clock.now_ms();
+        let state_draining;
         {
             let mut fleet = lock(&self.fleet);
             let state = fleet
@@ -726,10 +767,11 @@ impl ClusterServer {
             });
             state.identity = peer.identity.clone();
             state.last_seen_ms = now_ms;
-            state.draining = false;
+            // A drain survives a reconnect: it's asked for again below.
             state.last_ack = None;
             state.capabilities = hello.capabilities;
             fleet.leases.heartbeat(peer.worker, now_ms.div_euclid(1000));
+            state_draining = fleet.workers.get(&peer.worker).is_some_and(|s| s.draining);
         }
         bump(&self.counters.sessions);
 
@@ -742,7 +784,11 @@ impl ClusterServer {
             renew_now: peer.identity.as_ref().is_some_and(|p| p.renew_now),
         });
         let mut greeted = true;
-        for msg in [welcome, ToWorker::Assign(Assign::default())] {
+        let mut greeting = vec![welcome, ToWorker::Assign(Assign::default())];
+        if state_draining {
+            greeting.push(ToWorker::Drain);
+        }
+        for msg in greeting {
             greeted = greeted && self.send(&mut link, msg).await;
         }
         // A re-grant may have waited for this worker.
@@ -826,7 +872,10 @@ impl ClusterServer {
                 Flow::Stop(StopReason::Protocol)
             }
             ToCoordinator::Heartbeat(hb) => {
-                let ack = self.heartbeat(w, &hb);
+                let Some(ack) = self.heartbeat(peer, &hb) else {
+                    // Replaced or revoked in the meantime: stopping.
+                    return Flow::Continue;
+                };
                 self.reply(link, ToWorker::HeartbeatAck(ack)).await
             }
             ToCoordinator::Claim(batch) => {
@@ -850,7 +899,7 @@ impl ClusterServer {
                     }
                     None => vec![false; batch.items.len()],
                 };
-                let items = self.claim(w, &batch.items, &stored);
+                let items = self.claim(peer, &batch.items, &stored);
                 self.reply(
                     link,
                     ToWorker::Grants(GrantBatch {
@@ -861,7 +910,7 @@ impl ClusterServer {
                 .await
             }
             ToCoordinator::Outcome(report) => {
-                self.outcome(w, &report.items);
+                self.outcome(peer, &report.items);
                 Flow::Continue
             }
             ToCoordinator::Renew { public_key } => {
@@ -873,6 +922,9 @@ impl ClusterServer {
             }
             ToCoordinator::Drained => {
                 let mut fleet = lock(&self.fleet);
+                if !fleet.is_current(peer) {
+                    return Flow::Stop(StopReason::Drained);
+                }
                 let left = fleet.leases.evict(w);
                 fleet.pending.extend(left);
                 self.regrant(&mut fleet, self.clock.now_secs());
@@ -897,20 +949,16 @@ impl ClusterServer {
     /// acknowledgement's send time and the worker's receive time,
     /// θ = ((t0 − t1) + (t3 − t2)) / 2, which cancels symmetric latency.
     /// Before the first acknowledgement comes back, θ ≈ t0 − t1.
-    fn heartbeat(&self, w: WorkerId, hb: &Heartbeat) -> HeartbeatAck {
+    fn heartbeat(&self, peer: &Peer, hb: &Heartbeat) -> Option<HeartbeatAck> {
+        let w = peer.worker;
         let t1 = self.clock.now_ms();
         let mut fleet = lock(&self.fleet);
+        if !fleet.is_current(peer) {
+            return None;
+        }
         fleet.leases.heartbeat(w, t1.div_euclid(1000));
         let leases = u32::try_from(fleet.leases.held_by(w)).unwrap_or(u32::MAX);
-        let Some(state) = fleet.workers.get_mut(&w) else {
-            return HeartbeatAck {
-                seq: hb.seq,
-                coordinator_ms: t1,
-                offset_ms: 0,
-                skewed: false,
-                leases,
-            };
-        };
+        let state = fleet.workers.get_mut(&w)?;
         let forward = i128::from(hb.sent_ms) - i128::from(t1);
         let offset = match (hb.last_ack, state.last_ack) {
             (Some(echo), Some((seq, t2))) if echo.seq == seq => {
@@ -928,22 +976,28 @@ impl ClusterServer {
         state.last_seen_ms = t1;
         state.stats = hb.stats;
         state.last_ack = Some((hb.seq, t1));
-        HeartbeatAck {
+        Some(HeartbeatAck {
             seq: hb.seq,
             coordinator_ms: t1,
             offset_ms: offset,
             skewed,
             leases,
-        }
+        })
     }
 
-    fn claim(&self, w: WorkerId, items: &[ClaimItem], stored: &[bool]) -> Vec<GrantItem> {
+    /// Grants or denies each claimed key. A session that is no longer the
+    /// worker's current one (revoked, replaced or stopped while the claim
+    /// waited on the store check) gets no lease: every key is denied as if
+    /// draining, and the session is about to stop.
+    fn claim(&self, peer: &Peer, items: &[ClaimItem], stored: &[bool]) -> Vec<GrantItem> {
+        let w = peer.worker;
         let now = self.clock.now_secs();
         let mut fleet = lock(&self.fleet);
+        let current = fleet.is_current(peer);
         let (draining, offset) = fleet
             .workers
             .get(&w)
-            .map_or((true, 0), |s| (s.draining, s.offset_ms));
+            .map_or((true, 0), |s| (s.draining || !current, s.offset_ms));
         let ttl_secs = u32::try_from(self.config.lease_ttl_secs).unwrap_or(u32::MAX);
         let mut out = Vec::with_capacity(items.len());
         for (item, &stored) in items.iter().zip(stored) {
@@ -1001,16 +1055,19 @@ impl ClusterServer {
     /// Accepts terminal outcomes. One counts only with the current token
     /// from the current holder; anything else is stale and ignored, so a
     /// key is never counted twice (§19.3).
-    fn outcome(&self, w: WorkerId, items: &[OutcomeItem]) {
+    fn outcome(&self, peer: &Peer, items: &[OutcomeItem]) {
+        let w = peer.worker;
         let mut fleet = lock(&self.fleet);
+        let current = fleet.is_current(peer);
         for item in items {
             let key = InfoHash(item.key);
             let token = Token(item.token);
-            let current = fleet
-                .leases
-                .get(&key)
-                .is_some_and(|l| l.holder == w && l.token == token);
-            if current && fleet.leases.release(&key, token).is_some() {
+            let holds = current
+                && fleet
+                    .leases
+                    .get(&key)
+                    .is_some_and(|l| l.holder == w && l.token == token);
+            if holds && fleet.leases.release(&key, token).is_some() {
                 bump(&self.counters.outcomes);
             } else {
                 bump(&self.counters.stale_reports);
@@ -1065,19 +1122,24 @@ impl ClusterServer {
         let silent_ms = i64::try_from(self.send_timeout().as_millis()).unwrap_or(i64::MAX);
         let mut revoked = Vec::new();
         for (&w, state) in &mut fleet.workers {
-            let Some(slot) = &state.session else {
-                continue;
-            };
             let standing = state
                 .identity
                 .as_ref()
                 .is_none_or(|id| self.tls.still_valid(id));
             if !standing {
-                slot.stop(StopReason::Revoked);
-                state.session = None;
+                // Connected or not, a worker without a standing
+                // certificate loses its leases (§19.6).
                 revoked.push(w);
-                bump(&self.counters.revoked);
-            } else if now_ms.saturating_sub(state.last_seen_ms) > silent_ms {
+                if let Some(slot) = state.session.take() {
+                    slot.stop(StopReason::Revoked);
+                    bump(&self.counters.revoked);
+                }
+                continue;
+            }
+            let Some(slot) = &state.session else {
+                continue;
+            };
+            if now_ms.saturating_sub(state.last_seen_ms) > silent_ms {
                 slot.stop(StopReason::HeartbeatTimeout);
                 state.session = None;
             }
