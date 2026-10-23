@@ -3,8 +3,8 @@
 //! - **Before `Services::start`** (so before the registry's first
 //!   `Store::open`, where migrations run): if this version is in
 //!   probation and the store's schema is older than this build's, it
-//!   writes `<version>/migration.json`, starts the heartbeat (every 10 s)
-//!   and marks `probation.json` `migrating`.
+//!   writes `<version>/migration.json` (or exits, if it can't), starts the
+//!   heartbeat (every 10 s) and marks `probation.json` `migrating`.
 //! - **After it,** `starting`, with `baseline_max_id`; then the self-test:
 //!   the store opened with its migrations complete, the search index
 //!   answers a query, the HTTP port is bound (and the DHT's unless it's
@@ -23,8 +23,10 @@ use lodestar_log::{Count, log_event};
 
 use super::control::{self, Hint};
 use super::layout::{self, Bin};
-use super::log_events::{UPDATE_MIGRATING, UPDATE_PROBATION_FAILED, UPDATE_PROBATION_PASSED};
-use super::pending::{Migration, Pending, Phase, Probation};
+use super::log_events::{
+    UPDATE_MIGRATING, UPDATE_MIGRATION_UNRECORDED, UPDATE_PROBATION_FAILED, UPDATE_PROBATION_PASSED,
+};
+use super::pending::{self, Migration, Phase, Probation};
 use crate::cli::util;
 
 const COUNT_EVERY: Duration = Duration::from_secs(60);
@@ -68,15 +70,26 @@ pub struct Probe {
     pub search: Option<lodestar_search::SearchHandle>,
 }
 
-/// Before `Services::start`. Refuses (an error) only when `<data>/bin`
-/// can't be used.
+/// Before `Services::start`. Refuses (an error) when `<data>/bin` can't be
+/// used, when the supervisor is already gone, or when a migration can't be
+/// recorded.
 pub fn before_start(data_dir: &Path, db: &Path) -> Result<&'static Child, String> {
     let bin = Bin::open(data_dir).map_err(|e| e.to_string())?;
     let hint = std::env::var(control::ENV)
         .ok()
         .and_then(|t| Hint::decode(&t));
-    let parent = rustix::process::getppid().map(|p| p.as_raw_nonzero().get() as u32);
-    let supervised = hint.as_ref().is_some_and(|h| Some(h.pid) == parent);
+    let parent = || rustix::process::getppid().map(|p| p.as_raw_nonzero().get() as u32);
+    let supervised = hint.as_ref().is_some_and(|h| Some(h.pid) == parent());
+    // Stop with the supervisor: SIGTERM when it dies, then a recheck, in
+    // case it died before the signal was set.
+    #[cfg(target_os = "linux")]
+    if supervised {
+        let _ =
+            rustix::process::set_parent_process_death_signal(Some(rustix::process::Signal::TERM));
+        if hint.as_ref().map(|h| h.pid) != parent() {
+            return Err("the supervisor is gone".into());
+        }
+    }
     // A release child is its own build's version; debug builds take the
     // supervisor's word, so the tests can run copies of one binary as
     // several versions.
@@ -96,7 +109,7 @@ pub fn before_start(data_dir: &Path, db: &Path) -> Result<&'static Child, String
         }
         _ => {}
     }
-    let pending: Option<Pending> = bin.read("pending").ok().flatten();
+    let pending = pending::read(&bin).ok().flatten();
     let in_probation = supervised && pending.is_some_and(|p| p.version == version);
     let child = Child {
         bin,
@@ -108,7 +121,13 @@ pub fn before_start(data_dir: &Path, db: &Path) -> Result<&'static Child, String
         beat: Arc::new(Mutex::new(None)),
     };
     if child.in_probation {
-        child.mark_migrating(fault);
+        if let Err(e) = child.mark_migrating(fault) {
+            log_event!(
+                UPDATE_MIGRATION_UNRECORDED,
+                error = lodestar_log::Error::io(&e)
+            );
+            return Err(format!("recording the store upgrade (migration.json): {e}"));
+        }
     }
     Ok(CHILD.get_or_init(|| child))
 }
@@ -134,22 +153,23 @@ impl Child {
     }
 
     /// The schema is older than this build's: record the migration (with
-    /// the snapshots that exist before it) and beat while it runs.
-    fn mark_migrating(&self, fault: Option<&str>) {
+    /// the snapshots that exist before it) and beat while it runs. If the
+    /// record can't be made, nothing migrates: an error.
+    fn mark_migrating(&self, fault: Option<&str>) -> std::io::Result<()> {
         let from = util::open_read_only(&self.db)
             .ok()
             .and_then(|c| util::schema_version(&c).ok());
         let to = lodestar_store::latest_schema_version();
-        let forced = fault.is_some_and(|f| f == "stall" || f.starts_with("migrate="));
+        let forced =
+            fault.is_some_and(|f| f == "stall" || f == "unrecorded" || f.starts_with("migrate="));
         let Some(from) = from.filter(|f| (*f > 0 && *f < to) || forced) else {
-            return;
+            return Ok(());
         };
         let now = crate::unix_now().max(0) as u64;
         if let Some(v) = layout::parse_version(&self.version) {
             let dir = self.bin.overlay(&v);
-            if dir.is_dir() && !dir.join("migration.json").exists() {
-                let before = lodestar_store::snapshots::list(&self.db)
-                    .unwrap_or_default()
+            if dir.is_dir() && std::fs::symlink_metadata(dir.join("migration.json")).is_err() {
+                let before = lodestar_store::snapshots::list(&self.db)?
                     .into_iter()
                     .filter(|s| {
                         matches!(s.kind, lodestar_store::snapshots::Kind::PreMigration { .. })
@@ -162,10 +182,11 @@ impl Child {
                     started_at: now,
                     before,
                 };
-                let bytes = serde_json::to_vec_pretty(&m).unwrap_or_default();
-                if let Err(e) = layout::write_atomic(&dir, "migration.json", &bytes) {
-                    eprintln!("update: writing migration.json: {e}");
+                let bytes = serde_json::to_vec_pretty(&m).map_err(std::io::Error::other)?;
+                if super::testing::child_fault(&self.version) == Some("unrecorded") {
+                    return Err(std::io::Error::other("test fault"));
                 }
+                layout::write_atomic(&dir, "migration.json", &bytes)?;
             }
         }
         log_event!(
@@ -212,6 +233,7 @@ impl Child {
         if let Some(secs) = fault.and_then(|f| f.strip_prefix("migrate=")?.parse().ok()) {
             std::thread::sleep(Duration::from_secs(secs));
         }
+        Ok(())
     }
 
     /// Stops the heartbeat and waits for it, so no beat lands after.
@@ -238,6 +260,10 @@ impl Child {
         if !self.in_probation {
             if let Some(v) = fault.and_then(|f| f.strip_prefix("switch=")) {
                 control::set_intent(control::Action::Switch, Some(v.to_string()), None);
+                crate::system::Restart::global().request();
+            }
+            if fault == Some("rollback") {
+                control::set_intent(control::Action::Rollback, None, None);
                 crate::system::Restart::global().request();
             }
             return;

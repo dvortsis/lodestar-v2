@@ -14,7 +14,9 @@
 //!   start, `hang` without confirming, fail its `selftest`, `stall` (start
 //!   migrating, then stop beating), `migrate=<s>` (migrate for s seconds
 //!   while beating), `restart` (ask for a supervised restart),
-//!   `switch=<version>` (ask to switch), `orphan` (leave a grandchild);
+//!   `switch=<version>` (ask to switch), `rollback` (ask to roll back),
+//!   `orphan` (leave a grandchild), `unrecorded` (start migrating, then
+//!   fail to write `migration.json`);
 //! - `beat_ms`: the migration heartbeat's period.
 
 use std::time::Duration;

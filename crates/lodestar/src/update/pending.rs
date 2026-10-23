@@ -12,10 +12,16 @@
 //!   so does a migration longer than [`Limits::migration_cap`].
 //! - **The deadline:** `used_ms` adds up the time spent starting (not
 //!   migrating) across starts; past 5 minutes in all, the attempt fails.
+//! - Every duration is the supervisor's own monotonic measure ([`Clock`]);
+//!   the child's timestamps only show that a beat changed.
 
+use std::io;
 use std::time::Duration;
 
+use lodestar_update::semver::Version;
 use serde::{Deserialize, Serialize};
+
+use super::layout::Bin;
 
 /// `active`: the version to run, and the one before it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,17 +108,22 @@ pub struct Migration {
 #[serde(deny_unknown_fields)]
 pub struct Skip {
     pub version: String,
-    /// `failed` (written by the supervisor) or `user` (the updater's).
+    /// `failed` or `manual` (written by the supervisor: never installed
+    /// again), or `user` (the updater's).
     pub reason: String,
 }
 
-/// `halted.json`: a restored version failed too; nothing more is tried.
+/// `halted.json`: a restored version failed too, or a failed version
+/// can't be rolled back; nothing more is tried.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Halted {
     pub failed: String,
     pub previous: String,
     pub at: u64,
+    /// Why a rollback was refused; `None` when the restored version failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused: Option<String>,
 }
 
 pub const PENDING_FORMAT: u32 = 1;
@@ -154,49 +165,120 @@ pub enum Verdict {
     Fail(&'static str),
 }
 
-/// One check of a running child in probation. `started_ms` is when this
-/// attempt began (supervisor clock), `now_ms` now; `wall` the Unix time
-/// for the child's beats; `used_ms` what earlier attempts spent starting;
-/// `migrating_ms` how much of this attempt went to migrating so far.
+/// This attempt as the supervisor measured it, on its own monotonic
+/// clock (never the child's timestamps, so a wall-clock jump can't fail
+/// or extend an attempt).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Clock {
+    /// What earlier attempts spent starting.
+    pub used: Duration,
+    /// What this attempt spent starting (not migrating) so far.
+    pub starting: Duration,
+    /// Since the heartbeat last changed (or migrating was first seen).
+    pub since_beat: Duration,
+    /// Since this attempt was first seen migrating.
+    pub migrating: Duration,
+}
+
+/// One check of a running child in probation (`run_id` is this attempt's).
 pub fn judge(
     pending_exists: bool,
     probation: Option<&Probation>,
     run_id: &str,
-    used_ms: u64,
-    starting_ms: u64,
-    wall: u64,
+    clock: &Clock,
     limits: &Limits,
 ) -> Verdict {
     if !pending_exists {
         return Verdict::Passed;
     }
     let ours = probation.filter(|p| p.run_id == run_id);
-    if let Some(p) = ours.filter(|p| p.phase == Phase::Migrating) {
-        if wall.saturating_sub(p.at) >= limits.stall.as_secs() {
+    if ours.is_some_and(|p| p.phase == Phase::Migrating) {
+        if clock.since_beat >= limits.stall {
             return Verdict::Fail("the migration stopped making progress");
         }
-        if wall.saturating_sub(p.since) >= limits.migration_cap.as_secs() {
+        if clock.migrating >= limits.migration_cap {
             return Verdict::Fail("the migration ran past its time limit");
         }
         return Verdict::Wait;
     }
-    if used_ms.saturating_add(starting_ms) >= limits.deadline.as_millis() as u64 {
+    if clock.used.saturating_add(clock.starting) >= limits.deadline {
         return Verdict::Fail("it didn't pass its self-test in time");
     }
     Verdict::Wait
+}
+
+/// `pending`, refused (as damage) in a format this build doesn't know.
+pub fn read(bin: &Bin) -> io::Result<Option<Pending>> {
+    match bin.read::<Pending>("pending")? {
+        Some(p) if p.format != PENDING_FORMAT => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "pending has format {}, which this build can't read",
+                p.format
+            ),
+        )),
+        other => Ok(other),
+    }
+}
+
+/// The most `skipped` keeps (oldest dropped first).
+pub const MAX_SKIPPED: usize = 64;
+
+/// Whether the supervisor refuses `version` (it failed, or was rolled
+/// back by hand). An unreadable `skipped` refuses everything.
+pub fn is_skipped(bin: &Bin, version: &str) -> io::Result<bool> {
+    let skipped: Vec<Skip> = bin.read("skipped")?.unwrap_or_default();
+    Ok(skipped
+        .iter()
+        .any(|s| s.version == version && (s.reason == "failed" || s.reason == "manual")))
+}
+
+/// Adds `version` to `skipped` (a supervisor entry is never replaced by
+/// a `user` one). An unreadable `skipped` is an error, not a fresh list,
+/// so no earlier entry is lost.
+pub fn skip(bin: &Bin, version: &str, reason: &str) -> io::Result<()> {
+    let mut skipped: Vec<Skip> = bin.read("skipped")?.unwrap_or_default();
+    let refusing = |s: &Skip| s.reason == "failed" || s.reason == "manual";
+    if skipped
+        .iter()
+        .any(|s| s.version == version && (s.reason == reason || refusing(s)))
+    {
+        return Ok(());
+    }
+    skipped.retain(|s| s.version != version);
+    skipped.push(Skip {
+        version: version.to_string(),
+        reason: reason.to_string(),
+    });
+    let over = skipped.len().saturating_sub(MAX_SKIPPED);
+    skipped.drain(..over);
+    bin.write("skipped", &skipped)
+}
+
+/// A newer image makes the entries at or below its version moot: they
+/// go. Anything unreadable is left as it is.
+pub fn prune_skipped(bin: &Bin, image: &Version) {
+    let Ok(Some(mut skipped)) = bin.read::<Vec<Skip>>("skipped") else {
+        return;
+    };
+    let before = skipped.len();
+    skipped.retain(|s| super::layout::parse_version(&s.version).is_none_or(|v| v > *image));
+    if skipped.len() != before {
+        let _ = bin.write("skipped", &skipped);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn p(phase: Phase, at: u64, since: u64) -> Probation {
+    fn p(phase: Phase) -> Probation {
         Probation {
             run_id: "r".into(),
             version: String::new(),
             phase,
-            at,
-            since,
+            at: 0,
+            since: 0,
             from: 9,
             to: 10,
             baseline_max_id: None,
@@ -211,54 +293,125 @@ mod tests {
         grace: Duration::from_secs(30),
     };
 
+    fn secs(s: u64) -> Duration {
+        Duration::from_secs(s)
+    }
+
     #[test]
     fn a_long_migration_that_keeps_beating_passes_the_deadline() {
-        // An hour in, still beating ten seconds ago: wait, whatever
-        // starting time has accrued, since migrating doesn't count.
-        let mig = p(Phase::Migrating, 10_000 - 10, 10_000 - 3600);
-        assert_eq!(
-            judge(true, Some(&mig), "r", 0, 0, 10_000, &L),
-            Verdict::Wait
-        );
-        // Beats stopped five minutes ago: fail.
-        let stalled = p(Phase::Migrating, 10_000 - 300, 10_000 - 400);
+        let mig = p(Phase::Migrating);
+        // An hour in, a beat ten seconds ago: wait, whatever starting time
+        // has accrued, since migrating doesn't count.
+        let beating = Clock {
+            used: secs(299),
+            starting: secs(299),
+            since_beat: secs(10),
+            migrating: secs(3600),
+        };
+        assert_eq!(judge(true, Some(&mig), "r", &beating, &L), Verdict::Wait);
+        // No beat for five minutes: fail.
+        let stalled = Clock {
+            since_beat: secs(300),
+            ..beating
+        };
         assert!(matches!(
-            judge(true, Some(&stalled), "r", 0, 0, 10_000, &L),
+            judge(true, Some(&mig), "r", &stalled, &L),
             Verdict::Fail(_)
         ));
         // Past the cap, even beating: fail.
-        let capped = p(Phase::Migrating, 30_000, 30_000 - 6 * 3600);
+        let capped = Clock {
+            migrating: secs(6 * 3600),
+            ..beating
+        };
         assert!(matches!(
-            judge(true, Some(&capped), "r", 0, 0, 30_000, &L),
+            judge(true, Some(&mig), "r", &capped, &L),
             Verdict::Fail(_)
         ));
     }
 
     #[test]
     fn the_deadline_adds_up_across_attempts() {
-        let s = p(Phase::Starting, 0, 0);
+        let s = p(Phase::Starting);
+        let at = |used, starting| Clock {
+            used: Duration::from_millis(used),
+            starting: Duration::from_millis(starting),
+            ..Clock::default()
+        };
         assert_eq!(
-            judge(true, Some(&s), "r", 200_000, 99_000, 0, &L),
+            judge(true, Some(&s), "r", &at(200_000, 99_000), &L),
             Verdict::Wait
         );
         assert!(matches!(
-            judge(true, Some(&s), "r", 200_000, 100_000, 0, &L),
+            judge(true, Some(&s), "r", &at(200_000, 100_000), &L),
             Verdict::Fail(_)
         ));
         // No heartbeat at all (a child hanging before it writes one) counts
         // as starting; another run's file is ignored.
         assert!(matches!(
-            judge(true, None, "r", 0, 300_000, 0, &L),
+            judge(true, None, "r", &at(0, 300_000), &L),
             Verdict::Fail(_)
         ));
         let other = Probation {
             run_id: "x".into(),
-            ..p(Phase::Migrating, 0, 0)
+            ..p(Phase::Migrating)
         };
         assert!(matches!(
-            judge(true, Some(&other), "r", 0, 300_000, 0, &L),
+            judge(true, Some(&other), "r", &at(0, 300_000), &L),
             Verdict::Fail(_)
         ));
-        assert_eq!(judge(false, None, "r", 0, 900_000, 0, &L), Verdict::Passed);
+        assert_eq!(
+            judge(false, None, "r", &at(0, 900_000), &L),
+            Verdict::Passed
+        );
+    }
+
+    #[test]
+    fn skipped_is_capped_fails_closed_and_prunes_below_a_newer_image() {
+        let data = tempfile::tempdir().unwrap();
+        let bin = Bin::open(data.path()).unwrap();
+        for i in 0..(MAX_SKIPPED + 5) {
+            skip(&bin, &format!("0.{i}.0"), "failed").unwrap();
+        }
+        let all: Vec<Skip> = bin.read("skipped").unwrap().unwrap();
+        assert_eq!(all.len(), MAX_SKIPPED);
+        assert_eq!(all[0].version, "0.5.0", "the oldest went first");
+        assert!(is_skipped(&bin, "0.68.0").unwrap());
+        skip(&bin, "0.68.0", "user").unwrap();
+        assert!(
+            is_skipped(&bin, "0.68.0").unwrap(),
+            "a user skip doesn't replace it"
+        );
+        skip(&bin, "0.69.0", "user").unwrap();
+        assert!(!is_skipped(&bin, "0.69.0").unwrap());
+        prune_skipped(&bin, &Version::parse("0.60.0").unwrap());
+        let left: Vec<Skip> = bin.read("skipped").unwrap().unwrap();
+        assert!(
+            left.iter()
+                .all(|s| Version::parse(&s.version).unwrap().minor > 60)
+        );
+        std::fs::write(bin.path("skipped"), "not json").unwrap();
+        assert!(is_skipped(&bin, "0.61.0").is_err());
+        assert!(skip(&bin, "0.61.0", "failed").is_err());
+        assert_eq!(std::fs::read(bin.path("skipped")).unwrap(), b"not json");
+    }
+
+    #[test]
+    fn pending_in_another_format_is_damage() {
+        let data = tempfile::tempdir().unwrap();
+        let bin = Bin::open(data.path()).unwrap();
+        let mut pd = Pending {
+            format: PENDING_FORMAT,
+            version: "0.6.0".into(),
+            previous: IMAGE.into(),
+            kind: Kind::Install,
+            attempts: 0,
+            used_ms: 0,
+            index_before: vec![],
+        };
+        bin.write("pending", &pd).unwrap();
+        assert_eq!(read(&bin).unwrap(), Some(pd.clone()));
+        pd.format = 2;
+        bin.write("pending", &pd).unwrap();
+        assert_eq!(read(&bin).unwrap_err().kind(), io::ErrorKind::InvalidData);
     }
 }
