@@ -83,7 +83,7 @@ if ($Msi) {
   $svc = Get-CimInstance Win32_Service -Filter "Name='Lodestar'"
   Assert ($null -ne $svc) 'service Lodestar is not registered'
   Assert ($svc.PathName -match 'lodestar\.exe') "service points at $($svc.PathName)"
-  Assert ($svc.StartName -eq 'NT AUTHORITY\LocalService') "service runs as $($svc.StartName)"
+  Assert ($svc.StartName -eq 'NT SERVICE\Lodestar') "service runs as $($svc.StartName)"
   $web = Get-NetFirewallRule -DisplayName 'Lodestar web UI*' -ErrorAction SilentlyContinue
   Assert ($null -ne $web) 'web firewall rule missing'
   Assert ($web.Profile -eq 'Private') "web firewall rule profile is $($web.Profile), expected Private only"
