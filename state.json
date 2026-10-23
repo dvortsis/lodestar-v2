@@ -180,13 +180,19 @@
    "notes": "launched 14:40; not live.rs/compile.rs (B4/B17) | PR #71; reviewer started 16:45 | 17:15 r1 FIX: visibility via base(without_facet(user_ast)), merge main, category ranges, near-1M perf. 18:24 R1 all in (ee81535); R2 review in flight. 19:18 R2 MERGE at ee81535; must add B17 wiring + I1 lease precondition, I2 1M single-segment perf, I3 share selection, P2 bin cap before merge. 19:56 B17 wiring + I1/I2/I3/P2 pushed 3dd0eaf; R3 delta review in flight. 20:20 R3 MERGE at 3dd0eaf (polish deferred: lease.rs doc swap, adult_kind wording, Hours cap test, bin_of clamp, golden note). Merge on green. 20:45 243443a main merge only; merge on green. | 21:40 MERGED as 301199a."
   },
   "B16": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01E3eCWFkpTCtz9Ve8QSGuvA",
-   "pr": null,
+   "pr": 114,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed)."
+   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 03:53 PR #114 5bb1546 ready; +3.3 MB binary behind default-on fixture feature (brief cap 300 KB) -> reviewer to judge. Reviewer started.",
+   "self_review": {
+    "raised": 5,
+    "fixed": 5,
+    "left": 0,
+    "detail": "5 important fixed"
+   }
   },
   "W5": {
    "status": "merged",
