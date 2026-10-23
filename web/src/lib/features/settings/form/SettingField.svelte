@@ -56,7 +56,9 @@
 	const singleControl = $derived(
 		automatic ||
 			('builtin' in choice &&
-				['number', 'slider', 'text', 'select', 'json', 'chips'].includes(choice.builtin))
+				(['number', 'slider', 'text', 'select', 'json'].includes(choice.builtin) ||
+					// A locked chip list has no input to label.
+					(choice.builtin === 'chips' && !f.locked)))
 	);
 	// Discard, Undo or Use theirs bringing the sentinel back turns Automatic on again.
 	$effect(() => {

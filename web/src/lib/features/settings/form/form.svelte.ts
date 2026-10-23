@@ -87,6 +87,8 @@ export interface SettingsForm {
 	readonly draft: null | { fields: number; dropped: number };
 	/** The latest polite announcement; `id` changes with each one. */
 	readonly announcement: { id: number; text: string } | null;
+	/** The latest save's result, from any caller (the bar, ⌘/Ctrl+S, the wizard's Next). */
+	readonly lastSave: { id: number; result: SaveResult } | null;
 	href(key: FieldKey): string;
 	field(key: FieldKey): FieldState;
 	set(key: FieldKey, value: unknown): void;
@@ -143,6 +145,8 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 	let instantUndo = $state.raw<Record<string, { until: number; prev: SettingValue }>>({});
 	let draftOffer = $state.raw<null | { fields: number; dropped: number }>(null);
 	let announcement = $state.raw<{ id: number; text: string } | null>(null);
+	let lastSave = $state.raw<{ id: number; result: SaveResult } | null>(null);
+	let saveSeq = 0;
 
 	// Not rendered: plain variables.
 	let undoBatch: Batch | null = null;
@@ -675,6 +679,12 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 	}
 
 	async function save(): Promise<SaveResult> {
+		const result = await saveNow();
+		lastSave = { id: ++saveSeq, result };
+		return result;
+	}
+
+	async function saveNow(): Promise<SaveResult> {
 		if (inFlight) return { ok: false, reason: 'busy' };
 		if (mode === 'instant') return saveInstantSecrets();
 		formErrors = [];
@@ -1114,6 +1124,9 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 		},
 		get announcement() {
 			return announcement;
+		},
+		get lastSave() {
+			return lastSave;
 		},
 		href,
 		field,

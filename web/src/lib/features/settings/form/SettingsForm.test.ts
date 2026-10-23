@@ -372,4 +372,26 @@ describe('SettingsForm', () => {
 		await fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
 		await waitFor(() => expect(nav.goto).toHaveBeenCalled());
 	});
+
+	it('shows and focuses the summary for a save started elsewhere (the wizard’s Next)', async () => {
+		render(FormHarness, { form, saveBar: false });
+		form.set('crawler.timeout_secs', 500);
+		expect(await form.save()).toEqual({ ok: false, reason: 'invalid' });
+		const summary = await screen.findByTestId('error-summary');
+		await waitFor(() => expect(document.activeElement).toBe(within(summary).getByRole('heading')));
+		form.set('crawler.timeout_secs', 30);
+		expect(await form.save()).toMatchObject({ ok: true });
+		await waitFor(() => expect(screen.queryByTestId('error-summary')).toBeNull());
+	});
+
+	it('closes its open question when it unmounts', async () => {
+		const view = render(FormHarness, { form });
+		form.set('crawler.intensity', 'low');
+		form.set('crawler.timeout_secs', 30);
+		await fireEvent.click(await screen.findByRole('button', { name: 'Discard' }));
+		await screen.findByRole('dialog');
+		view.unmount();
+		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+		expect(form.dirtyCount).toBe(2); // unanswered: nothing discarded
+	});
 });
