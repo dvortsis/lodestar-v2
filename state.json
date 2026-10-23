@@ -1517,6 +1517,16 @@
       "from": "M-settings-form review",
       "what": "clear sessionStorage lodestar.settings.draft.v1.* on logout (features/auth/session.svelte.ts)",
       "to": "auth follow-up / S-settings-1"
+    },
+    "settings-group-keys": {
+      "from": "S-settings-1 brief",
+      "what": "groupFields keys group headings without section (general/logging both x-group data); make per-section keys",
+      "to": "engine follow-up"
+    },
+    "settings-backend-gaps": {
+      "from": "S-settings-1 brief",
+      "what": "flag for saved value hiding config.toml; running value for restart-pending fields; egress/VPN/retention/hot-cold/backup-schedule fields; palette Settings entries; status pill Restart needed; Keyboard screen onto engine; user-guide Settings chapter",
+      "to": "follow-up slices"
     }
   },
   "blocked_on_owner": [],
