@@ -11057,6 +11057,15 @@ export interface operations {
                     "application/json": components["schemas"]["UpdatesStatus"];
                 };
             };
+            /** @description `updates_unavailable`: this process serves no update engine. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -11077,7 +11086,7 @@ export interface operations {
                     "application/json": components["schemas"]["UpdatesStatus"];
                 };
             };
-            /** @description `updates_unavailable`. */
+            /** @description `updates_unavailable`: a fixture or Windows (see `GET /updates`). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -11088,6 +11097,15 @@ export interface operations {
             };
             /** @description `rate_limited`, with `Retry-After`. */
             429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `updates_unavailable`: this process serves no update engine. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11115,6 +11133,24 @@ export interface operations {
                     "application/json": components["schemas"]["UpdatesStatus"];
                 };
             };
+            /** @description `updates_unavailable`: a fixture or Windows (see `GET /updates`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `updates_unavailable`: this process serves no update engine. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -11139,8 +11175,26 @@ export interface operations {
                     "application/json": components["schemas"]["UpdatesStatus"];
                 };
             };
+            /** @description `updates_unavailable`: a fixture or Windows (see `GET /updates`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description `invalid_value` for any other number of days. */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `updates_unavailable`: this process serves no update engine. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11174,6 +11228,24 @@ export interface operations {
             };
             /** @description `unknown_version`. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `updates_unavailable`: a fixture or Windows (see `GET /updates`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `updates_unavailable`: this process serves no update engine. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

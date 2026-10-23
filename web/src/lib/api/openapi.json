@@ -5845,6 +5845,16 @@
               }
             }
           },
+          "503": {
+            "description": "`updates_unavailable`: this process serves no update engine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -5875,7 +5885,7 @@
             }
           },
           "409": {
-            "description": "`updates_unavailable`.",
+            "description": "`updates_unavailable`: a fixture or Windows (see `GET /updates`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5886,6 +5896,16 @@
           },
           "429": {
             "description": "`rate_limited`, with `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`updates_unavailable`: this process serves no update engine.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5919,6 +5939,26 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UpdatesStatus"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`updates_unavailable`: a fixture or Windows (see `GET /updates`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`updates_unavailable`: this process serves no update engine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -5962,8 +6002,28 @@
               }
             }
           },
+          "409": {
+            "description": "`updates_unavailable`: a fixture or Windows (see `GET /updates`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "422": {
             "description": "`invalid_value` for any other number of days.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`updates_unavailable`: this process serves no update engine.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6013,6 +6073,26 @@
           },
           "404": {
             "description": "`unknown_version`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`updates_unavailable`: a fixture or Windows (see `GET /updates`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`updates_unavailable`: this process serves no update engine.",
             "content": {
               "application/json": {
                 "schema": {
