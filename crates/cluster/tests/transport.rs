@@ -1072,6 +1072,26 @@ async fn a_retried_claim_hands_the_key_over_once() {
         coord.send(granted(b1, 1, 77)).await.unwrap();
         assert!(quiet_events(&mut a).await.is_empty());
 
+        // Two claims for one key both time out: their late replies hand
+        // it over exactly once.
+        let lost = a.claim(found(&clock, &[3]));
+        let (r, b4) = tokio::join!(lost, claimed(&mut coord));
+        assert!(matches!(r, Err(ClientError::Timeout)));
+        let lost = a.claim(found(&clock, &[3]));
+        let (r, b5) = tokio::join!(lost, claimed(&mut coord));
+        assert!(matches!(r, Err(ClientError::Timeout)));
+        coord.send(granted(b4, 3, 79)).await.unwrap();
+        coord.send(granted(b5, 3, 79)).await.unwrap();
+        assert_eq!(
+            quiet_events(&mut a).await,
+            vec![WorkerEvent::Regranted(vec![GrantItem::Granted {
+                key: key(3),
+                token: 79,
+                ttl_secs: 600
+            }])]
+        );
+        assert_eq!(a.leases(), 2);
+
         // The late reply arrives with no retry: it's an event, once.
         let lost = a.claim(found(&clock, &[2]));
         let (r, b3) = tokio::join!(lost, claimed(&mut coord));
@@ -1085,7 +1105,7 @@ async fn a_retried_claim_hands_the_key_over_once() {
                 ttl_secs: 600
             }])]
         );
-        assert_eq!(a.leases(), 2);
+        assert_eq!(a.leases(), 3);
     })
     .await;
 }
