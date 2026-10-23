@@ -201,7 +201,7 @@ impl Deluge {
     /// Sends one request; returns the answer and any session cookie set.
     async fn once<T: DeserializeOwned>(
         &self,
-        method: &str,
+        method: &'static str,
         params: &Value,
         cookie: Option<&Secret>,
         limit: usize,
@@ -235,7 +235,12 @@ impl Deluge {
             .filter_map(|v| v.to_str().ok())
             .find_map(session_cookie);
         let bytes = read_limited(resp, limit).await?;
-        tracing::debug!(method, status, "Deluge request");
+        lodestar_log::log_event!(
+            crate::log_events::CLIENT_REQUEST,
+            client = "deluge",
+            method = method,
+            status = lodestar_log::Count(status.into())
+        );
         if status != 200 {
             return Err(rejected_status(status, &bytes));
         }
@@ -314,7 +319,7 @@ impl Deluge {
     async fn logged_in<T: DeserializeOwned>(
         &self,
         cookie: &Secret,
-        method: &str,
+        method: &'static str,
         params: Value,
     ) -> Result<Option<T>, ClientError> {
         match self
@@ -357,7 +362,7 @@ impl Deluge {
     /// `None` is a JSON null result.
     async fn call<T: DeserializeOwned>(
         &self,
-        method: &str,
+        method: &'static str,
         params: Value,
         limit: usize,
     ) -> Result<Option<T>, ClientError> {
@@ -367,7 +372,7 @@ impl Deluge {
     /// [`call`](Self::call) with its own timeout (uploads get more).
     async fn call_timeout<T: DeserializeOwned>(
         &self,
-        method: &str,
+        method: &'static str,
         params: Value,
         limit: usize,
         timeout: Duration,
@@ -394,7 +399,7 @@ impl Deluge {
     /// A call whose result must not be null.
     async fn value<T: DeserializeOwned>(
         &self,
-        method: &str,
+        method: &'static str,
         params: Value,
         what: &'static str,
     ) -> Result<T, ClientError> {
@@ -435,7 +440,7 @@ impl Deluge {
     /// One add (`method` with the source parameters), then the label.
     async fn add_one(
         &self,
-        method: &str,
+        method: &'static str,
         mut params: Vec<Value>,
         label: Option<&str>,
         opts: &AddOptions,
@@ -516,7 +521,7 @@ impl Deluge {
         })
         .await?
         else {
-            tracing::debug!("Deluge didn't register the torrent in time; left paused");
+            lodestar_log::log_event!(crate::log_events::CLIENT_LEFT_PAUSED, client = "deluge");
             return Ok(Selection::Pending);
         };
         let skipped = skipped_files(selected, priorities.len())?;

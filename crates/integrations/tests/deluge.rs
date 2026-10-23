@@ -616,6 +616,10 @@ fn capture_logs() -> Arc<Mutex<Vec<u8>>> {
             .with_writer(move || W(Arc::clone(&sink)))
             .finish();
         tracing::subscriber::set_global_default(subscriber).unwrap();
+        // Every event on, at every level, so a secret in any of them fails.
+        for e in lodestar_integrations::log_events::CATALOGUE.events {
+            e.set_on(true);
+        }
         buf
     }))
 }
@@ -650,7 +654,7 @@ async fn no_password_or_cookie_in_logs_debug_or_errors() {
     let boxed = connect(config.clone()).unwrap();
     let session = cookie().split_once('=').unwrap().1.to_owned();
     let logged = String::from_utf8_lossy(&logs.lock().unwrap()).into_owned();
-    assert!(logged.contains("Deluge request"), "capture works");
+    assert!(logged.contains("client=deluge"), "capture works");
     for text in [
         logged,
         format!("{dl:?}"),

@@ -148,7 +148,7 @@ impl Aria2 {
 
     async fn call<T: DeserializeOwned>(
         &self,
-        method: &str,
+        method: &'static str,
         params: Vec<Value>,
         limit: usize,
     ) -> Result<T, ClientError> {
@@ -158,7 +158,7 @@ impl Aria2 {
     /// [`call`](Self::call) with its own timeout (uploads get more).
     async fn call_timeout<T: DeserializeOwned>(
         &self,
-        method: &str,
+        method: &'static str,
         params: Vec<Value>,
         limit: usize,
         timeout: Duration,
@@ -188,7 +188,12 @@ impl Aria2 {
         let resp = self.http.send(req).await?;
         let status = resp.status().as_u16();
         let bytes = read_limited(resp, limit).await?;
-        tracing::debug!(method, status, "Aria2 request");
+        lodestar_log::log_event!(
+            crate::log_events::CLIENT_REQUEST,
+            client = "aria2",
+            method = method,
+            status = lodestar_log::Count(status.into())
+        );
         if !matches!(status, 200 | 400) {
             return Err(rejected_status(status, &bytes));
         }

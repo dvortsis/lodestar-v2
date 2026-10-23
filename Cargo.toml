@@ -28,6 +28,7 @@ lodestar-api = { path = "crates/api" }
 lodestar-tracker-scrape = { path = "crates/tracker-scrape" }
 lodestar-sources-importers = { path = "crates/sources-importers" }
 lodestar-integrations = { path = "crates/integrations" }
+lodestar-log = { path = "crates/log" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

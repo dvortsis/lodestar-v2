@@ -165,7 +165,10 @@ pub fn percolate(
             }
             Err(_) => {
                 // The error isn't logged: Tantivy's can carry query terms.
-                tracing::warn!("percolator: saved search {} failed in the index", d.id);
+                lodestar_log::log_event!(
+                    crate::log_events::PERCOLATE_SEARCH_FAILED,
+                    saved_search = lodestar_log::Count(d.id.unsigned_abs())
+                );
                 out.failed.push(d.id);
             }
         }

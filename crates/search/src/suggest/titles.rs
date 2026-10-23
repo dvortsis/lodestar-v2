@@ -557,11 +557,17 @@ fn builder(titles: Weak<Titles>) {
             .and_then(|store| TitleSet::build(&store));
         match built {
             Ok(set) => {
-                tracing::debug!(titles = set.len(), "suggest: title set rebuilt");
+                lodestar_log::log_event!(
+                    crate::log_events::SUGGEST_TITLES_REBUILT,
+                    titles = lodestar_log::Count(set.len() as u64)
+                );
                 t.set(set);
             }
             Err(e) => {
-                tracing::warn!("suggest: rebuilding titles: {e}");
+                lodestar_log::log_event!(
+                    crate::log_events::SUGGEST_TITLES_FAILED,
+                    error = lodestar_log::Error::new(&e)
+                );
                 // Try again after the interval.
                 t.lock().dirty = true;
             }

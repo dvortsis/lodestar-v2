@@ -16,6 +16,7 @@ mod handle;
 mod index;
 mod lease;
 mod live;
+pub mod log_events;
 pub mod natural;
 mod percolate;
 pub mod query;
