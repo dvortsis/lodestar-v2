@@ -18,6 +18,9 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 if (-not $Msi -and -not $Zip) { throw 'pass -Msi <file> and/or -Zip <file>' }
+# msiexec rejects paths that mix / and \ (error 1619), so use full Windows paths.
+if ($Msi) { $Msi = (Resolve-Path $Msi).ProviderPath }
+if ($Zip) { $Zip = (Resolve-Path $Zip).ProviderPath }
 
 function Assert($ok, $msg) { if (-not $ok) { throw "SMOKE FAILED: $msg" } }
 
