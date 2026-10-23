@@ -11,7 +11,8 @@
 //! - **Offline:** the DHT is off (and locked off: a value saved in the
 //!   app can't turn it on), as are blocklist files and subscriptions and
 //!   their refresher. With no DHT there's no peer finder, so the fetch
-//!   pool never fetches. Nothing else in `serve` reaches out.
+//!   pool never fetches. Nothing else in `serve` reaches out today; a
+//!   service that would must check [`OFFLINE`].
 //! - **Local:** it binds `127.0.0.1:8090` unless `--config` or
 //!   `LODESTAR_HTTP_BIND` names another address, and warns on one that
 //!   isn't loopback.
@@ -32,6 +33,10 @@ use tokio::sync::watch;
 pub use imp::serve;
 
 /// Set while serving a fixture: services that would reach out stay off.
+/// Every service that makes outbound requests must check it, as the
+/// blocklist refresher does through [`unless_offline`]. TODO(#48): the
+/// tracker scraper, once `services.rs` starts it; fixture swarm rows are
+/// due for a scrape a few hours after the anchor.
 static OFFLINE: AtomicBool = AtomicBool::new(false);
 
 /// The blocklist refresher's stop signal, already stopped while serving a
@@ -95,7 +100,11 @@ mod imp {
         }
         let manifest = dir.join(data::MANIFEST);
         let Ok(text) = std::fs::read_to_string(&manifest) else {
-            return Found::Foreign(format!("it isn't empty and has no {}", data::MANIFEST));
+            return Found::Foreign(format!(
+                "it isn't empty and has no {} (if it's a fixture build that was \
+                 interrupted, delete the folder)",
+                data::MANIFEST
+            ));
         };
         let format = serde_json::from_str::<serde_json::Value>(&text)
             .ok()
@@ -157,7 +166,11 @@ mod imp {
             .map_or(0, |d| d.subsec_nanos());
         let dir =
             std::env::temp_dir().join(format!("lodestar-fixture-{}-{nanos}", std::process::id()));
-        std::fs::create_dir(&dir)?;
+        // Only its owner can read it: `auth.json` lives there.
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder.create(&dir)?;
         Ok(dir)
     }
 

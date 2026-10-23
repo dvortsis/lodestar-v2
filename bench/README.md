@@ -115,7 +115,9 @@ lodestar serve --fixture /tmp/lodestar-fixture
 - **Safe with `DIR`.** It builds in an empty or new folder and reuses
   one that holds a `fixture.json` of the current format. It refuses
   anything else with exit status 3 and writes nothing, so it can't touch
-  a real install. Delete the folder to rebuild after `FORMAT` changes.
+  a real install. Delete the folder to rebuild after `FORMAT` changes. A reused folder
+  keeps what it was built with, even after the generator or classifier
+  changes; rebuild for screenshots.
 - **Sign-in.** The setup token is printed as on any first start. With
   `LODESTAR_FIXTURE_PASSWORD` set, that password claims the instance
   first. There's no built-in password.
