@@ -813,7 +813,7 @@
    "pr": 88,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 19:40: rebuild rename (macOS), interrupted rebuild resume, NRT budget (Windows), uTP WSAENOBUFS. | 23:08 review FIX: live.rs HANG=300s widens timeout; real cause likely LiveIndexer thread exits on commit error (production bug). Asked root-cause fix. | 23:58 re-review FIX at 88c8871: report lost when reload fails post-commit (publish gap), backoff reset only after commit, indexed_total recount; plus fuzz res:<64 digits> 65-byte stored form (found on B14 CI). Sent. | 00:49 delta review a51c7ca: live indexer OK; FIX bare_res empty -> \"p\" regression (one line). Runner verifies next delta itself. Note #97 ported old res hunk -> trivial conflict. | 00:56 13b753d (fetch_update deprecation on rust 1.99 fixed); bare_res empty fix still pending. | 01:22 f0560e4 delta verified by runner (bare_res non-empty + must-fail cases, idle backoff reset). Approved; live.rs conflict with main (#104) -> asked main merge. Merge on green."
+   "notes": "Launched 19:40: rebuild rename (macOS), interrupted rebuild resume, NRT budget (Windows), uTP WSAENOBUFS. | 23:08 review FIX: live.rs HANG=300s widens timeout; real cause likely LiveIndexer thread exits on commit error (production bug). Asked root-cause fix. | 23:58 re-review FIX at 88c8871: report lost when reload fails post-commit (publish gap), backoff reset only after commit, indexed_total recount; plus fuzz res:<64 digits> 65-byte stored form (found on B14 CI). Sent. | 00:49 delta review a51c7ca: live indexer OK; FIX bare_res empty -> \"p\" regression (one line). Runner verifies next delta itself. Note #97 ported old res hunk -> trivial conflict. | 00:56 13b753d (fetch_update deprecation on rust 1.99 fixed); bare_res empty fix still pending. | 01:22 f0560e4 delta verified by runner (bare_res non-empty + must-fail cases, idle backoff reset). Approved; live.rs conflict with main (#104) -> asked main merge. Merge on green. | 01:28 d9700cf main merged (CatchUp read in follow(), verified by runner). Approved; merge on green."
   },
   "B2b": {
    "status": "review",
@@ -1241,7 +1241,8 @@
   "pin_toolchain": "rust-toolchain.toml is unpinned stable; 1.99 deprecations broke clippy on #88. Consider pinning (affects CALIB_REF_NS too).",
   "font_fout": "W9 moved Atkinson font preload after first frame (FOUT swap); recheck CLS/LCP when Search screens land",
   "B-update_signing": "Owner-delegated 2026-10-23 (\u00a72.21): separate stable/nightly signing keys; installs trust nightly key only on Nightly channel; RELEASE_SIGNING_KEY (tags, release env w/ owner reviewer) + NIGHTLY_SIGNING_KEY (nightly env); public keys in packaging/keys/; channel-scoped trust in verifier (\u00a712.2). P-release adds environments to jobs. | Code signing deferred (owner 2026-10-23): Authenticode checked only on artifacts that carry a signature; SHA-256 pins + signed manifest are the trust.",
-  "windows_acl": "auth.json (crates/api/src/auth.rs:424) and services.rs:326 0600 modes are cfg(unix) only: Windows needs an ACL on data files (M6-win locks the default folder; custom data dirs on Windows still inherit). Next auth/security slice."
+  "windows_acl": "auth.json (crates/api/src/auth.rs:424) and services.rs:326 0600 modes are cfg(unix) only: Windows needs an ACL on data files (M6-win locks the default folder; custom data dirs on Windows still inherit). Next auth/security slice.",
+  "b4b_swap_test_waits": "crates/search/src/live.rs the_swap_reports_its_adult_torrents (#104) uses two fixed 30 s waits (pattern X-flakes removed elsewhere); convert to condition waits in the next slice touching live.rs."
  },
  "blocked_on_owner": [],
  "launches_today": 8,
