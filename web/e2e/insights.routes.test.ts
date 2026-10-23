@@ -239,7 +239,9 @@ test.describe('states', () => {
 		await page.route('**/_app/immutable/**/*.js', async (route) => {
 			const response = await route.fetch();
 			const body = await response.text();
-			if (block && body.includes('Funnel by discovery cohort')) return route.abort();
+			if (block && body.includes('insights-funnel-complete')) {
+				return route.abort();
+			}
 			return route.fulfill({ response, body });
 		});
 		await go('/insights');

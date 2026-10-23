@@ -18,10 +18,8 @@
 	let Loaded = $state.raw<Component<P>>();
 	let host = $state<HTMLElement>();
 	let failed = $state(false);
-	let attempt = $state(0);
 
 	$effect(() => {
-		void attempt;
 		if (Loaded || !host) return;
 		let started = false;
 		const go = () => {
@@ -55,7 +53,7 @@
 	{:else if failed}
 		<div class="ins-chunk-error" role="alert" data-testid="insights-chunk-error">
 			<span>{m.insights_overview_chunk_failed()}</span>
-			<Button onclick={() => (attempt += 1)}>{m.insights_overview_retry()}</Button>
+			<Button onclick={() => location.reload()}>{m.insights_overview_retry()}</Button>
 		</div>
 	{:else}
 		<Skeleton class={height} />
