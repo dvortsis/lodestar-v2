@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 14cf4f6edb92455b861e0c580640d35590f752445a95471ac1d6e4181aa71409 # shrinks to text = "S01E02 1080p ", words = ["S01E02", "1080p"], slop = 1
+cc d32ad78917c5561de886e13b85ca7d933f6ce19a4de70ef4069b99f55cbdc573 # shrinks to text = "1080p ", words = ["a", "a"], slop = 1, path = false
