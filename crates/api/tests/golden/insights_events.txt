@@ -1,0 +1,2 @@
+200
+{"annotations":[{"at":1799929800,"kind":"restart","text":"v0.5.0"},{"at":1799964000,"kind":"paused","text":""},{"at":1799971200,"kind":"resumed","text":""},{"at":1799998200,"kind":"intensity","text":"aggressive"}],"paused":[{"from":1799964000,"to":1799971200}],"truncated":false}

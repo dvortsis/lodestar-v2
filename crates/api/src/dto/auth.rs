@@ -1,4 +1,5 @@
-//! `/auth`, `/setup`, `/login`, `/logout` and `/password` (§12).
+//! `/auth`, `/setup`, `/login`, `/logout`, `/password`, `/auth/proxy` and
+//! `/sessions/revoke-others` (§12).
 
 use std::fmt;
 
@@ -54,6 +55,82 @@ pub struct PasswordRequest {
     pub new: String,
 }
 
+/// `POST /sessions/revoke-others`, and any other change that only needs
+/// the password (§20.11). `Debug` redacts it.
+#[derive(Clone, Default, Serialize, Deserialize, ToSchema)]
+pub struct ConfirmRequest {
+    /// The admin password, every time. Without it the answer is 428
+    /// `confirm_required`.
+    #[serde(default)]
+    #[schema(nullable = false)]
+    pub password: Option<String>,
+}
+
+/// `GET` and `PUT /auth/proxy`: trusted reverse-proxy header auth.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "allowed_users": [],
+    "enabled": true,
+    "forced_off": false,
+    "header": "Remote-User",
+    "trusted": ["172.17.0.1/32"]
+}))]
+pub struct ProxySettings {
+    /// Empty: any user the proxy names.
+    pub allowed_users: Vec<String>,
+    pub enabled: bool,
+    /// `LODESTAR_PROXY_AUTH=off` turned proxy auth off for this run; the
+    /// saved settings shown here don't apply until it's removed.
+    pub forced_off: bool,
+    /// The header the proxy names the signed-in user in.
+    pub header: String,
+    /// The proxies whose header is believed, as canonical CIDRs.
+    pub trusted: Vec<String>,
+}
+
+/// `PUT /auth/proxy`. `Debug` redacts the password.
+#[derive(Clone, Serialize, Deserialize, ToSchema)]
+pub struct ProxyUpdate {
+    /// At most 64 user names; empty allows any.
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
+    pub enabled: bool,
+    /// Defaults to `Remote-User`.
+    #[serde(default = "default_header")]
+    pub header: String,
+    /// The admin password (428 `confirm_required` without it).
+    #[serde(default)]
+    #[schema(nullable = false)]
+    pub password: Option<String>,
+    /// IP addresses or CIDR ranges, at most 64. Required to turn it on.
+    #[serde(default)]
+    pub trusted: Vec<String>,
+}
+
+fn default_header() -> String {
+    crate::auth::proxy::DEFAULT_USER_HEADER.to_string()
+}
+
+impl fmt::Debug for ConfirmRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConfirmRequest")
+            .field("password", &REDACTED)
+            .finish()
+    }
+}
+
+impl fmt::Debug for ProxyUpdate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProxyUpdate")
+            .field("allowed_users", &self.allowed_users.len())
+            .field("enabled", &self.enabled)
+            .field("header", &self.header)
+            .field("password", &REDACTED)
+            .field("trusted", &self.trusted)
+            .finish()
+    }
+}
+
 impl fmt::Debug for SetupRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SetupRequest")
@@ -106,6 +183,22 @@ mod tests {
                 PasswordRequest {
                     old: secret.into(),
                     new: secret.into(),
+                }
+            ),
+            format!(
+                "{:?}",
+                ConfirmRequest {
+                    password: Some(secret.into()),
+                }
+            ),
+            format!(
+                "{:?}",
+                ProxyUpdate {
+                    allowed_users: vec![secret.into()],
+                    enabled: true,
+                    header: "Remote-User".into(),
+                    password: Some(secret.into()),
+                    trusted: vec![],
                 }
             ),
         ];

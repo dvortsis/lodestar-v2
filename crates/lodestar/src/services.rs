@@ -29,7 +29,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::config::Config;
-use crate::{floor, http, ops, settings, subscriptions};
+use crate::{floor, http, insights, ops, settings, subscriptions};
 
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -52,6 +52,8 @@ pub struct Handles {
     pipeline: Pipeline,
     /// The index, its live indexer and any rebuild (§8).
     search: Option<Arc<Serving>>,
+    /// Insights' searchable-time recorder and its stop signal.
+    insights: (watch::Sender<bool>, JoinHandle<()>),
 }
 
 impl Services {
@@ -160,6 +162,14 @@ impl Services {
             )
             .map_err(|e| format!("loading auth: {e}"))?,
         );
+        // The way back in after a proxy change locks you out (§12).
+        let proxy_env = std::env::var(lodestar_api::auth::PROXY_AUTH_ENV).ok();
+        if auth.apply_proxy_override(proxy_env.as_deref()) {
+            tracing::warn!(
+                "{} is set: trusted-proxy sign-in is off for this run",
+                lodestar_api::auth::PROXY_AUTH_ENV
+            );
+        }
         if let Some(token) = auth.setup_token() {
             // §12: whoever can read the logs claims the instance.
             tracing::warn!(
@@ -212,6 +222,30 @@ impl Services {
             stats: s.stats(),
         });
         let paused_now = crawl.clone();
+        // Insights (B11a): searchable time from the index's commits.
+        let insights = Arc::new(insights::Insights::new(pipeline.monitor()));
+        let (stop_insights, insights_stopped) = watch::channel(false);
+        let recorder = {
+            let crawl = crawl.clone();
+            insights::spawn(
+                insights.clone(),
+                insights::Follow {
+                    db: config.db_path(),
+                    store: config.store_config(),
+                    index: serving
+                        .as_ref()
+                        .map(|s| (s.commit_hook().clone(), s.stats())),
+                    paused: Box::new(move || crawl.status().paused),
+                    // As `/stats` counts them.
+                    searchable: {
+                        let index = search.clone();
+                        Box::new(move || index.as_ref().map(|i| i.index().num_docs()))
+                    },
+                    tick: insights::TICK,
+                },
+                insights_stopped,
+            )
+        };
         let ops = Arc::new(ops::Ops::new(
             crawl,
             settings.subscribe(),
@@ -228,6 +262,7 @@ impl Services {
             ops: Some(ops),
             user_data: Some(Arc::new(Mutex::new(user_data))),
             adult: settings::content::follow(settings.subscribe()),
+            insights: Some(insights),
         };
         settings::log::follow(settings.subscribe());
         let http = http::AppState {
@@ -287,6 +322,7 @@ impl Services {
                 subscriptions: (stop_subscriptions, refresher),
                 pipeline,
                 search: serving,
+                insights: (stop_insights, recorder),
             },
             listener,
         })
@@ -338,6 +374,10 @@ impl Handles {
             // works through a shared one.
             tokio::task::spawn_blocking(move || search.stop()).await??;
         }
+        // After the indexer's last commit, which it then records.
+        let (stop, recorder) = self.insights;
+        let _ = stop.send(true);
+        let _ = recorder.await;
         tracing::info!("stopped cleanly");
         Ok(())
     }

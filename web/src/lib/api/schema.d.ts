@@ -21,6 +21,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/proxy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The trusted reverse-proxy header settings (§12). `forced_off` says
+         *     `LODESTAR_PROXY_AUTH=off` turned them off for this run.
+         */
+        get: operations["getProxyAuth"];
+        /**
+         * Changes the trusted reverse-proxy header settings. Needs the password
+         *     (428 `confirm_required` without it).
+         */
+        put: operations["putProxyAuth"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/classify": {
         parameters: {
             query?: never;
@@ -578,6 +602,129 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/insights/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Trend annotations (`restart`, `stopped`, `paused`, `resumed`,
+         *     `intensity`; other events are skipped) and the paused spans
+         *     overlapping `from..to`, so the client draws gaps.
+         */
+        get: operations["getInsightsEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/insights/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The Insights overview (§10.9.2): stage strip, KPIs, trend with
+         *     annotations, the cohort funnel, segments, exceptions and Serve, from
+         *     the rollups. `compare=1` adds `previous` and `kpi.searchable_delta`.
+         *     Event time for the trend, new searchable, stages and Serve; discovery
+         *     cohort for the funnel, yield and time to searchable.
+         */
+        get: operations["getInsightsOverview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every API key and feed token, oldest first: never a secret. */
+        get: operations["listKeys"];
+        put?: never;
+        /**
+         * Makes an API key or feed token. Needs the password (428
+         *     `confirm_required` without it). The secret is in this response only.
+         */
+        post: operations["createKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/keys/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Deletes a key or token and its hash. */
+        delete: operations["deleteKey"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/keys/{id}/regenerate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replaces a key's secret: the old one stops working at once. The key
+         *     keeps its name, kind, scopes, feed and expiry, under a new id and
+         *     prefix. Needs the password (428 `confirm_required` without it).
+         */
+        post: operations["regenerateKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/keys/{id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revokes a key or token: it stops working and stays listed as revoked.
+         *     Revoking one already revoked changes nothing.
+         */
+        post: operations["revokeKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/login": {
         parameters: {
             query?: never;
@@ -749,6 +896,27 @@ export interface paths {
          *     `"explain": true` (as `GET`'s `explain`).
          */
         post: operations["searchPost"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sessions/revoke-others": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Signs out every other browser: rotates the session key and sets a new
+         *     cookie for this one. Needs the password (428 `confirm_required`
+         *     without it).
+         */
+        post: operations["revokeOtherSessions"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1174,6 +1342,21 @@ export interface components {
             id: number;
             query: string;
         };
+        /** @description A trend annotation. */
+        Annotation: {
+            /**
+             * Format: int64
+             * @description Unix seconds.
+             */
+            at: number;
+            /** @description `restart`, `stopped`, `paused`, `resumed` or `intensity`. */
+            kind: string;
+            /**
+             * @description The event's detail: the version for `restart`, the new level for
+             *     `intensity`; empty when there's none.
+             */
+            text: string;
+        };
         /** @description `POST /filters/apply`: the change took effect. */
         ApplyResponse: {
             /** @description Always `true`. */
@@ -1347,6 +1530,8 @@ export interface components {
              */
             setup_required: boolean;
         };
+        /** @enum {string} */
+        Bucket: "hour" | "day";
         /** @description One change to filtering (§20.7), tagged by `op`. */
         Change: {
             on: boolean;
@@ -1766,6 +1951,28 @@ export interface components {
              */
             pct_files: number;
         };
+        /**
+         * @description `POST /sessions/revoke-others`, and any other change that only needs
+         *     the password (§20.11). `Debug` redacts it.
+         */
+        ConfirmRequest: {
+            /**
+             * @description The admin password, every time. Without it the answer is 428
+             *     `confirm_required`.
+             */
+            password?: string;
+        };
+        /** @description Each stage ÷ the one before, 0–1; null when the one before is 0. */
+        Conversion: {
+            /** Format: double */
+            fetched: number | null;
+            /** Format: double */
+            peer_found: number | null;
+            /** Format: double */
+            searchable: number | null;
+            /** Format: double */
+            stored: number | null;
+        };
         CoreRuleState: {
             action: string;
             /** @description Part of the locked floor: can't be switched off. */
@@ -1920,6 +2127,42 @@ export interface components {
             /** @enum {string} */
             state: "running" | "paused";
         };
+        /** @description `POST /keys`. `Debug` redacts the password. */
+        CreateKeyRequest: {
+            /**
+             * Format: int64
+             * @description Unix seconds, in the future; absent: never expires.
+             */
+            expires_at?: number;
+            kind: components["schemas"]["KeyKind"];
+            /** @description 1–200 characters. */
+            name: string;
+            /** @description The admin password (428 `confirm_required` without it). */
+            password?: string;
+            /**
+             * Format: int64
+             * @description A feed token's saved search; absent: every feed. API keys take
+             *     none.
+             */
+            saved_search_id?: number;
+            /**
+             * @description An API key's scopes, at least one. A feed token takes none (it
+             *     reads feeds only).
+             */
+            scopes?: components["schemas"]["KeyScope"][];
+        };
+        /**
+         * @description `POST /keys` and `POST /keys/{id}/regenerate`: the key and, this once,
+         *     its secret. `Debug` redacts the secret.
+         */
+        CreatedKey: {
+            key: components["schemas"]["KeyInfo"];
+            /**
+             * @description The whole secret (`lsk_…` or `lsf_…`). Shown only now: Lodestar
+             *     keeps its hash, not the secret.
+             */
+            secret: string;
+        };
         Decision: {
             action: string;
             rule: string;
@@ -2064,6 +2307,18 @@ export interface components {
             data: components["schemas"]["ResyncEvent"];
             /** @enum {string} */
             event: "resync";
+        };
+        /** @description `GET /insights/events`: annotations and paused spans. */
+        EventsResponse: {
+            /** @description Oldest first; at most 1,000 (`truncated`). */
+            annotations: components["schemas"]["Annotation"][];
+            /**
+             * @description The paused spans overlapping the range, oldest first, so the
+             *     client draws gaps.
+             */
+            paused: components["schemas"]["PausedSpan"][];
+            /** @description More than 1,000 annotations: the oldest 1,000 are listed. */
+            truncated: boolean;
         };
         ExceptionEntry: {
             hashes?: string[];
@@ -2364,6 +2619,13 @@ export interface components {
             /** @description Files in all. */
             total: number;
         };
+        /** @description Where an exception's fix is: a settings section or a stage page. */
+        Fix: {
+            /** @description `settings` or `stage`. */
+            kind: string;
+            /** @description The section or stage (`index`, `fetch`, …). */
+            target: string;
+        };
         FixtureCounts: {
             /** @description Examples the rule now gets wrong. */
             failing: number;
@@ -2378,6 +2640,75 @@ export interface components {
         Fixtures: {
             core: components["schemas"]["FixtureCounts"][];
         };
+        /** @description One discovery cohort (or a UTC day of them) in the funnel (§10.9.3). */
+        FunnelCohort: {
+            /**
+             * Format: int64
+             * @description The cohort's first hour, unix seconds.
+             */
+            cohort: number;
+            conversion: components["schemas"]["Conversion"];
+            /**
+             * @description Final: nothing in progress and everything stored searchable, or
+             *     past the 72 h retry horizon. A day is final when all its hours
+             *     are. Not final is "incomplete" (hatched).
+             */
+            final: boolean;
+            /**
+             * Format: int64
+             * @description Harvested − stored − lost, at least 0.
+             */
+            in_progress: number;
+            /**
+             * @description Losses by reason (`no_peers`, `timed_out`, `refused`,
+             *     `encryption_failed`, `oversize`, `invalid`, `blocked`, `evicted`,
+             *     `gave_up`, `unreachable`), every reason listed.
+             */
+            losses: {
+                [key: string]: number;
+            };
+            stages: components["schemas"]["FunnelStages"];
+        };
+        /** @description Hashes of the cohort that reached each stage. */
+        FunnelStages: {
+            /** Format: int64 */
+            fetched: number;
+            /** Format: int64 */
+            harvested: number;
+            /** Format: int64 */
+            peer_found: number;
+            /** Format: int64 */
+            searchable: number;
+            /** Format: int64 */
+            stored: number;
+        };
+        /** @description The funnel over every cohort in the range. */
+        FunnelTotal: {
+            /**
+             * Format: int64
+             * @description Cohort hours in the range with any count.
+             */
+            cohorts: number;
+            conversion: components["schemas"]["Conversion"];
+            /**
+             * Format: int64
+             * @description Of those, final.
+             */
+            final_cohorts: number;
+            /** Format: int64 */
+            in_progress: number;
+            /**
+             * @description Each reason's share of all losses, 0–1; null when nothing was
+             *     lost.
+             */
+            loss_share: {
+                [key: string]: number | null;
+            };
+            losses: {
+                [key: string]: number;
+            };
+            stages: components["schemas"]["FunnelStages"];
+        };
         /** @enum {string} */
         GroupStatus: "available" | "unavailable";
         /**
@@ -2388,6 +2719,14 @@ export interface components {
             /** @description 1–500 40-character hex info hashes. */
             hashes: string[];
         };
+        /** @description Health (§10.9.2): running, paused or degraded, with the reason. */
+        Health: {
+            /** @description `paused`, `writer_stalled` or `index_lag`; null while running. */
+            reason: string | null;
+            state: components["schemas"]["HealthState"];
+        };
+        /** @enum {string} */
+        HealthState: "running" | "paused" | "degraded";
         /** @description A histogram with explicit bins; empty bins are present with count 0. */
         Histogram: {
             approx: boolean;
@@ -2524,6 +2863,46 @@ export interface components {
              */
             updated_at: number;
         };
+        /** @description An exception (§10.9.2 level 5): text + icon + a fix action. */
+        InsightsException: {
+            fix: components["schemas"]["Fix"];
+            /**
+             * @description `index_lag` (the index more than 30 s behind) or `cohort_stalled`
+             *     (hashes in progress, the crawler running, and nothing stored for
+             *     2 full hours).
+             */
+            kind: string;
+            severity: components["schemas"]["Severity"];
+            /**
+             * Format: int64
+             * @description Unix seconds.
+             */
+            since: number;
+            /** @description `s` or `torrents`. */
+            unit: string | null;
+            /** Format: double */
+            value: number | null;
+        };
+        /**
+         * @description The range as the server normalized it: whole UTC hours, or whole UTC
+         *     days past 7 days.
+         */
+        InsightsRange: {
+            /** @description `hour` up to 7 days, `day` (UTC days) beyond. */
+            bucket: components["schemas"]["Bucket"];
+            /**
+             * Format: int64
+             * @description Unix seconds, inclusive.
+             */
+            from: number;
+            /**
+             * Format: int64
+             * @description Unix seconds, exclusive. The current hour (day) counts so far.
+             */
+            to: number;
+            /** @description The time zone buckets are in: always `UTC`. */
+            tz: string;
+        };
         /** @description `docs/metrics.md` §7.5 `stages`. */
         InsightsStages: {
             /**
@@ -2578,6 +2957,115 @@ export interface components {
              * @description Once `failed`: the HTTP status of `error`.
              */
             status?: number;
+        };
+        /**
+         * @description A key or token as listed: never its secret or hash.
+         * @example {
+         *       "created_at": 1700000000,
+         *       "expires_at": null,
+         *       "id": 3,
+         *       "kind": "api_key",
+         *       "last_used_at": 1700000600,
+         *       "name": "Prowlarr",
+         *       "prefix": "lsk_Q7f2bX9a",
+         *       "revoked_at": null,
+         *       "saved_search_id": null,
+         *       "scopes": [
+         *         "torznab"
+         *       ],
+         *       "status": "active"
+         *     }
+         */
+        KeyInfo: {
+            /**
+             * Format: int64
+             * @description Unix seconds.
+             */
+            created_at: number;
+            /**
+             * Format: int64
+             * @description Unix seconds; null: never expires.
+             */
+            expires_at: number | null;
+            /** Format: int64 */
+            id: number;
+            kind: components["schemas"]["KeyKind"];
+            /**
+             * Format: int64
+             * @description Unix seconds, written at most once a minute; null: never used.
+             */
+            last_used_at: number | null;
+            name: string;
+            /** @description The secret's public start, to tell keys apart. */
+            prefix: string;
+            /**
+             * Format: int64
+             * @description Unix seconds; null: not revoked.
+             */
+            revoked_at: number | null;
+            /**
+             * Format: int64
+             * @description A feed token's saved search; null: every feed (or an API key).
+             */
+            saved_search_id: number | null;
+            scopes: components["schemas"]["KeyScope"][];
+            status: components["schemas"]["KeyStatus"];
+        };
+        /** @enum {string} */
+        KeyKind: "api_key" | "feed_token";
+        /** @description `GET /keys`, oldest first. */
+        KeyList: {
+            keys: components["schemas"]["KeyInfo"][];
+        };
+        /**
+         * @description What a key may reach (see `keys::scope`). A route opts in to one.
+         * @enum {string}
+         */
+        KeyScope: "search" | "torznab" | "feeds";
+        /** @enum {string} */
+        KeyStatus: "active" | "expired" | "revoked";
+        /** @description The KPI row (§10.9.2 level 1, `docs/metrics.md` §6.2). */
+        Kpi: {
+            health: components["schemas"]["Health"];
+            /**
+             * Format: int64
+             * @description Searchable torrents that were imported (bitmagnet import), part of
+             *     `searchable`; null until the count taken at start is in.
+             */
+            imported: number | null;
+            /**
+             * Format: int64
+             * @description Torrents that first became searchable in the range, imports
+             *     included. Event time; 0 is real.
+             */
+            new_searchable: number;
+            /**
+             * Format: int64
+             * @description Documents in the search index now; null when search is off.
+             */
+            searchable: number | null;
+            /**
+             * Format: int64
+             * @description The change since the previous period's end: now's count less
+             *     `previous.kpi.searchable`. Null without `compare=1`, for `all`,
+             *     with search off, or with no snapshot from then.
+             */
+            searchable_delta: number | null;
+            /**
+             * Format: int64
+             * @description First harvest → searchable, p50 and p95 seconds over the final
+             *     cohorts in the range. Always approximate (log buckets ≤ 10%).
+             *     Null when no cohort in the range is final.
+             */
+            time_to_searchable_p50_s: number | null;
+            /** Format: int64 */
+            time_to_searchable_p95_s: number | null;
+            /**
+             * Format: double
+             * @description Searchable ÷ harvested over the final cohorts in the range, 0–1.
+             *     Imports excluded. Null when no cohort in the range is final.
+             */
+            yield: number | null;
         };
         /**
          * @description One label in use.
@@ -2809,6 +3297,54 @@ export interface components {
             /** Format: int64 */
             version: number;
         };
+        /**
+         * @description The overview (§10.9.2): status, movement, the funnel, segments,
+         *     exceptions and Serve, for one range.
+         */
+        OverviewResponse: {
+            /**
+             * @description Trend annotations in the range, oldest first, at most 1,000
+             *     (`/insights/events` says when there were more). Event time.
+             */
+            annotations: components["schemas"]["Annotation"][];
+            /** @description What needs attention now, whatever the range (§10.9.2 level 5). */
+            exceptions: components["schemas"]["InsightsException"][];
+            /**
+             * @description The discovery cohorts in the range that have any count, oldest
+             *     first: hours up to 7 days, UTC days beyond (`range.bucket`).
+             */
+            funnel: components["schemas"]["FunnelCohort"][];
+            /** @description The funnel over every cohort in the range. */
+            funnel_total: components["schemas"]["FunnelTotal"];
+            /**
+             * Format: int64
+             * @description Torrents newly stored in the last full UTC hour (§10.12). Event
+             *     time. Null when that hour wasn't measured (the crawler paused or
+             *     not running) and stored nothing.
+             */
+            ingest_per_hour: number | null;
+            kpi: components["schemas"]["Kpi"];
+            /**
+             * @description The period of equal length just before, in the same shape;
+             *     present only with `compare=1`, and never for `all`.
+             */
+            previous?: components["schemas"]["PreviousPeriod"];
+            range: components["schemas"]["InsightsRange"];
+            segments: components["schemas"]["Segments"];
+            serve: components["schemas"]["Serve"];
+            stages: components["schemas"]["Stages"];
+            stale: null | components["schemas"]["Stale"];
+            /**
+             * @description Movement, one point per bucket (`range.bucket`), oldest first.
+             *     Event time.
+             */
+            trend: components["schemas"]["TrendPoint"][];
+            /**
+             * Format: int64
+             * @description When the numbers were read (unix seconds).
+             */
+            updated_at: number;
+        };
         PackRuleState: {
             action: string;
             /** @example MW-2 */
@@ -2839,6 +3375,19 @@ export interface components {
             /** @description At least 10 characters. */
             new: string;
             old: string;
+        };
+        PausedSpan: {
+            /**
+             * Format: int64
+             * @description Unix seconds: when it paused (before the range if it was already
+             *     paused then).
+             */
+            from: number;
+            /**
+             * Format: int64
+             * @description When it resumed; null while still paused.
+             */
+            to: number | null;
         };
         /** @description Floor entries one source dropped, waiting for a decision (§2.7). */
         PendingFloorEntry: {
@@ -2916,6 +3465,81 @@ export interface components {
             code: string;
             /** @description A sentence for people. */
             message: string;
+        };
+        /** @description The KPIs over the previous period. */
+        PreviousKpi: {
+            /** Format: int64 */
+            new_searchable: number;
+            /**
+             * Format: int64
+             * @description Searchable at the period's end: the last hourly snapshot in the
+             *     day before it ends. Null when there's none (search off, or not
+             *     running then).
+             */
+            searchable: number | null;
+            /** Format: int64 */
+            time_to_searchable_p50_s: number | null;
+            /** Format: int64 */
+            time_to_searchable_p95_s: number | null;
+            /** Format: double */
+            yield: number | null;
+        };
+        /** @description The previous period, for Compare: the fields that depend on the range. */
+        PreviousPeriod: {
+            kpi: components["schemas"]["PreviousKpi"];
+            range: components["schemas"]["InsightsRange"];
+            serve: components["schemas"]["Serve"];
+            stages: components["schemas"]["PreviousStages"];
+            trend: components["schemas"]["TrendPoint"][];
+        };
+        /** @description The stage strip over the previous period. */
+        PreviousStages: {
+            /** Format: int64 */
+            discover: number;
+            /** Format: int64 */
+            fetch: number | null;
+            /** Format: int64 */
+            serve: number | null;
+            /** Format: int64 */
+            understand: number;
+        };
+        /**
+         * @description `GET` and `PUT /auth/proxy`: trusted reverse-proxy header auth.
+         * @example {
+         *       "allowed_users": [],
+         *       "enabled": true,
+         *       "forced_off": false,
+         *       "header": "Remote-User",
+         *       "trusted": [
+         *         "172.17.0.1/32"
+         *       ]
+         *     }
+         */
+        ProxySettings: {
+            /** @description Empty: any user the proxy names. */
+            allowed_users: string[];
+            enabled: boolean;
+            /**
+             * @description `LODESTAR_PROXY_AUTH=off` turned proxy auth off for this run; the
+             *     saved settings shown here don't apply until it's removed.
+             */
+            forced_off: boolean;
+            /** @description The header the proxy names the signed-in user in. */
+            header: string;
+            /** @description The proxies whose header is believed, as canonical CIDRs. */
+            trusted: string[];
+        };
+        /** @description `PUT /auth/proxy`. `Debug` redacts the password. */
+        ProxyUpdate: {
+            /** @description At most 64 user names; empty allows any. */
+            allowed_users?: string[];
+            enabled: boolean;
+            /** @description Defaults to `Remote-User`. */
+            header?: string;
+            /** @description The admin password (428 `confirm_required` without it). */
+            password?: string;
+            /** @description IP addresses or CIDR ranges, at most 64. Required to turn it on. */
+            trusted?: string[];
         };
         QuarantineEntry: {
             /**
@@ -3396,6 +4020,70 @@ export interface components {
             revision: number;
             section: string;
         };
+        SegmentCount: {
+            key: string;
+            /** Format: int64 */
+            searchable: number;
+        };
+        SegmentYield: {
+            /** Format: int64 */
+            harvested: number;
+            /** @description The source plugin's name. */
+            key: string;
+            /** Format: int64 */
+            searchable: number;
+            /**
+             * Format: double
+             * @description Searchable ÷ harvested, 0–1; null when it harvested nothing.
+             */
+            yield: number | null;
+        };
+        /**
+         * @description Segments (§10.9.2 level 4). Rows are sorted by value, descending, then
+         *     key. Adult is left out entirely while "Show adult content" is off.
+         */
+        Segments: {
+            /**
+             * @description Newly searchable by content type (`movie`, `tv`, …, `adult`, and
+             *     `unclassified` for none yet). Event time.
+             */
+            by_content_type: components["schemas"]["SegmentCount"][];
+            /**
+             * @description The same by the content type's group: `video` (movie, tv, video),
+             *     `audio` (music, audiobook), `documents` (ebook, comic),
+             *     `software` (software, game), `images`, `other`, `adult`,
+             *     `unclassified`. Event time.
+             */
+            by_group: components["schemas"]["SegmentCount"][];
+            /**
+             * @description Yield by the source that found each hash first, over final
+             *     cohorts. Discovery cohort.
+             */
+            by_source: components["schemas"]["SegmentYield"][];
+        };
+        /**
+         * @description Serve (§10.9.2 level 6). Every field is null until its counter exists:
+         *     searches and latency with #48, alerts with B9, sends with the
+         *     integrations' counters.
+         */
+        Serve: {
+            /** Format: int64 */
+            alerts_fired: number | null;
+            /**
+             * Format: double
+             * @description Always approximate (log buckets).
+             */
+            latency_p95_ms: number | null;
+            /** Format: int64 */
+            searches: number | null;
+            /** Format: int64 */
+            sends: number | null;
+            /**
+             * Format: double
+             * @description Searches that found nothing ÷ searches, 0–1; null with no searches.
+             */
+            zero_result_rate: number | null;
+        };
         /** @description One field of a section, for its form. */
         SettingField: {
             /** @description The environment variable that overrides it; null when none does. */
@@ -3657,6 +4345,8 @@ export interface components {
              */
             token: string;
         };
+        /** @enum {string} */
+        Severity: "warning" | "error";
         /**
          * @description `GET /torrents/{hash}/siblings`: the torrents related to one, in three
          *     groups. Each is either available (possibly empty) or unavailable with
@@ -3817,6 +4507,47 @@ export interface components {
             purge?: unknown;
             /** @description Not editable before v0.6: refused with `409 not_editable`. */
             schedule?: unknown;
+        };
+        /** @description The stage strip (§10.9.1, `docs/metrics.md` §6.1). */
+        Stages: {
+            /**
+             * Format: int64
+             * @description Unique hashes harvested in the range (first harvests: the cohorts'
+             *     harvested counts). Always approximate (≈).
+             */
+            discover: number;
+            /**
+             * Format: int64
+             * @description Metadata retrieved in the range, by event time. Null until the
+             *     pipeline counts fetches by event time (B11b).
+             */
+            fetch: number | null;
+            /**
+             * Format: int64
+             * @description Searchable torrents now; null when search is off.
+             */
+            index: number | null;
+            /**
+             * Format: int64
+             * @description Searches answered in the range; null until search counters exist
+             *     (#48).
+             */
+            serve: number | null;
+            /**
+             * Format: int64
+             * @description Torrents newly stored in the range. Event time.
+             */
+            understand: number;
+        };
+        /** @description The stale banner (§10.9.6). */
+        Stale: {
+            /** @description `paused` (nothing to flush while paused) or `writer_stalled`. */
+            reason: string;
+            /**
+             * Format: int64
+             * @description The last flush, or the start when there was none since.
+             */
+            since: number;
         };
         /**
          * @description `GET /stats`: what the global bar and status pill show
@@ -4256,6 +4987,27 @@ export interface components {
             max_id: number | null;
         };
         /**
+         * @description One trend bucket. A count is null where nothing was measured (a gap:
+         *     paused, or not running), and 0 where it was measured and was 0.
+         */
+        TrendPoint: {
+            /**
+             * Format: int64
+             * @description The bucket's start, unix seconds.
+             */
+            at: number;
+            /**
+             * Format: int64
+             * @description Unique hashes first harvested in the bucket. Always ≈.
+             */
+            harvested: number | null;
+            /**
+             * Format: int64
+             * @description Torrents newly searchable in the bucket.
+             */
+            searchable: number | null;
+        };
+        /**
          * @description Why a section isn't available. Stable keys; the UI words them.
          * @enum {string}
          */
@@ -4453,6 +5205,50 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuthStatus"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getProxyAuth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProxySettings"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putProxyAuth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProxyUpdate"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProxySettings"];
                 };
             };
             default: components["responses"]["Error"];
@@ -5404,6 +6200,201 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    getInsightsEvents: {
+        parameters: {
+            query: {
+                /** @description Unix seconds. */
+                from: number;
+                /** @description Unix seconds, exclusive. */
+                to: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventsResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getInsightsOverview: {
+        parameters: {
+            query?: {
+                /**
+                 * @description `24h`, `7d` (the default), `30d`, `all` or `custom` (with `from`
+                 *     and `to`).
+                 */
+                range?: string;
+                /**
+                 * @description Unix seconds; `custom` only. Rounded down to its UTC hour (day,
+                 *     for ranges over 7 days).
+                 */
+                from?: number;
+                /**
+                 * @description Unix seconds, exclusive; `custom` only. Rounded up to its UTC hour
+                 *     (day), and to the current one at most.
+                 */
+                to?: number;
+                /**
+                 * @description `1` adds `previous`, the period of equal length before, and
+                 *     `kpi.searchable_delta`.
+                 */
+                compare?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OverviewResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description Made; `secret` is shown this once. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedKey"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The key's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        /** @description Any JSON, such as `{}`. */
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    regenerateKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The key's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfirmRequest"];
+            };
+        };
+        responses: {
+            /** @description Replaced; `secret` is shown this once. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedKey"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    revokeKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The key's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        /** @description Any JSON, such as `{}`. */
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyInfo"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     login: {
         parameters: {
             query?: never;
@@ -5810,6 +6801,33 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SearchResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    revokeOtherSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfirmRequest"];
+            };
+        };
+        responses: {
+            /** @description Every other session ended; a new session cookie is set. */
+            200: {
+                headers: {
+                    /** @description The new session cookie. */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
                 };
             };
             default: components["responses"]["Error"];
