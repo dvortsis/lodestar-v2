@@ -20,6 +20,7 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
     (7, V7),
     (8, V8),
     (9, V9),
+    (10, V10),
 ];
 
 /// M0: the canonical torrent tables plus settings and zstd dictionaries.
@@ -407,6 +408,140 @@ CREATE TABLE class_rules (
 ) STRICT;
 ";
 
+/// M5: your data (saved searches and their alerts, per-torrent marks,
+/// collections), API keys and feed tokens, and reporting (searchable time
+/// per hour, the opt-in query log, resolution time). Architecture §7,
+/// §10.8, §10.9.5, §12, §12.1; decisions in `docs/decisions/2026-10-22-B8.md`.
+///
+/// - Ids that anything outside the row refers to (an alert in an SSE
+///   cursor or RSS guid, a key in a log reference, a collection in a URL)
+///   are `AUTOINCREMENT`, so a deleted id never comes back meaning
+///   something else. `query_log` rows are referred to by nothing.
+/// - Every child of `torrents` cascades and is indexed on `torrent_id`,
+///   so deleting a torrent (retention, a filter relabel) takes its alerts,
+///   marks and collection entries with it without scanning.
+/// - `api_keys` holds only a SHA-256 of each secret, never the secret.
+/// - `query_log` has no column for an address, key or token.
+const V10: &str = "
+CREATE TABLE saved_searches (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 200),
+    -- The text as typed, and the parsed AST (serde JSON, the API's and
+    -- the percolator's form).
+    query      TEXT NOT NULL CHECK (length(CAST(query AS BLOB)) <= 2048),
+    ast        TEXT NOT NULL CHECK (json_valid(ast) AND length(ast) <= 65536),
+    sort       TEXT CHECK (sort IS NULL OR length(sort) BETWEEN 1 AND 32),
+    -- Notify in the app; serve an RSS feed; other channels (webhook, ntfy,
+    -- Discord, email: bits defined by the notifier, append only). Pausing
+    -- keeps them, so resuming restores them.
+    alert      INTEGER NOT NULL CHECK (alert IN (0, 1)),
+    rss        INTEGER NOT NULL CHECK (rss IN (0, 1)),
+    channels   INTEGER NOT NULL DEFAULT 0 CHECK (channels BETWEEN 0 AND 4294967295),
+    paused     INTEGER NOT NULL DEFAULT 0 CHECK (paused IN (0, 1)),
+    -- The highest torrent id evaluated against this search.
+    watermark  INTEGER NOT NULL CHECK (watermark >= 0),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE alerts (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    saved_search_id INTEGER NOT NULL REFERENCES saved_searches (id) ON DELETE CASCADE,
+    torrent_id      INTEGER NOT NULL REFERENCES torrents (id) ON DELETE CASCADE,
+    created_at      INTEGER NOT NULL,
+    read_at         INTEGER,
+    -- A torrent alerts once per search; also the per-search listing.
+    UNIQUE (saved_search_id, torrent_id)
+) STRICT;
+CREATE INDEX alerts_torrent ON alerts (torrent_id);
+-- Unread counts and the \"New since\" divider (§10.8).
+CREATE INDEX alerts_unread ON alerts (saved_search_id) WHERE read_at IS NULL;
+
+-- One row per torrent you marked; a row with no mark left is deleted.
+-- labels: canonical encoding (`user_items` module), NULL for none.
+CREATE TABLE user_items (
+    torrent_id INTEGER PRIMARY KEY REFERENCES torrents (id) ON DELETE CASCADE,
+    favourite  INTEGER NOT NULL CHECK (favourite IN (0, 1)),
+    hidden     INTEGER NOT NULL CHECK (hidden IN (0, 1)),
+    labels     TEXT CHECK (labels IS NULL OR length(labels) BETWEEN 1 AND 4096),
+    note       TEXT CHECK (note IS NULL OR length(note) BETWEEN 1 AND 4000),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    CHECK (favourite = 1 OR hidden = 1 OR labels IS NOT NULL OR note IS NOT NULL)
+) STRICT;
+
+CREATE TABLE collections (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 200),
+    note       TEXT CHECK (note IS NULL OR length(note) BETWEEN 1 AND 4000),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE collection_items (
+    collection_id INTEGER NOT NULL REFERENCES collections (id) ON DELETE CASCADE,
+    torrent_id    INTEGER NOT NULL REFERENCES torrents (id) ON DELETE CASCADE,
+    position      INTEGER NOT NULL,
+    added_at      INTEGER NOT NULL,
+    PRIMARY KEY (collection_id, torrent_id)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX collection_items_order ON collection_items (collection_id, position);
+CREATE INDEX collection_items_torrent ON collection_items (torrent_id);
+
+-- kind: 0 API key, 1 feed token (read-only RSS; for one saved search, or
+-- every feed when saved_search_id is NULL). scopes: bits defined by the
+-- auth code, persisted, append only.
+CREATE TABLE api_keys (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind            INTEGER NOT NULL CHECK (kind IN (0, 1)),
+    name            TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 200),
+    -- Public, shown to tell keys apart; the lookup key.
+    prefix          TEXT NOT NULL UNIQUE CHECK (
+        length(prefix) BETWEEN 8 AND 32 AND prefix NOT GLOB '*[^A-Za-z0-9_-]*'),
+    hash            BLOB NOT NULL CHECK (length(hash) = 32),
+    scopes          INTEGER NOT NULL CHECK (scopes BETWEEN 0 AND 4294967295),
+    saved_search_id INTEGER REFERENCES saved_searches (id) ON DELETE CASCADE,
+    created_at      INTEGER NOT NULL,
+    last_used_at    INTEGER,
+    expires_at      INTEGER,
+    revoked_at      INTEGER,
+    CHECK (kind = 1 OR saved_search_id IS NULL)
+) STRICT;
+CREATE INDEX api_keys_feed ON api_keys (saved_search_id) WHERE saved_search_id IS NOT NULL;
+
+-- The highest torrent id searchable by the end of each hour (§7). Both
+-- columns only grow. Hour 0 holds what was indexed before this table
+-- existed, whose hour is unknown.
+CREATE TABLE index_watermark_hour (
+    hour    INTEGER PRIMARY KEY CHECK (hour >= 0),
+    last_id INTEGER NOT NULL CHECK (last_id >= 0)
+) STRICT;
+CREATE INDEX index_watermark_last_id ON index_watermark_hour (last_id);
+INSERT INTO index_watermark_hour (hour, last_id)
+    SELECT 0, coalesce(max(id), 0) FROM torrents;
+
+-- Opt-in (off by default), local, pruned to its retention (§10.9.5).
+CREATE TABLE query_log (
+    id         INTEGER PRIMARY KEY,
+    at         INTEGER NOT NULL,
+    query      TEXT NOT NULL CHECK (length(CAST(query AS BLOB)) <= 2048),
+    results    INTEGER CHECK (results IS NULL OR results >= 0),
+    latency_us INTEGER NOT NULL CHECK (latency_us >= 0)
+) STRICT;
+CREATE INDEX query_log_at ON query_log (at);
+
+-- When enrichment first resolved a torrent's identity, for Discover's
+-- \"Recently resolved\" (B13).
+ALTER TABLE torrent_parsed ADD COLUMN resolved_at INTEGER;
+CREATE INDEX torrent_parsed_resolved ON torrent_parsed (resolved_at, torrent_id)
+    WHERE resolved_at IS NOT NULL;
+
+-- Releasing a rule's holds finds them by rule (§20.7), which scanned
+-- both tables once per rule.
+CREATE INDEX quarantine_rule ON quarantine (rule);
+CREATE INDEX tombstones_rule ON tombstones (rule);
+";
+
 /// How long a connection waits for a lock another connection holds.
 pub(crate) const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -626,6 +761,158 @@ mod tests {
             )
             .unwrap();
         assert_eq!(tables, 0);
+    }
+
+    /// M5 (V10) on a database at V9 with data in M4's tables: the data
+    /// survives, the version advances once, foreign keys hold, the
+    /// snapshot is taken, and reopening changes nothing.
+    #[test]
+    fn v10_upgrades_a_v9_database_with_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.db");
+        let mut conn = Connection::open(&path).unwrap();
+        configure(&conn, 0).unwrap();
+        migrate_with(&mut conn, Some(&path), &MIGRATIONS[..9]).unwrap();
+        assert_eq!(version(&conn), 9);
+        conn.execute_batch(
+            "INSERT INTO torrents (id, info_hash, name, size, piece_len, piece_count,
+                 file_count, info_size, flags, discovered_at, metadata_at, last_seen_at)
+             VALUES (3, zeroblob(20), 'a', 1, 1, 1, 1, 1, 0, 0, 0, 0),
+                    (8, x'0101010101010101010101010101010101010101', 'b', 1, 1, 1, 1, 1,
+                     0, 0, 0, 0);
+             DELETE FROM torrents WHERE id = 8;
+             INSERT INTO torrents (id, info_hash, name, size, piece_len, piece_count,
+                 file_count, info_size, flags, discovered_at, metadata_at, last_seen_at)
+             VALUES (5, x'0202020202020202020202020202020202020202', 'c', 1, 1, 1, 1, 1,
+                     0, 0, 0, 0);
+             INSERT INTO torrent_parsed (torrent_id, parser_ver, data) VALUES (3, 4, x'aa');
+             INSERT INTO swarm VALUES (3, 1, 2, 3, 1, 1, NULL, NULL, 10, 20, 0);
+             INSERT INTO trackers (url, added_at) VALUES ('udp://t:80', 0);
+             INSERT INTO filter_rules (position, query, action) VALUES (0, 'cam', 1);
+             INSERT INTO class_corrections VALUES (5, 1, 0);
+             INSERT INTO subscriptions (url, name, kind, action, interval_secs)
+                 VALUES ('https://l', 'L', 0, 1, 86400);
+             INSERT INTO settings VALUES ('crawler.intensity', '\"normal\"');",
+        )
+        .unwrap();
+        let before = |conn: &Connection| -> i64 {
+            conn.query_row(
+                "SELECT (SELECT count(*) FROM torrents) + (SELECT count(*) FROM torrent_parsed)
+                     + (SELECT count(*) FROM swarm) + (SELECT count(*) FROM trackers)
+                     + (SELECT count(*) FROM filter_rules)
+                     + (SELECT count(*) FROM class_corrections)
+                     + (SELECT count(*) FROM subscriptions) + (SELECT count(*) FROM settings)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        let rows = before(&conn);
+
+        migrate_with(&mut conn, Some(&path), &MIGRATIONS[..10]).unwrap();
+        assert_eq!(version(&conn), 10);
+        assert_eq!(before(&conn), rows, "no data lost");
+        let applied: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM schema_migrations WHERE version = 10",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(applied, 1);
+        let violations: i64 = conn
+            .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(violations, 0);
+        // Hour 0 holds what was stored before: those torrents' hour is
+        // unknown.
+        let seeded: (i64, i64) = conn
+            .query_row("SELECT hour, last_id FROM index_watermark_hour", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(seeded, (0, 5));
+        let resolved: Option<i64> = conn
+            .query_row("SELECT resolved_at FROM torrent_parsed", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(resolved, None);
+        let backup = Connection::open(dir.path().join("t.pre-v10.db")).unwrap();
+        assert_eq!(version(&backup), 9);
+
+        // Foreign keys are enforced on the new tables.
+        let err = conn
+            .execute(
+                "INSERT INTO user_items (torrent_id, favourite, hidden, created_at, updated_at)
+                 VALUES (8, 1, 0, 0, 0)",
+                [],
+            )
+            .unwrap_err();
+        assert_eq!(
+            err.sqlite_error_code(),
+            Some(rusqlite::ErrorCode::ConstraintViolation)
+        );
+
+        // A second open is a no-op: no new version, no new snapshot.
+        drop(conn);
+        let mut conn = Connection::open(&path).unwrap();
+        configure(&conn, 0).unwrap();
+        migrate_with(&mut conn, Some(&path), &MIGRATIONS[..10]).unwrap();
+        let versions: i64 = conn
+            .query_row("SELECT count(*) FROM schema_migrations", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(versions, 10);
+        assert!(!dir.path().join("t.pre-v10.1.db").exists());
+        assert!(!dir.path().join("t.pre-v11.db").exists());
+    }
+
+    #[test]
+    fn v10_on_a_fresh_database() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure(&conn, 0).unwrap();
+        migrate_with(&mut conn, None, MIGRATIONS).unwrap();
+        let seeded: (i64, i64) = conn
+            .query_row("SELECT hour, last_id FROM index_watermark_hour", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(seeded, (0, 0));
+        for table in [
+            "saved_searches",
+            "alerts",
+            "user_items",
+            "collections",
+            "collection_items",
+            "api_keys",
+            "query_log",
+        ] {
+            let strict: i64 = conn
+                .query_row(
+                    "SELECT strict FROM pragma_table_list WHERE name = ?1",
+                    [table],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(strict, 1, "{table} is STRICT");
+        }
+        // Releasing a rule's holds finds them by index, not a scan.
+        for (table, index) in [
+            ("quarantine", "quarantine_rule"),
+            ("tombstones", "tombstones_rule"),
+        ] {
+            let plan: Vec<String> = conn
+                .prepare(&format!(
+                    "EXPLAIN QUERY PLAN SELECT hash FROM {table} WHERE rule IN ('a', 'b') LIMIT 10"
+                ))
+                .unwrap()
+                .query_map([], |r| r.get(3))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap();
+            let plan = plan.join(" | ");
+            assert!(plan.contains(index), "{table}: {plan}");
+        }
     }
 
     #[test]
