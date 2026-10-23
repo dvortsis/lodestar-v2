@@ -1,4 +1,5 @@
 import type { OpenApiMock } from '../mock/openapi-mock';
+import { crawlerFixture, overviewFixture } from '../../src/lib/features/insights/overview/fixtures';
 
 // Every route the app has today, with sample params for the dynamic ones. A new route slice adds
 // its entry here (smoke tests then cover it in every project); `coverage.test.ts` flags gaps.
@@ -21,11 +22,27 @@ export interface RouteCase {
 }
 
 export const ROUTES: RouteCase[] = [
-	{ name: 'search', path: '/search', heading: 'Search', key: true, densityAware: true },
+	{
+		name: 'search',
+		path: '/search',
+		heading: 'Search',
+		key: true,
+		densityAware: true,
+		// The bare page parses nothing; an interaction with a query in the bar would.
+		mock: (m) => m.on('parseQuery', { ast: { op: 'all' }, canonical: '' })
+	},
 	{ name: 'discover', path: '/discover' },
 	{ name: 'alerts', path: '/alerts' },
 	{ name: 'alert-detail', path: '/alerts/1' },
-	{ name: 'insights', path: '/insights' },
+	{
+		name: 'insights',
+		path: '/insights',
+		heading: 'Insights',
+		mock: (m) => {
+			m.on('getInsightsOverview', overviewFixture());
+			m.on('getCrawler', crawlerFixture());
+		}
+	},
 	{ name: 'insights-stage', path: '/insights/harvest' },
 	{
 		name: 'compare',

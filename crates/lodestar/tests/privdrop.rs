@@ -117,12 +117,26 @@ fn drops_to_puid_and_pgid_before_anything_runs() {
     }
 
     // Every thread, the runtime's included, runs as 4242:4343 with no
-    // groups or capabilities, so setuid(0) can't succeed.
-    let tasks: Vec<_> = std::fs::read_dir(format!("/proc/{pid}/task"))
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .collect();
-    assert!(tasks.len() > 1, "expected the runtime's threads");
+    // groups or capabilities, so setuid(0) can't succeed: the
+    // supervisor's (one thread) and its child's, which does the work
+    // (B-update, §12.2).
+    let threads = |pid: &str| -> Vec<std::path::PathBuf> {
+        std::fs::read_dir(format!("/proc/{pid}/task"))
+            .map(|r| r.map(|e| e.unwrap().path()).collect())
+            .unwrap_or_default()
+    };
+    let children = std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children")).unwrap();
+    let child_pid = children
+        .split_whitespace()
+        .next()
+        .expect("the supervisor's child");
+    let mut tasks = threads(&pid.to_string());
+    let child_tasks = threads(child_pid);
+    assert!(
+        child_tasks.len() > 1,
+        "expected the child's runtime threads"
+    );
+    tasks.extend(child_tasks);
     for task in &tasks {
         let status = std::fs::read_to_string(task.join("status")).unwrap();
         assert_eq!(field(&status, "Uid"), "4242\t4242\t4242\t4242", "{task:?}");
