@@ -1,0 +1,4 @@
+period,key,reported
+current,sample,95
+current,get_peers,20
+current,refetch,2

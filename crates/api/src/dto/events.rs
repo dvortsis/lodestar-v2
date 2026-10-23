@@ -177,8 +177,9 @@ pub struct AlertsEvent {
     pub saved_search: i64,
 }
 
-/// `event: insights` (reserved: B11a publishes it every 30 s): the stage
-/// strip's headline numbers (`docs/metrics.md` §6.1, §7.5).
+/// `event: insights`, every 30 s while anyone subscribes: the default
+/// `7d` overview's stage strip (`docs/metrics.md` §6.1, §7.5, §7.7). A
+/// client showing another range refetches its own on each event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct InsightsEvent {
     pub stages: InsightsStages,
@@ -191,9 +192,16 @@ pub struct InsightsEvent {
 pub struct InsightsStages {
     /// Always approximate.
     pub discover: u64,
-    pub fetch: u64,
-    pub index: u64,
-    pub serve: u64,
+    /// Null when the range starts before fetches were counted by event
+    /// time.
+    #[schema(required = true)]
+    pub fetch: Option<u64>,
+    /// Null with search off.
+    #[schema(required = true)]
+    pub index: Option<u64>,
+    /// Null until the search counters exist.
+    #[schema(required = true)]
+    pub serve: Option<u64>,
     pub understand: u64,
 }
 

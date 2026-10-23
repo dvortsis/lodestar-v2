@@ -2115,6 +2115,84 @@
         ]
       }
     },
+    "/insights/discover": {
+      "get": {
+        "tags": [
+          "insights"
+        ],
+        "summary": "Discover (§10.9.5): keys reported, rediscovered and dropped by source and strategy, first harvests, and the DHT's snapshot. Event time, except `harvested` (discovery cohort, ≈).",
+        "operationId": "getInsightsDiscover",
+        "parameters": [
+          {
+            "name": "range",
+            "in": "query",
+            "description": "As the overview's.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "compare",
+            "in": "query",
+            "description": "`1` adds `previous`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "reason",
+            "in": "query",
+            "description": "A loss reason's name (`docs/metrics.md` §6.4: `no_peers`, …,\n`unreachable`): the Fetch page's losses and funnel show only that\nreason (the drill-through from a funnel loss, §10.9.4). Accepted\nand checked on every stage; only Fetch reads it.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoverResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/insights/events": {
       "get": {
         "tags": [
@@ -2151,6 +2229,239 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/EventsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/insights/export.csv": {
+      "get": {
+        "tags": [
+          "insights"
+        ],
+        "summary": "One panel of Insights as CSV, the numbers its chart shows.",
+        "operationId": "getInsightsExportCsv",
+        "parameters": [
+          {
+            "name": "panel",
+            "in": "query",
+            "description": "The panel: `trend`, `funnel`, `losses`, `segments.by_group`,\n`segments.by_content_type`, `segments.by_source`, `exceptions`,\n`annotations` (the overview's), or a stage's `<stage>.trend` and\ntables (`discover.by_source`, `discover.by_strategy`,\n`fetch.losses`, `fetch.funnel`, `understand.by_content_type`,\n`understand.by_group`, `index.removed_by_type`, `serve.trend`, …).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "range",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "compare",
+            "in": "query",
+            "description": "`1` adds the previous period's rows (`period` = `previous`) where\nthe panel has them.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The panel's rows as an attachment (`lodestar-insights-<panel>-<from>-<to>.csv`).",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/insights/fetch": {
+      "get": {
+        "tags": [
+          "insights"
+        ],
+        "summary": "Fetch (§10.9.5): fetched and lost by event time, losses by reason, the queue now, and the cohort funnel. `reason` keeps only that loss.",
+        "operationId": "getInsightsFetch",
+        "parameters": [
+          {
+            "name": "range",
+            "in": "query",
+            "description": "As the overview's.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "compare",
+            "in": "query",
+            "description": "`1` adds `previous`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "reason",
+            "in": "query",
+            "description": "A loss reason's name (`docs/metrics.md` §6.4: `no_peers`, …,\n`unreachable`): the Fetch page's losses and funnel show only that\nreason (the drill-through from a funnel loss, §10.9.4). Accepted\nand checked on every stage; only Fetch reads it.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/insights/index": {
+      "get": {
+        "tags": [
+          "insights"
+        ],
+        "summary": "Index (§10.9.5): searchable now and per bucket, new searchable, removals (a lifecycle event, by type), lag, size and rebuild state.",
+        "operationId": "getInsightsIndex",
+        "parameters": [
+          {
+            "name": "range",
+            "in": "query",
+            "description": "As the overview's.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "compare",
+            "in": "query",
+            "description": "`1` adds `previous`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "reason",
+            "in": "query",
+            "description": "A loss reason's name (`docs/metrics.md` §6.4: `no_peers`, …,\n`unreachable`): the Fetch page's losses and funnel show only that\nreason (the drill-through from a funnel loss, §10.9.4). Accepted\nand checked on every stage; only Fetch reads it.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IndexResponse"
                 }
               }
             }
@@ -2222,6 +2533,162 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/OverviewResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/insights/serve": {
+      "get": {
+        "tags": [
+          "insights"
+        ],
+        "summary": "Serve (§10.9.5): searches, latency, zero-result and cancel rates, alerts, notifications and sends. Every count is null until its counter exists.",
+        "operationId": "getInsightsServe",
+        "parameters": [
+          {
+            "name": "range",
+            "in": "query",
+            "description": "As the overview's.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "compare",
+            "in": "query",
+            "description": "`1` adds `previous`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "reason",
+            "in": "query",
+            "description": "A loss reason's name (`docs/metrics.md` §6.4: `no_peers`, …,\n`unreachable`): the Fetch page's losses and funnel show only that\nreason (the drill-through from a funnel loss, §10.9.4). Accepted\nand checked on every stage; only Fetch reads it.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServeResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/insights/understand": {
+      "get": {
+        "tags": [
+          "insights"
+        ],
+        "summary": "Understand (§10.9.5): stored, blocked (counts only) and newly searchable by content type and group. Event time.",
+        "operationId": "getInsightsUnderstand",
+        "parameters": [
+          {
+            "name": "range",
+            "in": "query",
+            "description": "As the overview's.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "compare",
+            "in": "query",
+            "description": "`1` adds `previous`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "reason",
+            "in": "query",
+            "description": "A loss reason's name (`docs/metrics.md` §6.4: `no_peers`, …,\n`unreachable`): the Fetch page's losses and funnel show only that\nreason (the drill-through from a funnel loss, §10.9.4). Accepted\nand checked on every stage; only Fetch reads it.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderstandResponse"
                 }
               }
             }
@@ -7934,6 +8401,160 @@
           }
         }
       },
+      "DiscoverKpi": {
+        "type": "object",
+        "required": [
+          "bep51_sample_yield",
+          "dht_nodes",
+          "dropped",
+          "harvested",
+          "keyspace_coverage",
+          "rediscovered",
+          "reply_ratio",
+          "reported",
+          "seen_filter_load"
+        ],
+        "properties": {
+          "bep51_sample_yield": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "BEP 51 sample yield. Null until the DHT counts samples."
+          },
+          "dht_nodes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Nodes in the routing tables now; null with the DHT off. Snapshot.",
+            "minimum": 0
+          },
+          "dropped": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Keys dropped because the pipeline was full. Event time.",
+            "minimum": 0
+          },
+          "harvested": {
+            "type": "integer",
+            "format": "int64",
+            "description": "First harvests (the cohorts' harvested counts). Always ≈.",
+            "minimum": 0
+          },
+          "keyspace_coverage": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Virtual-ID keyspace coverage. Null until the crawler reports it."
+          },
+          "rediscovered": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Keys stored already, seen again. Event time.",
+            "minimum": 0
+          },
+          "reply_ratio": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "DHT responses per query sent since the start (the NAT-saturation\nsignal); null with the DHT off. Snapshot."
+          },
+          "reported": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Keys the sources reported. Event time.",
+            "minimum": 0
+          },
+          "seen_filter_load": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The seen filter's load factor. Null until the filter reports it."
+          }
+        }
+      },
+      "DiscoverPoint": {
+        "type": "object",
+        "description": "One bucket; a count is null where nothing was measured.",
+        "required": [
+          "at",
+          "dropped",
+          "harvested",
+          "rediscovered",
+          "reported"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "dropped": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "harvested": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "First harvests in the bucket's cohorts.",
+            "minimum": 0
+          },
+          "rediscovered": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "reported": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "DiscoverPrevious": {
+        "type": "object",
+        "required": [
+          "kpi",
+          "range",
+          "trend"
+        ],
+        "properties": {
+          "kpi": {
+            "$ref": "#/components/schemas/DiscoverKpi",
+            "description": "Snapshot fields are null here."
+          },
+          "range": {
+            "$ref": "#/components/schemas/InsightsRange"
+          },
+          "trend": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiscoverPoint"
+            }
+          }
+        }
+      },
       "DiscoverResponse": {
         "type": "object",
         "description": "`GET /discover`: the three sections of §10.7.",
@@ -7954,6 +8575,36 @@
           "rising": {
             "$ref": "#/components/schemas/HitGroup",
             "description": "The top torrents by swarm trend."
+          }
+        }
+      },
+      "DiscoverSource": {
+        "type": "object",
+        "required": [
+          "dropped",
+          "key",
+          "rediscovered",
+          "reported"
+        ],
+        "properties": {
+          "dropped": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "key": {
+            "type": "string",
+            "description": "The source's plugin name."
+          },
+          "rediscovered": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "reported": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -8752,6 +9403,244 @@
           }
         }
       },
+      "FetchKpi": {
+        "type": "object",
+        "required": [
+          "ephemeral_port_pressure",
+          "fetch_latency_p50_ms",
+          "fetch_latency_p95_ms",
+          "fetched",
+          "in_flight",
+          "limiter_rejections",
+          "lost",
+          "mse_share",
+          "queue_age_s",
+          "queue_depth",
+          "utp_share"
+        ],
+        "properties": {
+          "ephemeral_port_pressure": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Ephemeral-port pressure (Windows). Null until counted."
+          },
+          "fetch_latency_p50_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Fetch latency percentiles. Null until a fetch latency histogram\nexists.",
+            "minimum": 0
+          },
+          "fetch_latency_p95_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "fetched": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Info dicts fetched in the range, by event time; null when the range\nstarts before they were counted so.",
+            "minimum": 0
+          },
+          "in_flight": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Fetches running now. Snapshot.",
+            "minimum": 0
+          },
+          "limiter_rejections": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Per-IP limiter rejections. Null until counted.",
+            "minimum": 0
+          },
+          "lost": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Keys lost in the range (with `reason`, for that reason only), by\nevent time; null as `fetched`.",
+            "minimum": 0
+          },
+          "mse_share": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "MSE (encrypted) share of successful fetches. Null until counted."
+          },
+          "queue_age_s": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Age of the oldest queued key. Null until the pool reports it.",
+            "minimum": 0
+          },
+          "queue_depth": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Keys queued or in flight now. Snapshot.",
+            "minimum": 0
+          },
+          "utp_share": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "uTP share of successful fetches. Null until counted."
+          }
+        }
+      },
+      "FetchPoint": {
+        "type": "object",
+        "required": [
+          "at",
+          "fetched",
+          "lost"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "fetched": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "lost": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "FetchPrevious": {
+        "type": "object",
+        "required": [
+          "kpi",
+          "range",
+          "trend"
+        ],
+        "properties": {
+          "kpi": {
+            "$ref": "#/components/schemas/FetchKpi"
+          },
+          "range": {
+            "$ref": "#/components/schemas/InsightsRange"
+          },
+          "trend": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FetchPoint"
+            }
+          }
+        }
+      },
+      "FetchResponse": {
+        "type": "object",
+        "description": "`GET /insights/fetch`.",
+        "required": [
+          "funnel",
+          "funnel_total",
+          "kpi",
+          "losses",
+          "range",
+          "reason",
+          "stale",
+          "trend",
+          "updated_at"
+        ],
+        "properties": {
+          "funnel": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FunnelCohort"
+            },
+            "description": "The discovery-cohort funnel, as the overview's (with `reason`, only\nthat loss)."
+          },
+          "funnel_total": {
+            "$ref": "#/components/schemas/FunnelTotal"
+          },
+          "kpi": {
+            "$ref": "#/components/schemas/FetchKpi"
+          },
+          "losses": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/LossCount"
+            },
+            "description": "Losses by reason, by event time, most first; null when the range\nstarts before fetches were counted by event time."
+          },
+          "previous": {
+            "$ref": "#/components/schemas/FetchPrevious"
+          },
+          "range": {
+            "$ref": "#/components/schemas/InsightsRange"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The `reason` filter, as asked; null for all."
+          },
+          "stale": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Stale"
+              }
+            ]
+          },
+          "trend": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FetchPoint"
+            }
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "FetchStatus": {
         "type": "object",
         "description": "The metadata-fetch pool's state.",
@@ -9462,9 +10351,296 @@
           }
         }
       },
+      "IndexKpi": {
+        "type": "object",
+        "required": [
+          "data_bytes",
+          "disk_free_bytes",
+          "file_index_coverage",
+          "index_lag_s",
+          "merges",
+          "new_searchable",
+          "projection_days",
+          "rebuild",
+          "removed",
+          "scrape_coverage",
+          "scrape_freshness_s",
+          "searchable",
+          "segments",
+          "sizes"
+        ],
+        "properties": {
+          "data_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Bytes in the data directory. Snapshot.",
+            "minimum": 0
+          },
+          "disk_free_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Free bytes on its volume: always null in this build.",
+            "minimum": 0
+          },
+          "file_index_coverage": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "File-index coverage (smart mode). Null until measured."
+          },
+          "index_lag_s": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "NRT commit lag (as `/stats`). Snapshot.",
+            "minimum": 0
+          },
+          "merges": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Segment merges. Null until the index reports them.",
+            "minimum": 0
+          },
+          "new_searchable": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Torrents that became searchable in the range. Event time.",
+            "minimum": 0
+          },
+          "projection_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Days until the disk is full. Null while free space is unknown.",
+            "minimum": 0
+          },
+          "rebuild": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A background rebuild's phase (`building`, `finishing`, `swapping`,\n`failed`); null when none runs. Snapshot."
+          },
+          "removed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Searchable torrents deleted in the range. Event time.",
+            "minimum": 0
+          },
+          "scrape_coverage": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Share of torrents with a swarm row. Null until rolled up."
+          },
+          "scrape_freshness_s": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Median age of scrape data. Null until rolled up.",
+            "minimum": 0
+          },
+          "searchable": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Documents in the index now; null with search off. Snapshot.",
+            "minimum": 0
+          },
+          "segments": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Index segments now. Null until the index reports them.",
+            "minimum": 0
+          },
+          "sizes": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/IndexSizes",
+                "description": "Database, index and file-index sizes against the §3 budget. Null\nuntil each part is measured."
+              }
+            ]
+          }
+        }
+      },
+      "IndexPoint": {
+        "type": "object",
+        "required": [
+          "at",
+          "new_searchable",
+          "removed",
+          "searchable"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "new_searchable": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "removed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "searchable": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The bucket's last searchable snapshot (a gauge: the last hour's);\nnull with none.",
+            "minimum": 0
+          }
+        }
+      },
+      "IndexPrevious": {
+        "type": "object",
+        "required": [
+          "kpi",
+          "range",
+          "trend"
+        ],
+        "properties": {
+          "kpi": {
+            "$ref": "#/components/schemas/IndexKpi"
+          },
+          "range": {
+            "$ref": "#/components/schemas/InsightsRange"
+          },
+          "trend": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IndexPoint"
+            }
+          }
+        }
+      },
+      "IndexResponse": {
+        "type": "object",
+        "description": "`GET /insights/index`.",
+        "required": [
+          "kpi",
+          "range",
+          "removed_by_type",
+          "stale",
+          "trackers",
+          "trend",
+          "updated_at"
+        ],
+        "properties": {
+          "kpi": {
+            "$ref": "#/components/schemas/IndexKpi"
+          },
+          "previous": {
+            "$ref": "#/components/schemas/IndexPrevious"
+          },
+          "range": {
+            "$ref": "#/components/schemas/InsightsRange"
+          },
+          "removed_by_type": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RemovedCount"
+            },
+            "description": "Searchable torrents deleted in the range (a lifecycle event,\n§10.9.3), by content type, Adult left out while hidden. Event time."
+          },
+          "stale": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Stale"
+              }
+            ]
+          },
+          "trackers": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/TrackerHealth"
+            },
+            "description": "Per-tracker health. Null until it's rolled up."
+          },
+          "trend": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IndexPoint"
+            }
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "IndexSizes": {
+        "type": "object",
+        "required": [
+          "database_bytes",
+          "file_index_bytes",
+          "index_bytes"
+        ],
+        "properties": {
+          "database_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "file_index_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "index_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "InsightsEvent": {
         "type": "object",
-        "description": "`event: insights` (reserved: B11a publishes it every 30 s): the stage\nstrip's headline numbers (`docs/metrics.md` §6.1, §7.5).",
+        "description": "`event: insights`, every 30 s while anyone subscribes: the default\n`7d` overview's stage strip (`docs/metrics.md` §6.1, §7.5, §7.7). A\nclient showing another range refetches its own on each event.",
         "required": [
           "stages",
           "updated_at"
@@ -9571,18 +10747,30 @@
             "minimum": 0
           },
           "fetch": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64",
+            "description": "Null when the range starts before fetches were counted by event\ntime.",
             "minimum": 0
           },
           "index": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64",
+            "description": "Null with search off.",
             "minimum": 0
           },
           "serve": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64",
+            "description": "Null until the search counters exist.",
             "minimum": 0
           },
           "understand": {
@@ -9819,11 +11007,15 @@
           "health",
           "imported",
           "new_searchable",
+          "new_searchable_delta",
           "searchable",
           "searchable_delta",
           "time_to_searchable_p50_s",
+          "time_to_searchable_p50_delta_s",
           "time_to_searchable_p95_s",
-          "yield"
+          "time_to_searchable_p95_delta_s",
+          "yield",
+          "yield_delta"
         ],
         "properties": {
           "health": {
@@ -9844,6 +11036,14 @@
             "description": "Torrents that first became searchable in the range, imports\nincluded. Event time; 0 is real.",
             "minimum": 0
           },
+          "new_searchable_delta": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "`new_searchable` less `previous.kpi.new_searchable`; null without\n`compare=1` (and for `all`)."
+          },
           "searchable": {
             "type": [
               "integer",
@@ -9861,6 +11061,14 @@
             "format": "int64",
             "description": "The change since the previous period's end: now's count less\n`previous.kpi.searchable`. Null without `compare=1`, for `all`,\nwith search off, or with no snapshot from then."
           },
+          "time_to_searchable_p50_delta_s": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "`time_to_searchable_p50_s` less the previous period's, seconds;\nnull without `compare=1` or when either side is null."
+          },
           "time_to_searchable_p50_s": {
             "type": [
               "integer",
@@ -9869,6 +11077,14 @@
             "format": "int64",
             "description": "First harvest → searchable, p50 and p95 seconds over the final\ncohorts in the range. Always approximate (log buckets ≤ 10%).\nNull when no cohort in the range is final.",
             "minimum": 0
+          },
+          "time_to_searchable_p95_delta_s": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "As `time_to_searchable_p50_delta_s`, for p95."
           },
           "time_to_searchable_p95_s": {
             "type": [
@@ -9885,6 +11101,14 @@
             ],
             "format": "double",
             "description": "Searchable ÷ harvested over the final cohorts in the range, 0–1.\nImports excluded. Null when no cohort in the range is final."
+          },
+          "yield_delta": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "`yield` less the previous period's, in ratio points (−1 to 1); null\nwithout `compare=1` or when either side is null."
           }
         }
       },
@@ -10234,6 +11458,33 @@
         "properties": {
           "password": {
             "type": "string"
+          }
+        }
+      },
+      "LossCount": {
+        "type": "object",
+        "required": [
+          "count",
+          "key",
+          "share"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "key": {
+            "type": "string",
+            "description": "The reason's name (§6.4)."
+          },
+          "share": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Of all losses in the range."
           }
         }
       },
@@ -11078,6 +12329,7 @@
         "required": [
           "kpi",
           "range",
+          "segments",
           "serve",
           "stages",
           "trend"
@@ -11088,6 +12340,10 @@
           },
           "range": {
             "$ref": "#/components/schemas/InsightsRange"
+          },
+          "segments": {
+            "$ref": "#/components/schemas/Segments",
+            "description": "The previous period's segments, in the same shape and with the\nsame Adult rule."
           },
           "serve": {
             "$ref": "#/components/schemas/Serve"
@@ -11258,6 +12514,31 @@
           }
         }
       },
+      "QueryRow": {
+        "type": "object",
+        "description": "A logged query and how often it ran (Serve, when query logging is on).",
+        "required": [
+          "count",
+          "query",
+          "zero"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "query": {
+            "type": "string"
+          },
+          "zero": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Of those runs, how many found nothing.",
+            "minimum": 0
+          }
+        }
+      },
       "Queue": {
         "type": "object",
         "description": "`GET /filters/queue`: quarantine (never with names) and the replay\nwindow's decisions per rule.",
@@ -11350,6 +12631,24 @@
           "failed",
           "done"
         ]
+      },
+      "RemovedCount": {
+        "type": "object",
+        "required": [
+          "key",
+          "removed"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Content type, or `unclassified`."
+          },
+          "removed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
       },
       "RestartAccepted": {
         "type": "object",
@@ -12355,6 +13654,213 @@
           }
         }
       },
+      "ServeKpi": {
+        "type": "object",
+        "required": [
+          "alerts_fired",
+          "cancel_rate",
+          "facet_sampling_rate",
+          "latency_p50_ms",
+          "latency_p95_ms",
+          "notification_failures",
+          "notifications_delivered",
+          "searches",
+          "sends",
+          "zero_result_rate"
+        ],
+        "properties": {
+          "alerts_fired": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "cancel_rate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "facet_sampling_rate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "latency_p50_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "latency_p95_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "notification_failures": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "notifications_delivered": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "searches": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "sends": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "zero_result_rate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        }
+      },
+      "ServePoint": {
+        "type": "object",
+        "required": [
+          "at",
+          "searches",
+          "zero_results"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "searches": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "zero_results": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "ServePrevious": {
+        "type": "object",
+        "required": [
+          "kpi",
+          "range",
+          "trend"
+        ],
+        "properties": {
+          "kpi": {
+            "$ref": "#/components/schemas/ServeKpi"
+          },
+          "range": {
+            "$ref": "#/components/schemas/InsightsRange"
+          },
+          "trend": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServePoint"
+            }
+          }
+        }
+      },
+      "ServeResponse": {
+        "type": "object",
+        "description": "`GET /insights/serve`. Every count is null until the search, alert,\nnotification and send counters exist.",
+        "required": [
+          "kpi",
+          "range",
+          "stale",
+          "top_queries",
+          "top_zero_result_queries",
+          "trend",
+          "updated_at"
+        ],
+        "properties": {
+          "kpi": {
+            "$ref": "#/components/schemas/ServeKpi"
+          },
+          "previous": {
+            "$ref": "#/components/schemas/ServePrevious"
+          },
+          "range": {
+            "$ref": "#/components/schemas/InsightsRange"
+          },
+          "stale": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Stale"
+              }
+            ]
+          },
+          "top_queries": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/QueryRow"
+            },
+            "description": "Most frequent queries, only with query logging on (it's off by\ndefault, and nothing logs queries yet): null."
+          },
+          "top_zero_result_queries": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/QueryRow"
+            }
+          },
+          "trend": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServePoint"
+            }
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "SettingField": {
         "type": "object",
         "description": "One field of a section, for its form.",
@@ -13298,6 +14804,24 @@
           "stored_torrents": 2410391,
           "updated_at": 1792681200,
           "uptime_s": 86400
+        }
+      },
+      "StrategyCount": {
+        "type": "object",
+        "required": [
+          "key",
+          "reported"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "`sample`, `get_peers`, `announce`, `lookup`, `refetch`, or\n`strategy_<n>`."
+          },
+          "reported": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
         }
       },
       "Strictness": {
@@ -14320,6 +15844,29 @@
           "max_id": 48211
         }
       },
+      "TrackerHealth": {
+        "type": "object",
+        "required": [
+          "key",
+          "reporting",
+          "state"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "`scheme://host:port` only: a URL path or query can carry a passkey."
+          },
+          "reporting": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "state": {
+            "type": "string",
+            "description": "`ok`, `backoff`, `down` or `banned`."
+          }
+        }
+      },
       "TrendPoint": {
         "type": "object",
         "description": "One trend bucket. A count is null where nothing was measured (a gap:\npaused, or not running), and 0 where it was measured and was 0.",
@@ -14365,6 +15912,187 @@
           "needs_payload_signature",
           "needs_piece_roots"
         ]
+      },
+      "UnderstandKpi": {
+        "type": "object",
+        "required": [
+          "blocked",
+          "junk_distribution",
+          "newly_searchable",
+          "parser_confidence",
+          "recent_corrections",
+          "resolution_rate",
+          "stored"
+        ],
+        "properties": {
+          "blocked": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Dropped by a blocklist or filter rule before storage (counts only),\nby event time; null as `fetch.kpi.fetched`.",
+            "minimum": 0
+          },
+          "junk_distribution": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/HistogramBin"
+            },
+            "description": "Junk score distribution. Null until scores are rolled up."
+          },
+          "newly_searchable": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Torrents that became searchable in the range. Event time.",
+            "minimum": 0
+          },
+          "parser_confidence": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/HistogramBin"
+            },
+            "description": "Parser confidence distribution. Null until rolled up."
+          },
+          "recent_corrections": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Recent \"Fix parse\" corrections. Null until counted.",
+            "minimum": 0
+          },
+          "resolution_rate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Ambiguous names resolved ÷ ambiguous. Null until a resolution\ncounter exists."
+          },
+          "stored": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Torrents newly stored in the range. Event time.",
+            "minimum": 0
+          }
+        }
+      },
+      "UnderstandPoint": {
+        "type": "object",
+        "required": [
+          "at",
+          "blocked",
+          "stored"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "blocked": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "stored": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "UnderstandPrevious": {
+        "type": "object",
+        "required": [
+          "kpi",
+          "range",
+          "trend"
+        ],
+        "properties": {
+          "kpi": {
+            "$ref": "#/components/schemas/UnderstandKpi"
+          },
+          "range": {
+            "$ref": "#/components/schemas/InsightsRange"
+          },
+          "trend": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnderstandPoint"
+            }
+          }
+        }
+      },
+      "UnderstandResponse": {
+        "type": "object",
+        "description": "`GET /insights/understand`.",
+        "required": [
+          "by_content_type",
+          "by_group",
+          "kpi",
+          "range",
+          "stale",
+          "trend",
+          "updated_at"
+        ],
+        "properties": {
+          "by_content_type": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SegmentCount"
+            },
+            "description": "Newly searchable by content type and group, as the overview's\nsegments (Adult left out while hidden). Event time."
+          },
+          "by_group": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SegmentCount"
+            }
+          },
+          "kpi": {
+            "$ref": "#/components/schemas/UnderstandKpi"
+          },
+          "previous": {
+            "$ref": "#/components/schemas/UnderstandPrevious"
+          },
+          "range": {
+            "$ref": "#/components/schemas/InsightsRange"
+          },
+          "stale": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Stale"
+              }
+            ]
+          },
+          "trend": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnderstandPoint"
+            }
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
       },
       "UnreadAlerts": {
         "type": "object",

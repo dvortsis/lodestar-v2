@@ -1,0 +1,3 @@
+period,dropped,key,rediscovered,reported
+current,1,dht,12,112
+current,0,bitmagnet,0,5

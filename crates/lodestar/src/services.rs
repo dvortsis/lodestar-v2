@@ -250,6 +250,13 @@ impl Services {
         let paused_now = crawl.clone();
         // Insights (B11a): searchable time from the index's commits.
         let insights = Arc::new(insights::Insights::new(pipeline.monitor()));
+        // What the stage pages read beside `OpsApi` (B11b).
+        if let Some(dht) = dht_stats.clone() {
+            insights.set_snapshot(Box::new(move || lodestar_api::insights::StageSnapshot {
+                dht_reply_ratio: (*dht.lock().unwrap_or_else(|e| e.into_inner()))
+                    .map(|d| d.reply_ratio()),
+            }));
+        }
         let (stop_insights, insights_stopped) = watch::channel(false);
         let recorder = {
             let crawl = crawl.clone();
@@ -330,6 +337,7 @@ impl Services {
                 crawler: Some(Arc::new(crawler)),
                 rebuild: search.clone(),
                 adult: api.adult.clone(),
+                insights: Some(api.clone()),
             },
         );
         // Saved searches → alerts (B9): it follows the serving index's
