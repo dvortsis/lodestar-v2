@@ -446,7 +446,9 @@ impl ClusterServer {
     /// Asks a worker to drain: it gets no new leases, finishes the ones it
     /// holds, says `Drained` and is stopped. The drain stands across
     /// reconnects (it's asked for again after `Welcome`) until
-    /// [`resume`](Self::resume). `false` if the worker isn't connected.
+    /// [`resume`](Self::resume). `false` if the worker isn't connected: a
+    /// drain is a request the worker has to act on, so it needs a session
+    /// to go to (to stop a disconnected worker for good, revoke it).
     pub fn drain(&self, worker: WorkerId) -> bool {
         let mut fleet = lock(&self.fleet);
         let Some(state) = fleet.workers.get_mut(&worker) else {
@@ -464,14 +466,22 @@ impl ClusterServer {
         true
     }
 
-    /// Ends a drain: the worker may claim again. `false` if it wasn't
+    /// Ends a drain: the worker may claim again, and keys waiting for a
+    /// worker may be granted to it at once. Unlike [`drain`](Self::drain)
+    /// it works on a disconnected worker too, so a drain can be lifted
+    /// before the worker comes back. Nothing is sent to the worker: it
+    /// simply stops getting `Draining` denials. `false` if it wasn't
     /// draining.
     pub fn resume(&self, worker: WorkerId) -> bool {
         let mut fleet = lock(&self.fleet);
         let Some(state) = fleet.workers.get_mut(&worker) else {
             return false;
         };
-        std::mem::replace(&mut state.draining, false)
+        if !std::mem::replace(&mut state.draining, false) {
+            return false;
+        }
+        self.regrant(&mut fleet, self.clock.now_secs());
+        true
     }
 
     pub fn snapshot(&self) -> FleetSnapshot {
@@ -1055,18 +1065,22 @@ impl ClusterServer {
     /// Accepts terminal outcomes. One counts only with the current token
     /// from the current holder; anything else is stale and ignored, so a
     /// key is never counted twice (§19.3).
+    ///
+    /// This doesn't ask whether the session is still current: a report from
+    /// an older connection of the same worker, with a token that is still
+    /// current, is a real outcome (dropping it would strand a lease the new
+    /// session's heartbeats keep renewing). A revoked worker's leases were
+    /// evicted under the same lock, so its tokens are already stale.
     fn outcome(&self, peer: &Peer, items: &[OutcomeItem]) {
         let w = peer.worker;
         let mut fleet = lock(&self.fleet);
-        let current = fleet.is_current(peer);
         for item in items {
             let key = InfoHash(item.key);
             let token = Token(item.token);
-            let holds = current
-                && fleet
-                    .leases
-                    .get(&key)
-                    .is_some_and(|l| l.holder == w && l.token == token);
+            let holds = fleet
+                .leases
+                .get(&key)
+                .is_some_and(|l| l.holder == w && l.token == token);
             if holds && fleet.leases.release(&key, token).is_some() {
                 bump(&self.counters.outcomes);
             } else {
@@ -1147,6 +1161,9 @@ impl ClusterServer {
         for w in revoked {
             let leases = fleet.leases.evict(w);
             fleet.pending.extend(leases);
+            // Its certificates are gone, so it can't come back under this
+            // id: forget it rather than check it every tick.
+            fleet.workers.remove(&w);
         }
         self.regrant(fleet, now_ms.div_euclid(1000));
     }

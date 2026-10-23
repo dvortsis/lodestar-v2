@@ -925,3 +925,167 @@ async fn a_drain_survives_a_reconnect_until_resumed() {
     })
     .await;
 }
+
+/// A local worker that gives up on replies after 300 ms, behind a store
+/// check the test releases one claim at a time.
+async fn impatient() -> (
+    Coord,
+    WorkerSession,
+    tokio::sync::oneshot::Receiver<()>,
+    std::sync::mpsc::Sender<()>,
+) {
+    let (entered_tx, entered) = tokio::sync::oneshot::channel();
+    let (release, release_rx) = std::sync::mpsc::channel();
+    let check = HeldCheck {
+        entered: std::sync::Mutex::new(Some(entered_tx)),
+        release: std::sync::Mutex::new(release_rx),
+    };
+    let c = coordinator_with(config(), Some(Arc::new(check))).await;
+    let config = WorkerConfig {
+        reply_timeout: Duration::from_millis(300),
+        ..manual()
+    };
+    let a = WorkerSession::start(
+        c.server.connect_local(),
+        Hello::new(0, Capabilities::default()),
+        c.clock(),
+        config,
+    )
+    .await
+    .unwrap();
+    (c, a, entered, release)
+}
+
+/// Every event that arrives within a short wait, `Assign` aside.
+async fn quiet_events(session: &mut WorkerSession) -> Vec<WorkerEvent> {
+    let mut out = Vec::new();
+    while let Ok(Some(e)) =
+        tokio::time::timeout(Duration::from_millis(300), session.next_event()).await
+    {
+        if !matches!(e, WorkerEvent::Assign(_)) {
+            out.push(e);
+        }
+    }
+    out
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_claim_reply_after_its_caller_gave_up_arrives_as_an_event() {
+    guard(async {
+        let (c, mut a, entered, release) = impatient().await;
+        let claim = a.claim(found(&*c.clock, &[1]));
+        let (r, _) = tokio::join!(claim, async {
+            entered.await.unwrap();
+        });
+        assert!(matches!(r, Err(ClientError::Timeout)));
+        // No other command goes through the driver before the reply.
+        release.send(()).unwrap();
+        let WorkerEvent::Regranted(items) = event(&mut a).await else {
+            panic!("the late grant was lost");
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].key(), key(1));
+        assert_eq!(a.leases(), 1);
+        assert_eq!(c.server.snapshot().leases, 1);
+    })
+    .await;
+}
+
+/// A worker session whose coordinator is the test itself, over the
+/// in-process link, so the order of every message is exact.
+async fn scripted() -> (CoordinatorLink, WorkerSession) {
+    let (mut coord, worker) = local_pair(16);
+    let clock: Arc<dyn Clock> = Arc::new(ManualClock::new(1_000_000));
+    let config = WorkerConfig {
+        reply_timeout: Duration::from_millis(200),
+        ..manual()
+    };
+    let hello = Hello::new(0, Capabilities::default());
+    let (session, ()) = tokio::join!(
+        async {
+            WorkerSession::start(worker, hello, clock, config)
+                .await
+                .unwrap()
+        },
+        async {
+            assert!(matches!(
+                coord.recv().await,
+                Ok(Some(ToCoordinator::Hello(_)))
+            ));
+            coord
+                .send(ToWorker::Welcome(Welcome {
+                    major: PROTOCOL_MAJOR,
+                    minor: PROTOCOL_MINOR,
+                    worker: 0,
+                    heartbeat_ms: 5_000,
+                    lease_ttl_secs: 600,
+                    renew_now: false,
+                }))
+                .await
+                .unwrap();
+        }
+    );
+    (coord, session)
+}
+
+async fn claimed(coord: &mut CoordinatorLink) -> u64 {
+    match coord.recv().await.unwrap() {
+        Some(ToCoordinator::Claim(c)) => c.batch,
+        other => panic!("expected a claim: {other:?}"),
+    }
+}
+
+fn granted(batch: u64, n: u8, token: u64) -> ToWorker {
+    ToWorker::Grants(GrantBatch {
+        batch,
+        items: vec![GrantItem::Granted {
+            key: key(n),
+            token,
+            ttl_secs: 600,
+        }],
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_retried_claim_hands_the_key_over_once() {
+    guard(async {
+        let (mut coord, mut a) = scripted().await;
+        let clock = ManualClock::new(0);
+
+        // The late reply arrives while the retry is outstanding: only the
+        // retry's reply hands the key over.
+        let first = a.claim(found(&clock, &[1]));
+        let (r, b1) = tokio::join!(first, claimed(&mut coord));
+        assert!(matches!(r, Err(ClientError::Timeout)));
+        let retry = a.claim(found(&clock, &[1]));
+        let (r, ()) = tokio::join!(retry, async {
+            let b2 = claimed(&mut coord).await;
+            coord.send(granted(b1, 1, 77)).await.unwrap();
+            coord.send(granted(b2, 1, 77)).await.unwrap();
+        });
+        assert_eq!(token_of(&r.unwrap()[0]), 77);
+        assert!(quiet_events(&mut a).await.is_empty());
+        assert_eq!(a.leases(), 1);
+
+        // A repeated late reply for a key already held under that token
+        // isn't handed over again.
+        coord.send(granted(b1, 1, 77)).await.unwrap();
+        assert!(quiet_events(&mut a).await.is_empty());
+
+        // The late reply arrives with no retry: it's an event, once.
+        let lost = a.claim(found(&clock, &[2]));
+        let (r, b3) = tokio::join!(lost, claimed(&mut coord));
+        assert!(matches!(r, Err(ClientError::Timeout)));
+        coord.send(granted(b3, 2, 78)).await.unwrap();
+        assert_eq!(
+            quiet_events(&mut a).await,
+            vec![WorkerEvent::Regranted(vec![GrantItem::Granted {
+                key: key(2),
+                token: 78,
+                ttl_secs: 600
+            }])]
+        );
+        assert_eq!(a.leases(), 2);
+    })
+    .await;
+}
