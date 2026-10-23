@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T06:59:39Z",
+ "updated_at": "2026-10-23T06:59:51Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -868,7 +868,7 @@
    "pr": 117,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "from #86 | 05:02 launched after B2b merge (brief by Opus helper, runner-reviewed; steward from start). | 2026-10-23T06:09:01Z PR #117 head f1e0457 (~13k lines, mostly generated); fresh + security reviewers launched | 2026-10-23T06:16:19Z security review MERGE w/ 2 important (licence_file path escape -> credential leak into rust.json; deadline not capped vs clock-behind-after-reboot) + 8 polish; requiring 1-2 (+cheap polish) after fresh review returns | 2026-10-23T06:40:44Z round 1 FIX (both reviewers MERGE-with-important): licence path escape, deadline clamp vs clock, HTTP_BIND trap, refused WITH bypass, fixture restart, started() placement + 8 cheap; merge main | 2026-10-23T06:56:15Z 0296fa5 round-1 fixes (14 items) + main merged; delta review started",
+   "notes": "from #86 | 05:02 launched after B2b merge (brief by Opus helper, runner-reviewed; steward from start). | 2026-10-23T06:09:01Z PR #117 head f1e0457 (~13k lines, mostly generated); fresh + security reviewers launched | 2026-10-23T06:16:19Z security review MERGE w/ 2 important (licence_file path escape -> credential leak into rust.json; deadline not capped vs clock-behind-after-reboot) + 8 polish; requiring 1-2 (+cheap polish) after fresh review returns | 2026-10-23T06:40:44Z round 1 FIX (both reviewers MERGE-with-important): licence path escape, deadline clamp vs clock, HTTP_BIND trap, refused WITH bypass, fixture restart, started() placement + 8 cheap; merge main | 2026-10-23T06:56:15Z 0296fa5 round-1 fixes (14 items) + main merged; delta review started | 2026-10-23T06:59:51Z delta 0296fa5 APPROVED; asked to merge main (B11a conflicts); merge on green",
    "self_review": {
     "raised": 6,
     "fixed": 6,
