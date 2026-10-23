@@ -12,6 +12,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 lodestar-bencode = { path = "../crates/bencode" }
 lodestar-classify = { path = "../crates/classify" }
+lodestar-cluster = { path = "../crates/cluster" }
 lodestar-dht = { path = "../crates/dht" }
 lodestar-filter = { path = "../crates/filter" }
 lodestar-metainfo = { path = "../crates/metainfo" }
@@ -88,6 +89,13 @@ bench = false
 [[bin]]
 name = "utp"
 path = "fuzz_targets/utp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cluster_frame"
+path = "fuzz_targets/cluster_frame.rs"
 test = false
 doc = false
 bench = false

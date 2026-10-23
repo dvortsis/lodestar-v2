@@ -50,12 +50,14 @@ impl Section for Content {
     const FIELDS: &'static [Field] = &[
         Field::new("show_adult")
             .file("content.show_adult")
-            .env("LODESTAR_SHOW_ADULT"),
+            .env("LODESTAR_SHOW_ADULT")
+            .group("adult")
+            .keywords(),
         // Reserved for the output slices (Torznab, Stremio, export), off
         // by default; nothing reads them yet.
-        Field::new("torznab_adult"),
-        Field::new("stremio_adult"),
-        Field::new("export_adult"),
+        Field::new("torznab_adult").group("adult").advanced(),
+        Field::new("stremio_adult").group("adult").advanced(),
+        Field::new("export_adult").group("adult").advanced(),
     ];
     const CONFIRMATIONS: &'static [&'static str] = &[CONFIRM_ADULT];
 
