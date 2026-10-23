@@ -63,6 +63,7 @@ pub fn document() -> Doc {
     doc.merge(crate::auth::ApiDoc::openapi());
     doc.merge(crate::search::ApiDoc::openapi());
     doc.merge(crate::facets::ApiDoc::openapi());
+    doc.merge(crate::suggest::ApiDoc::openapi());
     doc.merge(crate::torrents::ApiDoc::openapi());
     doc.merge(crate::filters::ApiDoc::openapi());
     doc.merge(crate::settings::ApiDoc::openapi());
@@ -75,6 +76,8 @@ pub fn document() -> Doc {
     doc.merge(crate::user_items::ApiDoc::openapi());
     doc.merge(crate::collections::ApiDoc::openapi());
     doc.merge(crate::saved::ApiDoc::openapi());
+    doc.merge(crate::export::ApiDoc::openapi());
+    doc.merge(crate::jobs::ApiDoc::openapi());
     doc.merge(crate::alerts::ApiDoc::openapi());
     finish(&mut doc);
     doc

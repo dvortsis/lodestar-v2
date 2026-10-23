@@ -415,6 +415,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Downloads a query's results as a file. To export an AST or a
+         *     selection of hashes, POST.
+         */
+        get: operations["exportGet"];
+        put?: never;
+        /**
+         * Downloads a query's results (text or AST), a selection of up to
+         *     10,000 hashes, or a collection as a file.
+         */
+        post: operations["exportPost"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/facets": {
         parameters: {
             query?: never;
@@ -711,6 +735,103 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every job kept: running and paused ones, and those finished in the
+         *     last 10 minutes, newest first.
+         */
+        get: operations["listJobs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One job. */
+        get: operations["getJob"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancels a job: it stops at its next step (a paused one at once). A
+         *     cancelled export's download ends with an error, so it's never taken
+         *     for a complete file.
+         */
+        post: operations["cancelJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pauses a job: it stops at its next step and holds nothing while it
+         *     waits (an export's download waits too). Unless it's resumed within
+         *     10 minutes it fails with `pause_expired`. Pausing a paused job does
+         *     nothing.
+         */
+        post: operations["pauseJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resumes a paused job. Resuming a running job does nothing. */
+        post: operations["resumeJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/keys": {
         parameters: {
             query?: never;
@@ -874,7 +995,9 @@ export interface paths {
         };
         /**
          * Parses a query: the AST and its canonical text, or a `query_syntax`
-         *     error whose `start`/`end` span the UI highlights.
+         *     error whose `start`/`end` span the UI highlights. With
+         *     `natural=true`, also the query `q` means as natural phrasing
+         *     (`natural_too_long` past 512 bytes or 32 words).
          */
         get: operations["parseQuery"];
         put?: never;
@@ -1242,6 +1365,27 @@ export interface paths {
          *     values are null, never 0.
          */
         get: operations["getStats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/suggest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Suggestions for the token at the caret: field names, values with
+         *     counts, titles, smart chips and "did you mean". `replace` ranges are
+         *     in characters, so the client never tokenises the query again.
+         */
+        get: operations["suggest"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1651,6 +1795,74 @@ export interface components {
              */
             setup_required: boolean;
         };
+        /** @description One job (`GET /jobs/{id}`, and each entry of `GET /jobs`). */
+        BackgroundJob: {
+            /**
+             * Format: int64
+             * @description Items done: rows written, for an export.
+             */
+            done: number;
+            /** @description Once `failed`: what went wrong. */
+            error?: components["schemas"]["ErrorBody"];
+            /**
+             * Format: int64
+             * @description Seconds left at the current rate; null while it isn't running,
+             *     before the first items, or when `total` is unknown.
+             */
+            eta_s: number | null;
+            /** @description An export's own details. */
+            export?: components["schemas"]["ExportJob"];
+            /**
+             * Format: int64
+             * @description Unix seconds; null while it runs.
+             */
+            finished_at: number | null;
+            /** Format: int64 */
+            id: number;
+            kind: components["schemas"]["BackgroundJobKind"];
+            /**
+             * Format: double
+             * @description Items read per second (`done` and `skipped`), paused time left
+             *     out; null before the first items.
+             */
+            rate: number | null;
+            /**
+             * Format: int64
+             * @description Items left out: for an export, torrents it may not include
+             *     (withheld, private-source, deleted or unknown), counted without
+             *     saying which or why.
+             */
+            skipped: number;
+            /**
+             * Format: int64
+             * @description Unix seconds.
+             */
+            started_at: number;
+            state: components["schemas"]["BackgroundJobState"];
+            /**
+             * Format: int64
+             * @description Items expected; null when unknown.
+             */
+            total: number | null;
+            /** @description `total` is an estimate (a query with more than 100,000 matches). */
+            total_approx: boolean;
+        };
+        /**
+         * @description What a job does. `import` is reserved for the importer framework
+         *     (§18.8): nothing starts one yet, but the Jobs view can render both.
+         * @enum {string}
+         */
+        BackgroundJobKind: "export" | "import";
+        /**
+         * @description Where a job is. `running` and `paused` hold one of the running
+         *     slots; the rest are finished and kept for 10 minutes.
+         * @enum {string}
+         */
+        BackgroundJobState: "running" | "paused" | "done" | "cancelled" | "failed";
+        /** @description `GET /jobs`: every job kept, newest first. */
+        BackgroundJobs: {
+            jobs: components["schemas"]["BackgroundJob"][];
+        };
         /** @enum {string} */
         Bucket: "hour" | "day";
         /** @description One change to filtering (§20.7), tagged by `op`. */
@@ -1801,6 +2013,14 @@ export interface components {
              *     ignored by previews.
              */
             password?: string | null;
+        };
+        /**
+         * @description A range of characters (Unicode scalar values) in the query, end
+         *     exclusive.
+         */
+        CharRange: {
+            end: number;
+            start: number;
         };
         ClassRule: {
             adult: boolean;
@@ -2534,6 +2754,75 @@ export interface components {
             title: number;
         };
         /**
+         * @description An export's format.
+         * @enum {string}
+         */
+        ExportFormat: "csv" | "json" | "magnets";
+        /** @description What an export job reports besides its progress. */
+        ExportJob: {
+            /**
+             * Format: int64
+             * @description Rows one export writes at most.
+             */
+            cap: number;
+            format: components["schemas"]["ExportFormat"];
+            /**
+             * @description The export stopped at `cap` with more rows left: the file holds
+             *     the first `cap`.
+             */
+            truncated: boolean;
+        };
+        /**
+         * @description `GET /export`'s parameters and `POST /export`'s body. Name one
+         *     source: a query (`q` or `ast`, with `sort` and `hidden` as `/search`
+         *     takes them; neither exports everything), `hashes` or `collection`.
+         *     `ast` and `hashes` need POST.
+         */
+        ExportRequest: {
+            /** @default null */
+            ast: null | components["schemas"]["AstNode"];
+            /**
+             * Format: int64
+             * @description A collection's id: its torrents in the collection's order.
+             * @default null
+             */
+            collection: number | null;
+            /**
+             * @description A comma-separated subset of [`ExportField`] names, written in
+             *     that type's order whatever the order given. Every field but
+             *     `magnet` by default; `magnets` takes none.
+             * @default null
+             * @example hash,name,size,seeders
+             */
+            fields: string | null;
+            /** @default null */
+            format: null | components["schemas"]["ExportFormat"];
+            /**
+             * @description Up to 10,000 info hashes (40 hex digits), such as the bulk bar's
+             *     selection (POST only). Repeats are exported once, in the order
+             *     first given.
+             * @default null
+             */
+            hashes: string[] | null;
+            /**
+             * @description Include torrents a filter rule hid (§20.3).
+             * @default null
+             */
+            hidden: boolean | null;
+            /**
+             * @description The query text, as `/search` takes it.
+             * @default null
+             */
+            q: string | null;
+            /**
+             * @description As `/search`'s; only with a query. Selections and collections
+             *     keep their own order.
+             * @default null
+             * @example -discovered
+             */
+            sort: string | null;
+        };
+        /**
          * @description Our address as other DHT nodes see it: the BEP 42 `ip` key of their
          *     replies, one vote per network (/24 or /64), the last 32 networks,
          *     IPv4 and IPv6 tallied apart (the IPv4 consensus wins when both have
@@ -3214,6 +3503,50 @@ export interface components {
             payload?: string | null;
             query?: string | null;
         };
+        /** @description One recognised clause and the words it came from. */
+        NaturalChip: {
+            /** @description Characters of `q`, end exclusive. */
+            from: components["schemas"]["CharRange"];
+            /** @description The clause as query text (`res:2160p`). */
+            text: string;
+        };
+        /**
+         * @description What natural phrasing proposes (§10.4): recognised words become
+         *     clauses, and every other word stays as text.
+         * @example {
+         *       "ast": {
+         *         "of": [],
+         *         "op": "and"
+         *       },
+         *       "canonical": "res:2160p type:movie year:2020 size:>=10GB",
+         *       "chips": [
+         *         {
+         *           "from": {
+         *             "end": 2,
+         *             "start": 0
+         *           },
+         *           "text": "res:2160p"
+         *         },
+         *         {
+         *           "from": {
+         *             "end": 9,
+         *             "start": 3
+         *           },
+         *           "text": "type:movie"
+         *         }
+         *       ],
+         *       "text": []
+         *     }
+         */
+        NaturalProposal: {
+            ast: components["schemas"]["AstNode"];
+            /** @description The proposed query; it always parses back to `ast`. */
+            canonical: string;
+            /** @description The recognised clauses, in the order they appear. */
+            chips: components["schemas"]["NaturalChip"][];
+            /** @description The words kept as text. */
+            text: string[];
+        };
         /**
          * @description `GET /network/check` and `POST /network/check`: the first-run
          *     wizard's network check and the dashboard's "reachable" flag. Every
@@ -3430,6 +3763,11 @@ export interface components {
         ParseResponse: {
             ast: components["schemas"]["AstNode"];
             canonical: string;
+            /**
+             * @description With `natural=true`: the query `q` means as natural phrasing, for
+             *     the UI to preview as chips. Nothing applies it.
+             */
+            natural?: components["schemas"]["NaturalProposal"];
         };
         /**
          * @description `POST /password`: ends every other session.
@@ -4776,6 +5114,64 @@ export interface components {
             url: string;
         };
         /**
+         * @description One suggestion: replace the query's characters `replace.start` to
+         *     `replace.end` (end exclusive) with `insert`. A leading `-` or `!`
+         *     stays outside the range.
+         */
+        SuggestItem: {
+            /**
+             * Format: int64
+             * @description Torrents it would find, of those this search may show; absent for
+             *     field names, categories and "did you mean".
+             */
+            count?: number;
+            /** @description The query text to put in. */
+            insert: string;
+            kind: components["schemas"]["SuggestKind"];
+            replace: components["schemas"]["CharRange"];
+            /**
+             * @description What to show: the value, title or field, or for `did_you_mean`
+             *     the whole corrected query.
+             */
+            text: string;
+        };
+        /**
+         * @description What an item offers.
+         * @enum {string}
+         */
+        SuggestKind: "field" | "value" | "title" | "chip" | "did_you_mean";
+        /**
+         * @description `GET /suggest`.
+         * @example {
+         *       "items": [
+         *         {
+         *           "count": 1284,
+         *           "insert": "res:2160p",
+         *           "kind": "chip",
+         *           "replace": {
+         *             "end": 5,
+         *             "start": 0
+         *           },
+         *           "text": "res:2160p"
+         *         },
+         *         {
+         *           "count": 12,
+         *           "insert": "title:\"The Dark Knight\"",
+         *           "kind": "title",
+         *           "replace": {
+         *             "end": 5,
+         *             "start": 0
+         *           },
+         *           "text": "The Dark Knight"
+         *         }
+         *       ]
+         *     }
+         */
+        SuggestResponse: {
+            /** @description "Did you mean" first, then chips, field names, values and titles. */
+            items: components["schemas"]["SuggestItem"][];
+        };
+        /**
          * @description Seeders and trackers reporting, as `≥1`, `≥5`, `≥50` and
          *     `never_scraped` values (§10.4).
          */
@@ -5952,6 +6348,162 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    exportGet: {
+        parameters: {
+            query?: {
+                /** @description The query text, as `/search` takes it; empty (or no source at all) exports everything. */
+                q?: string;
+                /** @description As `/search`'s. */
+                sort?: string;
+                /** @description Include torrents a filter rule hid (§20.3). */
+                hidden?: boolean;
+                /** @description Export a collection instead, in its order. */
+                collection?: number;
+                /** @description `csv` (the default), `json` (NDJSON) or `magnets`. */
+                format?: components["schemas"]["ExportFormat"];
+                /** @description A comma-separated subset of `ExportField`; every field but `magnet` by default. */
+                fields?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file, streamed. Its job's id is in `X-Export-Job`; poll `/jobs/{id}` for progress, `skipped` and `truncated`. */
+            200: {
+                headers: {
+                    /** @description `no-store`. */
+                    "Cache-Control"?: string;
+                    /** @description `attachment` with a generated name, `lodestar-export-<UTC time>.<csv|ndjson|txt>`. */
+                    "Content-Disposition"?: string;
+                    /** @description The export's job id. */
+                    "X-Export-Job"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                    "application/x-ndjson": string;
+                    "text/plain": string;
+                };
+            };
+            /** @description A bad parameter, as `/search`'s, or `one_source`, `unknown_field`, `fields_unused`, `sort_unused`; `ast` or `hashes` in the query string is a `bad_parameter` (POST them). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `collection_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `too_many_jobs`: four jobs are running or paused. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `search_disabled` (a query while search is off), or `shutting_down`. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    exportPost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExportRequest"];
+            };
+        };
+        responses: {
+            /** @description The file, streamed, as `GET /export`'s. */
+            200: {
+                headers: {
+                    /** @description `no-store`. */
+                    "Cache-Control"?: string;
+                    /** @description `attachment` with a generated name. */
+                    "Content-Disposition"?: string;
+                    /** @description The export's job id. */
+                    "X-Export-Job"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                    "application/x-ndjson": string;
+                    "text/plain": string;
+                };
+            };
+            /** @description As `GET /export`'s, or `too_many_hashes`, `bad_hash`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `collection_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `too_many_jobs`. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `search_disabled`, or `shutting_down`. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     facetsGet: {
         parameters: {
             query?: {
@@ -6403,6 +6955,196 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    listJobs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackgroundJobs"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The job's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackgroundJob"];
+                };
+            };
+            /** @description `job_not_found`: unknown, or finished more than 10 minutes ago. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    cancelJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The job's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        /** @description Any JSON, such as `{}`. */
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackgroundJob"];
+                };
+            };
+            /** @description `job_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `job_finished`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    pauseJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The job's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        /** @description Any JSON, such as `{}`. */
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackgroundJob"];
+                };
+            };
+            /** @description `job_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `job_finished`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    resumeJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The job's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        /** @description Any JSON, such as `{}`. */
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackgroundJob"];
+                };
+            };
+            /** @description `job_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `job_finished`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     listKeys: {
         parameters: {
             query?: never;
@@ -6652,6 +7394,11 @@ export interface operations {
             query?: {
                 /** @description The query text; empty matches everything. */
                 q?: string;
+                /**
+                 * @description Also read `q` as natural phrasing ("4k movies from 2020 over
+                 *     10gb") and propose the query it means, in `natural`.
+                 */
+                natural?: boolean;
             };
             header?: never;
             path?: never;
@@ -7474,6 +8221,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StatsResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    suggest: {
+        parameters: {
+            query?: {
+                /** @description The query text as typed so far. */
+                q?: string;
+                /** @description The caret, in characters from the start; the end by default. */
+                pos?: number;
+                /** @description Items at most: 8 by default, 1–20. */
+                limit?: number;
+                /** @description Include torrents a filter rule hid (§20.3), as `/search`. */
+                hidden?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuggestResponse"];
                 };
             };
             default: components["responses"]["Error"];
