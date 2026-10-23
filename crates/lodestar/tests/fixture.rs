@@ -3,7 +3,7 @@
 //! says, with Adult hidden and shown; a foreign folder is refused
 //! untouched; the DHT and the fetch pool never run; a temporary fixture is
 //! removed on a clean exit.
-#![cfg(unix)]
+#![cfg(all(unix, feature = "fixture"))]
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, Read, Write};
