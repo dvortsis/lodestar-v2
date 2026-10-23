@@ -114,7 +114,7 @@
 			<main id="boot-main" class="flex flex-1 flex-col"><h1 id="boot-h1" hidden>Search</h1></main>
 		</div>
 		<!-- prettier-ignore -->
-		<script>(function(){var b=document.getElementById('boot');if(!b)return;var p=location.pathname;if(/^\/(login|setup|welcome)(\/|$)/.test(p)||/^zh/i.test(navigator.language)){b.remove();return}var a=b.querySelectorAll('[data-boot-nav]'),i,h;for(i=0;i<a.length;i++){h='/'+a[i].getAttribute('href').split('/')[1];if(p==h||p.indexOf(h+'/')==0){a[i].setAttribute('aria-current','page');a[i].className+=' font-semibold';a[i].insertAdjacentHTML('beforeend','<span class="absolute inset-x-3 -bottom-1 h-0.5 rounded-selector bg-primary" aria-hidden="true"></span>')}}if(p=='/search'||p=='/search/')document.getElementById('boot-h1').hidden=false})()</script>
+		<script>(function(){var b=document.getElementById('boot');if(!b)return;var p=location.pathname;if(/^\/(login|setup|welcome)(\/|$)/.test(p)||/^zh/i.test(navigator.language)){b.remove();return}var a=b.querySelectorAll('[data-boot-nav]'),i,h,d=new URLSearchParams(location.search).get('density');for(i=0;i<a.length;i++){h='/'+a[i].getAttribute('href').split('/')[1];if(d)a[i].setAttribute('href',h+'?density='+encodeURIComponent(d));if(p==h||p.indexOf(h+'/')==0){a[i].setAttribute('aria-current','page');a[i].className+=' font-semibold';a[i].insertAdjacentHTML('beforeend','<span class="absolute inset-x-3 -bottom-1 h-0.5 rounded-selector bg-primary" aria-hidden="true"></span>')}}if(p=='/search'||p=='/search/')document.getElementById('boot-h1').hidden=false})()</script>
 		<div style="display: contents">%sveltekit.body%</div>
 	</body>
 </html>

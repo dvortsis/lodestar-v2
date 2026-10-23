@@ -73,22 +73,10 @@
 				statusRef.Pill = pill.default;
 				statusRef.Connection = connection.default;
 				statusRef.current = status.shellStatus;
-				// The key press that woke us now finds its shortcut.
-				if (replay?.target.isConnected) {
-					const { event, target } = replay;
-					target.dispatchEvent(
-						new KeyboardEvent('keydown', {
-							key: event.key,
-							code: event.code,
-							ctrlKey: event.ctrlKey,
-							metaKey: event.metaKey,
-							altKey: event.altKey,
-							shiftKey: event.shiftKey,
-							bubbles: true,
-							cancelable: true
-						})
-					);
-				}
+				// The key press that woke us now finds its shortcut. It goes to the registry only: the page
+				// has already seen the real event, and handing it a second one would act twice.
+				if (replay?.target.isConnected && !replay.event.defaultPrevented)
+					keysModule.keys.handle(replay.event);
 			});
 			// Fetched now, while the server is up: an error toast has to work when it is down.
 			loadToaster();
