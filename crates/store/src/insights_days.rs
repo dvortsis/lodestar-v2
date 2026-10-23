@@ -965,8 +965,11 @@ mod tests {
         .unwrap();
     }
 
+    /// `(day, metric, dim, key, value)` and `(day, stage, reason, count)`.
+    type Dump = (Vec<(i64, i64, i64, i64, i64)>, Vec<(i64, i64, i64, i64)>);
+
     /// Everything stored, at a day's grain: what a reader sums.
-    fn dump(s: &Store) -> (Vec<(i64, i64, i64, i64, i64)>, Vec<(i64, i64, i64, i64)>) {
+    fn dump(s: &Store) -> Dump {
         let q = |sql: &str| -> Vec<Vec<i64>> {
             let mut stmt = s.conn.prepare(sql).unwrap();
             let n = stmt.column_count();
@@ -1490,16 +1493,13 @@ mod tests {
             kind,
             detail: String::new(),
         };
-        let mut add = |ev: Event| {
+        for ev in [e(1, 1), e(2, 3)] {
             s.write(&crate::WriteBatch {
                 events: &[ev],
                 ..crate::WriteBatch::default()
             })
             .unwrap();
-        };
-        add(e(1, 1));
-        add(e(2, 3));
-        drop(add);
+        }
         assert!(s.stopped_uncleanly(1, 2).unwrap());
         s.write(&crate::WriteBatch {
             events: &[e(3, 2)],
