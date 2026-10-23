@@ -1375,6 +1375,7 @@ dependencies = [
  "getrandom 0.3.4",
  "hmac",
  "lodestar-api",
+ "lodestar-bench",
  "lodestar-classify",
  "lodestar-dht",
  "lodestar-filter",

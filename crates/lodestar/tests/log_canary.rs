@@ -9,12 +9,13 @@
 //! 3. **Opt-ins:** filter change details appear only while the opt-in is
 //!    on, only in the file, and not once its time has run out.
 //! 4. **Full plus both opt-ins:** no secret (the admin passwords, the
-//!    session cookie, the setup token after setup, a tracker passkey) and
-//!    no sealed name in any output.
+//!    session cookie, the setup token after setup, a tracker passkey, an
+//!    API key as `Authorization: Bearer`, `X-Api-Key` and `?apikey=`, a
+//!    feed token as `?token=`, the trusted-proxy user) and no sealed name
+//!    in any output. Keys and tokens can't read `/logs/catalog`.
 //!
 //! B-log2 adds the ring buffer, the live stream and the download to the
-//! outputs read here. B12's API keys, feed tokens and the trusted-proxy
-//! user join run 4 once B12 has merged.
+//! outputs read here.
 #![cfg(unix)]
 
 use std::io::{Read, Write};
@@ -576,4 +577,94 @@ fn run_4_full_and_both_opt_ins_never_show_a_secret_or_a_sealed_name() {
     // console never gets an opt-in.
     assert!(file.contains("canaryterm30"), "{file}");
     assert!(!console.contains("canaryterm30"), "{console}");
+}
+
+const PROXY_USER: &str = "canary-proxy-user-delta";
+
+/// Run 4's second half (its own server: B12's key and proxy changes each
+/// take the password, and the per-address bucket holds five): API keys as
+/// `Authorization: Bearer`, `X-Api-Key` and `?apikey=`, a feed token as
+/// `?token=`, and the trusted-proxy user, under Full plus both opt-ins.
+#[test]
+fn run_4_keys_tokens_and_the_proxy_user_never_show_either() {
+    let s = Server::start();
+    s.every_event_on();
+    s.logging(&format!(
+        r#"{{"data":"full","data_until":-1,"peer_activity_until":{},"change_details_until":{},"console_detail":"file"}}"#,
+        now() + 3600,
+        now() + 3600
+    ));
+    let secret = |body: &str| {
+        let r = s.post("/api/v1/keys", body);
+        assert!(
+            r.starts_with("HTTP/1.0 200") || r.starts_with("HTTP/1.0 201"),
+            "{r}"
+        );
+        let json = r.split("\r\n\r\n").nth(1).unwrap();
+        let v: serde_json::Value = serde_json::from_str(json).unwrap();
+        v["secret"].as_str().unwrap().to_string()
+    };
+    let key = secret(&format!(
+        r#"{{"kind":"api_key","name":"canary key","scopes":["search"],"password":"{PASSWORD}"}}"#
+    ));
+    let token = secret(&format!(
+        r#"{{"kind":"feed_token","name":"canary feed","password":"{PASSWORD}"}}"#
+    ));
+    // Keys can't read logs (§12.1), however they're presented.
+    for head in [
+        format!("GET /api/v1/logs/catalog HTTP/1.0\r\nAuthorization: Bearer {key}"),
+        format!("GET /api/v1/logs/catalog HTTP/1.0\r\nX-Api-Key: {key}"),
+        format!("GET /api/v1/logs/catalog?apikey={key} HTTP/1.0"),
+        format!("GET /api/v1/logs/catalog?token={token} HTTP/1.0"),
+    ] {
+        let r = s.request(&head, "").unwrap();
+        assert!(
+            r.starts_with("HTTP/1.0 401") || r.starts_with("HTTP/1.0 403"),
+            "{head}: {r}"
+        );
+        assert!(!r.contains("\"events\""), "{r}");
+    }
+    for head in [
+        format!("GET /api/v1/search?q=x HTTP/1.0\r\nAuthorization: Bearer {key}"),
+        format!("GET /api/v1/search?q=x&apikey={key} HTTP/1.0"),
+        format!("GET /api/v1/search?q=x&token={token} HTTP/1.0"),
+        "GET /api/v1/search?q=x HTTP/1.0\r\nX-Api-Key: lsk_AAAAAAAA_notarealsecretnotarealsecretnotarealsec".to_string(),
+    ] {
+        s.request(&head, "").unwrap();
+    }
+    // The trusted-proxy user, from a trusted peer.
+    let r = s.send(
+        "PUT",
+        "/api/v1/auth/proxy",
+        &format!(r#"{{"enabled":true,"trusted":["127.0.0.1"],"password":"{PASSWORD}"}}"#),
+    );
+    assert!(r.starts_with("HTTP/1.0 200"), "{r}");
+    let r = s
+        .request(
+            &format!("GET /api/v1/search?q=x HTTP/1.0\r\nRemote-User: {PROXY_USER}"),
+            "",
+        )
+        .unwrap();
+    assert!(
+        r.starts_with("HTTP/1.0 200"),
+        "the proxy user signs in: {r}"
+    );
+    // No password left in the bucket for a reveal: the other run 4 covers it.
+    s.exercise(40, false);
+    std::thread::sleep(Duration::from_millis(300));
+    let (console, file) = s.stop();
+    absent(
+        &[("console", &console), ("file", &file)],
+        &[
+            key.clone(),
+            key.split('_').next_back().unwrap().to_string(),
+            token.clone(),
+            token.split('_').next_back().unwrap().to_string(),
+            PROXY_USER.to_string(),
+            PASSWORD.to_string(),
+            PASSKEY.to_string(),
+            SEALED_NAME.to_string(),
+        ],
+        "keys, tokens and the proxy user",
+    );
 }
