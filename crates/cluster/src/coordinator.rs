@@ -412,6 +412,9 @@ impl Coordinator {
         }
         let fresh = Coordinator::from_rows(rows, secrets)?;
         let issued = std::mem::take(&mut fresh.trust_mut().issued);
+        // Everything that can fail is built before anything is replaced.
+        let key = certified_key(&fresh.server, &fresh.current, &fresh.previous)?;
+        let trust = Trust::new(fresh.cas(), fresh.current.fp, issued)?;
         let Coordinator {
             current,
             previous,
@@ -425,8 +428,12 @@ impl Coordinator {
         self.server = server;
         self.tokens = tokens;
         self.next_worker = next_worker;
-        self.trust_mut().issued = issued;
-        self.rebuild_trust()?;
+        *self.trust_mut() = trust;
+        *self
+            .shared
+            .server
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Arc::new(key);
         self.digest = Some(digest);
         Ok(true)
     }

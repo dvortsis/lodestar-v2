@@ -164,7 +164,8 @@ pub async fn connect(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkerEvent {
     Assign(Assign),
-    /// Keys whose lease expired elsewhere, granted to this worker.
+    /// Keys granted with no request waiting: leases that expired elsewhere,
+    /// or the answer to a claim whose caller timed out.
     Regranted(Vec<GrantItem>),
     /// Finish the leases held, report them, then call
     /// [`WorkerSession::drained`].
@@ -454,6 +455,9 @@ impl Driver {
     }
 
     async fn command(&mut self, cmd: Command) -> Step {
+        // Requests whose caller gave up (timed out) wait for no reply.
+        self.claims.retain(|_, tx| !tx.is_closed());
+        self.heartbeats.retain(|_, tx| !tx.is_closed());
         match cmd {
             Command::Claim(items, reply) => {
                 let batch = self.next_batch;
@@ -536,7 +540,8 @@ impl Driver {
                         let _ = reply.send(items);
                         Step::Continue
                     }
-                    None => Step::End(None),
+                    // Its caller timed out; the leases are still ours.
+                    None => self.event(WorkerEvent::Regranted(items)).await,
                 }
             }
             ToWorker::Renewed(grant) => {
