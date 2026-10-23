@@ -1979,7 +1979,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **The watermark lives in the Tantivy commit payload,** atomically with the documents it covers, rather than in SQLite. With one index, that's strictly safer: a crash can lose work but never skip or duplicate a torrent.
   - When the file index arrives (M3), the cross-index watermark goes to SQLite as §8 describes.
   - Indexing follows `Store::ids_after` in id order. That works because the single writer commits ids in order.
-- **Near-real-time indexing:** a `LiveIndexer` thread reads through its own read-only SQLite connection. It polls every 500 ms and commits every 2 s or 5k documents. The test asserts a new torrent is searchable within the 5 s budget.
+- **Near-real-time indexing:** a `LiveIndexer` thread reads through its own read-only SQLite connection. It polls every 500 ms and commits every 2 s or 5k documents. `search-bench --gate` checks that a new torrent is searchable within the 5 s budget (`docs/decisions/2026-10-22-X-flakes.md`).
   - The index directory is `data/index/v{schema}-t{tokenizer}`, so a schema or tokenizer bump builds a fresh index.
   - `index_watermark_hour` (searchable time per hour, §7) comes with the API slice, where the writer can record it.
 - **Measured** on 50k synthetic torrents: indexing runs at about 6,200 torrents per second.

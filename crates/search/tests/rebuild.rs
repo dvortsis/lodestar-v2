@@ -126,6 +126,32 @@ fn wait(what: &str, mut done: impl FnMut() -> bool) {
     }
 }
 
+/// A rebuild whose progress doesn't change this long is hung.
+const STALL: Duration = Duration::from_secs(60);
+/// One that keeps moving without finishing (retrying an error forever)
+/// fails here rather than hanging the run.
+const NEVER: Duration = Duration::from_secs(600);
+
+/// Waits for the rebuild to swap in. It fails at once, saying why, if the
+/// rebuild stopped on an error, and when its progress stops changing for
+/// [`STALL`]. A deadline on the whole wait is a time budget: Windows CI
+/// runs this suite in 40-70 s (Linux in about 11), and its 30 s deadline
+/// failed three different tests there.
+fn finished(serving: &Serving) {
+    let (mut last, start) = (serving.progress(), Instant::now());
+    let mut moved = start;
+    while let Some(p) = serving.progress() {
+        assert!(start.elapsed() < NEVER, "the rebuild never finished: {p:?}");
+        assert_ne!(p.phase, RebuildPhase::Failed, "the rebuild failed: {p:?}");
+        if last.as_ref() != Some(&p) {
+            last = Some(p);
+            moved = Instant::now();
+        }
+        assert!(moved.elapsed() < STALL, "the rebuild stalled: {last:?}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn names_in(root: &Path) -> Vec<String> {
     let mut v: Vec<String> = std::fs::read_dir(root)
         .unwrap()
@@ -178,15 +204,7 @@ fn searches_keep_working_through_a_rebuild_and_the_swap() {
     wait("searches run during the rebuild", || all(|c| &c.0));
     assert!(serving.rebuilding());
     hold.store(false, Ordering::Relaxed);
-    // Fails at once, saying why, if the rebuild stopped on an error
-    // rather than running out the wait.
-    wait("the rebuild finishes", || match serving.progress() {
-        None => true,
-        Some(p) => {
-            assert_ne!(p.phase, RebuildPhase::Failed, "the rebuild failed: {p:?}");
-            false
-        }
-    });
+    finished(&serving);
     wait("searches run after the swap", || all(|c| &c.1));
     stop.store(true, Ordering::Relaxed);
     for s in searchers {
@@ -245,7 +263,7 @@ fn no_torrent_visible_before_the_swap_is_missing_after_it() {
         total(&serving.index(), "common movie") > n
     });
     hold.store(false, Ordering::Relaxed);
-    wait("the rebuild finishes", || !serving.rebuilding());
+    finished(&serving);
     let at_swap = total(&serving.index(), "common movie");
     wait("the new index follows the store", || {
         total(&serving.index(), "common movie") > at_swap
@@ -278,10 +296,18 @@ fn an_interrupted_rebuild_resumes_from_its_watermarks() {
     let building = root.join(format!("{}.building", NEW.dir_name()));
     assert!(building.exists());
 
-    let serving = Serving::open_or_rebuild(&root, &dir.path().join("s.db"), config(NEW)).unwrap();
+    // Held before its first step: read unheld, the progress could
+    // already count a step (1050).
+    let start = Arc::new(AtomicBool::new(true));
+    let config = ServingConfig {
+        hold_before_start: Some(start.clone()),
+        ..config(NEW)
+    };
+    let serving = Serving::open_or_rebuild(&root, &dir.path().join("s.db"), config).unwrap();
     let p = serving.progress().unwrap();
     assert_eq!(p.done, 1000, "resumed, not started over");
-    wait("the rebuild finishes", || !serving.rebuilding());
+    start.store(false, Ordering::Relaxed);
+    finished(&serving);
     let index = serving.index();
     assert_eq!(index.num_docs(), reader.count().unwrap());
     assert_eq!(total(&index, "common movie"), n);
@@ -316,7 +342,7 @@ fn a_stopped_rebuild_resumes_at_the_next_start() {
         "nothing rebuilt twice"
     );
     hold.store(false, Ordering::Relaxed);
-    wait("the rebuild finishes", || !serving.rebuilding());
+    finished(&serving);
     assert_eq!(serving.index().num_docs(), n as u64);
 }
 
@@ -434,7 +460,7 @@ fn after_the_swap_new_torrents_go_to_the_new_index_only() {
         total(&old, "during rebuild") == 1
     });
     hold.store(false, Ordering::Relaxed);
-    wait("the rebuild finishes", || !serving.rebuilding());
+    finished(&serving);
     let new = serving.index();
     assert!(!Arc::ptr_eq(&old, &new));
     assert_eq!(total(&new, "during rebuild"), 1);
@@ -473,7 +499,7 @@ fn a_second_handle_on_the_same_root_fails_cleanly() {
         other => panic!("expected Locked, got {other:?}"),
     }
     // The first is untouched by the attempt.
-    wait("the rebuild finishes", || !first.rebuilding());
+    finished(&first);
     assert_eq!(first.index().num_docs(), 300);
     first.shutdown().unwrap();
     let again = Serving::open_or_rebuild(&root, &db, config(NEW)).unwrap();
@@ -510,7 +536,7 @@ fn reindex_entries_logged_during_the_rebuild_are_never_lost() {
     wait("the old index applies the log", || {
         enriched(&serving.index()) == 400
     });
-    wait("the rebuild finishes", || !serving.rebuilding());
+    finished(&serving);
     assert_eq!(enriched(&serving.index()), 400);
     assert_eq!(
         serving.index().num_docs(),

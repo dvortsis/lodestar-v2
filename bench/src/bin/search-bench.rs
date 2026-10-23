@@ -16,9 +16,14 @@
 //! A third table times `/facets` (B6): a lease, then every facet group
 //! and histogram for it, for a broad word alone and with selections that
 //! need disjunctive passes of their own, gated at [`FACETS_P95`].
+//!
+//! Last, it times new torrent → searchable (§3) through the live indexer
+//! at its production settings, gated at [`NRT_MAX`]. The unit tests only
+//! check that the indexer follows the store: a wall-clock budget there
+//! failed whenever a busy CI runner starved it.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -26,7 +31,8 @@ use std::time::{Duration, Instant};
 use lodestar_bench::synth::Generator;
 use lodestar_metainfo::Info;
 use lodestar_search::{
-    CancelToken, FacetParams, Lease, SearchIndex, Sort, Start, facets, index_dir, parse,
+    CancelToken, FacetParams, Lease, LiveConfig, LiveIndexer, SearchIndex, Sort, Start, facets,
+    index_dir, parse,
 };
 use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig};
 use rand::seq::IndexedRandom;
@@ -51,6 +57,12 @@ fn estimate_tolerance(exact: usize) -> f64 {
 }
 /// Counts checked: smaller ones are always counted exactly.
 const ESTIMATE_FROM: usize = 20_000;
+/// §3: new torrent → searchable.
+const NRT_MAX: Duration = Duration::from_secs(5);
+/// Torrents stored one at a time, each timed until it's searchable.
+const NRT_ROUNDS: usize = 10;
+/// A torrent never indexed fails the run here rather than hanging it.
+const NRT_GIVE_UP: Duration = Duration::from_secs(120);
 
 const USAGE: &str = "\
 Usage: search-bench [--torrents N] [--queries N] [--dir PATH] [--seed S] [--gate]
@@ -63,7 +75,9 @@ Usage: search-bench [--torrents N] [--queries N] [--dir PATH] [--seed S] [--gate
                  larger segments, as a live index's merges make them
   --dir PATH     keep the store and index here and reuse them next run
   --seed S       generator seed (default 1)
-  --gate         exit 1 if a p95 target is missed";
+  --gate         exit 1 if a p95 target or the NRT budget is missed
+
+The NRT check stores 10 more torrents, so a reused --dir grows by 10.";
 
 struct Args {
     torrents: usize,
@@ -451,7 +465,58 @@ fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
     }
     ok &= api_path(a, &index, &reader, now)?;
     ok &= facets_path(a, &index, now)?;
+    ok &= nrt(a, &index, &db)?;
     Ok(ok)
+}
+
+/// New torrent → searchable (§3) over the whole corpus, through a live
+/// indexer at its production settings ([`LiveConfig::default`]): each
+/// round stores one torrent and times it until the index counts it.
+/// Gated on the slowest round.
+fn nrt(a: &Args, index: &SearchIndex, db: &Path) -> Result<bool, Box<dyn std::error::Error>> {
+    let mut store = Store::open(db, StoreConfig::default())?;
+    let live = LiveIndexer::spawn(
+        index.clone(),
+        Store::open_reader(db, StoreConfig::default())?,
+        LiveConfig::default(),
+    )?;
+    // Another seed: torrents the corpus doesn't have.
+    let mut generator = Generator::new(a.seed ^ 0x6e72_7400);
+    let mut times = Vec::with_capacity(NRT_ROUNDS);
+    for _ in 0..NRT_ROUNDS {
+        let t = generator.next_torrent();
+        let info = Info::parse(&t.info)?;
+        let want = index.num_docs() + 1;
+        store.insert(&[NewTorrent {
+            info: &info,
+            raw_info: None,
+            discovered_at: t.discovered_at,
+            metadata_at: t.discovered_at + 5,
+            extra_flags: 0,
+            source: SourceId::new(0).expect("valid"),
+        }])?;
+        let started = Instant::now();
+        while index.num_docs() < want {
+            if started.elapsed() > NRT_GIVE_UP {
+                return Err("the live indexer never indexed a new torrent".into());
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        times.push(started.elapsed());
+    }
+    live.stop()?;
+    times.sort();
+    let worst = *times.last().expect("rounds");
+    let pass = worst <= NRT_MAX;
+    let secs = |d: Duration| format!("{:.2} s", d.as_secs_f64());
+    println!(
+        "\n  new torrent → searchable ({NRT_ROUNDS} rounds, production live indexer): p50 {}, max {}  max < {} s {}",
+        secs(pct(&times, 0.5)),
+        secs(worst),
+        NRT_MAX.as_secs(),
+        if pass { "PASS" } else { "FAIL" }
+    );
+    Ok(pass)
 }
 
 /// The classes as `/search` runs them: a lease and its first page (gated
