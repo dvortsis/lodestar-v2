@@ -119,7 +119,12 @@ describe('claims on the golden index', () => {
 
 	it('makes an interim screen per section nobody claims, in the right group and mode', () => {
 		const interim = registry.screens.filter((r) => r.interim);
-		expect(interim.map((r) => r.screen.id).sort()).toEqual(['content', 'logging', 'preferences']);
+		expect(interim.map((r) => r.screen.id).sort()).toEqual([
+			'content',
+			'logging',
+			'preferences',
+			'updates'
+		]);
 		const by = Object.fromEntries(interim.map((r) => [r.screen.id, r]));
 		expect(by.preferences).toMatchObject({ mode: 'instant' });
 		expect(by.preferences!.screen.group).toBe('preferences');

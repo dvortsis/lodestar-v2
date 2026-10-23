@@ -16,9 +16,9 @@ import {
 	LOADED,
 	loadSettingMessages,
 	messageId,
-	settingText,
-	unitText
+	settingText
 } from './messages';
+import { unitText } from './units';
 import { spec } from './testing/values';
 
 afterEach(() => vi.restoreAllMocks());

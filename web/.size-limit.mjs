@@ -38,14 +38,57 @@ if (strays.length)
 
 const entry = (name, path, limit) => ({ name, path, limit, gzip: true, running: false });
 
-// A route's own first load: the files it loads beyond what the search route already loads.
-const own = (route) => {
-	const files = routeFiles(route);
-	return {
-		js: files.js.filter((f) => !search.js.includes(f)),
-		css: files.css.filter((f) => !search.css.includes(f))
+// A route's own JS and CSS is its first view (runner decision, §2.19): static imports, plus dynamic
+// imports that run at mount (a route that defers its screen with `import()` would otherwise
+// measure as its stub). Chunks loaded only on interaction (opening a dialog or a menu) are left
+// out with `onDemand`, a list of regexes on manifest keys: the walk stops at a matching chunk and
+// `onDemandOf` measures what it stopped at, so the lazy code is still gated by its own entry.
+// Chunks the search route already loads are never walked into, so the entry's dynamic imports
+// (every other route's node) are not followed.
+const manifest = existsSync('.svelte-kit/output/client/.vite/manifest.json')
+	? JSON.parse(readFileSync('.svelte-kit/output/client/.vite/manifest.json', 'utf8'))
+	: {};
+const keyOf = new Map(Object.entries(manifest).map(([key, chunk]) => [`build/${chunk.file}`, key]));
+const walk = (route, onDemand, collectOnDemand) => {
+	const mine = routeFiles(route);
+	const shared = new Set([...search.js, ...search.css]);
+	const seen = new Set();
+	const files = new Set();
+	const later = new Set();
+	const matches = (key) => onDemand.some((re) => re.test(key));
+	const visit = (key, demanded) => {
+		const chunk = manifest[key];
+		if (!chunk || shared.has(`build/${chunk.file}`)) return;
+		const demand = demanded || matches(key);
+		const id = `${demand}:${key}`;
+		if (seen.has(id)) return;
+		seen.add(id);
+		(demand ? later : files).add(`build/${chunk.file}`);
+		for (const css of chunk.css ?? [])
+			if (!shared.has(`build/${css}`)) (demand ? later : files).add(`build/${css}`);
+		for (const next of [...(chunk.imports ?? []), ...(chunk.dynamicImports ?? [])])
+			visit(next, demand);
 	};
+	for (const f of mine.js) if (!shared.has(f) && keyOf.has(f)) visit(keyOf.get(f), false);
+	for (const f of mine.css) if (!shared.has(f)) files.add(f);
+	return collectOnDemand ? [...later].filter((f) => !files.has(f)) : [...files];
 };
+const own = (route, { onDemand = [] } = {}) => walk(route, onDemand, false);
+const onDemandOf = (route, onDemand) => walk(route, onDemand, true);
+
+// Settings: the form engine loads these on demand (its README), so a screen's first view stops at
+// them: every control but the toggle and the text input (per type), instant mode, previews, the
+// field menu, the ⌘S registration, copy's toast and the confirmation dialog. S-settings-1's screen
+// route entry uses this list; "Settings controls (on demand)" gates what it leaves out.
+const settingsOnDemand = [
+	/features\/settings\/form\/(Number|Slider|Choice|Secret|Chips|Json)Control\.svelte$/,
+	/features\/settings\/form\/(instant|preview|menu|save-key|copy)\.ts$/,
+	/features\/settings\/form\/ConfirmDialog\.svelte$/
+];
+const settingsLazy = onDemandOf('/settings/[section]', settingsOnDemand);
+
+// Alerts: the save and delete dialogs load when one is opened, and bring Bits UI's overlay code.
+const alertDialogs = [/features\/alerts\/(SaveSearch|DeleteAlert)Dialog\.svelte$/];
 
 export default [
 	entry('Search route JS (initial)', search.js, '45 KB'),
@@ -60,17 +103,39 @@ export default [
 	entry('Fonts on first paint', firstPaintFonts, '35 KB'),
 	// Mono loads lazily and is never preloaded (§10.1).
 	entry('Mono font (lazy)', monoFonts, '25 KB'),
-	// Settings: a screen's route and the Overview, each at the owner's 45 KB route limit (§10.1,
-	// 2026-10-23). The form engine is in the screen route; the Overview must not import it.
+	// Route budgets (runner decision, owner's §10.1 headroom rules): each route's own JS + CSS.
+	// Measured 25.96 KB with its lazy chunks (the screen, both layouts, labels, formatters, and the
+	// Svelte runtime only this route uses since #132 moved it out of /search's first load).
+	entry('Compare route (own JS + CSS)', own('/compare'), '28 KB'),
+	entry('Discover route (own JS + CSS)', own('/discover'), '15 KB'),
+	entry('Alerts route (own JS + CSS)', own('/alerts', { onDemand: alertDialogs }), '29 KB'),
+	// Alerts: first view 26.11 KB (limit = measured + 10%). Alert: 41.2 KB, so 45 KB (the §10.1 cap) holds:
+	// the virtual list for long hit lists (VirtualList, its virtualiser, the hit row and composition bar).
+	entry('Alert route (own JS + CSS)', own('/alerts/[id]', { onDemand: alertDialogs }), '45 KB'),
+	// Settings (owner's 45 KB route limit, §10.1): a screen's first view and the Overview.
 	entry(
 		'Settings screen route (own JS + CSS)',
-		[...own('/settings/[section]').js, ...own('/settings/[section]').css],
+		own('/settings/[section]', { onDemand: settingsOnDemand }),
 		'45 KB'
 	),
 	entry(
 		'Settings Overview route (own JS + CSS)',
-		[...own('/settings').js, ...own('/settings').css],
+		own('/settings', { onDemand: settingsOnDemand }),
 		'45 KB'
+	),
+	// The dialogs' on-demand code (Bits UI overlays, Dialog, both dialogs), still gated.
+	// The engine's on-demand code on a Settings screen, still gated: 34.34 KB with S-settings-1's
+	// screen (limit = measured + 10%). Until a screen uses the engine there's nothing to measure.
+	...(settingsLazy.length ? [entry('Settings controls (on demand)', settingsLazy, '38 KB')] : []),
+	entry(
+		'Alert dialogs (on demand)',
+		[
+			...new Set([
+				...onDemandOf('/alerts', alertDialogs),
+				...onDemandOf('/alerts/[id]', alertDialogs)
+			])
+		],
+		'27 KB'
 	)
 	// Placeholders for later slices. Fill `path` from the manifest when the chunk exists:
 	//   Detail-drawer chunk    <= 15 KB

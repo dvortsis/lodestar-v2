@@ -1,16 +1,25 @@
-//! Updates, part 2 (architecture §12.2, Unix): `lodestar serve` as the
-//! supervisor of an overlay child, probation with journaled rollback, and
-//! the child's side of it. Part 3 adds the check, the install and the API;
-//! until then nothing stages an overlay outside tests, so this runs the
-//! image's own code as its child.
+//! Self-updates (architecture §12.2), on Unix:
+//!
+//! - **Part 2:** `lodestar serve` as the supervisor of an overlay child,
+//!   probation with journaled rollback, and the child's side of it.
+//!   Nothing stages an overlay outside tests yet, so the supervisor runs
+//!   the image's own code as its child.
+//! - **Part 3 of 5:** the pure pieces the update engine is built on: the
+//!   window, the policy, the trust file and the signed check's fetch.
+//!   Nothing calls them until part 4 (the engine and `/updates`); part 5
+//!   installs.
 //!
 //! `<data>/bin`'s files and who writes them are in [`layout`]; the exit
 //! codes and the request file in [`control`]; probation's accounting in
 //! [`pending`]; the rollback steps in [`journal`].
+//!
+//! Off Unix only [`log_events`] and [`window`] (the settings section's
+//! check) compile: the log catalogue (and its golden) is the same
+//! everywhere, and Windows checks and installs with E-M6's helper.
 
-//! Only [`log_events`] exists off Unix, so the log catalogue (and its
-//! golden) is the same everywhere.
-
+#[cfg(unix)]
+#[allow(dead_code)] // The update engine's (part 4).
+pub mod check;
 #[cfg(unix)]
 pub mod control;
 #[cfg(unix)]
@@ -25,11 +34,19 @@ pub mod overlay;
 #[cfg(unix)]
 pub mod pending;
 #[cfg(unix)]
+#[allow(dead_code)] // The update engine's (part 4).
+pub mod policy;
+#[cfg(unix)]
 pub mod probation;
 #[cfg(unix)]
 pub mod supervisor;
 #[cfg(unix)]
 pub mod testing;
+#[cfg(unix)]
+#[allow(dead_code)] // The update engine's (part 4).
+pub mod trust_file;
+#[allow(dead_code)] // The update engine's (part 4); `Window::parse` checks settings now.
+pub mod window;
 
 #[cfg(unix)]
 use lodestar_update::semver::Version;

@@ -12,5 +12,6 @@ export const LOADERS: Record<string, () => Promise<MessageUnit>> = {
 	preferences: () => import('./message-map/preferences'),
 	search: () => import('./message-map/search'),
 	storage: () => import('./message-map/storage'),
-	transport: () => import('./message-map/transport')
+	transport: () => import('./message-map/transport'),
+	updates: () => import('./message-map/updates')
 };

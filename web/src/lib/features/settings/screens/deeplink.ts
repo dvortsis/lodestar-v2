@@ -28,12 +28,34 @@ export function controlOf(wrapper: HTMLElement): HTMLElement | null {
 	return wrapper.querySelector<HTMLElement>(`[data-control] :is(${CONTROL})`);
 }
 
+/** How long to wait for a control that loads on demand (by type) before giving up on focusing it. */
+export const CONTROL_WAIT_MS = 3000;
+
+/** Resolves with the field's control once it is in the DOM (some load on demand), or null. */
+function controlWhenReady(wrapper: HTMLElement): Promise<HTMLElement | null> {
+	return new Promise((resolve) => {
+		const found = controlOf(wrapper);
+		if (found) return resolve(found);
+		const timer = setTimeout(done, CONTROL_WAIT_MS);
+		const observer = new MutationObserver(() => {
+			const c = controlOf(wrapper);
+			if (c) done(c);
+		});
+		function done(c?: HTMLElement | null) {
+			clearTimeout(timer);
+			observer.disconnect();
+			resolve(c ?? controlOf(wrapper));
+		}
+		observer.observe(wrapper, { childList: true, subtree: true });
+	});
+}
+
 /** Scrolls to a field, focuses its control and marks it for a moment. False when it isn't there. */
 export function showField(key: FieldKey): boolean {
 	const wrapper = document.getElementById(key);
 	if (!wrapper) return false;
 	wrapper.scrollIntoView?.({ block: 'center' });
-	controlOf(wrapper)?.focus({ preventScroll: true });
+	void controlWhenReady(wrapper).then((c) => c?.focus({ preventScroll: true }));
 	wrapper.setAttribute('data-highlight', '');
 	setTimeout(() => wrapper.removeAttribute('data-highlight'), HIGHLIGHT_MS);
 	return true;

@@ -274,25 +274,10 @@ mod scm {
     }
 
     /// Appends a refusal's reason to `%SystemRoot%\Temp\lodestar-service.log`,
-    /// where the installer logs too. It holds only paths and SIDs.
+    /// where the installer logs too, never through a planted link
+    /// ([`super::super::temp_log`]). It holds only paths and SIDs.
     fn log_refusal(why: &str) {
-        use std::io::Write;
-        let Some(root) = std::env::var_os("SystemRoot") else {
-            return;
-        };
-        let path = std::path::Path::new(&root)
-            .join("Temp")
-            .join("lodestar-service.log");
-        let secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-        {
-            let _ = writeln!(f, "{secs} service refused to start: {why}");
-        }
+        let _ = crate::windows::temp_log::append("service refused to start", why);
     }
 
     /// Serialises status reports, so a progress tick never follows

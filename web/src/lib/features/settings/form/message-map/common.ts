@@ -21,10 +21,13 @@ export const MESSAGES: Record<string, () => string> = {
 	settings_group_index: m.settings_group_index,
 	settings_group_intensity: m.settings_group_intensity,
 	settings_group_keyboard: m.settings_group_keyboard,
+	settings_group_notify: m.settings_group_notify,
 	settings_group_opt_ins: m.settings_group_opt_ins,
 	settings_group_region: m.settings_group_region,
+	settings_group_schedule: m.settings_group_schedule,
 	settings_group_search: m.settings_group_search,
 	settings_group_transport: m.settings_group_transport,
+	settings_group_updates: m.settings_group_updates,
 	settings_group_web_ui: m.settings_group_web_ui,
 	settings_logging_help: m.settings_logging_help,
 	settings_logging_label: m.settings_logging_label,
@@ -37,5 +40,7 @@ export const MESSAGES: Record<string, () => string> = {
 	settings_storage_help: m.settings_storage_help,
 	settings_storage_label: m.settings_storage_label,
 	settings_transport_help: m.settings_transport_help,
-	settings_transport_label: m.settings_transport_label
+	settings_transport_label: m.settings_transport_label,
+	settings_updates_help: m.settings_updates_help,
+	settings_updates_label: m.settings_updates_label
 };

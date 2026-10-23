@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { clearIndexCache } from '../form/schema';
 import { dismissAll } from '../form/dialogs';
@@ -17,6 +17,11 @@ vi.mock('$app/navigation', () => ({
 	goto: vi.fn(),
 	replaceState: route.replaceState
 }));
+
+// Controls the engine loads by type, transformed once up front rather than inside a test's wait.
+beforeAll(async () => {
+	await Promise.all([import('../form/NumberControl.svelte'), import('./ConfigDisclosure.svelte')]);
+});
 
 const KEY = 'lodestar.settings.advanced.crawler';
 
@@ -111,12 +116,15 @@ describe('a generated screen', () => {
 		settingsApi();
 		open('crawler', '', '#crawler.timeout_secs');
 		render(ScreenHarness, { id: 'crawler' });
-		await waitFor(() => expect(advanced('fetching').open).toBe(true));
-		await waitFor(() => {
-			const wrapper = field('crawler.timeout_secs')!;
-			expect(wrapper.hasAttribute('data-highlight')).toBe(true);
-			expect(wrapper.contains(document.activeElement)).toBe(true);
-		});
+		await waitFor(() => expect(advanced('fetching').open).toBe(true), { timeout: 10_000 });
+		await waitFor(
+			() => {
+				const wrapper = field('crawler.timeout_secs')!;
+				expect(wrapper.hasAttribute('data-highlight')).toBe(true);
+				expect(wrapper.contains(document.activeElement)).toBe(true);
+			},
+			{ timeout: 10_000 }
+		);
 		expect(localStorage.getItem(KEY)).toBeNull();
 	});
 

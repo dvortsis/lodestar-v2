@@ -2,7 +2,6 @@
 // loads just its own sections' (`loadSettingMessages`, which resolves before its form mounts):
 // the generated `message-map/` reads each one statically, so a chunk never pulls in the rest of
 // the app's strings (and nothing here indexes `m` dynamically).
-import { m } from '$lib/paraglide/messages.js';
 import { COMMON_UNIT, LOADERS } from './message-map';
 import { devWarn } from './schema';
 import type { FieldSpec } from './types';
@@ -67,20 +66,4 @@ export function fieldHelp(spec: FieldSpec): string | undefined {
 	if (import.meta.env.DEV && text === undefined)
 		warnOnce(spec.helpKey, `no message for ${spec.helpKey}`);
 	return text;
-}
-
-const UNITS: Record<string, () => string> = {
-	seconds: m.settings_form_unit_seconds,
-	mebibytes: m.settings_form_unit_mebibytes,
-	connections: m.settings_form_unit_connections,
-	files: m.settings_form_unit_files,
-	days: m.settings_form_unit_days
-};
-
-/** A unit's suffix ("MiB"); an unknown unit shows as sent, with a dev warning. */
-export function unitText(unit: string | undefined): string | undefined {
-	if (unit === undefined) return undefined;
-	const f = UNITS[unit];
-	if (import.meta.env.DEV && !f) warnOnce(`unit:${unit}`, `unknown x-unit "${unit}"`);
-	return f ? f() : unit;
 }
