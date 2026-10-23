@@ -213,6 +213,16 @@ impl Applied {
                     format: Some("jsonl"),
                     detail: None,
                 },
+                // The ring buffer behind the live log: every record that
+                // passed its switch, whatever the file's level, under the
+                // file's kinds.
+                OutputStatus {
+                    output: Output::Live,
+                    enabled: true,
+                    level: Level::Trace,
+                    format: None,
+                    detail: None,
+                },
             ],
         }
     }
