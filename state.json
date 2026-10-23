@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T10:19:35Z",
+ "updated_at": "2026-10-23T10:28:52Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -384,13 +384,13 @@
    "merge": "eb8266e"
   },
   "B11b": {
-   "status": "review",
+   "status": "running",
    "model": "opus",
    "session": "session_01MHwrFHQEfii2sHpmGPEYz8",
    "pr": 123,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "2026-10-23T06:59:39Z unblocked by B11a; brief drafting (Opus helper) | 2026-10-23T07:17:05Z launched (brief by Opus helper, runner-reviewed + trigger-cost and split lines; steward) | 2026-10-23T09:05:30Z PR #123 part 1/2 head 21d889b (~3.5k lines): V11, aggregation, compaction, repair. Trigger +25-35% bulk delete (over ~10%), kept; fresh reviewer launched (judging trigger design). Part 2 follows after merge. | 2026-10-23T09:26:35Z main moved (B9): services.rs conflict - fold into review verdict | 2026-10-23T09:30:45Z review MERGE; short round: repair window anchored at last activity (not now), prepare_cached at 3 delete sites, docs polish, merge main (B9). Trigger kept (runner decision; revisit with retention). | 2026-10-23T10:19:35Z 52f94a6: round done (last_activity anchor, prepare_cached +18%, docs, main B9); log_lint ok on merged tree; merged-tree verify vs 97fbb56 running"
+   "notes": "2026-10-23T06:59:39Z unblocked by B11a; brief drafting (Opus helper) | 2026-10-23T07:17:05Z launched (brief by Opus helper, runner-reviewed + trigger-cost and split lines; steward) | 2026-10-23T09:05:30Z PR #123 part 1/2 head 21d889b (~3.5k lines): V11, aggregation, compaction, repair. Trigger +25-35% bulk delete (over ~10%), kept; fresh reviewer launched (judging trigger design). Part 2 follows after merge. | 2026-10-23T09:26:35Z main moved (B9): services.rs conflict - fold into review verdict | 2026-10-23T09:30:45Z review MERGE; short round: repair window anchored at last activity (not now), prepare_cached at 3 delete sites, docs polish, merge main (B9). Trigger kept (runner decision; revisit with retention). | 2026-10-23T10:19:35Z 52f94a6: round done (last_activity anchor, prepare_cached +18%, docs, main B9); log_lint ok on merged tree; merged-tree verify vs 97fbb56 running | 2026-10-23T10:28:52Z part 1 merged #123 as e73e568 (merged-tree 820 tests ok); part 2 starting"
   },
   "B10b": {
    "status": "merged",
@@ -912,13 +912,13 @@
    "notes": "from #86 | 05:02 launched after B2b merge (brief by Opus helper, runner-reviewed; steward from start). | 2026-10-23T06:38:50Z heartbeat: fixing self-review items, PR not yet open | 2026-10-23T06:44:57Z PR #119 head 7aa1fe6 ready (~9.4k lines); fresh + security reviewers launched. Asks: add B-log1b to slices.yaml, rule on shared test-assertion edits, flag \u00a72.19 refinements | 2026-10-23T06:56:15Z security review FIX: canary key needle split on '_' (random false leak ~5%); important: ANSI/control in console quote, canary flows vacuous, Windows log ACL (setup token in file), pre-existing dir/file perms + O_NOFOLLOW, passkey w/ extension, lint default-pass, setup_token event unused. Waiting fresh review | 2026-10-23T07:14:50Z round 1 FIX: canary needle, windows golden path, libraries default level; +10 important (console controls, lint fail-open, userinfo, passkey ext, file hardening/O_NOFOLLOW/win ACL, lodestar= mapping, panic Inside, rotation, Debug impls, Unraid LODESTAR_LOG). Shared-file lines accepted. Merge main. | 2026-10-23T07:36:09Z fcd5f1a round-1 fixes (13 items) + main B11a; delta review started; main moved again (B10b) - merge after review | 2026-10-23T07:44:55Z delta fcd5f1a FIX (round 2): merge main (B7) + convert search/suggest/titles.rs; Windows restrict_dir_acl -> runner decision: only Lodestar-created folder, with /L, existing folder warn not re-ACL; shrink-only enforcement, lint gaps, userinfo last @, scrub_text quotes, U+2028/9 | 2026-10-23T08:35:46Z 3a54829 round-2 fixes, CI green incl windows; main incl B7+M6-win merged; delta review 2 started | 2026-10-23T08:42:25Z delta 2 FIX (round 3): scrub_text URL cut at , ' ) leaks userinfo; + create_dir race, @-after-path over-redaction, log manifest forms, scrub false negatives; record temp-log helper for B-log1b | 2026-10-23T09:26:35Z main moved (B9): conflicts; told to merge + convert B9's new tracing calls in round 3 | 2026-10-23T10:07:14Z 3542db1 round-3 fixes + main (B2c,#122,B9) merged, B9 lines swept, B2c system/{address,restart}.rs -> NOT_YET_SWEPT; CI green; delta review 3 started | 2026-10-23T10:12:55Z delta 3 MERGE; merged #119 as 97fbb56"
   },
   "B-log2": {
-   "status": "pending",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_015dmwui9D3HewnFepxVMSL2",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
-   "notes": "from #86 | 2026-10-23T10:12:55Z unblocked by B-log1; brief drafting (Opus helper). Runs before B-log1b (both own logging/**; B-log1b also blocked by B11b on pipeline/**)"
+   "notes": "from #86 | 2026-10-23T10:12:55Z unblocked by B-log1; brief drafting (Opus helper). Runs before B-log1b (both own logging/**; B-log1b also blocked by B11b on pipeline/**) | 2026-10-23T10:28:52Z launched (brief by Opus helper + runner decisions: redacted downloads hide client IPs; /events proxy gap reported as follow-up)"
   },
   "S-logs": {
    "status": "pending",
@@ -944,8 +944,8 @@
    "session": "session_01S3vvLdWsMTnhxizee1srHu",
    "pr": 125,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": "from #86 | 2026-10-23T08:45:08Z unblocked by B2c; brief drafting (Opus helper); main.rs overlap with B-log1 #119 noted | 2026-10-23T09:08:06Z launched (brief by Opus helper, runner-reviewed): 3 PRs (trust core crate / supervisor+rollback / check+policy+API) | 2026-10-23T09:30:45Z PR1 ~3.8k lines (1.75k code, ~40% tests): runner agreed one PR with stated reason | 2026-10-23T10:19:35Z PR #125 (1/3 trust core) head ee5ae29 (~4k incl vectors); self-review 0 blocking; fresh + security reviewers launched"
+   "review_rounds": 1,
+   "notes": "from #86 | 2026-10-23T08:45:08Z unblocked by B2c; brief drafting (Opus helper); main.rs overlap with B-log1 #119 noted | 2026-10-23T09:08:06Z launched (brief by Opus helper, runner-reviewed): 3 PRs (trust core crate / supervisor+rollback / check+policy+API) | 2026-10-23T09:30:45Z PR1 ~3.8k lines (1.75k code, ~40% tests): runner agreed one PR with stated reason | 2026-10-23T10:19:35Z PR #125 (1/3 trust core) head ee5ae29 (~4k incl vectors); self-review 0 blocking; fresh + security reviewers launched | 2026-10-23T10:28:52Z PR1 round 1 FIX: trust_damaged across builds (revoked equality), merge lets marks drop on seq rise, merge main; polish (skip, 64-cap, normalised storage, mark bound, fuzz modes, drift, ctutils, README)"
   },
   "S-updates": {
    "status": "pending",
@@ -1334,10 +1334,12 @@
   "export-pacer-closed": "Later export brief: export worker's pacer wait should select on tx.closed() so a dropped live download frees its slot promptly (from #122)",
   "percolate-cancel-scan": "Percolator: in-scan cancel only stops collecting, not the scorer (tantivy default_collect_segment has no early exit); use a scorer loop with fill_buffer like lease.rs and count raw docs; fix the B9 decisions-file claim (from B9 delta review)",
   "slices-yaml-B-log1b-system": "Runner PR: add crates/lodestar/src/system/** to B-log1b owns (B2c's system/{address,restart}.rs are in NOT_YET_SWEPT)",
-  "B-log1b-extra": "B-log1b also: raw \" < > ` space in URL passwords, url::Url Debug password, planted index.json restricted:true (check owner/ACL), scrub_text quadratic on long lines, lint inline target-table log dep, restart.rs:173 exe path as Path field"
+  "B-log1b-extra": "B-log1b also: raw \" < > ` space in URL passwords, url::Url Debug password, planted index.json restricted:true (check owner/ACL), scrub_text quadratic on long lines, lint inline target-table log dep, restart.rs:173 exe path as Path field",
+  "events-proxy-heartbeat": "Fix /events heartbeat re-check: only checks cookie (auth.verify(&cookie)), so trusted-proxy sessions drop after ~15 s; re-check cookie or proxy like /logs/stream (from B-log2 brief)",
+  "B-log1b-folding": "B-log1b: flood folding only folds identical lines, so distinct-line floods (new hash per DHT harvest) aren't reduced; high-volume events stay default_on: false until its bench decides"
  },
  "blocked_on_owner": [],
- "launches_today": 18,
+ "launches_today": 19,
  "last_heartbeat": "2026-10-23T09:39:51Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
