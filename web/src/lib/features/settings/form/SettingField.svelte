@@ -89,8 +89,14 @@
 	// The menu loads when it's first opened; until then a plain button stands in for its trigger.
 	let menuParts = $state<typeof import('./menu')>();
 	let menuOpen = $state(false);
+	let menuFailed = $state(false);
 	async function openMenu() {
-		menuParts ??= await import('./menu');
+		try {
+			menuParts ??= await import('./menu');
+		} catch {
+			menuFailed = true; // browsers keep a failed module: say so, once
+			return;
+		}
 		menuOpen = true;
 	}
 
@@ -198,6 +204,8 @@
 
 	{#if f.preview && Preview.part}
 		<Preview.part.FieldPreview field={f} {automatic} part="lines" />
+	{:else if f.previewUnavailable || menuFailed}
+		<p class="text-small text-error">{m.settings_form_chunk_failed()}</p>
 	{/if}
 
 	{#if f.conflict}

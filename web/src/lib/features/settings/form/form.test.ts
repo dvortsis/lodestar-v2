@@ -906,6 +906,17 @@ describe('preview', () => {
 	});
 });
 
+describe('the API', () => {
+	it('works detached, as `onDestroy(form.destroy)` uses it', async () => {
+		const { set, save, destroy } = form;
+		set('crawler.intensity', 'low');
+		expect(await save()).toMatchObject({ ok: true });
+		set('crawler.intensity', 'aggressive');
+		destroy(); // writes the draft on the way out
+		expect(sessionStorage.getItem(DRAFT_PREFIX + 'test')).toContain('"aggressive"');
+	});
+});
+
 describe('drafts', () => {
 	it('writes a draft 300 ms after the last edit and offers it to the next form', async () => {
 		form.set('crawler.intensity', 'low');

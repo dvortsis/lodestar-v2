@@ -15,6 +15,7 @@
 	const file = $derived(lazyOf(props.builtin) ?? 'json');
 	const Loaded = $derived(controlOf(file));
 	const field = $derived(props.form.field(props.key));
+	const failedId = $props.id();
 	const options = $derived(field.spec.enum?.length ?? 0);
 	$effect(() => {
 		void loadControl(file);
@@ -24,7 +25,14 @@
 {#if Loaded}
 	<Loaded {...props} />
 {:else if controlFailed(file)}
-	<p class="text-small text-error">{m.settings_form_chunk_failed()}</p>
+	<!-- In the control's place: the field's label and help name what's missing. -->
+	<div
+		role="group"
+		aria-labelledby={props.controlProps['aria-labelledby']}
+		aria-describedby={failedId}
+	>
+		<p id={failedId} class="text-small text-error">{m.settings_form_chunk_failed()}</p>
+	</div>
 {:else if props.builtin === 'json'}
 	<!-- The JSON fallback's own textarea, four rows of Mono. -->
 	<textarea

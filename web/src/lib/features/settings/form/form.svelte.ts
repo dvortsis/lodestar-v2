@@ -105,20 +105,14 @@ export type Sections = Record<string, SectionState>;
 let previewMod: typeof import('./preview') | undefined;
 let instantMod: typeof import('./instant') | undefined;
 
-/** A lazy import, loaded once; a failed load is tried again next time. */
+/** A lazy import, loaded once. A failed load stays failed: browsers keep a failed module. */
 function once<T>(load: () => Promise<T>, loaded: (mod: T) => void): () => Promise<T> {
 	let p: Promise<T> | undefined;
 	return () =>
-		(p ??= load().then(
-			(mod) => {
-				loaded(mod);
-				return mod;
-			},
-			(e: unknown) => {
-				p = undefined;
-				throw e;
-			}
-		));
+		(p ??= load().then((mod) => {
+			loaded(mod);
+			return mod;
+		}));
 }
 
 const loadPreview = once(
@@ -129,7 +123,6 @@ const loadInstant = once(
 	() => import('./instant'),
 	(mod) => (instantMod = mod)
 );
-const ignore = () => {};
 
 /** The preview chunk, if it has loaded (for the field's preview lines). */
 export const loadedPreview = () => previewMod;
@@ -141,6 +134,29 @@ export const loadedPreview = () => previewMod;
 export async function preloadSettingsForm(instant = true): Promise<void> {
 	await Promise.all([instant ? loadInstant() : undefined, loadPreview()]);
 }
+
+/** `SettingsForm`'s methods, bound to the instance. */
+const API = [
+	'href',
+	'field',
+	'set',
+	'reset',
+	'blur',
+	'save',
+	'discard',
+	'undo',
+	'resolve',
+	'restoreDraft',
+	'dropDraft',
+	'retry',
+	'removeSecret',
+	'onConfirm',
+	'gate',
+	'defaultGate',
+	'received',
+	'resync',
+	'destroy'
+] as const satisfies readonly (keyof SettingsForm)[];
 
 /**
  * A form's state and its first-view half: the `SettingsForm` itself. Screens see only that
@@ -168,6 +184,8 @@ export class Engine implements SettingsForm {
 	undoSkipsSecrets = $state(false);
 	instantUndo = $state.raw<Record<string, { until: number; prev: SettingValue }>>({});
 	draft = $state.raw<null | { fields: number; dropped: number }>(null);
+	/** The preview code didn't load: previewed fields say so. */
+	previewFailed = $state(false);
 	announcement = $state.raw<{ id: number; text: string } | null>(null);
 	lastSave = $state.raw<{ id: number; result: SaveResult } | null>(null);
 
@@ -197,6 +215,11 @@ export class Engine implements SettingsForm {
 		this.id = opts.id;
 		this.mode = opts.mode ?? 'staged';
 		this.useDrafts = this.mode === 'staged' && (opts.drafts ?? true);
+		// The API works detached, as the closure it replaced did (`onDestroy(form.destroy)`).
+		for (const name of API) {
+			const method = this[name] as (...args: unknown[]) => unknown;
+			(this as Record<string, unknown>)[name] = method.bind(this);
+		}
 	}
 
 	dirtyCount = $derived.by(() => {
@@ -327,6 +350,7 @@ export class Engine implements SettingsForm {
 		}
 		if (this.savedRecently[key]) state.savedRecently = this.savedRecently[key];
 		if (this.instantUndo[key]) state.undoUntil = this.instantUndo[key].until;
+		if (spec.preview && this.previewFailed) state.previewUnavailable = true;
 		return state;
 	}
 
@@ -381,10 +405,14 @@ export class Engine implements SettingsForm {
 		if (this.destroyed || !this.specs.some((s) => s.preview)) return;
 		clearTimeout(this.previewTimer);
 		// Its code loads during the debounce.
-		if (!previewMod) void loadPreview().catch(ignore);
+		if (!previewMod) void loadPreview().catch(() => (this.previewFailed = true));
 		this.previewTimer = setTimeout(() => {
 			if (previewMod) void previewMod.runPreview(this);
-			else void loadPreview().then((mod) => mod.runPreview(this), ignore);
+			else
+				void loadPreview().then(
+					(mod) => mod.runPreview(this),
+					() => (this.previewFailed = true)
+				);
 		}, DEBOUNCE_MS);
 	}
 

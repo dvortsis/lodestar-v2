@@ -70,6 +70,8 @@ export interface FieldState {
 	preview?: { restartRequired: boolean; estimates: PreviewEstimate[]; warnings: PreviewWarning[] };
 	/** Saved by the last save, while its Undo is offered. */
 	savedRecently?: 'live' | 'restart';
+	/** Its preview's code didn't load: the field says so instead of what a preview would. */
+	previewUnavailable?: true;
 	/** Instant mode: while this field's own Undo is offered (ms timestamp). */
 	undoUntil?: number;
 	/** A secret with a saved value (`source !== 'default'`, the value never sent). */
