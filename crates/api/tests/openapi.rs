@@ -117,6 +117,10 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET", "/logs"),
     ("GET", "/logs/stream"),
     ("GET", "/logs/catalog"),
+    ("GET", "/logs/files"),
+    ("DELETE", "/logs/files"),
+    ("GET", "/logs/files/{name}"),
+    ("GET", "/logs/archive.zip"),
     ("GET", "/openapi.json"),
 ];
 const OPEN: [&str; 5] = ["/auth", "/setup", "/login", "/logout", "/openapi.json"];
@@ -324,7 +328,8 @@ async fn keys_reach_no_existing_route() {
         let path = path
             .replace("{hash}", &"ab".repeat(20))
             .replace("{id}", "1")
-            .replace("{section}", "crawler");
+            .replace("{section}", "crawler")
+            .replace("{name}", "lodestar.jsonl");
         for secret in &secrets {
             let bearer = format!("Bearer {secret}");
             let forms: [(String, Option<(&str, &str)>); 4] = [
@@ -393,6 +398,7 @@ async fn every_documented_route_is_served() {
             path.replace("{hash}", &"ab".repeat(20))
                 .replace("{id}", "1")
                 .replace("{section}", "crawler")
+                .replace("{name}", "lodestar.jsonl")
         );
         let req = Request::builder()
             .method(Method::from_bytes(method.as_bytes()).unwrap())
