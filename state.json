@@ -846,13 +846,14 @@
    "merge": "e12ab13"
   },
   "B2b": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "session": "session_018cM4vT2o5voJrbVBmt6CZA",
    "pr": 89,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 20:29 after #86 merged. | 23:25 review: no blocking; asked I1 (test endpoint echoes body: partial-read SSRF), I2 semaphore, I3 event on drop, I4 secret sealing/refuse, I5 merged check + polish; files outside owns accepted. | 23:48 e28de2f fixes pushed; runner verified I1 (Rejected -> status only; other variants static text). Approved; merge on green. Then launch B2c + B-log1. | 00:44 openapi conflict after B13; told to wait for B14 + B4b-r2 merges, then one main merge + regen (runner must ping it). | 02:40 pinged to merge main + regen after B14 merge. | 02:42 47b64e9 main merged (B14/B4b-r2), regen; runner checked merge commit. Approved; merge on green, then launch B2c + B-log1. | 02:48 60fc77e (+#106 merge, no code change). Approved; merge on green."
+   "notes": "Launched 20:29 after #86 merged. | 23:25 review: no blocking; asked I1 (test endpoint echoes body: partial-read SSRF), I2 semaphore, I3 event on drop, I4 secret sealing/refuse, I5 merged check + polish; files outside owns accepted. | 23:48 e28de2f fixes pushed; runner verified I1 (Rejected -> status only; other variants static text). Approved; merge on green. Then launch B2c + B-log1. | 00:44 openapi conflict after B13; told to wait for B14 + B4b-r2 merges, then one main merge + regen (runner must ping it). | 02:40 pinged to merge main + regen after B14 merge. | 02:42 47b64e9 main merged (B14/B4b-r2), regen; runner checked merge commit. Approved; merge on green, then launch B2c + B-log1. | 02:48 60fc77e (+#106 merge, no code change). Approved; merge on green. | 04:45 MERGED 1274bd7.",
+   "merge": "1274bd7"
   },
   "B2c": {
    "status": "pending",
@@ -1059,12 +1060,13 @@
    "merge": "aa799fa"
   },
   "V6-cluster2": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
-   "notes": "pull-forward after V6-cluster1 merge (owner: run as many as possible); brief includes #96 carry-forwards | 01:50 PR #108 1ff314c, CI queued; review after current reviews (disk). | 02:10 container restart; reviewers relaunched: M-auth, B5c, M6-win delta; V6-cluster2 review started. | 02:06 review FIX: flaky caps test (permit release race), revoke of disconnected worker keeps leases, revoked worker can be granted mid-claim, reconnect cancels drain; polish. | 02:42 delta d00eb8c FIX: late claim reply dropped (closed sender not pruned) -> verified fix + test; important: outcome is_current strands leases, retried claim double-grant dedupe; polish. | 02:47 ccb4957 runner-verified; one fix: prune closed claims before dedupe (two timed-out claims strand K). Then approved. | 02:50 2f90a63 closed-claims prune + test. APPROVED; merge on green. | 02:48 82ebee4 (+#106 merge, no Rust change). Approved; merge on green. | 04:09 filter budget red = calibration drift guard (17%), measured 33-42us; \u00a72.18 applies (no crates/filter). Session re-running once.",
+   "notes": "pull-forward after V6-cluster1 merge (owner: run as many as possible); brief includes #96 carry-forwards | 01:50 PR #108 1ff314c, CI queued; review after current reviews (disk). | 02:10 container restart; reviewers relaunched: M-auth, B5c, M6-win delta; V6-cluster2 review started. | 02:06 review FIX: flaky caps test (permit release race), revoke of disconnected worker keeps leases, revoked worker can be granted mid-claim, reconnect cancels drain; polish. | 02:42 delta d00eb8c FIX: late claim reply dropped (closed sender not pruned) -> verified fix + test; important: outcome is_current strands leases, retried claim double-grant dedupe; polish. | 02:47 ccb4957 runner-verified; one fix: prune closed claims before dedupe (two timed-out claims strand K). Then approved. | 02:50 2f90a63 closed-claims prune + test. APPROVED; merge on green. | 02:48 82ebee4 (+#106 merge, no Rust change). Approved; merge on green. | 04:09 filter budget red = calibration drift guard (17%), measured 33-42us; \u00a72.18 applies (no crates/filter). Session re-running once. | 04:45 MERGED 2e64daa.",
    "session": "session_01LvbsfQSKGCGby7T8r4xoNw",
    "pr": 108,
-   "review_rounds": 2
+   "review_rounds": 2,
+   "merge": "2e64daa"
   },
   "F-perf": {
    "status": "review",
