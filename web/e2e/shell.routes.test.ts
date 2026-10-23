@@ -211,9 +211,10 @@ test.describe('the chrome loads on the first interaction', () => {
 		go,
 		mock
 	}) => {
+		await page.clock.install();
 		await go('/search');
 		await expect(page.locator('#boot')).toHaveCount(0); // the app has mounted
-		await page.waitForTimeout(500);
+		await page.clock.runFor(5_000); // well past load, still short of the 30 s fallback
 		// Nothing yet: the static bar stays and no stream is open (the bare page's budget, §10.1).
 		await expect(page.getByTestId('palette-button')).toHaveCount(0);
 		expect(mock.calls('getEvents')).toHaveLength(0);
