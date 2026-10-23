@@ -1032,10 +1032,10 @@
    "session": "session_01JuPFjxS6u9KwGugz27C7KL"
   },
   "runner-launch-cap": {
-   "status": "approved",
+   "status": "in_review",
    "pr": 106,
    "branch": "claude/zealous-lovelace-qv6e22",
-   "notes": "review MERGE 01:03; merge on green (docs/config only)"
+   "notes": "01:15 owner approved process change (verified \"Yes, I approve this change\"); PR now ~190 lines (merge-guard hook, steward skill, ci-ok, README rules, \u00a72.20/2.21 + code-signing deferral). Fresh reviewer started. Numbering conflict with #107 \u00a72.20/21. Before merge: create ~/.lodestar-runner in runner container."
   },
   "S-snapshots": {
    "status": "running",
@@ -1233,7 +1233,7 @@
   "privdrop_flake": "privdrop.rs drops_to_puid_and_pgid_before_anything_runs failed once under full workspace run ('expected the runtime's threads'); from #84; reported by F-budget session",
   "pin_toolchain": "rust-toolchain.toml is unpinned stable; 1.99 deprecations broke clippy on #88. Consider pinning (affects CALIB_REF_NS too).",
   "font_fout": "W9 moved Atkinson font preload after first frame (FOUT swap); recheck CLS/LCP when Search screens land",
-  "B-update_signing": "Owner-delegated 2026-10-23 (\u00a72.21): separate stable/nightly signing keys; installs trust nightly key only on Nightly channel; RELEASE_SIGNING_KEY (tags, release env w/ owner reviewer) + NIGHTLY_SIGNING_KEY (nightly env); public keys in packaging/keys/; channel-scoped trust in verifier (\u00a712.2). P-release adds environments to jobs."
+  "B-update_signing": "Owner-delegated 2026-10-23 (\u00a72.21): separate stable/nightly signing keys; installs trust nightly key only on Nightly channel; RELEASE_SIGNING_KEY (tags, release env w/ owner reviewer) + NIGHTLY_SIGNING_KEY (nightly env); public keys in packaging/keys/; channel-scoped trust in verifier (\u00a712.2). P-release adds environments to jobs. | Code signing deferred (owner 2026-10-23): Authenticode checked only on artifacts that carry a signature; SHA-256 pins + signed manifest are the trust."
  },
  "blocked_on_owner": [],
  "launches_today": 8,
@@ -1256,6 +1256,7 @@
  "decisions_log": [
   "2026-10-23 00:40 owner: 'Go with whatever makes for the best user experience' re filter budget reference -> staged: #97 fastest-runner ref now; F-perf moves ref to EPYC 7763 (typical) when engine meets it.",
   "2026-10-23 00:58 owner (session_01SE4bp9YdZmHr8RN4FHpbmm, verified user message 'raise the cap by 50%'): max_launches_per_day 40 -> 60. Branch claude/zealous-lovelace-qv6e22.",
-  "2026-10-23 01:10 owner delegated 8 questions (deciding factors UX + performance). Runner decisions: (1) DHT session question resolved = \u00a72.16; rule indexes -> B8; typed held reason -> later migration. (2) #66 closes on #97 merge. (3) all rule shapes held to 50us via realistic mixed-shape case (F-perf), per-shape reported, hostile-input linear; UX guard if a shape can't meet budget. (4) snapshots purge + 90-day expiry (S-snapshots). (5) F-near: note only. (6) separate nightly key + release env tags-only w/ reviewer (P-release; owner sets env/secrets). (7) recovery key: accepted risk. (8) filter session told no self-merge; no branch protection (all sessions share the owner account, so protection can't distinguish them and would block runner merges)."
+  "2026-10-23 01:10 owner delegated 8 questions (deciding factors UX + performance). Runner decisions: (1) DHT session question resolved = \u00a72.16; rule indexes -> B8; typed held reason -> later migration. (2) #66 closes on #97 merge. (3) all rule shapes held to 50us via realistic mixed-shape case (F-perf), per-shape reported, hostile-input linear; UX guard if a shape can't meet budget. (4) snapshots purge + 90-day expiry (S-snapshots). (5) F-near: note only. (6) separate nightly key + release env tags-only w/ reviewer (P-release; owner sets env/secrets). (7) recovery key: accepted risk. (8) filter session told no self-merge; no branch protection (all sessions share the owner account, so protection can't distinguish them and would block runner merges).",
+  "2026-10-23 01:07 owner (verified): approved runner process change (#106) and deferred code-signing cert ('not selling this commercially'). Told P-release, M6-win, DOC-install."
  ]
 }
