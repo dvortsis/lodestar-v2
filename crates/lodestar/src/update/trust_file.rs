@@ -1,0 +1,174 @@
+//! `<data>/bin/trust.json` (§12.2): the trust state the checks advance.
+//!
+//! - **Written** forward-only (`TrustState::merge`: the sequence and the
+//!   marks never go down), by temporary file, fsync, rename and a folder
+//!   fsync. An unchanged state isn't rewritten.
+//! - **Missing:** rebuilt from the floor (the embedded statements), with
+//!   high-water marks from the newest verified overlay of each channel, so
+//!   deleting it never brings back a revoked key or an older manifest.
+//! - **Damaged** (unreadable, or not verifying against the embedded keys):
+//!   it blocks installs (`trust_damaged`) and is never overwritten; the
+//!   check still runs from the floor so notices and releases show.
+
+use std::io::{self, Read};
+use std::path::Path;
+
+use lodestar_update::trust::{MAX_TRUST, OverlayMark};
+use lodestar_update::{Embedded, TrustState};
+
+pub const FILE: &str = "trust.json";
+
+/// What reading `trust.json` found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Loaded {
+    /// Read and verified.
+    Found(TrustState),
+    /// It didn't exist: rebuilt from the floor and the overlays.
+    Rebuilt(TrustState),
+    /// It exists and doesn't verify: installs stay blocked, and this
+    /// floor-only state is used for the check alone.
+    Damaged(TrustState),
+}
+
+impl Loaded {
+    pub fn state(&self) -> &TrustState {
+        match self {
+            Loaded::Found(s) | Loaded::Rebuilt(s) | Loaded::Damaged(s) => s,
+        }
+    }
+
+    pub fn damaged(&self) -> bool {
+        matches!(self, Loaded::Damaged(_))
+    }
+}
+
+/// Reads `<dir>/trust.json`. `overlays` are the verified overlays' marks,
+/// used only to rebuild a missing file.
+pub fn load(dir: &Path, embedded: &Embedded, overlays: &[OverlayMark]) -> Loaded {
+    let floor = || TrustState::rebuild(embedded, &[]).unwrap_or_default();
+    match read_capped(&dir.join(FILE)) {
+        Ok(None) => {
+            Loaded::Rebuilt(TrustState::rebuild(embedded, overlays).unwrap_or_else(|_| floor()))
+        }
+        Ok(Some(bytes)) => match TrustState::load(&bytes, embedded) {
+            Ok(state) => Loaded::Found(state),
+            Err(_) => Loaded::Damaged(floor()),
+        },
+        // Unreadable now is damaged for now: nothing is written over it.
+        Err(_) => Loaded::Damaged(floor()),
+    }
+}
+
+/// Writes `next` merged over `loaded` (never over a damaged file).
+/// Returns the state now on disk, or `None` when nothing was written
+/// because it was damaged or unchanged.
+pub fn save(dir: &Path, loaded: &Loaded, next: TrustState) -> io::Result<Option<TrustState>> {
+    let merged = match loaded {
+        Loaded::Damaged(_) => return Ok(None),
+        Loaded::Found(old) => {
+            let merged = TrustState::merge(old, next);
+            if merged == *old {
+                return Ok(None);
+            }
+            merged
+        }
+        // Nothing on disk yet: the rebuilt state is the floor to merge on.
+        Loaded::Rebuilt(base) => TrustState::merge(base, next),
+    };
+    let bytes = merged.to_bytes().map_err(|e| io::Error::other(e.code()))?;
+    write_atomic(dir, FILE, &bytes)?;
+    Ok(Some(merged))
+}
+
+/// At most [`MAX_TRUST`] + 1 bytes (a larger file fails to load);
+/// `None` when it doesn't exist.
+fn read_capped(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    let file = match super::layout::open_nofollow(path) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        other => other?,
+    };
+    let mut out = Vec::new();
+    file.take(MAX_TRUST as u64 + 1).read_to_end(&mut out)?;
+    Ok(Some(out))
+}
+
+fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
+    super::layout::write_atomic(dir, name, bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use lodestar_update::testing::{TestKey, TestTrust, statement};
+    use lodestar_update::{Channel, Role};
+
+    use super::*;
+
+    fn trust() -> (TestTrust, Embedded) {
+        let t = TestTrust::default();
+        let e = t.embedded(vec![]);
+        (t, e)
+    }
+
+    #[test]
+    fn a_missing_file_is_rebuilt_and_a_damaged_one_never_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_t, e) = trust();
+        let loaded = load(dir.path(), &e, &[]);
+        assert!(matches!(loaded, Loaded::Rebuilt(_)));
+        // The first write creates it.
+        let mut next = loaded.state().clone();
+        next.channels.entry(Channel::Stable).or_default().hwm_ts = 100;
+        assert!(save(dir.path(), &loaded, next).unwrap().is_some());
+        let found = load(dir.path(), &e, &[]);
+        assert!(matches!(found, Loaded::Found(_)));
+        assert_eq!(found.state().channels[&Channel::Stable].hwm_ts, 100);
+
+        std::fs::write(dir.path().join(FILE), b"{ not trust").unwrap();
+        let damaged = load(dir.path(), &e, &[]);
+        assert!(damaged.damaged());
+        let mut next = damaged.state().clone();
+        next.channels.entry(Channel::Stable).or_default().hwm_ts = 200;
+        assert_eq!(save(dir.path(), &damaged, next).unwrap(), None);
+        assert_eq!(
+            std::fs::read(dir.path().join(FILE)).unwrap(),
+            b"{ not trust",
+            "never overwritten"
+        );
+    }
+
+    #[test]
+    fn marks_only_go_forward_and_an_unchanged_state_isnt_rewritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_t, e) = trust();
+        let first = load(dir.path(), &e, &[]);
+        let mut at = first.state().clone();
+        at.channels.entry(Channel::Stable).or_default().hwm_ts = 500;
+        save(dir.path(), &first, at.clone()).unwrap();
+        let found = load(dir.path(), &e, &[]);
+        let mut lower = found.state().clone();
+        lower.channels.entry(Channel::Stable).or_default().hwm_ts = 400;
+        assert_eq!(save(dir.path(), &found, lower).unwrap(), None);
+        assert_eq!(
+            load(dir.path(), &e, &[]).state().channels[&Channel::Stable].hwm_ts,
+            500
+        );
+    }
+
+    /// Deleting `trust.json` doesn't forget a revocation an overlay
+    /// carries: the rebuild takes the overlays' statements.
+    #[test]
+    fn a_rebuild_keeps_what_the_overlays_carry() {
+        let dir = tempfile::tempdir().unwrap();
+        let (t, e) = trust();
+        let rotation = statement(&t.recovery, 1, Role::Release, &TestKey::new(9).public(), 1);
+        let overlay = OverlayMark {
+            channel: Channel::Stable,
+            timestamp: 1_000,
+            sha256: lodestar_update::Sha256::of(b"body"),
+            statements: vec![rotation],
+        };
+        let rebuilt = load(dir.path(), &e, std::slice::from_ref(&overlay));
+        assert_eq!(rebuilt.state().seq, 1);
+        assert!(rebuilt.state().channels[&Channel::Stable].hwm_ts >= 1_000);
+    }
+}
