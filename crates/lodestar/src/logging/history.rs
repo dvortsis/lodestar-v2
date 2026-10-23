@@ -464,6 +464,9 @@ fn locate(
                         older,
                         Listed {
                             name: name.clone(),
+                            // History reads neither.
+                            size: 0,
+                            modified: None,
                             regular: true,
                         },
                     );

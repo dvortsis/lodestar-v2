@@ -1,17 +1,30 @@
 //! The log folder as the API reads it (architecture §12.1, §10.10.12):
-//! which folder, and the files in it.
+//! which folder, the files in it, their badges, and their content as a
+//! download.
 //!
 //! - **Which folder:** the one the file opened in this run. If file
 //!   logging hasn't opened, the configured folder, only if it's an existing
 //!   directory (not a link) that, on Unix, is Lodestar's account's and
 //!   isn't group- or world-writable. Never created or changed from here.
-//! - **Names are untrusted** (`names.rs`): only a name the writer makes
-//!   is listed or read.
+//! - **Names are untrusted** (`names.rs`), and so is `index.json`: it
+//!   supplies only flags, looked up by a validated name. An entry that
+//!   names anything else, or has the wrong types, only loses its badge. An
+//!   index that can't be read makes every file count as having details.
 
-use std::io;
+use std::collections::HashMap;
+use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
-use super::names::LogName;
+use flate2::bufread::MultiGzDecoder;
+use lodestar_api::logs::LogFormat;
+use serde_json::Value as Json;
+
+use super::file::{Flags, INDEX};
+use super::names::{LogName, open_regular};
+use super::read::{self, read_line};
+use super::view::{self, REDACT, UNREADABLE};
+use super::zip::Content;
 
 /// The folder the API reads, or why there's none.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,10 +58,82 @@ pub fn folder(opened: Option<PathBuf>, configured: &Path) -> Result<Folder, &'st
     })
 }
 
+/// `index.json`, read as untrusted input.
+#[derive(Debug, Clone, Default)]
+pub struct IndexView {
+    pub readable: bool,
+    files: HashMap<String, Flags>,
+}
+
+impl IndexView {
+    /// A file's flags; every file has details when the index is
+    /// unreadable (fail closed).
+    pub fn flags(&self, name: &LogName) -> Flags {
+        match self.readable {
+            false => Flags {
+                details: true,
+                opt_in: true,
+            },
+            true => self
+                .files
+                .get(&name.file_name())
+                .copied()
+                .unwrap_or_default(),
+        }
+    }
+}
+
+/// The most of `index.json` read.
+const INDEX_MAX: u64 = 4 << 20;
+
+pub fn read_index(dir: &Path) -> IndexView {
+    let unreadable = IndexView::default();
+    let file = match open_regular(&dir.join(INDEX)) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return IndexView {
+                readable: true,
+                files: HashMap::new(),
+            };
+        }
+        Err(_) => return unreadable,
+    };
+    let mut bytes = Vec::new();
+    if file.take(INDEX_MAX + 1).read_to_end(&mut bytes).is_err() || bytes.len() as u64 > INDEX_MAX {
+        return unreadable;
+    }
+    let Ok(Json::Object(root)) = serde_json::from_slice::<Json>(&bytes) else {
+        return unreadable;
+    };
+    let mut files = HashMap::new();
+    if let Some(Json::Object(entries)) = root.get("files") {
+        for (name, v) in entries {
+            let Some(parsed) = LogName::parse(name) else {
+                continue;
+            };
+            let Json::Object(f) = v else { continue };
+            let flag = |k: &str| match f.get(k) {
+                None => Some(false),
+                Some(Json::Bool(b)) => Some(*b),
+                Some(_) => None,
+            };
+            if let (Some(details), Some(opt_in)) = (flag("details"), flag("opt_in")) {
+                files.insert(parsed.file_name(), Flags { details, opt_in });
+            }
+        }
+    }
+    IndexView {
+        readable: true,
+        files,
+    }
+}
+
 /// A file in the folder by a log's name.
 #[derive(Debug, Clone)]
 pub struct Listed {
     pub name: LogName,
+    pub size: u64,
+    pub modified: Option<SystemTime>,
     /// A plain file: anything else (a link with a log's name) is never
     /// read or followed.
     pub regular: bool,
@@ -90,10 +175,152 @@ fn scan(dir: &Path) -> io::Result<Vec<Listed>> {
         let Ok(meta) = e.metadata() else { continue };
         out.push(Listed {
             name,
+            size: meta.len(),
+            modified: meta.modified().ok(),
             regular: meta.file_type().is_file(),
         });
     }
     Ok(out)
+}
+
+/// The first readable line's time (at most 64 KiB read, decompressed).
+pub fn first_ts(dir: &Path, name: &LogName) -> Option<String> {
+    let mut f = open_regular(&name.path(dir)).ok()?;
+    let line = read::first_line(&mut f, name.gz()).ok()??;
+    let v: Json = serde_json::from_slice(&line).ok()?;
+    let ts = v.get("ts")?.as_str()?;
+    lodestar_api::logs::parse_rfc3339(ts).map(|_| ts.to_string())
+}
+
+/// A reader of `name`'s bytes as written (decompressed), up to its
+/// length now: the current file to its last whole line.
+pub fn open_plain(dir: &Path, name: &LogName) -> io::Result<Box<dyn BufRead + Send>> {
+    let mut file = open_regular(&name.path(dir))?;
+    Ok(match name {
+        LogName::Current => {
+            let len = file.metadata()?.len();
+            let end = read::whole_lines(&mut file, len)?;
+            use std::io::Seek;
+            file.rewind()?;
+            Box::new(BufReader::with_capacity(64 << 10, file.take(end)))
+        }
+        // Untrusted when read back: never inflated past the most a log
+        // file holds (a bomb ends there, as history ends it).
+        LogName::Rotated { gz: true, .. } => Box::new(BufReader::with_capacity(
+            64 << 10,
+            MultiGzDecoder::new(BufReader::with_capacity(64 << 10, file)).take(read::MAX_PLAIN),
+        )),
+        LogName::Rotated { gz: false, .. } => Box::new(BufReader::with_capacity(64 << 10, file)),
+    })
+}
+
+/// A download's file name: ASCII, from the typed name.
+pub fn download_name(name: &LogName, format: LogFormat, redact: bool) -> String {
+    format!(
+        "{}{}.{}",
+        name.stem(),
+        if redact { "-redacted" } else { "" },
+        match format {
+            LogFormat::Jsonl => "jsonl",
+            LogFormat::Text => "txt",
+        }
+    )
+}
+
+/// A file's content as a download: as written (JSONL, unredacted), or
+/// line by line through the redaction rules, or as text.
+pub fn content(r: Box<dyn BufRead + Send>, format: LogFormat, redact: bool) -> Content {
+    match (format, redact) {
+        (LogFormat::Jsonl, false) => Box::new(Raw { r }),
+        _ => Box::new(Lines {
+            r,
+            format,
+            redact,
+            line: Vec::new(),
+            done: false,
+        }),
+    }
+}
+
+const CHUNK: usize = 64 << 10;
+
+struct Raw {
+    r: Box<dyn BufRead + Send>,
+}
+
+impl Iterator for Raw {
+    type Item = io::Result<Vec<u8>>;
+
+    fn next(&mut self) -> Option<io::Result<Vec<u8>>> {
+        let mut buf = vec![0u8; CHUNK];
+        match self.r.read(&mut buf) {
+            Ok(0) => None,
+            Ok(n) => {
+                buf.truncate(n);
+                Some(Ok(buf))
+            }
+            Err(e) => Some(Err(e)),
+        }
+    }
+}
+
+struct Lines {
+    r: Box<dyn BufRead + Send>,
+    format: LogFormat,
+    redact: bool,
+    line: Vec<u8>,
+    done: bool,
+}
+
+impl Lines {
+    /// One line converted, or `None` to leave it out.
+    fn convert(&self, over: bool) -> Option<String> {
+        if over {
+            return Some(UNREADABLE.to_string());
+        }
+        let parsed = view::file_line(&self.line, self.redact.then_some(REDACT));
+        match (parsed, self.format, self.redact) {
+            (Ok(None), _, _) => None,
+            (Ok(Some(l)), LogFormat::Jsonl, _) => Some(view::to_json(&l)),
+            (Ok(Some(l)), LogFormat::Text, _) => Some(view::to_text(&l)),
+            // Redacted output never passes through bytes it couldn't parse.
+            (Err(()), _, true) => Some(UNREADABLE.to_string()),
+            (Err(()), _, false) => Some(view::raw_text(&self.line)),
+        }
+    }
+}
+
+impl Iterator for Lines {
+    type Item = io::Result<Vec<u8>>;
+
+    fn next(&mut self) -> Option<io::Result<Vec<u8>>> {
+        if self.done {
+            return None;
+        }
+        let mut out = Vec::with_capacity(CHUNK + 1024);
+        while out.len() < CHUNK {
+            let mut line = std::mem::take(&mut self.line);
+            let read = read_line(&mut self.r, &mut line);
+            self.line = line;
+            match read {
+                Err(e) => return Some(Err(e)),
+                Ok(None) => {
+                    self.done = true;
+                    break;
+                }
+                Ok(Some((_, over))) => {
+                    if self.line.is_empty() && !over {
+                        continue;
+                    }
+                    if let Some(l) = self.convert(over) {
+                        out.extend_from_slice(l.as_bytes());
+                        out.push(b'\n');
+                    }
+                }
+            }
+        }
+        (!out.is_empty()).then_some(Ok(out))
+    }
 }
 
 #[cfg(test)]
@@ -127,6 +354,44 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_hostile_index_only_loses_badges() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        let good = "lodestar-20261023T101500.123Z.jsonl.gz";
+        std::fs::write(
+            d.join(INDEX),
+            format!(
+                r#"{{"files":{{"../../etc/passwd":{{"details":true}},"{good}":{{"details":true,"opt_in":false}},"lodestar.jsonl":{{"details":"yes"}},"lodestar-x.jsonl":7}},"alive_at":1}}"#
+            ),
+        )
+        .unwrap();
+        let ix = read_index(d);
+        assert!(ix.readable);
+        assert!(ix.flags(&LogName::parse(good).unwrap()).details);
+        assert!(!ix.flags(&LogName::Current).details, "wrong type: no badge");
+        assert_eq!(ix.files.len(), 1);
+        // Unreadable: every file has details.
+        std::fs::write(d.join(INDEX), "{not json").unwrap();
+        let ix = read_index(d);
+        assert!(!ix.readable);
+        assert!(ix.flags(&LogName::Current).details && ix.flags(&LogName::Current).opt_in);
+        std::fs::write(d.join(INDEX), "[1]").unwrap();
+        assert!(!read_index(d).readable);
+        std::fs::remove_file(d.join(INDEX)).unwrap();
+        assert!(read_index(d).readable, "none yet is an empty index");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_index_is_unreadable() {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = dir.path().join("elsewhere.json");
+        std::fs::write(&elsewhere, r#"{"files":{}}"#).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, dir.path().join(INDEX)).unwrap();
+        assert!(!read_index(dir.path()).readable);
+    }
+
     #[cfg(unix)]
     #[test]
     fn which_folder() {
@@ -146,6 +411,46 @@ mod tests {
             folder(Some(link.clone()), &logs).unwrap().dir,
             link,
             "the runtime's own"
+        );
+    }
+
+    #[test]
+    fn downloads_convert_line_by_line() {
+        let text = format!(
+            "{}\nnot json at all\n\n{}\n",
+            r#"{"id":"0011223344556677-1","ts":"2026-10-23T10:15:00.000Z","level":"info","component":"fetch","event":"x.y","msg":"m","fields":{"name":{"kind":"name","value":"Fixture.Name"}}}"#,
+            r#"{"ts":"2026-10-23T10:15:00.000Z","level":"info","component":"filters","event":"filters.change_detail","msg":"m","fields":{"change":{"kind":"filter_changes","value":"term"}}}"#,
+        );
+        let run = |format, redact| {
+            let r: Box<dyn BufRead + Send> = Box::new(io::Cursor::new(text.clone().into_bytes()));
+            String::from_utf8(
+                content(r, format, redact)
+                    .collect::<io::Result<Vec<Vec<u8>>>>()
+                    .unwrap()
+                    .concat(),
+            )
+            .unwrap()
+        };
+        assert_eq!(run(LogFormat::Jsonl, false), text, "as written");
+        let red = run(LogFormat::Jsonl, true);
+        assert!(
+            !red.contains("Fixture.Name") && !red.contains("term"),
+            "{red}"
+        );
+        assert_eq!(red.lines().count(), 2, "{red}");
+        assert!(red.lines().nth(1).unwrap() == UNREADABLE, "{red}");
+        let t = run(LogFormat::Text, false);
+        assert!(
+            t.contains("Fixture.Name") && t.contains("not json at all"),
+            "{t}"
+        );
+        assert!(
+            t.starts_with("2026-10-23T10:15:00.000Z  INFO x.y: m name=Fixture.Name"),
+            "{t}"
+        );
+        assert_eq!(
+            download_name(&LogName::Current, LogFormat::Text, true),
+            "lodestar-redacted.txt"
         );
     }
 }
