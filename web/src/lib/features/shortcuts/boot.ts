@@ -5,9 +5,11 @@
 import { mount, unmount } from 'svelte';
 import { api, latest } from '$lib/api/client';
 import { events } from '$lib/state/events.svelte';
+import { isBareRoute } from '$lib/shell/chrome';
 import { keys } from '$lib/keys';
 import { m } from '$lib/paraglide/messages.js';
-import { ACTION_IDS } from './catalog';
+import { ACTION_IDS } from './actions';
+import { onceLive } from './follow.svelte';
 import { sheet } from './sheet.svelte';
 
 export interface Prefs {
@@ -16,6 +18,7 @@ export interface Prefs {
 }
 
 const CACHE = 'lodestar.shortcuts';
+const FALLBACK_MS = 10_000;
 const ACTION = /^[a-z][a-z0-9_.]*$/;
 export const SECTION = { path: { section: 'preferences' } };
 
@@ -64,6 +67,8 @@ export function applyPrefs(prefs: Prefs, cache = true) {
 	keys.setSingleKeys(prefs.shortcuts);
 	for (const id of ACTION_IDS) if (!(id in prefs.shortcut_keys)) keys.remap(id, null);
 	for (const [id, key] of Object.entries(prefs.shortcut_keys)) {
+		// Only the remappable actions: a stored `palette.open` must not take Ctrl+K away.
+		if (!(ACTION_IDS as readonly string[]).includes(id)) continue;
 		try {
 			keys.remap(id, [key]);
 		} catch {
@@ -94,15 +99,30 @@ export function openSheet() {
 	sheet.open = true;
 	if (instance || loading) return;
 	loading = true;
-	void import('./ShortcutSheet.svelte').then((mod) => {
-		loading = false;
-		instance = mount(mod.default, { target: document.body });
-	});
+	void import('./ShortcutSheet.svelte').then(
+		(mod) => {
+			loading = false;
+			instance = mount(mod.default, { target: document.body });
+		},
+		() => {
+			// The chunk didn't load (offline, a redeploy): let the next `?` try again.
+			loading = false;
+			sheet.open = false;
+		}
+	);
 }
 
 export function startShortcuts(): () => void {
 	const cached = readCache();
 	if (cached) applyPrefs(cached, false);
+	let fetched = false;
+	const fetchOnce = () => {
+		if (!fetched) void refresh();
+		fetched = true;
+	};
+	// Not before the shell's stream is live: a request that succeeds tells the shell the server is
+	// up. A blocked stream falls back to a timer, except on the sign-in screens (no session).
+	const timer = isBareRoute(location.pathname) ? undefined : setTimeout(fetchOnce, FALLBACK_MS);
 	const offs = [
 		keys.register({
 			id: 'help.shortcuts',
@@ -118,12 +138,15 @@ export function startShortcuts(): () => void {
 			keywords: ['keyboard', 'shortcuts', 'wcag'],
 			run: () => void import('./toggle').then((t) => t.toggleSingleKeys())
 		}),
-		events.on('settings', (e) => {
-			if (e.section === 'preferences') void refresh();
+		onceLive(() => {
+			fetchOnce();
+			return events.on('settings', (e) => {
+				if (e.section === 'preferences') void refresh();
+			});
 		})
 	];
-	void refresh();
 	return () => {
+		clearTimeout(timer);
 		offs.forEach((off) => off());
 		if (instance) void unmount(instance);
 		instance = undefined;

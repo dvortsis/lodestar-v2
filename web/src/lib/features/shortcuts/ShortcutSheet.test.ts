@@ -80,7 +80,7 @@ describe('ShortcutSheet', () => {
 		vi.spyOn(console, 'error').mockImplementation(() => {});
 		render(ShortcutSheet);
 		const dialog = await screen.findByRole('dialog');
-		expect(within(dialog).getByText(/Alpha and Beta both use x/)).toBeTruthy();
+		expect(within(dialog).getByText(/Alpha and Beta both use X/)).toBeTruthy();
 	});
 
 	it('says when single-key shortcuts are off, marks them, and Turn on saves', async () => {

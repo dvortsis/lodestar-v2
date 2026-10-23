@@ -131,6 +131,20 @@ describe('KeyboardScreen', () => {
 		expect(screen.getByTestId('shortcut-key-results.next').textContent).toContain('N');
 	});
 
+	it('finds the row when the message leads with an action the editor does not list', async () => {
+		render(KeyboardScreen);
+		await screen.findByRole('switch');
+		await fireEvent.click(screen.getByRole('button', { name: 'Change the key for Next result' }));
+		await press('p');
+		const message = 'custom.thing and results.next both use p; give each its own key.';
+		patch.mockRejectedValueOnce(
+			new ApiError(422, 'invalid_setting', message, { field: 'shortcut_keys' })
+		);
+		await fireEvent.click(save());
+		const row = await screen.findByTestId('shortcut-row-results.next');
+		await vi.waitFor(() => expect(row.textContent).toContain(message));
+	});
+
 	it('shows a field the environment sets as locked, with its source', async () => {
 		get.mockResolvedValue(section(false, {}, 7, { env: 'LODESTAR_SHORTCUTS', read_only: true }));
 		render(KeyboardScreen);

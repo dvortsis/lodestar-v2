@@ -64,6 +64,7 @@ describe('ShortcutsField', () => {
 		// Still capturing: the next good key is taken.
 		await press('n');
 		expect(onchange).toHaveBeenCalledWith({ 'results.next': 'n' });
+		expect(screen.queryByText(message)).toBeNull();
 	});
 
 	it('Escape and Tab cancel; Tab still moves focus', async () => {
@@ -82,11 +83,12 @@ describe('ShortcutsField', () => {
 	it('does not let the key reach the registry', async () => {
 		const run = vi.fn();
 		const off = keys.register({ id: 'test.n', title: 'N', keys: ['n'], run });
-		keys.attach(window);
+		const detach = keys.attach(window);
 		setup();
 		await fireEvent.click(change('Next result'));
 		await press('n');
 		expect(run).not.toHaveBeenCalled();
+		detach();
 		off();
 	});
 
@@ -131,6 +133,12 @@ describe('ShortcutsField', () => {
 		expect(onchange).toHaveBeenLastCalledWith({ 'detail.send': 'z' });
 		await fireEvent.click(screen.getByRole('button', { name: 'Reset all' }));
 		expect(onchange).toHaveBeenLastCalledWith({});
+	});
+
+	it('puts focus back on the Change button after Reset', async () => {
+		setup({ 'results.next': 'n' });
+		await fireEvent.click(screen.getByRole('button', { name: 'Reset the key for Next result' }));
+		await vi.waitFor(() => expect(document.activeElement).toBe(change('Next result')));
 	});
 
 	it('has no Reset buttons when nothing is remapped', () => {

@@ -7,6 +7,7 @@
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import { ACTION_IDS, actionTitle, defaultKey, type ActionId } from './catalog';
+	import { tick } from 'svelte';
 	import {
 		capture,
 		clash,
@@ -51,12 +52,21 @@
 			return;
 		}
 		pending = undefined;
+		refusal = undefined;
 		onchange(withKey(value, id, key));
 		live = m.shortcuts_capture_set({ action: actionTitle(id), key: keyNameFor(key) });
 	}
 
 	function stop() {
 		capturing = undefined;
+		refusal = undefined;
+	}
+
+	/** A button that removes itself leaves focus nowhere: put it on the row's Change button. */
+	function focusChange(id: ActionId) {
+		void tick().then(() =>
+			document.querySelector<HTMLElement>(`[data-testid="shortcut-change-${id}"]`)?.focus()
+		);
 	}
 
 	function onkey(event: KeyboardEvent) {
@@ -101,6 +111,7 @@
 		pending = undefined;
 		refusal = undefined;
 		propose(id, defaultKey(id));
+		focusChange(id);
 	}
 </script>
 
@@ -152,12 +163,22 @@
 						<span>{m.shortcuts_conflict_used({ action: actionTitle(clashing.other) })}</span>
 						<Button
 							dense
+							{disabled}
 							onclick={() => {
 								onchange(swap(value, id, clashing.other, clashing.key));
 								pending = undefined;
+								focusChange(id);
 							}}>{m.shortcuts_conflict_swap()}</Button
 						>
-						<Button dense variant="quiet" onclick={() => (pending = undefined)}>
+						<Button
+							dense
+							variant="quiet"
+							{disabled}
+							onclick={() => {
+								pending = undefined;
+								focusChange(id);
+							}}
+						>
 							{m.shortcuts_conflict_cancel()}
 						</Button>
 					</p>
@@ -181,7 +202,15 @@
 	{/if}
 	{#if remapped}
 		<div class="sc-all">
-			<Button variant="quiet" {disabled} onclick={() => ((pending = undefined), onchange({}))}>
+			<Button
+				variant="quiet"
+				{disabled}
+				onclick={() => {
+					pending = undefined;
+					onchange({});
+					focusChange(ACTION_IDS[0]);
+				}}
+			>
 				{m.shortcuts_reset_all()}
 			</Button>
 		</div>

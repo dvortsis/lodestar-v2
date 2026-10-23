@@ -1,24 +1,9 @@
-// The actions Settings can remap: the server's `DEFAULT_SHORTCUTS` (preferences.rs), in §10.16's
-// order. The Settings screen lists these, not `keys.list()`: on that page the search and detail
-// commands are not registered.
-import { DEFAULT_KEYS } from '$lib/keys/defaults';
+// Titles of the remappable actions. The Settings screen lists these, not `keys.list()`: on that
+// page the search and detail commands are not registered.
 import { m } from '$lib/paraglide/messages.js';
+import type { ActionId } from './actions';
 
-export const ACTION_IDS = [
-	'search.focus',
-	'results.next',
-	'results.previous',
-	'detail.open_magnet',
-	'detail.copy_magnet',
-	'detail.send',
-	'results.select',
-	'help.shortcuts'
-] as const;
-
-export type ActionId = (typeof ACTION_IDS)[number];
-
-/** The default key of a remappable action. */
-export const defaultKey = (id: ActionId): string => DEFAULT_KEYS[id][0];
+export { ACTION_IDS, defaultKey, type ActionId } from './actions';
 
 const TITLES: Record<ActionId, () => string> = {
 	'search.focus': () => m.shortcuts_action_search_focus(),
@@ -32,7 +17,3 @@ const TITLES: Record<ActionId, () => string> = {
 };
 
 export const actionTitle = (id: ActionId): string => TITLES[id]();
-
-/** Each remappable action with its default key and title, in display order. */
-export const catalog = () =>
-	ACTION_IDS.map((id) => ({ id, key: defaultKey(id), title: TITLES[id] }));
