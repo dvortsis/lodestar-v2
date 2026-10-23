@@ -1494,7 +1494,7 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
     - Versions only go up.
     - A manifest and a freshness statement each get the same checks: refused if dated more than **1 day ahead** of the local clock, and an expiry at most **30 days** after its own timestamp.
     - A manifest is **current** while it, or its newest accepted freshness statement, hasn't expired. A manifest that isn't current is refused for new installs.
-    - A **freshness statement** is accepted only if the current freshness key signed it, its channel and manifest hash match the manifest, and the manifest itself verifies under a non-revoked key allowed on that channel. It extends expiry only.
+    - A **freshness statement** is accepted only if the current freshness key signed it, its channel and manifest hash match the manifest, and the manifest itself verifies under a non-revoked key allowed on that channel. It extends expiry only. The **freshness mark** is the newest freshness timestamp accepted; an older statement is refused.
     - The **high-water mark** stays on the manifest's own signed timestamp (per channel), and older manifests are refused. A freshness statement for a manifest older than the mark is refused, so the freshness key can freeze updates but never roll them back.
     - A release or nightly key rotation resets the high-water mark of the channels that key signs to the statement's date; a freshness-key rotation resets only the freshness mark. A leaked key that signs a manifest dated 2099 is therefore refused as being in the future; and anything it got accepted before the rotation stops counting once the rotation lands.
     - **If the local clock looks wrong in either direction,** the Updates screen says so instead of failing silently. That's when genuine manifests keep arriving from more than a day in the future, or when the clock is past the newest manifest's expiry while checks still succeed.
@@ -1502,7 +1502,7 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
     - the accepted key statements (in full, with their signatures);
     - the current sequence number;
     - the revoked keys;
-    - the high-water mark.
+    - the per-channel high-water marks and the freshness mark.
 
     It's written by temporary file, fsync, rename, and an fsync of the directory. It's in no store snapshot or backup, so **no rollback can undo a revocation.**
     - **"Forward only"** means the pair (sequence number, high-water mark) never decreases. A new state replaces the old only if its sequence number is higher, or equal with a later high-water mark.
@@ -2852,7 +2852,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **A leaked key can't freeze updates:**
   - manifests more than a day ahead of the local clock are refused;
   - expiry is capped at 30 days;
-  - the high-water mark belongs to the key generation and resets with a key statement.
+  - the high-water marks are per channel, on the manifest's own timestamp, and reset only for the channels a rotated key signs; the freshness mark resets with a freshness-key rotation.
 - **Rollback is journaled and crash-safe:**
   - the child is stopped first;
   - the store is restored before `active` is repointed, with the WAL removed before the rename;
