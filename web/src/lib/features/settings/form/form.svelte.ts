@@ -92,6 +92,8 @@ export interface SettingsForm {
 	set(key: FieldKey, value: unknown): void;
 	reset(key: FieldKey): void;
 	blur(key: FieldKey): void;
+	/** One atomic save. A save that resolves after `destroy()` returns `cancelled`, whatever the
+	 * server did: nothing is left to show it (the next screen loads the saved values). */
 	save(): Promise<SaveResult>;
 	discard(): void;
 	/** Staged: the last save's Undo. Instant: that field's Undo. */
@@ -147,6 +149,7 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 	let previewTimer: ReturnType<typeof setTimeout> | undefined;
 	let draftData: Draft | null = null;
 	let inFlight: Set<string> | null = null; // sections of the save in flight
+	let sending = new Set<string>(); // its fields: an edit to one is kept until the response
 	let failedOp: 'save' | 'undo' = 'save'; // what Retry re-runs
 	let held = new Map<string, number>(); // events held during it
 	let destroyed = false;
@@ -320,7 +323,7 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 		const [section, name] = splitKey(key);
 		const s = spec ? sec(section) : undefined;
 		if (!spec || !s) return;
-		const next = stage(s, name, value, spec);
+		const next = stage(s, name, value, spec, sending.has(key));
 		if (next === s) return;
 		setSection(next);
 		const f = next.fields[name]!;
@@ -529,7 +532,7 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 		status = 'ready';
 		saveError = undefined;
 		if (e.status === 409 && e.code === 'stale_revision') {
-			mergeCurrent(e.current ?? {}, 'stale');
+			mergeCurrent(sectionValues(e.current), 'stale');
 			return { ok: false, reason: 'conflict' };
 		}
 		if (e.status === 409 && (e.code === 'set_by_environment' || e.code === 'read_only')) {
@@ -653,6 +656,7 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 
 	function afterSend(sent: Set<string>) {
 		inFlight = null;
+		sending = new Set();
 		// Events for the saved sections at or below the response's revision were our own.
 		const later = [...held].filter(([s, rev]) => sent.has(s) && rev > (sections[s]?.revision ?? 0));
 		held = new Map();
@@ -661,7 +665,7 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 
 	async function save(): Promise<SaveResult> {
 		if (inFlight) return { ok: false, reason: 'busy' };
-		if (mode === 'instant') return { ok: false, reason: 'nothing' };
+		if (mode === 'instant') return saveInstantSecrets();
 		formErrors = [];
 		if (conflicts.length) {
 			announce(m.settings_form_announce_conflicts());
@@ -692,6 +696,7 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 		}
 		const sent = new Set(Object.keys(batch));
 		inFlight = sent;
+		sending = new Set(keys);
 		failedOp = 'save';
 		status = 'saving';
 		try {
@@ -776,6 +781,7 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 			return { ok: false, reason: 'nothing' };
 		const sent = new Set(Object.keys(batch));
 		inFlight = sent;
+		sending = new Set(batchKeys(batch));
 		failedOp = 'undo';
 		status = 'saving';
 		try {
@@ -831,7 +837,30 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 
 	// --- instant mode ------------------------------------------------------------------------
 
+	/** Instant mode's explicit commit: the staged secrets, each as its own change. */
+	async function saveInstantSecrets(): Promise<SaveResult> {
+		const staged = specs.filter((s) => {
+			const f = sections[s.section]?.fields[s.name];
+			return s.writeOnly && f !== undefined && isDirty(f);
+		});
+		if (staged.length === 0) return { ok: false, reason: 'nothing' };
+		let last: SaveResult = { ok: false, reason: 'nothing' };
+		for (const spec of staged) {
+			const run = instantChain.then(() => sendInstant(spec));
+			instantChain = run;
+			last = await run;
+			// Never kept once tried (§10.10.4).
+			const s = sections[spec.section];
+			if (s?.fields[spec.name]?.mine !== undefined)
+				setSection(stage(s, spec.name, undefined, spec));
+			if (!last.ok) return last;
+		}
+		return last;
+	}
+
 	function scheduleInstant(spec: FieldSpec) {
+		// A secret is sent only when the user commits it (`save()`), never half-typed.
+		if (spec.writeOnly) return;
 		clearTimeout(instantTimers.get(spec.key));
 		const run = () => {
 			instantTimers.delete(spec.key);
@@ -868,6 +897,7 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 		}
 		const prev = f.saved;
 		const batch: Batch = { [section]: { if_revision: s.revision, [name]: wire(f.mine) } };
+		sending = new Set([key]);
 		// Danger classes gate instant changes too, and fail closed the same way.
 		const gated = await runGates(batch, [key]);
 		if (gated) {
@@ -887,7 +917,8 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 		const e = 'error' in r ? r.error : undefined;
 		if (!retried && e instanceof ApiError && e.code === 'stale_revision') {
 			// The user just acted: take the new revision and try once more.
-			const v = e.current?.[section] ?? (await getSection(section).catch(() => undefined));
+			const v =
+				sectionValues(e.current)[section] ?? (await getSection(section).catch(() => undefined));
 			const cur = sections[section];
 			if (v && cur) {
 				setSection({ ...cur, revision: v.revision, restart: v.restart_required });
@@ -1100,6 +1131,27 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 		resync,
 		destroy
 	};
+}
+
+const isObj = (v: unknown): v is Record<string, unknown> =>
+	typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** A stale refusal's `current`, keeping only entries shaped like `SectionValues`. */
+function sectionValues(current: unknown): Record<string, SectionValues> {
+	const out: Record<string, SectionValues> = {};
+	if (!isObj(current)) return out;
+	for (const [section, v] of Object.entries(current)) {
+		if (
+			isObj(v) &&
+			Number.isSafeInteger(v.revision) &&
+			Array.isArray(v.restart_required) &&
+			isObj(v.fields) &&
+			Object.values(v.fields).every((f) => isObj(f) && typeof f.source === 'string' && 'value' in f)
+		) {
+			out[section] = v as unknown as SectionValues;
+		}
+	}
+	return out;
 }
 
 function without<T>(record: Record<string, T>, key: string): Record<string, T> {
