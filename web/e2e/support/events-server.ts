@@ -30,6 +30,16 @@ declare global {
 	}
 }
 
+/**
+ * The shell starts its stream on the first interaction (or 30 s after load). Tests that need it
+ * right away send one: a synthetic event the shell treats like the first key press.
+ */
+export async function engage(page: Page) {
+	// The chrome (and its listeners) mounts a moment after load; its skip link is the sign.
+	await page.waitForSelector('a[href="#main"]', { state: 'attached' });
+	await page.evaluate(() => window.dispatchEvent(new Event('focusin')));
+}
+
 export interface EventsHandle {
 	/** Sends one frame on every open connection. */
 	send(event: string, data: unknown): Promise<void>;
@@ -78,6 +88,14 @@ export async function liveEvents(
 				new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } })
 			);
 		};
+		// Keep nudging until the chrome has mounted and taken it.
+		let tries = 0;
+		const nudge = setInterval(() => {
+			if (document.querySelector('a[href="#main"]')) {
+				dispatchEvent(new Event('focusin'));
+				clearInterval(nudge);
+			} else if (++tries > 100) clearInterval(nudge);
+		}, 100);
 	}, initial);
 	return {
 		send: (event, data) =>
