@@ -14,6 +14,12 @@ The Settings form engine (architecture §10.10.1, §10.10.4, §10.10.5, §10.10.
 - **A stale save always returns `conflict`**, even when the merge found no field in conflict: the user sees the merged values and saves again (§10.10.5: never re-save automatically).
 - **An `onConfirm` handler is asked once per save.** A second refusal with the same code shows the server's message on the field.
 - **Secrets are cleared after every save attempt**, including one refused by client validation, so a typed secret is never held longer than one try (§10.10.4).
+- **A secret is never reset through Save.** `reset()` on a `writeOnly` field does nothing: removing a saved secret is destructive and not undoable, so it runs only through `removeSecret` after its own confirmation (§10.10.7). Instant mode offers no Undo for a secret either.
+- **Instant mode runs the same danger gates**, failing closed the same way, and holds `settings` events for the section while its own change is in flight, so the user's own change never shows as a conflict.
+- **The draft is written before a save is sent**, not only after the debounce, so a `401` redirect or a crash right after ⌘S keeps it.
+- **Editing a field in conflict rebases it on theirs**, as Keep mine does: the new value is the user's choice over theirs.
+- **Retry re-runs what failed:** a failed Undo is retried as the Undo. If its window closed meanwhile, the banner clears.
+- **A save of a secret alone offers no Undo** (there's nothing to send back); "Saved" still shows for the same 10 s.
 - **`401` returns `refused` and changes nothing else:** W5's handler redirects, and the draft was already written.
 - **Announcements are joined into one string** when one merge has two things to say (conflicts, and fields that no longer exist), since the live region reads only its latest text.
 - **A stale Undo says so and refetches quietly**: the refetch doesn't follow it with "Updated elsewhere".
@@ -26,7 +32,9 @@ The Settings form engine (architecture §10.10.1, §10.10.4, §10.10.5, §10.10.
 
 ## Drafts
 - **Key `lodestar.settings.draft.v1.<id>`, format `{ v: 1, at, sections: { [section]: { revision, base, mine, reset } } }`.** A reset has no value, so it's listed in `reset` with its base rather than in `mine`. Never secrets, never locked or read-only fields, at most 64 KiB (`JSON.stringify` length).
-- **An offered draft isn't overwritten** before the user restores or discards it: edits made meanwhile are kept in the form, and drafts resume once the offer is answered. On Restore, edits made since the page loaded win over the draft's.
+- **An offered draft isn't overwritten or cleared** before the user restores or discards it, not by a save or Discard either: edits made meanwhile are kept in the form, and drafts resume once the offer is answered. On Restore, edits made since the page loaded win over the draft's.
+- **Section and field names from storage or events are looked up as own properties only**, so a draft naming `constructor` can't break loading; a draft that can't be planned is cleared.
+- **The 64 KiB cap counts UTF-8 bytes.**
 - **A draft that no longer differs from the server is cleared without asking.**
 
 ## Timings

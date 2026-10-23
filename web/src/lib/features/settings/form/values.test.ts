@@ -173,3 +173,27 @@ describe('applying a save', () => {
 		expect(dirtyNames(s)).toEqual([]);
 	});
 });
+
+describe('editing a conflict', () => {
+	it('rebases on theirs, as Keep mine would', () => {
+		const s0 = fromValues(values('c', 3, { t: sv('theirs', 'db') }));
+		const conflicted = {
+			...s0,
+			fields: {
+				t: {
+					saved: sv('theirs', 'db'),
+					base: 'old',
+					mine: 'mine',
+					conflict: { mine: 'mine', theirs: 'theirs' }
+				}
+			}
+		};
+		const s = stage(conflicted, 't', 'newer');
+		expect(s.fields.t).toEqual({ saved: sv('theirs', 'db'), base: 'theirs', mine: 'newer' });
+	});
+
+	it('never resets a secret', () => {
+		const s0 = fromValues(values('c', 3, { token: sv(null, 'db') }));
+		expect(stage(s0, 'token', RESET, spec('c.token', { writeOnly: true }))).toBe(s0);
+	});
+});

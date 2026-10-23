@@ -82,12 +82,15 @@ export function stage(
 ): SectionState {
 	const f = s.fields[name];
 	if (!f || isLocked(f.saved) || spec?.readOnly) return s;
-	// An empty secret is no replacement.
+	// An empty secret is no replacement, and a secret is never reset through Save: Remove runs on
+	// its own, after a confirmation (§10.10.7).
+	if (spec?.writeOnly && value === RESET) return s;
 	if (spec?.writeOnly && (value === '' || value === null)) value = undefined;
 	if (value === RESET && f.saved.source !== 'db') value = undefined;
 	const next: FieldModel = {
 		saved: f.saved,
-		base: f.mine === undefined ? f.saved.value : f.base,
+		// Editing a field in conflict is choosing a new value over theirs: rebase on theirs.
+		base: f.mine === undefined || f.conflict ? f.saved.value : f.base,
 		mine: value
 	};
 	if (value === undefined) return withField(s, name, { saved: f.saved });

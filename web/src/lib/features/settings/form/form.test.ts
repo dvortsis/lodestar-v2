@@ -293,6 +293,24 @@ describe('saving', () => {
 		expect(rev).toBe(8);
 	});
 
+	it('maps 409 read_only onto the field and refetches its section', async () => {
+		server.next(
+			'PATCH /settings',
+			server.err(409, 'read_only', {
+				section: 'crawler',
+				field: 'intensity',
+				message: 'Read-only.'
+			})
+		);
+		server.sections.get('crawler')!.fields.intensity!.read_only = true;
+		form.set('crawler.intensity', 'low');
+		expect(await form.save()).toEqual({ ok: false, reason: 'refused' });
+		await flush();
+		expect(server.requests('GET', '/settings/crawler')).toHaveLength(2);
+		expect(form.field('crawler.intensity')).toMatchObject({ locked: true, dirty: false });
+		expect(form.errors).toEqual([{ key: 'crawler.intensity', message: 'Read-only.' }]);
+	});
+
 	it('merges on 409 stale_revision and waits for the user to save again', async () => {
 		server.change('crawler', {
 			intensity: { value: 'aggressive', source: 'db' },
@@ -437,8 +455,7 @@ describe('saving', () => {
 		const login = vi.fn();
 		onLoginRequired(login);
 		server.next('PATCH /settings', server.err(401, 'login_required'));
-		form.set('crawler.intensity', 'low');
-		vi.advanceTimersByTime(300);
+		form.set('crawler.intensity', 'low'); // saved at once: no time for the draft's debounce
 		expect(await form.save()).toEqual({ ok: false, reason: 'refused' });
 		expect(login).toHaveBeenCalled();
 		expect(sessionStorage.getItem(DRAFT_PREFIX + 'test')).toContain('"low"');
@@ -543,6 +560,44 @@ describe('undo', () => {
 		expect(form.undoUntil).toBeNull();
 	});
 
+	it('retries a failed Undo, not a save', async () => {
+		form.set('crawler.intensity', 'low');
+		await form.save();
+		server.next('PATCH /settings', { status: 0, body: null });
+		expect(await form.undo()).toEqual({ ok: false, reason: 'network' });
+		expect(form.status).toBe('offline');
+		await form.retry();
+		expect(patches().map((p) => p.body)).toEqual([
+			{ crawler: { if_revision: 3, intensity: 'low' } },
+			{ crawler: { if_revision: 4, intensity: null } },
+			{ crawler: { if_revision: 4, intensity: null } }
+		]);
+		expect(form.field('crawler.intensity').source).toBe('default');
+	});
+
+	it('returns busy for Undo and Remove while a save is in flight', async () => {
+		form.set('crawler.intensity', 'low');
+		await form.save();
+		const release = server.hold('PATCH /settings');
+		form.set('transport.utp', false);
+		const saving = form.save();
+		await flush();
+		expect(await form.undo()).toEqual({ ok: false, reason: 'busy' });
+		expect(await form.removeSecret('secrets.token')).toEqual({ ok: false, reason: 'busy' });
+		release();
+		await saving;
+		expect(patches()).toHaveLength(2);
+	});
+
+	it('offers no Undo for a save of a secret alone', async () => {
+		form.set('secrets.token', SECRET);
+		expect(await form.save()).toMatchObject({ ok: true });
+		expect(form.undoUntil).toBeNull();
+		expect(form.status).toBe('saved');
+		vi.advanceTimersByTime(10_000);
+		expect(form.status).toBe('ready');
+	});
+
 	it('leaves secrets out of Undo and says so', async () => {
 		form.set('secrets.token', SECRET);
 		form.set('crawler.intensity', 'low');
@@ -569,6 +624,33 @@ describe('secrets', () => {
 		form.set('crawler.timeout_secs', 0); // invalid: nothing sent, the secret still cleared
 		expect(await form.save()).toEqual({ ok: false, reason: 'invalid' });
 		expect(form.field('secrets.token').dirty).toBe(false);
+	});
+
+	it('never stages a secret’s reset into Save', async () => {
+		form.reset('secrets.token');
+		expect(form.dirtyCount).toBe(0);
+		expect(await form.save()).toEqual({ ok: false, reason: 'nothing' });
+	});
+
+	it('never writes a secret to the console, on any path', async () => {
+		const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((k) =>
+			vi.spyOn(console, k).mockImplementation(() => {})
+		);
+		for (const reply of [
+			server.err(500, 'internal'),
+			server.err(400, 'unknown_field', { section: 'secrets', field: 'token' }),
+			server.err(422, 'invalid_setting', { section: 'secrets', field: 'token' }),
+			{ status: 0, body: null },
+			{ status: 200, body: { sections: {} } }
+		]) {
+			server.next('PATCH /settings', reply);
+			form.set('secrets.token', SECRET);
+			await form.save();
+		}
+		const logged = JSON.stringify(spies.flatMap((s) => s.mock.calls));
+		expect(logged).not.toContain(SECRET);
+		expect(JSON.stringify(form.errors)).not.toContain(SECRET);
+		expect(sessionStorage.getItem(DRAFT_PREFIX + 'test') ?? '').not.toContain(SECRET);
 	});
 
 	it('removes a secret on its own, as one PATCH to null', async () => {
@@ -652,7 +734,7 @@ describe('events', () => {
 		s.revision++;
 		form.received({ section: 'crawler', revision: s.revision });
 		await flush();
-		expect(form.announcement?.text).toMatch(/1 settings no longer exist/);
+		expect(form.announcement?.text).toMatch(/no longer exist were left out of your changes: 1\./);
 		expect(form.dirtyCount).toBe(0);
 	});
 });
@@ -817,6 +899,40 @@ describe('drafts', () => {
 		expect(form.dirtyCount).toBe(0);
 	});
 
+	it('keeps an offered draft through a save and a discard until it’s answered', async () => {
+		form.set('crawler.intensity', 'low');
+		vi.advanceTimersByTime(300);
+		const next = open();
+		await flush();
+		expect(next.draft).not.toBeNull();
+		next.set('transport.utp', false);
+		await next.save();
+		expect(sessionStorage.getItem(DRAFT_PREFIX + 'test')).toContain('"low"');
+		next.set('transport.utp', true);
+		next.discard();
+		expect(sessionStorage.getItem(DRAFT_PREFIX + 'test')).toContain('"low"');
+		next.restoreDraft();
+		expect(next.field('crawler.intensity')).toMatchObject({ value: 'low', dirty: true });
+	});
+
+	it('survives a draft naming an Object.prototype key', async () => {
+		sessionStorage.setItem(
+			DRAFT_PREFIX + 'proto',
+			JSON.stringify({
+				v: 1,
+				at: 1,
+				sections: { constructor: { revision: 1, base: { a: 1 }, mine: { a: 2 }, reset: [] } }
+			})
+		);
+		const f = open({ id: 'proto' });
+		await flush();
+		expect(f.status).toBe('ready');
+		expect(f.draft).toBeNull();
+		f.received({ section: 'constructor', revision: 99 });
+		f.received({ section: 'toString', revision: 99 });
+		expect(f.field('constructor.fields' as never).locked).toBe(true);
+	});
+
 	it('keeps no drafts when turned off', async () => {
 		const f = open({ id: 'nodraft', drafts: false });
 		await flush();
@@ -889,6 +1005,53 @@ describe('instant mode', () => {
 			{ transport: { if_revision: 8, utp: false } }
 		]);
 		expect(inst.field('transport.utp')).toMatchObject({ value: false, dirty: false });
+	});
+
+	it('holds events during its own change, so it never conflicts with itself', async () => {
+		const release = server.hold('PATCH /settings', { applied: true });
+		inst.set('crawler.timeout_secs', 20);
+		vi.advanceTimersByTime(300);
+		await flush();
+		inst.set('crawler.timeout_secs', 25); // typed while the first change is in flight
+		const rev = server.sections.get('crawler')!.revision; // already saved: 4
+		expect(rev).toBe(4);
+		inst.received({ section: 'crawler', revision: rev }); // its event, before the response
+		await flush();
+		release();
+		await flush();
+		vi.advanceTimersByTime(300);
+		await flush();
+		expect(inst.conflicts).toEqual([]);
+		expect(inst.field('crawler.timeout_secs')).toMatchObject({ value: 25, dirty: false });
+		expect(patches().map((p) => p.body)).toEqual([
+			{ crawler: { if_revision: 3, timeout_secs: 20 } },
+			{ crawler: { if_revision: 4, timeout_secs: 25 } }
+		]);
+	});
+
+	it('gates danger classes and fails closed, putting the value back', async () => {
+		vi.spyOn(console, 'error').mockImplementation(() => {});
+		inst.set('logging.data', 'full');
+		await flush();
+		expect(patches()).toHaveLength(0);
+		expect(inst.field('logging.data')).toMatchObject({ value: 'private', dirty: false });
+		expect(inst.errors).toEqual([{ message: expect.stringMatching(/confirmation/) }]);
+		const ask = vi.fn(async () => true);
+		inst.gate('privacy', ask);
+		inst.set('logging.data', 'full');
+		await flush();
+		expect(ask).toHaveBeenCalledTimes(1);
+		expect(patches()).toHaveLength(1);
+	});
+
+	it('offers no Undo for a secret', async () => {
+		inst.set('secrets.token', SECRET);
+		vi.advanceTimersByTime(300);
+		await flush();
+		expect(patches()).toHaveLength(1);
+		expect(inst.field('secrets.token').undoUntil).toBeUndefined();
+		expect(await inst.undo('secrets.token')).toEqual({ ok: false, reason: 'nothing' });
+		expect(patches()).toHaveLength(1);
 	});
 
 	it('has no drafts, and Save does nothing', async () => {
