@@ -252,7 +252,7 @@ pub(crate) async fn get_one(
                 entries.push(CollectionEntry {
                     added_at: item.added_at,
                     position: ordinal as i64,
-                    torrent: hit_row(&row, e),
+                    torrent: hit_row(&store, s.hot.as_deref(), &row, e)?,
                 });
             }
         }

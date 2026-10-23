@@ -92,6 +92,9 @@ pub(crate) fn slow(index: &SearchIndex, delay: Duration) -> Compiled {
         filters: Vec::new(),
         boosts: None,
         key: format!("slow{delay:?}"),
+        now: 0,
+        reads_hot: false,
+        hot: None,
     }
 }
 
@@ -113,6 +116,9 @@ pub(crate) fn tripwire(at: usize, token: &CancelToken) -> (Compiled, Arc<AtomicU
         filters: Vec::new(),
         boosts: None,
         key: format!("tripwire{at}"),
+        now: 0,
+        reads_hot: false,
+        hot: None,
     };
     (compiled, visits)
 }
@@ -204,4 +210,25 @@ fn spin(d: Duration) {
     while start.elapsed() < d {
         std::hint::spin_loop();
     }
+}
+
+/// [`index_with`] (3 segments) with hot columns: every torrent but each
+/// fifth scraped, with seeders, leechers and trackers varying by id.
+pub(crate) fn hot_index(n: u64) -> (Arc<SearchIndex>, Arc<lodestar_store::HotColumns>) {
+    let (index, _) = index_with(n, 3);
+    let hot = Arc::new(lodestar_store::HotColumns::new());
+    for id in 1..=n {
+        if id % 5 != 0 {
+            hot.set_swarm(
+                id,
+                lodestar_store::SwarmHot {
+                    seeders: (id * 37 % 23) as u32,
+                    leechers: (id % 7) as u32,
+                    trackers: (id % 4) as u32,
+                    dht: lodestar_store::NEVER,
+                },
+            );
+        }
+    }
+    (Arc::new(index.with_hot(hot.clone())), hot)
 }

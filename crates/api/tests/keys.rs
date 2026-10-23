@@ -83,6 +83,8 @@ fn fixture_with(frozen: bool) -> Fixture {
         user_data: Some(store.clone()),
         adult: Default::default(),
         insights: None,
+        hot: None,
+        events: None,
     };
     let guarded = Router::new()
         .merge(auth::key_or_session(
@@ -993,6 +995,8 @@ async fn without_user_data_keys_are_unavailable() {
         user_data: None,
         adult: Default::default(),
         insights: None,
+        hot: None,
+        events: None,
     };
     let app = Router::new().nest("/api/v1", router(state));
     let token = auth.setup_token().unwrap();
