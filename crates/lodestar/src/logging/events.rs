@@ -139,12 +139,13 @@ lodestar_log::catalogue! {
         message: "The log file reached the folder's total cap; file logging pauses until it rotates",
         fields: {},
     }
-    /// The logs folder belongs to another account and others can read it.
+    /// The logs folder isn't private (another account's on Unix; one
+    /// Lodestar didn't make on Windows), and it's left as it is.
     LOGGING_FOLDER_SHARED {
         id: "logging.folder_shared",
         component: System,
         level: Warn,
-        message: "The logs folder belongs to another account and isn't private; other users may read the log files",
+        message: "The logs folder wasn't made private by Lodestar and is left as it is; other users may read the log files",
         fields: { path: Path },
     }
     /// A rotated file couldn't be compressed or an old one deleted.

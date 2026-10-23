@@ -58,6 +58,10 @@ pub struct Index {
     /// When the run writing here was last alive (Unix seconds).
     #[serde(default)]
     pub alive_at: i64,
+    /// Lodestar made this folder and restricted its ACL (Windows), so it
+    /// isn't a shared one at the next start.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub restricted: bool,
     #[serde(skip)]
     path: PathBuf,
 }
@@ -260,6 +264,8 @@ pub enum Folder {
 /// refuses one anyone can write to without the sticky bit, where another
 /// account could replace the files.
 fn folder(dir: &Path) -> io::Result<Folder> {
+    #[cfg(windows)]
+    let existed = fs::symlink_metadata(dir).is_ok();
     let mut dirs = fs::DirBuilder::new();
     dirs.recursive(true);
     #[cfg(unix)]
@@ -290,13 +296,53 @@ fn folder(dir: &Path) -> io::Result<Folder> {
     }
     #[cfg(windows)]
     {
-        // It holds the first-run setup token: only its owner, SYSTEM and
-        // Administrators may read it.
-        lodestar_integrations::secret::restrict_dir_acl(dir)?;
+        // As on Unix, an existing folder keeps its ACL: restricting a
+        // chosen `D:\Downloads` would take Users' access to everything in
+        // it. One Lodestar made and restricted earlier says so in its index.
+        if existed {
+            return Ok(if Index::load(dir).restricted {
+                Folder::Private
+            } else {
+                Folder::Shared
+            });
+        }
+        // A folder Lodestar just made holds the first-run setup token:
+        // only its owner, SYSTEM and Administrators may read it. Failing
+        // that, file logging stays off, and a service operator, who sees no
+        // console, finds the reason beside the service's own.
+        if let Err(e) = lodestar_integrations::secret::restrict_dir_acl(dir) {
+            // Removed again (it's empty), so the next start doesn't take
+            // it for an existing folder and log into it unrestricted.
+            let _ = fs::remove_dir(dir);
+            service_log(&format!(
+                "file logging is off: the new logs folder's access couldn't be restricted ({e})"
+            ));
+            return Err(e);
+        }
+        let mut index = Index::load(dir);
+        index.restricted = true;
+        index.save()?;
         Ok(Folder::Private)
     }
     #[cfg(not(any(unix, windows)))]
     Ok(Folder::Shared)
+}
+
+/// Appends a line to `%SystemRoot%\Temp\lodestar-service.log`, where the
+/// Windows service and its installer write the reasons a service operator
+/// needs. The line names no path.
+#[cfg(windows)]
+fn service_log(why: &str) {
+    let Some(root) = std::env::var_os("SystemRoot") else {
+        return;
+    };
+    let path = Path::new(&root).join("Temp").join("lodestar-service.log");
+    let secs = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "{secs} logging: {why}");
+    }
 }
 
 fn last_byte(path: &Path) -> io::Result<Option<u8>> {

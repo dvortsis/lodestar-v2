@@ -22,12 +22,18 @@ NOT_YET_SWEPT names the files whose plain macros the follow-up sweep
 shrink: a listed file that no longer has a plain macro, or no longer
 exists, fails the check, so converting a file means taking it off.
 
-Usage: python3 .github/scripts/log_lint.py [repo root]
+Usage: python3 .github/scripts/log_lint.py [--base REF] [repo root]
+
+`--base REF` also checks that NOT_YET_SWEPT names nothing REF's copy
+doesn't (CI passes the pull request's base branch), so the list can't
+grow in a pull request.
 """
 
 from __future__ import annotations
 
+import ast
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -58,20 +64,61 @@ EXEMPT = {
 }
 
 MACRO_NAMES = r"trace|debug|info|warn|error|event|span|trace_span|debug_span|info_span|warn_span|error_span"
+# Bare, or through any path with a `tracing` segment: `tracing::warn!`,
+# `crate::tracing::warn!` (a re-export), `tracing::log::warn!`.
 LOG_MACROS = re.compile(
-    r"(?:(?<![\w:.])(?:::)?tracing\s*::\s*|(?<![\w:.]))"
+    r"(?:(?<![\w:.])(?:::)?(?:\w+\s*::\s*)*?tracing\s*::\s*(?:\w+\s*::\s*)*?|(?<![\w:.]))"
     rf"({MACRO_NAMES})"
     r"\s*!\s*[(\[{]"
 )
-# `use tracing::{warn, …}`, `use tracing::warn`, `use tracing as t`,
-# `use ::tracing::…`, `use tracing::*`, `extern crate tracing as t`.
-TRACING_IMPORT = re.compile(
-    r"\buse\s+(?:::)?tracing\s*(?:\bas\b"
-    rf"|::\s*\{{[^}}]*\b(?:{MACRO_NAMES}|instrument)\b"
-    rf"|::\s*(?:{MACRO_NAMES}|instrument)\b"
-    r"|::\s*\*)"
-    r"|\bextern\s+crate\s+tracing\s+as\b"
-)
+EXTERN_RENAME = re.compile(r"\bextern\s+crate\s+tracing\s+as\b")
+# What a `use` may not reach through `tracing`: a macro, `instrument`,
+# `log` (its `log` macros) or everything.
+IMPORTED = set(MACRO_NAMES.split("|")) | {"instrument", "log", "*"}
+USE_TOKEN = re.compile(r"::|[{},*]|\w+")
+
+
+def flatten(tokens: list[str], i: int = 0, prefix: tuple = ()) -> tuple[list[tuple[list[str], str | None]], int]:
+    """A `use` tree's paths, each with its `as` name: `{tracing::{self as
+    t, warn}}` is `[(["tracing"], "t"), (["tracing", "warn"], None)]`."""
+    out, segs = [], list(prefix)
+    while i < len(tokens):
+        t = tokens[i]
+        if t == "::":
+            i += 1
+        elif t == "{":
+            i += 1
+            while i < len(tokens) and tokens[i] != "}":
+                if tokens[i] == ",":
+                    i += 1
+                    continue
+                sub, i = flatten(tokens, i, tuple(segs))
+                out += sub
+            return out, i + 1
+        elif t in (",", "}"):
+            break
+        elif t == "as":
+            return [(segs, tokens[i + 1] if i + 1 < len(tokens) else "_")], i + 2
+        elif t == "self" and segs:
+            i += 1
+        else:
+            segs.append(t)
+            i += 1
+    return [(segs, None)], i
+
+
+def gets_around(segs: list[str], alias: str | None) -> bool:
+    """A `use` path that renames or re-exports `tracing`, or imports its
+    macros (from the crate root or a re-export: `crate::tracing::warn`)."""
+    for k, seg in enumerate(segs):
+        if seg == "tracing":
+            break
+        if seg not in ("crate", "self", "super"):
+            return False
+    else:
+        return False
+    rest = segs[k + 1 :]
+    return not rest or rest[0] in IMPORTED
 # `#[instrument]`, `#[tracing::instrument]`, `#[::tracing::instrument]`,
 # `#[cfg_attr(…, instrument(…))]`.
 INSTRUMENT = re.compile(r"(?:^|[\[(,\s:])(?:::)?(?:tracing\s*::\s*)?instrument\b")
@@ -187,7 +234,12 @@ def plain_macros(rel: str, clean: str) -> list[str]:
     found = []
     for m in LOG_MACROS.finditer(clean):
         found.append(f"{rel}:{line_of(m.start())}: plain `{m.group(1)}!`: use `log_event!` with a catalogued event")
-    for m in TRACING_IMPORT.finditer(clean):
+    for m in re.finditer(r"\buse\b", clean):
+        end = clean.find(";", m.end())
+        paths, _ = flatten(USE_TOKEN.findall(clean[m.end() : end if end >= 0 else len(clean)]))
+        if any(gets_around(segs, alias) for segs, alias in paths):
+            found.append(f"{rel}:{line_of(m.start())}: a `tracing` macro import: use `log_event!`")
+    for m in EXTERN_RENAME.finditer(clean):
         found.append(f"{rel}:{line_of(m.start())}: a `tracing` macro import: use `log_event!`")
     return found
 
@@ -212,13 +264,26 @@ def check_source(rel: str, code: str, swept: bool = True) -> list[str]:
     return findings
 
 
+LOG_DEP = re.compile(r"""^\s*(?:log\s*=|\[\s*[\w.-]*dependencies\s*\.\s*log\s*\])|\bpackage\s*=\s*["']log["']""")
+SECTION = re.compile(r"^\s*\[\s*([^\]]+?)\s*\]")
+
+
 def manifests(root: Path) -> list[str]:
-    """A dependency renamed from `tracing` in any crate's manifest."""
+    """A dependency renamed from `tracing`, or on the `log` crate (its
+    macros are another way round `log_event!`), in any crate's manifest.
+    Dev-dependencies serve tests only."""
     out = []
     for p in sorted(root.glob("crates/*/Cargo.toml")):
+        rel = p.relative_to(root).as_posix()
+        section = ""
         for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
-            if RENAMED_DEP.search(line.split("#", 1)[0]):
-                out.append(f"{p.relative_to(root).as_posix()}:{i}: `tracing` renamed: use `log_event!`")
+            code = line.split("#", 1)[0]
+            if m := SECTION.match(code):
+                section = m.group(1)
+            if RENAMED_DEP.search(code):
+                out.append(f"{rel}:{i}: `tracing` renamed: use `log_event!`")
+            if "dev-dependencies" not in section and LOG_DEP.search(code):
+                out.append(f"{rel}:{i}: the `log` crate: use `log_event!`")
     return out
 
 
@@ -245,9 +310,45 @@ def run(root: Path, not_yet: list[str] = NOT_YET_SWEPT) -> list[str]:
     return problems
 
 
+def listed_in(source: str) -> list[str] | None:
+    """The NOT_YET_SWEPT list in a copy of this script, or None."""
+    for node in ast.parse(source).body:
+        if (
+            isinstance(node, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == "NOT_YET_SWEPT" for t in node.targets)
+        ):
+            return list(ast.literal_eval(node.value))
+    return None
+
+
+def grown(base: list[str] | None, now: list[str]) -> list[str]:
+    """Entries `now` adds to `base`'s list (none when base has no list)."""
+    if base is None:
+        return []
+    return [f"{e}: added to NOT_YET_SWEPT: the list may only shrink" for e in now if e not in base]
+
+
+def base_list(root: Path, ref: str) -> list[str] | None:
+    shown = subprocess.run(
+        ["git", "-C", str(root), "show", f"{ref}:.github/scripts/log_lint.py"],
+        capture_output=True,
+        text=True,
+    )
+    if shown.returncode != 0:
+        # No such file at the base yet: nothing to compare with.
+        return None
+    return listed_in(shown.stdout)
+
+
 def main() -> int:
-    root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[2]
+    args = sys.argv[1:]
+    base = None
+    if args[:1] == ["--base"]:
+        base, args = args[1], args[2:]
+    root = Path(args[0]) if args else Path(__file__).resolve().parents[2]
     problems = run(root)
+    if base is not None:
+        problems.extend(grown(base_list(root, base), NOT_YET_SWEPT))
     for p in problems:
         print(p)
     if problems:
