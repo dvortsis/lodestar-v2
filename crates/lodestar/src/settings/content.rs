@@ -35,7 +35,7 @@ pub struct Content {
     pub torznab_adult: bool,
     /// Adult results in the Stremio add-on. Not used yet.
     pub stremio_adult: bool,
-    /// Adult torrents in exports. Not used yet.
+    /// Adult torrents in exports (`/export`).
     pub export_adult: bool,
 }
 
@@ -51,8 +51,8 @@ impl Section for Content {
         Field::new("show_adult")
             .file("content.show_adult")
             .env("LODESTAR_SHOW_ADULT"),
-        // Reserved for the output slices (Torznab, Stremio, export), off
-        // by default; nothing reads them yet.
+        // The outputs' own (Torznab, Stremio, export), off by default;
+        // export's is read by `follow_export`, the others are reserved.
         Field::new("torznab_adult"),
         Field::new("stremio_adult"),
         Field::new("export_adult"),
@@ -98,6 +98,12 @@ pub fn follow(rx: watch::Receiver<Content>) -> AdultVisibility {
     AdultVisibility::follow(move || rx.borrow().show_adult)
 }
 
+/// Export's own adult setting (`export_adult`, §20.9), followed live,
+/// for `/export`.
+pub fn follow_export(rx: watch::Receiver<Content>) -> lodestar_api::export::ExportAdult {
+    lodestar_api::export::ExportAdult(AdultVisibility::follow(move || rx.borrow().export_adult))
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -106,6 +112,21 @@ mod tests {
 
     fn confirm(v: Value) -> Result<(), SettingsError> {
         Content::confirm(v.as_object().unwrap())
+    }
+
+    #[test]
+    fn export_follows_its_own_setting_live() {
+        let (tx, rx) = watch::channel(Content::default());
+        let export = follow_export(rx.clone());
+        let search = follow(rx);
+        assert!(!export.0.shown());
+        tx.send_modify(|c| c.show_adult = true);
+        assert!(
+            search.shown() && !export.0.shown(),
+            "search's doesn't apply"
+        );
+        tx.send_modify(|c| c.export_adult = true);
+        assert!(export.0.shown());
     }
 
     #[test]
@@ -286,7 +307,7 @@ mod tests {
         }
 
         #[test]
-        fn the_reserved_output_settings_are_off_and_unused() {
+        fn the_output_settings_are_off_and_the_unwired_ones_say_so() {
             let dir = tempfile::tempdir().unwrap();
             let r = registry(dir.path(), &[]);
             let index = r.index();
@@ -300,7 +321,11 @@ mod tests {
                 let help = content.schema["properties"][f]["description"]
                     .as_str()
                     .unwrap();
-                assert!(help.contains("Not used yet"), "{f}: {help}");
+                assert_eq!(
+                    help.contains("Not used yet"),
+                    f != "export_adult",
+                    "{f}: {help}"
+                );
             }
         }
     }
