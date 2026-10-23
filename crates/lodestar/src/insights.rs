@@ -33,7 +33,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
-use lodestar_api::insights::{self as api, InsightsSource, OverviewCache};
+use lodestar_api::insights::{self as api, InsightsSource, OverviewCache, StageSnapshot};
 use lodestar_pipeline::Monitor;
 use lodestar_pipeline::metric::{self, coverage};
 use lodestar_search::{CommitHook, Committed, IndexStats};
@@ -100,6 +100,8 @@ pub struct Insights {
     cache: OverviewCache,
     /// When compaction is first considered, after start.
     compact_after: Duration,
+    /// The stage pages' snapshot ([`Insights::set_snapshot`]).
+    snapshot: std::sync::OnceLock<Box<dyn Fn() -> StageSnapshot + Send + Sync>>,
 }
 
 impl std::fmt::Debug for Insights {
@@ -131,7 +133,14 @@ impl Insights {
             floor_until: AtomicI64::new(0),
             cache: OverviewCache::default(),
             compact_after: COMPACT_AFTER,
+            snapshot: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Where the stage pages' snapshot comes from (the DHT's reply ratio);
+    /// set once, at start.
+    pub fn set_snapshot(&self, f: Box<dyn Fn() -> StageSnapshot + Send + Sync>) {
+        let _ = self.snapshot.set(f);
     }
 
     fn bump(&self) {
@@ -161,6 +170,12 @@ impl InsightsSource for Insights {
 
     fn cache(&self) -> &OverviewCache {
         &self.cache
+    }
+
+    fn stage_snapshot(&self) -> StageSnapshot {
+        self.snapshot
+            .get()
+            .map_or_else(StageSnapshot::default, |f| f())
     }
 
     fn seal_floor(&self) -> Option<i64> {
@@ -614,6 +629,21 @@ mod tests {
         assert_eq!(codes::metric::COVERAGE_CRAWL, coverage::CRAWL);
         assert_eq!(codes::metric::FUNNEL_EVENTS, metric::FUNNEL_EVENTS);
         assert_eq!(codes::metric::REMOVED, metric::REMOVED);
+        assert_eq!(codes::metric::HARVESTED, metric::HARVESTED);
+        assert_eq!(codes::metric::REDISCOVERED, metric::REDISCOVERED);
+        assert_eq!(codes::metric::DROPPED, metric::DROPPED);
+        assert_eq!(codes::BLOCKED, Loss::Blocked as u8);
+        use lodestar_pipeline::strategy;
+        for (code, name) in [
+            (strategy::SAMPLE, "sample"),
+            (strategy::GET_PEERS, "get_peers"),
+            (strategy::ANNOUNCE, "announce"),
+            (strategy::LOOKUP, "lookup"),
+            (strategy::REFETCH, "refetch"),
+        ] {
+            assert_eq!(codes::strategy_name(i64::from(code)), Some(name));
+        }
+        assert_eq!(codes::STRATEGIES.len(), 5);
     }
 
     /// The store's delete trigger writes `metric::REMOVED` and

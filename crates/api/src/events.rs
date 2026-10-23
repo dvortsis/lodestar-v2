@@ -49,8 +49,8 @@ use utoipa::OpenApi;
 
 use crate::dto::error::ErrorEnvelope;
 use crate::dto::events::{
-    AlertsEvent, CrawlerEvent, Event, EventsQuery, RebuildEvent, RebuildPhase, ResyncEvent,
-    ResyncReason, SettingsEvent, Topic, TorrentsEvent,
+    AlertsEvent, CrawlerEvent, Event, EventsQuery, InsightsEvent, InsightsStages, RebuildEvent,
+    RebuildPhase, ResyncEvent, ResyncReason, SettingsEvent, Topic, TorrentsEvent,
 };
 use crate::error::{ApiError, ApiResult};
 use crate::extract::Peer;
@@ -84,6 +84,9 @@ pub struct EventsConfig {
     pub crawler_every: Duration,
     /// Rebuild progress is checked this often, while anyone subscribes.
     pub rebuild_every: Duration,
+    /// An `insights` event this often, while anyone subscribes (§10.9.6:
+    /// every 30 s).
+    pub insights_every: Duration,
     /// Concurrent streams in all...
     pub max_streams: usize,
     /// ...and per session (the UI opens one per tab).
@@ -100,6 +103,7 @@ impl Default for EventsConfig {
             retry: Duration::from_secs(5),
             crawler_every: Duration::from_secs(5),
             rebuild_every: Duration::from_secs(5),
+            insights_every: Duration::from_secs(30),
             max_streams: 64,
             max_per_session: 4,
         }
@@ -130,6 +134,10 @@ pub struct EventSources {
     /// "Show adult content", read live when a `torrents` event is made:
     /// the API state's own [`AdultVisibility`]. The default hides Adult.
     pub adult: AdultVisibility,
+    /// The API's state, for `insights`: each event is the default `7d`
+    /// overview's stage strip, built as `GET /insights/overview` builds
+    /// it (cached per flush). `None`: nothing publishes `insights`.
+    pub insights: Option<ApiState>,
 }
 
 impl std::fmt::Debug for EventSources {
@@ -139,6 +147,7 @@ impl std::fmt::Debug for EventSources {
             .field("crawler", &self.crawler.is_some())
             .field("rebuild", &self.rebuild)
             .field("adult", &self.adult)
+            .field("insights", &self.insights.is_some())
             .finish()
     }
 }
@@ -437,6 +446,13 @@ impl EventHub {
             tasks.push(tokio::spawn(poll_rebuild(
                 Arc::downgrade(&hub),
                 handle,
+                hub.closed.subscribe(),
+            )));
+        }
+        if let Some(state) = sources.insights {
+            tasks.push(tokio::spawn(poll_insights(
+                Arc::downgrade(&hub),
+                state,
                 hub.closed.subscribe(),
             )));
         }
@@ -754,6 +770,46 @@ async fn poll_crawler(
         let Some(hub) = hub.upgrade() else { return };
         if hub.listeners(Topic::Crawler) > 0 {
             hub.publish(&Event::Crawler(crawler.snapshot()));
+        }
+    }
+}
+
+/// Publishes the default overview's stage strip every `insights_every`
+/// while anyone listens (§10.9.6). A client showing another range
+/// refetches its own on each event.
+async fn poll_insights(
+    hub: std::sync::Weak<EventHub>,
+    state: ApiState,
+    mut closed: watch::Receiver<bool>,
+) {
+    let every = match hub.upgrade() {
+        Some(h) => h.config.insights_every,
+        None => return,
+    };
+    let mut tick = tokio::time::interval(every);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            biased;
+            _ = closed.wait_for(|c| *c) => return,
+            _ = tick.tick() => {}
+        }
+        let Some(hub) = hub.upgrade() else { return };
+        if hub.listeners(Topic::Insights) == 0 {
+            continue;
+        }
+        // Built outside the hub; a failed build skips this tick.
+        if let Ok(r) = crate::insights::overview_response(&state, Default::default()).await {
+            hub.publish(&Event::Insights(InsightsEvent {
+                stages: InsightsStages {
+                    discover: r.stages.discover,
+                    fetch: r.stages.fetch,
+                    index: r.stages.index,
+                    serve: r.stages.serve,
+                    understand: r.stages.understand,
+                },
+                updated_at: r.updated_at,
+            }));
         }
     }
 }
