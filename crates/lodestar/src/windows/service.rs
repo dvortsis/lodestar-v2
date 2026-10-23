@@ -56,6 +56,20 @@ pub fn default_data_dir_unless_set(config: &mut Config, default_dir: &Path) {
     }
 }
 
+/// Whether two paths name the same folder, as Windows compares them: the
+/// real paths when both exist (so case, 8.3 names and `..` don't matter),
+/// else case-insensitively with `/` as `\` and no trailing separator.
+pub fn same_dir(a: &Path, b: &Path) -> bool {
+    let norm = |p: &Path| {
+        let p = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        p.to_string_lossy()
+            .replace('/', "\\")
+            .trim_end_matches('\\')
+            .to_lowercase()
+    };
+    norm(a) == norm(b)
+}
+
 /// The config path when the arguments are a service command line (none,
 /// `serve`, and an optional `--config <path>`), else `None`: every other
 /// command runs as usual, without asking the SCM anything.
@@ -188,10 +202,13 @@ mod scm {
         let own = acl::service_sid(name).ok();
         let code = match load(own.as_deref()) {
             // Refused before anything was read or written in the default
-            // folder, so there's nowhere safe to log it: the exit code (3)
-            // says so.
-            None => REFUSED,
-            Some((config, data_dir)) => {
+            // folder, so the reason goes outside it, beside the
+            // installer's log; the exit code (3) says it was refused.
+            Err(why) => {
+                log_refusal(&why);
+                REFUSED
+            }
+            Ok((config, data_dir)) => {
                 let _ = std::env::set_current_dir(&data_dir);
                 init_logging(
                     &data_dir,
@@ -225,11 +242,11 @@ mod scm {
     /// The config and the data folder, with `%ProgramData%\Lodestar` made
     /// private ([`acl`]) before anything in it is read, whenever it's used:
     /// for the config file when neither `--config` nor `LODESTAR_DATA_DIR`
-    /// points elsewhere, and for the data when the config doesn't. `None`
-    /// when it's used and isn't private.
-    fn load(own: Option<&str>) -> Option<(Result<Config, String>, PathBuf)> {
+    /// points elsewhere, and for the data when the config doesn't. An
+    /// error says why it's used and isn't private.
+    fn load(own: Option<&str>) -> Result<(Result<Config, String>, PathBuf), String> {
         let default_dir = super::default_data_dir(std::env::var("ProgramData").ok());
-        let secure = || acl::secure_dir(&default_dir, own, &acl::Windows { own_sid: own }).ok();
+        let secure = || acl::secure_dir(&default_dir, own, &acl::Windows { own_sid: own });
         let env = |k: &str| std::env::var(k).ok();
         let explicit = CONFIG_PATH.get().cloned().flatten();
         let elsewhere = explicit.is_some() || env("LODESTAR_DATA_DIR").is_some();
@@ -247,10 +264,32 @@ mod scm {
         let data_dir = config
             .as_ref()
             .map_or(default_dir.clone(), |c| c.data_dir.clone());
-        if elsewhere && data_dir == default_dir {
+        if elsewhere && super::same_dir(&data_dir, &default_dir) {
             secure()?;
         }
-        Some((config, data_dir))
+        Ok((config, data_dir))
+    }
+
+    /// Appends a refusal's reason to `%SystemRoot%\Temp\lodestar-service.log`,
+    /// where the installer logs too. It holds only paths and SIDs.
+    fn log_refusal(why: &str) {
+        use std::io::Write;
+        let Some(root) = std::env::var_os("SystemRoot") else {
+            return;
+        };
+        let path = std::path::Path::new(&root)
+            .join("Temp")
+            .join("lodestar-service.log");
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = writeln!(f, "{secs} service refused to start: {why}");
+        }
     }
 
     /// Serialises status reports, so a progress tick never follows
@@ -443,6 +482,20 @@ mod tests {
             config_path(Some("x.toml".into()), &default, none),
             Some("x.toml".into())
         );
+    }
+
+    #[test]
+    fn compares_folders_as_windows_does() {
+        let p = |s: &str| PathBuf::from(s);
+        let pd = p(r"C:\ProgramData\Lodestar");
+        assert!(same_dir(&pd, &p(r"c:\programdata\lodestar")));
+        assert!(same_dir(&pd, &p("C:/ProgramData/Lodestar/")));
+        assert!(!same_dir(&pd, &p(r"D:\Lodestar")));
+        // Existing paths compare by their real path.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("data");
+        std::fs::create_dir(&dir).unwrap();
+        assert!(same_dir(&dir, &dir.join("..").join("data")));
     }
 
     #[test]

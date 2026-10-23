@@ -354,6 +354,62 @@ fn runs_as_its_virtual_account_in_the_installers_folder() {
         "{stopped}"
     );
     assert_eq!(std::fs::read_to_string(&log_path).unwrap(), before);
+    // The reason goes outside the folder, beside the installer's log.
+    let root_dir = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+    let reasons = std::fs::read_to_string(
+        Path::new(&root_dir)
+            .join("Temp")
+            .join("lodestar-service.log"),
+    )
+    .unwrap_or_default();
+    assert!(
+        reasons.contains(&format!("{} isn't private", data.display())),
+        "{reasons}"
+    );
+}
+
+/// Without the installer, the virtual account creates the folder itself:
+/// private from the start, owned by the service, and used.
+#[test]
+fn its_virtual_account_creates_a_missing_folder() {
+    if !can_register() {
+        return;
+    }
+    let root = Path::new(r"C:\").join(format!("lodestar-test-new-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let bin = root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let exe = bin.join("lodestar.exe");
+    std::fs::copy(env!("CARGO_BIN_EXE_lodestar"), &exe).unwrap();
+    let program_data = root.join("pd");
+    std::fs::create_dir_all(&program_data).unwrap();
+    let data = program_data.join("Lodestar");
+
+    let name = format!("LodestarVn{}", std::process::id());
+    let port = free_port();
+    let account = format!("NT SERVICE\\{name}");
+    let service = register(
+        &name,
+        &exe,
+        Some(&account),
+        &program_data,
+        port,
+        Some(root.clone()),
+    );
+    start_and_check(&service, port, &data.join("logs").join("lodestar.log"));
+    let sid = service_sid(&name);
+    let sd = sddl(&data);
+    assert!(sd.starts_with(&format!("O:{sid}")), "{sd}");
+    assert!(sd.contains("D:PAI") || sd.contains("D:P("), "{sd}");
+    for other in [";BU)", ";AU)", ";LS)", ";WD)", "ID;"] {
+        assert!(!sd.contains(other), "{other} in {sd}");
+    }
+    let stopped = stop(&service);
+    assert_eq!(
+        field(&stopped, "SERVICE_EXIT_CODE").as_deref(),
+        Some("0"),
+        "{stopped}"
+    );
 }
 
 #[test]

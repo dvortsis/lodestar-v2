@@ -4,8 +4,9 @@
 //! session key (`auth.json`), its log (with the setup token) and its
 //! database there, and the service reads `config.toml` from it, so before
 //! anything is read or written the folder must be private:
-//! - its owner is `SYSTEM` or `Administrators`: an owner can always
-//!   rewrite the ACL;
+//! - its owner is `SYSTEM`, `Administrators` or the service's own SID
+//!   (`NT SERVICE\<name>`, which owns a folder it created): an owner can
+//!   always rewrite the ACL;
 //! - its DACL is protected (nothing inherited) and allows only those two
 //!   and the service's own SID (`NT SERVICE\<name>`). A shared account
 //!   such as LocalService isn't enough: many other services run as it;
@@ -19,14 +20,15 @@
 //! folder passes, as a hint for the installer only: nothing trusts it.
 //!
 //! This is checked at every start. A missing folder is created with its
-//! final ACL in one step. A folder that isn't private is taken over (its
-//! owner and ACL, the folder alone, never the tree beneath it) only while
-//! it's empty; otherwise the service refuses to start.
+//! final ACL in one step. The service never repairs a folder: one that
+//! isn't private is refused, and only the installer secures an existing
+//! folder. (A user who created the folder can keep a handle that survives
+//! any owner or ACL change made afterwards.)
 //!
 //! The policy and the SDDL parsing are plain code tested on every OS;
 //! [`Windows`] is the system side. The workspace forbids `unsafe`, so it
-//! reads ACLs with PowerShell's `Get-Acl` (SDDL isn't localised) and sets
-//! them with `icacls`, both by absolute path.
+//! reads ACLs with PowerShell's `Get-Acl` (SDDL isn't localised) and
+//! creates the folder through .NET, both by absolute path.
 
 use std::io;
 use std::path::Path;
@@ -177,55 +179,31 @@ pub fn parse_inspection(text: &str) -> Result<Inspection, String> {
     })
 }
 
-/// What to do with an inspected folder.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Verdict {
-    Private,
-    /// Not private but empty: safe to take over (the folder alone).
-    TakeOver(String),
-    Refuse(String),
-}
-
-pub fn verdict(seen: &Inspection, own_sid: Option<&str>) -> Verdict {
+/// Why an inspected folder isn't private, or `Ok` when it is.
+pub fn verdict(seen: &Inspection, own_sid: Option<&str>) -> Result<(), String> {
     if seen.folder.link {
-        return Verdict::Refuse("it's a link or junction; Lodestar only uses a real folder".into());
+        return Err("it's a link or junction; Lodestar only uses a real folder".into());
     }
     if let Some(link) = seen.links.first() {
-        return Verdict::Refuse(format!("{link} is a link or junction inside it"));
+        return Err(format!("{link} is a link or junction inside it"));
     }
     for e in &seen.entries {
         if e.link {
-            return Verdict::Refuse(format!("{} in it is a link or junction", e.name));
+            return Err(format!("{} in it is a link or junction", e.name));
         }
-        match parse_sddl(&e.sddl) {
-            Ok(d) if trusted(&d.owner, own_sid) => {}
-            Ok(d) => {
-                return Verdict::Refuse(format!(
-                    "{} in it belongs to {}, so another user could have put it there",
-                    e.name, d.owner
-                ));
-            }
-            Err(why) => return Verdict::Refuse(format!("{}: {why}", e.name)),
+        let d = parse_sddl(&e.sddl).map_err(|why| format!("{}: {why}", e.name))?;
+        if !trusted(&d.owner, own_sid) {
+            return Err(format!(
+                "{} in it belongs to {}, so another user could have put it there",
+                e.name, d.owner
+            ));
         }
     }
-    let why = match parse_sddl(&seen.folder.sddl) {
-        Err(why) => why,
-        // The folder's owner must be SYSTEM or Administrators, as the
-        // installer makes it: not even the service.
-        Ok(d) if !trusted(&d.owner, None) => format!("it belongs to {}", d.owner),
-        Ok(d) => match check_dacl(&d.dacl, own_sid) {
-            Ok(()) => return Verdict::Private,
-            Err(why) => why,
-        },
-    };
-    if seen.entries.is_empty() {
-        Verdict::TakeOver(why)
-    } else {
-        Verdict::Refuse(format!(
-            "it isn't private ({why}) and isn't empty, so another user could have put files in \
-             it. Move its contents somewhere else, check them, and start the service again"
-        ))
+    let d = parse_sddl(&seen.folder.sddl)?;
+    if !trusted(&d.owner, own_sid) {
+        return Err(format!("it belongs to {}", d.owner));
     }
+    check_dacl(&d.dacl, own_sid)
 }
 
 /// The system side of [`secure_dir`].
@@ -234,13 +212,15 @@ pub trait Ops {
     fn inspect(&self, dir: &Path) -> io::Result<Option<Inspection>>;
     /// Creates the folder with its final ACL in one step.
     fn create(&self, dir: &Path) -> io::Result<()>;
-    /// Gives the folder (the folder alone, not what's in it, and a link
-    /// itself, never its target) owner `Administrators` and the private ACL.
-    fn take_over(&self, dir: &Path) -> io::Result<()>;
 }
 
+/// What a refusal tells the administrator to do.
+pub const REPAIR: &str = "Repair the installation: run the Lodestar installer's Repair, or \
+                          delete the folder as an administrator and start the service again";
+
 /// Makes sure `dir` is private for the service with `own_sid`, creating
-/// it if needed. An error says why the service won't use it.
+/// it if needed. It never changes an existing folder. An error says why
+/// the service won't use it.
 pub fn secure_dir(dir: &Path, own_sid: Option<&str>, ops: &impl Ops) -> Result<(), String> {
     let shown = dir.display();
     let inspect = || {
@@ -255,39 +235,12 @@ pub fn secure_dir(dir: &Path, own_sid: Option<&str>, ops: &impl Ops) -> Result<(
             inspect()?.ok_or_else(|| format!("{shown} vanished after it was created"))?
         }
     };
-    let marked = || {
-        let marker = dir.join(MARKER);
-        if !marker.exists() {
-            let _ = std::fs::write(marker, "Lodestar checked this folder's permissions.\r\n");
-        }
-    };
-    match verdict(&seen, own_sid) {
-        Verdict::Private => {
-            marked();
-            Ok(())
-        }
-        Verdict::Refuse(why) => Err(format!("{shown}: {why}.")),
-        Verdict::TakeOver(why) => {
-            ops.take_over(dir).map_err(|e| {
-                format!(
-                    "{shown} isn't private ({why}), and Lodestar couldn't fix it: {e}. \
-                     Reinstall Lodestar, or give the folder the permissions the installer \
-                     sets (owner Administrators; full control for SYSTEM, Administrators \
-                     and NT SERVICE\\Lodestar only; nothing inherited)."
-                )
-            })?;
-            let again = inspect()?.ok_or_else(|| format!("{shown} vanished"))?;
-            match verdict(&again, own_sid) {
-                Verdict::Private => {
-                    marked();
-                    Ok(())
-                }
-                Verdict::Refuse(why) | Verdict::TakeOver(why) => {
-                    Err(format!("{shown} still isn't private: {why}."))
-                }
-            }
-        }
+    verdict(&seen, own_sid).map_err(|why| format!("{shown} isn't private: {why}. {REPAIR}."))?;
+    let marker = dir.join(MARKER);
+    if !marker.exists() {
+        let _ = std::fs::write(marker, "Lodestar checked this folder's permissions.\r\n");
     }
+    Ok(())
 }
 
 /// The private DACL, for creating the folder.
@@ -297,28 +250,6 @@ pub fn private_sddl(own_sid: Option<&str>) -> String {
         s.push_str(&format!("(A;OICI;FA;;;{sid})"));
     }
     s
-}
-
-/// The `icacls` runs that take a folder over, each a list of arguments
-/// after the path: the owner, then a reset to inherited entries only
-/// (dropping every explicit one, which `/grant:r` alone leaves), then the
-/// protected ACL. `/L` acts on a link itself, never its target, and
-/// there's no `/T`: nothing beneath the folder is touched.
-pub fn take_over_steps(own_sid: Option<&str>) -> Vec<Vec<String>> {
-    let strings = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-    let mut grant = strings(&[
-        "/inheritance:r",
-        "/grant:r",
-        "*S-1-5-18:(OI)(CI)F",
-        "*S-1-5-32-544:(OI)(CI)F",
-    ]);
-    grant.extend(own_sid.map(|sid| format!("*{sid}:(OI)(CI)F")));
-    grant.extend(strings(&["/L", "/Q"]));
-    vec![
-        strings(&["/setowner", "*S-1-5-32-544", "/L", "/Q"]),
-        strings(&["/reset", "/L", "/Q"]),
-        grant,
-    ]
 }
 
 /// The service SID in `sc showsid` output (its labels are translated; the
@@ -351,8 +282,9 @@ foreach ($l in Get-ChildItem -LiteralPath $p -Force -Recurse -Attributes Reparse
 }";
 
 /// Creates the folder with its ACL in one call (no window with the
-/// inherited one). Needs Full Language Mode; [`Windows::create`] falls
-/// back to a plain create and a take-over.
+/// inherited one). Needs Full Language Mode. On a path that exists by
+/// then (a race), it changes nothing, and the inspection that follows
+/// judges what's there.
 pub const CREATE_SCRIPT: &str = "$ErrorActionPreference = 'Stop'
 $s = New-Object System.Security.AccessControl.DirectorySecurity
 $s.SetSecurityDescriptorSddlForm($env:LODESTAR_ACL_SDDL)
@@ -404,41 +336,9 @@ impl Ops for Windows<'_> {
     }
 
     fn create(&self, dir: &Path) -> io::Result<()> {
-        if self.powershell(CREATE_SCRIPT, dir).is_ok() {
-            return Ok(());
-        }
-        // Constrained Language Mode: create, then fix the ACL. The
-        // inspection afterwards catches anything added in between.
-        std::fs::create_dir(dir)?;
-        self.take_over(dir)
-    }
-
-    fn take_over(&self, dir: &Path) -> io::Result<()> {
-        let mut steps = take_over_steps(self.own_sid).into_iter();
-        // The owner change needs rights the virtual account lacks; for a
-        // folder it already owns, the ACL step is enough, and the
-        // inspection afterwards judges the result.
-        if let Some(own) = steps.next() {
-            let _ = icacls(dir, &own);
-        }
-        steps.try_for_each(|args| icacls(dir, &args))
-    }
-}
-
-#[cfg(windows)]
-fn icacls(dir: &Path, args: &[String]) -> io::Result<()> {
-    let mut cmd = super::system32_command("icacls.exe")
-        .ok_or_else(|| io::Error::other("SystemRoot isn't set"))?;
-    let out = cmd.arg(dir).args(args).output()?;
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!(
-            "icacls {}: {} {}",
-            args.join(" "),
-            String::from_utf8_lossy(&out.stdout).trim(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        )))
+        // Under Constrained Language Mode this call isn't allowed; the
+        // service then refuses, and the installer has to create the folder.
+        self.powershell(CREATE_SCRIPT, dir).map(drop)
     }
 }
 
@@ -553,47 +453,54 @@ mod tests {
         let admin_file = item("config.toml", "O:BAD:AI(A;ID;FA;;;SY)");
         let user_file = item("config.toml", "O:S-1-5-21-9-9-9-1001D:AI(A;ID;FA;;;SY)");
         let v = |s: &Inspection| verdict(s, Some(OWN));
-        assert_eq!(v(&seen(PRIVATE, &[])), Verdict::Private);
-        assert_eq!(
-            v(&seen(PRIVATE, &[own_file.clone(), admin_file])),
-            Verdict::Private
-        );
+        let refused = |s: &Inspection, why: &str| {
+            let err = v(s).unwrap_err();
+            assert!(err.contains(why), "{err}");
+        };
+        assert_eq!(v(&seen(PRIVATE, &[])), Ok(()));
+        assert_eq!(v(&seen(PRIVATE, &[own_file.clone(), admin_file])), Ok(()));
+        // The service owns a folder it created itself.
+        let service_owned =
+            format!("O:{OWN}D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;{OWN})");
+        assert_eq!(v(&seen(&service_owned, &[])), Ok(()));
         // A planted entry is refused, even in a private folder.
-        assert!(
-            matches!(v(&seen(PRIVATE, std::slice::from_ref(&user_file))), Verdict::Refuse(w) if w.contains("belongs to S-1-5-21"))
+        refused(
+            &seen(PRIVATE, std::slice::from_ref(&user_file)),
+            "belongs to S-1-5-21",
         );
         let link = Item {
             link: true,
             sddl: String::new(),
             ..item("logs", "")
         };
-        assert!(matches!(v(&seen(PRIVATE, &[link])), Verdict::Refuse(w) if w.contains("link")));
-        // Not private but empty: taken over; not empty: refused.
-        assert!(matches!(v(&seen(INHERITED, &[])), Verdict::TakeOver(_)));
-        assert!(
-            matches!(v(&seen(INHERITED, &[own_file]), ), Verdict::Refuse(w) if w.contains("isn't empty"))
-        );
+        refused(&seen(PRIVATE, &[link]), "logs in it is a link");
+        // A folder that isn't private is refused, empty or not: the
+        // service never repairs one.
+        refused(&seen(INHERITED, &[]), "belongs to S-1-5-21");
+        let admin_open = "O:BAD:AI(A;OICIID;FA;;;SY)(A;OICIID;0x1200a9;;;BU)";
+        refused(&seen(admin_open, &[]), "inherits");
+        refused(&seen(admin_open, &[own_file]), "inherits");
         // A user-owned folder with a private-looking DACL isn't private.
-        let user_owned = "O:S-1-5-21-9-9-9-1001D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)";
-        assert!(
-            matches!(v(&seen(user_owned, &[])), Verdict::TakeOver(w) if w.contains("belongs to"))
+        refused(
+            &seen(
+                "O:S-1-5-21-9-9-9-1001D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)",
+                &[],
+            ),
+            "belongs to S-1-5-21",
         );
-        assert!(matches!(
-            v(&seen(user_owned, &[user_file])),
-            Verdict::Refuse(_)
-        ));
-        // The folder must belong to SYSTEM or Administrators, as the
-        // installer makes it, not even to the service.
-        let service_owned = format!("O:{OWN}D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)");
-        assert!(matches!(v(&seen(&service_owned, &[])), Verdict::TakeOver(w) if w.contains(OWN)));
+        // Another service's SID owns nothing here.
+        refused(
+            &seen("O:S-1-5-80-9-9-9-9-9D:PAI(A;OICI;FA;;;SY)", &[]),
+            "belongs to S-1-5-80-9",
+        );
         // A link anywhere beneath it is refused.
         let mut deep = seen(PRIVATE, &[]);
         deep.links.push(r"C:\ProgramData\Lodestar\index\v4".into());
-        assert!(matches!(v(&deep), Verdict::Refuse(w) if w.contains(r"index\v4 is a link")));
+        refused(&deep, r"index\v4 is a link");
         // A linked folder is refused outright.
         let mut linked = seen(PRIVATE, &[]);
         linked.folder.link = true;
-        assert!(matches!(v(&linked), Verdict::Refuse(w) if w.contains("link")));
+        refused(&linked, "link or junction");
     }
 
     #[test]
@@ -623,7 +530,6 @@ mod tests {
     struct Fake {
         inspections: RefCell<Vec<Option<Inspection>>>,
         calls: RefCell<Vec<&'static str>>,
-        fail_take_over: bool,
     }
 
     impl Fake {
@@ -631,7 +537,6 @@ mod tests {
             Fake {
                 inspections: RefCell::new(inspections),
                 calls: RefCell::new(Vec::new()),
-                fail_take_over: false,
             }
         }
     }
@@ -645,14 +550,6 @@ mod tests {
             self.calls.borrow_mut().push("create");
             Ok(())
         }
-        fn take_over(&self, _: &Path) -> io::Result<()> {
-            self.calls.borrow_mut().push("take_over");
-            if self.fail_take_over {
-                Err(io::Error::other("access denied"))
-            } else {
-                Ok(())
-            }
-        }
     }
 
     fn secure(fake: &Fake) -> Result<(), String> {
@@ -664,6 +561,9 @@ mod tests {
         let fake = Fake::new(vec![None, Some(seen(PRIVATE, &[]))]);
         assert_eq!(secure(&fake), Ok(()));
         assert_eq!(*fake.calls.borrow(), ["inspect", "create", "inspect"]);
+        // What's there after the create is judged like any folder.
+        let fake = Fake::new(vec![None, Some(seen(INHERITED, &[]))]);
+        assert!(secure(&fake).unwrap_err().contains("isn't private"));
     }
 
     #[test]
@@ -674,67 +574,19 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_open_folder_is_taken_over_and_rechecked() {
-        let fake = Fake::new(vec![Some(seen(INHERITED, &[])), Some(seen(PRIVATE, &[]))]);
-        assert_eq!(secure(&fake), Ok(()));
-        assert_eq!(*fake.calls.borrow(), ["inspect", "take_over", "inspect"]);
-        // Something added while it was taken over is caught.
-        let planted = item("logs", "O:S-1-5-21-9-9-9-1001D:AI");
-        let fake = Fake::new(vec![
-            Some(seen(INHERITED, &[])),
-            Some(seen(PRIVATE, &[planted])),
-        ]);
-        assert!(secure(&fake).unwrap_err().contains("still isn't private"));
-        // A take-over that didn't stick is refused.
-        let fake = Fake::new(vec![Some(seen(INHERITED, &[])), Some(seen(INHERITED, &[]))]);
-        assert!(secure(&fake).unwrap_err().contains("still isn't private"));
-    }
-
-    #[test]
-    fn a_folder_that_cant_be_fixed_is_refused() {
-        let mut fake = Fake::new(vec![Some(seen(INHERITED, &[]))]);
-        fake.fail_take_over = true;
-        let err = secure(&fake).unwrap_err();
-        assert!(
-            err.contains("belongs to") && err.contains("access denied"),
-            "{err}"
-        );
-    }
-
-    #[test]
-    fn a_non_empty_open_folder_is_refused_untouched() {
-        let fake = Fake::new(vec![Some(seen(
-            INHERITED,
-            &[item("config.toml", "O:BAD:AI")],
-        ))]);
-        assert!(secure(&fake).unwrap_err().contains("isn't empty"));
-        assert_eq!(*fake.calls.borrow(), ["inspect"]);
-    }
-
-    #[test]
-    fn takes_over_the_folder_alone() {
-        let steps = take_over_steps(Some(OWN));
-        assert_eq!(steps[0], ["/setowner", "*S-1-5-32-544", "/L", "/Q"]);
-        assert_eq!(steps[1], ["/reset", "/L", "/Q"]);
-        assert_eq!(
-            steps[2],
-            [
-                "/inheritance:r",
-                "/grant:r",
-                "*S-1-5-18:(OI)(CI)F",
-                "*S-1-5-32-544:(OI)(CI)F",
-                "*S-1-5-80-1-2-3-4-5:(OI)(CI)F",
-                "/L",
-                "/Q"
-            ]
-        );
-        assert!(steps.iter().flatten().all(|a| a != "/T"));
-        assert_eq!(take_over_steps(None)[2].len(), 6);
-        assert_eq!(
-            private_sddl(Some(OWN)),
-            "D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;S-1-5-80-1-2-3-4-5)"
-        );
-        assert_eq!(check_dacl(&private_sddl(Some(OWN))[2..], Some(OWN)), Ok(()));
+    fn a_folder_that_isnt_private_is_refused_untouched() {
+        // Foreign-owned and empty, then SYSTEM- or Administrators-owned
+        // but open: both refused, nothing changed, the repair named.
+        let admin_open = "O:SYD:AI(A;OICIID;FA;;;SY)(A;OICIID;0x1200a9;;;BU)";
+        for folder in [INHERITED, admin_open] {
+            let fake = Fake::new(vec![Some(seen(folder, &[]))]);
+            let err = secure(&fake).unwrap_err();
+            assert!(
+                err.contains("isn't private") && err.contains("Repair"),
+                "{err}"
+            );
+            assert_eq!(*fake.calls.borrow(), ["inspect"]);
+        }
     }
 
     #[test]
@@ -773,25 +625,25 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn creates_inspects_and_takes_over_for_real() {
+    fn creates_and_refuses_for_real() {
         if !admin() {
             return;
         }
-        // `icacls` grants only to accounts it can resolve, so the test
-        // stands in a service every Windows has for Lodestar's (which the
-        // installer registers before the service first runs).
+        // A service every Windows has stands in for Lodestar's, so icacls
+        // can name it.
         let sid = service_sid("EventLog").unwrap();
         assert!(sid.starts_with("S-1-5-80-"), "{sid}");
         let ops = Windows {
             own_sid: Some(&sid),
         };
         let tmp = tempfile::tempdir().unwrap();
+        let sddl_of = |p: &Path| ops.inspect(p).unwrap().unwrap().folder.sddl;
 
         // Created with its final ACL.
         let dir = tmp.path().join("created");
         secure_dir(&dir, Some(&sid), &ops).unwrap();
         let seen = ops.inspect(&dir).unwrap().unwrap();
-        assert_eq!(verdict(&seen, Some(&sid)), Verdict::Private, "{seen:?}");
+        assert_eq!(verdict(&seen, Some(&sid)), Ok(()), "{seen:?}");
         assert!(seen.folder.sddl.contains(&sid), "{seen:?}");
         std::fs::write(dir.join("auth.json"), "{}").unwrap();
         let acl = run("icacls.exe", &[dir.join("auth.json").as_os_str()]);
@@ -800,55 +652,47 @@ mod tests {
         secure_dir(&dir, Some(&sid), &ops).unwrap();
         // Another service's SID isn't this one's.
         let other = service_sid("LodestarOther").unwrap();
-        assert!(
-            secure_dir(
-                &dir,
-                Some(&other),
-                &Windows {
-                    own_sid: Some(&other)
-                }
-            )
-            .is_err()
-        );
+        let other_ops = Windows {
+            own_sid: Some(&other),
+        };
+        assert!(secure_dir(&dir, Some(&other), &other_ops).is_err());
 
-        // An inherited, empty folder is taken over.
+        // An inherited, empty folder is refused, and left as it was.
         let open = tmp.path().join("open");
         std::fs::create_dir(&open).unwrap();
-        secure_dir(&open, Some(&sid), &ops).unwrap();
-        assert_eq!(
-            verdict(&ops.inspect(&open).unwrap().unwrap(), Some(&sid)),
-            Verdict::Private
-        );
+        let before = sddl_of(&open);
+        let err = secure_dir(&open, Some(&sid), &ops).unwrap_err();
+        assert!(err.contains("inherits"), "{err}");
+        assert_eq!(sddl_of(&open), before);
 
-        // A folder owned by someone else (Users here) with a private-looking
-        // ACL and something in it is refused, and left as it was.
+        // So is a folder owned by someone else (Users here) with a
+        // private-looking ACL, empty or not.
         let foreign = tmp.path().join("foreign");
         std::fs::create_dir(&foreign).unwrap();
-        std::fs::write(foreign.join("config.toml"), "").unwrap();
-        run(
-            "icacls.exe",
-            &[
-                foreign.as_os_str(),
-                "/inheritance:r".as_ref(),
-                "/grant:r".as_ref(),
-                "*S-1-5-18:(OI)(CI)F".as_ref(),
-                "*S-1-5-32-544:(OI)(CI)F".as_ref(),
-            ],
-        );
-        run(
-            "icacls.exe",
-            &[
-                foreign.as_os_str(),
-                "/setowner".as_ref(),
-                "*S-1-5-32-545".as_ref(),
-            ],
-        );
+        let args = |a: &[&str]| -> Vec<std::ffi::OsString> {
+            std::iter::once(foreign.clone().into_os_string())
+                .chain(a.iter().map(|s| s.into()))
+                .collect()
+        };
+        let icacls = |a: Vec<std::ffi::OsString>| {
+            let refs: Vec<&std::ffi::OsStr> = a.iter().map(|s| s.as_os_str()).collect();
+            run("icacls.exe", &refs);
+        };
+        icacls(args(&[
+            "/inheritance:r",
+            "/grant:r",
+            "*S-1-5-18:(OI)(CI)F",
+            "*S-1-5-32-544:(OI)(CI)F",
+        ]));
+        icacls(args(&["/setowner", "*S-1-5-32-545"]));
+        let before = sddl_of(&foreign);
         let err = secure_dir(&foreign, Some(&sid), &ops).unwrap_err();
-        assert!(err.contains("isn't empty"), "{err}");
-        let after = ops.inspect(&foreign).unwrap().unwrap();
-        assert_eq!(parse_sddl(&after.folder.sddl).unwrap().owner, "BU");
+        assert!(err.contains("belongs to BU"), "{err}");
+        assert_eq!(sddl_of(&foreign), before);
+        std::fs::write(foreign.join("config.toml"), "").unwrap();
+        assert!(secure_dir(&foreign, Some(&sid), &ops).is_err());
 
-        // So is a private folder holding an entry someone else owns.
+        // And a private folder holding an entry someone else owns.
         let planted = tmp.path().join("planted");
         secure_dir(&planted, Some(&sid), &ops).unwrap();
         std::fs::write(planted.join("config.toml"), "").unwrap();
@@ -862,6 +706,39 @@ mod tests {
         );
         let err = secure_dir(&planted, Some(&sid), &ops).unwrap_err();
         assert!(err.contains("belongs to"), "{err}");
+    }
+
+    /// Creating over a path that became a junction (a race) changes
+    /// nothing behind it, and the inspection then refuses the link.
+    #[cfg(windows)]
+    #[test]
+    fn a_create_never_reaches_through_a_junction() {
+        if !admin() {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        let junction = tmp.path().join("Lodestar");
+        run(
+            "cmd",
+            &[
+                "/C".as_ref(),
+                "mklink".as_ref(),
+                "/J".as_ref(),
+                junction.as_os_str(),
+                target.as_os_str(),
+            ],
+        );
+        let ops = Windows { own_sid: None };
+        let before = ops.inspect(&target).unwrap().unwrap().folder.sddl;
+        let _ = ops.create(&junction);
+        assert_eq!(ops.inspect(&target).unwrap().unwrap().folder.sddl, before);
+        assert!(
+            secure_dir(&junction, None, &ops)
+                .unwrap_err()
+                .contains("link or junction")
+        );
     }
 
     #[cfg(windows)]
