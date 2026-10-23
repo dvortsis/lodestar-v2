@@ -256,10 +256,10 @@
       "status": "running",
       "model": "sonnet",
       "session": "session_015U1ernRx1MK1knzFVYDnee",
-      "pr": null,
+      "pr": 132,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus (runner: perf + contenteditable)); brief committed 576d67a with runner addendum"
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus (runner: perf + contenteditable)); brief committed 576d67a with runner addendum | 2026-10-23T17:07:42Z blocked draft #132: bare /search 104,825 B > 102,400, LCP 3.03s. Runner decision: defer Shell Chrome chunk to first interaction/idle/30s (auth handlers stay eager, 401 spec), static bar in app.html #boot-main (+236 B); assigned Shell.svelte edit; keep W9 focus/CLS/first-key specs; INP check"
     },
     "S-search-2": {
       "status": "pending",
