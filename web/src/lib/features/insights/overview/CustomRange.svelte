@@ -3,7 +3,7 @@
 	import { untrack } from 'svelte';
 	import IconError from '~icons/ph/x-circle';
 	import Button from '$lib/ui/controls/Button.svelte';
-	import Input from '$lib/ui/fields/Input.svelte';
+	import { FOCUS_RING, TARGET_MIN } from '$lib/ui/classes';
 	import { m } from '$lib/paraglide/messages.js';
 	import { customFromDays } from './query';
 
@@ -17,13 +17,22 @@
 	}
 	let { from, to, fieldError, onapply, oncancel }: Props = $props();
 
-	let fromDay = $state(untrack(() => from));
-	let toDay = $state(untrack(() => to));
+	// Uncontrolled inputs: the values are set once and read on submit, which keeps Svelte's value
+	// helpers out of the shared chunks.
+	let fromEl = $state<HTMLInputElement>();
+	let toEl = $state<HTMLInputElement>();
+	$effect(() => {
+		untrack(() => {
+			if (fromEl) fromEl.value = from;
+			if (toEl) toEl.value = to;
+		});
+	});
 	let localError = $state<'from' | 'to' | undefined>();
 
 	function apply(event: SubmitEvent) {
 		event.preventDefault();
-		const r = customFromDays(fromDay, toDay);
+		const fromDay = fromEl?.value ?? '';
+		const r = customFromDays(fromDay, toEl?.value ?? '');
 		if (!r) {
 			localError = fromDay ? 'to' : 'from';
 			return;
@@ -40,20 +49,18 @@
 </script>
 
 <form class="ins-custom" onsubmit={apply} data-testid="insights-custom">
-	{#each [['from', m.insights_overview_custom_from()], ['to', m.insights_overview_custom_to()]] as [field, text] (field)}
+	{#each [{ field: 'from', text: m.insights_overview_custom_from() }, { field: 'to', text: m.insights_overview_custom_to() }] as { field, text } (field)}
 		{@const err = errorFor(field as 'from' | 'to')}
 		<div class="ins-field">
 			<label for="ins-custom-{field}">{text}</label>
-			<Input
+			<input
 				id="ins-custom-{field}"
 				type="date"
-				dense
-				value={field === 'from' ? fromDay : toDay}
-				oninput={(e) => {
-					const v = (e.currentTarget as HTMLInputElement).value;
-					if (field === 'from') fromDay = v;
-					else toDay = v;
-				}}
+				class="input input-sm w-full border-field-border aria-invalid:border-error {FOCUS_RING} {TARGET_MIN}"
+				bind:this={
+					() => (field === 'from' ? fromEl : toEl),
+					(el) => (field === 'from' ? (fromEl = el) : (toEl = el))
+				}
 				aria-invalid={err ? true : undefined}
 				aria-describedby={err ? `ins-custom-${field}-error` : undefined}
 				data-testid="insights-custom-{field}"
