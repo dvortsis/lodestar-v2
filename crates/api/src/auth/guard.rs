@@ -176,19 +176,20 @@ async fn guard(scope: u32, mut req: Request, next: Next) -> Response {
         Presented::Bad => return failed(&auth, client(&auth, &req, peer), "unknown", "malformed"),
         Presented::One(s, f) => (s, f),
     };
+    let ip = client(&auth, &req, peer);
+    if let Err(wait) = auth.key_failures.check(ip) {
+        // Already limited: logged when it became so, not again per request.
+        return limited_response(wait);
+    }
+    // After the limiter, so a limited address's writes log nothing either.
     if req.method() != Method::GET && req.method() != Method::HEAD {
-        refused(client(&auth, &req, peer), "unknown", "read_only");
+        refused(ip, "unknown", "read_only");
         return ApiError::new(
             StatusCode::FORBIDDEN,
             "key_read_only",
             "API keys and feed tokens can only read; sign in to make changes.",
         )
         .into_response();
-    }
-    let ip = client(&auth, &req, peer);
-    if let Err(wait) = auth.key_failures.check(ip) {
-        // Already limited: logged when it became so, not again per request.
-        return limited_response(wait);
     }
     let Some(p) = keys::parse(&secret) else {
         return failed(&auth, ip, "unknown", "malformed");
@@ -670,5 +671,17 @@ mod tests {
         assert_eq!(limited.len(), 1, "{lines:#?}");
         assert!(limited[0].ends_with("limit=key_checks"), "{lines:#?}");
         assert_eq!(reasons(ip).len(), 10, "{lines:#?}");
+        // Junk-key writes from the limited address log nothing more either.
+        for _ in 0..5 {
+            let status = b
+                .send(Method::POST, "/search", &[("x-api-key", "junk")], ip)
+                .await;
+            assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        }
+        assert_eq!(
+            super::super::log_events::capture::lines(&format!("client={ip} ")).len(),
+            lines.len(),
+            "nothing more logged while limited"
+        );
     }
 }
