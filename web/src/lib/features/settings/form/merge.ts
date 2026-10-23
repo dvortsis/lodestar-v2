@@ -107,3 +107,24 @@ export function asValues(s: SectionState): SectionValues {
 	for (const [name, f] of Object.entries(s.fields)) fields[name] = f.saved;
 	return { section: s.section, revision: s.revision, restart_required: s.restart, fields };
 }
+
+const isObj = (v: unknown): v is Record<string, unknown> =>
+	typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** A stale refusal's `current`, keeping only entries shaped like `SectionValues`. */
+export function sectionValues(current: unknown): Record<string, SectionValues> {
+	const out: Record<string, SectionValues> = {};
+	if (!isObj(current)) return out;
+	for (const [section, v] of Object.entries(current)) {
+		if (
+			isObj(v) &&
+			Number.isSafeInteger(v.revision) &&
+			Array.isArray(v.restart_required) &&
+			isObj(v.fields) &&
+			Object.values(v.fields).every((f) => isObj(f) && typeof f.source === 'string' && 'value' in f)
+		) {
+			out[section] = v as unknown as SectionValues;
+		}
+	}
+	return out;
+}
