@@ -4,14 +4,19 @@
 //! session key (`auth.json`), its log (with the setup token) and its
 //! database there, and the service reads `config.toml` from it, so before
 //! anything is read or written the folder must be private:
-//! - its owner is `SYSTEM`, `Administrators` or the service's own SID
-//!   (`NT SERVICE\<name>`): an owner can always rewrite the ACL;
-//! - its DACL is protected (nothing inherited) and allows only those
-//!   three. A shared account such as LocalService isn't enough: many other
-//!   services run as it;
-//! - nothing directly inside it is a link or junction, or owned by anyone
-//!   else: such an entry could have been planted before the folder was
-//!   private.
+//! - its owner is `SYSTEM` or `Administrators`: an owner can always
+//!   rewrite the ACL;
+//! - its DACL is protected (nothing inherited) and allows only those two
+//!   and the service's own SID (`NT SERVICE\<name>`). A shared account
+//!   such as LocalService isn't enough: many other services run as it;
+//! - nothing directly inside it is owned by anyone else, and nothing
+//!   anywhere inside it is a link, junction or other reparse point: such an
+//!   entry could have been planted before the folder was private.
+//!
+//! These are the installer's rules too (`packaging/windows/
+//! secure-datadir.ps1`, `docs/decisions/2026-10-22-P-release.md`); the two
+//! must stay in step. A `.lodestar-secured` marker is written once the
+//! folder passes, as a hint for the installer only: nothing trusts it.
 //!
 //! This is checked at every start. A missing folder is created with its
 //! final ACL in one step. A folder that isn't private is taken over (its
@@ -25,6 +30,10 @@
 
 use std::io;
 use std::path::Path;
+
+/// Written once the folder passes; a hint for the installer, trusted by
+/// nothing.
+pub const MARKER: &str = ".lodestar-secured";
 
 /// One security descriptor in SDDL, as far as the check needs it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,6 +131,8 @@ pub fn check_dacl(dacl: &str, own_sid: Option<&str>) -> Result<(), String> {
 pub struct Inspection {
     pub folder: Item,
     pub entries: Vec<Item>,
+    /// Reparse points anywhere beneath the folder, by full path.
+    pub links: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,11 +145,12 @@ pub struct Item {
 }
 
 /// Parses the inspection script's output: one tab-separated line per item,
-/// `F` for the folder then `E` per entry, each `kind, attributes, SDDL,
-/// name`.
+/// `F` for the folder, `E` per entry directly in it, `L` per reparse point
+/// anywhere beneath it, each `kind, attributes, SDDL, name`.
 pub fn parse_inspection(text: &str) -> Result<Inspection, String> {
     let mut folder = None;
     let mut entries = Vec::new();
+    let mut links = Vec::new();
     for line in text.lines().filter(|l| !l.trim().is_empty()) {
         let mut f = line.splitn(4, '\t');
         let (Some(kind), Some(attrs), Some(sddl), Some(name)) =
@@ -154,12 +166,14 @@ pub fn parse_inspection(text: &str) -> Result<Inspection, String> {
         match kind {
             "F" if folder.is_none() => folder = Some(item),
             "E" => entries.push(item),
+            "L" => links.push(item.name),
             _ => return Err(format!("unexpected inspection line {line:?}")),
         }
     }
     Ok(Inspection {
         folder: folder.ok_or("the inspection didn't report the folder")?,
         entries,
+        links,
     })
 }
 
@@ -175,6 +189,9 @@ pub enum Verdict {
 pub fn verdict(seen: &Inspection, own_sid: Option<&str>) -> Verdict {
     if seen.folder.link {
         return Verdict::Refuse("it's a link or junction; Lodestar only uses a real folder".into());
+    }
+    if let Some(link) = seen.links.first() {
+        return Verdict::Refuse(format!("{link} is a link or junction inside it"));
     }
     for e in &seen.entries {
         if e.link {
@@ -193,7 +210,9 @@ pub fn verdict(seen: &Inspection, own_sid: Option<&str>) -> Verdict {
     }
     let why = match parse_sddl(&seen.folder.sddl) {
         Err(why) => why,
-        Ok(d) if !trusted(&d.owner, own_sid) => format!("it belongs to {}", d.owner),
+        // The folder's owner must be SYSTEM or Administrators, as the
+        // installer makes it: not even the service.
+        Ok(d) if !trusted(&d.owner, None) => format!("it belongs to {}", d.owner),
         Ok(d) => match check_dacl(&d.dacl, own_sid) {
             Ok(()) => return Verdict::Private,
             Err(why) => why,
@@ -236,8 +255,17 @@ pub fn secure_dir(dir: &Path, own_sid: Option<&str>, ops: &impl Ops) -> Result<(
             inspect()?.ok_or_else(|| format!("{shown} vanished after it was created"))?
         }
     };
+    let marked = || {
+        let marker = dir.join(MARKER);
+        if !marker.exists() {
+            let _ = std::fs::write(marker, "Lodestar checked this folder's permissions.\r\n");
+        }
+    };
     match verdict(&seen, own_sid) {
-        Verdict::Private => Ok(()),
+        Verdict::Private => {
+            marked();
+            Ok(())
+        }
         Verdict::Refuse(why) => Err(format!("{shown}: {why}.")),
         Verdict::TakeOver(why) => {
             ops.take_over(dir).map_err(|e| {
@@ -250,7 +278,10 @@ pub fn secure_dir(dir: &Path, own_sid: Option<&str>, ops: &impl Ops) -> Result<(
             })?;
             let again = inspect()?.ok_or_else(|| format!("{shown} vanished"))?;
             match verdict(&again, own_sid) {
-                Verdict::Private => Ok(()),
+                Verdict::Private => {
+                    marked();
+                    Ok(())
+                }
                 Verdict::Refuse(why) | Verdict::TakeOver(why) => {
                     Err(format!("{shown} still isn't private: {why}."))
                 }
@@ -304,9 +335,13 @@ $p = $env:LODESTAR_ACL_PATH
 $f = Get-Item -LiteralPath $p -Force
 $s = if (\"$($f.Attributes)\" -match 'ReparsePoint') { '' } else { (Get-Acl -LiteralPath $p).Sddl }
 \"F`t$($f.Attributes)`t$s`t$($f.Name)\"
+if (\"$($f.Attributes)\" -match 'ReparsePoint') { exit 0 }
 foreach ($c in Get-ChildItem -LiteralPath $p -Force) {
   $s = if (\"$($c.Attributes)\" -match 'ReparsePoint') { '' } else { (Get-Acl -LiteralPath $c.FullName).Sddl }
   \"E`t$($c.Attributes)`t$s`t$($c.Name)\"
+}
+foreach ($l in Get-ChildItem -LiteralPath $p -Force -Recurse -Attributes ReparsePoint) {
+  \"L`t$($l.Attributes)`t`t$($l.FullName)\"
 }";
 
 /// Creates the folder with its ACL in one call (no window with the
@@ -501,6 +536,7 @@ mod tests {
         Inspection {
             folder: item("Lodestar", folder),
             entries: entries.to_vec(),
+            links: Vec::new(),
         }
     }
 
@@ -539,6 +575,14 @@ mod tests {
             v(&seen(user_owned, &[user_file])),
             Verdict::Refuse(_)
         ));
+        // The folder must belong to SYSTEM or Administrators, as the
+        // installer makes it, not even to the service.
+        let service_owned = format!("O:{OWN}D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)");
+        assert!(matches!(v(&seen(&service_owned, &[])), Verdict::TakeOver(w) if w.contains(OWN)));
+        // A link anywhere beneath it is refused.
+        let mut deep = seen(PRIVATE, &[]);
+        deep.links.push(r"C:\ProgramData\Lodestar\index\v4".into());
+        assert!(matches!(v(&deep), Verdict::Refuse(w) if w.contains(r"index\v4 is a link")));
         // A linked folder is refused outright.
         let mut linked = seen(PRIVATE, &[]);
         linked.folder.link = true;
@@ -551,7 +595,8 @@ mod tests {
             "F\tDirectory\t{PRIVATE}\tLodestar\r\n\
              E\tArchive\tO:BAD:AI(A;ID;FA;;;SY)\tconfig.toml\r\n\
              E\tDirectory, ReparsePoint\t\tlogs\r\n\
-             E\tArchive\tO:SYD:AI\tname\twith tab\r\n"
+             E\tArchive\tO:SYD:AI\tname\twith tab\r\n\
+             L\tDirectory, ReparsePoint\t\tC:\\pd\\Lodestar\\logs\r\n"
         );
         let s = parse_inspection(&text).unwrap();
         assert_eq!(s.folder.sddl, PRIVATE);
@@ -560,6 +605,7 @@ mod tests {
         assert_eq!(s.entries[0].name, "config.toml");
         assert!(s.entries[1].link);
         assert_eq!(s.entries[2].name, "name\twith tab");
+        assert_eq!(s.links, [r"C:\pd\Lodestar\logs"]);
         assert!(parse_inspection("").is_err());
         assert!(parse_inspection("E\tArchive\tO:BAD:\tx\n").is_err());
         assert!(parse_inspection("F\ta\tb\n").is_err());
@@ -846,6 +892,6 @@ mod tests {
             ],
         );
         let err = secure_dir(&dir, None, &ops).unwrap_err();
-        assert!(err.contains("logs in it is a link"), "{err}");
+        assert!(err.contains("is a link or junction inside it"), "{err}");
     }
 }
