@@ -324,7 +324,7 @@
    "pr": 112,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 03:30 PR #112 b0834b4 ready; reviewer + security review started. 5,703 lines. \u00a72.19 flags: regenerate not reveal; bad XFF ends walk; revoke/delete no password; max 500 keys; login limiter bounded.",
+   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 03:30 PR #112 b0834b4 ready; reviewer + security review started. 5,703 lines. \u00a72.19 flags: regenerate not reveal; bad XFF ends walk; revoke/delete no password; max 500 keys; login limiter bounded. | 03:45 review+security MERGE (no blocking). Asked: proxy-trust docs (gateway lets anyone in), polish, logging redaction note. Merge after B10a: B12 merges main keeping B10a user_data open.",
    "self_review": {
     "raised": 7,
     "fixed": 7,
@@ -1278,7 +1278,8 @@
   "crawler_settings_sse": "ops.rs /crawler pause/resume/intensity save straight to the registry, no settings SSE event; route through settings::save_and_announce (B2c or later).",
   "user_data_reader_lock": "B10a: GET /collections, /collections/{id}, /user-items/labels and withheld-heavy /user-items scan every entry on the shared reader lock; bound or move off the search reader (next brief touching user data).",
   "b9_unread_shown_only": "B9 must count unread alerts shown-only (B10a lists do); store unread_total counts Adult alerts.",
-  "b9_feed_access": "B9 feed handlers must call Access::reaches_feed (B12)."
+  "b9_feed_access": "B9 feed handlers must call Access::reaches_feed (B12).",
+  "request_log_redaction": "When api.request / URI logging lands, redact apikey and token query values (B12)."
  },
  "blocked_on_owner": [],
  "launches_today": 13,
