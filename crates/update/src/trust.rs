@@ -44,10 +44,6 @@ impl Marks {
     pub(crate) fn passes(mark: u64, mark_sha: Option<Sha256>, ts: u64, sha: Sha256) -> bool {
         ts > mark || (ts == mark && mark_sha.is_none_or(|m| m == sha))
     }
-
-    fn not_lower_than(&self, old: &Marks) -> bool {
-        self.hwm_ts >= old.hwm_ts && self.fresh_ts >= old.fresh_ts
-    }
 }
 
 /// The trust state.
@@ -123,8 +119,10 @@ impl TrustState {
         if bytes.len() > MAX_TRUST {
             return Err(Error::TrustDamaged);
         }
-        let state: TrustState = doc::strict(bytes).map_err(|_| Error::TrustDamaged)?;
-        state.chain(embedded)?;
+        let mut state: TrustState = doc::strict(bytes).map_err(|_| Error::TrustDamaged)?;
+        // Normalised, so a file written by hand (or by another layout)
+        // merges like one this build wrote.
+        state.statements = state.chain(embedded)?.signed();
         Ok(state)
     }
 
@@ -158,9 +156,10 @@ impl TrustState {
         Ok(chain)
     }
 
-    /// Marks more than a day ahead of `now` can't be honest (every mark is
-    /// a verified timestamp, accepted at most a day ahead), so they count
-    /// as damage rather than freezing updates until that date.
+    /// Marks more than a day ahead of `now` mean the clock is behind:
+    /// every mark is a verified timestamp, accepted at most a day ahead.
+    /// That's `Ahead` (notice `clock_behind`); the file is left alone, so
+    /// the marks still hold once the clock is right.
     pub fn marks_plausible(&self, now: u64) -> Result<(), Error> {
         let limit = now.saturating_add(MAX_AHEAD);
         if self
@@ -168,7 +167,7 @@ impl TrustState {
             .values()
             .any(|m| m.hwm_ts > limit || m.fresh_ts > limit)
         {
-            return Err(Error::TrustDamaged);
+            return Err(Error::Ahead);
         }
         Ok(())
     }
@@ -233,48 +232,38 @@ impl TrustState {
     /// (a rotation's reset is intended: it lets a client a leaked key froze
     /// recover), then each mark is the later of the two, so a check that
     /// started from a stale state can't lower a channel the rotation
-    /// doesn't govern. With the same sequence, the old state stays unless
-    /// no mark is lower. Revocations are the union.
+    /// doesn't govern. With the same sequence (and the same statements),
+    /// each mark is likewise the later of the two. On a tie a stored
+    /// digest is kept. Statements compare by their signed bodies, so a
+    /// file in another textual form still merges. Revocations are the
+    /// union.
     pub fn merge(old: &TrustState, new: TrustState) -> TrustState {
-        if !new.statements.starts_with(&old.statements) || new.seq < old.seq {
-            return old.clone();
-        }
-        if new.seq == old.seq {
-            let forward = new.statements == old.statements
-                && old
-                    .channels
-                    .iter()
-                    .all(|(c, m)| new.channels.get(c).is_some_and(|n| n.not_lower_than(m)));
-            let mut out = if forward { new } else { old.clone() };
-            out.revoked = union(&out.revoked, &old.revoked);
-            return out;
-        }
-        let mut base = old.clone();
-        let Some(added) = usize::try_from(old.seq)
-            .ok()
-            .and_then(|from| new.statements.get(from..))
+        // Statements compare by their signed bodies, not their text.
+        let (Some(old_bodies), Some(new_bodies)) =
+            (bodies(&old.statements), bodies(&new.statements))
         else {
             return old.clone();
         };
-        for s in added {
-            let Some(body) = statement_body(s) else {
-                return old.clone();
-            };
+        if new.seq < old.seq
+            || !new_bodies.starts_with(&old_bodies)
+            || (new.seq == old.seq && new_bodies != old_bodies)
+        {
+            return old.clone();
+        }
+        let mut base = old.clone();
+        for body in &new_bodies[old_bodies.len()..] {
             base.reset(body.role, body.timestamp);
         }
         for (c, n) in &new.channels {
             let m = base.channels.entry(*c).or_default();
-            if n.hwm_ts >= m.hwm_ts {
-                m.hwm_ts = n.hwm_ts;
-                m.hwm_sha256 = n.hwm_sha256;
-            }
-            if n.fresh_ts >= m.fresh_ts {
-                m.fresh_ts = n.fresh_ts;
-                m.fresh_sha256 = n.fresh_sha256;
-            }
+            (m.hwm_ts, m.hwm_sha256) = later((m.hwm_ts, m.hwm_sha256), (n.hwm_ts, n.hwm_sha256));
+            (m.fresh_ts, m.fresh_sha256) =
+                later((m.fresh_ts, m.fresh_sha256), (n.fresh_ts, n.fresh_sha256));
         }
-        base.seq = new.seq;
-        base.statements = new.statements;
+        if new.seq > old.seq {
+            base.seq = new.seq;
+            base.statements = new.statements;
+        }
         base.revoked = union(&old.revoked, &new.revoked);
         base
     }
@@ -309,9 +298,23 @@ fn union(a: &[String], b: &[String]) -> Vec<String> {
     out
 }
 
-/// A stored statement's body (its signature was verified when it was
-/// accepted, and is again on load).
-fn statement_body(s: &SignedStatement) -> Option<crate::doc::StatementBody> {
-    let (body, _) = doc::decode(&s.body, &s.minisig, crate::doc::MAX_STATEMENT).ok()?;
-    crate::doc::StatementBody::parse(&body).ok()
+/// Stored statements' bodies (their signatures were verified when they
+/// were accepted, and are again on load).
+fn bodies(statements: &[SignedStatement]) -> Option<Vec<crate::doc::StatementBody>> {
+    statements
+        .iter()
+        .map(|s| {
+            let (body, _) = doc::decode(&s.body, &s.minisig, crate::doc::MAX_STATEMENT).ok()?;
+            crate::doc::StatementBody::parse(&body).ok()
+        })
+        .collect()
+}
+
+/// The later of two marks; on a tie, a stored digest is kept.
+fn later(old: (u64, Option<Sha256>), new: (u64, Option<Sha256>)) -> (u64, Option<Sha256>) {
+    match new.0.cmp(&old.0) {
+        std::cmp::Ordering::Greater => new,
+        std::cmp::Ordering::Equal if old.1.is_none() => new,
+        _ => old,
+    }
 }

@@ -456,7 +456,7 @@ fn trust_json_loads_across_different_generation_zero_keys() {
 }
 
 #[test]
-fn marks_far_ahead_of_the_clock_are_damage() {
+fn marks_far_ahead_of_the_clock_mean_the_clock_is_behind() {
     let t = trust();
     let emb = t.embedded(vec![]);
     let mut s = TrustState::default();
@@ -470,8 +470,9 @@ fn marks_far_ahead_of_the_clock_are_damage() {
     let m = signed_manifest(&t.release, Channel::Stable, T, "0.5.3");
     assert_eq!(
         check(&envelope(&m, None), Channel::Stable, T + 100, &emb, &s),
-        Err(Error::TrustDamaged)
+        Err(Error::Ahead)
     );
+    assert_eq!(Error::Ahead.notice(), Some(crate::Notice::ClockBehind));
     assert!(
         check(
             &envelope(&m, None),
@@ -748,4 +749,122 @@ impl ReplaceSecond for [u8] {
         let i = s.rfind("\"stable\"").unwrap();
         format!("{}\"beta\"{}", &s[..i], &s[i + 8..]).into_bytes()
     }
+}
+
+/// An honest state checked on a host whose clock is two days behind (a
+/// NAS before time sync): `clock_behind`, never damage, and the marks
+/// still hold once the clock is right.
+#[test]
+fn a_clock_behind_is_not_damage() {
+    let t = trust();
+    let emb = t.embedded(vec![]);
+    let m = signed_manifest(&t.release, Channel::Stable, T, "0.5.3");
+    let env = envelope(&m, None);
+    let state = check(&env, Channel::Stable, T + 10, &emb, &TrustState::default())
+        .unwrap()
+        .next;
+    assert_eq!(
+        check(&env, Channel::Stable, T - 2 * DAY, &emb, &state),
+        Err(Error::Ahead)
+    );
+    let older = signed_manifest(&t.release, Channel::Stable, T - 5, "0.5.2");
+    assert_eq!(
+        check(
+            &envelope(&older, None),
+            Channel::Stable,
+            T + 20,
+            &emb,
+            &state
+        ),
+        Err(Error::Older)
+    );
+}
+
+/// A valid `trust.json` whose statements are in another textual form
+/// (another untrusted comment, a cosig) loads normalised and keeps
+/// merging forward.
+#[test]
+fn an_unnormalised_trust_json_keeps_updating() {
+    let t = trust();
+    let emb = t.embedded(vec![]);
+    let k5 = TestKey::new(5);
+    let mut s1 = statement(&t.recovery, 1, Role::Release, &k5.public(), T);
+    s1.minisig = s1
+        .minisig
+        .replace("signature from a TEST ONLY key", "hand made");
+    s1.cosig = Some(t.release.sign(b"x"));
+    let mut disk = TrustState {
+        seq: 1,
+        statements: vec![s1.clone()],
+        ..TrustState::default()
+    };
+    disk.channels.insert(
+        Channel::Stable,
+        Marks {
+            hwm_ts: T + 10,
+            ..Marks::default()
+        },
+    );
+    let loaded = TrustState::load(&disk.to_bytes().unwrap(), &emb).unwrap();
+    assert_ne!(loaded.statements, disk.statements);
+    let k6 = TestKey::new(6);
+    let s2 = statement(&t.recovery, 2, Role::Nightly, &k6.public(), T);
+    let (_, m) = manifest_with(&k5, Channel::Stable, T + 30, |m| {
+        with_statements(m, &[s1.clone(), s2])
+    });
+    let next = check(&envelope(&m, None), Channel::Stable, T + 40, &emb, &loaded)
+        .unwrap()
+        .next;
+    // Merging into the file exactly as stored works too.
+    for old in [&loaded, &disk] {
+        let merged = TrustState::merge(old, next.clone());
+        assert_eq!(merged.seq, 2);
+        assert_eq!(merged.marks(Channel::Stable).hwm_ts, T + 30);
+    }
+}
+
+#[test]
+fn merge_keeps_a_stored_digest_and_takes_later_marks_at_the_same_sequence() {
+    let sha = Some(Sha256::of(b"stored"));
+    let mut old = TrustState::default();
+    old.channels.insert(
+        Channel::Stable,
+        Marks {
+            hwm_ts: 10,
+            hwm_sha256: sha,
+            fresh_ts: 5,
+            ..Marks::default()
+        },
+    );
+    old.channels.insert(
+        Channel::Beta,
+        Marks {
+            hwm_ts: 7,
+            ..Marks::default()
+        },
+    );
+    let mut new = TrustState::default();
+    new.channels.insert(
+        Channel::Stable,
+        Marks {
+            hwm_ts: 10,
+            hwm_sha256: None,
+            fresh_ts: 9,
+            ..Marks::default()
+        },
+    );
+    new.channels.insert(
+        Channel::Beta,
+        Marks {
+            hwm_ts: 3,
+            ..Marks::default()
+        },
+    );
+    let merged = TrustState::merge(&old, new);
+    let stable = merged.marks(Channel::Stable);
+    assert_eq!(
+        (stable.hwm_ts, stable.hwm_sha256, stable.fresh_ts),
+        (10, sha, 9)
+    );
+    assert_eq!(merged.marks(Channel::Beta).hwm_ts, 7);
 }
