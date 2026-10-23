@@ -1,0 +1,313 @@
+# The relevance judgment corpus (bench/README.md, "Relevance").
+#
+# Every title, person, group, studio and site here is invented for this
+# suite: no real torrent's name is used. The release-name vocabulary
+# (resolutions, sources, codecs, audio) is generic.
+#
+# Format: `key [seeders=N] | size | name` for a single-file torrent, or
+# `key [seeders=N] | dir | name` followed by indented `size | path`
+# lines for a multi-file one. Sizes are powers of 1024 (K, M, G, T).
+#
+# Order matters only where ranking ties: the worse copy comes first, so
+# a tie favours it and the suite measures what the ranking lacks rather
+# than what insertion order happens to give it.
+
+# ---- A film with release noise: The Glass Orchard (2019) -------------------
+go-cam | 1.4G | The.Glass.Orchard.2019.CAM.x264-PLNTH.mkv
+go-1080 | 8.2G | The.Glass.Orchard.2019.1080p.BluRay.x264-KSTRL.mkv
+go-2160 | dir | The.Glass.Orchard.2019.2160p.UHD.BluRay.x265.HDR.DTS-HD.MA.5.1-NOVAQ
+    52G | The.Glass.Orchard.2019.2160p.UHD.BluRay.x265.HDR.DTS-HD.MA.5.1-NOVAQ.mkv
+    8K | The.Glass.Orchard.2019.2160p.UHD.BluRay.x265.HDR.DTS-HD.MA.5.1-NOVAQ.nfo
+    140M | Sample/the.glass.orchard.2019.2160p.sample.mkv
+go-720 | 2.1G | The Glass Orchard (2019) 720p WEB-DL AAC2.0 H.264-BRMBY.mp4
+go-web | dir | The.Glass.Orchard.2019.1080p.WEB-DL.DD+5.1.H.264-TEALDK
+    4.6G | The.Glass.Orchard.2019.1080p.WEB-DL.DD+5.1.H.264-TEALDK.mkv
+    3K | The.Glass.Orchard.2019.1080p.WEB-DL.DD+5.1.H.264-TEALDK.nfo
+go2 | 9.1G | The.Glass.Orchard.II.2023.1080p.BluRay.x264-KSTRL.mkv
+go-ost | dir | The Glass Orchard (Original Motion Picture Soundtrack) 2019 [FLAC]
+    38M | 01 - Opening Frost.flac
+    41M | 02 - Rows of Light.flac
+    29M | 03 - The Orchard at Night.flac
+    35M | 04 - Glass Blossoms.flac
+    2M | cover.jpg
+go-book | 3M | Mara Ellison - The Glass Orchard (2016).epub
+fest | dir | Indie.Film.Festival.Shorts.2019.1080p.WEB-DL.x264-OAKUM
+    410M | 01.Paper.Boats.mkv
+    380M | 02.Quiet.Tenants.mkv
+    95M | Trailers/The Glass Orchard (trailer).mkv
+    120M | Trailers/Northwind Express (trailer).mkv
+
+# ---- A series: Harbor Lights (2021–2024) -----------------------------------
+hl-s01e05 | 1.1G | Harbor.Lights.S01E05.1080p.WEB-DL.DD5.1.H.264-TEALDK.mkv
+hl-s01 | dir | Harbor.Lights.S01.1080p.WEB-DL.DD5.1.H.264-TEALDK
+    1.2G | Harbor.Lights.S01E01.Pilot.1080p.WEB-DL.DD5.1.H.264-TEALDK.mkv
+    1.1G | Harbor.Lights.S01E02.Low.Water.1080p.WEB-DL.DD5.1.H.264-TEALDK.mkv
+    1.1G | Harbor.Lights.S01E03.Breakwater.1080p.WEB-DL.DD5.1.H.264-TEALDK.mkv
+    1.2G | Harbor.Lights.S01E04.Fog.Signals.1080p.WEB-DL.DD5.1.H.264-TEALDK.mkv
+    1.1G | Harbor.Lights.S01E05.1080p.WEB-DL.DD5.1.H.264-TEALDK.mkv
+    1.3G | Harbor.Lights.S01E06.Ballast.1080p.WEB-DL.DD5.1.H.264-TEALDK.mkv
+hl-s02e06 | 1.2G | Harbor.Lights.S02E06.Night.Ferry.1080p.WEB-DL.DD5.1.H.264-TEALDK.mkv
+hl-s02 | dir | Harbor.Lights.S02.1080p.WEB-DL.DD5.1.H.264-TEALDK
+    1.2G | Harbor.Lights.S02E01.Return.Tide.1080p.WEB-DL.DD5.1.H.264-TEALDK.mkv
+    1.2G | Harbor.Lights.S02E02.Saltworks.1080p.WEB-DL.DD5.1.H.264-TEALDK.mkv
+    1.1G | Harbor.Lights.S02E03.Moorings.1080p.WEB-DL.DD5.1.H.264-TEALDK.mkv
+    1.2G | Harbor.Lights.S02E04.Dry.Dock.1080p.WEB-DL.DD5.1.H.264-TEALDK.mkv
+    1.2G | Harbor.Lights.S02E05.The.Lighthouse.Keeper.1080p.WEB-DL.DD5.1.H.264-TEALDK.mkv
+    1.2G | Harbor.Lights.S02E06.Night.Ferry.1080p.WEB-DL.DD5.1.H.264-TEALDK.mkv
+hl-s02-720 | dir | Harbor.Lights.S02.720p.WEB-DL.x264-BRMBY
+    600M | harbor.lights.s02e01.720p.web-dl.x264-brmby.mkv
+    600M | harbor.lights.s02e02.720p.web-dl.x264-brmby.mkv
+    600M | harbor.lights.s02e03.720p.web-dl.x264-brmby.mkv
+    600M | harbor.lights.s02e04.720p.web-dl.x264-brmby.mkv
+    600M | harbor.lights.s02e05.720p.web-dl.x264-brmby.mkv
+    600M | harbor.lights.s02e06.720p.web-dl.x264-brmby.mkv
+hl-s02e05-720 | 610M | Harbor.Lights.S02E05.720p.HDTV.x264-OAKUM.mkv
+hl-s02e05 | 1.2G | Harbor.Lights.S02E05.The.Lighthouse.Keeper.1080p.WEB-DL.DD5.1.H.264-TEALDK.mkv
+hl-2x05 | 350M | Harbor Lights 2x05 The Lighthouse Keeper 480p HDTV x264.mkv
+hl-s03e01 | 1.3G | Harbor.Lights.S03E01.Undertow.1080p.WEB-DL.DD5.1.H.264-TEALDK.mkv
+hl-complete | dir | Harbor.Lights.Complete.Series.S01-S03.1080p.BluRay.x264-KSTRL
+    2.1G | Season 1/Harbor.Lights.S01E01.Pilot.1080p.BluRay.x264-KSTRL.mkv
+    2.0G | Season 1/Harbor.Lights.S01E02.Low.Water.1080p.BluRay.x264-KSTRL.mkv
+    2.2G | Season 2/Harbor.Lights.S02E05.The.Lighthouse.Keeper.1080p.BluRay.x264-KSTRL.mkv
+    2.1G | Season 2/Harbor.Lights.S02E06.Night.Ferry.1080p.BluRay.x264-KSTRL.mkv
+    2.3G | Season 3/Harbor.Lights.S03E01.Undertow.1080p.BluRay.x264-KSTRL.mkv
+    2.2G | Season 3/Harbor.Lights.S03E02.Shoals.1080p.BluRay.x264-KSTRL.mkv
+hl-1958 | 4.4G | Harbor.Lights.1958.720p.BluRay.x264-VSPR.mkv
+harbor-docu | 3.3G | Lights.of.the.Harbor.2020.Documentary.1080p.WEB.h264-LUMN7.mkv
+seals | 2.8G | Harbor.Seals.of.the.North.2019.Documentary.1080p.WEB.h264-LUMN7.mkv
+
+# ---- Years in titles and release years -------------------------------------
+bw-1984 | 7.4G | Blackwater.1984.1080p.BluRay.x264-KSTRL.mkv
+bw-2021 | 5.1G | Blackwater.2021.1080p.WEB-DL.x264-OAKUM.mkv
+bw-2021-2160 | 18G | Blackwater.2021.2160p.WEB-DL.DDP5.1.HDR.HEVC-LUMN7.mkv
+bw-bay | 2.2G | Blackwater.Bay.Rescue.S01E02.720p.HDTV.x264-OAKUM.mkv
+summer84 | 6.8G | Summer.of.1984.2022.1080p.BluRay.x264-NOVAQ.mkv
+summer84-720 | 3.1G | Summer of 1984 (2022) 720p WEB-DL x264-BRMBY.mkv
+station2001 | 4.2G | Station.2001.2017.1080p.WEB-DL.x264-PLNTH.mkv
+y2001 | 3.9G | Undertow.Road.2001.720p.DVDRip.x264-VSPR.mkv
+
+# ---- CJK -------------------------------------------------------------------
+xh-series | dir | 星河旅人 Star River Traveler 第一季 全12集 2022 1080p WEB-DL
+    1.1G | 星河旅人.S01E01.2022.1080p.WEB-DL.mp4
+    1.1G | 星河旅人.S01E02.2022.1080p.WEB-DL.mp4
+    1.1G | 星河旅人.S01E03.2022.1080p.WEB-DL.mp4
+xh-movie | 6.5G | 星河旅人：归途.2024.1080p.BluRay.x264-QLLFN.mkv
+shanhai | dir | 山海遗梦 Shan Hai Yi Meng 2020 2160p WEB-DL HEVC
+    3.2G | 山海遗梦.第01集.2160p.mkv
+    3.1G | 山海遗梦.第02集.2160p.mkv
+yoake | 7.0G | 夜明けの街.Yoake.no.Machi.2021.1080p.BluRay.x264-ZEPHR0.mkv
+badaui | dir | 바다의 노래 Badaui Norae E01-E16 2023 1080p WEB-DL
+    1.4G | 바다의 노래 E01.mkv
+    1.4G | 바다의 노래 E02.mkv
+hoshi-05 | 1.3G | [QLLFN] 星の旅人 Hoshi no Tabibito - 05 [1080p].mkv
+hoshi-06 | 650M | [ZEPHR0] Hoshi no Tabibito - 06 [720p].mkv
+hoshi-batch | dir | [QLLFN] Hoshi no Tabibito (01-12) [1080p] [Batch]
+    1.3G | [QLLFN] Hoshi no Tabibito - 01 [1080p].mkv
+    1.3G | [QLLFN] Hoshi no Tabibito - 05 [1080p].mkv
+    1.3G | [QLLFN] Hoshi no Tabibito - 12 [1080p].mkv
+changhe | 5.4G | 长河落日.2019.1080p.WEB-DL.x264.mkv
+lvren | 1.8G | 旅人日记.2018.720p.HDTV.mkv
+
+# ---- Plurals and stems -----------------------------------------------------
+kn-ember | 7.7G | Knights.of.Ember.Hollow.2018.1080p.BluRay.x264-KSTRL.mkv
+kn-ember-s | dir | Knights.of.Ember.Hollow.S01.720p.WEB-DL.x264-BRMBY
+    700M | Knights.of.Ember.Hollow.S01E01.720p.WEB-DL.x264-BRMBY.mkv
+    700M | Knights.of.Ember.Hollow.S01E02.720p.WEB-DL.x264-BRMBY.mkv
+knight-varrow | 5.5G | The.Last.Knight.of.Varrow.2020.1080p.WEB-DL.x264-NOVAQ.mkv
+lanterns | 4.9G | Paper.Lanterns.2017.1080p.WEB-DL.x264-OAKUM.mkv
+lantern-soc | 3.6G | The.Paper.Lantern.Society.2015.720p.BluRay.x264-VSPR.mkv
+wolves | 7.1G | Wolves.of.Tamsin.Ridge.2019.1080p.BluRay.x264-BRMBY.mkv
+wolf | 1.4G | The.Wolf.of.Tamsin.Ridge.2011.DVDRip.x264-VSPR.mkv
+daughters | 6.6G | The Clockmaker's Daughters (2016) 1080p BluRay x264-PLNTH.mkv
+cities | 8.0G | Cities.of.Salt.and.Brass.2022.1080p.BluRay.x264-KSTRL.mkv
+
+# ---- Compound tokens: Copper Canyon (2016) ---------------------------------
+cc-x264 | 8.8G | Copper.Canyon.2016.1080p.BluRay.x264-KSTRL.mkv
+cc-x265 | 4.3G | Copper.Canyon.2016.1080p.BluRay.x265.10bit-NOVAQ.mkv
+cc-h264web | 5.2G | Copper.Canyon.2016.1080p.WEB-DL.DD+5.1.H.264-TEALDK.mkv
+cc-webrip | 1.9G | Copper.Canyon.2016.720p.WEBRip.AAC2.0.x264-BRMBY.mp4
+cc-hevc | 21G | Copper.Canyon.2016.2160p.WEB-DL.DDP5.1.Atmos.HEVC-LUMN7.mkv
+cc-remux | 31G | Copper.Canyon.2016.1080p.BluRay.REMUX.AVC.DTS-HD.MA.7.1-OAKUM.mkv
+cc-dvd | 1.4G | Copper.Canyon.2016.DVDRip.XviD.AC3-VSPR.avi
+cc-rail | 2.2G | Copper.Canyon.Railway.Documentary.2012.720p.HDTV.x264-OAKUM.mkv
+
+# ---- Title against path: Meridian ------------------------------------------
+mer-film | 7.9G | Meridian.2020.1080p.BluRay.x264-PLNTH.mkv
+mer-album | dir | Tessa Vane - Meridian (2019) [FLAC]
+    34M | 01 - Meridian.flac
+    31M | 02 - Salt Lines.flac
+    36M | 03 - Low Orbit.flac
+    1M | folder.jpg
+mer-mix | dir | Night Drive Mix Vol 3 (2021) [MP3 320]
+    9M | 01 - Arlo Finch - Sodium Glow.mp3
+    10M | 02 - Pell Harbour - Glasswork.mp3
+    8M | 03 - Kaia Rowe - Meridian Line.mp3
+    9M | 04 - The Hollow Pines - Undertow.mp3
+mer-walls | dir | Assorted.Wallpapers.Pack.2020
+    6M | landscapes/meridian_sunset_4k.jpg
+    5M | landscapes/canyon_dawn_4k.jpg
+    5M | city/night_tram_4k.jpg
+mer-course | dir | Linux.Admin.Course.2022
+    300M | Module 1/Introduction.mp4
+    420M | Module 3/Meridian Config Walkthrough.mp4
+    2M | Module 3/meridian-config.pdf
+
+# ---- Junk and spam: Silent Tide (2020) -------------------------------------
+st-junk1 | dir | Silent.Tide.2020.1080p.BluRay.x264
+    2M | Silent.Tide.2020.1080p.BluRay.x264.mkv.exe
+    1K | Password.txt
+    1K | Visit www.example-free-movies.test.url
+st-junk2 | dir | Silent Tide 2020 FULL HD 1080p
+    52M | Silent Tide 2020 FULL HD 1080p.zip
+    2K | How To Open.lnk
+st-junk3 | 1.1M | Silent.Tide.2020.1080p.WEB-DL.mp4.scr
+st-real | 6.9G | Silent.Tide.2020.1080p.BluRay.x264-NOVAQ.mkv
+st-real-720 | dir | Silent.Tide.2020.720p.WEB-DL.x264-OAKUM
+    2.4G | Silent.Tide.2020.720p.WEB-DL.x264-OAKUM.mkv
+    3K | Silent.Tide.2020.720p.WEB-DL.x264-OAKUM.nfo
+silent-hours | 4.0G | Silent.Hours.2019.1080p.WEB-DL.x264-PLNTH.mkv
+tidepool-show | 900M | Tide.Pool.Stories.S01E01.720p.HDTV.x264-OAKUM.mkv
+
+# ---- Swarm health: copies that differ only in seeders ----------------------
+ash-dead seeders=0 | 4.4G | Ashfall.Protocol.2022.1080p.WEB-DL.x264-OAKUM.mkv
+ash-mid seeders=40 | 2.0G | Ashfall.Protocol.2022.720p.WEB-DL.x264-OAKUM.mkv
+ash-live seeders=850 | 4.4G | Ashfall.Protocol.2022.1080p.WEB-DL.x264-OAKUM.mkv
+nw-dead seeders=0 | 7.2G | Northwind.Express.2018.1080p.BluRay.x264-KSTRL.mkv
+nw-null | 7.2G | Northwind.Express.2018.1080p.BluRay.x264-KSTRL.mkv
+nw-live seeders=310 | 7.2G | Northwind.Express.2018.1080p.BluRay.x264-KSTRL.mkv
+gc-dead seeders=1 | dir | Gilded.Cage.S01.1080p.WEB-DL.x264-TEALDK
+    1.5G | Gilded.Cage.S01E01.1080p.WEB-DL.x264-TEALDK.mkv
+    1.5G | Gilded.Cage.S01E02.1080p.WEB-DL.x264-TEALDK.mkv
+gc-live seeders=95 | dir | Gilded.Cage.S01.1080p.WEB-DL.x264-TEALDK
+    1.5G | Gilded.Cage.S01E01.1080p.WEB-DL.x264-TEALDK.mkv
+    1.5G | Gilded.Cage.S01E02.1080p.WEB-DL.x264-TEALDK.mkv
+
+# ---- Adult, hidden by default, beside mainstream titles that share words ---
+vr-xxx | 1.2G | Velvetine.Studios.26.03.14.Velvet.Room.Encounter.XXX.1080p.MP4-PLNTH.mp4
+vr-xxx2 | 1.5G | The.Velvet.Room.XXX.Parody.2020.DVDRip.x264.mp4
+vr-film | 6.2G | The.Velvet.Room.2019.1080p.BluRay.x264-PLNTH.mkv
+ms-hentai | dir | Moonlit Sisters Hentai Collection [Uncensored]
+    300M | Moonlit Sisters 01.mp4
+    300M | Moonlit Sisters 02.mp4
+ms-film | 5.0G | Moonlit.Sisters.2017.1080p.BluRay.x264-ZEPHR0.mkv
+sexdis | 1.1G | Sex.and.Dissent.S01E03.1080p.WEB.h264-LUMN7.mkv
+lovelab | 3.0G | Love.Lab.Human.Sexuality.Documentary.2021.1080p.WEB-DL.x264-NOVAQ.mkv
+
+# ---- Music: Tessa Vane and friends -----------------------------------------
+tv-mp3 | dir | Tessa Vane - Paper Moons (2022) [MP3 320]
+    11M | 01 - Paper Moons.mp3
+    9M | 02 - Tin Lanterns.mp3
+    10M | 03 - Harbour Wall.mp3
+tv-paper | dir | Tessa Vane - Paper Moons (2022) [FLAC 24-96]
+    88M | 01 - Paper Moons.flac
+    71M | 02 - Tin Lanterns.flac
+    80M | 03 - Harbour Wall.flac
+    2M | cover.jpg
+tv-disco | dir | Tessa Vane - Discography 2015-2022 [FLAC]
+    30M | 2015 - First Light/01 - First Light.flac
+    33M | 2019 - Meridian/01 - Meridian.flac
+    31M | 2019 - Meridian/02 - Salt Lines.flac
+    40M | 2022 - Paper Moons/01 - Paper Moons.flac
+    36M | 2022 - Paper Moons/02 - Tin Lanterns.flac
+comp | dir | Various Artists - Coastal Drive Vol. 2 (2020) [MP3 320]
+    9M | 01 - Pell Harbour - Long Exposure.mp3
+    8M | 02 - Tessa Vane - Undertow.mp3
+    9M | 03 - Arlo Finch - Glass Hours.mp3
+hp-album | dir | The Hollow Pines - Granite Hearts (2018) [FLAC]
+    32M | 01 - Stoneworks.flac
+    29M | 02 - Granite Hearts.flac
+    30M | 03 - Quarry Song.flac
+
+# ---- Software ---------------------------------------------------------------
+pf-2023 | dir | PhotoForge.Studio.2023.v24.0.3.x64.Multilingual
+    1.8G | Setup.exe
+    2K | Readme.txt
+pf-2024 | dir | PhotoForge.Studio.2024.v25.1.2.x64.Multilingual
+    2.1G | Setup.exe
+    2K | Readme.txt
+pf-mac | dir | PhotoForge Studio 2024 v25.1.2 macOS
+    2.3G | PhotoForge_Studio_2024_v25.1.2.dmg
+pf-plugins | dir | PhotoForge.Plugins.Bundle.2024.x64
+    400M | PluginsSetup.exe
+pf-course | dir | Mastering PhotoForge Studio - Video Course (2023)
+    200M | 01 Getting Started.mp4
+    350M | 02 Layers and Masks.mp4
+    280M | 03 Colour Grading.mp4
+
+# ---- Books ------------------------------------------------------------------
+eb-pack | dir | Mara Ellison - Collected Novels (EPUB, MOBI)
+    3M | The Glass Orchard.epub
+    3M | The Glass Orchard.mobi
+    2M | Winter Ledger.epub
+    2M | Winter Ledger.mobi
+eb-tidepool | 14M | Learning Tidepool - Data Pipelines in Practice (2024).pdf
+
+# ---- Games ------------------------------------------------------------------
+sf-repack | dir | Starlit Frontier - Deluxe Edition [v1.4.2 + 3 DLCs] [Repack by QLLFN]
+    40M | setup.exe
+    3.9G | setup-starlit-frontier-01.bin
+    3.9G | setup-starlit-frontier-02.bin
+sf-iso | dir | Starlit.Frontier.v1.4.2-KSTRL
+    11G | kstrl-starlitfrontier.iso
+    5K | kstrl.nfo
+sf-ost | dir | Starlit Frontier OST (2023) [MP3]
+    7M | 01 - Launch Window.mp3
+    8M | 02 - Frontier Hymn.mp3
+
+# ---- Ambiguous names: the payload is in the files --------------------------
+rg-proper | 3.2G | Riverglass.2018.720p.BluRay.x264-VSPR.mkv
+rg-hash | dir | a7f3e9c1b2d4
+    4.1G | Riverglass.2018.1080p.WEB-DL.mkv
+pines-folder | dir | New folder (3)
+    32M | Granite Hearts/01 - Stoneworks.flac
+    29M | Granite Hearts/02 - Granite Hearts.flac
+
+# ---- Background: share words with the families, answer none of them -------
+bg01 | 4.1G | Canyon.Run.2015.1080p.BluRay.x264-KSTRL.mkv
+bg02 | 2.9G | Copper.Mines.of.Ostfeld.2010.Documentary.720p.HDTV.x264-OAKUM.mkv
+bg03 | 5.6G | The.Room.Upstairs.2018.1080p.WEB-DL.x264-PLNTH.mkv
+bg04 | 3.3G | Glassmakers.of.Venn.2016.Documentary.1080p.WEB.h264-LUMN7.mkv
+bg05 | 6.1G | Orchard.Street.2018.1080p.WEB-DL.x264-OAKUM.mkv
+bg06 | 4.8G | Glass.Eyes.2017.720p.BluRay.x264-VSPR.mkv
+bg07 | 7.3G | City.Lights.Falling.2020.1080p.BluRay.x264-NOVAQ.mkv
+bg08 | 1.0G | Northern.Lights.Over.Skarvik.S01E01.1080p.WEB.h264-LUMN7.mkv
+bg09 | 5.2G | The.Keeper.2016.1080p.BluRay.x264-BRMBY.mkv
+bg10 | 4.6G | Ember.Line.2021.1080p.WEB-DL.x264-TEALDK.mkv
+bg11 | 6.0G | Hollow.Point.2019.1080p.BluRay.x264-KSTRL.mkv
+bg12 | 3.8G | Paper.Towns.of.Ardmore.2014.720p.BluRay.x264-VSPR.mkv
+bg13 | 5.9G | The.Wolf.Hour.2019.1080p.WEB-DL.x264-NOVAQ.mkv
+bg14 | 4.4G | Ridge.Runners.2016.1080p.BluRay.x264-PLNTH.mkv
+bg15 | 6.3G | Salt.and.Iron.2023.1080p.WEB-DL.x264-OAKUM.mkv
+bg16 | 7.0G | Velvet.Hours.2018.1080p.BluRay.x264-ZEPHR0.mkv
+bg17 | 3.1G | Sisters.of.the.Fen.2015.720p.WEB-DL.x264-BRMBY.mkv
+bg18 | 1.2G | Night.Shift.Stories.S02E04.1080p.WEB-DL.x264-TEALDK.mkv
+bg19 | 2.5G | Protocol.Seven.2014.720p.BluRay.x264-VSPR.mkv
+bg20 | 5.5G | Express.Lane.2021.1080p.WEB-DL.x264-LUMN7.mkv
+bg21 | dir | Arlo Finch - Sodium Glow (2021) [FLAC]
+    30M | 01 - Sodium Glow.flac
+    28M | 02 - Night Tram.flac
+bg22 | dir | Pell Harbour - Long Exposure (2020) [MP3 320]
+    9M | 01 - Long Exposure.mp3
+    8M | 02 - Glasswork.mp3
+bg23 | dir | CodeLedger.Pro.2024.v8.2.x64
+    600M | Setup.exe
+bg24 | 9M | Winter Ledger - Mara Ellison (2019).epub
+bg25 | dir | Frontier.Towns.S01.720p.HDTV.x264-OAKUM
+    500M | Frontier.Towns.S01E01.720p.HDTV.x264-OAKUM.mkv
+    500M | Frontier.Towns.S01E02.720p.HDTV.x264-OAKUM.mkv
+bg26 | 4.0G | Starlight.Motel.2013.1080p.BluRay.x264-KSTRL.mkv
+bg27 | 2.6G | Tidewater.2012.720p.BluRay.x264-VSPR.mkv
+bg28 | 6.4G | Blackthorn.Manor.2020.1080p.WEB-DL.x264-NOVAQ.mkv
+bg29 | 3.3G | 1984.Revisited.2019.Documentary.1080p.WEB.h264-LUMN7.mkv
+bg30 | 4.7G | 2021.A.Year.in.Pictures.2021.Documentary.1080p.WEB.h264-LUMN7.mkv
+bg31 | 5.0G | 星空下的约定.2021.1080p.WEB-DL.mkv
+bg32 | 1.6G | [ZEPHR0] Yoru no Machi - 03 [1080p].mkv
+bg33 | 6.6G | The.Lantern.Keeper.2017.1080p.BluRay.x264-PLNTH.mkv
+bg34 | 4.2G | Daughter.of.the.Tide.2019.1080p.WEB-DL.x264-OAKUM.mkv
+bg35 | 5.3G | Brass.Monkeys.2015.1080p.BluRay.x264-BRMBY.mkv
+bg36 | dir | Granite.Coast.S01.1080p.WEB-DL.x264-TEALDK
+    1.4G | Granite.Coast.S01E01.1080p.WEB-DL.x264-TEALDK.mkv
+bg37 | 3.4G | The.Studio.2016.720p.BluRay.x264-VSPR.mkv
+bg38 | 7.5G | Room.Service.2022.1080p.BluRay.x264-KSTRL.mkv
+bg39 | 4.1G | Moonlit.Road.2019.1080p.WEB-DL.x264-ZEPHR0.mkv
+bg40 | 2.0G | Remux.Workshop.Tutorial.2021.1080p.WEB.h264-LUMN7.mp4
