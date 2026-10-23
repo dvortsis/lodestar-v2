@@ -151,12 +151,55 @@ fn check_entries(
 ///   folder inherits the private data folder's (`windows::logfile`).
 pub fn log_folder_private(sddl: &str, own: Option<&str>) -> Result<(), String> {
     let d = parse_sddl(sddl)?;
-    if !trusted(&d.owner, own) {
+    let ok = |sid: &str| {
+        let sid = full_sid(sid, own);
+        matches!(
+            sid.as_str(),
+            "S-1-5-18" | "S-1-5-32-544" | "S-1-3-4" | "S-1-3-0"
+        ) || Some(sid.as_str()) == own
+    };
+    let owner = full_sid(&d.owner, own);
+    if !matches!(owner.as_str(), "S-1-5-18" | "S-1-5-32-544") && Some(owner.as_str()) != own {
         return Err(format!("it belongs to {}", d.owner));
     }
-    check_entries(&d.dacl, false, &|sid| {
-        trusted(sid, own) || matches!(sid, "OW" | "S-1-3-4" | "CO" | "S-1-3-0")
-    })
+    check_entries(&d.dacl, false, &ok)
+}
+
+/// A SID as SDDL writes it, spelled out. SDDL abbreviates well-known
+/// SIDs (`SY`, `LS`), and a machine's own accounts by their RID (`LA`, the
+/// built-in Administrator, which a CI runner may run as), while `whoami`
+/// gives the full SID. The machine-relative ones take `own`'s machine
+/// prefix, when `own` is a local account. An alias not listed stays as it
+/// is, so it matches nothing: fail closed.
+pub fn full_sid(sid: &str, own: Option<&str>) -> String {
+    let well_known = match sid {
+        "SY" => Some("S-1-5-18"),
+        "BA" => Some("S-1-5-32-544"),
+        "BU" => Some("S-1-5-32-545"),
+        "OW" => Some("S-1-3-4"),
+        "CO" => Some("S-1-3-0"),
+        "LS" => Some("S-1-5-19"),
+        "NS" => Some("S-1-5-20"),
+        "WD" => Some("S-1-1-0"),
+        "AU" => Some("S-1-5-11"),
+        _ => None,
+    };
+    if let Some(full) = well_known {
+        return full.to_string();
+    }
+    let rid = match sid {
+        "LA" => Some("500"),
+        "LG" => Some("501"),
+        _ => None,
+    };
+    let prefix = own
+        .filter(|o| o.starts_with("S-1-5-21-"))
+        .and_then(|o| o.rsplit_once('-'))
+        .map(|(prefix, _)| prefix);
+    match (rid, prefix) {
+        (Some(rid), Some(prefix)) => format!("{prefix}-{rid}"),
+        _ => sid.to_string(),
+    }
 }
 
 /// The SID in `whoami /user /fo csv /nh` output (`"host\\user","S-1-5-…"`).
@@ -495,6 +538,30 @@ mod tests {
         assert!(log_folder_private("O:BAD:NO_ACCESS_CONTROL", None).is_err());
         assert!(log_folder_private("O:BAD:P(OA;;FA;;;SY)", None).is_err());
         assert!(log_folder_private("garbage", None).is_err());
+        // The built-in Administrator (a CI runner's account) is written
+        // `LA`, and LocalService `LS`: spelled out against `whoami`'s SID.
+        const ADMIN: &str = "S-1-5-21-1-2-3-500";
+        let la =
+            "O:LAG:S-1-5-21-1-2-3-513D:AI(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;LA)";
+        assert_eq!(log_folder_private(la, Some(ADMIN)), Ok(()));
+        assert!(
+            log_folder_private(la, Some(USER)).is_err(),
+            "another machine account's"
+        );
+        assert!(
+            log_folder_private(la, Some(OWN)).is_err(),
+            "a service SID has no machine prefix"
+        );
+        assert_eq!(
+            log_folder_private("O:LSD:P(A;;FA;;;LS)(A;;FA;;;SY)", Some("S-1-5-19")),
+            Ok(())
+        );
+        assert!(
+            log_folder_private("O:BAD:P(A;;FA;;;XX)", None).is_err(),
+            "an unknown alias"
+        );
+        assert_eq!(full_sid("LA", Some(ADMIN)), ADMIN);
+        assert_eq!(full_sid("LA", None), "LA");
         // Deny entries and CREATOR OWNER are fine.
         assert_eq!(
             log_folder_private("O:BAD:P(D;;FA;;;WD)(A;OICIIO;GA;;;CO)(A;;FA;;;SY)", None),
