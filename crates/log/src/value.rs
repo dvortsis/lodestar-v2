@@ -50,6 +50,7 @@ pub mod kind {
         FilterChange => FieldKind::Data(Kind::FilterChange),
         Error => FieldKind::Error,
         Label => FieldKind::Label,
+        SetupToken => FieldKind::Label,
     }
 }
 
@@ -76,6 +77,9 @@ pub enum Value<'a> {
     Flag(bool),
     Count(u64),
     Location(&'a str, u32),
+    Listen(SocketAddr),
+    /// The setup token, shown until setup completes.
+    Secret(&'a str),
 }
 
 /// A value as one output shows it.
@@ -116,9 +120,12 @@ impl Value<'_> {
             Value::Size(_) | Value::Signed(_) => FieldKind::Data(Kind::Size),
             Value::Detail(_) => FieldKind::Data(Kind::FilterChange),
             Value::Error(_) => FieldKind::Error,
-            Value::Label(_) | Value::Flag(_) | Value::Count(_) | Value::Location(..) => {
-                FieldKind::Label
-            }
+            Value::Label(_)
+            | Value::Flag(_)
+            | Value::Count(_)
+            | Value::Location(..)
+            | Value::Listen(_)
+            | Value::Secret(_) => FieldKind::Label,
         }
     }
 
@@ -172,6 +179,8 @@ impl Value<'_> {
             Value::Flag(b) => Rendered::Flag(b),
             Value::Count(n) => Rendered::Number(n),
             Value::Location(file, line) => Rendered::Text(format!("{file}:{line}")),
+            Value::Listen(addr) => Rendered::Text(addr.to_string()),
+            Value::Secret(s) => Rendered::Text(s.to_string()),
         }
     }
 }
@@ -346,6 +355,35 @@ pub struct Count(pub u64);
 impl<'a> IntoValue<'a, kind::Label> for Count {
     fn into_value(self) -> Value<'a> {
         Value::Count(self.0)
+    }
+}
+
+/// The first-run setup token (§12): the one secret a line may carry,
+/// printed at start until setup completes, after which it stops working.
+/// Only `auth.setup_token` declares it.
+#[derive(Clone, Copy)]
+pub struct SetupToken<'a>(pub &'a str);
+
+impl<'a> IntoValue<'a, kind::SetupToken> for SetupToken<'a> {
+    fn into_value(self) -> Value<'a> {
+        Value::Secret(self.0)
+    }
+}
+
+impl fmt::Debug for SetupToken<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SetupToken([hidden])")
+    }
+}
+
+/// An address Lodestar itself listens on (its UI and API): its own,
+/// never a peer's or a client's.
+#[derive(Debug, Clone, Copy)]
+pub struct Listen(pub SocketAddr);
+
+impl<'a> IntoValue<'a, kind::Label> for Listen {
+    fn into_value(self) -> Value<'a> {
+        Value::Listen(self.0)
     }
 }
 

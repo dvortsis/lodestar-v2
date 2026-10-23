@@ -513,10 +513,10 @@ fn tighten_permissions(path: &Path, file: &File) -> io::Result<()> {
     // mount is never touched. A loose one that can't be tightened is an
     // error: the key is exposed.
     if mode & 0o077 != 0 {
-        tracing::warn!(
-            path = %path.display(),
-            mode = format_args!("{:o}", mode & 0o777),
-            "the secrets key was readable by other users; restricting it to 0600"
+        lodestar_log::log_event!(
+            crate::log_events::SECRET_KEY_TIGHTENED,
+            path = lodestar_log::Path::new(path),
+            mode = lodestar_log::Count(u64::from(mode & 0o777))
         );
         file.set_permissions(fs::Permissions::from_mode(0o600))?;
     }
@@ -531,10 +531,10 @@ fn tighten_permissions(path: &Path, file: &File) -> io::Result<()> {
 #[cfg(windows)]
 fn tighten_permissions(path: &Path, _file: &File) -> io::Result<()> {
     if let Err(e) = restrict_acl(path) {
-        tracing::warn!(
-            path = %path.display(),
-            error = %e,
-            "couldn't re-apply the secrets key's restricted ACL"
+        lodestar_log::log_event!(
+            crate::log_events::SECRET_KEY_ACL_FAILED,
+            path = lodestar_log::Path::new(path),
+            error = lodestar_log::Error::new(&e)
         );
     }
     Ok(())

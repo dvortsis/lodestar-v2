@@ -20,6 +20,7 @@ lodestar-filter.workspace = true
 # `POST /settings/test` runs the download clients' own tests through its
 # SSRF guard (B2b).
 lodestar-integrations.workspace = true
+lodestar-log.workspace = true
 lodestar-metainfo.workspace = true
 lodestar-search.workspace = true
 lodestar-store.workspace = true

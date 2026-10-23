@@ -202,7 +202,7 @@ impl Transmission {
     /// as a rejection otherwise.
     async fn call<T: DeserializeOwned>(
         &self,
-        method: &str,
+        method: &'static str,
         arguments: Value,
         limit: usize,
     ) -> Result<T, ClientError> {
@@ -213,7 +213,7 @@ impl Transmission {
     /// [`call`](Self::call) with its own timeout (uploads get more).
     async fn call_timeout<T: DeserializeOwned>(
         &self,
-        method: &str,
+        method: &'static str,
         arguments: Value,
         limit: usize,
         timeout: Duration,
@@ -243,7 +243,12 @@ impl Transmission {
                 .map_err(|_| ClientError::Protocol("couldn't build the request"))?;
             let resp = self.http.send(req).await?;
             let status = resp.status().as_u16();
-            tracing::debug!(method, status, "Transmission request");
+            lodestar_log::log_event!(
+                crate::log_events::CLIENT_REQUEST,
+                client = "transmission",
+                method = method,
+                status = lodestar_log::Count(status.into())
+            );
             match status {
                 409 => {
                     let id = resp
@@ -328,7 +333,10 @@ impl Transmission {
                 } else if version >= LABELS_SET {
                     Some(label)
                 } else {
-                    tracing::debug!(version, "Transmission has no labels; added without one");
+                    lodestar_log::log_event!(
+                        crate::log_events::CLIENT_NO_LABELS,
+                        rpc_version = lodestar_log::Count(version as u64)
+                    );
                     None
                 }
             }
@@ -358,7 +366,10 @@ impl Transmission {
                 )
                 .await;
             if let Err(e) = set {
-                tracing::debug!(error = %e, "Transmission added the torrent but not its label");
+                lodestar_log::log_event!(
+                    crate::log_events::CLIENT_LABEL_FAILED,
+                    error = lodestar_log::Error::new(&e)
+                );
             }
         }
         Ok(Added::New(hash))
@@ -392,7 +403,10 @@ impl Transmission {
         })
         .await?
         else {
-            tracing::debug!("Transmission metadata didn't arrive; left paused");
+            lodestar_log::log_event!(
+                crate::log_events::CLIENT_LEFT_PAUSED,
+                client = "transmission"
+            );
             return Ok(Selection::Pending);
         };
         let skipped = skipped_files(selected, count)?;

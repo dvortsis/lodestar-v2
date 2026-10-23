@@ -144,7 +144,8 @@ fn every_section_reports_every_field() {
             "storage",
             "search",
             "content",
-            "preferences"
+            "preferences",
+            "logging"
         ]
     );
     for s in &index.sections {
@@ -214,9 +215,10 @@ fn the_file_and_defaults_are_told_apart() {
         &[],
     );
     let r = registry(dir.path(), &c);
+    // `log` is the logging section's alias.
     assert_eq!(
-        field(&r, "general", "log_level"),
-        (json!("debug"), SettingSource::File, false)
+        field(&r, "logging", "verbosity"),
+        (json!("detailed"), SettingSource::File, false)
     );
     assert_eq!(
         field(&r, "network", "http_bind"),
@@ -262,7 +264,7 @@ fn environment_fields_are_read_only_and_name_the_variable() {
     );
     // A refused field refuses the whole patch: nothing saved.
     let err = r
-        .patch("general", patch(json!({ "log_level": "debug" })))
+        .patch("logging", patch(json!({ "verbosity": "detailed" })))
         .unwrap_err();
     assert!(matches!(err, SettingsError::SetByEnv { ref var, .. } if var == "LODESTAR_LOG"));
     assert!(
@@ -402,11 +404,11 @@ fn patches_are_validated_per_field() {
     invalid("network", json!({ "http_bind": 8090 }), "http_bind");
     invalid("network", json!({ "http_bind": "0.0.0.0:0" }), "http_bind");
     // Log filters.
-    invalid("general", json!({ "log_level": "info,=[" }), "log_level");
+    invalid("logging", json!({ "libraries": "info,=[" }), "libraries");
     invalid(
-        "general",
-        json!({ "log_level": "x".repeat(2000) }),
-        "log_level",
+        "logging",
+        json!({ "libraries": "x".repeat(2000) }),
+        "libraries",
     );
     // The field in error is the one named, even with valid ones beside it.
     invalid(
@@ -451,8 +453,8 @@ fn patches_are_validated_per_field() {
     )
     .unwrap();
     r.patch(
-        "general",
-        patch(json!({ "log_level": "info,lodestar_dht=debug" })),
+        "logging",
+        patch(json!({ "libraries": "info,hyper=debug", "components": { "dht": "debug" } })),
     )
     .unwrap();
 }
@@ -550,7 +552,7 @@ fn restart_only_changes_are_listed_until_restart() {
     assert!(out.restart_required.is_empty());
     assert!(!out.fields["intensity"].restart_required);
     let out = r
-        .patch("general", patch(json!({ "log_level": "debug" })))
+        .patch("logging", patch(json!({ "verbosity": "detailed" })))
         .unwrap();
     assert!(out.restart_required.is_empty());
 }
@@ -561,20 +563,23 @@ async fn changes_reach_subscribers() {
     let c = config(dir.path(), None, &[]);
     let r = registry(dir.path(), &c);
     let mut crawler = r.subscribe::<Crawler>();
-    let mut general = r.subscribe::<General>();
+    let mut logging = r.subscribe::<super::logging::Logging>();
     r.patch("crawler", patch(json!({ "intensity": "aggressive" })))
         .unwrap();
     crawler.changed().await.unwrap();
     assert_eq!(crawler.borrow_and_update().intensity, Intensity::Aggressive);
-    assert!(!general.has_changed().unwrap());
+    assert!(!logging.has_changed().unwrap());
     // Saving the same value again wakes nobody.
     r.patch("crawler", patch(json!({ "intensity": "aggressive" })))
         .unwrap();
     assert!(!crawler.has_changed().unwrap());
-    r.patch("general", patch(json!({ "log_level": "warn" })))
+    r.patch("logging", patch(json!({ "verbosity": "warnings" })))
         .unwrap();
-    general.changed().await.unwrap();
-    assert_eq!(general.borrow_and_update().log_level, "warn");
+    logging.changed().await.unwrap();
+    assert_eq!(
+        logging.borrow_and_update().verbosity,
+        super::logging::Verbosity::Warnings
+    );
 }
 
 #[tokio::test]
@@ -586,18 +591,30 @@ async fn the_log_filter_follows_live() {
     let (_layer, handle) = reload::Layer::<EnvFilter, Subscriber>::new(EnvFilter::new("error"));
     let (seen_tx, mut seen) = tokio::sync::mpsc::unbounded_channel();
     let h = handle.clone();
-    let task = log::follow_with(r.subscribe(), move |filter| {
+    let task = log::follow_with(r.subscribe(), None, move |filter| {
         let result = log::reload(&h, filter);
         let _ = seen_tx.send(filter.to_string());
         result
     });
-    // It applies the effective value at once (main started with the file's).
-    assert_eq!(seen.recv().await.unwrap(), "info");
-    r.patch("general", patch(json!({ "log_level": "lodestar=trace" })))
-        .unwrap();
-    assert_eq!(seen.recv().await.unwrap(), "lodestar=trace");
+    // It applies the effective value at once (main started with the
+    // file's): Libraries at warnings, each component at the verbosity.
+    let first = seen.recv().await.unwrap();
+    assert!(
+        first.starts_with("warn,") && first.contains("lodestar_dht=info"),
+        "{first}"
+    );
+    r.patch(
+        "logging",
+        patch(json!({ "components": { "dht": "trace" }, "libraries": "hyper=debug" })),
+    )
+    .unwrap();
+    let next = seen.recv().await.unwrap();
+    assert!(
+        next.starts_with("hyper=debug,") && next.contains("lodestar_dht=trace"),
+        "{next}"
+    );
     let current = handle.with_current(|f| f.to_string()).unwrap();
-    assert_eq!(current, "lodestar=trace");
+    assert!(current.contains("lodestar_dht=trace"), "{current}");
     task.abort();
 }
 
@@ -1023,10 +1040,11 @@ fn saved_values_of_now_read_only_fields_are_removed_once() {
     let c = config(dir.path(), None, &[]);
     let out = logs(|| drop(registry(dir.path(), &c)));
     assert!(
-        out.contains("removed saved network.secure_cookies"),
+        out.contains("Removed a saved setting")
+            && out.contains("section=network field=secure_cookies"),
         "{out}"
     );
-    assert!(out.contains("removed saved general.data_dir"), "{out}");
+    assert!(out.contains("section=general field=data_dir"), "{out}");
     assert!(!out.contains("/elsewhere"), "{out}");
     // Only the retired rows went; the next start has nothing to say.
     let r = registry(dir.path(), &c);
@@ -1043,7 +1061,7 @@ fn saved_values_of_now_read_only_fields_are_removed_once() {
     );
     drop(r);
     let out = logs(|| drop(registry(dir.path(), &c)));
-    assert!(!out.contains("removed saved"), "{out}");
+    assert!(!out.contains("Removed a saved setting"), "{out}");
 }
 
 #[test]
@@ -1066,9 +1084,9 @@ fn a_saved_value_over_the_file_is_noted_without_its_value() {
         ])
         .unwrap();
     let out = logs(|| drop(registry(dir.path(), &c)));
-    assert!(out.contains("crawler.timeout_secs"), "{out}");
+    assert!(out.contains("section=crawler field=timeout_secs"), "{out}");
     assert!(out.contains("set it to null in the app to reset"), "{out}");
     assert!(!out.contains("47"), "{out}");
-    assert!(!out.contains("crawler.max_metadata_mib"), "{out}");
-    assert!(!out.contains("crawler.intensity"), "{out}");
+    assert!(!out.contains("field=max_metadata_mib"), "{out}");
+    assert!(!out.contains("field=intensity"), "{out}");
 }

@@ -8,6 +8,7 @@ mod config;
 mod floor;
 mod fsdetect;
 mod http;
+mod logging;
 mod metrics;
 mod ops;
 mod privdrop;

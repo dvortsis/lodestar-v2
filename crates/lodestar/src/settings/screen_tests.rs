@@ -43,7 +43,7 @@ fn failure(section: &str, error: SettingsError) -> SettingsFailure {
 fn every_field_has_its_form_hints() {
     let dir = tempfile::tempdir().unwrap();
     let r = registry(dir.path(), &config(dir.path(), None, &[]));
-    let units = ["seconds", "mebibytes", "connections"];
+    let units = ["seconds", "mebibytes", "connections", "days", "files"];
     let widgets = [
         "radio",
         "slider",
@@ -51,6 +51,10 @@ fn every_field_has_its_form_hints() {
         "shortcuts",
         "language",
         "time-zone",
+        "log-events",
+        "log-components",
+        "log-kinds",
+        "duration",
     ];
     let dangers = ["disruptive", "privacy", "destructive", "security"];
     // Ours, and utoipa's for integers.
@@ -136,7 +140,9 @@ fn every_field_has_its_form_hints() {
     assert_eq!(bind["x-env"], json!("LODESTAR_HTTP_BIND"));
     assert_eq!(bind["x-config"], json!("http.bind"));
     assert_eq!(prop("preferences", "theme_dark")["x-auto"], json!(""));
-    assert_eq!(prop("general", "log_level")["format"], json!("log-filter"));
+    assert_eq!(prop("logging", "libraries")["format"], json!("log-filter"));
+    assert_eq!(prop("logging", "data")["x-danger"], json!("privacy"));
+    assert_eq!(prop("logging", "verbosity")["x-env"], json!("LODESTAR_LOG"));
 }
 
 #[test]
@@ -392,7 +398,7 @@ fn the_preview_checks_like_a_save_and_saves_nothing() {
             "crawler": { "intensity": "low", "timeout_secs": 20 },
             "network": { "http_bind": "127.0.0.1:9000", "dht_enabled": false },
             "search": { "enabled": false, "heap_mib": 256 },
-            "general": { "log_level": "info,lodestar_dht=debug" },
+            "logging": { "components": { "dht": "debug" } },
         })))
         .unwrap();
     let crawler = &p.sections["crawler"];
@@ -418,7 +424,7 @@ fn the_preview_checks_like_a_save_and_saves_nothing() {
     };
     assert_eq!(codes("network", "dht_enabled"), ["crawling_stops"]);
     assert_eq!(codes("search", "enabled"), ["search_stops"]);
-    assert_eq!(codes("general", "log_level"), ["verbose_logs"]);
+    assert_eq!(codes("logging", "components"), ["verbose_logs"]);
     assert_eq!(
         p.sections["search"].fields["heap_mib"].estimates[0].value,
         json!(256)
@@ -484,6 +490,14 @@ fn any_value() -> impl Strategy<Value = Value> {
         json!({}),
         json!({ "results.next": "n" }),
         json!({ "a": "j", "b": "j" }),
+        json!({ "dht": "debug" }),
+        json!({ "logging.applied": false }),
+        json!({ "app.start": false }),
+        json!({ "name": 1 }),
+        json!("detailed"),
+        json!("full"),
+        json!(-1),
+        json!(4_000_000_000i64),
         json!([1]),
     ])
 }
@@ -497,6 +511,7 @@ fn any_key(section: &'static str) -> impl Strategy<Value = String> {
         "storage" => super::storage::Storage::FIELDS,
         "search" => super::search::Search::FIELDS,
         "content" => super::content::Content::FIELDS,
+        "logging" => super::logging::Logging::FIELDS,
         "preferences" => Preferences::FIELDS,
         _ => &[],
     }
@@ -522,6 +537,7 @@ fn any_batch() -> impl Strategy<Value = SettingsBatch> {
         "search",
         "content",
         "preferences",
+        "logging",
         "nope",
     ];
     prop::collection::vec(prop::sample::select(sections.to_vec()), 0..4).prop_flat_map(|names| {
@@ -731,7 +747,7 @@ fn secrets_are_never_returned_exported_or_echoed() {
         .unwrap();
     drop(r);
     let text = logs(|| drop(vault(dir.path())));
-    assert!(text.contains("settings.vault.token"), "{text}");
+    assert!(text.contains("section=vault field=token"), "{text}");
     assert!(!text.contains("98765432"), "{text}");
 }
 

@@ -1372,10 +1372,13 @@ dependencies = [
  "brotli",
  "clap",
  "flate2",
+ "getrandom 0.3.4",
+ "hmac",
  "lodestar-api",
  "lodestar-classify",
  "lodestar-dht",
  "lodestar-filter",
+ "lodestar-log",
  "lodestar-metainfo",
  "lodestar-peer-wire",
  "lodestar-pipeline",
@@ -1413,6 +1416,7 @@ dependencies = [
  "lodestar-classify",
  "lodestar-filter",
  "lodestar-integrations",
+ "lodestar-log",
  "lodestar-metainfo",
  "lodestar-pipeline",
  "lodestar-search",
@@ -1520,6 +1524,7 @@ dependencies = [
  "chacha20poly1305",
  "getrandom 0.3.4",
  "lettre",
+ "lodestar-log",
  "proptest",
  "quick-xml",
  "reqwest",
@@ -1532,6 +1537,13 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "zeroize",
+]
+
+[[package]]
+name = "lodestar-log"
+version = "0.0.0"
+dependencies = [
+ "tracing",
 ]
 
 [[package]]
