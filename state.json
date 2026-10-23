@@ -557,13 +557,13 @@
       "notes": ""
     },
     "M-filters-dialogs": {
-      "status": "review",
+      "status": "merged",
       "model": "opus",
       "session": "session_01PWJPAR99QvqkMzwdG1hG29",
       "pr": 144,
       "attempt": 0,
       "review_rounds": 1,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus); brief committed 576d67a with runner addendum | 2026-10-23T17:23:23Z part 1/2 PR #136 head ef29faa; one combined fresh+security reviewer (usage saving) | 2026-10-23T17:37:32Z review MERGE (no security findings); short round: onclose fires twice + tests; polish. Runner checks delta directly | 2026-10-23T17:56:15Z 6e05ddd fixes (onclose once + tests, polish), green; held by merge freeze | 2026-10-23T18:42:25Z part 1 #136 merged as 2a24c6d; part 2 may push | 2026-10-23T18:54:31Z part 2 PR #144 head 9d99deb (+1,420, 684 tests); part-1 reviewer resumed | 2026-10-23T19:01:52Z #144 review MERGE; short round: commit strength-switch-during-preview test + polish | 2026-10-23T19:22:46Z f680509 round in; playwright red on insights.routes.test.ts:236 (route.fetch after page close, #135 flake); assigned unrouteAll fix into #144",
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus); brief committed 576d67a with runner addendum | 2026-10-23T17:23:23Z part 1/2 PR #136 head ef29faa; one combined fresh+security reviewer (usage saving) | 2026-10-23T17:37:32Z review MERGE (no security findings); short round: onclose fires twice + tests; polish. Runner checks delta directly | 2026-10-23T17:56:15Z 6e05ddd fixes (onclose once + tests, polish), green; held by merge freeze | 2026-10-23T18:42:25Z part 1 #136 merged as 2a24c6d; part 2 may push | 2026-10-23T18:54:31Z part 2 PR #144 head 9d99deb (+1,420, 684 tests); part-1 reviewer resumed | 2026-10-23T19:01:52Z #144 review MERGE; short round: commit strength-switch-during-preview test + polish | 2026-10-23T19:22:46Z f680509 round in; playwright red on insights.routes.test.ts:236 (route.fetch after page close, #135 flake); assigned unrouteAll fix into #144 | 2026-10-23T19:38:04Z e6fb2e5 (strength-switch test, polish, sleeps removed, settled helper, insights unrouteAll fix) CI green; merged #144. Slice done",
       "catch_ups": 1
     },
     "S-filters": {
@@ -889,10 +889,10 @@
       "status": "review",
       "model": "opus",
       "session": "session_01Bt3QbxVvS5sAU3VJp3wHet",
-      "pr": 143,
+      "pr": 146,
       "attempt": 0,
       "review_rounds": 1,
-      "notes": "from #86 | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus); brief committed 576d67a with runner addendum | 2026-10-23T18:40:51Z OWNER decision: Settings route budget = \u00a710.1 45 KB per route (replaces \u00a710.10.11 20 KB); engine target <=22 KB (measured ~21.1); instant-mode lazy split as follow-up. Part 1 pushed (70c1c07, no PR), part 2 local; push after #48 | 2026-10-23T18:54:05Z part 1 PR #143 dddb14e review FIX: in-flight revert-to-saved edit lost (staged+instant); gate test table; instant writeOnly guard; polish. No security findings. Engine ~10.6 KB (part 1) | 2026-10-23T19:05:48Z fix round pushed c6873df (main merged) | 2026-10-23T19:24:51Z c6873df delta checked (B1 keep path + tests, gate table, instant secret explicit-only), CI green; merged #143 part 1. Part 2 next",
+      "notes": "from #86 | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus); brief committed 576d67a with runner addendum | 2026-10-23T18:40:51Z OWNER decision: Settings route budget = \u00a710.1 45 KB per route (replaces \u00a710.10.11 20 KB); engine target <=22 KB (measured ~21.1); instant-mode lazy split as follow-up. Part 1 pushed (70c1c07, no PR), part 2 local; push after #48 | 2026-10-23T18:54:05Z part 1 PR #143 dddb14e review FIX: in-flight revert-to-saved edit lost (staged+instant); gate test table; instant writeOnly guard; polish. No security findings. Engine ~10.6 KB (part 1) | 2026-10-23T19:05:48Z fix round pushed c6873df (main merged) | 2026-10-23T19:24:51Z c6873df delta checked (B1 keep path + tests, gate table, instant secret explicit-only), CI green; merged #143 part 1. Part 2 next | 2026-10-23T19:38:04Z part 2 PR #146 head 2779c79 (3,544, ~half tests); part-1 reviewer resumed",
       "catch_ups": 1
     },
     "S-settings-2": {
