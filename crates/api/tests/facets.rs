@@ -171,6 +171,8 @@ fn fixture(n: usize) -> Fixture {
             ops: None,
             insights: None,
             user_data: None,
+            hot: None,
+            events: None,
         }),
     );
     let mut f = Fixture {
@@ -664,6 +666,8 @@ async fn search_disabled() {
             ops: None,
             insights: None,
             user_data: None,
+            hot: None,
+            events: None,
         }),
     );
     let token = auth.setup_token().unwrap();

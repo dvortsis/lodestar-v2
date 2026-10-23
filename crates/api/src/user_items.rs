@@ -16,7 +16,9 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::get;
 use axum::{Json, Router};
 use lodestar_metainfo::InfoHash;
-use lodestar_store::{Enriched, Error as StoreError, Store, TorrentRow, UserItem, UserItemUpdate};
+use lodestar_store::{
+    Enriched, Error as StoreError, HotColumns, Store, TorrentRow, UserItem, UserItemUpdate,
+};
 use utoipa::OpenApi;
 
 use crate::discover::withheld;
@@ -29,7 +31,7 @@ use crate::dto::user_items::{
 };
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{Json as JsonBody, Path, Query, same_origin_json};
-use crate::{ApiState, auth, search, torrents, unix_now};
+use crate::{ApiState, auth, search, swarm, torrents, unix_now};
 
 /// This module's half of `/openapi.json`.
 #[derive(OpenApi)]
@@ -115,12 +117,18 @@ pub(crate) fn shown_row(
     Ok(Some((row, enrichment)))
 }
 
-/// A result row for `row`, its classification fields filled as search
-/// fills them.
-pub(crate) fn hit_row(row: &TorrentRow, e: Option<Enriched>) -> SearchHit {
-    let mut hit = torrents::hit(row, 0.0, None);
+/// A result row for `row`, its classification and swarm fields filled
+/// as search fills them.
+pub(crate) fn hit_row(
+    store: &Store,
+    hot: Option<&HotColumns>,
+    row: &TorrentRow,
+    e: Option<Enriched>,
+) -> ApiResult<SearchHit> {
+    let swarm = swarm::summary(store, hot, row).map_err(internal)?;
+    let mut hit = torrents::hit(row, 0.0, None, swarm);
     search::enrich(&mut hit, e);
-    hit
+    Ok(hit)
 }
 
 /// A refusal from the store as a 422 on `field`; its message names the
@@ -253,7 +261,7 @@ pub(crate) async fn list(
                     hidden: item.hidden,
                     labels: item.labels,
                     note: item.note,
-                    torrent: hit_row(&row, e),
+                    torrent: hit_row(&store, s.hot.as_deref(), &row, e)?,
                     updated_at: item.updated_at,
                 });
                 last = Some(key);

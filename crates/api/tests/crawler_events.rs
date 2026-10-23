@@ -183,6 +183,8 @@ fn fixture() -> Fixture {
                 user_data: None,
                 insights: None,
                 adult: Default::default(),
+                hot: None,
+                events: None,
             }),
         )
         .layer(Extension(hub.clone()));
@@ -347,6 +349,8 @@ async fn without_a_hub_the_controls_still_work() {
             user_data: None,
             insights: None,
             adult: Default::default(),
+            hot: None,
+            events: None,
         }),
     );
     assert_eq!(

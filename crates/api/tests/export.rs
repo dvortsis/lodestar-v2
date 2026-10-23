@@ -24,7 +24,9 @@ use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_classify::Correction;
 use lodestar_metainfo::Info;
 use lodestar_search::{LeaseConfig, Leases, SearchHandle, SearchIndex};
-use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig, flags};
+use lodestar_store::{
+    NewTorrent, SourceId, Store, StoreConfig, SwarmUpdate, TrackerCounts, WriteBatch, flags,
+};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -146,6 +148,8 @@ fn fixture(ts: &[T], o: Opts) -> Fixture {
                 adult: AdultVisibility::follow(move || shown.load(Ordering::SeqCst)),
                 user_data: None,
                 insights: None,
+                hot: None,
+                events: None,
             }),
         )
         .layer(Extension(o.config))
@@ -409,6 +413,64 @@ fn golden_torrents() -> Vec<T> {
         },
         t("Holiday\u{7}Clips\u{202e}4pm.exe"),
     ]
+}
+
+#[tokio::test]
+async fn rows_carry_swarm_health_once_scraped() {
+    let f = fixture(&golden_torrents()[..2], Opts::default());
+    {
+        let mut store = f.store.lock().unwrap();
+        let tracker = store.upsert_tracker("udp://t.example:1337", 1).unwrap();
+        store
+            .write(&WriteBatch {
+                swarm: &[SwarmUpdate {
+                    torrent_id: f.ids[0],
+                    at: 1_700_000_100,
+                    seeders: 12,
+                    leechers: 3,
+                    completed: 90,
+                    trackers_reporting: 1,
+                    trackers_checked: 2,
+                    dht: None,
+                    per_tracker: vec![TrackerCounts {
+                        tracker,
+                        seeders: 12,
+                        leechers: 3,
+                        completed: 90,
+                    }],
+                    next_scrape_at: 1_700_021_700,
+                    flags: 0,
+                    interest: false,
+                }],
+                ..WriteBatch::default()
+            })
+            .unwrap();
+    }
+    let c = session(&f).await;
+    let (_, ndjson) = export(
+        &f,
+        &c,
+        "/api/v1/export?sort=%2Bdiscovered&format=json",
+        None,
+    )
+    .await;
+    assert_eq!(column(&ndjson, "seeders"), [json!(12), Value::Null]);
+    assert_eq!(column(&ndjson, "leechers"), [json!(3), Value::Null]);
+    assert_eq!(column(&ndjson, "trackers_checked"), [json!(2), Value::Null]);
+    assert_eq!(
+        column(&ndjson, "last_scrape_at"),
+        [json!(1_700_000_100), Value::Null]
+    );
+    let (_, csv) = export(
+        &f,
+        &c,
+        "/api/v1/export?sort=%2Bdiscovered&fields=hash,seeders",
+        None,
+    )
+    .await;
+    let rows = lines(&csv);
+    assert_eq!(rows[1].split(',').nth(1), Some("12"));
+    assert_eq!(rows[2].split(',').nth(1), Some(""), "never scraped: empty");
 }
 
 #[tokio::test]
@@ -1497,7 +1559,7 @@ async fn bad_requests_get_the_envelope() {
             "query_syntax",
         ),
         (
-            get("/api/v1/export?sort=seeders", Some(&c)),
+            get("/api/v1/export?sort=popularity", Some(&c)),
             400,
             "unknown_sort",
         ),
