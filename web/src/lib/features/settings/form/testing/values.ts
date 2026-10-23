@@ -1,5 +1,5 @@
 // Test helpers: values and specs the way the server sends them.
-import type { FieldSpec, SectionValues, SettingSource, SettingValue } from './types';
+import type { FieldSpec, SectionValues, SettingSource, SettingValue } from '../types';
 
 export const sv = (
 	value: unknown,

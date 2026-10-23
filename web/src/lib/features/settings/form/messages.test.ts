@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EN_FILE, MAP_FILE, messageKeys, renderMap } from './message-map.gen';
 import { fieldHelp, fieldLabel, messageId, settingText, unitText } from './messages';
-import { spec } from './testing';
+import { spec } from './testing/values';
 
 afterEach(() => vi.restoreAllMocks());
 

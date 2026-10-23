@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { onLoginRequired } from '$lib/api/client';
 import { DRAFT_PREFIX } from './draft';
-import { fakeServer, flush } from './fake-server';
+import { fakeServer, flush } from './testing/fake-server';
 import { createSettingsForm, type SettingsForm } from './form.svelte';
 import { clearIndexCache } from './schema';
-import { spec, sv, values } from './testing';
+import { spec, sv, values } from './testing/values';
 import type { FieldSpec, GateContext } from './types';
 
 const SECRET = 'hunter2-very-secret';
