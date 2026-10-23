@@ -786,7 +786,8 @@ mod tests {
         std::fs::write(dir.join("auth.json"), "{}").unwrap();
         let acl = run("icacls.exe", &[dir.join("auth.json").as_os_str()]);
         assert!(!acl.contains("BUILTIN\\Users"), "{acl}");
-        assert!(acl.contains("NT SERVICE\\Lodestar"), "{acl}");
+        // No "Lodestar" service exists here, so icacls shows the bare SID.
+        assert!(acl.contains(&sid), "{acl}");
         secure_dir(&dir, Some(&sid), &ops).unwrap();
         // Another service's SID isn't this one's.
         let other = service_sid("LodestarOther").unwrap();
