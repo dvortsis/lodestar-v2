@@ -235,13 +235,13 @@
    "notes": "launched 22:38; deps W7ab,W7cd,W5,W3 merged | 23:40 review FIX: .update-snapshots marker must not merge (commit CI baselines), size reason; SSE-only reachability lockout, Enter hijack, metrics.md cite, safeNext control chars; polish. | 00:47 code findings fixed; lhci mobile fails (109KB/2.66s vs 102400B/2500ms; main 83KB/2.41s). Runner: keep budgets (owner best-UX), do (c) defer stream + (b) vite.config/app.html/font fixes allowed; report if still over. Baselines import pending. | 00:59 c5d0549: lhci passes locally (97.7KB, LCP 2.4s, CLS 0) via deferred stream/chrome/toaster + font preload moved after first frame; awaiting baselines import + marker removal. Then runner verifies delta (shared-file edits) and merges on green. Carry: recheck FOUT/CLS when Search lands. | 01:33 E2E run 39881347868 green, artifact 12470864759 (snapshot-baselines). BLOCKED: proxy denies productionresultssa9.blob.core.windows.net for all sessions. Asked owner: allow host or import artifact (as b2b46df). W9 waits with marker."
   },
   "M-auth": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01SLtBN2YZg1WidnV1PRro9w",
-   "pr": null,
+   "pr": 93,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:33."
+   "notes": "Launched 21:33. | 01:50 PR #93 7f49b18 (web only); reviewer started (security). filter budget red: \u00a72.18 (no Rust)."
   },
   "S-search-1": {
    "status": "pending",
@@ -307,13 +307,13 @@
    "notes": ""
   },
   "B7": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01QE5wiiZe5CM8pk9fT2tuBD",
-   "pr": null,
+   "pr": 102,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:41 after B6 merged."
+   "notes": "Launched 21:41 after B6 merged. | 01:50 PR #102 41231f7 conflicts live.rs; asked main merge + relevance gate; review on new head."
   },
   "B12": {
    "status": "pending",
@@ -334,13 +334,13 @@
    "notes": ""
   },
   "B5c": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_016s5MgUbh76LeFpk3cmTmFT",
-   "pr": null,
+   "pr": 100,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:41 after B6 merged."
+   "notes": "Launched 21:41 after B6 merged. | 01:50 PR #100 544a76f; reviewer started (cache key incl. visibility/epoch; overlap with #48 explain/cache_key)."
   },
   "B13": {
    "status": "merged",
@@ -1024,16 +1024,18 @@
    "merge": "aa799fa"
   },
   "V6-cluster2": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
-   "notes": "pull-forward after V6-cluster1 merge (owner: run as many as possible); brief includes #96 carry-forwards",
-   "session": "session_01LvbsfQSKGCGby7T8r4xoNw"
+   "notes": "pull-forward after V6-cluster1 merge (owner: run as many as possible); brief includes #96 carry-forwards | 01:50 PR #108 1ff314c, CI queued; review after current reviews (disk).",
+   "session": "session_01LvbsfQSKGCGby7T8r4xoNw",
+   "pr": 108
   },
   "F-perf": {
    "status": "running",
    "model": "opus",
-   "notes": "owner 00:40 \"best user experience\" -> budget held on typical hardware (EPYC 7763 ref) via F-perf; #97 keeps fastest-runner ref as stopgap. Stacked on slice/F-near.",
-   "session": "session_01JuPFjxS6u9KwGugz27C7KL"
+   "notes": "owner 00:40 \"best user experience\" -> budget held on typical hardware (EPYC 7763 ref) via F-perf; #97 keeps fastest-runner ref as stopgap. Stacked on slice/F-near. | 01:50 draft PR #110; told F-near merged.",
+   "session": "session_01JuPFjxS6u9KwGugz27C7KL",
+   "pr": 110
   },
   "runner-launch-cap": {
    "status": "in_review",
