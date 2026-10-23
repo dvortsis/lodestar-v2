@@ -22,7 +22,7 @@ Check the download against `SHA256SUMS` on the release page first
 - Registers a Windows service named **Lodestar**, running as its own
   unprivileged account, `NT SERVICE\Lodestar`. It starts by itself a little after
   Windows boots (delayed start) and is restarted if it fails, up to two times a day.
-  The MSI starts nothing during install: start it from Services, or restart the PC.
+  The installer starts it right away, and an upgrade restarts it.
   The first-run setup token is in `C:\ProgramData\Lodestar\logs\lodestar.log`
   (only Administrators can read it).
 - Locks `C:\ProgramData\Lodestar` so only SYSTEM, Administrators and the
@@ -51,6 +51,8 @@ it off: Lodestar still works, only slower. Remove the exclusion any time in
 msiexec /i lodestar-0.5.0-x86_64.msi /qn DEFENDER_EXCLUSION=1 WEB_FIREWALL=1   # boxes ticked; leave them out for off
 msiexec /x lodestar-0.5.0-x86_64.msi /qn                        # uninstall, keep data
 msiexec /x lodestar-0.5.0-x86_64.msi /qn REMOVE_DATA=1          # uninstall and delete the data
+
+`REMOVE_DATA=1` refuses, quietly, to delete a data folder that contains a link or junction (it never follows one); then the folder stays and the uninstall still succeeds. The reason is written to a log under `C:\Windows\Temp\lodestar-secure-*` (Administrators only).
 ```
 
 ## Build it yourself

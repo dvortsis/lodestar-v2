@@ -90,6 +90,11 @@ if ($Msi) {
   $logs = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
   Assert (-not (Test-Path $installDir)) 'Lodestar is already installed on this machine'
 
+  # --- a different install folder is refused ---
+  $other = Start-Process msiexec.exe -ArgumentList @('/i', "`"$Msi`"", '/qn', '/norestart', 'INSTALLFOLDER=C:\LodestarElsewhere\', '/l*v', "`"$logs\msi-refused-folder.log`"") -Wait -PassThru
+  Assert ($other.ExitCode -ne 0) 'an install into another folder went ahead'
+  Assert (-not (Test-Path 'C:\LodestarElsewhere')) 'an install into another folder left files behind'
+
   # --- install (Defender box left off) ---
   Invoke-Msiexec @('/i', "`"$Msi`"", '/qn', '/norestart', '/l*v', "`"$logs\msi-install.log`"") 'install'
   Assert (Test-Path "$installDir\lodestar.exe") 'lodestar.exe not in Program Files'
@@ -129,6 +134,13 @@ if ($Msi) {
   $privs = (sc.exe qprivs Lodestar | Out-String)
   Assert ($privs -match 'SeChangeNotifyPrivilege') 'service lost SeChangeNotifyPrivilege'
   Assert ($privs -notmatch 'SeImpersonatePrivilege|SeCreateGlobalPrivilege') 'service still holds SeImpersonate or SeCreateGlobal'
+  # The installer starts the service (Start="install"): it must be up without anyone starting it.
+  $up = $false
+  for ($i = 0; $i -lt 90 -and -not $up; $i++) {
+    try { $up = ((Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 'http://127.0.0.1:8090/healthz').StatusCode -eq 200) } catch { Start-Sleep -Seconds 1 }
+  }
+  Assert $up 'the installer did not leave the service running (no /healthz on 8090)'
+  Stop-Service Lodestar
   # DHT off so the runner's network is left alone; the service reads this at start.
   Set-Content -LiteralPath "$dataDir\config.toml" -Value "[dht]`nenabled = false`n" -Encoding ascii
   Start-Service Lodestar
@@ -155,6 +167,10 @@ if ($Msi) {
 
   # --- upgrade: the next version installed over this one keeps the service, data and ACL ---
   if ($UpgradeMsi) {
+    # Start from an install that chose the web rule, so the upgrade (without the option) must keep it.
+    Invoke-Msiexec @('/x', "`"$Msi`"", '/qn', '/norestart', '/l*v', "`"$logs\msi-upgrade-prep-uninstall.log`"") 'uninstall before the upgrade check'
+    Invoke-Msiexec @('/i', "`"$Msi`"", '/qn', '/norestart', 'WEB_FIREWALL=1', '/l*v', "`"$logs\msi-upgrade-prep.log`"") 'install with the web rule'
+    Assert ($null -ne (Get-NetFirewallRule -DisplayName 'Lodestar web UI*' -ErrorAction SilentlyContinue)) 'the web rule is missing right after installing with WEB_FIREWALL=1'
     Set-Content -Path "$dataDir\upgrade-check.txt" -Value 'kept across the upgrade'
     Invoke-Msiexec @('/i', "`"$UpgradeMsi`"", '/qn', '/norestart', '/l*v', "`"$logs\msi-upgrade.log`"") 'upgrade'
     $svc = Get-CimInstance Win32_Service -Filter "Name='Lodestar'"
@@ -162,17 +178,18 @@ if ($Msi) {
     Assert ($svc.StartName -eq 'NT SERVICE\Lodestar') "after the upgrade the service runs as $($svc.StartName)"
     Assert (Test-Path "$installDir\lodestar.exe") 'the upgrade left no lodestar.exe'
     Assert (Test-Path "$dataDir\upgrade-check.txt") 'the upgrade lost data'
+    Assert ($null -ne (Get-NetFirewallRule -DisplayName 'Lodestar web UI*' -ErrorAction SilentlyContinue)) 'the upgrade dropped the web firewall rule chosen before'
     $acl = Get-Acl $dataDir
     Assert $acl.AreAccessRulesProtected 'after the upgrade the data folder inherits permissions'
     $broad = @($acl.Access | Where-Object { $_.IdentityReference.Value -match '(Users|Everyone|Authenticated Users)$' })
     Assert ($broad.Count -eq 0) "after the upgrade the data folder grants access to $($broad.IdentityReference -join ', ')"
     Assert ((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\Lodestar').DelayedAutostart -eq 1) 'after the upgrade the service is not delayed-start'
-    Start-Service Lodestar
+    # The upgrade starts the service itself.
     $up = $false
     for ($i = 0; $i -lt 90 -and -not $up; $i++) {
       try { $up = ((Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 'http://127.0.0.1:8090/healthz').StatusCode -eq 200) } catch { Start-Sleep -Seconds 1 }
     }
-    Assert $up 'after the upgrade the service never answered /healthz'
+    Assert $up 'after the upgrade the service was not running (no /healthz on 8090)'
     Stop-Service Lodestar
     Remove-Item "$dataDir\upgrade-check.txt"
     # Back to the first version for the rest of the checks.
@@ -234,15 +251,16 @@ if ($Msi) {
     } catch { Write-Host "::warning::could not read Defender settings: $_" }
   }
   Invoke-Msiexec @('/x', "`"$Msi`"", '/qn', '/norestart', 'REMOVE_DATA=1', '/l*v', "`"$logs\msi-uninstall2.log`"") 'uninstall with REMOVE_DATA'
-  if (Test-Path $dataDir) {
-    # Show why: run the repository copy of the script here, where its output is visible.
+  $left = Test-Path $dataDir
+  if ($left) {
+    # Show why (the diagnostics must not decide the result): run the repository copy of the script here.
     Write-Host '--- data folder contents'
     Get-ChildItem -LiteralPath $dataDir -Force -Recurse -ErrorAction SilentlyContinue | Select-Object -First 40 | ForEach-Object { Write-Host ("{0} {1}" -f $_.Attributes, $_.FullName) }
     Write-Host '--- remove-datadir.ps1 run by hand'
     & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'remove-datadir.ps1') -Path "$dataDir\."
     Write-Host "exit code: $LASTEXITCODE"
   }
-  Assert (-not (Test-Path $dataDir)) 'REMOVE_DATA=1 left the data folder behind'
+  Assert (-not $left) 'REMOVE_DATA=1 left the data folder behind'
   if (Get-Command Get-MpPreference -ErrorAction SilentlyContinue) {
     try { Assert (-not (@((Get-MpPreference).ExclusionPath) -like "$dataDir*")) 'Defender exclusion left behind after uninstall' } catch [System.Management.Automation.RuntimeException] { throw } catch { }
   }
