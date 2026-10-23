@@ -1,0 +1,31 @@
+# Filter budget gate decisions (#97)
+
+- **The 50 µs filter budget is held on the reference runner (owner, 2026-10-22).** The owner chose to normalise the gate when asked to pick from engine − core, engine/core, an absolute retry or a larger runner. The build runner later passed on their go-ahead to change the gate if something fits the stack better. The budget and what it holds (core, 1%, 10%; 25% reported) are unchanged; only where it's measured changed (§1.6.6, §20.8).
+  - **Why:** hosted runners differ by 1.5–1.9×, uniformly across core and engine. PR #48 measured 11.9 / 42.1 / 52.8 µs (core, 1%, 10%) on the same code main measured at 6.2 / 22.2 / 28.8 µs, and failed. The gate failed PRs, and `main`, at random.
+  - **How:**
+    - `crates/filter/tests/props.rs` times `calibrate`, which runs no Lodestar code, seven times before any filter code runs and seven times after the engine is dropped.
+    - The runner's speed is the fastest of those passes over `CALIB_REF_NS` (7.2 µs per torrent), and each case's median time is divided by it.
+    - It fails as untrusted when the fastest passes before and after differ by more than 15%, or when the speed is outside 0.4–2.0×.
+    - Raw times, the speed, the CPU and `rustc --version` are printed.
+  - **The fastest pass, not the median:** noise only adds time, so the fastest pass can only make the gate stricter.
+    - The first version pooled the median of all 14 passes. On the reviewer's Intel VM, a burst of steal slowed the seven "before" passes to 21–25 µs, against 11 normally, and the median read 16.55 µs (2.24×). A clean 10% pass of 59.6 µs raw then scaled to 26.6 µs instead of 39.5, a third too low.
+    - The fastest pass, 11.6 µs, gives 1.57× and 38.0 µs, in line with quiet runs.
+  - **The reference is the fastest hosted runners seen** (Xeon 6973P-C, 7.2 µs; EPYC 9V45, 7.3 µs). There the gate reads what the unscaled gate did.
+    - **To re-derive `CALIB_REF_NS`:** run the test on a runner of that type and take its `calibration:` line.
+    - **When to re-derive:** after a Rust toolchain change (the toolchain isn't pinned and the calibration is all std: SipHash, the hash set, `sort_unstable`), or a change to `calibrate`, `torrents` or `COMMON`.
+  - **Tracking isn't exact, and errs strict so far.** The calibration stays in the small caches, while the 10,000-rule engine doesn't.
+    - On the reviewer's Intel VM the calibration ran 1.48× the EPYC 9V45 while the 10% case ran 1.80×. CPUs therefore differ by up to about 1.25× once scaled, with slower CPUs scaling higher.
+    - On CI the 10% case scales to 31.7–35.5 µs; Intel build VMs scale to 38–39.5 µs.
+  - **A budget gate, not a regression gate:** a slowdown that keeps a case under 50 µs passes, about +40% at 10% on the EPYC 7763 and +58% on the EPYC 9V45. Finer detection would need a bench against a stored baseline (for example instruction counts), noted as a possible follow-up.
+  - **Not chosen:**
+    - **engine − core** grows with a slow runner (22.6 µs on main's run, 40.9 on #48's).
+    - **engine / core** is stable, but makes a core speed-up read as an engine regression.
+    - **A larger runner** needs a Team or Enterprise plan, and its hosts still vary.
+    - **#66's 60 ms synthetic workload** moved only 1.10× where the filter moved 1.25×, and its 1.6× cap would fail a 7763-class runner.
+    - **Calibrating between passes** (#97's first version) let an engine pass slow the next calibration by up to 19%, so a regression could hide part of itself.
+  - **Evidence** (PR #97's temporary sample workflow, run 39868473532, 10% case, raw → scaled):
+    - EPYC 7763 ×4: 52.0–52.5 → 35.0–35.3 µs.
+    - Xeon 6973P-C: 35.5 → 35.5 µs.
+    - EPYC 9V45 (run 39864506449): 32.1 → 31.7 µs.
+    - A full match run 24 times scaled to 68.7 µs, and turning the cheap check off scaled to 111.4 µs. Both failed the gate.
+- **Supersedes #66** (slice/F1, runner-speed scaling with a clamped 60 ms workload).
