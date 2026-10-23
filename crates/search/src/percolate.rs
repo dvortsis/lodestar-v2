@@ -140,6 +140,10 @@ pub fn percolate(
         let stopped = Arc::new(AtomicBool::new(false));
         let collector = PostFilter {
             ranges: &compiled.filters,
+            // Swarm clauses read the hot columns as search does; a torrent
+            // just indexed is usually not scraped yet, so it matches no
+            // swarm range until it is (M4).
+            hot: compiled.hot.as_ref(),
             inner: TopIds {
                 keep: limits.keep,
                 // The first search of a run always completes.

@@ -16,15 +16,17 @@ use lodestar_cluster::{Lease, WorkerId};
 use lodestar_filter::{Action, Decision, Engine, Facts, Handle, HeldSet, Item, Sealer, Verdict};
 use lodestar_metainfo::InfoHash;
 use lodestar_sources::{Discovery, Funnel, FunnelCounts, Loss, Stage};
+use lodestar_store::hot::flags as hot_flags;
 use lodestar_store::{
-    CohortCount, Counter, Event, Filtered, Held, Inserted, PreparedTorrent, QueuedKey, SHADOW,
-    SourceId, Store, Touch, WriteBatch, flags,
+    CohortCount, Counter, Event, Filtered, Held, HotColumns, Inserted, PreparedTorrent, QueuedKey,
+    SHADOW, SourceId, Store, SwarmUpdate, Touch, WriteBatch, flags, swarm_flags,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, interval_at};
 
 use crate::coordinator::Coordinator;
 use crate::have::{Bloom, Have, capacity_for};
+use crate::health::HealthHandle;
 use crate::rollups::{Rollups, metric};
 use crate::worker::{Results, collect};
 use crate::{event, unix_now};
@@ -69,6 +71,8 @@ pub struct WriterStats {
     /// Stored torrents enriched in the background (imports, older rows,
     /// records from an older parser).
     pub enriched: AtomicU64,
+    /// Scrape results stored.
+    pub swarm_updates: AtomicU64,
 }
 
 pub(crate) struct WriterIo {
@@ -80,6 +84,8 @@ pub(crate) struct WriterIo {
     pub retry: mpsc::Sender<Discovery>,
     /// The pool's queue at shutdown.
     pub finish: oneshot::Receiver<Vec<QueuedKey>>,
+    /// Scrape rounds from the health service.
+    pub swarm: mpsc::Receiver<Vec<SwarmUpdate>>,
 }
 
 pub(crate) struct Writer {
@@ -101,6 +107,10 @@ pub(crate) struct Writer {
     pub last_purge: i64,
     pub coordinator: Arc<Coordinator>,
     pub stats: Arc<WriterStats>,
+    /// Updated after each commit, so SQLite is always ahead of them.
+    pub hot: Option<Arc<HotColumns>>,
+    /// Told about rediscoveries, to scrape them sooner (§5).
+    pub health: Option<HealthHandle>,
 }
 
 /// A result under a current lease, ready to commit.
@@ -118,11 +128,13 @@ struct Committing {
 /// What a transaction did, for the async side to account.
 struct Outcome {
     /// Per stored or already-stored result: (index, new?, swarm hashes).
-    stored: Vec<(usize, bool, Vec<InfoHash>)>,
+    stored: Vec<(usize, i64, bool, Vec<InfoHash>)>,
     /// Results the authoritative blocklist rejected.
     blocked: Vec<usize>,
-    /// Per touch: whether the store had it.
-    touched: Vec<bool>,
+    /// Per touch: the torrent's id, if the store had it.
+    touched: Vec<Option<i64>>,
+    /// Per swarm update: whether its torrent still exists.
+    swarm: Vec<bool>,
     /// The classification rules changed under the batch (§20.9).
     stale_class: bool,
 }
@@ -141,7 +153,7 @@ impl Writer {
                     let Some(first) = first else { break };
                     let batch =
                         collect(first, &mut io.results, self.cfg.batch_max, self.cfg.batch_wait).await;
-                    self.commit(batch, Vec::new(), Vec::new(), &io.retry).await;
+                    self.commit(batch, Vec::new(), Vec::new(), Vec::new(), &io.retry).await;
                 }
                 Some(first) = io.touches.recv() => {
                     let mut touches = vec![first];
@@ -151,7 +163,10 @@ impl Writer {
                             Err(_) => break,
                         }
                     }
-                    self.commit(Vec::new(), touches, Vec::new(), &io.retry).await;
+                    self.commit(Vec::new(), touches, Vec::new(), Vec::new(), &io.retry).await;
+                }
+                Some(swarm) = io.swarm.recv() => {
+                    self.commit(Vec::new(), Vec::new(), swarm, Vec::new(), &io.retry).await;
                 }
                 Some(queue) = io.queues.recv() => self.save_queue(queue).await,
                 // Always ready until done; the unbiased select gives it a
@@ -162,12 +177,18 @@ impl Writer {
                         self.backfill_after = 0;
                         self.backfill_done = false;
                     }
-                    self.commit(Vec::new(), Vec::new(), Vec::new(), &io.retry).await;
+                    self.commit(Vec::new(), Vec::new(), Vec::new(), Vec::new(), &io.retry).await;
                     if unix_now() - self.last_purge >= PURGE_EVERY {
                         self.purge().await;
                     }
                 }
             }
+        }
+        // Scrape rounds already handed over are kept: the health service
+        // stopped before the pipeline's inputs did.
+        let mut swarm = Vec::new();
+        while let Ok(batch) = io.swarm.try_recv() {
+            swarm.extend(batch);
         }
         let queue = io.finish.await.unwrap_or_default();
         let stop = Event {
@@ -175,7 +196,7 @@ impl Writer {
             kind: event::STOP,
             detail: format!("{} keys queued", queue.len()),
         };
-        self.commit(Vec::new(), Vec::new(), vec![stop], &io.retry)
+        self.commit(Vec::new(), Vec::new(), swarm, vec![stop], &io.retry)
             .await;
         self.save_queue(queue).await;
         let store = self.store.take().expect("store");
@@ -254,6 +275,7 @@ impl Writer {
         &mut self,
         results: Vec<Results>,
         touches: Vec<Discovery>,
+        swarm: Vec<SwarmUpdate>,
         events: Vec<Event>,
         retry: &mpsc::Sender<Discovery>,
     ) {
@@ -287,6 +309,7 @@ impl Writer {
         counters.extend(crate::rollups::funnel_events(&cohorts, unix_now()));
         if committing.is_empty()
             && touches.is_empty()
+            && swarm.is_empty()
             && events.is_empty()
             && cohorts.is_empty()
             && counters.is_empty()
@@ -297,11 +320,12 @@ impl Writer {
         let now = unix_now();
         let quarantine_until = now + self.cfg.quarantine_secs;
         let backfill_until = self.cfg.backfill_until;
-        let (store, committing, touches, result) = tokio::task::spawn_blocking(move || {
+        let (store, committing, touches, swarm, result) = tokio::task::spawn_blocking(move || {
             let result = transaction(
                 &mut store,
                 &committing,
                 &touches,
+                &swarm,
                 &cohorts,
                 &counters,
                 &events,
@@ -310,7 +334,7 @@ impl Writer {
                 quarantine_until,
                 class_gen,
             );
-            (store, committing, touches, result)
+            (store, committing, touches, swarm, result)
         })
         .await
         .expect("writer transaction task");
@@ -336,13 +360,20 @@ impl Writer {
             .store(unix_now() as u64, Ordering::Relaxed);
         // The have-filter learns the keys before their leases end, so a
         // rediscovery in between is held, never claimed and fetched again.
-        for (_, _, hashes) in &outcome.stored {
+        for (_, _, _, hashes) in &outcome.stored {
             for h in hashes {
                 self.have.insert(h);
             }
         }
-        for (i, new, _) in outcome.stored {
+        for (i, id, new, _) in outcome.stored {
             let c = &committing[i];
+            // A new torrent was last seen when it was discovered, as
+            // `torrents.last_seen_at` says: `seen:`, the seen sort and the
+            // freshness prior read the hot column, not the row.
+            if let (true, Some(hot)) = (new, &self.hot) {
+                let at = c.lease.discovered_at.clamp(0, i64::from(u32::MAX - 1));
+                hot.touch(id as u64, at as u32);
+            }
             let Some(lease) = self.coordinator.complete(&c.results.key, c.results.token) else {
                 continue;
             };
@@ -371,8 +402,28 @@ impl Writer {
             self.coordinator
                 .lost(&c.results.key, c.results.token, Loss::Blocked);
         }
-        for (d, had) in touches.into_iter().zip(outcome.touched) {
-            if had {
+        if let Some(hot) = &self.hot {
+            for (u, stored) in swarm.iter().zip(&outcome.swarm) {
+                if let (true, Some(h)) = (*stored, u.hot()) {
+                    let id = u.torrent_id as u64;
+                    hot.set_swarm(id, h);
+                    let suspect = u.flags & swarm_flags::SUSPECT != 0;
+                    hot.set_flags(id, hot_flags::SUSPECT, suspect);
+                }
+            }
+        }
+        self.stats.swarm_updates.fetch_add(
+            outcome.swarm.iter().filter(|s| **s).count() as u64,
+            Ordering::Relaxed,
+        );
+        for (d, id) in touches.into_iter().zip(outcome.touched) {
+            if let Some(id) = id {
+                if let Some(hot) = &self.hot {
+                    hot.touch(id as u64, d.at.clamp(0, i64::from(u32::MAX - 1)) as u32);
+                }
+                if let Some(health) = &self.health {
+                    health.rediscovered(id);
+                }
                 self.stats.rediscovered.fetch_add(1, Ordering::Relaxed);
                 self.rollups.add(
                     d.at,
@@ -517,6 +568,7 @@ fn transaction(
     store: &mut Store,
     committing: &[Committing],
     touches: &[Discovery],
+    swarm: &[SwarmUpdate],
     cohorts: &[CohortCount],
     counters: &[Counter],
     events: &[Event],
@@ -629,6 +681,7 @@ fn transaction(
     let written = store.write(&WriteBatch {
         prepared: &prepared,
         touches: &all_touches,
+        swarm,
         counters,
         cohorts,
         events,
@@ -642,6 +695,7 @@ fn transaction(
         .map(|(&i, ins)| {
             (
                 i,
+                ins.id(),
                 matches!(ins, Inserted::New(_)),
                 committing[i].results.torrent.swarm_hashes().collect(),
             )
@@ -651,10 +705,8 @@ fn transaction(
         stored,
         blocked,
         stale_class: written.stale_class,
-        touched: written.touched[extra..]
-            .iter()
-            .map(Option::is_some)
-            .collect(),
+        touched: written.touched[extra..].to_vec(),
+        swarm: written.swarm,
     })
 }
 

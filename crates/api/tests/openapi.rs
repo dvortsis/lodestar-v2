@@ -272,6 +272,8 @@ fn app_with_keys() -> (tempfile::TempDir, Router, Arc<Auth>, Arc<Mutex<Store>>) 
             index: None,
             reader: Arc::new(Mutex::new(reader)),
             filters: None,
+            hot: None,
+            events: None,
             settings: None,
             ops: None,
             user_data: Some(store.clone()),
