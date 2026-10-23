@@ -17,8 +17,16 @@
 //!   `metric::COVERAGE` (indexing always while search is on, crawling
 //!   while not paused), so a quiet hour reads 0 and a paused one a gap.
 //! - **A crash** can lose the last commit's rows (and up to 30 s of
-//!   coverage); B11b's `lodestar rollup --repair` recomputes searchable
-//!   counts from `torrents` and `index_watermark_hour`.
+//!   coverage); `lodestar rollup --repair` recomputes searchable counts
+//!   from `torrents` and `index_watermark_hour`, and runs by itself over
+//!   the last 72 h at the next start ([`repair_after_unclean_stop`]).
+//! - **Daily compaction** (B11b): a tick 10 minutes after start, and then
+//!   once `last_compaction_at` is 24 h old, folds hourly rollups older
+//!   than 30 days into daily rows, a day per transaction, for at most a
+//!   second per tick (the loop records commits between steps), then
+//!   prunes the query log and gives back the pages it freed.
+//! - **The imported total** mirrors `insights_state.imported`, which the
+//!   store keeps exact (no scan at start).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -30,7 +38,10 @@ use lodestar_pipeline::Monitor;
 use lodestar_pipeline::metric::{self, coverage};
 use lodestar_search::{CommitHook, Committed, IndexStats};
 use lodestar_sources::Stage;
-use lodestar_store::{Counter, SearchableCodes, Store, StoreConfig, flags};
+use lodestar_store::{
+    CompactOptions, Counter, RepairCodes, RepairOptions, Repaired, SearchableCodes, Store,
+    StoreConfig,
+};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
@@ -41,8 +52,30 @@ pub const CODES: SearchableCodes = SearchableCodes {
     delay: metric::TIME_TO_SEARCHABLE,
 };
 
+/// What `rollup --repair` writes under.
+pub const REPAIR_CODES: RepairCodes = RepairCodes {
+    searchable: CODES,
+    stored_stage: Stage::Stored as u8,
+    stored: metric::STORED,
+};
+
 /// Coverage is added, and the index's watermark checked, this often.
 pub const TICK: Duration = Duration::from_secs(30);
+/// Compaction is first considered this long after start, so start-up
+/// isn't slowed.
+const COMPACT_AFTER: Duration = Duration::from_secs(600);
+/// ... and runs when the last finished run is this old.
+const COMPACT_EVERY_S: i64 = 86_400;
+/// Hourly rows are kept this many days (§7).
+pub const KEEP_HOURLY_DAYS: i64 = 30;
+/// A compaction step gives the loop back after this long.
+const COMPACT_BUDGET: Duration = Duration::from_secs(1);
+/// The query log keeps 30 days (§10.9.5) and at most this many rows.
+const QUERY_LOG_DAYS: i64 = 30;
+pub const QUERY_LOG_ROWS: u64 = 100_000;
+/// The automatic repair after an unclean stop recounts this far back:
+/// the retry horizon.
+pub const AUTO_REPAIR_HOURS: i64 = 72;
 /// Commits waiting for the recorder; past this they're dropped (and
 /// covered by the next one).
 const QUEUE: usize = 64;
@@ -54,7 +87,7 @@ pub struct Insights {
     started_at: i64,
     /// Bumped whenever the recorder writes, for the overview cache.
     recorded: AtomicI64,
-    /// Imported torrents; -1 until the count at start is in.
+    /// Imported torrents, mirroring `insights_state`; -1 until it's read.
     imported: AtomicI64,
     /// The oldest cohort of the keys restored at start (`i64::MAX`:
     /// none), which keeps its days unsealed until the restored keys have
@@ -62,6 +95,8 @@ pub struct Insights {
     floor: AtomicI64,
     floor_until: AtomicI64,
     cache: OverviewCache,
+    /// When compaction is first considered, after start.
+    compact_after: Duration,
 }
 
 impl std::fmt::Debug for Insights {
@@ -92,6 +127,7 @@ impl Insights {
             floor: AtomicI64::new(i64::MAX),
             floor_until: AtomicI64::new(0),
             cache: OverviewCache::default(),
+            compact_after: COMPACT_AFTER,
         }
     }
 
@@ -204,16 +240,13 @@ async fn run(
     if let Some(w) = watermark(&follow) {
         store = record(insights, store, w, crate::unix_now()).await?;
     }
-    // The imported total: one scan of `torrents` over what's recorded
-    // searchable so far, then what each later range adds (only once the
-    // count is in, so nothing is counted twice).
-    let counted;
-    (store, counted) = blocking(store, |s| s.count_flagged_searchable(flags::IMPORTED)).await?;
-    match counted {
-        Ok(n) => insights.imported.store(n as i64, Ordering::Release),
-        // The total stays null; everything else goes on.
-        Err(e) => tracing::warn!("insights: counting imported torrents failed: {e}"),
-    }
+    store = mirror_state(insights, store).await?;
+    let mut compaction = Compaction {
+        from: crate::unix_now() + insights.compact_after.as_secs() as i64,
+        running: false,
+        freed: 0,
+        unknown_logged: false,
+    };
     let mut tick = tokio::time::interval(follow.tick);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     tick.tick().await;
@@ -251,6 +284,10 @@ async fn run(
                 }
                 if let Some(w) = watermark(&follow) {
                     store = record(insights, store, w, now).await?;
+                }
+                store = mirror_state(insights, store).await?;
+                if now >= compaction.from {
+                    store = compact(insights, store, &mut compaction, now).await?;
                 }
             }
             _ = stop.changed() => break,
@@ -300,35 +337,141 @@ async fn record(
             // days' sums are out of date. Read them again.
             let sealed = api::sealed_hour(crate::unix_now(), insights.seal_floor());
             let stale = r.first_cohort.filter(|&c| c < sealed);
-            // Only onto a count that's in. A compare-exchange loop:
-            // `fetch_update` is deprecated and its replacement is newer
-            // than the MSRV.
-            if r.imported > 0 {
-                let add = r.imported as i64;
-                let mut cur = insights.imported.load(Ordering::Acquire);
-                while cur >= 0 {
-                    match insights.imported.compare_exchange_weak(
-                        cur,
-                        cur + add,
-                        Ordering::AcqRel,
-                        Ordering::Acquire,
-                    ) {
-                        Ok(_) => break,
-                        Err(now) => cur = now,
-                    }
-                }
-            }
             insights.bump();
+            let store = if r.imported > 0 {
+                mirror_state(insights, store).await?
+            } else {
+                store
+            };
             if let Some(c) = stale {
                 insights.cache.forget_days_from(c);
                 return warm(insights, store).await;
             }
+            return Ok(store);
         }
         Ok(None) => {}
         // A busy or failed write: the next commit or tick covers the ids.
         Err(e) => tracing::warn!("insights: searchable time not recorded: {e}"),
     }
     Ok(store)
+}
+
+/// Copies `insights_state.imported` (kept exact by the store) into
+/// [`Insights`]; on a failed read the last value stays.
+async fn mirror_state(insights: &Arc<Insights>, store: Store) -> Result<Store, BoxError> {
+    let (store, st) = blocking(store, |s| s.insights_state()).await?;
+    match st {
+        Ok(st) => insights
+            .imported
+            .store(st.imported.max(0), Ordering::Release),
+        Err(e) => tracing::warn!("insights: reading its state failed: {e}"),
+    }
+    Ok(store)
+}
+
+/// Where the daily compaction is.
+#[derive(Debug)]
+struct Compaction {
+    /// Not before this (unix seconds): 10 minutes after start.
+    from: i64,
+    /// A run is under way, cut short by its budget.
+    running: bool,
+    /// Pages the run has freed so far.
+    freed: u64,
+    unknown_logged: bool,
+}
+
+/// One compaction step, when one is due: a budgeted call, and when the
+/// run is done, the query log's prune and an `incremental_vacuum` of what
+/// the run freed.
+async fn compact(
+    insights: &Arc<Insights>,
+    store: Store,
+    c: &mut Compaction,
+    now: i64,
+) -> Result<Store, BoxError> {
+    let (store, due) = blocking(store, move |s| s.insights_state()).await?;
+    let due = match due {
+        Ok(st) => c.running || now - st.last_compaction_at >= COMPACT_EVERY_S,
+        Err(e) => {
+            tracing::warn!("insights: reading its state failed: {e}");
+            false
+        }
+    };
+    if !due {
+        return Ok(store);
+    }
+    let hold = insights.seal_floor().map(|h| h.div_euclid(24));
+    let (mut store, r) = blocking(store, move |s| {
+        s.compact_rollups(CompactOptions {
+            now,
+            keep_days: KEEP_HOURLY_DAYS,
+            hold_from_day: hold,
+            budget: COMPACT_BUDGET,
+            kind: &metric::aggregation,
+        })
+    })
+    .await?;
+    let r = match r {
+        Ok(r) => r,
+        Err(e) => {
+            // The day it was on is whole either way; the next tick goes on.
+            tracing::warn!("insights: compaction stopped: {e}");
+            return Ok(store);
+        }
+    };
+    if !r.unknown_metrics.is_empty() && !c.unknown_logged {
+        c.unknown_logged = true;
+        tracing::warn!(
+            "insights: metrics {:?} have no aggregation kind; their hourly rows are kept",
+            r.unknown_metrics
+        );
+    }
+    c.freed += r.freed_pages;
+    c.running = !r.done;
+    if r.days + r.stragglers > 0 {
+        insights.cache.forget_days_before(r.compacted_before_day);
+        insights.bump();
+    }
+    if r.done {
+        let freed = std::mem::take(&mut c.freed);
+        let pruned;
+        (store, pruned) = blocking(store, move |s| {
+            let pruned = s.prune_query_log(now - QUERY_LOG_DAYS * 86_400, QUERY_LOG_ROWS);
+            let vacuumed = s.incremental_vacuum(freed);
+            pruned.and_then(|n| vacuumed.map(|()| n))
+        })
+        .await?;
+        match pruned {
+            Ok(_) => tracing::debug!(
+                "insights: compacted up to day {}, {} hourly rows folded",
+                r.compacted_before_day,
+                r.rows
+            ),
+            Err(e) => tracing::warn!("insights: pruning the query log failed: {e}"),
+        }
+    }
+    Ok(store)
+}
+
+/// `lodestar rollup --repair` by itself at start, on the writer's store
+/// before the pipeline takes it (nothing else writes rollups yet), when
+/// the last run didn't stop cleanly: the newest start/stop event is a
+/// start. It recounts what was stored in the last 72 h (the cohorts and
+/// hours from then on), which takes seconds, not a full scan.
+pub fn repair_after_unclean_stop(store: &mut Store) -> lodestar_store::Result<Option<Repaired>> {
+    use lodestar_pipeline::event;
+    if !store.stopped_uncleanly(event::START, event::STOP)? {
+        return Ok(None);
+    }
+    let since_hour = crate::unix_now().div_euclid(3600) - AUTO_REPAIR_HOURS;
+    store
+        .repair_rollups(RepairOptions {
+            codes: REPAIR_CODES,
+            since_hour,
+            recount_imported: false,
+        })
+        .map(Some)
 }
 
 /// Coverage seconds for `from..to`, split at hour boundaries. Nothing
@@ -454,6 +597,185 @@ mod tests {
         assert_eq!(codes::metric::SEARCHABLE, metric::SEARCHABLE);
         assert_eq!(codes::metric::COVERAGE_INDEX, coverage::INDEX);
         assert_eq!(codes::metric::COVERAGE_CRAWL, coverage::CRAWL);
+        assert_eq!(codes::metric::FUNNEL_EVENTS, metric::FUNNEL_EVENTS);
+        assert_eq!(codes::metric::REMOVED, metric::REMOVED);
+    }
+
+    /// The store's delete trigger writes `metric::REMOVED` and
+    /// `UNCLASSIFIED` as literals (V11): codes are persisted.
+    #[test]
+    fn the_removal_trigger_writes_the_pipelines_code() {
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let conn = store.connection();
+        conn.execute_batch(
+            "INSERT INTO torrents (id, info_hash, name, size, piece_len, piece_count, file_count,
+                 info_size, flags, discovered_at, metadata_at, last_seen_at, content_type)
+             VALUES (1, randomblob(20), 'a', 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL);",
+        )
+        .unwrap();
+        store.record_index_watermark(1, 1).unwrap();
+        store
+            .connection()
+            .execute_batch("DELETE FROM torrents WHERE id = 1")
+            .unwrap();
+        let (m, dim): (u32, u32) = store
+            .connection()
+            .query_row("SELECT metric, dim FROM rollup_hour", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!((m, dim), (metric::REMOVED, lodestar_store::UNCLASSIFIED));
+        assert_eq!(
+            metric::aggregation(metric::REMOVED),
+            Some(lodestar_store::Aggregation::Sum)
+        );
+    }
+
+    /// The repair runs at start only after a start with no stop after it,
+    /// and only over the last 72 h.
+    #[test]
+    fn the_automatic_repair_runs_only_after_an_unclean_stop() {
+        use lodestar_pipeline::event;
+        use lodestar_store::{Event, WriteBatch};
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let now = crate::unix_now();
+        // Two torrents, one stored 10 days ago and one an hour ago, and no
+        // rollups: what a crash before the flush leaves.
+        store
+            .connection()
+            .execute_batch(&format!(
+                "INSERT INTO torrents (id, info_hash, name, size, piece_len, piece_count,
+                     file_count, info_size, flags, discovered_at, metadata_at, last_seen_at,
+                     first_source)
+                 VALUES (1, randomblob(20), 'a', 0, 0, 0, 0, 0, 0, {old}, {old}, {old}, 0),
+                        (2, randomblob(20), 'b', 0, 0, 0, 0, 0, 0, {new}, {new}, {new}, 0);",
+                old = now - 10 * 86_400,
+                new = now - 3600,
+            ))
+            .unwrap();
+        assert_eq!(
+            repair_after_unclean_stop(&mut store).unwrap(),
+            None,
+            "no run yet"
+        );
+        let event = |kind| Event {
+            at: now - 60,
+            kind,
+            detail: String::new(),
+        };
+        for kind in [event::START, event::STOP] {
+            store
+                .write(&WriteBatch {
+                    events: &[event(kind)],
+                    ..WriteBatch::default()
+                })
+                .unwrap();
+        }
+        assert_eq!(
+            repair_after_unclean_stop(&mut store).unwrap(),
+            None,
+            "a clean stop"
+        );
+        store
+            .write(&WriteBatch {
+                events: &[event(event::START)],
+                ..WriteBatch::default()
+            })
+            .unwrap();
+        let r = repair_after_unclean_stop(&mut store).unwrap().unwrap();
+        assert_eq!((r.cohorts_stored, r.hours_stored), (1, 1), "{r:?}");
+        let stored: i64 = store
+            .connection()
+            .query_row(
+                "SELECT coalesce(sum(count), 0) FROM cohort_hour WHERE stage = ?1",
+                [Stage::Stored as u8],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, 1, "only the torrent from the last 72 h");
+    }
+
+    /// The recorder compacts once its first delay has passed, and the run
+    /// leaves the hourly rows of the last 30 days alone.
+    #[tokio::test]
+    async fn the_recorder_compacts_old_hours() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("t.db");
+        let now_h = crate::unix_now().div_euclid(3600);
+        {
+            let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+            let rows: Vec<Counter> = [now_h - 40 * 24, now_h - 1]
+                .into_iter()
+                .map(|hour| Counter {
+                    hour,
+                    metric: metric::STORED,
+                    dim: 0,
+                    key: 0,
+                    value: 3,
+                })
+                .collect();
+            store.add_counters(&rows).unwrap();
+            // A search logged 40 days ago, and one today: the daily job
+            // prunes the old one (§10.9.5, 30 days).
+            let now = crate::unix_now();
+            let entry = |at| lodestar_store::QueryLogEntry {
+                at,
+                query: "ubuntu",
+                results: Some(1),
+                latency_us: 10,
+            };
+            store
+                .log_queries(
+                    lodestar_store::QueryLogging::On,
+                    &[entry(now - 40 * 86_400), entry(now)],
+                )
+                .unwrap();
+        }
+        let mut insights = Insights::with_clock(Box::new(|| 0), 1);
+        insights.compact_after = Duration::ZERO;
+        let insights = Arc::new(insights);
+        let (stop_tx, stop) = watch::channel(false);
+        let task = spawn(
+            insights.clone(),
+            Follow {
+                db: db.clone(),
+                store: StoreConfig::default(),
+                index: None,
+                paused: Box::new(|| false),
+                searchable: Box::new(|| None),
+                tick: Duration::from_millis(50),
+            },
+            stop,
+        );
+        let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
+        let start = std::time::Instant::now();
+        while reader.insights_state().unwrap().last_compaction_at == 0 {
+            assert!(start.elapsed() < Duration::from_secs(10), "no compaction");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        stop_tx.send(true).unwrap();
+        task.await.unwrap();
+        let day = (now_h - 40 * 24).div_euclid(24);
+        let daily = reader
+            .rollup_day_sums(
+                metric::STORED,
+                day,
+                day + 1,
+                lodestar_store::RollupBy::Total,
+            )
+            .unwrap();
+        assert_eq!(daily[0].value, 3);
+        let hourly = reader
+            .rollup_sums(
+                metric::STORED,
+                now_h - 41 * 24,
+                now_h,
+                lodestar_store::RollupBy::Hour,
+            )
+            .unwrap();
+        assert_eq!(hourly.len(), 1, "the last 30 days stay hourly");
+        assert_eq!(reader.query_log_len().unwrap(), 1, "pruned to 30 days");
+        assert_eq!(insights.imported(), Some(0));
     }
 
     /// Commits reach the store, the count of imports arrives, and the

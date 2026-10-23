@@ -6,10 +6,12 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use lodestar_store::{Counter, SourceId};
+use lodestar_store::{CohortCount, Counter, SourceId};
 
 /// `rollup_hour.metric` codes.
 pub mod metric {
+    use lodestar_store::Aggregation;
+
     /// Keys reported by a source (dim = source, key = strategy).
     pub const HARVESTED: u32 = 1;
     /// Keys already stored, seen again (dim = source, key = strategy).
@@ -37,6 +39,51 @@ pub mod metric {
     /// last snapshot in each hour, every 30 s (dim = 0, key = 0). Insights'
     /// Compare reads it as the count at a period's end.
     pub const SEARCHABLE: u32 = 13;
+
+    /// Funnel transitions by **event time**: each stage reached (dim =
+    /// `lodestar_sources::Stage` code, key 0) or loss (dim = `Stage::Lost`,
+    /// key = `Loss` code), at the hour the writer flushed it (within its
+    /// 5 s cadence). `stages.fetch` reads dim `Stage::Fetched`. Hours
+    /// before `insights_state.funnel_events_since_hour` weren't counted.
+    pub const FUNNEL_EVENTS: u32 = 14;
+    /// Searchable torrents deleted (a filter relabel, `delete_torrents`,
+    /// retention), a lifecycle event (§10.9.3), at the hour of the delete
+    /// (dim = content type, or `UNCLASSIFIED`; key 0). Written by the
+    /// store's `torrents_removed` trigger (V11), which has this code as a
+    /// literal.
+    pub const REMOVED: u32 = 15;
+
+    /// How each code folds into a day (compaction, repair and day
+    /// reads). **Every code has a kind;** a code with none is never
+    /// compacted, so a gauge can't be summed by accident. Codes 5–9 are
+    /// #48's (scrape and search counters, all additive).
+    pub fn aggregation(code: u32) -> Option<Aggregation> {
+        AGGREGATION
+            .iter()
+            .find(|(c, _)| *c == code)
+            .map(|&(_, a)| a)
+    }
+
+    /// The highest code defined.
+    pub const LAST_CODE: u32 = REMOVED;
+
+    const AGGREGATION: [(u32, Aggregation); 15] = [
+        (HARVESTED, Aggregation::Sum),
+        (REDISCOVERED, Aggregation::Sum),
+        (DROPPED, Aggregation::Sum),
+        (STORED, Aggregation::Sum),
+        (5, Aggregation::Sum),
+        (6, Aggregation::Sum),
+        (7, Aggregation::Sum),
+        (8, Aggregation::Sum),
+        (9, Aggregation::Sum),
+        (NEWLY_SEARCHABLE, Aggregation::Sum),
+        (TIME_TO_SEARCHABLE, Aggregation::Sum),
+        (COVERAGE, Aggregation::Sum),
+        (SEARCHABLE, Aggregation::Last),
+        (FUNNEL_EVENTS, Aggregation::Sum),
+        (REMOVED, Aggregation::Sum),
+    ];
 
     /// [`COVERAGE`] dims.
     pub mod coverage {
@@ -83,5 +130,77 @@ impl Rollups {
             .collect();
         out.sort_by_key(|c| (c.hour, c.metric, c.dim, c.key));
         out
+    }
+}
+
+/// The funnel rows a flush writes, again by event time
+/// ([`metric::FUNNEL_EVENTS`] at `now`'s hour).
+pub fn funnel_events(cohorts: &[CohortCount], now: i64) -> Vec<Counter> {
+    let mut by: HashMap<(u32, i64), i64> = HashMap::new();
+    for c in cohorts {
+        *by.entry((u32::from(c.stage), i64::from(c.reason)))
+            .or_default() += c.count;
+    }
+    let mut out: Vec<Counter> = by
+        .into_iter()
+        .map(|((dim, key), value)| Counter {
+            hour: now.div_euclid(3600),
+            metric: metric::FUNNEL_EVENTS,
+            dim,
+            key,
+            value,
+        })
+        .collect();
+    out.sort_by_key(|c| (c.dim, c.key));
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use lodestar_store::Aggregation;
+
+    use super::*;
+
+    /// Every code from 1 to the highest has a kind; only the gauge is
+    /// `Last`.
+    #[test]
+    fn every_code_has_an_aggregation() {
+        for code in 1..=metric::LAST_CODE {
+            let kind = metric::aggregation(code);
+            assert!(kind.is_some(), "metric {code} has no aggregation kind");
+            assert_eq!(
+                kind == Some(Aggregation::Last),
+                code == metric::SEARCHABLE,
+                "metric {code}"
+            );
+        }
+        assert_eq!(metric::aggregation(0), None);
+        assert_eq!(metric::aggregation(metric::LAST_CODE + 1), None);
+    }
+
+    #[test]
+    fn funnel_rows_become_event_time_counts() {
+        let src = SourceId::new(1).unwrap();
+        let row = |cohort, stage, reason, count| CohortCount {
+            cohort,
+            source: src,
+            stage,
+            reason,
+            count,
+        };
+        let now = 500_000 * 3600 + 17;
+        let got: Vec<_> =
+            funnel_events(&[row(10, 3, 0, 2), row(99, 3, 0, 5), row(10, 6, 2, 1)], now)
+                .into_iter()
+                .map(|c| (c.hour, c.metric, c.dim, c.key, c.value))
+                .collect();
+        assert_eq!(
+            got,
+            [
+                (500_000, metric::FUNNEL_EVENTS, 3, 0, 7),
+                (500_000, metric::FUNNEL_EVENTS, 6, 2, 1)
+            ]
+        );
+        assert!(funnel_events(&[], now).is_empty());
     }
 }

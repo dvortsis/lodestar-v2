@@ -21,6 +21,7 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
     (8, V8),
     (9, V9),
     (10, V10),
+    (11, V11),
 ];
 
 /// M0: the canonical torrent tables plus settings and zstd dictionaries.
@@ -542,6 +543,77 @@ CREATE INDEX quarantine_rule ON quarantine (rule);
 CREATE INDEX tombstones_rule ON tombstones (rule);
 ";
 
+/// B11b: Insights at daily grain, its state, and removals (architecture §7
+/// "Insights rollups", §10.9.3; decisions in
+/// `docs/decisions/2026-10-23-B11b.md`).
+///
+/// - `rollup_day` and `cohort_day` are `rollup_hour` and `cohort_hour` at
+///   UTC-day grain (`day` = Unix time / 86,400, `docs/metrics.md` §2),
+///   same keys. The nightly compaction folds whole hourly days older than
+///   30 days into them, one day per transaction.
+/// - `insights_state` holds four integers: `compacted_before_day` (days
+///   below it are daily; read in the same snapshot as the rows, so a
+///   compaction running beside a read never double-counts or drops a
+///   day), `last_compaction_at` (unix seconds, 0 = never),
+///   `funnel_events_since_hour` (the first hour fetches are counted by
+///   event time, metric 14: earlier buckets are unknown, not 0) and
+///   `imported` (searchable imported torrents, kept exact from here on).
+/// - `imported` is seeded with the same count `count_flagged_searchable`
+///   makes (flag 32 = `flags::IMPORTED`, up to the highest searchable
+///   id), once, here. `record_searchable` then adds each range's imports
+///   in its own transaction, and the trigger below subtracts.
+/// - **The trigger** runs for every torrent deleted by any path (a filter
+///   relabel, `delete_torrents`, retention later, the snapshot purge on a
+///   migration snapshot) that was searchable (its id at or below the
+///   highest `index_watermark_hour.last_id`, hour 0 included). It counts
+///   a removal at the current hour under metric 15 (`REMOVED`; dim = its
+///   content type, or 255 = `UNCLASSIFIED`), and takes an import off
+///   `imported`. The codes are the pipeline's, persisted: a test in
+///   `crates/lodestar` holds `metric::REMOVED` to this literal.
+const V11: &str = "
+CREATE TABLE rollup_day (
+    day    INTEGER NOT NULL,
+    metric INTEGER NOT NULL,
+    dim    INTEGER NOT NULL,
+    key    INTEGER NOT NULL,
+    value  INTEGER NOT NULL,
+    PRIMARY KEY (day, metric, dim, key)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE cohort_day (
+    day    INTEGER NOT NULL,
+    source INTEGER NOT NULL,
+    stage  INTEGER NOT NULL,
+    reason INTEGER NOT NULL,
+    count  INTEGER NOT NULL,
+    PRIMARY KEY (day, source, stage, reason)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE insights_state (
+    key   TEXT PRIMARY KEY,
+    value INTEGER NOT NULL
+) STRICT;
+INSERT INTO insights_state (key, value) VALUES
+    ('compacted_before_day', 0),
+    ('last_compaction_at', 0),
+    -- The first whole hour after the upgrade: the current one is partial.
+    ('funnel_events_since_hour', unixepoch() / 3600 + 1),
+    ('imported', (SELECT count(*) FROM torrents WHERE flags & 32 != 0
+        AND id <= (SELECT coalesce(max(last_id), 0) FROM index_watermark_hour)));
+
+CREATE TRIGGER torrents_removed AFTER DELETE ON torrents
+WHEN old.id <= (SELECT coalesce(max(last_id), 0) FROM index_watermark_hour)
+BEGIN
+    INSERT INTO rollup_hour (hour, metric, dim, key, value)
+    VALUES (unixepoch() / 3600, 15,
+            CASE WHEN old.content_type BETWEEN 0 AND 254 THEN old.content_type ELSE 255 END,
+            0, 1)
+    ON CONFLICT DO UPDATE SET value = value + 1;
+    UPDATE insights_state SET value = value - 1
+    WHERE key = 'imported' AND old.flags & 32 != 0;
+END;
+";
+
 /// How long a connection waits for a lock another connection holds.
 pub(crate) const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -912,6 +984,64 @@ mod tests {
                 .unwrap();
             let plan = plan.join(" | ");
             assert!(plan.contains(index), "{table}: {plan}");
+        }
+    }
+
+    /// V11 on a V10 database: `imported` is seeded with the searchable
+    /// imports, compaction starts from nothing, fetch counting from the
+    /// next hour, and deletes are counted from then on.
+    #[test]
+    fn v11_seeds_insights_state_from_a_v10_database() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure(&conn, 0).unwrap();
+        migrate_with(&mut conn, None, &MIGRATIONS[..10]).unwrap();
+        conn.execute_batch(
+            "INSERT INTO torrents (id, info_hash, name, size, piece_len, piece_count, file_count,
+                 info_size, flags, discovered_at, metadata_at, last_seen_at, content_type)
+             VALUES (1, zeroblob(20), 'a', 0, 0, 0, 0, 0, 32, 0, 0, 0, 3),
+                    (2, randomblob(20), 'b', 0, 0, 0, 0, 0, 32, 0, 0, 0, NULL),
+                    (3, randomblob(20), 'c', 0, 0, 0, 0, 0, 32, 0, 0, 0, 1),
+                    (4, randomblob(20), 'd', 0, 0, 0, 0, 0, 0, 0, 0, 0, 1);
+             UPDATE index_watermark_hour SET last_id = 2 WHERE hour = 0;",
+        )
+        .unwrap();
+        migrate_with(&mut conn, None, MIGRATIONS).unwrap();
+        let state = |k: &str| -> i64 {
+            conn.query_row(
+                "SELECT value FROM insights_state WHERE key = ?1",
+                [k],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(state("imported"), 2, "ids 1 and 2: searchable imports");
+        assert_eq!(state("compacted_before_day"), 0);
+        assert_eq!(state("last_compaction_at"), 0);
+        let now_h: i64 = conn
+            .query_row("SELECT unixepoch() / 3600", [], |r| r.get(0))
+            .unwrap();
+        assert!((now_h..=now_h + 2).contains(&state("funnel_events_since_hour")));
+        // Id 3 isn't searchable: no removal. Id 1 is, and imported.
+        conn.execute_batch("DELETE FROM torrents WHERE id IN (1, 3)")
+            .unwrap();
+        let removed: Vec<(i64, i64)> = conn
+            .prepare("SELECT dim, value FROM rollup_hour WHERE metric = 15")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(removed, [(3, 1)]);
+        assert_eq!(state("imported"), 1);
+        for table in ["rollup_day", "cohort_day", "insights_state"] {
+            let strict: i64 = conn
+                .query_row(
+                    "SELECT strict FROM pragma_table_list WHERE name = ?1",
+                    [table],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(strict, 1, "{table} is STRICT");
         }
     }
 

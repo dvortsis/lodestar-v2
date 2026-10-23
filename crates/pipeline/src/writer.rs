@@ -282,7 +282,9 @@ impl Writer {
         let class_gen = self.store.as_ref().and_then(|s| s.class_gen().ok());
         let committing = self.judge(committing);
         let cohorts = self.funnel.drain();
-        let counters = self.rollups.drain();
+        let mut counters = self.rollups.drain();
+        // The same transitions by event time, at the flush (B11b).
+        counters.extend(crate::rollups::funnel_events(&cohorts, unix_now()));
         if committing.is_empty()
             && touches.is_empty()
             && events.is_empty()
