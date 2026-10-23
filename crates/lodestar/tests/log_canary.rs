@@ -266,7 +266,8 @@ impl Server {
     fn logging(&self, body: &str) {
         let r = self.send("PATCH", "/api/v1/settings/logging", body);
         assert!(r.starts_with("HTTP/1.0 200"), "{body}: {r}");
-        // `follow` applies it on its own task.
+        // `follow` applies it on its own task. Kept: nothing a test can see
+        // says it has, short of a production hook.
         std::thread::sleep(Duration::from_millis(300));
     }
 
@@ -296,6 +297,26 @@ impl Server {
 
     fn console(&self) -> String {
         self.stderr.lock().unwrap().clone()
+    }
+
+    /// Waits until neither output has grown for three reads 100 ms apart,
+    /// so lines written on other tasks have landed before an absence is
+    /// asserted. Fails if they are still growing after 15 s.
+    fn settle(&self) {
+        let start = Instant::now();
+        let (mut last, mut quiet) = (self.mark(), 0);
+        while quiet < 3 {
+            std::thread::sleep(Duration::from_millis(100));
+            let now = self.mark();
+            quiet = if now == last { quiet + 1 } else { 0 };
+            last = now;
+            assert!(
+                start.elapsed() < Duration::from_secs(15),
+                "the logs kept growing: console {} bytes, file {} bytes",
+                now.0,
+                now.1
+            );
+        }
     }
 
     /// Where each output is now, to read only what comes after.
@@ -360,7 +381,8 @@ impl Server {
             .args(["-TERM", &self.child.id().to_string()])
             .status();
         let _ = self.child.wait();
-        std::thread::sleep(Duration::from_millis(100));
+        // The reader thread drains what the child left in the pipe.
+        self.settle();
         (self.console(), self.file())
     }
 }
@@ -395,6 +417,7 @@ impl Stream {
                 std::thread::sleep(Duration::from_millis(20));
             }
             drop(out);
+            // Retry pacing while the earlier stream's slot is released.
             std::thread::sleep(Duration::from_millis(300));
         }
     }
@@ -432,6 +455,22 @@ impl Stream {
 
     fn text(&self) -> String {
         self.text.lock().unwrap().clone()
+    }
+
+    /// Waits until the text has not grown for three reads 100 ms apart.
+    fn settle(&self) {
+        let start = Instant::now();
+        let (mut last, mut quiet) = (self.text().len(), 0);
+        while quiet < 3 {
+            std::thread::sleep(Duration::from_millis(100));
+            let now = self.text().len();
+            quiet = if now == last { quiet + 1 } else { 0 };
+            last = now;
+            assert!(
+                start.elapsed() < Duration::from_secs(15),
+                "the stream kept growing: {now} bytes"
+            );
+        }
     }
 
     fn last_id(&self) -> Option<String> {
@@ -661,7 +700,7 @@ fn run_1_private_shows_no_fixture_identifier() {
     let stream = Stream::open(&s, "", None);
     let mark = s.mark();
     s.exercise(1, true);
-    std::thread::sleep(Duration::from_millis(300));
+    s.settle();
     let (console, file) = s.since(mark);
     let mut needles: Vec<String> = identifiers(&s.hash).into_iter().map(|(_, v)| v).collect();
     needles.extend([PASSKEY.to_string(), SEALED_NAME.to_string()]);
@@ -671,14 +710,14 @@ fn run_1_private_shows_no_fixture_identifier() {
     drop(stream);
     s.exercise(2, false);
     let again = Stream::open(&s, "", Some(&last));
-    std::thread::sleep(Duration::from_millis(500));
+    again.settle();
     assert!(!again.text().contains("event: resync"), "{}", again.text());
     assert!(
         again.text().contains("filters.rule_set_updated"),
         "it caught up"
     );
     let replay = Stream::open(&s, &format!("?after={first}"), None);
-    std::thread::sleep(Duration::from_millis(300));
+    replay.settle();
     let api = s.api(&replay);
     absent(&api.all(), &needles, "Private, through the API");
     absent(
@@ -735,7 +774,7 @@ fn run_2_one_kind_at_a_time_shows_only_that_kind() {
         let mark = s.mark();
         let stream_mark = open.text().len();
         s.exercise(10 + n as u32, n == 0);
-        std::thread::sleep(Duration::from_millis(300));
+        s.settle();
         let (console, file) = s.since(mark);
         let others: Vec<String> = ids
             .iter()
@@ -777,7 +816,7 @@ fn run_2_one_kind_at_a_time_shows_only_that_kind() {
         let start = Instant::now();
         while !open.text()[before_off..].contains("event: purge") {
             assert!(
-                start.elapsed() < Duration::from_secs(5),
+                start.elapsed() < Duration::from_secs(15),
                 "{kind}: no purge frame"
             );
             std::thread::sleep(Duration::from_millis(50));
@@ -789,7 +828,7 @@ fn run_2_one_kind_at_a_time_shows_only_that_kind() {
             &first.map_or(String::new(), |f| format!("?after={f}")),
             None,
         );
-        std::thread::sleep(Duration::from_millis(300));
+        replay.settle();
         let api = s.api(&replay);
         let after_off: Vec<(&str, &str)> = api.redacted().into_iter().collect();
         absent(&after_off, &mine, &format!("{kind} after it's off"));
@@ -805,7 +844,7 @@ fn run_3_opt_ins_appear_only_while_on_and_only_in_the_file() {
     // Off: no detail.
     let mark = s.mark();
     s.exercise(20, true);
-    std::thread::sleep(Duration::from_millis(300));
+    s.settle();
     let (console, file) = s.since(mark);
     absent(
         &[
@@ -821,7 +860,7 @@ fn run_3_opt_ins_appear_only_while_on_and_only_in_the_file() {
     s.logging(&format!(r#"{{"change_details_until":{}}}"#, now() + 4));
     let mark = s.mark();
     s.exercise(21, false);
-    std::thread::sleep(Duration::from_millis(300));
+    s.settle();
     let (console, file) = s.since(mark);
     assert!(
         file.contains("\"event\":\"filters.change_detail\"") && file.contains("canaryterm21"),
@@ -847,10 +886,11 @@ fn run_3_opt_ins_appear_only_while_on_and_only_in_the_file() {
     // later changes aren't recorded.
     let before_off = open.text().len();
     let first = open.first_id().unwrap();
+    // Time passing for the code under test: the 4 s opt-in window must run out.
     std::thread::sleep(Duration::from_secs(5));
     let mark = s.mark();
     s.exercise(22, false);
-    std::thread::sleep(Duration::from_millis(300));
+    s.settle();
     let (console, file) = s.since(mark);
     absent(
         &[("console", &console), ("file", &file)],
@@ -865,7 +905,7 @@ fn run_3_opt_ins_appear_only_while_on_and_only_in_the_file() {
         &open.text()[before_off..]
     );
     let replay = Stream::open(&s, &format!("?after={first}"), None);
-    std::thread::sleep(Duration::from_millis(300));
+    replay.settle();
     let api = s.api(&replay);
     absent(
         &api.redacted(),
@@ -929,7 +969,8 @@ fn run_4_full_and_both_opt_ins_never_show_a_secret_or_a_sealed_name() {
     let cookie_2 = s.cookie.clone();
     let open = Stream::open(&s, "", None);
     s.exercise(31, false);
-    std::thread::sleep(Duration::from_millis(300));
+    s.settle();
+    open.settle();
     let token = s.token.clone();
     let h = hex(&s.hash);
     let api = s.api(&open);
@@ -1120,7 +1161,8 @@ fn run_4_keys_tokens_and_the_proxy_user_never_show_either() {
     let open = Stream::open(&s, "", None);
     s.exercise(40, false);
     let cookie_now = s.cookie.clone();
-    std::thread::sleep(Duration::from_millis(300));
+    s.settle();
+    open.settle();
     let api = s.api(&open);
     let (console, file) = s.stop();
     let mut outputs = vec![("console", console.as_str()), ("file", file.as_str())];
