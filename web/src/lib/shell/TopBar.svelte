@@ -3,7 +3,6 @@
 	// overflow menu. Below x-large the destinations collapse behind a menu button that discloses
 	// them under the bar (a disclosure, so nothing traps focus). Heavy widgets (the overflow menu,
 	// the palette) load on first use to keep the first load within budget (§10.1).
-	import { onMount } from 'svelte';
 	import { afterNavigate } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -22,7 +21,8 @@
 	const link =
 		'relative inline-flex min-h-(--control-height) items-center gap-2 rounded-field px-3 text-body hover:bg-hover';
 
-	// The overflow menu: a plain button until pressed, then the real menu, opened.
+	// The overflow menu: a plain button until pressed, then the real menu, opened. Its chunk (Bits UI
+	// and positioning, ~35 KB) is fetched on hover or focus, never at load.
 	type MoreComponent = typeof import('./OverflowMenu.svelte').default;
 	let More = $state<MoreComponent>();
 	let moreLoad: Promise<MoreComponent> | undefined;
@@ -30,10 +30,6 @@
 	async function openMore() {
 		More = await loadMore();
 	}
-	onMount(() => {
-		const idle = globalThis.requestIdleCallback ?? ((cb: () => void) => setTimeout(cb, 2000));
-		idle(() => void loadMore());
-	});
 
 	// Esc closes the disclosure and returns focus to its button.
 	function onkeydown(e: KeyboardEvent) {

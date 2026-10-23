@@ -169,6 +169,15 @@ export class OpenApiMock {
 		// open, so by default it is left pending (the status pill reads "Connecting"); a test that
 		// needs events overrides `getEvents` (see e2e/support/events-server.ts, used by shell.routes.test.ts).
 		if (op.id === 'getEvents' && override === undefined) return new Promise<void>(() => {});
+		// The shell probes `GET /auth` when the stream cannot connect, to tell a blocked stream from a
+		// server that is down. Any answer will do; tests that care override it.
+		if (op.id === 'getAuthStatus' && override === undefined) {
+			return route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify({ logged_in: false, setup_required: false })
+			});
+		}
 		let status: number, body: Json, headers: Record<string, string> | undefined;
 		const pick = (v: unknown) => {
 			if (
