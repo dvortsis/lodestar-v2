@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T08:35:46Z",
+ "updated_at": "2026-10-23T08:39:04Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -350,8 +350,8 @@
    "session": "session_01A5U5nutWzMJ5yTeLGHtYrt",
    "pr": 121,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": "2026-10-23T06:26:11Z unblocked by B12; brief being drafted by Opus helper | 2026-10-23T06:36:24Z launched after B12 merge (brief by Opus helper, runner-reviewed; steward from start) | 2026-10-23T08:15:57Z PR #121 head 2d9509d (~4.4k lines); self-review 1 blocking fixed; fresh + security reviewers launched | 2026-10-23T08:28:33Z security review MERGE w/ important: per-search percolation cost unbounded (segment skip by id max, cancel in collector, cap searches, bench); feed/list unbounded scan under reader lock (SQL predicate + LIMIT). Owner flag: feed follows content.show_adult (\u00a72.19)."
+   "review_rounds": 1,
+   "notes": "2026-10-23T06:26:11Z unblocked by B12; brief being drafted by Opus helper | 2026-10-23T06:36:24Z launched after B12 merge (brief by Opus helper, runner-reviewed; steward from start) | 2026-10-23T08:15:57Z PR #121 head 2d9509d (~4.4k lines); self-review 1 blocking fixed; fresh + security reviewers launched | 2026-10-23T08:28:33Z security review MERGE w/ important: per-search percolation cost unbounded (segment skip by id max, cancel in collector, cap searches, bench); feed/list unbounded scan under reader lock (SQL predicate + LIMIT). Owner flag: feed follows content.show_adult (\u00a72.19). | 2026-10-23T08:39:04Z both reviews MERGE; round 1 perf/robustness: feed/list SQL LIMIT (reader lock), segment-skip + cancel in collector + cap 1000 searches, record_hits paused/updated re-check, polish; bench follow-up"
   },
   "B5c": {
    "status": "merged",
@@ -1329,11 +1329,12 @@
   "release-features-licences": "P-release/Dockerfile must build --no-default-features --features web (no fixture) so licences inventory matches what ships (rand_chacha unlisted today) - from B2c review | P-release #92 now covers release matrix + Dockerfile",
   "docs-LODESTAR_LOG": "Docs follow-up: docs/operations.md:26 and packaging/docker/README.md:72 must say setting LODESTAR_LOG makes the logging section read-only (from B-log1 review)",
   "win-hardening-followup": "Windows service hardening follow-up (from M6-win delta 4, admin-only/low): same_dir should canonicalize the parent and compare final name (8.3, \\\\?\\, UNC, trailing dot); compute config 'elsewhere' via same_dir for --config and LODESTAR_DATA_DIR; refusal log open with FILE_FLAG_OPEN_REPARSE_POINT + regular-file check, doc says untrusted (or event log); acl.rs:10-11 comment names SYSTEM/Administrators",
-  "slices-yaml-B-log1b-windows": "Runner PR: add crates/lodestar/src/windows/** to B-log1b owns (M6-win's windows/{ports,priority,service}.rs are in NOT_YET_SWEPT)"
+  "slices-yaml-B-log1b-windows": "Runner PR: add crates/lodestar/src/windows/** to B-log1b owns (M6-win's windows/{ports,priority,service}.rs are in NOT_YET_SWEPT)",
+  "bench-percolation": "Next bench/ brief: percolation at ~10M torrents incl file:() and regex queries (from B9 review)"
  },
  "blocked_on_owner": [],
  "launches_today": 17,
- "last_heartbeat": "2026-10-23T07:39:51Z",
+ "last_heartbeat": "2026-10-23T08:39:04Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
  "runner_prs_open": {
@@ -1376,6 +1377,7 @@
   "113": "03:35 PR #113 opened from owner-session commit 005065f (CI commit-back of E2E baselines; owner decision \"best practice\"). Fresh + security review running. After merge: W9 merges main, pushes with marker; CI commits baselines; W9 removes marker. | 03:40 review MERGE; asked owner session for hardening (symlink refusal, head.sha checkout, [[=~]], dirname --, caps, env input, heading). | 03:48 9ae4c0a hardening verified by runner. APPROVED; merge on green, then tell W9. | 04:16 MERGED 6d14f0e. W9 told.",
   "fix-check-ids": "2026-10-23T06:32:39Z #118 merged (smoke green on the fixed script)",
   "slices-yaml-120": "2026-10-23T07:34:04Z #120 merged (069533a): B-log1b added (owns widened per review), B11c deps B11b",
-  "heartbeat-0739": "no new slices ready (S-search-4 waits S-search-3/W9; B11c waits B11b); open: #119 delta review, #117 merging main, #98 round 4, #92 CI, #91 waits #92, #103 owner, #48 owner"
+  "heartbeat-0739": "no new slices ready (S-search-4 waits S-search-3/W9; B11c waits B11b); open: #119 delta review, #117 merging main, #98 round 4, #92 CI, #91 waits #92, #103 owner, #48 owner",
+  "heartbeat-0838": "open: #121 B9 round 1, #119 B-log1 delta 2, #117 B2c windows (export test race; fix PR requested from B10b session), #92 P-release CI, #91 waits #92, #103/#48 owner"
  }
 }
