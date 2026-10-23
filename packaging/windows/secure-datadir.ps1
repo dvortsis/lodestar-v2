@@ -104,6 +104,11 @@ function Get-NotPrivateReason($folder) {
 # created it in the meantime, its owner or its ACL will not be.
 function New-DataFolder {
   (New-Object IO.DirectoryInfo $dir).Create((New-DataSecurity))
+  # Create does nothing if the name already exists, and the ACL and owner checks below follow
+  # links, so check for a link first: a junction planted in the gap would otherwise pass.
+  if ((Get-Item -LiteralPath $dir -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+    Stop-Install "$dir is a link or junction. Remove it and install again."
+  }
   $owner = (Get-Acl -LiteralPath $dir).GetOwner([Security.Principal.SecurityIdentifier])
   $why = Get-NotPrivateReason $dir
   if ($trusted -notcontains $owner -or $why) {

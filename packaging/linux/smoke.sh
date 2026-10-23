@@ -11,6 +11,7 @@ port=${2:-18090}
 [ -f "$tarball" ] || { echo "no such file: $tarball" >&2; exit 1; }
 
 work=$(mktemp -d)
+chmod 755 "$work"   # the server may drop to another user (PUID) and must reach the data folder
 pid=
 cleanup() {
   [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true

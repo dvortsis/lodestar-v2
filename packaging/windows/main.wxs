@@ -36,7 +36,9 @@
              InstallScope="perMachine"
              Platform="x64" />
 
-    <MajorUpgrade DowngradeErrorMessage="A newer version of Lodestar is already installed." />
+    <!-- Downgrades and same-version upgrades are allowed: nightlies and a release share an MSI
+         version, and a failed update is rolled back by reinstalling the previous MSI (§12.2). -->
+    <MajorUpgrade AllowDowngrades="yes" AllowSameVersionUpgrades="yes" />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
     <Icon Id="LodestarIcon" SourceFile="$(env.LODESTAR_PACKAGING)\icons\lodestar.ico" />
@@ -46,14 +48,17 @@
     <!-- Public properties, usable as `msiexec /i lodestar.msi DEFENDER_EXCLUSION=1`. -->
     <!-- Off unless ticked on the Options page or passed on the command line. -->
     <Property Id="DEFENDER_EXCLUSION" Secure="yes" />
+    <!-- `WEB_FIREWALL=1` also lets other PCs on private networks reach the web page (8090/tcp). -->
+    <Property Id="WEB_FIREWALL" Secure="yes" />
     <!-- `msiexec /x lodestar.msi REMOVE_DATA=1` also deletes the data folder. -->
     <Property Id="REMOVE_DATA" Secure="yes" />
 
-    <Feature Id="Main" Title="Lodestar" Level="1" Absent="disallow" ConfigurableDirectory="INSTALLFOLDER">
+    <Feature Id="Main" Title="Lodestar" Level="1" Absent="disallow">
       <ComponentRef Id="ProgramFiles" />
       <ComponentRef Id="ServiceComponent" />
       <ComponentRef Id="DataFolder" />
       <ComponentRef Id="FirewallRules" />
+      <ComponentRef Id="FirewallWeb" />
       <ComponentRef Id="StartMenuShortcut" />
     </Feature>
 
@@ -63,7 +68,7 @@
         <Directory Id="INSTALLFOLDER" Name="Lodestar" />
       </Directory>
       <Directory Id="CommonAppDataFolder">
-        <Directory Id="DATAFOLDER" Name="Lodestar" />
+        <Directory Id="DataFolderDir" Name="Lodestar" />
       </Directory>
       <Directory Id="ProgramMenuFolder">
         <Directory Id="StartMenuDir" Name="Lodestar" />
@@ -96,9 +101,9 @@
     <!-- Data folder: created by SecureDataFolder below, with its final permissions
          (not by CreateFolder, which would leave it with ProgramData's inherited
          rights for a while). Never removed by the installer itself. -->
-    <DirectoryRef Id="DATAFOLDER">
+    <DirectoryRef Id="DataFolderDir">
       <Component Id="DataFolder" Guid="2D5B2E5C-6B34-4F0F-9D54-3D1A3F8E9A03" Win64="yes">
-        <RegistryValue Root="HKLM" Key="Software\Lodestar" Name="DataFolder" Type="string" Value="[DATAFOLDER]" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="Software\Lodestar" Name="DataFolder" Type="string" Value="[DataFolderDir]" KeyPath="yes" />
       </Component>
     </DirectoryRef>
 
@@ -106,14 +111,23 @@
     <DirectoryRef Id="INSTALLFOLDER">
       <Component Id="FirewallRules" Guid="2D5B2E5C-6B34-4F0F-9D54-3D1A3F8E9A04" Win64="yes">
         <RegistryValue Root="HKLM" Key="Software\Lodestar" Name="FirewallRules" Type="integer" Value="1" KeyPath="yes" />
-        <!-- Web UI: private networks only, never the public profile. -->
-        <fire:FirewallException Id="FwWeb" Name="Lodestar web UI (8090/tcp, private networks)"
-                                Protocol="tcp" Port="8090" Profile="private" Scope="any"
-                                Program="[#LodestarExe]" IgnoreFailure="yes" />
         <!-- DHT: UDP, private networks only too. 6881/tcp (peer connections) is
              reserved and unused today, so it has no rule. -->
         <fire:FirewallException Id="FwDht" Name="Lodestar DHT (6881/udp, private networks)"
                                 Protocol="udp" Port="6881" Profile="private" Scope="any"
+                                Program="[#LodestarExe]" IgnoreFailure="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- Web UI port: opt-in (WEB_FIREWALL=1, off by default), per the M6-win decision that the UI
+         port is not opened to the network unless the user chooses. Private networks only. The
+         web page on this PC itself needs no rule. -->
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="FirewallWeb" Guid="2D5B2E5C-6B34-4F0F-9D54-3D1A3F8E9A06" Win64="yes">
+        <Condition>WEB_FIREWALL = "1"</Condition>
+        <RegistryValue Root="HKLM" Key="Software\Lodestar" Name="FirewallWeb" Type="integer" Value="1" KeyPath="yes" />
+        <fire:FirewallException Id="FwWeb" Name="Lodestar web UI (8090/tcp, private networks)"
+                                Protocol="tcp" Port="8090" Profile="private" Scope="any"
                                 Program="[#LodestarExe]" IgnoreFailure="yes" />
       </Component>
     </DirectoryRef>
@@ -135,7 +149,7 @@
          not secure, or contains a link. The MSI's ACL is what the service later
          verifies (windows/acl.rs). See secure-datadir.ps1. -->
     <CustomAction Id="SecureDataFolder" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="check"
-                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]secure-datadir.ps1&quot; -Path &quot;[DATAFOLDER].&quot;" />
+                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]secure-datadir.ps1&quot; -Path &quot;[DataFolderDir].&quot;" />
 
     <!-- Pre-shutdown: give the final commit up to 60 s before Windows stops the
          service at shutdown (WiX 3 has no attribute for it, so this is the
@@ -150,31 +164,51 @@
     <CustomAction Id="CreateServiceRollback" Directory="TARGETDIR" Execute="rollback" Impersonate="no" Return="ignore"
                   ExeCommand="&quot;[System64Folder]sc.exe&quot; delete Lodestar" />
     <CustomAction Id="CreateService" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="check"
-                  ExeCommand="&quot;[System64Folder]sc.exe&quot; create Lodestar binPath= &quot;\&quot;[INSTALLFOLDER]lodestar.exe\&quot; serve&quot; start= demand obj= &quot;NT SERVICE\Lodestar&quot; DisplayName= Lodestar" />
+                  ExeCommand="&quot;[System64Folder]sc.exe&quot; create Lodestar binPath= &quot;\&quot;[INSTALLFOLDER]lodestar.exe\&quot; serve&quot; start= delayed-auto obj= &quot;NT SERVICE\Lodestar&quot; DisplayName= Lodestar" />
+    <!-- Restart after a failure, also when the program exits with an error code rather than
+         crashing (exit 1 and 3 are errors), but not forever: two restarts, then nothing until the
+         counter resets after a day. -->
+    <CustomAction Id="ServiceFailureActions" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="check"
+                  ExeCommand="&quot;[System64Folder]sc.exe&quot; failure Lodestar reset= 86400 actions= restart/60000/restart/300000//" />
+    <CustomAction Id="ServiceFailureFlag" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="check"
+                  ExeCommand="&quot;[System64Folder]sc.exe&quot; failureflag Lodestar 1" />
     <CustomAction Id="DescribeService" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="ignore"
                   ExeCommand="&quot;[System64Folder]sc.exe&quot; description Lodestar &quot;Lodestar DHT crawler and torrent search&quot;" />
-    <CustomAction Id="ServiceSidType" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="ignore"
+    <CustomAction Id="ServiceSidType" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="check"
                   ExeCommand="&quot;[System64Folder]sc.exe&quot; sidtype Lodestar unrestricted" />
 
     <!-- Opt-in only: runs when the box is ticked. Failure (Defender off or managed by
          another product) does not stop the install. -->
     <CustomAction Id="AddDefenderExclusion" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="ignore"
-                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;Add-MpPreference -ExclusionPath '[DATAFOLDER].'&quot;" />
+                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;Add-MpPreference -ExclusionPath '[DataFolderDir].'&quot;" />
+    <CustomAction Id="RemoveDefenderExclusionRollback" Directory="TARGETDIR" Execute="rollback" Impersonate="no" Return="ignore"
+                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;Remove-MpPreference -ExclusionPath '[DataFolderDir].'&quot;" />
     <CustomAction Id="RemoveDefenderExclusion" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="ignore"
-                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;Remove-MpPreference -ExclusionPath '[DATAFOLDER].'&quot;" />
+                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;Remove-MpPreference -ExclusionPath '[DataFolderDir].'&quot;" />
 
     <!-- Only when asked: REMOVE_DATA=1 on the uninstall command line. -->
     <CustomAction Id="RemoveDataFolder" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="ignore"
-                  ExeCommand="&quot;[System64Folder]cmd.exe&quot; /c rmdir /s /q &quot;[DATAFOLDER].&quot;" />
+                  ExeCommand="&quot;[System64Folder]cmd.exe&quot; /c rmdir /s /q &quot;[DataFolderDir].&quot;" />
+
+    <!-- SYSTEM runs scripts from, and the service runs the program from, the install folder, and a
+         folder outside Program Files can be writable by other users. Only the default is allowed. -->
+    <CustomAction Id="WrongInstallFolder" Error="Lodestar installs to C:\Program Files\Lodestar only. Choose the default folder." />
 
     <InstallExecuteSequence>
+      <Custom Action="WrongInstallFolder" After="CostFinalize">NOT Installed AND NOT (INSTALLFOLDER = "[ProgramFiles64Folder]Lodestar\")</Custom>
       <Custom Action="CreateServiceRollback" After="InstallFiles">NOT Installed</Custom>
       <Custom Action="CreateService" After="CreateServiceRollback">NOT Installed</Custom>
       <Custom Action="DescribeService" After="CreateService">NOT Installed</Custom>
       <Custom Action="ServiceSidType" After="DescribeService">NOT Installed</Custom>
-      <Custom Action="SecureDataFolder" After="ServiceSidType">NOT Installed</Custom>
+      <Custom Action="ServiceFailureActions" After="ServiceSidType">NOT Installed</Custom>
+      <Custom Action="ServiceFailureFlag" After="ServiceFailureActions">NOT Installed</Custom>
+      <!-- Also on Repair, which is how an administrator fixes a refused data folder. -->
+      <Custom Action="SecureDataFolder" After="ServiceFailureFlag">NOT (REMOVE="ALL")</Custom>
       <Custom Action="SetPreshutdownTimeout" After="SecureDataFolder">NOT Installed</Custom>
-            <Custom Action="AddDefenderExclusion" After="InstallFiles">NOT Installed AND DEFENDER_EXCLUSION="1"</Custom>
+      <!-- The exclusion goes in last, after the folder is known to be ours, and comes out again
+           if a later step rolls the install back. -->
+      <Custom Action="RemoveDefenderExclusionRollback" After="SetPreshutdownTimeout">NOT Installed AND DEFENDER_EXCLUSION="1"</Custom>
+      <Custom Action="AddDefenderExclusion" After="RemoveDefenderExclusionRollback">NOT Installed AND DEFENDER_EXCLUSION="1"</Custom>
       <Custom Action="RemoveDefenderExclusion" Before="RemoveFiles">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
       <Custom Action="RemoveDataFolder" Before="RemoveFiles">REMOVE="ALL" AND REMOVE_DATA="1" AND NOT UPGRADINGPRODUCTCODE</Custom>
     </InstallExecuteSequence>
@@ -197,8 +231,14 @@
         <Control Id="DefenderBox" Type="CheckBox" X="20" Y="58" Width="330" Height="18"
                  Property="DEFENDER_EXCLUSION" CheckBoxValue="1"
                  Text="Exclude Lodestar's data folder from Windows Defender scans" />
-        <Control Id="DefenderText" Type="Text" X="38" Y="80" Width="312" Height="120" NoPrefix="yes"
+        <Control Id="DefenderText" Type="Text" X="38" Y="80" Width="312" Height="100" NoPrefix="yes"
                  Text="Why: Lodestar writes its database and search index all day. Defender scanning every write can slow it several times over.&#13;&#10;&#13;&#10;The trade-off: Defender will not scan anything in %ProgramData%\Lodestar. Lodestar keeps only its own database and index there, and it downloads torrent metadata, not files. If you share this PC with other people or are unsure, leave this off. Lodestar works without it, only slower.&#13;&#10;&#13;&#10;You can add or remove the exclusion later in Windows Security." />
+
+        <Control Id="WebBox" Type="CheckBox" X="20" Y="184" Width="330" Height="18"
+                 Property="WEB_FIREWALL" CheckBoxValue="1"
+                 Text="Let other PCs on my private network open the Lodestar web page" />
+        <Control Id="WebText" Type="Text" X="38" Y="204" Width="312" Height="28" NoPrefix="yes"
+                 Text="Leave this off unless you need it. The web page on this PC works either way." />
 
         <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
         <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="&amp;Back">
