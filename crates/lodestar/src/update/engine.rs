@@ -92,7 +92,7 @@ struct Inner {
     ctx: Context,
     bin: Option<Bin>,
     settings: watch::Receiver<Updates>,
-    hub: Option<Arc<EventHub>>,
+    publish: Publish,
     fetch: Arc<dyn Fetch>,
     zone: (jiff::tz::TimeZone, String),
     found: Mutex<Found>,
@@ -100,7 +100,12 @@ struct Inner {
     checking: tokio::sync::Mutex<()>,
     last_manual: Mutex<Option<Instant>>,
     clock: Box<dyn Fn() -> i64 + Send + Sync>,
+    /// The keys checks verify with (the embedded ones, or tests').
+    keys: Box<dyn Fn() -> Result<lodestar_update::Embedded, lodestar_update::Error> + Send + Sync>,
 }
+
+/// Where `updates` events go: the event hub, or a test's list.
+pub type Publish = Arc<dyn Fn(UpdatesEvent) + Send + Sync>;
 
 /// What the last check found.
 #[derive(Default)]
@@ -115,20 +120,34 @@ impl Engine {
     pub fn new(
         ctx: Context,
         settings: watch::Receiver<Updates>,
-        hub: Option<Arc<EventHub>>,
+        hub: Arc<EventHub>,
         fetch: Arc<dyn Fetch>,
     ) -> Engine {
         let (tz, name, _) = super::window::local_zone();
-        Engine::with(ctx, settings, hub, fetch, (tz, name), Box::new(unix_now))
+        let publish: Publish = Arc::new(move |e| {
+            hub.publish(&Event::Updates(e));
+        });
+        Engine::with(
+            ctx,
+            settings,
+            publish,
+            fetch,
+            (tz, name),
+            Box::new(unix_now),
+            Box::new(super::trust_root),
+        )
     }
 
     fn with(
         ctx: Context,
         settings: watch::Receiver<Updates>,
-        hub: Option<Arc<EventHub>>,
+        publish: Publish,
         fetch: Arc<dyn Fetch>,
         zone: (jiff::tz::TimeZone, String),
         clock: Box<dyn Fn() -> i64 + Send + Sync>,
+        keys: Box<
+            dyn Fn() -> Result<lodestar_update::Embedded, lodestar_update::Error> + Send + Sync,
+        >,
     ) -> Engine {
         let bin = Bin::open(&ctx.data_dir).ok();
         Engine {
@@ -136,13 +155,14 @@ impl Engine {
                 ctx,
                 bin,
                 settings,
-                hub,
+                publish,
                 fetch,
                 zone,
                 found: Mutex::new(Found::default()),
                 checking: tokio::sync::Mutex::new(()),
                 last_manual: Mutex::new(None),
                 clock,
+                keys,
             }),
         }
     }
@@ -202,15 +222,13 @@ impl Engine {
     }
 
     fn publish(&self, state: UpdatesState, version: Option<String>, error: Option<String>) {
-        if let Some(hub) = &self.inner.hub {
-            hub.publish(&Event::Updates(UpdatesEvent {
-                state,
-                version,
-                bytes_done: None,
-                bytes_total: None,
-                error,
-            }));
-        }
+        (self.inner.publish)(UpdatesEvent {
+            state,
+            version,
+            bytes_done: None,
+            bytes_total: None,
+            error,
+        });
     }
 
     /// One check: fetch, verify, advance `trust.json`, keep the result.
@@ -267,7 +285,7 @@ impl Engine {
             f.notices.clear();
             return Ok(());
         };
-        let embedded = super::trust_root().map_err(lodestar_update::Error::code)?;
+        let embedded = (self.inner.keys)().map_err(lodestar_update::Error::code)?;
         let Some(bin) = self.inner.bin.clone() else {
             return Err("bin_unavailable");
         };
@@ -365,7 +383,7 @@ impl Engine {
         if trust_damaged {
             return Reason::TrustDamaged;
         }
-        let keys = super::trust_root().ok();
+        let keys = (self.inner.keys)().ok();
         let role = settings.channel.update().role();
         let has_key = keys.is_some_and(|k| match role {
             lodestar_update::Role::Release => k.release.is_some(),
@@ -719,5 +737,220 @@ impl UpdatesApi for Engine {
 
     fn clear_history(&self) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
         Box::pin(async move { Engine::clear_history(self) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lodestar_update::Channel;
+    use lodestar_update::testing::{TestTrust, bytes, envelope, manifest};
+
+    use super::super::check::tests::Fake;
+    use super::*;
+
+    const NOW: i64 = 1_800_000_000;
+    const STABLE: &str =
+        "https://github.com/dvortsis/lodestar-v2/releases/download/update-manifest/stable.json";
+
+    struct Env {
+        dir: tempfile::TempDir,
+        fake: Arc<Fake>,
+        trust: Arc<TestTrust>,
+        settings: watch::Sender<Updates>,
+        events: Arc<Mutex<Vec<UpdatesEvent>>>,
+        engine: Engine,
+    }
+
+    fn env(mode: Mode) -> Env {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Arc::new(Fake::default());
+        let trust = Arc::new(TestTrust::default());
+        let (settings, rx) = watch::channel(Updates {
+            mode,
+            ..Updates::default()
+        });
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink = events.clone();
+        let keys = trust.clone();
+        let engine = Engine::with(
+            Context {
+                data_dir: dir.path().to_path_buf(),
+                running: Version::new(0, 5, 0),
+                image: Version::new(0, 5, 0),
+                supervised: true,
+                notices: vec![],
+                repository: "https://github.com/dvortsis/lodestar-v2".into(),
+            },
+            rx,
+            Arc::new(move |e| lock(&sink).push(e)),
+            fake.clone(),
+            (jiff::tz::TimeZone::UTC, "UTC".into()),
+            Box::new(|| NOW),
+            Box::new(move || Ok(keys.embedded(vec![]))),
+        );
+        Env {
+            dir,
+            fake,
+            trust,
+            settings,
+            events,
+            engine,
+        }
+    }
+
+    impl Env {
+        /// Serves a stable manifest signed by `key` (the release key by
+        /// default), dated `ts`, with one release.
+        fn serve(&self, ts: i64, version: &str, key: Option<&lodestar_update::testing::TestKey>) {
+            let body = bytes(&manifest(Channel::Stable, ts as u64, version, b"binary"));
+            let signed = key.unwrap_or(&self.trust.release).signed(&body);
+            self.fake.serve(STABLE, 200, None, &envelope(&signed, None));
+        }
+
+        fn trust_mark(&self) -> Option<u64> {
+            let text = std::fs::read(self.dir.path().join("bin").join(trust_file::FILE)).ok()?;
+            let v: serde_json::Value = serde_json::from_slice(&text).ok()?;
+            v["channels"]["stable"]["hwm_ts"].as_u64()
+        }
+
+        fn states(&self) -> Vec<UpdatesState> {
+            lock(&self.events).iter().map(|e| e.state).collect()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_good_check_lists_the_release_and_advances_trust() {
+        let e = env(Mode::Notify);
+        e.serve(NOW - 100, "0.6.0", None);
+        assert_eq!(e.engine.run_check().await, Ok(()));
+        let s = e.engine.status();
+        assert_eq!(s.status.state, CheckState::Ok);
+        assert_eq!(s.status.checked_at, Some(NOW));
+        let next = s.status.next_check_at.unwrap();
+        assert!((NOW + 6 * 3600..NOW + 7 * 3600).contains(&next), "{next}");
+        assert_eq!(s.releases.len(), 1);
+        assert_eq!(s.releases[0].version, "0.6.0");
+        assert!(
+            !s.releases[0].eligible,
+            "notify installs nothing but security fixes"
+        );
+        assert_eq!(e.trust_mark(), Some((NOW - 100) as u64));
+        assert_eq!(
+            e.states(),
+            [UpdatesState::Checking, UpdatesState::Available],
+            "one event per change"
+        );
+        assert!(!s.capability.can_install);
+        // Only the updater's agent went out, once.
+        assert_eq!(*e.fake.asked.lock().unwrap(), [STABLE]);
+    }
+
+    #[tokio::test]
+    async fn a_replay_or_a_foreign_key_fails_and_moves_nothing() {
+        let e = env(Mode::Notify);
+        e.serve(NOW - 100, "0.6.0", None);
+        e.engine.run_check().await.unwrap();
+        // An older manifest than the mark.
+        e.serve(NOW - 200, "0.6.1", None);
+        let code = e.engine.run_check().await.unwrap_err();
+        assert!(!code.is_empty());
+        assert_eq!(e.trust_mark(), Some((NOW - 100) as u64));
+        let s = e.engine.status();
+        assert_eq!(s.status.state, CheckState::Failed);
+        assert_eq!(s.status.error.as_deref(), Some(code));
+        // Stable signed by the nightly key.
+        e.serve(NOW - 50, "0.6.2", Some(&e.trust.nightly));
+        assert!(e.engine.run_check().await.is_err());
+        assert_eq!(e.trust_mark(), Some((NOW - 100) as u64));
+        assert_eq!(e.states().last(), Some(&UpdatesState::Failed));
+    }
+
+    #[tokio::test]
+    async fn a_damaged_trust_file_blocks_installs_and_is_never_overwritten() {
+        let e = env(Mode::Auto);
+        std::fs::create_dir_all(e.dir.path().join("bin")).unwrap();
+        let path = e.dir.path().join("bin").join(trust_file::FILE);
+        std::fs::write(&path, b"{ damaged").unwrap();
+        e.serve(NOW - 100, "0.6.0", None);
+        e.engine.run_check().await.unwrap();
+        let s = e.engine.status();
+        assert!(
+            s.notices.contains(&"trust_damaged".to_string()),
+            "{:?}",
+            s.notices
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"{ damaged");
+        assert_eq!(s.releases.len(), 1, "the check still shows what's out");
+    }
+
+    #[tokio::test]
+    async fn nothing_published_is_no_error() {
+        let e = env(Mode::Notify);
+        assert_eq!(e.engine.run_check().await, Ok(()));
+        let s = e.engine.status();
+        assert_eq!((s.status.state, s.releases.len()), (CheckState::Ok, 0));
+        assert_eq!(e.states(), [UpdatesState::Checking]);
+    }
+
+    #[tokio::test]
+    async fn the_manual_check_is_rate_limited() {
+        let e = env(Mode::Off);
+        e.serve(NOW - 100, "0.6.0", None);
+        let s = e.engine.check_now().await.unwrap();
+        assert_eq!(s.releases.len(), 1, "a manual check runs even when off");
+        assert_eq!(
+            s.status.next_check_at, None,
+            "nothing is scheduled when off"
+        );
+        assert!(matches!(
+            e.engine.check_now().await,
+            Err(UpdatesError::RateLimited { retry_after }) if (1..=60).contains(&retry_after)
+        ));
+    }
+
+    #[tokio::test]
+    async fn skip_pause_and_clear_write_their_state() {
+        let e = env(Mode::Auto);
+        e.serve(NOW - 10 * 86_400, "0.6.0", None);
+        e.engine.run_check().await.unwrap();
+        assert_eq!(e.engine.skip("0.9.9"), Err(UpdatesError::UnknownVersion));
+        let s = e.engine.skip("0.6.0").unwrap();
+        assert!(s.releases.is_empty(), "a skipped version isn't a candidate");
+        let skipped: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(e.dir.path().join("bin").join("skipped")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(skipped[0]["reason"], "user");
+
+        let s = e.engine.pause(7);
+        assert_eq!(s.policy.paused_until, Some(NOW + 7 * 86_400));
+        assert_eq!(e.engine.pause(0).policy.paused_until, None);
+
+        std::fs::write(
+            e.dir.path().join("bin").join(history::FILE),
+            br#"{"entries":[{"version":"0.5.0","from":"image","at":1,"result":"rolled_back"}]}"#,
+        )
+        .unwrap();
+        let s = e.engine.status();
+        assert_eq!(s.history.len(), 1);
+        assert!(s.notices.contains(&"rolled_back".to_string()));
+        assert!(e.engine.clear_history().unwrap().history.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_schedule_follows_the_mode() {
+        let e = env(Mode::Off);
+        assert_eq!(e.engine.until_scheduled(), None);
+        e.settings.send_modify(|s| s.mode = Mode::Notify);
+        assert_eq!(
+            e.engine.until_scheduled(),
+            Some(Duration::ZERO),
+            "due at once"
+        );
+        e.serve(NOW - 100, "0.6.0", None);
+        e.engine.run_check().await.unwrap();
+        let wait = e.engine.until_scheduled().unwrap();
+        assert!(wait >= EVERY && wait < EVERY + Duration::from_secs(3600));
+        assert_eq!(e.engine.summary(), (true, Some(NOW)));
     }
 }
