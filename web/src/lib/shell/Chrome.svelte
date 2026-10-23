@@ -47,6 +47,7 @@
 	}
 
 	let offCommands: (() => void) | undefined;
+	let offShortcuts: (() => void) | undefined;
 	let detachKeys: (() => void) | undefined;
 	let uninstallAuth: (() => void) | undefined;
 	let disposed = false;
@@ -63,13 +64,15 @@
 			void Promise.all([
 				import('$lib/keys'),
 				import('./commands'),
+				import('$lib/features/shortcuts/boot'),
 				import('./status.svelte'),
 				import('./StatusPill.svelte'),
 				import('./ConnectionView.svelte')
-			]).then(([keysModule, commands, status, pill, connection]) => {
+			]).then(([keysModule, commands, shortcutsBoot, status, pill, connection]) => {
 				if (disposed) return;
 				detachKeys = keysModule.keys.attach(window);
 				offCommands = commands.registerShellCommands();
+				offShortcuts = shortcutsBoot.startShortcuts();
 				statusRef.Pill = pill.default;
 				statusRef.Connection = connection.default;
 				statusRef.current = status.shellStatus;
@@ -88,6 +91,7 @@
 			stopWaiting();
 			detachKeys?.();
 			offCommands?.();
+			offShortcuts?.();
 			uninstallAuth?.();
 		};
 	});
