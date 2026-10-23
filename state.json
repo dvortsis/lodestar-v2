@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T06:08:13Z",
+ "updated_at": "2026-10-23T06:09:01Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -862,13 +862,18 @@
    "merge": "1274bd7"
   },
   "B2c": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_019JSHNmjWkJEYfg8YsfJ7wG",
-   "pr": null,
+   "pr": 117,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "from #86 | 05:02 launched after B2b merge (brief by Opus helper, runner-reviewed; steward from start)."
+   "notes": "from #86 | 05:02 launched after B2b merge (brief by Opus helper, runner-reviewed; steward from start). | 2026-10-23T06:09:01Z PR #117 head f1e0457 (~13k lines, mostly generated); fresh + security reviewers launched",
+   "self_review": {
+    "raised": 6,
+    "fixed": 6,
+    "left": 0
+   }
   },
   "M-settings-form": {
    "status": "pending",
