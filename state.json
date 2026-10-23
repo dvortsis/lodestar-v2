@@ -1036,6 +1036,11 @@
    "pr": 106,
    "branch": "claude/zealous-lovelace-qv6e22",
    "notes": "review MERGE 01:03; merge on green (docs/config only)"
+  },
+  "S-snapshots": {
+   "status": "launching",
+   "model": "opus",
+   "notes": "owner-delegated decision 2026-10-23: purge + 90-day expiry for migration snapshots"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -1222,20 +1227,10 @@
   "pin_toolchain": "rust-toolchain.toml is unpinned stable; 1.99 deprecations broke clippy on #88. Consider pinning (affects CALIB_REF_NS too).",
   "font_fout": "W9 moved Atkinson font preload after first frame (FOUT swap); recheck CLS/LCP when Search screens land"
  },
- "blocked_on_owner": [
-  "Modern DHT crawler architecture: waiting on an AskUserQuestion",
-  "F1b #66: sign-off on calibrated filter budget (50us at reference runner speed, scale up to 1.6x on slower runners)"
- ],
+ "blocked_on_owner": [],
  "launches_today": 8,
  "last_heartbeat": "2026-10-22T20:39Z",
- "owner_questions": [
-  "F1 budget scope: gate covers cheaply-rejectable rule shapes (10% = 40.8 us on runner). Shapes the cheap check cannot decide cost more at 10% of rules (VM: NEAR/1 ~450-500, negation ~140, fuzzy ~125, prefix ~110 us; runner ~1.4x faster). Should those shapes be gated at 50 us too?",
-  "Filter budget hardware: 50 us has no reference machine; gate now calibrated to the runner F1 measured on (10%=40.8 us), slower runners scale up to 1.6x. Confirm or set a reference machine.",
-  "Migration snapshots (<db>.pre-vN.db, VACUUM INTO before each migration, kept forever) retain quarantine names purged later, defeating 'deleted data is overwritten'. Recommend: run the same expiry purge on snapshots and delete them after 90 days (rollback window).",
-  "F-near: multi-token NEAR words now match where they never did; stored CSX-5 overrides/exceptions/Always-allow using such words would release more without a new impact preview (\u00a71.8.6). Pre-release, no installs. Recommend: note only, no re-preview machinery.",
-  "Release signing hygiene (owner actions): restrict the GitHub `release` environment to tags with a required reviewer (nightlies signed from main expose the key to any merged workflow change), and consider a separate nightly key trusted only on Nightly.",
-  "Auto-update recovery key: compromise/rotation of the offline recovery key. Recommend: accepted risk (offline, password-protected; remedy = new build + manual update), no recovery-key rotation statement. Or design a self-signed sequenced recovery-key statement."
- ],
+ "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
  "runner_prs_open": {
   "80": "token classes: owner imported baselines b2b46df; CI running; merge on green",
@@ -1252,6 +1247,7 @@
  ],
  "decisions_log": [
   "2026-10-23 00:40 owner: 'Go with whatever makes for the best user experience' re filter budget reference -> staged: #97 fastest-runner ref now; F-perf moves ref to EPYC 7763 (typical) when engine meets it.",
-  "2026-10-23 00:58 owner (session_01SE4bp9YdZmHr8RN4FHpbmm, verified user message 'raise the cap by 50%'): max_launches_per_day 40 -> 60. Branch claude/zealous-lovelace-qv6e22."
+  "2026-10-23 00:58 owner (session_01SE4bp9YdZmHr8RN4FHpbmm, verified user message 'raise the cap by 50%'): max_launches_per_day 40 -> 60. Branch claude/zealous-lovelace-qv6e22.",
+  "2026-10-23 01:10 owner delegated 8 questions (deciding factors UX + performance). Runner decisions: (1) DHT session question resolved = \u00a72.16; rule indexes -> B8; typed held reason -> later migration. (2) #66 closes on #97 merge. (3) all rule shapes held to 50us via realistic mixed-shape case (F-perf), per-shape reported, hostile-input linear; UX guard if a shape can't meet budget. (4) snapshots purge + 90-day expiry (S-snapshots). (5) F-near: note only. (6) separate nightly key + release env tags-only w/ reviewer (P-release; owner sets env/secrets). (7) recovery key: accepted risk. (8) filter session told no self-merge; no branch protection (all sessions share the owner account, so protection can't distinguish them and would block runner merges)."
  ]
 }
