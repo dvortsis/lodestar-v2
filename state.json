@@ -3,7 +3,7 @@
  "updated_at": "2026-10-22T21:45Z",
  "launches": {
   "date": "2026-10-22",
-  "count": 30
+  "count": 31
  },
  "tags": {},
  "slices": {
@@ -1038,9 +1038,10 @@
    "notes": "review MERGE 01:03; merge on green (docs/config only)"
   },
   "S-snapshots": {
-   "status": "launching",
+   "status": "running",
    "model": "opus",
-   "notes": "owner-delegated decision 2026-10-23: purge + 90-day expiry for migration snapshots"
+   "notes": "owner-delegated decision 2026-10-23: purge + 90-day expiry for migration snapshots",
+   "session": "session_01KNQRrRWSAMYLC5vJRhERho"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
