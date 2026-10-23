@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T06:56:15Z",
+ "updated_at": "2026-10-23T06:59:39Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -306,13 +306,13 @@
    "notes": ""
   },
   "B11a": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01Rg3cvfHbL2g5dSqoPL3qLq",
    "pr": 116,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 05:15 PR #116 0d95d4c ready; reviewer started. | 05:35 review MERGE; asked: searchable_delta via hourly snapshot (code 13), clamp all, cap annotations, plan test on year data, decisions notes + named follow-ups. | 2026-10-23T06:04:00Z e2eab71 fmt+clippy red: deprecated fetch_update at insights.rs:307; asked for CAS loop as hot.rs:194 | 2026-10-23T06:15:43Z a24093e: delta f8f1125 checked (gauge 13, clamp, annotations cap, plan test, docs) + fetch_update -> load/fetch_add (single-writer task, verified). Approved; merge on green | 2026-10-23T06:26:11Z d962260 approved; main moved (B12): conflicts dto/mod.rs, lib.rs; asked to merge main | 2026-10-23T06:34:16Z 0b2f560 merged main (B12); merge on green",
+   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 05:15 PR #116 0d95d4c ready; reviewer started. | 05:35 review MERGE; asked: searchable_delta via hourly snapshot (code 13), clamp all, cap annotations, plan test on year data, decisions notes + named follow-ups. | 2026-10-23T06:04:00Z e2eab71 fmt+clippy red: deprecated fetch_update at insights.rs:307; asked for CAS loop as hot.rs:194 | 2026-10-23T06:15:43Z a24093e: delta f8f1125 checked (gauge 13, clamp, annotations cap, plan test, docs) + fetch_update -> load/fetch_add (single-writer task, verified). Approved; merge on green | 2026-10-23T06:26:11Z d962260 approved; main moved (B12): conflicts dto/mod.rs, lib.rs; asked to merge main | 2026-10-23T06:34:16Z 0b2f560 merged main (B12); merge on green | 2026-10-23T06:59:39Z merged #116 as 23a1b77",
    "self_review": {
     "raised": 13,
     "fixed": 7,
@@ -327,7 +327,7 @@
    "pr": 102,
    "attempt": 1,
    "review_rounds": 3,
-   "notes": "Launched 21:41 after B6 merged. | 01:50 PR #102 41231f7 conflicts live.rs; asked main merge + relevance gate; review on new head. | 01:52 c764a4f main merged (relevance PASS); reviewer started. | 02:45 review FIX: natural phrasing inverts negations/field syntax (-cam -> includes CAM) -> strict-lex first + meaning-preserving prop test; important: did-you-mean cost, FST peak RSS/10M plan, swap-path test. | 03:20 c80199b fixes (strict-lex natural phrasing + prop test, did-you-mean capped, FST memory, swap test). Delta reviewer started. OK given for query.rs pub(crate) + ROUTES line. | 03:33 delta c80199b FIX: chip_nodes swallows tokens with ./,/nbsp (release names -> res:1080p); important: cross-run merge/contradictions, structural prop test. Grouping preservation verified. | 03:47 7548049 chip/merge/structural-prop fixes; narrow delta reviewer (round 3) started. | 03:58 round-3 delta FIX (two-value tokens, bare-number ext, AND merge regression, nested field guard, prop test). Past escalation limit (2): not parked because each round narrows a hard parser problem; next blocking -> split natural phrasing into follow-up and merge /suggest. Flagged to owner. | 04:14 b0a76dc verified by runner (38-input probe). APPROVED; merge on green. | 04:35 conflicts after X-flakes+B5c (search-bench, api/search.rs, live.rs) -> asked main merge. | 04:58 3c5fbd2 main merged (live.rs hooks re-applied in follow(): verified by runner). Approved; merge on green. | 05:56 CI green 3c5fbd2 but merged tree fails: tests/suggest.rs ApiState missing user_data (B10a) -> asked main merge. | 2026-10-23T06:14:33Z 3ecb9e0 merged main + user_data fix; merge on green | 2026-10-23T06:26:11Z 3ecb9e0 trial-merges clean on 87a5cf7 but overlaps (lib.rs, openapi.rs, dto/mod.rs): merged-tree verify before merge | 2026-10-23T06:52:29Z 3ecb9e0 CI green; merged-tree verify vs 077bf08 running"
+   "notes": "Launched 21:41 after B6 merged. | 01:50 PR #102 41231f7 conflicts live.rs; asked main merge + relevance gate; review on new head. | 01:52 c764a4f main merged (relevance PASS); reviewer started. | 02:45 review FIX: natural phrasing inverts negations/field syntax (-cam -> includes CAM) -> strict-lex first + meaning-preserving prop test; important: did-you-mean cost, FST peak RSS/10M plan, swap-path test. | 03:20 c80199b fixes (strict-lex natural phrasing + prop test, did-you-mean capped, FST memory, swap test). Delta reviewer started. OK given for query.rs pub(crate) + ROUTES line. | 03:33 delta c80199b FIX: chip_nodes swallows tokens with ./,/nbsp (release names -> res:1080p); important: cross-run merge/contradictions, structural prop test. Grouping preservation verified. | 03:47 7548049 chip/merge/structural-prop fixes; narrow delta reviewer (round 3) started. | 03:58 round-3 delta FIX (two-value tokens, bare-number ext, AND merge regression, nested field guard, prop test). Past escalation limit (2): not parked because each round narrows a hard parser problem; next blocking -> split natural phrasing into follow-up and merge /suggest. Flagged to owner. | 04:14 b0a76dc verified by runner (38-input probe). APPROVED; merge on green. | 04:35 conflicts after X-flakes+B5c (search-bench, api/search.rs, live.rs) -> asked main merge. | 04:58 3c5fbd2 main merged (live.rs hooks re-applied in follow(): verified by runner). Approved; merge on green. | 05:56 CI green 3c5fbd2 but merged tree fails: tests/suggest.rs ApiState missing user_data (B10a) -> asked main merge. | 2026-10-23T06:14:33Z 3ecb9e0 merged main + user_data fix; merge on green | 2026-10-23T06:26:11Z 3ecb9e0 trial-merges clean on 87a5cf7 but overlaps (lib.rs, openapi.rs, dto/mod.rs): merged-tree verify before merge | 2026-10-23T06:52:29Z 3ecb9e0 CI green; merged-tree verify vs 077bf08 running | 2026-10-23T06:59:39Z merged-tree re-verify vs 23a1b77 (B11a) running"
   },
   "B12": {
    "status": "merged",
@@ -390,7 +390,7 @@
    "pr": null,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": ""
+   "notes": "2026-10-23T06:59:39Z unblocked by B11a; brief drafting (Opus helper)"
   },
   "B10b": {
    "status": "review",
@@ -438,7 +438,7 @@
    "pr": null,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": ""
+   "notes": "2026-10-23T06:59:39Z unblocked by B11a; brief drafting (Opus helper)"
   },
   "S-search-4": {
    "status": "pending",
