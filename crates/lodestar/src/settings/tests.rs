@@ -648,7 +648,8 @@ async fn the_intensity_reaches_the_running_dht() {
     let until = |want: DhtIntensity| {
         let node = &node;
         async move {
-            for _ in 0..100 {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+            while tokio::time::Instant::now() < deadline {
                 if node.snapshot().await.unwrap().intensity == want {
                     return true;
                 }

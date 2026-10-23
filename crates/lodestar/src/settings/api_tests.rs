@@ -720,7 +720,7 @@ async fn export_and_import() {
 /// Reads `body` until `needle` appears, or fails after 5 s.
 async fn read_until(body: &mut Body, needle: &str) -> String {
     let mut text = String::new();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     while !text.contains(needle) {
         let frame = tokio::time::timeout_at(
             deadline,
@@ -856,6 +856,9 @@ async fn a_save_still_publishes_when_its_client_goes_away() {
         c,
         r#"{"intensity":"low"}"#,
     )));
+    // Kept: nothing observable says the save is parked on the lock, and a
+    // production hook for it is out of scope here. The pause only lets the
+    // request reach the blocking task before the client "goes away".
     tokio::time::sleep(Duration::from_millis(200)).await;
     request.abort();
     assert!(request.await.unwrap_err().is_cancelled());

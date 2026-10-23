@@ -74,6 +74,8 @@ async fn tests_past_the_cap_are_refused_at_once() {
         .map(|_| tokio::spawn(app.clone().oneshot(request(&cookie, &url))))
         .collect();
     // Let them start and take every slot; they then wait on the server.
+    // Kept: nothing observable says a slot is taken, short of a production
+    // hook; the check below only fails if the sleep was too short to start them.
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(running.iter().all(|r| !r.is_finished()));
     // One more is refused at once.

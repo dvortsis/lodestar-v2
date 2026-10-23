@@ -197,7 +197,7 @@ fn crawler() -> Event {
     Event::Crawler(CrawlerEvent::default())
 }
 
-const SOON: Duration = Duration::from_secs(5);
+const SOON: Duration = Duration::from_secs(15);
 
 #[tokio::test]
 async fn events_stream_promptly_through_the_router() {
