@@ -15,8 +15,31 @@
 	let Connection = $state<typeof import('./ConnectionView.svelte').default>();
 	const connection = $derived(statusRef.current?.connection ?? 'ok');
 
+	// The UI font starts loading right after the first frame instead of competing with the scripts and
+	// CSS that paint it (LCP, §10.1); the page paints in the fallback and swaps (font-display: swap).
+	function preloadFont() {
+		const link = document.createElement('link');
+		link.rel = 'preload';
+		link.as = 'font';
+		link.type = 'font/woff2';
+		link.crossOrigin = 'anonymous';
+		link.href = '/fonts/atkinson-hyperlegible-next-latin.woff2';
+		document.head.append(link);
+	}
+
 	onMount(() => {
-		void import('./Chrome.svelte').then((mod) => (Chrome = mod.default));
+		// After the first frame, so the request never competes with the page's first paint.
+		let timer: ReturnType<typeof setTimeout>;
+		const frame = requestAnimationFrame(() => {
+			preloadFont();
+			timer = setTimeout(
+				() => void import('./Chrome.svelte').then((mod) => (Chrome = mod.default))
+			);
+		});
+		return () => {
+			cancelAnimationFrame(frame);
+			clearTimeout(timer);
+		};
 	});
 
 	$effect(() => {
