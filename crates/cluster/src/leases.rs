@@ -219,6 +219,22 @@ impl LeaseTable {
         self.restore(worker, key, RestoredLease::from(lease), now)
     }
 
+    /// Ends every lease `worker` holds at once and forgets it: it was
+    /// revoked or finished draining (§19.6, "returns its leases"). The
+    /// caller grants the keys again. Its late reports are stale from now on.
+    pub fn evict(&mut self, worker: WorkerId) -> Vec<(InfoHash, Lease)> {
+        self.workers.remove(&worker);
+        let keys: Vec<InfoHash> = self
+            .leases
+            .iter()
+            .filter(|(_, l)| l.holder == worker)
+            .map(|(k, _)| *k)
+            .collect();
+        keys.into_iter()
+            .filter_map(|k| self.leases.remove(&k).map(|l| (k, l)))
+            .collect()
+    }
+
     pub fn len(&self) -> usize {
         self.leases.len()
     }
@@ -328,6 +344,21 @@ mod tests {
         assert!(t.release(&key, a_token).is_none());
         assert_eq!(t.get(&key).unwrap().cohort, 2, "cohort kept");
         assert!(t.release(&key, b_token).is_some());
+    }
+
+    #[test]
+    fn eviction_returns_only_that_workers_leases() {
+        let mut t = LeaseTable::new(1, 600);
+        let Claimed::Granted(a_token) = t.claim(A, claim(1, 0), 0) else {
+            panic!()
+        };
+        t.claim(B, claim(2, 0), 0);
+        let evicted = t.evict(A);
+        assert_eq!(evicted.len(), 1);
+        assert_eq!(evicted[0].0, InfoHash([1; 20]));
+        assert!(t.release(&InfoHash([1; 20]), a_token).is_none());
+        assert_eq!((t.len(), t.held_by(A), t.held_by(B)), (1, 0, 1));
+        assert!(t.evict(A).is_empty());
     }
 
     #[test]
