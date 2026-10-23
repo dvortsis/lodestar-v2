@@ -121,12 +121,11 @@ Send a push notification only for:
 There's a **daily summary** on the first wake after 07:00 in the owner's time zone. It covers what merged, what's running, what's parked and why, the next ready slices, and every refinement of an owner decision decided since the last summary (`docs/owner-decisions.md` §2.19), which the owner can veto.
 
 ## Watchdog
-A scheduled task, **"Lodestar runner watchdog"**, starts a fresh session every 4 hours.
-- **The runner counts as quiet** when two things are both true: the newest commit on `runner-state` is more than 2 hours old, and the runner session isn't `working`.
-- **First quiet check:** the watchdog nudges the runner once with `send_message`, and writes the nudge time to `watchdog.json` on `runner-state`.
-- **Replacing the runner:** if the runner is still quiet 2 hours after that nudge, or its session is archived, failed or missing, the watchdog starts a new runner session with the prompt above. It then tells the old session to stop.
-- **The new runner takes over** by setting `runner_session` to its own id.
-- **Otherwise the watchdog does nothing and ends.** It never merges, launches slices or edits `state.json`.
+A scheduled task, **"Lodestar runner watchdog"** (`trig_0172BngAUoA4NRaRWBYiRWVf`), starts a fresh session every 4 hours. It only reads, and it decides from the age of the newest commit on `runner-state`:
+- **Quiet:** that commit is 2 to 4 hours old and the runner session isn't `working`. The watchdog nudges the runner once with `send_message`.
+- **Gone:** that commit is more than 4 hours old, so the last nudge didn't help, or the runner session is archived, failed or missing. The watchdog starts a new runner session with the prompt above, tells the old session to stop, and sends the owner one line.
+- **The new runner takes over** by creating the marker and setting `runner_session` to its own id. An old runner that wakes later sees this and stops ("Who merges").
+- **Otherwise the watchdog does nothing and ends.** It never pushes, merges, launches slices or edits `state.json`.
 
 ## Stopping
 - **Disable the hourly scheduled task and the watchdog, or tell the runner to stop.** Running slices finish their current turn, and nothing new launches.
