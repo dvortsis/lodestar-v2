@@ -563,6 +563,11 @@ jobs:
           $hash = (Get-FileHash $msi -Algorithm SHA256).Hash.ToLower()
           "$hash  $($msi.Name)" | Set-Content -Path "$($msi.FullName).sha256" -Encoding ascii
 
+      - name: Inspect the MSI (service tables)
+        shell: pwsh
+        continue-on-error: true
+        run: packaging/windows/inspect-msi.ps1 "$PWD/dist/lodestar-$($env:MSI_VERSION)-x86_64.msi"
+
       # Install the MSI silently, check files, service, firewall and shortcut, run the
       # installed binary and check /healthz, uninstall. The service is installed but not
       # started: its entrypoint is slice M6-win's, so the binary is run directly until then.
