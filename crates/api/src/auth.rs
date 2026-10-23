@@ -186,6 +186,16 @@ impl Auth {
         })
     }
 
+    /// Stops every limiter refilling, so tests that empty a bucket don't
+    /// depend on how fast the machine runs them. Tests only.
+    #[doc(hidden)]
+    pub fn without_refill(mut self) -> Auth {
+        self.login.refill = 0.0;
+        self.key_failures.refill = 0.0;
+        self.key_requests.refill = 0.0;
+        self
+    }
+
     /// Applies [`PROXY_AUTH_ENV`]'s value: `off` (any case) turns proxy
     /// auth off for this run without touching the saved settings. Called
     /// where [`Auth::load`] runs. Returns whether it applied.
@@ -221,6 +231,11 @@ impl Auth {
     /// the previous value calls this directly.
     pub fn set_proxy(&self, config: ProxyConfig) -> Result<ProxyConfig, SetProxyError> {
         let proxy = Proxy::compile(config).map_err(SetProxyError::Invalid)?;
+        if proxy.config.enabled && proxy.has_wide_range() {
+            tracing::warn!(
+                "trusted-proxy auth trusts a range wider than /16 (IPv6 /48): every host in it can sign in"
+            );
+        }
         let mut state = self.state.write().expect("auth lock");
         let previous = std::mem::replace(&mut state.proxy, proxy);
         if let Err(e) = self.save(&state) {

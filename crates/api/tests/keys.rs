@@ -57,11 +57,21 @@ async fn sets_cookie() -> ([(header::HeaderName, &'static str); 1], &'static str
 }
 
 fn fixture() -> Fixture {
+    fixture_with(false)
+}
+
+/// `frozen`: no limiter refills, so emptying a bucket doesn't depend on
+/// how fast the machine runs.
+fn fixture_with(frozen: bool) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("t.db");
     let store = Store::open(&db, StoreConfig::default()).unwrap();
     let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
-    let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
+    let mut auth = Auth::load(&dir.path().join("auth.json"), false).unwrap();
+    if frozen {
+        auth = auth.without_refill();
+    }
+    let auth = Arc::new(auth);
     let store = Arc::new(Mutex::new(store));
     let state = ApiState {
         auth: auth.clone(),
@@ -103,6 +113,7 @@ struct Reply {
     status: StatusCode,
     cookie: Option<String>,
     retry_after: Option<String>,
+    cache_control: Option<String>,
     set_cookie: bool,
     body: Value,
     text: String,
@@ -121,6 +132,10 @@ async fn send(app: &Router, mut req: Request<Body>, from: SocketAddr) -> Reply {
         .headers()
         .get(header::RETRY_AFTER)
         .map(|v| v.to_str().unwrap().to_string());
+    let cache_control = resp
+        .headers()
+        .get(header::CACHE_CONTROL)
+        .map(|v| v.to_str().unwrap().to_string());
     let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
         .await
         .unwrap();
@@ -129,6 +144,7 @@ async fn send(app: &Router, mut req: Request<Body>, from: SocketAddr) -> Reply {
         status,
         cookie,
         retry_after,
+        cache_control,
         set_cookie,
         body: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
         text,
@@ -254,6 +270,7 @@ async fn creating_a_key_needs_the_password_and_shows_the_secret_once() {
     with["password"] = json!(PASSWORD);
     let r = create(&f, &cookie, with).await;
     assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    assert_eq!(r.cache_control.as_deref(), Some("no-store"));
     let secret = r.body["secret"].as_str().unwrap().to_string();
     assert_eq!(secret.len(), keys::SECRET_LEN);
     assert!(secret.starts_with("lsk_"));
@@ -489,6 +506,22 @@ async fn scopes_are_enforced() {
     .await;
     assert_eq!(r.status, StatusCode::FORBIDDEN);
     assert_eq!(r.body["error"]["code"], "key_scope");
+    // A refused request isn't recorded as a use.
+    let (refused_id, refused) = make_key(&f, &cookie, "api_key", json!(["search"])).await;
+    send(
+        &f.app,
+        get_with("/test/torznab", &[("x-api-key", &refused)]),
+        fresh_ip(),
+    )
+    .await;
+    let k = f
+        .store
+        .lock()
+        .unwrap()
+        .api_key(refused_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(k.last_used_at, None);
     let r = send(
         &f.app,
         get_with("/test/feeds/1", &[("x-api-key", &search_only)]),
@@ -601,6 +634,7 @@ async fn regenerate_kills_the_old_secret() {
     )
     .await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.cache_control.as_deref(), Some("no-store"));
     let new = r.body["secret"].as_str().unwrap().to_string();
     assert_ne!(new, old);
     assert_eq!(r.body["key"]["name"], "Prowlarr");
@@ -790,29 +824,29 @@ async fn failed_key_checks_are_limited_per_ip() {
 
 #[tokio::test]
 async fn each_key_has_a_request_bucket() {
-    let f = fixture();
+    let f = fixture_with(true);
     let cookie = signed_in(&f).await;
     let (_, key) = make_key(&f, &cookie, "api_key", json!(["torznab"])).await;
     let (_, other) = make_key(&f, &cookie, "api_key", json!(["torznab"])).await;
-    let mut limited = None;
-    // The burst plus what refills while the loop runs.
-    for i in 0..(auth::KEY_BURST as usize * 2) {
+    for i in 0..auth::KEY_BURST as usize {
         let r = send(
             &f.app,
             get_with("/test/torznab", &[("x-api-key", &key)]),
             fresh_ip(),
         )
         .await;
-        if r.status == StatusCode::TOO_MANY_REQUESTS {
-            limited = Some((i, r));
-            break;
-        }
-        assert_eq!(r.status, StatusCode::OK);
+        assert_eq!(r.status, StatusCode::OK, "request {i}");
     }
-    let (i, r) = limited.expect("the bucket ran out");
-    assert!(i >= auth::KEY_BURST as usize, "{i}");
-    assert_eq!(r.retry_after.as_deref(), Some("1"));
+    let r = send(
+        &f.app,
+        get_with("/test/torznab", &[("x-api-key", &key)]),
+        fresh_ip(),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(r.body["error"]["code"], "rate_limited");
+    // With no refill the wait is the cap; `limit.rs` tests the arithmetic.
+    assert_eq!(r.retry_after.as_deref(), Some("3600"));
     let r = send(
         &f.app,
         get_with("/test/torznab", &[("x-api-key", &other)]),

@@ -130,6 +130,14 @@ impl Proxy {
                     "A /0 range trusts every address, so anyone could sign in by sending the header.",
                 ));
             }
+            // A request with no known peer reads as the unspecified
+            // address; a range holding it would trust those.
+            if c.contains(IpAddr::from([0, 0, 0, 0])) || c.contains(IpAddr::from([0u16; 8])) {
+                return Err(refuse(
+                    "trusted",
+                    "A range that includes 0.0.0.0 or :: can't be trusted; list your proxy's own address.",
+                ));
+            }
             if !trusted.contains(&c) {
                 trusted.push(c);
             }
@@ -180,6 +188,14 @@ impl Proxy {
         })
     }
 
+    /// Whether a trusted range is wider than a /16 (IPv4) or /48 (IPv6):
+    /// worth a warning, since every host in it is believed.
+    pub(crate) fn has_wide_range(&self) -> bool {
+        self.trusted
+            .iter()
+            .any(|c| c.len < if c.net.is_ipv4() { 16 } else { 48 })
+    }
+
     pub(crate) fn trusts(&self, ip: IpAddr) -> bool {
         let ip = canonical(ip);
         self.trusted.iter().any(|c| c.contains(ip))
@@ -206,7 +222,7 @@ impl Proxy {
     /// rightmost forwarded address that isn't one.
     pub(crate) fn client_ip(&self, peer: IpAddr, headers: &HeaderMap) -> IpAddr {
         if !self.config.enabled {
-            return peer;
+            return canonical(peer);
         }
         let values: Vec<&str> = headers
             .get_all(header::HeaderName::from_static("x-forwarded-for"))
@@ -424,6 +440,19 @@ mod tests {
             }),
             "trusted"
         );
+        for unspecified in ["0.0.0.0", "0.0.0.0/1", "::/1", "::", "::ffff:0.0.0.0/97"] {
+            assert_eq!(
+                bad(ProxyConfig {
+                    trusted: vec![unspecified.into()],
+                    ..base.clone()
+                }),
+                "trusted",
+                "{unspecified}"
+            );
+        }
+        assert!(!proxy(&["10.1.0.0/16", "fd00::/48"], &[]).has_wide_range());
+        assert!(proxy(&["10.0.0.0/8"], &[]).has_wide_range());
+        assert!(proxy(&["128.0.0.0/1"], &[]).has_wide_range());
         assert_eq!(
             bad(ProxyConfig {
                 trusted: vec![],
@@ -547,6 +576,11 @@ mod tests {
         let mut off = p.clone();
         off.config.enabled = false;
         assert_eq!(off.client_ip(peer, &h), peer, "off ignores it too");
+        assert_eq!(
+            off.client_ip(ip("::ffff:10.0.0.1"), &h),
+            peer,
+            "and canonicalizes"
+        );
     }
 
     proptest! {
