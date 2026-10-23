@@ -507,3 +507,43 @@ fn maintenance_runs_as_puid() {
     }
     assert_eq!(data.marker(), "first");
 }
+
+/// While B-update's journal exists, nothing opens the store: `serve
+/// --child`, `import-bitmagnet` and every maintenance command refuse
+/// (exit 3), and the supervisor (`serve` on Unix) finishes it before it
+/// runs anything; one it can't read stops it.
+#[test]
+fn store_openers_refuse_during_an_update_rollback() {
+    let data = Data::new();
+    data.journal();
+    // The store opener is `serve --child` on Unix, plain `serve` on
+    // Windows (where `--child` is refused as a bad argument).
+    let serve: &[&str] = if cfg!(unix) {
+        &["serve", "--child"]
+    } else {
+        &["serve"]
+    };
+    for args in [
+        serve,
+        &["import-bitmagnet", "postgres://localhost/bitmagnet"],
+        &["stats"],
+        &["reindex"],
+        &["vacuum"],
+        &["rollup", "--repair"],
+        &["backup"],
+        &["rollback"],
+    ] {
+        let out = data.run(args);
+        status(&out, 3);
+        assert!(text(&out).contains("rollback"), "{args:?}: {}", text(&out));
+    }
+    #[cfg(unix)]
+    {
+        let out = data.run(&["serve"]);
+        status(&out, 1);
+        assert!(text(&out).contains("rollback journal"), "{}", text(&out));
+    }
+    #[cfg(not(unix))]
+    status(&data.run(&["serve", "--child"]), 2);
+    assert_eq!(data.marker(), "first");
+}
