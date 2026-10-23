@@ -1046,7 +1046,7 @@
   "S-snapshots": {
    "status": "review",
    "model": "opus",
-   "notes": "owner-delegated decision 2026-10-23: purge + 90-day expiry for migration snapshots | 01:31 PR #109 f596b13 ready; reviewer started (security pass).",
+   "notes": "owner-delegated decision 2026-10-23: purge + 90-day expiry for migration snapshots | 01:31 PR #109 f596b13 ready; reviewer started (security pass). | 02:00 review FIX: reported hash pre-existing in cs_hashes (added_at) missed -> origin 0/1 full lookup + test; important: incremental per-snapshot mark (0.96s/snapshot/tick @200k tombstones blocks ingest), before-rollback copies in list, one name parser.",
    "session": "session_01KNQRrRWSAMYLC5vJRhERho",
    "pr": 109
   },
