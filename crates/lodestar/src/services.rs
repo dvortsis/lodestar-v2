@@ -107,7 +107,16 @@ impl Services {
         let blocklist = config.blocklist_files()?;
         let subs_ips = ips.clone();
         let (store, control, user_data, reader, serving) = tokio::task::spawn_blocking(move || {
-            let store = Store::open(&db, store_config.clone())?;
+            let mut store = Store::open(&db, store_config.clone())?;
+            // After an unclean stop, the counts a crash can lose are
+            // recounted (§7), before the pipeline writes any.
+            match insights::repair_after_unclean_stop(&mut store) {
+                Ok(Some(r)) if r.changed() => {
+                    tracing::info!("insights: repaired the rollups after an unclean stop: {r:?}")
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!("insights: the repair after an unclean stop failed: {e}"),
+            }
             // Settings and lists change through a second connection, so
             // they never wait behind the ingest writer for long.
             let mut control = Store::open(&db, store_config.clone())?;

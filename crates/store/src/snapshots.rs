@@ -224,7 +224,7 @@ pub(crate) struct Plan {
 impl Plan {
     /// The newest schema version this table knows. A new migration must
     /// say here what its schema means for the purge.
-    pub(crate) const KNOWN_THROUGH: i64 = 10;
+    pub(crate) const KNOWN_THROUGH: i64 = 11;
 
     /// Per schema version (see the PR's table and `docs/decisions`):
     ///
@@ -232,7 +232,7 @@ impl Plan {
     /// |---|---|---|---|
     /// | 1–3 | purged | absent | absent |
     /// | 4–9 | purged | purged | absent |
-    /// | 10 | purged | purged | purged |
+    /// | 10–11 | purged | purged | purged |
     /// | other | skipped with a warning | skipped | skipped |
     pub(crate) fn for_version(version: i64) -> Option<Plan> {
         match version {
@@ -263,7 +263,11 @@ impl Plan {
             // `collections` have AUTOINCREMENT ids, so a snapshot row
             // whose id the live store has issued but no longer holds was
             // deleted there. Edited searches, marks and notes leave no
-            // trace: they go with the snapshot at 90 days.
+            // trace: they go with the snapshot at 90 days. V11 adds
+            // Insights' day tables, its state and the removal trigger: a
+            // torrent the purge deletes is counted as removed in the
+            // snapshot, and its import comes off the total, as it did
+            // live (B11b's decisions).
             10..=Self::KNOWN_THROUGH => Some(Plan {
                 torrents: true,
                 filter: true,

@@ -21,6 +21,7 @@ mod floor;
 pub mod history;
 pub mod hot;
 mod insights;
+mod insights_days;
 mod reporting;
 mod rules;
 mod saved;
@@ -55,6 +56,10 @@ pub use hot::{Col, HotColumns, NEVER, SwarmHot};
 pub use insights::{
     CohortCount, Counter, Event, RollupBy, Searchable, SearchableCodes, UNCLASSIFIED, log_bucket,
     log_bucket_bounds,
+};
+pub use insights_days::{
+    Aggregation, CompactOptions, Compacted, InsightsState, RepairCodes, RepairOptions, Repaired,
+    repair_rollups,
 };
 pub use reporting::{QueryCount, QueryLogEntry, QueryLogging, Resolved};
 pub use rules::{ClassCorrection, ExceptionRow, MARK_CHUNK, OverrideRow, RuleRow, RuleSet};

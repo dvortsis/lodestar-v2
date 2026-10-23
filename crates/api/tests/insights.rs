@@ -357,6 +357,10 @@ fn story(f: &Fixture) {
             counter(open, 4, 0, 0, 2),
             // Searches (#48's metric 8): not read yet.
             counter(NOW_H - 1, 8, 0, 0, 77),
+            // Fetches by event time (metric 14, dim = the Fetched stage).
+            counter(done, 14, u32::from(FETCHED), 0, 5),
+            counter(open, 14, u32::from(FETCHED), 0, 2),
+            counter(open, 14, u32::from(LOST), 9, 1),
         ],
         &[
             Event {
@@ -386,6 +390,13 @@ fn story(f: &Fixture) {
             },
         ],
     );
+    // Fetches have been counted by event time for two days: a range
+    // reaching further back doesn't know its fetches.
+    c.execute(
+        "UPDATE insights_state SET value = ?1 WHERE key = 'funnel_events_since_hour'",
+        [NOW_H - 48],
+    )
+    .unwrap();
     // Coverage: the last 30 hours, but not the paused 2.
     let running: Vec<i64> = (NOW_H - 29..=NOW_H)
         .filter(|h| !(NOW_H - 10..NOW_H - 8).contains(h))
@@ -560,7 +571,7 @@ async fn goldens() {
         "/api/v1/insights/overview?range=24h",
     )
     .await;
-    golden(
+    let week = golden(
         &f,
         &cookie,
         "overview_7d_compare",
@@ -586,7 +597,13 @@ async fn goldens() {
     assert_eq!(day["kpi"]["imported"], 40);
     assert_eq!(day["kpi"]["searchable_delta"], Value::Null);
     assert!(day.get("previous").is_none());
-    assert_eq!(day["stages"]["fetch"], Value::Null);
+    assert_eq!(day["stages"]["fetch"], 7);
+    assert_eq!(
+        week["stages"]["fetch"],
+        Value::Null,
+        "before fetches were counted"
+    );
+    assert_eq!(week["previous"]["stages"]["fetch"], Value::Null);
     assert_eq!(day["stages"]["serve"], Value::Null);
     assert_eq!(
         day["serve"]["searches"],
@@ -1148,7 +1165,7 @@ async fn a_year_of_rollups_answers_within_budget() {
     let warmed = lodestar_api::insights::warm(&f.store(), &f.source.cache, NOW, None).unwrap();
     eprintln!("warm ({warmed} days): {:?}", cold.elapsed());
     assert!(warmed >= 355);
-    for query in [
+    let queries = [
         "range=24h",
         "range=7d",
         "range=7d&compare=1",
@@ -1156,24 +1173,77 @@ async fn a_year_of_rollups_answers_within_budget() {
         "range=30d&compare=1",
         "range=all",
         "range=all&compare=1",
-    ] {
-        let uri = format!("/api/v1/insights/overview?{query}");
-        for _ in 0..3 {
-            // A new flush each time: never a cached response.
-            f.touched();
-            let start = Instant::now();
-            let v = json_get(&f, &cookie, &uri).await;
-            let took = start.elapsed();
-            eprintln!("{query}: {took:?}");
-            assert!(v["kpi"]["yield"].as_f64().is_some(), "{query}");
-            assert!(
-                v["annotations"].as_array().unwrap().len() <= 1000,
-                "{query}"
-            );
-            // The budget holds in release builds; others only report.
-            if !cfg!(debug_assertions) {
-                assert!(took.as_millis() <= 50, "{query}: {took:?}");
+    ];
+    let timed = |label: &'static str| {
+        let (f, cookie) = (&f, &cookie);
+        async move {
+            let mut bodies = Vec::new();
+            for query in queries {
+                let uri = format!("/api/v1/insights/overview?{query}");
+                for i in 0..3 {
+                    // A new flush each time: never a cached response.
+                    f.touched();
+                    let start = Instant::now();
+                    let (status, body) = send(f, get(&uri, Some(cookie))).await;
+                    let took = start.elapsed();
+                    eprintln!("{label} {query}: {took:?}");
+                    assert_eq!(status, 200);
+                    let v: Value = serde_json::from_str(&body).unwrap();
+                    assert!(v["kpi"]["yield"].as_f64().is_some(), "{query}");
+                    assert!(
+                        v["annotations"].as_array().unwrap().len() <= 1000,
+                        "{query}"
+                    );
+                    // The budget holds in release builds; others only report.
+                    if !cfg!(debug_assertions) {
+                        assert!(took.as_millis() <= 50, "{label} {query}: {took:?}");
+                    }
+                    if i == 0 {
+                        bodies.push(body);
+                    }
+                }
             }
+            bodies
         }
+    };
+    let hourly = timed("hourly").await;
+    // The nightly compaction's first run on the year, as the recorder
+    // makes it: every response over compacted days is byte for byte the
+    // same.
+    let kind = |m: u32| {
+        Some(if m == 13 {
+            lodestar_store::Aggregation::Last
+        } else {
+            lodestar_store::Aggregation::Sum
+        })
+    };
+    let r = f
+        .store()
+        .compact_rollups(lodestar_store::CompactOptions {
+            now: NOW,
+            keep_days: 30,
+            hold_from_day: None,
+            budget: std::time::Duration::from_secs(600),
+            kind: &kind,
+        })
+        .unwrap();
+    assert!(r.done && r.days >= 330, "{r:?}");
+    f.source.cache.forget_days_before(r.compacted_before_day);
+    let daily = timed("compacted").await;
+    for ((q, a), b) in queries.iter().zip(&hourly).zip(&daily) {
+        assert_eq!(a, b, "{q}: the response changed with compaction");
     }
+    // A short range over compacted days is read by day.
+    let from = (NOW_H - 60 * 24) * 3600;
+    let v = json_get(
+        &f,
+        &cookie,
+        &format!(
+            "/api/v1/insights/overview?range=custom&from={from}&to={}",
+            from + 3 * 86_400
+        ),
+    )
+    .await;
+    assert_eq!(v["range"]["bucket"], "day");
+    assert_eq!(v["trend"].as_array().unwrap().len(), 4);
 }
