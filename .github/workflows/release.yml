@@ -563,7 +563,10 @@ jobs:
       - name: MSI logs
         if: failure()
         shell: pwsh
-        run: Get-ChildItem $env:RUNNER_TEMP -Filter 'msi-*.log' | ForEach-Object { "::group::$($_.Name)"; Get-Content $_.FullName -Tail 200; "::endgroup::" }
+        run: |
+          Get-ChildItem $env:RUNNER_TEMP -Filter 'msi-*.log' | ForEach-Object { "::group::$($_.Name)"; Get-Content $_.FullName -Tail 200; "::endgroup::" }
+          $sd = Join-Path $env:SystemRoot 'Temp\lodestar-secure-datadir.log'
+          if (Test-Path $sd) { "::group::secure-datadir.log"; Get-Content $sd; "::endgroup::" }
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
