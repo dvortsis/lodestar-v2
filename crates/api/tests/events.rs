@@ -502,3 +502,159 @@ async fn without_a_hub_it_is_unavailable() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["error"]["code"], "events_unavailable");
 }
+
+/// Stores `names` and classifies them, as the pipeline would, before any
+/// indexer sees them.
+fn add_classified(store: &mut Store, names: &[&str]) {
+    use lodestar_bencode::{OwnedValue, to_vec};
+    let b = |s: &str| OwnedValue::Bytes(s.as_bytes().to_vec());
+    let raws: Vec<Vec<u8>> = names
+        .iter()
+        .map(|n| {
+            to_vec(&OwnedValue::Dict(
+                [
+                    ("length", OwnedValue::Int(1 << 30)),
+                    ("name", b(n)),
+                    ("piece length", OwnedValue::Int(1 << 16)),
+                    ("pieces", OwnedValue::Bytes(vec![0; 20])),
+                ]
+                .into_iter()
+                .map(|(k, v)| (k.as_bytes().to_vec(), v))
+                .collect(),
+            ))
+        })
+        .collect();
+    let infos: Vec<lodestar_metainfo::Info> = raws
+        .iter()
+        .map(|r| lodestar_metainfo::Info::parse(r).unwrap())
+        .collect();
+    let batch: Vec<lodestar_store::NewTorrent<'_>> = infos
+        .iter()
+        .zip(&raws)
+        .map(|(info, raw)| lodestar_store::NewTorrent {
+            info,
+            raw_info: Some(raw),
+            discovered_at: 1_700_000_000,
+            metadata_at: 1_700_000_100,
+            extra_flags: 0,
+            source: lodestar_store::SourceId::new(0).unwrap(),
+        })
+        .collect();
+    for t in store.insert(&batch).unwrap() {
+        let id = t.id();
+        let row = store.torrent(id).unwrap().unwrap();
+        let tree = store.files(id).unwrap().unwrap();
+        let files = lodestar_classify::file_infos(&tree.files, tree.encoding);
+        let (e, _) = lodestar_filter::reclassify::enrich_corrected(
+            &row.name,
+            &files,
+            lodestar_classify::Correction::default(),
+        );
+        store.set_enrichments(&[(id, e)]).unwrap();
+    }
+}
+
+/// B4b end to end: the live indexer's commits reach the stream with
+/// Adult left out while "Show adult content" is off, read live through
+/// the same `AdultVisibility` the API state holds (as `lodestar serve`
+/// wires it), and a commit of only hidden Adult sends nothing.
+#[tokio::test]
+async fn the_torrents_count_leaves_out_adult_while_it_is_hidden() {
+    use lodestar_search::{CommitHook, LiveConfig, LiveIndexer, SearchIndex};
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+    let index = SearchIndex::in_memory().unwrap();
+    let (show, rx) = tokio::sync::watch::channel(false);
+    let adult = lodestar_api::AdultVisibility::follow(move || *rx.borrow());
+    let hook = Arc::new(CommitHook::default());
+    let hub = EventHub::start(
+        config(),
+        EventSources {
+            commits: Some(hook.clone()),
+            adult: adult.clone(),
+            ..EventSources::default()
+        },
+    );
+    let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
+    let app = Router::new()
+        .nest(
+            "/api/v1",
+            router(ApiState {
+                auth: auth.clone(),
+                index: Some(index.clone().into()),
+                reader: Arc::new(Mutex::new(
+                    Store::open_reader(&db, StoreConfig::default()).unwrap(),
+                )),
+                filters: None,
+                settings: None,
+                hot: None,
+                events: None,
+                adult,
+            }),
+        )
+        .layer(Extension(hub.clone()));
+    let cookie = session(&auth);
+    let addr = serve(app).await;
+    let mut c = Conn::open(
+        addr,
+        "/api/v1/events?topics=torrents",
+        &[("Cookie", &cookie)],
+    )
+    .await;
+    c.until("retry: 5000\n\n", SOON).await;
+    // One indexer run per step, so each step is one commit of torrents
+    // classified before it saw them.
+    let run = |names: &[&str], store: &mut Store| {
+        add_classified(store, names);
+        let live = LiveIndexer::spawn_with_stats(
+            index.clone(),
+            Store::open_reader(&db, StoreConfig::default()).unwrap(),
+            LiveConfig {
+                heap_bytes: 15 << 20,
+                poll: Duration::from_millis(10),
+                commit_every: Duration::from_secs(3600),
+                commit_docs: names.len(),
+                ..LiveConfig::default()
+            },
+            Arc::default(),
+            hook.clone(),
+        )
+        .unwrap();
+        let start = Instant::now();
+        let want = store.ids_after(0, 1000).unwrap().len() as i64;
+        while index.watermark().unwrap() < want {
+            assert!(start.elapsed() < SOON, "not indexed");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        live.stop().unwrap();
+    };
+    let mixed = [
+        "Big.Movie.2019.1080p.mkv",
+        "Studio.Scene.XXX.1080p.mp4",
+        "Other.Movie.2018.720p.mkv",
+        "Another.Clip.XXX.720p.mp4",
+        "Third.Movie.2017.2160p.mkv",
+    ];
+    // Hidden (the default): 3 of 5.
+    run(&mixed, &mut store);
+    c.until("data: {\"added\":3,\"max_id\":5}\n\n", SOON).await;
+    // Shown: the same mix counts 5.
+    show.send_replace(true);
+    let again: Vec<String> = mixed.iter().map(|n| n.replacen('.', ".Two.", 1)).collect();
+    let again: Vec<&str> = again.iter().map(String::as_str).collect();
+    run(&again, &mut store);
+    c.until("data: {\"added\":5,\"max_id\":10}\n\n", SOON).await;
+    // Hidden again: an all-Adult commit sends nothing, and the next
+    // event carries the newest watermark.
+    show.send_replace(false);
+    run(
+        &["Third.Clip.XXX.1080p.mp4", "Fourth.Clip.XXX.720p.mp4"],
+        &mut store,
+    );
+    run(&["Fourth.Movie.2016.1080p.mkv"], &mut store);
+    c.until("data: {\"added\":1,\"max_id\":13}\n\n", SOON).await;
+    assert!(!c.text.contains("\"max_id\":12"), "{}", c.text);
+    assert_eq!(c.text.matches("event: torrents").count(), 3, "{}", c.text);
+    hub.close();
+}
