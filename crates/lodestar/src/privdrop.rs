@@ -31,10 +31,11 @@ pub struct Ids {
 /// What the drop prepares before switching.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
-    /// `serve` and `import-bitmagnet`: the data directory is made the
-    /// target account's first.
+    /// `serve`, `import-bitmagnet` and the maintenance commands that write
+    /// in the data directory (`backup`, `rollback`, `vacuum`, `reindex`):
+    /// the data directory is made the target account's first.
     DataDir,
-    /// `healthcheck`: switch only; it never writes.
+    /// `healthcheck` and `stats`: switch only; they never write.
     ProcessOnly,
 }
 
