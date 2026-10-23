@@ -621,7 +621,12 @@ fn logged(console: &str, file: &str, ids: &[&str]) {
             file.contains(&format!(r#""event":"{id}""#)),
             "{id} isn't in the file"
         );
-        assert!(console.contains(id), "{id} isn't on the console");
+        // The console writes `<id>: <message>`: the id whole, so
+        // `auth.sign_in` isn't found in `auth.sign_in_failed`.
+        assert!(
+            console.contains(&format!(" {id}: ")),
+            "{id} isn't on the console"
+        );
     }
 }
 
@@ -993,7 +998,7 @@ const PROXY_USER: &str = "canary-proxy-user-delta";
 /// `?token=`, and the trusted-proxy user, under Full plus both opt-ins.
 #[test]
 fn run_4_keys_tokens_and_the_proxy_user_never_show_either() {
-    let s = Server::start();
+    let mut s = Server::start();
     s.every_event_on();
     s.logging(&format!(
         r#"{{"data":"full","data_until":-1,"peer_activity_until":{},"change_details_until":{},"console_detail":"file"}}"#,
@@ -1086,9 +1091,18 @@ fn run_4_keys_tokens_and_the_proxy_user_never_show_either() {
         r.starts_with("HTTP/1.0 200"),
         "the proxy user signs in: {r}"
     );
+    // "Sign out other sessions" (the password's fourth use here): logged,
+    // and its new cookie never is.
+    let r = s.post(
+        "/api/v1/sessions/revoke-others",
+        &format!(r#"{{"password":"{PASSWORD}"}}"#),
+    );
+    assert!(r.starts_with("HTTP/1.0 200"), "{r}");
+    let first_cookie = std::mem::replace(&mut s.cookie, cookie(&r));
     // No password left in the bucket for a reveal: the other run 4 covers it.
     let open = Stream::open(&s, "", None);
     s.exercise(40, false);
+    let cookie_now = s.cookie.clone();
     std::thread::sleep(Duration::from_millis(300));
     let api = s.api(&open);
     let (console, file) = s.stop();
@@ -1105,6 +1119,8 @@ fn run_4_keys_tokens_and_the_proxy_user_never_show_either() {
             PASSWORD.to_string(),
             PASSKEY.to_string(),
             SEALED_NAME.to_string(),
+            first_cookie.split_once('=').unwrap().1.to_string(),
+            cookie_now.split_once('=').unwrap().1.to_string(),
         ],
         "keys, tokens and the proxy user",
     );
@@ -1116,7 +1132,12 @@ fn run_4_keys_tokens_and_the_proxy_user_never_show_either() {
     logged(
         &console,
         &file,
-        &["auth.key_refused", "auth.proxy_changed", "api.request"],
+        &[
+            "auth.key_refused",
+            "auth.proxy_changed",
+            "auth.sessions_revoked",
+            "api.request",
+        ],
     );
     let refused = lines_of(&file, "auth.key_refused");
     for kind in ["api_key", "feed_token"] {
@@ -1128,7 +1149,13 @@ fn run_4_keys_tokens_and_the_proxy_user_never_show_either() {
         );
     }
     let proxy = lines_of(&file, "auth.proxy_changed");
-    assert!(proxy.iter().any(|l| l.contains("true")), "{proxy:?}");
+    assert!(
+        proxy
+            .iter()
+            .any(|l| l.contains(r#""enabled":{"kind":"label","value":true}"#)
+                && l.contains(r#""trusted":{"kind":"label","value":1}"#)),
+        "{proxy:?}"
+    );
     let requests = lines_of(&file, "api.request");
     for route in ["/api/v1/search", "/api/v1/feeds/{id}"] {
         assert!(
@@ -1138,10 +1165,33 @@ fn run_4_keys_tokens_and_the_proxy_user_never_show_either() {
             "{route}: {requests:?}"
         );
     }
+    // An unmatched route logs `unmatched`, and the refusals' lines carry
+    // their final status (the guard's 401).
+    assert!(
+        requests
+            .iter()
+            .any(|l| l.contains(r#""value":"unmatched""#)),
+        "{requests:?}"
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|l| l.contains(r#""/api/v1/feeds/{id}""#)
+                && l.contains(r#""status":{"kind":"label","value":401}"#)),
+        "{requests:?}"
+    );
     for l in &requests {
         assert!(
-            !l.contains("apikey") && !l.contains("token=") && !l.contains("q=x"),
+            !l.contains("apikey")
+                && !l.contains("token=")
+                && !l.contains("q=x")
+                && !l.contains("no-such-route"),
             "{l}"
         );
     }
+    absent(
+        &outputs,
+        &["canaryquery".to_string()],
+        "an unmatched route's query",
+    );
 }
