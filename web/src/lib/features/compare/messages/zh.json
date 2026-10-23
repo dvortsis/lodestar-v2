@@ -86,5 +86,6 @@
 	"compare_type_images": "图片",
 	"compare_type_video": "视频",
 	"compare_type_other": "其他",
-	"compare_type_adult": "成人"
+	"compare_type_adult": "成人",
+	"compare_open_torrent": "打开种子"
 }

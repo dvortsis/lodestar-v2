@@ -86,5 +86,6 @@
 	"compare_type_images": "Images",
 	"compare_type_video": "Video",
 	"compare_type_other": "Other",
-	"compare_type_adult": "Adult"
+	"compare_type_adult": "Adult",
+	"compare_open_torrent": "Open the torrent"
 }

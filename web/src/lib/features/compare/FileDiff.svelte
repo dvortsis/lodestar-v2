@@ -50,7 +50,7 @@
 				{m.compare_diff_truncated()}
 				{#if href}<!-- eslint-disable-next-line svelte/no-navigation-without-resolve --><a
 						{href}
-						class="cmp-link">{m.compare_open()}</a
+						class="cmp-link">{m.compare_open_torrent()}</a
 					>{/if}
 			</p>
 		{/if}
