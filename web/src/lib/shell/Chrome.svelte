@@ -78,8 +78,10 @@
 				if (replay?.target.isConnected && !replay.event.defaultPrevented)
 					keysModule.keys.handle(replay.event);
 			});
-			// Fetched now, while the server is up: an error toast has to work when it is down.
+			// Fetched now, while the server is up: an error toast and the error screen have to work
+			// when it is down.
 			loadToaster();
+			void import('./ErrorView.svelte');
 		});
 		return () => {
 			disposed = true;

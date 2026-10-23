@@ -5,11 +5,12 @@
 	// already has the bar's height, so nothing shifts (§10.1: LCP, CLS). The skip link and the
 	// connection states are plain markup here, so they work before the chrome arrives and when the
 	// server (and so every lazy chunk) is gone. The page is rendered once, here, and never remounted.
-	import { onMount, type Snippet } from 'svelte';
+	import { onMount, tick, type Snippet } from 'svelte';
 	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import { m } from '$lib/paraglide/messages.js';
 	import { isBareRoute } from './chrome';
+	import { shell } from './shell.svelte';
 	import { statusRef } from './status-ref.svelte';
 
 	let { children }: { children: Snippet } = $props();
@@ -29,38 +30,63 @@
 		el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName);
 	onMount(() => {
 		const first = (e: KeyboardEvent) => {
+			// Holding Ctrl or Shift is the start of a combo, not the key to replay.
+			if (['Control', 'Shift', 'Alt', 'Meta', 'AltGraph'].includes(e.key)) return;
 			removeEventListener('keydown', first, true);
+			// The palette key is taken here, not left to the registry that loads on this very press:
+			// by then the browser has already used Ctrl/Cmd+K itself (the address bar).
+			if (!bare && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+				e.preventDefault();
+				shell.paletteOpen = true;
+				return;
+			}
 			if (e.target instanceof HTMLElement && !typing(e.target))
 				replay = { event: e, target: e.target };
 		};
-		addEventListener('keydown', first, { capture: true, passive: true });
+		addEventListener('keydown', first, { capture: true });
 		return () => removeEventListener('keydown', first, true);
 	});
-	// Keyboard focus survives the swap: a user who pressed Tab before the app loaded keeps their
-	// place. Kit resets focus to <body> once it has hydrated, so the focus is put back after that.
-	let regain: HTMLElement | undefined;
+	// Keyboard focus survives the swaps. A user who pressed Tab before the app loaded is on the static
+	// skip link or a static bar link; both are replaced (by this frame's skip link at mount, by the
+	// full bar when the chrome arrives) and kit resets focus to <body> after it hydrates. So focus
+	// is remembered by identity (the skip link, or the data-testid the static and full bars share)
+	// and put back on the new element, only while focus is still on <body>.
+	let want: string | undefined;
+	const SKIP = 'skip';
+	function focusKey(el: Element | null): string | undefined {
+		if (!(el instanceof HTMLElement)) return undefined;
+		if (el.matches('#boot > a:first-child, a[href="#main"]')) return SKIP;
+		if (el.closest('header')) return el.dataset.testid;
+		return undefined;
+	}
+	function regain(last: boolean) {
+		const key = want;
+		if (!key) return;
+		const active = document.activeElement;
+		if (active && active !== document.body) {
+			want = undefined;
+			return;
+		}
+		const target =
+			key === SKIP
+				? document.querySelector<HTMLElement>('a[href="#main"]')
+				: document.querySelector<HTMLElement>(`header [data-testid="${key}"]`);
+		if (!target) return;
+		// Kept after the first restore until kit's own reset has happened (`last`), so it can be redone.
+		if (last) want = undefined;
+		target.focus({ preventScroll: true });
+	}
 	onMount(() => {
 		const header = document.getElementById('boot-header');
 		const boot = document.getElementById('boot');
-		const active = document.activeElement;
+		want = focusKey(document.activeElement);
 		// eslint-disable-next-line svelte/no-dom-manipulating -- adopts the static bar app.html painted
 		if (header && slot) slot.replaceChildren(header);
-		const skipped = active instanceof HTMLElement && active.matches('#boot > a:first-child');
 		boot?.remove();
-		if (skipped) regain = document.querySelector<HTMLElement>('a[href="#main"]') ?? undefined;
-		else if (active instanceof HTMLElement && header?.contains(active)) regain = active;
+		void tick().then(() => regain(false));
 	});
 	afterNavigate((nav) => {
-		if (nav.type !== 'enter' || !regain) return;
-		const target = regain;
-		regain = undefined;
-		setTimeout(() => {
-			if (
-				target.isConnected &&
-				(!document.activeElement || document.activeElement === document.body)
-			)
-				target.focus({ preventScroll: true });
-		});
+		if (nav.type === 'enter') setTimeout(() => regain(true));
 	});
 
 	onMount(() => {
@@ -68,7 +94,13 @@
 		let timer: ReturnType<typeof setTimeout>;
 		const frame = requestAnimationFrame(() => {
 			timer = setTimeout(
-				() => void import('./Chrome.svelte').then((mod) => (Chrome = mod.default))
+				() =>
+					void import('./Chrome.svelte').then(async (mod) => {
+						want = focusKey(document.activeElement) ?? want;
+						Chrome = mod.default;
+						await tick();
+						regain(false);
+					})
 			);
 		});
 		return () => {

@@ -87,6 +87,7 @@
 		<a
 			href={resolve(hrefFor('/search') as Route)}
 			aria-label={m.shell_home_label()}
+			data-testid="brand"
 			class="inline-flex items-center gap-2 rounded-field pe-2 {FOCUS_RING} {TARGET_MIN}"
 		>
 			<Compass class="size-8" />
