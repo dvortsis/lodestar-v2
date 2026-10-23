@@ -47,7 +47,7 @@
 	"filters_flows_done_version": "Rule set version",
 	"filters_flows_failed_title": "The change wasn't applied",
 	"filters_flows_error_network": "Lodestar isn't responding. Check that it's running, then try again.",
-	"filters_flows_error_code": "Lodestar refused the change ({code}).",
+	"filters_flows_error_code": "Lodestar refused the change ({code}). Check the change and try again; if it keeps happening, check Lodestar's log.",
 	"filters_flows_adult_title": "Show adult content?",
 	"filters_flows_adult_body": "Adult torrents will appear in Search, Discover, Alerts and Insights. Torznab, Stremio and export keep their own adult settings, which stay off until you turn them on.",
 	"filters_flows_adult_age": "Turn this on only if you're 18 or older.",

@@ -427,3 +427,120 @@ describe('assessmentDiffers', () => {
 		);
 	});
 });
+
+describe('the full state × event table', () => {
+	const doneCtx = () => {
+		const c = applying();
+		return run(c, { type: 'applied', seq: c.seq, response: applied(weakening()) }).ctx;
+	};
+	const failedCtx = () => {
+		const c = applying();
+		return run(c, { type: 'apply_error', seq: c.seq, error: err(500, 'internal'), now: T0 }).ctx;
+	};
+	const previewingCtx = () =>
+		run(
+			initialCtx,
+			{ type: 'start', change: off, now: T0 },
+			{ type: 'job_started', seq: 1, job: 7 }
+		).ctx;
+	const states: Record<FlowState['kind'], () => Ctx> = {
+		idle: () => initialCtx,
+		closed: () => run(previewed(), { type: 'cancel' }).ctx,
+		previewing: previewingCtx,
+		review: () => previewed(strengthening()),
+		confirm: () => previewed(weakening()),
+		applying: () => applying(),
+		done: doneCtx,
+		failed: failedCtx
+	};
+	// Events as they'd arrive for the context's own (current) generation.
+	const events = (c: Ctx): Record<string, Event> => ({
+		start: { type: 'start', change: off, now: T0 },
+		variant: { type: 'variant', change: off, now: T0 },
+		retry: { type: 'retry', now: T0 },
+		cancel: { type: 'cancel' },
+		job_status: { type: 'job_status', seq: c.seq, status: running(), now: T0 },
+		job_error: { type: 'job_error', seq: c.seq, error: err(500, 'x'), phase: 'poll', now: T0 },
+		apply: { type: 'apply' },
+		confirm: { type: 'confirm', password: 'pw', now: T0 },
+		applied: { type: 'applied', seq: c.seq, response: applied(weakening()) },
+		apply_error: { type: 'apply_error', seq: c.seq, error: err(500, 'x'), now: T0 }
+	});
+	// The state each event leads to; absent = ignored (the same context, no effects).
+	const table: Record<FlowState['kind'], Partial<Record<string, FlowState['kind']>>> = {
+		idle: { start: 'previewing' },
+		closed: { start: 'previewing' },
+		previewing: {
+			start: 'previewing',
+			cancel: 'closed',
+			job_status: 'previewing',
+			job_error: 'failed'
+		},
+		review: { start: 'previewing', variant: 'previewing', cancel: 'closed', apply: 'applying' },
+		confirm: { start: 'previewing', variant: 'previewing', cancel: 'closed', confirm: 'applying' },
+		applying: { cancel: 'closed', applied: 'done', apply_error: 'failed' },
+		done: { start: 'previewing', cancel: 'closed' },
+		failed: { start: 'previewing', retry: 'previewing', cancel: 'closed' }
+	};
+
+	for (const [kind, make] of Object.entries(states) as [FlowState['kind'], () => Ctx][]) {
+		for (const [name, event] of Object.entries(events(make()))) {
+			const target = table[kind][name];
+			it(`${kind} × ${name} → ${target ?? 'ignored'}`, () => {
+				const c = make();
+				const r = transition(c, event);
+				if (target === undefined) {
+					expect(r.ctx).toBe(c);
+					expect(r.effects).toEqual([]);
+				} else {
+					expect(r.ctx.state.kind).toBe(target);
+				}
+				// Only a confirm, from `confirm`, may carry the password.
+				if (!(kind === 'confirm' && name === 'confirm'))
+					expect(wire(r.effects)).not.toContain('"password"');
+			});
+		}
+	}
+
+	it('a late answer for an older generation is ignored in every state', () => {
+		for (const make of Object.values(states)) {
+			const c = make();
+			for (const e of Object.values(events({ ...c, seq: c.seq - 1 }))) {
+				if (!('seq' in e)) continue;
+				expect(transition(c, e).ctx).toBe(c);
+			}
+		}
+	});
+});
+
+describe('the rate-limit lock', () => {
+	it('holds across a re-preview: a variant does not reopen the confirm early', () => {
+		const ctx = applying();
+		const locked = run(ctx, {
+			type: 'apply_error',
+			seq: ctx.seq,
+			error: err(429, 'rate_limited', { retryAfter: 30 }),
+			now: T0
+		}).ctx;
+		const again = run(
+			locked,
+			{ type: 'variant', change: off, now: T0 + 1 },
+			{ type: 'job_started', seq: locked.seq + 1, job: 8 }
+		).ctx;
+		const shown = run(again, {
+			type: 'job_status',
+			seq: again.seq,
+			status: finished(weakening()),
+			now: T0 + 2
+		}).ctx;
+		expect(shown.state).toMatchObject({
+			kind: 'confirm',
+			error: 'rate_limited',
+			retryAt: T0 + 30_000
+		});
+		expect(run(shown, { type: 'confirm', password: 'pw', now: T0 + 29_999 }).effects).toEqual([]);
+		expect(
+			effectTypes(run(shown, { type: 'confirm', password: 'pw', now: T0 + 30_000 }).effects)
+		).toEqual(['apply']);
+	});
+});
