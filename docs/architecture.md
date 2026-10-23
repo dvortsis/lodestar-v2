@@ -1475,8 +1475,11 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
     - It names its **channel** inside the signed body, and a manifest for a different channel than the one chosen is refused.
     - **Every manifest published after a key rotation carries the key statements** that chain its key back to the recovery key, the weekly re-signs included. A client that was offline across the rotation can still verify.
   - Each **artifact** (binary, MSI) is pinned in the manifest by SHA-256 and size, and checked after download. Windows artifacts are also Authenticode-signed (M6), and that signature is checked too.
-  - **Two built-in keys** (`packaging/keys/`, embedded at build):
-    - the **release key** (`02910813433E81E0`), the first key generation, signs manifests;
+  - **Built-in keys** (`packaging/keys/`, embedded at build; roles per `owner-decisions.md` §2.21):
+    - the **release key** (`02910813433E81E0`), the first key generation, signs stable manifests;
+    - the **nightly key** signs nightly manifests and is trusted only on the Nightly channel;
+    - the **freshness key** signs only freshness statements (channel, manifest hash, timestamp, expiry) for manifests already signed by the release or nightly key, never new content;
+    - the release, nightly and freshness keys are all changed the same way, by a recovery-signed key statement;
     - the **recovery key** (`67922DDF005FD310`) is kept offline by the owner and signs nothing but key changes.
   - **Key changes need the recovery key:**
     - A key-change statement names the new release key and carries a **sequence number** one higher than the last one published.
@@ -1486,7 +1489,7 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
     - So a leaked release key can sign manifests until the owner rotates it, but it can never rotate to an attacker's key, and the rotation shuts it out.
   - **The recovery key itself is an accepted risk.** It's offline and password-protected, and there's no protocol to rotate it.
     - If it's ever lost or compromised, the remedy is a new build with a new embedded key, which users install **by hand** once.
-    - Whether to add a recovery-key rotation statement is the owner's call. It isn't designed here.
+    - No rotation statement is designed (`owner-decisions.md` §2.21).
   - **Time limits on manifests:**
     - Versions only go up.
     - A manifest whose timestamp is more than **1 day ahead** of the local clock is refused.
@@ -1509,8 +1512,8 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
     - **A missing `trust.json`** is rebuilt from that floor. Its high-water mark is the timestamp of the newest verified overlay manifest.
     - **A corrupt `trust.json`** blocks new installs. The running version keeps running, and a notice says so.
   - **Key statements get the same time check:** a statement dated more than 1 day ahead of the local clock is refused.
-  - **Re-signing:** the release workflow re-signs every channel's current manifest weekly, with a fresh timestamp and an expiry within 30 days. An installation that checks always finds a valid one without a new release. A lapsed manifest only blocks new installs; it never stops an installed version from starting (below).
-  - **Release engineering** (M6 `release.yml`) signs with `RELEASE_SIGNING_KEY`. That's a secret of the GitHub Actions environment `release`, which only `v*` tags and `main` may use, so a workflow edited on a feature branch can't read it. The private keys never enter the repository. The owner created both key pairs on 2026-10-22. Further hardening is recommended to the owner in `packaging/keys/README.md`: a required reviewer on the environment, and a separate nightly key.
+  - **Re-signing:** a scheduled workflow issues a fresh freshness statement for every channel's current manifest weekly, signed by the freshness key, with a fresh timestamp and an expiry within 30 days; the manifest itself isn't re-signed. An installation that checks always finds a valid one without a new release. A lapsed manifest only blocks new installs; it never stops an installed version from starting (below).
+  - **Release engineering** (M6 `release.yml`) keeps each key in its own GitHub Actions environment (`owner-decisions.md` §2.21): `RELEASE_SIGNING_KEY` in `release`, which only `v*` tags may use, with the owner as required reviewer; the nightly key in `nightly` (main only); the freshness key in `freshness` (the scheduled re-sign on main only). A workflow edited on a feature branch can't read any of them, and the private keys never enter the repository. The owner created the release and recovery key pairs on 2026-10-22, and creates the nightly and freshness pairs.
 - **Before installing:**
   - **Where the installation can update itself:** `noexec` data volumes, a read-only binary location with no data-directory fallback, and package-managed installs fall back to Check and notify, with the reason.
   - **Free space:** enough for the store snapshot, the new binary, and the manifest's reindex estimate.
@@ -2485,7 +2488,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - **The first gate wasn't honest.** It judged one torrent, over and over, against rules none of whose words it had, so the narrowing skipped 99% of them. The review made 10% of the rules candidates that matched nothing and measured 16.8–17.0 ms per torrent.
   - **The gate now** judges a varied set of 512 torrents with 1%, 10% and 25% of the rules built on words they have, and about 40 rules per torrent that get the full match (§20.8). It holds the core, 1% and 10%; 25% is reported.
   - **What made it:** compiled queries with a three-valued cheap check (token texts, a Bloom filter of neighbouring tokens, token starts, extensions, sizes, tags); an index keyed on each rule's rarest-looking word; an exact ASCII fast path of the search tokenizer for the full match; a per-torrent vocabulary for prefixes and fuzzy words; and word plans and a flag table in the core's tokenizer and signals. On this set the engine went from 30 ms per torrent at 10% to 40.8 µs on the runner (core 8.9, 1% 32.9, 25% 48.1 reported). The build VM runs about 1.4× slower.
-  - **Scope:** the gate covers rule shapes the cheap check can reject. Shapes it can't decide (negations, NEAR, prefixes, fuzzy words, `title:`) get the full match on every torrent that has their words, and cost more (§20.8). Whether to hold those is the owner's call.
+  - **Scope:** the gate covers rule shapes the cheap check can reject. Shapes it can't decide (negations, NEAR, prefixes, fuzzy words, `title:`) get the full match on every torrent that has their words, and cost more (§20.8). All shapes are held (`owner-decisions.md` §2.21).
   - **Correctness:** a differential property test checks the compiled match against the previous matcher on random queries and torrents, and the cheap check against the full match. Its *no* answers rest on property tests that the scan's keys, pairs, starts and vocabulary cover the tokenizer's tokens exactly or as supersets. Injected bugs were caught.
 - **The floor from config files only adds (§2.7).** `blocklist.files` add through the store. A floor-marked list's upstream removals stay blocked. Both kinds of drop wait in *pending floor removals*, reported once per start with a counter metric, and leave the floor only through `resolve_floor_removal` with the effect warning and the password.
 - **Floor removals, as reviewed:** a confirmed removal settles the entries its warning counted (`floor_entries`), never more. An entry two config files list stays while either lists it. Accepting a held version of a floor-marked list is no longer weakening, since what it drops stays blocked in the list's pending removals (§20.7).
@@ -2860,7 +2863,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - forwarded stops don't count as attempts;
   - the timer starts after migrations;
   - Windows probation survives reboots.
-- **The recovery key is an accepted risk.** Its rotation is the owner's call.
+- **The recovery key is an accepted risk.** It isn't rotated (`owner-decisions.md` §2.21).
 - **Post-rotation manifests carry the key statements.**
 - **`LODESTAR_UPDATES=image`** locks Container image updates.
 - **Show adult content** is B17's server-wide `content.show_adult`, not a preference.
@@ -3691,7 +3694,7 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
       | `title:` | 83–85 |
       | mix | 171–178 |
 
-      Most of that is the full match's first tokenization of every path (about 35 µs a torrent) and then a scan per rule. Whether to hold such shapes to the budget is the owner's call.
+      Most of that is the full match's first tokenization of every path (about 35 µs a torrent) and then a scan per rule. They're held to the budget too (`owner-decisions.md` §2.21).
     - **History:** the first version of this gate judged one torrent with rules none of whose words it had. The review measured 17 ms per torrent once 10% of the rules were candidates; this set measured 30 ms at 10% before the work below.
   - **How the rules stay cheap:**
     - **Narrowing:** each rule is indexed by a token text or tag it can't match without. Where several are each needed (an AND, a phrase's words), it's keyed on the rarest-looking, so `1080p cam` is looked at only for torrents that have `cam`. Rules are marked in a bit set by position and read in order.
