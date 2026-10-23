@@ -1,0 +1,2 @@
+404
+{"error":{"code":"collection_not_found","message":"There's no collection with that id."}}

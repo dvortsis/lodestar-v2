@@ -48,6 +48,7 @@ fn fixture() -> Fixture {
             filters: None,
             settings: Some(registry),
             ops: None,
+            user_data: None,
             adult: Default::default(),
         }),
     );
