@@ -1,0 +1,11 @@
+200
+# Lodestar settings: the values saved in the app.
+# Import this file in Settings > General > Backup & portability.
+# Never included: secrets, values set by environment variables, and
+# filter, floor, pack or subscription state.
+lodestar_settings = 1
+
+[crawler]
+# config.toml: dht.intensity · LODESTAR_INTENSITY
+intensity = "low"
+
