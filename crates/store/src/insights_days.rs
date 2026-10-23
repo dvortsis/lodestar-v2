@@ -218,16 +218,29 @@ fn next_day(conn: &Connection, from: i64, to: i64) -> Result<Option<i64>> {
 /// Days below `before` that still have hourly rows, oldest first: the
 /// rows of metrics with no kind (which stay) and stragglers. Ranges of
 /// the primary keys below the boundary, which hold only those.
-fn days_below(conn: &Connection, before: i64) -> Result<Vec<i64>> {
+fn days_below(
+    conn: &Connection,
+    before: i64,
+    kind: &dyn Fn(u32) -> Option<Aggregation>,
+) -> Result<Vec<i64>> {
     let mut days = BTreeSet::new();
-    for sql in [
-        "SELECT DISTINCT hour / 24 FROM rollup_hour WHERE hour >= 0 AND hour < ?1",
-        "SELECT DISTINCT cohort / 24 FROM cohort_hour WHERE cohort >= 0 AND cohort < ?1",
-    ] {
-        let mut stmt = conn.prepare_cached(sql)?;
-        for d in stmt.query_map([before * 24], |r| r.get::<_, i64>(0))? {
-            days.insert(d?);
+    let mut stmt = conn.prepare_cached(
+        "SELECT DISTINCT hour / 24, metric FROM rollup_hour WHERE hour >= 0 AND hour < ?1",
+    )?;
+    for row in stmt.query_map([before * 24], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, u32>(1)?))
+    })? {
+        let (d, metric) = row?;
+        // A metric with no kind stays hourly: its day isn't revisited.
+        if kind(metric).is_some() {
+            days.insert(d);
         }
+    }
+    let mut stmt = conn.prepare_cached(
+        "SELECT DISTINCT cohort / 24 FROM cohort_hour WHERE cohort >= 0 AND cohort < ?1",
+    )?;
+    for d in stmt.query_map([before * 24], |r| r.get::<_, i64>(0))? {
+        days.insert(d?);
     }
     Ok(days.into_iter().collect())
 }
@@ -261,7 +274,7 @@ impl Store {
         // Each call folds at least one day before it looks at the budget,
         // so a run always gets on.
         let mut worked = false;
-        for day in days_below(&self.conn, before)? {
+        for day in days_below(&self.conn, before, opts.kind)? {
             if worked && started.elapsed() >= opts.budget {
                 out.compacted_before_day = before;
                 out.unknown_metrics = unknown.into_iter().collect();
@@ -673,7 +686,9 @@ fn repair(conn: &Connection, opts: RepairOptions) -> Result<Repaired> {
                         }
                         if let (Some(h), true) = (searchable, cohort >= opts.since_hour) {
                             *rc.cohort_searchable.entry((cohort, src)).or_default() += 1;
-                            let delay = h * 3600 + 1800 - discovered_at;
+                            // The hour's midpoint, but never before it
+                            // was stored.
+                            let delay = (h * 3600 + 1800).max(metadata_at) - discovered_at;
                             *rc.delays.entry((cohort, log_bucket(delay))).or_default() += 1;
                         }
                     }
@@ -804,16 +819,21 @@ fn cohort_cell(conn: &Connection, g: Grain, source: u8, stage: u8) -> Result<i64
              AND reason = 0",
             h,
         ),
+        // The day's row plus its hourly stragglers, still to be folded.
         Grain::Day(d) => (
-            "SELECT count FROM cohort_day WHERE day = ?1 AND source = ?2 AND stage = ?3
-             AND reason = 0",
+            "SELECT coalesce((SELECT count FROM cohort_day WHERE day = ?1 AND source = ?2
+                                AND stage = ?3 AND reason = 0), 0)
+                  + coalesce((SELECT sum(count) FROM cohort_hour
+                              WHERE cohort >= ?1 * 24 AND cohort < ?1 * 24 + 24
+                                AND source = ?2 AND stage = ?3 AND reason = 0), 0)",
             d,
         ),
     };
     Ok(conn
         .prepare_cached(sql)?
-        .query_row(params![at, source, stage], |r| r.get(0))
+        .query_row(params![at, source, stage], |r| r.get::<_, Option<i64>>(0))
         .optional()?
+        .flatten()
         .unwrap_or(0))
 }
 
@@ -824,11 +844,21 @@ fn set_cohort_cell(conn: &Connection, g: Grain, source: u8, stage: u8, n: i64) -
              ON CONFLICT DO UPDATE SET count = excluded.count",
             h,
         ),
-        Grain::Day(d) => (
-            "INSERT INTO cohort_day (day, source, stage, reason, count) VALUES (?1, ?2, ?3, 0, ?4)
-             ON CONFLICT DO UPDATE SET count = excluded.count",
-            d,
-        ),
+        Grain::Day(d) => {
+            // The recount covers the stragglers: they go, so the next
+            // compaction can't add them again.
+            conn.prepare_cached(
+                "DELETE FROM cohort_hour WHERE cohort >= ?1 * 24 AND cohort < ?1 * 24 + 24
+                 AND source = ?2 AND stage = ?3 AND reason = 0",
+            )?
+            .execute(params![d, source, stage])?;
+            (
+                "INSERT INTO cohort_day (day, source, stage, reason, count)
+                 VALUES (?1, ?2, ?3, 0, ?4)
+                 ON CONFLICT DO UPDATE SET count = excluded.count",
+                d,
+            )
+        }
     };
     conn.prepare_cached(sql)?
         .execute(params![at, source, stage, n])?;
@@ -842,7 +872,9 @@ fn metric_total(conn: &Connection, g: Grain, metric: u32) -> Result<i64> {
             h,
         ),
         Grain::Day(d) => (
-            "SELECT coalesce(sum(value), 0) FROM rollup_day WHERE day = ?1 AND metric = ?2",
+            "SELECT coalesce((SELECT sum(value) FROM rollup_day WHERE day = ?1 AND metric = ?2), 0)
+                  + coalesce((SELECT sum(value) FROM rollup_hour
+                              WHERE hour >= ?1 * 24 AND hour < ?1 * 24 + 24 AND metric = ?2), 0)",
             d,
         ),
     };
@@ -864,11 +896,20 @@ fn replace_metric(
             "INSERT INTO rollup_hour (hour, metric, dim, key, value) VALUES (?1, ?2, ?3, ?4, ?5)",
             h,
         ),
-        Grain::Day(d) => (
-            "DELETE FROM rollup_day WHERE day = ?1 AND metric = ?2",
-            "INSERT INTO rollup_day (day, metric, dim, key, value) VALUES (?1, ?2, ?3, ?4, ?5)",
-            d,
-        ),
+        Grain::Day(d) => {
+            // Stragglers too: the recount covers them.
+            conn.prepare_cached(
+                "DELETE FROM rollup_hour WHERE hour >= ?1 * 24 AND hour < ?1 * 24 + 24
+                 AND metric = ?2",
+            )?
+            .execute(params![d, metric])?;
+            (
+                "DELETE FROM rollup_day WHERE day = ?1 AND metric = ?2",
+                "INSERT INTO rollup_day (day, metric, dim, key, value)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                d,
+            )
+        }
     };
     conn.prepare_cached(del)?.execute(params![at, metric])?;
     let mut stmt = conn.prepare_cached(ins)?;
@@ -1241,6 +1282,9 @@ mod tests {
         let before = dump(&s);
         let now = (DAY + 365 + 1) * 86_400;
         let mut max_wal = 0;
+        let mut freed = 0;
+        // As the recorder runs it: budgeted steps, then the freed pages
+        // handed back 256 at a time.
         loop {
             let r = s
                 .compact_rollups(CompactOptions {
@@ -1249,10 +1293,17 @@ mod tests {
                 })
                 .unwrap();
             max_wal = max_wal.max(std::fs::metadata(&wal).map_or(0, |m| m.len()));
-            s.incremental_vacuum(r.freed_pages).unwrap();
+            freed += r.freed_pages;
             if r.done {
                 break;
             }
+        }
+        assert!(freed > 0);
+        while freed > 0 {
+            let n = freed.min(256);
+            s.incremental_vacuum(n).unwrap();
+            freed -= n;
+            max_wal = max_wal.max(std::fs::metadata(&wal).map_or(0, |m| m.len()));
         }
         assert_eq!(dump(&s), before);
         // SQLite checkpoints every 1,000 pages (16 MB at 16 KB pages);
@@ -1465,6 +1516,21 @@ mod tests {
             40
         );
         assert!(!s.repair_rollups(repair_opts(H)).unwrap().changed());
+        // A day short by 5 with a straggler of 2 still to fold: repair
+        // absorbs the straggler, so the next compaction can't add it twice.
+        s.conn
+            .execute_batch(&format!(
+                "UPDATE cohort_day SET count = count - 5 WHERE day = {DAY} AND stage = 4
+                     AND source = 1;
+                 INSERT INTO cohort_hour (cohort, source, stage, reason, count)
+                     VALUES ({h}, 1, 4, 0, 2);",
+                h = H + 3
+            ))
+            .unwrap();
+        assert!(s.repair_rollups(repair_opts(H)).unwrap().cohorts_stored > 0);
+        assert_eq!(day_cell(&s, 4), good.0);
+        s.compact_rollups(opts(now + 86_400)).unwrap();
+        assert_eq!(day_cell(&s, 4), good.0, "the straggler isn't counted twice");
     }
 
     #[test]

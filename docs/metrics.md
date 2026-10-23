@@ -476,7 +476,7 @@ code has one, and a code with none is never compacted):
 
 **`insights_state`** (one row each): `compacted_before_day`,
 `last_compaction_at` (Unix seconds, 0 = never), `funnel_events_since_hour`
-(the first hour metric 14 counts; buckets before it are unknown, never 0)
+(the first hour metric 14 counts; buckets before it are unknown, never 0; 0 on a store created with V11)
 and `imported` (searchable imports: seeded at the V11 upgrade, raised by
 each searchable range, lowered by the trigger).
 
@@ -492,7 +492,7 @@ after an unclean stop, over the last 72 h) recounts from `torrents` and
 | Rebuilt | From |
 |---|---|
 | Cohort Stored, by (cohort, source) | torrents' `discovered_at` hour and `first_source`, imports excluded |
-| `STORED` per hour, by source | `metadata_at` hour, imports excluded (the writer counts at commit, seconds later: an hour boundary can shift) |
+| `STORED` per hour, by source | `metadata_at` hour, imports excluded (the writer counts at the same hour since B11b) |
 | `NEWLY_SEARCHABLE` per hour, by type and import | the first watermark row covering each id |
 | Cohort Searchable and its `TIME_TO_SEARCHABLE` histogram | the same, the delay taken to the watermark hour's midpoint (≤ 30 min off) |
 | `imported` (the command only) | `count_flagged_searchable(IMPORTED)` |
