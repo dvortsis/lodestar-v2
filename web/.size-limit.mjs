@@ -87,6 +87,23 @@ const settingsOnDemand = [
 ];
 const settingsLazy = onDemandOf('/settings/[section]', settingsOnDemand);
 
+// Settings shell and screens (S-settings-1): code that runs on interaction or only where it is
+// needed stays out of a route's first view: the search index and results (on first focus), Restart
+// now / Review / the Restarting state and the banners (only while something waits), the lockout
+// dialog (on a disruptive save), the config.toml body (when opened), and the per-screen extras of
+// Network (reachability) and General (backup, import and reset). The entry below gates them.
+const settingsShellOnDemand = [
+	/features\/settings\/shell\/(search|SearchResults|restart-flow|restart|RestartReview|RestartingScreen|Banners|RestartBanner|AddressBanner)\.(ts|svelte)$/,
+	/features\/settings\/screens\/(lockout|ConfigToml|NetworkScreen|ReachabilityPanel|GeneralScreen|BackupPanel|DangerZone|reset|backup)\.(ts|svelte)$/,
+	/features\/filters\/flows\//,
+	// Server messages load per section (`loadSettingMessages`); the other screens' hand-built code
+	// loads when its screen opens.
+	/features\/settings\/form\/message-map\/(?!common)/,
+	/features\/(?!settings\/)[^/]+\/(?!screen\.ts)/
+];
+const settingsFirstView = [...settingsOnDemand, ...settingsShellOnDemand];
+const settingsShellLazy = onDemandOf('/settings/[section]', settingsShellOnDemand);
+
 // Alerts: the save and delete dialogs load when one is opened, and bring Bits UI's overlay code.
 const alertDialogs = [/features\/alerts\/(SaveSearch|DeleteAlert)Dialog\.svelte$/];
 
@@ -115,14 +132,17 @@ export default [
 	// Settings (owner's 45 KB route limit, §10.1): a screen's first view and the Overview.
 	entry(
 		'Settings screen route (own JS + CSS)',
-		own('/settings/[section]', { onDemand: settingsOnDemand }),
+		own('/settings/[section]', { onDemand: settingsFirstView }),
 		'45 KB'
 	),
 	entry(
 		'Settings Overview route (own JS + CSS)',
-		own('/settings', { onDemand: settingsOnDemand }),
+		own('/settings', { onDemand: settingsFirstView }),
 		'45 KB'
 	),
+	...(settingsShellLazy.length
+		? [entry('Settings shell and extras (on demand)', settingsShellLazy, '55 KB')]
+		: []),
 	// The dialogs' on-demand code (Bits UI overlays, Dialog, both dialogs), still gated.
 	// The engine's on-demand code on a Settings screen, still gated: 34.34 KB with S-settings-1's
 	// screen (limit = measured + 10%). Until a screen uses the engine there's nothing to measure.
