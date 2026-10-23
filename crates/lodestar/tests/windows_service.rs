@@ -144,6 +144,19 @@ fn runs_as_a_service() {
     })
     .unwrap_or_else(|| panic!("no setup token in the log:\n{}", log()));
 
+    // The default data folder was secured before anything was read:
+    // nothing inherited from ProgramData, nothing for Users.
+    let program_data = std::env::var("ProgramData").unwrap_or_else(|_| r"C:\ProgramData".into());
+    let secured = Path::new(&program_data).join("Lodestar");
+    assert!(secured.join(".lodestar-secured").exists());
+    let out = Command::new("icacls.exe").arg(&secured).output().unwrap();
+    let acl = String::from_utf8_lossy(&out.stdout);
+    assert!(acl.contains("NT AUTHORITY\\SYSTEM"), "{acl}");
+    assert!(acl.contains("BUILTIN\\Administrators"), "{acl}");
+    assert!(acl.contains(&format!("NT SERVICE\\{}", service.0)), "{acl}");
+    assert!(!acl.contains("BUILTIN\\Users"), "{acl}");
+    assert!(!acl.contains("(I)"), "{acl}");
+
     let pid = field(&sc(&["queryex", &service.0]), "PID").expect("a PID");
     let priority = wait_for(Duration::from_secs(30), || {
         let out = Command::new("powershell.exe")

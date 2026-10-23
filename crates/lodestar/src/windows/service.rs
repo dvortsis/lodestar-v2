@@ -3,18 +3,21 @@
 //! The installer (P-release) registers the service as [`NAME`] with the
 //! image path `"<install dir>\lodestar.exe"`, optionally followed by
 //! `--config <path>`. No subcommand marks a service start: when the
-//! process has no console, `main` asks the Service Control Manager
-//! whether it started it ([`run_if_launched`]), and an ordinary run is
-//! told no at once.
+//! arguments are a serve command line and the process has no console,
+//! `main` asks the Service Control Manager whether it started it
+//! ([`run_if_launched`]), and an ordinary run is told no at once.
 //!
 //! Started by the SCM, Lodestar:
-//! - keeps its data in `%ProgramData%\Lodestar` unless `LODESTAR_DATA_DIR`
-//!   or the config file says otherwise, and runs from that folder, so
-//!   relative paths in the config land there;
+//! - first secures `%ProgramData%\Lodestar` ([`super::acl`]), and refuses
+//!   to start (service-specific exit code 3) if it can't;
+//! - keeps its data there unless `LODESTAR_DATA_DIR` or the config file
+//!   says otherwise, and runs from that folder, so relative paths in the
+//!   config land there;
 //! - logs to `<data>\logs\lodestar.log` ([`super::logfile`]), where the
 //!   first run's setup token appears;
 //! - maps Stop, Shutdown and Preshutdown to the same graceful shutdown as
-//!   Ctrl+C, reporting progress so the SCM waits for it;
+//!   Ctrl+C, acknowledging at once (also while the store opens) and
+//!   reporting progress so the SCM waits for it;
 //! - reports a service-specific exit code 1 when it stops on an error, so
 //!   the SCM's recovery actions (restart) apply.
 
@@ -52,22 +55,17 @@ pub fn default_data_dir_unless_set(config: &mut Config, default_dir: &Path) {
     }
 }
 
-/// The service's command line (the image path's arguments): an optional
-/// `serve` and `--config <path>`.
-pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<PathBuf>, String> {
-    let mut config = None;
-    let mut serve = false;
-    let mut args = args.into_iter();
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--config" => {
-                config = Some(PathBuf::from(args.next().ok_or("--config needs a path")?));
-            }
-            "serve" if !serve => serve = true,
-            other => return Err(format!("unexpected argument {other:?} for the service")),
-        }
-    }
-    Ok(config)
+/// The config path when the arguments are a service command line (none,
+/// `serve`, and an optional `--config <path>`), else `None`: every other
+/// command runs as usual, without asking the SCM anything.
+pub fn service_command<I, T>(args: I) -> Option<Option<PathBuf>>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    use clap::Parser;
+    let cli = crate::cli::Cli::try_parse_from(args).ok()?;
+    matches!(cli.command, None | Some(crate::cli::Command::Serve)).then_some(cli.config)
 }
 
 #[cfg(windows)]
@@ -75,7 +73,9 @@ pub use scm::run_if_launched;
 
 #[cfg(windows)]
 mod scm {
+    use std::ffi::OsString;
     use std::io::IsTerminal;
+    use std::path::{Path, PathBuf};
     use std::process::ExitCode;
     use std::sync::OnceLock;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -96,26 +96,35 @@ mod scm {
     use super::NAME;
     use crate::config::Config;
     use crate::services::{BoxError, Services};
+    use crate::windows::acl;
     use crate::windows::logfile::{self, LogFile};
 
     /// How long the SCM should wait between progress reports while
     /// stopping; progress is reported every [`STOP_TICK`].
     const STOP_WAIT_HINT: Duration = Duration::from_secs(30);
     const STOP_TICK: Duration = Duration::from_secs(5);
+    /// The exit code for a start refused for safety (the CLI's 3).
+    const REFUSED: u32 = 3;
 
+    /// The `--config` path from the command line, for `service_main`.
+    static CONFIG_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
     /// The service's exit code, for the process's.
     static EXIT: OnceLock<u32> = OnceLock::new();
+    /// For the control handler, which runs on the dispatcher's thread.
+    static STATUS: OnceLock<ServiceStatusHandle> = OnceLock::new();
+    static CHECKPOINT: AtomicU32 = AtomicU32::new(1);
 
     define_windows_service!(ffi_service_main, service_main);
 
-    /// Runs Lodestar as a service if the SCM started this process, and
-    /// returns its exit code once it has stopped; `None` for an ordinary
-    /// run.
-    pub fn run_if_launched() -> Option<ExitCode> {
+    /// Runs Lodestar as a service if the SCM started this process with
+    /// `config` from its command line, and returns its exit code once it
+    /// has stopped; `None` for an ordinary run.
+    pub fn run_if_launched(config: Option<PathBuf>) -> Option<ExitCode> {
         // A service has no console; a console run needn't ask the SCM.
         if std::io::stdin().is_terminal() {
             return None;
         }
+        let _ = CONFIG_PATH.set(config);
         // Fails at once (ERROR_FAILED_SERVICE_CONTROLLER_CONNECT) unless
         // the SCM started this process.
         service_dispatcher::start(NAME, ffi_service_main).ok()?;
@@ -125,24 +134,36 @@ mod scm {
         })
     }
 
-    fn service_main(_args: Vec<std::ffi::OsString>) {
-        let _ = EXIT.set(run());
+    fn service_main(args: Vec<OsString>) {
+        // The SCM passes the service's registered name first.
+        let name = args
+            .first()
+            .and_then(|n| n.to_str())
+            .filter(|n| !n.is_empty())
+            .unwrap_or(NAME)
+            .to_string();
+        let _ = EXIT.set(run(&name));
     }
 
     /// The service's life: register, run, report the end.
-    fn run() -> u32 {
+    fn run(name: &str) -> u32 {
         let (stop_tx, stop_rx) = watch::channel(false);
         let handler = move |control| match control {
             ServiceControl::Stop | ServiceControl::Shutdown | ServiceControl::Preshutdown => {
+                // Acknowledged at once, even while the store is opening.
+                if let Some(status) = STATUS.get() {
+                    stop_pending(*status);
+                }
                 let _ = stop_tx.send(true);
                 ServiceControlHandlerResult::NoError
             }
             ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
             _ => ServiceControlHandlerResult::NotImplemented,
         };
-        let Ok(status) = service_control_handler::register(NAME, handler) else {
+        let Ok(status) = service_control_handler::register(name, handler) else {
             return 1;
         };
+        let _ = STATUS.set(status);
         // Running at once: opening a large store can take longer than
         // the SCM waits for a start, and /healthz says when it's ready.
         report(
@@ -153,14 +174,21 @@ mod scm {
                 | ServiceControlAccept::PRESHUTDOWN,
             0,
         );
-        let code = match serve(status, stop_rx) {
-            Ok(()) => {
-                tracing::info!("service: stopped");
-                0
-            }
-            Err(e) => {
-                tracing::error!("service: stopped on an error: {e}");
-                1
+        let default_dir = super::default_data_dir(std::env::var("ProgramData").ok());
+        // Before anything in it is read or written. A refusal can't be
+        // logged in the folder; the exit code (3) says it was refused.
+        let code = if acl::secure_dir(&default_dir, |d, l| acl::icacls(d, l, Some(name))).is_err() {
+            REFUSED
+        } else {
+            match serve(&default_dir, status, stop_rx) {
+                Ok(()) => {
+                    tracing::info!("service: stopped");
+                    0
+                }
+                Err(e) => {
+                    tracing::error!("service: stopped on an error: {e}");
+                    1
+                }
             }
         };
         report(
@@ -193,19 +221,35 @@ mod scm {
         });
     }
 
-    fn serve(status: ServiceStatusHandle, mut stop: watch::Receiver<bool>) -> Result<(), BoxError> {
-        let default_dir = super::default_data_dir(std::env::var("ProgramData").ok());
-        if std::fs::create_dir_all(&default_dir).is_ok() {
-            let _ = std::env::set_current_dir(&default_dir);
-        }
-        let env = |k: &str| std::env::var(k).ok();
-        let config = super::parse_args(std::env::args().skip(1)).and_then(|path| {
-            let path = super::config_path(path, &default_dir, env);
-            let mut config =
-                Config::load(path.as_deref(), env).map_err(|e| format!("config: {e}"))?;
-            super::default_data_dir_unless_set(&mut config, &default_dir);
-            Ok(config)
+    /// Reports StopPending with the next checkpoint.
+    fn stop_pending(status: ServiceStatusHandle) {
+        let _ = status.set_service_status(ServiceStatus {
+            service_type: ServiceType::OWN_PROCESS,
+            current_state: ServiceState::StopPending,
+            controls_accepted: ServiceControlAccept::empty(),
+            exit_code: ServiceExitCode::NO_ERROR,
+            checkpoint: CHECKPOINT.fetch_add(1, Ordering::Relaxed),
+            wait_hint: STOP_WAIT_HINT,
+            process_id: None,
         });
+    }
+
+    fn serve(
+        default_dir: &Path,
+        status: ServiceStatusHandle,
+        stop: watch::Receiver<bool>,
+    ) -> Result<(), BoxError> {
+        let default_dir = default_dir.to_path_buf();
+        let _ = std::env::set_current_dir(&default_dir);
+        let env = |k: &str| std::env::var(k).ok();
+        let path = CONFIG_PATH.get().cloned().flatten();
+        let path = super::config_path(path, &default_dir, env);
+        let config = Config::load(path.as_deref(), env)
+            .map(|mut c| {
+                super::default_data_dir_unless_set(&mut c, &default_dir);
+                c
+            })
+            .map_err(|e| format!("config: {e}"));
         let data_dir = config.as_ref().map_or(default_dir, |c| c.data_dir.clone());
         init_logging(
             &data_dir,
@@ -218,36 +262,37 @@ mod scm {
             .enable_all()
             .build()?;
         runtime.block_on(async {
-            let signal = async move {
-                while !*stop.borrow_and_update() {
-                    if stop.changed().await.is_err() {
-                        // The handler is gone; nothing can stop us later.
-                        std::future::pending::<()>().await;
-                    }
-                }
-                tracing::info!("service: stopping");
-                tokio::spawn(stop_pending(status));
+            let mut early = stop.clone();
+            // A stop while the store opens ends the start: the open's
+            // blocking work finishes as the runtime drops, and SQLite
+            // needs nothing more.
+            let services = tokio::select! {
+                s = Services::start(&config) => s?,
+                () = stopped(&mut early, status) => return Ok(()),
             };
-            Services::start(&config).await?.run(signal).await
+            let mut stop = stop;
+            services
+                .run(async move { stopped(&mut stop, status).await })
+                .await
         })
     }
 
-    /// Reports StopPending with a rising checkpoint until the runtime
-    /// ends, so the SCM sees the shutdown making progress.
-    async fn stop_pending(status: ServiceStatusHandle) {
-        static CHECKPOINT: AtomicU32 = AtomicU32::new(1);
-        loop {
-            let _ = status.set_service_status(ServiceStatus {
-                service_type: ServiceType::OWN_PROCESS,
-                current_state: ServiceState::StopPending,
-                controls_accepted: ServiceControlAccept::empty(),
-                exit_code: ServiceExitCode::NO_ERROR,
-                checkpoint: CHECKPOINT.fetch_add(1, Ordering::Relaxed),
-                wait_hint: STOP_WAIT_HINT,
-                process_id: None,
-            });
-            tokio::time::sleep(STOP_TICK).await;
+    /// Resolves once a stop is requested, then keeps reporting progress
+    /// to the SCM until the runtime ends.
+    async fn stopped(stop: &mut watch::Receiver<bool>, status: ServiceStatusHandle) {
+        while !*stop.borrow_and_update() {
+            if stop.changed().await.is_err() {
+                // The handler is gone; nothing can stop us later.
+                std::future::pending::<()>().await;
+            }
         }
+        tracing::info!("service: stopping");
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(STOP_TICK).await;
+                stop_pending(status);
+            }
+        });
     }
 
     /// The service's subscriber: the log file, no console.
@@ -276,19 +321,34 @@ mod scm {
 mod tests {
     use super::*;
 
-    fn args(s: &str) -> Result<Option<PathBuf>, String> {
-        parse_args(s.split_whitespace().map(String::from))
+    fn command(s: &str) -> Option<Option<PathBuf>> {
+        service_command(std::iter::once("lodestar").chain(s.split_whitespace()))
     }
 
     #[test]
-    fn reads_the_image_path_arguments() {
-        assert_eq!(args(""), Ok(None));
-        assert_eq!(args("serve"), Ok(None));
-        assert_eq!(args("--config c.toml"), Ok(Some("c.toml".into())));
-        assert_eq!(args("serve --config c.toml"), Ok(Some("c.toml".into())));
-        assert!(args("--config").is_err());
-        assert!(args("serve serve").is_err());
-        assert!(args("healthcheck").unwrap_err().contains("healthcheck"));
+    fn only_a_serve_command_line_is_a_service_start() {
+        assert_eq!(command(""), Some(None));
+        assert_eq!(command("serve"), Some(None));
+        assert_eq!(command("--config c.toml"), Some(Some("c.toml".into())));
+        assert_eq!(
+            command("serve --config c.toml"),
+            Some(Some("c.toml".into()))
+        );
+        assert_eq!(
+            command("--config c.toml serve"),
+            Some(Some("c.toml".into()))
+        );
+        for other in [
+            "healthcheck",
+            "backup",
+            "stats --json",
+            "lists",
+            "--config",
+            "--help",
+            "bogus",
+        ] {
+            assert_eq!(command(other), None, "{other}");
+        }
     }
 
     #[test]

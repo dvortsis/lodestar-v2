@@ -1247,6 +1247,16 @@ impl FiltersApi {
         Ok(had)
     }
 
+    /// [`release`](Self::release) for many hashes: one transaction and one
+    /// WAL scrub in the store, not one per hash.
+    fn release_many(&self, store: &mut Store, hashes: &[[u8; 20]]) -> ApiResult<()> {
+        store.release_many(hashes).map_err(internal)?;
+        for h in hashes {
+            self.held.remove(h);
+        }
+        Ok(())
+    }
+
     /// Releases everything `rules` hold, quarantine and tombstones: they
     /// stopped applying. The engine is reloaded from the store first, so
     /// a hash released early can't be held again by a rule that's gone.
@@ -1487,9 +1497,7 @@ impl FiltersApi {
                         c.cs.remove_hash(h);
                     }
                 });
-                for h in &hs {
-                    self.release(store, *h)?;
-                }
+                self.release_many(store, &hs)?;
                 out.removed = Some(n);
             }
             Change::FalsePositive { hash } => {
@@ -1699,9 +1707,7 @@ impl FiltersApi {
                     }
                     _ => {}
                 });
-                for h in &done.unblocked {
-                    self.release(store, *h)?;
-                }
+                self.release_many(store, &done.unblocked)?;
                 out.settled = Some(done.settled.len());
             }
             Change::Undo => self.undo(store)?,

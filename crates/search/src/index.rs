@@ -577,6 +577,26 @@ impl SearchIndex {
         Ok(total)
     }
 
+    /// Adult documents (`type:adult`) with ids in `(after, upto]`, in
+    /// the current searcher: what an index swap made visible that's
+    /// hidden while Adult is.
+    pub(crate) fn adult_between(&self, after: i64, upto: i64) -> Result<u64> {
+        let f = &self.fields;
+        // Torrent ids come from SQLite's rowid sequence and start at 1;
+        // a watermark is 0 at the lowest, so `max(0)` never changes one.
+        let id = |v: i64| Term::from_field_u64(f.id, v.max(0) as u64);
+        let adult: Box<dyn Query> = Box::new(TermQuery::new(
+            Term::from_field_text(f.tag, &adult_tag()),
+            IndexRecordOption::Basic,
+        ));
+        let range: Box<dyn Query> = Box::new(tantivy::query::RangeQuery::new(
+            std::ops::Bound::Excluded(id(after)),
+            std::ops::Bound::Included(id(upto)),
+        ));
+        let q = BooleanQuery::new(vec![(Occur::Must, adult), (Occur::Must, range)]);
+        Ok(self.searcher().search(&q, &Count)? as u64)
+    }
+
     /// Documents in the current searcher.
     pub fn num_docs(&self) -> u64 {
         self.reader.searcher().num_docs()
@@ -908,17 +928,44 @@ fn load(store: &mut Store, id: i64) -> Result<Option<Loaded>> {
 /// derives it again and logs the torrent for reindexing.
 fn torrent_doc(store: &mut Store, t: &Loaded) -> Result<TorrentDoc> {
     let mut doc = TorrentDoc::new(&t.row, &t.tree);
-    if let Some(e) = store.enrichment(t.row.id)? {
+    doc.enriched = doc_enrichment(store, t.row.id)?;
+    Ok(doc)
+}
+
+/// The enrichment half of torrent `id`'s document.
+fn doc_enrichment(store: &mut Store, id: i64) -> Result<DocEnrichment> {
+    if let Some(e) = store.enrichment(id)? {
         match Record::decode(&e.data) {
             Ok(record) => {
                 // An empty or unreadable `comp` only loses the shares.
                 let comp = Composition::decode(&e.comp).ok();
-                doc.enriched = DocEnrichment::new(&record, comp.as_ref());
+                return Ok(DocEnrichment::new(&record, comp.as_ref()));
             }
-            Err(err) => tracing::debug!(id = t.row.id, "unreadable enrichment: {err}"),
+            Err(err) => tracing::debug!(id, "unreadable enrichment: {err}"),
         }
     }
-    Ok(doc)
+    Ok(DocEnrichment::default())
+}
+
+/// The term an Adult document is indexed with, its effective class
+/// (§20.9): what B17's `-type:adult` visibility clause excludes.
+fn adult_tag() -> String {
+    format!(
+        "{}:{}",
+        crate::query::TagKey::Type.as_str(),
+        lodestar_classify::ContentType::Adult.as_str()
+    )
+}
+
+/// Whether a document with this enrichment is indexed with `type:adult`.
+fn is_adult(e: &DocEnrichment) -> bool {
+    e.tags.contains(&adult_tag())
+}
+
+/// Whether torrent `id`, indexed from the store as it is now, would be
+/// `type:adult`.
+fn stored_adult(store: &mut Store, id: i64) -> Result<bool> {
+    Ok(is_adult(&doc_enrichment(store, id)?))
 }
 
 /// One index's writer and how far it has followed the store.
@@ -949,6 +996,20 @@ impl Side {
         reader.reload()?;
         Ok(())
     }
+}
+
+/// What one [`Indexer::catch_up_counted`] step did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CatchUp {
+    /// Torrents new to the index. A re-indexed torrent counts only as
+    /// replayed, whatever its class.
+    pub added: usize,
+    /// How many of `added` are Adult: indexed with `type:adult`, the term
+    /// the visibility clause `-type:adult` excludes, so the count and
+    /// search agree (§20.9).
+    pub adult_added: usize,
+    /// `reindex_log` entries replayed.
+    pub replayed: usize,
 }
 
 /// Adds torrents to both indexes in id order and commits each with its
@@ -985,13 +1046,13 @@ impl Indexer {
     /// re-indexes torrents changed since (upgraded partial imports, new
     /// enrichment). Returns how many torrents it added or replaced.
     pub fn catch_up(&mut self, store: &mut Store, limit: usize) -> Result<usize> {
-        let (added, replayed) = self.catch_up_counted(store, limit)?;
-        Ok(added + replayed)
+        let c = self.catch_up_counted(store, limit)?;
+        Ok(c.added + c.replayed)
     }
 
     /// [`Indexer::catch_up`], counting the torrents added and the
-    /// `reindex_log` entries replayed apart.
-    pub fn catch_up_counted(&mut self, store: &mut Store, limit: usize) -> Result<(usize, usize)> {
+    /// `reindex_log` entries replayed apart (see [`CatchUp`]).
+    pub fn catch_up_counted(&mut self, store: &mut Store, limit: usize) -> Result<CatchUp> {
         for side in [&mut self.torrents, &mut self.files] {
             if side.last_id == 0 && side.reindex_seq == 0 {
                 // A new index reads every torrent's current data, so the
@@ -999,8 +1060,7 @@ impl Indexer {
                 side.reindex_seq = store.reindex_head()?;
             }
         }
-        let added = self.catch_up_new(store, limit)?;
-        let mut replayed = 0;
+        let mut counted = self.catch_up_new(store, limit)?;
         let after = self.torrents.reindex_seq.min(self.files.reindex_seq);
         for (seq, id) in store.reindex_after(after, limit)? {
             let t = load(store, id)?;
@@ -1035,9 +1095,9 @@ impl Indexer {
                 }
             }
             self.pending += 1;
-            replayed += 1;
+            counted.replayed += 1;
         }
-        Ok((added, replayed))
+        Ok(counted)
     }
 
     /// Whether both indexes have followed the store up to torrent `id`
@@ -1048,16 +1108,21 @@ impl Indexer {
             .all(|s| s.last_id >= id && s.reindex_seq >= seq)
     }
 
-    fn catch_up_new(&mut self, store: &mut Store, limit: usize) -> Result<usize> {
+    /// Adds the torrents after the watermarks and counts them.
+    fn catch_up_new(&mut self, store: &mut Store, limit: usize) -> Result<CatchUp> {
         let from = self.torrents.last_id.min(self.files.last_id);
         let ids = store.ids_after(from, limit)?;
-        let mut added = 0;
+        let mut c = CatchUp::default();
         for id in ids {
             // Deleted between the reads: nothing to index.
             let t = load(store, id)?;
+            // The class of a torrent counted here, from its document when
+            // the torrent index takes it.
+            let mut class = None;
             if id > self.torrents.last_id {
                 if let Some(t) = &t {
                     let doc = torrent_doc(store, t)?;
+                    class = Some(is_adult(&doc.enriched));
                     self.torrents
                         .writer
                         .add_document(doc.to_document(&self.index.fields))?;
@@ -1076,10 +1141,16 @@ impl Indexer {
             }
             if t.is_some() {
                 self.pending += 1;
-                added += 1;
+                c.added += 1;
+                let adult = match class {
+                    Some(a) => a,
+                    // Only the file index was behind.
+                    None => stored_adult(store, id)?,
+                };
+                c.adult_added += usize::from(adult);
             }
         }
-        Ok(added)
+        Ok(c)
     }
 
     /// Commits what's pending with the watermarks and makes it

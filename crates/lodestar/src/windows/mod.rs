@@ -12,6 +12,7 @@
 
 #![cfg_attr(not(windows), allow(dead_code))]
 
+pub mod acl;
 pub mod logfile;
 pub mod ports;
 pub mod priority;
@@ -19,23 +20,24 @@ pub mod service;
 
 use std::process::ExitCode;
 
-/// `main`'s hook. Runs the whole service when the Service Control
-/// Manager started this process and returns its exit code. Otherwise,
-/// for `serve`, starts the [`startup`] checks and returns `None` so
-/// `main` carries on.
+/// `main`'s hook, before its own argument parsing. For a serve command
+/// line (none, `serve`, `--config <path>`) it runs the whole service when
+/// the Service Control Manager started this process, and returns its exit
+/// code; otherwise it starts the [`startup`] checks and returns `None` so
+/// `main` carries on. Any other command, or arguments that don't parse
+/// (`main` reports those), is left alone.
 pub fn hook() -> Option<ExitCode> {
     #[cfg(windows)]
     {
-        if let Some(code) = service::run_if_launched() {
+        let config_path = service::service_command(std::env::args_os())?;
+        if let Some(code) = service::run_if_launched(config_path.clone()) {
             return Some(code);
         }
-        if let Ok(crate::Command::Serve(path)) = crate::parse_args(std::env::args().skip(1)) {
-            // An unreadable config is `main`'s to report.
-            if let Ok(config) =
-                crate::config::Config::load(path.as_deref(), |k| std::env::var(k).ok())
-            {
-                startup(&config);
-            }
+        // An unreadable config is `main`'s to report.
+        if let Ok(config) =
+            crate::config::Config::load(config_path.as_deref(), |k| std::env::var(k).ok())
+        {
+            startup(&config);
         }
     }
     None
