@@ -530,6 +530,138 @@ async fn writes_are_same_origin_json_and_everything_needs_a_session() {
     }
 }
 
+/// A search whose matches are mostly withheld: the list pages and the
+/// feed fill from the few shown ones, however many are withheld between.
+#[tokio::test]
+async fn many_withheld_alerts_page_and_feed_correctly() {
+    let f = fixture();
+    let c = session(&f);
+    let (search, shown) = {
+        let mut store = f.store.lock().unwrap();
+        let raws: Vec<Vec<u8>> = (0..450)
+            .map(|i| metainfo(&format!("Withheld.{i}.1080p")))
+            .collect();
+        let infos: Vec<Info> = raws.iter().map(|r| Info::parse(r).unwrap()).collect();
+        let batch: Vec<NewTorrent<'_>> = infos
+            .iter()
+            .zip(&raws)
+            .enumerate()
+            .map(|(i, (info, raw))| NewTorrent {
+                info,
+                raw_info: Some(raw),
+                discovered_at: 1_700_001_000,
+                metadata_at: 1_700_001_000,
+                // Every 150th is shown; the rest a filter hid.
+                extra_flags: if i % 150 == 0 { 0 } else { flags::HIDDEN },
+                source: SourceId::new(0).unwrap(),
+            })
+            .collect();
+        let ids: Vec<i64> = store
+            .insert(&batch)
+            .unwrap()
+            .into_iter()
+            .map(|i| i.id())
+            .collect();
+        let shown: Vec<i64> = ids.iter().step_by(150).rev().copied().collect();
+        let search = store
+            .create_saved_search(
+                &SavedSearchInput {
+                    name: "mostly hidden",
+                    query: "x",
+                    ast: "{}",
+                    sort: None,
+                    alert: true,
+                    rss: true,
+                    channels: 0,
+                    paused: false,
+                },
+                0,
+                0,
+            )
+            .unwrap();
+        store
+            .record_percolation(
+                *ids.last().unwrap(),
+                &[SearchHits {
+                    saved_search_id: search,
+                    torrent_ids: &ids,
+                }],
+                1_700_002_000,
+            )
+            .unwrap();
+        (search, shown)
+    };
+    assert_eq!(shown.len(), 3);
+    let base = format!("/api/v1/saved-searches/{search}/alerts");
+    let mut seen = Vec::new();
+    let mut uri = format!("{base}?limit=2");
+    loop {
+        let page = send(&f.app, get(&uri, Some(&c))).await.json();
+        seen.extend(torrent_ids(&page));
+        let Some(next) = page["next_cursor"].as_str() else {
+            break;
+        };
+        assert!(shown.contains(&next.parse().unwrap()), "{next}");
+        uri = format!("{base}?limit=2&cursor={next}");
+    }
+    assert_eq!(seen, shown);
+    let r = send(&f.app, get(&feed_uri(search, None), Some(&c))).await;
+    assert_eq!(guids(&r.text).len(), 3);
+    assert!(!r.text.contains("Withheld.1."));
+    let badge = send(&f.app, get("/api/v1/alerts/unread", Some(&c)))
+        .await
+        .json();
+    assert_eq!(badge["unread"], 6 + 3);
+}
+
+/// Every saved search runs against every commit, so at most 1,000 are
+/// kept.
+#[tokio::test]
+async fn saved_searches_are_capped() {
+    let f = fixture();
+    let c = session(&f);
+    {
+        let mut store = f.store.lock().unwrap();
+        let have = store.saved_search_count().unwrap();
+        for i in have..1_000 {
+            store
+                .create_saved_search(
+                    &SavedSearchInput {
+                        name: &format!("s{i}"),
+                        query: "x",
+                        ast: "{}",
+                        sort: None,
+                        alert: false,
+                        rss: false,
+                        channels: 0,
+                        paused: true,
+                    },
+                    0,
+                    0,
+                )
+                .unwrap();
+        }
+    }
+    let body = json!({ "name": "one more", "q": "x", "alert": true, "rss": false });
+    let r = send(
+        &f.app,
+        post("/api/v1/saved-searches", Some(&c), body.clone()),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::CONFLICT);
+    assert_eq!(r.json()["error"]["code"], "too_many_saved_searches");
+    // Deleting one makes room.
+    let del = Request::delete(format!("/api/v1/saved-searches/{}", f.empty))
+        .header(header::HOST, "lodestar.lan:8090")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, &c)
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(send(&f.app, del).await.status, StatusCode::OK);
+    let r = send(&f.app, post("/api/v1/saved-searches", Some(&c), body)).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+}
+
 // ---- SSE ---------------------------------------------------------------------
 
 /// The `alerts` frames a client reconnecting after `last` is handed.
@@ -699,6 +831,11 @@ async fn the_feed_shows_shown_public_alerts_with_magnets() {
     );
     assert_eq!(r.headers[header::CACHE_CONTROL], "private, max-age=60");
     assert_eq!(r.headers[header::REFERRER_POLICY], "no-referrer");
+    assert_eq!(r.headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    assert_eq!(
+        r.headers[header::CONTENT_SECURITY_POLICY],
+        "default-src 'none'; sandbox"
+    );
     // Filter-hidden (3), Adult while hidden (4) and private-source (5)
     // never appear.
     let h = &f.hashes;
@@ -859,12 +996,35 @@ async fn who_reaches_a_feed() {
         "alerts_feed_not_found",
         &send(&f.app, get(&feed_uri(f.quiet, Some(&every)), None)).await,
     );
-    // A revoked token is a bad key; a key without FEEDS lacks the scope.
-    let r = send(&f.app, get(&feed_uri(f.nature, Some(&revoked)), None)).await;
-    assert_eq!(
-        (r.status, r.json()["error"]["code"].as_str()),
-        (StatusCode::UNAUTHORIZED, Some("bad_api_key"))
-    );
+    // A revoked or expired token is a bad key; a key without FEEDS
+    // lacks the scope.
+    let expired = {
+        let m = mint(KeyKind::FeedToken).unwrap();
+        f.store
+            .lock()
+            .unwrap()
+            .create_api_key(
+                &NewApiKey {
+                    kind: KeyKind::FeedToken,
+                    name: "old",
+                    prefix: &m.prefix,
+                    hash: m.hash,
+                    scopes: scope::FEEDS,
+                    saved_search_id: None,
+                    expires_at: Some(1),
+                },
+                0,
+            )
+            .unwrap();
+        m.secret.expose().to_string()
+    };
+    for t in [&revoked, &expired] {
+        let r = send(&f.app, get(&feed_uri(f.nature, Some(t)), None)).await;
+        assert_eq!(
+            (r.status, r.json()["error"]["code"].as_str()),
+            (StatusCode::UNAUTHORIZED, Some("bad_api_key"))
+        );
+    }
     let r = send(
         &f.app,
         get_with(
@@ -920,6 +1080,16 @@ async fn the_origin_is_the_host_and_https_only_through_a_trusted_proxy() {
             "{bad:?}"
         );
     }
+    // Without a `Host` (HTTP/2 sends `:authority`), the request target's
+    // authority.
+    let req = Request::get(format!("http://h2.lan:8443{}", feed_uri(f.nature, None)))
+        .header(header::COOKIE, &c)
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        channel_link(&send(&f.app, req).await.text),
+        format!("http://h2.lan:8443/alerts/{id}")
+    );
     // X-Forwarded-Proto is ignored from anyone but a trusted proxy...
     let https = [("x-forwarded-proto", "https")];
     assert!(

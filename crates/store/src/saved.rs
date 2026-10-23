@@ -378,27 +378,116 @@ impl Store {
     }
 }
 
-/// The nav badge (B9), counted only over torrents that may be shown.
+/// What may be shown of a torrent `t` joined to an alert: never one a
+/// filter rule hid (`?hidden` holds [`flags::HIDDEN`], plus
+/// [`flags::PRIVATE_SOURCE`] where private-source torrents are left out
+/// too), and, when `?type` is a content type code (Adult's, while "Show
+/// adult content" is off), never one classified as it. A torrent counts
+/// as classified only with a `torrent_parsed` row (as `Store::enrichment`
+/// reads it), so this is exactly the API's per-row `withheld` rule.
+const SHOWN: &str = "(t.flags & :hidden) = 0
+    AND NOT (:type IS NOT NULL AND coalesce(t.content_type, 0) = :type
+             AND EXISTS (SELECT 1 FROM torrent_parsed p WHERE p.torrent_id = t.id))";
+
+/// The shown-only reads (B9) and the percolator's guarded record.
 impl Store {
     /// Unread alerts across every saved search on torrents search would
-    /// show: never one a filter rule hid ([`flags::HIDDEN`]), and, when
-    /// `hidden_type` is a content type code (Adult's, while "Show adult
-    /// content" is off), never one classified as it. A torrent counts as
-    /// classified only with a `torrent_parsed` row, so this is exactly the
-    /// API's per-row `withheld` rule, in SQL: the badge then equals the sum
-    /// of the per-search `unread` the list view shows (§20.9).
+    /// show (see [`SHOWN`]): the nav badge, equal to the sum of the
+    /// per-search `unread` the list view shows (§20.9).
     pub fn unread_shown(&self, hidden_type: Option<u8>) -> Result<u64> {
         Ok(self
             .conn
-            .prepare_cached(
+            .prepare_cached(&format!(
                 "SELECT count(*) FROM alerts a JOIN torrents t ON t.id = a.torrent_id
-             WHERE a.read_at IS NULL AND (t.flags & ?1) = 0
-               AND NOT (?2 IS NOT NULL AND coalesce(t.content_type, 0) = ?2
-                        AND EXISTS (SELECT 1 FROM torrent_parsed p WHERE p.torrent_id = t.id))",
-            )?
-            .query_row(params![flags::HIDDEN, hidden_type], |r| {
+                 WHERE a.read_at IS NULL AND {SHOWN}"
+            ))?
+            .query_row(
+                rusqlite::named_params! { ":hidden": flags::HIDDEN, ":type": hidden_type },
+                |r| crate::get_u64(r, 0),
+            )?)
+    }
+
+    /// A saved search's alerts on torrents that may be shown, newest
+    /// first: up to `limit` below the torrent id `before`, or from the
+    /// newest. `hidden_type` is as [`Store::unread_shown`] takes it;
+    /// `public_only` also leaves out private-source torrents (a feed,
+    /// §18.7). The rule runs in SQL, walking the search's alerts by
+    /// torrent id, so a search whose matches are mostly withheld costs
+    /// one index scan rather than a lookup per row.
+    pub fn shown_alerts(
+        &self,
+        saved_search_id: i64,
+        before: Option<i64>,
+        limit: usize,
+        hidden_type: Option<u8>,
+        public_only: bool,
+    ) -> Result<Vec<Alert>> {
+        let hidden = flags::HIDDEN
+            | if public_only {
+                flags::PRIVATE_SOURCE
+            } else {
+                0
+            };
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "SELECT a.id, a.saved_search_id, a.torrent_id, a.created_at, a.read_at
+             FROM alerts a JOIN torrents t ON t.id = a.torrent_id
+             WHERE a.saved_search_id = :search AND a.torrent_id < :before AND {SHOWN}
+             ORDER BY a.torrent_id DESC LIMIT :limit"
+        ))?;
+        let rows = stmt.query_map(
+            rusqlite::named_params! {
+                ":search": saved_search_id,
+                ":before": before.unwrap_or(i64::MAX),
+                ":hidden": hidden,
+                ":type": hidden_type,
+                ":limit": sql_limit(limit),
+            },
+            alert_row,
+        )?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Saved searches in all, paused ones included.
+    pub fn saved_search_count(&self) -> Result<u64> {
+        Ok(self
+            .conn
+            .query_row("SELECT count(*) FROM saved_searches", [], |r| {
                 crate::get_u64(r, 0)
             })?)
+    }
+
+    /// [`Store::record_percolation`] for the percolator: each search's
+    /// hits come with the AST the run matched, and a search that is
+    /// paused, or whose AST is no longer that one, when the transaction
+    /// runs is left alone: no alerts and no watermark move. A search
+    /// paused or edited while a run was under way then gets nothing from
+    /// the old query; an edited one runs the same range again with the
+    /// new one.
+    pub fn record_percolation_unchanged(
+        &mut self,
+        through: i64,
+        results: &[(SearchHits<'_>, &str)],
+        now: i64,
+    ) -> Result<Vec<Alert>> {
+        if results
+            .iter()
+            .any(|(r, _)| r.torrent_ids.iter().any(|&t| t > through))
+        {
+            return Err(Error::Invalid("hit above the percolation range"));
+        }
+        let tx = crate::begin_write(&mut self.conn)?;
+        let mut created = Vec::new();
+        for (r, ast) in results {
+            let current: Option<(bool, String)> = tx
+                .prepare_cached("SELECT paused, ast FROM saved_searches WHERE id = ?1")?
+                .query_row([r.saved_search_id], |row| Ok((row.get(0)?, row.get(1)?)))
+                .optional()?;
+            if current.is_some_and(|(paused, current)| !paused && current == *ast) {
+                record_hits(&tx, through, r, now, &mut created)?;
+            }
+        }
+        tx.commit()?;
+        Ok(created)
     }
 }
 
@@ -701,6 +790,101 @@ mod tests {
         assert_eq!(s.unread_shown(Some(0)).unwrap(), 3);
         s.mark_alerts_read(Some(a), i64::MAX, 1).unwrap();
         assert_eq!(s.unread_shown(Some(11)).unwrap(), 0);
+    }
+
+    /// The list and the feed read shown alerts in SQL: thousands of
+    /// withheld ones in between cost no lookups and don't fill a page.
+    #[test]
+    fn shown_alerts_skip_withheld_rows_in_sql() {
+        let mut s = test_store(3000);
+        let a = s.create_saved_search(&input("a"), 0, 0).unwrap();
+        let ids: Vec<i64> = (1..=3000).collect();
+        s.record_percolation(3000, &[hits(a, &ids)], 0).unwrap();
+        // Everything but 1, 2, 1500 and 3000 is hidden; 2 is Adult and
+        // classified; 1500 is private-source.
+        s.conn
+            .execute_batch(&format!(
+                "UPDATE torrents SET flags = {h} WHERE id NOT IN (1, 2, 1500, 3000);
+                 UPDATE torrents SET flags = {p} WHERE id = 1500;
+                 UPDATE torrents SET content_type = 11 WHERE id = 2;
+                 INSERT INTO torrent_parsed (torrent_id, parser_ver, data) VALUES (2, 1, x'00');",
+                h = flags::HIDDEN,
+                p = flags::PRIVATE_SOURCE
+            ))
+            .unwrap();
+        let t = |v: Vec<Alert>| v.iter().map(|x| x.torrent_id).collect::<Vec<_>>();
+        assert_eq!(
+            t(s.shown_alerts(a, None, 10, Some(11), false).unwrap()),
+            [3000, 1500, 1]
+        );
+        assert_eq!(
+            t(s.shown_alerts(a, None, 10, None, false).unwrap()),
+            [3000, 1500, 2, 1]
+        );
+        // A feed leaves out private-source torrents too.
+        assert_eq!(
+            t(s.shown_alerts(a, None, 10, Some(11), true).unwrap()),
+            [3000, 1]
+        );
+        // Paging: below a cursor, and a limit.
+        assert_eq!(
+            t(s.shown_alerts(a, Some(3000), 1, Some(11), false).unwrap()),
+            [1500]
+        );
+        assert_eq!(
+            t(s.shown_alerts(a, Some(1500), 10, Some(11), false).unwrap()),
+            [1]
+        );
+        // The same rule as the badge.
+        assert_eq!(s.unread_shown(Some(11)).unwrap(), 3);
+        assert_eq!(s.saved_search_count().unwrap(), 1);
+    }
+
+    /// A search paused, edited or deleted while a run was under way gets
+    /// nothing from it, and keeps its watermark.
+    #[test]
+    fn a_guarded_record_skips_searches_changed_mid_run() {
+        let mut s = test_store(10);
+        let same = s.create_saved_search(&input("same"), 0, 0).unwrap();
+        let paused = s.create_saved_search(&input("paused"), 0, 0).unwrap();
+        let edited = s.create_saved_search(&input("edited"), 0, 0).unwrap();
+        let gone = s.create_saved_search(&input("gone"), 0, 0).unwrap();
+        let mut p = input("paused");
+        p.paused = true;
+        s.update_saved_search(paused, &p, 0, 1).unwrap();
+        let mut e = input("edited");
+        e.ast = r#"{"op":"term","word":"other"}"#;
+        s.update_saved_search(edited, &e, 0, 1).unwrap();
+        s.delete_saved_search(gone).unwrap();
+        let ids = [3, 5];
+        let created = s
+            .record_percolation_unchanged(
+                10,
+                &[
+                    (hits(same, &ids), AST),
+                    (hits(paused, &ids), AST),
+                    (hits(edited, &ids), AST),
+                    (hits(gone, &ids), AST),
+                ],
+                9,
+            )
+            .unwrap();
+        assert_eq!(created.len(), 2);
+        assert!(created.iter().all(|a| a.saved_search_id == same));
+        assert_eq!(s.saved_search(same).unwrap().unwrap().watermark, 10);
+        for id in [paused, edited] {
+            assert_eq!(s.saved_search(id).unwrap().unwrap().watermark, 0);
+            assert!(s.alerts(id, None, 10).unwrap().is_empty());
+        }
+        // The edited one, recorded with its new AST, moves on.
+        let created = s
+            .record_percolation_unchanged(10, &[(hits(edited, &[7]), e.ast)], 9)
+            .unwrap();
+        assert_eq!(created.len(), 1);
+        assert!(matches!(
+            s.record_percolation_unchanged(5, &[(hits(same, &[6]), AST)], 9),
+            Err(Error::Invalid(_))
+        ));
     }
 
     #[test]

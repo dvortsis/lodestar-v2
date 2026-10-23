@@ -10,10 +10,18 @@
 //!   ranges are new every run, so nothing would be reused.
 //! - **No visibility clauses.** An alert is stored for every match (B8);
 //!   what's hidden is left out when alerts are read (the API).
+//! - **Cost tracks the new data, not the index:** only segments whose
+//!   ids can fall in a search's range are collected (by the `id`
+//!   column's minimum and maximum), so a run over the last commit reads
+//!   the newest segments, not the whole corpus.
 //! - **Bounded:** each search covers at most `max_range` ids per run and
 //!   keeps at most `keep` hits (the highest ids). The token is checked
-//!   between searches, so a budget stops a run cleanly; what it didn't
-//!   reach runs next time.
+//!   between searches and between segments, and, once a search has
+//!   completed in the run, every few thousand documents inside a scan
+//!   too, so one heavy search can't overrun the budget by much. A run's
+//!   first search is never stopped inside its scan, so a run that starts
+//!   one always finishes one. A search the token stops is reported as
+//!   not run; what a run didn't reach runs next time.
 //!
 //! No store writes here: the caller records the result in one
 //! transaction per range ([`lodestar_store::Store::record_percolation`]).
@@ -21,12 +29,14 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::ops::Bound;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tantivy::collector::{Collector, SegmentCollector};
-use tantivy::query::{BooleanQuery, Occur, Query, RangeQuery};
-use tantivy::{DocId, Score, SegmentOrdinal, SegmentReader, Term};
+use tantivy::query::{BooleanQuery, EnableScoring, Occur, Query, RangeQuery};
+use tantivy::{DocId, Score, Searcher, SegmentOrdinal, SegmentReader, Term};
 
-use crate::cancel::CancelToken;
+use crate::cancel::{CHECK_EVERY, CancelToken};
 use crate::filter::PostFilter;
 use crate::index::{Result, SearchIndex};
 use crate::query::Node;
@@ -127,11 +137,21 @@ pub fn percolate(
             Bound::Included(term(end)),
         ));
         let q = BooleanQuery::new(vec![(Occur::Must, compiled.query), (Occur::Must, range)]);
+        let stopped = Arc::new(AtomicBool::new(false));
         let collector = PostFilter {
             ranges: &compiled.filters,
-            inner: TopIds { keep: limits.keep },
+            inner: TopIds {
+                keep: limits.keep,
+                // The first search of a run always completes.
+                cancel: (!out.matched.is_empty()).then(|| cancel.clone()),
+                stopped: stopped.clone(),
+            },
         };
-        match searcher.search(&q, &collector) {
+        match collect(&searcher, &q, &collector, (d.watermark, end), cancel) {
+            Ok(_) if stopped.load(Ordering::Relaxed) => {
+                out.stopped = true;
+                break;
+            }
             Ok((ids, truncated)) => {
                 if end < upto {
                     out.capped += 1;
@@ -143,8 +163,9 @@ pub fn percolate(
                     truncated,
                 });
             }
-            Err(e) => {
-                tracing::warn!("percolator: saved search {} failed in the index: {e}", d.id);
+            Err(_) => {
+                // The error isn't logged: Tantivy's can carry query terms.
+                tracing::warn!("percolator: saved search {} failed in the index", d.id);
                 out.failed.push(d.id);
             }
         }
@@ -152,10 +173,52 @@ pub fn percolate(
     Ok(out)
 }
 
+/// Runs `q` over the segments that can hold an id in `(after, upto]`,
+/// skipping the rest by their `id` column's range. A token that stops
+/// between segments marks the collector stopped.
+fn collect(
+    searcher: &Searcher,
+    q: &dyn Query,
+    collector: &PostFilter<'_, TopIds>,
+    (after, upto): (i64, i64),
+    cancel: &CancelToken,
+) -> Result<(Vec<i64>, bool)> {
+    let weight = q.weight(EnableScoring::disabled_from_searcher(searcher))?;
+    let mut fruits = Vec::new();
+    for (ord, seg) in searcher.segment_readers().iter().enumerate() {
+        if !may_hold(seg, after, upto)? {
+            continue;
+        }
+        if collector.inner.cancel.is_some() && cancel.is_stopped() {
+            collector.inner.stopped.store(true, Ordering::Relaxed);
+            break;
+        }
+        let ord = SegmentOrdinal::try_from(ord).unwrap_or(SegmentOrdinal::MAX);
+        fruits.push(collector.collect_segment(weight.as_ref(), ord, seg)?);
+    }
+    Ok(collector.merge_fruits(fruits)?)
+}
+
+/// Whether `seg` may hold a live document with an id in `(after, upto]`.
+fn may_hold(seg: &SegmentReader, after: i64, upto: i64) -> Result<bool> {
+    if seg.num_docs() == 0 {
+        return Ok(false);
+    }
+    let col = seg.fast_fields().u64("id")?;
+    let (lo, hi) = (col.min_value(), col.max_value());
+    let after = u64::try_from(after).unwrap_or(0);
+    let upto = u64::try_from(upto).unwrap_or(0);
+    Ok(hi > after && lo <= upto)
+}
+
 /// Collects the `keep` highest torrent ids, highest first, and whether
-/// any match was left out.
+/// any match was left out. With a token, it stops collecting once the
+/// token does (checked every [`CHECK_EVERY`] documents) and sets
+/// `stopped`: the result is then incomplete and isn't used.
 struct TopIds {
     keep: usize,
+    cancel: Option<CancelToken>,
+    stopped: Arc<AtomicBool>,
 }
 
 struct TopIdsSegment {
@@ -164,6 +227,9 @@ struct TopIdsSegment {
     /// A min-heap of the highest ids so far.
     heap: BinaryHeap<Reverse<u64>>,
     over: bool,
+    cancel: Option<CancelToken>,
+    stopped: Arc<AtomicBool>,
+    since_check: u32,
 }
 
 /// Up to `keep` highest of `ids`, highest first, and whether any were cut.
@@ -209,6 +275,9 @@ impl Collector for TopIds {
             keep: self.keep,
             heap: BinaryHeap::new(),
             over: false,
+            cancel: self.cancel.clone(),
+            stopped: self.stopped.clone(),
+            since_check: 0,
         })
     }
 
@@ -227,6 +296,19 @@ impl SegmentCollector for TopIdsSegment {
     type Fruit = (Vec<u64>, bool);
 
     fn collect(&mut self, doc: DocId, _: Score) {
+        if let Some(cancel) = &self.cancel {
+            if self.stopped.load(Ordering::Relaxed) {
+                return;
+            }
+            self.since_check += 1;
+            if self.since_check >= CHECK_EVERY {
+                self.since_check = 0;
+                if cancel.is_stopped() {
+                    self.stopped.store(true, Ordering::Relaxed);
+                    return;
+                }
+            }
+        }
         if let Some(id) = self.col.first(doc) {
             push(&mut self.heap, self.keep, id, &mut self.over);
         }
@@ -400,6 +482,92 @@ mod tests {
         let p = percolate(&index, &due, 50, ALL, 0, &CancelToken::new()).unwrap();
         assert_eq!(p.matched.len(), 3);
         assert!(!p.more());
+    }
+
+    /// Only the segments that can hold the range are read.
+    #[test]
+    fn segments_outside_the_range_are_skipped() {
+        // Ids 1-100, 101-200 and 201-300, one segment each.
+        let (index, _) = index_with(300, 3);
+        let searcher = index.searcher();
+        let segs = searcher.segment_readers();
+        let held = |after, upto| -> Vec<bool> {
+            segs.iter()
+                .map(|s| may_hold(s, after, upto).unwrap())
+                .collect()
+        };
+        let want: Vec<Vec<bool>> = vec![
+            vec![true, true, true],
+            vec![false, false, true],
+            vec![false, true, true],
+            vec![true, false, false],
+            vec![false, false, false],
+        ];
+        let mut got = vec![
+            held(0, 300),
+            held(200, 300),
+            held(150, 201),
+            held(0, 100),
+            held(300, 400),
+        ];
+        // Segment order isn't id order; compare by each segment's ids.
+        let order: Vec<u64> = segs
+            .iter()
+            .map(|s| s.fast_fields().u64("id").unwrap().min_value())
+            .collect();
+        let mut idx: Vec<usize> = (0..3).collect();
+        idx.sort_by_key(|&i| order[i]);
+        for g in &mut got {
+            *g = idx.iter().map(|&i| g[i]).collect();
+        }
+        assert_eq!(got, want);
+        // A segment whose documents are all deleted holds nothing.
+        delete(&index, 201..=300);
+        let searcher = index.searcher();
+        assert!(
+            searcher
+                .segment_readers()
+                .iter()
+                .filter(|s| s.num_docs() > 0)
+                .count()
+                <= 2
+        );
+        // Results are what a full scan gives.
+        let p = run(&index, "Half", 150, 300, ALL);
+        assert_eq!(ids(&p), expected("half", 200, 150, 200));
+    }
+
+    /// Inside a scan, a stopped token stops collection within
+    /// `CHECK_EVERY` documents and marks the result unusable.
+    #[test]
+    fn a_scan_stops_once_its_token_does() {
+        let (index, _) = index_with(10_000, 1);
+        let searcher = index.searcher();
+        let token = CancelToken::new();
+        token.cancel();
+        let stopped = Arc::new(AtomicBool::new(false));
+        let collector = TopIds {
+            keep: usize::MAX,
+            cancel: Some(token),
+            stopped: stopped.clone(),
+        };
+        let all = tantivy::query::AllQuery;
+        let weight = all
+            .weight(EnableScoring::disabled_from_searcher(&searcher))
+            .unwrap();
+        let seg = &searcher.segment_readers()[0];
+        let (ids, _) = collector.collect_segment(weight.as_ref(), 0, seg).unwrap();
+        assert!(stopped.load(Ordering::Relaxed));
+        assert_eq!(ids.len(), CHECK_EVERY as usize - 1);
+        // Without a token the same scan collects every document.
+        let free = TopIds {
+            keep: usize::MAX,
+            cancel: None,
+            stopped: Arc::default(),
+        };
+        let (ids, _) = free.collect_segment(weight.as_ref(), 0, seg).unwrap();
+        assert!(seg.num_docs() > CHECK_EVERY);
+        assert_eq!(ids.len(), seg.num_docs() as usize);
     }
 
     #[test]
