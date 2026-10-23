@@ -32,7 +32,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use lodestar_classify::ContentType;
 use lodestar_store::{
-    CohortCount, Counter, Event, RollupBy, Store, UNCLASSIFIED, log_bucket_bounds,
+    CohortCount, Counter, Event, InsightsState, RollupBy, Store, UNCLASSIFIED, log_bucket_bounds,
 };
 use utoipa::OpenApi;
 
@@ -72,6 +72,8 @@ pub mod codes {
         pub const TIME_TO_SEARCHABLE: u32 = 11;
         pub const COVERAGE: u32 = 12;
         pub const SEARCHABLE: u32 = 13;
+        pub const FUNNEL_EVENTS: u32 = 14;
+        pub const REMOVED: u32 = 15;
         /// `COVERAGE` dims.
         pub const COVERAGE_INDEX: u32 = 0;
         pub const COVERAGE_CRAWL: u32 = 1;
@@ -268,6 +270,13 @@ impl OverviewCache {
             .clear();
     }
 
+    /// Drops the sums of days below `day` (compacted: read from the day
+    /// tables from now on), to keep the cache to the hourly band.
+    pub fn forget_days_before(&self, day: i64) {
+        let mut days = self.days.lock().unwrap_or_else(PoisonError::into_inner);
+        days.days = days.days.split_off(&(day * 24));
+    }
+
     fn generation(&self) -> u64 {
         self.days
             .lock()
@@ -307,7 +316,9 @@ pub fn warm(
             return Ok(0);
         };
         let to = sealed_before(now.div_euclid(3600), floor);
-        let from = first.div_euclid(24) * 24;
+        // Compacted days are read from the day tables, never kept here.
+        let compacted = store.insights_state()?.compacted_before_day * 24;
+        let from = (first.div_euclid(24) * 24).max(compacted);
         if from >= to {
             return Ok(0);
         }
@@ -324,6 +335,8 @@ struct DayRows {
     newly: Option<i64>,
     newly_by_dim: BTreeMap<u32, i64>,
     stored: i64,
+    /// Fetches by event time (`FUNNEL_EVENTS`, the `Fetched` stage).
+    fetched: i64,
     coverage: BTreeMap<u32, i64>,
     /// Summed over the day (`cohort` = the day's first hour).
     cohorts: Vec<CohortCount>,
@@ -367,6 +380,11 @@ fn sealed_days(
         for c in store.rollup_sums(metric::STORED, a, b, RollupBy::Hour)? {
             read.get_mut(&day(c.hour)).expect("in range").stored += c.value;
         }
+        for c in store.rollup_sums(metric::FUNNEL_EVENTS, a, b, RollupBy::HourDim)? {
+            if c.dim == u32::from(codes::FETCHED) {
+                read.get_mut(&day(c.hour)).expect("in range").fetched += c.value;
+            }
+        }
         for c in store.rollup_sums(metric::COVERAGE, a, b, RollupBy::HourDim)? {
             *read
                 .get_mut(&day(c.hour))
@@ -402,6 +420,64 @@ fn sealed_days(
     Ok(out.into_values().collect())
 }
 
+/// Compacted days `from..to` (whole days below `compacted_before_day`):
+/// their `rollup_day`/`cohort_day` rows plus any hourly stragglers waiting
+/// for the next compaction (only `Sum` metrics are read here). One seek
+/// per (day, metric), and a range scan of the sparse hours below the
+/// boundary.
+fn compacted_days(store: &Store, from: i64, to: i64) -> lodestar_store::Result<Vec<DayRows>> {
+    use codes::metric;
+    let (a, b) = (from.div_euclid(24), to.div_euclid(24));
+    let mut read: BTreeMap<i64, DayRows> = (from..to)
+        .step_by(24)
+        .map(|d| (d, DayRows::default()))
+        .collect();
+    let both = |m: u32, by: RollupBy| -> lodestar_store::Result<Vec<Counter>> {
+        let mut v = store.rollup_day_sums(m, a, b, by)?;
+        v.extend(store.rollup_straggler_sums(m, from, to, by)?);
+        Ok(v)
+    };
+    fn at(read: &mut BTreeMap<i64, DayRows>, h: i64) -> &mut DayRows {
+        read.get_mut(&h).expect("in range")
+    }
+    for c in both(metric::NEWLY_SEARCHABLE, RollupBy::HourDim)? {
+        let d = at(&mut read, c.hour);
+        *d.newly.get_or_insert(0) += c.value;
+        *d.newly_by_dim.entry(c.dim).or_default() += c.value;
+    }
+    for c in both(metric::STORED, RollupBy::Hour)? {
+        at(&mut read, c.hour).stored += c.value;
+    }
+    for c in both(metric::FUNNEL_EVENTS, RollupBy::HourDim)? {
+        if c.dim == u32::from(codes::FETCHED) {
+            at(&mut read, c.hour).fetched += c.value;
+        }
+    }
+    for c in both(metric::COVERAGE, RollupBy::HourDim)? {
+        *at(&mut read, c.hour).coverage.entry(c.dim).or_default() += c.value;
+    }
+    for c in store
+        .rollup_day_sums(metric::TIME_TO_SEARCHABLE, a, b, RollupBy::HourKey)?
+        .into_iter()
+        .chain(store.rollup_straggler_sums(
+            metric::TIME_TO_SEARCHABLE,
+            from,
+            to,
+            RollupBy::HourKey,
+        )?)
+    {
+        *at(&mut read, c.hour).delays.entry(c.key).or_default() += c.value;
+    }
+    for c in store
+        .cohort_day_sums(a, b)?
+        .into_iter()
+        .chain(store.cohort_sums(from, to, 24)?)
+    {
+        at(&mut read, c.cohort).cohorts.push(c);
+    }
+    Ok(read.into_values().collect())
+}
+
 fn unavailable() -> ApiError {
     ApiError::new(
         StatusCode::SERVICE_UNAVAILABLE,
@@ -426,8 +502,10 @@ struct Window {
 }
 
 impl Window {
-    fn new(from_h: i64, to_h: i64) -> Window {
-        if to_h - from_h <= HOURLY_MAX {
+    /// Hourly buckets up to [`HOURLY_MAX`] and from `compacted` (the
+    /// first hour that's still hourly) on; UTC days otherwise.
+    fn new(from_h: i64, to_h: i64, compacted: i64) -> Window {
+        if to_h - from_h <= HOURLY_MAX && from_h >= compacted {
             Window {
                 from_h,
                 to_h,
@@ -477,9 +555,15 @@ fn bad(field: &'static str, message: impl Into<std::borrow::Cow<'static, str>>) 
 }
 
 /// The query's range, normalized: whole UTC hours ending with the current
-/// one, or whole UTC days past 7 days. `first_hour` is the earliest
-/// rollup hour, for `all`.
-fn window(q: &OverviewQuery, now: i64, first_hour: Option<i64>) -> ApiResult<Window> {
+/// one, or whole UTC days past 7 days or when it reaches a compacted day
+/// (`compacted`, the first hour still hourly). `first_hour` is the
+/// earliest rollup hour, for `all`.
+fn window(
+    q: &OverviewQuery,
+    now: i64,
+    first_hour: Option<i64>,
+    compacted: i64,
+) -> ApiResult<Window> {
     let end_h = now.div_euclid(3600) + 1;
     let range = q.range.as_deref().unwrap_or("7d");
     if range != "custom" && (q.from.is_some() || q.to.is_some()) {
@@ -496,7 +580,7 @@ fn window(q: &OverviewQuery, now: i64, first_hour: Option<i64>) -> ApiResult<Win
             let from_h = first_hour
                 .unwrap_or(end_h - 24)
                 .clamp(end_h - MAX_SPAN_HOURS, end_h - 1);
-            return Ok(Window::new(from_h, end_h));
+            return Ok(Window::new(from_h, end_h, compacted));
         }
         "custom" => {
             let from = q
@@ -517,7 +601,7 @@ fn window(q: &OverviewQuery, now: i64, first_hour: Option<i64>) -> ApiResult<Win
             if to_h - from_h > MAX_SPAN_HOURS {
                 return Err(bad("from", "The range is wider than 20 years."));
             }
-            return Ok(Window::new(from_h, to_h));
+            return Ok(Window::new(from_h, to_h, compacted));
         }
         _ => {
             return Err(bad(
@@ -527,11 +611,11 @@ fn window(q: &OverviewQuery, now: i64, first_hour: Option<i64>) -> ApiResult<Win
         }
     };
     if hours <= HOURLY_MAX {
-        Ok(Window::new(end_h - hours, end_h))
+        Ok(Window::new(end_h - hours, end_h, compacted))
     } else {
         // Whole UTC days, the current one last.
         let to_h = ceil_to(end_h, 24);
-        Ok(Window::new(to_h - hours, to_h))
+        Ok(Window::new(to_h - hours, to_h, compacted))
     }
 }
 
@@ -739,6 +823,8 @@ struct PeriodRows {
     cohorts_recent: Vec<CohortCount>,
     delays_old: Vec<Counter>,
     delays_recent: Vec<Counter>,
+    /// Fetches by event time over the whole window.
+    fetched: i64,
 }
 
 /// Where [`read_period`] takes sealed days' sums from.
@@ -750,18 +836,27 @@ struct Sealed<'a> {
     floor: Option<i64>,
 }
 
+/// One period's rows, in the caller's snapshot. With day buckets, days
+/// below `compacted` (an hour: `compacted_before_day`'s first) come from
+/// the day tables, sealed days from `sealed`'s cache, the rest hour by
+/// hour.
 fn read_period(
     store: &Store,
     w: &Window,
     now_h: i64,
     sealed: Option<Sealed<'_>>,
+    compacted: i64,
 ) -> lodestar_store::Result<PeriodRows> {
     use codes::metric;
-    // Day buckets: sealed days from their sums, the rest hour by hour.
-    let split = if let (24, Some(sealed)) = (w.grain, &sealed) {
-        sealed_before(now_h, sealed.floor).clamp(w.from_h, w.to_h)
+    let cb = if w.grain == 24 {
+        compacted.clamp(w.from_h, w.to_h)
     } else {
         w.from_h
+    };
+    let split = if let (24, Some(sealed)) = (w.grain, &sealed) {
+        sealed_before(now_h, sealed.floor).clamp(cb, w.to_h)
+    } else {
+        cb
     };
     let cut = cutoff(w, now_h).max(split);
     let mut rows = PeriodRows {
@@ -783,31 +878,52 @@ fn read_period(
             w.to_h,
             RollupBy::HourKey,
         )?,
+        fetched: store
+            .rollup_sums(metric::FUNNEL_EVENTS, split, w.to_h, RollupBy::Dim)?
+            .iter()
+            .filter(|c| c.dim == u32::from(codes::FETCHED))
+            .map(|c| c.value)
+            .sum(),
     };
-    if let Some(sealed) = sealed.filter(|_| split > w.from_h) {
-        let days = sealed_days(store, sealed.cache, sealed.generation, w.from_h, split)?;
-        let row = |hour, dim, key, value| Counter {
-            hour,
-            metric: 0,
-            dim,
-            key,
-            value,
-        };
-        for (d, day) in (w.from_h..split).step_by(24).zip(&days) {
-            if let Some(n) = day.newly {
-                rows.newly_by_hour.push(row(d, 0, 0, n));
-            }
-            for (&dim, &n) in &day.newly_by_dim {
-                rows.newly_by_dim.push(row(0, dim, 0, n));
-            }
-            rows.stored_by_hour.push(row(d, 0, 0, day.stored));
-            for (&dim, &n) in &day.coverage {
-                rows.coverage.push(row(d, dim, 0, n));
-            }
-            rows.cohorts_old.extend_from_slice(&day.cohorts);
-            for (&key, &n) in &day.delays {
-                rows.delays_old.push(row(0, 0, key, n));
-            }
+    let mut days: Vec<Arc<DayRows>> = if cb > w.from_h {
+        compacted_days(store, w.from_h, cb)?
+            .into_iter()
+            .map(Arc::new)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if let Some(sealed) = sealed.filter(|_| split > cb) {
+        days.extend(sealed_days(
+            store,
+            sealed.cache,
+            sealed.generation,
+            cb,
+            split,
+        )?);
+    }
+    let row = |hour, dim, key, value| Counter {
+        hour,
+        metric: 0,
+        dim,
+        key,
+        value,
+    };
+    for (d, day) in (w.from_h..split).step_by(24).zip(&days) {
+        if let Some(n) = day.newly {
+            rows.newly_by_hour.push(row(d, 0, 0, n));
+        }
+        for (&dim, &n) in &day.newly_by_dim {
+            rows.newly_by_dim.push(row(0, dim, 0, n));
+        }
+        rows.stored_by_hour.push(row(d, 0, 0, day.stored));
+        rows.fetched += day.fetched;
+        for (&dim, &n) in &day.coverage {
+            rows.coverage.push(row(d, dim, 0, n));
+        }
+        rows.cohorts_old.extend_from_slice(&day.cohorts);
+        for (&key, &n) in &day.delays {
+            rows.delays_old.push(row(0, 0, key, n));
         }
     }
     Ok(rows)
@@ -836,6 +952,9 @@ fn read_now(store: &Store, now_h: i64) -> lodestar_store::Result<NowRows> {
 #[derive(Debug)]
 struct Period {
     stages: (u64, u64),
+    /// Fetched by event time; `None` when the window starts before fetches
+    /// were counted (an unknown, not a 0).
+    fetch: Option<u64>,
     new_searchable: u64,
     yield_: Option<f64>,
     p50: Option<u64>,
@@ -844,7 +963,7 @@ struct Period {
     cohorts: Cohorts,
 }
 
-fn period(w: &Window, now_h: i64, rows: &PeriodRows) -> Period {
+fn period(w: &Window, now_h: i64, rows: &PeriodRows, st: &InsightsState) -> Period {
     use codes::metric;
     let cohorts = cohorts(w, now_h, &rows.cohorts_old, &rows.cohorts_recent);
     let mut hist: BTreeMap<i64, u64> = BTreeMap::new();
@@ -914,6 +1033,7 @@ fn period(w: &Window, now_h: i64, rows: &PeriodRows) -> Period {
         .sum();
     Period {
         stages: (discover, understand),
+        fetch: (w.from_h >= st.funnel_events_since_hour).then_some(rows.fetched.max(0) as u64),
         new_searchable: newly.values().sum(),
         yield_,
         p50,
@@ -1083,11 +1203,14 @@ fn stalled(rows: &NowRows, now_h: i64) -> Option<InsightsException> {
     })
 }
 
-/// Everything but the snapshot fields, which [`overview`] fills in.
+/// Everything but the snapshot fields, which [`overview`] fills in. `st`
+/// is read in the caller's snapshot, which this one joins.
+#[allow(clippy::too_many_arguments)]
 fn build(
     store: &Store,
     cache: &OverviewCache,
     floor: Option<i64>,
+    st: &InsightsState,
     w: Window,
     prev: Option<Window>,
     now: i64,
@@ -1099,10 +1222,11 @@ fn build(
         generation: cache.generation(),
         floor,
     };
+    let compacted = st.compacted_before_day * 24;
     store.read_snapshot(|store| {
-        let rows = read_period(store, &w, now_h, Some(sealed))?;
+        let rows = read_period(store, &w, now_h, Some(sealed), compacted)?;
         let prev_rows = prev
-            .map(|p| read_period(store, &p, now_h, Some(sealed)))
+            .map(|p| read_period(store, &p, now_h, Some(sealed), compacted))
             .transpose()?;
         let now_rows = read_now(store, now_h)?;
         let events = store.events(w.from_h * 3600, w.to_h * 3600)?;
@@ -1111,7 +1235,7 @@ fn build(
             .into_iter()
             .map(|s| (s.id.get(), s.plugin))
             .collect();
-        let p = period(&w, now_h, &rows);
+        let p = period(&w, now_h, &rows, st);
         let (funnel, funnel_total) = funnel(&p.cohorts);
         let last_hour = now_h - 1;
         let ingest = now_rows
@@ -1129,21 +1253,14 @@ fn build(
                     .then_some(0)
             });
         // Searchable at the previous period's end: the last hourly
-        // snapshot in the day before the range starts.
+        // snapshot in the day before the range starts (a compacted day
+        // keeps its last hour's).
         let searchable_then = match prev {
-            Some(_) => store
-                .rollup_sums(
-                    codes::metric::SEARCHABLE,
-                    w.from_h - 24,
-                    w.from_h,
-                    RollupBy::Hour,
-                )?
-                .last()
-                .map(|c| c.value.max(0) as u64),
+            Some(_) => searchable_before(store, w.from_h, compacted)?,
             None => None,
         };
         let previous = prev.zip(prev_rows).map(|(pw, pr)| {
-            let q = period(&pw, now_h, &pr);
+            let q = period(&pw, now_h, &pr, st);
             PreviousPeriod {
                 kpi: PreviousKpi {
                     new_searchable: q.new_searchable,
@@ -1156,7 +1273,7 @@ fn build(
                 serve: Serve::default(),
                 stages: PreviousStages {
                     discover: q.stages.0,
-                    fetch: None,
+                    fetch: q.fetch,
                     serve: None,
                     understand: q.stages.1,
                 },
@@ -1192,7 +1309,7 @@ fn build(
             serve: Serve::default(),
             stages: Stages {
                 discover: p.stages.0,
-                fetch: None,
+                fetch: p.fetch,
                 index: None,
                 serve: None,
                 understand: p.stages.1,
@@ -1202,6 +1319,35 @@ fn build(
             updated_at: now,
         })
     })
+}
+
+/// The last `SEARCHABLE` snapshot in the 24 hours before `from_h`:
+/// hourly where those hours are, else the compacted day's (`Last`: its
+/// latest hour's value).
+fn searchable_before(
+    store: &Store,
+    from_h: i64,
+    compacted: i64,
+) -> lodestar_store::Result<Option<u64>> {
+    let m = codes::metric::SEARCHABLE;
+    let hourly = store
+        .rollup_sums(m, (from_h - 24).max(compacted), from_h, RollupBy::Hour)?
+        .last()
+        .map(|c| c.value);
+    let then = match hourly {
+        Some(v) => Some(v),
+        None if from_h - 24 < compacted => store
+            .rollup_day_sums(
+                m,
+                (from_h - 24).div_euclid(24),
+                ceil_to(from_h.min(compacted), 24).div_euclid(24),
+                RollupBy::Hour,
+            )?
+            .last()
+            .map(|c| c.value),
+        None => None,
+    };
+    Ok(then.map(|v| v.max(0) as u64))
 }
 
 /// The snapshot fields, read for every request.
@@ -1318,44 +1464,89 @@ pub(crate) async fn overview(
     let reader = s.reader.clone();
     let mut response = tokio::task::spawn_blocking(move || -> ApiResult<OverviewResponse> {
         let store = reader.lock().unwrap_or_else(PoisonError::into_inner);
-        let first = if q.range.as_deref() == Some("all") {
-            store.first_rollup_hour().map_err(internal)?
-        } else {
-            None
-        };
-        let w = window(&q, now, first)?;
-        let prev = (compare && q.range.as_deref() != Some("all"))
-            .then(|| Window::new(w.from_h - w.span(), w.from_h));
-        let key = CacheKey {
-            window: w,
-            previous: prev,
-            now_h: now.div_euclid(3600),
-            adult,
-            last_flush: source.last_flush(),
-            last_recorded: source.last_recorded(),
-        };
-        if let Some(hit) = source.cache().get(&key) {
-            return Ok((*hit).clone());
-        }
-        let built = Arc::new(
-            build(
-                &store,
-                source.cache(),
-                source.seal_floor(),
-                w,
-                prev,
-                now,
-                adult,
-            )
-            .map_err(internal)?,
-        );
-        source.cache().put(key, built.clone());
-        Ok((*built).clone())
+        // The grain is decided by `compacted_before_day` read in the same
+        // snapshot as the rows, so a compaction beside it can't make a
+        // day count twice or not at all.
+        store
+            .read_snapshot(|store| {
+                Ok(overview_in_snapshot(
+                    store, &q, compare, now, adult, &*source,
+                ))
+            })
+            .map_err(internal)?
     })
     .await
     .map_err(internal)??;
     apply_snapshot(&mut response, snap);
     Ok(Json(response))
+}
+
+/// The overview's rollup part, inside the caller's read transaction.
+fn overview_in_snapshot(
+    store: &Store,
+    q: &OverviewQuery,
+    compare: bool,
+    now: i64,
+    adult: bool,
+    source: &dyn InsightsSource,
+) -> ApiResult<OverviewResponse> {
+    let st = store.insights_state().map_err(internal)?;
+    let compacted = st.compacted_before_day * 24;
+    let first = if q.range.as_deref() == Some("all") {
+        store.first_rollup_hour().map_err(internal)?
+    } else {
+        None
+    };
+    let (w, prev) = windows(
+        window(q, now, first, compacted)?,
+        compare && q.range.as_deref() != Some("all"),
+        compacted,
+    );
+    let key = CacheKey {
+        window: w,
+        previous: prev,
+        now_h: now.div_euclid(3600),
+        adult,
+        last_flush: source.last_flush(),
+        last_recorded: source.last_recorded(),
+    };
+    if let Some(hit) = source.cache().get(&key) {
+        return Ok((*hit).clone());
+    }
+    let built = Arc::new(
+        build(
+            store,
+            source.cache(),
+            source.seal_floor(),
+            &st,
+            w,
+            prev,
+            now,
+            adult,
+        )
+        .map_err(internal)?,
+    );
+    source.cache().put(key, built.clone());
+    Ok((*built).clone())
+}
+
+/// The window and, with Compare, the one of equal length before it. When
+/// the previous one reaches a compacted day it's bucketed by day, and the
+/// current one is too, so their trends line up.
+fn windows(w: Window, compare: bool, compacted: i64) -> (Window, Option<Window>) {
+    if !compare {
+        return (w, None);
+    }
+    let prev = Window::new(w.from_h - w.span(), w.from_h, compacted);
+    if prev.grain == w.grain {
+        return (w, Some(prev));
+    }
+    // Hourly now, daily before: both by day.
+    let w = Window::new(w.from_h, w.to_h, i64::MAX);
+    (
+        w,
+        Some(Window::new(w.from_h - w.span(), w.from_h, i64::MAX)),
+    )
 }
 
 /// Trend annotations (`restart`, `stopped`, `paused`, `resumed`,
@@ -1436,6 +1627,13 @@ mod tests {
     use super::*;
 
     const NOW: i64 = 1_800_000_000 + 1800;
+    /// Nothing compacted; fetches counted since forever.
+    const ST: InsightsState = InsightsState {
+        compacted_before_day: 0,
+        last_compaction_at: 0,
+        funnel_events_since_hour: 0,
+        imported: 0,
+    };
 
     fn q(range: &str) -> OverviewQuery {
         OverviewQuery {
@@ -1447,21 +1645,21 @@ mod tests {
     #[test]
     fn ranges_normalize_to_whole_buckets() {
         let now_h = NOW / 3600;
-        let w = window(&q("24h"), NOW, None).unwrap();
+        let w = window(&q("24h"), NOW, None, 0).unwrap();
         assert_eq!((w.from_h, w.to_h, w.grain), (now_h - 23, now_h + 1, 1));
-        let w = window(&OverviewQuery::default(), NOW, None).unwrap();
+        let w = window(&OverviewQuery::default(), NOW, None, 0).unwrap();
         assert_eq!((w.span(), w.grain), (168, 1));
-        let w = window(&q("30d"), NOW, None).unwrap();
+        let w = window(&q("30d"), NOW, None, 0).unwrap();
         assert_eq!((w.span(), w.grain, w.from_h % 24), (720, 24, 0));
         assert!(w.to_h > now_h && w.to_h - now_h <= 24);
-        let w = window(&q("all"), NOW, Some(now_h - 5)).unwrap();
+        let w = window(&q("all"), NOW, Some(now_h - 5), 0).unwrap();
         assert_eq!((w.from_h, w.to_h, w.grain), (now_h - 5, now_h + 1, 1));
-        let w = window(&q("all"), NOW, Some(now_h - 1000)).unwrap();
+        let w = window(&q("all"), NOW, Some(now_h - 1000), 0).unwrap();
         assert_eq!((w.grain, w.from_h % 24), (24, 0));
-        let w = window(&q("all"), NOW, None).unwrap();
+        let w = window(&q("all"), NOW, None, 0).unwrap();
         assert_eq!(w.span(), 24);
         // A stray hour from an unset clock: at most 20 years back.
-        let w = window(&q("all"), NOW, Some(1)).unwrap();
+        let w = window(&q("all"), NOW, Some(1), 0).unwrap();
         assert!(w.span() <= MAX_SPAN_HOURS + 48, "{}", w.span());
         let custom = |from, to| OverviewQuery {
             range: Some("custom".into()),
@@ -1469,7 +1667,13 @@ mod tests {
             to,
             compare: None,
         };
-        let w = window(&custom(Some(NOW - 7200 - 5), Some(NOW + 99_999)), NOW, None).unwrap();
+        let w = window(
+            &custom(Some(NOW - 7200 - 5), Some(NOW + 99_999)),
+            NOW,
+            None,
+            0,
+        )
+        .unwrap();
         assert_eq!((w.from_h, w.to_h), (now_h - 2, now_h + 1));
         for (query, field) in [
             (q("1y"), "range"),
@@ -1487,7 +1691,7 @@ mod tests {
                 "from",
             ),
         ] {
-            let e = window(&query, NOW, None).unwrap_err();
+            let e = window(&query, NOW, None, 0).unwrap_err();
             assert_eq!(e.status(), StatusCode::BAD_REQUEST);
             assert_eq!(e.body()["error"]["field"], field, "{query:?}");
         }
@@ -1628,12 +1832,15 @@ mod tests {
             floor: None,
         };
         for w in [
-            window(&q("30d"), NOW, None).unwrap(),
-            Window::new(now_h - 40 * 24, now_h - 10 * 24),
+            window(&q("30d"), NOW, None, 0).unwrap(),
+            Window::new(now_h - 40 * 24, now_h - 10 * 24, 0),
         ] {
-            let summed = read_period(&store, &w, now_h, Some(sealed)).unwrap();
-            let direct = read_period(&store, &w, now_h, None).unwrap();
-            let (a, b) = (period(&w, now_h, &summed), period(&w, now_h, &direct));
+            let summed = read_period(&store, &w, now_h, Some(sealed), 0).unwrap();
+            let direct = read_period(&store, &w, now_h, None, 0).unwrap();
+            let (a, b) = (
+                period(&w, now_h, &summed, &ST),
+                period(&w, now_h, &direct, &ST),
+            );
             assert_eq!(a.trend, b.trend);
             assert_eq!(
                 (a.stages, a.new_searchable, a.yield_, a.p50, a.p95),
@@ -1678,6 +1885,183 @@ mod tests {
             sealed_before(now_h, Some(now_h)),
             sealed_before(now_h, None)
         );
+    }
+
+    /// A window reaching a compacted day is bucketed by day, however
+    /// short; with Compare, both windows share the grain.
+    #[test]
+    fn compacted_days_are_read_by_day() {
+        let now_h = NOW / 3600;
+        let compacted = (now_h / 24 - 31) * 24;
+        let custom = |from: i64, to: i64| OverviewQuery {
+            range: Some("custom".into()),
+            from: Some(from * 3600),
+            to: Some(to * 3600),
+            compare: None,
+        };
+        let w = window(&custom(compacted - 30, compacted + 5), NOW, None, compacted).unwrap();
+        assert_eq!(w.grain, 24);
+        assert_eq!((w.from_h % 24, w.to_h % 24), (0, 0));
+        let w = window(&custom(compacted, compacted + 5), NOW, None, compacted).unwrap();
+        assert_eq!((w.grain, w.from_h), (1, compacted));
+        let (w2, prev) = windows(w, true, compacted);
+        let prev = prev.unwrap();
+        assert_eq!((w2.grain, prev.grain), (24, 24));
+        assert_eq!(prev.to_h, w2.from_h);
+        assert_eq!(prev.span(), w2.span());
+        // Far from the boundary nothing changes.
+        let w = window(&q("24h"), NOW, None, compacted).unwrap();
+        assert_eq!(windows(w, true, compacted).0, w);
+        assert_eq!(windows(w, false, compacted), (w, None));
+    }
+
+    /// The overview's reads over compacted days equal the same reads of
+    /// the hours before compaction, fetches included; fetches before
+    /// they were counted are unknown, not 0.
+    #[test]
+    fn reads_over_compacted_days_equal_their_hours() {
+        let mut store = Store::open_in_memory(lodestar_store::StoreConfig::default()).unwrap();
+        let now_h = NOW / 3600;
+        let (mut counters, mut cohorts) = (Vec::new(), Vec::new());
+        for h in now_h - 60 * 24..now_h {
+            let k = h % 5;
+            if k == 2 {
+                continue;
+            }
+            let c = |metric, dim, key, value| Counter {
+                hour: h,
+                metric,
+                dim,
+                key,
+                value,
+            };
+            counters.extend([
+                c(codes::metric::NEWLY_SEARCHABLE, (k % 3) as u32, 0, k + 1),
+                c(codes::metric::STORED, 0, 0, k),
+                c(
+                    codes::metric::COVERAGE,
+                    codes::metric::COVERAGE_CRAWL,
+                    0,
+                    3600,
+                ),
+                c(
+                    codes::metric::COVERAGE,
+                    codes::metric::COVERAGE_INDEX,
+                    0,
+                    3000,
+                ),
+                c(codes::metric::TIME_TO_SEARCHABLE, 0, 30 + k, 3),
+                c(
+                    codes::metric::FUNNEL_EVENTS,
+                    u32::from(codes::FETCHED),
+                    0,
+                    2 + k,
+                ),
+                c(codes::metric::FUNNEL_EVENTS, u32::from(codes::LOST), 2, 1),
+            ]);
+            cohorts.extend([
+                row(h, codes::HARVESTED, 0, 6 + k),
+                row(h, codes::STORED, 0, 3),
+                row(h, codes::SEARCHABLE, 0, 2),
+                row(h, codes::LOST, (k % 3 + 1) as u8, 1),
+            ]);
+        }
+        store.add_counters(&counters).unwrap();
+        store
+            .set_gauges(&[Counter {
+                // In the day before the second range starts.
+                hour: (now_h - 50 * 24).div_euclid(24) * 24 - 24 + 7,
+                metric: codes::metric::SEARCHABLE,
+                dim: 0,
+                key: 0,
+                value: 77,
+            }])
+            .unwrap();
+        store
+            .write(&lodestar_store::WriteBatch {
+                cohorts: &cohorts,
+                ..lodestar_store::WriteBatch::default()
+            })
+            .unwrap();
+        let ranges = [
+            Window::new(now_h - 60 * 24, now_h + 1, 0),
+            Window::new(now_h - 50 * 24, now_h - 40 * 24, 0),
+            window(&q("30d"), NOW, None, 0).unwrap(),
+        ];
+        let read = |store: &Store, st: &InsightsState| {
+            let cache = OverviewCache::default();
+            let sealed = Sealed {
+                cache: &cache,
+                generation: 0,
+                floor: None,
+            };
+            ranges
+                .iter()
+                .map(|w| {
+                    let rows =
+                        read_period(store, w, now_h, Some(sealed), st.compacted_before_day * 24)
+                            .unwrap();
+                    let p = period(w, now_h, &rows, st);
+                    let names = BTreeMap::new();
+                    (
+                        p.trend.clone(),
+                        p.stages,
+                        p.fetch,
+                        p.new_searchable,
+                        p.yield_,
+                        p.p50,
+                        p.p95,
+                        funnel(&p.cohorts),
+                        segments(&rows, &p.cohorts, &names, true),
+                        searchable_before(store, w.from_h, st.compacted_before_day * 24).unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let before = read(&store, &ST);
+        let kind = |m: u32| {
+            Some(if m == codes::metric::SEARCHABLE {
+                lodestar_store::Aggregation::Last
+            } else {
+                lodestar_store::Aggregation::Sum
+            })
+        };
+        let done = store
+            .compact_rollups(lodestar_store::CompactOptions {
+                now: NOW,
+                keep_days: 30,
+                hold_from_day: None,
+                budget: std::time::Duration::from_secs(60),
+                kind: &kind,
+            })
+            .unwrap();
+        assert!(done.done && done.days >= 29, "{done:?}");
+        let st = store.insights_state().unwrap();
+        assert!(st.compacted_before_day * 24 > now_h - 32 * 24);
+        let after = read(
+            &store,
+            &InsightsState {
+                funnel_events_since_hour: 0,
+                ..st
+            },
+        );
+        assert_eq!(after, before);
+        assert_eq!(before[1].9, Some(77), "the compacted day's gauge");
+        assert!(before[0].2.is_some_and(|n| n > 0));
+        // Fetches weren't counted before `funnel_events_since_hour`.
+        let late = InsightsState {
+            funnel_events_since_hour: now_h - 10 * 24,
+            ..st
+        };
+        let rows = read_period(
+            &store,
+            &ranges[2],
+            now_h,
+            None,
+            st.compacted_before_day * 24,
+        )
+        .unwrap();
+        assert_eq!(period(&ranges[2], now_h, &rows, &late).fetch, None);
     }
 
     #[test]

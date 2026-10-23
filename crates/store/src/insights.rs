@@ -255,7 +255,7 @@ pub fn log_bucket_bounds(bucket: i64) -> (f64, f64) {
 ///
 /// At most `cap` ids above the highest recorded are covered: the id
 /// written is returned too.
-fn raise_watermark(
+pub(crate) fn raise_watermark(
     tx: &Connection,
     hour: i64,
     last_id: i64,
@@ -282,7 +282,7 @@ fn raise_watermark(
 /// Ids one `record_searchable` transaction covers at most, so a large
 /// range (the first start after an upgrade, a swap) never holds the write
 /// lock for long.
-const SEARCHABLE_CHUNK: i64 = 20_000;
+pub(crate) const SEARCHABLE_CHUNK: i64 = 20_000;
 
 /// Insights' write hook and read path (B11a): searchable time and the
 /// Searchable stage, and the indexed reads the overview is built from.
@@ -420,6 +420,14 @@ impl Store {
         cohort_rows.sort_by_key(|c| (c.cohort, c.source));
         let first_cohort = cohort_rows.first().map(|c| c.cohort);
         write(&tx, &counters, &cohort_rows, &[])?;
+        // The imported total stays exact: this range's imports, in the
+        // same transaction (the delete trigger takes them off again).
+        if imported > 0 {
+            tx.prepare_cached(
+                "UPDATE insights_state SET value = value + ?1 WHERE key = 'imported'",
+            )?
+            .execute([imported as i64])?;
+        }
         tx.commit()?;
         Ok(Some(Searchable {
             after,
@@ -565,12 +573,15 @@ impl Store {
         .collect()
     }
 
-    /// The earliest hour any rollup or cohort row holds, if any: the
-    /// start of the "all" range. Two primary-key ends.
+    /// The earliest hour any rollup or cohort row holds, hourly or daily
+    /// (a day's first hour), if any: the start of the "all" range. Four
+    /// primary-key ends.
     pub fn first_rollup_hour(&self) -> Result<Option<i64>> {
         Ok(self.conn.query_row(
             "SELECT min(coalesce((SELECT min(hour) FROM rollup_hour WHERE hour > 0), 1 << 62),
-                        coalesce((SELECT min(cohort) FROM cohort_hour WHERE cohort > 0), 1 << 62))",
+                        coalesce((SELECT min(cohort) FROM cohort_hour WHERE cohort > 0), 1 << 62),
+                        coalesce((SELECT min(day) * 24 FROM rollup_day WHERE day > 0), 1 << 62),
+                        coalesce((SELECT min(day) * 24 FROM cohort_day WHERE day > 0), 1 << 62))",
             [],
             |r| r.get::<_, i64>(0),
         )?)

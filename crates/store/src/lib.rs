@@ -21,6 +21,7 @@ mod floor;
 pub mod history;
 pub mod hot;
 mod insights;
+mod insights_days;
 mod reporting;
 mod rules;
 mod saved;
@@ -55,6 +56,10 @@ pub use hot::{Col, HotColumns, NEVER, SwarmHot};
 pub use insights::{
     CohortCount, Counter, Event, RollupBy, Searchable, SearchableCodes, UNCLASSIFIED, log_bucket,
     log_bucket_bounds,
+};
+pub use insights_days::{
+    Aggregation, CompactOptions, Compacted, InsightsState, RepairCodes, RepairOptions, Repaired,
+    repair_rollups,
 };
 pub use reporting::{QueryCount, QueryLogEntry, QueryLogging, Resolved};
 pub use rules::{ClassCorrection, ExceptionRow, MARK_CHUNK, OverrideRow, RuleRow, RuleSet};
@@ -657,8 +662,13 @@ impl Store {
         let mut deleted = false;
         for r in refiled {
             if r.filtered.held.is_some() {
-                deleted |= tx.execute("DELETE FROM torrents WHERE id = ?1", [r.id])? > 0;
-                tx.execute("INSERT INTO reindex_log (torrent_id) VALUES (?1)", [r.id])?;
+                // Cached: the delete carries Insights' trigger.
+                deleted |= tx
+                    .prepare_cached("DELETE FROM torrents WHERE id = ?1")?
+                    .execute([r.id])?
+                    > 0;
+                tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
+                    .execute([r.id])?;
             } else if r.flags != 0 {
                 let marked = tx.execute(
                     "UPDATE torrents SET flags = flags | ?2 WHERE id = ?1 AND flags & ?2 != ?2",

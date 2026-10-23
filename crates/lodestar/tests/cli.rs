@@ -1,5 +1,5 @@
 //! The real binary's maintenance commands: backup, rollback, vacuum,
-//! reindex and stats, each with its refusals.
+//! reindex, stats and rollup, each with its refusals.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -339,6 +339,66 @@ fn vacuum_compacts_offline_only() {
 }
 
 #[test]
+fn rollup_repair_recounts_offline_only() {
+    let data = Data::new();
+    let store = data.open();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    // Two torrents stored an hour ago whose rollups a crash lost.
+    store
+        .connection()
+        .execute_batch(&format!(
+            "INSERT INTO torrents (id, info_hash, name, size, piece_len, piece_count, file_count,
+                 info_size, flags, discovered_at, metadata_at, last_seen_at, first_source)
+             VALUES (1, randomblob(20), 'a', 0, 0, 0, 0, 0, 0, {t}, {t}, {t}, 0),
+                    (2, randomblob(20), 'b', 0, 0, 0, 0, 0, 0, {t}, {t}, {t}, 0);",
+            t = now - 3600
+        ))
+        .unwrap();
+    let out = data.run(&["rollup", "--repair"]);
+    status(&out, 3);
+    assert!(
+        text(&out).contains("open in another process"),
+        "{}",
+        text(&out)
+    );
+    drop(store);
+
+    let out = data.run(&["rollup", "--repair"]);
+    status(&out, 0);
+    assert!(
+        text(&out).contains("stored counts raised"),
+        "{}",
+        text(&out)
+    );
+    let stored = || -> i64 {
+        Store::open_reader(data.db(), StoreConfig::default())
+            .unwrap()
+            .connection()
+            .query_row(
+                "SELECT coalesce(sum(count), 0) FROM cohort_hour WHERE stage = 4",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(stored(), 2);
+    // Again: nothing to raise.
+    let out = data.run(&["rollup", "--repair", "--since", "400d"]);
+    status(&out, 0);
+    assert!(text(&out).contains("nothing changed"), "{}", text(&out));
+    assert_eq!(stored(), 2);
+    assert_eq!(data.marker(), "first");
+
+    status(&data.run(&["rollup"]), 2);
+    status(&data.run(&["rollup", "--repair", "--since", "90"]), 2);
+    data.journal();
+    status(&data.run(&["rollup", "--repair"]), 3);
+}
+
+#[test]
 fn reindex_marks_the_index_offline() {
     let data = Data::new();
     let out = data.run(&["stats", "--json"]);
@@ -404,7 +464,9 @@ fn bad_arguments_exit_2() {
     status(&data.run(&["vacuum", "--yes"]), 2);
     let out = data.run(&["--help"]);
     status(&out, 0);
-    for command in ["serve", "backup", "rollback", "vacuum", "reindex", "stats"] {
+    for command in [
+        "serve", "backup", "rollback", "vacuum", "reindex", "stats", "rollup",
+    ] {
         assert!(text(&out).contains(command), "{}", text(&out));
     }
 }
