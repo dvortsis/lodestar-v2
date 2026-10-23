@@ -839,6 +839,93 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/system": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The build, this installation, the restart and any pending address
+         *     change: everything About, the Overview and General show. A value this
+         *     platform can't measure is null, never 0.
+         */
+        get: operations["getSystem"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/system/address/keep": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Keeps the new HTTP address: this process is serving on it, so the
+         *     request itself shows it's reachable (whatever `Host` says: a reverse
+         *     proxy may rewrite it). `409 no_address_change` unless one is awaiting
+         *     confirmation.
+         */
+        post: operations["keepAddress"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/system/address/revert": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Goes back to the previous HTTP address now. Awaiting confirmation,
+         *     the previous value is saved again and the server restarts onto it
+         *     (`restarting`); awaiting the restart, the saved change is undone and
+         *     nothing restarts. `409 no_address_change` when there's no change.
+         */
+        post: operations["revertAddress"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/system/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restarts Lodestar: a graceful shutdown (the queue, DHT state and last
+         *     commit are saved), then the same program again. It answers first;
+         *     poll `/healthz` until it's back. `409 restart_unavailable` where it
+         *     can't restart itself, with how to restart instead.
+         */
+        post: operations["restartSystem"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/torrents/{hash}": {
         parameters: {
             query?: never;
@@ -898,6 +985,40 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description A pending HTTP-address change (§10.10.6's lockout protection). */
+        AddressChange: {
+            /**
+             * Format: int64
+             * @description Unix seconds when it reverts, while awaiting confirmation.
+             */
+            deadline: number | null;
+            /**
+             * @description What a keep-or-revert timer guards.
+             * @enum {string}
+             */
+            kind: "http_bind";
+            /** @description Where the UI was before the change. */
+            previous_url: string;
+            /** @enum {string} */
+            state: "awaiting_restart" | "awaiting_confirmation" | "reverted";
+            /** @description Where the UI is after it. */
+            url: string;
+        };
+        /**
+         * @description `POST /system/address/keep` and `/revert`: the change as it is now.
+         * @example {
+         *       "address_change": null,
+         *       "restarting": false
+         *     }
+         */
+        AddressOutcome: {
+            address_change: null | components["schemas"]["AddressChange"];
+            /**
+             * @description The server restarts on the previous address once this answer has
+             *     gone out.
+             */
+            restarting: boolean;
+        };
         /**
          * @description `event: alerts` (reserved: B9 publishes it): a saved search matched
          *     new torrents. The matches themselves come from the API.
@@ -1102,6 +1223,27 @@ export interface components {
              */
             setup_required: boolean;
         };
+        /** @description How the build was made. */
+        BuildInfo: {
+            /** @description The full commit hash; null when the build didn't know it. */
+            commit: string | null;
+            /**
+             * Format: int64
+             * @description Unix seconds: `SOURCE_DATE_EPOCH`, else the commit's date; null
+             *     when neither was known (never the time of the build, so builds
+             *     stay reproducible).
+             */
+            date: number | null;
+            /** @description `rustc -V` of the compiler that built it. */
+            rustc: string | null;
+            /** @description The target triple, e.g. `x86_64-unknown-linux-musl`. */
+            target: string;
+            /**
+             * @description The embedded UI's build id (SvelteKit's `_app/version.json`); null
+             *     when the binary embeds the stub page.
+             */
+            ui_build_id: string | null;
+        };
         /** @description One change to filtering (§20.7), tagged by `op`. */
         Change: {
             on: boolean;
@@ -1251,6 +1393,18 @@ export interface components {
              */
             password?: string | null;
         };
+        /** @description One setting changed from its default, by name only. */
+        ChangedSetting: {
+            /** @description `section.field`. */
+            name: string;
+            /**
+             * @description Where a setting's effective value comes from, lowest to highest:
+             *     the built-in default, `config.toml`, a change saved in the app, or a
+             *     `LODESTAR_*` environment variable.
+             * @enum {string}
+             */
+            source: "default" | "file" | "db" | "env";
+        };
         ClassRule: {
             adult: boolean;
             /** Format: int64 */
@@ -1394,6 +1548,32 @@ export interface components {
              * @description The same, of the non-padding files.
              */
             pct_files: number;
+        };
+        Connection: {
+            /**
+             * Format: int64
+             * @description How many are enabled (sources, lists, integrations); null for the
+             *     DHT, and for what this build doesn't have yet.
+             */
+            count: number | null;
+            /**
+             * @description Something Lodestar connects to (§10.10.13 "No telemetry, ever").
+             * @enum {string}
+             */
+            kind: "dht" | "sources" | "blocklist_subscriptions" | "integrations" | "updates" | "companions" | "workers";
+            /**
+             * Format: int64
+             * @description Unix seconds of the last contact, where it's recorded (a list's
+             *     last refresh).
+             */
+            last_checked_at: number | null;
+            /** @description The Settings screen that changes it (`/settings/<screen>`). */
+            settings: string;
+            /**
+             * @description Null for what this build doesn't have yet (updates until the
+             *     update engine, companions and workers until v0.6).
+             */
+            state: null | ("on" | "paused" | "off");
         };
         CoreRuleState: {
             action: string;
@@ -1549,6 +1729,53 @@ export interface components {
             /** @enum {string} */
             state: "running" | "paused";
         };
+        /** @description The data formats a bug report needs, and why an upgrade might reindex. */
+        DataFormats: {
+            /** @description The search index's version, `v{schema}-t{tokenizer}`. */
+            index: string;
+            rebuild: null | components["schemas"]["RebuildEvent"];
+            /**
+             * Format: int64
+             * @description The store's schema version (the last migration applied); null if
+             *     the store couldn't be read.
+             */
+            store_schema: number | null;
+        };
+        /** @description The data directory and what it holds. */
+        DataInfo: {
+            /**
+             * Format: int64
+             * @description Bytes in the cold store; null when there is none.
+             */
+            cold_bytes: number | null;
+            /**
+             * Format: int64
+             * @description Bytes in the database, its WAL and shared memory.
+             */
+            database_bytes: number | null;
+            /** @description The data directory, as configured. */
+            dir: string;
+            /**
+             * @description What's wrong with its filesystem and the safe alternative (FUSE,
+             *     a network share, Unraid's user share); null when nothing is.
+             */
+            filesystem_warning: string | null;
+            /**
+             * Format: int64
+             * @description Bytes free on its volume.
+             */
+            free_bytes: number | null;
+            /**
+             * Format: int64
+             * @description Bytes in the search index, every version included.
+             */
+            index_bytes: number | null;
+            /**
+             * Format: int64
+             * @description Bytes in the log files; null when nothing is logged to files.
+             */
+            logs_bytes: number | null;
+        };
         Decision: {
             action: string;
             rule: string;
@@ -1560,6 +1787,17 @@ export interface components {
             rule: string;
             /** @description Decided in shadow mode: recorded, not acted on. */
             shadow: boolean;
+        };
+        Deployment: {
+            /** @description The image's digest, when the image sets it. */
+            image_digest: string | null;
+            /** @description The image's tag, when the image sets it. */
+            image_tag: string | null;
+            /**
+             * @description How Lodestar is installed.
+             * @enum {string}
+             */
+            kind: "docker" | "unraid" | "windows_service" | "windows_portable" | "systemd" | "tarball" | "unknown";
         };
         Detection: {
             /** @description Corrections that say adult or not. */
@@ -1588,6 +1826,18 @@ export interface components {
              * @description Nodes across its routing tables.
              */
             routing_nodes: number;
+        };
+        /** @description The copyable diagnostics block's server half: never a value. */
+        Diagnostics: {
+            /** @description Settings that aren't at their default, and where each comes from. */
+            changed: components["schemas"]["ChangedSetting"][];
+            /** @description The logging preset; null until file logging lands. */
+            logging: string | null;
+            /**
+             * Format: int64
+             * @description Errors logged recently; null until file logging lands.
+             */
+            recent_errors: number | null;
         };
         DiffFile: {
             /** @description `/`-separated, decoded. */
@@ -2055,6 +2305,26 @@ export interface components {
             status: components["schemas"]["GroupStatus"];
             /** @description More matched than the group lists. */
             truncated: boolean;
+        };
+        /** @description The machine Lodestar runs on. */
+        HostInfo: {
+            /** @description `x86_64`, `aarch64`, … */
+            arch: string;
+            /**
+             * Format: int64
+             * @description CPU cores this process may use.
+             */
+            cpus: number | null;
+            /**
+             * Format: int64
+             * @description Memory this process may use: the machine's, or a container's
+             *     limit when lower.
+             */
+            memory_bytes: number | null;
+            /** @description `linux`, `macos`, `windows`, … */
+            os: string;
+            /** @description The IANA time zone, e.g. `Europe/Berlin`. */
+            time_zone: string | null;
         };
         /** @description `POST /classify/rules/remove`. */
         IdBody: {
@@ -2533,6 +2803,39 @@ export interface components {
          * @enum {string}
          */
         RebuildPhase: "building" | "finishing" | "swapping" | "failed" | "done";
+        /**
+         * @description `POST /system/restart`: accepted; the server restarts once this
+         *     answer has gone out.
+         * @example {
+         *       "estimated_seconds": 4,
+         *       "restarting": true
+         *     }
+         */
+        RestartAccepted: {
+            /**
+             * Format: int64
+             * @description About how long until it answers again.
+             */
+            estimated_seconds: number;
+            restarting: boolean;
+        };
+        /** @description Whether Restart now is offered (§10.10.6). */
+        RestartInfo: {
+            available: boolean;
+            /**
+             * Format: int64
+             * @description Seconds this run took from start to listening: about how long a
+             *     restart pauses crawling.
+             */
+            estimated_seconds: number;
+            /** @description When it isn't available, how to restart instead. */
+            hint: string | null;
+            /**
+             * @description How this process restarts itself.
+             * @enum {string}
+             */
+            method: "reexec" | "manual";
+        };
         /**
          * @description `event: resync`: events were missed; refetch what the page shows, then
          *     carry on with the events that follow. It has no `id:`.
@@ -3463,6 +3766,110 @@ export interface components {
             leechers: number | null;
             /** Format: int32 */
             seeders: number | null;
+        };
+        /**
+         * @description `GET /system`.
+         * @example {
+         *       "address_change": null,
+         *       "build": {
+         *         "commit": "2e64daaddf4df35b41908529eed3de8102b64e30",
+         *         "date": 1792677600,
+         *         "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+         *         "target": "x86_64-unknown-linux-musl",
+         *         "ui_build_id": "1792677600123"
+         *       },
+         *       "channel": "stable",
+         *       "connections": [
+         *         {
+         *           "count": null,
+         *           "kind": "dht",
+         *           "last_checked_at": null,
+         *           "settings": "network",
+         *           "state": "on"
+         *         }
+         *       ],
+         *       "data": {
+         *         "cold_bytes": null,
+         *         "database_bytes": 6442450944,
+         *         "dir": "/data",
+         *         "filesystem_warning": null,
+         *         "free_bytes": 107374182400,
+         *         "index_bytes": 2684354560,
+         *         "logs_bytes": null
+         *       },
+         *       "data_formats": {
+         *         "index": "v3-t1",
+         *         "rebuild": null,
+         *         "store_schema": 14
+         *       },
+         *       "deployment": {
+         *         "image_digest": null,
+         *         "image_tag": "0.5.2",
+         *         "kind": "docker"
+         *       },
+         *       "diagnostics": {
+         *         "changed": [
+         *           {
+         *             "name": "crawler.intensity",
+         *             "source": "db"
+         *           }
+         *         ],
+         *         "logging": null,
+         *         "recent_errors": null
+         *       },
+         *       "host": {
+         *         "arch": "x86_64",
+         *         "cpus": 4,
+         *         "memory_bytes": 8589934592,
+         *         "os": "linux",
+         *         "time_zone": "Europe/Berlin"
+         *       },
+         *       "repository": "https://github.com/dvortsis/lodestar-v2",
+         *       "restart": {
+         *         "available": true,
+         *         "estimated_seconds": 4,
+         *         "hint": null,
+         *         "method": "reexec"
+         *       },
+         *       "restart_required": [
+         *         "network.dht_port"
+         *       ],
+         *       "started_at": 1792677600,
+         *       "uptime_s": 86400,
+         *       "version": "0.5.2"
+         *     }
+         */
+        SystemInfo: {
+            address_change: null | components["schemas"]["AddressChange"];
+            build: components["schemas"]["BuildInfo"];
+            /**
+             * @description The release channel this build came from. `dev` is a local build.
+             * @enum {string}
+             */
+            channel: "stable" | "beta" | "nightly" | "dev";
+            /** @description Everything Lodestar connects to, each with its state. */
+            connections: components["schemas"]["Connection"][];
+            data: components["schemas"]["DataInfo"];
+            data_formats: components["schemas"]["DataFormats"];
+            deployment: components["schemas"]["Deployment"];
+            diagnostics: components["schemas"]["Diagnostics"];
+            host: components["schemas"]["HostInfo"];
+            /**
+             * @description The source repository (`Cargo.toml`'s `repository`), so a fork
+             *     links to itself.
+             */
+            repository: string;
+            restart: components["schemas"]["RestartInfo"];
+            /** @description Saved settings that apply at the next restart, as `section.field`. */
+            restart_required: string[];
+            /**
+             * Format: int64
+             * @description Unix seconds this run started.
+             */
+            started_at: number;
+            /** Format: int64 */
+            uptime_s: number;
+            version: string;
         };
         /** @description One term facet. */
         TermFacet: {
@@ -5012,6 +5419,113 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StatsResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSystem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemInfo"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    keepAddress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddressOutcome"];
+                };
+            };
+            /** @description `no_address_change`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    revertAddress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddressOutcome"];
+                };
+            };
+            /** @description `no_address_change`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    restartSystem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestartAccepted"];
+                };
+            };
+            /** @description `restart_unavailable`: restart it the way it was started (the message says how). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];

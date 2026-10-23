@@ -35,6 +35,7 @@ pub mod openapi;
 pub mod ops;
 mod search;
 pub mod settings;
+pub mod system;
 mod torrents;
 
 use std::sync::{Arc, Mutex};
@@ -82,6 +83,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(compare::routes())
         .merge(discover::routes())
         .merge(events::routes())
+        .merge(system::routes())
         .merge(openapi::routes())
         // What `auth::protected` checks sessions against.
         .layer(Extension(auth::SessionAuth(state.auth.clone())))

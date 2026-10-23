@@ -343,6 +343,8 @@ async fn errors_share_one_envelope() {
         Request::delete("/api/v1/settings/crawler")
             .body(Body::empty())
             .unwrap(),
+        get("/api/v1/system", None),
+        post("/api/v1/system/restart", None, json!({})),
     ] {
         let (status, _, body) = call(&f.app, req).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
