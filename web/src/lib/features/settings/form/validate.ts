@@ -1,10 +1,10 @@
-// Client validation from the schema (§10.10.5): type, integer, bounds, enum and the address
-// formats. The server has the final say; `log-filter` and `duration` are left to it and to
-// their widgets. Messages say what's wrong and what to do (§10.14).
+// Client validation from the schema (§10.10.5): type, integer, bounds, enum, the address
+// formats and time windows. The server has the final say; `log-filter` and `duration` are left
+// to it and to their widgets. Messages say what's wrong and what to do (§10.14).
 import { formatCount } from '$lib/format';
 import { currentLocale } from '$lib/i18n/locale.svelte';
 import { m } from '$lib/paraglide/messages.js';
-import { unitText } from './messages';
+import { unitText } from './units';
 import type { FieldSpec } from './types';
 import { JsonDraft, RESET, type Staged } from './values';
 
@@ -55,6 +55,19 @@ export function isHost(s: string): boolean {
 	if (isIPv6(s)) return true;
 	const name = s.endsWith('.') ? s.slice(0, -1) : s;
 	return name.length > 0 && name.length <= 253 && name.split('.').every((l) => HOST_LABEL.test(l));
+}
+
+const TIME_RANGE = /^([01]\d|2[0-3]):([0-5]\d)-([01]\d|2[0-3]):([0-5]\d)$/;
+
+/**
+ * A time window, `HH:MM-HH:MM` in 24-hour time (what B-update's server parses): `ok`; `same`
+ * when it starts and ends at the same minute (no time, or all of it: the server refuses it);
+ * else `bad`. An end before the start runs past midnight.
+ */
+export function timeRange(s: string): 'ok' | 'same' | 'bad' {
+	const t = TIME_RANGE.exec(s);
+	if (!t) return 'bad';
+	return t[1] === t[3] && t[2] === t[4] ? 'same' : 'ok';
 }
 
 export function isHttpUrl(s: string): boolean {
@@ -116,6 +129,11 @@ export function validate(spec: FieldSpec, value: Staged): string | undefined {
 			}
 			if (spec.format === 'url' && !isHttpUrl(value)) return m.settings_form_error_url();
 			if (spec.format === 'host' && !isHost(value)) return m.settings_form_error_host();
+			if (spec.format === 'time-range') {
+				const t = timeRange(value);
+				if (t === 'bad') return m.settings_form_error_time_range();
+				if (t === 'same') return m.settings_form_error_time_range_same();
+			}
 			return undefined;
 		}
 		case 'string-list':

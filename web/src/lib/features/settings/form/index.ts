@@ -9,7 +9,7 @@ export {
 	type SettingsIndexView,
 	type FieldGroup
 } from './schema';
-export { settingText, fieldLabel, fieldHelp, unitText } from './messages';
+export { settingText, fieldLabel, fieldHelp } from './messages';
 export { registerWidget, widgetFor } from './widgets';
 export type { WidgetProps, WidgetChoice, BuiltinWidget, FieldControlProps } from './widgets';
 export type {

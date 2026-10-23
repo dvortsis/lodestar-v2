@@ -144,6 +144,7 @@ fn every_section_reports_every_field() {
             "storage",
             "search",
             "content",
+            "updates",
             "preferences",
             "logging"
         ]
