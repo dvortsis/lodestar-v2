@@ -1030,6 +1030,12 @@
    "model": "opus",
    "notes": "owner 00:40 \"best user experience\" -> budget held on typical hardware (EPYC 7763 ref) via F-perf; #97 keeps fastest-runner ref as stopgap. Stacked on slice/F-near.",
    "session": "session_01JuPFjxS6u9KwGugz27C7KL"
+  },
+  "runner-launch-cap": {
+   "status": "approved",
+   "pr": 106,
+   "branch": "claude/zealous-lovelace-qv6e22",
+   "notes": "review MERGE 01:03; merge on green (docs/config only)"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
