@@ -129,7 +129,7 @@ pub(super) fn login_required(auth: &Auth) -> ApiError {
 
 /// A session cookie, or the trusted proxy's user header (`peer` is the
 /// TCP peer).
-pub(super) fn logged_in(auth: &Auth, headers: &HeaderMap, peer: IpAddr) -> bool {
+pub(crate) fn logged_in(auth: &Auth, headers: &HeaderMap, peer: IpAddr) -> bool {
     headers
         .get(header::COOKIE)
         .and_then(|v| v.to_str().ok())
