@@ -128,6 +128,12 @@ test.describe('the story', () => {
 });
 
 test.describe('states', () => {
+	// A route callback still awaiting route.fetch() when the page closes would throw ("Target page,
+	// context or browser has been closed") and fail a test that already passed.
+	test.afterEach(async ({ page }) => {
+		await page.unrouteAll({ behavior: 'ignoreErrors' });
+	});
+
 	test('loading shows placeholders, then the page', async ({ page, mock, go }) => {
 		let release!: () => void;
 		const gate = new Promise<void>((r) => (release = r));

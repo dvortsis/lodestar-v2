@@ -15,6 +15,11 @@
 //!   no-op when not started as root. If `exec` fails, `serve` fails, so
 //!   the process exits non-zero and the container's or service's restart
 //!   policy takes over.
+//! - **Supervised (B-update, Unix):** under the supervisor, `serve
+//!   --child` writes its request and exits with `EXIT_RESTART` after the
+//!   graceful shutdown, and the supervisor starts the same version again,
+//!   using no probation attempt. `reexec` stays for an unsupervised run
+//!   (`serve --fixture DIR`).
 //! - **Windows: `manual`** until M6 wires its hooks (a service exits with
 //!   a service-specific code for the SCM's recovery action; the portable
 //!   build starts a new copy, then exits). They keep [`Restart::requested`]
@@ -40,6 +45,8 @@ pub struct Restart {
     /// Why this run can't restart itself after all (a temporary fixture,
     /// which is deleted when the process ends).
     refused: OnceLock<String>,
+    /// `serve --child` under its supervisor: the supervisor restarts it.
+    supervised: AtomicBool,
 }
 
 /// What a restart takes when nothing has been measured yet.
@@ -54,6 +61,27 @@ impl Restart {
             started: OnceLock::new(),
             start_secs: AtomicU64::new(0),
             refused: OnceLock::new(),
+            supervised: AtomicBool::new(false),
+        }
+    }
+
+    /// This run is the supervisor's child (`main.rs`, before
+    /// `Services::start`): a restart is the supervisor's, so it's
+    /// available on any Unix and reported as `supervised`.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub fn set_supervised(&self) {
+        self.supervised.store(true, Ordering::SeqCst);
+    }
+
+    pub fn supervised(&self) -> bool {
+        self.supervised.load(Ordering::SeqCst)
+    }
+
+    fn method(&self) -> RestartMethod {
+        if self.supervised() {
+            RestartMethod::Supervised
+        } else {
+            self.method
         }
     }
 
@@ -101,7 +129,10 @@ impl Restart {
     }
 
     pub fn available(&self) -> bool {
-        self.method == RestartMethod::Reexec && self.refused.get().is_none()
+        matches!(
+            self.method(),
+            RestartMethod::Reexec | RestartMethod::Supervised
+        ) && self.refused.get().is_none()
     }
 
     pub fn info(&self) -> RestartInfo {
@@ -115,7 +146,7 @@ impl Restart {
             estimated_seconds: self.estimated_seconds(),
             hint,
             method: if available {
-                self.method
+                self.method()
             } else {
                 RestartMethod::Manual
             },
@@ -180,7 +211,7 @@ pub fn reexec() -> std::io::Error {
 /// upgrade), Linux names the running one `<path> (deleted)`: run what's
 /// installed at `<path>` now, or else the running image itself.
 #[cfg(unix)]
-fn program(
+pub(crate) fn program(
     exe: std::path::PathBuf,
     exists: impl Fn(&std::path::Path) -> bool,
 ) -> std::path::PathBuf {
@@ -236,6 +267,15 @@ mod tests {
         let info = r.info();
         assert!(info.available && info.hint.is_none());
         assert_eq!(info.estimated_seconds, DEFAULT_ESTIMATE_SECS);
+    }
+
+    #[test]
+    fn a_supervised_child_restarts_through_its_supervisor() {
+        let r = Restart::new(RestartMethod::Manual);
+        r.set_supervised();
+        let info = r.info();
+        assert!(info.available && info.hint.is_none());
+        assert_eq!(info.method, RestartMethod::Supervised);
     }
 
     #[test]

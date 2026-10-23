@@ -34,9 +34,11 @@
 		testid: string;
 		/** Show the column headings (more than one column, or a column with its own name). */
 		headed?: boolean;
+		/** The column that will be applied, marked "(chosen)" (the CSX-5 strengths). */
+		chosen?: string;
 	}
 
-	let { caption, columns, testid, headed = columns.length > 1 }: Props = $props();
+	let { caption, columns, testid, headed = columns.length > 1, chosen }: Props = $props();
 
 	const labels: Record<(typeof PREVIEW_ROWS)[number], () => string> = {
 		quarantine: m.filters_flows_row_quarantine,
@@ -66,7 +68,9 @@
 			<tr>
 				<td></td>
 				{#each columns as c (c.key)}
-					<th scope="col" class="text-end font-medium">{c.label}</th>
+					<th scope="col" class="text-end font-medium" data-testid="{testid}-{c.key}-heading">
+						{c.key === chosen ? m.filters_flows_chosen({ label: c.label }) : c.label}
+					</th>
 				{/each}
 			</tr>
 		</thead>

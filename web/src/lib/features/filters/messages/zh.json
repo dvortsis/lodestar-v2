@@ -14,5 +14,11 @@
 	"filters_flows_done_title": "变更内容",
 	"filters_flows_col_previewed": "预览",
 	"filters_flows_col_applied": "已应用",
-	"filters_flows_adult_confirm": "显示成人内容"
+	"filters_flows_adult_confirm": "显示成人内容",
+	"filters_flows_strength": "强度",
+	"filters_flows_action": "操作",
+	"filters_flows_action_hide": "隐藏",
+	"filters_flows_action_quarantine": "隔离",
+	"filters_flows_action_drop": "丢弃",
+	"filters_flows_reveal_apply": "显示"
 }
