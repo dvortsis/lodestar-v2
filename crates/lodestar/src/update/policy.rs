@@ -250,7 +250,7 @@ fn level_allows(setting: Level, release: ReleaseLevel) -> bool {
 /// can install (not in `image` mode). The window, the wait, the level and
 /// a pause don't apply. Confirming a release's manual steps is the
 /// route's check (`confirm_manual`), not this one's.
-#[cfg_attr(not(test), allow(dead_code))] // `POST /updates/install` (part 4).
+#[cfg_attr(not(test), allow(dead_code))] // `POST /updates/install` (part 5).
 pub fn install_now(i: &Inputs<'_>, version: &Version) -> Result<(), Refusal> {
     let Some(r) = i.releases.iter().find(|r| r.version == *version) else {
         return Err(Refusal::UnknownVersion);
@@ -274,7 +274,7 @@ pub fn install_now(i: &Inputs<'_>, version: &Version) -> Result<(), Refusal> {
 }
 
 /// Why Install now refuses.
-#[cfg_attr(not(test), allow(dead_code))] // `POST /updates/install` (part 4).
+#[cfg_attr(not(test), allow(dead_code))] // `POST /updates/install` (part 5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refusal {
     UnknownVersion,

@@ -6,8 +6,10 @@
 //!   the image's own code as its child.
 //! - **Part 3 of 5:** the pure pieces the update engine is built on: the
 //!   window, the policy, the trust file and the signed check's fetch.
-//!   Nothing calls them until part 4 (the engine and `/updates`); part 5
-//!   installs.
+//! - **Part 4 of 5:** the [`engine`] in `serve --child` (the scheduled and
+//!   manual checks, the policy over what they found), `/updates`, the
+//!   `updates` SSE topic and `/system`'s Updates row; [`unavailable`]
+//!   answers for a fixture and Windows. Part 5 installs.
 //!
 //! `<data>/bin`'s files and who writes them are in [`layout`]; the exit
 //! codes and the request file in [`control`]; probation's accounting in
@@ -99,7 +101,7 @@ pub fn start(
     events: &std::sync::Arc<lodestar_api::events::EventHub>,
 ) -> Started {
     let version = env!("CARGO_PKG_VERSION").to_string();
-    let unavailable = |why: &'static str| Started {
+    let unavailable = |why: lodestar_api::updates::UpdatesUnavailable| Started {
         api: std::sync::Arc::new(unavailable::Unavailable {
             why,
             version: version.clone(),
@@ -108,17 +110,17 @@ pub fn start(
         task: None,
     };
     if crate::fixture::active() {
-        return unavailable("fixture");
+        return unavailable(lodestar_api::updates::UpdatesUnavailable::Fixture);
     }
     #[cfg(not(unix))]
     {
         let _ = (config, settings, events);
-        unavailable("windows_helper")
+        unavailable(lodestar_api::updates::UpdatesUnavailable::WindowsHelper)
     }
     #[cfg(unix)]
     {
         let Ok(fetch) = check::Guarded::new() else {
-            return unavailable("network");
+            return unavailable(lodestar_api::updates::UpdatesUnavailable::Network);
         };
         let child = probation::current();
         let hint = child.and_then(|c| c.hint.as_ref());

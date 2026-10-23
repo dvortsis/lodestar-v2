@@ -9,6 +9,31 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+/// Why this process has no update engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+#[schema(example = "windows_helper")]
+pub enum UpdatesUnavailable {
+    /// A fixture: served offline, never checking.
+    Fixture,
+    /// The update client couldn't be built.
+    Network,
+    /// Windows: checking and installing come with the Windows helper
+    /// (E-M6), so the screen says that instead of offering updates.
+    WindowsHelper,
+}
+
+impl UpdatesUnavailable {
+    /// Its wire name, as the error message and `capability.reason` use it.
+    pub fn code(self) -> &'static str {
+        match self {
+            UpdatesUnavailable::Fixture => "fixture",
+            UpdatesUnavailable::Network => "network",
+            UpdatesUnavailable::WindowsHelper => "windows_helper",
+        }
+    }
+}
+
 /// The check's state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -61,9 +86,10 @@ pub struct Running {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Capability {
     pub can_install: bool,
-    /// Why not: `not_supervised`, `dev_build`, `windows_helper`,
-    /// `noexec`, `not_writable`, `package_managed`, `image_mode`,
-    /// `trust_damaged`, `channel_unavailable` or `not_built_yet`. Install
+    /// Why not: `not_supervised`, `dev_build`, `noexec`, `not_writable`,
+    /// `package_managed`, `image_mode`, `trust_damaged`,
+    /// `channel_unavailable` or `not_built_yet`; or, when `unavailable`
+    /// is set, the same reason (`windows_helper`, …). Install
     /// automatically then behaves as Check and notify.
     #[schema(required = true)]
     pub reason: Option<String>,
@@ -176,9 +202,9 @@ pub struct HistoryEntry {
 /// `GET /updates`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct UpdatesStatus {
-    /// Why updates aren't available at all (`fixture`); null otherwise.
+    /// Why updates aren't available at all; null otherwise.
     #[schema(required = true)]
-    pub unavailable: Option<String>,
+    pub unavailable: Option<UpdatesUnavailable>,
     pub status: CheckStatus,
     pub running: Running,
     pub capability: Capability,

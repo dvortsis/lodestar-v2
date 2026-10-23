@@ -5,19 +5,19 @@
 use lodestar_api::ops::BoxFuture;
 use lodestar_api::updates::{
     Capability, CheckState, CheckStatus, Policy, RollbackInfo, Running, UpdatesApi, UpdatesError,
-    UpdatesStatus,
+    UpdatesStatus, UpdatesUnavailable,
 };
 
 #[derive(Debug, Clone)]
 pub struct Unavailable {
-    pub why: &'static str,
+    pub why: UpdatesUnavailable,
     pub version: String,
 }
 
 impl Unavailable {
     fn status(&self) -> UpdatesStatus {
         UpdatesStatus {
-            unavailable: Some(self.why.to_string()),
+            unavailable: Some(self.why),
             status: CheckStatus {
                 state: CheckState::Idle,
                 checked_at: None,
@@ -34,7 +34,7 @@ impl Unavailable {
             },
             capability: Capability {
                 can_install: false,
-                reason: Some(self.why.to_string()),
+                reason: Some(self.why.code().to_string()),
             },
             policy: Policy {
                 mode: "off".into(),
@@ -60,7 +60,7 @@ impl Unavailable {
     }
 
     fn refused<T: Send + 'static>(&self) -> BoxFuture<'_, Result<T, UpdatesError>> {
-        let why = self.why.to_string();
+        let why = self.why;
         Box::pin(async move { Err(UpdatesError::Unavailable(why)) })
     }
 }
@@ -85,5 +85,44 @@ impl UpdatesApi for Unavailable {
 
     fn clear_history(&self) -> BoxFuture<'_, Result<UpdatesStatus, UpdatesError>> {
         self.refused()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Windows' answer (`start` off Unix): `unavailable: "windows_helper"`,
+    /// nothing installable, and every write refused with that reason.
+    #[tokio::test]
+    async fn windows_answers_windows_helper() {
+        let u = Unavailable {
+            why: UpdatesUnavailable::WindowsHelper,
+            version: "0.5.3".into(),
+        };
+        let json = serde_json::to_value(UpdatesApi::status(&u).await).unwrap();
+        assert_eq!(json["unavailable"], "windows_helper");
+        assert_eq!(json["capability"]["can_install"], false);
+        assert_eq!(json["capability"]["reason"], "windows_helper");
+        assert_eq!(json["running"]["version"], "0.5.3");
+        assert_eq!(json["releases"], serde_json::json!([]));
+        assert_eq!(
+            u.check().await.unwrap_err(),
+            UpdatesError::Unavailable(UpdatesUnavailable::WindowsHelper)
+        );
+        assert!(u.skip("0.5.4".into()).await.is_err());
+        assert!(u.pause(7).await.is_err());
+        assert!(u.clear_history().await.is_err());
+    }
+
+    #[test]
+    fn every_reason_has_its_wire_name() {
+        for why in [
+            UpdatesUnavailable::Fixture,
+            UpdatesUnavailable::Network,
+            UpdatesUnavailable::WindowsHelper,
+        ] {
+            assert_eq!(serde_json::to_value(why).unwrap(), why.code());
+        }
     }
 }

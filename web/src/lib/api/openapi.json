@@ -7472,7 +7472,7 @@
               "string",
               "null"
             ],
-            "description": "Why not: `not_supervised`, `dev_build`, `windows_helper`,\n`noexec`, `not_writable`, `package_managed`, `image_mode`,\n`trust_damaged`, `channel_unavailable` or `not_built_yet`. Install\nautomatically then behaves as Check and notify."
+            "description": "Why not: `not_supervised`, `dev_build`, `noexec`, `not_writable`,\n`package_managed`, `image_mode`, `trust_damaged`,\n`channel_unavailable` or `not_built_yet`; or, when `unavailable`\nis set, the same reason (`windows_helper`, …). Install\nautomatically then behaves as Check and notify."
           }
         }
       },
@@ -18279,13 +18279,27 @@
             "$ref": "#/components/schemas/CheckStatus"
           },
           "unavailable": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Why updates aren't available at all (`fixture`); null otherwise."
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/UpdatesUnavailable",
+                "description": "Why updates aren't available at all; null otherwise."
+              }
+            ]
           }
         }
+      },
+      "UpdatesUnavailable": {
+        "type": "string",
+        "description": "Why this process has no update engine.",
+        "enum": [
+          "fixture",
+          "network",
+          "windows_helper"
+        ],
+        "example": "windows_helper"
       },
       "UserItemDetail": {
         "type": "object",

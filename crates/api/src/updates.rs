@@ -27,7 +27,7 @@ use crate::auth;
 use crate::dto::error::ErrorEnvelope;
 pub use crate::dto::updates::{
     Blocked, Capability, CheckState, CheckStatus, HistoryEntry, PauseRequest, PendingInstall,
-    Policy, ReleaseInfo, RollbackInfo, Running, SkipRequest, UpdatesStatus,
+    Policy, ReleaseInfo, RollbackInfo, Running, SkipRequest, UpdatesStatus, UpdatesUnavailable,
 };
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{Json as JsonBody, same_origin_json};
@@ -58,8 +58,8 @@ pub enum UpdatesError {
     RateLimited { retry_after: u64 },
     /// The version isn't one a check found.
     UnknownVersion,
-    /// Updates aren't available in this process (`fixture`).
-    Unavailable(String),
+    /// Updates aren't available in this process.
+    Unavailable(UpdatesUnavailable),
     /// A value the route doesn't take; the message says which.
     Invalid {
         field: &'static str,
@@ -85,7 +85,7 @@ impl From<UpdatesError> for ApiError {
             UpdatesError::Unavailable(why) => ApiError::new(
                 StatusCode::CONFLICT,
                 "updates_unavailable",
-                format!("Updates aren't available here ({why})."),
+                format!("Updates aren't available here ({}).", why.code()),
             ),
             UpdatesError::Invalid { field, message } => {
                 ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "invalid_value", message)

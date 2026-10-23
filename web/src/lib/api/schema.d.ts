@@ -2399,9 +2399,10 @@ export interface components {
         Capability: {
             can_install: boolean;
             /**
-             * @description Why not: `not_supervised`, `dev_build`, `windows_helper`,
-             *     `noexec`, `not_writable`, `package_managed`, `image_mode`,
-             *     `trust_damaged`, `channel_unavailable` or `not_built_yet`. Install
+             * @description Why not: `not_supervised`, `dev_build`, `noexec`, `not_writable`,
+             *     `package_managed`, `image_mode`, `trust_damaged`,
+             *     `channel_unavailable` or `not_built_yet`; or, when `unavailable`
+             *     is set, the same reason (`windows_helper`, …). Install
              *     automatically then behaves as Check and notify.
              */
             reason: string | null;
@@ -7336,9 +7337,14 @@ export interface components {
             rollback: components["schemas"]["RollbackInfo"];
             running: components["schemas"]["Running"];
             status: components["schemas"]["CheckStatus"];
-            /** @description Why updates aren't available at all (`fixture`); null otherwise. */
-            unavailable: string | null;
+            unavailable: null | components["schemas"]["UpdatesUnavailable"];
         };
+        /**
+         * @description Why this process has no update engine.
+         * @example windows_helper
+         * @enum {string}
+         */
+        UpdatesUnavailable: "fixture" | "network" | "windows_helper";
         /**
          * @description `GET /user-items/{hash}`: the marks and the collections it is in.
          * @example {
