@@ -549,8 +549,11 @@ pub fn chip_nodes(word: &str) -> Vec<Node> {
     if let Some(node) = release_chip(word, &lower) {
         out.push(node);
     }
+    // Extensions, with a letter in them: `300`, `007`, `720` are numbers
+    // (and split-archive parts), not extensions anyone types.
     if lower.len() <= 10
         && lower.bytes().all(|b| b.is_ascii_alphanumeric())
+        && lower.bytes().any(|b| b.is_ascii_alphabetic())
         && lodestar_classify::ext::category_of(&lower) != Category::Other
     {
         out.push(Node::Ext {
@@ -582,11 +585,28 @@ const CHIP_KEYS: [(TagKey, &str); 5] = [
 /// `word` as one keyword value, when it's that value and nothing else:
 /// read as the release parser reads `A [word]`, the title must stay `A`
 /// and the only field it sets must be one of [`CHIP_KEYS`] (with the
-/// channels an audio codec carries, `dd5.1`). So a token with more in it
-/// (`Naruto.S01E02.1080p`, `x265,naruto`, `naruto\u{3000}1080p`) is no chip:
-/// it would lose the rest of its text.
+/// channels an audio codec carries, `dd5.1`), with one value. So a token
+/// with more in it (`Naruto.S01E02.1080p`, `x265,naruto`, `ita.eng`,
+/// `x264.x265`, `naruto\u{3000}1080p`) is no chip: it would lose the rest
+/// of its text.
 fn release_chip(word: &str, lower: &str) -> Option<Node> {
     if word.chars().any(|c| c.is_whitespace() && !c.is_ascii()) {
+        return None;
+    }
+    // Two values joined (`x264.x265`, `flac-mp3`) aren't one: each piece
+    // would chip on its own. `h.264`, `dts-hd.ma` and `dd5.1` have one
+    // such piece at most.
+    let pieces: Vec<&str> = word
+        .split(['.', '-', '_', '+'])
+        .filter(|p| !p.is_empty())
+        .collect();
+    if pieces.len() > 1
+        && pieces
+            .iter()
+            .filter(|p| release_chip(p, &p.to_lowercase()).is_some())
+            .count()
+            > 1
+    {
         return None;
     }
     let parsed = lodestar_release_parser::parse(&format!("A [{word}]"));
@@ -595,7 +615,11 @@ fn release_chip(word: &str, lower: &str) -> Option<Node> {
     }
     let fields = parsed.fields();
     let mut found = None;
-    for (k, _) in fields.iter().filter(|(k, _)| *k != "title") {
+    for (k, v) in fields.iter().filter(|(k, _)| *k != "title") {
+        // A list (`ita.eng` is `en, it`) is more than one value.
+        if v.contains(", ") {
+            return None;
+        }
         match CHIP_KEYS.iter().find(|(_, rk)| rk == k) {
             Some((key, _)) if found.is_none() => found = Some(*key),
             None if *k == "channels" => {}
