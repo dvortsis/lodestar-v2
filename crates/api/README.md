@@ -79,3 +79,20 @@ cd web && npm run api:types             # writes src/lib/api/schema.d.ts
 ```
 
 CI regenerates both and fails on any diff (`ci.yml` checks the JSON, `web.yml` checks the types), so commit both files with the change that caused them. Never merge them by hand; regenerate them after a merge instead.
+
+## Confirmations, keys and proxy auth (B12)
+
+These primitives live in `src/auth.rs`, `src/auth/` and `src/keys.rs`. Later slices use them rather than rolling their own.
+
+- **Fresh password (§20.11).** A route whose change needs the password calls `auth::require_fresh_password(&auth, ip, body.password.as_deref())` on the blocking pool, or `auth::confirm_fresh_password(&auth, ip, body.password).await` from a handler.
+  - No password (absent or `""`): `428 confirm_required` with `field: "password"`. No attempt is spent.
+  - A wrong one: `401 bad_password` with `field: "password"`.
+  - Too many attempts: `429 rate_limited`, from the same per-IP bucket as login.
+  - Nothing is remembered between calls, and the password never reaches a log. Proxy-header sign-in doesn't skip it.
+  - Check the request's other fields first, so a bad value is reported before the password is asked for. A 428 that carries more (filters' `assessment`) builds on `auth::confirm_required()`.
+- **Routes keys may reach.** Wrap them in `auth::key_or_session(routes, keys::scope::TORZNAB)` (or `SEARCH`), or `auth::feed_token(routes)` for RSS. Everything else stays in `auth::protected`, which no key passes.
+  - The handler reads `Extension<auth::Access>`: `Session`, `Key { id, scopes }` or `Feed { id, saved_search_id }`.
+  - A feed handler answers 404 unless `access.reaches_feed(search_id)`.
+  - Key requests are GET or HEAD only, and any `Set-Cookie` they'd get is dropped.
+- **Scopes** are `keys::scope::{SEARCH, TORZNAB, FEEDS}`: bits stored with the key, never reused. A new scope takes a new bit and a `dto::keys::KeyScope` variant.
+- **Client addresses.** `ClientIp` is the forwarded client behind a trusted proxy and the TCP peer otherwise. Use it for anything rate-limited per client. A test router mounted outside `router()` gets the guards' state from `auth::mount(routes, state)`.

@@ -31,6 +31,7 @@ pub mod events;
 pub mod extract;
 mod facets;
 pub mod filters;
+pub mod keys;
 pub mod openapi;
 pub mod ops;
 mod search;
@@ -63,6 +64,10 @@ pub struct ApiState {
     pub settings: Option<Arc<dyn settings::SettingsApi>>,
     /// `None` when no pipeline runs (tests, tools).
     pub ops: Option<Arc<dyn ops::OpsApi>>,
+    /// A read-write connection for user data: saved searches, user
+    /// items, collections and API keys (§7, §12). `None` when not
+    /// served (tests, tools).
+    pub user_data: Option<Arc<Mutex<Store>>>,
     /// "Show adult content" (§20.9), followed live; hidden by default.
     pub adult: AdultVisibility,
 }
@@ -82,9 +87,10 @@ pub fn router(state: ApiState) -> Router {
         .merge(compare::routes())
         .merge(discover::routes())
         .merge(events::routes())
+        .merge(keys::routes())
         .merge(openapi::routes())
         // What `auth::protected` checks sessions against.
-        .layer(Extension(auth::SessionAuth(state.auth.clone())))
+        .layer(Extension(auth::SessionAuth::of(&state)))
         // For open routes; `auth::protected` sets its own behind the
         // session guard, and this doesn't replace it.
         .method_not_allowed_fallback(error::wrong_method)

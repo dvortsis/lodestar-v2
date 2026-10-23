@@ -159,6 +159,14 @@ impl Services {
             )
             .map_err(|e| format!("loading auth: {e}"))?,
         );
+        // The way back in after a proxy change locks you out (§12).
+        let proxy_env = std::env::var(lodestar_api::auth::PROXY_AUTH_ENV).ok();
+        if auth.apply_proxy_override(proxy_env.as_deref()) {
+            tracing::warn!(
+                "{} is set: trusted-proxy sign-in is off for this run",
+                lodestar_api::auth::PROXY_AUTH_ENV
+            );
+        }
         if let Some(token) = auth.setup_token() {
             // §12: whoever can read the logs claims the instance.
             tracing::warn!(
@@ -217,6 +225,13 @@ impl Services {
             search_state.clone(),
             config.data_dir.clone(),
         ));
+        // User data (§7, §12) over its own read-write connection.
+        let user_data = {
+            let (db, store_config) = (config.db_path(), config.store_config());
+            tokio::task::spawn_blocking(move || Store::open(&db, store_config))
+                .await?
+                .map_err(|e| format!("opening user data: {e}"))?
+        };
         let api = lodestar_api::ApiState {
             auth,
             index: search.clone(),
@@ -224,6 +239,7 @@ impl Services {
             filters: Some(filters),
             settings: Some(settings.clone()),
             ops: Some(ops),
+            user_data: Some(Arc::new(Mutex::new(user_data))),
             adult: settings::content::follow(settings.subscribe()),
         };
         settings::log::follow(settings.subscribe());

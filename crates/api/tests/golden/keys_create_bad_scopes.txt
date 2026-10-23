@@ -1,0 +1,2 @@
+400
+{"error":{"code":"bad_scopes","field":"scopes","message":"Choose at least one thing the key may reach."}}
