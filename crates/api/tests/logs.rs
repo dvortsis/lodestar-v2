@@ -590,16 +590,32 @@ async fn a_client_that_never_reads_slows_nothing_and_gets_one_resync() {
         start.elapsed() < Duration::from_secs(10),
         "the writer never waits"
     );
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    s.drain(Duration::from_secs(3)).await;
+    // Read until the stream has accounted for (nearly) every line, as
+    // delivered or reported lost, instead of assuming a fixed window is enough.
+    let account = |s: &Conn| {
+        let lost: u64 = s
+            .data("resync")
+            .iter()
+            .map(|r| r["skipped"].as_u64().unwrap() + r["evicted"].as_u64().unwrap())
+            .sum();
+        (s.ids().len() as u64, lost)
+    };
+    let deadline = Instant::now() + SOON;
+    loop {
+        s.drain(Duration::from_millis(300)).await;
+        let (got, lost) = account(&s);
+        if got + lost >= 39_000 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "after {SOON:?} saw {got} delivered + {lost} lost"
+        );
+    }
     let resyncs = s.data("resync");
     assert!(!resyncs.is_empty(), "it fell behind");
     assert!(resyncs.iter().all(|r| r["reason"] == "lagged"));
-    let lost: u64 = resyncs
-        .iter()
-        .map(|r| r["skipped"].as_u64().unwrap() + r["evicted"].as_u64().unwrap())
-        .sum();
-    let got = s.ids().len() as u64;
+    let (got, lost) = account(&s);
     assert!(got < 40_000, "{got}");
     assert!(got + lost >= 39_000, "{got} + {lost}");
 }
@@ -673,9 +689,17 @@ async fn a_stream_ends_with_its_session_and_on_close() {
         .unwrap();
     let mut p = Conn::open(addr, "/api/v1/logs/stream", &[("remote-user", "admin")]).await;
     p.until("retry:", SOON).await;
-    // Lets keep-alives accumulate: the assertion below counts three, and
-    // they are timer-driven, so this is time passing for the code under test.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Keep-alives are timer-driven: read until three have arrived.
+    let deadline = Instant::now() + SOON;
+    while p.text.matches(": keep-alive").count() < 3 {
+        assert!(
+            Instant::now() < deadline,
+            "after {SOON:?} saw {} keep-alives: {}",
+            p.text.matches(": keep-alive").count(),
+            p.text
+        );
+        p.drain(Duration::from_millis(100)).await;
+    }
     let n = fake.push(Level::Info, "still here");
     p.until(&format!("id: {EPOCH}-{n}"), SOON).await;
     assert!(p.text.matches(": keep-alive").count() >= 3, "{}", p.text);
@@ -774,8 +798,15 @@ async fn a_download_holds_a_read_and_close_ends_it_unread() {
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "a download too");
     // Their producers are stuck on full buffers; closing ends both and
     // lets their reads go, with neither client reading.
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(fake.transport().reads_held(), 2);
+    let start = Instant::now();
+    while fake.transport().reads_held() != 2 {
+        assert!(
+            start.elapsed() < SOON,
+            "reads held: {}",
+            fake.transport().reads_held()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     fake.transport().close();
     let start = Instant::now();
     while fake.transport().reads_held() > 0 {

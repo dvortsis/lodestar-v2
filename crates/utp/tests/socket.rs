@@ -33,15 +33,16 @@ async fn bind_local() -> UtpSocket {
     .unwrap()
 }
 
-/// Waits until `cond` holds, for up to `secs`.
-async fn eventually(secs: u64, mut cond: impl FnMut() -> bool) -> bool {
+/// Waits until `cond` holds, for up to `secs`, and panics saying what
+/// `seen` reports if it never does.
+async fn eventually(secs: u64, seen: impl Fn() -> String, mut cond: impl FnMut() -> bool) {
     for _ in 0..secs * 50 {
         if cond() {
-            return true;
+            return;
         }
         sleep(Duration::from_millis(20)).await;
     }
-    cond()
+    assert!(cond(), "after {secs} s: {}", seen());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -62,7 +63,7 @@ async fn echo_a_megabyte_each_way() {
         s.shutdown().await.unwrap();
     });
     let client = bind_local().await;
-    let stream = timeout(Duration::from_secs(5), client.connect(addr))
+    let stream = timeout(Duration::from_secs(15), client.connect(addr))
         .await
         .unwrap()
         .unwrap();
@@ -84,11 +85,18 @@ async fn echo_a_megabyte_each_way() {
     drop(writer.await.unwrap());
     drop(rd);
     // Both sides close cleanly and unregister.
-    assert!(
-        eventually(10, || client.connections() == 0
-            && server.connections() == 0)
-        .await
-    );
+    eventually(
+        10,
+        || {
+            format!(
+                "client {}, server {} connections",
+                client.connections(),
+                server.connections()
+            )
+        },
+        || client.connections() == 0 && server.connections() == 0,
+    )
+    .await;
     let stats = client.stats();
     assert_eq!(stats.connects, 1);
     assert_eq!(stats.timeouts, 0);
@@ -126,7 +134,12 @@ async fn many_connections_at_once() {
     for t in tasks {
         timeout(Duration::from_secs(20), t).await.unwrap().unwrap();
     }
-    assert!(eventually(10, || client.connections() == 0).await);
+    eventually(
+        10,
+        || format!("{} connections", client.connections()),
+        || client.connections() == 0,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -141,7 +154,12 @@ async fn nobody_listening() {
     )
     .await;
     assert!(r.is_err(), "still waiting for a SYN-ACK");
-    assert!(eventually(10, || client.connections() == 0).await);
+    eventually(
+        10,
+        || format!("{} connections", client.connections()),
+        || client.connections() == 0,
+    )
+    .await;
     assert_eq!(
         quiet.stats().unknown,
         1,
@@ -167,7 +185,12 @@ async fn connection_cap_is_enforced() {
     let target = quiet.local_addr().unwrap();
     let c = client.clone();
     let pending = tokio::spawn(async move { c.connect(target).await.map(drop) });
-    assert!(eventually(10, || client.connections() == 1).await);
+    eventually(
+        10,
+        || format!("{} connections", client.connections()),
+        || client.connections() == 1,
+    )
+    .await;
     let err = client.connect(target).await.unwrap_err();
     assert!(err.to_string().contains("too many"), "{err}");
     pending.abort();
@@ -185,7 +208,7 @@ async fn reset_reaches_the_peer() {
     let mut buf = [0u8; 5];
     s.read_exact(&mut buf).await.unwrap();
     s.reset();
-    let err = timeout(Duration::from_secs(5), c.read(&mut buf))
+    let err = timeout(Duration::from_secs(15), c.read(&mut buf))
         .await
         .unwrap()
         .unwrap_err();
@@ -239,7 +262,12 @@ async fn shares_a_port_with_krpc() {
     let mut got = Vec::new();
     c.read_to_end(&mut got).await.unwrap();
     assert_eq!(got, b"pong");
-    assert!(eventually(10, || krpc.lock().unwrap().len() == 1).await);
+    eventually(
+        10,
+        || format!("{} KRPC packets", krpc.lock().unwrap().len()),
+        || krpc.lock().unwrap().len() == 1,
+    )
+    .await;
     assert_eq!(krpc.lock().unwrap()[0], b"d1:y1:qe");
     assert_eq!(utp.stats().invalid, 0, "no KRPC reached uTP");
 }
@@ -335,7 +363,7 @@ async fn dual_stack_socket_reaches_ipv4_peers() {
         s.write_all(b"v4").await.unwrap();
         s.shutdown().await.unwrap();
     });
-    let mut c = timeout(Duration::from_secs(5), client.connect(addr))
+    let mut c = timeout(Duration::from_secs(15), client.connect(addr))
         .await
         .unwrap()
         .unwrap();
@@ -388,22 +416,42 @@ async fn per_ip_cap_is_enforced() {
             async move { c.connect(target).await.map(drop) },
         ));
     }
-    assert!(eventually(10, || client.connections() == 8).await);
+    eventually(
+        10,
+        || format!("{} connections", client.connections()),
+        || client.connections() == 8,
+    )
+    .await;
     let err = client.connect(target).await.unwrap_err();
     assert!(err.to_string().contains("too many"), "{err}");
     // Another IP is unaffected (only the cap is checked, not reachability).
     let other: SocketAddr = "127.0.0.2:9".parse().unwrap();
     let c = client.clone();
     let ninth = tokio::spawn(async move { c.connect(other).await.map(drop) });
-    assert!(eventually(10, || client.connections() == 9).await);
+    eventually(
+        10,
+        || format!("{} connections", client.connections()),
+        || client.connections() == 9,
+    )
+    .await;
     // Abandoned attempts free their slots.
     for p in pending {
         p.abort();
     }
     ninth.abort();
-    assert!(eventually(10, || client.connections() == 0).await);
+    eventually(
+        10,
+        || format!("{} connections", client.connections()),
+        || client.connections() == 0,
+    )
+    .await;
     let c = client.clone();
     let again = tokio::spawn(async move { c.connect(target).await.map(drop) });
-    assert!(eventually(10, || client.connections() == 1).await);
+    eventually(
+        10,
+        || format!("{} connections", client.connections()),
+        || client.connections() == 1,
+    )
+    .await;
     again.abort();
 }

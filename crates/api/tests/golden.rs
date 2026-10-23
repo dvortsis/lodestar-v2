@@ -757,6 +757,7 @@ fn quarantine(f: &Fixture, hashes: &[[u8; 20]], rule: &str) {
 
 async fn job_until_finished(f: &Fixture, c: Option<&str>, job: &Value) -> Request<Body> {
     let uri = format!("/api/v1/filters/preview/jobs/{job}");
+    let mut last = Value::Null;
     for _ in 0..1500 {
         let resp = f.app.clone().oneshot(get(&uri, c)).await.unwrap();
         let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
@@ -766,9 +767,10 @@ async fn job_until_finished(f: &Fixture, c: Option<&str>, job: &Value) -> Reques
         if v["state"] != "running" {
             return get(&uri, c);
         }
+        last = v;
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    panic!("the preview job never finished");
+    panic!("the preview job never finished; last saw {last}");
 }
 
 #[tokio::test]

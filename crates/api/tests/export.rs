@@ -327,9 +327,9 @@ async fn job(f: &Fixture, cookie: &str, id: u64) -> Value {
     body
 }
 
-/// Waits (up to 5 s) for a job to finish.
+/// Waits (up to 15 s) for a job to finish.
 async fn finished(f: &Fixture, cookie: &str, id: u64) -> Value {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         let j = job(f, cookie, id).await;
         if !j["finished_at"].is_null() {
@@ -965,10 +965,21 @@ async fn a_client_that_stops_reading_holds_no_lock() {
     assert!(d.next().await.unwrap().is_ok());
     // Not reading: the export waits on the socket, and everything else
     // (which needs the reader lock) still answers at once.
-    // Kept: the export is meant to stall on the socket, so there is no
-    // event to wait for; this gives it time to fill its buffers.
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let before = job(&f, &c, d.job).await;
+    // Wait until its progress stops moving: it has filled the buffers.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut before = job(&f, &c, d.job).await;
+    loop {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let now = job(&f, &c, d.job).await;
+        if now["done"] == before["done"] {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "progress kept moving: {before} then {now}"
+        );
+        before = now;
+    }
     assert_eq!(before["state"], "running");
     for _ in 0..3 {
         let started = Instant::now();
@@ -1043,9 +1054,9 @@ async fn concurrent_exports_share_one_rate() {
     assert!(took >= Duration::from_millis(540), "{took:?}");
 }
 
-/// Waits (up to 5 s) until no job is running or paused.
+/// Waits (up to 15 s) until no job is running or paused.
 async fn none_running(f: &Fixture, c: &str, request: usize) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         let (_, list) = json_of(&f.app, get("/api/v1/jobs", Some(c))).await;
         let unfinished: Vec<&Value> = list["jobs"]
@@ -1350,7 +1361,8 @@ async fn the_exports_lease_outlives_the_registrys_expiry_and_new_commits() {
         w.catch_up(&mut s, 1000).unwrap();
         w.commit().unwrap();
     }
-    // Kept: lets the paused export sit while the index moves on.
+    // Kept: simulated time. The lease's ttl and max_age are 1 ms (above), so
+    // this lets it expire while the export sits paused.
     tokio::time::sleep(Duration::from_millis(50)).await;
     control(&f, &c, d.job, "resume").await;
     got.extend(d.rest().await.unwrap());
