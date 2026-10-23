@@ -949,7 +949,7 @@
    "pr": 98,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:38 (\"run as many feature sessions as possible\")."
+   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 01:35 review FIX sent: stale vs M6-cli cli::parse (won't compile), ProgramData ACL inherited (Users RW: auth.json/setup token/config plant) -> icacls lockdown + test; important: StopPending during start, SCM dispatcher only for service argv, PowerShell trade-off doc, SO_LINGER widens \u00a711 doc. P-release told MSI reqs."
   },
   "R-relevance": {
    "status": "merged",
@@ -1240,7 +1240,8 @@
   "privdrop_flake": "privdrop.rs drops_to_puid_and_pgid_before_anything_runs failed once under full workspace run ('expected the runtime's threads'); from #84; reported by F-budget session",
   "pin_toolchain": "rust-toolchain.toml is unpinned stable; 1.99 deprecations broke clippy on #88. Consider pinning (affects CALIB_REF_NS too).",
   "font_fout": "W9 moved Atkinson font preload after first frame (FOUT swap); recheck CLS/LCP when Search screens land",
-  "B-update_signing": "Owner-delegated 2026-10-23 (\u00a72.21): separate stable/nightly signing keys; installs trust nightly key only on Nightly channel; RELEASE_SIGNING_KEY (tags, release env w/ owner reviewer) + NIGHTLY_SIGNING_KEY (nightly env); public keys in packaging/keys/; channel-scoped trust in verifier (\u00a712.2). P-release adds environments to jobs. | Code signing deferred (owner 2026-10-23): Authenticode checked only on artifacts that carry a signature; SHA-256 pins + signed manifest are the trust."
+  "B-update_signing": "Owner-delegated 2026-10-23 (\u00a72.21): separate stable/nightly signing keys; installs trust nightly key only on Nightly channel; RELEASE_SIGNING_KEY (tags, release env w/ owner reviewer) + NIGHTLY_SIGNING_KEY (nightly env); public keys in packaging/keys/; channel-scoped trust in verifier (\u00a712.2). P-release adds environments to jobs. | Code signing deferred (owner 2026-10-23): Authenticode checked only on artifacts that carry a signature; SHA-256 pins + signed manifest are the trust.",
+  "windows_acl": "auth.json (crates/api/src/auth.rs:424) and services.rs:326 0600 modes are cfg(unix) only: Windows needs an ACL on data files (M6-win locks the default folder; custom data dirs on Windows still inherit). Next auth/security slice."
  },
  "blocked_on_owner": [],
  "launches_today": 8,
