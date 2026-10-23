@@ -41,6 +41,7 @@ pub mod ops;
 mod saved;
 mod search;
 pub mod settings;
+mod suggest;
 mod torrents;
 mod user_items;
 
@@ -88,6 +89,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(auth::routes())
         .merge(search::routes())
         .merge(facets::routes())
+        .merge(suggest::routes())
         .merge(torrents::routes())
         .merge(filters::routes())
         .merge(settings::routes())
