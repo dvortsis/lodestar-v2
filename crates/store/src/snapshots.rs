@@ -1,9 +1,13 @@
-//! Migration snapshots, `<db>.pre-v<N>[.<k>].db` (architecture §7, §12):
-//! the copies [`schema`](crate::schema) takes with `VACUUM INTO` before
-//! each migration, for `lodestar rollback`.
+//! Store snapshots (architecture §7, §12): the copies of the store that
+//! `lodestar rollback` restores or keeps.
 //!
-//! A snapshot is a full copy of the store, so it would keep what the live
-//! store later purges: sealed quarantine names, deleted torrents (owner
+//! - `<db>.pre-v<N>[.<k>].db`, taken by [`schema`](crate::schema) with
+//!   `VACUUM INTO` before each migration;
+//! - `<db>.before-rollback-<time>.db`, the copy of the store a rollback
+//!   keeps before restoring a snapshot over it.
+//!
+//! Each is a full copy of the store, so it would keep what the live store
+//! later purges: sealed quarantine names, deleted torrents (owner
 //! decisions §2.16, §2.17). On the writer's hourly purge tick,
 //! [`Store::purge_snapshots`]:
 //!
@@ -29,7 +33,7 @@
 //! refuses while any connection has the store open, and keeps the server
 //! from opening it while the rollback runs.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -47,6 +51,11 @@ pub const RETAIN_SECS: i64 = RETAIN_DAYS * 86_400;
 /// while, and the modification time is set when it ends.
 const TAKEN_MARGIN: i64 = 86_400;
 
+/// After a pass over a snapshot, the next one looks up only holds
+/// recorded since, less this much: a hold written on another connection
+/// just before the pass may commit just after it.
+const RECHECK_MARGIN: i64 = 600;
+
 /// How long opening a snapshot waits for a lock. Nothing else should hold
 /// one (see the module docs); this only keeps a stray `sqlite3` shell from
 /// stalling the writer.
@@ -56,15 +65,28 @@ const SNAPSHOT_BUSY: Duration = Duration::from_millis(200);
 /// step.
 const ADULT_HOLD: &str = "+adult";
 
+/// `cs_hashes.origin` of a list import. Confirmed (0) and reported (1)
+/// entries come from your own actions.
+const IMPORTED: i64 = 2;
+
+/// Which copy of the store a snapshot is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Kind {
+    /// `<db>.pre-v<version>[.<repeat>].db`: taken before migrating to
+    /// `version`, so it holds `version - 1`. `repeat` is the `k` of a
+    /// repeat snapshot of the same migration (0 for the first).
+    PreMigration { version: i64, repeat: u32 },
+    /// `<db>.before-rollback-<time>.db`: the store as it was before a
+    /// rollback replaced it.
+    BeforeRollback,
+}
+
 /// One snapshot file of the store.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Snapshot {
     pub path: PathBuf,
     pub name: String,
-    /// Taken before migrating to this version, so it holds `version - 1`.
-    pub version: i64,
-    /// The `k` of a repeat snapshot of the same migration (0 for the first).
-    pub repeat: u32,
+    pub kind: Kind,
     /// When it was taken (Unix seconds): its modification time.
     pub taken_at: Option<i64>,
 }
@@ -74,6 +96,14 @@ impl Snapshot {
     pub fn expires_at(&self) -> Option<i64> {
         self.taken_at.map(expires_at)
     }
+
+    /// The migration it was taken before, for a pre-migration snapshot.
+    pub fn version(&self) -> Option<i64> {
+        match self.kind {
+            Kind::PreMigration { version, .. } => Some(version),
+            Kind::BeforeRollback => None,
+        }
+    }
 }
 
 /// When a snapshot taken at `taken_at` is deleted.
@@ -81,7 +111,8 @@ pub fn expires_at(taken_at: i64) -> i64 {
     taken_at.saturating_add(RETAIN_SECS)
 }
 
-/// The snapshots of the store at `db`, oldest migration first. Only
+/// The snapshots of the store at `db`: pre-migration ones oldest
+/// migration first, then the copies rollbacks kept, oldest first. Only
 /// regular files count: a symlink or folder with a snapshot's name isn't
 /// one this build wrote.
 pub fn list(db: &Path) -> std::io::Result<Vec<Snapshot>> {
@@ -103,7 +134,7 @@ pub fn list(db: &Path) -> std::io::Result<Vec<Snapshot>> {
         let Some(name) = entry.file_name().to_str().map(str::to_string) else {
             continue;
         };
-        let Some((version, repeat)) = parse_name(stem, &name) else {
+        let Some(kind) = parse_name(stem, &name) else {
             continue;
         };
         if !entry.file_type().is_ok_and(|t| t.is_file()) {
@@ -114,30 +145,37 @@ pub fn list(db: &Path) -> std::io::Result<Vec<Snapshot>> {
             taken_at: modified(&path),
             path,
             name,
-            version,
-            repeat,
+            kind,
         });
     }
-    out.sort_by_key(|s| (s.version, s.repeat));
+    // The rollback copies' names sort by time.
+    out.sort_by(|a, b| (a.kind, &a.name).cmp(&(b.kind, &b.name)));
     Ok(out)
 }
 
-/// `(N, k)` from `<stem>.pre-v<N>.db` or `<stem>.pre-v<N>.<k>.db`, the
-/// names `schema::snapshot_path` gives.
-fn parse_name(stem: &str, name: &str) -> Option<(i64, u32)> {
-    let rest = name
-        .strip_prefix(stem)?
-        .strip_prefix(".pre-v")?
-        .strip_suffix(".db")?;
+/// The kind of snapshot `name` is, for the store `<stem>.db`:
+/// `<stem>.pre-v<N>[.<k>].db` (the names `schema::snapshot_path` gives)
+/// or `<stem>.before-rollback-<YYYYMMDD>-<HHMMSS>.db` (rollback's).
+pub fn parse_name(stem: &str, name: &str) -> Option<Kind> {
+    let rest = name.strip_prefix(stem)?.strip_suffix(".db")?;
+    let digits = |s: &str| !s.is_empty() && s.len() <= 9 && s.bytes().all(|b| b.is_ascii_digit());
+    if let Some(stamp) = rest.strip_prefix(".before-rollback-") {
+        let (day, time) = stamp.split_once('-')?;
+        return (day.len() == 8 && time.len() == 6 && digits(day) && digits(time))
+            .then_some(Kind::BeforeRollback);
+    }
+    let rest = rest.strip_prefix(".pre-v")?;
     let (n, k) = match rest.split_once('.') {
         Some((n, k)) => (n, Some(k)),
         None => (rest, None),
     };
-    let digits = |s: &str| !s.is_empty() && s.len() <= 9 && s.bytes().all(|b| b.is_ascii_digit());
     if !digits(n) || !k.is_none_or(digits) {
         return None;
     }
-    Some((n.parse().ok()?, k.map_or(Some(0), |k| k.parse().ok())?))
+    Some(Kind::PreMigration {
+        version: n.parse().ok()?,
+        repeat: k.map_or(Some(0), |k| k.parse().ok())?,
+    })
 }
 
 /// The oldest held hash that can matter to a snapshot taken at `taken_at`.
@@ -210,41 +248,80 @@ pub struct PurgeReport {
     pub warnings: Vec<String>,
 }
 
+/// How far each snapshot has been checked against the live store's holds,
+/// kept on the writer's [`Store`] for the life of the process. The first
+/// pass after a start (or over a new or replaced file) looks up every hold
+/// since the snapshot was taken; later ones only those since the last.
+#[derive(Debug, Default)]
+pub(crate) struct Marks(HashMap<PathBuf, Mark>);
+
+#[derive(Debug, Clone, Copy)]
+struct Mark {
+    /// The file it was for: another time means another file.
+    taken_at: Option<i64>,
+    /// The `now` of the last complete pass.
+    through: i64,
+}
+
+impl Marks {
+    /// The oldest hold recorded at or after which `snap` still needs a
+    /// lookup.
+    fn since(&self, snap: &Snapshot) -> i64 {
+        let taken = snap.taken_at.map_or(i64::MIN, held_since);
+        match self.0.get(&snap.path) {
+            Some(m) if m.taken_at == snap.taken_at => {
+                taken.max(m.through.saturating_sub(RECHECK_MARGIN))
+            }
+            _ => taken,
+        }
+    }
+}
+
 /// What the live store holds, read once per tick.
 struct Live {
     /// Quarantined hashes that still have a sealed name.
     sealed: HashSet<[u8; 20]>,
-    /// Every held hash with when it was recorded: CS-1 entries,
-    /// tombstones and quarantine.
+    /// Hashes you confirmed or reported as CS-1: looked up in every pass,
+    /// whenever they were recorded. Few, and `add_cs_hashes` keeps an
+    /// imported entry's old time when you report it.
+    reported: Vec<[u8; 20]>,
+    /// The other holds (imported CS-1 entries, tombstones, quarantine)
+    /// with when they were recorded.
     held: Vec<([u8; 20], i64)>,
 }
 
 impl Live {
-    /// Held hashes recorded before `since` aren't read.
+    /// Holds recorded before `since` (other than `reported`) aren't read.
     fn read(conn: &Connection, since: i64) -> rusqlite::Result<Live> {
+        let hash = |h: Vec<u8>| <[u8; 20]>::try_from(h).ok();
         let mut sealed = HashSet::new();
         let mut stmt = conn.prepare("SELECT hash FROM quarantine WHERE sealed IS NOT NULL")?;
         for h in stmt.query_map([], |r| r.get::<_, Vec<u8>>(0))? {
-            if let Ok(h) = <[u8; 20]>::try_from(h?) {
-                sealed.insert(h);
-            }
+            sealed.extend(hash(h?));
+        }
+        let mut reported = Vec::new();
+        let mut stmt = conn.prepare("SELECT hash FROM cs_hashes WHERE origin != ?1")?;
+        for h in stmt.query_map([IMPORTED], |r| r.get::<_, Vec<u8>>(0))? {
+            reported.extend(hash(h?));
         }
         let mut held = Vec::new();
         let mut stmt = conn.prepare(
-            "SELECT hash, added_at FROM cs_hashes WHERE added_at >= ?1
+            "SELECT hash, added_at FROM cs_hashes WHERE origin = ?2 AND added_at >= ?1
              UNION ALL SELECT hash, at FROM tombstones WHERE at >= ?1
              UNION ALL SELECT hash, at FROM quarantine WHERE at >= ?1",
         )?;
-        let rows = stmt.query_map([since], |r| {
+        let rows = stmt.query_map(params![since, IMPORTED], |r| {
             Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, i64>(1)?))
         })?;
         for row in rows {
             let (h, at) = row?;
-            if let Ok(h) = <[u8; 20]>::try_from(h) {
-                held.push((h, at));
-            }
+            held.extend(hash(h).map(|h| (h, at)));
         }
-        Ok(Live { sealed, held })
+        Ok(Live {
+            sealed,
+            reported,
+            held,
+        })
     }
 }
 
@@ -272,42 +349,42 @@ impl Store {
                 return report;
             }
         };
-        if all.is_empty() {
-            return report;
-        }
-        let since = all
-            .iter()
-            .map(|s| s.taken_at.map_or(i64::MIN, held_since))
-            .min()
-            .unwrap_or(i64::MIN);
-        let mut live = None;
+        self.snapshot_marks
+            .0
+            .retain(|path, _| all.iter().any(|s| &s.path == path));
+        let mut keep = Vec::new();
         for snap in all {
-            if snap
-                .expires_at()
-                .is_some_and(|expires_at| now >= expires_at)
-            {
-                match remove_snapshot(&snap.path) {
-                    Ok(()) => report.expired.push(snap.path),
-                    Err(e) => report.warnings.push(format!(
-                        "deleting the expired snapshot {} failed: {e}",
-                        snap.path.display()
-                    )),
-                }
+            if snap.expires_at().is_none_or(|at| now < at) {
+                keep.push(snap);
                 continue;
             }
-            if live.is_none() {
-                match Live::read(&self.conn, since) {
-                    Ok(l) => live = Some(l),
-                    Err(e) => {
-                        report.warnings.push(format!(
-                            "reading held hashes for the snapshot purge failed: {e}"
-                        ));
-                        return report;
-                    }
-                }
+            self.snapshot_marks.0.remove(&snap.path);
+            let (gone, failed) = remove_snapshot(&snap.path);
+            for (path, e) in failed {
+                report.warnings.push(format!(
+                    "deleting the expired snapshot file {} failed: {e}",
+                    path.display()
+                ));
             }
-            let live = live.as_ref().expect("read above");
-            match purge_one(&snap, live, now, hits_before) {
+            if gone {
+                report.expired.push(snap.path);
+            }
+        }
+        let Some(since) = keep.iter().map(|s| self.snapshot_marks.since(s)).min() else {
+            return report;
+        };
+        let live = match Live::read(&self.conn, since) {
+            Ok(l) => l,
+            Err(e) => {
+                report.warnings.push(format!(
+                    "reading held hashes for the snapshot purge failed: {e}"
+                ));
+                return report;
+            }
+        };
+        for snap in keep {
+            let since = self.snapshot_marks.since(&snap);
+            match purge_one(&snap, &live, since, now, hits_before) {
                 Ok(Outcome::Skipped(why)) => report.warnings.push(why),
                 Ok(Outcome::Unchanged) => {}
                 Ok(Outcome::Purged {
@@ -316,13 +393,23 @@ impl Store {
                 }) => {
                     report.torrents += torrents;
                     report.quarantine += quarantine;
-                    report.purged.push(snap.path);
+                    report.purged.push(snap.path.clone());
                 }
-                Err(e) => report.warnings.push(format!(
-                    "purging the snapshot {} failed (it was left as it was): {e}",
-                    snap.path.display()
-                )),
+                Err(e) => {
+                    report.warnings.push(format!(
+                        "purging the snapshot {} failed (it was left as it was): {e}",
+                        snap.path.display()
+                    ));
+                    continue;
+                }
             }
+            self.snapshot_marks.0.insert(
+                snap.path,
+                Mark {
+                    taken_at: snap.taken_at,
+                    through: now,
+                },
+            );
         }
         report
     }
@@ -334,30 +421,86 @@ enum Outcome {
     Purged { torrents: usize, quarantine: usize },
 }
 
-/// Deletes a snapshot and any side file SQLite left beside it. A plain
-/// unlink: overwriting first doesn't reach the old blocks on copy-on-write
-/// filesystems or SSDs, so it would only cost a write of the whole file.
-fn remove_snapshot(path: &Path) -> std::io::Result<()> {
-    std::fs::remove_file(path)?;
+/// Deletes a snapshot and any side file SQLite left beside it: whether
+/// the snapshot itself is gone, and the files that couldn't be deleted. A
+/// plain unlink: overwriting first doesn't reach the old blocks on
+/// copy-on-write filesystems or SSDs, so it would only cost a write of the
+/// whole file.
+fn remove_snapshot(path: &Path) -> (bool, Vec<(PathBuf, std::io::Error)>) {
+    let mut failed = Vec::new();
+    let mut remove = |p: PathBuf| match std::fs::remove_file(&p) {
+        Ok(()) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+        Err(e) => {
+            failed.push((p, e));
+            false
+        }
+    };
+    let gone = remove(path.to_path_buf());
     for suffix in ["-wal", "-shm", "-journal"] {
         let mut side = path.as_os_str().to_os_string();
         side.push(suffix);
-        match std::fs::remove_file(PathBuf::from(side)) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
-            _ => {}
-        }
+        remove(PathBuf::from(side));
     }
-    Ok(())
+    (gone, failed)
 }
 
-fn purge_one(snap: &Snapshot, live: &Live, now: i64, hits_before: i64) -> crate::Result<Outcome> {
-    // Never created: a snapshot that vanished meanwhile is an error, not a
-    // new empty file.
-    let mut conn = Connection::open_with_flags(
-        &snap.path,
+/// Opens a snapshot for writing; never creates one, so a snapshot that
+/// vanished meanwhile is an error, not a new empty file.
+fn open_rw(path: &Path) -> rusqlite::Result<Connection> {
+    let conn = Connection::open_with_flags(
+        path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     conn.busy_timeout(SNAPSHOT_BUSY)?;
+    Ok(conn)
+}
+
+/// Folds a WAL left beside a snapshot (a purge interrupted between its
+/// commit and checkpoint) into the file and goes back to the rollback
+/// journal, keeping the file's modification time. `lodestar rollback`
+/// calls it before checking and copying a snapshot, so the copy holds the
+/// purge. Whether there was a WAL to fold.
+pub fn settle(path: &Path) -> rusqlite::Result<bool> {
+    let taken = modified(path);
+    let conn = open_rw(path)?;
+    let folded = settle_conn(&conn)?;
+    drop(conn);
+    if let Some(taken) = taken.filter(|_| folded) {
+        let _ = set_modified(path, taken);
+    }
+    Ok(folded)
+}
+
+fn settle_conn(conn: &Connection) -> rusqlite::Result<bool> {
+    let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0))?;
+    if !mode.eq_ignore_ascii_case("wal") {
+        return Ok(false);
+    }
+    conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+    conn.pragma_update(None, "journal_mode", "DELETE")?;
+    Ok(true)
+}
+
+fn purge_one(
+    snap: &Snapshot,
+    live: &Live,
+    since: i64,
+    now: i64,
+    hits_before: i64,
+) -> crate::Result<Outcome> {
+    let mut conn = open_rw(&snap.path)?;
+    // A WAL left by an interrupted purge goes first, so it's either
+    // folded in or nothing is written.
+    let folded = settle_conn(&conn)?;
+    let restore_time = |conn: Connection| {
+        drop(conn);
+        if let Some(taken) = snap.taken_at {
+            // The expiry goes by the modification time: keep it the time
+            // the snapshot was taken.
+            let _ = set_modified(&snap.path, taken);
+        }
+    };
     let has_migrations: bool = conn
         .query_row(
             "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'schema_migrations'",
@@ -374,6 +517,9 @@ fn purge_one(snap: &Snapshot, live: &Live, now: i64, hits_before: i64) -> crate:
         None
     };
     let Some(plan) = version.and_then(Plan::for_version) else {
+        if folded {
+            restore_time(conn);
+        }
         let held = version.map_or_else(|| "no schema version".into(), |v| format!("schema v{v}"));
         return Ok(Outcome::Skipped(format!(
             "the snapshot {} holds {held}, which this version doesn't know how to purge; it's \
@@ -384,13 +530,10 @@ fn purge_one(snap: &Snapshot, live: &Live, now: i64, hits_before: i64) -> crate:
 
     // Look first, so a snapshot with nothing to purge isn't written (nor
     // its modification time touched).
-    let since = snap.taken_at.map_or(i64::MIN, held_since);
     let mut ids = BTreeSet::new();
     if plan.torrents {
-        for (h, at) in &live.held {
-            if *at < since {
-                continue;
-            }
+        let recent = live.held.iter().filter(|(_, at)| *at >= since);
+        for h in live.reported.iter().chain(recent.map(|(h, _)| h)) {
             ids.extend(crate::find_any(&conn, std::iter::once(InfoHash(*h)))?);
         }
     }
@@ -417,6 +560,9 @@ fn purge_one(snap: &Snapshot, live: &Live, now: i64, hits_before: i64) -> crate:
         )?;
     }
     if ids.is_empty() && unsealed.is_empty() && expiring == 0 && hits == 0 {
+        if folded {
+            restore_time(conn);
+        }
         return Ok(Outcome::Unchanged);
     }
 
@@ -463,12 +609,7 @@ fn purge_one(snap: &Snapshot, live: &Live, now: i64, hits_before: i64) -> crate:
         let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
         let _ = conn.pragma_update(None, "journal_mode", "DELETE");
     }
-    drop(conn);
-    if let Some(taken) = snap.taken_at {
-        // The expiry goes by the modification time: keep it the time the
-        // snapshot was taken.
-        let _ = set_modified(&snap.path, taken);
-    }
+    restore_time(conn);
     let (torrents, quarantine) = result?;
     Ok(Outcome::Purged {
         torrents,
@@ -579,13 +720,18 @@ mod tests {
 
     #[test]
     fn names_match_the_ones_schema_gives() {
+        let pre = |version, repeat| Some(Kind::PreMigration { version, repeat });
         let db = Path::new("/data/lodestar.db");
         let first = crate::schema::snapshot_path(db, 7);
         assert_eq!(
             parse_name("lodestar", first.file_name().unwrap().to_str().unwrap()),
-            Some((7, 0))
+            pre(7, 0)
         );
-        assert_eq!(parse_name("lodestar", "lodestar.pre-v4.2.db"), Some((4, 2)));
+        assert_eq!(parse_name("lodestar", "lodestar.pre-v4.2.db"), pre(4, 2));
+        assert_eq!(
+            parse_name("lodestar", "lodestar.before-rollback-20261022-000000.db"),
+            Some(Kind::BeforeRollback)
+        );
         for bad in [
             "lodestar.pre-v.db",
             "lodestar.pre-v4..db",
@@ -594,7 +740,13 @@ mod tests {
             "lodestar.pre-v4.db-journal",
             "other.pre-v4.db",
             "lodestar.pre-v-1.db",
-            "lodestar.before-rollback-20261022-000000.db",
+            "lodestar.pre-v99999999999.db",
+            "lodestar.before-rollback-2026102-000000.db",
+            "lodestar.before-rollback-20261022-00000x.db",
+            "lodestar.before-rollback-20261022-000000.db-wal",
+            "lodestar.before-rollback-.db",
+            "lodestar.rollback-20261022-000000.tmp",
+            "lodestar.db",
         ] {
             assert_eq!(parse_name("lodestar", bad), None, "{bad}");
         }
@@ -660,7 +812,9 @@ mod tests {
         assert_eq!(r.quarantine, 1);
         assert!(!contains(&snap, expiring));
         assert!(contains(&snap, kept.as_bytes()));
-        assert!(!side(&snap, "-wal").exists() && !side(&snap, "-journal").exists());
+        for suffix in ["-wal", "-shm", "-journal"] {
+            assert!(!side(&snap, suffix).exists(), "{suffix} left behind");
+        }
         quick_check(&snap);
         let conn = Connection::open(&snap).unwrap();
         let mode: String = conn
@@ -832,5 +986,202 @@ mod tests {
             PurgeReport::default()
         );
         assert!(snap.exists());
+    }
+
+    /// The review's case: a hash an imported list already had (its
+    /// `added_at` predates the snapshot) is reported afterwards, and the
+    /// live store deletes its torrent. The report keeps the old time, so a
+    /// time window alone would miss it.
+    #[test]
+    fn a_reported_hash_from_an_older_import_is_purged() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db) = live(dir.path());
+        let marker = "reported-after-import-marker-a61c";
+        insert_torrent(store.connection(), 1, [7; 20], marker);
+        store.add_cs_hashes(&[[7; 20]], 2, T - 30 * DAY).unwrap();
+        let snap = take(&store, &db, 10, T);
+        // Purged once with nothing to do, so the next pass is incremental.
+        assert_eq!(store.purge_snapshots(T + DAY, 0), PurgeReport::default());
+
+        store.add_cs_hashes(&[[7; 20]], 1, T + 2 * DAY).unwrap();
+        store.delete_torrents(&[[7; 20]]).unwrap();
+        let r = store.purge_snapshots(T + 3 * DAY, 0);
+        assert_eq!(r.torrents, 1, "{r:?}");
+        assert!(!contains(&snap, marker.as_bytes()));
+    }
+
+    /// After a full pass, only holds recorded since the last pass (less a
+    /// margin) are looked up; a replaced file gets a full pass again.
+    #[test]
+    fn later_passes_look_up_only_new_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db) = live(dir.path());
+        for id in 1..=3u8 {
+            insert_torrent(store.connection(), i64::from(id), [id; 20], "t");
+        }
+        let tomb = |store: &Store, h: u8, at: i64| {
+            store
+                .connection()
+                .execute(
+                    "INSERT INTO tombstones (hash, rule, at) VALUES (?1, 'FK-4', ?2)",
+                    params![&[h; 20][..], at],
+                )
+                .unwrap();
+        };
+        let snap = take(&store, &db, 10, T);
+        let now = T + DAY;
+        assert_eq!(store.purge_snapshots(now, 0), PurgeReport::default());
+        // Recorded inside the last pass's margin: still looked up.
+        tomb(&store, 1, now - RECHECK_MARGIN);
+        // Before the margin: a full pass would have found it already, so
+        // it isn't looked up again (here it wasn't, by construction).
+        tomb(&store, 2, now - RECHECK_MARGIN - 1);
+        let r = store.purge_snapshots(now + 3600, 0);
+        assert_eq!(r.torrents, 1, "{r:?}");
+        // The same name with another time is another file: full pass.
+        set_modified(&snap, T + 1).unwrap();
+        let r = store.purge_snapshots(now + 7200, 0);
+        assert_eq!(r.torrents, 1, "{r:?}");
+        let left: i64 = Connection::open(&snap)
+            .unwrap()
+            .query_row("SELECT count(*) FROM torrents", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 1);
+    }
+
+    /// The copy of the store a rollback keeps gets the same purge and
+    /// expiry as a pre-migration snapshot.
+    #[test]
+    fn copies_kept_by_a_rollback_are_purged_and_expire() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db) = live(dir.path());
+        let sealed = b"before-rollback-sealed-marker-3b8e";
+        quarantine(store.connection(), [1; 20], "CS-3", sealed, T + DAY);
+        let kept = dir
+            .path()
+            .join("lodestar.before-rollback-20270115-080000.db");
+        store
+            .connection()
+            .execute("VACUUM INTO ?1", [kept.to_string_lossy()])
+            .unwrap();
+        set_modified(&kept, T).unwrap();
+        let pre = take(&store, &db, 10, T);
+        let listed = list(&db).unwrap();
+        assert_eq!(
+            listed.iter().map(|s| s.kind).collect::<Vec<_>>(),
+            [
+                Kind::PreMigration {
+                    version: 10,
+                    repeat: 0
+                },
+                Kind::BeforeRollback
+            ]
+        );
+
+        let now = T + 2 * DAY;
+        store.purge_filter(now, 0).unwrap();
+        let r = store.purge_snapshots(now, 0);
+        assert_eq!(r.purged, vec![pre.clone(), kept.clone()]);
+        assert!(!contains(&kept, sealed));
+        quick_check(&kept);
+        let r = store.purge_snapshots(T + RETAIN_SECS, 0);
+        assert_eq!(r.expired, vec![pre, kept.clone()]);
+        assert!(!kept.exists());
+    }
+
+    /// A purge interrupted between its commit and checkpoint leaves a WAL
+    /// beside the snapshot; [`settle`] (which rollback runs before copying)
+    /// folds it in, so the copy holds the purge.
+    #[test]
+    fn settle_folds_a_left_over_wal() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, db) = live(dir.path());
+        let open = take(&store, &db, 10, T);
+        assert!(!settle(&open).unwrap(), "nothing to fold");
+        // Copy the file and its WAL while a connection has them open: what
+        // a process that died mid-purge leaves.
+        let conn = Connection::open(&open).unwrap();
+        conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+        conn.execute("INSERT INTO settings (key, value) VALUES ('k', 1)", [])
+            .unwrap();
+        let snap = crate::schema::snapshot_path(&db, 11);
+        std::fs::copy(&open, &snap).unwrap();
+        std::fs::copy(side(&open, "-wal"), side(&snap, "-wal")).unwrap();
+        drop(conn);
+        set_modified(&snap, T).unwrap();
+
+        assert!(settle(&snap).unwrap());
+        assert!(!side(&snap, "-wal").exists());
+        assert_eq!(modified(&snap), Some(T));
+        let conn = Connection::open_with_flags(&snap, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode, "delete");
+        let v: i64 = conn
+            .query_row("SELECT value FROM settings WHERE key = 'k'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(v, 1);
+    }
+
+    /// A side file that can't be deleted is reported on its own; the
+    /// snapshot itself still counts as deleted.
+    #[test]
+    fn a_stuck_side_file_does_not_hide_the_deletion() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db) = live(dir.path());
+        let snap = take(&store, &db, 10, T);
+        std::fs::create_dir(side(&snap, "-shm")).unwrap();
+        let r = store.purge_snapshots(T + RETAIN_SECS, 0);
+        assert_eq!(r.expired, vec![snap.clone()]);
+        assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
+        assert!(r.warnings[0].contains("-shm"), "{:?}", r.warnings);
+        assert!(!snap.exists());
+    }
+
+    /// The hourly cost with many holds (the review's measure): 200k
+    /// tombstones recorded after the snapshot of a 20k-torrent store.
+    /// `cargo test -p lodestar-store --lib purge_cost -- --ignored --nocapture`
+    #[test]
+    #[ignore = "timing, run by hand"]
+    fn purge_cost() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, db) = live(dir.path());
+        {
+            let conn = store.connection();
+            conn.execute_batch("BEGIN").unwrap();
+            for id in 1..=20_000i64 {
+                let mut h = [0u8; 20];
+                h[..8].copy_from_slice(&id.to_be_bytes());
+                insert_torrent(conn, id, h, "t");
+            }
+            conn.execute_batch("COMMIT").unwrap();
+        }
+        take(&store, &db, 10, T);
+        {
+            let conn = store.connection();
+            conn.execute_batch("BEGIN").unwrap();
+            for i in 0..200_000u64 {
+                let mut h = [0xffu8; 20];
+                h[..8].copy_from_slice(&i.to_be_bytes());
+                conn.execute(
+                    "INSERT INTO tombstones (hash, rule, at) VALUES (?1, 'FK-4', ?2)",
+                    params![&h[..], T + 600],
+                )
+                .unwrap();
+            }
+            conn.execute_batch("COMMIT").unwrap();
+        }
+        for (i, now) in [T + 2 * 3600, T + 3 * 3600, T + 4 * 3600]
+            .into_iter()
+            .enumerate()
+        {
+            let start = std::time::Instant::now();
+            let r = store.purge_snapshots(now, 0);
+            assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+            eprintln!("tick {}: {:?}", i + 1, start.elapsed());
+        }
     }
 }
