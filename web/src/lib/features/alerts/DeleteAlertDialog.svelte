@@ -7,7 +7,6 @@
 	import { ApiError } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
 	import { deleteSavedSearch, type SavedSearch } from './api';
-	import { focusAfterOpen } from './focus';
 
 	interface Props {
 		open?: boolean;
@@ -24,13 +23,8 @@
 		if (open) failed = false;
 	});
 
-	// The dialog opens on Cancel, the safe choice. Bits focuses the first control when it mounts,
-	// so wait for that.
+	// The dialog opens on Cancel, the safe choice.
 	const cancelId = $props.id();
-	$effect(() => {
-		if (!open) return;
-		return focusAfterOpen(() => document.getElementById(cancelId));
-	});
 
 	async function confirm() {
 		if (busy) return;
@@ -56,6 +50,7 @@
 	title={m.alerts_delete_title({ name: search.name })}
 	description={search.rss ? m.alerts_delete_body_rss() : m.alerts_delete_body()}
 	closeLabel={m.alerts_close()}
+	initialFocus={() => document.getElementById(cancelId)}
 >
 	{#if failed}
 		<Banner kind="error">{m.alerts_delete_failed({ name: search.name })}</Banner>

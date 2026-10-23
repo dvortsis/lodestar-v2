@@ -15,7 +15,6 @@
 	import { m } from '$lib/paraglide/messages.js';
 	import { alertPath, createSavedSearch, type SavedSearch } from './api';
 	import { saveFailure, type SaveFailure } from './errors';
-	import { focusAfterOpen } from './focus';
 
 	interface Props {
 		open?: boolean;
@@ -48,8 +47,6 @@
 			failure = {};
 			submitting = false;
 		});
-		// The dialog opens on its first field, so the name can be typed at once.
-		return focusAfterOpen(() => form?.querySelector<HTMLElement>('[name="name"]'));
 	});
 
 	const nameError = $derived(failure.field === 'name' ? failure.message : undefined);
@@ -100,7 +97,13 @@
 	}
 </script>
 
-<Dialog bind:open title={m.alerts_create_title()} closeLabel={m.alerts_close()}>
+<!-- The dialog opens on its first field, so the name can be typed at once. -->
+<Dialog
+	bind:open
+	title={m.alerts_create_title()}
+	closeLabel={m.alerts_close()}
+	initialFocus={() => form?.querySelector<HTMLElement>('[name="name"]')}
+>
 	<form id={formId} bind:this={form} class="al-form" onsubmit={submit} novalidate>
 		{#if failure.form}
 			<Banner kind="error">{failure.form}</Banner>
