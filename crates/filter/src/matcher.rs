@@ -20,8 +20,7 @@
 //! hash lookups. It never says *yes* from a hash, so a token whose hash
 //! collides with a word can't make a rule match, or stop one matching.
 
-use std::borrow::Cow;
-use std::cell::{Cell, OnceCell};
+use std::cell::OnceCell;
 
 use lodestar_classify::{Category, Classification, FileInfo, Record};
 use lodestar_search::DocEnrichment;
@@ -903,27 +902,24 @@ fn has_word(field: &Text, whole: &[Term], parts: &[Term]) -> bool {
         || sequence(field, parts)
 }
 
-/// The terms at consecutive positions.
+/// The terms at consecutive positions. Each place of the first term
+/// looks the rest up by position, so the cost grows with the text, not
+/// its square.
 fn sequence(field: &Text, words: &[Term]) -> bool {
-    let Some(first) = words.first() else {
+    let Some((first, rest)) = words.split_first() else {
         return false;
     };
-    let at = |pos: u32, w: &Term| {
-        field
-            .toks
-            .iter()
-            .any(|t| t.position == pos && field.is(t, w.hash, &w.text))
-    };
+    crate::work::tick(field.toks.len());
     field
         .toks
         .iter()
         .filter(|t| field.is(t, first.hash, &first.text))
         .any(|start| {
-            words
-                .iter()
-                .zip(0..)
-                .skip(1)
-                .all(|(w, i)| at(start.position + i, w))
+            rest.iter().zip(1..).all(|(w, i)| {
+                field
+                    .at(start.position + i)
+                    .any(|t| field.is(t, w.hash, &w.text))
+            })
         })
 }
 
@@ -933,10 +929,10 @@ fn sequence(field: &Text, words: &[Term]) -> bool {
 /// run between the nearest ends of two spans (§16), so `1080p NEAR/1 x`
 /// allows one token between `p` and `x`, as a single word would.
 ///
-/// Names are untrusted and can repeat a word hundreds of times, so the
-/// other words are looked for only in the window around each place of
-/// the first, found by binary search on position: the cost grows with
-/// the text, not its square.
+/// Names are untrusted and can repeat a word thousands of times. Each
+/// word's places are listed once, in order, and each place of the first
+/// word finds the nearest of every other word's by binary search, so the
+/// cost grows with the text times its logarithm, whatever the slop.
 fn has_near(field: &Text, words: &[Operand], slop: u32) -> bool {
     let Some((first, rest)) = words.split_first() else {
         return false;
@@ -944,13 +940,14 @@ fn has_near(field: &Text, words: &[Operand], slop: u32) -> bool {
     let span = words.len() as u32 + slop;
     // Words of one token each, the usual case: each place of the first
     // word against every token, as cheap as it gets for an ordinary name.
-    // Past a few places, the windowed search below takes over.
+    // Past a few places, the listed search below takes over.
     if words
         .iter()
         .all(|w| w.whole.is_empty() && w.parts.len() == 1)
     {
         fn places<'a>(field: &'a Text, w: &'a Operand) -> impl Iterator<Item = u32> + 'a {
             let w = &w.parts[0];
+            crate::work::tick(field.toks.len());
             field
                 .toks
                 .iter()
@@ -974,107 +971,75 @@ fn has_near(field: &Text, words: &[Operand], slop: u32) -> bool {
             return false;
         }
     }
-    let near = Near {
-        field,
-        order: OnceCell::new(),
-        scans: Cell::new(SCANS),
-    };
-    // The first word's places in any order, then each other word only in
-    // the window around one.
-    field
-        .toks
-        .iter()
-        .filter(|t| starts(first, t.hash))
-        .filter_map(|t| near.place(first, t))
-        .any(|(a0, a1)| {
-            rest.iter().all(|w| {
-                // A place of `w` ends within `span - 1` of the first
-                // word's place, so it starts no earlier than this.
-                let width = w.parts.len().max(1) as u32 - 1;
-                let lo = a0.saturating_sub(span - 1 + width);
-                let hi = a1.saturating_add(span - 1);
-                near.any_between(lo, hi, |t| {
-                    starts(w, t.hash) && near.place(w, t).is_some_and(|b| gap((a0, a1), b) < span)
-                })
-            })
-        })
+    let first = Places::of(field, first);
+    let rest: Vec<Places> = rest.iter().map(|w| Places::of(field, w)).collect();
+    first.all().any(|a| rest.iter().all(|w| w.within(a, span)))
 }
 
-/// Plain scans of a text's tokens before [`Near`] sorts them by position
-/// and searches: as cheap for an ordinary name, and a hostile one that
-/// repeats a word hundreds of times then costs in proportion to its
-/// length, not its square.
+/// Plain scans of a text's tokens for the first word's places before
+/// NEAR lists every word's: as cheap for an ordinary name, and bounded
+/// by the text's length times this.
 const SCANS: u32 = 8;
 
-/// One text, for finding NEAR words' places.
-struct Near<'a> {
-    field: &'a Text,
-    /// The tokens in position order, made when the scans run out: the
-    /// tokenizer emits a compound after its word's later parts, so such
-    /// texts are sorted.
-    order: OnceCell<Cow<'a, [fasttok::Tok]>>,
-    /// Plain scans left.
-    scans: Cell<u32>,
+/// A NEAR word's places in one text, each list by first position: its
+/// parts in a row (`width` positions after the first), and its whole
+/// forms (one position each).
+struct Places {
+    parts: Vec<u32>,
+    width: u32,
+    whole: Vec<u32>,
 }
 
-impl Near<'_> {
-    /// Whether `f` holds for a token at positions `lo..=hi`.
-    #[inline]
-    fn any_between(&self, lo: u32, hi: u32, f: impl FnMut(&fasttok::Tok) -> bool) -> bool {
-        let toks = &self.field.toks;
-        if let Some(left) = self.scans.get().checked_sub(1) {
-            self.scans.set(left);
-            return toks
-                .iter()
-                .filter(|t| (lo..=hi).contains(&t.position))
-                .any(f);
-        }
-        let sorted = self.order.get_or_init(|| {
-            if toks.is_sorted_by_key(|t| t.position) {
-                Cow::Borrowed(&toks[..])
-            } else {
-                let mut v = toks.clone();
-                v.sort_by_key(|t| t.position);
-                Cow::Owned(v)
+impl Places {
+    fn of(field: &Text, w: &Operand) -> Places {
+        crate::work::tick(field.toks.len());
+        let mut p = Places {
+            parts: Vec::new(),
+            width: w.parts.len().saturating_sub(1) as u32,
+            whole: Vec::new(),
+        };
+        for t in &field.toks {
+            if let Some((head, tail)) = w.parts.split_first() {
+                if field.is(t, head.hash, &head.text)
+                    && tail.iter().zip(1..).all(|(x, i)| {
+                        field
+                            .at(t.position + i)
+                            .any(|t| field.is(t, x.hash, &x.text))
+                    })
+                {
+                    p.parts.push(t.position);
+                    continue;
+                }
             }
-        });
-        let from = sorted.partition_point(|t| t.position < lo);
-        let to = sorted.partition_point(|t| t.position <= hi);
-        sorted[from..to.max(from)].iter().any(f)
-    }
-
-    /// The place of NEAR word `w` starting at token `t`, as first and
-    /// last positions: its parts in a row from `t`, or `t` itself as a
-    /// whole form.
-    #[inline]
-    fn place(&self, w: &Operand, t: &fasttok::Tok) -> Option<(u32, u32)> {
-        let field = self.field;
-        if let Some((first, rest)) = w.parts.split_first() {
-            if t.hash == first.hash
-                && field.text(t) == &*first.text
-                && rest.iter().zip(1..).all(|(x, i)| {
-                    let pos = t.position + i;
-                    self.any_between(pos, pos, |t| field.is(t, x.hash, &x.text))
-                })
-            {
-                return Some((t.position, t.position + rest.len() as u32));
+            if w.whole.iter().any(|x| field.is(t, x.hash, &x.text)) {
+                p.whole.push(t.position);
             }
         }
-        (!w.whole.is_empty() && w.whole.iter().any(|x| field.is(t, x.hash, &x.text)))
-            .then_some((t.position, t.position))
+        p.parts.sort_unstable();
+        p.whole.sort_unstable();
+        p
     }
-}
 
-/// Whether a token with this hash could start a place of `w`: most
-/// tokens can't, and this is the whole cost for them.
-#[inline]
-fn starts(w: &Operand, hash: u64) -> bool {
-    w.parts.first().is_some_and(|f| f.hash == hash) || w.whole.iter().any(|x| x.hash == hash)
-}
+    /// Every place, as first and last positions.
+    fn all(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
+        let parts = self.parts.iter().map(|&p| (p, p + self.width));
+        parts.chain(self.whole.iter().map(|&p| (p, p)))
+    }
 
-/// The positions between two spans' nearest ends; 0 where they overlap.
-fn gap((a0, a1): (u32, u32), (b0, b1): (u32, u32)) -> u32 {
-    b0.saturating_sub(a1).max(a0.saturating_sub(b1))
+    /// Whether a place is fewer than `span` positions from `(a0, a1)`,
+    /// between nearest ends. For a place `(b, b + w)` that is
+    /// `a0 - (span - 1) - w <= b <= a1 + span - 1`; the first place at or
+    /// after the low end, found by binary search, answers it.
+    fn within(&self, (a0, a1): (u32, u32), span: u32) -> bool {
+        let near = |list: &[u32], w: u32| {
+            crate::work::tick(list.len().max(1).ilog2() as usize + 1);
+            let lo = i64::from(a0) - i64::from(span) + 1 - i64::from(w);
+            let hi = i64::from(a1) + i64::from(span) - 1;
+            let i = list.partition_point(|&b| i64::from(b) < lo);
+            list.get(i).is_some_and(|&b| i64::from(b) <= hi)
+        };
+        near(&self.parts, self.width) || near(&self.whole, 0)
+    }
 }
 
 fn edit_distance(a: &str, b: &[char]) -> usize {
@@ -1109,6 +1074,10 @@ fn edit_distance(a: &str, b: &[char]) -> usize {
 #[cfg(test)]
 #[path = "matcher_reference.rs"]
 mod reference;
+
+#[cfg(test)]
+#[path = "matcher_old.rs"]
+mod old;
 
 #[cfg(test)]
 mod tests {
@@ -1278,6 +1247,108 @@ mod tests {
         assert!(!doc.matches(&q, &[]));
         q = parse("beta").unwrap();
         assert!(doc.matches(&q, &[]));
+    }
+
+    fn near_of(q: &str) -> (Vec<Operand>, u32) {
+        match compile(&parse(q).unwrap()) {
+            Compiled::Near { words, slop, .. } => (words, slop),
+            c => panic!("{q:?} compiled to {c:?}"),
+        }
+    }
+
+    fn phrase_of(q: &str) -> Vec<Term> {
+        match compile(&parse(q).unwrap()) {
+            Compiled::Phrase { parts, .. } => parts,
+            c => panic!("{q:?} compiled to {c:?}"),
+        }
+    }
+
+    /// Hostile names (§6) repeat a word thousands of times. Phrases and
+    /// NEAR cost in proportion to the text (times its logarithm), held
+    /// to a count of steps rather than a time: four times the text takes
+    /// well under the sixteen times a square would.
+    #[test]
+    fn hostile_names_cost_in_proportion() {
+        let far = format!("{}b", "x ".repeat(60));
+        let cases: &[(&str, &str, &str)] = &[
+            // Every place of the first word starts a phrase that fails late.
+            ("a ", "b", "\"a a a a b c\""),
+            ("1080p ", "x264", "\"1080p 1080p 1080p x265\""),
+            // More places than the plain scans take, single tokens.
+            ("a ", "b", "a NEAR/2 c"),
+            ("a b ", "c", "a NEAR/50 d"),
+            // The other word there, near only the last place, or near none.
+            ("a ", "b", "a NEAR/1 b"),
+            ("a ", &far, "a NEAR/50 b"),
+            // Words of several tokens, near and far, and a wide slop.
+            ("1080p.x264 ", "WEB-DL", "1080p NEAR/3 web-dl"),
+            ("1080p.x264 ", "WEB-DL", "1080p NEAR/50 web-dl NEAR/50 dd+"),
+            ("web dl x ", "z", "web-dl NEAR/5 web-dl NEAR/5 z"),
+        ];
+        for &(unit, tail, q) in cases {
+            let text = |n: usize| fasttok::tokens(&format!("{}{tail}", unit.repeat(n)));
+            let run = |t: &Text| -> (bool, u64) {
+                crate::work::counted(|| {
+                    if q.contains("NEAR") {
+                        let (words, slop) = near_of(q);
+                        has_near(t, &words, slop)
+                    } else {
+                        sequence(t, &phrase_of(q))
+                    }
+                })
+            };
+            let (small, big) = (text(1_000), text(4_000));
+            let ((m1, w1), (m2, w2)) = (run(&small), run(&big));
+            assert_eq!(m1, m2, "{q:?}");
+            let n = big.toks.len() as u64;
+            assert!(
+                w2 <= 6 * w1,
+                "{q:?}: {w1} steps, then {w2} on four times the text"
+            );
+            assert!(
+                w2 <= 40 * n * u64::from(n.ilog2()),
+                "{q:?}: {w2} steps on {n} tokens"
+            );
+            // As the search before it answered.
+            let old = if q.contains("NEAR") {
+                let (words, slop) = near_of(q);
+                old::has_near(&small, &words, slop)
+            } else {
+                old::sequence(&small, &phrase_of(q))
+            };
+            assert_eq!(m1, old, "{q:?}");
+        }
+    }
+
+    /// Words a phrase or NEAR test text repeats: single tokens, words of
+    /// several, and their compound forms.
+    fn near_word() -> impl Strategy<Value = &'static str> {
+        prop::sample::select(vec![
+            "a", "b", "x", "1080p", "1080", "p", "x264", "264", "web-dl", "webdl", "web", "dl",
+            "dd+", "dd", "h.264", "5.1",
+        ])
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(2000))]
+        /// The indexed phrase and NEAR search answer as the scanning one
+        /// before it did, on texts that repeat their words.
+        #[test]
+        fn indexed_search_agrees_with_the_scans(
+            words in prop::collection::vec(near_word(), 0..60),
+            seps in prop::collection::vec(prop::sample::select(vec![" ", ".", "-", "_", "  "]), 60),
+            q in prop::collection::vec(near_word(), 2..4),
+            slop in 1u32..7,
+        ) {
+            let text: String = words.iter().zip(&seps).map(|(w, s)| format!("{w}{s}")).collect();
+            let t = fasttok::tokens(&text);
+            let near = q.join(&format!(" NEAR/{slop} "));
+            let (ws, sl) = near_of(&near);
+            prop_assert_eq!(has_near(&t, &ws, sl), old::has_near(&t, &ws, sl), "{} on {:?}", near, text);
+            let phrase = format!("\"{}\"", q.join(" "));
+            let parts = phrase_of(&phrase);
+            prop_assert_eq!(sequence(&t, &parts), old::sequence(&t, &parts), "{} on {:?}", phrase, text);
+        }
     }
 
     #[test]
