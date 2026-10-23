@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T07:14:50Z",
+ "updated_at": "2026-10-23T07:17:05Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -384,13 +384,13 @@
    "merge": "eb8266e"
   },
   "B11b": {
-   "status": "pending",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01MHwrFHQEfii2sHpmGPEYz8",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
-   "notes": "2026-10-23T06:59:39Z unblocked by B11a; brief drafting (Opus helper)"
+   "notes": "2026-10-23T06:59:39Z unblocked by B11a; brief drafting (Opus helper) | 2026-10-23T07:17:05Z launched (brief by Opus helper, runner-reviewed + trigger-cost and split lines; steward)"
   },
   "B10b": {
    "status": "review",
@@ -438,7 +438,7 @@
    "pr": null,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": "2026-10-23T06:59:39Z unblocked by B11a; brief drafting (Opus helper)"
+   "notes": "2026-10-23T06:59:39Z unblocked by B11a; brief drafting (Opus helper) | 2026-10-23T07:17:05Z brief committed; HOLD until B11b merges (needs public overview_response from B11b); slices.yaml deps to gain B11b"
   },
   "S-search-4": {
    "status": "pending",
@@ -1318,10 +1318,11 @@
   "B11b-gauge-13": "B11b daily compaction/rollup --repair must treat metric 13 (SEARCHABLE) as a gauge (keep last per day, never sum) - from B11a #116",
   "flake-stats-metrics": "lodestar ops::tests::stats_match_the_metrics (ops/tests.rs:445, queue_depth /stats vs /metrics after pause) failed once under parallel load (B11a report 06:34); candidate for a flake fix slice if it recurs in CI",
   "release-features-licences": "P-release/Dockerfile must build --no-default-features --features web (no fixture) so licences inventory matches what ships (rand_chacha unlisted today) - from B2c review | P-release #92 now covers release matrix + Dockerfile",
-  "slices-yaml-B-log1b": "Runner PR to add B-log1b to runner/slices.yaml: sweep remaining raw tracing (api/src/auth.rs, pipeline lib.rs/writer.rs, search rebuild.rs, DHT/fetch), auth.setup_token event, canary positive controls for api.request/auth.*, hot-path bench+padding before DHT/fetch, TARGETS completeness test, high-volume events default_on false until B-log2"
+  "slices-yaml-B-log1b": "Runner PR to add B-log1b to runner/slices.yaml: sweep remaining raw tracing (api/src/auth.rs, pipeline lib.rs/writer.rs, search rebuild.rs, DHT/fetch), auth.setup_token event, canary positive controls for api.request/auth.*, hot-path bench+padding before DHT/fetch, TARGETS completeness test, high-volume events default_on false until B-log2",
+  "slices-yaml-B11c-deps": "Runner PR: add B11b to B11c deps in runner/slices.yaml (B11c reuses overview_response B11b makes public)"
  },
  "blocked_on_owner": [],
- "launches_today": 16,
+ "launches_today": 17,
  "last_heartbeat": "2026-10-23T06:38:50Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
