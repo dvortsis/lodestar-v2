@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T07:17:52Z",
+ "updated_at": "2026-10-23T07:34:04Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -327,7 +327,7 @@
    "pr": 102,
    "attempt": 1,
    "review_rounds": 3,
-   "notes": "Launched 21:41 after B6 merged. | 01:50 PR #102 41231f7 conflicts live.rs; asked main merge + relevance gate; review on new head. | 01:52 c764a4f main merged (relevance PASS); reviewer started. | 02:45 review FIX: natural phrasing inverts negations/field syntax (-cam -> includes CAM) -> strict-lex first + meaning-preserving prop test; important: did-you-mean cost, FST peak RSS/10M plan, swap-path test. | 03:20 c80199b fixes (strict-lex natural phrasing + prop test, did-you-mean capped, FST memory, swap test). Delta reviewer started. OK given for query.rs pub(crate) + ROUTES line. | 03:33 delta c80199b FIX: chip_nodes swallows tokens with ./,/nbsp (release names -> res:1080p); important: cross-run merge/contradictions, structural prop test. Grouping preservation verified. | 03:47 7548049 chip/merge/structural-prop fixes; narrow delta reviewer (round 3) started. | 03:58 round-3 delta FIX (two-value tokens, bare-number ext, AND merge regression, nested field guard, prop test). Past escalation limit (2): not parked because each round narrows a hard parser problem; next blocking -> split natural phrasing into follow-up and merge /suggest. Flagged to owner. | 04:14 b0a76dc verified by runner (38-input probe). APPROVED; merge on green. | 04:35 conflicts after X-flakes+B5c (search-bench, api/search.rs, live.rs) -> asked main merge. | 04:58 3c5fbd2 main merged (live.rs hooks re-applied in follow(): verified by runner). Approved; merge on green. | 05:56 CI green 3c5fbd2 but merged tree fails: tests/suggest.rs ApiState missing user_data (B10a) -> asked main merge. | 2026-10-23T06:14:33Z 3ecb9e0 merged main + user_data fix; merge on green | 2026-10-23T06:26:11Z 3ecb9e0 trial-merges clean on 87a5cf7 but overlaps (lib.rs, openapi.rs, dto/mod.rs): merged-tree verify before merge | 2026-10-23T06:52:29Z 3ecb9e0 CI green; merged-tree verify vs 077bf08 running | 2026-10-23T06:59:39Z merged-tree re-verify vs 23a1b77 (B11a) running | 2026-10-23T07:00:31Z merged-tree vs 23a1b77 fails: suggest.rs:99 missing insights; asked to merge main | 2026-10-23T07:09:40Z d8fb0a7: main 23a1b77 merged + insights: None; merge on green"
+   "notes": "Launched 21:41 after B6 merged. | 01:50 PR #102 41231f7 conflicts live.rs; asked main merge + relevance gate; review on new head. | 01:52 c764a4f main merged (relevance PASS); reviewer started. | 02:45 review FIX: natural phrasing inverts negations/field syntax (-cam -> includes CAM) -> strict-lex first + meaning-preserving prop test; important: did-you-mean cost, FST peak RSS/10M plan, swap-path test. | 03:20 c80199b fixes (strict-lex natural phrasing + prop test, did-you-mean capped, FST memory, swap test). Delta reviewer started. OK given for query.rs pub(crate) + ROUTES line. | 03:33 delta c80199b FIX: chip_nodes swallows tokens with ./,/nbsp (release names -> res:1080p); important: cross-run merge/contradictions, structural prop test. Grouping preservation verified. | 03:47 7548049 chip/merge/structural-prop fixes; narrow delta reviewer (round 3) started. | 03:58 round-3 delta FIX (two-value tokens, bare-number ext, AND merge regression, nested field guard, prop test). Past escalation limit (2): not parked because each round narrows a hard parser problem; next blocking -> split natural phrasing into follow-up and merge /suggest. Flagged to owner. | 04:14 b0a76dc verified by runner (38-input probe). APPROVED; merge on green. | 04:35 conflicts after X-flakes+B5c (search-bench, api/search.rs, live.rs) -> asked main merge. | 04:58 3c5fbd2 main merged (live.rs hooks re-applied in follow(): verified by runner). Approved; merge on green. | 05:56 CI green 3c5fbd2 but merged tree fails: tests/suggest.rs ApiState missing user_data (B10a) -> asked main merge. | 2026-10-23T06:14:33Z 3ecb9e0 merged main + user_data fix; merge on green | 2026-10-23T06:26:11Z 3ecb9e0 trial-merges clean on 87a5cf7 but overlaps (lib.rs, openapi.rs, dto/mod.rs): merged-tree verify before merge | 2026-10-23T06:52:29Z 3ecb9e0 CI green; merged-tree verify vs 077bf08 running | 2026-10-23T06:59:39Z merged-tree re-verify vs 23a1b77 (B11a) running | 2026-10-23T07:00:31Z merged-tree vs 23a1b77 fails: suggest.rs:99 missing insights; asked to merge main | 2026-10-23T07:09:40Z d8fb0a7: main 23a1b77 merged + insights: None; merge on green | 2026-10-23T07:34:04Z main moved (B10b): clean trial merge, overlaps -> merged-tree verify after CI on d8fb0a7"
   },
   "B12": {
    "status": "merged",
@@ -393,13 +393,13 @@
    "notes": "2026-10-23T06:59:39Z unblocked by B11a; brief drafting (Opus helper) | 2026-10-23T07:17:05Z launched (brief by Opus helper, runner-reviewed + trigger-cost and split lines; steward)"
   },
   "B10b": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "session": "session_018gReKT5Ef1ESyRwSB6wkhg",
    "pr": 115,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 04:15 PR #115 f8e5d23; told to make the 2 services.rs edits itself; review after that push. \u00a72.19: exports follow export_adult (not Show adult). | 05:05 review FIX: dropped request leaks job slot (drop-guard) ; important: global throttle across 4 jobs (+6% p95 at 5k/s), #48 swarm note. | 05:31 0a8032c drop-guard + shared pacer (4 concurrent: p95 mean +1.2%) + notes. Runner delta-checked; approved; merge on green. | 05:56 CI green 0a8032c; conflicts after B10a/B16 (api route registration) -> asked main merge. | 2026-10-23T06:08:13Z ed7fed0 contains main incl B16; merge on green | 2026-10-23T06:26:11Z main moved (B12): conflicts in dto/mod.rs, lib.rs, openapi.json; asked to merge main | 2026-10-23T06:32:39Z 35af964 merged main 87a5cf7 (checked: export/jobs under auth::protected, openapi regenerated); merge on green | 2026-10-23T06:52:29Z 35af964 windows red: export throttle tests 538-542ms vs >=550ms bound (timer granularity); asked for derived bound with margin | 2026-10-23T07:05:59Z 1caa3c6: real pacer fix (idle time banked as burst) + test; still lacks B11a main merge (msg crossed) - waiting next head | 2026-10-23T07:09:40Z 4c1827e: main 23a1b77 merged; bounds >=540ms vs 600 theoretical (pacer fix removed credit); merge on green",
+   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 04:15 PR #115 f8e5d23; told to make the 2 services.rs edits itself; review after that push. \u00a72.19: exports follow export_adult (not Show adult). | 05:05 review FIX: dropped request leaks job slot (drop-guard) ; important: global throttle across 4 jobs (+6% p95 at 5k/s), #48 swarm note. | 05:31 0a8032c drop-guard + shared pacer (4 concurrent: p95 mean +1.2%) + notes. Runner delta-checked; approved; merge on green. | 05:56 CI green 0a8032c; conflicts after B10a/B16 (api route registration) -> asked main merge. | 2026-10-23T06:08:13Z ed7fed0 contains main incl B16; merge on green | 2026-10-23T06:26:11Z main moved (B12): conflicts in dto/mod.rs, lib.rs, openapi.json; asked to merge main | 2026-10-23T06:32:39Z 35af964 merged main 87a5cf7 (checked: export/jobs under auth::protected, openapi regenerated); merge on green | 2026-10-23T06:52:29Z 35af964 windows red: export throttle tests 538-542ms vs >=550ms bound (timer granularity); asked for derived bound with margin | 2026-10-23T07:05:59Z 1caa3c6: real pacer fix (idle time banked as burst) + test; still lacks B11a main merge (msg crossed) - waiting next head | 2026-10-23T07:09:40Z 4c1827e: main 23a1b77 merged; bounds >=540ms vs 600 theoretical (pacer fix removed credit); merge on green | 2026-10-23T07:34:04Z merged #115 as c2639ab",
    "self_review": {
     "raised": 4,
     "fixed": 4,
@@ -868,7 +868,7 @@
    "pr": 117,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "from #86 | 05:02 launched after B2b merge (brief by Opus helper, runner-reviewed; steward from start). | 2026-10-23T06:09:01Z PR #117 head f1e0457 (~13k lines, mostly generated); fresh + security reviewers launched | 2026-10-23T06:16:19Z security review MERGE w/ 2 important (licence_file path escape -> credential leak into rust.json; deadline not capped vs clock-behind-after-reboot) + 8 polish; requiring 1-2 (+cheap polish) after fresh review returns | 2026-10-23T06:40:44Z round 1 FIX (both reviewers MERGE-with-important): licence path escape, deadline clamp vs clock, HTTP_BIND trap, refused WITH bypass, fixture restart, started() placement + 8 cheap; merge main | 2026-10-23T06:56:15Z 0296fa5 round-1 fixes (14 items) + main merged; delta review started | 2026-10-23T06:59:51Z delta 0296fa5 APPROVED; asked to merge main (B11a conflicts); merge on green | 2026-10-23T07:09:40Z 4076936: main 23a1b77 merged; merge on green",
+   "notes": "from #86 | 05:02 launched after B2b merge (brief by Opus helper, runner-reviewed; steward from start). | 2026-10-23T06:09:01Z PR #117 head f1e0457 (~13k lines, mostly generated); fresh + security reviewers launched | 2026-10-23T06:16:19Z security review MERGE w/ 2 important (licence_file path escape -> credential leak into rust.json; deadline not capped vs clock-behind-after-reboot) + 8 polish; requiring 1-2 (+cheap polish) after fresh review returns | 2026-10-23T06:40:44Z round 1 FIX (both reviewers MERGE-with-important): licence path escape, deadline clamp vs clock, HTTP_BIND trap, refused WITH bypass, fixture restart, started() placement + 8 cheap; merge main | 2026-10-23T06:56:15Z 0296fa5 round-1 fixes (14 items) + main merged; delta review started | 2026-10-23T06:59:51Z delta 0296fa5 APPROVED; asked to merge main (B11a conflicts); merge on green | 2026-10-23T07:09:40Z 4076936: main 23a1b77 merged; merge on green | 2026-10-23T07:34:04Z main moved (B10b) -> conflicts; told to HOLD until B7 merges, then merge main once",
    "self_review": {
     "raised": 6,
     "fixed": 6,
@@ -1107,6 +1107,15 @@
    "pr": 107,
    "branch": "runner/delegated-decisions",
    "notes": "3 review rounds -> MERGE; nits applied; merge on green"
+  },
+  "B-log1b": {
+   "status": "pending",
+   "model": "opus",
+   "session": null,
+   "pr": null,
+   "attempt": 0,
+   "review_rounds": 0,
+   "notes": "2026-10-23T07:34:04Z added by #120; needs brief from B-log1 review follow-ups"
   }
  },
  "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -1317,9 +1326,7 @@
   "b11a_followups": "B11a follow-ups: \u00a71.6.4 dashboard-open bench gate in CI; insights SSE topic; persisted import counter (no full scan per start); \u00a76.3 annotation kinds (upgrade/import/reindex/network change).",
   "B11b-gauge-13": "B11b daily compaction/rollup --repair must treat metric 13 (SEARCHABLE) as a gauge (keep last per day, never sum) - from B11a #116",
   "flake-stats-metrics": "lodestar ops::tests::stats_match_the_metrics (ops/tests.rs:445, queue_depth /stats vs /metrics after pause) failed once under parallel load (B11a report 06:34); candidate for a flake fix slice if it recurs in CI",
-  "release-features-licences": "P-release/Dockerfile must build --no-default-features --features web (no fixture) so licences inventory matches what ships (rand_chacha unlisted today) - from B2c review | P-release #92 now covers release matrix + Dockerfile",
-  "slices-yaml-B-log1b": "Runner PR to add B-log1b to runner/slices.yaml: sweep remaining raw tracing (api/src/auth.rs, pipeline lib.rs/writer.rs, search rebuild.rs, DHT/fetch), auth.setup_token event, canary positive controls for api.request/auth.*, hot-path bench+padding before DHT/fetch, TARGETS completeness test, high-volume events default_on false until B-log2",
-  "slices-yaml-B11c-deps": "Runner PR: add B11b to B11c deps in runner/slices.yaml (B11c reuses overview_response B11b makes public)"
+  "release-features-licences": "P-release/Dockerfile must build --no-default-features --features web (no fixture) so licences inventory matches what ships (rand_chacha unlisted today) - from B2c review | P-release #92 now covers release matrix + Dockerfile"
  },
  "blocked_on_owner": [],
  "launches_today": 17,
@@ -1364,6 +1371,6 @@
   "metrics": "Since 02:55: review_rounds incremented on every FIX verdict (backfilled 02:58 by counting FIX verdicts in notes, approximate). New PRs record self_review {raised,fixed,left} from the PR description.",
   "113": "03:35 PR #113 opened from owner-session commit 005065f (CI commit-back of E2E baselines; owner decision \"best practice\"). Fresh + security review running. After merge: W9 merges main, pushes with marker; CI commits baselines; W9 removes marker. | 03:40 review MERGE; asked owner session for hardening (symlink refusal, head.sha checkout, [[=~]], dirname --, caps, env input, heading). | 03:48 9ae4c0a hardening verified by runner. APPROVED; merge on green, then tell W9. | 04:16 MERGED 6d14f0e. W9 told.",
   "fix-check-ids": "2026-10-23T06:32:39Z #118 merged (smoke green on the fixed script)",
-  "slices-yaml-120": "2026-10-23T07:17:52Z PR #120 runner/slices-b-log1b: B-log1b entry + B11c deps B11b; reviewer running"
+  "slices-yaml-120": "2026-10-23T07:34:04Z #120 merged (069533a): B-log1b added (owns widened per review), B11c deps B11b"
  }
 }
