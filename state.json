@@ -530,13 +530,13 @@
       "notes": ""
     },
     "S-settings-1": {
-      "status": "pending",
+      "status": "running",
       "model": "sonnet",
-      "session": null,
+      "session": "session_01WxWNVVXvmeyCn6M12V9h9h",
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": ""
+      "notes": " | 2026-10-23T20:11:46Z launched (sonnet, auto; brief 3 PRs; runner answers: lazy per-section messages if over 45 KB, notify after PR1 to unblock dependents, nav -> /settings, refinements confirmed)"
     },
     "S-wizard": {
       "status": "pending",
@@ -1530,7 +1530,7 @@
     }
   },
   "blocked_on_owner": [],
-  "launches_today": 31,
+  "launches_today": 32,
   "last_heartbeat": "2026-10-23T13:39:57Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
