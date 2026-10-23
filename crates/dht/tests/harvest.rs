@@ -24,6 +24,7 @@ fn config(bootstrap: Vec<String>) -> Config {
         read_only: false,
         harvest: Default::default(),
         deny: None,
+        paused: false,
     }
 }
 

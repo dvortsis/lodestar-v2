@@ -11,7 +11,7 @@ use lodestar_sources::{
     BoxFuture, Consent, Endpoint, Found, Kind, Manifest, Network, PluginError, Priority, Risk,
     SourceCtx, SourcePlugin,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 /// The DHT's harvest strategy codes, for per-strategy metrics. Persisted
 /// in the rollups: append only.
@@ -50,15 +50,25 @@ pub struct DhtSource {
     config: Config,
     stats: Arc<Mutex<Option<StatsSnapshot>>>,
     node: Arc<Mutex<Option<NodeHandle>>>,
+    /// The crawler's pause, handed to the node whenever it runs.
+    paused: watch::Sender<bool>,
 }
 
 impl DhtSource {
+    /// `config.paused` is the pause it starts with.
     pub fn new(config: Config) -> DhtSource {
         DhtSource {
+            paused: watch::Sender::new(config.paused),
             config,
             stats: Arc::default(),
             node: Arc::default(),
         }
+    }
+
+    /// Pauses or resumes the node's harvesting (`NodeHandle::set_paused`),
+    /// now if it runs and from its start if it doesn't yet.
+    pub fn set_paused(&self, paused: bool) {
+        self.paused.send_replace(paused);
     }
 
     /// The running node, for BEP 33 scrapes: set once it has started and
@@ -112,7 +122,12 @@ impl SourcePlugin for DhtSource {
     fn run(&self, mut ctx: SourceCtx) -> BoxFuture<'_, Result<(), PluginError>> {
         Box::pin(async move {
             let (tx, mut harvests) = mpsc::channel(4096);
-            let node = Node::start(self.config.clone(), Some(tx))
+            let mut paused = self.paused.subscribe();
+            let config = Config {
+                paused: *paused.borrow_and_update(),
+                ..self.config.clone()
+            };
+            let node = Node::start(config, Some(tx))
                 .await
                 .map_err(|e| PluginError(format!("DHT bind failed: {e}")))?;
             tracing::info!(addrs = ?node.local_addrs(), "DHT node started");
@@ -139,6 +154,10 @@ impl SourcePlugin for DhtSource {
                         }
                         None => requests_open = false,
                     },
+                    Ok(()) = paused.changed() => {
+                        let p = *paused.borrow_and_update();
+                        node.handle().set_paused(p).await;
+                    }
                     _ = tick.tick() => {
                         *self.stats.lock().expect("dht stats lock") = Some(node.stats());
                     }

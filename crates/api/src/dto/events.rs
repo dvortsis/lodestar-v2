@@ -90,7 +90,7 @@ pub struct TorrentsEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({
     "at": 1_700_000_000u64, "dht_nodes": 812, "fetch_active": 40, "fetch_pending": 1200,
-    "fetched": 3400, "harvested": 91000, "stored": 3100, "torrents": 48211
+    "fetched": 3400, "harvested": 91000, "paused": false, "stored": 3100, "torrents": 48211
 }))]
 pub struct CrawlerEvent {
     /// Unix seconds.
@@ -107,6 +107,10 @@ pub struct CrawlerEvent {
     pub fetched: u64,
     /// Hashes received from sources since start.
     pub harvested: u64,
+    /// The crawler is paused (`POST /crawler/pause`): the counters stand
+    /// still because nothing is harvested or fetched, not because
+    /// something broke.
+    pub paused: bool,
     /// Torrents stored since start.
     pub stored: u64,
     /// Torrents in the store.
