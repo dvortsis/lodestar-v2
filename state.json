@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T09:08:06Z",
+ "updated_at": "2026-10-23T09:15:07Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -1384,6 +1384,6 @@
   "heartbeat-0739": "no new slices ready (S-search-4 waits S-search-3/W9; B11c waits B11b); open: #119 delta review, #117 merging main, #98 round 4, #92 CI, #91 waits #92, #103 owner, #48 owner",
   "heartbeat-0838": "open: #121 B9 round 1, #119 B-log1 delta 2, #117 B2c windows (export test race; fix PR requested from B10b session), #92 P-release CI, #91 waits #92, #103/#48 owner",
   "fix-export-race": "2026-10-23T08:59:12Z #122 merged (reviewed APPROVE, CI green). Follow-up: export worker pacer wait doesn't select on tx.closed()",
-  "slices-yaml-124": "2026-10-23T09:08:06Z PR #124: B-update owns + crates/update/**, fuzz target; B-log1b owns + windows/**; reviewer running"
+  "slices-yaml-124": "2026-10-23T09:15:07Z #124 merged: B-update owns crates/update/** + fuzz target; B-log1b owns windows/**"
  }
 }
