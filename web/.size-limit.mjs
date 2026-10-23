@@ -49,9 +49,28 @@ const manifest = existsSync('.svelte-kit/output/client/.vite/manifest.json')
 	? JSON.parse(readFileSync('.svelte-kit/output/client/.vite/manifest.json', 'utf8'))
 	: {};
 const keyOf = new Map(Object.entries(manifest).map(([key, chunk]) => [`build/${chunk.file}`, key]));
+// The shell is not a route's own (owner, §10.1: route budgets are "the shell excluded"): its chrome
+// (keys, commands, status, Toaster, error and connection views, Button, Banner and the icons they
+// use) loads on the first interaction or after 30 s on every page. So a route's shared base is the
+// search route's first load plus Chrome.svelte, its static imports and the dynamic imports it
+// makes on engagement, everything except the command palette and the overflow menu, which load
+// only when opened (runner decision, §2.19).
+const chromeOnDemand = [/shell\/(CommandPalette|OverflowMenu)\.svelte$/];
+const shellFiles = new Set();
+const takeShell = (key) => {
+	const chunk = manifest[key];
+	if (!chunk || chromeOnDemand.some((re) => re.test(key))) return;
+	if (shellFiles.has(`build/${chunk.file}`)) return;
+	shellFiles.add(`build/${chunk.file}`);
+	for (const css of chunk.css ?? []) shellFiles.add(`build/${css}`);
+	for (const next of [...(chunk.imports ?? []), ...(chunk.dynamicImports ?? [])]) takeShell(next);
+};
+const chromeKey = Object.keys(manifest).find((key) => key.endsWith('src/lib/shell/Chrome.svelte'));
+if (chromeKey) takeShell(chromeKey);
+
 const walk = (route, onDemand, collectOnDemand) => {
 	const mine = routeFiles(route);
-	const shared = new Set([...search.js, ...search.css]);
+	const shared = new Set([...search.js, ...search.css, ...shellFiles]);
 	const seen = new Set();
 	const files = new Set();
 	const later = new Set();
