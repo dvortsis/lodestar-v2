@@ -260,7 +260,7 @@ jobs:
   # reasons, and the runner judges those under owner-decisions §2.18.
   ci-ok:
     name: ci-ok
-    needs: [changes, lint, openapi, test, relevance, importer, fuzz]
+    needs: [changes, lint, openapi, test, relevance, importer, fuzz, log-bench]
     if: always()
     runs-on: ubuntu-latest
     steps:
