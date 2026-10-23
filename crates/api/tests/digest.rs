@@ -632,6 +632,27 @@ async fn previews_match_goldens_and_the_overview() {
             }
             None => assert!(text.contains("- Yield: — (No completed cohorts yet)")),
         }
+        // The changes are the overview's own.
+        for (field, label) in [
+            ("searchable_delta", "Searchable torrents"),
+            ("new_searchable_delta", "New searchable"),
+        ] {
+            match k[field].as_i64() {
+                Some(0) => {
+                    assert!(text.contains(&format!("- {label}")) && text.contains("change 0"))
+                }
+                Some(d) => {
+                    let (arrow, sign) = if d > 0 {
+                        ("▲", "+")
+                    } else {
+                        ("▼", "\u{2212}")
+                    };
+                    let want = format!("change {arrow} {sign}{}", grouped(d.unsigned_abs()));
+                    assert!(text.contains(&want), "{field}: {want}\n{text}");
+                }
+                None => {}
+            }
+        }
         assert!(text.contains(&format!("/insights?range={range}&compare=1")));
     }
 }

@@ -161,6 +161,25 @@ fn format_count(n: u64) -> String {
     out
 }
 
+/// `x` × 10^`k`, rounded half away from zero on `x`'s shortest decimal
+/// form, as `Intl.NumberFormat` does (0.575 → 58 at k = 2, where the binary
+/// double is just under it). Saturates; `x` is finite and not negative.
+fn scaled_round(x: f64, k: usize) -> u64 {
+    let s = format!("{x}");
+    let (int, frac) = s.split_once('.').unwrap_or((&s, ""));
+    let mut digits = String::from(int);
+    let mut frac = frac.chars();
+    for _ in 0..k {
+        digits.push(frac.next().unwrap_or('0'));
+    }
+    let n = digits.parse::<u64>().unwrap_or(u64::MAX);
+    if frac.next().is_some_and(|c| c >= '5') {
+        n.saturating_add(1)
+    } else {
+        n
+    }
+}
+
 /// `n` steps of 10^-`f` percent, as `12.3%` (`f` = 1) or `12%` (`f` = 0).
 fn percent_steps(n: u64, f: u32) -> String {
     if f == 0 {
@@ -179,8 +198,7 @@ fn format_percent(ratio: f64, f: u32) -> String {
         return DASH.into();
     }
     let one = 10u64.pow(2 + f);
-    // Half away from zero, as `Intl` rounds.
-    let steps = (ratio * one as f64).round() as u64;
+    let steps = scaled_round(ratio, 2 + f as usize);
     if ratio > 0.0 && steps == 0 {
         format!("<{}", percent_steps(1, f))
     } else if ratio < 1.0 && steps >= one {
@@ -205,7 +223,7 @@ fn format_delta_percent(d: f64) -> String {
     if !d.is_finite() {
         return DASH.into();
     }
-    let steps = (d.abs() * 1000.0).round() as u64;
+    let steps = scaled_round(d.abs(), 3);
     match steps {
         0 => "0.0%".into(),
         s if d > 0.0 => format!("+{}", percent_steps(s, 1)),
@@ -577,7 +595,10 @@ fn model(o: &OverviewResponse, period: DigestPeriod, now: i64) -> Model {
             HealthState::Degraded => "Degraded",
         };
         match &k.health.reason {
-            Some(r) => format!("{state} ({})", health_reason(r)),
+            Some(r) if r != "paused" || k.health.state != HealthState::Paused => {
+                format!("{state} ({})", health_reason(r))
+            }
+            Some(_) => state.into(),
             None => state.into(),
         }
     };
@@ -664,11 +685,10 @@ fn model(o: &OverviewResponse, period: DigestPeriod, now: i64) -> Model {
     let cohorts = match f.cohorts {
         0 => "No cohorts in this period yet".to_string(),
         n => format!(
-            "{} {}, {} final, {} incomplete",
+            "{} {}, {} final",
             format_count(n),
             if n == 1 { "cohort" } else { "cohorts" },
-            format_count(f.final_cohorts),
-            format_count(n.saturating_sub(f.final_cohorts))
+            format_count(f.final_cohorts)
         ),
     };
     let mut shares: Vec<(&str, f64)> = f
@@ -789,7 +809,8 @@ fn render_text(m: &Model, alerts: usize) -> String {
     t
 }
 
-fn render_html(m: &Model) -> String {
+/// The HTML part with at most `alerts` exceptions listed.
+fn render_html(m: &Model, alerts: usize) -> String {
     let mut h = Html::default();
     h.raw("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>")
         .text(&m.subject)
@@ -862,7 +883,7 @@ fn render_html(m: &Model) -> String {
         h.raw("<p>Nothing needs attention.</p>\n");
     } else {
         h.raw("<ul>\n");
-        for a in &m.alerts {
+        for a in m.alerts.iter().take(alerts) {
             h.raw("<li>").text(a.severity).raw(": ").text(&a.message);
             if let Some(link) = &a.link {
                 h.raw(" Fix: <a href=\"")
@@ -872,6 +893,11 @@ fn render_html(m: &Model) -> String {
                     .raw("</a>");
             }
             h.raw("</li>\n");
+        }
+        if m.alerts.len() > alerts {
+            h.raw("<li>And ")
+                .text(&format_count((m.alerts.len() - alerts) as u64))
+                .raw(" more in Insights.</li>\n");
         }
         h.raw("</ul>\n");
     }
@@ -887,8 +913,8 @@ fn render_html(m: &Model) -> String {
 /// or 7d, `compare=1`); `now` is the generation time. Pure.
 pub(crate) fn render(o: &OverviewResponse, period: DigestPeriod, now: i64) -> Digest {
     let m = model(o, period, now);
-    // Fewer exceptions until the text fits; the HTML has no such limit in
-    // practice (every field is cut to 64 characters) but is checked too.
+    // Fewer exceptions until each part fits (they are the only part that
+    // grows; every field is cut to 64 characters).
     let mut shown = m.alerts.len();
     let mut text = render_text(&m, shown);
     while text.len() > MAX_TEXT_BYTES && shown > 0 {
@@ -896,11 +922,11 @@ pub(crate) fn render(o: &OverviewResponse, period: DigestPeriod, now: i64) -> Di
         text = render_text(&m, shown);
     }
     let subject = m.subject.chars().take(MAX_SUBJECT_CHARS).collect();
-    let mut html = render_html(&m);
-    if html.len() > MAX_HTML_BYTES {
-        let mut m = m;
-        m.alerts.clear();
-        html = render_html(&m);
+    let mut shown_html = m.alerts.len();
+    let mut html = render_html(&m, shown_html);
+    while html.len() > MAX_HTML_BYTES && shown_html > 0 {
+        shown_html -= 1;
+        html = render_html(&m, shown_html);
     }
     Digest {
         generated_at: now,
@@ -958,6 +984,11 @@ mod tests {
             (1.0, 0, "100%"),
             (1.5, 1, "150.0%"),
             (-0.1, 1, "—"),
+            // Half-way on the shortest decimal form, as Node rounds them.
+            (0.575, 0, "58%"),
+            (0.145, 0, "15%"),
+            (0.285, 0, "29%"),
+            (0.5005, 1, "50.1%"),
         ] {
             assert_eq!(format_percent(ratio, f), want, "{ratio} f={f}");
         }
@@ -971,6 +1002,7 @@ mod tests {
         assert_eq!(format_delta_count(1_000_000_000_000), "+1,000,000,000,000");
         assert_eq!(format_delta_percent(-0.032), "\u{2212}3.2%");
         assert_eq!(format_delta_percent(0.032), "+3.2%");
+        assert_eq!(format_delta_percent(-0.5105), "\u{2212}51.1%");
         assert_eq!(format_delta_percent(0.0), "0.0%");
         assert_eq!(format_delta_percent(0.00001), "0.0%");
         assert_eq!(format_delta_percent(-0.00001), "0.0%");
@@ -1396,7 +1428,7 @@ mod tests {
         assert!(d.text.contains("- Searchable torrents: 84,210\n"));
         let p = render(&paused(), DigestPeriod::Weekly, T);
         assert!(p.text.contains("- Searchable torrents: —"));
-        assert!(p.text.contains("- Health: Paused (paused)"));
+        assert!(p.text.contains("- Health: Paused\n"));
     }
 
     #[test]
@@ -1423,7 +1455,7 @@ mod tests {
         // Harvested is approximate; the others are counts.
         assert!(d.text.contains("- Harvested: ≈\u{a0}10,234\n"));
         assert!(d.text.contains("(>99.9% of stored)"));
-        assert!(d.text.contains("168 cohorts, 96 final, 72 incomplete"));
+        assert!(d.text.contains("168 cohorts, 96 final"));
     }
 
     #[test]
@@ -1585,7 +1617,7 @@ mod tests {
 
     #[test]
     fn maximal_inputs_stay_inside_the_limits() {
-        let key = "ж".repeat(200);
+        let key = "😀\"'&<".repeat(40);
         let mut o = week();
         let rows: Vec<SegmentCount> = (0..50)
             .map(|i| row(&format!("{key}{i}"), 9_000 + i))
