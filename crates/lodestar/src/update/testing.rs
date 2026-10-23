@@ -17,7 +17,11 @@
 //!   `switch=<version>` (ask to switch), `rollback` (ask to roll back),
 //!   `orphan` (leave a grandchild), `unrecorded` (start migrating, then
 //!   fail to write `migration.json`);
-//! - `beat_ms`: the migration heartbeat's period.
+//! - `beat_ms`: the migration heartbeat's period;
+//! - `max_binary`: a smaller cap on an overlay's binary (bytes).
+//!
+//! Two more faults: `overlay:io` makes verification fail with a transient
+//! I/O error; `child:ignoreterm@v` catches SIGTERM and hangs.
 
 use std::time::Duration;
 
@@ -36,6 +40,7 @@ pub struct Overrides {
     pub migration_cap_ms: Option<u64>,
     pub grace_ms: Option<u64>,
     pub beat_ms: Option<u64>,
+    pub max_binary: Option<u64>,
     pub fault: Option<String>,
 }
 
@@ -102,6 +107,16 @@ pub fn limits() -> Limits {
 /// The migration heartbeat's period (10 s).
 pub fn beat() -> Duration {
     Duration::from_millis(get().and_then(|o| o.beat_ms).unwrap_or(10_000))
+}
+
+/// A smaller cap on an overlay's binary.
+pub fn max_binary() -> Option<u64> {
+    get()?.max_binary
+}
+
+/// Whether the fault `name` (a whole list entry) is set.
+pub fn fault_set(name: &str) -> bool {
+    faults().any(|f| f == name)
 }
 
 /// The faults asked for (`fault` is a comma-separated list).

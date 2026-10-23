@@ -602,6 +602,9 @@ fn stops_and_restarts_in_probation_use_no_attempt() {
         1,
         "only the current run's attempt is charged"
     );
+    // Stopped while serving, not mid-start (when TERM can land before
+    // the child's handler).
+    wait_until("it didn't serve", LONG, || env.healthy());
     assert_eq!(r.stop(), 0);
 }
 
@@ -821,6 +824,7 @@ fn a_migrated_store_without_a_snapshot_is_never_rolled_back() {
     });
     assert_eq!(env.json("active").unwrap()["version"], NEW);
     assert!(env.json("skipped").is_none());
+    wait_until("it didn't serve", LONG, || env.healthy());
     assert_eq!(r.stop(), 0);
 }
 
@@ -841,17 +845,155 @@ fn a_migration_that_cant_be_recorded_never_starts() {
     assert_eq!(r.stop(), 0);
 }
 
-/// Versions only go up: a switch to an older version is refused.
+/// Versions only go up: running NEW, a switch to a version between the
+/// image and NEW (verified, newer than the image) is refused.
 #[test]
 fn a_switch_to_an_older_version_is_refused() {
     let env = Env::new();
-    env.stage("0.4.0", None, now() + 86_400);
-    let mut r = env.start(&env.overrides(json!({"fault": format!("child:switch=0.4.0@{IMAGE}")})));
+    env.stage(NEW, None, now() + 86_400);
+    env.stage("0.7.0", None, now() + 86_400);
+    env.activate(NEW, false);
+    let mut r = env.start(&env.overrides(json!({"fault": format!("child:switch=0.7.0@{NEW}")})));
     let mut log = String::new();
     wait_until("no refusal", LONG, || {
         log.push_str(&r.log());
         log.contains("versions only go up")
     });
-    assert!(!env.bin("active").exists() && !env.bin("pending").exists());
+    assert_eq!(env.json("active").unwrap()["version"], NEW);
+    assert!(!env.bin("pending").exists());
     r.stop();
+}
+
+/// `active` naming a version no newer than the one it replaced (a
+/// downgrade) isn't run: the image runs instead.
+#[test]
+fn an_active_downgrade_runs_the_image() {
+    let env = Env::new();
+    env.stage(NEW, None, now() + 86_400);
+    std::fs::write(
+        env.bin("active"),
+        json!({"version": NEW, "previous": "0.9.5"}).to_string(),
+    )
+    .unwrap();
+    let mut r = env.start(&env.overrides(json!({})));
+    wait_until("the image didn't start", LONG, || env.healthy());
+    let exe = std::fs::read_link(format!("/proc/{}/exe", children(r.child.id())[0])).unwrap();
+    assert!(
+        !exe.to_string_lossy().starts_with("/memfd:"),
+        "{}",
+        exe.display()
+    );
+    let log = r.log();
+    assert!(
+        log.contains("isn't newer than the version it replaced"),
+        "{log}"
+    );
+    assert_eq!(r.stop(), 0);
+}
+
+/// A transient I/O error keeps the overlay for the next start; a binary
+/// past the size cap is set aside.
+#[test]
+fn a_transient_error_keeps_the_overlay_and_an_oversize_binary_doesnt() {
+    let env = Env::new();
+    env.stage(NEW, None, now() + 86_400);
+    env.activate(NEW, false);
+    let mut r = env.start(&env.overrides(json!({"fault": "overlay:io"})));
+    wait_until("the image didn't start", LONG, || env.healthy());
+    let log = r.log();
+    assert!(log.contains("can't be checked right now"), "{log}");
+    assert_eq!(r.stop(), 0);
+    assert!(env.bin(NEW).join("lodestar").exists(), "kept");
+    assert!(!env.bin(&format!("{NEW}.bad")).exists());
+
+    let mut r = env.start(&env.overrides(json!({"max_binary": 4096})));
+    wait_until("the image didn't start", LONG, || env.healthy());
+    let log = r.log();
+    assert!(log.contains("too large"), "{log}");
+    assert_eq!(r.stop(), 0);
+    assert!(env.bin(&format!("{NEW}.bad")).exists(), "set aside");
+}
+
+/// A child that ignores a forwarded TERM is killed after the grace period.
+#[test]
+fn a_child_that_ignores_a_stop_is_killed() {
+    let env = Env::new();
+    let mut r = env.start(&env.overrides(json!({
+        "fault": format!("child:ignoreterm@{IMAGE}"),
+        "grace_ms": 1500,
+    })));
+    let pid = r.child.id();
+    // Until the child has its TERM handler (SigCgt bit 15).
+    wait_until("the child never caught TERM", LONG, || {
+        children(pid).first().is_some_and(|kid| {
+            std::fs::read_to_string(format!("/proc/{kid}/status"))
+                .ok()
+                .and_then(|st| {
+                    let line = st.lines().find(|l| l.starts_with("SigCgt:"))?;
+                    u64::from_str_radix(line[7..].trim(), 16).ok()
+                })
+                .is_some_and(|mask| mask & (1 << 14) != 0)
+        })
+    });
+    assert!(
+        Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let start = Instant::now();
+    let status = r.child.wait().unwrap();
+    assert_eq!(status.code(), Some(128 + 9), "{}", r.log());
+    assert!(start.elapsed() < Duration::from_secs(20));
+}
+
+/// The child stops when its supervisor dies (PR_SET_PDEATHSIG), even by
+/// SIGKILL, which the supervisor can't forward.
+#[test]
+fn the_child_stops_with_its_supervisor() {
+    let env = Env::new();
+    let mut r = env.start(&env.overrides(json!({})));
+    wait_until("it didn't start", LONG, || env.healthy());
+    let kid = children(r.child.id())[0];
+    r.child.kill().unwrap();
+    r.child.wait().unwrap();
+    wait_until("the child outlived its supervisor", LONG, || {
+        !std::fs::read_to_string(format!("/proc/{kid}/stat")).is_ok_and(|s| !s.contains(") Z "))
+    });
+}
+
+/// A damaged `pending` doesn't let `active`'s version run unprobated: it
+/// starts a fresh probation, so failing it still rolls back.
+#[test]
+fn a_damaged_pending_starts_a_fresh_probation() {
+    let env = Env::new();
+    env.stage(NEW, None, now() + 86_400);
+    env.activate(NEW, false);
+    std::fs::write(env.bin("pending"), b"{ damaged").unwrap();
+    let r = env.start(&env.overrides(json!({"fault": format!("child:crash@{NEW}")})));
+    wait_until("no rollback", LONG, || {
+        env.json("skipped").is_some() && !env.bin("pending").exists() && env.healthy()
+    });
+    assert!(!env.bin(NEW).exists() && !env.bin("active").exists());
+    assert_eq!(r.stop(), 0);
+}
+
+/// A store whose schema can't be read isn't migrated unrecorded: the
+/// child refuses to start, and with nothing to check the store against,
+/// no rollback runs either.
+#[test]
+fn an_unreadable_store_is_never_migrated_unrecorded() {
+    let env = Env::new();
+    env.stage(NEW, None, now() + 86_400);
+    env.activate(NEW, true);
+    std::fs::write(env.db(), b"not a database").unwrap();
+    let (status, log) = env.run_to_exit(&env.overrides(json!({})), LONG);
+    assert_eq!(status, 1, "{log}");
+    assert!(log.contains("reading the store's schema"), "{log}");
+    assert!(!env.bin(NEW).join("migration.json").exists());
+    assert!(
+        env.json("halted.json").unwrap()["refused"].is_string(),
+        "{log}"
+    );
 }

@@ -73,6 +73,9 @@ fn io_refusal(what: &str, e: &std::io::Error) -> Refusal {
 pub fn verify(bin: &Bin, version: &Version) -> Result<Verified, Refusal> {
     let dir = bin.overlay(version);
     let bad = |what: &str, e: &dyn std::fmt::Display| Refusal::Bad(format!("{what}: {e}"));
+    if super::testing::fault_set("overlay:io") {
+        return Err(Refusal::Unavailable("test fault".into()));
+    }
     let manifest = read_capped(
         &dir.join(MANIFEST),
         lodestar_update::doc::MAX_MANIFEST as u64,
@@ -88,15 +91,20 @@ pub fn verify(bin: &Bin, version: &Version) -> Result<Verified, Refusal> {
     }
     let (mut file, unsealed) = sealed_copy(src)?;
     let (sha256, len) = hash(&mut file).map_err(|e| io_refusal("reading its binary", &e))?;
+    if len > max_binary() {
+        return Err(Refusal::Bad("its binary is too large".into()));
+    }
     let target = super::testing::target()
         .or_else(|| lodestar_update::Target::from_triple(env!("LODESTAR_BUILD_TARGET")))
+        // This build's problems, not the overlay's: it's kept.
         .ok_or_else(|| {
-            Refusal::Bad(format!(
+            Refusal::Unavailable(format!(
                 "this build's target ({}) isn't shipped",
                 env!("LODESTAR_BUILD_TARGET")
             ))
         })?;
-    let embedded = super::trust_root().map_err(|e| bad("the built-in keys", &e))?;
+    let embedded =
+        super::trust_root().map_err(|e| Refusal::Unavailable(format!("the built-in keys: {e}")))?;
     let overlay =
         lodestar_update::overlay(&manifest, &minisig, sha256, len, version, target, &embedded)
             .map_err(|e| match e {
@@ -113,8 +121,11 @@ pub fn verify(bin: &Bin, version: &Version) -> Result<Verified, Refusal> {
 }
 
 /// The largest binary read: anything past a release artifact's limit is
-/// refused before it's hashed or copied.
-const MAX_BINARY: u64 = lodestar_update::doc::MAX_ARTIFACT_SIZE;
+/// refused before it's hashed or copied (smaller under the debug-only
+/// `max_binary` override).
+fn max_binary() -> u64 {
+    super::testing::max_binary().unwrap_or(lodestar_update::doc::MAX_ARTIFACT_SIZE)
+}
 
 /// The binary copied into a sealed memfd, rewound; or, where that isn't
 /// available, the file itself and why.
@@ -134,9 +145,9 @@ fn sealed_copy(src: File) -> Result<(File, Option<String>), Refusal> {
         Err(e) => return Ok((src, Some(format!("no memfd: {e}")))),
     };
     let mut copy = File::from(fd);
-    let copied = std::io::copy(&mut src.take(MAX_BINARY + 1), &mut copy)
+    let copied = std::io::copy(&mut src.take(max_binary() + 1), &mut copy)
         .map_err(|e| io_refusal("copying its binary", &e))?;
-    if copied > MAX_BINARY {
+    if copied > max_binary() {
         return Err(Refusal::Bad("its binary is too large".into()));
     }
     let seals = SealFlags::SEAL | SealFlags::SHRINK | SealFlags::GROW | SealFlags::WRITE;
@@ -157,18 +168,21 @@ fn read_capped(path: &std::path::Path, cap: u64) -> std::io::Result<Vec<u8>> {
     let mut out = Vec::new();
     f.take(cap + 1).read_to_end(&mut out)?;
     if out.len() as u64 > cap {
-        return Err(std::io::Error::other("too large"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "too large",
+        ));
     }
     Ok(out)
 }
 
-/// The SHA-256 and length of at most [`MAX_BINARY`] + 1 bytes (so the
+/// The SHA-256 and length of at most [`max_binary`] + 1 bytes (so the
 /// size check refuses a larger file).
 fn hash(file: &mut File) -> std::io::Result<(Sha256, u64)> {
     let mut h = sha2::Sha256::new();
     let mut buf = vec![0u8; 1 << 16];
     let mut len = 0u64;
-    let mut capped = file.take(MAX_BINARY + 1);
+    let mut capped = file.take(max_binary() + 1);
     loop {
         let n = capped.read(&mut buf)?;
         if n == 0 {
@@ -196,4 +210,29 @@ fn program(file: &File, _path: PathBuf) -> PathBuf {
 #[cfg(not(target_os = "linux"))]
 fn program(_file: &File, path: PathBuf) -> PathBuf {
     path
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Error, ErrorKind};
+
+    /// What can't change by itself sets the overlay aside; what may pass
+    /// keeps it.
+    #[test]
+    fn only_definitive_errors_are_bad() {
+        let bad = |e: Error| matches!(io_refusal("x", &e), Refusal::Bad(_));
+        assert!(bad(Error::from(ErrorKind::NotFound)));
+        assert!(bad(Error::new(ErrorKind::InvalidData, "too large")));
+        assert!(bad(Error::from_raw_os_error(
+            rustix::io::Errno::LOOP.raw_os_error()
+        )));
+        for transient in [
+            Error::from(ErrorKind::PermissionDenied),
+            Error::from_raw_os_error(rustix::io::Errno::IO.raw_os_error()),
+            Error::from_raw_os_error(rustix::io::Errno::MFILE.raw_os_error()),
+        ] {
+            assert!(!bad(transient));
+        }
+    }
 }
