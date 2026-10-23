@@ -56,7 +56,10 @@
     <Property Id="WEB_FIREWALL_PREV">
       <RegistrySearch Id="WebFirewallPrev" Root="HKLM" Key="Software\Lodestar" Name="FirewallWeb" Type="raw" Win64="yes" />
     </Property>
-    <SetProperty Id="WEB_FIREWALL" Value="1" After="AppSearch" Sequence="both">WEB_FIREWALL_PREV = "#1" AND NOT WEB_FIREWALL</SetProperty>
+    <!-- Sequence="first": in the UI sequence when there is one (so a user who unticks the box on an upgrade is
+         not overridden in the execute sequence, where an emptied property is not passed from the client),
+         in the execute sequence only for a silent install. An explicit WEB_FIREWALL=0 also wins. -->
+    <SetProperty Id="WEB_FIREWALL" Value="1" After="AppSearch" Sequence="first">WEB_FIREWALL_PREV = "#1" AND WEB_FIREWALL = ""</SetProperty>
     <!-- `msiexec /x lodestar.msi REMOVE_DATA=1` also deletes the data folder. -->
     <Property Id="REMOVE_DATA" Secure="yes" />
 
