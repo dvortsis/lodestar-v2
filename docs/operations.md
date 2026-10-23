@@ -193,8 +193,13 @@ doesn't write those snapshots yet **(planned)**. `cold.db` and the
   - **Snapshots are deleted 90 days after they are taken.** That is the
     window to roll back an upgrade. For a longer-term copy, make a backup
     (below) and keep it somewhere safe.
+  - **A rollback keeps the store it replaced** as
+    `lodestar.before-rollback-<time>.db`, so you can undo it with
+    `lodestar rollback <that name>`. This copy is also deleted after 90
+    days.
   - **Snapshots get the same clean-up as the database.** Every hour while
-    it runs, Lodestar also removes from the snapshots the expired
+    it runs, Lodestar also removes from the snapshots (and the copies
+    rollbacks keep) the expired
     quarantine entries (with their hidden names) and the torrents an abuse
     report or a filter deleted, so a snapshot can't bring them back.
   - `lodestar stats` shows how many snapshots there are and their total

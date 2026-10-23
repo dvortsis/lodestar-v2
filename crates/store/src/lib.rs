@@ -376,6 +376,8 @@ pub struct Store {
     /// The database file, for its migration snapshots ([`snapshots`]);
     /// `None` in memory and on read-only connections.
     path: Option<PathBuf>,
+    /// How far each snapshot was checked by [`Store::purge_snapshots`].
+    snapshot_marks: snapshots::Marks,
 }
 
 impl Store {
@@ -440,6 +442,7 @@ impl Store {
             config,
             scrub_pending: false,
             path: None,
+            snapshot_marks: Default::default(),
         })
     }
 
@@ -481,6 +484,7 @@ impl Store {
             config,
             scrub_pending: _,
             path: _,
+            snapshot_marks: _,
         } = self;
         let own: Vec<Prepared> = batch
             .torrents

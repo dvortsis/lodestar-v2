@@ -27,73 +27,46 @@ use super::util::{
 use crate::config::Config;
 use lodestar_store::snapshots::{self, RETAIN_DAYS};
 
-/// One `<stem>.pre-v<N>[.<k>].db` file.
+/// One snapshot of the store: a `<stem>.pre-v<N>[.<k>].db` file, or the
+/// `<stem>.before-rollback-<time>.db` copy an earlier rollback kept
+/// (`lodestar_store::snapshots`, which also purges and expires them).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Snapshot {
     pub path: PathBuf,
     pub name: String,
-    /// Taken before migrating to this version, so it holds `version - 1`.
-    pub version: i64,
+    /// Taken before migrating to this version, so it holds `version - 1`;
+    /// `None` for a copy a rollback kept.
+    pub version: Option<i64>,
     /// The `k` of a repeat snapshot of the same migration (0 for the first).
     pub repeat: u32,
     pub bytes: u64,
     pub modified: Option<i64>,
 }
 
-/// The snapshots of the store at `db`, oldest migration first.
+/// The snapshots of the store at `db`: pre-migration ones oldest
+/// migration first, then the copies rollbacks kept, oldest first.
 pub fn snapshots(db: &Path) -> Outcome<Vec<Snapshot>> {
-    let dir = db.parent().unwrap_or(Path::new("."));
-    let stem = db
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .ok_or_else(|| Failure::Failed(format!("{} has no file name", db.display())))?;
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(Failure::Failed(format!("reading {}: {e}", dir.display()))),
-    };
-    let mut out = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(failed(format!("reading {}", dir.display())))?;
-        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
-            continue;
-        };
-        let Some((version, repeat)) = parse_name(stem, &name) else {
-            continue;
-        };
-        // Symlinks and folders aren't snapshots this build wrote.
-        if !entry.file_type().is_ok_and(|t| t.is_file()) {
-            continue;
-        }
-        let path = entry.path();
-        out.push(Snapshot {
-            bytes: file_len(&path),
-            modified: modified_secs(&path),
-            path,
-            name,
-            version,
-            repeat,
-        });
-    }
-    out.sort_by_key(|s| (s.version, s.repeat));
-    Ok(out)
-}
-
-/// `(N, k)` from `<stem>.pre-v<N>.db` or `<stem>.pre-v<N>.<k>.db`.
-fn parse_name(stem: &str, name: &str) -> Option<(i64, u32)> {
-    let rest = name
-        .strip_prefix(stem)?
-        .strip_prefix(".pre-v")?
-        .strip_suffix(".db")?;
-    let (n, k) = match rest.split_once('.') {
-        Some((n, k)) => (n, Some(k)),
-        None => (rest, None),
-    };
-    let digits = |s: &str| !s.is_empty() && s.len() <= 9 && s.bytes().all(|b| b.is_ascii_digit());
-    if !digits(n) || !k.is_none_or(digits) {
-        return None;
-    }
-    Some((n.parse().ok()?, k.map_or(Some(0), |k| k.parse().ok())?))
+    let all = snapshots::list(db).map_err(failed(format!(
+        "listing the snapshots beside {}",
+        db.display()
+    )))?;
+    Ok(all
+        .into_iter()
+        .map(|s| {
+            let (version, repeat) = match s.kind {
+                snapshots::Kind::PreMigration { version, repeat } => (Some(version), repeat),
+                snapshots::Kind::BeforeRollback => (None, 0),
+            };
+            Snapshot {
+                bytes: file_len(&s.path),
+                modified: modified_secs(&s.path),
+                path: s.path,
+                name: s.name,
+                version,
+                repeat,
+            }
+        })
+        .collect())
 }
 
 /// Which snapshot `wanted` names: its file name, or `v<N>` when exactly
@@ -106,7 +79,7 @@ fn pick<'a>(all: &'a [Snapshot], wanted: &str) -> Outcome<&'a Snapshot> {
     let by_version: Vec<_> = wanted
         .strip_prefix('v')
         .and_then(|n| n.parse::<i64>().ok())
-        .map(|n| all.iter().filter(|s| s.version == n).collect())
+        .map(|n| all.iter().filter(|s| s.version == Some(n)).collect())
         .unwrap_or_default();
     match by_version.as_slice() {
         [one] => Ok(one),
@@ -154,7 +127,7 @@ pub fn run(config: &Config, options: Options<'_>) -> Outcome {
         None => println!("Nothing was changed."),
         Some(r) => {
             println!(
-                "Restored {}. The store before the rollback is kept as {}.",
+                "Restored {}. The store before the rollback is kept as {} for {RETAIN_DAYS} days.",
                 snapshot.name,
                 r.kept.display()
             );
@@ -182,10 +155,13 @@ fn list(all: &[Snapshot], now: i64) {
     }
     println!("Snapshots taken before each upgrade of the store:");
     for s in all {
+        let what = s.version.map_or_else(
+            || "kept by a rollback".to_string(),
+            |v| format!("before v{v}"),
+        );
         println!(
-            "  {:<28} before v{}, {}, {}",
+            "  {:<28} {what}, {}, {}",
             s.name,
-            s.version,
             format_bytes(s.bytes),
             age(s.modified, now)
         );
@@ -195,8 +171,9 @@ fn list(all: &[Snapshot], now: i64) {
          is kept as a copy."
     );
     println!(
-        "Lodestar deletes each snapshot {RETAIN_DAYS} days after it was taken, and removes \
-         expired quarantine and deleted torrents from them as it does from the store."
+        "Lodestar deletes each snapshot, and each copy a rollback kept, {RETAIN_DAYS} days \
+         after it was taken, and removes expired quarantine and deleted torrents from them as \
+         it does from the store."
     );
 }
 
@@ -250,6 +227,10 @@ pub fn restore(
     let db = config.db_path();
     let lock = StoreLock::acquire(&db)?;
     let (snap_schema, snap_torrents) = {
+        // A WAL left by an interrupted snapshot purge is folded in first,
+        // so the check and the copy below see the purged file.
+        snapshots::settle(&snapshot.path)
+            .map_err(failed(format!("opening {}", snapshot.path.display())))?;
         let conn = open_read_only(&snapshot.path)?;
         quick_check(&conn).map_err(|e| {
             Failure::Failed(format!("{} fails its check: {e}", snapshot.path.display()))
@@ -350,28 +331,11 @@ pub fn restore(
 mod tests {
     use super::*;
 
-    #[test]
-    fn parses_snapshot_names() {
-        assert_eq!(parse_name("lodestar", "lodestar.pre-v4.db"), Some((4, 0)));
-        assert_eq!(parse_name("lodestar", "lodestar.pre-v4.2.db"), Some((4, 2)));
-        assert_eq!(parse_name("lodestar", "lodestar.pre-v.db"), None);
-        assert_eq!(parse_name("lodestar", "lodestar.pre-v4..db"), None);
-        assert_eq!(parse_name("lodestar", "lodestar.pre-v4.x.db"), None);
-        assert_eq!(parse_name("lodestar", "lodestar.pre-v4.db-wal"), None);
-        assert_eq!(parse_name("lodestar", "other.pre-v4.db"), None);
-        assert_eq!(parse_name("lodestar", "lodestar.pre-v-1.db"), None);
-        assert_eq!(parse_name("lodestar", "lodestar.pre-v99999999999.db"), None);
-        assert_eq!(
-            parse_name("lodestar", "lodestar.before-rollback-20261022-000000.db"),
-            None
-        );
-    }
-
     fn snap(name: &str, version: i64, repeat: u32) -> Snapshot {
         Snapshot {
             path: PathBuf::from(name),
             name: name.into(),
-            version,
+            version: Some(version),
             repeat,
             bytes: 0,
             modified: None,
