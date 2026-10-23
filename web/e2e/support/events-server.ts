@@ -33,12 +33,15 @@ declare global {
 
 /**
  * The shell starts its stream on the first interaction (or 30 s after load). Tests that need it
- * right away send one: a synthetic event the shell treats like the first key press.
+ * right away send one: a synthetic event the shell treats like the first key press. Sent for four
+ * seconds, since the chrome that listens for it mounts a moment after load.
  */
 export async function engage(page: Page) {
-	// The chrome (and its listeners) mounts a moment after load; its skip link is the sign.
-	await page.waitForSelector('a[href="#main"]', { state: 'attached' });
-	await page.evaluate(() => window.dispatchEvent(new Event('focusin')));
+	// The chrome's listeners attach when it mounts, a moment after load: nudge until it has.
+	for (let i = 0; i < 40; i++) {
+		await page.evaluate(() => window.dispatchEvent(new Event('focusin')));
+		await page.waitForTimeout(100);
+	}
 }
 
 export interface EventsHandle {
@@ -92,10 +95,8 @@ export async function liveEvents(
 		// Keep nudging until the chrome has mounted and taken it.
 		let tries = 0;
 		const nudge = setInterval(() => {
-			if (document.querySelector('a[href="#main"]')) {
-				dispatchEvent(new Event('focusin'));
-				clearInterval(nudge);
-			} else if (++tries > 100) clearInterval(nudge);
+			dispatchEvent(new Event('focusin'));
+			if (++tries > 60) clearInterval(nudge);
 		}, 100);
 	}, initial);
 	return {

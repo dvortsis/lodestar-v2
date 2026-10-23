@@ -308,7 +308,9 @@ test.describe('401 hand-off', () => {
 		})
 	});
 
-	test('a first run goes to /setup', async ({ page }) => {
+	test('a first run goes to /setup', async ({ page, mock }) => {
+		// The setup screen checks GET /auth itself and goes back to /login if no setup is needed.
+		mock.on('getAuthStatus', { logged_in: false, setup_required: true });
 		await page.route('**/api/v1/events*', (route) => route.fulfill(unauthorized(true)));
 		await page.goto('/search');
 		await engage(page);
