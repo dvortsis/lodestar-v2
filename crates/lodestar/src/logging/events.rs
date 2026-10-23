@@ -357,4 +357,69 @@ lodestar_log::catalogue! {
         message: "Applying the blocklist subscriptions failed",
         fields: { error: Error },
     }
+    /// A saved search's query can't be read by this build; it's skipped
+    /// until it's saved again (once per search per run of Lodestar).
+    ALERTS_SEARCH_UNREADABLE {
+        id: "alerts.search_unreadable",
+        component: Search,
+        level: Warn,
+        message: "A saved search has a query this build can't read; skipped",
+        fields: { saved_search: Label },
+    }
+    /// New alerts were recorded but their live event wasn't sent.
+    ALERTS_ANNOUNCE_FAILED {
+        id: "alerts.announce_failed",
+        component: Search,
+        level: Warn,
+        message: "Announcing new alerts failed; they're recorded and listed",
+        fields: {},
+    }
+    /// One percolator run: counts only, never a query.
+    ALERTS_RUN {
+        id: "alerts.run",
+        component: Search,
+        level: Debug,
+        message: "Percolator run",
+        fields: { searches: Label, through: Label, alerts: Label, unreadable: Label, more: Label },
+    }
+    /// New alerts were found.
+    ALERTS_FOUND {
+        id: "alerts.found",
+        component: Search,
+        level: Info,
+        message: "New alerts",
+        fields: { alerts: Label, searches: Label, events: Label, took_ms: Label },
+    }
+    /// Old alerts were pruned.
+    ALERTS_PRUNED {
+        id: "alerts.pruned",
+        component: Search,
+        level: Info,
+        message: "Pruned old alerts",
+        fields: { alerts: Label },
+    }
+    /// Pruning old alerts failed.
+    ALERTS_PRUNE_FAILED {
+        id: "alerts.prune_failed",
+        component: Search,
+        level: Warn,
+        message: "Pruning old alerts failed",
+        fields: { error: Error },
+    }
+    /// The index's watermark couldn't be read.
+    ALERTS_WATERMARK_FAILED {
+        id: "alerts.watermark_failed",
+        component: Search,
+        level: Warn,
+        message: "Reading the index watermark failed",
+        fields: { error: Error },
+    }
+    /// A percolator run failed or panicked; it's retried.
+    ALERTS_RUN_FAILED {
+        id: "alerts.run_failed",
+        component: Search,
+        level: Warn,
+        message: "A percolator run failed; retrying",
+        fields: { panicked: Label, error: Error },
+    }
 }

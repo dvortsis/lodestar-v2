@@ -9,8 +9,13 @@
 //! - characters XML 1.0 forbids (C0 controls other than tab, newline and
 //!   carriage return, and U+FFFE and U+FFFF) are dropped. Lone surrogates
 //!   can't occur in a Rust string. Nothing else is changed;
-//! - no CDATA sections, and no attribute takes input (`isPermaLink` is
-//!   always `false`);
+//! - no CDATA sections. The one attribute built from input is the magnet
+//!   enclosure's `url`, which [`render`] assembles itself from a checked
+//!   info-hash and a percent-encoded name (see [`RssMagnet`]), then
+//!   escapes; `isPermaLink` is always `false`;
+//! - item titles go through `clean_line`: control characters become
+//!   spaces and bidirectional overrides are dropped, so a name can't
+//!   break a reader's list or disguise itself;
 //! - an item's `description` is plain text, but RSS readers decode it as
 //!   HTML after the XML is parsed, so `&lt;img onerror=…&gt;` would become a
 //!   live tag. It is HTML-escaped first and XML-escaped second, so a reader
@@ -26,6 +31,8 @@
 use std::fmt::Write;
 
 use super::Notification;
+use reqwest::Url;
+
 use super::text::{clean_line, format_bytes, web_link};
 
 /// What the renderer can't repair.
@@ -74,6 +81,65 @@ pub struct RssItem {
     /// Found only through a private source (§18.7): [`render`] leaves the
     /// item out.
     pub private_source: bool,
+    /// The torrent as a magnet link, written as the item's enclosure so
+    /// feed readers and download clients can fetch it.
+    pub magnet: Option<RssMagnet>,
+}
+
+/// What a magnet enclosure is built from. [`render`] accepts only this
+/// shape, `magnet:?xt=urn:btih:<40 hex>&dn=<percent-encoded name>`, typed
+/// `application/x-bittorrent` with the torrent's size as its length; an
+/// info-hash that isn't 40 hex digits leaves the enclosure out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RssMagnet {
+    /// The v1 info-hash (or a v2 hash truncated to 20 bytes), as hex.
+    pub info_hash: String,
+    /// The display name; cleaned as a title is, then percent-encoded.
+    pub name: String,
+    /// Bytes.
+    pub size: u64,
+}
+
+/// The magnet URL for `m`, or `None` when its hash isn't 40 hex digits.
+fn magnet_url(m: &RssMagnet) -> Option<String> {
+    let hash = &m.info_hash;
+    if hash.len() != 40 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut url = format!("magnet:?xt=urn:btih:{}&dn=", hash.to_ascii_lowercase());
+    for b in clean_line(&m.name).bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            url.push(char::from(b));
+        } else {
+            let _ = write!(url, "%{b:02X}");
+        }
+    }
+    Some(url)
+}
+
+/// `scheme://host[:port]` for a feed's links, from a request's `Host`
+/// value: only a host name or IP address and an optional port pass, read
+/// through [`Url`] (so it's normalized: lower case, IDNA, no default
+/// port). Anything else (a path, credentials, a query, stray characters)
+/// is `None`, and the caller falls back to a fixed origin.
+pub fn feed_origin(https: bool, host: &str) -> Option<String> {
+    let host = host.trim();
+    let allowed = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']');
+    if host.is_empty() || host.len() > 255 || !host.chars().all(allowed) {
+        return None;
+    }
+    let scheme = if https { "https" } else { "http" };
+    let url = Url::parse(&format!("{scheme}://{host}/")).ok()?;
+    let plain = url.username().is_empty()
+        && url.password().is_none()
+        && url.path() == "/"
+        && url.query().is_none()
+        && url.fragment().is_none();
+    let name = url.host_str().filter(|h| plain && !h.is_empty())?;
+    Some(match url.port() {
+        Some(port) => format!("{scheme}://{name}:{port}"),
+        None => format!("{scheme}://{name}"),
+    })
 }
 
 /// The items of `n` a feed may carry: shareable ones only, each with its
@@ -86,6 +152,7 @@ pub fn items_from_notification(n: &Notification) -> Vec<RssItem> {
             guid: item.info_hash.clone(),
             published: n.created_at,
             private_source: false,
+            magnet: None,
             description: match item.size_bytes {
                 Some(size) => format!("{} ({})", clean_line(&n.title), format_bytes(size)),
                 None => clean_line(&n.title),
@@ -111,7 +178,7 @@ pub fn render(channel: &RssChannel, items: &[RssItem]) -> Result<String, RssErro
     element(&mut out, 1, "lastBuildDate", &rfc2822(channel.built_at));
     for item in items.iter().filter(|i| !i.private_source) {
         out.push_str("  <item>\n");
-        element(&mut out, 2, "title", &item.title);
+        element(&mut out, 2, "title", &clean_line(&item.title));
         if let Some(link) = item.link.as_deref().and_then(web_link) {
             element(&mut out, 2, "link", &link);
         }
@@ -120,6 +187,15 @@ pub fn render(channel: &RssChannel, items: &[RssItem]) -> Result<String, RssErro
         out.push_str("</guid>\n");
         element(&mut out, 2, "pubDate", &rfc2822(item.published));
         element(&mut out, 2, "description", &html_escape(&item.description));
+        if let Some((url, m)) = item.magnet.as_ref().and_then(|m| Some((magnet_url(m)?, m))) {
+            out.push_str("    <enclosure url=\"");
+            escape_into(&mut out, &url);
+            let _ = writeln!(
+                out,
+                "\" type=\"application/x-bittorrent\" length=\"{}\"/>",
+                m.size
+            );
+        }
         out.push_str("  </item>\n");
     }
     out.push_str("</channel>\n</rss>\n");
@@ -226,13 +302,20 @@ mod tests {
             published: 1_761_134_400 + i,
             description: "Two new results (4.37\u{a0}GiB)".into(),
             private_source: false,
+            magnet: None,
         }
     }
 
     #[test]
     fn golden_output() {
         let mut hostile = item(1);
-        hostile.title = "Tom & Jerry <script>alert('x')</script> \"quoted\"\u{0}\u{8}\r\n\t".into();
+        hostile.title =
+            "Tom & Jerry <script>alert('x')</script>\u{202E} \"quoted\"\u{0}\u{8}\r\n\tend".into();
+        hostile.magnet = Some(RssMagnet {
+            info_hash: "AB".repeat(20),
+            name: "Tom & Jerry \"x\" <y>\r\n".into(),
+            size: 1234,
+        });
         let got = render(&channel(), &[item(0), hostile]).unwrap();
         let want = "\
 <?xml version=\"1.0\" encoding=\"UTF-8\"?>
@@ -250,12 +333,12 @@ mod tests {
     <description>Two new results (4.37\u{a0}GiB)</description>
   </item>
   <item>
-    <title>Tom &amp; Jerry &lt;script&gt;alert(&apos;x&apos;)&lt;/script&gt; &quot;quoted&quot;&#xD;
-\t</title>
+    <title>Tom &amp; Jerry &lt;script&gt;alert(&apos;x&apos;)&lt;/script&gt; &quot;quoted&quot;     end</title>
     <link>http://lodestar.lan/t/aaaa</link>
     <guid isPermaLink=\"false\">aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</guid>
     <pubDate>Wed, 22 Oct 2025 12:00:01 GMT</pubDate>
     <description>Two new results (4.37\u{a0}GiB)</description>
+    <enclosure url=\"magnet:?xt=urn:btih:abababababababababababababababababababab&amp;dn=Tom%20%26%20Jerry%20%22x%22%20%3Cy%3E\" type=\"application/x-bittorrent\" length=\"1234\"/>
   </item>
 </channel>
 </rss>
@@ -374,6 +457,216 @@ mod tests {
         assert!(!xml.contains("<item>"));
     }
 
+    #[test]
+    fn only_the_magnet_shape_is_written() {
+        let with = |hash: &str, name: &str| {
+            let mut i = item(0);
+            i.magnet = Some(RssMagnet {
+                info_hash: hash.into(),
+                name: name.into(),
+                size: 7,
+            });
+            render(&channel(), &[i]).unwrap()
+        };
+        let good = with(&"0123456789abcdefABCDEF".repeat(2)[..40], "a b/é");
+        assert!(good.contains(
+            "<enclosure url=\"magnet:?xt=urn:btih:0123456789abcdefabcdef0123456789abcdefab&amp;dn=a%20b%2F%C3%A9\" type=\"application/x-bittorrent\" length=\"7\"/>"
+        ));
+        check_well_formed(&good).unwrap();
+        for bad in [
+            "a".repeat(39),
+            "a".repeat(41),
+            "g".repeat(40),
+            format!("{}\"", "a".repeat(39)),
+            format!("{}&x=", "a".repeat(37)),
+            "é".repeat(20),
+            String::new(),
+        ] {
+            let xml = with(&bad, "x");
+            assert!(!xml.contains("enclosure"), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn origins_are_a_host_and_port_only() {
+        for (https, host, want) in [
+            (false, "lodestar.lan:8090", Some("http://lodestar.lan:8090")),
+            (true, "LODESTAR.example", Some("https://lodestar.example")),
+            (false, "192.168.1.5", Some("http://192.168.1.5")),
+            (false, "[::1]:8090", Some("http://[::1]:8090")),
+            // The scheme's default port is dropped.
+            (false, "host:80", Some("http://host")),
+            (true, "host:443", Some("https://host")),
+            (false, "", None),
+            (false, "user@host", None),
+            (false, "host/path", None),
+            (false, "host?x=1", None),
+            (false, "host#x", None),
+            (false, "host:99999", None),
+            (false, "a b", None),
+            (false, "host\"><x", None),
+            (false, "javascript:alert(1)", None),
+        ] {
+            assert_eq!(feed_origin(https, host).as_deref(), want, "{host:?}");
+        }
+        assert!(feed_origin(false, &"a".repeat(256)).is_none());
+    }
+
+    /// An element as parsed: its name, its text and its attributes.
+    type Parsed = (String, String, Vec<(String, String)>);
+
+    /// The document as a real XML parser reads it: every element's name,
+    /// its text (references resolved) and its attributes, in order. Any
+    /// DOCTYPE, CDATA, comment or processing instruction is an error, so
+    /// "no live markup" means exactly the renderer's own elements.
+    fn parse_with_quick_xml(xml: &str) -> Result<Vec<Parsed>, String> {
+        use quick_xml::Reader;
+        use quick_xml::events::Event;
+        let mut reader = Reader::from_str(xml);
+        let mut out: Vec<Parsed> = Vec::new();
+        let mut open: Vec<usize> = Vec::new();
+        loop {
+            let event = reader.read_event().map_err(|e| e.to_string())?;
+            let element = |e: &quick_xml::events::BytesStart<'_>| -> Result<_, String> {
+                let name = e.name().as_ref().to_owned();
+                let mut attrs = Vec::new();
+                for a in e.attributes() {
+                    let a = a.map_err(|e| e.to_string())?;
+                    let k = a.key.as_ref().to_owned();
+                    let v = a
+                        .normalized_value(quick_xml::XmlVersion::Implicit1_0)
+                        .map_err(|e| e.to_string())?
+                        .into_owned();
+                    attrs.push((k, v));
+                }
+                Ok((name, String::new(), attrs))
+            };
+            match event {
+                Event::Decl(_) => {}
+                Event::Start(e) => {
+                    out.push(element(&e)?);
+                    open.push(out.len() - 1);
+                }
+                Event::Empty(e) => out.push(element(&e)?),
+                Event::End(_) => {
+                    open.pop().ok_or("unbalanced end")?;
+                }
+                Event::Text(t) => {
+                    let text = t.xml10_content().into_owned();
+                    if let Some(&i) = open.last() {
+                        out[i].1.push_str(&text);
+                    } else if !text.trim().is_empty() {
+                        return Err("text outside the root".into());
+                    }
+                }
+                Event::GeneralRef(r) => {
+                    let c = match r.resolve_char_ref().map_err(|e| e.to_string())? {
+                        Some(c) => c.to_string(),
+                        None => match &*r {
+                            "amp" => "&".into(),
+                            "lt" => "<".into(),
+                            "gt" => ">".into(),
+                            "quot" => "\"".into(),
+                            "apos" => "'".into(),
+                            other => return Err(format!("unknown entity {other}")),
+                        },
+                    };
+                    let i = *open.last().ok_or("a reference outside the root")?;
+                    out[i].1.push_str(&c);
+                }
+                Event::Eof => break,
+                other => return Err(format!("unexpected {other:?}")),
+            }
+        }
+        if open.is_empty() {
+            Ok(out)
+        } else {
+            Err("unclosed element".into())
+        }
+    }
+
+    /// Percent-decodes a magnet's `dn`.
+    fn percent_decode(s: &str) -> String {
+        let b = s.as_bytes();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] == b'%' {
+                out.push(u8::from_str_radix(&s[i + 1..i + 3], 16).unwrap());
+                i += 3;
+            } else {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+        String::from_utf8(out).unwrap()
+    }
+
+    fn hostile_name() -> impl Strategy<Value = String> {
+        prop::collection::vec(
+            prop_oneof![
+                3 => any::<char>(),
+                3 => prop::sample::select(vec![
+                    '&', '<', '>', '"', '\'', '\r', '\n', '\t', '\0', '\u{1}', '\u{1b}',
+                    '\u{7f}', '\u{85}', '\u{202e}', '\u{2066}', '\u{200f}', '\u{fffe}', '%',
+                    '=', '?', ']', ';', '#', '/', ' ',
+                ]),
+            ],
+            0..48,
+        )
+        .prop_map(|v| v.into_iter().collect::<String>())
+        .prop_map(|s| {
+            // A CDATA terminator and a fake tag, somewhere in most names.
+            if s.len() % 3 == 0 {
+                format!("{s}]]><x>{s}")
+            } else {
+                s
+            }
+        })
+    }
+
+    proptest! {
+        /// Arbitrary torrent names (markup, controls, CR, bidi, `]]>`)
+        /// give XML a real parser reads back with the name intact (as
+        /// `clean_line` leaves it), in the title and the magnet's `dn`,
+        /// and no element the renderer didn't write.
+        #[test]
+        fn hostile_names_parse_back_intact(name in hostile_name(), size in any::<u64>()) {
+            let i = RssItem {
+                title: name.clone(),
+                link: Some("http://lodestar.lan/t/aaaa".into()),
+                guid: "ab".repeat(20),
+                published: 0,
+                description: name.clone(),
+                private_source: false,
+                magnet: Some(RssMagnet { info_hash: "ab".repeat(20), name: name.clone(), size }),
+            };
+            let xml = render(&channel(), &[i]).unwrap();
+            let parsed = parse_with_quick_xml(&xml).map_err(|e| TestCaseError::fail(format!("{e}\n{xml}")))?;
+            let names: Vec<&str> = parsed.iter().map(|(n, _, _)| n.as_str()).collect();
+            prop_assert_eq!(
+                names,
+                ["rss", "channel", "title", "link", "description", "lastBuildDate",
+                 "item", "title", "link", "guid", "pubDate", "description", "enclosure"]
+            );
+            let want = expected(&clean_line(&name));
+            prop_assert_eq!(&parsed[7].1, &want);
+            // The description: one more HTML layer, which a reader undoes.
+            prop_assert_eq!(html_unescape(&parsed[11].1), expected(&name));
+            prop_assert!(!parsed[11].1.contains('<'));
+            let attrs = &parsed[12].2;
+            prop_assert_eq!(attrs.len(), 3);
+            prop_assert_eq!(&attrs[1], &("type".to_string(), "application/x-bittorrent".to_string()));
+            prop_assert_eq!(&attrs[2], &("length".to_string(), size.to_string()));
+            let url = &attrs[0].1;
+            let dn = url
+                .strip_prefix(&format!("magnet:?xt=urn:btih:{}&dn=", "ab".repeat(20)))
+                .ok_or_else(|| TestCaseError::fail(url.clone()))?;
+            prop_assert!(dn.bytes().all(|b| b.is_ascii_alphanumeric() || b"-._~%".contains(&b)));
+            prop_assert_eq!(percent_decode(dn), clean_line(&name));
+        }
+    }
+
     // A minimal well-formedness check, written here so the test doesn't
     // rely on the renderer's own idea of XML: tags balance, text holds no
     // raw `<` and only the five named entities and `&#xD;` after `&`, and
@@ -403,8 +696,13 @@ mod tests {
                     return Err(format!("unbalanced </{name}>"));
                 }
             } else {
+                // `<enclosure …/>` is the one empty element.
+                let (tag, empty) = match tag.strip_suffix('/') {
+                    Some(t) => (t, true),
+                    None => (tag, false),
+                };
                 let name = tag.split(' ').next().unwrap_or("");
-                if name.is_empty() || tag.ends_with('/') || tag.starts_with('!') {
+                if name.is_empty() || tag.starts_with('!') || (empty && name != "enclosure") {
                     return Err(format!("unexpected tag <{tag}>"));
                 }
                 // Attribute values: quoted, and holding no raw `<`, `&`
@@ -414,12 +712,15 @@ mod tests {
                         let (k, v) = attr.split_once('=').ok_or("bare attribute")?;
                         let v = v.strip_prefix('"').and_then(|v| v.strip_suffix('"'));
                         let v = v.ok_or("unquoted attribute")?;
-                        if k.is_empty() || v.contains(['"', '&']) {
+                        if k.is_empty() || v.contains('"') {
                             return Err(format!("bad attribute {attr}"));
                         }
+                        check_text(v)?;
                     }
                 }
-                stack.push(name);
+                if !empty {
+                    stack.push(name);
+                }
             }
             rest = &rest[gt + 1..];
         }
@@ -506,6 +807,7 @@ mod tests {
                 published: 0,
                 description: description.clone(),
                 private_source: false,
+                magnet: None,
             };
             let xml = render(&c, &[i]).unwrap();
             prop_assert_eq!(check_well_formed(&xml), Ok(()));
@@ -519,7 +821,7 @@ mod tests {
                 unescape(&xml[from..to])
             };
             prop_assert_eq!(text_of("title", 0), expected(&channel_title));
-            prop_assert_eq!(text_of("title", 1), expected(&title));
+            prop_assert_eq!(text_of("title", 1), expected(&clean_line(&title)));
             prop_assert_eq!(text_of("guid", 0), expected(&guid));
             // A reader decodes the XML, then the HTML: both layers undone
             // give back the input.
@@ -548,6 +850,8 @@ mod tests {
             "<a>",
             "<a>\u{1}</a>",
             "<a b=c></a>",
+            "<a b=\"x & y\"></a>",
+            "<a/>",
             "<a><![CDATA[x]]></a>",
         ] {
             assert!(check_well_formed(bad).is_err(), "{bad}");

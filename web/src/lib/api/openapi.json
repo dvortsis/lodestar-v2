@@ -11,6 +11,84 @@
     }
   ],
   "paths": {
+    "/alerts/read": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Marks alerts read up to `through` (the highest alert id you saw), for\none saved search or all of them. Alerts that arrived since stay unread.\nIt returns no count: one would reveal alerts that are withheld.",
+        "operationId": "markAlertsRead",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlertsRead"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`saved_search_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/alerts/unread": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Unread alerts across every saved search, on torrents search would show:\nthe nav badge, equal to the sum of the saved searches' `unread`.",
+        "operationId": "getUnreadAlerts",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnreadAlerts"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/auth": {
       "get": {
         "tags": [
@@ -1495,6 +1573,89 @@
         ]
       }
     },
+    "/feeds/{id}": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "A saved search's alerts as RSS 2.0: the 50 newest on torrents search\nwould show, each with a magnet enclosure. Feed readers that can't sign\nin pass a feed token as `?token=`; an API key with the `feeds` scope\nworks too. Private-source torrents never appear. Anything the caller\ncan't have (another search's token, a search without RSS, an unknown\nid) is the same `404 feed_not_found`.",
+        "operationId": "getFeed",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The saved search's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "description": "A feed token (`lsf_…`), for feed readers that can't sign in. A\nsession or an API key with the `feeds` scope also works.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The feed.",
+            "content": {
+              "application/rss+xml": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Unchanged since the `ETag` sent in `If-None-Match`."
+          },
+          "401": {
+            "description": "`login_required` or `bad_api_key`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`key_scope`: an API key without the `feeds` scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`feed_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/filters": {
       "get": {
         "tags": [
@@ -2958,6 +3119,16 @@
               }
             }
           },
+          "409": {
+            "description": "`too_many_saved_searches`: 1,000 are kept at most.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "422": {
             "description": "`invalid_value`: the name or query isn't allowed.",
             "content": {
@@ -3139,6 +3310,86 @@
           },
           "422": {
             "description": "`invalid_value`: the name or query isn't allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/saved-searches/{id}/alerts": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "A saved search's alerts, newest first. Only alerts on torrents search\nwould show: none a filter rule hid, and Adult only while \"Show adult\ncontent\" is on. A page is full unless the list ends: withheld rows are\nskipped, never counted.",
+        "operationId": "listAlerts",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The saved search's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The previous page's `next_cursor`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "1–200; 50 by default.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertsPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`bad_cursor`: a cursor this server didn't give out.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`saved_search_not_found`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4785,36 +5036,123 @@
           "restarting": false
         }
       },
+      "AlertRow": {
+        "type": "object",
+        "description": "One alert: a torrent a saved search matched once it became searchable.",
+        "required": [
+          "created_at",
+          "id",
+          "read",
+          "torrent"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it was recorded, Unix seconds."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The alert's id, never reused. `POST /alerts/read` takes the\nhighest one you saw."
+          },
+          "read": {
+            "type": "boolean",
+            "description": "Marked read."
+          },
+          "torrent": {
+            "$ref": "#/components/schemas/SearchHit"
+          }
+        }
+      },
       "AlertsEvent": {
         "type": "object",
-        "description": "`event: alerts` (reserved: B9 publishes it): a saved search matched\nnew torrents. The matches themselves come from the API.",
+        "description": "`event: alerts`: a saved search matched torrents that just became\nsearchable. One event per saved search per percolation run; the\nmatches themselves come from `GET /saved-searches/{id}/alerts`. Only\ntorrents search would show count: none a filter rule hid, and no\nAdult while \"Show adult content\" is off (§20.9). A run whose new\nmatches are all hidden sends no event.",
         "required": [
           "alert",
           "matched",
           "max_id",
+          "notify",
           "saved_search"
         ],
         "properties": {
           "alert": {
             "type": "integer",
             "format": "int64",
-            "description": "The alert's id."
+            "description": "The highest new alert's id (shown ones only)."
           },
           "matched": {
             "type": "integer",
             "format": "int64",
-            "description": "New matches.",
+            "description": "New alerts on torrents you can see; at least 1.",
             "minimum": 0
           },
           "max_id": {
             "type": "integer",
             "format": "int64",
-            "description": "The highest matching torrent id."
+            "description": "The highest of their torrent ids."
+          },
+          "notify": {
+            "type": "boolean",
+            "description": "The saved search alerts in the app (its `alert` flag): notify only\nwhen true. Otherwise the event only refreshes counts."
           },
           "saved_search": {
             "type": "integer",
             "format": "int64",
             "description": "The saved search's id."
+          }
+        },
+        "example": {
+          "alert": 913,
+          "matched": 2,
+          "max_id": 48211,
+          "notify": true,
+          "saved_search": 4
+        }
+      },
+      "AlertsPage": {
+        "type": "object",
+        "description": "`GET /saved-searches/{id}/alerts`.",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlertRow"
+            },
+            "description": "Newest first: only alerts on torrents search would show."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; null on the last."
+          }
+        }
+      },
+      "AlertsRead": {
+        "type": "object",
+        "description": "`POST /alerts/read`: marks alerts read up to the highest one you saw,\nso alerts that arrived while the page was open stay unread (§10.8's\n\"New since …\" divider).",
+        "required": [
+          "through"
+        ],
+        "properties": {
+          "saved_search": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "One saved search's alerts; every saved search's when absent."
+          },
+          "through": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The highest alert id you saw."
           }
         }
       },
@@ -14027,6 +14365,24 @@
           "needs_payload_signature",
           "needs_piece_roots"
         ]
+      },
+      "UnreadAlerts": {
+        "type": "object",
+        "description": "`GET /alerts/unread`: the nav badge.",
+        "required": [
+          "unread"
+        ],
+        "properties": {
+          "unread": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unread alerts across every saved search, on torrents search would\nshow: the sum of the saved searches' `unread`.",
+            "minimum": 0
+          }
+        },
+        "example": {
+          "unread": 3
+        }
       },
       "UserItemDetail": {
         "type": "object",

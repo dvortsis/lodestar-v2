@@ -104,6 +104,10 @@ const ROUTES: &[(&str, &str)] = &[
     ("POST", "/system/restart"),
     ("POST", "/system/address/keep"),
     ("POST", "/system/address/revert"),
+    ("GET", "/saved-searches/{id}/alerts"),
+    ("POST", "/alerts/read"),
+    ("GET", "/alerts/unread"),
+    ("GET", "/feeds/{id}"),
     ("GET", "/logs/catalog"),
     ("GET", "/openapi.json"),
 ];
@@ -265,9 +269,12 @@ fn app_with_keys() -> (tempfile::TempDir, Router, Arc<Auth>, Arc<Mutex<Store>>) 
     (dir, app, auth, store)
 }
 
-/// Every route that exists today stays session-only (§12): a valid API
-/// key with every scope, or a feed token, presented every way, gets the
-/// same 401 as no credentials at all.
+/// Every route stays session-only (§12): a valid API key with every
+/// scope, or a feed token, presented every way, gets the same 401 as no
+/// credentials at all. The one exception is the feed route (B9), which a
+/// key with `feeds` reaches as a key and a feed token as `?token=` only:
+/// there they're let through (to a 404, as no search exists), and the
+/// other way round is a bad key.
 #[tokio::test]
 async fn keys_reach_no_existing_route() {
     use lodestar_api::keys::{mint, scope};
@@ -336,15 +343,28 @@ async fn keys_reach_no_existing_route() {
                     .await
                     .unwrap();
                 let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+                let want = if path.starts_with("/feeds/") {
+                    let token = secret.starts_with("lsf_");
+                    let as_token = uri.contains("?token=");
+                    if token == as_token {
+                        (StatusCode::NOT_FOUND, Some("feed_not_found"))
+                    } else {
+                        (StatusCode::UNAUTHORIZED, Some("bad_api_key"))
+                    }
+                } else {
+                    (StatusCode::UNAUTHORIZED, Some("login_required"))
+                };
                 assert_eq!(
                     (status, body["error"]["code"].as_str()),
-                    (StatusCode::UNAUTHORIZED, Some("login_required")),
+                    want,
                     "{method} {uri}"
                 );
             }
         }
     }
-    // Nothing was recorded as a use.
+    // A use is recorded only once a key is let through: on the feed
+    // route, which each of them reached. Every other route answered 401
+    // before any key was checked.
     assert!(
         store
             .lock()
@@ -352,7 +372,7 @@ async fn keys_reach_no_existing_route() {
             .api_keys()
             .unwrap()
             .iter()
-            .all(|k| k.last_used_at.is_none())
+            .all(|k| k.last_used_at.is_some())
     );
 }
 

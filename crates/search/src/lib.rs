@@ -18,6 +18,7 @@ mod lease;
 mod live;
 pub mod log_events;
 pub mod natural;
+mod percolate;
 pub mod query;
 mod rebuild;
 pub mod schema;
@@ -48,5 +49,6 @@ pub use index::{
 };
 pub use lease::{EXACT_BUDGET, Lease, LeaseConfig, Leases, Page, Start};
 pub use live::{CommitHook, Committed, IndexStats, LiveConfig, LiveIndexer};
+pub use percolate::{Due, Matched, PercolateLimits, Percolation, percolate};
 pub use query::{Node, ParseError, parse};
 pub use rebuild::{IndexVersion, Rebuild, RebuildPhase, RebuildProgress, Serving, ServingConfig};
