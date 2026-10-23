@@ -123,7 +123,7 @@ pub fn event_json(
     m.insert("event".into(), record.event.id.into());
     m.insert("msg".into(), record.event.message.into());
     m.insert("fields".into(), Json::Object(fields));
-    Json::Object(m).to_string()
+    json_line(&Json::Object(m))
 }
 
 fn json_of(shown: &Rendered) -> Json {
@@ -138,24 +138,68 @@ fn json_of(shown: &Rendered) -> Json {
 /// `s` on one line: control characters escaped, so a message can't start
 /// a line of its own.
 fn one_line(s: &str) -> String {
-    match s.chars().any(char::is_control) {
-        true => s
-            .chars()
-            .map(|c| match c.is_control() {
-                true => c.escape_default().to_string(),
-                false => c.to_string(),
-            })
-            .collect(),
+    match s.chars().any(unsafe_char) {
+        true => s.chars().map(escape).collect(),
         false => s.to_string(),
     }
 }
 
-/// A value with spaces quoted, so `k=v` pairs stay readable.
+/// What a terminal would act on rather than show: control characters
+/// (ESC starts a sequence, BEL rings) and the bidirectional overrides,
+/// which can make a line read differently from what it holds.
+fn unsafe_char(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{200e}' | '\u{200f}' | '\u{061c}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+        )
+}
+
+fn escape(c: char) -> String {
+    match c {
+        '\n' => "\\n".into(),
+        '\r' => "\\r".into(),
+        '\t' => "\\t".into(),
+        c if unsafe_char(c) => format!("\\u{{{:x}}}", c as u32),
+        c => c.to_string(),
+    }
+}
+
+/// A value with spaces quoted, so `k=v` pairs stay readable, and quoted
+/// with its unsafe characters escaped whenever it holds one.
 fn quote(s: &str) -> String {
-    if s.is_empty() || s.contains(char::is_whitespace) || s.contains('"') {
-        format!("{s:?}")
-    } else {
-        s.to_string()
+    let needs = s.is_empty()
+        || s.contains(char::is_whitespace)
+        || s.contains('"')
+        || s.chars().any(unsafe_char);
+    if !needs {
+        return s.to_string();
+    }
+    let mut out = String::from('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c => out.push_str(&escape(c)),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// A JSON line with the bidirectional overrides escaped too (serde_json
+/// escapes the control characters already); still valid JSON.
+fn json_line(v: &Json) -> String {
+    let text = v.to_string();
+    match text.chars().any(unsafe_char) {
+        true => text
+            .chars()
+            .map(|c| match unsafe_char(c) {
+                true => format!("\\u{:04x}", c as u32),
+                false => c.to_string(),
+            })
+            .collect(),
+        false => text,
     }
 }
 
@@ -199,12 +243,29 @@ pub fn untyped_json(stamp: Stamp, u: &Untyped) -> String {
     m.insert("target".into(), u.target.clone().into());
     m.insert("msg".into(), u.message.clone().into());
     m.insert("fields".into(), Json::Object(fields));
-    Json::Object(m).to_string()
+    json_line(&Json::Object(m))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_controls_and_bidi_overrides_are_escaped() {
+        let evil = "Name\u{1b}[31mred\u{7}\u{202e}gpj.exe";
+        let q = quote(evil);
+        assert!(!q.chars().any(unsafe_char), "{q}");
+        assert!(
+            q.starts_with('"') && q.contains("\\u{1b}") && q.contains("\\u{202e}"),
+            "{q}"
+        );
+        assert_eq!(quote("plain"), "plain");
+        assert_eq!(quote("a \"b\""), "\"a \\\"b\\\"\"");
+        let line = json_line(&serde_json::json!({ "v": evil }));
+        assert!(!line.chars().any(unsafe_char), "{line}");
+        let back: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(back["v"], evil, "still valid JSON with the same value");
+    }
 
     #[test]
     fn an_untyped_message_stays_on_one_line() {

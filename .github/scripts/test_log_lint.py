@@ -27,6 +27,8 @@ class Macros(unittest.TestCase):
             "let _s = tracing::info_span!(\"fetch\").entered();",
             "tracing::trace!(target: \"t\", \"x\");",
             "::tracing::warn!(\"x\");",
+            "warn !(\"x\");",
+            "tracing :: error ! (\"x\");",
         ]:
             with self.subTest(line=line):
                 self.assertEqual(len([f for f in findings(f"fn f() {{ {line} }}") if "plain" in f]), 1, line)
@@ -39,6 +41,7 @@ class Macros(unittest.TestCase):
             "use ::tracing::error;",
             "use tracing::*;",
             "extern crate tracing as t;",
+            "use tracing::instrument as trace_it;",
         ]:
             with self.subTest(line=line):
                 self.assertEqual(len(findings(line)), 1, line)
@@ -101,6 +104,8 @@ class Instrument(unittest.TestCase):
             "#[instrument(skip(name, path))]\nfn f(name: &str, path: &Path) {}",
             "#[instrument(fields(x = 1))]\nfn f(name: &str) {}",
             "#[instrument(\n    level = \"debug\",\n    skip(a)\n)]\nfn f(a: u8, b: u8) {}",
+            "#[::tracing::instrument]\nfn f(name: &str) {}",
+            "#[cfg_attr(feature = \"x\", instrument(level = \"debug\"))]\nfn f(name: &str) {}",
         ]
         for code in refused:
             with self.subTest(code=code):
@@ -113,6 +118,15 @@ class Instrument(unittest.TestCase):
         for code in allowed:
             with self.subTest(code=code):
                 self.assertEqual(findings(code), [], code)
+        # `err` and `ret` record the error and the return value.
+        for code in [
+            "#[instrument(skip_all, err)]\nfn f() -> Result<(), E> {}",
+            "#[instrument(skip_all, ret)]\nfn f() -> u8 {}",
+            "#[instrument(skip_all, err(Display))]\nfn f() -> Result<(), E> {}",
+        ]:
+            with self.subTest(code=code):
+                self.assertEqual(len(findings(code)), 1, code)
+        self.assertEqual(findings("#[derive(Debug)]\nstruct Instrumented;"), [])
 
 
 class ErrorFields(unittest.TestCase):
@@ -134,31 +148,49 @@ class ErrorFields(unittest.TestCase):
 
 
 class Paths(unittest.TestCase):
-    def test_a_missing_listed_path_fails(self):
-        with tempfile.TemporaryDirectory() as d:
-            root = Path(d)
-            (root / "crates/a/src").mkdir(parents=True)
-            (root / "crates/a/src/lib.rs").write_text("fn f() {}\n")
-            (root / "crates/a/src/tests.rs").write_text('fn t() { tracing::warn!("x"); }\n')
-            self.assertEqual(log_lint.run(root, ["crates/a/src/"]), [])
-            got = log_lint.run(root, ["crates/a/src/", "crates/b/src/x.rs", "crates/c/"])
-            self.assertEqual(len(got), 2, got)
-            self.assertTrue(all("missing" in g for g in got))
-            (root / "crates/a/src/lib.rs").write_text('fn f() { tracing::warn!("x"); }\n')
-            self.assertEqual(len(log_lint.run(root, ["crates/a/src/"])), 1)
+    def tree(self, files: dict[str, str]) -> Path:
+        d = tempfile.mkdtemp()
+        root = Path(d)
+        for rel, text in files.items():
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text(text)
+        return root
 
-    def test_every_enforced_path_exists_and_is_clean(self):
+    def test_every_crate_is_checked(self):
+        root = self.tree({
+            "crates/a/src/lib.rs": 'fn f() { tracing::warn!("x"); }\n',
+            "crates/a/src/tests.rs": 'fn t() { tracing::warn!("x"); }\n',
+            "crates/a/tests/it.rs": 'fn t() { tracing::warn!("x"); }\n',
+            "crates/b/src/deep/mod.rs": 'fn f() { info!("y"); }\n',
+        })
+        got = log_lint.run(root, [])
+        self.assertEqual(len(got), 2, got)
+
+    def test_not_yet_swept_files_skip_only_the_plain_macro_rules(self):
+        root = self.tree({
+            "crates/a/src/old.rs": 'fn f() { tracing::warn!("x"); }\n#[instrument]\nfn g(a: u8) {}\n',
+        })
+        got = log_lint.run(root, ["crates/a/src/old.rs"])
+        self.assertEqual(len(got), 1, got)
+        self.assertIn("skip_all", got[0])
+
+    def test_the_list_only_shrinks(self):
+        root = self.tree({"crates/a/src/done.rs": "fn f() {}\n"})
+        got = log_lint.run(root, ["crates/a/src/done.rs", "crates/a/src/gone.rs"])
+        self.assertEqual(len(got), 2, got)
+        self.assertTrue(any("no plain macro left" in g for g in got))
+        self.assertTrue(any("missing" in g for g in got))
+
+    def test_a_renamed_tracing_dependency_is_refused(self):
+        root = self.tree({
+            "crates/a/Cargo.toml": '[dependencies]\nlog2 = { package = "tracing", version = "0.1" }\n',
+            "crates/a/src/lib.rs": "fn f() {}\n",
+        })
+        self.assertEqual(len(log_lint.run(root, [])), 1)
+
+    def test_the_repository_is_clean(self):
         root = Path(__file__).resolve().parents[2]
         self.assertEqual(log_lint.run(root), [])
-
-    def test_unlisted_paths_are_not_checked(self):
-        with tempfile.TemporaryDirectory() as d:
-            root = Path(d)
-            (root / "crates/a/src").mkdir(parents=True)
-            (root / "crates/a/src/lib.rs").write_text('fn f() { tracing::warn!("x"); }\n')
-            (root / "crates/b").mkdir(parents=True)
-            (root / "crates/b/ok.rs").write_text("fn f() {}\n")
-            self.assertEqual(log_lint.run(root, ["crates/b/ok.rs"]), [])
 
 
 if __name__ == "__main__":

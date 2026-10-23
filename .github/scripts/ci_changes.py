@@ -31,7 +31,8 @@ FUZZ = sorted(p.stem for p in (ROOT / "fuzz/fuzz_targets").glob("*.rs"))
 
 # Paths that change how every Rust job builds: run all of them.
 # Outside the crates but checked by a Rust job: the drift job regenerates this.
-RUST_ALSO = re.compile(r"^web/src/lib/api/openapi\.json$")
+# The logging check runs in the lint job.
+RUST_ALSO = re.compile(r"^(web/src/lib/api/openapi\.json|\.github/scripts/(test_)?log_lint\.py)$")
 
 EVERYTHING = re.compile(
     r"^(Cargo\.(toml|lock)|rust-toolchain(\.toml)?|\.cargo/|\.github/workflows/ci\.yml"

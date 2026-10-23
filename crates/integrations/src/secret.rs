@@ -551,6 +551,42 @@ fn restrict_acl(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// [`restrict_acl`] for a folder, inherited by every file made in it
+/// (the log folder, which holds the first-run setup token). Elsewhere
+/// the folder's mode does this.
+#[cfg(not(windows))]
+pub fn restrict_dir_acl(_dir: &Path) -> io::Result<()> {
+    Ok(())
+}
+
+/// [`restrict_acl`] for a folder, inherited by every file made in it
+/// (the log folder, which holds the first-run setup token).
+#[cfg(windows)]
+pub fn restrict_dir_acl(dir: &Path) -> io::Result<()> {
+    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+    let icacls = Path::new(&root).join("System32").join("icacls.exe");
+    let status = std::process::Command::new(icacls)
+        .arg(dir)
+        .args([
+            "/inheritance:r",
+            "/grant:r",
+            "*S-1-3-4:(OI)(CI)F",
+            "*S-1-5-18:(OI)(CI)F",
+            "*S-1-5-32-544:(OI)(CI)F",
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "icacls failed",
+        ))
+    }
+}
+
 /// Replaces the file's ACL with full control for its owner, `SYSTEM` and
 /// `Administrators`, dropping inherited entries (`Users`, `Everyone`).
 /// `icacls` ships with every supported Windows; calling it keeps this crate

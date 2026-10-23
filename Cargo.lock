@@ -1379,6 +1379,7 @@ dependencies = [
  "lodestar-classify",
  "lodestar-dht",
  "lodestar-filter",
+ "lodestar-integrations",
  "lodestar-log",
  "lodestar-metainfo",
  "lodestar-peer-wire",

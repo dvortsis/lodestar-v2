@@ -221,7 +221,7 @@ impl Applied {
 /// The `tracing` filter for untyped lines: the Libraries filter, then each
 /// first-party target at its component's level.
 fn filter(l: &Logging, levels: &[Level; Component::ALL.len()]) -> String {
-    let mut parts = vec![l.libraries.clone()];
+    let mut parts = vec![crate::settings::logging::with_default_level(&l.libraries)];
     for (target, c) in super::TARGETS {
         parts.push(format!("{target}={}", levels[*c as usize].name()));
     }

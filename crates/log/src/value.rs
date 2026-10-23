@@ -60,7 +60,7 @@ pub trait IntoValue<'a, K> {
 }
 
 /// One field's value, raw, as the record carries it to the outputs.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub enum Value<'a> {
     Torrent(&'a [u8; 20]),
     Name(&'a str),
@@ -80,6 +80,13 @@ pub enum Value<'a> {
     Listen(SocketAddr),
     /// The setup token, shown until setup completes.
     Secret(&'a str),
+}
+
+// Its kind only: a `{:?}` of a record must never print what it carries.
+impl fmt::Debug for Value<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Value({}: [hidden])", self.kind().name())
+    }
 }
 
 /// A value as one output shows it.
@@ -313,8 +320,14 @@ impl<'a> IntoValue<'a, kind::Client> for Client {
 
 /// A peer's address. Next to a torrent in the same line, it shows only
 /// with the peer activity opt-in on; on its own, with peer addresses on.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct Peer(pub SocketAddr);
+
+impl fmt::Debug for Peer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Peer([hidden])")
+    }
+}
 
 impl<'a> IntoValue<'a, kind::Peer> for Peer {
     fn into_value(self) -> Value<'a> {
@@ -676,8 +689,14 @@ mod tests {
             format!("{:?}", Url::new("https://t/?passkey=Secret")),
             format!("{:?}", Query("Secret query")),
             format!("{:?}", Detail("Secret term")),
+            format!("{:?}", Peer("203.0.113.7:1".parse().unwrap())),
+            format!("{:?}", Value::Name("Secret.Name")),
+            format!("{:?}", Value::Torrent(&h)),
         ] {
-            assert!(!s.contains("Secret") && !s.contains("abab"), "{s}");
+            assert!(
+                !s.contains("Secret") && !s.contains("abab") && !s.contains("203.0"),
+                "{s}"
+            );
         }
     }
 }

@@ -114,6 +114,11 @@ impl Index {
 pub enum WriteError {
     /// No space (or quota) left: file logging should stop.
     DiskFull,
+    /// The current file reached the folder's total cap (rotation keeps
+    /// failing); `first` the first line refused.
+    OverCap {
+        first: bool,
+    },
     Other(io::Error),
 }
 
@@ -152,8 +157,13 @@ impl Worker {
             .spawn(move || {
                 for job in rx {
                     let result = match job {
-                        Job::Compress(name, cfg) => compress(&cfg.dir, &name, &index)
-                            .and_then(|()| prune(&cfg, &index, SystemTime::now())),
+                        // Pruned even when compressing failed: the cap holds
+                        // either way.
+                        Job::Compress(name, cfg) => {
+                            let compressed = compress(&cfg.dir, &name, &index);
+                            let pruned = prune(&cfg, &index, SystemTime::now());
+                            compressed.and(pruned)
+                        }
                         Job::Prune(cfg) => prune(&cfg, &index, SystemTime::now()),
                         #[cfg(test)]
                         Job::Barrier(done) => {
@@ -199,16 +209,94 @@ pub struct FileSink {
     retry_at: Option<Instant>,
     /// The index's `alive_at` when this opened: the previous run's.
     last_alive: i64,
+    /// The folder isn't Lodestar's own and isn't private.
+    pub shared: bool,
+    /// Lines refused because the current file reached the total cap.
+    over_cap: bool,
     #[cfg(test)]
     pub fail_rotation: bool,
+    /// Every write fails as with a full disk.
+    #[cfg(test)]
+    pub full: bool,
 }
 
 /// Log files are the owner's only (0600 on Unix): with an identifying
 /// kind or an opt-in on, they hold torrent details.
 fn private(o: &mut OpenOptions) -> &mut OpenOptions {
     #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(o, 0o600);
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Never through a symlink someone planted in the folder.
+        o.mode(0o600)
+            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    }
     o
+}
+
+/// The file's mode 0600 whatever it was created with (an older file, a
+/// wider umask).
+fn tighten(file: &File) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if file.metadata()?.permissions().mode() & 0o077 != 0 {
+            file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        }
+    }
+    let _ = file;
+    Ok(())
+}
+
+/// How private the logs folder is, once checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Folder {
+    /// Lodestar's own and 0700 (or restricted by ACL on Windows).
+    Private,
+    /// Another account's: left as it is, with a warning.
+    Shared,
+}
+
+/// Makes the folder (0700), tightens it when it's Lodestar's own, and
+/// refuses one anyone can write to without the sticky bit, where another
+/// account could replace the files.
+fn folder(dir: &Path) -> io::Result<Folder> {
+    let mut dirs = fs::DirBuilder::new();
+    dirs.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut dirs, 0o700);
+    dirs.create(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let meta = fs::metadata(dir)?;
+        let mode = meta.mode();
+        if meta.uid() == rustix::process::geteuid().as_raw() {
+            if mode & 0o077 != 0 {
+                fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
+            }
+            return Ok(Folder::Private);
+        }
+        if mode & 0o002 != 0 && mode & 0o1000 == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "the logs folder is writable by anyone",
+            ));
+        }
+        Ok(if mode & 0o077 == 0 {
+            Folder::Private
+        } else {
+            Folder::Shared
+        })
+    }
+    #[cfg(windows)]
+    {
+        // It holds the first-run setup token: only its owner, SYSTEM and
+        // Administrators may read it.
+        lodestar_integrations::secret::restrict_dir_acl(dir)?;
+        Ok(Folder::Private)
+    }
+    #[cfg(not(any(unix, windows)))]
+    Ok(Folder::Shared)
 }
 
 fn last_byte(path: &Path) -> io::Result<Option<u8>> {
@@ -224,18 +312,16 @@ fn last_byte(path: &Path) -> io::Result<Option<u8>> {
 }
 
 fn open_append(path: &Path) -> io::Result<File> {
-    private(OpenOptions::new().create(true).append(true)).open(path)
+    let file = private(OpenOptions::new().create(true).append(true)).open(path)?;
+    tighten(&file)?;
+    Ok(file)
 }
 
 impl FileSink {
     /// Opens (or creates) the current file in `cfg.dir`, compresses
     /// rotated files a previous run left uncompressed, and prunes.
     pub fn open(cfg: FileConfig) -> io::Result<FileSink> {
-        let mut dirs = fs::DirBuilder::new();
-        dirs.recursive(true);
-        #[cfg(unix)]
-        std::os::unix::fs::DirBuilderExt::mode(&mut dirs, 0o700);
-        dirs.create(&cfg.dir)?;
+        let shared = folder(&cfg.dir)? == Folder::Shared;
         let path = cfg.dir.join(CURRENT);
         let index = Arc::new(Mutex::new(Index::load(&cfg.dir)));
         let worker = Worker::start(index.clone());
@@ -253,9 +339,13 @@ impl FileSink {
             worker,
             retry_at: None,
             last_alive,
+            shared,
+            over_cap: false,
             cfg,
             #[cfg(test)]
             fail_rotation: false,
+            #[cfg(test)]
+            full: false,
         };
         // A line a full disk cut short last time ends here, so the next
         // starts on its own.
@@ -315,6 +405,18 @@ impl FileSink {
                 self.retry_at = Some(Instant::now() + ROTATION_RETRY);
                 rotation = Some(e);
             }
+        }
+        // A rotation that keeps failing mustn't let one file grow past the
+        // folder's cap: lines stop until a rotation succeeds.
+        if self.size + len > self.cfg.total {
+            let first = !self.over_cap;
+            self.over_cap = true;
+            return Err(WriteError::OverCap { first });
+        }
+        self.over_cap = false;
+        #[cfg(test)]
+        if self.full {
+            return Err(WriteError::DiskFull);
         }
         if (flags.details && !self.flags.details) || (flags.opt_in && !self.flags.opt_in) {
             self.flags = self.flags.union(flags);
@@ -739,18 +841,78 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn disk_full_is_reported() {
         let dir = tempfile::tempdir().unwrap();
-        std::os::unix::fs::symlink("/dev/full", dir.path().join(CURRENT)).unwrap();
         let mut sink = FileSink::open(cfg(dir.path(), 1 << 20)).unwrap();
+        sink.full = true;
         assert!(matches!(
             sink.write("x", Flags::default()),
             Err(WriteError::DiskFull)
         ));
+        assert!(disk_full(&io::Error::from(io::ErrorKind::StorageFull)));
+        #[cfg(unix)]
+        assert!(disk_full(&io::Error::from_raw_os_error(28)));
     }
 
+    #[test]
+    fn the_current_file_stops_at_the_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut c = cfg(dir.path(), 1 << 20);
+        c.total = 40;
+        let mut sink = FileSink::open(c).unwrap();
+        sink.write("twenty bytes of line", Flags::default())
+            .unwrap();
+        assert!(matches!(
+            sink.write("twenty bytes of line", Flags::default()),
+            Err(WriteError::OverCap { first: true })
+        ));
+        assert!(matches!(
+            sink.write("twenty bytes of line", Flags::default()),
+            Err(WriteError::OverCap { first: false })
+        ));
+        assert!(fs::metadata(dir.path().join(CURRENT)).unwrap().len() <= 40);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_and_open_folders_are_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("elsewhere");
+        fs::write(&target, "").unwrap();
+        let logs = dir.path().join("logs");
+        fs::create_dir(&logs).unwrap();
+        std::os::unix::fs::symlink(&target, logs.join(CURRENT)).unwrap();
+        assert!(
+            FileSink::open(cfg(&logs, 1 << 20)).is_err(),
+            "never through a symlink"
+        );
+        // A loose folder of our own is tightened.
+        let loose = dir.path().join("loose");
+        fs::create_dir(&loose).unwrap();
+        fs::set_permissions(&loose, fs::Permissions::from_mode(0o777)).unwrap();
+        let sink = FileSink::open(cfg(&loose, 1 << 20)).unwrap();
+        assert!(!sink.shared);
+        assert_eq!(
+            fs::metadata(&loose).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        // An existing loose file is tightened too.
+        let older = dir.path().join("older");
+        fs::create_dir(&older).unwrap();
+        fs::write(older.join(CURRENT), "old line\n").unwrap();
+        fs::set_permissions(older.join(CURRENT), fs::Permissions::from_mode(0o644)).unwrap();
+        FileSink::open(cfg(&older, 1 << 20)).unwrap();
+        assert_eq!(
+            fs::metadata(older.join(CURRENT))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
     #[test]
     fn leftovers_are_compressed_at_open() {
         let dir = tempfile::tempdir().unwrap();

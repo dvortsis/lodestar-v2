@@ -65,6 +65,27 @@ fn passkey_like(segment: &str) -> bool {
         && segment.bytes().any(|b| b.is_ascii_digit())
 }
 
+/// `segment` with each passkey-like run between `.`, `:`, `,`, `=`, `+`
+/// and `~` removed: `/dl/<passkey>.torrent` keeps `.torrent`.
+fn redact_runs(segment: &str) -> String {
+    if passkey_like(segment) {
+        return REDACTED.to_string();
+    }
+    let mut out = String::with_capacity(segment.len());
+    let mut run = String::new();
+    for c in segment.chars() {
+        if matches!(c, '.' | ':' | ',' | '=' | '+' | '~') {
+            out.push_str(if passkey_like(&run) { REDACTED } else { &run });
+            run.clear();
+            out.push(c);
+        } else {
+            run.push(c);
+        }
+    }
+    out.push_str(if passkey_like(&run) { REDACTED } else { &run });
+    out
+}
+
 /// `url` without its credentials. Other query values stay.
 pub fn scrub(url: &str, form: Form) -> String {
     scrub_with(url, form, false)
@@ -78,44 +99,54 @@ fn scrub_with(url: &str, form: Form, drop_query: bool) -> String {
     {
         return format!("magnet:{REDACTED}");
     }
-    let url = url.split('#').next().unwrap_or(url);
-    let (head, query) = match url.split_once('?') {
-        Some((h, q)) => (h, Some(q)),
-        None => (url, None),
-    };
     let mut out = String::with_capacity(url.len());
-    let path = match form {
-        Form::Absolute => match head.split_once("://") {
+    // The authority, userinfo included, comes off the raw URL first: a
+    // password may hold `#` or `?` (`http://u:p#w@host/`).
+    let rest = match form {
+        Form::Absolute => match url.split_once("://") {
             Some((scheme, rest)) => {
                 out.push_str(scheme);
                 out.push_str("://");
-                let (authority, path) = match rest.find('/') {
-                    Some(i) => (&rest[..i], &rest[i..]),
-                    None => (rest, ""),
-                };
-                match authority.rsplit_once('@') {
-                    Some((_, host)) => {
+                let end = rest.find('/').unwrap_or(rest.len());
+                let (authority, rest) = rest.split_at(end);
+                let authority = match authority.rfind('@') {
+                    Some(at) => {
                         out.push_str(REDACTED);
                         out.push('@');
-                        out.push_str(host);
+                        &authority[at + 1..]
                     }
-                    None => out.push_str(authority),
+                    None => authority,
+                };
+                // A host with its query or fragment and no path.
+                let host_end = authority.find(['?', '#']).unwrap_or(authority.len());
+                out.push_str(&authority[..host_end]);
+                if host_end < authority.len() {
+                    // `host?query`: the query is the rest's start.
+                    let mut joined = authority[host_end..].to_string();
+                    joined.push_str(rest);
+                    return finish(out, &joined, drop_query);
                 }
-                path
+                rest
             }
-            None => head,
+            None => url,
         },
-        Form::Request => head,
+        Form::Request => url,
+    };
+    finish(out, rest, drop_query)
+}
+
+/// `rest` (a path, query and fragment) appended to `out`, scrubbed.
+fn finish(mut out: String, rest: &str, drop_query: bool) -> String {
+    let rest = rest.split('#').next().unwrap_or(rest);
+    let (path, query) = match rest.split_once('?') {
+        Some((p, q)) => (p, Some(q)),
+        None => (rest, None),
     };
     for (i, segment) in path.split('/').enumerate() {
         if i > 0 {
             out.push('/');
         }
-        if passkey_like(segment) {
-            out.push_str(REDACTED);
-        } else {
-            out.push_str(segment);
-        }
+        out.push_str(&redact_runs(segment));
     }
     if let Some(query) = query {
         if drop_query {
@@ -133,13 +164,12 @@ fn scrub_with(url: &str, form: Form, drop_query: bool) -> String {
                     out.push('=');
                     out.push_str(REDACTED);
                 }
-                Some((name, value)) if passkey_like(value) => {
+                Some((name, value)) => {
                     out.push_str(name);
                     out.push('=');
-                    out.push_str(REDACTED);
+                    out.push_str(&redact_runs(value));
                 }
-                _ if passkey_like(pair) => out.push_str(REDACTED),
-                _ => out.push_str(pair),
+                None => out.push_str(&redact_runs(pair)),
             }
             out.push_str(&rest[end..(end + 1).min(rest.len())]);
             rest = &rest[(end + 1).min(rest.len())..];
@@ -179,7 +209,7 @@ pub fn scrub_text(text: &str) -> String {
             .char_indices()
             .find(|(_, c)| !url_char(*c))
             .map_or(rest.len(), |(j, _)| i + j);
-        out.push_str(&hide_runs(&rest[..start]));
+        out.push_str(&hide_runs(&redact_secrets(&rest[..start])));
         out.push_str(&scrub_with(&rest[start..end], Form::Absolute, true));
         rest = &rest[end..];
         if end == start {
@@ -189,7 +219,88 @@ pub fn scrub_text(text: &str) -> String {
             rest = &rest[step..];
         }
     }
-    out.push_str(&hide_runs(rest));
+    out.push_str(&hide_runs(&redact_secrets(rest)));
+    out
+}
+
+fn token_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'~' | b'+' | b'/' | b'=')
+}
+
+fn name_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-')
+}
+
+/// Secrets in free text with no URL around them: Lodestar's own keys and
+/// tokens (`lsk_…`, `lsf_…`), `Bearer …`, and the value after a
+/// credential-like name and `=` or `:` (`X-Api-Key: …`, `/feed?apikey=…`).
+fn redact_secrets(text: &str) -> String {
+    let b = text.as_bytes();
+    let stop = |from: usize| {
+        (from..b.len())
+            .find(|&k| {
+                b[k].is_ascii_whitespace()
+                    || matches!(b[k], b'&' | b';' | b',' | b'"' | b'\'' | b')')
+            })
+            .unwrap_or(b.len())
+    };
+    // Byte ranges to replace, in order; every bound is next to ASCII, so
+    // each is a char boundary.
+    let mut cuts: Vec<(usize, usize)> = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        let at_word = i == 0 || !name_char(b[i - 1]);
+        if !at_word || !name_char(b[i]) {
+            i += 1;
+            continue;
+        }
+        let name_end = (i..b.len()).find(|&j| !name_char(b[j])).unwrap_or(b.len());
+        if b[i..].starts_with(b"lsk_") || b[i..].starts_with(b"lsf_") {
+            cuts.push((i, name_end));
+            i = name_end;
+            continue;
+        }
+        let word = &b[i..name_end];
+        if word.eq_ignore_ascii_case(b"bearer") && b.get(name_end) == Some(&b' ') {
+            let start = name_end + 1;
+            let end = (start..b.len())
+                .find(|&j| !token_char(b[j]))
+                .unwrap_or(b.len());
+            if end > start {
+                cuts.push((start, end));
+            }
+            i = end.max(start);
+            continue;
+        }
+        if matches!(b.get(name_end), Some(b'=' | b':')) && credential(&text[i..name_end]) {
+            let mut j = name_end + 1;
+            while j < b.len() && b[j] == b' ' {
+                j += 1;
+            }
+            let mut end = stop(j);
+            // `Authorization: Bearer <token>`: the scheme and the token.
+            let scheme = &b[j..end];
+            if (scheme.eq_ignore_ascii_case(b"bearer") || scheme.eq_ignore_ascii_case(b"basic"))
+                && b.get(end) == Some(&b' ')
+            {
+                end = stop(end + 1);
+            }
+            if end > j {
+                cuts.push((j, end));
+            }
+            i = end.max(name_end + 1);
+            continue;
+        }
+        i = name_end;
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    for (from, to) in cuts {
+        out.push_str(&text[copied..from]);
+        out.push_str(REDACTED);
+        copied = to;
+    }
+    out.push_str(&text[copied..]);
     out
 }
 
@@ -300,6 +411,22 @@ mod tests {
         }
         assert!(s.starts_with("error sending request for url (https://[redacted]@t.example/[redacted]/announce): timed out"), "{s}");
         assert!(s.contains("magnet:[redacted]"), "{s}");
+        for (text, secret) in [
+            (
+                "got key lsk_AbCdEfGh_0123456789abcdefghijklmnopqrstuvwxyzABCDEFG for x",
+                "lsk_AbCd",
+            ),
+            ("token lsf_AbCdEfGh_secret-part ok", "lsf_AbCd"),
+            ("Authorization: Bearer abc.def-ghi rejected", "abc.def"),
+            ("header X-Api-Key: s3cr3tvalue was wrong", "s3cr3tvalue"),
+            ("GET /api/v1/feeds/x.rss?token=t0ken123&limit=5", "t0ken123"),
+            ("apikey=k3y passkey: pk", "k3y"),
+        ] {
+            let s = scrub_text(text);
+            assert!(!s.contains(secret), "{secret} in {s}");
+        }
+        assert!(scrub_text("passkey: pk").ends_with("[redacted]"));
+        assert_eq!(scrub_text("limit=5 and size: 7"), "limit=5 and size: 7");
         let base32 = "ZHQVOY7XELZD5GFCTXW6X2RUDOMNKMCW";
         assert_eq!(scrub_text(&format!("x {base32} y")), "x [hidden] y");
         // Ordinary text is untouched, a stray "://" included.

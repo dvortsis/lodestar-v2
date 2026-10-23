@@ -610,7 +610,7 @@ async fn the_log_filter_follows_live() {
     .unwrap();
     let next = seen.recv().await.unwrap();
     assert!(
-        next.starts_with("hyper=debug,") && next.contains("lodestar_dht=trace"),
+        next.starts_with("warn,hyper=debug,") && next.contains("lodestar_dht=trace"),
         "{next}"
     );
     let current = handle.with_current(|f| f.to_string()).unwrap();
