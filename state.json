@@ -392,13 +392,19 @@
    "notes": "#47 merged by the filter session 06:19"
   },
   "B10a": {
-   "status": "running",
+   "status": "review",
    "model": "sonnet",
    "session": "session_012Zx7Sqy3qDZQ8VUnW41wvd",
-   "pr": null,
+   "pr": 111,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed)."
+   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 03:13 PR #111 7ae814b ready (first steward-flow PR). Diff 7,553 lines (check size). Reviewer started. \u00a72.19 flags: alert counts shown-only; collection positions among shown; reorder keeps withheld slots.",
+   "self_review": {
+    "raised": 12,
+    "fixed": 7,
+    "left": 3,
+    "detail": "3 blocking (all fixed), 5 important (3 fixed), 4 polish (no-op wrappers fixed)"
+   }
   },
   "B11c": {
    "status": "pending",
@@ -1283,7 +1289,8 @@
  "owner_flags": [
   "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
   "\u00a72.19 (C-adult-other #105): Other->Scene, Ebook->Comics at threshold 60, consistent with TV/Comic/Movie. Known edges: light novel with \"hentai\" in title, \"Porn Studies\" journal become Adult.",
-  "\u00a72.19 (M6-win/P-release): Windows service runs as virtual account NT SERVICE\\Lodestar (per-service SID), not LocalSystem/LocalService; data folder ACL SYSTEM+Administrators+service SID only, inheritance removed."
+  "\u00a72.19 (M6-win/P-release): Windows service runs as virtual account NT SERVICE\\Lodestar (per-service SID), not LocalSystem/LocalService; data folder ACL SYSTEM+Administrators+service SID only, inheritance removed.",
+  "\u00a72.19 (B10a #111): saved-search alert counts count shown torrents only; collection position/next_after are among shown entries; reorder keeps withheld entries in their slots."
  ],
  "decisions_log": [
   "2026-10-23 00:40 owner: 'Go with whatever makes for the best user experience' re filter budget reference -> staged: #97 fastest-runner ref now; F-perf moves ref to EPYC 7763 (typical) when engine meets it.",
