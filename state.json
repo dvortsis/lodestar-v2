@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T06:32:39Z",
+ "updated_at": "2026-10-23T06:34:16Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -312,7 +312,7 @@
    "pr": 116,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 05:15 PR #116 0d95d4c ready; reviewer started. | 05:35 review MERGE; asked: searchable_delta via hourly snapshot (code 13), clamp all, cap annotations, plan test on year data, decisions notes + named follow-ups. | 2026-10-23T06:04:00Z e2eab71 fmt+clippy red: deprecated fetch_update at insights.rs:307; asked for CAS loop as hot.rs:194 | 2026-10-23T06:15:43Z a24093e: delta f8f1125 checked (gauge 13, clamp, annotations cap, plan test, docs) + fetch_update -> load/fetch_add (single-writer task, verified). Approved; merge on green | 2026-10-23T06:26:11Z d962260 approved; main moved (B12): conflicts dto/mod.rs, lib.rs; asked to merge main",
+   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 05:15 PR #116 0d95d4c ready; reviewer started. | 05:35 review MERGE; asked: searchable_delta via hourly snapshot (code 13), clamp all, cap annotations, plan test on year data, decisions notes + named follow-ups. | 2026-10-23T06:04:00Z e2eab71 fmt+clippy red: deprecated fetch_update at insights.rs:307; asked for CAS loop as hot.rs:194 | 2026-10-23T06:15:43Z a24093e: delta f8f1125 checked (gauge 13, clamp, annotations cap, plan test, docs) + fetch_update -> load/fetch_add (single-writer task, verified). Approved; merge on green | 2026-10-23T06:26:11Z d962260 approved; main moved (B12): conflicts dto/mod.rs, lib.rs; asked to merge main | 2026-10-23T06:34:16Z 0b2f560 merged main (B12); merge on green",
    "self_review": {
     "raised": 13,
     "fixed": 7,
@@ -1315,7 +1315,8 @@
   "m4_export_swarm": "#48 (M4) must fill swarm fields via torrents::hit + search::enrich so /export includes them (B10b).",
   "filter_polish": "Next filter brief: IdHasher seeding; prefilter/Nearness/always_fuzzy doc fixes; widen early_stop proptest to 66+ chars and multibyte; mixed-set headroom only ~13% on 7763.",
   "b11a_followups": "B11a follow-ups: \u00a71.6.4 dashboard-open bench gate in CI; insights SSE topic; persisted import counter (no full scan per start); \u00a76.3 annotation kinds (upgrade/import/reindex/network change).",
-  "B11b-gauge-13": "B11b daily compaction/rollup --repair must treat metric 13 (SEARCHABLE) as a gauge (keep last per day, never sum) - from B11a #116"
+  "B11b-gauge-13": "B11b daily compaction/rollup --repair must treat metric 13 (SEARCHABLE) as a gauge (keep last per day, never sum) - from B11a #116",
+  "flake-stats-metrics": "lodestar ops::tests::stats_match_the_metrics (ops/tests.rs:445, queue_depth /stats vs /metrics after pause) failed once under parallel load (B11a report 06:34); candidate for a flake fix slice if it recurs in CI"
  },
  "blocked_on_owner": [],
  "launches_today": 15,
