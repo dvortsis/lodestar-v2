@@ -67,7 +67,7 @@
 		// Whatever was typed before this loaded. After the URL sync above (effects run in order), so
 		// the URL's empty query does not wipe it.
 		if (editor.text && editor.text !== s.text) setText(editor.text);
-		else if (s.text) editor.set(s.text); // the URL's query, adopted before the editor existed
+		else if (s.text) editor.set(s.text, true); // the URL's query, adopted before the editor existed
 		if (takeSubmit()) submit();
 	});
 	onDestroy(() => editor?.destroy());
@@ -99,9 +99,11 @@
 	}
 </script>
 
-<p id={message} class="truncate text-small" class:text-error={!!syntax}>
+<!-- One text-small line, always (nothing shifts on the bare page); an error's text wraps rather than
+     being cut, so its "what to do" part stays readable at 320 px (WCAG 1.4.10). -->
+<p id={message} data-live class="text-small" class:text-error={!!syntax}>
 	{#if syntax}
-		<IconError class="qt-icon size-4" aria-hidden="true" />
+		<IconError class="qt-icon inline size-4" aria-hidden="true" />
 		{m.search_query_error_lead()}
 		{syntax.message}
 	{:else}

@@ -144,6 +144,7 @@ export function svelteBarrel() {
 			edits.sort((a, b) => b[0] - a[0]);
 			let out = code;
 			for (const [start, end, text] of edits) out = out.slice(0, start) + text + out.slice(end);
+			// No source map: production builds ship none (build.sourcemap is off).
 			return { code: out, map: null };
 		}
 	};
@@ -171,12 +172,17 @@ const isRoot = (id, nodes) =>
  */
 export function routeNodes(appJs, route) {
 	const dictionary = appJs.match(/dictionary = (\{[\s\S]*?\});/);
-	const nodes = dictionary?.[1]
-		? JSON.parse(dictionary[1].replace(/,\s*}/, '}'))[route]
+	const entry = dictionary?.[1]
+		? JSON.parse(
+				dictionary[1].replace(/,\s*}/, '}').replace(/~(\d+)/g, (_, d) => String(~Number(d)))
+			)[route]
 		: undefined;
-	if (!nodes) throw new Error(`first-load: route ${route} not in the generated app.js`);
-	// The root layout (0) and the error page (1) load with every route.
-	return [0, 1, ...nodes];
+	if (!entry) throw new Error(`first-load: route ${route} not in the generated app.js`);
+	// An entry is the page node, then its layouts and error pages, possibly nested and negated
+	// (kit writes ~n for a node with a server load). The root layout (0) and error page (1) always load.
+	/** @type {number[]} */
+	const nodes = [entry].flat(Infinity).filter((n) => typeof n === 'number');
+	return [...new Set([0, 1, ...nodes.map((n) => (n < 0 ? ~n : n))])];
 }
 
 /**
@@ -266,7 +272,7 @@ const at = (p) => fileURLToPath(new URL(`../${p}`, import.meta.url));
  * @param {string[]} files the route's initial JS (`routeFiles(route).js`)
  */
 export function checkFirstLoad(route, files) {
-	if (!existsSync(GRAPH)) return [];
+	if (!existsSync(GRAPH)) return files.length ? [`no chunk graph at ${GRAPH}: rebuild`] : [];
 	/** @type {Graph} */
 	const { chunks, modules } = JSON.parse(readFileSync(GRAPH, 'utf8'));
 	const nodes = routeNodes(readFileSync(at(`${GENERATED}app.js`), 'utf8'), route);
@@ -300,7 +306,12 @@ export function findStrays({ chunks, modules }, files, roots, route = '/search')
 	const short = (id) => id.replace(/^.*\/node_modules\//, '~/').replace(at(''), '');
 	const problems = [];
 	for (const file of files) {
-		for (const id of chunks[file]?.modules ?? []) {
+		const chunk = chunks[file];
+		if (!chunk) {
+			problems.push(`${file} is not in the chunk graph (stale or missing: rebuild)`);
+			continue;
+		}
+		for (const id of chunk.modules) {
 			if (!reach.has(id) && !id.startsWith('\0') && !id.startsWith('rolldown:'))
 				problems.push(`${file}: ${short(id)} is not reachable from ${route}`);
 		}

@@ -3,15 +3,18 @@
 const ENGAGED = ['pointerdown', 'keydown', 'touchstart', 'focusin'] as const;
 
 /**
- * Runs `cb` once, on the first interaction anywhere on the page. Returns the cancel. Focus on
- * <body> is not one: kit puts it there itself when the app starts.
+ * Runs `cb` once, on the first interaction anywhere on the page, or after `afterMs` if given (the
+ * shell's 30 s fallback). Returns the cancel. Focus on <body> is not an interaction: kit puts it
+ * there itself when the app starts.
  */
-export function onFirstInteraction(cb: () => void): () => void {
+export function onFirstInteraction(cb: () => void, afterMs?: number): () => void {
+	const timer = afterMs === undefined ? undefined : setTimeout(() => go(), afterMs);
 	const stop = () => {
+		clearTimeout(timer);
 		for (const e of ENGAGED) removeEventListener(e, go, true);
 	};
-	const go = (e: Event) => {
-		if (e.type === 'focusin' && e.target === document.body) return;
+	const go = (e?: Event) => {
+		if (e?.type === 'focusin' && e.target === document.body) return;
 		stop();
 		cb();
 	};

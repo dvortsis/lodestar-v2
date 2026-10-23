@@ -87,6 +87,12 @@ describe('findStrays', () => {
 		expect(findStrays(clean, ['first.js'], ['/r/search'])).toEqual([]);
 	});
 
+	it('names a route file the graph does not have (a stale record)', () => {
+		expect(findStrays(graph, ['first.js', 'gone.js'], ['/r/search', '/r/alerts'])).toEqual([
+			'gone.js is not in the chunk graph (stale or missing: rebuild)'
+		]);
+	});
+
 	it('names a module that still imports the Svelte runtime barrel', () => {
 		const left = { chunks: {}, modules: { '/r/c.svelte': { imports: [BARREL] } } };
 		expect(findStrays(left, [], [])[0]).toContain('imports the Svelte runtime barrel');
@@ -97,6 +103,9 @@ describe('routeNodes', () => {
 	it('reads the route from the generated app.js, with the layout and error nodes', () => {
 		const app = 'export const dictionary = {\n\t\t"/": [2],\n\t\t"/search": [11],\n\t};';
 		expect(routeNodes(app, '/search')).toEqual([0, 1, 11]);
+		// A route with its own layout and error page, one with a server load (~n).
+		const nested = 'export const dictionary = {\n\t\t"/search": [11,[2,~3],[4]],\n\t};';
+		expect(routeNodes(nested, '/search')).toEqual([0, 1, 11, 2, 3, 4]);
 		expect(() => routeNodes(app, '/nope')).toThrow(/not in the generated app\.js/);
 	});
 });

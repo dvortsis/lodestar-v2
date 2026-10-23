@@ -77,7 +77,7 @@ async function engage(editor: HTMLElement) {
 	editor.focus();
 	// Live's message line replaces the static one.
 	await waitFor(() =>
-		expect(document.querySelector('#search-query-message.truncate')).not.toBeNull()
+		expect(document.querySelector('#search-query-message[data-live]')).not.toBeNull()
 	);
 }
 
@@ -192,19 +192,20 @@ describe('the query bar', () => {
 		expect(message().textContent?.trim()).toBe('');
 	});
 
-	it('keeps the message line one text-small line whatever it shows', async () => {
+	it('reserves the message line from first paint and keeps it one element', async () => {
 		const { editor } = setup();
 		const before = message();
 		expect(before.className).toContain('text-small');
 		expect(before.textContent).toBe(' '); // holds the line before anything loads
 		await engage(editor);
 		expect(message().className).toContain('text-small');
-		expect(message().className).toContain('truncate'); // never wraps to a second line
+		expect(message().textContent).toBe('\u00a0'); // still one empty line once loaded
 		await typeText(editor, '(');
 		await fireEvent.keyDown(editor, { key: 'Enter' });
 		await waitFor(() => expect(message().textContent).toContain("missing ')'"));
 		expect(document.querySelectorAll('#search-query-message')).toHaveLength(1);
-		expect(message().className).toContain('truncate');
+		// An error wraps rather than being cut (WCAG 1.4.10): no truncation.
+		expect(message().className).not.toContain('truncate');
 	});
 
 	it('puts the URL back on /search before writing (the drawer is open on /t/…)', async () => {

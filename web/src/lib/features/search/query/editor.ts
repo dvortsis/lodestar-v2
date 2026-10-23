@@ -23,8 +23,12 @@ export interface EditorOptions {
 
 export interface Editor {
 	readonly text: string;
-	/** Text from outside (the URL, the server's canonical text, a "Try"): one undo step. */
-	set(text: string): void;
+	/**
+	 * Text from outside (the URL, the server's canonical text, a "Try"): one undo step. With
+	 * `base`, it replaces the history instead (the URL's query when the editor starts, so undo
+	 * never empties a pasted link).
+	 */
+	set(text: string, base?: boolean): void;
 	/** Focus with the caret at the end. */
 	focusEnd(): void;
 	/** The range to mark as a parse error, in UTF-16 offsets, or null. */
@@ -60,6 +64,13 @@ type EditKind = 'insert' | 'delete' | null;
 
 const oneLine = (s: string) => s.replace(/\r\n|[\r\n]/g, ' ');
 
+/** A caret measured in `raw` (the DOM), moved to `oneLine(raw)`: each CRLF before it is one char. */
+function shrink(raw: string, sel: { anchor: number; focus: number } | null) {
+	if (!sel) return null;
+	const at = (n: number) => n - (raw.slice(0, n).match(/\r\n/g)?.length ?? 0);
+	return { anchor: at(sel.anchor), focus: at(sel.focus) };
+}
+
 function editKind(inputType: string | undefined): EditKind {
 	if (!inputType) return null;
 	if (inputType === 'insertText' || inputType === 'insertCompositionText') return 'insert';
@@ -71,6 +82,8 @@ export function attach(el: HTMLElement, opts: EditorOptions): Editor {
 	let text = oneLine(el.textContent ?? '');
 	let error: Range16 | null = null;
 	let composing = false;
+	/** Enter already submitted from keydown: the beforeinput that may follow must not again. */
+	let submitted = false;
 
 	const history: Snapshot[] = [{ text, anchor: text.length, focus: text.length }];
 	let at = 0;
@@ -224,7 +237,7 @@ export function attach(el: HTMLElement, opts: EditorOptions): Editor {
 		if (composing || ev.isComposing) return; // re-rendered at compositionend
 		const raw = el.textContent ?? '';
 		const next = oneLine(raw);
-		const sel = caret() ?? { anchor: next.length, focus: next.length };
+		const sel = shrink(raw, caret()) ?? { anchor: next.length, focus: next.length };
 		const kind = editKind(ev.inputType);
 		edit(next, sel, kind);
 		// A space ends a typing burst: the next word is its own undo step.
@@ -251,8 +264,12 @@ export function attach(el: HTMLElement, opts: EditorOptions): Editor {
 			if (type === 'historyUndo') undo();
 			else redo();
 		} else if (type === 'insertParagraph' || type === 'insertLineBreak') {
-			e.preventDefault(); // one line; Enter submits (keydown)
+			// One line. Enter submits from keydown; a soft keyboard's "search" key may arrive only as
+			// this (Android sends keyCode 229 first), so it submits here, once, when not composing.
+			e.preventDefault();
+			if (!composing && !(e as InputEvent).isComposing && !submitted) opts.onsubmit();
 		}
+		submitted = false;
 	}
 
 	function onkeydown(event: Event) {
@@ -269,6 +286,7 @@ export function attach(el: HTMLElement, opts: EditorOptions): Editor {
 			redo();
 		} else if (e.key === 'Enter') {
 			e.preventDefault();
+			submitted = true; // the browser may still send insertParagraph for this key
 			opts.onsubmit();
 		} else if (e.key === 'Escape') {
 			if (opts.onescape?.()) {
@@ -287,8 +305,9 @@ export function attach(el: HTMLElement, opts: EditorOptions): Editor {
 
 	function oncompositionend() {
 		composing = false;
-		const next = oneLine(el.textContent ?? '');
-		edit(next, caret() ?? { anchor: next.length, focus: next.length }, null);
+		const raw = el.textContent ?? '';
+		const next = oneLine(raw);
+		edit(next, shrink(raw, caret()) ?? { anchor: next.length, focus: next.length }, null);
 	}
 
 	function undo() {
@@ -321,10 +340,13 @@ export function attach(el: HTMLElement, opts: EditorOptions): Editor {
 		get text() {
 			return text;
 		},
-		set(next: string) {
+		set(next: string, base = false) {
 			next = oneLine(next);
 			if (next === text) return;
-			record(next, { anchor: next.length, focus: next.length }, null);
+			if (base)
+				history.splice(0, Infinity, { text: next, anchor: next.length, focus: next.length });
+			else record(next, { anchor: next.length, focus: next.length }, null);
+			if (base) at = 0;
 			text = next;
 			render({ anchor: next.length, focus: next.length });
 		},

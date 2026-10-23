@@ -15,7 +15,10 @@
 	let bar = $state<ReturnType<typeof QueryBar>>();
 
 	// `/` and the page's scope. `$lib/keys` arrives with the shell's first interaction; this page's
-	// listener is added first, so the command exists when the shell replays that first key.
+	// listener is added first, so the command exists when the shell replays that first key. With no
+	// interaction, the shell attaches its keys after 30 s: register at the same moment, so the first
+	// `/` after that finds the command too.
+	const KEYS_AFTER_MS = 30_000;
 	onMount(() => {
 		let off: (() => void) | undefined;
 		let gone = false;
@@ -23,7 +26,7 @@
 			void import('$lib/keys').then(({ keys }) => {
 				if (!gone) off = registerSearchCommands(keys, () => bar?.focusEnd());
 			});
-		});
+		}, KEYS_AFTER_MS);
 		return () => {
 			gone = true;
 			stop();

@@ -58,6 +58,5 @@ search[data-search-bar] {
 	text-decoration: wavy underline var(--color-error);
 }
 .qt-icon {
-	display: inline;
 	vertical-align: text-bottom;
 }
