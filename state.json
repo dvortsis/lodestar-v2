@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T08:42:25Z",
+ "updated_at": "2026-10-23T08:42:55Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -1379,6 +1379,7 @@
   "fix-check-ids": "2026-10-23T06:32:39Z #118 merged (smoke green on the fixed script)",
   "slices-yaml-120": "2026-10-23T07:34:04Z #120 merged (069533a): B-log1b added (owns widened per review), B11c deps B11b",
   "heartbeat-0739": "no new slices ready (S-search-4 waits S-search-3/W9; B11c waits B11b); open: #119 delta review, #117 merging main, #98 round 4, #92 CI, #91 waits #92, #103 owner, #48 owner",
-  "heartbeat-0838": "open: #121 B9 round 1, #119 B-log1 delta 2, #117 B2c windows (export test race; fix PR requested from B10b session), #92 P-release CI, #91 waits #92, #103/#48 owner"
+  "heartbeat-0838": "open: #121 B9 round 1, #119 B-log1 delta 2, #117 B2c windows (export test race; fix PR requested from B10b session), #92 P-release CI, #91 waits #92, #103/#48 owner",
+  "fix-export-race": "2026-10-23T08:42:55Z PR #122 (B10b session) test-only fix for export dropped-setup race; reviewer + CI running. Follow-up: worker pacer wait doesn't select on tx.closed() (slot held ~128ms/chunk after client drop) -> later export brief"
  }
 }
