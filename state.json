@@ -499,7 +499,7 @@
       "pr": 138,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:37:17Z PR #138 head 857f236; search JS 39.51->40.68 (lazy runtime hoisted into shared chunk); held until S-search-1 chunking fix; fixture check requested; review after re-measure | 2026-10-23T17:46:20Z fixture check done via API (no screenshots: embedded UI predates branch) | 2026-10-23T22:17Z released 2nd of 4 | 2026-10-23T22:27Z own() w/ dynamic: Alerts 50/Alert 60 incl dialog lazies; first view ~28/~42. Runner: S-alerts adds own(route,{onDemand}) + '(on demand)' entries; limits measured+10% capped 45",
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:37:17Z PR #138 head 857f236; search JS 39.51->40.68 (lazy runtime hoisted into shared chunk); held until S-search-1 chunking fix; fixture check requested; review after re-measure | 2026-10-23T17:46:20Z fixture check done via API (no screenshots: embedded UI predates branch) | 2026-10-23T22:17Z released 2nd of 4 | 2026-10-23T22:27Z own() w/ dynamic: Alerts 50/Alert 60 incl dialog lazies; first view ~28/~42. Runner: S-alerts adds own(route,{onDemand}) + '(on demand)' entries; limits measured+10% capped 45 | 2026-10-23T22:46Z pushed 3660432 (onDemand in own(); Alerts 26.1/29, Alert 41.2/45, dialogs 24/27; lhci 94,791); runner delta OK; merge on green",
       "catch_ups": 0
     },
     "S-insights-1": {
