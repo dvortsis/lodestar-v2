@@ -1,3 +1,4 @@
+import { HASH, mockTorrent } from '../detail.fixtures';
 import type { OpenApiMock } from '../mock/openapi-mock';
 
 // Every route the app has today, with sample params for the dynamic ones. A new route slice adds
@@ -42,5 +43,10 @@ export const ROUTES: RouteCase[] = [
 	},
 	{ name: 'welcome', path: '/welcome', key: true },
 	{ name: 'settings', path: '/settings/general', key: true },
-	{ name: 'torrent', path: `/t/${'0123456789abcdef'.repeat(2).padEnd(40, '0')}`, key: true }
+	{
+		name: 'torrent',
+		path: `/t/${HASH}`,
+		key: true,
+		mock: (m) => mockTorrent(m)
+	}
 ];

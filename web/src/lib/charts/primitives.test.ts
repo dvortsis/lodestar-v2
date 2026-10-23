@@ -152,6 +152,20 @@ describe('HBarList', () => {
 	});
 });
 
+describe('HBarList colour', () => {
+	it('uses the item colour, defaulting to the first data slot', () => {
+		const { container } = render(HBarList, {
+			items: [
+				{ key: 'a', label: 'A', value: 2, color: 'var(--data-5)' },
+				{ key: 'b', label: 'B', value: 1 }
+			],
+			label: 'Top'
+		});
+		const fills = [...container.querySelectorAll<HTMLElement>('li [style*="width"]')];
+		expect(fills.map((f) => f.style.backgroundColor)).toEqual(['var(--data-5)', 'var(--data-1)']);
+	});
+});
+
 describe('DataTableAlternative', () => {
 	const props = {
 		caption: 'Seeders per day',

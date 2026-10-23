@@ -2,9 +2,19 @@
 // Route budgets come from the SvelteKit build manifest (scripts/size-entries.mjs), so later
 // route chunks never count against the search route.
 import { existsSync, readFileSync } from 'node:fs';
-import { routeFiles } from './scripts/size-entries.mjs';
+import { chunkFiles, routeFiles } from './scripts/size-entries.mjs';
 
 const search = routeFiles('/search');
+// The detail drawer: DetailHost and what only it loads, once a route imports it (the search page does,
+// through import.meta.glob). Empty before that, and then the entry below is left out.
+const drawer = chunkFiles('src/lib/features/detail/DetailHost.svelte');
+// /t/[hash]'s own files: what the search route doesn't already load.
+const tRoute = routeFiles('/t/[hash]');
+const own = (route) => ({
+	js: route.js.filter((f) => !search.js.includes(f)),
+	css: route.css.filter((f) => !search.css.includes(f))
+});
+const detailPage = own(tRoute);
 
 // Fonts are committed subsets (scripts/fonts.mjs) served from static/fonts -> build/fonts.
 const FONT_DIR = 'build/fonts';
@@ -41,8 +51,13 @@ export default [
 	// Latin subset of Atkinson Hyperlegible Next, fetched at first layout; a preload costs LCP (§10.1).
 	entry('Fonts on first paint', firstPaintFonts, '35 KB'),
 	// Mono loads lazily and is never preloaded (§10.1).
-	entry('Mono font (lazy)', monoFonts, '25 KB')
-	// Placeholders for later slices. Fill `path` from the manifest when the chunk exists:
-	//   Detail-drawer chunk    <= 15 KB
+	entry('Mono font (lazy)', monoFonts, '25 KB'),
+	...(drawer.js.length
+		? [entry('Detail-drawer chunk', [...drawer.js, ...drawer.css], '15 KB')]
+		: []),
+	...(detailPage.js.length
+		? [entry('/t/[hash] route', [...detailPage.js, ...detailPage.css], '15 KB')]
+		: [])
+	// Placeholder for a later slice. Fill `path` from the manifest when the chunk exists:
 	//   Insights chunk (uPlot) <= 45 KB
 ];
