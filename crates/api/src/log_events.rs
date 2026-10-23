@@ -18,6 +18,18 @@ lodestar_log::catalogue! {
         message: "An API request failed inside the server",
         fields: { error: Error },
     }
+    /// One API request (`request_log`): the method, the matched route
+    /// template (never the raw path or query), the status, how long it
+    /// took and the client's TCP peer. Never a header. Off by default:
+    /// it joins at Detailed.
+    API_REQUEST {
+        id: "api.request",
+        component: Api,
+        level: Debug,
+        default_on: false,
+        message: "API request",
+        fields: { method: Label, route: Label, status: Label, took_ms: Size, client: Client },
+    }
     /// A filter change was applied: the engine's new version only.
     FILTERS_RULE_SET_UPDATED {
         id: "filters.rule_set_updated",
