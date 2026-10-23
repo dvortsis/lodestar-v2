@@ -334,7 +334,15 @@ fn targets_against(crates: &[String], targets: &[(&str, Component)]) -> Vec<Stri
 
 #[test]
 fn targets_cover_every_crate() {
-    let crates = workspace_crates(&workspace_root());
+    let root = workspace_root();
+    // `workspace_crates` reads these members; a new kind of member needs
+    // it taught.
+    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    assert!(
+        manifest.contains(r#"members = ["crates/*", "bench"]"#),
+        "the workspace's members changed: teach workspace_crates them"
+    );
+    let crates = workspace_crates(&root);
     assert!(crates.iter().any(|c| c == "lodestar_update"), "{crates:?}");
     assert!(crates.iter().any(|c| c == "lodestar_bench"), "{crates:?}");
     assert_eq!(targets_against(&crates, TARGETS), Vec::<String>::new());
@@ -350,23 +358,47 @@ fn targets_cover_every_crate() {
     assert!(got[0].starts_with("lodestar_update"), "{got:?}");
 }
 
-/// The catalogue names declared in `src` at the top level of a module
-/// (`catalogue! {` unindented: a test's own catalogue sits inside its
-/// test module, indented).
+/// Every catalogue name declared in `src`, however it's indented or
+/// nested (`catalogue! {` followed by its name).
 fn declared_catalogues(src: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut lines = src.lines();
     while let Some(line) = lines.next() {
-        let top = line.starts_with("catalogue!") || line.starts_with("lodestar_log::catalogue!");
-        if !top {
+        let code = line.split("//").next().unwrap_or("");
+        // An invocation: `catalogue!` then its brace.
+        let Some(after_brace) = code
+            .split("catalogue!")
+            .nth(1)
+            .and_then(|r| r.trim_start().strip_prefix('{'))
+            .map(str::trim)
+        else {
             continue;
-        }
-        if let Some(name) = lines.by_ref().map(str::trim).find(|l| !l.is_empty()) {
-            out.push(name.trim_end_matches(';').trim_matches('"').to_string());
+        };
+        // The name on the same line, or the next one with anything.
+        let name = match after_brace.is_empty() {
+            false => Some(after_brace.to_string()),
+            true => lines
+                .by_ref()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+                .map(String::from),
+        };
+        if let Some(name) = name {
+            let name = name
+                .split(';')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .trim_matches('"');
+            out.push(name.to_string());
         }
     }
     out
 }
+
+/// Catalogues tests declare for themselves in a test module, never
+/// registered. (Test-only files, `tests.rs` and `*_tests.rs`, aren't read.)
+const TEST_CATALOGUES: &[&str] = &["entry-tests", "bench"];
 
 fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -402,17 +434,28 @@ fn every_declared_catalogue_is_registered() {
     let mut declared = Vec::new();
     for f in files {
         let rel = f.strip_prefix(&root).unwrap().display().to_string();
-        // `lodestar-log`'s own docs and tests declare examples.
-        if rel.starts_with("crates/log/") {
+        // `lodestar-log`'s own docs and tests declare examples, and
+        // test-only files their own.
+        let name = f.file_name().unwrap().to_string_lossy();
+        if rel.starts_with("crates/log/") || name == "tests.rs" || name.ends_with("_tests.rs") {
             continue;
         }
         for name in declared_catalogues(&std::fs::read_to_string(&f).unwrap()) {
-            declared.push((name, rel.clone()));
+            if !TEST_CATALOGUES.contains(&name.as_str()) {
+                declared.push((name, rel.clone()));
+            }
         }
     }
     assert!(
         declared.iter().any(|(n, _)| n == "lodestar-pipeline"),
         "{declared:?}"
+    );
+    // Nested or indented declarations are found too.
+    assert_eq!(
+        declared_catalogues(
+            "pub mod log_events {\n    lodestar_log::catalogue! {\n        \"nested\";\n    }\n}\nlodestar_log::catalogue! { \"inline\"; }\n"
+        ),
+        ["nested", "inline"]
     );
     assert_eq!(unregistered(&declared, CATALOGUES), Vec::<String>::new());
     // A catalogue left out of the list fails.

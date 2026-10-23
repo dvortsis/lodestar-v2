@@ -353,8 +353,10 @@ fn hot_distinct() {
 
 #[test]
 fn the_rule_sorts_by_both_bounds() {
-    // 1,000 ns and 200 bytes a line: 10 a second is within both bounds.
-    assert_eq!(verdict(10.0, 1_000.0, 200.0), Verdict::DefaultOn);
+    // 1,000 ns and 200 bytes a line: 1 a second (16.5 MiB a day) is
+    // within both bounds; 10 a second (165 MiB a day) isn't.
+    assert_eq!(verdict(1.0, 1_000.0, 200.0), Verdict::DefaultOn);
+    assert_eq!(verdict(10.0, 1_000.0, 200.0), Verdict::Detailed);
     // 100 a second is 0.01% CPU but 1.6 GiB a day.
     assert_eq!(verdict(100.0, 1_000.0, 200.0), Verdict::Trace);
     // 5 a second: 82 MiB a day, under 10x the share.
