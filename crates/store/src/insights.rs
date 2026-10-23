@@ -252,7 +252,15 @@ pub fn log_bucket_bounds(bucket: i64) -> (f64, f64) {
 /// below the highest recorded changes nothing, and an hour before the
 /// latest is counted in the latest. Returns the hour written and the
 /// highest id recorded before, or `None` if nothing changed.
-fn raise_watermark(tx: &Connection, hour: i64, last_id: i64) -> Result<Option<(i64, i64)>> {
+///
+/// At most `cap` ids above the highest recorded are covered: the id
+/// written is returned too.
+fn raise_watermark(
+    tx: &Connection,
+    hour: i64,
+    last_id: i64,
+    cap: i64,
+) -> Result<Option<(i64, i64, i64)>> {
     let (max_hour, max_id): (i64, i64) = tx.query_row(
         "SELECT coalesce(max(hour), 0), coalesce(max(last_id), 0) FROM index_watermark_hour",
         [],
@@ -261,20 +269,28 @@ fn raise_watermark(tx: &Connection, hour: i64, last_id: i64) -> Result<Option<(i
     if last_id <= max_id {
         return Ok(None);
     }
+    let last_id = last_id.min(max_id.saturating_add(cap));
     let hour = hour.max(max_hour).max(1);
     tx.execute(
         "INSERT INTO index_watermark_hour (hour, last_id) VALUES (?1, ?2)
          ON CONFLICT (hour) DO UPDATE SET last_id = excluded.last_id",
         params![hour, last_id],
     )?;
-    Ok(Some((hour, max_id)))
+    Ok(Some((hour, max_id, last_id)))
 }
+
+/// Ids one `record_searchable` transaction covers at most, so a large
+/// range (the first start after an upgrade, a swap) never holds the write
+/// lock for long.
+const SEARCHABLE_CHUNK: i64 = 20_000;
 
 /// Insights' write hook and read path (B11a): searchable time and the
 /// Searchable stage, and the indexed reads the overview is built from.
 impl Store {
     /// Records that every torrent id up to `last_id` was searchable at
-    /// `at` (unix seconds), in one `BEGIN IMMEDIATE` transaction:
+    /// `at` (unix seconds), in `BEGIN IMMEDIATE` transactions of at most
+    /// 20,000 ids each (so a large range never holds the write lock for
+    /// long), each of which:
     /// - `index_watermark_hour` is raised as by
     ///   [`Store::record_index_watermark`];
     /// - each torrent with an id above the highest id recorded before (a
@@ -301,8 +317,41 @@ impl Store {
         if last_id < 0 {
             return Err(crate::Error::Invalid("last_id must not be negative"));
         }
+        let mut total: Option<Searchable> = None;
+        while let Some(r) = self.record_searchable_chunk(last_id, at, codes)? {
+            total = Some(match total {
+                None => r,
+                Some(t) => Searchable {
+                    after: t.after,
+                    last_id: r.last_id,
+                    hour: r.hour,
+                    torrents: t.torrents + r.torrents,
+                    imported: t.imported + r.imported,
+                    first_cohort: match (t.first_cohort, r.first_cohort) {
+                        (Some(a), Some(b)) => Some(a.min(b)),
+                        (a, b) => a.or(b),
+                    },
+                },
+            });
+            if r.last_id >= last_id {
+                break;
+            }
+        }
+        Ok(total)
+    }
+
+    /// One transaction of [`Store::record_searchable`]: at most
+    /// [`SEARCHABLE_CHUNK`] ids.
+    fn record_searchable_chunk(
+        &mut self,
+        last_id: i64,
+        at: i64,
+        codes: SearchableCodes,
+    ) -> Result<Option<Searchable>> {
         let tx = crate::begin_write(&mut self.conn)?;
-        let Some((hour, after)) = raise_watermark(&tx, at.div_euclid(3600), last_id)? else {
+        let Some((hour, after, last_id)) =
+            raise_watermark(&tx, at.div_euclid(3600), last_id, SEARCHABLE_CHUNK)?
+        else {
             return Ok(None);
         };
         let mut newly: HashMap<(u32, i64), i64> = HashMap::new();
@@ -719,6 +768,33 @@ mod tests {
         assert!((lo..hi).contains(&((2 * 3600 + 90) as f64)));
         assert_eq!(s.index_watermarks(1, H + 10).unwrap(), [(0, 2), (H + 2, 8)]);
         assert!(s.record_searchable(-1, at, CODES).is_err());
+    }
+
+    /// A range wider than one transaction's chunk is counted in full.
+    #[test]
+    fn a_wide_range_is_recorded_in_chunks() {
+        let mut s = store();
+        let n = SEARCHABLE_CHUNK * 2 + 7;
+        let tx = s.conn.transaction().unwrap();
+        for id in 1..=n {
+            tx.execute(
+                "INSERT INTO torrents (id, info_hash, name, size, piece_len, piece_count,
+                     file_count, info_size, flags, discovered_at, metadata_at, last_seen_at,
+                     first_source, content_type)
+                 VALUES (?1, ?2, 'x', 0, 0, 0, 0, 0, 0, ?3, ?3, ?3, 0, 0)",
+                params![id, id.to_be_bytes().repeat(3)[..20].to_vec(), H * 3600],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+        let r = s
+            .record_searchable(n, H * 3600 + 60, CODES)
+            .unwrap()
+            .unwrap();
+        assert_eq!((r.after, r.last_id, r.torrents), (0, n, n as u64));
+        assert_eq!(r.first_cohort, Some(H));
+        assert_eq!(searchable_cohorts(&s), [(H, 0, n)]);
+        assert_eq!(s.index_watermarks(H, H).unwrap(), [(0, 0), (H, n)]);
     }
 
     #[test]

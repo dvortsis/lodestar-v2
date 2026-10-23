@@ -42,7 +42,7 @@ pub const CODES: SearchableCodes = SearchableCodes {
 };
 
 /// Coverage is added, and the index's watermark checked, this often.
-const TICK: Duration = Duration::from_secs(30);
+pub const TICK: Duration = Duration::from_secs(30);
 /// Commits waiting for the recorder; past this they're dropped (and
 /// covered by the next one).
 const QUEUE: usize = 64;
@@ -56,6 +56,11 @@ pub struct Insights {
     recorded: AtomicI64,
     /// Imported torrents; -1 until the count at start is in.
     imported: AtomicI64,
+    /// The oldest cohort of the keys restored at start (`i64::MAX`:
+    /// none), which keeps its days unsealed until the restored keys have
+    /// resolved (`floor_until`, unix seconds).
+    floor: AtomicI64,
+    floor_until: AtomicI64,
     cache: OverviewCache,
 }
 
@@ -84,6 +89,8 @@ impl Insights {
             started_at,
             recorded: AtomicI64::new(0),
             imported: AtomicI64::new(-1),
+            floor: AtomicI64::new(i64::MAX),
+            floor_until: AtomicI64::new(0),
             cache: OverviewCache::default(),
         }
     }
@@ -116,6 +123,12 @@ impl InsightsSource for Insights {
     fn cache(&self) -> &OverviewCache {
         &self.cache
     }
+
+    fn seal_floor(&self) -> Option<i64> {
+        let floor = self.floor.load(Ordering::Acquire);
+        (floor != i64::MAX && crate::unix_now() < self.floor_until.load(Ordering::Acquire))
+            .then_some(floor)
+    }
 }
 
 /// What the recorder follows.
@@ -126,6 +139,8 @@ pub struct Follow {
     pub index: Option<(Arc<CommitHook>, Arc<IndexStats>)>,
     /// Whether the crawler is paused now.
     pub paused: Box<dyn Fn() -> bool + Send + Sync>,
+    /// How often coverage is added ([`TICK`]).
+    pub tick: Duration,
 }
 
 /// Starts the recorder. It runs until `stop` turns true, recording what
@@ -158,6 +173,26 @@ async fn run(
 ) -> Result<(), BoxError> {
     let (db, config) = (follow.db.clone(), follow.store.clone());
     let mut store = tokio::task::spawn_blocking(move || Store::open(&db, config)).await??;
+    // Keys restored from the fetch queue keep their cohort, however old
+    // (a long downtime): those days take Stored and lost counts until the
+    // keys resolve, within the retry horizon, so they aren't sealed till
+    // then.
+    let queued;
+    (store, queued) = blocking(store, |s| s.load_fetch_queue()).await?;
+    match queued {
+        Ok(q) => {
+            if let Some(oldest) = q.iter().map(|k| k.cohort).min() {
+                insights.floor.store(oldest, Ordering::Release);
+                insights.floor_until.store(
+                    crate::unix_now() + (api::RETRY_HORIZON_HOURS + 1) * 3600,
+                    Ordering::Release,
+                );
+            }
+        }
+        Err(e) => tracing::warn!("insights: reading the fetch queue failed: {e}"),
+    }
+    // The sealed days' sums first, so the first long range is quick.
+    store = warm(insights, store).await?;
     let watermark = |f: &Follow| {
         f.index
             .as_ref()
@@ -177,24 +212,14 @@ async fn run(
         // The total stays null; everything else goes on.
         Err(e) => tracing::warn!("insights: counting imported torrents failed: {e}"),
     }
-    // The sealed days' sums, so the first long range is quick too.
-    let now = crate::unix_now();
-    let warmed;
-    (store, warmed) = blocking(store, {
-        let insights = insights.clone();
-        move |s| api::warm(s, &insights.cache, now)
-    })
-    .await?;
-    if let Err(e) = warmed {
-        tracing::warn!("insights: reading the sealed days failed: {e}");
-    }
-    let mut tick = tokio::time::interval(TICK);
+    let mut tick = tokio::time::interval(follow.tick);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     tick.tick().await;
     let mut covered_to = crate::unix_now();
     loop {
         tokio::select! {
-            c = commits.recv() => {
+            // With search off nothing sends: only the tick and the stop.
+            c = commits.recv(), if follow.index.is_some() => {
                 let Some(c) = c else { break };
                 store = record(insights, store, c.max_torrent_id, c.at as i64).await?;
             }
@@ -233,8 +258,21 @@ async fn blocking<T: Send + 'static>(
     .await?)
 }
 
+/// Reads the sealed days' sums the cache lacks.
+async fn warm(insights: &Arc<Insights>, store: Store) -> Result<Store, BoxError> {
+    let i = insights.clone();
+    let (store, warmed) = blocking(store, move |s| {
+        api::warm(s, &i.cache, crate::unix_now(), i.seal_floor())
+    })
+    .await?;
+    if let Err(e) = warmed {
+        tracing::warn!("insights: reading the sealed days failed: {e}");
+    }
+    Ok(store)
+}
+
 async fn record(
-    insights: &Insights,
+    insights: &Arc<Insights>,
     store: Store,
     last_id: i64,
     at: i64,
@@ -242,13 +280,10 @@ async fn record(
     let (store, r) = blocking(store, move |s| s.record_searchable(last_id, at, CODES)).await?;
     match r {
         Ok(Some(r)) => {
-            // An index backlog made old cohorts searchable: the sealed
-            // days' sums are out of date.
-            if r.first_cohort
-                .is_some_and(|c| c < api::sealed_hour(at.max(crate::unix_now())))
-            {
-                insights.cache.forget_days();
-            }
+            // An index backlog made old cohorts searchable: those sealed
+            // days' sums are out of date. Read them again.
+            let sealed = api::sealed_hour(crate::unix_now(), insights.seal_floor());
+            let stale = r.first_cohort.filter(|&c| c < sealed);
             if r.imported > 0 {
                 // Only onto a count that's in.
                 let _ = insights
@@ -258,6 +293,10 @@ async fn record(
                     });
             }
             insights.bump();
+            if let Some(c) = stale {
+                insights.cache.forget_days_from(c);
+                return warm(insights, store).await;
+            }
         }
         Ok(None) => {}
         // A busy or failed write: the next commit or tick covers the ids.
@@ -266,14 +305,19 @@ async fn record(
     Ok(store)
 }
 
-/// Coverage seconds for `from..to`, split at hour boundaries.
+/// Coverage seconds for `from..to`, split at hour boundaries. Nothing
+/// counts as measured while the crawler is paused (§10.9.3: a paused
+/// stretch is a gap, not a zero), so `INDEX` needs both.
 fn coverage_rows(from: i64, to: i64, indexing: bool, crawling: bool) -> Vec<Counter> {
     let mut out = Vec::new();
     let mut t = from;
     while t < to {
         let hour = t.div_euclid(3600);
         let end = ((hour + 1) * 3600).min(to);
-        for (on, dim) in [(indexing, coverage::INDEX), (crawling, coverage::CRAWL)] {
+        for (on, dim) in [
+            (indexing && crawling, coverage::INDEX),
+            (crawling, coverage::CRAWL),
+        ] {
             if on {
                 out.push(Counter {
                     hour,
@@ -299,17 +343,19 @@ mod tests {
     #[test]
     fn coverage_splits_at_hours() {
         let h = 500_000 * 3600;
-        let rows = coverage_rows(h - 10, h + 20, true, false);
+        let rows = coverage_rows(h - 10, h + 20, false, true);
         let got: Vec<_> = rows.iter().map(|c| (c.hour, c.dim, c.value)).collect();
         assert_eq!(
             got,
             [
-                (h / 3600 - 1, coverage::INDEX, 10),
-                (h / 3600, coverage::INDEX, 20)
+                (h / 3600 - 1, coverage::CRAWL, 10),
+                (h / 3600, coverage::CRAWL, 20)
             ]
         );
-        assert_eq!(coverage_rows(h, h + 5, true, true).len(), 2);
+        assert_eq!(coverage_rows(h - 10, h + 20, true, true).len(), 4);
         assert!(coverage_rows(h, h, true, true).is_empty());
+        // Paused: nothing is measured, so the trend shows a gap.
+        assert!(coverage_rows(h, h + 5, true, false).is_empty());
         assert!(coverage_rows(h, h + 5, false, false).is_empty());
     }
 
@@ -400,6 +446,7 @@ mod tests {
             store: StoreConfig::default(),
             index: Some((hook, stats.clone())),
             paused: Box::new(|| false),
+            tick: TICK,
         };
         let task = {
             let insights = insights.clone();
@@ -435,5 +482,55 @@ mod tests {
         let hour = crate::unix_now() / 3600;
         let w = store.index_watermarks(hour - 1, hour + 1).unwrap();
         assert_eq!(w.last().map(|r| r.1), Some(9));
+    }
+
+    /// With search off the recorder keeps running and records crawl
+    /// coverage (nothing ever sends it a commit).
+    #[tokio::test]
+    async fn without_search_it_records_coverage() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("t.db");
+        drop(Store::open(&db, StoreConfig::default()).unwrap());
+        let insights = Arc::new(Insights::with_clock(Box::new(|| 0), 1));
+        let (stop_tx, stop) = watch::channel(false);
+        let task = spawn(
+            insights.clone(),
+            Follow {
+                db: db.clone(),
+                store: StoreConfig::default(),
+                index: None,
+                paused: Box::new(|| false),
+                tick: Duration::from_millis(50),
+            },
+            stop,
+        );
+        let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
+        let start = std::time::Instant::now();
+        let crawl = || {
+            let h = crate::unix_now() / 3600;
+            reader
+                .rollup_sums(
+                    metric::COVERAGE,
+                    h - 1,
+                    h + 1,
+                    lodestar_store::RollupBy::Dim,
+                )
+                .unwrap()
+        };
+        loop {
+            let rows = crawl();
+            if rows.iter().any(|c| c.dim == coverage::CRAWL && c.value > 0) {
+                assert!(
+                    rows.iter().all(|c| c.dim != coverage::INDEX),
+                    "search is off"
+                );
+                break;
+            }
+            assert!(start.elapsed() < Duration::from_secs(10), "no coverage");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(!task.is_finished(), "the recorder keeps running");
+        stop_tx.send(true).unwrap();
+        task.await.unwrap();
     }
 }

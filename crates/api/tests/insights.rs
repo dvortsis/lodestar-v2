@@ -900,8 +900,9 @@ async fn compare_covers_the_period_before() {
     assert_eq!(p["trend"].as_array().unwrap().len(), 24);
     assert_eq!(v["kpi"]["new_searchable"], 3);
     assert_eq!(p["kpi"]["new_searchable"], 2);
-    assert_eq!(v["kpi"]["searchable_delta"], 3);
-    assert_eq!(p["kpi"]["searchable"], 997);
+    // Removals aren't counted yet, so the change since then isn't known.
+    assert_eq!(v["kpi"]["searchable_delta"], Value::Null);
+    assert_eq!(p["kpi"]["searchable"], Value::Null);
     // Without compare, or for `all`, there's no previous period.
     let v = json_get(&f, &cookie, "/api/v1/insights/overview?range=24h&compare=0").await;
     assert!(v.get("previous").is_none());
@@ -1130,7 +1131,7 @@ async fn a_year_of_rollups_answers_within_budget() {
     let cookie = session(&f).await;
     // What the recorder does at start: the sealed days' sums.
     let cold = Instant::now();
-    let warmed = lodestar_api::insights::warm(&f.store(), &f.source.cache, NOW).unwrap();
+    let warmed = lodestar_api::insights::warm(&f.store(), &f.source.cache, NOW, None).unwrap();
     eprintln!("warm ({warmed} days): {:?}", cold.elapsed());
     assert!(warmed >= 355);
     for query in [

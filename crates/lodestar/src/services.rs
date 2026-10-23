@@ -226,6 +226,7 @@ impl Services {
                         .as_ref()
                         .map(|s| (s.commit_hook().clone(), s.stats())),
                     paused: Box::new(move || crawl.status().paused),
+                    tick: insights::TICK,
                 },
                 insights_stopped,
             )

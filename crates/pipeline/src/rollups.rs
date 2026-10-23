@@ -36,8 +36,9 @@ pub mod metric {
 
     /// [`COVERAGE`] dims.
     pub mod coverage {
-        /// Searchable time was being recorded (the server ran with
-        /// search on).
+        /// Searchable time was being recorded: the server ran with
+        /// search on and the crawler not paused (a paused stretch is a
+        /// gap on the trend, §10.9.3).
         pub const INDEX: u32 = 0;
         /// The crawler ran, not paused.
         pub const CRAWL: u32 = 1;

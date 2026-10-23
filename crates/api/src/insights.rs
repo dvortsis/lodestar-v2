@@ -152,13 +152,16 @@ const MAX_ANNOTATIONS: usize = 1000;
 const CACHE_ENTRIES: usize = 8;
 /// UTC days that ended this many days ago or more are "sealed": past the
 /// retry horizon with room to spare, so nothing writes into their hours
-/// any more (the recorder says when it does: [`OverviewCache::forget_days`]).
-/// Their sums are kept in memory, so a long range reads them once.
+/// any more (the recorder says when it does:
+/// [`OverviewCache::forget_days_from`]). Their sums are kept in memory, so
+/// a long range reads them once.
 const SEALED_DAYS: i64 = 8;
 
-/// The first hour that isn't sealed at `now_h`.
-fn sealed_before(now_h: i64) -> i64 {
-    (now_h.div_euclid(24) - SEALED_DAYS) * 24
+/// The first hour that isn't sealed at `now_h`: [`SEALED_DAYS`] back, and
+/// never past `floor` (the oldest cohort still in flight), as a UTC day.
+fn sealed_before(now_h: i64, floor: Option<i64>) -> i64 {
+    let by_age = (now_h.div_euclid(24) - SEALED_DAYS) * 24;
+    floor.map_or(by_age, |f| by_age.min(f.div_euclid(24) * 24))
 }
 
 /// What the overview needs from the process beyond [`OpsApi`]: the
@@ -178,6 +181,13 @@ pub trait InsightsSource: Send + Sync + fmt::Debug {
     fn imported(&self) -> Option<u64>;
     /// The overview cache; the implementer keeps one.
     fn cache(&self) -> &OverviewCache;
+    /// The oldest discovery cohort that may still be written to (keys
+    /// restored after a long downtime keep their cohort): days from it on
+    /// aren't sealed. `None` when nothing older than [`SEALED_DAYS`] is
+    /// in flight.
+    fn seal_floor(&self) -> Option<i64> {
+        None
+    }
     /// Unix seconds now (a fixed clock in tests).
     fn now(&self) -> i64 {
         crate::unix_now()
@@ -189,7 +199,15 @@ pub trait InsightsSource: Send + Sync + fmt::Debug {
 #[derive(Debug, Default)]
 pub struct OverviewCache {
     entries: Mutex<VecDeque<(CacheKey, Arc<OverviewResponse>)>>,
-    days: Mutex<BTreeMap<i64, Arc<DayRows>>>,
+    days: Mutex<Days>,
+}
+
+/// The sealed days' sums, and a generation [`OverviewCache::forget_days_from`]
+/// bumps, so sums read from a snapshot older than a forget are never kept.
+#[derive(Debug, Default)]
+struct Days {
+    generation: u64,
+    days: BTreeMap<i64, Arc<DayRows>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -232,18 +250,28 @@ impl OverviewCache {
         self.len() == 0
     }
 
-    /// Drops every sealed day's sums and every response: something was
-    /// written into an hour that was thought sealed (the recorder making
-    /// old cohorts searchable after an index backlog).
-    pub fn forget_days(&self) {
-        self.days
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clear();
+    /// Drops the sums of the sealed days from `hour`'s on, and every
+    /// response: something was written into an hour thought sealed (the
+    /// recorder making old cohorts searchable after an index backlog).
+    /// The caller warms them again ([`warm`]).
+    pub fn forget_days_from(&self, hour: i64) {
+        {
+            let mut days = self.days.lock().unwrap_or_else(PoisonError::into_inner);
+            days.generation += 1;
+            let stale = days.days.split_off(&(hour.div_euclid(24) * 24));
+            drop(stale);
+        }
         self.entries
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
+    }
+
+    fn generation(&self) -> u64 {
+        self.days
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .generation
     }
 
     /// How many sealed days it holds, for tests.
@@ -251,30 +279,41 @@ impl OverviewCache {
         self.days
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+            .days
             .len()
     }
 }
 
-/// The hour before which the recorder's writes reach sealed days: a
+/// The hour before which a write reaches sealed days at `now`: a
 /// [`lodestar_store::Searchable`] whose `first_cohort` is earlier calls
-/// for [`OverviewCache::forget_days`].
-pub fn sealed_hour(now: i64) -> i64 {
-    sealed_before(now.div_euclid(3600))
+/// for [`OverviewCache::forget_days_from`].
+pub fn sealed_hour(now: i64, floor: Option<i64>) -> i64 {
+    sealed_before(now.div_euclid(3600), floor)
 }
 
-/// Reads every sealed day's sums into `cache` (at start, so the first
-/// long range is as quick as the rest).
-pub fn warm(store: &Store, cache: &OverviewCache, now: i64) -> lodestar_store::Result<usize> {
-    let now_h = now.div_euclid(3600);
-    let Some(first) = store.first_rollup_hour()? else {
-        return Ok(0);
-    };
-    let to = sealed_before(now_h);
-    let from = first.div_euclid(24) * 24;
-    if from >= to {
-        return Ok(0);
-    }
-    Ok(sealed_days(store, cache, from, to.min(from + MAX_SPAN_HOURS))?.len())
+/// Reads every sealed day's sums that `cache` lacks (at start, and after
+/// a forget, so a long range is as quick as the rest). Returns how many
+/// sealed days it holds.
+pub fn warm(
+    store: &Store,
+    cache: &OverviewCache,
+    now: i64,
+    floor: Option<i64>,
+) -> lodestar_store::Result<usize> {
+    let generation = cache.generation();
+    store.read_snapshot(|store| {
+        let Some(first) = store.first_rollup_hour()? else {
+            return Ok(0);
+        };
+        let to = sealed_before(now.div_euclid(3600), floor);
+        let from = first.div_euclid(24) * 24;
+        if from >= to {
+            return Ok(0);
+        }
+        let to = to.min(from + MAX_SPAN_HOURS);
+        sealed_days(store, cache, generation, from, to)?;
+        Ok(cache.days())
+    })
 }
 
 /// One sealed UTC day's sums: what [`read_period`] would read for it.
@@ -291,21 +330,27 @@ struct DayRows {
 }
 
 /// The sealed days `from..to` (whole days), from the cache, reading the
-/// missing ones in one pass.
+/// missing ones in one pass. What it reads is kept only if no forget came
+/// since `generation`, taken before the caller's snapshot began.
 fn sealed_days(
     store: &Store,
     cache: &OverviewCache,
+    generation: u64,
     from: i64,
     to: i64,
 ) -> lodestar_store::Result<Vec<Arc<DayRows>>> {
     use codes::metric;
-    let missing: Vec<i64> = {
+    let mut out: BTreeMap<i64, Arc<DayRows>> = {
         let days = cache.days.lock().unwrap_or_else(PoisonError::into_inner);
-        (from..to)
-            .step_by(24)
-            .filter(|d| !days.contains_key(d))
+        days.days
+            .range(from..to)
+            .map(|(&d, r)| (d, r.clone()))
             .collect()
     };
+    let missing: Vec<i64> = (from..to)
+        .step_by(24)
+        .filter(|d| !out.contains_key(d))
+        .collect();
     if let (Some(&a), Some(&b)) = (missing.first(), missing.last()) {
         let (a, b) = (a, b + 24);
         let mut read: BTreeMap<i64, DayRows> = (a..b)
@@ -341,15 +386,19 @@ fn sealed_days(
                 .or_default() += c.value;
         }
         let mut days = cache.days.lock().unwrap_or_else(PoisonError::into_inner);
+        let keep = days.generation == generation;
         for (d, rows) in read {
-            days.entry(d).or_insert_with(|| Arc::new(rows));
+            if out.contains_key(&d) {
+                continue;
+            }
+            let rows = Arc::new(rows);
+            if keep {
+                days.days.entry(d).or_insert_with(|| rows.clone());
+            }
+            out.insert(d, rows);
         }
     }
-    let days = cache.days.lock().unwrap_or_else(PoisonError::into_inner);
-    Ok((from..to)
-        .step_by(24)
-        .filter_map(|d| days.get(&d).cloned())
-        .collect())
+    Ok(out.into_values().collect())
 }
 
 fn unavailable() -> ApiError {
@@ -456,7 +505,7 @@ fn window(q: &OverviewQuery, now: i64, first_hour: Option<i64>) -> ApiResult<Win
                 return Err(bad("to", "to must be after from."));
             }
             let from_h = from.div_euclid(3600);
-            let to_h = ceil_to(to, 3600).div_euclid(3600).min(end_h);
+            let to_h = ceil_to(to.min(end_h * 3600), 3600).div_euclid(3600);
             if from_h >= to_h {
                 return Err(bad("from", "The range starts after the current hour."));
             }
@@ -687,16 +736,25 @@ struct PeriodRows {
     delays_recent: Vec<Counter>,
 }
 
+/// Where [`read_period`] takes sealed days' sums from.
+#[derive(Debug, Clone, Copy)]
+struct Sealed<'a> {
+    cache: &'a OverviewCache,
+    /// The cache's generation before the snapshot began.
+    generation: u64,
+    floor: Option<i64>,
+}
+
 fn read_period(
     store: &Store,
     w: &Window,
     now_h: i64,
-    cache: Option<&OverviewCache>,
+    sealed: Option<Sealed<'_>>,
 ) -> lodestar_store::Result<PeriodRows> {
     use codes::metric;
     // Day buckets: sealed days from their sums, the rest hour by hour.
-    let split = if let (24, Some(_)) = (w.grain, cache) {
-        sealed_before(now_h).clamp(w.from_h, w.to_h)
+    let split = if let (24, Some(sealed)) = (w.grain, &sealed) {
+        sealed_before(now_h, sealed.floor).clamp(w.from_h, w.to_h)
     } else {
         w.from_h
     };
@@ -721,8 +779,8 @@ fn read_period(
             RollupBy::HourKey,
         )?,
     };
-    if let Some(cache) = cache.filter(|_| split > w.from_h) {
-        let days = sealed_days(store, cache, w.from_h, split)?;
+    if let Some(sealed) = sealed.filter(|_| split > w.from_h) {
+        let days = sealed_days(store, sealed.cache, sealed.generation, w.from_h, split)?;
         let row = |hour, dim, key, value| Counter {
             hour,
             metric: 0,
@@ -1024,16 +1082,22 @@ fn stalled(rows: &NowRows, now_h: i64) -> Option<InsightsException> {
 fn build(
     store: &Store,
     cache: &OverviewCache,
+    floor: Option<i64>,
     w: Window,
     prev: Option<Window>,
     now: i64,
     adult: bool,
 ) -> lodestar_store::Result<OverviewResponse> {
     let now_h = now.div_euclid(3600);
+    let sealed = Sealed {
+        cache,
+        generation: cache.generation(),
+        floor,
+    };
     store.read_snapshot(|store| {
-        let rows = read_period(store, &w, now_h, Some(cache))?;
+        let rows = read_period(store, &w, now_h, Some(sealed))?;
         let prev_rows = prev
-            .map(|p| read_period(store, &p, now_h, Some(cache)))
+            .map(|p| read_period(store, &p, now_h, Some(sealed)))
             .transpose()?;
         let now_rows = read_now(store, now_h)?;
         let events = store.events(w.from_h * 3600, w.to_h * 3600)?;
@@ -1129,7 +1193,7 @@ struct Snapshot {
     started_at: i64,
 }
 
-fn apply_snapshot(r: &mut OverviewResponse, s: Snapshot, compare: bool) {
+fn apply_snapshot(r: &mut OverviewResponse, s: Snapshot) {
     let last = s.last_flush.unwrap_or(s.started_at);
     r.stale = (s.now - last > STALE_AFTER_S).then(|| Stale {
         reason: if s.paused { "paused" } else { "writer_stalled" }.into(),
@@ -1178,18 +1242,14 @@ fn apply_snapshot(r: &mut OverviewResponse, s: Snapshot, compare: bool) {
     r.kpi.imported = s.imported;
     r.stages.index = s.searchable;
     r.updated_at = s.now;
-    if compare && r.previous.is_some() {
-        let delta = r.kpi.new_searchable.min(i64::MAX as u64) as i64;
-        r.kpi.searchable_delta = Some(delta);
-        if let Some(p) = &mut r.previous {
-            p.kpi.searchable = s.searchable.map(|n| n.saturating_sub(delta as u64));
-        }
-    }
+    // `kpi.searchable_delta` and `previous.kpi.searchable` stay null:
+    // the change since the previous period's end needs removals, which
+    // nothing counts until B11b's lifecycle counters.
 }
 
 /// The Insights overview (§10.9.2): stage strip, KPIs, trend with
 /// annotations, the cohort funnel, segments, exceptions and Serve, from
-/// the rollups. `compare=1` adds `previous` and `kpi.searchable_delta`.
+/// the rollups. `compare=1` adds `previous`.
 /// Event time for the trend, new searchable, stages and Serve; discovery
 /// cohort for the funnel, yield and time to searchable.
 #[utoipa::path(
@@ -1248,13 +1308,24 @@ pub(crate) async fn overview(
         if let Some(hit) = source.cache().get(&key) {
             return Ok((*hit).clone());
         }
-        let built = Arc::new(build(&store, source.cache(), w, prev, now, adult).map_err(internal)?);
+        let built = Arc::new(
+            build(
+                &store,
+                source.cache(),
+                source.seal_floor(),
+                w,
+                prev,
+                now,
+                adult,
+            )
+            .map_err(internal)?,
+        );
         source.cache().put(key, built.clone());
         Ok((*built).clone())
     })
     .await
     .map_err(internal)??;
-    apply_snapshot(&mut response, snap, compare);
+    apply_snapshot(&mut response, snap);
     Ok(Json(response))
 }
 
@@ -1519,11 +1590,16 @@ mod tests {
             })
             .unwrap();
         let cache = OverviewCache::default();
+        let sealed = Sealed {
+            cache: &cache,
+            generation: 0,
+            floor: None,
+        };
         for w in [
             window(&q("30d"), NOW, None).unwrap(),
             Window::new(now_h - 40 * 24, now_h - 10 * 24),
         ] {
-            let summed = read_period(&store, &w, now_h, Some(&cache)).unwrap();
+            let summed = read_period(&store, &w, now_h, Some(sealed)).unwrap();
             let direct = read_period(&store, &w, now_h, None).unwrap();
             let (a, b) = (period(&w, now_h, &summed), period(&w, now_h, &direct));
             assert_eq!(a.trend, b.trend);
@@ -1539,9 +1615,37 @@ mod tests {
             );
         }
         assert!(cache.days() >= 22);
-        cache.forget_days();
-        assert_eq!(cache.days(), 0);
-        assert!(warm(&store, &cache, NOW).unwrap() >= 30);
+        // A forget drops the days from its hour on, and sums read from a
+        // snapshot older than it aren't kept.
+        let from = now_h - 20 * 24;
+        let before = cache.days();
+        cache.forget_days_from(from);
+        let dropped = before - cache.days();
+        assert!(dropped > 0 && cache.days() > 0);
+        sealed_days(
+            &store,
+            &cache,
+            0,
+            from.div_euclid(24) * 24,
+            sealed_before(now_h, None),
+        )
+        .unwrap();
+        assert_eq!(
+            cache.days(),
+            before - dropped,
+            "an old generation's sums aren't kept"
+        );
+        assert!(warm(&store, &cache, NOW, None).unwrap() >= 32);
+        // The floor keeps in-flight cohorts' days unsealed.
+        let floor = Some(now_h - 15 * 24);
+        assert_eq!(
+            sealed_before(now_h, floor),
+            (now_h - 15 * 24).div_euclid(24) * 24
+        );
+        assert_eq!(
+            sealed_before(now_h, Some(now_h)),
+            sealed_before(now_h, None)
+        );
     }
 
     #[test]

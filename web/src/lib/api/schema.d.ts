@@ -495,7 +495,7 @@ export interface paths {
         /**
          * The Insights overview (§10.9.2): stage strip, KPIs, trend with
          *     annotations, the cohort funnel, segments, exceptions and Serve, from
-         *     the rollups. `compare=1` adds `previous` and `kpi.searchable_delta`.
+         *     the rollups. `compare=1` adds `previous`.
          *     Event time for the trend, new searchable, stages and Serve; discovery
          *     cohort for the funnel, yield and time to searchable.
          */
@@ -2116,9 +2116,9 @@ export interface components {
             searchable: number | null;
             /**
              * Format: int64
-             * @description Torrents made searchable in this range, as the change since the
-             *     previous period's end; null without `compare=1` (and for `all`).
-             *     Removals aren't counted yet (B11b).
+             * @description The change since the previous period's end. Always null for now:
+             *     it needs removals, which nothing counts until B11b's lifecycle
+             *     counters.
              */
             searchable_delta: number | null;
             /**
@@ -2447,8 +2447,8 @@ export interface components {
             new_searchable: number;
             /**
              * Format: int64
-             * @description Searchable at the period's end: now's, less what this range made
-             *     searchable. Null when search is off.
+             * @description Searchable at the period's end. Null until removals are counted
+             *     (B11b), as `kpi.searchable_delta`.
              */
             searchable: number | null;
             /** Format: int64 */
@@ -4303,10 +4303,7 @@ export interface operations {
                  *     (day), and to the current one at most.
                  */
                 to?: number;
-                /**
-                 * @description `1` adds `previous`, the period of equal length before, and
-                 *     `kpi.searchable_delta`.
-                 */
+                /** @description `1` adds `previous`, the period of equal length before. */
                 compare?: number;
             };
             header?: never;
