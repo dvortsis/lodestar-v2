@@ -983,18 +983,18 @@ async fn none_running(f: &Fixture, c: &str, request: usize) {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let (_, list) = json_of(&f.app, get("/api/v1/jobs", Some(c))).await;
-        let running: Vec<&Value> = list["jobs"]
+        let unfinished: Vec<&Value> = list["jobs"]
             .as_array()
             .unwrap()
             .iter()
             .filter(|j| j["finished_at"].is_null())
             .collect();
-        if running.is_empty() {
+        if unfinished.is_empty() {
             return;
         }
         assert!(
             Instant::now() < deadline,
-            "request {request}: a dropped setup left {running:?}"
+            "request {request}: a dropped setup left {unfinished:?}"
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
