@@ -320,8 +320,8 @@
    "session": "session_01QE5wiiZe5CM8pk9fT2tuBD",
    "pr": 102,
    "attempt": 1,
-   "review_rounds": 2,
-   "notes": "Launched 21:41 after B6 merged. | 01:50 PR #102 41231f7 conflicts live.rs; asked main merge + relevance gate; review on new head. | 01:52 c764a4f main merged (relevance PASS); reviewer started. | 02:45 review FIX: natural phrasing inverts negations/field syntax (-cam -> includes CAM) -> strict-lex first + meaning-preserving prop test; important: did-you-mean cost, FST peak RSS/10M plan, swap-path test. | 03:20 c80199b fixes (strict-lex natural phrasing + prop test, did-you-mean capped, FST memory, swap test). Delta reviewer started. OK given for query.rs pub(crate) + ROUTES line. | 03:33 delta c80199b FIX: chip_nodes swallows tokens with ./,/nbsp (release names -> res:1080p); important: cross-run merge/contradictions, structural prop test. Grouping preservation verified. | 03:47 7548049 chip/merge/structural-prop fixes; narrow delta reviewer (round 3) started."
+   "review_rounds": 3,
+   "notes": "Launched 21:41 after B6 merged. | 01:50 PR #102 41231f7 conflicts live.rs; asked main merge + relevance gate; review on new head. | 01:52 c764a4f main merged (relevance PASS); reviewer started. | 02:45 review FIX: natural phrasing inverts negations/field syntax (-cam -> includes CAM) -> strict-lex first + meaning-preserving prop test; important: did-you-mean cost, FST peak RSS/10M plan, swap-path test. | 03:20 c80199b fixes (strict-lex natural phrasing + prop test, did-you-mean capped, FST memory, swap test). Delta reviewer started. OK given for query.rs pub(crate) + ROUTES line. | 03:33 delta c80199b FIX: chip_nodes swallows tokens with ./,/nbsp (release names -> res:1080p); important: cross-run merge/contradictions, structural prop test. Grouping preservation verified. | 03:47 7548049 chip/merge/structural-prop fixes; narrow delta reviewer (round 3) started. | 03:58 round-3 delta FIX (two-value tokens, bare-number ext, AND merge regression, nested field guard, prop test). Past escalation limit (2): not parked because each round narrows a hard parser problem; next blocking -> split natural phrasing into follow-up and merge /suggest. Flagged to owner."
   },
   "B12": {
    "status": "review",
@@ -1307,7 +1307,8 @@
   "\u00a72.19 (C-adult-other #105): Other->Scene, Ebook->Comics at threshold 60, consistent with TV/Comic/Movie. Known edges: light novel with \"hentai\" in title, \"Porn Studies\" journal become Adult.",
   "\u00a72.19 (M6-win/P-release): Windows service runs as virtual account NT SERVICE\\Lodestar (per-service SID), not LocalSystem/LocalService; data folder ACL SYSTEM+Administrators+service SID only, inheritance removed.",
   "\u00a72.19 (B10a #111): saved-search alert counts count shown torrents only; collection position/next_after are among shown entries; reorder keeps withheld entries in their slots.",
-  "\u00a72.19 (B12 #112): key \"reveal\" replaced by regenerate; a bad X-Forwarded-For entry ends the walk at the peer (safer than skipping); revoke/delete need no password; at most 500 keys/tokens; login limiter map strictly bounded with overflow bucket."
+  "\u00a72.19 (B12 #112): key \"reveal\" replaced by regenerate; a bad X-Forwarded-For entry ends the walk at the peer (safer than skipping); revoke/delete need no password; at most 500 keys/tokens; login limiter map strictly bounded with overflow bucket.",
+  "Process: B7 (#102) exceeded review_rounds_before_escalation (now 4 FIX rounds on natural phrasing). Runner chose not to park: fix scope narrowed each round; if another blocking round, natural phrasing is split into a follow-up slice and /suggest merges without it. Owner may prefer parking."
  ],
  "decisions_log": [
   "2026-10-23 00:40 owner: 'Go with whatever makes for the best user experience' re filter budget reference -> staged: #97 fastest-runner ref now; F-perf moves ref to EPYC 7763 (typical) when engine meets it.",
