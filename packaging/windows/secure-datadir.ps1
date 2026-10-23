@@ -38,12 +38,10 @@ $dir = [IO.Path]::GetFullPath($Path).TrimEnd('\')
 $marker = '.lodestar-secured'
 $system = New-Object Security.Principal.SecurityIdentifier 'S-1-5-18'
 $admins = New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-544'
-# The service's own SID is S-1-5-80 plus five 32-bit words of the SHA-1 of its upper-case
-# name (UTF-16LE). Work it out rather than ask Windows to translate NT SERVICE\<name>: the
-# lookup fails while the service has no SID type registered yet, as in this install.
-$hash = [Security.Cryptography.SHA1]::Create().ComputeHash([Text.Encoding]::Unicode.GetBytes($Service.ToUpperInvariant()))
-$words = 0..4 | ForEach-Object { [BitConverter]::ToUInt32($hash, 4 * $_) }
-$svc = New-Object Security.Principal.SecurityIdentifier ('S-1-5-80-' + ($words -join '-'))
+# The service's own SID, worked out (see service-sid.ps1): translating NT SERVICE\<name>
+# fails while the service has no SID type yet, as in this install.
+. (Join-Path $PSScriptRoot 'service-sid.ps1')
+$svc = Get-ServiceSid $Service
 Log "service SID: $svc"
 
 function New-DataSecurity {
