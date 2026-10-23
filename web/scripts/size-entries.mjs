@@ -46,22 +46,3 @@ export function routeFiles(route) {
 	const abs = (f) => `build/${f}`.replaceAll('\\', '/');
 	return { js: js.map(abs), css: css.map(abs) };
 }
-
-/**
- * Files of a dynamically imported module (a manifest key such as
- * `src/lib/features/detail/DetailHost.svelte`): its static-import closure, minus what the search
- * route already loads. Empty when the module is not a separate chunk in this build (or none exists).
- */
-export function chunkFiles(sourceKey) {
-	const manifestPath = at('.svelte-kit/output/client/.vite/manifest.json');
-	if (!existsSync(manifestPath)) return { js: [], css: [] };
-	const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-	if (!manifest[sourceKey]) return { js: [], css: [] };
-	const { js, css } = closure(manifest, [sourceKey]);
-	const abs = (f) => `build/${f}`.replaceAll('\\', '/');
-	const base = routeFiles('/search');
-	return {
-		js: js.map(abs).filter((f) => !base.js.includes(f)),
-		css: css.map(abs).filter((f) => !base.css.includes(f))
-	};
-}

@@ -161,7 +161,9 @@ fn system_reports_and_restarts_in_place() {
     assert_eq!(info["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(info["repository"], env!("CARGO_PKG_REPOSITORY"));
     assert_eq!(info["restart"]["available"], true);
-    assert_eq!(info["restart"]["method"], "reexec");
+    // `serve` on Unix is the supervisor, which restarts its child (§12.2).
+    let method = if cfg!(unix) { "supervised" } else { "reexec" };
+    assert_eq!(info["restart"]["method"], method);
     assert!(info["restart"]["estimated_seconds"].as_u64().unwrap() >= 1);
     assert_eq!(
         info["restart_required"],

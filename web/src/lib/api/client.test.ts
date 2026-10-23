@@ -58,7 +58,8 @@ describe('requests', () => {
 				hidden: null,
 				limit: null,
 				offset: null,
-				sort: null
+				sort: null,
+				tz: null
 			}
 		});
 		const [, init] = fetchMock.mock.calls[0]!;
@@ -143,6 +144,56 @@ describe('errors', () => {
 		);
 		const e = await api.get('/parse').catch((x) => x);
 		expect(e).toMatchObject({ setupRequired: true, assessment: { a: 1 } });
+	});
+
+	it('keeps a settings refusal’s section', async () => {
+		fetchMock.mockImplementation(async () =>
+			json(
+				{
+					error: {
+						code: 'invalid_setting',
+						field: 'timeout_secs',
+						message: 'Must be from 1 to 120.',
+						section: 'crawler'
+					}
+				},
+				{ status: 422 }
+			)
+		);
+		const e = await api.patch('/settings', { body: {} }).catch((x) => x);
+		expect(e).toMatchObject({
+			status: 422,
+			code: 'invalid_setting',
+			field: 'timeout_secs',
+			section: 'crawler'
+		});
+		expect(e.current).toBeUndefined();
+	});
+
+	it('keeps a stale revision’s current values', async () => {
+		const crawler = {
+			fields: {
+				intensity: {
+					env: null,
+					read_only: false,
+					restart_required: false,
+					source: 'db',
+					value: 'low'
+				}
+			},
+			restart_required: [],
+			revision: 5,
+			section: 'crawler'
+		};
+		fetchMock.mockImplementation(async () =>
+			json(
+				{ error: { code: 'stale_revision', message: 'x' }, current: { crawler } },
+				{ status: 409 }
+			)
+		);
+		const e = await api.patch('/settings', { body: {} }).catch((x) => x);
+		expect(e).toMatchObject({ status: 409, code: 'stale_revision', current: { crawler } });
+		expect(e.section).toBeUndefined();
 	});
 
 	it('parses Retry-After as seconds or HTTP date', () => {

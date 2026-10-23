@@ -13,7 +13,9 @@ use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_classify::Correction;
 use lodestar_metainfo::Info;
 use lodestar_search::SearchIndex;
-use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig, flags};
+use lodestar_store::{
+    NewTorrent, SourceId, Store, StoreConfig, SwarmUpdate, TrackerCounts, WriteBatch, flags,
+};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -147,6 +149,8 @@ fn fixture_with(torrents: &[T<'_>], search: bool, adult: bool) -> Fixture {
             user_data: None,
             adult: AdultVisibility::follow(move || adult),
             insights: None,
+            hot: None,
+            events: None,
         }),
     );
     let hashes = infos
@@ -699,4 +703,83 @@ async fn adult_shown_follows_the_setting() {
     assert_eq!(body["torrents"][1]["content_type"], "adult");
     let (status, _) = call(&f.app, compare(&f, &[KNIGHT_1080, KNIGHT_HIDDEN], c)).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// Writes a scrape result for torrent `i` of the fixture, as the
+/// scheduler's writer would.
+fn scraped(f: &Fixture, i: usize, seeders: u32) {
+    let mut store = Store::open(f._dir.path().join("t.db"), StoreConfig::default()).unwrap();
+    let id = i as i64 + 1;
+    assert_eq!(
+        torrent_hash(&store, id),
+        f.hashes[i],
+        "fixture ids follow the list"
+    );
+    let tracker = store.upsert_tracker("udp://t.example:1337", 1).unwrap();
+    store
+        .write(&WriteBatch {
+            swarm: &[SwarmUpdate {
+                torrent_id: id,
+                at: 1_700_000_100,
+                seeders,
+                leechers: 3,
+                completed: 90,
+                trackers_reporting: 1,
+                trackers_checked: 2,
+                dht: None,
+                per_tracker: vec![TrackerCounts {
+                    tracker,
+                    seeders,
+                    leechers: 3,
+                    completed: 90,
+                }],
+                next_scrape_at: 1_700_021_700,
+                flags: 0,
+                interest: false,
+            }],
+            ..WriteBatch::default()
+        })
+        .unwrap();
+}
+
+fn torrent_hash(store: &Store, id: i64) -> String {
+    let row = store.torrent(id).unwrap().unwrap();
+    row.info_hash.0.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[tokio::test]
+async fn compare_and_siblings_show_swarm_health() {
+    let all = works();
+    let f = fixture(&all, true);
+    scraped(&f, KNIGHT_1080, 12);
+    let c = session(&f).await;
+    let c = Some(c.as_str());
+
+    let (status, body) = json_of(&f.app, compare(&f, &[KNIGHT_1080, KNIGHT_720], c)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let cols = body["torrents"].as_array().unwrap();
+    assert_eq!(cols[0]["seeders"], 12);
+    assert_eq!(cols[0]["leechers"], 3);
+    assert_eq!(cols[0]["trackers_reporting"], 1);
+    assert_eq!(cols[0]["trackers_checked"], 2);
+    // Never scraped stays unknown, not 0.
+    for k in [
+        "seeders",
+        "leechers",
+        "trackers_reporting",
+        "trackers_checked",
+    ] {
+        assert_eq!(cols[1][k], Value::Null, "{k}");
+    }
+
+    let uri = format!("/api/v1/torrents/{}/siblings", f.hashes[KNIGHT_720]);
+    let (status, body) = json_of(&f.app, get(&uri, c)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let hits = body["other_versions"]["hits"].as_array().unwrap();
+    let knight = hits
+        .iter()
+        .find(|h| h["name"] == all[KNIGHT_1080].name)
+        .unwrap_or_else(|| panic!("{body}"));
+    assert_eq!(knight["seeders"], 12);
+    assert_eq!(knight["trackers_reporting"], 1);
 }

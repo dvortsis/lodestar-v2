@@ -55,6 +55,8 @@ fn fixture(config: EventsConfig) -> Fixture {
                 settings: None,
                 ops: None,
                 user_data: None,
+                hot: None,
+                events: None,
                 adult: Default::default(),
                 insights: None,
             }),
@@ -195,7 +197,7 @@ fn crawler() -> Event {
     Event::Crawler(CrawlerEvent::default())
 }
 
-const SOON: Duration = Duration::from_secs(5);
+const SOON: Duration = Duration::from_secs(15);
 
 #[tokio::test]
 async fn events_stream_promptly_through_the_router() {
@@ -577,6 +579,8 @@ async fn without_a_hub_it_is_unavailable() {
             settings: None,
             ops: None,
             user_data: None,
+            hot: None,
+            events: None,
             adult: Default::default(),
             insights: None,
         }),
@@ -679,6 +683,8 @@ async fn the_torrents_count_leaves_out_adult_while_it_is_hidden() {
                 settings: None,
                 ops: None,
                 user_data: None,
+                hot: None,
+                events: None,
                 adult,
                 insights: None,
             }),

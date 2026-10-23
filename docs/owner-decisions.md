@@ -348,6 +348,15 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **No certificate for now:** Windows builds (MSI, portable zip, binaries) ship without an Authenticode signature until the owner gets one. The `owner-signing-cert` dependency blocks nothing.
     - **Update trust is unchanged:** the Ed25519-signed manifest and its SHA-256 and size pins (architecture §12.2) are what the update engine trusts, so the update path loses nothing it relies on. The engine checks Authenticode only on artifacts that carry a signature.
     - **The user guide** explains the SmartScreen warning plainly. It also shows how to check a download against the release's signed checksums before choosing "Run anyway" (§2.14).
+24. **Multi-session best practices are standing rules** (owner, 2026-10-23, "M4 completion strategy" session: "Let's add all the best practices for multi-session development to Claude's global rules to ensure a more efficient experience going forward"). This came out of M4's last PR (#48): it chased `main` for 36 hours while `main` took 63 merges a day, picked up other slices' flaky tests, and its session sat on a permission prompt the owner couldn't see. The owner first approved a one-off merge pause until #48 lands, then made the lessons permanent.
+
+    The practices, as applied (the owner approved them as a set; the wording and thresholds below are refinements under §2.19, not the owner's words):
+    - **A landing lane:** the runner holds merges that overlap a reviewed PR that keeps needing `main`, until it lands. It extends §2.22's freshness rule (`runner/README.md` step 4).
+    - **Small PRs:** slices that would be large are split before launch, so each PR lands between other merges.
+    - **Shared CI and branches:** one push per round of fixes, `main` brought in only when needed, pushes held during a pause, and one session per branch.
+    - **Tests wait for conditions, never fixed sleeps.** A flake is fixed once, where it is, not re-run onto the next PR.
+    - **Sessions don't stall unseen:** long-running sessions run in Auto, the coordination tools are pre-approved in `.claude/settings.json`, and the runner notifies the owner at once when a session waits on a permission prompt.
+    - The rules are in `CLAUDE.md` ("Multi-session work"), `runner/README.md`, `runner/standards.md` and the `steward` skill. The thresholds were picked under §2.19, so the owner can veto them, and are recorded in `docs/decisions/2026-10-23-multi-session.md`.
 
 ## 3. Points still open (not decided by the owner)
 - **Name-pattern blocklists.** The owner said "build those" *(M4, 10-22 03:27:05)*; they were then moved into the §20 rule engine by the approved design PR #27. Assumed satisfied by the rule engine unless the owner says otherwise.

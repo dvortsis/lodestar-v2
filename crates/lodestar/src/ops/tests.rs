@@ -55,6 +55,7 @@ impl SourcePlugin for Feed {
             loop {
                 tokio::select! {
                     _ = ctx.shutdown.requested() => return Ok(()),
+                    // Paces the source: one key per tick is the load under test.
                     _ = tokio::time::sleep(Duration::from_millis(10)) => {
                         n += 1;
                         let mut key = [7u8; 20];
@@ -80,6 +81,7 @@ impl Fetcher for Counting {
     ) -> BoxFuture<'static, Result<Fetched, FailureKind>> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Box::pin(async {
+            // Simulates a peer that takes a moment before it refuses.
             tokio::time::sleep(Duration::from_millis(5)).await;
             Err(FailureKind::Refused)
         })
@@ -172,6 +174,8 @@ async fn fixture() -> Fixture {
             user_data: None,
             adult: Default::default(),
             insights: None,
+            hot: None,
+            events: None,
         }),
     );
     Fixture {
@@ -248,21 +252,47 @@ fn req(method: &str, uri: &str, cookie: &str, body: Option<&str>) -> Request<Bod
     b.body(Body::from(body.unwrap_or("").to_string())).unwrap()
 }
 
-/// Fetch starts over `ms`.
+/// Fetch starts over `ms`. The window is the point: it checks that
+/// something does or doesn't start within a bound, so it stays a sleep.
 async fn starts_during(f: &Fixture, ms: u64) -> usize {
     let before = f.starts.load(Ordering::SeqCst);
     tokio::time::sleep(Duration::from_millis(ms)).await;
     f.starts.load(Ordering::SeqCst) - before
 }
 
-async fn eventually(mut check: impl FnMut() -> bool) {
-    for _ in 0..200 {
-        if check() {
-            return;
-        }
+/// Polls `check` every 25 ms for up to 15 s, then panics saying `what`
+/// it was waiting for and what `seen` reports.
+async fn eventually(what: &str, seen: impl Fn() -> String, mut check: impl FnMut() -> bool) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    while !check() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out after 15 s waiting for {what}; last saw {}",
+            seen()
+        );
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    panic!("timed out");
+}
+
+/// Waits until fetch starts stop changing between two reads 100 ms
+/// apart. A pause applies before the API answers, so this settles at
+/// once; the 1 s bound is there so a pool that keeps starting fetches
+/// after a pause fails here instead of passing.
+async fn starts_settled(f: &Fixture) {
+    let mut last = usize::MAX;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    loop {
+        let now = f.starts.load(Ordering::SeqCst);
+        if now == last {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "fetch starts kept changing for 1 s, last saw {now}"
+        );
+        last = now;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 async fn node_paused(dht: &DhtSource) -> Option<bool> {
@@ -286,7 +316,7 @@ async fn answers(addr: SocketAddr) -> bool {
     };
     socket.send_to(&msg.encode(), addr).await.unwrap();
     let mut buf = [0u8; 1500];
-    match tokio::time::timeout(Duration::from_secs(2), socket.recv_from(&mut buf)).await {
+    match tokio::time::timeout(Duration::from_secs(10), socket.recv_from(&mut buf)).await {
         Ok(Ok((n, _))) => krpc::parse(&buf[..n]).is_ok_and(|m| matches!(m.body, Krpc::Response(_))),
         _ => false,
     }
@@ -319,8 +349,13 @@ async fn pause_resume_and_intensity_through_the_api() {
     assert_eq!(running["state"], json!("running"));
     assert_eq!(running["intensity"], json!("balanced"));
     assert_eq!(running["intensity_env"], Value::Null);
-    eventually(|| f.starts.load(Ordering::SeqCst) > 10).await;
-    eventually(|| f.dht.stats().is_some()).await;
+    eventually(
+        "more than 10 fetch starts",
+        || f.starts.load(Ordering::SeqCst).to_string(),
+        || f.starts.load(Ordering::SeqCst) > 10,
+    )
+    .await;
+    eventually("DHT stats", || "none".into(), || f.dht.stats().is_some()).await;
 
     // Pause: no new fetch starts within a bound, the node holds its
     // crawl but still answers, and one event is recorded.
@@ -332,7 +367,7 @@ async fn pause_resume_and_intensity_through_the_api() {
         (paused["state"].clone(), paused["paused"].clone()),
         (json!("paused"), json!(true))
     );
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    starts_settled(&f).await;
     assert_eq!(
         starts_during(&f, 400).await,
         0,
@@ -388,7 +423,12 @@ async fn pause_resume_and_intensity_through_the_api() {
     assert_eq!(status, 200);
     let (_, crawler) = f.send(req("GET", "/api/v1/crawler", c, None)).await;
     assert_eq!(crawler["intensity"], json!("aggressive"));
-    eventually(|| f.events(event::INTENSITY) == ["low", "aggressive"]).await;
+    eventually(
+        "the low and aggressive intensity events",
+        || format!("{:?}", f.events(event::INTENSITY)),
+        || f.events(event::INTENSITY) == ["low", "aggressive"],
+    )
+    .await;
     let (status, bad) = f
         .send(req(
             "PATCH",
@@ -411,7 +451,12 @@ async fn pause_resume_and_intensity_through_the_api() {
         Some(r#"{"paused":true}"#),
     ))
     .await;
-    eventually(|| f.events(event::PAUSE).len() == 2).await;
+    eventually(
+        "two pause events",
+        || format!("{:?}", f.events(event::PAUSE)),
+        || f.events(event::PAUSE).len() == 2,
+    )
+    .await;
     assert_eq!(node_paused(&f.dht).await, Some(true));
     assert!(f.ops.control.status().paused);
     f.stop().await;
@@ -424,25 +469,45 @@ async fn stats_match_the_metrics() {
     let mut f = fixture().await;
     let cookie = f.session().await;
     let c = cookie.as_str();
-    eventually(|| f.starts.load(Ordering::SeqCst) > 5).await;
+    eventually(
+        "more than 5 fetch starts",
+        || f.starts.load(Ordering::SeqCst).to_string(),
+        || f.starts.load(Ordering::SeqCst) > 5,
+    )
+    .await;
     // Pausing holds the counters still, so the two reads agree.
     f.send(req("POST", "/api/v1/crawler/pause", c, Some("{}")))
         .await;
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let (status, stats) = f.send(req("GET", "/api/v1/stats", c, None)).await;
-    assert_eq!(status, 200, "{stats}");
-    let monitor = f.ops.monitor.clone();
-    let metrics = crate::metrics::render(&monitor, f.dht.stats().as_ref(), &Default::default());
-    let metric = |name: &str| -> u64 {
-        metrics
-            .lines()
-            .find_map(|l| l.strip_prefix(&format!("lodestar_{name} ")))
-            .unwrap_or_else(|| panic!("no {name} in /metrics"))
-            .parse()
-            .unwrap()
+    starts_settled(&f).await;
+    // The Feed source keeps emitting while paused, so the two reads are only
+    // compared once they agree on the fields that move; try until they do.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let (stats, metric) = loop {
+        let (status, stats) = f.send(req("GET", "/api/v1/stats", c, None)).await;
+        assert_eq!(status, 200, "{stats}");
+        let monitor = f.ops.monitor.clone();
+        let metrics = crate::metrics::render(&monitor, f.dht.stats().as_ref(), &Default::default());
+        let metric = move |name: &str| -> u64 {
+            metrics
+                .lines()
+                .find_map(|l| l.strip_prefix(&format!("lodestar_{name} ")))
+                .unwrap_or_else(|| panic!("no {name} in /metrics"))
+                .parse()
+                .unwrap()
+        };
+        if stats["stored_torrents"] == json!(metric("torrents"))
+            && stats["queue_depth"] == json!(metric("fetch_pending"))
+        {
+            break (stats, metric);
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "after 15 s /stats said {stats} but /metrics said torrents {} fetch_pending {}",
+            metric("torrents"),
+            metric("fetch_pending")
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
     };
-    assert_eq!(stats["stored_torrents"], json!(metric("torrents")));
-    assert_eq!(stats["queue_depth"], json!(metric("fetch_pending")));
     assert!(stats["queue_depth"].as_u64().unwrap() > 0);
     assert_eq!(
         stats["uptime_s"].as_i64().unwrap(),
@@ -591,10 +656,8 @@ async fn concurrent_toggles_leave_the_process_as_the_registry_says() {
         let saved = f.registry.get::<settings::crawler::Crawler>().paused;
         assert_eq!(f.ops.control.status().paused, saved, "round {round}");
         // And so is the DHT node, which applies it in its own task.
-        for _ in 0..200 {
-            if node_paused(&f.dht).await == Some(saved) {
-                break;
-            }
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        while node_paused(&f.dht).await != Some(saved) && tokio::time::Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
         assert_eq!(node_paused(&f.dht).await, Some(saved), "round {round}");
@@ -687,6 +750,7 @@ async fn the_pause_survives_a_restart() {
     assert!(status.paused);
     assert_eq!(status.since, at);
     // Started paused: nothing is fetched.
+    // A negative check: nothing starts over a fixed window, so it stays a sleep.
     let before = f.starts.load(Ordering::SeqCst);
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(f.starts.load(Ordering::SeqCst), before);

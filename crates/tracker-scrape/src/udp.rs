@@ -47,6 +47,8 @@ pub struct UdpConfig {
     pub bind: Option<SocketAddr>,
     /// Re-resolve the tracker's host this often.
     pub resolve_every: Duration,
+    /// Blocklisted addresses, checked before every request.
+    pub deny: Option<crate::Deny>,
 }
 
 impl Default for UdpConfig {
@@ -56,6 +58,7 @@ impl Default for UdpConfig {
             retries: 1,
             bind: None,
             resolve_every: Duration::from_secs(3600),
+            deny: None,
         }
     }
 }
@@ -254,16 +257,26 @@ impl UdpTracker {
     }
 
     async fn socket(&mut self) -> Result<&UdpSocket> {
-        let stale = self
-            .socket
-            .as_ref()
-            .is_none_or(|(_, at)| at.elapsed() >= self.cfg.resolve_every);
+        let deny = self.cfg.deny.clone();
+        let denied = |a: SocketAddr| crate::denied(deny.as_ref(), a.ip());
+        // A blocklist update applies at once, not at the next re-resolve.
+        let stale = self.socket.as_ref().is_none_or(|(s, at)| {
+            at.elapsed() >= self.cfg.resolve_every || s.peer_addr().map_or(true, denied)
+        });
         if stale {
-            let addr = tokio::net::lookup_host((self.host.as_str(), self.port))
+            self.socket = None;
+            let addrs: Vec<SocketAddr> = tokio::net::lookup_host((self.host.as_str(), self.port))
                 .await
                 .map_err(|_| Error::Resolve)?
-                .find(|a| self.cfg.bind.is_none_or(|b| b.is_ipv4() == a.is_ipv4()))
-                .ok_or(Error::Resolve)?;
+                .filter(|a| self.cfg.bind.is_none_or(|b| b.is_ipv4() == a.is_ipv4()))
+                .collect();
+            if addrs.is_empty() {
+                return Err(Error::Resolve);
+            }
+            let addr = addrs
+                .into_iter()
+                .find(|a| !denied(*a))
+                .ok_or(Error::Denied)?;
             let bind = self.cfg.bind.unwrap_or_else(|| match addr {
                 SocketAddr::V4(_) => SocketAddr::from(([0, 0, 0, 0], 0)),
                 SocketAddr::V6(_) => SocketAddr::from(([0u16; 8], 0)),
