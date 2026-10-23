@@ -279,6 +279,7 @@ mod tests {
             }
         }
         use toggled::TOGGLED;
+        check_ids(&[&toggled::CATALOGUE]).unwrap();
         let before = TOGGLED::EVENT.count();
         TOGGLED::EVENT.set_on(false);
         log_event!(TOGGLED, size = size(), client = "x");
