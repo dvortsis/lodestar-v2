@@ -241,6 +241,7 @@ fn strategy_name(key: i64) -> String {
 }
 
 /// One window of Discover: (kpi, trend, by_source, by_strategy).
+#[allow(clippy::type_complexity)]
 fn discover(
     c: &Ctx<'_>,
 ) -> lodestar_store::Result<(
