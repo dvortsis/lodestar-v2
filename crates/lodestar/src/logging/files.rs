@@ -423,6 +423,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mine = tmp.path().join("mine");
         std::fs::create_dir(&mine).unwrap();
+        assert_eq!(crate::windows::acl::log_folder(&mine), Ok(()));
         assert!(folder(None, &mine).is_ok());
         let theirs = tmp.path().join("theirs");
         std::fs::create_dir(&theirs).unwrap();
