@@ -555,10 +555,10 @@
       "status": "review",
       "model": "opus",
       "session": "session_01PWJPAR99QvqkMzwdG1hG29",
-      "pr": 136,
+      "pr": 144,
       "attempt": 0,
       "review_rounds": 1,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus); brief committed 576d67a with runner addendum | 2026-10-23T17:23:23Z part 1/2 PR #136 head ef29faa; one combined fresh+security reviewer (usage saving) | 2026-10-23T17:37:32Z review MERGE (no security findings); short round: onclose fires twice + tests; polish. Runner checks delta directly | 2026-10-23T17:56:15Z 6e05ddd fixes (onclose once + tests, polish), green; held by merge freeze | 2026-10-23T18:42:25Z part 1 #136 merged as 2a24c6d; part 2 may push"
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus); brief committed 576d67a with runner addendum | 2026-10-23T17:23:23Z part 1/2 PR #136 head ef29faa; one combined fresh+security reviewer (usage saving) | 2026-10-23T17:37:32Z review MERGE (no security findings); short round: onclose fires twice + tests; polish. Runner checks delta directly | 2026-10-23T17:56:15Z 6e05ddd fixes (onclose once + tests, polish), green; held by merge freeze | 2026-10-23T18:42:25Z part 1 #136 merged as 2a24c6d; part 2 may push | 2026-10-23T18:54:31Z part 2 PR #144 head 9d99deb (+1,420, 684 tests); part-1 reviewer resumed"
     },
     "S-filters": {
       "status": "pending",
