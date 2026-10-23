@@ -1,0 +1,2 @@
+404
+{"error":{"code":"torrent_not_found","message":"There's no torrent with that hash."}}

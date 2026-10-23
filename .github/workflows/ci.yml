@@ -1,9 +1,28 @@
 name: CI
 
+# A pull request runs only the jobs its files need (.github/scripts/ci_changes.py):
+# docs or web-only changes skip the Rust jobs, the benchmark and importer gates
+# run when a crate they build changes, and each fuzz target runs when a crate it
+# builds changes. macOS tests run on main and nightly, or on a PR labelled
+# `full-ci`, which also runs everything else. Main and nightly always run it all.
+# Labels are read on the next push; `labeled` isn't a trigger, because a run
+# whose jobs all skip would replace the head's failed checks with skipped ones.
+# To run everything now, add `full-ci` and start CI (and Release) by hand on
+# the branch (workflow_dispatch runs everything). A manual run tests the branch
+# head without main merged in, so if the PR run is red, push or merge main
+# instead: a passing manual run would replace the failed checks.
+# Skipped jobs show as skipped; a skipped matrix job keeps its unexpanded name
+# (`test (${{ matrix.os }})`), so if branch protection is ever added, require an
+# aggregate job rather than individual matrix entries.
+
 on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened]
+  schedule:
+    - cron: "41 2 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -17,8 +36,35 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.c.outputs.rust }}
+      test_os: ${{ steps.c.outputs.test_os }}
+      bench: ${{ steps.c.outputs.bench }}
+      filter: ${{ steps.c.outputs.filter }}
+      importer: ${{ steps.c.outputs.importer }}
+      fuzz: ${{ steps.c.outputs.fuzz }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: c
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        # bash (not the default `bash -e`) sets pipefail, so a crash in the
+        # script fails the job instead of leaving every output empty.
+        shell: bash
+        run: python3 .github/scripts/ci_changes.py "$EVENT" "$BASE" "$HEAD" "$LABELS" | tee -a "$GITHUB_OUTPUT"
+
   lint:
     name: fmt + clippy
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +77,8 @@ jobs:
 
   openapi:
     name: openapi.json drift
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,19 +91,41 @@ jobs:
 
   test:
     name: test (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.test_os != '[]'
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: ${{ fromJSON(needs.changes.outputs.test_os) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
+      # The PUID/PGID drop only happens as root (tests/privdrop.rs skips
+      # otherwise). Built as the runner user, so target/ stays theirs.
+      - name: privilege drop as root
+        if: runner.os == 'Linux'
+        run: |
+          bin=$(cargo test -p lodestar --test privdrop --no-run --message-format=json \
+            | jq -r 'select(.profile.test == true and .target.name == "privdrop") | .executable')
+          sudo "$bin" --test-threads=1 --nocapture 2>&1 | tee privdrop.log
+          if grep -q skipping privdrop.log; then
+            echo "::error::the root-only tests skipped"; exit 1
+          fi
+          # The maintenance commands drop root too (tests/cli.rs).
+          cli=$(cargo test -p lodestar --test cli --no-run --message-format=json \
+            | jq -r 'select(.profile.test == true and .target.name == "cli") | .executable')
+          sudo "$cli" maintenance_runs_as_puid --exact --nocapture 2>&1 | tee cli-root.log
+          if grep -q skipping cli-root.log || ! grep -q "1 passed" cli-root.log; then
+            echo "::error::the root-only CLI test skipped"; exit 1
+          fi
 
   size-budget:
     name: size budget (§3)
+    needs: changes
+    if: needs.changes.outputs.bench == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -65,6 +135,8 @@ jobs:
 
   search-latency:
     name: search latency (§3)
+    needs: changes
+    if: needs.changes.outputs.bench == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -75,6 +147,8 @@ jobs:
 
   filter-budget:
     name: filter budget (§20.8)
+    needs: changes
+    if: needs.changes.outputs.filter == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -87,6 +161,8 @@ jobs:
 
   importer:
     name: bitmagnet importer (PostgreSQL)
+    needs: changes
+    if: needs.changes.outputs.importer == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -106,10 +182,12 @@ jobs:
 
   fuzz:
     name: fuzz (${{ matrix.target }})
+    needs: changes
+    if: needs.changes.outputs.fuzz != '[]'
     strategy:
       fail-fast: false
       matrix:
-        target: [bencode, krpc, metainfo, filetree, tokenizer, query, release, tracker_scrape, lists, utp]
+        target: ${{ fromJSON(needs.changes.outputs.fuzz) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
