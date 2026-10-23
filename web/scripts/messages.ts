@@ -180,6 +180,20 @@ export function merge(sources: Source[]): MergeResult {
 	return { messages, coverage, errors, warnings };
 }
 
+const BOOT_LOCALES = /\/\*boot-locales\*\/[^]*?\/\*end\*\//;
+
+/**
+ * Bakes the auto-selectable locales into the first-paint script in app.html, which drops the static
+ * English shell when the app will show another language (the same rule as `resolveLocale`).
+ * Returns null when the marker is missing.
+ */
+export function injectBootLocales(html: string, coverage: Record<Locale, number>): string | null {
+	if (!BOOT_LOCALES.test(html)) return null;
+	const covered = LOCALES.filter((l) => l === 'en' || coverage[l] >= AUTO_LOCALE_COVERAGE);
+	const table = JSON.stringify(Object.fromEntries(covered.map((l) => [l, 1])));
+	return html.replace(BOOT_LOCALES, () => `/*boot-locales*/${table}/*end*/`);
+}
+
 /** Merges and writes messages/{en,zh}.json under `root`; returns the result. */
 export function mergeMessages(root: string): MergeResult {
 	const result = merge(discover(root));
@@ -204,6 +218,12 @@ export function mergeMessages(root: string): MergeResult {
 	mkdirSync(dirname(coverageFile), { recursive: true });
 	if (!existsSync(coverageFile) || readFileSync(coverageFile, 'utf8') !== generated) {
 		writeFileSync(coverageFile, generated);
+	}
+	const htmlFile = join(root, 'src/app.html');
+	if (existsSync(htmlFile)) {
+		const html = readFileSync(htmlFile, 'utf8');
+		const next = injectBootLocales(html, result.coverage);
+		if (next !== null && next !== html) writeFileSync(htmlFile, next);
 	}
 	return result;
 }

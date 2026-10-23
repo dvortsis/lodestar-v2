@@ -32,13 +32,13 @@ const entry = (name, path, limit) => ({ name, path, limit, gzip: true, running: 
 export default [
 	entry('Search route JS (initial)', search.js, '45 KB'),
 	entry('CSS', search.css, '20 KB'),
-	// Total first load: html + search JS + CSS + the preloaded font.
+	// Total first load: html + search JS + CSS + the Latin font (fetched at first layout, not preloaded).
 	entry(
 		'Total first load',
 		['build/index.html', ...search.js, ...search.css, ...firstPaintFonts],
 		'100 KB'
 	),
-	// Latin subset of Atkinson Hyperlegible Next, preloaded (§10.1).
+	// Latin subset of Atkinson Hyperlegible Next, fetched at first layout; a preload costs LCP (§10.1).
 	entry('Fonts on first paint', firstPaintFonts, '35 KB'),
 	// Mono loads lazily and is never preloaded (§10.1).
 	entry('Mono font (lazy)', monoFonts, '25 KB')

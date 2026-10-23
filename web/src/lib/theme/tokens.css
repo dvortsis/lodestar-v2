@@ -42,11 +42,23 @@
 		U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
+/* The face shown until Atkinson arrives: a system sans scaled so its text is a little wider and taller
+   than Atkinson's (measured, 400 and 600, 14-24 px). The swap then only ever shrinks text. A narrower
+   fallback would paint a smaller heading first and the swap would become a later, larger LCP candidate:
+   CI measured 2.67 s against a 1.5 s first paint (§10.1, docs/decisions/2026-10-22-W9.md). */
+@font-face {
+	font-family: 'Atkinson Fallback';
+	src: local('Arial'), local('Liberation Sans'), local('Helvetica');
+	size-adjust: 106%;
+	ascent-override: 105%;
+	descent-override: 32%;
+}
+
 @theme static {
 	/* §8 families */
 	--font-sans:
-		'Atkinson Hyperlegible Next', system-ui, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC',
-		sans-serif;
+		'Atkinson Hyperlegible Next', 'Atkinson Fallback', system-ui, 'PingFang SC', 'Microsoft YaHei',
+		'Noto Sans CJK SC', sans-serif;
 	--font-mono: 'Atkinson Hyperlegible Mono', ui-monospace, monospace;
 
 	/* §8 scale: Tailwind's default steps are reset, so only text-caption … text-display exist */
