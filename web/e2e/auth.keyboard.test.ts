@@ -1,5 +1,6 @@
 // Keyboard-only M-auth flows (no pointer): first-run setup end to end, and sign-in.
 import { expect, test } from './support/test';
+import { crawlerFixture, overviewFixture } from '../src/lib/features/insights/overview/fixtures';
 
 test('keyboard: first-run setup from token to /welcome', async ({ page, go, mock, kbd }) => {
 	mock.on('getAuthStatus', { logged_in: false, setup_required: true });
@@ -43,6 +44,8 @@ test('keyboard: the token help opens and Back returns to step 1', async ({
 test('keyboard: sign in and return to next', async ({ page, go, mock, kbd }) => {
 	mock.on('getAuthStatus', { logged_in: false, setup_required: false });
 	mock.on('login', { ok: true });
+	mock.on('getInsightsOverview', overviewFixture());
+	mock.on('getCrawler', crawlerFixture());
 	await go(`/login?next=${encodeURIComponent('/insights')}`);
 	await kbd.tabTo(page.getByLabel('Password'));
 	await page.keyboard.type('correct horse battery');

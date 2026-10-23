@@ -4,6 +4,7 @@
 import { expectNoA11yViolations } from './a11y';
 import { crawlerEvent, engage, liveEvents, openPaletteWithKey } from './support/events-server';
 import { expect, test } from './support/test';
+import { crawlerFixture, overviewFixture } from '../src/lib/features/insights/overview/fixtures';
 
 const nav = (page: import('@playwright/test').Page) =>
 	page.getByRole('navigation', { name: 'Main' });
@@ -223,7 +224,9 @@ test.describe('the chrome loads on the first interaction', () => {
 });
 
 test.describe('command palette', () => {
-	test('opens from the button, filters, runs a command and closes', async ({ page, go }) => {
+	test('opens from the button, filters, runs a command and closes', async ({ page, go, mock }) => {
+		mock.on('getInsightsOverview', overviewFixture());
+		mock.on('getCrawler', crawlerFixture());
 		await go('/search');
 		await engage(page);
 		await page.getByTestId('palette-button').click();
