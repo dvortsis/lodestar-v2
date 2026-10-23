@@ -7,18 +7,18 @@
 	import { replaceState } from '$app/navigation';
 	import { m } from '$lib/paraglide/messages.js';
 	import Toggle from '$lib/ui/fields/Toggle.svelte';
-	import { onMount, untrack, type Snippet } from 'svelte';
+	import { onMount, untrack, type Component, type Snippet } from 'svelte';
 	import {
 		createSettingsForm,
 		loadSettingMessages,
 		settingText,
 		type FieldKey,
+		type FieldSpec,
 		type SettingsForm
 	} from '../form';
 	import SettingsFormView from '../form/SettingsForm.svelte';
 	import type { ResolvedScreen } from '../shell/registry';
 	import { useSettings } from '../shell/state.svelte';
-	import ConfigDisclosure from './ConfigDisclosure.svelte';
 	import SettingsGroups from './SettingsGroups.svelte';
 
 	interface Props {
@@ -49,6 +49,12 @@
 		const section = screen.sections?.[0];
 		const help = settings.index?.sections.find((s) => s.section === section)?.helpKey;
 		return help ? settingText(help) : undefined;
+	});
+
+	// "View as config.toml" comes in after the screen, so it is not part of its first view.
+	let Config = $state.raw<Component<{ form: SettingsForm; specs: FieldSpec[] }>>();
+	onMount(() => {
+		void import('./ConfigDisclosure.svelte').then((mod) => (Config = mod.default as never));
 	});
 
 	let form = $state<SettingsForm>();
@@ -114,7 +120,7 @@
 				{changedOnly}
 				after={afterGroup}
 			/>
-			<ConfigDisclosure {form} specs={form.specs} />
+			{#if Config}<Config {form} specs={form.specs} />{/if}
 			{@render footer?.()}
 		</SettingsFormView>
 	{:else}

@@ -7,8 +7,6 @@
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
-	import IconBack from '~icons/ph/arrow-left';
-	import { events } from '$lib/state/events.svelte';
 	import type { Component, Snippet } from 'svelte';
 	import { flow } from './flow.svelte';
 	import SettingsNav from './SettingsNav.svelte';
@@ -21,11 +19,21 @@
 	const onScreen = $derived(page.params.section !== undefined);
 
 	// `/system` follows the `settings` events: saves change which fields wait for a restart.
-	$effect(() =>
-		events.on('settings', () => void settings.refreshSystem(), {
-			onResync: () => void settings.refreshSystem()
-		})
-	);
+	// The events client comes in after the page (until then `/system` is the page-load answer).
+	$effect(() => {
+		let off: (() => void) | undefined;
+		let gone = false;
+		void import('$lib/state/events.svelte').then(({ events }) => {
+			if (gone) return;
+			off = events.on('settings', () => void settings.refreshSystem(), {
+				onResync: () => void settings.refreshSystem()
+			});
+		});
+		return () => {
+			gone = true;
+			off?.();
+		};
+	});
 
 	// `/` focuses the search box while on a Settings page. The key registry loads on demand (as the
 	// shell does), and its scope is popped with the page.
@@ -84,7 +92,7 @@
 		{#if !settings.wide && onScreen}
 			<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- no base path (svelte.config.js) -->
 			<a class="settings-back" href="/settings" data-testid="settings-back">
-				<IconBack aria-hidden="true" />{m.settings_ui_back()}
+				<span aria-hidden="true">←</span>{m.settings_ui_back()}
 			</a>
 		{/if}
 		{#if settings.status === 'failed'}
