@@ -287,7 +287,7 @@
       "pr": 139,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:41:07Z PR #139 head 4d4cf5f; search JS +1.0 kB (same chunk leak); held until #132 chunk fix, then re-measure + review | 2026-10-23T22:54Z released 3rd of 4",
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:41:07Z PR #139 head 4d4cf5f; search JS +1.0 kB (same chunk leak); held until #132 chunk fix, then re-measure + review | 2026-10-23T22:54Z released 3rd of 4 | 2026-10-23T23:17Z pushed dc0b279 (drawer 26.9/29.2, /t 22.4/24.3, on-demand 27.0/29.7; search JS 41.09; lhci 97,561); first runner fresh review running",
       "catch_ups": 0
     },
     "D-docker": {
@@ -1531,7 +1531,8 @@
       "to": "follow-up slices"
     },
     "E-M6-windows-updates": "E-M6 owns Windows update check+notify+install (update-helper); reuse list in B-update brief item 10 + decisions file",
-    "search-live-windows-os5": "2026-10-23T22:15Z seen on #149 94ac8c1 test(windows): search live::tests::each_commit_reports_once_with_its_count_and_watermark \u2014 indexer error 'Access is denied (os error 5)' during commit (Windows file-sharing on segment files). Likely real Windows runtime issue (tantivy delete while mmapped/AV); owner: E-M6 Windows runtime (mmap delete-retry) unless it recurs before \u2014 then runner opens an Opus fix slice. Count: 1"
+    "search-live-windows-os5": "2026-10-23T22:15Z seen on #149 94ac8c1 test(windows): search live::tests::each_commit_reports_once_with_its_count_and_watermark \u2014 indexer error 'Access is denied (os error 5)' during commit (Windows file-sharing on segment files). Likely real Windows runtime issue (tantivy delete while mmapped/AV); owner: E-M6 Windows runtime (mmap delete-retry) unless it recurs before \u2014 then runner opens an Opus fix slice. Count: 1",
+    "lhci-trend": "2026-10-23T23:17Z /search Lighthouse bytes rising per route merged: 93.7k(#132)->94.8k(#138)->97.6k(#139 branch) vs 102,400 owner limit; /search JS 39.5->41.1 KB (route table/preload map + vendor). Assign trimming (route-table size, preload map) to S-search-2 before more routes land"
   },
   "blocked_on_owner": [],
   "launches_today": 32,
