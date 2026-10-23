@@ -248,7 +248,8 @@ impl Entry {
     }
 
     /// The summary of a run of lines like `self` (no fields, so it never
-    /// shows more than the first line did).
+    /// shows more than the first line did). It keeps the line's opt-in, so
+    /// it goes when that turns off, as the lines do.
     pub fn summary(&self, millis: i64, repeated: Repeated) -> Entry {
         Entry {
             seq: 0,
@@ -259,7 +260,7 @@ impl Entry {
             msg: self.msg.clone(),
             fields: Vec::new(),
             shown: Mask::NONE,
-            opt_in: None,
+            opt_in: self.opt_in,
             truncated: false,
             repeated: Some(repeated),
         }
@@ -361,6 +362,8 @@ impl Entry {
                 budget = budget.saturating_sub(s.len());
             }
         }
+        // Many small fields can still pass it on their overhead alone.
+        while self.accounted() > MAX_ENTRY && self.fields.pop().is_some() {}
         self.truncated = true;
     }
 
@@ -623,6 +626,30 @@ mod tests {
             "first run: open http://x and enter setup token [redacted] to create"
         );
         assert_eq!(redact_setup_token("no token here"), None);
+    }
+
+    #[test]
+    fn many_fields_still_fit_and_summaries_keep_the_opt_in() {
+        let u = Untyped {
+            level: Level::Warn,
+            target: "hyper".into(),
+            component: "libraries",
+            message: "m".into(),
+            fields: (0..2000).map(|i| (format!("f{i}"), "v".into())).collect(),
+        };
+        let ring = Entry::untyped(Stamp { millis: 0 }, &u).ring_copy().unwrap();
+        assert!(ring.truncated && ring.accounted() <= MAX_ENTRY);
+        let mut e = record_entry(Mask(u32::MAX));
+        e.opt_in = Some(Kind::FilterChange);
+        let s = e.summary(
+            0,
+            Repeated {
+                count: 2,
+                seconds: 10,
+                first: None,
+            },
+        );
+        assert_eq!(s.opt_in, Some(Kind::FilterChange));
     }
 
     #[test]

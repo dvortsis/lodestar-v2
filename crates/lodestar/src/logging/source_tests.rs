@@ -544,3 +544,40 @@ fn unreadable_lines_are_counted_and_the_cap_gives_partial_pages() {
     assert!(partial);
     assert_eq!(got, 2000);
 }
+
+#[test]
+fn the_seam_holds_while_the_ring_evicts_during_a_walk() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rt, _) = runtime(&section(dir.path(), |_| {}), Some(300), true);
+    for n in 0..2000 {
+        line(rt, n, "x");
+    }
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let noise = {
+        let stop = stop.clone();
+        std::thread::spawn(move || {
+            let mut i = 0u64;
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                rt.record_untyped(&format::Untyped {
+                    level: Level::Info,
+                    target: "noise".into(),
+                    component: "system",
+                    message: format!("noise {i}"),
+                    fields: vec![],
+                });
+                i += 1;
+            }
+        })
+    };
+    let src = logs(rt);
+    for _ in 0..5 {
+        let mut got: Vec<u64> = all_pages(&src, "hist-line", 1000)
+            .iter()
+            .map(number)
+            .collect();
+        got.sort_unstable();
+        assert_eq!(got, (0..2000).collect::<Vec<u64>>());
+    }
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    noise.join().unwrap();
+}

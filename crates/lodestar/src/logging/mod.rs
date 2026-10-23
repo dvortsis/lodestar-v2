@@ -614,15 +614,20 @@ impl Runtime {
         let (seq, file_line) = match e.ring_copy() {
             Some(copy) => {
                 lodestar_log::note_written(Output::Live, copy.accounted());
-                let (seq, _) = self.ring.push(copy, refs);
-                (
-                    seq,
-                    file_on.then(|| e.json(Some(&self.id(seq)), Some(&self.epoch))),
-                )
+                let (seq, _, off) = self.ring.push(copy, refs);
+                // Purged as the ring purged its copy, if a kind turned off.
+                let line = match off == Mask::NONE {
+                    true => Some(e),
+                    false => ring::purged(&e, off, refs),
+                };
+                let line = line
+                    .filter(|_| file_on)
+                    .map(|l| l.json(Some(&self.id(seq)), Some(&self.epoch)));
+                (seq, line)
             }
             None => {
                 lodestar_log::note_written(Output::Live, e.accounted());
-                let (seq, kept) = self.ring.push(e, refs);
+                let (seq, kept, _) = self.ring.push(e, refs);
                 // A line the ring purged as it came in (rendered under the
                 // mask before a kind turned off) goes to the file as purged.
                 let line = kept

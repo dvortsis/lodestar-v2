@@ -49,6 +49,9 @@ pub struct Purge {
 struct Inner {
     /// The last sequence given out (0: none yet).
     seq: u64,
+    /// The highest sequence evicted by the bounds (a purge's removals
+    /// aren't evictions): everything above it is here, or was purged.
+    evicted: u64,
     entries: VecDeque<Arc<Entry>>,
     bytes: usize,
     /// What may show now: the live mask.
@@ -106,6 +109,7 @@ impl Ring {
         Ring {
             inner: Mutex::new(Inner {
                 seq: 0,
+                evicted: 0,
                 entries: VecDeque::new(),
                 bytes: 0,
                 allowed,
@@ -120,10 +124,14 @@ impl Ring {
     }
 
     /// Puts `entry` in, purged first if it carries a kind that's off now,
-    /// and returns its sequence and what was kept (`None`: an opt-in
-    /// that's off, not kept). The sequence is given either way, so the
-    /// file line has its id.
-    pub fn push(&self, mut entry: Entry, refs: Option<Refs<'_>>) -> (u64, Option<Arc<Entry>>) {
+    /// and returns its sequence, what was kept (`None`: an opt-in that's
+    /// off, not kept) and the kinds purged from it. The sequence is given
+    /// either way, so the file line has its id.
+    pub fn push(
+        &self,
+        mut entry: Entry,
+        refs: Option<Refs<'_>>,
+    ) -> (u64, Option<Arc<Entry>>, Mask) {
         let mut inner = lock(&self.inner);
         inner.seq += 1;
         let seq = inner.seq;
@@ -143,7 +151,10 @@ impl Ring {
             inner.entries.push_back(e.clone());
             while inner.entries.len() > inner.max_records || inner.bytes > inner.max_bytes {
                 match inner.entries.pop_front() {
-                    Some(old) => inner.bytes -= old.accounted(),
+                    Some(old) => {
+                        inner.bytes -= old.accounted();
+                        inner.evicted = old.seq;
+                    }
                     None => break,
                 }
             }
@@ -153,7 +164,7 @@ impl Ring {
         if self.listeners.load(Ordering::Relaxed) > 0 {
             self.wake.send_replace(seq);
         }
-        (seq, kept)
+        (seq, kept, off)
     }
 
     /// Sets what may show from now on, and purges the kinds in `off` from
@@ -208,10 +219,11 @@ impl Ring {
             .purges
             .front()
             .is_some_and(|p| p.generation > generation.saturating_add(1));
+        // The forgotten ones' kinds aren't known any more: every kind.
         let out = match forgotten {
             true => vec![Purge {
                 generation: inner.generation,
-                kinds: newer.iter().fold(Mask::NONE, |m, p| Mask(m.0 | p.kinds.0)),
+                kinds: Mask(Kind::ALL.iter().fold(0, |m, k| m | k.bit())),
                 through: newer.iter().map(|p| p.through).max().unwrap_or(0),
             }],
             false => newer,
@@ -224,12 +236,11 @@ impl Ring {
         lock(&self.inner).generation
     }
 
-    /// The newest sequence given out, and the oldest kept (`head + 1` when
-    /// empty).
+    /// The newest sequence given out, and the lowest that hasn't been
+    /// evicted (every one from it on is here, or was purged).
     pub fn bounds(&self) -> (u64, u64) {
         let inner = lock(&self.inner);
-        let oldest = inner.entries.front().map_or(inner.seq + 1, |e| e.seq);
-        (inner.seq, oldest)
+        (inner.seq, inner.evicted + 1)
     }
 
     /// How many records and bytes it holds.
@@ -263,11 +274,11 @@ impl Ring {
             let batch: Vec<Arc<Entry>> = {
                 let inner = lock(&self.inner);
                 if first {
-                    let oldest = inner.entries.front().map_or(inner.seq + 1, |e| e.seq);
-                    // Left the ring unseen (`oldest - 1` would be next).
-                    out.evicted = oldest.saturating_sub(1).saturating_sub(cursor);
+                    // Evicted before they were read (a purge's removals
+                    // aren't counted: they were never to be shown).
+                    out.evicted = inner.evicted.saturating_sub(cursor);
                     if out.evicted > 0 {
-                        pos = oldest - 1;
+                        pos = inner.evicted;
                     }
                     first = false;
                 }
@@ -290,33 +301,35 @@ impl Ring {
     }
 
     /// Entries with sequence below `before`, newest first, that `keep`
-    /// accepts: at most `max`. Returns them and the lowest sequence looked
-    /// at (the next page's `before`), or `None` when the ring holds nothing
-    /// older.
+    /// accepts: at most `max`. Returns them and, when there were `max`, the
+    /// lowest sequence looked at (the next page's `before`); else `None`
+    /// and the lowest sequence the ring still covered at its last look
+    /// (anything below it was evicted, so it's in the files).
     pub fn before(
         &self,
         before: u64,
         max: usize,
         keep: impl Fn(&Entry) -> bool,
-    ) -> (Vec<Arc<Entry>>, Option<u64>) {
+    ) -> (Vec<Arc<Entry>>, Result<u64, u64>) {
         let mut out = Vec::new();
         let mut pos = before;
         loop {
-            let batch: Vec<Arc<Entry>> = {
+            let (batch, low): (Vec<Arc<Entry>>, u64) = {
                 let inner = lock(&self.inner);
                 let end = inner.entries.partition_point(|e| e.seq < pos);
                 let start = end.saturating_sub(BATCH);
-                inner.entries.range(start..end).rev().cloned().collect()
+                let batch = inner.entries.range(start..end).rev().cloned().collect();
+                (batch, inner.evicted + 1)
             };
             if batch.is_empty() {
-                return (out, None);
+                return (out, Err(low.min(before)));
             }
             for e in batch {
                 pos = e.seq;
                 if keep(&e) {
                     out.push(e);
                     if out.len() == max {
-                        return (out, Some(pos));
+                        return (out, Ok(pos));
                     }
                 }
             }
@@ -400,6 +413,15 @@ mod tests {
         let (n, _) = ring.usage();
         assert_eq!(n, MAX_RECORDS);
         assert_eq!(ring.bounds(), (MAX_RECORDS as u64 + 10, 11));
+        // A purge's removals aren't evictions.
+        let ring2 = Ring::new(Mask(u32::MAX));
+        let mut d = entry(vec![], 0);
+        d.opt_in = Some(Kind::FilterChange);
+        ring2.push(d, None);
+        ring2.push(entry(vec![], 0), None);
+        ring2.purge(Mask::PRIVATE, Mask::NONE.with(Kind::FilterChange), None);
+        assert_eq!(ring2.bounds(), (2, 1));
+        assert_eq!(ring2.after(0, 10, |_| true).evicted, 0);
         let ring = Ring::new(Mask(u32::MAX));
         for _ in 0..1000 {
             ring.push(entry(vec![], 10_000), None);
@@ -444,13 +466,14 @@ mod tests {
     fn a_record_rendered_before_the_purge_is_purged_as_it_arrives() {
         let ring = Ring::new(Mask(u32::MAX));
         ring.purge(Mask::PRIVATE, Mask::NONE.with(Kind::Name), None);
-        let (seq, kept) = ring.push(entry(vec![("name", Kind::Name, "Late.Name")], 0), None);
+        let (seq, kept, off) = ring.push(entry(vec![("name", Kind::Name, "Late.Name")], 0), None);
+        assert_eq!(off, Mask::NONE.with(Kind::Name));
         assert_eq!(seq, 1);
         let kept = kept.unwrap();
         assert_eq!(kept.fields[0].value, Shown::Text(HIDDEN.into()));
         let mut late = entry(vec![], 0);
         late.opt_in = Some(Kind::FilterChange);
-        let (seq, kept) = ring.push(late, None);
+        let (seq, kept, _) = ring.push(late, None);
         assert_eq!((seq, kept.is_none()), (2, true), "a sequence, but not kept");
         assert!(!format!("{:?}", ring.snapshot()).contains("Late.Name"));
     }
@@ -486,9 +509,9 @@ mod tests {
         assert_eq!(a.lines.len(), 2);
         let (lines, next) = ring.before(26, 2, info);
         assert_eq!(lines.iter().map(|e| e.seq).collect::<Vec<_>>(), [25, 23]);
-        assert_eq!(next, Some(23));
+        assert_eq!(next, Ok(23));
         let (lines, next) = ring.before(23, 10, info);
         assert_eq!(lines.iter().map(|e| e.seq).collect::<Vec<_>>(), [21]);
-        assert_eq!(next, None);
+        assert_eq!(next, Err(21), "20 and below were evicted");
     }
 }

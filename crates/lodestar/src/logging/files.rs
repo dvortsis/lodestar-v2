@@ -70,12 +70,48 @@ pub fn list(dir: &Path) -> io::Result<Vec<Listed>> {
         });
     }
     out.sort_by(|a, b| LogName::newest_first(&a.name, &b.name));
+    // While a rotated file is compressed, its `.jsonl` and `.jsonl.gz`
+    // are both there for a moment: one file, read once (the `.gz`, which
+    // sorts first and holds the same lines at the same offsets).
+    out.dedup_by(|later, kept| match (&later.name, &kept.name) {
+        (LogName::Rotated { stamp: a, n: x, .. }, LogName::Rotated { stamp: b, n: y, .. }) => {
+            a == b && x == y
+        }
+        _ => false,
+    });
     Ok(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_file_being_compressed_is_listed_once() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in [
+            "lodestar.jsonl",
+            "lodestar-20261023T101500.123Z.jsonl",
+            "lodestar-20261023T101500.123Z.jsonl.gz",
+            "lodestar-20261023T101500.123Z.jsonl.gz.part",
+            "lodestar-20251023T101500.123Z.jsonl.gz",
+        ] {
+            std::fs::write(dir.path().join(name), "").unwrap();
+        }
+        let names: Vec<String> = list(dir.path())
+            .unwrap()
+            .iter()
+            .map(|l| l.name.file_name())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "lodestar.jsonl",
+                "lodestar-20261023T101500.123Z.jsonl.gz",
+                "lodestar-20251023T101500.123Z.jsonl.gz",
+            ]
+        );
+    }
 
     #[cfg(unix)]
     #[test]
