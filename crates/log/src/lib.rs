@@ -33,7 +33,7 @@ pub use dispatch::{
     KindStatus, Output, OutputStatus, Record, Sink, Status, average_line, catalogues, check_ids,
     emit, events, find, note_written, rate_per_hour, register, set_sink, set_status, status,
 };
-pub use event::{Catalogue, Component, Event, FieldKind, Kind, Level, Mask, Padded};
+pub use event::{Catalogue, Component, Event, FieldKind, Kind, Level, Mask};
 pub use value::{
     Client, Count, Detail, Error, HIDDEN, IntoValue, Listen, Location, Name, Path, Peer,
     PlainError, Query, Reference, Rendered, SetupToken, Torrent, Url, Value, kind, pairs_torrent,
@@ -264,20 +264,35 @@ mod tests {
         let before = QUIET::EVENT.count();
         log_event!(QUIET);
         assert_eq!(QUIET::EVENT.count(), before + 1);
-        let before = PLAIN::EVENT.count();
-        PLAIN::EVENT.set_on(false);
-        log_event!(PLAIN, size = size(), client = "x");
+        // Its own event: the module's are shared statics, and another
+        // test reading `PLAIN`'s switch mustn't see this one toggle it.
+        mod toggled {
+            crate::catalogue! {
+                "toggled";
+                TOGGLED {
+                    id: "test.toggled",
+                    component: System,
+                    level: Info,
+                    message: "toggled",
+                    fields: { torrent: Hash, size: Size, client: Label },
+                }
+            }
+        }
+        use toggled::TOGGLED;
+        let before = TOGGLED::EVENT.count();
+        TOGGLED::EVENT.set_on(false);
+        log_event!(TOGGLED, size = size(), client = "x");
         assert_eq!(evaluated.get(), 0, "fields aren't evaluated while it's off");
-        assert_eq!(PLAIN::EVENT.count(), before + 1, "but it counts");
-        PLAIN::EVENT.set_on(true);
+        assert_eq!(TOGGLED::EVENT.count(), before + 1, "but it counts");
+        TOGGLED::EVENT.set_on(true);
         log_event!(
-            PLAIN,
+            TOGGLED,
             torrent = Torrent(&[1; 20]),
             size = size(),
             client = "x"
         );
         assert_eq!(evaluated.get(), 1);
-        assert_eq!(PLAIN::EVENT.count(), before + 2);
+        assert_eq!(TOGGLED::EVENT.count(), before + 2);
     }
 
     #[test]

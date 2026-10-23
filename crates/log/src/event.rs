@@ -306,7 +306,7 @@ fn stripe() -> usize {
 /// prefetch and Apple silicon's 128-byte lines.
 #[derive(Debug, Default)]
 #[repr(align(128))]
-pub struct Padded<T>(pub T);
+pub(crate) struct Padded<T>(pub T);
 
 impl<T> std::ops::Deref for Padded<T> {
     type Target = T;

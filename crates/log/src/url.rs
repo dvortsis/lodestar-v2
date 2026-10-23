@@ -107,7 +107,13 @@ fn scrub_with(url: &str, form: Form, drop_query: bool) -> String {
     // An absolute-form request target (`GET http://u:p@host/ HTTP/1.1`,
     // as a proxy gets) has an authority, userinfo included.
     let form = match form {
-        Form::Request if !url.starts_with('/') && url.contains("://") => Form::Absolute,
+        Form::Request
+            if url
+                .find("://")
+                .is_some_and(|i| !url[..i].contains(['/', '?', '#'])) =>
+        {
+            Form::Absolute
+        }
         f => f,
     };
     // A magnet link is all torrent: never shown.
@@ -311,7 +317,11 @@ pub fn scrub_text(text: &str) -> String {
         };
         let mut from = i;
         if rest[i..].starts_with("://") {
-            let at = userinfo_in_text(&rest[i + 3..]);
+            let next = scheme
+                .from(text, pos + i + 3)
+                .map_or(rest.len(), |n| n - pos)
+                - (i + 3);
+            let at = userinfo_in_text(&rest[i + 3..], next);
             if let Some(at) = at {
                 from = i + 3 + at + 1;
             }
@@ -338,25 +348,28 @@ pub fn scrub_text(text: &str) -> String {
 }
 
 /// Where the userinfo's `@` is in what follows `scheme://` in free text,
-/// if there is one. Two rules, the wider wins ("never too little"):
+/// if there is one. `next` is where the next `://` starts in `after` (or
+/// its length): no search goes past it, so each byte is searched for one
+/// URL only. Two rules, the wider wins ("never too little"):
 /// - up to a hard stop, the URL rules' [`userinfo`] (a raw `,`, `'` or
-///   `)` stays inside the password, and a `/` before the `@` makes the
-///   URL ambiguous, so it's hidden whole);
+///   `)` stays inside the password, however long, and a `/` before the
+///   `@` makes the URL ambiguous, so it's hidden whole);
 /// - within [`USERINFO_LOOKAHEAD`] bytes on the same line, the last `@`
 ///   before any `/`, so a raw space, `"`, `<`, `>` or backtick in a
 ///   password goes too. `see https://a.example and me@x` loses `a.example
 ///   and me` with it: over-redaction is accepted.
-fn userinfo_in_text(after: &str) -> Option<usize> {
+fn userinfo_in_text(after: &str, next: usize) -> Option<usize> {
+    let after = &after[..next];
+    let hard = after.find(hard_stop).unwrap_or(after.len());
+    let narrow = userinfo(&after[..hard]).0;
     let mut bound = after.len().min(USERINFO_LOOKAHEAD);
     while !after.is_char_boundary(bound) {
         bound -= 1;
     }
+    // One scan: the window ends at the first `/` or line break.
     let window = &after[..bound];
-    let window = &window[..window.find(['\n', '\r']).unwrap_or(window.len())];
-    let hard = window.find(hard_stop).unwrap_or(window.len());
-    let narrow = userinfo(&window[..hard]).0;
-    let slash = window.find('/').unwrap_or(window.len());
-    let wide = window[..slash].rfind('@');
+    let window = &window[..window.find(['/', '\n', '\r']).unwrap_or(window.len())];
+    let wide = window.rfind('@');
     narrow.max(wide)
 }
 
@@ -804,6 +817,10 @@ mod tests {
                 let s = scrub(&url, form);
                 assert_eq!(s, "https://[redacted]@host/x", "{c:?} {form:?}");
             }
+            // A target that isn't absolute keeps the request rules, its
+            // query's credentials included.
+            let s = scrub("x?token=S3cr3t&u=http://h", Form::Request);
+            assert!(!s.contains("S3cr3t"), "{s}");
             // A request target that holds a URL in its query.
             let s = scrub(&format!("/go?to={url}&n=1"), Form::Request);
             assert!(!s.contains("pa") && s.ends_with("to=[redacted]&n=1"), "{s}");
@@ -821,6 +838,34 @@ mod tests {
             scrub_text("https://h.example\nme@x"),
             "https://h.example\nme@x"
         );
+        // A long raw password holding a URL-ending `)` still goes whole,
+        // past the look-ahead (the narrow rule runs to a hard stop).
+        let long = format!(
+            "x https://u:{}){}@host/x y",
+            "p".repeat(600),
+            "q".repeat(10)
+        );
+        assert_eq!(scrub_text(&long), "x https://[redacted]@host/x y");
+        // The typed wrappers, as a line renders them.
+        for c in [' ', '"', '<', '>', '`'] {
+            for (url, form) in [
+                (format!("https://u:pa{c}ss@host/x"), Form::Absolute),
+                (format!("http://u:pa{c}ss@host/x?apikey=k"), Form::Request),
+            ] {
+                let v = match form {
+                    Form::Absolute => crate::Url::new(&url),
+                    Form::Request => crate::Url::request(&url),
+                };
+                let shown = crate::IntoValue::<crate::kind::Url>::into_value(v)
+                    .render(crate::Mask::NONE.with(crate::Kind::Url), false, None)
+                    .to_string();
+                assert!(
+                    !shown.contains("pa") && !shown.contains("=k"),
+                    "{c:?}: {shown}"
+                );
+                assert!(shown.contains("[redacted]@host/x"), "{c:?}: {shown}");
+            }
+        }
         // Over-redaction of an ambiguous line is accepted.
         assert_eq!(
             scrub_text("see https://a.example and me@x.org"),
