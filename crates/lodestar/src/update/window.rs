@@ -7,11 +7,10 @@
 //! the window is in UTC, and `/updates` says so (`window_zone`). A
 //! boundary in a DST gap is the transition itself (the first moment the
 //! clock reads past it). A repeated hour counts on both passes: the
-//! window is open whenever the local clock reads inside it, and it opens
-//! and closes at the first matching moment after now.
+//! window is open whenever the local clock reads inside it, and `when`
+//! gives the first moment after now that it opens or closes.
 
 use jiff::Timestamp;
-use jiff::civil::{Date, Time};
 use jiff::tz::TimeZone;
 
 /// A parsed window: minutes after local midnight.
@@ -38,7 +37,8 @@ impl Window {
         let (a, b) = s.split_once('-').ok_or_else(bad)?;
         let minutes = |t: &str| -> Option<u16> {
             let (h, m) = t.split_once(':')?;
-            if h.len() != 2 || m.len() != 2 {
+            let digits = |x: &str| x.len() == 2 && x.bytes().all(|b| b.is_ascii_digit());
+            if !digits(h) || !digits(m) {
                 return None;
             }
             let (h, m): (u16, u16) = (h.parse().ok()?, m.parse().ok()?);
@@ -63,86 +63,61 @@ impl Window {
     /// next opens: within a day, or two when a DST gap swallows the
     /// window on the day between.
     pub fn when(&self, now: i64, tz: &TimeZone) -> When {
-        let Some((date, minute)) = local(now, tz) else {
-            return When::Opens(now);
-        };
-        if self.contains(minute) {
-            return When::Open {
-                closes: next_at(self.end, now, date, tz),
-            };
+        let open = |t: i64| local(t, tz).is_some_and(|m| self.contains(m));
+        if open(now) {
+            When::Open {
+                closes: first(now, tz, |t| !open(t)).unwrap_or(now + DAY),
+            }
+        } else {
+            When::Opens(first(now, tz, open).unwrap_or(now + DAY))
         }
-        // A window wholly inside a DST gap doesn't happen that day: its
-        // start resolves to the transition, where it's already over.
-        // Look again from there.
-        let mut from = (now, date);
-        for _ in 0..3 {
-            let at = next_at(self.start, from.0, from.1, tz);
-            match local(at, tz) {
-                Some((_, m)) if self.contains(m) => return When::Opens(at),
-                Some((d, _)) => from = (at, d),
-                None => break,
+    }
+}
+
+const DAY: i64 = 86_400;
+
+/// The local minute of the day at `t`.
+fn local(t: i64, tz: &TimeZone) -> Option<u16> {
+    let z = Timestamp::from_second(t).ok()?.to_zoned(tz.clone());
+    Some((z.hour() as u16) * 60 + z.minute() as u16)
+}
+
+/// The first moment after `now`, within three days, where `hit` holds.
+/// The local minute changes only on a whole minute or at a zone
+/// transition, so those are the only moments to try: the answer is exact
+/// on both passes of a repeated hour and across a gap.
+fn first(now: i64, tz: &TimeZone, hit: impl Fn(i64) -> bool) -> Option<i64> {
+    let limit = now + 3 * DAY;
+    let mut transitions = Timestamp::from_second(now)
+        .ok()
+        .map(|t| {
+            tz.following(t)
+                .map(|t| t.timestamp().as_second())
+                .take_while(|&t| t <= limit)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|&t| t > now)
+        .peekable();
+    let mut minute = (now.div_euclid(60) + 1) * 60;
+    while minute <= limit {
+        // A transition between whole minutes comes first.
+        while let Some(&t) = transitions.peek() {
+            if t >= minute {
+                break;
+            }
+            transitions.next();
+            if hit(t) {
+                return Some(t);
             }
         }
-        When::Opens(next_at(self.start, now, date, tz))
-    }
-}
-
-/// The local date and minute of the day at `t`.
-fn local(t: i64, tz: &TimeZone) -> Option<(Date, u16)> {
-    let z = Timestamp::from_second(t).ok()?.to_zoned(tz.clone());
-    Some((z.date(), (z.hour() as u16) * 60 + z.minute() as u16))
-}
-
-/// The first moment after `now` when the local clock reads `minute`
-/// (today, else tomorrow; the day after only around a DST change).
-fn next_at(minute: u16, now: i64, today: Date, tz: &TimeZone) -> i64 {
-    let time = Time::constant((minute / 60) as i8, (minute % 60) as i8, 0, 0);
-    for days in -1..3 {
-        let Ok(date) = today.checked_add(jiff::Span::new().days(days)) else {
-            continue;
-        };
-        if let Some(ts) = instants(date.to_datetime(time), tz)
-            .into_iter()
-            .find(|&ts| ts > now)
-        {
-            return ts;
+        if hit(minute) {
+            return Some(minute);
         }
+        minute += 60;
     }
-    now + 86_400
-}
-
-/// Every moment the local clock reads `dt`, earliest first: one; both
-/// passes of a repeated hour; for a time in a DST gap, the transition
-/// itself (the first moment the clock reads past it).
-fn instants(dt: jiff::civil::DateTime, tz: &TimeZone) -> Vec<i64> {
-    use jiff::tz::AmbiguousOffset;
-    let ambiguous = tz.to_ambiguous_timestamp(dt);
-    match ambiguous.offset() {
-        AmbiguousOffset::Gap { before, .. } => {
-            // Read with the offset before the gap, the time lands at or
-            // after the transition; the last transition at or before
-            // that moment is the one.
-            let Ok(past) = before.to_timestamp(dt) else {
-                return vec![];
-            };
-            let Ok(just_after) = past.checked_add(jiff::SignedDuration::from_secs(1)) else {
-                return vec![];
-            };
-            tz.preceding(just_after)
-                .next()
-                .map(|t| vec![t.timestamp().as_second()])
-                .unwrap_or_default()
-        }
-        AmbiguousOffset::Fold { .. } => [ambiguous.earlier(), ambiguous.later()]
-            .into_iter()
-            .filter_map(|t| t.ok().map(|t| t.as_second()))
-            .collect(),
-        AmbiguousOffset::Unambiguous { .. } => ambiguous
-            .earlier()
-            .ok()
-            .map(|t| vec![t.as_second()])
-            .unwrap_or_default(),
-    }
+    None
 }
 
 /// The host's time zone and its name; UTC (`found` false) when none can
@@ -185,6 +160,9 @@ mod tests {
             "03:00-03:00",
             "aa:bb-cc:dd",
             "03:00-05:00-06:00",
+            "+3:00-05:00",
+            "03:+5-05:00",
+            "03:00-+5:00",
         ] {
             assert!(Window::parse(bad).is_err(), "{bad}");
         }
@@ -354,6 +332,75 @@ mod tests {
             let now = start + step * 900;
             if let When::Opens(at) = w.when(now, &cet()) {
                 assert!(at > now && at - now <= 25 * 3600, "{now} -> {at}");
+            }
+        }
+    }
+
+    /// Now on the first pass of the repeated hour: the answer is the first
+    /// moment the window opens or closes, including a re-entry or a brief
+    /// re-close on the second pass.
+    #[test]
+    fn the_first_pass_of_a_repeated_hour_sees_the_second() {
+        // 2026-10-25, CET: 02:30 CEST is 00:30Z; 02:00 CET is 01:00Z.
+        let w = Window::parse("00:00-02:30").unwrap();
+        assert_eq!(
+            w.when(ts("2026-10-25T00:30:00Z"), &cet()),
+            When::Opens(ts("2026-10-25T01:00:00Z")),
+            "02:00-02:30 CET reopens it"
+        );
+        let w = Window::parse("02:15-03:45").unwrap();
+        assert_eq!(
+            w.when(ts("2026-10-25T00:20:00Z"), &cet()),
+            When::Open {
+                closes: ts("2026-10-25T01:00:00Z")
+            },
+            "02:00-02:15 CET is outside it"
+        );
+        assert_eq!(
+            w.when(ts("2026-10-25T01:00:00Z"), &cet()),
+            When::Opens(ts("2026-10-25T01:15:00Z"))
+        );
+    }
+
+    /// Across the fall-back days in Europe and the US, every few minutes:
+    /// nothing between now and the answer changes the state, checked on a
+    /// grid offset from the whole minutes the search tries.
+    #[test]
+    fn the_answer_is_the_first_change_across_the_fall_back_hour() {
+        let us = TimeZone::posix("EST5EDT,M3.2.0,M11.1.0").unwrap();
+        let days = [
+            (cet(), "2026-10-24T20:00:00Z"),
+            (us, "2026-11-01T02:00:00Z"),
+        ];
+        let windows = [
+            "00:00-02:30",
+            "02:15-03:45",
+            "01:00-02:00",
+            "01:30-01:45",
+            "02:00-02:15",
+            "23:00-01:30",
+            "01:59-02:01",
+        ];
+        for (tz, from) in &days {
+            let open = |w: &Window, t: i64| local(t, tz).is_some_and(|m| w.contains(m));
+            for w in windows {
+                let win = Window::parse(w).unwrap();
+                let mut now = ts(from);
+                while now < ts(from) + 10 * 3600 {
+                    let (at, state) = match win.when(now, tz) {
+                        When::Open { closes } => (closes, true),
+                        When::Opens(at) => (at, false),
+                    };
+                    assert_eq!(open(&win, now), state, "{w} at {now}");
+                    assert_eq!(open(&win, at), !state, "{w}: {now} -> {at}");
+                    assert_eq!(open(&win, at - 1), state, "{w}: {now} -> {at}");
+                    let mut t = now + 30;
+                    while t < at {
+                        assert_eq!(open(&win, t), state, "{w}: {now} -> {at} misses {t}");
+                        t += 60;
+                    }
+                    now += 300;
+                }
             }
         }
     }
