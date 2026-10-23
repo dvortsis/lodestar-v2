@@ -32,7 +32,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use lodestar_bench::synth::Generator;
+use lodestar_bench::synth::{self, Generator};
 use lodestar_metainfo::Info;
 use lodestar_search::query::TagKey;
 use lodestar_search::suggest::{self, Shown};
@@ -40,7 +40,7 @@ use lodestar_search::{
     CancelToken, FacetParams, Lease, LiveConfig, LiveIndexer, Node, SearchIndex, Sort, Start,
     facets, index_dir, parse, with_filters,
 };
-use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig};
+use lodestar_store::{HotColumns, NewTorrent, SourceId, Store, StoreConfig};
 use rand::seq::IndexedRandom;
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -73,8 +73,8 @@ const NRT_ROUNDS: usize = 10;
 const NRT_GIVE_UP: Duration = Duration::from_secs(120);
 
 const USAGE: &str = "\
-Usage: search-bench [--torrents N] [--queries N] [--dir PATH] [--seed S] [--gate]
-                    [--commit-every N]
+Usage: search-bench [--torrents N] [--queries N] [--dir PATH] [--seed S] [--no-hot] [--gate]
+                    [--only TEXT] [--commit-every N]
 
   --torrents N   corpus size (default 1000000)
   --queries N    queries per class (default 300)
@@ -83,7 +83,10 @@ Usage: search-bench [--torrents N] [--queries N] [--dir PATH] [--seed S] [--gate
                  larger segments, as a live index's merges make them
   --dir PATH     keep the store and index here and reuse them next run
   --seed S       generator seed (default 1)
+  --no-hot       search without hot columns (no swarm data, text-only
+                 ranking, no swarm classes)
   --gate         exit 1 if a p95 target or the NRT budget is missed
+  --only TEXT    run only the classes whose name contains TEXT
 
 The NRT check stores 10 more torrents, so a reused --dir grows by 10.";
 
@@ -92,7 +95,9 @@ struct Args {
     queries: usize,
     dir: Option<PathBuf>,
     seed: u64,
+    hot: bool,
     gate: bool,
+    only: Option<String>,
     commit_every: usize,
 }
 
@@ -102,7 +107,9 @@ fn args() -> Result<Args, String> {
         queries: 300,
         dir: None,
         seed: 1,
+        hot: true,
         gate: false,
+        only: None,
         commit_every: 200_000,
     };
     let mut it = std::env::args().skip(1);
@@ -115,7 +122,9 @@ fn args() -> Result<Args, String> {
             "--queries" => a.queries = value("--queries")?.parse().map_err(|_| "bad --queries")?,
             "--dir" => a.dir = Some(PathBuf::from(value("--dir")?)),
             "--seed" => a.seed = value("--seed")?.parse().map_err(|_| "bad --seed")?,
+            "--no-hot" => a.hot = false,
             "--gate" => a.gate = true,
+            "--only" => a.only = Some(value("--only")?),
             "--commit-every" => {
                 a.commit_every = value("--commit-every")?
                     .parse()
@@ -213,6 +222,28 @@ fn build(
     Ok(())
 }
 
+/// Hot columns (§7) for every stored torrent, from the synthetic swarm
+/// distribution, as the scraper would leave them.
+fn hot_columns(store: &Store, seed: u64) -> Result<HotColumns, Box<dyn std::error::Error>> {
+    let hot = HotColumns::new();
+    let mut after = 0;
+    loop {
+        let ids = store.ids_after(after, 100_000)?;
+        let Some(&last) = ids.last() else {
+            break;
+        };
+        for id in ids {
+            let id = id as u64;
+            if let Some(s) = synth::swarm(seed, id) {
+                hot.set_swarm(id, s);
+            }
+            hot.touch(id, synth::last_seen(seed, id));
+        }
+        after = last;
+    }
+    Ok(hot)
+}
+
 /// Words from synthetic names, with how often they occur.
 fn vocabulary(seed: u64, sample: usize) -> (Vec<String>, Vec<Vec<String>>) {
     let mut generator = Generator::new(seed);
@@ -252,7 +283,7 @@ struct Class {
     queries: Vec<String>,
 }
 
-fn classes(seed: u64, per_class: usize) -> Vec<Class> {
+fn classes(seed: u64, per_class: usize, hot: bool) -> Vec<Class> {
     let (words, names) = vocabulary(seed ^ 0x5eed, 20_000);
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let common = &words[..words.len().min(100)];
@@ -290,7 +321,15 @@ fn classes(seed: u64, per_class: usize) -> Vec<Class> {
         "year:2015..2020",
         "has:nfo -type:software",
     ];
-    vec![
+    let swarm_filters = [
+        "seeders:>=5",
+        "seeders:>=1 trackers:>=2",
+        "seeders:0",
+        "dht:>100",
+        "leechers:>=10",
+        "-seeders:0",
+    ];
+    let mut out = vec![
         Class {
             name: "1 common word",
             target: Some(KEYWORD_P95),
@@ -385,7 +424,78 @@ fn classes(seed: u64, per_class: usize) -> Vec<Class> {
             sort: Sort::Discovered { desc: true },
             queries: make(&mut |r| browse[r.random_range(0..browse.len())].to_string()),
         },
-    ]
+    ];
+    if !hot {
+        return out;
+    }
+    // Swarm health (§7 hot columns, M4): filters and sorts read the hot
+    // columns by torrent id for every match.
+    out.extend([
+        Class {
+            name: "word + swarm filter",
+            target: Some(KEYWORD_P95),
+            cold: false,
+            sort: Sort::Relevance,
+            queries: make(&mut |r| {
+                format!(
+                    "{} {}",
+                    pick(r, common),
+                    swarm_filters[r.random_range(0..swarm_filters.len())]
+                )
+            }),
+        },
+        Class {
+            name: "word by seeders",
+            target: Some(KEYWORD_P95),
+            cold: false,
+            sort: Sort::Seeders { desc: true },
+            queries: make(&mut |r| pick(r, common)),
+        },
+        Class {
+            name: "trackers:>=3 browse",
+            target: Some(BROWSE_P95),
+            cold: false,
+            sort: Sort::Discovered { desc: true },
+            queries: make(&mut |_| "trackers:>=3".to_string()),
+        },
+        Class {
+            name: "browse by seeders",
+            target: Some(BROWSE_P95),
+            cold: false,
+            sort: Sort::Seeders { desc: true },
+            queries: make(&mut |r| browse[r.random_range(0..browse.len())].to_string()),
+        },
+        // A cache miss reads the hot column for every match: the path a
+        // fresh epoch takes after each scrape write, so it's gated too.
+        Class {
+            name: "by seeders (cold)",
+            target: Some(BROWSE_P95),
+            cold: true,
+            sort: Sort::Seeders { desc: true },
+            queries: make(&mut |r| browse[r.random_range(0..browse.len())].to_string()),
+        },
+        Class {
+            name: "by trackers (cold)",
+            target: Some(BROWSE_P95),
+            cold: true,
+            sort: Sort::Trackers { desc: true },
+            queries: make(&mut |r| browse[r.random_range(0..browse.len())].to_string()),
+        },
+        // Hot predicates under an OR can't be lifted: they run as a
+        // constant-score query checking each candidate (`CheckQuery`).
+        Class {
+            name: "word + OR'd swarm",
+            target: Some(KEYWORD_P95),
+            cold: false,
+            sort: Sort::Relevance,
+            queries: make(&mut |r| {
+                let a = swarm_filters[r.random_range(0..swarm_filters.len())];
+                let b = swarm_filters[r.random_range(0..swarm_filters.len())];
+                format!("{} ({a} | {b})", pick(r, common))
+            }),
+        },
+    ]);
+    out
 }
 
 fn pct(sorted: &[Duration], p: f64) -> Duration {
@@ -397,19 +507,33 @@ fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
     let dir = a.dir.clone().unwrap_or_else(|| tmp.path().to_path_buf());
     std::fs::create_dir_all(&dir)?;
     let db = dir.join("bench.db");
-    let index = SearchIndex::open(&index_dir(&dir.join("index")))?;
+    let mut index = SearchIndex::open(&index_dir(&dir.join("index")))?;
     {
         let mut store = Store::open(&db, StoreConfig::default())?;
         build(&mut store, &index, a.seed, a.torrents, a.commit_every)?;
         store.checkpoint()?;
     }
     let reader = Store::open_reader(&db, StoreConfig::default())?;
+    if a.hot {
+        let hot = Arc::new(hot_columns(&reader, a.seed)?);
+        // Settle the epoch the loading writes started.
+        hot.epoch();
+        index = index.with_hot(hot);
+    }
     let docs = index.num_docs();
     let now = 2_000_000_000;
     println!("Lodestar search benchmark");
     println!(
         "  corpus      {docs} torrents, {} index segments",
         index.segments()
+    );
+    println!(
+        "  swarm       {}",
+        if a.hot {
+            "hot columns from the synthetic swarm distribution"
+        } else {
+            "none (--no-hot)"
+        }
     );
     println!(
         "  per class   {} queries, top 50, rows loaded from SQLite\n",
@@ -421,7 +545,10 @@ fn run(a: &Args) -> Result<bool, Box<dyn std::error::Error>> {
     );
 
     let mut ok = true;
-    for class in classes(a.seed, a.queries) {
+    for class in classes(a.seed, a.queries, a.hot)
+        .into_iter()
+        .filter(|c| a.only.as_deref().is_none_or(|o| c.name.contains(o)))
+    {
         // Warm caches the way a running server would be.
         for q in class.queries.iter().take(20) {
             let ast = parse(q)?;
@@ -552,7 +679,10 @@ fn api_path(
     // worst error itself.
     let mut worst: f64 = 0.0;
     let mut worst_err: f64 = 0.0;
-    for class in classes(a.seed, a.queries) {
+    for class in classes(a.seed, a.queries, a.hot)
+        .into_iter()
+        .filter(|c| a.only.as_deref().is_none_or(|o| c.name.contains(o)))
+    {
         let mut times = Vec::with_capacity(class.queries.len());
         let mut deep = Vec::new();
         let mut estimated = 0usize;

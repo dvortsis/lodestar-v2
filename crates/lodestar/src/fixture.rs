@@ -11,8 +11,9 @@
 //! - **Offline:** the DHT is off (and locked off: a value saved in the
 //!   app can't turn it on), as are blocklist files and subscriptions and
 //!   their refresher. With no DHT there's no peer finder, so the fetch
-//!   pool never fetches. Nothing else in `serve` reaches out today; a
-//!   service that would must check [`OFFLINE`].
+//!   pool never fetches, and the tracker scraper doesn't start (its swarm
+//!   rows are the manifest's). Nothing else in `serve` reaches out today;
+//!   a service that would must check [`OFFLINE`].
 //! - **Local:** it binds `127.0.0.1:8090` unless `--config` or
 //!   `LODESTAR_HTTP_BIND` names another address, and warns on one that
 //!   isn't loopback.
@@ -34,9 +35,8 @@ pub use imp::serve;
 
 /// Set while serving a fixture: services that would reach out stay off.
 /// Every service that makes outbound requests must check it, as the
-/// blocklist refresher does through [`unless_offline`]. TODO(#48): the
-/// tracker scraper, once `services.rs` starts it; fixture swarm rows are
-/// due for a scrape a few hours after the anchor.
+/// blocklist refresher does through [`unless_offline`] and the tracker
+/// scraper through [`active`] (`services.rs`).
 static OFFLINE: AtomicBool = AtomicBool::new(false);
 
 /// Whether this process serves a fixture (`/system`'s `fixture`).

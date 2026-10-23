@@ -170,9 +170,13 @@ fn field_names_come_from_the_field_table() {
         of_kind(&got, Kind::Field),
         [("res:".to_string(), None), ("resolved:".to_string(), None)]
     );
-    // Fields that arrive later aren't offered; the exact name comes first.
+    // Swarm health's fields (M4) come from the same table; the shorter
+    // name first, and the exact name first.
     let got = suggest_at(&f.index, "see", PLAIN, 8);
-    assert!(of_kind(&got, Kind::Field).is_empty(), "{got:?}");
+    assert_eq!(
+        of_kind(&got, Kind::Field),
+        [("seen:".to_string(), None), ("seeders:".to_string(), None)]
+    );
     let got = suggest_at(&f.index, "s", PLAIN, 8);
     assert_eq!(of_kind(&got, Kind::Field)[0].0, "s:");
     // Inside file:(…), only what a file clause takes.

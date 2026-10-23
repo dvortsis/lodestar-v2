@@ -39,6 +39,8 @@ fn app_for(dir: &tempfile::TempDir, auth: Arc<Auth>) -> Router {
             user_data: Some(Arc::new(Mutex::new(store))),
             adult: Default::default(),
             insights: None,
+            hot: None,
+            events: None,
         }),
     )
 }

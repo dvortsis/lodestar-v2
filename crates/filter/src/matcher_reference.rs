@@ -152,6 +152,7 @@ impl<'a> Doc<'a> {
                 let Some(f) = self.facts else { return false };
                 let at = match field {
                     DateField::Discovered => f.discovered_at,
+                    DateField::Seen => return false,
                 };
                 let resolve = |w: &When| match *w {
                     When::Ago(secs) => f.now - secs,
@@ -172,6 +173,13 @@ impl<'a> Doc<'a> {
             }
             Node::Flag { name, value } => self.flag(name) == *value,
             Node::Hash { hash } => self.item.hashes.iter().any(|h| hex(h) == *hash),
+            Node::TimeOfDay { from, to } => self.facts.is_some_and(|f| {
+                lodestar_search::in_time(
+                    lodestar_search::minute_of_day(f.discovered_at, 0),
+                    *from,
+                    *to,
+                )
+            }),
             Node::Tag { key, any } => self.enrichment().is_some_and(|e| {
                 any.iter()
                     .any(|v| e.tags.contains(&format!("{}:{v}", key.as_str())))
@@ -223,6 +231,7 @@ impl<'a> Doc<'a> {
             NumField::Season => list(|e| &e.seasons),
             NumField::Episode => list(|e| &e.episodes),
             NumField::Junk => self.enrichment().is_some_and(|e| f(e.junk)),
+            NumField::Seeders | NumField::Leechers | NumField::Trackers | NumField::Dht => false,
         }
     }
 

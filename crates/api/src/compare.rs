@@ -27,6 +27,7 @@ use crate::dto::discover::{HitGroup, Unavailable};
 use crate::dto::search::SearchHit;
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{self, Path, same_origin_json};
+use crate::swarm::{self, Summary};
 use crate::{ApiState, auth, search, torrents, unix_now};
 
 /// This module's half of `/openapi.json`.
@@ -83,10 +84,10 @@ fn record(e: Option<&Enriched>) -> Option<Record> {
     e.and_then(|e| Record::decode(&e.data).ok())
 }
 
-/// A search result row for `row`, its classification fields filled as
-/// search fills them.
-fn hit_row(row: &TorrentRow, score: f32, e: Option<Enriched>) -> SearchHit {
-    let mut hit = torrents::hit(row, score, None);
+/// A search result row for `row`, its classification and swarm fields
+/// filled as search fills them.
+fn hit_row(row: &TorrentRow, score: f32, e: Option<Enriched>, swarm: Summary) -> SearchHit {
+    let mut hit = torrents::hit(row, score, None, swarm);
     search::enrich(&mut hit, e);
     hit
 }
@@ -217,7 +218,8 @@ fn other_versions(
     let index = search.index();
     let node = shown(&candidates_query(identity), adult);
     // Relevance: the title field's BM25 ranks the exact title over
-    // longer ones. The swarm and freshness priors join it with M4.
+    // longer ones, and the swarm and freshness priors re-rank the first
+    // window when hot columns are served (M4).
     let results = index
         .search_page(
             &index.query(&node, unix_now()),
@@ -256,7 +258,11 @@ fn other_versions(
             truncated = true;
             break;
         }
-        hits.push(hit_row(&row, h.score, e));
+        let swarm = {
+            let store = s.reader.lock().expect("reader lock");
+            swarm::summary(&store, s.hot.as_deref(), &row).map_err(internal)?
+        };
+        hits.push(hit_row(&row, h.score, e, swarm));
     }
     Ok(HitGroup::available(hits, truncated))
 }
@@ -309,8 +315,11 @@ pub(crate) async fn compare(
         // The reader is shared by every API read: it's locked for each
         // lookup and each blob, never across the comparison.
         let mut rows = Vec::with_capacity(n);
+        let mut swarms = Vec::with_capacity(n);
         for h in &hashes {
-            let found = visible(&s.reader.lock().expect("reader lock"), h, false, adult)?;
+            let store = s.reader.lock().expect("reader lock");
+            let found = visible(&store, h, false, adult)?;
+            swarms.push(swarm::summary(&store, s.hot.as_deref(), &found.0).map_err(internal)?);
             rows.push(found);
         }
         let records: Vec<Option<Record>> = rows.iter().map(|(_, e)| record(e.as_ref())).collect();
@@ -345,7 +354,8 @@ pub(crate) async fn compare(
         let torrents = rows
             .into_iter()
             .zip(values)
-            .map(|((row, e), attributes)| column(&row, e, attributes))
+            .zip(swarms)
+            .map(|(((row, e), attributes), swarm)| column(&row, e, attributes, swarm))
             .collect();
         Ok(Json(CompareResponse {
             differs,
@@ -362,8 +372,9 @@ fn column(
     row: &TorrentRow,
     e: Option<Enriched>,
     attributes: BTreeMap<String, Option<String>>,
+    swarm: Summary,
 ) -> CompareTorrent {
-    let hit = hit_row(row, 0.0, e);
+    let hit = hit_row(row, 0.0, e, swarm);
     CompareTorrent {
         attributes,
         composition: hit.composition,
