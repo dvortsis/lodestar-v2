@@ -982,7 +982,7 @@
    "status": "review",
    "session": "session_01MRKeGCGmpz4LUQE5LbEXsz",
    "owner_started": true,
-   "notes": "owner chose 'Normalise' in-session (per-pass calibration, scale [0.4,3.0], ref-runner us). PR #97 draft; temp sample workflow to be removed; supersedes #66 (close on merge). | 00:19 #97 ready 03c25c8 (CALIB_REF 7.4us, sample 8 runners, slowed legs fail, ported res:360). Reviewer started. | 00:33 review FIX: calibration median skewed by noise (use min, untrusted if before/after differ >15%, SPEED 0.4-2.0); doc re-derivation; cross-CPU 1.25x; budget-not-regression. Flag reference=fastest runner to owner (\u00a72.19).",
+   "notes": "owner chose 'Normalise' in-session (per-pass calibration, scale [0.4,3.0], ref-runner us). PR #97 draft; temp sample workflow to be removed; supersedes #66 (close on merge). | 00:19 #97 ready 03c25c8 (CALIB_REF 7.4us, sample 8 runners, slowed legs fail, ported res:360). Reviewer started. | 00:33 review FIX: calibration median skewed by noise (use min, untrusted if before/after differ >15%, SPEED 0.4-2.0); doc re-derivation; cross-CPU 1.25x; budget-not-regression. Flag reference=fastest runner to owner (\u00a72.19). | 00:45 c77ad52 blocking fix verified by runner (min of before/after fastest pass, drift<=15%, SPEED 0.4-2.0, REF 7.2us). Approved pending stopgap/F-perf note in decisions + green CI. Then merge #85 F-near, close #66.",
    "pr": 97,
    "branch": "claude/affectionate-hawking-uhztfw"
   },
