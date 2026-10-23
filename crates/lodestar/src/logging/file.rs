@@ -60,10 +60,13 @@ pub struct Index {
     /// When the run writing here was last alive (Unix seconds).
     #[serde(default)]
     pub alive_at: i64,
-    /// Lodestar made this folder and restricted its ACL (Windows), so it
-    /// isn't a shared one at the next start.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub restricted: bool,
+    /// Lodestar made this folder and restricted its ACL (Windows). A hint
+    /// only: whether a folder is private is its owner's and DACL's to say
+    /// (`windows::acl::log_folder`), since anyone who can write here could
+    /// plant `true`. A rebuilt index doesn't know (`None`), and `false` is
+    /// never written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restricted: Option<bool>,
     #[serde(skip)]
     path: PathBuf,
 }
@@ -481,12 +484,13 @@ fn folder(dir: &Path) -> io::Result<Folder> {
     {
         // As on Unix, an existing folder keeps its ACL: restricting a
         // chosen `D:\Downloads` would take Users' access to everything in
-        // it. One Lodestar made and restricted earlier says so in its index.
+        // it. Its owner and DACL say whether it's private, never the
+        // index's `restricted` hint, which anyone who can write here could
+        // plant, and which a corrupt index loses.
         if existed {
-            return Ok(if Index::load(dir).restricted {
-                Folder::Private
-            } else {
-                Folder::Shared
+            return Ok(match crate::windows::acl::log_folder(dir) {
+                Ok(()) => Folder::Private,
+                Err(_) => Folder::Shared,
             });
         }
         // A folder Lodestar just made holds the first-run setup token:
@@ -503,7 +507,7 @@ fn folder(dir: &Path) -> io::Result<Folder> {
             return Err(e);
         }
         let mut index = Index::load(dir);
-        index.restricted = true;
+        index.restricted = Some(true);
         index.save()?;
         Ok(Folder::Private)
     }
@@ -513,19 +517,11 @@ fn folder(dir: &Path) -> io::Result<Folder> {
 
 /// Appends a line to `%SystemRoot%\Temp\lodestar-service.log`, where the
 /// Windows service and its installer write the reasons a service operator
-/// needs. The line names no path.
+/// needs, never through a planted link (`windows::temp_log`). The line
+/// names no path.
 #[cfg(windows)]
 fn service_log(why: &str) {
-    let Some(root) = std::env::var_os("SystemRoot") else {
-        return;
-    };
-    let path = Path::new(&root).join("Temp").join("lodestar-service.log");
-    let secs = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(f, "{secs} logging: {why}");
-    }
+    let _ = crate::windows::temp_log::append("logging", why);
 }
 
 fn last_byte(path: &Path) -> io::Result<Option<u8>> {
@@ -1354,5 +1350,84 @@ mod tests {
         );
         assert!(!ns.iter().any(|n| n.ends_with(".part")), "{ns:?}");
         assert_eq!(lines(dir.path()), ["left"]);
+    }
+
+    #[cfg(windows)]
+    fn icacls(path: &Path, args: &[&str]) {
+        let root = std::env::var_os("SystemRoot").unwrap();
+        let out = std::process::Command::new(Path::new(&root).join("System32").join("icacls.exe"))
+            .arg(path)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "icacls {args:?}: {}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+
+    /// The owner and the DACL decide "Private" on Windows, never the
+    /// index's `restricted` flag.
+    #[cfg(windows)]
+    #[test]
+    fn windows_privacy_is_the_acl_not_the_index() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        // A shared folder (Users may read it) with `"restricted": true`
+        // planted in its index is still shared.
+        let shared = tmp.path().join("shared");
+        fs::create_dir(&shared).unwrap();
+        icacls(&shared, &["/grant", "*S-1-5-32-545:(OI)(CI)RX"]);
+        fs::write(
+            shared.join(INDEX),
+            r#"{"files":{},"alive_at":0,"restricted":true}"#,
+        )
+        .unwrap();
+        assert_eq!(folder(&shared).unwrap(), Folder::Shared);
+        assert!(FileSink::open(cfg(&shared, 1 << 20)).unwrap().shared);
+
+        // A folder Lodestar made is private; a corrupt index rebuilt and
+        // saved doesn't make it shared, now or at the next start.
+        let made = tmp.path().join("made");
+        assert_eq!(folder(&made).unwrap(), Folder::Private);
+        assert_eq!(Index::load(&made).restricted, Some(true));
+        assert_eq!(crate::windows::acl::log_folder(&made), Ok(()));
+        fs::write(made.join(INDEX), "{corrupt").unwrap();
+        let rebuilt = Index::load(&made);
+        assert_eq!(rebuilt.restricted, None, "unknown, never false");
+        rebuilt.save().unwrap();
+        assert!(
+            !fs::read_to_string(made.join(INDEX))
+                .unwrap()
+                .contains("restricted")
+        );
+        assert_eq!(folder(&made).unwrap(), Folder::Private);
+        let sink = FileSink::open(cfg(&made, 1 << 20)).unwrap();
+        assert!(!sink.shared);
+        drop(sink);
+        assert!(!FileSink::open(cfg(&made, 1 << 20)).unwrap().shared);
+
+        // The service's logs folder: made inside the private data folder
+        // (as `windows::logfile` makes it), inheriting its ACL.
+        let data = tmp.path().join("data");
+        fs::create_dir(&data).unwrap();
+        let own = crate::windows::acl::process_sid().expect("whoami");
+        let grant = format!("*{own}:(OI)(CI)F");
+        icacls(
+            &data,
+            &[
+                "/inheritance:r",
+                "/grant:r",
+                "*S-1-5-18:(OI)(CI)F",
+                "*S-1-5-32-544:(OI)(CI)F",
+                &grant,
+            ],
+        );
+        let log = crate::windows::logfile::path(&data);
+        let logs = log.parent().unwrap();
+        fs::create_dir_all(logs).unwrap();
+        assert_eq!(crate::windows::acl::log_folder(logs), Ok(()));
+        assert_eq!(folder(logs).unwrap(), Folder::Private);
     }
 }

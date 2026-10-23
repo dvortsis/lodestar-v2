@@ -253,6 +253,7 @@ impl PacketSink for LossySink {
         if !lost {
             let (udp, packet) = (self.udp.clone(), packet.to_vec());
             tokio::spawn(async move {
+                // Simulates network latency (the lossy link under test).
                 tokio::time::sleep(Duration::from_millis(delay)).await;
                 let _ = udp.send_to(&packet, to);
             });
