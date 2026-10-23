@@ -74,6 +74,7 @@
       <Component Id="ProgramFiles" Guid="2D5B2E5C-6B34-4F0F-9D54-3D1A3F8E9A01" Win64="yes">
         <File Id="LodestarExe" Name="lodestar.exe" Source="$(var.CargoTargetBinDir)\lodestar.exe" KeyPath="yes" />
         <File Id="SecureDataDir" Name="secure-datadir.ps1" Source="$(env.LODESTAR_PACKAGING)\windows\secure-datadir.ps1" />
+        <File Id="ServiceSid" Name="service-sid.ps1" Source="$(env.LODESTAR_PACKAGING)\windows\service-sid.ps1" />
       </Component>
 
       <!-- The service. Started by hand (Start="demand") until the service

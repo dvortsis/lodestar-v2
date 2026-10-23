@@ -77,6 +77,13 @@ jobs:
           bytes=$(docker image inspect lodestar:smoke --format '{{.Size}}')
           echo "Image size: $((bytes / 1024 / 1024)) MiB ($bytes bytes)" | tee -a "$GITHUB_STEP_SUMMARY"
 
+      # The image is built without the `fixture` feature (`serve --fixture` test data).
+      - name: Image has no fixture backend
+        run: |
+          out=$(docker run --rm lodestar:smoke serve --fixture /tmp/fixture 2>&1 || true)
+          echo "$out"
+          echo "$out" | grep -q "no fixture backend" || { echo "::error::the image has the fixture feature; release builds must not"; exit 1; }
+
       - name: Start the containers
         run: |
           # The image starts as root and the binary drops to PUID/PGID
@@ -507,6 +514,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: package-windows
+
+      - name: Unit test (service SID derivation)
+        shell: pwsh
+        run: packaging/windows/test-service-sid.ps1
 
       - name: Build
         # Without the `fixture` feature (`serve --fixture` test data): not for releases.
