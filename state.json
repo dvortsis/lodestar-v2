@@ -318,13 +318,19 @@
    "notes": "Launched 21:41 after B6 merged. | 01:50 PR #102 41231f7 conflicts live.rs; asked main merge + relevance gate; review on new head. | 01:52 c764a4f main merged (relevance PASS); reviewer started. | 02:45 review FIX: natural phrasing inverts negations/field syntax (-cam -> includes CAM) -> strict-lex first + meaning-preserving prop test; important: did-you-mean cost, FST peak RSS/10M plan, swap-path test. | 03:20 c80199b fixes (strict-lex natural phrasing + prop test, did-you-mean capped, FST memory, swap test). Delta reviewer started. OK given for query.rs pub(crate) + ROUTES line."
   },
   "B12": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01RNKiUPUDPTqDXniLQ7ApU1",
-   "pr": null,
+   "pr": 112,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed)."
+   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 03:30 PR #112 b0834b4 ready; reviewer + security review started. 5,703 lines. \u00a72.19 flags: regenerate not reveal; bad XFF ends walk; revoke/delete no password; max 500 keys; login limiter bounded.",
+   "self_review": {
+    "raised": 7,
+    "fixed": 7,
+    "left": 0,
+    "detail": "0 blocking, 2 important (fixed or documented), 5 polish (fixed); /security-review nothing exploitable"
+   }
   },
   "B9": {
    "status": "pending",
@@ -1271,7 +1277,8 @@
   "apistate_user_data": "B12 and B10a both add identical ApiState.user_data field + None in test literals; second to merge drops duplicates.",
   "crawler_settings_sse": "ops.rs /crawler pause/resume/intensity save straight to the registry, no settings SSE event; route through settings::save_and_announce (B2c or later).",
   "user_data_reader_lock": "B10a: GET /collections, /collections/{id}, /user-items/labels and withheld-heavy /user-items scan every entry on the shared reader lock; bound or move off the search reader (next brief touching user data).",
-  "b9_unread_shown_only": "B9 must count unread alerts shown-only (B10a lists do); store unread_total counts Adult alerts."
+  "b9_unread_shown_only": "B9 must count unread alerts shown-only (B10a lists do); store unread_total counts Adult alerts.",
+  "b9_feed_access": "B9 feed handlers must call Access::reaches_feed (B12)."
  },
  "blocked_on_owner": [],
  "launches_today": 13,
@@ -1292,7 +1299,8 @@
   "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
   "\u00a72.19 (C-adult-other #105): Other->Scene, Ebook->Comics at threshold 60, consistent with TV/Comic/Movie. Known edges: light novel with \"hentai\" in title, \"Porn Studies\" journal become Adult.",
   "\u00a72.19 (M6-win/P-release): Windows service runs as virtual account NT SERVICE\\Lodestar (per-service SID), not LocalSystem/LocalService; data folder ACL SYSTEM+Administrators+service SID only, inheritance removed.",
-  "\u00a72.19 (B10a #111): saved-search alert counts count shown torrents only; collection position/next_after are among shown entries; reorder keeps withheld entries in their slots."
+  "\u00a72.19 (B10a #111): saved-search alert counts count shown torrents only; collection position/next_after are among shown entries; reorder keeps withheld entries in their slots.",
+  "\u00a72.19 (B12 #112): key \"reveal\" replaced by regenerate; a bad X-Forwarded-For entry ends the walk at the peer (safer than skipping); revoke/delete need no password; at most 500 keys/tokens; login limiter map strictly bounded with overflow bucket."
  ],
  "decisions_log": [
   "2026-10-23 00:40 owner: 'Go with whatever makes for the best user experience' re filter budget reference -> staged: #97 fastest-runner ref now; F-perf moves ref to EPYC 7763 (typical) when engine meets it.",
