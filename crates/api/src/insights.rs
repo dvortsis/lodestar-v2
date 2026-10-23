@@ -267,7 +267,19 @@ pub struct OverviewCache {
 struct Days {
     generation: u64,
     days: BTreeMap<i64, Arc<DayRows>>,
+    /// The stage pages' sealed days: one metric's day, by (dim, key);
+    /// keyed (day's first hour, metric). [`LAST`] marks a gauge's entry
+    /// (its last snapshot, under (0, 0)).
+    metrics: BTreeMap<(i64, u32), MetricDay>,
 }
+
+/// Marks a gauge's entry in [`Days::metrics`].
+const LAST: u32 = 1 << 31;
+
+/// One metric's sealed day, by (dim, key).
+type MetricDay = Arc<BTreeMap<(u32, i64), i64>>;
+/// A metric's sealed days, by the day's first hour.
+type MetricDays = BTreeMap<i64, MetricDay>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CacheKey {
@@ -331,7 +343,10 @@ impl OverviewCache {
         {
             let mut days = self.days.lock().unwrap_or_else(PoisonError::into_inner);
             days.generation += 1;
-            let stale = days.days.split_off(&(hour.div_euclid(24) * 24));
+            let day = hour.div_euclid(24) * 24;
+            let stale = days.days.split_off(&day);
+            drop(stale);
+            let stale = days.metrics.split_off(&(day, 0));
             drop(stale);
         }
         self.entries
@@ -349,6 +364,38 @@ impl OverviewCache {
     pub fn forget_days_before(&self, day: i64) {
         let mut days = self.days.lock().unwrap_or_else(PoisonError::into_inner);
         days.days = days.days.split_off(&(day * 24));
+        days.metrics = days.metrics.split_off(&(day * 24, 0));
+    }
+
+    /// The sealed days `from..to` of one metric (`metric | LAST` for a
+    /// gauge), by day: those it has, and the days it lacks.
+    fn metric_days(&self, metric: u32, from: i64, to: i64) -> (MetricDays, Vec<i64>) {
+        let days = self.days.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut have = BTreeMap::new();
+        let mut missing = Vec::new();
+        for d in (from..to).step_by(24) {
+            match days.metrics.get(&(d, metric)) {
+                Some(rows) => {
+                    have.insert(d, rows.clone());
+                }
+                None => missing.push(d),
+            }
+        }
+        (have, missing)
+    }
+
+    /// Keeps sealed metric days read under `generation`, unless a forget
+    /// came since.
+    fn keep_metric_days(&self, generation: u64, metric: u32, read: &MetricDays) {
+        let mut days = self.days.lock().unwrap_or_else(PoisonError::into_inner);
+        if days.generation != generation {
+            return;
+        }
+        for (&d, rows) in read {
+            days.metrics
+                .entry((d, metric))
+                .or_insert_with(|| rows.clone());
+        }
     }
 
     fn generation(&self) -> u64 {
@@ -398,6 +445,12 @@ pub fn warm(
         }
         let from = from.max(to - MAX_SPAN_HOURS);
         sealed_days(store, cache, generation, from, to)?;
+        let sealed = Sealed {
+            cache,
+            generation,
+            floor,
+        };
+        stages::warm_metrics(store, &sealed, from, to)?;
         Ok(cache.days())
     })
 }
@@ -1399,6 +1452,7 @@ pub(crate) fn segment_movers(
 fn build(
     store: &Store,
     cache: &OverviewCache,
+    generation: u64,
     floor: Option<i64>,
     st: &InsightsState,
     w: Window,
@@ -1409,7 +1463,7 @@ fn build(
     let now_h = now.div_euclid(3600);
     let sealed = Sealed {
         cache,
-        generation: cache.generation(),
+        generation,
         floor,
     };
     let compacted = st.compacted_before_day * 24;
@@ -1690,13 +1744,16 @@ pub(crate) async fn overview_response(
     let reader = s.reader.clone();
     let mut response = tokio::task::spawn_blocking(move || -> ApiResult<OverviewResponse> {
         let store = reader.lock().unwrap_or_else(PoisonError::into_inner);
+        // Before the snapshot begins, so sums read from it are never kept
+        // past a forget made meanwhile.
+        let generation = source.cache().generation();
         // The grain is decided by `compacted_before_day` read in the same
         // snapshot as the rows, so a compaction beside it can't make a
         // day count twice or not at all.
         store
             .read_snapshot(|store| {
                 Ok(overview_in_snapshot(
-                    store, &q, compare, now, adult, &*source,
+                    store, &q, compare, now, adult, &*source, generation,
                 ))
             })
             .map_err(internal)?
@@ -1715,6 +1772,7 @@ fn overview_in_snapshot(
     now: i64,
     adult: bool,
     source: &dyn InsightsSource,
+    generation: u64,
 ) -> ApiResult<OverviewResponse> {
     let st = store.insights_state().map_err(internal)?;
     let compacted = st.compacted_before_day * 24;
@@ -1743,6 +1801,7 @@ fn overview_in_snapshot(
         build(
             store,
             source.cache(),
+            generation,
             source.seal_floor(),
             &st,
             w,

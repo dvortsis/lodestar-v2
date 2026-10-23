@@ -587,6 +587,7 @@ async fn bad_parameters_name_their_field() {
         ("export.csv", "panel=fetch", "panel"),
         ("export.csv", "panel=trend&range=1y", "range"),
         ("export.csv", "panel=fetch.trend&compare=2", "compare"),
+        ("export.csv", "panel=trend&reason=nope", "reason"),
     ] {
         let (status, body) = send(
             &f,
@@ -1261,17 +1262,15 @@ async fn a_year_of_rollups_answers_within_budget() {
                         );
                     }
                     // The budget holds in release builds; others only report.
-                    // Stage pages are held to it over what a running store
-                    // has: hourly rows for 30 days, the rest compacted. A
-                    // year still hourly (before the first compaction, which
-                    // runs 10 minutes after the upgrade) only reports.
-                    if !cfg!(debug_assertions)
-                        && (label == "compacted" || query.starts_with("overview"))
-                    {
+                    if !cfg!(debug_assertions) {
                         assert!(took.as_millis() <= 50, "{label} {query}: {took:?}");
                     }
+                    // The first read of a page's sealed days fills the
+                    // cache; the next reads them from it, alike.
                     if i == 0 {
                         bodies.push(body);
+                    } else {
+                        assert_eq!(bodies.last(), Some(&body), "{label} {query}");
                     }
                 }
             }
@@ -1355,8 +1354,9 @@ async fn stage_goldens() {
     assert_eq!(d["by_ip_family"], Value::Null);
     assert_eq!(
         d["by_strategy"],
-        json!([{"key": "sample", "reported": 95}, {"key": "get_peers", "reported": 20},
-               {"key": "refetch", "reported": 2}])
+        json!([{"key": "sample", "reported": 90}, {"key": "get_peers", "reported": 20},
+               {"key": "bitmagnet:0", "reported": 5}, {"key": "refetch", "reported": 2}]),
+        "another source's code isn't a DHT strategy"
     );
     assert_eq!(d["by_source"][0]["key"], "dht");
     // The paused hours are gaps; a measured quiet hour is 0.
@@ -1431,6 +1431,11 @@ async fn stage_goldens() {
             .iter()
             .all(|p| p["searches"].is_null())
     );
+    // The pages agree with the overview's stage strip and KPIs.
+    let o = json_get(&f, &cookie, "/api/v1/insights/overview?range=24h").await;
+    assert_eq!(pages["fetch_24h"]["kpi"]["fetched"], o["stages"]["fetch"]);
+    assert_eq!(u["kpi"]["stored"], o["stages"]["understand"]);
+    assert_eq!(i["kpi"]["new_searchable"], o["kpi"]["new_searchable"]);
     // With Adult shown, it's listed.
     f.adult.store(true, Ordering::Relaxed);
     f.touched();
@@ -1533,6 +1538,13 @@ async fn export_goldens() {
             body.ends_with("\r\n") && body.starts_with("period"),
             "{panel}"
         );
+        let head = body.lines().next().unwrap();
+        assert!(
+            head.split(',').all(|h| !h.is_empty()
+                && h.bytes()
+                    .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'.'))),
+            "{panel}: header {head:?}"
+        );
         assert_eq!(
             body.matches("\r\n").count(),
             body.matches('\n').count(),
@@ -1608,6 +1620,29 @@ async fn export_goldens() {
         assert_eq!(cells[3], want(&point["fetched"]));
         assert_eq!(cells[4], want(&point["lost"]));
     }
+    // A filtered Fetch page's CSV holds what its chart shows.
+    let page = json_get(
+        &f,
+        &cookie,
+        "/api/v1/insights/fetch?range=24h&reason=timed_out",
+    )
+    .await;
+    let (_, _, csv) = send_full(
+        &f,
+        get(
+            "/api/v1/insights/export.csv?panel=fetch.losses&range=24h&reason=timed_out",
+            Some(&cookie),
+        ),
+    )
+    .await;
+    assert_eq!(
+        csv.lines().count(),
+        1 + page["losses"].as_array().unwrap().len()
+    );
+    assert!(
+        csv.contains(",timed_out,") && !csv.contains("blocked"),
+        "{csv}"
+    );
     // Adult is left out of a per-type CSV while hidden.
     let (_, _, csv) = send_full(
         &f,

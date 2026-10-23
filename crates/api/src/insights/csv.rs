@@ -402,6 +402,7 @@ pub(crate) async fn export_csv(
     Query(q): Query<ExportQuery>,
 ) -> ApiResult<Response> {
     let p = panel(q.panel.as_deref())?;
+    super::stages::reason_code(q.reason.as_deref())?;
     let compare = q.compare == Some(1);
     let value = match p.stage {
         None => serde_json::to_value(
@@ -425,7 +426,7 @@ pub(crate) async fn export_csv(
                 from: q.from,
                 to: q.to,
                 compare: q.compare,
-                reason: None,
+                reason: q.reason,
             },
         )
         .await?

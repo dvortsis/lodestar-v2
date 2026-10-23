@@ -387,8 +387,9 @@ segments: {
 }
 ```
 
-Still B11b's: `by_strategy` and `by_ip_family` (the cohort table has no
-strategy or address-family dimension yet) and `resolved_by` (needs a
+Still waiting: `by_strategy` and `by_ip_family` here (the cohort table
+has no strategy or address-family dimension yet; Discover's
+`by_strategy` is volume by event time) and `resolved_by` (needs a
 resolution counter).
 
 **`GET /insights/events`:** `{annotations: Annotation[], paused: {from:
@@ -516,7 +517,7 @@ gone: hour buckets, hourly finality and hourly repair.
 `GET /insights/{discover|fetch|understand|index|serve}?range=&from=&to=&compare=&reason=`.
 The overview's range rules and `400`s; `reason` is a §6.4 loss name
 (else `400` with `field: "reason"`), accepted on every page and read by
-Fetch only. Each answers `{range, updated_at, stale, kpi, trend[],
+Fetch only (the others ignore it, and share a cache entry). Each answers `{range, updated_at, stale, kpi, trend[],
 <sections>}`, plus `previous: {kpi, range, trend}` with `compare=1` (its
 snapshot fields null). Rollups and snapshots only; cached per (query,
 stage, reason, last flush). A trend count is **null where nothing was
@@ -528,8 +529,8 @@ per-type list while hidden (totals count it, as on the overview).
 |---|---|---|---|
 | Discover | `kpi.reported`, `.rediscovered`, `.dropped`; `trend[].reported`…; `by_source[]` | metrics 1, 2, 3 (dim = source) | Event time |
 | Discover | `kpi.harvested`, `trend[].harvested` | cohort harvested (first harvests, ≈) | Discovery cohort |
-| Discover | `by_strategy[]` (`sample`, `get_peers`, `announce`, `lookup`, `refetch`) | metric 1's key: volume, not yield | Event time |
-| Discover | `kpi.dht_nodes`, `kpi.reply_ratio` | the DHT now (`/crawler`'s routing nodes; `/metrics`' `dht_reply_ratio`, since start) | Snapshot |
+| Discover | `by_strategy[]`: the DHT's `sample`, `get_peers`, `announce`, `lookup`, `refetch` from any source, otherwise `<plugin>:<n>` (that plugin's own code) | metric 1's key: volume, not yield | Event time |
+| Discover | `kpi.dht_nodes`, `kpi.reply_ratio` | the DHT now (`/crawler`'s routing nodes; `/metrics`' `dht_reply_ratio`, since start, null before the first query) | Snapshot |
 | Discover | `kpi.bep51_sample_yield`, `.keyspace_coverage`, `.seen_filter_load`; `by_ip_family` | **null** until the DHT counts samples / reports coverage and the filter's load; until leases carry the address family | — |
 | Fetch | `kpi.fetched`, `.lost`; `trend[]`; `losses[]` (count and share of all losses, by reason) | metric 14 (dims `Fetched`, `Lost`; `reason` filters `lost` and `losses`) | Event time |
 | Fetch | `funnel[]`, `funnel_total` | the overview's cohort funnel (`reason` keeps only that loss) | Discovery cohort |
@@ -545,7 +546,7 @@ per-type list while hidden (totals count it, as on the overview).
 | Index | `kpi.sizes`, `.projection_days`, `.segments`, `.merges`, `.file_index_coverage`, `.scrape_coverage`, `.scrape_freshness_s`; `trackers` | **null** until per-part sizes, free space, index segment and merge counts, file-index coverage and swarm rollups are measured | — |
 | Serve | every `kpi` field, `trend[]`, `top_queries`, `top_zero_result_queries` | **null** until #48's search counters (searches, zero results, latency), cancel and facet-sampling counters, B9's alert counts, notification and send counters, and a query-logging setting (logging is off by default and nothing writes the log yet) | — |
 
-#### `GET /insights/export.csv?panel=&range=&from=&to=&compare=`
+#### `GET /insights/export.csv?panel=&range=&from=&to=&compare=&reason=`
 
 `panel` ∈ `trend`, `funnel`, `losses`, `segments.by_group`,
 `segments.by_content_type`, `segments.by_source`, `exceptions`,
@@ -564,11 +565,13 @@ panel's header is the same whether or not it has rows. Numbers raw (ratios
 controls and bidi formatting as `\u{…}`; quoted with a comma or a quote).
 Headers: `text/csv; charset=utf-8; header=present`, `attachment;
 filename="lodestar-insights-<panel>-<from>-<to>.csv"`, `no-store`,
-`nosniff`.
+`nosniff`. `reason` is checked as on the stage pages and filters the
+`fetch.*` panels as Fetch does.
 
 #### `event: insights`
 
 Every 30 s while anyone subscribes: `{stages, updated_at}`, the default
 `7d` overview's stage strip; `stages.fetch`, `.index` and `.serve` are
 nullable as in §7.5. A client showing another range refetches its own on
-each event.
+each event. The overview is built only while a stream with the topic (or
+with no `topics`, which means all) is open.

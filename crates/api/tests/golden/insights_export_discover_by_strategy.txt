@@ -1,4 +1,5 @@
 period,key,reported
-current,sample,95
+current,sample,90
 current,get_peers,20
+current,bitmagnet:0,5
 current,refetch,2

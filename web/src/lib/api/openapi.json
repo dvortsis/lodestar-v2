@@ -2297,6 +2297,15 @@
               "format": "int32",
               "minimum": 0
             }
+          },
+          {
+            "name": "reason",
+            "in": "query",
+            "description": "As the stage pages' `reason`: checked for every panel, and Fetch's\npanels keep only that loss, as the page does.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -14815,7 +14824,7 @@
         "properties": {
           "key": {
             "type": "string",
-            "description": "`sample`, `get_peers`, `announce`, `lookup`, `refetch`, or\n`strategy_<n>`."
+            "description": "The DHT's strategies by name (`sample`, `get_peers`, `announce`,\n`lookup`, or `strategy_<n>`), `refetch` from any source, and other\nsources' own codes as `<plugin>:<n>`."
           },
           "reported": {
             "type": "integer",
