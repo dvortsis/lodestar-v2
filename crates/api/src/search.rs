@@ -10,7 +10,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::routing::get;
 use hmac::{Hmac, KeyInit, Mac};
 use lodestar_classify::{Category, Composition, Record};
-use lodestar_search::natural::natural;
+use lodestar_search::natural::{NaturalError, natural};
 use lodestar_search::query::TagKey;
 use lodestar_search::{
     CancelToken, Cursor, Error as SearchError, Lease, Node, ParseError, Sort, Start, parse,
@@ -207,12 +207,14 @@ pub(crate) async fn parse_query(
         .natural
         .then(|| natural(&p.q))
         .transpose()
-        .map_err(|e| {
-            ApiError::bad_request(
+        .or_else(|e| match e {
+            // `q` parsed above, so it can't be this; nothing to propose.
+            NaturalError::Syntax => Ok(None),
+            e => Err(ApiError::bad_request(
                 "natural_too_long",
                 format!("Natural phrasing reads at most 512 bytes and 32 words; this is {e}."),
             )
-            .field("q")
+            .field("q")),
         })?
         .map(|n| NaturalProposal {
             ast: n.ast,

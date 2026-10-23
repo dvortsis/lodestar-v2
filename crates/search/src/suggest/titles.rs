@@ -47,6 +47,8 @@ pub const MIN_INTERVAL: Duration = Duration::from_secs(60);
 /// Titles longer than this (folded, in bytes) aren't offered: they're
 /// junk names more than titles anyone types.
 const MAX_TITLE_BYTES: usize = 160;
+/// Records read per query while building.
+const READ_CHUNK: usize = if cfg!(test) { 3 } else { 20_000 };
 /// Spellings tracked per title while building.
 const VARIANTS: usize = 4;
 
@@ -151,43 +153,58 @@ impl TitleSet {
         let adult = ContentType::Adult.code();
         let mut by_key: HashMap<String, Agg> = HashMap::new();
         let mut torrents = 0u64;
+        let mut seen: Vec<String> = Vec::new();
+        // In chunks by id, each its own read: one statement over the whole
+        // table would hold a read transaction for the whole build, and
+        // with it every WAL checkpoint.
         let mut stmt = store
             .connection()
-            .prepare(
-                "SELECT t.flags, t.content_type, p.data
-                 FROM torrent_parsed p JOIN torrents t ON t.id = p.torrent_id",
+            .prepare_cached(
+                "SELECT p.torrent_id, t.flags, t.content_type, p.data
+                 FROM torrent_parsed p JOIN torrents t ON t.id = p.torrent_id
+                 WHERE p.torrent_id > ?1 ORDER BY p.torrent_id LIMIT ?2",
             )
             .map_err(lodestar_store::Error::from)?;
-        let mut rows = stmt.query([]).map_err(lodestar_store::Error::from)?;
-        let mut seen: Vec<String> = Vec::new();
-        while let Some(row) = rows.next().map_err(lodestar_store::Error::from)? {
-            let flags: i64 = row.get(0).map_err(lodestar_store::Error::from)?;
-            let ct: Option<u8> = row.get(1).map_err(lodestar_store::Error::from)?;
-            let data: Vec<u8> = row.get(2).map_err(lodestar_store::Error::from)?;
-            let Ok(record) = Record::decode(&data) else {
-                continue;
-            };
-            torrents += 1;
-            let c = class(ct == Some(adult), flags & flags::HIDDEN != 0);
-            seen.clear();
-            let titles = record
-                .release("title")
-                .into_iter()
-                .chain(record.release_all("alt"));
-            for title in titles {
-                let key = fold(title, false);
-                if key.is_empty() || key.len() > MAX_TITLE_BYTES || seen.contains(&key) {
+        let mut after = 0i64;
+        loop {
+            let mut rows = stmt
+                .query(lodestar_store::rusqlite::params![after, READ_CHUNK as i64])
+                .map_err(lodestar_store::Error::from)?;
+            let mut read = 0;
+            while let Some(row) = rows.next().map_err(lodestar_store::Error::from)? {
+                read += 1;
+                after = row.get(0).map_err(lodestar_store::Error::from)?;
+                let flags: i64 = row.get(1).map_err(lodestar_store::Error::from)?;
+                let ct: Option<u8> = row.get(2).map_err(lodestar_store::Error::from)?;
+                let data: Vec<u8> = row.get(3).map_err(lodestar_store::Error::from)?;
+                let Ok(record) = Record::decode(&data) else {
                     continue;
+                };
+                torrents += 1;
+                let c = class(ct == Some(adult), flags & flags::HIDDEN != 0);
+                seen.clear();
+                let titles = record
+                    .release("title")
+                    .into_iter()
+                    .chain(record.release_all("alt"));
+                for title in titles {
+                    let key = fold(title, false);
+                    if key.is_empty() || key.len() > MAX_TITLE_BYTES || seen.contains(&key) {
+                        continue;
+                    }
+                    let display = title.split_whitespace().collect::<Vec<_>>().join(" ");
+                    let agg = by_key.entry(key.clone()).or_default();
+                    agg.counts[c] = agg.counts[c].saturating_add(1);
+                    if let Some(v) = agg.variants.iter_mut().find(|(d, _)| *d == display) {
+                        v.1 += 1;
+                    } else if agg.variants.len() < VARIANTS {
+                        agg.variants.push((display, 1));
+                    }
+                    seen.push(key);
                 }
-                let display = title.split_whitespace().collect::<Vec<_>>().join(" ");
-                let agg = by_key.entry(key.clone()).or_default();
-                agg.counts[c] = agg.counts[c].saturating_add(1);
-                if let Some(v) = agg.variants.iter_mut().find(|(d, _)| *d == display) {
-                    v.1 += 1;
-                } else if agg.variants.len() < VARIANTS {
-                    agg.variants.push((display, 1));
-                }
-                seen.push(key);
+            }
+            if read < READ_CHUNK {
+                break;
             }
         }
         let mut entries: Vec<(Vec<u8>, usize, u64)> = by_key
@@ -570,6 +587,63 @@ mod tests {
         adult: false,
         hidden: false,
     };
+
+    /// A store of torrents named `names`, enriched.
+    fn store_of(names: &[&str]) -> Store {
+        use lodestar_bencode::{OwnedValue, to_vec};
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        for name in names {
+            let b = |s: &str| OwnedValue::Bytes(s.as_bytes().to_vec());
+            let raw = to_vec(&OwnedValue::Dict(
+                [
+                    ("length", OwnedValue::Int(1 << 30)),
+                    ("name", b(name)),
+                    ("piece length", OwnedValue::Int(1 << 16)),
+                    ("pieces", OwnedValue::Bytes(vec![0; 20])),
+                ]
+                .into_iter()
+                .map(|(k, v)| (k.as_bytes().to_vec(), v))
+                .collect(),
+            ));
+            let info = lodestar_metainfo::Info::parse(&raw).unwrap();
+            store
+                .insert(&[lodestar_store::NewTorrent {
+                    info: &info,
+                    raw_info: Some(&raw),
+                    discovered_at: 1_700_000_000,
+                    metadata_at: 1_700_000_001,
+                    extra_flags: 0,
+                    source: lodestar_store::SourceId::new(0).unwrap(),
+                }])
+                .unwrap();
+        }
+        while lodestar_pipeline::enrich::enrich_stored(&mut store, 0, 100)
+            .unwrap()
+            .is_some()
+        {}
+        store
+    }
+
+    #[test]
+    fn a_build_reads_every_chunk() {
+        // Seven torrents, read three at a time here.
+        let names = [
+            "Alpha.2001.1080p.mkv",
+            "Bravo.2002.1080p.mkv",
+            "Charlie.2003.1080p.mkv",
+            "Delta.2004.1080p.mkv",
+            "Echo.2005.1080p.mkv",
+            "Foxtrot.2006.1080p.mkv",
+            "alpha.2007.720p.mkv",
+        ];
+        let set = TitleSet::build(&store_of(&names)).unwrap();
+        assert_eq!(set.torrents(), 7);
+        // `Alpha` and `alpha` are one title, spelt as the first one seen.
+        assert_eq!(set.len(), 6);
+        let alpha = set.lookup("alpha", PLAIN, 5);
+        assert_eq!((alpha[0].display.as_str(), alpha[0].count), ("Alpha", 2));
+        assert_eq!(set.lookup("foxtrot", PLAIN, 5).len(), 1);
+    }
 
     #[test]
     fn folding() {

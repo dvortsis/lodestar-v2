@@ -12,11 +12,21 @@
 //! linking word (`and`, `in`, `with`, …) next to a recognised one is
 //! dropped. The result is always a query the parser reads back exactly.
 //!
+//! **Explicit syntax is kept as written.** The input is split the way
+//! the query lexer splits it, and only runs of plain words (each a word
+//! the parser reads as itself, outside brackets and away from `NEAR`)
+//! go through the rules. Everything else (`-x265`, `!cam`, `res:1080p`,
+//! `ext:mkv,avi`, `"a phrase"`, `OR`, `(a | b)`) is copied verbatim, so
+//! natural phrasing never changes what a token in query syntax means.
+//! Input the strict parser rejects isn't read (`/parse` answers it with
+//! the syntax error).
+//!
 //! Sizes: "over"/"under" are inclusive (`size:>=10GB`), since a byte
 //! either way means nothing; years and counts keep the strict sense
 //! ("after 2010" is `year:>=2011`).
 
 use crate::query::{self, DateField, Node, NumField, TagKey, TextField, When};
+use crate::suggest::caret::{self, Raw, RawKind};
 use crate::suggest::chip_nodes;
 
 /// Longest input read, in bytes.
@@ -29,6 +39,8 @@ pub const MAX_NATURAL_WORDS: usize = 32;
 pub enum NaturalError {
     TooLong,
     TooManyWords,
+    /// Not a query the strict parser reads.
+    Syntax,
 }
 
 impl std::fmt::Display for NaturalError {
@@ -36,6 +48,7 @@ impl std::fmt::Display for NaturalError {
         match self {
             NaturalError::TooLong => write!(f, "longer than {MAX_NATURAL_BYTES} bytes"),
             NaturalError::TooManyWords => write!(f, "more than {MAX_NATURAL_WORDS} words"),
+            NaturalError::Syntax => write!(f, "not a query the parser reads"),
         }
     }
 }
@@ -73,39 +86,47 @@ struct W {
     from: (usize, usize),
 }
 
-fn words(input: &str) -> Vec<W> {
-    let mut out = Vec::new();
-    let mut start: Option<(usize, usize)> = None;
-    let push = |s: usize, e: usize, cs: usize, out: &mut Vec<W>| {
-        let raw = &input[s..e];
-        let trimmed = raw.trim_matches(|c: char| "()[]{},.;:!?\"'".contains(c));
-        if trimmed.is_empty() {
-            return;
-        }
-        // Character offsets of the trimmed part.
-        let lead = raw[..raw.find(trimmed).unwrap_or(0)].chars().count();
-        let len = trimmed.chars().count();
-        out.push(W {
-            orig: trimmed.to_owned(),
-            low: trimmed.to_lowercase(),
-            from: (cs + lead, cs + lead + len),
-        });
+/// The word a plain token is: outer punctuation trimmed for matching
+/// (`4k,` reads as `4k`), with its character range in `input`.
+fn word(input: &str, t: &Raw) -> Option<W> {
+    let raw = &input[t.start..t.end];
+    let trimmed = raw.trim_matches(|c: char| "[]{},.;:!?'".contains(c));
+    if trimmed.is_empty() {
+        return None;
+    }
+    let lead = raw.find(trimmed).unwrap_or(0);
+    let from = caret::chars(input, t.start + lead);
+    Some(W {
+        orig: trimmed.to_owned(),
+        low: trimmed.to_lowercase(),
+        from: (from, from + trimmed.chars().count()),
+    })
+}
+
+fn is_near(w: &str) -> bool {
+    w == "NEAR" || w.starts_with("NEAR/")
+}
+
+/// Whether token `i` is a plain word the rules may read: one the parser
+/// reads as itself, apart from its neighbours, outside brackets, and not
+/// a `NEAR` operand.
+fn plain(input: &str, toks: &[Raw], i: usize) -> bool {
+    let t = &toks[i];
+    let text = &input[t.start..t.end];
+    let near = |j: Option<usize>| {
+        j.and_then(|j| toks.get(j))
+            .is_some_and(|n| n.kind == RawKind::Word && is_near(&input[n.start..n.end]))
     };
-    for (ci, (bi, c)) in input.char_indices().enumerate() {
-        let sep = c.is_whitespace() || c == ',' || c == ';';
-        match (sep, start) {
-            (true, Some((s, cs))) => {
-                push(s, bi, cs, &mut out);
-                start = None;
-            }
-            (false, None) => start = Some((bi, ci)),
-            _ => {}
-        }
-    }
-    if let Some((s, cs)) = start {
-        push(s, input.len(), cs, &mut out);
-    }
-    out
+    // Touching its neighbour (`-"a b"`, `title:"x"`), it's part of it.
+    let apart =
+        |j: Option<usize>, gap: &dyn Fn(&Raw) -> bool| j.and_then(|j| toks.get(j)).is_none_or(gap);
+    t.kind == RawKind::Word
+        && t.depth == 0
+        && apart(i.checked_sub(1), &|p: &Raw| p.end < t.start)
+        && apart(Some(i + 1), &|n: &Raw| t.end < n.start)
+        && query::is_plain_word(text)
+        && !near(i.checked_sub(1))
+        && !near(Some(i + 1))
 }
 
 /// Words that link recognised ones and mean nothing alone.
@@ -515,10 +536,72 @@ pub fn natural(input: &str) -> Result<Natural, NaturalError> {
     if input.len() > MAX_NATURAL_BYTES {
         return Err(NaturalError::TooLong);
     }
-    let w = words(input);
-    if w.len() > MAX_NATURAL_WORDS {
+    let toks = caret::split(input);
+    if toks.len() > MAX_NATURAL_WORDS {
         return Err(NaturalError::TooManyWords);
     }
+    let strict = query::parse(input).map_err(|_| NaturalError::Syntax)?;
+    let mut pieces: Vec<String> = Vec::new();
+    let mut chips = Vec::new();
+    let mut text = Vec::new();
+    let mut i = 0;
+    while i < toks.len() {
+        if plain(input, &toks, i) {
+            let mut run = Vec::new();
+            while i < toks.len() && plain(input, &toks, i) {
+                run.extend(word(input, &toks[i]));
+                i += 1;
+            }
+            let read = read_run(&run);
+            chips.extend(read.chips);
+            text.extend(read.text);
+            if !read.nodes.is_empty() {
+                pieces.push(and(read.nodes).to_query());
+            }
+        } else {
+            // Syntax, verbatim: up to the next plain word.
+            let start = toks[i].start;
+            while i < toks.len() && !plain(input, &toks, i) {
+                i += 1;
+            }
+            pieces.push(input[start..toks[i - 1].end].to_owned());
+        }
+    }
+    // The pieces read together as the proposal; should they not (a rule
+    // emptied a run between operators), the query stands as typed.
+    match query::parse(&pieces.join(" ")) {
+        Ok(ast) => Ok(Natural {
+            canonical: ast.to_query(),
+            ast,
+            chips,
+            text,
+        }),
+        Err(_) => Ok(Natural {
+            canonical: strict.to_query(),
+            ast: strict,
+            chips: Vec::new(),
+            text: Vec::new(),
+        }),
+    }
+}
+
+fn and(mut nodes: Vec<Node>) -> Node {
+    match nodes.len() {
+        0 => Node::All,
+        1 => nodes.pop().expect("one"),
+        _ => Node::And { of: nodes },
+    }
+}
+
+/// What the rules made of a run of plain words.
+struct Read {
+    nodes: Vec<Node>,
+    chips: Vec<NaturalChip>,
+    text: Vec<String>,
+}
+
+/// The rules over one run of plain words.
+fn read_run(w: &[W]) -> Read {
     // Each word: recognised (a slot in `parts`) or text.
     enum Part {
         Text(usize),
@@ -619,38 +702,16 @@ pub fn natural(input: &str) -> Result<Natural, NaturalError> {
         });
         nodes.push(node.0);
     }
-    let ast = match nodes.len() {
-        0 => Node::All,
-        1 => nodes.pop().expect("one"),
-        _ => Node::And { of: nodes },
-    };
-    let canonical = ast.to_query();
-    Ok(Natural {
-        ast,
-        canonical,
-        chips,
-        text,
-    })
+    Read { nodes, chips, text }
 }
 
-/// A word kept as text: itself when the parser reads it as a plain
-/// word, otherwise a one-word phrase, so syntax in it (`-`, `*`, `~`,
-/// `OR`, `res:`) stays literal.
+/// A word kept as text, if the parser reads it as itself once trimmed
+/// (it did before: it's from a plain token).
 fn text_node(word: &str) -> Option<Node> {
-    if query::is_plain_word(word) {
-        return Some(Node::Word {
-            field: TextField::Any,
-            word: word.to_owned(),
-        });
-    }
-    let text = word.replace('"', " ");
-    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let node = Node::Phrase {
+    query::is_plain_word(word).then(|| Node::Word {
         field: TextField::Any,
-        text,
-    };
-    // An empty phrase, or one the parser reads otherwise, is dropped.
-    (query::parse(&node.to_query()).ok().as_ref() == Some(&node)).then_some(node)
+        word: word.to_owned(),
+    })
 }
 
 #[cfg(test)]
@@ -659,14 +720,32 @@ mod tests {
 
     #[test]
     fn words_keep_char_ranges() {
-        let w = words("  Amélie, (2001)  4k.");
-        let got: Vec<(&str, (usize, usize))> =
-            w.iter().map(|w| (w.orig.as_str(), w.from)).collect();
+        let q = "  Amélie, [2001]  4k.";
+        let toks = caret::split(q);
+        let got: Vec<(String, (usize, usize))> = toks
+            .iter()
+            .filter_map(|t| word(q, t))
+            .map(|w| (w.orig, w.from))
+            .collect();
         assert_eq!(
             got,
-            [("Amélie", (2, 8)), ("2001", (11, 15)), ("4k", (18, 20))]
+            [
+                ("Amélie".to_string(), (2, 8)),
+                ("2001".to_string(), (11, 15)),
+                ("4k".to_string(), (18, 20))
+            ]
         );
-        assert!(words(" , ; ").is_empty());
+    }
+
+    #[test]
+    fn syntax_is_not_plain() {
+        let q = "a -b c:d res:1080p \"e\" OR (f) g NEAR h x* -\"i j\" k";
+        let toks = caret::split(q);
+        let plain: Vec<&str> = (0..toks.len())
+            .filter(|&i| plain(q, &toks, i))
+            .map(|i| &q[toks[i].start..toks[i].end])
+            .collect();
+        assert_eq!(plain, ["a", "c:d", "k"]);
     }
 
     #[test]
@@ -686,6 +765,7 @@ mod tests {
     #[test]
     fn limits() {
         assert_eq!(natural(&"a ".repeat(40)), Err(NaturalError::TooManyWords));
+        assert_eq!(natural("a (b"), Err(NaturalError::Syntax));
         assert_eq!(natural(&"x".repeat(600)), Err(NaturalError::TooLong));
         assert_eq!(natural("").unwrap().ast, Node::All);
     }
