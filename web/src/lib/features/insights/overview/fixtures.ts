@@ -83,15 +83,15 @@ export function overviewFixture(over: Partial<Overview> = {}): Overview {
 			health: { reason: null, state: 'running' },
 			imported: 4321,
 			new_searchable: 7891,
-			new_searchable_delta: 1234,
+			new_searchable_delta: null,
 			searchable: 1_234_567,
-			searchable_delta: 56_789,
+			searchable_delta: null,
 			time_to_searchable_p50_delta_s: null,
 			time_to_searchable_p50_s: 5400,
 			time_to_searchable_p95_delta_s: null,
 			time_to_searchable_p95_s: 90_000,
 			yield: 0.4371,
-			yield_delta: -0.032
+			yield_delta: null
 		},
 		range: { bucket: 'hour', from: NOW - 48 * HOUR, to: NOW, tz: 'UTC' },
 		segments: {
@@ -138,3 +138,10 @@ export function crawlerFixture(over: Partial<Crawler> = {}): Crawler {
 		...over
 	};
 }
+
+/** The deltas the server adds with `compare=1`. */
+export const COMPARE_KPI = {
+	new_searchable_delta: 1234,
+	searchable_delta: 56_789,
+	yield_delta: -0.032
+} as const;

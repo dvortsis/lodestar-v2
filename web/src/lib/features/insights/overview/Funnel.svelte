@@ -70,7 +70,9 @@
 				sub:
 					s === 'harvested'
 						? undefined
-						: m.insights_overview_funnel_conversion({ percent: formatPercent(conv, locale, 1) })
+						: conv === null
+							? m.insights_overview_funnel_conversion_none()
+							: m.insights_overview_funnel_conversion({ percent: formatPercent(conv, locale, 1) })
 			};
 		})
 	);

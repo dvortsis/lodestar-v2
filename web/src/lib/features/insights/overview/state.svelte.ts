@@ -11,7 +11,7 @@ export type CrawlerStatus = components['schemas']['CrawlerStatus'];
 export type CrawlerEvent = components['schemas']['CrawlerEvent'];
 export type Intensity = CrawlerStatus['intensity'];
 export type Load = 'loading' | 'ready' | 'error';
-export type Notice = 'paused' | 'resumed' | 'load_failed';
+export type Notice = 'paused' | 'resumed';
 export type CrawlerAction = 'pause' | 'resume' | 'intensity';
 
 export function createInsights() {
@@ -32,7 +32,7 @@ export function createInsights() {
 	const crawlerSlot = latest();
 
 	async function checkAll(q: InsightsQuery, current: Overview) {
-		if (startupState(q.range, current, all) !== 'check') return;
+		if (q.range === 'all' || current.funnel_total.final_cohorts > 0) return;
 		try {
 			const r = await allSlot.run((signal) =>
 				api.get('/insights/overview', { query: { range: 'all' }, signal })
@@ -68,7 +68,6 @@ export function createInsights() {
 			if (quiet && overview) return;
 			error = e instanceof ApiError ? e : undefined;
 			phase = 'error';
-			notice = 'load_failed';
 		}
 	}
 
@@ -92,6 +91,8 @@ export function createInsights() {
 		} catch (e) {
 			if (!isAbort(e)) {
 				crawlerError = { action, message: e instanceof ApiError ? e.message : '' };
+				// Show what the server really has, not the level that was clicked.
+				await fetchCrawler();
 			}
 		} finally {
 			busy = undefined;

@@ -1,7 +1,6 @@
 {
 	"$schema": "https://inlang.com/schema/inlang-message-format",
 	"insights_overview_title": "Insights",
-	"insights_overview_loading": "Loading Insights",
 	"insights_stage_discover": "Discover",
 	"insights_stage_fetch": "Fetch",
 	"insights_stage_understand": "Understand",
@@ -46,7 +45,6 @@
 	"insights_overview_intensity_low_effect": "Gentle on your network and disk. New torrents arrive slowly.",
 	"insights_overview_intensity_balanced_effect": "A steady pace that suits most setups.",
 	"insights_overview_intensity_aggressive_effect": "Finds the most, and uses the most network and disk. It can slow down other devices.",
-	"insights_overview_intensity_env": "Set by {variable}.",
 	"insights_overview_strip_label": "Stages of the process",
 	"insights_overview_stage_discover_hint": "Unique hashes harvested (≈)",
 	"insights_overview_stage_fetch_hint": "Metadata fetched",
@@ -70,7 +68,6 @@
 	"insights_overview_starting_body": "Lodestar is searching the network. Leave it running: the first torrents become searchable after their metadata is fetched.",
 	"insights_overview_notice_paused": "Crawler paused",
 	"insights_overview_notice_resumed": "Crawler resumed",
-	"insights_overview_notice_failed": "Insights could not be loaded",
 	"insights_overview_status_title": "Status",
 	"insights_overview_status_time": "Searchable torrents is a snapshot of now. New searchable uses event time. Yield and time to searchable use discovery cohort.",
 	"insights_overview_kpi_searchable": "Searchable torrents",
@@ -200,5 +197,8 @@
 	"insights_type_game": "Games",
 	"insights_type_images": "Images",
 	"insights_type_other": "Other",
-	"insights_type_adult": "Adult"
+	"insights_type_adult": "Adult",
+	"insights_overview_range_invalid": "That range can't be shown. Change the dates above and apply them again.",
+	"insights_overview_funnel_conversion_none": "No conversion yet",
+	"insights_overview_intensity_locked": "Crawler intensity: {level}. Set by {variable}."
 }

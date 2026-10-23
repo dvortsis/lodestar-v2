@@ -3,6 +3,7 @@
 import { expectNoA11yViolations } from './a11y';
 import {
 	crawlerFixture,
+	COMPARE_KPI,
 	NOW,
 	overviewFixture
 } from '../src/lib/features/insights/overview/fixtures';
@@ -99,6 +100,7 @@ test.describe('the story', () => {
 		mock.on('getInsightsOverview', (request) =>
 			new URL(request.url()).searchParams.get('compare') === '1'
 				? overviewFixture({
+						kpi: { ...overviewFixture().kpi, ...COMPARE_KPI },
 						previous: {
 							kpi: {} as never,
 							range: overviewFixture().range,
@@ -108,7 +110,7 @@ test.describe('the story', () => {
 							trend: previous
 						}
 					})
-				: overviewFixture({ kpi: { ...overviewFixture().kpi, searchable_delta: null } })
+				: overviewFixture()
 		);
 		mock.on('getCrawler', crawlerFixture());
 		await go('/insights');
@@ -299,6 +301,9 @@ test.describe('the URL is the state', () => {
 		);
 		await expect(page.getByTestId('insights-custom-to-error')).toHaveText('The range is too long.');
 		await expect(page.getByTestId('insights-custom-to')).toHaveAttribute('aria-invalid', 'true');
+		// A bad range is not "Lodestar did not answer".
+		await expect(page.getByTestId('insights-range-invalid')).toBeVisible();
+		await expect(page.getByTestId('insights-retry')).toHaveCount(0);
 	});
 });
 
@@ -337,6 +342,15 @@ test.describe('crawler controls', () => {
 		await page.getByRole('radio', { name: 'Low' }).click();
 		await expect.poll(() => mock.calls('patchCrawler').length).toBe(1);
 		expect(mock.calls('patchCrawler')[0]!.postDataJSON()).toEqual({ intensity: 'low' });
+	});
+
+	test('a failed intensity change shows what the server has', async ({ page, mock, go }) => {
+		serve(mock);
+		mock.error('patchCrawler', 500, 'internal', 'no');
+		await go('/insights');
+		await page.getByRole('radio', { name: 'Aggressive' }).click();
+		await expect(page.getByTestId('insights-crawler-error')).toContainText('change the intensity');
+		await expect(page.getByRole('radio', { name: 'Balanced' })).toBeChecked();
 	});
 
 	test('intensity set by an environment variable has no control', async ({ page, mock, go }) => {
@@ -393,6 +407,24 @@ for (const mode of ['light', 'dark'] as const) {
 				await expectNoA11yViolations(page);
 				await page.getByTestId('insights-funnel-panel-toggle').click();
 				await page.getByRole('radio', { name: 'Custom' }).click();
+				await expectNoA11yViolations(page);
+			});
+			test('has no violations when paused, stale or failed', async ({ page, mock, go }) => {
+				const base = overviewFixture();
+				serve(
+					mock,
+					{
+						kpi: { ...base.kpi, health: { state: 'paused', reason: 'paused' } },
+						stale: { reason: 'paused', since: NOW - 600 }
+					},
+					{ paused: true, state: 'paused' }
+				);
+				await go('/insights');
+				await expect(page.getByTestId('insights-paused')).toBeVisible();
+				await expectNoA11yViolations(page);
+				mock.error('getInsightsOverview', 500, 'internal', 'boom');
+				await go('/insights?range=24h');
+				await expect(page.getByTestId('insights-retry')).toBeVisible();
 				await expectNoA11yViolations(page);
 			});
 		});

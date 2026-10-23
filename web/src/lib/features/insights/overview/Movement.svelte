@@ -3,7 +3,7 @@
 	// dual axis. A null point is a gap (paused or not running), never 0. With Compare on, the
 	// previous period is a muted series. Time is shown in the server's `range.tz` (buckets are UTC).
 	import LineChart from '$lib/charts/LineChart.svelte';
-	import { formatCompact, formatCount, formatDateFull } from '$lib/format';
+	import { formatCompact, formatCount, formatDateFull, type MetricValue } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import ChartPanel from './ChartPanel.svelte';
@@ -54,11 +54,15 @@
 			: [own];
 	}
 	const fmt = (v: number | null | undefined) => formatCount(v, locale);
+	// Harvested counts are always approximate (metrics.md §6.3).
+	const approxCount = (v: MetricValue, l?: string) =>
+		formatCount({ value: typeof v === 'object' && v !== null ? v.value : v, approx: true }, l);
 	function rows(field: 'searchable' | 'harvested') {
 		return overview.trend.map((p, i) => ({
 			at: formatDateFull(p.at, locale, { timeZone: tz, bucket }),
-			value: fmt(p[field]),
-			previous: fmt(prev?.[i]?.[field])
+			value: field === 'harvested' ? approxCount(p[field], locale) : fmt(p[field]),
+			previous:
+				field === 'harvested' ? approxCount(prev?.[i]?.[field], locale) : fmt(prev?.[i]?.[field])
 		}));
 	}
 	const columns = (label: string) => [
@@ -99,7 +103,7 @@
 				series={series(c.field, c.title)}
 				label={m.insights_overview_chart_summary({ title: c.title, unit, range: rangeText })}
 				{unit}
-				format={formatCount}
+				format={c.field === 'harvested' ? approxCount : formatCount}
 				axisFormat={formatCompact}
 				{bucket}
 				timeZone={tz}
