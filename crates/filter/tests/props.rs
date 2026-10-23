@@ -454,6 +454,8 @@ fn budget() {
     // The fastest calibration passes before and after must agree this
     // closely, or the runner's speed changed under the test.
     const DRIFT: f64 = 0.15;
+    // Attempts at a measurement the drift doesn't spoil.
+    const ATTEMPTS: usize = 3;
     let set = torrents(512);
     let classes: Vec<_> = set
         .iter()
@@ -541,98 +543,114 @@ fn budget() {
         passes.into_iter().fold(f64::INFINITY, f64::min)
     };
 
-    let before = calibration("before");
-    let core = shipped();
-    let mut cases = vec![(
-        "core".to_owned(),
-        time("core", &|i| {
-            std::hint::black_box(core.verdict(std::hint::black_box(&items[i])));
-        }),
-        true,
-    )];
+    // A runner's speed can change under the test (a shared host's
+    // neighbours), which the calibrations before and after catch. Such a
+    // run measures again rather than failing, up to three times; only a
+    // trusted attempt decides, and only drift on every attempt fails.
+    let mut drifted = Vec::new();
+    for attempt in 1..=ATTEMPTS {
+        println!("attempt {attempt} of {ATTEMPTS}");
+        let before = calibration("before");
+        let core = shipped();
+        let mut cases = vec![(
+            "core".to_owned(),
+            time("core", &|i| {
+                std::hint::black_box(core.verdict(std::hint::black_box(&items[i])));
+            }),
+            true,
+        )];
 
-    // The whole engine: the core, every pack, and 10,000 of your rules,
-    // reading the classification as ingest does.
-    let mut engine = lodestar_filter::Engine::new(core);
-    engine.packs = lodestar_filter::PackSwitches::all();
-    let mut sets: Vec<(String, Vec<lodestar_filter::UserRule>, bool)> =
-        [(1, true), (10, true), (25, false)]
-            .into_iter()
-            .map(|(share, held)| {
-                let what = format!("engine, packs on, 10,000 rules, {share}% on common words");
-                (what, ten_thousand_rules(share), held)
-            })
-            .collect();
-    sets.push((
-        "engine, packs on, 10,000 rules, mixed (10% common, 1% NEAR, 2% negation, 2% fuzzy, 3% prefix, 1% title)".into(),
-        mixed_rules(),
-        true,
-    ));
-    for shape in Shape::ALL {
-        let what = format!("engine, packs on, 10,000 rules, 10% {shape:?}");
-        sets.push((what, shape_rules(shape), false));
-    }
-    for (what, rules, held) in sets {
-        engine.rules = rules.into();
-        let (met, full) = (0..items.len()).fold((0, 0), |(m, f), i| {
-            let (a, b) = engine.rule_counts(&items[i], Some(&facts[i]));
-            (m + a, f + b)
-        });
-        println!(
-            "{what}: each torrent meets {:.0} rules on average; {:.0} get the full match",
-            met as f64 / items.len() as f64,
-            full as f64 / items.len() as f64
-        );
-        let per = time(&what, &|i| {
-            let v = engine.judge(std::hint::black_box(&items[i]), Some(&facts[i]), 0);
-            assert!(
-                v.decision
-                    .as_ref()
-                    .is_none_or(|d| !matches!(d.rule, lodestar_filter::RuleRef::User(_))),
-                "no rule of yours matches the set: {what}: {:?}",
-                v.decision
+        // The whole engine: the core, every pack, and 10,000 of your rules,
+        // reading the classification as ingest does.
+        let mut engine = lodestar_filter::Engine::new(core);
+        engine.packs = lodestar_filter::PackSwitches::all();
+        let mut sets: Vec<(String, Vec<lodestar_filter::UserRule>, bool)> =
+            [(1, true), (10, true), (25, false)]
+                .into_iter()
+                .map(|(share, held)| {
+                    let what = format!("engine, packs on, 10,000 rules, {share}% on common words");
+                    (what, ten_thousand_rules(share), held)
+                })
+                .collect();
+        sets.push((
+            "engine, packs on, 10,000 rules, mixed (10% common, 1% NEAR, 2% negation, 2% fuzzy, 3% prefix, 1% title)".into(),
+            mixed_rules(),
+            true,
+        ));
+        for shape in Shape::ALL {
+            let what = format!("engine, packs on, 10,000 rules, 10% {shape:?}");
+            sets.push((what, shape_rules(shape), false));
+        }
+        for (what, rules, held) in sets {
+            engine.rules = rules.into();
+            let (met, full) = (0..items.len()).fold((0, 0), |(m, f), i| {
+                let (a, b) = engine.rule_counts(&items[i], Some(&facts[i]));
+                (m + a, f + b)
+            });
+            println!(
+                "{what}: each torrent meets {:.0} rules on average; {:.0} get the full match",
+                met as f64 / items.len() as f64,
+                full as f64 / items.len() as f64
             );
-        });
-        cases.push((what, per, held));
-    }
-    drop(engine);
-    let after = calibration("after");
+            let per = time(&what, &|i| {
+                let v = engine.judge(std::hint::black_box(&items[i]), Some(&facts[i]), 0);
+                assert!(
+                    v.decision
+                        .as_ref()
+                        .is_none_or(|d| !matches!(d.rule, lodestar_filter::RuleRef::User(_))),
+                    "no rule of yours matches the set: {what}: {:?}",
+                    v.decision
+                );
+            });
+            cases.push((what, per, held));
+        }
+        drop(engine);
+        let after = calibration("after");
 
-    let calib_us = before.min(after);
-    // How many times the reference's time this runner takes.
-    let speed = calib_us * 1e3 / CALIB_REF_NS;
-    println!(
-        "calibration: {calib_us:.2} µs per torrent, {speed:.2}× the reference's {:.2} µs",
-        CALIB_REF_NS / 1e3
-    );
-    let drift = before.max(after) / calib_us - 1.0;
-    assert!(
-        drift <= DRIFT,
-        "the fastest calibration pass was {before:.2} µs before and {after:.2} µs after, \
-         {:.0}% apart: the runner's speed changed under the test, so the measurement \
-         can't be trusted",
-        drift * 100.0
-    );
-    assert!(
-        SPEED.contains(&speed),
-        "the runner took {speed:.2}× the reference's time to calibrate, outside \
-         {SPEED:?}: the measurement can't be trusted"
-    );
-    let mut over = Vec::new();
-    for (what, raw, held) in cases {
-        let per = raw / speed;
-        println!("{what}: {per:.1} µs per torrent on the reference runner ({raw:.1} µs here)");
-        if per >= BUDGET_US {
-            if held {
-                over.push(format!("{what}: {per:.1} µs ({raw:.1} µs here)"));
-            } else {
-                println!("{what}: over {BUDGET_US} µs (reported, not held)");
+        let calib_us = before.min(after);
+        // How many times the reference's time this runner takes.
+        let speed = calib_us * 1e3 / CALIB_REF_NS;
+        println!(
+            "calibration: {calib_us:.2} µs per torrent, {speed:.2}× the reference's {:.2} µs",
+            CALIB_REF_NS / 1e3
+        );
+        let drift = before.max(after) / calib_us - 1.0;
+        if drift > DRIFT {
+            let note = format!(
+                "attempt {attempt}: the fastest calibration pass was {before:.2} µs before and \
+                 {after:.2} µs after, {:.0}% apart",
+                drift * 100.0
+            );
+            println!("{note}: the runner's speed changed under the test, so measuring again");
+            drifted.push(note);
+            continue;
+        }
+        assert!(
+            SPEED.contains(&speed),
+            "the runner took {speed:.2}× the reference's time to calibrate, outside \
+             {SPEED:?}: the measurement can't be trusted"
+        );
+        let mut over = Vec::new();
+        for (what, raw, held) in cases {
+            let per = raw / speed;
+            println!("{what}: {per:.1} µs per torrent on the reference runner ({raw:.1} µs here)");
+            if per >= BUDGET_US {
+                if held {
+                    over.push(format!("{what}: {per:.1} µs ({raw:.1} µs here)"));
+                } else {
+                    println!("{what}: over {BUDGET_US} µs (reported, not held)");
+                }
             }
         }
+        assert!(
+            over.is_empty(),
+            "over the {BUDGET_US} µs budget on the reference runner, with this runner at \
+             {speed:.2}× its time: {over:?}"
+        );
+        return;
     }
-    assert!(
-        over.is_empty(),
-        "over the {BUDGET_US} µs budget on the reference runner, with this runner at \
-         {speed:.2}× its time: {over:?}"
+    panic!(
+        "the runner's speed changed under the test on all {ATTEMPTS} attempts, so the \
+         measurement can't be trusted: {drifted:?}"
     );
 }
