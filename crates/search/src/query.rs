@@ -872,6 +872,13 @@ fn tag_value(key: TagKey, v: &str) -> Option<String> {
     };
     // Read the value the way the parser reads it in a name, so aliases
     // (`x265`, `4k`, `dovi`, `french`) land on the stored form.
+    // `res:360` is read as `360p`, so both spellings land on the same
+    // stored form: the parser files 360p under 480p.
+    let v = if key == TagKey::Res && lower.bytes().all(|b| b.is_ascii_digit()) {
+        format!("{lower}p")
+    } else {
+        v.to_owned()
+    };
     let parsed = lodestar_release_parser::parse(&format!("A [{v}]"));
     if let Some((_, found)) = parsed.fields().into_iter().find(|(k, _)| *k == release_key) {
         return found.split(", ").next().map(str::to_owned);
@@ -1609,6 +1616,19 @@ mod tests {
         assert!(e("/S0[1-9]/").contains("regex"));
         let err = parse("x sise:1").unwrap_err();
         assert_eq!((err.start, err.end), (2, 7));
+    }
+
+    #[test]
+    fn a_bare_resolution_reads_as_its_p_form() {
+        // Found by fuzz (query): `res:360` took `360p` as written, which
+        // renders and re-parses as `480p`.
+        for n in ["240", "360", "480", "576", "720", "1080", "2160", "999"] {
+            let bare = parse(&format!("res:{n}")).unwrap();
+            assert_eq!(bare, parse(&format!("res:{n}p")).unwrap(), "res:{n}");
+            assert_eq!(parse(&bare.to_query()).unwrap(), bare, "res:{n}");
+        }
+        let fuzzed = parse("\n\n!!?\nres:360\n").unwrap();
+        assert_eq!(parse(&fuzzed.to_query()).unwrap(), fuzzed);
     }
 
     #[test]
