@@ -813,7 +813,7 @@
    "pr": 88,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 19:40: rebuild rename (macOS), interrupted rebuild resume, NRT budget (Windows), uTP WSAENOBUFS. | 23:08 review FIX: live.rs HANG=300s widens timeout; real cause likely LiveIndexer thread exits on commit error (production bug). Asked root-cause fix. | 23:58 re-review FIX at 88c8871: report lost when reload fails post-commit (publish gap), backoff reset only after commit, indexed_total recount; plus fuzz res:<64 digits> 65-byte stored form (found on B14 CI). Sent."
+   "notes": "Launched 19:40: rebuild rename (macOS), interrupted rebuild resume, NRT budget (Windows), uTP WSAENOBUFS. | 23:08 review FIX: live.rs HANG=300s widens timeout; real cause likely LiveIndexer thread exits on commit error (production bug). Asked root-cause fix. | 23:58 re-review FIX at 88c8871: report lost when reload fails post-commit (publish gap), backoff reset only after commit, indexed_total recount; plus fuzz res:<64 digits> 65-byte stored form (found on B14 CI). Sent. | 00:49 delta review a51c7ca: live indexer OK; FIX bare_res empty -> \"p\" regression (one line). Runner verifies next delta itself. Note #97 ported old res hunk -> trivial conflict."
   },
   "B2b": {
    "status": "review",
