@@ -26,6 +26,7 @@ mod rules;
 mod saved;
 mod schema;
 mod settings;
+pub mod snapshots;
 mod sources;
 mod subscriptions;
 mod swarm;
@@ -34,7 +35,7 @@ mod user_items;
 
 use std::fmt;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use lodestar_metainfo::{
     FileAttrs, Info, InfoHash, InfoHashV2, MetaVersion, Text, TextEncoding, info_without_pieces,
@@ -396,6 +397,11 @@ pub struct Store {
     /// stays true until this store's next delete. That's harmless: it
     /// costs one extra checkpoint.
     scrub_pending: bool,
+    /// The database file, for its migration snapshots ([`snapshots`]);
+    /// `None` in memory and on read-only connections.
+    path: Option<PathBuf>,
+    /// How far each snapshot was checked by [`Store::purge_snapshots`].
+    snapshot_marks: snapshots::Marks,
 }
 
 impl Store {
@@ -427,7 +433,9 @@ impl Store {
     fn init(mut conn: Connection, path: Option<&Path>, config: StoreConfig) -> Result<Store> {
         schema::configure(&conn, config.mmap_size)?;
         schema::migrate(&mut conn, path)?;
-        Store::load(conn, config)
+        let mut store = Store::load(conn, config)?;
+        store.path = path.map(Path::to_path_buf);
+        Ok(store)
     }
 
     fn load(conn: Connection, config: StoreConfig) -> Result<Store> {
@@ -457,6 +465,8 @@ impl Store {
             codec,
             config,
             scrub_pending: false,
+            path: None,
+            snapshot_marks: Default::default(),
         })
     }
 
@@ -497,6 +507,8 @@ impl Store {
             codec,
             config,
             scrub_pending: _,
+            path: _,
+            snapshot_marks: _,
         } = self;
         let own: Vec<Prepared> = batch
             .torrents

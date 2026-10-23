@@ -21,7 +21,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use utoipa::ToSchema;
 
-use super::{Field, Section};
+use super::{Auto, Field, Preview, Section};
 use crate::config::{Config, EncryptionName, IntensityName};
 
 /// How hard the DHT crawler works (architecture §5).
@@ -76,21 +76,40 @@ impl Section for Crawler {
     const FIELDS: &'static [Field] = &[
         Field::new("intensity")
             .file("dht.intensity")
-            .env("LODESTAR_INTENSITY"),
-        Field::new("encryption").file("fetch.encryption").restart(),
+            .env("LODESTAR_INTENSITY")
+            .group("intensity")
+            .widget("radio")
+            .preview()
+            .keywords(),
+        Field::new("encryption")
+            .file("fetch.encryption")
+            .restart()
+            .group("fetching")
+            .widget("radio"),
         Field::new("max_sockets")
             .file("fetch.max_sockets")
             .restart()
-            .range(0, 4096),
+            .range(0, 4096)
+            .group("fetching")
+            .advanced()
+            .unit("connections")
+            .auto(Auto::Int(0))
+            .preview(),
         Field::new("timeout_secs")
             .file("fetch.timeout_secs")
             .restart()
-            .range(1, 120),
+            .range(1, 120)
+            .group("fetching")
+            .advanced()
+            .unit("seconds"),
         Field::new("max_metadata_mib")
             .file("fetch.max_metadata_mib")
             .restart()
-            .range(1, 64),
-        Field::new("paused"),
+            .range(1, 64)
+            .group("fetching")
+            .advanced()
+            .unit("mebibytes"),
+        Field::new("paused").group("intensity"),
     ];
 
     fn from_config(config: &Config) -> Self {
@@ -116,6 +135,16 @@ impl Section for Crawler {
         }
     }
 
+    fn preview(&self, field: &str) -> Preview {
+        match field {
+            // The fetch pool's size these values give, at the next start.
+            "intensity" | "max_sockets" => {
+                Preview::default().estimate("sockets", self.fetch_sockets())
+            }
+            _ => Preview::default(),
+        }
+    }
+
     fn apply(&self, field: &str, config: &mut Config) {
         match field {
             "intensity" => config.dht.intensity = self.intensity.into(),
@@ -135,6 +164,22 @@ impl Section for Crawler {
             // The services read it from the registry, not the config.
             "paused" => {}
             _ => {}
+        }
+    }
+}
+
+impl Crawler {
+    /// Concurrent metadata fetches: `max_sockets`, or the intensity's
+    /// when it's 0, as `Config::pipeline_config` sizes the fetch pool
+    /// (a test holds them together).
+    pub fn fetch_sockets(&self) -> u32 {
+        if self.max_sockets > 0 {
+            return self.max_sockets;
+        }
+        match self.intensity {
+            Intensity::Low => 100,
+            Intensity::Balanced => 400,
+            Intensity::Aggressive => 1000,
         }
     }
 }
@@ -207,4 +252,27 @@ pub fn follow_control(mut rx: watch::Receiver<Crawler>, control: Control) -> Joi
                 .await;
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_previewed_socket_count_is_the_fetch_pools() {
+        for intensity in [Intensity::Low, Intensity::Balanced, Intensity::Aggressive] {
+            for max_sockets in [0, 1, 250] {
+                let c = Crawler {
+                    intensity,
+                    max_sockets,
+                    ..Crawler::default()
+                };
+                let mut config = Config::default();
+                c.apply("intensity", &mut config);
+                c.apply("max_sockets", &mut config);
+                let pool = config.pipeline_config().unwrap().pool.max_sockets;
+                assert_eq!(c.fetch_sockets() as usize, pool, "{c:?}");
+            }
+        }
+    }
 }

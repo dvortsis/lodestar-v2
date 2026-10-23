@@ -646,7 +646,7 @@ fn migrate_with(
 /// `<db>.pre-v<N>.db`, or `<db>.pre-v<N>.<k>.db` if that exists already:
 /// `VACUUM INTO` refuses existing files, and an earlier snapshot (say, from
 /// a migration that failed and is being retried) must never be lost.
-fn snapshot_path(db: &Path, version: i64) -> std::path::PathBuf {
+pub(crate) fn snapshot_path(db: &Path, version: i64) -> std::path::PathBuf {
     let candidate = |k: u32| match k {
         0 => db.with_extension(format!("pre-v{version}.db")),
         k => db.with_extension(format!("pre-v{version}.{k}.db")),

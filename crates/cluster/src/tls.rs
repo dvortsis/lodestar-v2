@@ -224,6 +224,33 @@ impl CoordinatorTls {
     }
 }
 
+impl CoordinatorTls {
+    /// Whether an identity from an earlier handshake still stands: its
+    /// certificate is on record, not revoked, and not expired. The cluster
+    /// server asks this on every heartbeat tick for each open connection.
+    pub fn still_valid(&self, peer: &PeerIdentity) -> bool {
+        let Some(now) = self
+            .time
+            .current_time()
+            .and_then(|t| i64::try_from(t.as_secs()).ok())
+        else {
+            return false;
+        };
+        self.shared
+            .trust
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .issued
+            .values()
+            .any(|i| {
+                i.serial == peer.serial
+                    && i.worker == peer.worker
+                    && !i.revoked
+                    && now <= i.not_after
+            })
+    }
+}
+
 /// Serves the coordinator's current certificate, so a renewal or a CA
 /// switch needs no new `ServerConfig`.
 #[derive(Debug)]
