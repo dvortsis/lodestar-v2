@@ -306,13 +306,19 @@
    "notes": ""
   },
   "B11a": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01Rg3cvfHbL2g5dSqoPL3qLq",
-   "pr": null,
+   "pr": 116,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed)."
+   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 05:15 PR #116 0d95d4c ready; reviewer started.",
+   "self_review": {
+    "raised": 13,
+    "fixed": 7,
+    "left": 6,
+    "detail": "2 blocking + 5 important fixed; polish partly"
+   }
   },
   "B7": {
    "status": "review",
