@@ -31,6 +31,13 @@ if command -v file >/dev/null 2>&1 && file "$dir/lodestar" | grep -q 'dynamicall
   exit 1
 fi
 
+# Releases are built without the `fixture` feature (`serve --fixture` test data).
+# The flag always exists; a build without the feature refuses it ("no fixture backend").
+if ! "$dir/lodestar" serve --fixture "$work/fixture" 2>&1 | grep -q "no fixture backend"; then
+  echo "::error::this build has the fixture feature; release builds must not" >&2
+  exit 1
+fi
+
 mkdir "$work/data"
 LODESTAR_DATA_DIR="$work/data" \
 LODESTAR_HTTP_BIND="127.0.0.1:$port" \

@@ -25,6 +25,10 @@ if ($Zip) { $Zip = (Resolve-Path $Zip).ProviderPath }
 function Assert($ok, $msg) { if (-not $ok) { throw "SMOKE FAILED: $msg" } }
 
 function Test-Serve([string]$exe, [string]$dataDir) {
+  # Releases are built without the `fixture` feature (`serve --fixture` test data).
+  # The flag always exists; a build without the feature refuses it ("no fixture backend").
+  $fx = (& $exe serve --fixture (Join-Path ([IO.Path]::GetTempPath()) 'lodestar-fixture-check') 2>&1 | Out-String)
+  Assert ($fx -match 'no fixture backend') 'this build has the fixture feature; release builds must not'
   New-Item -ItemType Directory -Force $dataDir | Out-Null
   $env:LODESTAR_DATA_DIR = $dataDir
   $env:LODESTAR_HTTP_BIND = "127.0.0.1:$Port"

@@ -454,7 +454,8 @@ jobs:
           tool: cargo-zigbuild@0.24.0
 
       - name: Build
-        run: cargo zigbuild --locked --release -p lodestar --bin lodestar --target ${{ matrix.target }}
+        # Without the `fixture` feature (`serve --fixture` test data): not for releases.
+        run: cargo zigbuild --locked --release -p lodestar --bin lodestar --no-default-features --features web --target ${{ matrix.target }}
 
       - name: Tarball
         run: |
@@ -508,7 +509,8 @@ jobs:
           key: package-windows
 
       - name: Build
-        run: cargo build --locked --release -p lodestar --bin lodestar --target x86_64-pc-windows-msvc
+        # Without the `fixture` feature (`serve --fixture` test data): not for releases.
+        run: cargo build --locked --release -p lodestar --bin lodestar --no-default-features --features web --target x86_64-pc-windows-msvc
 
       - name: Sign lodestar.exe (skipped without a certificate)
         shell: pwsh

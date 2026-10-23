@@ -56,7 +56,7 @@ Needs Windows, the MSVC Rust target, [WiX Toolset 3](https://wixtoolset.org/) an
 in `web/`), because it is embedded in the binary.
 
 ```powershell
-cargo build --release --locked -p lodestar --target x86_64-pc-windows-msvc
+cargo build --release --locked -p lodestar --no-default-features --features web --target x86_64-pc-windows-msvc
 packaging\windows\build-portable.ps1 -Version 0.5.0 -OutDir dist
 packaging\windows\build-msi.ps1      -Version 0.5.0 -OutDir dist
 packaging\windows\smoke.ps1 -Msi dist\lodestar-0.5.0-x86_64.msi -Zip dist\lodestar-0.5.0-x86_64-windows-portable.zip
