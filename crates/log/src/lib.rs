@@ -33,7 +33,7 @@ pub use dispatch::{
     KindStatus, Output, OutputStatus, Record, Sink, Status, average_line, catalogues, check_ids,
     emit, events, find, note_written, rate_per_hour, register, set_sink, set_status, status,
 };
-pub use event::{Catalogue, Component, Event, FieldKind, Kind, Level, Mask};
+pub use event::{Catalogue, Component, Event, FieldKind, Kind, Level, Mask, Padded};
 pub use value::{
     Client, Count, Detail, Error, HIDDEN, IntoValue, Listen, Location, Name, Path, Peer,
     PlainError, Query, Reference, Rendered, SetupToken, Torrent, Url, Value, kind, pairs_torrent,
