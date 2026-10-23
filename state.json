@@ -1077,7 +1077,7 @@
   "F-perf": {
    "status": "review",
    "model": "opus",
-   "notes": "owner 00:40 \"best user experience\" -> budget held on typical hardware (EPYC 7763 ref) via F-perf; #97 keeps fastest-runner ref as stopgap. Stacked on slice/F-near. | 01:50 draft PR #110; told F-near merged. | 02:15 mixed set 46.4us (7763-scaled), shapes 35-42us, 10% 36.2us; draft #110 to be marked ready. | 02:52 #110 ready 0f4610e (7763-scaled: 10% 33.6us, mixed 43.8, shapes 32-42). Reviewer started (exactness vs reference = content safety). | 03:05 review FIX: fuzzy shape best-case only (q/z words); realistic fuzzy -> mixed 64.5us (fails). Fix: realistic words + cheaper fuzzy (length buckets/q-gram/Myers/shared scan) or \u00a72.21 fallback for fuzzy. Exactness verified 0 FN. | 04:09 asked: drift -> retry up to 3 attempts instead of fail. | 04:12 65e4b7e: drift retry; fuzzy cheaper (mixed 46.7-47.2 scaled on VM, fuzzy 10% 46.6-47.2) -> no fallback. Waiting 7763 CI run. | 05:16 21f8301 ready (7763: mixed 44.2, fuzzy 10% 44.6, 10% 35.4). Narrow delta reviewer on fuzzy exactness started.",
+   "notes": "owner 00:40 \"best user experience\" -> budget held on typical hardware (EPYC 7763 ref) via F-perf; #97 keeps fastest-runner ref as stopgap. Stacked on slice/F-near. | 01:50 draft PR #110; told F-near merged. | 02:15 mixed set 46.4us (7763-scaled), shapes 35-42us, 10% 36.2us; draft #110 to be marked ready. | 02:52 #110 ready 0f4610e (7763-scaled: 10% 33.6us, mixed 43.8, shapes 32-42). Reviewer started (exactness vs reference = content safety). | 03:05 review FIX: fuzzy shape best-case only (q/z words); realistic fuzzy -> mixed 64.5us (fails). Fix: realistic words + cheaper fuzzy (length buckets/q-gram/Myers/shared scan) or \u00a72.21 fallback for fuzzy. Exactness verified 0 FN. | 04:09 asked: drift -> retry up to 3 attempts instead of fail. | 04:12 65e4b7e: drift retry; fuzzy cheaper (mixed 46.7-47.2 scaled on VM, fuzzy 10% 46.6-47.2) -> no fallback. Waiting 7763 CI run. | 05:16 21f8301 ready (7763: mixed 44.2, fuzzy 10% 44.6, 10% 35.4). Narrow delta reviewer on fuzzy exactness started. | 05:30 delta MERGE (3.33M edit-distance + 384k full evals, 0 FN/FP). Merge on green.",
    "session": "session_01JuPFjxS6u9KwGugz27C7KL",
    "pr": 110,
    "review_rounds": 1
@@ -1307,7 +1307,8 @@
   "searchbench_reused_dir": "search-bench NRT check fails on a reused --dir (seeded torrents dedupe); make it fresh or reseed (B7 note).",
   "blog1_new_crate": "B-log1 adds crates/log (lodestar-log) for log_event!; update slices.yaml owns in next runner PR.",
   "blog1b": "B-log1b follow-up: sweep remaining call sites (pipeline, search, filter/lists.rs, api/auth/http.rs, lodestar main/services) listed in B-log1 brief; pipeline worker logs fetch key.",
-  "m4_export_swarm": "#48 (M4) must fill swarm fields via torrents::hit + search::enrich so /export includes them (B10b)."
+  "m4_export_swarm": "#48 (M4) must fill swarm fields via torrents::hit + search::enrich so /export includes them (B10b).",
+  "filter_polish": "Next filter brief: IdHasher seeding; prefilter/Nearness/always_fuzzy doc fixes; widen early_stop proptest to 66+ chars and multibyte; mixed-set headroom only ~13% on 7763."
  },
  "blocked_on_owner": [],
  "launches_today": 15,
