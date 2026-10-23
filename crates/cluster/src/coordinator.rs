@@ -51,6 +51,9 @@ pub const CA_LIFETIME_SECS: i64 = 10 * 365 * 86_400;
 pub const ROTATION_OVERLAP_SECS: i64 = 7 * 86_400;
 /// Join tokens open at once.
 pub const MAX_OPEN_TOKENS: usize = 64;
+/// A worker renews at most once an hour (each renewal adds a 72-hour
+/// certificate record), except onto a new CA during a rotation.
+pub const RENEW_MIN_INTERVAL_SECS: i64 = 3600;
 
 const PREFIX: &str = "cluster.";
 const KEY_CA: &str = "cluster.ca.current";
@@ -209,9 +212,12 @@ impl TokenRecord {
 /// The coordinator's cluster PKI. One owner (the coordinator's cluster
 /// task) mutates it; [`Coordinator::tls`] hands out the shared, read-only
 /// handshake side.
-// TODO(V6-cluster2): open this in `lodestar serve`, serve the cluster port
-// through `CoordinatorTls::config_for`, carry `JoinToken`/`JoinGrant` and
-// renewals in the protocol's frames, and run `maintain` hourly.
+///
+/// **The store is the source of truth.** Another process on the same
+/// database (a CLI command creating a token or revoking a worker) changes
+/// the `cluster.` rows, and [`reload`](Self::reload) picks that up; the
+/// cluster server calls it on every heartbeat tick, so a revocation from
+/// anywhere closes the worker's connection within one heartbeat.
 pub struct Coordinator {
     current: Authority,
     previous: Option<(Authority, i64)>,
@@ -220,6 +226,9 @@ pub struct Coordinator {
     next_worker: u32,
     shared: Arc<Shared>,
     tls: CoordinatorTls,
+    /// A digest of the `cluster.` rows last loaded, so an unchanged store
+    /// isn't parsed again.
+    digest: Option<[u8; 32]>,
 }
 
 impl std::fmt::Debug for Coordinator {
@@ -265,13 +274,24 @@ impl Coordinator {
     }
 
     fn load(store: &Store, secrets: &SecretStore) -> Result<Coordinator, ClusterError> {
+        let rows = store.settings_with_prefix(PREFIX)?;
+        let digest = rows_digest(&rows);
+        let mut coordinator = Coordinator::from_rows(rows, secrets)?;
+        coordinator.digest = Some(digest);
+        Ok(coordinator)
+    }
+
+    fn from_rows(
+        rows: Vec<(String, String)>,
+        secrets: &SecretStore,
+    ) -> Result<Coordinator, ClusterError> {
         let mut current = None;
         let mut previous = None;
         let mut server = None;
         let mut tokens = HashMap::new();
         let mut issued = HashMap::new();
         let mut next_worker = None;
-        for (key, value) in store.settings_with_prefix(PREFIX)? {
+        for (key, value) in rows {
             let fields: Vec<&str> = value.split_ascii_whitespace().collect();
             match (key.as_str(), fields.as_slice()) {
                 (KEY_CA, ["v1", cert, sealed]) => {
@@ -374,7 +394,67 @@ impl Coordinator {
             next_worker,
             shared,
             tls,
+            digest: None,
         })
+    }
+
+    /// Re-reads the PKI from the store if any `cluster.` row changed since
+    /// it was last read, keeping the same [`CoordinatorTls`] handles: new
+    /// tokens, revocations, renewals and rotations made by another process
+    /// apply from the next handshake, and to open connections at the next
+    /// check. Returns whether anything changed. On an error the state in
+    /// memory is kept as it was.
+    pub fn reload(&mut self, store: &Store, secrets: &SecretStore) -> Result<bool, ClusterError> {
+        let rows = store.settings_with_prefix(PREFIX)?;
+        let digest = rows_digest(&rows);
+        if self.digest == Some(digest) {
+            return Ok(false);
+        }
+        let fresh = Coordinator::from_rows(rows, secrets)?;
+        let issued = std::mem::take(&mut fresh.trust_mut().issued);
+        // Everything that can fail is built before anything is replaced.
+        let key = certified_key(&fresh.server, &fresh.current, &fresh.previous)?;
+        let trust = Trust::new(fresh.cas(), fresh.current.fp, issued)?;
+        let Coordinator {
+            current,
+            previous,
+            server,
+            tokens,
+            next_worker,
+            ..
+        } = fresh;
+        self.current = current;
+        self.previous = previous;
+        self.server = server;
+        self.tokens = tokens;
+        self.next_worker = next_worker;
+        *self.trust_mut() = trust;
+        *self
+            .shared
+            .server
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Arc::new(key);
+        self.digest = Some(digest);
+        Ok(true)
+    }
+
+    /// Seals the cluster's private keys (CA, previous CA, the coordinator's
+    /// own) again with `secrets`' primary key, in one transaction. Part of a
+    /// secrets-key rotation: `SecretStore::rotate`, then this, and only then
+    /// `SecretStore::retire_old_keys`.
+    pub fn reseal(&mut self, store: &mut Store, secrets: &SecretStore) -> Result<(), ClusterError> {
+        let ca = format!("v1 {}", authority_value(&self.current, secrets)?);
+        let server = server_value(&self.server, secrets)?;
+        let previous = match &self.previous {
+            Some((old, until)) => Some(format!("v1 {} {until}", authority_value(old, secrets)?)),
+            None => None,
+        };
+        let mut rows = vec![(KEY_CA, ca.as_str()), (KEY_SERVER, server.as_str())];
+        if let Some(previous) = &previous {
+            rows.push((KEY_CA_PREVIOUS, previous.as_str()));
+        }
+        store.set_settings_text(&rows)?;
+        Ok(())
     }
 
     /// The handshake side, for the cluster port's listener.
@@ -615,6 +695,24 @@ impl Coordinator {
         };
         if now > current.not_after {
             return Err(ClusterError::Expired);
+        }
+        // Rate limit: the worker's newest certificate must be an hour old,
+        // unless it's from a CA being rotated out.
+        let newest = self
+            .shared
+            .trust
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .issued
+            .values()
+            .filter(|i| i.worker == current.worker && !i.revoked)
+            .map(|i| (i.not_after, i.issuer))
+            .max();
+        if let Some((not_after, issuer)) = newest {
+            let issued_at = not_after - LEAF_LIFETIME_SECS;
+            if issuer == self.current.fp && now - issued_at < RENEW_MIN_INTERVAL_SECS {
+                return Err(ClusterError::TooSoon);
+            }
         }
         let (fp, issued, grant) =
             self.issue_worker(current.worker, &current.name, public_key, now)?;
@@ -868,6 +966,20 @@ fn spend_token(
     drop(upsert);
     tx.commit()?;
     Ok(Some(WorkerId(worker)))
+}
+
+fn rows_digest(rows: &[(String, String)]) -> [u8; 32] {
+    let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
+    for (key, value) in rows {
+        // Lengths first, so no two row lists hash alike.
+        ctx.update(&(key.len() as u64).to_le_bytes());
+        ctx.update(key.as_bytes());
+        ctx.update(&(value.len() as u64).to_le_bytes());
+        ctx.update(value.as_bytes());
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(ctx.finish().as_ref());
+    out
 }
 
 fn new_server_leaf(ca: &Authority, now: i64) -> Result<ServerLeaf, ClusterError> {

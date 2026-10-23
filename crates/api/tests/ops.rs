@@ -20,8 +20,8 @@ use lodestar_api::ops::{
     SourcePatch, SourcePriority, SourceState, StatsResponse,
 };
 use lodestar_api::settings::{
-    SectionValues, SettingSource, SettingValue, SettingsApi, SettingsError, SettingsIndex,
-    SettingsPatch,
+    Imported, Saved, SectionValues, SettingSource, SettingValue, SettingsApi, SettingsBatch,
+    SettingsError, SettingsFailure, SettingsImport, SettingsIndex, SettingsPreview,
 };
 use lodestar_api::{ApiState, Auth, router};
 use lodestar_store::{Store, StoreConfig};
@@ -64,26 +64,49 @@ impl SettingsApi for FakeSettings {
                 })
                 .collect(),
             restart_required: Vec::new(),
+            revision: 0,
             section: "crawler".into(),
         })
     }
 
-    fn patch(&self, section: &str, patch: SettingsPatch) -> Result<SectionValues, SettingsError> {
-        if section != "crawler" {
-            return Err(SettingsError::UnknownSection);
-        }
-        for (k, v) in patch.0 {
-            if k == "intensity"
-                && let Some(var) = &self.intensity_env
-            {
-                return Err(SettingsError::SetByEnv {
-                    field: k,
-                    var: var.clone(),
-                });
+    fn save(&self, batch: SettingsBatch) -> Result<Saved, SettingsFailure> {
+        let mut sections = Vec::new();
+        for (section, patch) in batch.0 {
+            if section != "crawler" {
+                return Err(SettingsFailure::new(section, SettingsError::UnknownSection));
             }
-            self.values.lock().unwrap().insert(k, v);
+            for (k, v) in patch.0 {
+                if k == "intensity"
+                    && let Some(var) = &self.intensity_env
+                {
+                    return Err(SettingsFailure::new(
+                        section,
+                        SettingsError::SetByEnv {
+                            field: k,
+                            var: var.clone(),
+                        },
+                    ));
+                }
+                self.values.lock().unwrap().insert(k, v);
+            }
+            sections.push(self.section("crawler").unwrap());
         }
-        Ok(self.section("crawler").unwrap())
+        Ok(Saved {
+            sections,
+            changed: Vec::new(),
+        })
+    }
+
+    fn preview(&self, _: SettingsBatch) -> Result<SettingsPreview, SettingsFailure> {
+        unreachable!("these routes don't preview")
+    }
+
+    fn export(&self, _: bool) -> String {
+        unreachable!("these routes don't export")
+    }
+
+    fn import(&self, _: SettingsImport, _: bool) -> Result<Imported, SettingsFailure> {
+        unreachable!("these routes don't import")
     }
 }
 

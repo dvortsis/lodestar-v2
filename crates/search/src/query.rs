@@ -852,7 +852,15 @@ const MAX_TAG_BYTES: usize = 64;
 /// A keyword value as the index holds it, or `None` if it can't be one.
 fn tag_value(key: TagKey, v: &str) -> Option<String> {
     use lodestar_classify::{AdultKind, ContentType, ResolvedVia, Structure};
-    let lower = v.to_lowercase();
+    let mut lower = v.to_lowercase();
+    // `res:360` is read as `360p`, so both spellings land on the same
+    // stored form (the parser files 360p under 480p), and the limit
+    // applies to that form, which is what renders.
+    let bare_res =
+        key == TagKey::Res && !lower.is_empty() && lower.bytes().all(|b| b.is_ascii_digit());
+    if bare_res {
+        lower.push('p');
+    }
     if lower.is_empty() || lower.len() > MAX_TAG_BYTES {
         return None;
     }
@@ -872,27 +880,18 @@ fn tag_value(key: TagKey, v: &str) -> Option<String> {
     };
     // Read the value the way the parser reads it in a name, so aliases
     // (`x265`, `4k`, `dovi`, `french`) land on the stored form.
-    // `res:360` is read as `360p`, so both spellings land on the same
-    // stored form: the parser files 360p under 480p.
-    let v = if key == TagKey::Res && lower.bytes().all(|b| b.is_ascii_digit()) {
-        format!("{lower}p")
-    } else {
-        v.to_owned()
-    };
+    let v = if bare_res { lower.as_str() } else { v };
     let parsed = lodestar_release_parser::parse(&format!("A [{v}]"));
     if let Some((_, found)) = parsed.fields().into_iter().find(|(k, _)| *k == release_key) {
         return found.split(", ").next().map(str::to_owned);
     }
     // Otherwise take it as written, if it looks like a stored value
-    // (`fr`, `1080p`), with `res:1080` as `1080p`.
+    // (`fr`, `1080p`).
     let plain = lower
         .bytes()
         .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'));
     if !plain {
         return None;
-    }
-    if key == TagKey::Res && lower.bytes().all(|b| b.is_ascii_digit()) {
-        return Some(format!("{lower}p"));
     }
     Some(lower)
 }
@@ -1629,6 +1628,27 @@ mod tests {
         }
         let fuzzed = parse("\n\n!!?\nres:360\n").unwrap();
         assert_eq!(parse(&fuzzed.to_query()).unwrap(), fuzzed);
+        // Also found by fuzz (query): 64 digits passed the 64-byte limit,
+        // then rendered as 65 bytes with their `p`, which didn't parse
+        // back. The limit applies to the stored form, either spelling.
+        // An empty part of a list is no resolution: refused, as for
+        // every other key (`codec:x265,`), not read as "p".
+        for empty in ["res:720,", "res:,720", "res:,", "res:"] {
+            assert!(parse(empty).is_err(), "{empty}");
+        }
+        let digits = "4".repeat(63) + "5";
+        assert!(parse(&format!("res:{digits}")).is_err());
+        assert!(parse(&format!("res:{digits}p")).is_err());
+        let fits = &digits[1..];
+        assert_eq!(
+            parse(&format!("res:{fits}")).unwrap(),
+            parse(&format!("res:{fits}p")).unwrap()
+        );
+        let raw = "<\u{1}\u{1}\u{d} \u{0}. ! res:4444444444444444444444444444444444444444444444444444444444444445\u{a}!NR\u{5}\u{5}\u{0}3\u{0}\u{1e}\u{0}\u{0}";
+        assert!(raw.contains(&format!("res:{digits}\n")));
+        if let Ok(ast) = parse(raw) {
+            assert_eq!(parse(&ast.to_query()).unwrap(), ast, "{raw:?}");
+        }
     }
 
     #[test]
