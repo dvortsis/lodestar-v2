@@ -11,7 +11,8 @@
     - The first version pooled the median of all 14 passes. On the reviewer's Intel VM, a burst of steal slowed the seven "before" passes to 21–25 µs, against 11 normally, and the median read 16.55 µs (2.24×). A clean 10% pass of 59.6 µs raw then scaled to 26.6 µs instead of 39.5, a third too low.
     - The fastest pass, 11.6 µs, gives 1.57× and 38.0 µs, in line with quiet runs.
   - **The reference is the fastest hosted runners seen** (Xeon 6973P-C, 7.2 µs; EPYC 9V45, 7.3 µs). There the gate reads what the unscaled gate did.
-    - **To re-derive `CALIB_REF_NS`:** run the test on a runner of that type and take its `calibration:` line.
+    - **This is a stopgap (owner, 2026-10-22: "Go with whatever makes for the best user experience").** Users run Lodestar on NAS and desktop hardware, so the budget should hold on typical hardware, not the fastest. **F-perf** moves `CALIB_REF_NS` to the EPYC 7763, the most common hosted runner, once the engine meets 50 µs there. Moving it now would fail today's code at 10% (52 µs on the 7763) and block F-near and F-perf.
+    - **To derive `CALIB_REF_NS` for any runner type:** run the test on runners of that type (the log's CPU line names it), take the `calibration:` line from each (its fastest pass), and use the lowest.
     - **When to re-derive:** after a Rust toolchain change (the toolchain isn't pinned and the calibration is all std: SipHash, the hash set, `sort_unstable`), or a change to `calibrate`, `torrents` or `COMMON`.
   - **Tracking isn't exact, and errs strict so far.** The calibration stays in the small caches, while the 10,000-rule engine doesn't.
     - On the reviewer's Intel VM the calibration ran 1.48× the EPYC 9V45 while the 10% case ran 1.80×. CPUs therefore differ by up to about 1.25× once scaled, with slower CPUs scaling higher.

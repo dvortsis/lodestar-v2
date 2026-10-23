@@ -281,12 +281,18 @@ fn calibrate(name: &str, files: &[FileInfo], common: &[u64]) -> usize {
 /// job 120136592071) and an EPYC 9V45 (7.3 µs, job 120123205000). On
 /// those the gate reads what it did before calibration.
 ///
-/// To re-derive it, run the budget test on a runner of the fastest type
-/// and take the `calibration:` line's µs. Re-derive it when the
-/// calibration's time moves: a Rust toolchain change (the toolchain isn't
-/// pinned, and the calibration is all std: SipHash, the hash set,
-/// `sort_unstable`), or a change to [`calibrate`], [`torrents`] or
-/// [`COMMON`]. The test prints `rustc --version` to tell.
+/// This is a stopgap (owner, 2026-10-22: "whatever makes for the best user
+/// experience"): the budget should hold on typical hardware, so F-perf
+/// moves the reference to the EPYC 7763, the most common hosted runner,
+/// once the engine meets 50 µs there.
+///
+/// To derive it for a runner type, run the budget test on a runner of
+/// that type (the log's CPU line names it) and take the `calibration:`
+/// line's µs, the fastest pass; take the lowest over a few runs. Re-derive
+/// it when the calibration's time moves: a Rust toolchain change (the
+/// toolchain isn't pinned, and the calibration is all std: SipHash, the
+/// hash set, `sort_unstable`), or a change to [`calibrate`], [`torrents`]
+/// or [`COMMON`]. The test prints `rustc --version` to tell.
 const CALIB_REF_NS: f64 = 7_200.0;
 
 /// §20.8 and the owner's budget (§1.6.6): under 50 µs per torrent at
