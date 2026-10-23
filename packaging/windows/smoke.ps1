@@ -24,6 +24,15 @@ if ($Zip) { $Zip = (Resolve-Path $Zip).ProviderPath }
 
 function Assert($ok, $msg) { if (-not $ok) { throw "SMOKE FAILED: $msg" } }
 
+# Windows can hold a killed process's files for a moment; the temp folder is only scratch
+# space, so retry and then give up with a warning rather than fail the smoke test.
+function Remove-Scratch([string]$path) {
+  for ($i = 0; $i -lt 10; $i++) {
+    try { Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop; return } catch { Start-Sleep -Seconds 1 }
+  }
+  Write-Host "::warning::could not remove $path"
+}
+
 function Test-Serve([string]$exe, [string]$dataDir) {
   # Releases are built without the `fixture` feature (`serve --fixture` test data).
   # The flag always exists; a build without the feature refuses it ("no fixture backend").
@@ -70,7 +79,7 @@ if ($Zip) {
     Assert (Test-Path (Join-Path $dir $f)) "zip is missing $f"
   }
   Test-Serve (Join-Path $dir 'lodestar.exe') (Join-Path $work 'data')
-  Remove-Item -Recurse -Force $work
+  Remove-Scratch $work
   Write-Host "portable zip ok: $Zip"
 }
 
