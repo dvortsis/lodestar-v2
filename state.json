@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T08:58:22Z",
+ "updated_at": "2026-10-23T08:59:12Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -1331,7 +1331,8 @@
   "win-hardening-followup": "Windows service hardening follow-up (from M6-win delta 4, admin-only/low): same_dir should canonicalize the parent and compare final name (8.3, \\\\?\\, UNC, trailing dot); compute config 'elsewhere' via same_dir for --config and LODESTAR_DATA_DIR; refusal log open with FILE_FLAG_OPEN_REPARSE_POINT + regular-file check, doc says untrusted (or event log); acl.rs:10-11 comment names SYSTEM/Administrators",
   "slices-yaml-B-log1b-windows": "Runner PR: add crates/lodestar/src/windows/** to B-log1b owns (M6-win's windows/{ports,priority,service}.rs are in NOT_YET_SWEPT)",
   "bench-percolation": "Next bench/ brief: percolation at ~10M torrents incl file:() and regex queries (from B9 review)",
-  "win-temp-log-helper": "B-log1b: shared helper opening %SystemRoot%\\Temp logs with FILE_FLAG_OPEN_REPARSE_POINT (refuse reparse points) for logging service_log and M6-win log_refusal"
+  "win-temp-log-helper": "B-log1b: shared helper opening %SystemRoot%\\Temp logs with FILE_FLAG_OPEN_REPARSE_POINT (refuse reparse points) for logging service_log and M6-win log_refusal",
+  "export-pacer-closed": "Later export brief: export worker's pacer wait should select on tx.closed() so a dropped live download frees its slot promptly (from #122)"
  },
  "blocked_on_owner": [],
  "launches_today": 17,
@@ -1380,6 +1381,6 @@
   "slices-yaml-120": "2026-10-23T07:34:04Z #120 merged (069533a): B-log1b added (owns widened per review), B11c deps B11b",
   "heartbeat-0739": "no new slices ready (S-search-4 waits S-search-3/W9; B11c waits B11b); open: #119 delta review, #117 merging main, #98 round 4, #92 CI, #91 waits #92, #103 owner, #48 owner",
   "heartbeat-0838": "open: #121 B9 round 1, #119 B-log1 delta 2, #117 B2c windows (export test race; fix PR requested from B10b session), #92 P-release CI, #91 waits #92, #103/#48 owner",
-  "fix-export-race": "2026-10-23T08:42:55Z PR #122 (B10b session) test-only fix for export dropped-setup race; reviewer + CI running. Follow-up: worker pacer wait doesn't select on tx.closed() (slot held ~128ms/chunk after client drop) -> later export brief"
+  "fix-export-race": "2026-10-23T08:59:12Z #122 merged (reviewed APPROVE, CI green). Follow-up: export worker pacer wait doesn't select on tx.closed()"
  }
 }
