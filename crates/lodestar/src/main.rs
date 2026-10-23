@@ -9,6 +9,7 @@ mod floor;
 mod fsdetect;
 mod http;
 mod metrics;
+mod ops;
 mod privdrop;
 mod services;
 mod settings;
