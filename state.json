@@ -892,7 +892,7 @@
       "pr": 143,
       "attempt": 0,
       "review_rounds": 1,
-      "notes": "from #86 | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus); brief committed 576d67a with runner addendum | 2026-10-23T18:40:51Z OWNER decision: Settings route budget = \u00a710.1 45 KB per route (replaces \u00a710.10.11 20 KB); engine target <=22 KB (measured ~21.1); instant-mode lazy split as follow-up. Part 1 pushed (70c1c07, no PR), part 2 local; push after #48 | 2026-10-23T18:54:05Z part 1 PR #143 dddb14e review FIX: in-flight revert-to-saved edit lost (staged+instant); gate test table; instant writeOnly guard; polish. No security findings. Engine ~10.6 KB (part 1)",
+      "notes": "from #86 | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus); brief committed 576d67a with runner addendum | 2026-10-23T18:40:51Z OWNER decision: Settings route budget = \u00a710.1 45 KB per route (replaces \u00a710.10.11 20 KB); engine target <=22 KB (measured ~21.1); instant-mode lazy split as follow-up. Part 1 pushed (70c1c07, no PR), part 2 local; push after #48 | 2026-10-23T18:54:05Z part 1 PR #143 dddb14e review FIX: in-flight revert-to-saved edit lost (staged+instant); gate test table; instant writeOnly guard; polish. No security findings. Engine ~10.6 KB (part 1) | 2026-10-23T19:05:48Z fix round pushed c6873df (main merged)",
       "catch_ups": 1
     },
     "S-settings-2": {
@@ -1594,27 +1594,13 @@
     "merge_freeze": "LIFTED 2026-10-23T18:42:25Z after #48 merged (035ca7f). Merge in order: #136 done -> #132 -> others re-measure; release pushes one or two at a time to keep CI free.",
     "merge_order_after_m4": "#48 -> #132 (S-search-1 chunk fix) -> #136 -> #135 -> fixture fix -> S-compare/S-alerts/S-detail/S-discover re-measure -> #128 B-update",
     "owner_decision_settings_budget": "2026-10-23T18:40:51Z owner: Settings route budget 45 KB like other routes (\u00a710.10.11's 20 KB replaced); engine <=22 KB",
-    "multi_session_rules": "2026-10-23T19:01:52Z #145 merged 8ad1971; rules summary sent to 8 live slices; owner test push sent; heartbeat 3h"
+    "multi_session_rules": "2026-10-23T19:01:52Z #145 merged 8ad1971; rules summary sent to 8 live slices; owner test push sent; heartbeat 3h",
+    "size_rule_existing_prs": "2026-10-23T19:05:48Z runner: ~3k split rule applies before launch; already-built PRs (#139 4.5k, #138 3.8k, #143 5.1k, settings part 2 3k) stay whole with stated reasons"
   },
   "ext": {
     "m4-swarm-fields": "satisfied 035ca7f",
     "m4-done": "satisfied 035ca7f"
   },
-  "registered_sessions": {
-    "session_01DDEhacHac1WPa8byNBPXKY": {
-      "title": "M4 completion strategy",
-      "branch": "claude/relaxed-pascal-1j0wv0",
-      "owns": [
-        "CLAUDE.md",
-        "runner/README.md",
-        "runner/standards.md",
-        ".claude/skills/steward/SKILL.md",
-        ".claude/settings.json",
-        "docs/owner-decisions.md \u00a72.24",
-        "docs/decisions/2026-10-23-multi-session.md"
-      ],
-      "registered": "2026-10-23T18:56:17Z"
-    }
-  },
+  "registered_sessions": {},
   "landing_lane": null
 }
