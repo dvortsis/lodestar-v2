@@ -3,6 +3,7 @@
 // are in shell.keyboard.test.ts. Name ends in `routes.test.ts` so the `core` project runs it.
 import { expectNoA11yViolations } from './a11y';
 import { crawlerEvent, engage, liveEvents, openPaletteWithKey } from './support/events-server';
+import { interact } from './support/interact';
 import { expect, test } from './support/test';
 import { crawlerFixture, overviewFixture } from '../src/lib/features/insights/overview/fixtures';
 
@@ -44,6 +45,7 @@ test.describe('navigation', () => {
 
 	test('the overflow menu lists its five items and opens a destination', async ({ page, go }) => {
 		await go('/search');
+		await interact(page); // the full bar loads on the first interaction
 		await page.getByTestId('more-button').click();
 		const menu = page.getByRole('menu', { name: 'More' });
 		await expect(menu.getByRole('menuitem')).toHaveText([
@@ -71,6 +73,7 @@ test.describe('responsive navigation', () => {
 			await page.setViewportSize({ width, height: 800 });
 			await go('/search');
 			await expect(nav(page)).toHaveCount(0);
+			await interact(page, page.getByTestId('menu-button'));
 			const button = page.getByTestId('menu-button');
 			await expect(button).toHaveAttribute('aria-expanded', 'false');
 			await button.click();
@@ -85,6 +88,19 @@ test.describe('responsive navigation', () => {
 			);
 		});
 	}
+
+	test('a tap on the static menu button before the bar has loaded opens the menu', async ({
+		page,
+		go
+	}) => {
+		await page.setViewportSize({ width: 390, height: 800 });
+		await go('/search');
+		// The static bar from app.html is still in place: its menu button is inert markup.
+		await expect(page.getByTestId('menu-button')).toHaveCount(0);
+		await page.locator('header .x-large\\:hidden').first().click();
+		await expect(page.getByTestId('menu-button')).toHaveAttribute('aria-expanded', 'true');
+		await expect(nav(page).getByRole('link')).toHaveCount(5);
+	});
 
 	test('the status pill keeps its words for assistive tech when only the icon shows', async ({
 		page,
@@ -179,11 +195,42 @@ test.describe('status pill', () => {
 	});
 });
 
+test.describe('the chrome loads on the first interaction', () => {
+	test('a visitor who never interacts gets the full bar after 30 s', async ({ page, go, mock }) => {
+		await page.clock.install();
+		await go('/search');
+		await expect(page.locator('#boot')).toHaveCount(0);
+		await page.clock.runFor(29_000);
+		await expect(page.getByTestId('palette-button')).toHaveCount(0);
+		await page.clock.runFor(1_500);
+		await expect(page.getByTestId('palette-button')).toBeAttached();
+		await expect.poll(() => mock.calls('getEvents').length).toBe(1);
+	});
+
+	test('one key loads it and starts the stream: no second interaction needed', async ({
+		page,
+		go,
+		mock
+	}) => {
+		await page.clock.install();
+		await go('/search');
+		await expect(page.locator('#boot')).toHaveCount(0); // the app has mounted
+		await page.clock.runFor(5_000); // well past load, still short of the 30 s fallback
+		// Nothing yet: the static bar stays and no stream is open (the bare page's budget, §10.1).
+		await expect(page.getByTestId('palette-button')).toHaveCount(0);
+		expect(mock.calls('getEvents')).toHaveLength(0);
+		await page.keyboard.press('Escape');
+		await expect(page.getByTestId('palette-button')).toBeAttached();
+		await expect.poll(() => mock.calls('getEvents').length).toBe(1);
+	});
+});
+
 test.describe('command palette', () => {
 	test('opens from the button, filters, runs a command and closes', async ({ page, go, mock }) => {
 		mock.on('getInsightsOverview', overviewFixture());
 		mock.on('getCrawler', crawlerFixture());
 		await go('/search');
+		await interact(page, page.getByTestId('palette-button'));
 		await page.getByTestId('palette-button').click();
 		const dialog = page.getByRole('dialog', { name: 'Command palette' });
 		const input = dialog.getByRole('combobox', { name: 'Type a command' });
@@ -217,6 +264,7 @@ test.describe('command palette', () => {
 
 	test('says so when nothing matches', async ({ page, go }) => {
 		await go('/search');
+		await interact(page, page.getByTestId('palette-button'));
 		await page.getByTestId('palette-button').click();
 		await page.getByRole('combobox', { name: 'Type a command' }).fill('zzzz');
 		await expect(page.getByText('No command matches “zzzz”')).toBeVisible();
@@ -338,7 +386,8 @@ test.describe('401 hand-off', () => {
 			await expect(page.getByRole('main')).toBeVisible();
 			await expect(page.getByRole('banner')).toHaveCount(0);
 			await expect(page.getByRole('navigation')).toHaveCount(0);
-			await page.waitForTimeout(1500); // the shell's idle work would have started by now
+			// engage() has just interacted for four seconds; a stream the shell was going to start on an
+			// interaction would be in requests() by now. Its 30 s idle fallback is out of reach of any wait.
 			expect(await events.requests()).toHaveLength(0);
 		}
 		expect(mock.calls('getEvents')).toHaveLength(0);
@@ -380,6 +429,7 @@ for (const [name, themeId, colorMode] of [
 		test('the open mobile menu', async ({ page, go }) => {
 			await page.setViewportSize({ width: 390, height: 800 });
 			await go('/search');
+			await interact(page, page.getByTestId('menu-button'));
 			await page.getByTestId('menu-button').click();
 			await expect(nav(page)).toBeVisible();
 			await expectNoA11yViolations(page);
@@ -387,6 +437,7 @@ for (const [name, themeId, colorMode] of [
 
 		test('the open palette', async ({ page, go }) => {
 			await go('/search');
+			await interact(page, page.getByTestId('palette-button'));
 			await page.getByTestId('palette-button').click();
 			await expect(page.getByRole('option', { name: /Go to Alerts/ })).toBeVisible();
 			await expectNoA11yViolations(page);
@@ -394,6 +445,7 @@ for (const [name, themeId, colorMode] of [
 
 		test('the open overflow menu', async ({ page, go }) => {
 			await go('/search');
+			await interact(page);
 			await page.getByTestId('more-button').click();
 			await expect(page.getByRole('menuitem', { name: 'About' })).toBeVisible();
 			await expectNoA11yViolations(page);

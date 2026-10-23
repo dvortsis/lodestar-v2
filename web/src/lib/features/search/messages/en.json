@@ -1,0 +1,12 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"search_page_title": "Search",
+	"search_query_label": "Search torrents",
+	"search_query_placeholder": "Search by name, or add a filter such as res:1080p",
+	"search_query_placeholder_short": "Search, or filter: res:1080p",
+	"search_query_error_lead": "Can't read this query:",
+	"search_query_check_failed": "Couldn't check the query",
+	"search_query_check_failed_body": "The check didn't go through. Check that Lodestar is running, then try again.",
+	"search_query_retry": "Retry",
+	"search_query_focus": "Focus search"
+}
