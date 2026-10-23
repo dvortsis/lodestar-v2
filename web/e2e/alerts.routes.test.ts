@@ -4,6 +4,7 @@
 import type { Page } from '@playwright/test';
 import type { components } from '../src/lib/api/schema';
 import { expectNoA11yViolations } from './a11y';
+import { dialogSettled } from './support/dialog';
 import { liveEvents } from './support/events-server';
 import { expect, test } from './support/test';
 import type { OpenApiMock } from './mock/openapi-mock';
@@ -115,27 +116,6 @@ async function connected(page: Page) {
 	await expect
 		.poll(() => page.evaluate(() => window.__sse?.requests.length ?? 0), { timeout: 10_000 })
 		.toBeGreaterThan(0);
-}
-
-// axe reads colours mid-fade otherwise (the overlay and the panel animate in): wait until the
-// dialog is open, nothing is animating and the panel is fully opaque.
-async function dialogSettled(page: Page, name?: string) {
-	const dialog = page.getByRole('dialog', name ? { name } : undefined);
-	await expect(dialog).toBeVisible();
-	await expect
-		.poll(
-			() =>
-				page.evaluate(() => {
-					const el = document.querySelector('[role="dialog"]');
-					return (
-						el?.getAttribute('data-state') === 'open' &&
-						Number(getComputedStyle(el).opacity) === 1 &&
-						document.getAnimations().every((a) => a.playState !== 'running')
-					);
-				}),
-			{ timeout: 15_000, message: 'the dialog did not finish opening' }
-		)
-		.toBe(true);
 }
 
 test.describe('the list', () => {
