@@ -6,6 +6,7 @@
 //! from.
 
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -13,7 +14,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode, header};
-use lodestar_api::{ApiState, Auth, router};
+use lodestar_api::{AdultVisibility, ApiState, Auth, router};
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::Info;
 use lodestar_search::{SearchHandle, SearchIndex};
@@ -37,6 +38,8 @@ fn raw(i: usize) -> Vec<u8> {
         )
     };
     let name = match i % 3 {
+        // Detected Adult: hidden until "Show adult content" is on.
+        _ if i % 10 == 7 => format!("Dark.Scene.{i}.XXX.1080p.mp4"),
         0 => format!("Dark.Knight.{}.1080p.BluRay.x264-GRP", 2000 + i),
         1 => format!("The.Dark.Side.S01E0{}.720p.WEB-DL", 1 + i % 9),
         _ => format!("Knight.Rider.{i}.Collection"),
@@ -67,6 +70,8 @@ struct Fixture {
     auth: Arc<Auth>,
     store: Store,
     index: SearchIndex,
+    /// "Show adult content", read live.
+    adult: Arc<AtomicBool>,
     added: usize,
     _dir: tempfile::TempDir,
 }
@@ -110,6 +115,8 @@ fn fixture(n: usize) -> Fixture {
     let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
     let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
     let handle: SearchHandle = index.clone().into();
+    let adult = Arc::new(AtomicBool::new(false));
+    let shown = adult.clone();
     let app = Router::new().nest(
         "/api/v1",
         router(ApiState {
@@ -118,7 +125,7 @@ fn fixture(n: usize) -> Fixture {
             reader: Arc::new(Mutex::new(reader)),
             filters: None,
             settings: None,
-            adult: Default::default(),
+            adult: AdultVisibility::follow(move || shown.load(Ordering::Relaxed)),
         }),
     );
     let mut f = Fixture {
@@ -126,6 +133,7 @@ fn fixture(n: usize) -> Fixture {
         auth,
         store,
         index,
+        adult,
         added: 0,
         _dir: dir,
     };
@@ -374,4 +382,41 @@ async fn a_cached_browse_and_facets_answer_within_two_milliseconds() {
         println!("{uri}: p50 {:?}, p95 {p95:?}", times[times.len() / 2]);
         assert!(p95 <= Duration::from_millis(2), "{uri}: {p95:?}");
     }
+}
+
+#[tokio::test]
+async fn show_adult_content_never_shares_a_cached_result() {
+    let f = fixture(60);
+    let c = session(&f).await;
+    let facets = async || {
+        let (s, _, v) = call(&f.app, get("/api/v1/facets?q=dark", Some(&c))).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        v
+    };
+    let adult_ids: Vec<i64> = (0..60)
+        .filter(|i| i % 10 == 7)
+        .map(|i| i as i64 + 1)
+        .collect();
+    let (_, off) = search(&f, &c, "q=dark&limit=100").await;
+    let off_facets = facets().await;
+    assert!(hit_ids(&off).iter().all(|id| !adult_ids.contains(id)));
+    // Turned on between two identical requests: the second sees Adult.
+    f.adult.store(true, Ordering::Relaxed);
+    let (_, on) = search(&f, &c, "q=dark&limit=100").await;
+    let on_facets = facets().await;
+    assert!(hit_ids(&on).iter().any(|id| adult_ids.contains(id)));
+    assert!(on["total"].as_u64() > off["total"].as_u64());
+    assert_eq!(on_facets["total"], on["total"]);
+    assert!(on_facets["total"].as_u64() > off_facets["total"].as_u64());
+    // And off again: nothing Adult, from either path.
+    f.adult.store(false, Ordering::Relaxed);
+    let (_, again) = search(&f, &c, "q=dark&limit=100").await;
+    assert_eq!(hit_ids(&again), hit_ids(&off));
+    assert_eq!(facets().await["total"], off_facets["total"]);
+    // A cursor from the Adult-shown search is refused once it's hidden.
+    let (_, page) = search(&f, &c, "q=dark&limit=5").await;
+    f.adult.store(true, Ordering::Relaxed);
+    let cur = page["next_cursor"].as_str().unwrap();
+    let (s, _) = search(&f, &c, &format!("q=dark&limit=5&cursor={cur}")).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
 }

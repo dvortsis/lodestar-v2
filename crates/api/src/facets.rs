@@ -235,10 +235,10 @@ async fn run_facets(
             sort,
             now: unix_now(),
         };
-        let cache = search.cache();
+        let (cache, serving) = (search.cache(), search.index());
         let (got, _) = match &lease {
-            Some(lease) => cache.facets_on(lease, &spec, &budget),
-            None => cache.facets(&search.index(), &spec, &budget),
+            Some(lease) => cache.facets_on(&serving, lease, &spec, &budget),
+            None => cache.facets(&serving, &spec, &budget),
         }
         .map_err(timeout)?;
         let total = got.total;

@@ -28,6 +28,8 @@
 //! the client, so page 2 after a cached page 1 reads the snapshot page 1
 //! came from. Entries live at most [`CacheConfig::ttl`] from when they
 //! were computed, so a cached lease never outlives a lease's bounds.
+//! A search with `file:(…)` isn't kept: its lease holds the clauses' id
+//! sets, which the byte estimate doesn't cover.
 //!
 //! **Bounded** in entries and estimated bytes per kind, least recently
 //! used first out. The lock is held only to look up, insert or evict,
@@ -107,11 +109,47 @@ struct Snapshot {
 }
 
 impl Snapshot {
-    fn current(index: &SearchIndex, files: bool) -> Snapshot {
-        Snapshot {
-            torrents: Generation::of(&index.searcher()),
+    /// The snapshot serving now, and where it stands among the index's.
+    fn current(index: &SearchIndex, files: bool) -> (Snapshot, Seen) {
+        let searcher = index.searcher();
+        let at = Snapshot {
+            torrents: Generation::of(&searcher),
             files: files.then(|| Generation::of(&index.files_searcher())),
+        };
+        (at, Seen::of(index, &searcher))
+    }
+
+    /// Estimated bytes of its generations (each key holds its own).
+    fn bytes(&self) -> usize {
+        let one = |g: &Generation| 16 + g.0.len() * size_of::<(SegmentId, Option<u64>)>();
+        one(&self.torrents) + self.files.as_ref().map_or(0, one)
+    }
+}
+
+/// Which index a snapshot belongs to and its reader's reload count, so a
+/// lookup on a snapshot older than the latest one seen (a lease taken
+/// before a commit, a searcher taken just before a reload) is told apart
+/// from a new generation. Not part of the key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Seen {
+    /// The index's identity: its clones' shared liveness token.
+    index: usize,
+    /// `SearcherGeneration::generation_id`, which grows with each reload
+    /// of one index's reader.
+    id: u64,
+}
+
+impl Seen {
+    fn of(index: &SearchIndex, searcher: &Searcher) -> Seen {
+        Seen {
+            index: std::sync::Weak::as_ptr(&index.holders()) as usize,
+            id: searcher.generation().generation_id(),
         }
+    }
+
+    /// Whether this is an older snapshot of the same index than `latest`.
+    fn before(&self, latest: &Seen) -> bool {
+        self.index == latest.index && self.id < latest.id
     }
 }
 
@@ -242,12 +280,13 @@ impl ResultCache {
             spec.node, spec.scope, spec.sort, spec.limit
         );
         let now = index::relative(spec.node).then_some(spec.now);
-        let key = Key {
-            what,
-            at: Snapshot::current(index, files),
-            now,
-        };
-        self.search.get_or_compute(key, cancel, |key| {
+        let (at, seen) = Snapshot::current(index, files);
+        let key = Key { what, at, now };
+        // A lease with `file:(…)` holds the clauses' id sets (a sorted id
+        // list per set, and a bitset of up to the highest id / 8 bytes),
+        // far beyond the per-entry estimate: those searches aren't kept.
+        let cache = !files;
+        self.search.get_or_compute(key, seen, cache, cancel, |key| {
             let lease = Arc::new(Lease::new(
                 index.clone(),
                 spec.node,
@@ -257,8 +296,11 @@ impl ResultCache {
             )?);
             let page = lease.page(Start::Offset(0), spec.limit, cancel)?;
             let kept = settled(index, key, lease.searcher(), files);
-            let bytes =
-                ENTRY_BYTES + LEASE_BYTES + key.what.len() + page.hits.len() * size_of::<Hit>();
+            let bytes = ENTRY_BYTES
+                + LEASE_BYTES
+                + key.what.len()
+                + key.at.bytes()
+                + page.hits.len() * size_of::<Hit>();
             Ok(Computed {
                 value: Arc::new(CachedSearch { lease, page }),
                 key: kept,
@@ -275,12 +317,9 @@ impl ResultCache {
         spec: &FacetSpec<'_>,
         cancel: &CancelToken,
     ) -> Result<(Arc<CachedFacets>, Outcome)> {
-        let key = facet_key(
-            spec,
-            Snapshot::current(index, spec.query.has_file_clause()),
-            spec.now,
-        );
-        self.facets.get_or_compute(key, cancel, |key| {
+        let (at, seen) = Snapshot::current(index, spec.query.has_file_clause());
+        let key = facet_key(spec, at, spec.now);
+        self.facets.get_or_compute(key, seen, true, cancel, |key| {
             let lease = Lease::new(index.clone(), spec.query, spec.now, spec.sort, cancel)?;
             let got = facets::facets(&lease, spec.node, spec.filters, spec.params, cancel)?;
             let kept = settled(index, key, lease.searcher(), spec.query.has_file_clause());
@@ -289,10 +328,13 @@ impl ResultCache {
     }
 
     /// Facets for `spec` on `lease` (a search's, from its cursor), from the
-    /// cache when its snapshot has them. The count is the lease's own, as
-    /// it is now (an exact count on demand included).
+    /// cache when its snapshot is the one `serving` has now; a lease on an
+    /// older snapshot (or a retired index) is counted without the cache,
+    /// so it never retires the entries of the one serving. The count is
+    /// the lease's own, as it is now (an exact count on demand included).
     pub fn facets_on(
         &self,
+        serving: &SearchIndex,
         lease: &Arc<Lease>,
         spec: &FacetSpec<'_>,
         cancel: &CancelToken,
@@ -303,12 +345,17 @@ impl ResultCache {
             torrents: Generation::of(lease.searcher()),
             files: files.then(|| Generation::of(&index.files_searcher())),
         };
+        let seen = Seen::of(index, lease.searcher());
+        let now = Seen::of(serving, &serving.searcher());
+        let cache = seen == now;
         let key = facet_key(spec, at, lease.now());
-        let (got, outcome) = self.facets.get_or_compute(key, cancel, |key| {
-            let got = facets::facets(lease, spec.node, spec.filters, spec.params, cancel)?;
-            let kept = settled(index, key, lease.searcher(), files);
-            Ok(facets_entry(got, lease.total(), kept))
-        })?;
+        let (got, outcome) = self
+            .facets
+            .get_or_compute(key, seen, cache, cancel, |key| {
+                let got = facets::facets(lease, spec.node, spec.filters, spec.params, cancel)?;
+                let kept = settled(index, key, lease.searcher(), files);
+                Ok(facets_entry(got, lease.total(), kept))
+            })?;
         let total = lease.total();
         if got.total == total {
             return Ok((got, outcome));
@@ -370,7 +417,7 @@ fn facets_entry(got: Facets, total: Total, key: Option<Key>) -> Computed<Arc<Cac
         .map(|(_, h)| h.bins.len() * size_of::<facets::Bin>() + 64)
         .sum();
     let bytes = ENTRY_BYTES
-        + key.as_ref().map_or(0, |k| k.what.len())
+        + key.as_ref().map_or(0, |k| k.what.len() + k.at.bytes())
         + size_of::<Facets>()
         + values
         + bins;
@@ -450,9 +497,11 @@ struct Inner<V> {
     flights: HashMap<Key, Arc<Flight<V>>>,
     bytes: usize,
     tick: u64,
-    /// The torrent generation of the latest lookup: entries of any other
-    /// can't be hit again, and are dropped when it changes.
-    current: Option<Generation>,
+    /// The torrent generation of the latest lookup, and where it stands:
+    /// entries of any other can't be hit again, and are dropped when it
+    /// moves on. A lookup on an older snapshot of the same index never
+    /// moves it back.
+    current: Option<(Seen, Generation)>,
 }
 
 struct Slot<V> {
@@ -542,13 +591,17 @@ impl<V: Clone> Lru<V> {
 
     /// The value under `key`, or `compute`'s (given the lookup key; it
     /// says which key to keep its value under).
+    /// `seen` places the key's snapshot among the index's; `cache: false`
+    /// computes without looking up or keeping anything.
     fn get_or_compute(
         &self,
         key: Key,
+        seen: Seen,
+        cache: bool,
         cancel: &CancelToken,
         compute: impl FnOnce(&Key) -> Result<Computed<V>>,
     ) -> Result<(V, Outcome)> {
-        if !self.config.enabled {
+        if !self.config.enabled || !cache {
             self.counters.misses.fetch_add(1, Ordering::Relaxed);
             return Ok((compute(&key)?.value, Outcome::Miss));
         }
@@ -556,9 +609,19 @@ impl<V: Clone> Lru<V> {
         // retired index, and unmapping it shouldn't stall other lookups.
         let mut gone = Vec::new();
         let mut inner = lock(&self.inner);
-        if inner.current.as_ref() != Some(&key.at.torrents) {
-            gone.extend(self.retire(&mut inner, |k, _| k.at.torrents != key.at.torrents));
-            inner.current = Some(key.at.torrents.clone());
+        match &inner.current {
+            // An older snapshot than one already seen: never move back
+            // to it (that would retire the newer one's entries).
+            Some((latest, _)) if seen.before(latest) => {
+                drop(inner);
+                self.counters.misses.fetch_add(1, Ordering::Relaxed);
+                return Ok((compute(&key)?.value, Outcome::Miss));
+            }
+            Some((_, g)) if *g == key.at.torrents => {}
+            _ => {
+                gone.extend(self.retire(&mut inner, |k, _| k.at.torrents != key.at.torrents));
+                inner.current = Some((seen, key.at.torrents.clone()));
+            }
         }
         let ttl = self.config.ttl;
         if inner.map.get(&key).is_some_and(|s| s.born.elapsed() >= ttl) {
@@ -603,8 +666,10 @@ impl<V: Clone> Lru<V> {
             resolved: false,
         };
         let c = compute(&leader.key)?;
-        self.land(&leader.key, &leader.flight);
+        // Kept before the flight lands, so an identical lookup in between
+        // finds one or the other and never computes again.
         self.keep(c.key, c.value.clone(), c.bytes);
+        self.land(&leader.key, &leader.flight);
         leader.flight.finish(Some(c.value.clone()));
         leader.resolved = true;
         Ok((c.value, Outcome::Miss))
@@ -633,7 +698,7 @@ impl<V: Clone> Lru<V> {
         let mut inner = lock(&self.inner);
         // A result of a snapshot older than the latest lookup's would
         // never be hit (or one newer: the next lookup will see it).
-        if inner.current.as_ref() != Some(&key.at.torrents) {
+        if inner.current.as_ref().map(|(_, g)| g) != Some(&key.at.torrents) {
             return;
         }
         if let Some(old) = inner.map.remove(&key) {
