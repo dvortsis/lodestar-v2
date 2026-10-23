@@ -10,6 +10,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::routing::get;
 use hmac::{Hmac, KeyInit, Mac};
 use lodestar_classify::{Category, Composition, Record};
+use lodestar_search::natural::{NaturalError, natural};
 use lodestar_search::query::TagKey;
 use lodestar_search::{
     CancelToken, Cursor, EXPLAIN_MAX, Error as SearchError, Explanation, Lease, Node, ParseError,
@@ -21,9 +22,11 @@ use sha2::{Digest, Sha256};
 use utoipa::OpenApi;
 
 use crate::dto::search::{
-    CompositionShare, ExplainHit, ExplainPhase2, ExplainPriors, ExplainWeights, ParseQuery,
-    ParseResponse, SearchExplain, SearchHit, SearchNotice, SearchRequest, SearchResponse,
+    CompositionShare, ExplainHit, ExplainPhase2, ExplainPriors, ExplainWeights, NaturalChip,
+    NaturalProposal, ParseQuery, ParseResponse, SearchExplain, SearchHit, SearchNotice,
+    SearchRequest, SearchResponse,
 };
+use crate::dto::suggest::CharRange;
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{Json, Query, same_origin_json};
 use crate::{ApiState, auth, torrents};
@@ -186,7 +189,9 @@ fn parse_error(e: ParseError) -> ApiError {
 }
 
 /// Parses a query: the AST and its canonical text, or a `query_syntax`
-/// error whose `start`/`end` span the UI highlights.
+/// error whose `start`/`end` span the UI highlights. With
+/// `natural=true`, also the query `q` means as natural phrasing
+/// (`natural_too_long` past 512 bytes or 32 words).
 #[utoipa::path(
     operation_id = "parseQuery",
     get,
@@ -200,7 +205,40 @@ pub(crate) async fn parse_query(
 ) -> ApiResult<axum::Json<ParseResponse>> {
     let ast = parse(&p.q).map_err(parse_error)?;
     let canonical = ast.to_query();
-    Ok(axum::Json(ParseResponse { ast, canonical }))
+    let natural = p
+        .natural
+        .then(|| natural(&p.q))
+        .transpose()
+        .or_else(|e| match e {
+            // `q` parsed above, so it can't be this; nothing to propose.
+            NaturalError::Syntax => Ok(None),
+            e => Err(ApiError::bad_request(
+                "natural_too_long",
+                format!("Natural phrasing reads at most 512 bytes and 32 words and operators; this is {e}."),
+            )
+            .field("q")),
+        })?
+        .map(|n| NaturalProposal {
+            ast: n.ast,
+            canonical: n.canonical,
+            chips: n
+                .chips
+                .into_iter()
+                .map(|c| NaturalChip {
+                    from: CharRange {
+                        end: c.from.1,
+                        start: c.from.0,
+                    },
+                    text: c.text,
+                })
+                .collect(),
+            text: n.text,
+        });
+    Ok(axum::Json(ParseResponse {
+        ast,
+        canonical,
+        natural,
+    }))
 }
 
 pub(crate) fn sort_param(s: Option<&str>) -> ApiResult<Sort> {
