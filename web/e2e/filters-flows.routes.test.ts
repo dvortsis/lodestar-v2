@@ -63,8 +63,18 @@ function previews(mock: OpenApiMock, ...assessments: Assessment[]) {
 
 const body = (r: Request) => r.postData() ?? '';
 const dialog = (page: Page) => page.getByRole('dialog');
+/**
+ * Waits for running animations (axe reads colours mid-fade otherwise). A cancelled animation counts
+ * as settled (its `finished` rejects with AbortError), and the wait gives up after 10 s rather than
+ * hang on one that never ends.
+ */
 const settled = (page: Page) =>
-	page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished)));
+	page.evaluate(() =>
+		Promise.race([
+			Promise.all(document.getAnimations().map((a) => a.finished.catch(() => undefined))),
+			new Promise((done) => setTimeout(done, 10_000))
+		])
+	);
 
 test.describe('change flows', () => {
 	test('a strengthening change asks for no password', async ({ page, go, mock }) => {
