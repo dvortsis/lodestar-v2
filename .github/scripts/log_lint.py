@@ -451,14 +451,13 @@ def base_source(root: Path, ref: str) -> str | None:
         capture_output=True,
     ).returncode != 0:
         raise BaseUnreadable(f"--base {ref}: no such commit")
-    shown = subprocess.run(
-        ["git", "-C", str(root), "show", f"{ref}:.github/scripts/log_lint.py"],
-        capture_output=True,
-        text=True,
-    )
-    if shown.returncode != 0:
+    path = f"{ref}:.github/scripts/log_lint.py"
+    if subprocess.run(["git", "-C", str(root), "cat-file", "-e", path], capture_output=True).returncode != 0:
         # No such file at the base yet: nothing to compare with.
         return None
+    shown = subprocess.run(["git", "-C", str(root), "show", path], capture_output=True, text=True)
+    if shown.returncode != 0:
+        raise BaseUnreadable(f"--base {ref}: its log_lint.py can't be read")
     return shown.stdout
 
 
