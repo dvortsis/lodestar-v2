@@ -7,7 +7,7 @@
 limits:
   max_core: 16             # Opus code slices at once (disjoint owned paths only; owner raised to 16, 2026-10-22)
   max_helpers: 16          # Sonnet/Haiku slices at once (owner, 2026-10-22)
-  max_launches_per_day: 40 # backstop against runaway loops, not a budget
+  max_launches_per_day: 60 # backstop against runaway loops, not a budget (owner raised from 40, 2026-10-23)
   review_rounds_before_escalation: 2
 
 external:
