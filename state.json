@@ -927,7 +927,7 @@
    "status": "running",
    "model": "sonnet",
    "session": "session_01Pzq27d7V3yu5T8D2v5xiFG",
-   "pr": null,
+   "pr": 92,
    "attempt": 1,
    "review_rounds": 0,
    "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 01:05 PR #92; told: env release/nightly on jobs, signing reqs in PR desc for B-update."
@@ -943,10 +943,10 @@
    "merge": "953ff83"
   },
   "M6-win": {
-   "status": "running",
+   "status": "review",
    "model": "opus",
    "session": "session_01CqsN771NrbwFdVvvzXpoLm",
-   "pr": null,
+   "pr": 98,
    "attempt": 1,
    "review_rounds": 0,
    "notes": "Launched 21:38 (\"run as many feature sessions as possible\")."
@@ -971,10 +971,10 @@
    "merge": "6927fe1"
   },
   "DOC-install": {
-   "status": "running",
+   "status": "review",
    "model": "sonnet",
    "session": "session_01HkZAMVce8znDed5m6X2aoQ",
-   "pr": null,
+   "pr": 91,
    "attempt": 1,
    "review_rounds": 0,
    "notes": "Launched 21:38 (\"run as many feature sessions as possible\")."
@@ -1068,7 +1068,8 @@
   "owner_questions": "Owner 2026-10-22 17:15: never stop monitoring/driving sessions to wait for an owner answer. Ask in the chat reply (and a push notification if the owner may be away), not with a blocking prompt; keep working on everything else meanwhile.",
   "filter_budget_owner_auth": "2026-10-22 22:20 owner authorised changing the filter budget gate",
   "owner_2026_10_22_rules": "Owner in runner session 22:2x: 'Yes, I agree to 1 and 2'. (1) a check also red on main, or a known flake with a fix PR open, in code the PR doesn't touch, doesn't block merge; comment on PR. (2) runner decides refinements of owner decisions that don't reverse/loosen them, weaken security/content-safety, or change owner numbers; record in docs/decisions and flag to owner. Repo doc update (diff in scratchpad/owner-rules.diff) was denied by the permission classifier; owner to commit or allow.",
-  "merge_freeze_for_48": "CANCELLED 00:42: no freeze. M4 stops chasing main; reviewers review #48's own diff; one final main merge after reviews, mechanical delta verified by runner."
+  "merge_freeze_for_48": "CANCELLED 00:42: no freeze. M4 stops chasing main; reviewers review #48's own diff; one final main merge after reviews, mechanical delta verified by runner.",
+  "push_state_every_wake": "Watchdog trig_0172BngAUoA4NRaRWBYiRWVf (every 4h from 04:12) judges liveness by runner-state commit age: push state.json on every wake, even if nothing changed."
  },
  "watched_sessions": {
   "session_015F9H2aHowz7TJLffFYxUvf": {
@@ -1148,7 +1149,10 @@
  },
  "heartbeats": 4,
  "reviews_in_flight": [
-  "88"
+  "88",
+  98,
+  91,
+  106
  ],
  "carry_forward": {
   "next-bans-touch": [
