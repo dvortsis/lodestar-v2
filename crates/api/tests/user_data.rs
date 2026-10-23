@@ -159,6 +159,7 @@ fn fixture_with(torrents: &[T<'_>], search: bool, writable: bool) -> Fixture {
             ops: None,
             user_data: writable.then(|| Arc::new(Mutex::new(user_data))),
             adult: AdultVisibility::follow(move || shown.load(Ordering::Relaxed)),
+            insights: None,
         }),
     );
     Fixture {
