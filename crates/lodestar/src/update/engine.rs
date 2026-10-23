@@ -374,9 +374,7 @@ impl Engine {
         let Some(bin) = &self.inner.bin else {
             return Reason::NotWritable;
         };
-        if rustix::fs::statvfs(bin.dir())
-            .is_ok_and(|s| s.f_flag.contains(rustix::fs::StatVfsMountFlags::NOEXEC))
-        {
+        if noexec(bin.dir()) {
             return Reason::Noexec;
         }
         if rustix::fs::access(bin.dir(), rustix::fs::Access::WRITE_OK).is_err() {
@@ -696,6 +694,19 @@ fn outcome_name(o: history::Outcome) -> &'static str {
         history::Outcome::Failed => "failed",
         history::Outcome::Skipped => "skipped",
     }
+}
+
+/// Whether `dir` is on a `noexec` mount. rustix has `ST_NOEXEC` only on
+/// Linux, the one shipped Unix target; elsewhere (macOS, a developer's
+/// machine) it isn't checked.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn noexec(dir: &std::path::Path) -> bool {
+    rustix::fs::statvfs(dir).is_ok_and(|s| s.f_flag.contains(rustix::fs::StatVfsMountFlags::NOEXEC))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn noexec(_dir: &std::path::Path) -> bool {
+    false
 }
 
 /// A random minute within the hour after the 6 hours.
