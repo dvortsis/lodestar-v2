@@ -102,6 +102,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/compare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 2–5 torrents side by side (§10.6): each one's summary and parsed
+         *     attributes, which attributes differ, the composition's shared scale
+         *     and the file lists compared by path and size.
+         * @description A hash that's unknown, hidden by a filter rule, or Adult while Adult
+         *     is hidden is the same 404 `torrent_not_found`, which names nothing.
+         */
+        post: operations["compareTorrents"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/discover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Discover (§10.7): the newest searchable torrents, paged like search
+         *     and optionally one content type's; the top torrents by swarm trend;
+         *     and ambiguous torrents just identified. A section this build can't
+         *     serve is `unavailable` with its reason, never an empty list.
+         */
+        get: operations["getDiscover"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/events": {
         parameters: {
             query?: never;
@@ -562,6 +607,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/torrents/{hash}/siblings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Torrents related to one (§10.5): other versions of the same work,
+         *     identical-payload clones and the same file elsewhere. The last two
+         *     need data M7 adds, so they're `unavailable` until then.
+         */
+        get: operations["getTorrentSiblings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -962,6 +1028,78 @@ export interface components {
             detection: components["schemas"]["Detection"];
             rules: components["schemas"]["ClassRule"][];
         };
+        /** @description `POST /compare`'s body. */
+        CompareRequest: {
+            /** @description 2–5 distinct 40-character hex info hashes, in column order. */
+            hashes: string[];
+        };
+        /** @description `POST /compare`: 2–5 torrents side by side. */
+        CompareResponse: {
+            /**
+             * @description For each parsed attribute any torrent has (the release fields:
+             *     `title`, `year`, `res`, `vcodec`, `group`, …), whether the values
+             *     differ across the set. A torrent without the attribute counts as
+             *     a different value.
+             */
+            differs: {
+                [key: string]: boolean;
+            };
+            /** @description The file lists compared by path and size. */
+            file_diff: components["schemas"]["FileDiff"];
+            /**
+             * Format: int64
+             * @description The shared scale for the composition bars: the largest `size` of
+             *     the set, in bytes.
+             */
+            scale_bytes: number;
+            /** @description One per hash, in the request's order. */
+            torrents: components["schemas"]["CompareTorrent"][];
+        };
+        /** @description One torrent's column in Compare. */
+        CompareTorrent: {
+            /**
+             * @description Every attribute in `differs`: this torrent's value, or null when
+             *     it has none. Lists are comma-joined.
+             */
+            attributes: {
+                [key: string]: string | null;
+            };
+            /** @description As in a search hit; empty before classification. */
+            composition: components["schemas"]["CompositionShare"][];
+            /** @description As in a search hit; null = not classified. */
+            content_type: string | null;
+            /** Format: int64 */
+            discovered_at: number;
+            /** Format: int64 */
+            files: number;
+            /** @description 40 hex digits. */
+            hash: string;
+            /**
+             * Format: int32
+             * @description Null = never scraped.
+             */
+            leechers: number | null;
+            name: string;
+            /**
+             * Format: int32
+             * @description Null = never scraped.
+             */
+            seeders: number | null;
+            /** Format: int64 */
+            size: number;
+            /** @description The effective title; null = not resolved. */
+            title: string | null;
+            /**
+             * Format: int32
+             * @description Null = never scraped.
+             */
+            trackers_checked: number | null;
+            /**
+             * Format: int32
+             * @description Null = never scraped.
+             */
+            trackers_reporting: number | null;
+        };
         /** @description One colour group's share of a torrent (`docs/metrics.md` §4, §7.1). */
         CompositionShare: {
             /**
@@ -1105,6 +1243,21 @@ export interface components {
             /** @description What your correction says. */
             adult: boolean;
             hash: string;
+        };
+        DiffFile: {
+            /** @description `/`-separated, decoded. */
+            path: string;
+            /** Format: int64 */
+            size: number;
+        };
+        /** @description `GET /discover`: the three sections of §10.7. */
+        DiscoverResponse: {
+            /** @description The newest searchable torrents, newest first. */
+            newest: components["schemas"]["NewestSection"];
+            /** @description Ambiguous torrents just identified. */
+            recently_resolved: components["schemas"]["HitGroup"];
+            /** @description The top torrents by swarm trend. */
+            rising: components["schemas"]["HitGroup"];
         };
         ErrorBody: {
             /**
@@ -1282,6 +1435,21 @@ export interface components {
              */
             unavailable: string[];
         };
+        /**
+         * @description The file lists compared: files match when their path (inside the
+         *     torrent, `/`-separated, decoded) and size are equal. Padding files
+         *     are left out.
+         */
+        FileDiff: {
+            /** @description Files every torrent has, in the first torrent's order. */
+            common: components["schemas"]["FileList"];
+            /**
+             * @description Per torrent, in the request's order: files no other torrent has.
+             *     With three or more torrents, a file some but not all have is in
+             *     neither list.
+             */
+            only: components["schemas"]["FileList"][];
+        };
         /** @description One file of a torrent. */
         FileEntry: {
             /** @description Any of `padding`, `hidden`, `executable`, `symlink`. */
@@ -1290,6 +1458,18 @@ export interface components {
             path: string;
             /** Format: int64 */
             size: number;
+        };
+        /** @description A bounded list of files. */
+        FileList: {
+            /**
+             * Format: int64
+             * @description Files in the list in all, listed or not.
+             */
+            count: number;
+            /** @description At most 2,000, in the torrent's order. */
+            files: components["schemas"]["DiffFile"][];
+            /** @description `count` is more than `files` lists. */
+            truncated: boolean;
         };
         /** @description `GET /torrents/{hash}/files`: a page of the file list. */
         FilesPage: {
@@ -1312,6 +1492,8 @@ export interface components {
         Fixtures: {
             core: components["schemas"]["FixtureCounts"][];
         };
+        /** @enum {string} */
+        GroupStatus: "available" | "unavailable";
         /** @description A histogram with explicit bins; empty bins are present with count 0. */
         Histogram: {
             approx: boolean;
@@ -1345,6 +1527,19 @@ export interface components {
              * @description Inclusive.
              */
             lo: number;
+        };
+        /**
+         * @description A section of result rows (the row search returns) that may not be
+         *     available in this build or for this torrent. Unavailable is never an
+         *     empty list that reads as "none": `status` says which.
+         */
+        HitGroup: {
+            /** @description Empty when unavailable. */
+            hits: components["schemas"]["SearchHit"][];
+            reason: null | components["schemas"]["Unavailable"];
+            status: components["schemas"]["GroupStatus"];
+            /** @description More matched than the group lists. */
+            truncated: boolean;
         };
         /** @description `POST /classify/rules/remove`. */
         IdBody: {
@@ -1436,6 +1631,29 @@ export interface components {
             /** @description A payload signature, 16 hex digits. */
             payload?: string | null;
             query?: string | null;
+        };
+        /**
+         * @description Discover's Newest: a page of result rows by `discovered_at`, newest
+         *     first, paged like search.
+         */
+        NewestSection: {
+            hits: components["schemas"]["SearchHit"][];
+            limit: number;
+            /** @description Pass as `cursor` for the next page; null on the last page. */
+            next_cursor: string | null;
+            /**
+             * @description As search's: `adult_hidden` for the `adult` tab while "Show adult
+             *     content" is off, so it's empty.
+             */
+            notices: components["schemas"]["SearchNotice"][];
+            /** @description Rows before this page. */
+            offset: number;
+            /** @description Searchable torrents in this tab, not just this page. */
+            total: number;
+            /** @description `total` is an estimate (shown with "≈"). */
+            total_approx: boolean;
+            /** @description The tab; null is every type. */
+            type: string | null;
         };
         /** @description The body of a write that has nothing else to say. */
         OkResponse: {
@@ -2004,6 +2222,25 @@ export interface components {
             token: string;
         };
         /**
+         * @description `GET /torrents/{hash}/siblings`: the torrents related to one, in three
+         *     groups. Each is either available (possibly empty) or unavailable with
+         *     a reason.
+         */
+        SiblingsResponse: {
+            /** @description 40 hex digits: the torrent asked about. */
+            hash: string;
+            /** @description Identical-payload clones: the same content under another hash. */
+            identical_payload: components["schemas"]["HitGroup"];
+            identity: null | components["schemas"]["TitleIdentity"];
+            /**
+             * @description Other versions of the same work (other releases, qualities,
+             *     groups), best first.
+             */
+            other_versions: components["schemas"]["HitGroup"];
+            /** @description Other torrents containing one of this torrent's files. */
+            same_file: components["schemas"]["HitGroup"];
+        };
+        /**
          * @description `POST /filters/strictness`: what the lists would block, and a warning
          *     matched to it (§2.9, §20.13).
          */
@@ -2166,6 +2403,25 @@ export interface components {
             /** @description Rules in shadow mode that would have decided. */
             shadow: string[];
         };
+        /**
+         * @description A work's title identity (`docs/decisions/2026-10-22-B13.md`): its normalized title plus the
+         *     year, season and episode spans the release names, if any.
+         */
+        TitleIdentity: {
+            /** @description Absolute episode spans (anime numbering). */
+            absolute: string[];
+            /** @description Episode spans (`2`, `1-10`). */
+            episodes: string[];
+            /** @description Season spans. */
+            seasons: string[];
+            /**
+             * @description The title's words as search tokenizes them, lowercased and
+             *     folded.
+             */
+            title_words: string[];
+            /** @description Year spans (`2008`, `1990-1999`). */
+            years: string[];
+        };
         TombstoneEntry: {
             /** @description Left by an adult hold's quarantine at the 30-day purge. */
             adult_hold: boolean;
@@ -2292,6 +2548,11 @@ export interface components {
              */
             max_id: number;
         };
+        /**
+         * @description Why a section isn't available. Stable keys; the UI words them.
+         * @enum {string}
+         */
+        Unavailable: "search_disabled" | "no_title" | "needs_swarm_history" | "needs_resolution_history" | "needs_payload_signature" | "needs_piece_roots";
     };
     responses: {
         /** @description Any failure: the error envelope. `error.code` is stable; branch on it. */
@@ -2418,6 +2679,64 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClassRuleRemoved"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    compareTorrents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompareRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompareResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getDiscover: {
+        parameters: {
+            query?: {
+                /**
+                 * @description The Newest tab: a content type (`movie`, `tv`, `music`,
+                 *     `audiobook`, `ebook`, `comic`, `software`, `game`, `images`,
+                 *     `video`, `other`, `adult`); absent is every type.
+                 */
+                type?: string;
+                /** @description Newest rows per page: 1–200, 50 by default. */
+                limit?: number;
+                /**
+                 * @description The previous response's `newest.next_cursor`; send the same `type`
+                 *     with it. It pages Newest only.
+                 */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscoverResponse"];
                 };
             };
             default: components["responses"]["Error"];
@@ -3170,6 +3489,29 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getTorrentSiblings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A 40-character hex info hash. */
+                hash: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SiblingsResponse"];
                 };
             };
             default: components["responses"]["Error"];
