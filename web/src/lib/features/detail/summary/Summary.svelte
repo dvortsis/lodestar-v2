@@ -55,13 +55,21 @@
 			{/if}
 		</dd>
 
+		<dt>{m.last_seen()}</dt>
+		<dd class="tabular-nums" data-testid="detail-last-seen">
+			{formatDateTime(detail.last_seen_at, locale)}
+		</dd>
+
 		<dt>{m.seeders()}</dt>
-		<dd class="tabular-nums" data-testid="detail-seeders">
-			{#if detail.seeders === null}
-				<span aria-hidden="true">{DASH}</span><span class="sr-only">{m.never_scraped()}</span>
-			{:else}
-				{formatCount(detail.seeders, locale)}
-			{/if}
+		<dd class="ls-detail-row" data-testid="detail-seeders-row">
+			<span class="tabular-nums" data-testid="detail-seeders">
+				{#if detail.seeders === null}
+					<span aria-hidden="true">{DASH}</span><span class="sr-only">{m.never_scraped()}</span>
+				{:else}
+					{formatCount({ value: detail.seeders, approx: detail.seeders_approx }, locale)}
+				{/if}
+			</span>
+			{#if detail.swarm_suspect}<Badge variant="warning">{m.swarm_suspect()}</Badge>{/if}
 		</dd>
 
 		<dt>{m.leechers()}</dt>

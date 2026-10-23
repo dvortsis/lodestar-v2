@@ -16,6 +16,28 @@ const ids = [
 ];
 const text = (id: string) => screen.getByTestId(id).textContent!.replace(/\s+/g, ' ').trim();
 
+describe('Summary (swarm fields)', () => {
+	it('shows Last seen as an absolute time', () => {
+		render(Summary, { detail: torrentDetail({ last_seen_at: 1_700_200_000 }), hit: null });
+		expect(text('detail-last-seen')).toMatch(/2023/);
+	});
+	it('puts ≈ on seeders only when the server says approximate', () => {
+		const { unmount } = render(Summary, {
+			detail: torrentDetail({ seeders_approx: true }),
+			hit: null
+		});
+		expect(text('detail-seeders')).toMatch(/^≈\s*120$/);
+		unmount();
+		render(Summary, { detail: torrentDetail({ seeders_approx: false }), hit: null });
+		expect(text('detail-seeders')).toBe('120');
+	});
+	it('labels suspect seeders with text and an icon', () => {
+		render(Summary, { detail: torrentDetail({ swarm_suspect: true }), hit: null });
+		const badge = screen.getByText('Suspect seeders');
+		expect(badge.closest('span')!.querySelector('svg')).toBeTruthy();
+	});
+});
+
 describe('Summary', () => {
 	it('shows every number with a test id', () => {
 		render(Summary, { detail: torrentDetail(), hit: searchHit() });

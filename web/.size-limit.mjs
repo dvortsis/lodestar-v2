@@ -76,22 +76,33 @@ const walk = (route, onDemand, collectOnDemand) => {
 const own = (route, { onDemand = [] } = {}) => walk(route, onDemand, false);
 // A lazily imported module (a manifest key), measured the same way: what the search route doesn't
 // already load, through static imports and mount-time dynamic imports.
-const ownChunk = (sourceKey) => {
+const ownChunk = (sourceKey, onDemand = [], collectOnDemand = false) => {
 	const shared = new Set([...search.js, ...search.css]);
 	const seen = new Set();
-	const files = new Set();
-	const visit = (key) => {
+	const now = new Set();
+	const later = new Set();
+	const matches = (key) => onDemand.some((re) => re.test(key));
+	const visit = (key, demanded) => {
 		const chunk = manifest[key];
-		if (!chunk || seen.has(key) || shared.has(`build/${chunk.file}`)) return;
-		seen.add(key);
-		files.add(`build/${chunk.file}`);
-		for (const css of chunk.css ?? []) if (!shared.has(`build/${css}`)) files.add(`build/${css}`);
-		for (const next of [...(chunk.imports ?? []), ...(chunk.dynamicImports ?? [])]) visit(next);
+		if (!chunk || shared.has(`build/${chunk.file}`)) return;
+		const demand = demanded || matches(key);
+		const id = `${demand}:${key}`;
+		if (seen.has(id)) return;
+		seen.add(id);
+		const into = demand ? later : now;
+		into.add(`build/${chunk.file}`);
+		for (const css of chunk.css ?? []) if (!shared.has(`build/${css}`)) into.add(`build/${css}`);
+		for (const next of [...(chunk.imports ?? []), ...(chunk.dynamicImports ?? [])])
+			visit(next, demand);
 	};
-	visit(sourceKey);
-	return [...files];
+	visit(sourceKey, false);
+	return collectOnDemand ? [...later].filter((f) => !now.has(f)) : [...now];
 };
 const onDemandOf = (route, onDemand) => walk(route, onDemand, true);
+
+// Detail: the DetailHost module, and the sections that load when scrolled to (or on an error).
+const DRAWER = 'src/lib/features/detail/DetailHost.svelte';
+const detailLazy = [/features\/detail\/(Contents|ErrorState|parsed\/Parsed)\.svelte$/];
 
 // Alerts: the save and delete dialogs load when one is opened, and bring Bits UI's overlay code.
 const alertDialogs = [/features\/alerts\/(SaveSearch|DeleteAlert)Dialog\.svelte$/];
@@ -128,11 +139,20 @@ export default [
 			])
 		],
 		'27 KB'
+	),
+	// Limits are measured + 10%. Over the 15 KB target (§10.1) because the first view carries the
+	// Drawer primitive, ~40 messages, the Svelte runtime and key registry only this view uses so far, and
+	// the format and API helpers; the tree and virtual list are in the on-demand entry.
+	// Detail (S-detail): the first view is the header and the summary. Contents (composition and the
+	// file tree with its virtual list), Parsed and the error state are separate chunks that load as
+	// their section scrolls near or an error shows, each gated by the on-demand entry.
+	entry('Detail drawer (own JS + CSS)', ownChunk(DRAWER, detailLazy), '29.2 KB'),
+	entry('/t/[hash] route (own JS + CSS)', own('/t/[hash]', { onDemand: detailLazy }), '24.3 KB'),
+	entry(
+		'Detail sections (on demand)',
+		[...new Set([...ownChunk(DRAWER, detailLazy, true), ...onDemandOf('/t/[hash]', detailLazy)])],
+		'29.7 KB'
 	)
-	// Detail (S-detail): the drawer chunk and the /t/[hash] page, each with its lazy sections (the
-	// summary is first view; Contents, Parsed and the error state load as their sections show).
-	entry('Detail drawer (own JS + CSS)', ownChunk('src/lib/features/detail/DetailHost.svelte'), 'DRAWER'),
-	entry('/t/[hash] route (own JS + CSS)', own('/t/[hash]'), 'TROUTE'),
 	// Placeholders for later slices. Fill `path` from the manifest when the chunk exists:
 	//   Insights chunk (uPlot) <= 45 KB
 ];
