@@ -220,7 +220,7 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 				for (const key of opts.fields as FieldKey[]) {
 					const spec = index.spec(key);
 					if (spec) list.push(spec);
-					else devWarn(`${opts.id}: no setting ${key}`);
+					else if (import.meta.env.DEV) devWarn(`${opts.id}: no setting ${key}`);
 				}
 			} else list = opts.fields as FieldSpec[];
 			byKey = new Map(list.map((s) => [s.key, s]));
@@ -539,7 +539,8 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 			return { ok: false, reason: 'refused' };
 		}
 		if (e.code === 'unknown_field' || e.code === 'unknown_section') {
-			devError(`the server refused ${e.code} (${e.section ?? ''}.${e.field ?? ''})`);
+			if (import.meta.env.DEV)
+				devError(`the server refused ${e.code} (${e.section ?? ''}.${e.field ?? ''})`);
 			formErrors = [...formErrors, m.settings_form_error_schema()];
 			return { ok: false, reason: 'refused' };
 		}
@@ -732,7 +733,8 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 		const missing = kinds.filter((d) => !gates.has(d));
 		if (missing.length) {
 			const fields = keys.filter((k) => missing.includes(byKey.get(k)!.danger!));
-			devError(`no confirmation is registered for ${fields.join(', ')} (${missing.join(', ')})`);
+			if (import.meta.env.DEV)
+				devError(`no confirmation is registered for ${fields.join(', ')} (${missing.join(', ')})`);
 			formErrors = [...formErrors, m.settings_form_error_needs_confirmation()];
 			status = 'ready';
 			return { ok: false, reason: 'refused' };

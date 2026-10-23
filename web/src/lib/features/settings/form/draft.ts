@@ -76,7 +76,7 @@ export function writeDraft(id: string, draft: Draft | null): boolean {
 		}
 		const text = JSON.stringify(draft);
 		if (new TextEncoder().encode(text).length > DRAFT_MAX_BYTES) {
-			devWarn(`the draft for "${id}" is over 64 KiB; it isn't kept`);
+			if (import.meta.env.DEV) devWarn(`the draft for "${id}" is over 64 KiB; it isn't kept`);
 			store.removeItem(DRAFT_PREFIX + id);
 			return false;
 		}
