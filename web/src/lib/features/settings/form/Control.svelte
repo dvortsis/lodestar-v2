@@ -7,8 +7,7 @@
 	import Slider from '$lib/ui/fields/Slider.svelte';
 	import Toggle from '$lib/ui/fields/Toggle.svelte';
 	import SegmentedControl from '$lib/ui/controls/SegmentedControl.svelte';
-	import ChipsControl from './ChipsControl.svelte';
-	import JsonControl from './JsonControl.svelte';
+	import LazyControl from './LazyControl.svelte';
 	import NumberControl from './NumberControl.svelte';
 	import { optionLabel } from './display';
 	import type { SettingsForm } from './form.svelte';
@@ -119,8 +118,13 @@
 		oninput={(e) => set(e.currentTarget.value)}
 		onblur={blur}
 	/>
-{:else if widget === 'chips'}
-	<ChipsControl {form} {key} {controlProps} {dense} />
 {:else}
-	<JsonControl {form} {key} {controlProps} />
+	<LazyControl
+		widget={widget === 'chips' ? 'chips' : 'json'}
+		{form}
+		{key}
+		{controlProps}
+		{label}
+		{dense}
+	/>
 {/if}

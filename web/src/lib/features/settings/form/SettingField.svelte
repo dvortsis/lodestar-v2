@@ -9,18 +9,17 @@
 	import Mono from '$lib/ui/labels/Mono.svelte';
 	import type { MenuItem } from '$lib/ui/overlays/Menu.svelte';
 	import { untrack, type Component } from 'svelte';
-	import { toast } from '$lib/ui/feedback/toasts.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import IconRestart from '~icons/ph/arrows-clockwise';
-	import IconCheck from '~icons/ph/check-circle';
 	import IconMenu from '~icons/ph/dots-three';
 	import IconFile from '~icons/ph/file';
 	import IconInfo from '~icons/ph/info';
 	import IconLock from '~icons/ph/lock-simple';
 	import IconWarning from '~icons/ph/warning';
 	import Control from './Control.svelte';
-	import SecretControl from './SecretControl.svelte';
-	import { automaticNumber, automaticValue, displayValue, estimatePart } from './display';
+	import LazyControl from './LazyControl.svelte';
+	import { lazyPart } from './lazy.svelte';
+	import { automaticNumber, automaticValue, estimatePart } from './display';
 	import type { SettingsForm } from './form.svelte';
 	import { fieldHelp, fieldLabel } from './messages';
 	import { fieldAnchor } from './schema';
@@ -88,6 +87,12 @@
 		...(spec.config || spec.env ? [{ id: 'keys', label: m.settings_form_menu_show_keys() }] : [])
 	]);
 	let showKeys = $state(false);
+	// A conflict and what a save did come with the edit chunk, when they first show.
+	const edit = () => import('./edit');
+	const Conflict = lazyPart(() => edit().then((mod) => mod.FieldConflict));
+	const Saved = lazyPart(() => edit().then((mod) => mod.FieldSaved));
+	$effect(() => Conflict.want(f.conflict));
+	$effect(() => Saved.want(f.savedRecently || f.undoUntil));
 
 	// The menu loads when it's first opened; until then a plain button stands in for its trigger.
 	type FieldMenuProps = {
@@ -103,20 +108,22 @@
 		menuOpen = true;
 	}
 
-	async function copy(text: string, done: string) {
+	function copy(text: string, what: 'value' | 'link') {
+		let done: Promise<void>;
 		try {
-			await navigator.clipboard.writeText(text);
-			toast.push({ kind: 'success', text: done, timeout: 3000 });
-		} catch {
-			toast.push({ kind: 'error', text: m.settings_form_copy_failed() });
+			done = navigator.clipboard.writeText(text); // in the click: Safari allows it only there
+		} catch (e) {
+			done = Promise.reject(e); // no clipboard (an insecure origin)
 		}
+		done.catch(() => {}); // reported by the toast
+		void import('./copy').then((c) => c.toastCopy(done, what));
 	}
 
 	function onMenu(id: string) {
 		if (id === 'reset') form.reset(key);
 		else if (id === 'link') {
 			const href = form.href(key);
-			void copy(new URL(href, location.href).href, m.settings_form_link_copied());
+			void copy(new URL(href, location.href).href, 'link');
 		} else if (id === 'keys') showKeys = !showKeys;
 	}
 
@@ -191,7 +198,7 @@
 						{@const Widget = choice.component}
 						<Widget {form} {key} {controlProps} {dense} />
 					{:else if choice.builtin === 'secret'}
-						<SecretControl {form} {key} {controlProps} {label} {dense} />
+						<LazyControl widget="secret" {form} {key} {controlProps} {label} {dense} />
 					{:else}
 						<Control
 							{form}
@@ -225,16 +232,10 @@
 		</p>
 	{/if}
 
-	{#if f.conflict}
+	{#if f.conflict && Conflict.part}
 		<div class="flex flex-wrap items-center gap-2 text-small" data-testid="conflict">
 			<IconWarning class="size-(--icon-size-row) shrink-0 text-warning" aria-hidden="true" />
-			<span data-testid="conflict-text"
-				>{m.settings_form_conflict({ value: displayValue(spec, f.conflict.theirs) })}</span
-			>
-			<Button dense onclick={() => form.resolve(key, 'mine')}>{m.settings_form_keep_mine()}</Button>
-			<Button dense onclick={() => form.resolve(key, 'theirs')}
-				>{m.settings_form_use_theirs()}</Button
-			>
+			<Conflict.part {form} {key} />
 		</div>
 	{/if}
 
@@ -255,14 +256,7 @@
 	<!-- Status line: only what applies (§10.10.4). -->
 	<div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-small text-muted-text">
 		{#if f.savedRecently}
-			<span class="inline-flex items-center gap-1 text-success">
-				<IconCheck class="size-(--icon-size-row) shrink-0" aria-hidden="true" />
-				<span class="text-base-content">
-					{f.savedRecently === 'restart'
-						? m.settings_form_saved_restart()
-						: m.settings_form_saved()}
-				</span>
-			</span>
+			{#if Saved.part}<Saved.part {form} {key} part="saved" />{/if}
 		{:else if spec.restartRequired && !f.locked}
 			<span class="inline-flex items-center gap-1">
 				<IconRestart class="size-(--icon-size-row) shrink-0" aria-hidden="true" />
@@ -276,7 +270,7 @@
 				<Button
 					dense
 					variant="quiet"
-					onclick={() => copy(f.env!, m.settings_form_copied())}
+					onclick={() => copy(f.env!, 'value')}
 					aria-label={m.settings_form_copy_variable({ variable: f.env })}
 					>{m.settings_form_copy()}</Button
 				>
@@ -290,7 +284,7 @@
 					<Button
 						dense
 						variant="quiet"
-						onclick={() => copy(String(f.value), m.settings_form_copied())}
+						onclick={() => copy(String(f.value), 'value')}
 						aria-label={m.settings_form_copy_value({ label })}>{m.settings_form_copy()}</Button
 					>
 				{/if}
@@ -301,14 +295,8 @@
 				{m.setting_file()}
 			</span>
 		{/if}
-		{#if f.undoUntil}
-			<span class="inline-flex items-center gap-1">
-				<IconCheck class="size-(--icon-size-row) shrink-0 text-success" aria-hidden="true" />
-				<span class="text-base-content">{m.settings_form_announce_changed()}</span>
-				<Button dense variant="quiet" onclick={() => form.undo(key)}
-					>{m.settings_form_undo()}</Button
-				>
-			</span>
+		{#if f.undoUntil && Saved.part}
+			<Saved.part {form} {key} part="undo" />
 		{/if}
 	</div>
 

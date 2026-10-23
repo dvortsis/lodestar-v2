@@ -5,6 +5,13 @@ import { existsSync, readFileSync } from 'node:fs';
 import { routeFiles } from './scripts/size-entries.mjs';
 
 const search = routeFiles('/search');
+// A Settings section's own first load: what /settings/[section] loads beyond /search (the
+// shell and the search route's chunks are already counted above). The form engine's on-demand
+// parts (the edit chunk, instant mode, previews, the secret/chip/JSON controls) are dynamic
+// imports, so they stay out of it.
+const inSearch = new Set([...search.js, ...search.css]);
+const settings = routeFiles('/settings/[section]');
+const settingsOwn = [...settings.js, ...settings.css].filter((f) => !inSearch.has(f));
 
 // Fonts are committed subsets (scripts/fonts.mjs) served from static/fonts -> build/fonts.
 const FONT_DIR = 'build/fonts';
@@ -41,7 +48,9 @@ export default [
 	// Latin subset of Atkinson Hyperlegible Next, fetched at first layout; a preload costs LCP (§10.1).
 	entry('Fonts on first paint', firstPaintFonts, '35 KB'),
 	// Mono loads lazily and is never preloaded (§10.1).
-	entry('Mono font (lazy)', monoFonts, '25 KB')
+	entry('Mono font (lazy)', monoFonts, '25 KB'),
+	// §10.1's 45 KB per route, the shell excluded (owner, 2026-10-23).
+	entry('Settings section route (beyond /search)', settingsOwn, '45 KB')
 	// Placeholders for later slices. Fill `path` from the manifest when the chunk exists:
 	//   Detail-drawer chunk    <= 15 KB
 	//   Insights chunk (uPlot) <= 45 KB

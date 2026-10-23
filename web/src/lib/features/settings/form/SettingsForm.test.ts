@@ -3,7 +3,8 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/sve
 import { tick } from 'svelte';
 import { keys } from '$lib/keys';
 import { dismissAll } from './dialogs';
-import { createSettingsForm, type SettingsForm } from './form.svelte';
+import { loadControl } from './controls.svelte';
+import { createSettingsForm, preloadSettingsForm, type SettingsForm } from './form.svelte';
 import FormHarness from './testing/FormHarness.svelte';
 import { fakeServer } from './testing/fake-server';
 import { spec, sv, values } from './testing/values';
@@ -36,9 +37,15 @@ const SPECS: FieldSpec[] = [
 let server: ReturnType<typeof fakeServer>;
 let form: SettingsForm;
 
-// The lazily loaded dialog and menu, transformed once up front rather than inside a test's timeout.
+// The lazily loaded dialog, menu and engine parts, loaded once up front rather than inside a
+// test's timeout (`lazy.test.ts` covers loading them on demand).
 beforeAll(async () => {
-	await Promise.all([import('./ConfirmDialog.svelte'), import('./FieldMenu.svelte')]);
+	await Promise.all([
+		import('./ConfirmDialog.svelte'),
+		import('./FieldMenu.svelte'),
+		preloadSettingsForm(),
+		...(['secret', 'chips', 'json'] as const).map((w) => loadControl(w))
+	]);
 });
 
 beforeEach(async () => {

@@ -6,6 +6,7 @@
 //     revision, base: { field: value }, mine: { field: value }, reset: [field] } } }
 //
 // A reset has no value, so it's listed in `reset` (with its base) rather than in `mine`.
+import { clearDraft, DRAFT_PREFIX, storage } from './draft-store';
 import { merge } from './merge';
 import { devWarn } from './schema';
 import type { FieldSpec } from './types';
@@ -19,7 +20,7 @@ import {
 	type Staged
 } from './values';
 
-export const DRAFT_PREFIX = 'lodestar.settings.draft.v1.';
+export { clearDraft, DRAFT_PREFIX };
 export const DRAFT_MAX_BYTES = 64 * 1024;
 
 export interface DraftSection {
@@ -35,14 +36,6 @@ export interface Draft {
 }
 
 type SpecOf = (section: string, name: string) => FieldSpec | undefined;
-
-function storage(): Storage | undefined {
-	try {
-		return globalThis.sessionStorage ?? undefined;
-	} catch {
-		return undefined; // blocked (sandboxed frame, privacy settings)
-	}
-}
 
 /** Only fields a draft may hold: dirty, not locked, not secret, known to the form. */
 export function draftOf(
@@ -86,10 +79,6 @@ export function writeDraft(id: string, draft: Draft | null): boolean {
 	} catch {
 		return false; // full (QuotaExceededError) or blocked
 	}
-}
-
-export function clearDraft(id: string): void {
-	writeDraft(id, null);
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
