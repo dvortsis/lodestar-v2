@@ -8,7 +8,9 @@
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import IconBack from '~icons/ph/arrow-left';
-	import type { Snippet } from 'svelte';
+	import { events } from '$lib/state/events.svelte';
+	import type { Component, Snippet } from 'svelte';
+	import { flow } from './flow.svelte';
 	import SettingsNav from './SettingsNav.svelte';
 	import { createSettingsState, provideSettings } from './state.svelte';
 
@@ -16,12 +18,32 @@
 
 	const settings = provideSettings(createSettingsState());
 	const onScreen = $derived(page.params.section !== undefined);
+
+	// `/system` follows the `settings` events: saves change which fields wait for a restart.
+	$effect(() =>
+		events.on('settings', () => void settings.refreshSystem(), {
+			onResync: () => void settings.refreshSystem()
+		})
+	);
+
+	// The banners and the restarting state load only when there is something to show.
+	let Banners = $state.raw<Component>();
+	const needBanners = $derived(
+		flow.phase !== 'idle' ||
+			(settings.system !== undefined &&
+				(settings.system.restart_required.length > 0 ||
+					settings.system.address_change?.state === 'awaiting_confirmation'))
+	);
+	$effect(() => {
+		if (needBanners && !Banners)
+			void import('./Banners.svelte').then((mod) => (Banners = mod.default));
+	});
 </script>
 
 <div class="settings-frame" data-wide={settings.wide || undefined}>
 	{#if settings.wide}
 		<div class="settings-pane">
-			<SettingsNav screens={settings.registry.screens} />
+			<SettingsNav screens={settings.registry.screens} badges={settings.badges} />
 		</div>
 	{/if}
 	<div class="settings-main">
@@ -39,6 +61,7 @@
 				{/snippet}
 			</Banner>
 		{/if}
+		{#if Banners && needBanners}<Banners />{/if}
 		{@render children()}
 	</div>
 </div>

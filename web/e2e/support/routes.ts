@@ -1,6 +1,7 @@
 import type { OpenApiMock } from '../mock/openapi-mock';
 import { crawlerFixture, overviewFixture } from '../../src/lib/features/insights/overview/fixtures';
 import { SettingsBackend } from '../../src/lib/features/settings/form/testing/e2e-backend';
+import { SystemBackend } from '../../src/lib/features/settings/shell/e2e-system';
 import { goldenIndex, goldenValues } from '../../src/lib/features/settings/shell/golden';
 
 // Every route the app has today, with sample params for the dynamic ones. A new route slice adds
@@ -57,13 +58,19 @@ export const ROUTES: RouteCase[] = [
 		path: '/settings/crawler',
 		heading: 'Crawler',
 		key: true,
-		mock: (m) => void new SettingsBackend(goldenIndex(), goldenValues()).attach(m)
+		mock: (m) => {
+			new SettingsBackend(goldenIndex(), goldenValues()).attach(m);
+			new SystemBackend().attach(m);
+		}
 	},
 	{
 		name: 'settings-overview',
 		path: '/settings',
 		heading: 'Settings',
-		mock: (m) => void new SettingsBackend(goldenIndex(), goldenValues()).attach(m)
+		mock: (m) => {
+			new SettingsBackend(goldenIndex(), goldenValues()).attach(m);
+			new SystemBackend().attach(m);
+		}
 	},
 	{ name: 'torrent', path: `/t/${'0123456789abcdef'.repeat(2).padEnd(40, '0')}`, key: true }
 ];

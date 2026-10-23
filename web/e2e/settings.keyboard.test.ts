@@ -3,14 +3,17 @@
 // parts.
 import { expect, test } from './support/test';
 import { SettingsBackend } from '../src/lib/features/settings/form/testing/e2e-backend';
+import { SystemBackend } from '../src/lib/features/settings/shell/e2e-system';
 import { goldenIndex, goldenValues } from '../src/lib/features/settings/shell/golden';
 
 test.use({ viewport: { width: 1366, height: 900 } });
 
 test.describe('keyboard: settings', () => {
+	let system: SystemBackend;
 	let backend: SettingsBackend;
 	test.beforeEach(async ({ mock }) => {
 		backend = new SettingsBackend(goldenIndex(), goldenValues()).attach(mock);
+		system = new SystemBackend({ restart_required: ['crawler.encryption'] }).attach(mock);
 	});
 
 	test('reaches every screen from the navigation', async ({ page, go, kbd }) => {
@@ -48,5 +51,19 @@ test.describe('keyboard: settings', () => {
 		await kbd.tabTo(page.getByTestId('settings-back'), 30);
 		await kbd.press('Enter');
 		await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeFocused();
+	});
+
+	test('restarts through its dialog', async ({ page, go, kbd }) => {
+		await page.route('**/healthz', (route) => route.fulfill({ status: 200, body: 'ok' }));
+		await go('/settings/crawler');
+		await kbd.tabTo(page.getByTestId('settings-restart-now'), 80);
+		await kbd.press('Enter');
+		const dialog = page.getByRole('dialog', { name: 'Restart Lodestar?' });
+		await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused();
+		await kbd.press('Tab');
+		await expect(dialog.getByRole('button', { name: 'Restart' })).toBeFocused();
+		await kbd.press('Enter');
+		await expect.poll(() => system.posts).toEqual(['restart']);
+		await expect(page.getByTestId('settings-restart-banner')).toHaveCount(0, { timeout: 15_000 });
 	});
 });

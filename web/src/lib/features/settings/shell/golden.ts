@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import type { components } from '$lib/api/schema';
 import { sv, values } from '../form/testing/values';
 import type { SectionValues } from '../form/types';
+import type { SystemInfo } from './system';
 
 // Vitest and Playwright both run from web/ (import.meta.url isn't a file URL under Vite).
 export const GOLDEN = resolve(
@@ -48,3 +49,39 @@ export function goldenValues(): SectionValues[] {
 		);
 	});
 }
+
+// --- `/system` and the network check ---------------------------------------------------------
+/** A `/system` answer; only what the Settings shell reads is meaningful. */
+export function systemInfo(over: Partial<SystemInfo> = {}): SystemInfo {
+	return {
+		address_change: null,
+		channel: 'stable',
+		connections: [],
+		deployment: { image_digest: null, image_tag: null, kind: 'docker' },
+		diagnostics: { changed: [], logging: null, recent_errors: null },
+		fixture: false,
+		repository: 'https://github.com/dvortsis/lodestar-v2',
+		restart: { available: true, estimated_seconds: 20, hint: null, method: 'reexec' },
+		restart_required: [],
+		started_at: 1_000,
+		uptime_s: 60,
+		version: '0.5.0',
+		...over
+	} as unknown as SystemInfo;
+}
+
+export const checkBody = (over: Record<string, unknown> = {}) => ({
+	checked_at: 1,
+	external: { agreeing: 14, ip: '203.0.113.9', port: 6881, voters: 16 },
+	inbound_queries: 412,
+	mapping: 'unavailable',
+	measured_s: 590,
+	min_window_s: 120,
+	reachable: true,
+	reason: 'unsolicited_queries',
+	unsolicited_queries: 37,
+	unsolicited_sources: 21,
+	window_s: 600,
+	window_started_at: 1,
+	...over
+});

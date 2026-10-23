@@ -5,15 +5,8 @@
 	import { page } from '$app/state';
 	import { m } from '$lib/paraglide/messages.js';
 	import { onMount, type Component } from 'svelte';
+	import type { Badge } from './badges';
 	import { GROUPS, type ResolvedScreen, type ScreenGroup } from './registry';
-
-	export interface Badge {
-		/** The visible words ("1 problem", "Restart needed"). */
-		text: string;
-		/** Appended to the link's accessible name. */
-		label: string;
-		kind: 'problem' | 'restart' | 'notice';
-	}
 
 	interface Props {
 		screens: readonly ResolvedScreen[];

@@ -6,7 +6,7 @@ import type { SettingsScreen } from './registry';
 
 import { indexView } from '../form/schema';
 
-export { GOLDEN, goldenIndex, goldenValues } from './golden';
+export { GOLDEN, checkBody, goldenIndex, goldenValues, systemInfo } from './golden';
 export const goldenView = () => indexView(goldenIndex());
 
 export const screen = (id: string, over: Partial<SettingsScreen> = {}): SettingsScreen => ({

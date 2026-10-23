@@ -7,6 +7,7 @@ import type { Page } from '@playwright/test';
 import { expectNoA11yViolations } from './a11y';
 import { expect, test } from './support/test';
 import { SettingsBackend } from '../src/lib/features/settings/form/testing/e2e-backend';
+import { SystemBackend } from '../src/lib/features/settings/shell/e2e-system';
 import { goldenIndex, goldenValues } from '../src/lib/features/settings/shell/golden';
 
 const nav = (page: Page) => page.getByRole('navigation', { name: 'Settings sections' });
@@ -23,6 +24,7 @@ test.describe('screens', () => {
 	let backend: SettingsBackend;
 	test.beforeEach(async ({ mock }) => {
 		backend = backendWith().attach(mock);
+		new SystemBackend().attach(mock);
 	});
 
 	for (const [id, heading] of [
@@ -165,6 +167,7 @@ test.describe('an environment-locked field', () => {
 			const port = values.find((v) => v.section === 'network')!.fields.dht_port!;
 			Object.assign(port, { source: 'env', env: 'LODESTAR_DHT_PORT', read_only: true });
 		}).attach(mock);
+		new SystemBackend().attach(mock);
 		await go('/settings/network');
 		const field = page.locator('[data-field="network.dht_port"]');
 		await expect(field.getByTestId('status-env')).toContainText('Set by LODESTAR_DHT_PORT');
@@ -173,7 +176,10 @@ test.describe('an environment-locked field', () => {
 });
 
 test.describe('layout', () => {
-	test.beforeEach(async ({ mock }) => void backendWith().attach(mock));
+	test.beforeEach(async ({ mock }) => {
+		backendWith().attach(mock);
+		new SystemBackend().attach(mock);
+	});
 
 	for (const width of [390, 768]) {
 		test(`takes turns, list then detail, at ${width}`, async ({ page, go }) => {
@@ -205,6 +211,107 @@ test.describe('layout', () => {
 	});
 });
 
+test.describe('the Overview', () => {
+	test.use({ viewport: { width: 1366, height: 900 } });
+
+	test('lists what needs attention, problems first, and what changed', async ({
+		page,
+		go,
+		mock
+	}) => {
+		backendWith().attach(mock);
+		const system = new SystemBackend({
+			restart_required: ['crawler.encryption'],
+			diagnostics: {
+				logging: null,
+				recent_errors: null,
+				changed: [
+					{ name: 'crawler.intensity', source: 'db' },
+					{ name: 'network.dht_port', source: 'file' }
+				]
+			}
+		}).attach(mock);
+		system.check = { ...system.check, reachable: false, reason: 'no_unsolicited_queries' };
+		await go('/settings');
+		const rows = page.getByTestId('settings-attention').getByRole('listitem');
+		await expect(rows).toHaveCount(2);
+		await expect(rows.nth(0)).toContainText("isn't reachable from the internet");
+		await expect(rows.nth(1)).toContainText('1 change waits for a restart');
+		await expect(page.getByTestId('settings-changed-crawler')).toHaveText('1 changed');
+		await expect(
+			nav(page).getByRole('link', { name: /^Network & VPN\s*, 1 problem$/ })
+		).toBeVisible();
+		await page.getByTestId('settings-changed-crawler').click();
+		await expect(page).toHaveURL(/\/settings\/crawler\?changed=1/);
+		await expect(h1(page, 'Crawler')).toBeVisible();
+	});
+
+	test('says so when nothing needs attention', async ({ page, go, mock }) => {
+		backendWith().attach(mock);
+		new SystemBackend().attach(mock);
+		await go('/settings');
+		await expect(page.getByTestId('settings-attention-none')).toHaveText(
+			'Nothing needs attention.'
+		);
+		await expect(page.getByTestId('settings-changed-none')).toBeVisible();
+	});
+});
+
+test.describe('restart and the address check', () => {
+	test.use({ viewport: { width: 1366, height: 900 } });
+
+	test('shows the restart banner on every page and restarts through to the reload', async ({
+		page,
+		go,
+		mock
+	}) => {
+		backendWith().attach(mock);
+		const system = new SystemBackend({
+			restart_required: ['crawler.encryption', 'network.dht_port']
+		}).attach(mock);
+		await page.route('**/healthz', (route) => route.fulfill({ status: 200, body: 'ok' }));
+		await go('/settings/storage');
+		const banner = page.getByTestId('settings-restart-banner');
+		await expect(banner).toContainText('2 changes apply after a restart');
+		await nav(page).getByRole('link', { name: 'Search & ranking' }).click();
+		await expect(banner).toContainText('2 changes apply after a restart');
+
+		await banner.getByRole('button', { name: 'Review' }).click();
+		await expect(page.getByTestId('settings-review-crawler.encryption')).toBeVisible();
+
+		await banner.getByRole('button', { name: 'Restart now' }).click();
+		const dialog = page.getByRole('dialog', { name: 'Restart Lodestar?' });
+		await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused();
+		await dialog.getByRole('button', { name: 'Restart' }).click();
+		await expect.poll(() => system.posts).toEqual(['restart']);
+		// The full-page state, then the reload finds nothing waiting.
+		await expect(banner).toHaveCount(0, { timeout: 15_000 });
+		await expect(page.getByTestId('settings-restarting')).toHaveCount(0);
+		await expect(h1(page, 'Search & ranking')).toBeVisible();
+	});
+
+	test('keeps or reverts a new address from a banner on every page', async ({ page, go, mock }) => {
+		backendWith().attach(mock);
+		const system = new SystemBackend().attach(mock);
+		system.change({
+			deadline: Math.floor(Date.now() / 1000) + 300,
+			kind: 'http_bind',
+			previous_url: 'http://192.168.1.5:8090/',
+			state: 'awaiting_confirmation',
+			stored: false,
+			url: 'http://192.168.1.5:9090/'
+		});
+		await go('/settings/storage');
+		const banner = page.getByTestId('settings-address-banner');
+		await expect(banner).toContainText('Keep this address?');
+		await expect(banner).toContainText('in 5 min');
+		await expect(page.getByTestId('settings-address-unstored')).toBeVisible();
+		await banner.getByRole('button', { name: 'Keep' }).click();
+		await expect.poll(() => system.posts).toEqual(['keep']);
+		await expect(banner).toHaveCount(0);
+	});
+});
+
 for (const mode of ['light', 'dark'] as const) {
 	for (const [width, screens] of [
 		[
@@ -231,6 +338,7 @@ for (const mode of ['light', 'dark'] as const) {
 			for (const path of screens) {
 				test(`is axe-clean: ${path}`, async ({ page, go, mock }) => {
 					backendWith().attach(mock);
+					new SystemBackend().attach(mock);
 					await go(path);
 					await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 					await expect(page.getByText('Loading settings…')).toHaveCount(0);
