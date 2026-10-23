@@ -1,0 +1,83 @@
+/* Styles for the shortcut sheet, editor and screen. Plain CSS with @apply, so none of it adds a
+   utility to the global sheet (the 20 KB budget); it ships with the lazy chunks that import it.
+   Tokens and ramp spacing only. */
+@reference "../../../app.css";
+
+.sc-sheet {
+	@apply flex flex-col gap-4;
+}
+.sc-heading {
+	@apply mb-1 text-small font-semibold text-muted-text;
+}
+.sc-list {
+	@apply divide-y divide-base-300;
+}
+.sc-item {
+	@apply flex items-center justify-between gap-4 py-2 text-body;
+}
+.sc-keys {
+	@apply flex shrink-0 items-center gap-1;
+}
+.sc-tag {
+	@apply text-caption text-muted-text;
+}
+.sc-muted {
+	@apply text-muted-text;
+}
+.sc-link {
+	@apply text-body text-primary underline underline-offset-2 hover:no-underline pointer-coarse:inline-flex pointer-coarse:min-h-(--target-min) pointer-coarse:items-center;
+}
+.sc-link:focus-visible {
+	outline: var(--focus-ring-width) solid var(--color-primary);
+	outline-offset: 2px;
+}
+
+.sc-row {
+	@apply flex flex-wrap items-center gap-x-4 gap-y-1 py-2;
+}
+.sc-name {
+	@apply min-w-0 flex-1 text-body;
+}
+.sc-key {
+	@apply flex min-w-16 justify-end;
+}
+.sc-prompt {
+	@apply text-small text-muted-text;
+}
+.sc-actions {
+	@apply flex items-center gap-1;
+}
+.sc-note {
+	@apply flex w-full items-center gap-2 text-small;
+}
+.sc-note svg {
+	@apply size-4 shrink-0;
+}
+.sc-bad svg {
+	@apply text-error;
+}
+.sc-warn svg {
+	@apply text-warning;
+}
+.sc-all {
+	@apply mt-2 flex justify-end;
+}
+
+.sc-screen {
+	@apply flex max-w-xl flex-col gap-4 p-4 text-base-content;
+}
+.sc-h1 {
+	@apply text-display font-semibold;
+}
+.sc-h2 {
+	@apply mb-1 text-title font-semibold;
+}
+.sc-text {
+	@apply text-body text-muted-text;
+}
+.sc-help {
+	@apply mt-1;
+}
+.sc-buttons {
+	@apply flex gap-2;
+}
