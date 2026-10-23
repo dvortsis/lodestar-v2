@@ -145,13 +145,20 @@ fn one_line(s: &str) -> String {
 }
 
 /// What a terminal would act on rather than show: control characters
-/// (ESC starts a sequence, BEL rings) and the bidirectional overrides,
-/// which can make a line read differently from what it holds.
+/// (ESC starts a sequence, BEL rings), the bidirectional overrides, which
+/// can make a line read differently from what it holds, and the line and
+/// paragraph separators, which some readers break a line at.
 fn unsafe_char(c: char) -> bool {
     c.is_control()
         || matches!(
             c,
-            '\u{200e}' | '\u{200f}' | '\u{061c}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+            '\u{200e}'
+                | '\u{200f}'
+                | '\u{061c}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{2028}'
+                | '\u{2029}'
         )
 }
 
@@ -252,11 +259,15 @@ mod tests {
 
     #[test]
     fn terminal_controls_and_bidi_overrides_are_escaped() {
-        let evil = "Name\u{1b}[31mred\u{7}\u{202e}gpj.exe";
+        let evil = "Name\u{1b}[31mred\u{7}\u{202e}gpj.exe\u{2028}forged\u{2029}";
         let q = quote(evil);
         assert!(!q.chars().any(unsafe_char), "{q}");
         assert!(
-            q.starts_with('"') && q.contains("\\u{1b}") && q.contains("\\u{202e}"),
+            q.starts_with('"')
+                && q.contains("\\u{1b}")
+                && q.contains("\\u{202e}")
+                && q.contains("\\u{2028}")
+                && q.contains("\\u{2029}"),
             "{q}"
         );
         assert_eq!(quote("plain"), "plain");

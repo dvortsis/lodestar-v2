@@ -83,14 +83,14 @@ fn section(f: impl FnOnce(&mut Logging)) -> Logging {
 fn runtime(dir: &std::path::Path, l: &Logging) -> (Runtime, Buf) {
     let console = Buf::default();
     let mut l = l.clone();
-    l.file_folder = dir.display().to_string();
+    l.file_folder = dir.join("logs").display().to_string();
     let rt = Runtime::new(Box::new(console.clone()), Applied::compute(&l, unix_now()));
     rt.open_file();
     (rt, console)
 }
 
 fn file_text(dir: &std::path::Path) -> String {
-    std::fs::read_to_string(dir.join(file::CURRENT)).unwrap_or_default()
+    std::fs::read_to_string(dir.join("logs").join(file::CURRENT)).unwrap_or_default()
 }
 
 #[test]
@@ -155,7 +155,7 @@ fn the_console_stays_private_under_a_full_file() {
         "opt-ins never reach the console: {c}"
     );
     // The details index knows.
-    let index = std::fs::read_to_string(dir.path().join(file::INDEX)).unwrap();
+    let index = std::fs::read_to_string(dir.path().join("logs").join(file::INDEX)).unwrap();
     assert!(
         index.contains("\"details\":true") && index.contains("\"opt_in\":true"),
         "{index}"
@@ -203,10 +203,13 @@ fn one_kind_at_a_time_shows_only_that_kind() {
 fn start_up_lines_are_buffered_into_the_file() {
     let dir = tempfile::tempdir().unwrap();
     let console = Buf::default();
-    let l = section(|l| l.file_folder = dir.path().display().to_string());
+    let l = section(|l| l.file_folder = dir.path().join("logs").display().to_string());
     let rt = Runtime::new(Box::new(console.clone()), Applied::compute(&l, unix_now()));
     record_all(&rt);
-    assert!(!dir.path().join(file::CURRENT).exists(), "not open yet");
+    assert!(
+        !dir.path().join("logs").join(file::CURRENT).exists(),
+        "not open yet"
+    );
     assert!(
         console.text().contains("everything"),
         "the console has it at once"
@@ -222,7 +225,7 @@ fn start_up_lines_are_buffered_into_the_file() {
 #[test]
 fn the_buffer_is_bounded() {
     let dir = tempfile::tempdir().unwrap();
-    let l = section(|l| l.file_folder = dir.path().display().to_string());
+    let l = section(|l| l.file_folder = dir.path().join("logs").display().to_string());
     let rt = Runtime::new(Box::new(Buf::default()), Applied::compute(&l, unix_now()));
     for _ in 0..STARTUP_LINES + 10 {
         record_all(&rt);
@@ -256,7 +259,7 @@ fn turning_the_file_off_and_on() {
     let dir = tempfile::tempdir().unwrap();
     let (rt, _) = runtime(dir.path(), &Logging::default());
     let mut l = Logging {
-        file_folder: dir.path().display().to_string(),
+        file_folder: dir.path().join("logs").display().to_string(),
         file_enabled: false,
         ..Logging::default()
     };

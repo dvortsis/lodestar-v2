@@ -48,7 +48,16 @@ pub const CREDENTIAL_NAMES: &[&str] = &[
 
 /// Parts of a query name that make it a credential (`x-api-key`,
 /// `access_token`, `client_secret`…).
-pub const CREDENTIAL_PARTS: &[&str] = &["key", "token", "pass", "secret", "auth", "sess", "sig"];
+pub const CREDENTIAL_PARTS: &[&str] = &[
+    "key",
+    "token",
+    "pass",
+    "secret",
+    "auth",
+    "sess",
+    "sig",
+    "credential",
+];
 
 fn credential(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
@@ -107,9 +116,19 @@ fn scrub_with(url: &str, form: Form, drop_query: bool) -> String {
             Some((scheme, rest)) => {
                 out.push_str(scheme);
                 out.push_str("://");
-                let end = rest.find('/').unwrap_or(rest.len());
+                // The userinfo runs to the last `@` before the first `/`
+                // after an `@`, so a raw password holding `/`
+                // (`https://u:pa/ss@host/x`) goes too. An `@` in a path
+                // hides the host with it: never too little.
+                let (at, end) = match rest.find('@') {
+                    Some(first) => {
+                        let end = rest[first..].find('/').map_or(rest.len(), |j| first + j);
+                        (rest[..end].rfind('@'), end)
+                    }
+                    None => (None, rest.find('/').unwrap_or(rest.len())),
+                };
                 let (authority, rest) = rest.split_at(end);
-                let authority = match authority.rfind('@') {
+                let authority = match at {
                     Some(at) => {
                         out.push_str(REDACTED);
                         out.push('@');
@@ -233,7 +252,9 @@ fn name_char(b: u8) -> bool {
 
 /// Secrets in free text with no URL around them: Lodestar's own keys and
 /// tokens (`lsk_…`, `lsf_…`), `Bearer …`, and the value after a
-/// credential-like name and `=` or `:` (`X-Api-Key: …`, `/feed?apikey=…`).
+/// credential-like name and `=` or `:` (`X-Api-Key: …`, `/feed?apikey=…`,
+/// `token = …`), quoted or not (`password: "…"`, `{"x-api-key": "…"}`,
+/// `token='…'`).
 fn redact_secrets(text: &str) -> String {
     let b = text.as_bytes();
     let stop = |from: usize| {
@@ -261,8 +282,10 @@ fn redact_secrets(text: &str) -> String {
             continue;
         }
         let word = &b[i..name_end];
-        if word.eq_ignore_ascii_case(b"bearer") && b.get(name_end) == Some(&b' ') {
-            let start = name_end + 1;
+        if word.eq_ignore_ascii_case(b"bearer")
+            && b.get(name_end).is_some_and(|c| c.is_ascii_whitespace())
+        {
+            let start = skip_space(b, name_end);
             let end = (start..b.len())
                 .find(|&j| !token_char(b[j]))
                 .unwrap_or(b.len());
@@ -272,23 +295,39 @@ fn redact_secrets(text: &str) -> String {
             i = end.max(start);
             continue;
         }
-        if matches!(b.get(name_end), Some(b'=' | b':')) && credential(&text[i..name_end]) {
-            let mut j = name_end + 1;
-            while j < b.len() && b[j] == b' ' {
-                j += 1;
-            }
-            let mut end = stop(j);
-            // `Authorization: Bearer <token>`: the scheme and the token.
-            let scheme = &b[j..end];
-            if (scheme.eq_ignore_ascii_case(b"bearer") || scheme.eq_ignore_ascii_case(b"basic"))
-                && b.get(end) == Some(&b' ')
-            {
-                end = stop(end + 1);
-            }
+        // The name's closing quote (`"x-api-key": …`), then the separator,
+        // with any space around it.
+        let mut sep = name_end;
+        if matches!(b.get(sep), Some(b'"' | b'\'')) {
+            sep += 1;
+        }
+        sep = skip_space(b, sep);
+        if matches!(b.get(sep), Some(b'=' | b':')) && credential(&text[i..name_end]) {
+            let j = skip_space(b, sep + 1);
+            let (j, end) = match b.get(j) {
+                // A quoted value runs to its closing quote.
+                Some(&q @ (b'"' | b'\'')) => {
+                    let from = j + 1;
+                    let to = (from..b.len()).find(|&k| b[k] == q).unwrap_or(b.len());
+                    (from, to)
+                }
+                _ => {
+                    let mut end = stop(j);
+                    // `Authorization: Bearer <token>`: the scheme and the token.
+                    let scheme = &b[j..end];
+                    if (scheme.eq_ignore_ascii_case(b"bearer")
+                        || scheme.eq_ignore_ascii_case(b"basic"))
+                        && b.get(end).is_some_and(|c| c.is_ascii_whitespace())
+                    {
+                        end = stop(skip_space(b, end));
+                    }
+                    (j, end)
+                }
+            };
             if end > j {
                 cuts.push((j, end));
             }
-            i = end.max(name_end + 1);
+            i = end.max(sep + 1);
             continue;
         }
         i = name_end;
@@ -302,6 +341,13 @@ fn redact_secrets(text: &str) -> String {
     }
     out.push_str(&text[copied..]);
     out
+}
+
+/// The first index at or after `from` that isn't ASCII whitespace.
+fn skip_space(b: &[u8], from: usize) -> usize {
+    (from..b.len())
+        .find(|&k| !b[k].is_ascii_whitespace())
+        .unwrap_or(b.len())
 }
 
 fn find_ci(haystack: &str, needle: &str) -> Option<usize> {
@@ -397,6 +443,24 @@ mod tests {
             scrub("https://h/announcements/latest", Form::Absolute),
             "https://h/announcements/latest"
         );
+        // A raw password holding `/` (or `@`) goes whole.
+        assert_eq!(
+            scrub("https://u:pa/ss@host/x", Form::Absolute),
+            "https://[redacted]@host/x"
+        );
+        assert_eq!(
+            scrub("https://u:p@a@s@host:81/x?y=1", Form::Absolute),
+            "https://[redacted]@host:81/x?y=1"
+        );
+        assert_eq!(
+            scrub("https://u:pa/ss@host", Form::Absolute),
+            "https://[redacted]@host"
+        );
+        // No `@`: the host stays.
+        assert_eq!(
+            scrub("https://host/a/b", Form::Absolute),
+            "https://host/a/b"
+        );
     }
 
     #[test]
@@ -426,6 +490,28 @@ mod tests {
             assert!(!s.contains(secret), "{secret} in {s}");
         }
         assert!(scrub_text("passkey: pk").ends_with("[redacted]"));
+        // Quoted values, space around the separator, any space after Bearer.
+        for (text, secret) in [
+            (r#"password: "hunter 2" rejected"#, "hunter 2"),
+            (r#"api_key: "k3y""#, "k3y"),
+            (r#"{"x-api-key": "k3y", "n": 1}"#, "k3y"),
+            ("token='t0k' then", "t0k"),
+            ("token = t0k then", "t0k"),
+            ("password =\th2", "h2"),
+            ("Authorization: Bearer\t abc.def", "abc.def"),
+            ("Bearer  abc.def", "abc.def"),
+            ("Authorization:   Bearer    abc.def", "abc.def"),
+            ("credentials: c3d", "c3d"),
+            ("aws_credential=c3d", "c3d"),
+        ] {
+            let s = scrub_text(text);
+            assert!(!s.contains(secret), "{secret} in {s}");
+        }
+        assert_eq!(
+            scrub_text(r#"{"x-api-key": "k3y", "n": 1}"#),
+            r#"{"x-api-key": "[redacted]", "n": 1}"#
+        );
+        assert_eq!(scrub_text("token = t0k then"), "token = [redacted] then");
         assert_eq!(scrub_text("limit=5 and size: 7"), "limit=5 and size: 7");
         let base32 = "ZHQVOY7XELZD5GFCTXW6X2RUDOMNKMCW";
         assert_eq!(scrub_text(&format!("x {base32} y")), "x [hidden] y");
@@ -449,6 +535,12 @@ mod tests {
             "ß://ü?ä=ö#",
             "http://[::1]:80/?a",
             "&&==??",
+            "token=\"",
+            "token: '",
+            "key =",
+            "Bearer ",
+            "a://@",
+            "https://@/@",
         ] {
             let _ = scrub(s, Form::Absolute);
             let _ = scrub(s, Form::Request);

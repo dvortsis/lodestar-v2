@@ -309,8 +309,14 @@ impl fmt::Debug for Url<'_> {
 }
 
 /// A sign-in or API client's address.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct Client(pub IpAddr);
+
+impl fmt::Debug for Client {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Client([hidden])")
+    }
+}
 
 impl<'a> IntoValue<'a, kind::Client> for Client {
     fn into_value(self) -> Value<'a> {
@@ -690,6 +696,8 @@ mod tests {
             format!("{:?}", Query("Secret query")),
             format!("{:?}", Detail("Secret term")),
             format!("{:?}", Peer("203.0.113.7:1".parse().unwrap())),
+            format!("{:?}", Client("203.0.113.8".parse().unwrap())),
+            format!("{:?}", Value::Client("203.0.113.8".parse().unwrap())),
             format!("{:?}", Value::Name("Secret.Name")),
             format!("{:?}", Value::Torrent(&h)),
         ] {

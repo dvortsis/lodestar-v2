@@ -560,7 +560,9 @@ pub fn restrict_dir_acl(_dir: &Path) -> io::Result<()> {
 }
 
 /// [`restrict_acl`] for a folder, inherited by every file made in it
-/// (the log folder, which holds the first-run setup token).
+/// (the log folder, which holds the first-run setup token). Only for a
+/// folder the caller just created: it replaces the folder's ACL. `/L`
+/// acts on a link itself, never on the folder it points to.
 #[cfg(windows)]
 pub fn restrict_dir_acl(dir: &Path) -> io::Result<()> {
     let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
@@ -573,6 +575,7 @@ pub fn restrict_dir_acl(dir: &Path) -> io::Result<()> {
             "*S-1-3-4:(OI)(CI)F",
             "*S-1-5-18:(OI)(CI)F",
             "*S-1-5-32-544:(OI)(CI)F",
+            "/L",
         ])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -582,7 +585,10 @@ pub fn restrict_dir_acl(dir: &Path) -> io::Result<()> {
     } else {
         Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "icacls failed",
+            match status.code() {
+                Some(code) => format!("icacls exited with {code}"),
+                None => "icacls failed".to_owned(),
+            },
         ))
     }
 }

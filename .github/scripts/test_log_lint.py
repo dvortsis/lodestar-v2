@@ -29,6 +29,10 @@ class Macros(unittest.TestCase):
             "::tracing::warn!(\"x\");",
             "warn !(\"x\");",
             "tracing :: error ! (\"x\");",
+            "crate::tracing::warn!(\"x\");",
+            "self::tracing::info!(\"x\");",
+            "super::tracing::debug!(\"x\");",
+            "tracing::log::warn!(\"x\");",
         ]:
             with self.subTest(line=line):
                 self.assertEqual(len([f for f in findings(f"fn f() {{ {line} }}") if "plain" in f]), 1, line)
@@ -42,10 +46,25 @@ class Macros(unittest.TestCase):
             "use tracing::*;",
             "extern crate tracing as t;",
             "use tracing::instrument as trace_it;",
+            "pub use tracing;",
+            "use tracing::{self as t};",
+            "use {tracing::warn};",
+            "use ::{tracing as t};",
+            "use tracing::log::warn;",
+            "use tracing::{log};",
+            "pub(crate) use crate::tracing::warn;",
+            "use self::{tracing::{info}};",
         ]:
             with self.subTest(line=line):
                 self.assertEqual(len(findings(line)), 1, line)
-        for line in ["use tracing::Level;", "use tracing::field::{Field, Visit};", "use tracing_subscriber::layer::Layer;"]:
+        for line in [
+            "use tracing::Level;",
+            "use tracing::field::{Field, Visit};",
+            "use tracing_subscriber::layer::Layer;",
+            "use {tracing::Level, std::fmt};",
+            "use crate::settings::{self, log};",
+            "use std::io::{self as io2};",
+        ]:
             with self.subTest(line=line):
                 self.assertEqual(findings(line), [], line)
 
@@ -187,6 +206,31 @@ class Paths(unittest.TestCase):
             "crates/a/src/lib.rs": "fn f() {}\n",
         })
         self.assertEqual(len(log_lint.run(root, [])), 1)
+
+    def test_a_log_dependency_is_refused(self):
+        for manifest in [
+            '[dependencies]\nlog = "0.4"\n',
+            '[dependencies]\nlogs = { package = "log", version = "0.4" }\n',
+            '[dependencies.log]\nversion = "0.4"\n',
+            '[target.\'cfg(windows)\'.dependencies]\nlog = "0.4"\n',
+        ]:
+            with self.subTest(manifest=manifest):
+                root = self.tree({"crates/a/Cargo.toml": manifest, "crates/a/src/lib.rs": "fn f() {}\n"})
+                self.assertEqual(len(log_lint.run(root, [])), 1, manifest)
+        root = self.tree({
+            "crates/a/Cargo.toml": '[dependencies]\nlogos = "1"\n[dev-dependencies]\nlog = "0.4"\n',
+            "crates/a/src/lib.rs": "fn f() {}\n",
+        })
+        self.assertEqual(log_lint.run(root, []), [])
+
+    def test_the_list_may_not_grow_against_the_base(self):
+        base = 'NOT_YET_SWEPT = [\n    "a.rs",\n    "b.rs",\n]\n'
+        self.assertEqual(log_lint.listed_in(base), ["a.rs", "b.rs"])
+        self.assertEqual(log_lint.grown(["a.rs", "b.rs"], ["a.rs"]), [])
+        self.assertEqual(len(log_lint.grown(["a.rs"], ["a.rs", "c.rs"])), 1)
+        # A base without the script (or the list) has nothing to compare.
+        self.assertEqual(log_lint.grown(None, ["c.rs"]), [])
+        self.assertIsNone(log_lint.listed_in("X = 1\n"))
 
     def test_the_repository_is_clean(self):
         root = Path(__file__).resolve().parents[2]
