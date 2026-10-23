@@ -1347,6 +1347,11 @@ export interface components {
             previous_url: string;
             /** @enum {string} */
             state: "awaiting_restart" | "awaiting_confirmation" | "reverted";
+            /**
+             * @description False when the pending change couldn't be stored: the protection
+             *     lasts only until the process ends, and the log has the error.
+             */
+            stored: boolean;
             /** @description Where the UI is after it. */
             url: string;
         };

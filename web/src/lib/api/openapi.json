@@ -3908,6 +3908,7 @@
           "kind",
           "previous_url",
           "state",
+          "stored",
           "url"
         ],
         "properties": {
@@ -3938,6 +3939,10 @@
               "awaiting_confirmation",
               "reverted"
             ]
+          },
+          "stored": {
+            "type": "boolean",
+            "description": "False when the pending change couldn't be stored: the protection\nlasts only until the process ends, and the log has the error."
           },
           "url": {
             "type": "string",
