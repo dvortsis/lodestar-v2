@@ -176,9 +176,10 @@ fn system_reports_and_restarts_in_place() {
     );
     assert_eq!(info["data"]["dir"], dir.path().display().to_string());
     assert!(info["data"]["database_bytes"].as_u64().unwrap() > 0);
-    // No cold store and no log files yet: unknown, not 0.
+    // No cold store yet: unknown, not 0. The log file is on by default
+    // and already holds the start-up lines (B-log1).
     assert_eq!(info["data"]["cold_bytes"], Value::Null);
-    assert_eq!(info["data"]["logs_bytes"], Value::Null);
+    assert!(info["data"]["logs_bytes"].as_u64().unwrap() > 0);
     assert_eq!(info["address_change"], Value::Null);
     assert_eq!(info["connections"][0]["kind"], "dht");
     assert_eq!(info["connections"][0]["state"], "off");

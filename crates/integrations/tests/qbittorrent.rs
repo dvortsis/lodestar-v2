@@ -426,6 +426,10 @@ fn capture_logs() -> Arc<Mutex<Vec<u8>>> {
             .with_writer(move || W(Arc::clone(&sink)))
             .finish();
         tracing::subscriber::set_global_default(subscriber).unwrap();
+        // Every event on, at every level, so a secret in any of them fails.
+        for e in lodestar_integrations::log_events::CATALOGUE.events {
+            e.set_on(true);
+        }
         buf
     }))
 }
@@ -460,7 +464,7 @@ async fn no_password_or_session_in_logs_debug_or_errors() {
     let sid_value = SID.split_once('=').unwrap().1;
     let logged = String::from_utf8_lossy(&logs.lock().unwrap()).into_owned();
     assert!(
-        logged.contains("qBittorrent request"),
+        logged.contains("client=qbittorrent"),
         "capture works: {logged}"
     );
     for text in [

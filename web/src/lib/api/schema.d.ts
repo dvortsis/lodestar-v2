@@ -945,6 +945,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/logs/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every log event (id, component, level, label and help keys, default,
+         *     current, data kinds, required, rate per hour), every data kind with its
+         *     switch per output and its deadline, the presets and the outputs. Admin
+         *     session only.
+         */
+        get: operations["getLogCatalog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/network/check": {
         parameters: {
             query?: never;
@@ -3707,7 +3729,7 @@ export interface components {
             /**
              * Format: int64
              * @description Searchable torrents that were imported (bitmagnet import), part of
-             *     `searchable`; null until the count taken at start is in.
+             *     `searchable`; null until Insights' state is read at start.
              */
             imported: number | null;
             /**
@@ -3758,6 +3780,127 @@ export interface components {
              */
             count: number;
             label: string;
+        };
+        /** @description `GET /logs/catalog`. */
+        LogCatalog: {
+            events: components["schemas"]["LogEvent"][];
+            kinds: components["schemas"]["LogKind"][];
+            /**
+             * Format: int64
+             * @description The server's clock (Unix seconds): deadlines are set from it.
+             */
+            now: number;
+            outputs: components["schemas"]["LogOutput"][];
+            presets: components["schemas"]["LogPresets"];
+        };
+        /**
+         * @description Where an event comes from (§12.1's per-component levels; `system` is
+         *     the process's own: start, stop, settings, logging).
+         * @enum {string}
+         */
+        LogComponent: "system" | "dht" | "fetch" | "pipeline" | "search" | "api" | "sources" | "filters" | "integrations" | "workers" | "companions" | "auth" | "libraries";
+        /**
+         * @description A kind of data a line may contain (§12.1). `peer_activity` and
+         *     `filter_changes` are the opt-ins.
+         * @enum {string}
+         */
+        LogDataKind: "hash" | "name" | "path" | "url" | "query" | "client" | "peer" | "size" | "peer_activity" | "filter_changes";
+        /** @description One catalogued event. */
+        LogEvent: {
+            component: components["schemas"]["LogComponent"];
+            /** @description On now. */
+            current: boolean;
+            /**
+             * @description On in the default preset (Normal). One that's off by default joins
+             *     at Detailed.
+             */
+            default_on: boolean;
+            /** @description The message key of one line of help. */
+            help_key: string;
+            /** @description Stable: `fetch.failed`. */
+            id: string;
+            /** @description The data kinds it can carry (the badges). */
+            kinds: components["schemas"]["LogDataKind"][];
+            /** @description The message key of its plain name ("Each failed metadata fetch"). */
+            label_key: string;
+            level: components["schemas"]["LogLevel"];
+            opt_in: null | components["schemas"]["LogDataKind"];
+            /**
+             * Format: int64
+             * @description Lines per hour since start, from its counter, which counts while
+             *     it's off too.
+             */
+            rate_per_hour: number;
+            /** @description Can't be turned off. */
+            required: boolean;
+        };
+        /** @description One data kind and its switch. */
+        LogKind: {
+            /** @description On in the Private preset. */
+            default_on: boolean;
+            /** @description Identifies torrents or people: turning it on is time-limited. */
+            identifying: boolean;
+            kind: components["schemas"]["LogDataKind"];
+            /**
+             * @description Only by opt-in, for at most 24 hours, never by a preset, never on
+             *     the console or the Event Log.
+             */
+            opt_in: boolean;
+            outputs: components["schemas"]["LogKindOutputs"];
+            /**
+             * Format: int64
+             * @description When it turns off: 0 off, -1 until turned off, else Unix seconds.
+             */
+            until: number;
+        };
+        /** @description Whether a kind shows on each output. */
+        LogKindOutputs: {
+            console: boolean;
+            event_log: boolean;
+            file: boolean;
+            live: boolean;
+        };
+        /**
+         * @description A level, from the least to the most verbose.
+         * @enum {string}
+         */
+        LogLevel: "error" | "warn" | "info" | "debug" | "trace";
+        /** @description One output's state. */
+        LogOutput: {
+            /** @description `private` or `file` (the console's data kinds). */
+            detail: string | null;
+            enabled: boolean;
+            /** @description `text` or `json` (console); `jsonl` (file). */
+            format: string | null;
+            /** @description Its minimum level. */
+            level: components["schemas"]["LogLevel"];
+            output: components["schemas"]["LogOutputName"];
+        };
+        /**
+         * @description An output (§12.1): each has its own level and data kinds.
+         * @enum {string}
+         */
+        LogOutputName: "console" | "file" | "live" | "event_log";
+        /** @description The presets now. */
+        LogPresets: {
+            /** @description `private`, `hashes`, `full` or `custom`. */
+            data: string;
+            temporary: null | components["schemas"]["LogTemporary"];
+            /**
+             * @description `errors`, `warnings`, `normal`, `detailed`, `everything` or
+             *     `custom`.
+             */
+            verbosity: string;
+        };
+        /** @description A timed verbosity ("Detailed for 30 minutes"). */
+        LogTemporary: {
+            /**
+             * Format: int64
+             * @description Unix seconds.
+             */
+            until: number;
+            /** @description `detailed` or `everything`… */
+            verbosity: string;
         };
         /**
          * @description `POST /login`.
@@ -5228,8 +5371,10 @@ export interface components {
             discover: number;
             /**
              * Format: int64
-             * @description Metadata retrieved in the range, by event time. Null until the
-             *     pipeline counts fetches by event time (B11b).
+             * @description Metadata retrieved in the range, by event time (the writer's
+             *     flush). Null when the range starts before fetches were counted by
+             *     event time (the first whole hour after the upgrade that added it):
+             *     unknown, not 0.
              */
             fetch: number | null;
             /**
@@ -7741,6 +7886,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getLogCatalog: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogCatalog"];
                 };
             };
             default: components["responses"]["Error"];

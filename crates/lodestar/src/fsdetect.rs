@@ -105,8 +105,17 @@ pub fn detect(dir: &Path) -> FsReport {
 /// Logs [`FsReport::warning`] for the data directory, if there is one.
 pub fn warn_at_start(dir: &Path) {
     let report = detect(dir);
-    if report.is_risky() {
-        tracing::warn!("{}", report.warning().unwrap_or_default());
+    if !report.is_risky() {
+        return;
+    }
+    use crate::logging::events;
+    use lodestar_log::{Path as LogPath, log_event};
+    let path = LogPath::new(&report.path);
+    match report.kind {
+        FsKind::UnraidUserShare => log_event!(events::SYSTEM_DATA_DIR_USER_SHARE, path = path),
+        FsKind::Fuse => log_event!(events::SYSTEM_DATA_DIR_FUSE, path = path),
+        FsKind::Network => log_event!(events::SYSTEM_DATA_DIR_NETWORK, path = path),
+        FsKind::Local | FsKind::Unknown => {}
     }
 }
 

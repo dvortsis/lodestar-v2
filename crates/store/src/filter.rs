@@ -296,9 +296,15 @@ impl Store {
                 }
             }
         }
-        for id in &ids {
-            tx.execute("DELETE FROM torrents WHERE id = ?1", [id])?;
-            tx.execute("INSERT INTO reindex_log (torrent_id) VALUES (?1)", [id])?;
+        {
+            // Cached: the delete carries Insights' trigger, which SQLite
+            // would otherwise compile again for every row.
+            let mut delete = tx.prepare_cached("DELETE FROM torrents WHERE id = ?1")?;
+            let mut log = tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?;
+            for id in &ids {
+                delete.execute([id])?;
+                log.execute([id])?;
+            }
         }
         tx.commit()?;
         if !ids.is_empty() {

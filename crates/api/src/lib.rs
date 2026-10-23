@@ -37,6 +37,8 @@ pub mod filters;
 pub mod insights;
 pub mod jobs;
 pub mod keys;
+pub mod log_events;
+pub mod logs;
 pub mod openapi;
 pub mod ops;
 mod saved;
@@ -107,6 +109,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(jobs::routes())
         .merge(system::routes())
         .merge(alerts::routes())
+        .merge(logs::routes())
         .merge(openapi::routes())
         // What `auth::protected` checks sessions against.
         .layer(Extension(auth::SessionAuth::of(&state)))

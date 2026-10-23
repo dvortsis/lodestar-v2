@@ -15,7 +15,6 @@ DynamicUser=yes
 StateDirectory=lodestar
 StateDirectoryMode=0700
 Environment=LODESTAR_DATA_DIR=/var/lib/lodestar
-Environment=LODESTAR_LOG=info
 
 # Below-normal priority so the crawler yields to other work on the host.
 Nice=10
