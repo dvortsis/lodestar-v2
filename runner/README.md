@@ -67,13 +67,14 @@ The list lives in `state.json` under `watched_sessions`.
    - **No blocking findings:** check freshness, then merge with a merge commit.
      - **Fresh enough:** the PR's head already contains `main`, or nothing merged since its merge base touches the same area. The areas are: Rust, as `.github/scripts/ci_changes.py` defines it (`crates/**`, `Cargo.*`, `bench/**`, `fuzz/**`, `rust-toolchain*`, `.cargo/**`, `web/src/lib/api/openapi.json`); the rest of `web/**`; and `.github/**`. Docs-only changes never overlap.
      - **Not fresh enough:** bring `main` in first, with `update_pull_request_branch` (a merge commit), and merge once CI is green on the new head. This is the substitute for a merge queue, which GitHub offers only on repositories owned by an organization.
-     - **The landing lane** (owner, 2026-10-23, `docs/owner-decisions.md` §2.24). It stops a reviewed PR from chasing a fast `main`, as #48 did for 36 hours. A PR enters the lane when it has passed review but still needs `main`, and it has already needed two catch-up merges, or has more than ~1,500 changed lines.
-       - While it's in the lane, merge nothing else that overlaps its areas. Docs-only PRs can still merge. Record the lane in `state.json` (`landing_lane`: PR, areas, entered at).
-       - Ask the running slices whose areas overlap to hold their pushes until it lands, so the Actions queue is free for it.
-       - Only one PR is in the lane at a time; pick the critical-path PR first.
-       - The PR leaves the lane when it merges, or when a failure turns out to be its own. Then the others resume while it's fixed, and it re-enters once it's green.
-       - If the lane has been held for 2 hours, tell the owner what's holding it.
-       - After the PR leaves, tell the slices that held their pushes to resume.
+     - **The landing lane** (owner, 2026-10-23, `docs/owner-decisions.md` §2.24) extends the freshness rule above. It stops a reviewed PR from chasing a fast `main`, as #48 did for 36 hours.
+       - **Entry:** a PR enters when it has passed review but isn't fresh enough, and either it has already needed two catch-up merges or it has more than ~1,500 changed lines. Count catch-ups per slice in `state.json` (`catch_ups`).
+       - **On entry:** record the lane in `state.json` (`landing_lane`: PR, areas, entered at) and run `update_pull_request_branch` at once. Ask the running slices whose areas overlap to hold their pushes, so the Actions queue is free for it.
+       - **While it's in the lane:** merge nothing else that overlaps its areas. Docs-only PRs can still merge, and so does a step 2 revert or fix for a red `main`. The lane PR then brings `main` in again.
+       - **One PR at a time:** only one PR is in the lane; pick the critical-path PR first.
+       - **Exit:** the PR leaves the lane when it merges, or when a failure turns out to be its own. Then the others resume while it's fixed. Once it's green, it re-enters, waiting its turn if another PR holds the lane.
+       - **After 2 hours held:** tell the owner what's holding it.
+       - **After exit:** tell the slices that held their pushes to resume.
    - **After merging:** set the slice to `merged`, unsubscribe from its PR, and archive its session (`archive_session`). Pass important and polish findings to the next slice that touches those files.
 5. **Retry limits:**
    - A **Sonnet or Haiku** slice that fails review twice is relaunched **on Opus** on the same branch. That's the "weak output is redone on Opus" rule.
@@ -86,7 +87,7 @@ The list lives in `state.json` under `watched_sessions`.
    - at most `max_launches_per_day` new sessions;
    - **never two running slices whose `owns` overlap.** Every slice records its decisions in its own new file under `docs/decisions/`, so no two slices share a decisions file (§16 is closed to new entries);
    - **order:** critical-path core slices first, then the slices that unblock the most others;
-   - **size:** a slice estimated at more than ~3,000 changed lines is split before launch: into sequential slices, or into parallel ones against interfaces fixed first. Each PR then lands between other merges instead of chasing `main` (§2.24).
+   - **size:** a slice estimated at more than ~3,000 changed lines is split before launch: into sequential slices, or into parallel ones against interfaces fixed first. Each PR then lands between other merges instead of chasing `main` (§2.24). Between ~1,500 and ~3,000 lines, keep the slice whole when splitting would cut through an interface that isn't fixed yet.
 8. **Expand epics.**
    - When an `epic` entry's deps are merged, the runner (Opus) reads the relevant architecture sections and the code as it now stands.
    - It writes that epic's slices into `slices.yaml`, opens a PR, reviews it and merges it.

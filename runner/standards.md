@@ -26,12 +26,12 @@ The sources of truth, in order:
 - `npx size-limit`
 - `npx playwright test` for any route or component with an e2e spec. Chromium is at `/opt/pw-browsers`; never run `playwright install`.
 
-**Always:** `git fetch origin main` and merge it (never rebase a shared branch) before opening a PR or requesting review on a stale head. Never push red.
+**Always:** `git fetch origin main` and merge it (never rebase a shared branch) before opening a PR, or before requesting review on a head that isn't fresh enough (`runner/README.md` step 4). Never push red.
 
 **Pushes and `main` (multi-session rules, `docs/owner-decisions.md` §2.24):**
 - **One push per round of fixes.** Every push starts the full CI matrix, and every other PR queues behind it. Don't push work in progress to an open PR.
-- **Bring `main` in only when it's needed:** a conflict, the runner asks, or you're requesting review on a stale head. Not on every merge to `main`, and never while your own CI is running, because the new push cancels that run and starts over.
-- **During a landing lane or merge pause** (`runner/README.md`), keep working locally and hold pushes to overlapping areas until the runner says it's over.
+- **Bring `main` in only when it's needed:** a conflict, the runner asks, or you're requesting review on a head that isn't fresh enough. Not on every merge to `main`, and never while your own CI is running, because the new push cancels that run and starts over.
+- **When the runner asks you to hold pushes** (a landing lane, `runner/README.md` step 4), keep working locally and push nothing until it says to resume.
 
 ## 2. Code rules
 - **Delegation (CLAUDE.md):** untrusted-input parsers, on-disk formats, concurrency-heavy code and security code are Opus slices only. A helper that finds itself needing one of these stops and says so in the PR.

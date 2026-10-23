@@ -16,19 +16,19 @@ Read the relevant sections before starting any task. If work changes a decision,
 - **Before pushing:**
   - Rust: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`.
   - In `web/`: `npm run check` (svelte-check, eslint, prettier, the hex and arbitrary-value bans), `npx vitest run`, `npm run build`, `npx size-limit`, and `npx playwright test` for anything with an e2e spec. Chromium is at `/opt/pw-browsers`; never run `playwright install`.
-  - Merge `origin/main` (don't rebase shared branches). Don't push red.
+  - Merge `origin/main` only when it's needed (see "Multi-session work"), and never rebase shared branches. Don't push red.
 - **Merging:** PRs merge with green CI and no blocking findings from a fresh Opus reviewer. Only the build runner merges them, falling back to GitHub auto-merge (owner, 2026-10-22 and §2.22); other sessions follow `.claude/skills/steward/SKILL.md` and never merge. A check that's also red on `main`, or a known flake with a fix PR open, in code the PR doesn't touch, doesn't block; say so on the PR (`docs/owner-decisions.md` §2.18). Jobs inside the required `ci-ok` check must still pass.
 - **Commits:** imperative subject ≤ 72 chars, a body that explains why, and the Co-Authored-By / Claude-Session trailers the harness supplies. Never put model identifiers in commits, PRs or code.
 - **Tests:** every crate ships unit tests. Parsers (bencode, KRPC, metainfo, query language, release-name parser) also get property tests or `cargo fuzz` targets, plus golden-corpus tests where the plan calls for them. Benchmarks gate budgets once `bench/` exists.
 
 ## Multi-session work (owner, 2026-10-23, `docs/owner-decisions.md` §2.24)
 Many sessions build this repo at once, and `main` takes dozens of merges a day. These rules keep work landing instead of chasing `main`:
-- **Keep PRs small enough to land between merges.** The runner splits a slice estimated over ~3k changed lines before launch. A PR that has needed two catch-up merges goes into the runner's landing lane (`runner/README.md`).
+- **Keep PRs small enough to land between merges.** The runner splits a slice estimated over ~3k changed lines before launch. A reviewed PR that keeps needing `main` goes into the runner's landing lane (`runner/README.md` step 4).
 - **One session per branch.** To change another session's PR, message that session, never push to its branch. Before writing a fix, check open PRs and the runner for one already under way.
-- **Bring `main` in only when it's needed:** a conflict, the runner asks, or you're about to request review on a stale head. Never bring it in while your own CI is running.
-- **Push once per round of fixes,** not per commit. Each push starts about 37 CI jobs that every other PR queues behind. While the runner has a merge pause on, keep working locally and hold pushes.
+- **Bring `main` in only when it's needed:** a conflict, the runner asks, or you're about to request review on a head that isn't fresh enough (`runner/README.md` step 4). Never bring it in while your own CI is running.
+- **Push once per round of fixes,** not per commit. Each push starts about 37 CI jobs that every other PR queues behind. When the runner asks you to hold pushes, keep working locally until it says to resume.
 - **No fixed sleeps in tests.** Wait for a condition with a deadline of at least 10 s, so tests pass on the slowest CI runner (Windows). A fixed sleep is a blocking review finding.
-- **A flake in someone else's test gets fixed once:** port the existing fix or write one, and tell the runner. A re-run only hands it to the next PR.
+- **A flake in someone else's test gets fixed once.** If a fix PR is open, cite it (§2.18) and ask the runner to land it first. If none exists, tell the runner before writing one. A re-run only hands the flake to the next PR.
 - **Long-running sessions run in Auto mode, never Plan.** Plan mode stops for approvals that nobody may be watching. The coordination tools are pre-approved in `.claude/settings.json`.
 - **Messages between sessions** say who decided (the owner, the runner), give numbered steps, and ask for a reply when one is needed.
 
