@@ -1284,10 +1284,11 @@
   "2026-10-23 01:07 owner (verified): approved runner process change (#106) and deferred code-signing cert ('not selling this commercially'). Told P-release, M6-win, DOC-install."
  ],
  "runner_notes": {
-  "106": "01:55 delta re-review MERGE at 00943df; polish pushed 751ad89 (release.yml outside ci-ok, arch code-signing deferred), PR body updated. Merge on green (ci.yml change -> full CI). Marker exists. Then broadcast (106-broadcast) and tell owner to add the ruleset.",
-  "106-broadcast": "After #106 merges: message every in-flight session (running/in-review slices + M4 #48, \"Modern DHT crawler architecture\", settings session): \"#106 is merged. Run `git fetch origin main && git merge origin/main` on your branch now and push. This brings in the merge-guard hook and .claude/skills/steward/SKILL.md. Read the steward skill and follow it from now on. Only the runner merges: don't merge, enable auto-merge or push to main. When your PR is ready, message the runner session (session_01EYhgh4JX3AmHzKXPjYCoUg).\" Next heartbeat: verify each branch contains #106 merge commit; chase; tell owner if filter session merges anything after.",
+  "106": "02:55 MERGED d243361 (CI fully green). Broadcast sent to 20 sessions. Next heartbeat: verify each branch contains d243361; chase; report filter-session merges to owner. Owner step: ruleset on main.",
+  "106-broadcast": "DONE 02:55",
   "107": "01:41 MERGED 16b6a83.",
   "sweep": "02:07 sweep: nothing fully complete yet; background CI waiter running for 79,101,97,88,105,106.",
-  "heartbeat": "02:39 heartbeat: no new PRs; reviews/waiters in flight."
+  "heartbeat": "02:39 heartbeat: no new PRs; reviews/waiters in flight.",
+  "launch_template": "From now on, launch prompts use runner/README.md standing instructions (steward skill, message runner_session)."
  }
 }
