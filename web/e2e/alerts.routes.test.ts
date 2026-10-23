@@ -4,6 +4,7 @@
 import type { Page } from '@playwright/test';
 import type { components } from '../src/lib/api/schema';
 import { expectNoA11yViolations } from './a11y';
+import { dialogSettled } from './support/dialog';
 import { liveEvents } from './support/events-server';
 import { expect, test } from './support/test';
 import type { OpenApiMock } from './mock/openapi-mock';
@@ -598,12 +599,12 @@ for (const [name, themeId, colorMode] of [
 			listMocks(mock);
 			await go('/alerts');
 			await page.getByTestId('alerts-new').click();
-			await expect(page.getByRole('dialog', { name: 'Save search' })).toBeVisible();
+			await dialogSettled(page, 'Save search');
 			await expectNoA11yViolations(page);
 			await page.keyboard.press('Escape');
 			await expect(page.getByRole('dialog')).toHaveCount(0);
 			await page.getByTestId('alerts-delete-2').click();
-			await expect(page.getByRole('dialog')).toBeVisible();
+			await dialogSettled(page);
 			await expectNoA11yViolations(page);
 		});
 	});

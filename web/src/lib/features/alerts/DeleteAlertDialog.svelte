@@ -23,14 +23,8 @@
 		if (open) failed = false;
 	});
 
-	// The dialog opens on Cancel, the safe choice. Bits focuses the first control when it mounts,
-	// so wait for that.
+	// The dialog opens on Cancel, the safe choice.
 	const cancelId = $props.id();
-	$effect(() => {
-		if (!open) return;
-		const t = setTimeout(() => document.getElementById(cancelId)?.focus(), 0);
-		return () => clearTimeout(t);
-	});
 
 	async function confirm() {
 		if (busy) return;
@@ -56,6 +50,7 @@
 	title={m.alerts_delete_title({ name: search.name })}
 	description={search.rss ? m.alerts_delete_body_rss() : m.alerts_delete_body()}
 	closeLabel={m.alerts_close()}
+	initialFocus={() => document.getElementById(cancelId)}
 >
 	{#if failed}
 		<Banner kind="error">{m.alerts_delete_failed({ name: search.name })}</Banner>
