@@ -127,12 +127,14 @@ test.describe('where the static shell must not show', () => {
 		}
 	});
 
-	test.describe('another language, no app JS', () => {
+	// The app picks a browser language only when its catalogue is complete (zh is not yet), so a
+	// zh browser gets the English app and the English static shell is right for it.
+	test.describe('another language, not yet auto-selectable', () => {
 		test.use({ locale: 'zh-CN' });
-		test('is dropped, so English text never flashes', async ({ page, go }) => {
+		test('keeps the static shell, because the app will show English too', async ({ page, go }) => {
 			await blockApp(page);
 			await go('/search');
-			await expect(page.locator('#boot')).toHaveCount(0);
+			await expect(page.locator('#boot')).toHaveCount(1);
 		});
 	});
 });
@@ -177,41 +179,53 @@ test('no layout shift on the sign-in and setup screens, where the shell is dropp
 
 test.describe('another language', () => {
 	test.use({ locale: 'zh-CN' });
-	test('no English flash and no layout shift: the bar slot is reserved, then filled', async ({
+	test('no English flash and no layout shift: the shell and the app agree', async ({
 		page,
 		go
 	}) => {
 		await watchShift(page);
 		await liveEvents(page);
 		await go('/search');
-		// Never any English static text in the document at any point after parse.
 		await expect(page.locator('#boot')).toHaveCount(0);
 		await expect(page.getByTestId('status-pill')).toHaveAttribute('data-state', 'crawling');
 		expect(await cumulativeShift(page)).toBeLessThan(0.001);
 	});
 });
 
-test('keyboard focus survives the swap: Tab before the app loads, same stop after', async ({
-	page
-}) => {
-	let release: () => void = () => {};
-	const gate = new Promise<void>((resolve) => (release = resolve));
-	await page.route('**/_app/immutable/**/*.js', async (route) => {
-		await gate;
-		await route.continue();
-	});
-	await page.goto('/alerts', { waitUntil: 'commit' });
-	await expect(page.locator('#boot')).toBeAttached();
-	await page.keyboard.press('Tab');
-	await expect(page.locator('#boot a').first()).toBeFocused();
-	release();
-	await expect(page.locator('#boot')).toHaveCount(0);
-	await expect(page.getByRole('link', { name: 'Skip to main content' })).toBeFocused();
-	// And in the bar: the next Tab lands on the brand, then the destinations, as before. The full bar
-	// replaces the static one after the first frame; wait for it so the Tab does not race that swap.
-	await expect(page.getByTestId('more-button')).toBeAttached();
-	await page.keyboard.press('Tab');
-	await expect(page.getByRole('link', { name: 'Lodestar, home' })).toBeFocused();
+test.describe('keyboard focus survives the swaps', () => {
+	test.use({ viewport: { width: 1366, height: 768 } });
+	// Tab N times before the app loads, let it load, wait for the full bar: the same stop is focused.
+	for (const [tabs, stop] of [
+		[1, 'skip'],
+		[2, 'brand'],
+		[3, 'nav-search'],
+		[5, 'nav-alerts']
+	] as const) {
+		test(`Tab x${tabs} before load keeps ${stop}`, async ({ page }) => {
+			let release: () => void = () => {};
+			const gate = new Promise<void>((resolve) => (release = resolve));
+			await page.route('**/_app/immutable/**/*.js', async (route) => {
+				await gate;
+				await route.continue();
+			});
+			await page.goto('/alerts', { waitUntil: 'commit' });
+			await expect(page.locator('#boot')).toBeAttached();
+			for (let i = 0; i < tabs; i++) await page.keyboard.press('Tab');
+			const focused = () =>
+				stop === 'skip'
+					? page.getByRole('link', { name: 'Skip to main content' })
+					: page.locator(`header [data-testid="${stop}"]`);
+			await expect(focused()).toBeFocused();
+			release();
+			await expect(page.locator('#boot')).toHaveCount(0);
+			// The full bar replaces the static one a moment later; it must not take the focus with it.
+			await expect(page.getByTestId('more-button')).toBeAttached();
+			await expect(focused()).toBeFocused();
+			// And Tab carries on from there.
+			await page.keyboard.press('Tab');
+			await expect(focused()).not.toBeFocused();
+		});
+	}
 });
 
 test('the fallback font is never smaller than Atkinson, so the font swap cannot become a later LCP', async ({
@@ -261,4 +275,25 @@ test('the static links keep the density, so a click before the app loads does no
 		'href',
 		/\?density=compact$/
 	);
+	await expect(page.locator('#boot [data-boot-brand]')).toHaveAttribute(
+		'href',
+		'/search?density=compact'
+	);
+});
+
+test('Ctrl/Cmd+K as the very first key is taken from the browser, not just replayed', async ({
+	page,
+	go
+}) => {
+	await go('/search');
+	await page.evaluate(() => {
+		(window as unknown as { __k: boolean[] }).__k = [];
+		window.addEventListener('keydown', (e) => {
+			if (e.key.toLowerCase() === 'k')
+				(window as unknown as { __k: boolean[] }).__k.push(e.defaultPrevented);
+		});
+	});
+	await page.keyboard.press('Control+k');
+	expect(await page.evaluate(() => (window as unknown as { __k: boolean[] }).__k)).toEqual([true]);
+	await expect(page.getByRole('dialog')).toBeVisible();
 });

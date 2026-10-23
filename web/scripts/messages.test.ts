@@ -2,7 +2,14 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { discover, merge, mergeMessages, placeholders, topLevelKeys } from './messages.ts';
+import {
+	discover,
+	injectBootLocales,
+	merge,
+	mergeMessages,
+	placeholders,
+	topLevelKeys
+} from './messages.ts';
 
 let root: string;
 beforeEach(() => {
@@ -132,5 +139,24 @@ describe('mergeMessages', () => {
 		put(feature('search'), 'en', { search_a: '{' });
 		expect(mergeMessages(root).errors).not.toEqual([]);
 		expect(JSON.parse(readFileSync(join(root, 'messages/en.json'), 'utf8')).search_b).toBe('B');
+	});
+});
+
+describe('injectBootLocales', () => {
+	const html = '<script>var L=/*boot-locales*/{"en":1}/*end*/;</script>';
+
+	it('bakes only the locales the browser may pick on its own', () => {
+		expect(injectBootLocales(html, { en: 1, zh: 0.35 })).toContain(
+			'/*boot-locales*/{"en":1}/*end*/'
+		);
+		expect(injectBootLocales(html, { en: 1, zh: 0.96 })).toContain(
+			'/*boot-locales*/{"en":1,"zh":1}/*end*/'
+		);
+	});
+
+	it('is idempotent and says so when the marker is missing', () => {
+		const once = injectBootLocales(html, { en: 1, zh: 0.96 })!;
+		expect(injectBootLocales(once, { en: 1, zh: 0.96 })).toBe(once);
+		expect(injectBootLocales('<script></script>', { en: 1, zh: 1 })).toBeNull();
 	});
 });

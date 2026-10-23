@@ -1,31 +1,8 @@
 <script lang="ts">
-	import { resolve } from '$app/paths';
-	import { page } from '$app/state';
-	import { m } from '$lib/paraglide/messages.js';
-	import StateScreen from '$lib/shell/StateScreen.svelte';
-
-	const notFound = $derived(page.status === 404);
+	// Kit loads this node with every route (it is the error boundary), so it stays a stub: the screen
+	// itself (illustrations included) is fetched only when something has actually failed.
+	let View = $state<typeof import('$lib/shell/ErrorView.svelte').default>();
+	void import('$lib/shell/ErrorView.svelte').then((mod) => (View = mod.default));
 </script>
 
-<svelte:head
-	><title>{notFound ? m.shell_state_not_found_title() : m.shell_state_error_title()}</title
-	></svelte:head
->
-
-<StateScreen
-	title={notFound ? m.shell_state_not_found_title() : m.shell_state_error_title()}
-	text={notFound ? m.shell_state_not_found_text() : m.shell_state_error_text()}
-	code={notFound ? undefined : m.shell_state_error_code({ status: String(page.status) })}
-	scene={notFound ? 'empty_state_explore' : undefined}
->
-	{#snippet actions()}
-		<a href={resolve('/search')} class="btn btn-primary">{m.shell_state_home()}</a>
-		{#if !notFound}
-			<button
-				type="button"
-				class="btn btn-outline border-field-border"
-				onclick={() => location.reload()}>{m.shell_state_retry()}</button
-			>
-		{/if}
-	{/snippet}
-</StateScreen>
+{#if View}<View />{/if}

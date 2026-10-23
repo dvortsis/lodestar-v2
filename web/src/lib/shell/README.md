@@ -1,6 +1,6 @@
 # lib/shell
 
-App chrome (§10.3, §10.13, §10.19). `routes/+layout.svelte` renders `Shell.svelte`; `routes/+error.svelte` renders `StateScreen.svelte`. Decisions and the size budget: `docs/decisions/2026-10-22-W9.md`. Strings: `lib/features/shell/messages`.
+App chrome (§10.3, §10.13, §10.19). `routes/+layout.svelte` renders `Shell.svelte`; `routes/+error.svelte` is a stub that loads `ErrorView.svelte` (which renders `StateScreen.svelte`) only when something failed, because kit loads the error node with every route. Decisions and the size budget: `docs/decisions/2026-10-22-W9.md`. Strings: `lib/features/shell/messages`.
 
 | File                                      | Role                                                                                                  |
 | ----------------------------------------- | ----------------------------------------------------------------------------------------------------- |
