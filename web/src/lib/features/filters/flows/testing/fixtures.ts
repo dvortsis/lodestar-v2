@@ -1,4 +1,4 @@
-// Fixtures for the flows' tests and the showcase. Preview values are chosen so a sum of any two
+// Fixtures for the flows' tests. Preview values are chosen so a sum of any two
 // rows is never another row's value (a summed row would show).
 import type { ApplyResponse, Assessment, JobStatus, Preview } from '../types';
 
@@ -6,7 +6,7 @@ export const preview = (over: Partial<Preview> = {}): Preview => ({
 	quarantine: 3,
 	tombstones: 17,
 	stored: 120,
-	removed_from_floor: 0,
+	removed_from_floor: 5,
 	caught_30d: 214,
 	core_caught_30d: 9,
 	per_day: 7,

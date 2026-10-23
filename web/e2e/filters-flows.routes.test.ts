@@ -160,6 +160,8 @@ test.describe('change flows', () => {
 		await expect(page.getByTestId('change-apply')).toHaveAttribute('aria-disabled', 'true');
 		await page.getByLabel('Password').fill(PW);
 		await page.getByLabel('Password').press('Enter');
+		// Give a request that shouldn't exist time to arrive.
+		await page.waitForTimeout(500);
 		expect(mock.calls('applyFilterChange')).toHaveLength(1);
 		await expect(page.getByText('You can try again now.')).toBeVisible({ timeout: 5000 });
 	});
