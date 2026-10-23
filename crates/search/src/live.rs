@@ -10,7 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lodestar_store::Store;
 
-use crate::index::{Result, SearchIndex};
+use crate::index::{CatchUp, Result, SearchIndex};
 
 #[derive(Debug, Clone)]
 pub struct LiveConfig {
@@ -261,7 +261,11 @@ fn follow(
     let mut since = Instant::now();
     let mut pending = Pending::default();
     while !stop.load(Ordering::Relaxed) {
-        let (added, adult, replayed) = indexer.catch_up_counted(store, config.batch)?;
+        let CatchUp {
+            added,
+            adult_added: adult,
+            replayed,
+        } = indexer.catch_up_counted(store, config.batch)?;
         pending.added += added as u64;
         pending.adult += adult as u64;
         pending.indexed += (added + replayed) as u64;
@@ -699,6 +703,7 @@ mod tests {
         assert_eq!(index.adult_between(0, 5).unwrap(), 2);
         assert_eq!(index.adult_between(2, 5).unwrap(), 1);
         assert_eq!(index.adult_between(0, 1).unwrap(), 0);
+        assert_eq!(index.adult_between(1, 2).unwrap(), 1);
         assert_eq!(index.adult_between(4, 5).unwrap(), 0);
     }
 
@@ -781,6 +786,97 @@ mod tests {
         let got = wait_for(&stats, None, 0, &seen, 32);
         assert_eq!(got.iter().map(|c| c.docs_added).sum::<u64>(), 32, "{got:?}");
         assert_eq!(got.iter().map(|c| c.max_torrent_id).max(), Some(52));
+        serving.shutdown().unwrap();
+    }
+
+    /// Stores `name` with its classification in one transaction, as the
+    /// pipeline's writer does, so no indexer can see it unclassified.
+    fn add_classified(store: &mut Store, name: &str) {
+        use lodestar_bencode::{OwnedValue, to_vec};
+        let b = |s: &str| OwnedValue::Bytes(s.as_bytes().to_vec());
+        let raw = to_vec(&OwnedValue::Dict(
+            [
+                ("length", OwnedValue::Int(1 << 20)),
+                ("name", b(name)),
+                ("piece length", OwnedValue::Int(1 << 16)),
+                ("pieces", OwnedValue::Bytes(vec![0; 20])),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.as_bytes().to_vec(), v))
+            .collect(),
+        ));
+        let info = lodestar_metainfo::Info::parse(&raw).unwrap();
+        let mut prepared = store.preparer().prepare(&info, Some(&raw)).unwrap();
+        prepared.enrichment = Some(lodestar_pipeline::enrich::enrich(
+            &prepared.name,
+            &info.files,
+            info.path_encoding,
+        ));
+        store
+            .write(&lodestar_store::WriteBatch {
+                prepared: &[lodestar_store::PreparedTorrent {
+                    torrent: &prepared,
+                    discovered_at: 1_700_000_000,
+                    metadata_at: 1_700_000_001,
+                    extra_flags: 0,
+                    source: lodestar_store::SourceId::new(0).unwrap(),
+                    verified: true,
+                }],
+                ..lodestar_store::WriteBatch::default()
+            })
+            .unwrap();
+    }
+
+    /// B4b-r2: torrents only the swap makes visible (stored after the old
+    /// indexer stopped) are reported by the swap, with their Adult count.
+    #[test]
+    fn the_swap_reports_its_adult_torrents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("index");
+        let db = tmp.path().join("s.db");
+        let mut writer = Store::open(&db, StoreConfig::default()).unwrap();
+        for i in 0..20 {
+            add(&mut writer, &format!("Old.{i}"));
+        }
+        let new = exact_old(&root, &mut writer);
+        let hold = Arc::new(AtomicBool::new(true));
+        let (reached, at_swap) = (
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(true)),
+        );
+        let config = ServingConfig {
+            live: quick(),
+            rebuild_commit_docs: 5,
+            version: new,
+            hold_before_finish: Some(hold.clone()),
+            hold_at_swap: Some((reached.clone(), at_swap.clone())),
+            ..ServingConfig::default()
+        };
+        let serving = Serving::open_or_rebuild(&root, &db, config).unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let s = seen.clone();
+        serving
+            .commit_hook()
+            .set(move |c| s.lock().unwrap().push(c));
+        hold.store(false, Ordering::Relaxed);
+        let start = Instant::now();
+        while !reached.load(Ordering::Relaxed) {
+            assert!(start.elapsed() < Duration::from_secs(30));
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // The old indexer has stopped; the new one hasn't started.
+        add_classified(&mut writer, "Swap.Scene.XXX.1080p.mp4");
+        add_classified(&mut writer, "Swap.Movie.2019.1080p.mkv");
+        add_classified(&mut writer, "Swap.Clip.XXX.720p.mp4");
+        at_swap.store(false, Ordering::Relaxed);
+        while serving.rebuilding() {
+            assert!(start.elapsed() < Duration::from_secs(30));
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let got = seen.lock().unwrap().clone();
+        assert_eq!(got.len(), 1, "{got:?}");
+        let c = got[0];
+        assert_eq!((c.docs_added, c.adult_added, c.max_torrent_id), (3, 2, 23));
         serving.shutdown().unwrap();
     }
 }
