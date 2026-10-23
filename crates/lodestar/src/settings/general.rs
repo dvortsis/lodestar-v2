@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use super::{Field, Section};
+use super::{Field, Preview, Section};
 use crate::config::Config;
 
 /// The longest log filter accepted.
@@ -29,12 +29,20 @@ impl Default for General {
 impl Section for General {
     const SECTION: &'static str = "general";
     const FIELDS: &'static [Field] = &[
-        Field::new("log_level").file("log").env("LODESTAR_LOG"),
+        Field::new("log_level")
+            .file("log")
+            .env("LODESTAR_LOG")
+            .group("logging")
+            .format("log-filter")
+            .preview()
+            .keywords(),
         Field::new("data_dir")
             .file("data_dir")
             .env("LODESTAR_DATA_DIR")
             .read_only()
-            .restart(),
+            .restart()
+            .group("data")
+            .keywords(),
     ];
 
     fn from_config(config: &Config) -> Self {
@@ -50,6 +58,20 @@ impl Section for General {
         if field == "log_level" {
             config.log = self.log_level.clone();
         }
+    }
+
+    fn preview(&self, field: &str) -> Preview {
+        let verbose = self.log_level.split(',').any(|d| {
+            let level = d.rsplit('=').next().unwrap_or("").trim();
+            level.eq_ignore_ascii_case("debug") || level.eq_ignore_ascii_case("trace")
+        });
+        if field == "log_level" && verbose {
+            return Preview::default().warn(
+                "verbose_logs",
+                "Debug and trace logs grow quickly; turn them back down when you're done.",
+            );
+        }
+        Preview::default()
     }
 
     fn check(&self, field: &str) -> Result<(), String> {

@@ -24,15 +24,18 @@ pub enum Topic {
     Alerts,
     /// Insights deltas every 30 s (reserved for B11a; [`InsightsEvent`]).
     Insights,
+    /// A settings section was saved ([`SettingsEvent`]).
+    Settings,
 }
 
 impl Topic {
-    pub const ALL: [Topic; 5] = [
+    pub const ALL: [Topic; 6] = [
         Topic::Torrents,
         Topic::Crawler,
         Topic::Rebuild,
         Topic::Alerts,
         Topic::Insights,
+        Topic::Settings,
     ];
 
     /// The name in `?topics=` and in the frame's `event:` line.
@@ -43,6 +46,7 @@ impl Topic {
             Topic::Rebuild => "rebuild",
             Topic::Alerts => "alerts",
             Topic::Insights => "insights",
+            Topic::Settings => "settings",
         }
     }
 
@@ -55,6 +59,9 @@ impl Topic {
         1 << self as u8
     }
 }
+
+// Topic sets are a `u8`: past 8 topics, widen it (§10.10.9).
+const _: () = assert!(Topic::ALL.len() <= u8::BITS as usize);
 
 /// `GET /events` parameters.
 #[derive(Debug, Clone, Default, Deserialize, IntoParams)]
@@ -182,6 +189,16 @@ pub struct InsightsStages {
     pub understand: u64,
 }
 
+/// `event: settings`: a section was saved (by any tab, device or API
+/// client) and is now at `revision`. It carries no values: fetch them
+/// with `GET /settings/{section}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({ "revision": 4, "section": "crawler" }))]
+pub struct SettingsEvent {
+    pub revision: u64,
+    pub section: String,
+}
+
 /// Why a `resync` was sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -218,6 +235,7 @@ pub enum Event {
     Rebuild(RebuildEvent),
     Alerts(AlertsEvent),
     Insights(InsightsEvent),
+    Settings(SettingsEvent),
     Resync(ResyncEvent),
 }
 
@@ -231,6 +249,7 @@ impl Event {
             Event::Rebuild(_) => Topic::Rebuild,
             Event::Alerts(_) => Topic::Alerts,
             Event::Insights(_) => Topic::Insights,
+            Event::Settings(_) => Topic::Settings,
             Event::Resync(_) => return None,
         })
     }
@@ -248,6 +267,7 @@ impl Event {
             Event::Rebuild(e) => serde_json::to_string(e),
             Event::Alerts(e) => serde_json::to_string(e),
             Event::Insights(e) => serde_json::to_string(e),
+            Event::Settings(e) => serde_json::to_string(e),
             Event::Resync(e) => serde_json::to_string(e),
         };
         v.expect("event payloads serialize")
@@ -292,5 +312,11 @@ mod tests {
         });
         assert_eq!((r.name(), r.topic()), ("resync", None));
         assert_eq!(r.data(), r#"{"reason":"lagged"}"#);
+        let s = Event::Settings(SettingsEvent {
+            revision: 4,
+            section: "crawler".into(),
+        });
+        assert_eq!((s.name(), s.topic()), ("settings", Some(Topic::Settings)));
+        assert_eq!(s.data(), r#"{"revision":4,"section":"crawler"}"#);
     }
 }
