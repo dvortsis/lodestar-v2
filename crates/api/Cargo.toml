@@ -17,6 +17,9 @@ futures-core = { version = "0.3.34", default-features = false }
 hmac = "0.13.0"
 lodestar-classify.workspace = true
 lodestar-filter.workspace = true
+# `POST /settings/test` runs the download clients' own tests through its
+# SSRF guard (B2b).
+lodestar-integrations.workspace = true
 lodestar-metainfo.workspace = true
 lodestar-search.workspace = true
 lodestar-store.workspace = true

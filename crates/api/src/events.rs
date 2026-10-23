@@ -1,6 +1,7 @@
 //! `GET /events` (§9): the server-sent event stream. New torrents (from
-//! the live indexer's commit hook), crawler stats and rebuild progress
-//! now; alerts (B9) and Insights deltas (B11a) are typed and reserved.
+//! the live indexer's commit hook), crawler stats, rebuild progress and
+//! settings saves ([`EventHub::settings_saved`]) now; alerts (B9) and
+//! Insights deltas (B11a) are typed and reserved.
 //!
 //! **One hub per process.** [`EventHub::publish`] gives each event the id
 //! `<epoch>-<seq>` (a random per-process epoch, a monotonic sequence),
@@ -46,8 +47,8 @@ use utoipa::OpenApi;
 
 use crate::dto::error::ErrorEnvelope;
 use crate::dto::events::{
-    CrawlerEvent, Event, EventsQuery, RebuildEvent, RebuildPhase, ResyncEvent, ResyncReason, Topic,
-    TorrentsEvent,
+    CrawlerEvent, Event, EventsQuery, RebuildEvent, RebuildPhase, ResyncEvent, ResyncReason,
+    SettingsEvent, Topic, TorrentsEvent,
 };
 use crate::error::{ApiError, ApiResult};
 use crate::search::AdultVisibility;
@@ -500,6 +501,16 @@ impl EventHub {
         // full buffer overwrites its oldest slot (those clients lag).
         let _ = self.tx.send(stored);
         Some(id)
+    }
+
+    /// Publishes `settings`: `section` was saved and is now at
+    /// `revision`. The settings routes call it after each save that
+    /// changed a section; it carries no values.
+    pub fn settings_saved(&self, section: &str, revision: u64) -> Option<String> {
+        self.publish(&Event::Settings(SettingsEvent {
+            revision,
+            section: section.to_string(),
+        }))
     }
 
     /// Takes a stream slot for `session`.
@@ -998,6 +1009,26 @@ mod tests {
         );
         // Another process's epoch.
         assert_ne!(hub(EventsConfig::default()).epoch(), h.epoch());
+    }
+
+    #[tokio::test]
+    async fn settings_saves_reach_only_settings_subscribers() {
+        let h = hub(EventsConfig::default());
+        let mut settings = h.subscribe(Topic::Settings.bit(), None);
+        let mut torrents = h.subscribe(Topic::Torrents.bit(), None);
+        let id = h.settings_saved("crawler", 3).unwrap();
+        assert_eq!(id, format!("{}-1", h.epoch()));
+        assert_eq!(seqs(&mut settings), [Ok(1)]);
+        assert!(seqs(&mut torrents).is_empty());
+        let stored = lock(&h.ring).events[0].clone();
+        assert_eq!(
+            std::str::from_utf8(&stored.frame).unwrap(),
+            format!(
+                "id: {id}\nevent: settings\ndata: {{\"revision\":3,\"section\":\"crawler\"}}\n\n"
+            )
+        );
+        // Six topics now; the `u8` set has room for two more.
+        assert_eq!(all().count_ones(), 6);
     }
 
     #[tokio::test]
