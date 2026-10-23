@@ -186,7 +186,7 @@
    "pr": 114,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 03:53 PR #114 5bb1546 ready; +3.3 MB binary behind default-on fixture feature (brief cap 300 KB) -> reviewer to judge. Reviewer started. | 04:15 review MERGE; asked: stripped size figure (+692 KB), WARN fixture mode, stale-anchor warning, polish. Release opt-out -> P-release follow-up.",
+   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 03:53 PR #114 5bb1546 ready; +3.3 MB binary behind default-on fixture feature (brief cap 300 KB) -> reviewer to judge. Reviewer started. | 04:15 review MERGE; asked: stripped size figure (+692 KB), WARN fixture mode, stale-anchor warning, polish. Release opt-out -> P-release follow-up. | 05:27 0eb5b73 review fixes (stripped size, WARN, stale-anchor, store marker). Approved after runner delta check; merge on green.",
    "self_review": {
     "raised": 5,
     "fixed": 5,
