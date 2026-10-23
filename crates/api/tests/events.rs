@@ -54,6 +54,7 @@ fn fixture(config: EventsConfig) -> Fixture {
                 ops: None,
                 user_data: None,
                 adult: Default::default(),
+                insights: None,
             }),
         )
         .layer(Extension(hub.clone()));
@@ -495,6 +496,7 @@ async fn without_a_hub_it_is_unavailable() {
             ops: None,
             user_data: None,
             adult: Default::default(),
+            insights: None,
         }),
     );
     let cookie = session(&auth);
@@ -596,6 +598,7 @@ async fn the_torrents_count_leaves_out_adult_while_it_is_hidden() {
                 ops: None,
                 user_data: None,
                 adult,
+                insights: None,
             }),
         )
         .layer(Extension(hub.clone()));

@@ -52,6 +52,7 @@ fn fixture(file: Option<&str>, env: &[(&'static str, &'static str)]) -> Fixture 
             ops: None,
             adult: Default::default(),
             user_data: None,
+            insights: None,
         }),
     );
     Fixture {

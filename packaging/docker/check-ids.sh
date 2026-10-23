@@ -25,11 +25,34 @@ if [ -z "$pid" ] || [ "$pid" = 0 ]; then
   exit 1
 fi
 
-fail=0
+if [ ! -d /proc/"$pid"/task ]; then
+  echo "::error::$name: PID $pid is gone"
+  exit 1
+fi
+
+# Fields of the thread status read last ($snap).
+field() { awk -v k="$1:" '$1 == k { $1 = ""; sub(/^[ \t]+/, ""); print; exit }' <<<"$snap"; }
+
+fail=0 checked=0 main_checked=0
 for status in /proc/"$pid"/task/*/status; do
-  field() { sudo awk -v k="$1:" '$1 == k { $1 = ""; sub(/^[ \t]+/, ""); print; exit }' "$status"; }
+  # Read each thread's status once. A thread can exit between the glob and
+  # the read: one whose task directory is gone runs nothing, so it's
+  # skipped. Any other failed read fails the check, and the main thread
+  # (task id = pid) must always be read.
+  task=${status%/status}
+  if ! snap=$(sudo cat "$status"); then
+    if [ -d /proc/"$pid"/task/"$pid" ] && [ ! -e "$task" ]; then
+      echo "$name $task: exited before it was read, skipped"
+    else
+      echo "::error::$name $task: status unreadable"
+      fail=1
+    fi
+    continue
+  fi
   got_uid=$(field Uid) got_gid=$(field Gid) groups=$(field Groups)
-  echo "$name ${status%/status}: Uid=[$got_uid] Gid=[$got_gid] Groups=[$groups]"
+  checked=$((checked + 1))
+  if [ "$task" = /proc/"$pid"/task/"$pid" ]; then main_checked=1; fi
+  echo "$name $task: Uid=[$got_uid] Gid=[$got_gid] Groups=[$groups]"
   [ "$got_uid" = "$uid $uid $uid $uid" ] || { echo "::error::$name runs as uid $got_uid, not $uid"; fail=1; }
   [ "$got_gid" = "$gid $gid $gid $gid" ] || { echo "::error::$name runs as gid $got_gid, not $gid"; fail=1; }
   [ "$groups" = "$want_groups" ] || { echo "::error::$name has groups [$groups], not [$want_groups]"; fail=1; }
@@ -40,10 +63,14 @@ for status in /proc/"$pid"/task/*/status; do
   for cap in CapPrm CapEff CapAmb; do
     v=$(field "$cap")
     case "$v" in
-      *[!0]*) echo "::error::$name has $cap=$v"; fail=1 ;;
+      '' | *[!0]*) echo "::error::$name has $cap=[$v]"; fail=1 ;;
     esac
   done
 done
+if [ "$main_checked" != 1 ]; then
+  echo "::error::$name: the main thread's status couldn't be read ($checked threads checked)"
+  fail=1
+fi
 
 if [ -n "$data" ]; then
   owner=$(sudo stat --format '%u:%g' "$data")

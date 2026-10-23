@@ -91,6 +91,7 @@ fn fixture(n: usize) -> Fixture {
             ops: None,
             user_data: None,
             adult: Default::default(),
+            insights: None,
         }),
     );
     let mut f = Fixture {
