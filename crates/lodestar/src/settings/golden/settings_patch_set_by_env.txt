@@ -1,2 +1,2 @@
 409
-{"error":{"code":"set_by_environment","field":"dht_port","message":"The environment variable LODESTAR_DHT_PORT sets this, and it takes precedence. Change or remove LODESTAR_DHT_PORT and restart."}}
+{"error":{"code":"set_by_environment","field":"dht_port","message":"The environment variable LODESTAR_DHT_PORT sets this, and it takes precedence. Change or remove LODESTAR_DHT_PORT and restart.","section":"network"}}
