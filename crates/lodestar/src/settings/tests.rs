@@ -649,23 +649,33 @@ async fn the_intensity_reaches_the_running_dht() {
         let node = &node;
         async move {
             let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
-            while tokio::time::Instant::now() < deadline {
-                if node.snapshot().await.unwrap().intensity == want {
-                    return true;
+            loop {
+                let now = node.snapshot().await.unwrap().intensity;
+                if now == want {
+                    return;
                 }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "after 15 s the node's intensity is {now:?}, wanted {want:?}"
+                );
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             }
-            false
         }
     };
-    assert!(until(DhtIntensity::Low).await);
+    until(DhtIntensity::Low).await;
     r.patch("crawler", patch(json!({ "intensity": "aggressive" })))
         .unwrap();
-    assert!(until(DhtIntensity::Aggressive).await);
+    until(DhtIntensity::Aggressive).await;
     // A change to another crawler field leaves the node alone.
     r.patch("crawler", patch(json!({ "timeout_secs": 30 })))
         .unwrap();
-    assert!(until(DhtIntensity::Aggressive).await);
+    // A negative check: the node must still be Aggressive after a fixed
+    // window, so it stays a sleep.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(
+        node.snapshot().await.unwrap().intensity,
+        DhtIntensity::Aggressive
+    );
     task.abort();
     node.shutdown().await.unwrap();
 }

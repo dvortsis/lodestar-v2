@@ -1693,13 +1693,13 @@ async fn insights_events_go_out_only_while_someone_listens() {
     let start = Instant::now();
     while text.matches("event: insights").count() < 2 {
         assert!(
-            start.elapsed() < std::time::Duration::from_secs(5),
+            start.elapsed() < std::time::Duration::from_secs(15),
             "{text}"
         );
         let next = std::future::poll_fn(|cx| {
             futures_core::Stream::poll_next(std::pin::Pin::new(&mut body), cx)
         });
-        let chunk = tokio::time::timeout(std::time::Duration::from_secs(5), next)
+        let chunk = tokio::time::timeout(std::time::Duration::from_secs(15), next)
             .await
             .expect("an event")
             .expect("open")

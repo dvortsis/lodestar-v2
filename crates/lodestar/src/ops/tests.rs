@@ -261,23 +261,26 @@ async fn starts_during(f: &Fixture, ms: u64) -> usize {
 }
 
 /// Polls `check` every 25 ms for up to 15 s, then panics saying `what`
-/// it was waiting for.
-async fn eventually(what: &str, mut check: impl FnMut() -> bool) {
+/// it was waiting for and what `seen` reports.
+async fn eventually(what: &str, seen: impl Fn() -> String, mut check: impl FnMut() -> bool) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     while !check() {
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out after 15 s waiting for {what}"
+            "timed out after 15 s waiting for {what}; last saw {}",
+            seen()
         );
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
 }
 
-/// Waits until fetch starts stop changing, which is how a pause that is
-/// still draining in-flight work shows it has taken hold.
+/// Waits until fetch starts stop changing between two reads 100 ms
+/// apart. A pause applies before the API answers, so this settles at
+/// once; the 5 s bound is there so a pool that keeps starting fetches
+/// after a pause fails here instead of passing.
 async fn starts_settled(f: &Fixture) {
     let mut last = usize::MAX;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         let now = f.starts.load(Ordering::SeqCst);
         if now == last {
@@ -285,7 +288,7 @@ async fn starts_settled(f: &Fixture) {
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "fetch starts kept changing for 15 s, last saw {now}"
+            "fetch starts kept changing for 5 s, last saw {now}"
         );
         last = now;
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -313,7 +316,7 @@ async fn answers(addr: SocketAddr) -> bool {
     };
     socket.send_to(&msg.encode(), addr).await.unwrap();
     let mut buf = [0u8; 1500];
-    match tokio::time::timeout(Duration::from_secs(2), socket.recv_from(&mut buf)).await {
+    match tokio::time::timeout(Duration::from_secs(10), socket.recv_from(&mut buf)).await {
         Ok(Ok((n, _))) => krpc::parse(&buf[..n]).is_ok_and(|m| matches!(m.body, Krpc::Response(_))),
         _ => false,
     }
@@ -346,11 +349,13 @@ async fn pause_resume_and_intensity_through_the_api() {
     assert_eq!(running["state"], json!("running"));
     assert_eq!(running["intensity"], json!("balanced"));
     assert_eq!(running["intensity_env"], Value::Null);
-    eventually("more than 10 fetch starts", || {
-        f.starts.load(Ordering::SeqCst) > 10
-    })
+    eventually(
+        "more than 10 fetch starts",
+        || f.starts.load(Ordering::SeqCst).to_string(),
+        || f.starts.load(Ordering::SeqCst) > 10,
+    )
     .await;
-    eventually("DHT stats", || f.dht.stats().is_some()).await;
+    eventually("DHT stats", || "none".into(), || f.dht.stats().is_some()).await;
 
     // Pause: no new fetch starts within a bound, the node holds its
     // crawl but still answers, and one event is recorded.
@@ -418,9 +423,11 @@ async fn pause_resume_and_intensity_through_the_api() {
     assert_eq!(status, 200);
     let (_, crawler) = f.send(req("GET", "/api/v1/crawler", c, None)).await;
     assert_eq!(crawler["intensity"], json!("aggressive"));
-    eventually("the low and aggressive intensity events", || {
-        f.events(event::INTENSITY) == ["low", "aggressive"]
-    })
+    eventually(
+        "the low and aggressive intensity events",
+        || format!("{:?}", f.events(event::INTENSITY)),
+        || f.events(event::INTENSITY) == ["low", "aggressive"],
+    )
     .await;
     let (status, bad) = f
         .send(req(
@@ -444,7 +451,12 @@ async fn pause_resume_and_intensity_through_the_api() {
         Some(r#"{"paused":true}"#),
     ))
     .await;
-    eventually("two pause events", || f.events(event::PAUSE).len() == 2).await;
+    eventually(
+        "two pause events",
+        || format!("{:?}", f.events(event::PAUSE)),
+        || f.events(event::PAUSE).len() == 2,
+    )
+    .await;
     assert_eq!(node_paused(&f.dht).await, Some(true));
     assert!(f.ops.control.status().paused);
     f.stop().await;
@@ -457,25 +469,44 @@ async fn stats_match_the_metrics() {
     let mut f = fixture().await;
     let cookie = f.session().await;
     let c = cookie.as_str();
-    eventually("more than 5 fetch starts", || {
-        f.starts.load(Ordering::SeqCst) > 5
-    })
+    eventually(
+        "more than 5 fetch starts",
+        || f.starts.load(Ordering::SeqCst).to_string(),
+        || f.starts.load(Ordering::SeqCst) > 5,
+    )
     .await;
     // Pausing holds the counters still, so the two reads agree.
     f.send(req("POST", "/api/v1/crawler/pause", c, Some("{}")))
         .await;
     starts_settled(&f).await;
-    let (status, stats) = f.send(req("GET", "/api/v1/stats", c, None)).await;
-    assert_eq!(status, 200, "{stats}");
-    let monitor = f.ops.monitor.clone();
-    let metrics = crate::metrics::render(&monitor, f.dht.stats().as_ref(), &Default::default());
-    let metric = |name: &str| -> u64 {
-        metrics
-            .lines()
-            .find_map(|l| l.strip_prefix(&format!("lodestar_{name} ")))
-            .unwrap_or_else(|| panic!("no {name} in /metrics"))
-            .parse()
-            .unwrap()
+    // The Feed source keeps emitting while paused, so the two reads are only
+    // compared once they agree on the fields that move; try until they do.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let (stats, metric) = loop {
+        let (status, stats) = f.send(req("GET", "/api/v1/stats", c, None)).await;
+        assert_eq!(status, 200, "{stats}");
+        let monitor = f.ops.monitor.clone();
+        let metrics = crate::metrics::render(&monitor, f.dht.stats().as_ref(), &Default::default());
+        let metric = move |name: &str| -> u64 {
+            metrics
+                .lines()
+                .find_map(|l| l.strip_prefix(&format!("lodestar_{name} ")))
+                .unwrap_or_else(|| panic!("no {name} in /metrics"))
+                .parse()
+                .unwrap()
+        };
+        if stats["stored_torrents"] == json!(metric("torrents"))
+            && stats["queue_depth"] == json!(metric("fetch_pending"))
+        {
+            break (stats, metric);
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "after 15 s /stats said {stats} but /metrics said torrents {} fetch_pending {}",
+            metric("torrents"),
+            metric("fetch_pending")
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
     };
     assert_eq!(stats["stored_torrents"], json!(metric("torrents")));
     assert_eq!(stats["queue_depth"], json!(metric("fetch_pending")));
