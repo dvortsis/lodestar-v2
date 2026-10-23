@@ -241,7 +241,7 @@ impl Plan {
             // older than its oldest row. Deleted or changed searches,
             // marks, notes and keys leave no trace to match a snapshot
             // against: they go with the snapshot at 90 days.
-            10 => Some(Plan {
+            10..=Self::KNOWN_THROUGH => Some(Plan {
                 torrents: true,
                 filter: true,
                 query_log: true,
