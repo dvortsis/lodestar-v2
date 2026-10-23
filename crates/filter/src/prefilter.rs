@@ -25,9 +25,6 @@ use lodestar_search::{DocEnrichment, Node};
 /// A torrent's tag keys, built on first use.
 pub(crate) type Tags<'a, 't> = &'a dyn Fn() -> &'t IdSet;
 
-/// Whether a torrent passes a [`Gate`].
-pub(crate) type Gates<'a> = &'a dyn Fn(Gate) -> bool;
-
 use crate::hash::{IdMap, IdSet, fmix64, fnv_byte, fnv_start, term_hash};
 use crate::matcher::{Compiled, compile, gate};
 use crate::rules::UserRule;
@@ -281,7 +278,12 @@ impl DocKeys {
             out: IdMap::with_capacity_and_hasher(256, Default::default()),
             pairs: Bloom::for_text(bytes),
             starts: Bloom::for_text(bytes),
-            vocabulary: Vocabulary::default(),
+            // Room for a typical torrent's distinct texts, so they're
+            // rarely moved as they grow.
+            vocabulary: Vocabulary {
+                buf: String::with_capacity(bytes.min(4096)),
+                words: Vec::with_capacity(128),
+            },
             seen: [const { None }; SEEN],
             at: At::default(),
         };
@@ -511,27 +513,38 @@ impl Vocabulary {
     /// entry `after` of the same hash, and its starts to `starts`.
     fn push(&mut self, text: Piece<'_>, after: u32, starts: &mut Bloom) -> u32 {
         let start = self.buf.len();
-        match text {
+        let (chars, has) = match text {
             Piece::Ascii(pieces) => {
-                for p in pieces {
-                    self.buf
-                        .extend(p.iter().map(|c| char::from(c.to_ascii_lowercase())));
+                // Pieces of ASCII text, at most a token long between them.
+                let mut low = [0u8; MAX_TOKEN_BYTES];
+                let mut n = 0;
+                for &c in pieces.iter().flat_map(|p| p.iter()) {
+                    low[n] = c.to_ascii_lowercase();
+                    n += 1;
                 }
+                let low = &low[..n];
+                self.buf
+                    .push_str(std::str::from_utf8(low).expect("ASCII text"));
+                add_starts(starts, low.iter().copied());
+                let has = low.iter().fold(0, |m, &c| m | char_bit(char::from(c)));
+                (n, has)
             }
-            Piece::Str(t) => self.buf.push_str(t),
-        }
-        let text = &self.buf[start..];
-        if text.is_ascii() {
-            add_starts(starts, text.bytes());
-        } else {
-            add_starts_str(starts, text);
-        }
+            Piece::Str(t) => {
+                self.buf.push_str(t);
+                if t.is_ascii() {
+                    add_starts(starts, t.bytes());
+                } else {
+                    add_starts_str(starts, t);
+                }
+                (t.chars().count(), char_set(t))
+            }
+        };
         let i = self.words.len() as u32;
         self.words.push(Entry {
             start: start as u32,
             end: self.buf.len() as u32,
-            chars: text.chars().count() as u32,
-            has: char_set(text),
+            chars: chars as u32,
+            has,
             next: NONE,
         });
         if after != NONE {
@@ -1034,7 +1047,7 @@ impl RuleList {
         &self,
         keys: &DocKeys,
         tags: Tags<'_, '_>,
-        gates: Gates<'_>,
+        gates: impl Fn(Gate) -> bool,
     ) -> Vec<u32> {
         let ix = self.index();
         // Marked by position, then read in order.
@@ -1364,7 +1377,7 @@ mod tests {
         ]);
         let keys = DocKeys::new("Alpha.Gamma", &[]);
         let ids = |l: &RuleList| {
-            l.candidates(&keys, &|| &NO_TAGS, &|_| true)
+            l.candidates(&keys, &|| &NO_TAGS, |_| true)
                 .iter()
                 .map(|&i| l[i as usize].id)
                 .collect::<Vec<_>>()
