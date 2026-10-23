@@ -199,7 +199,7 @@ impl<Tx: Serialize + Send + 'static, Rx: Inbound> Link<Tx, Rx> {
     pub async fn close(&mut self) {
         match &mut self.transport {
             Transport::Ws(ws) => {
-                let _ = ws.close(None).await;
+                let _ = WebSocketStream::close(ws, None).await;
             }
             Transport::Local { rx, .. } => rx.close(),
         }
