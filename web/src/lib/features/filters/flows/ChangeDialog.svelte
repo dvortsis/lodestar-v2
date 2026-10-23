@@ -160,6 +160,8 @@
 	}
 
 	function initialFocus() {
+		// A form step starts on its first control, as the modal does by default.
+		if (!active) return null;
 		return s.kind === 'confirm' ? passwordEl() : titleEl();
 	}
 
@@ -236,8 +238,8 @@
 		const restore = () => {
 			if (panel?.isConnected && tries++ < 60) return void requestAnimationFrame(restore);
 			const now = document.activeElement;
-			const lost =
-				!now || now === document.body || !now.isConnected || !!now.closest('[role="dialog"]');
+			// Lost means nowhere, or still in this (closed) dialog; another dialog keeps it.
+			const lost = !now || now === document.body || !now.isConnected || !!panel?.contains(now);
 			if (lost && back instanceof HTMLElement && back.isConnected) back.focus();
 		};
 		requestAnimationFrame(restore);
@@ -440,6 +442,12 @@
 				{shadowing
 					? m.filters_flows_shadow_off()
 					: m.filters_flows_shadow({ days: formatCount(shadowDays, currentLocale()) })}
+			</Button>
+		{/if}
+		{#if form && (s.kind === 'review' || s.kind === 'confirm' || s.kind === 'failed')}
+			<!-- Back to the form step, with what was typed: the change can be corrected. -->
+			<Button variant="quiet" onclick={() => flow.cancel()} data-testid="change-back">
+				{m.filters_flows_back()}
 			</Button>
 		{/if}
 		{#if s.kind === 'failed' && s.canRetry}

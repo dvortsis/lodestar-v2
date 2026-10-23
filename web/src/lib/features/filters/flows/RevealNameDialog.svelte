@@ -20,12 +20,13 @@
 	const flow = createChangeFlow();
 
 	// Opening previews the reveal (warning + password); the dialog itself then owns the flow.
-	let started = false;
+	// A new hash while open previews that torrent instead (the old name goes with the old flow state).
+	let started: string | null = null;
 	$effect(() => {
-		if (open && !started) {
-			started = true;
+		if (open && started !== hash) {
+			started = hash;
 			flow.start(revealName(hash));
-		} else if (!open) started = false;
+		} else if (!open) started = null;
 	});
 </script>
 
@@ -41,7 +42,7 @@
 			<p class="text-muted-text">{m.filters_flows_reveal_lead()}</p>
 			<div class="flex flex-col gap-1">
 				<span class="text-small font-medium">{m.filters_flows_reveal_name()}</span>
-				<span data-testid="reveal-name"><Mono wrap>{response.name ?? '—'}</Mono></span>
+				<span data-testid="reveal-name" dir="auto"><Mono wrap>{response.name ?? '—'}</Mono></span>
 			</div>
 		</div>
 	{/snippet}

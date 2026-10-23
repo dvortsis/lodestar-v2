@@ -101,7 +101,8 @@
 	};
 	const reasons = {
 		no_payload_signature: m.filters_flows_reason_no_payload_signature,
-		no_group: m.filters_flows_reason_no_group
+		no_group: m.filters_flows_reason_no_group,
+		bad_hash: m.filters_flows_reason_bad_hash
 	};
 
 	function startPreview() {
@@ -116,6 +117,23 @@
 		matches = null;
 	}
 </script>
+
+{#snippet matchesNow()}
+	{#if query}
+		<div class="flex flex-col gap-1">
+			<span data-testid="block-query"><Mono wrap>{query}</Mono></span>
+			<p class="flex justify-between gap-3">
+				<span class="text-muted-text">{m.filters_flows_matches_now()}</span>
+				<span class="tabular-nums" data-testid="block-matches" aria-live="polite">
+					{#if matches === 'failed'}{m.filters_flows_matches_failed()}{:else if matches}{formatCount(
+							{ value: matches.total, approx: matches.approx },
+							currentLocale()
+						)}{:else}—{/if}
+				</span>
+			</p>
+		</div>
+	{/if}
+{/snippet}
 
 <ChangeDialog
 	{flow}
@@ -147,6 +165,7 @@
 								{reasons[s.reason]()}
 							</p>
 						{:else if s.tier === 'torrent' && s.query}
+							<p class="text-small text-muted-text">{m.filters_flows_tier_torrent_help()}</p>
 							<Mono wrap class="text-muted-text">{s.query}</Mono>
 						{/if}
 					</div>
@@ -188,21 +207,11 @@
 					</div>
 				{/each}
 			</fieldset>
-			{#if query}
-				<div class="flex flex-col gap-1">
-					<span data-testid="block-query"><Mono wrap>{query}</Mono></span>
-					<p class="flex justify-between gap-3">
-						<span class="text-muted-text">{m.filters_flows_matches_now()}</span>
-						<span class="tabular-nums" data-testid="block-matches" aria-live="polite">
-							{#if matches === 'failed'}{m.filters_flows_matches_failed()}{:else if matches}{formatCount(
-									{ value: matches.total, approx: matches.approx },
-									currentLocale()
-								)}{:else}—{/if}
-						</span>
-					</p>
-				</div>
-			{/if}
+			{@render matchesNow()}
 		</div>
+	{/snippet}
+	{#snippet extra()}
+		{#if flow.state.kind !== 'previewing'}{@render matchesNow()}{/if}
 	{/snippet}
 	{#snippet formFooter()}
 		<Button

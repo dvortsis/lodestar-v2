@@ -9,6 +9,8 @@
 	import Field from '$lib/ui/fields/Field.svelte';
 	import Input from '$lib/ui/fields/Input.svelte';
 	import Textarea from '$lib/ui/fields/Textarea.svelte';
+	import { formatCount } from '$lib/format';
+	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import ChangeDialog from './ChangeDialog.svelte';
 	import { addOverride, type OverrideInput } from './changes';
@@ -36,7 +38,10 @@
 	let expires = $state('');
 	let shadow = $state('');
 	let tried = $state(false);
+	const applying = $derived(flow.state.kind === 'applying');
 
+	/** The server caps expiry and shadow at ten years; zero would expire at once. */
+	const MAX_DAYS = 3650;
 	const HEX40 = /^[0-9a-f]{40}$/i;
 	const HEX16 = /^[0-9a-f]{16}$/i;
 	const hashes = $derived(value.split(/[\s,]+/).filter(Boolean));
@@ -50,7 +55,9 @@
 	const days = (s: string) => (s.trim() === '' ? null : /^\d+$/.test(s.trim()) ? Number(s) : NaN);
 	const dayError = (s: string) => {
 		const d = days(s);
-		return d === null || (d >= 1 && d <= 3650) ? undefined : m.filters_flows_invalid_days();
+		return d === null || (d >= 1 && d <= MAX_DAYS)
+			? undefined
+			: m.filters_flows_invalid_days({ max: formatCount(MAX_DAYS, currentLocale()) });
 	};
 
 	function entry(neutralize: boolean): ChangeOf<'add_override'> {
@@ -85,7 +92,11 @@
 		const s = flow.state;
 		if ((s.kind !== 'review' && s.kind !== 'confirm') || s.change.op !== 'add_override') return;
 		if (kind !== 'keyword' || !!s.change.neutralize === (strength === 'neutralize')) return;
-		flow.variant(entry(strength === 'neutralize'));
+		// From the change previewed, not the form: a shadow choice made since is kept.
+		const next = { ...s.change };
+		if (strength === 'neutralize') next.neutralize = true;
+		else delete next.neutralize;
+		flow.variant(next);
 	});
 
 	// The two columns come from the server: an Override preview carries the Neutralize numbers
@@ -178,9 +189,24 @@
 			<Field label={valueLabel} help={valueHelp} error={tried ? valueError : undefined} required>
 				{#snippet children(props)}
 					{#if kind === 'hashes'}
-						<Textarea {...props} bind:value rows={3} mono data-testid="override-value" />
+						<Textarea
+							{...props}
+							bind:value
+							rows={3}
+							mono
+							spellcheck="false"
+							autocapitalize="off"
+							data-testid="override-value"
+						/>
 					{:else}
-						<Input {...props} bind:value mono={kind === 'payload'} data-testid="override-value" />
+						<Input
+							{...props}
+							bind:value
+							mono={kind === 'payload'}
+							spellcheck="false"
+							autocapitalize="off"
+							data-testid="override-value"
+						/>
 					{/if}
 				{/snippet}
 			</Field>
@@ -201,7 +227,13 @@
 			{/if}
 			<Field label={m.filters_flows_scope_label()} help={m.filters_flows_scope_help()}>
 				{#snippet children(props)}
-					<Input {...props} bind:value={scope} data-testid="override-scope" />
+					<Input
+						{...props}
+						bind:value={scope}
+						spellcheck="false"
+						autocapitalize="off"
+						data-testid="override-scope"
+					/>
 				{/snippet}
 			</Field>
 			<Field label={m.filters_flows_expires_label()} error={tried ? dayError(expires) : undefined}>
@@ -231,20 +263,27 @@
 		</Button>
 	{/snippet}
 	{#snippet extra()}
-		{#if kind === 'keyword'}
+		<!-- Neutralize is offered once the server has previewed it beside Override (it refuses it
+		     for some keywords), and stays while it's the strength chosen. -->
+		{#if kind === 'keyword' && (neutralCol || strength === 'neutralize')}
 			<div class="flex flex-col gap-1">
 				<span class="text-small font-medium">{m.filters_flows_strength()}</span>
 				<SegmentedControl
-					options={strengths}
+					options={strengths.map((o) => ({ ...o, disabled: applying }))}
 					bind:value={strength}
 					label={m.filters_flows_strength()}
 				/>
+				<p class="text-small text-muted-text">
+					{strength === 'override'
+						? m.filters_flows_strength_override_help()
+						: m.filters_flows_strength_neutralize_help()}
+				</p>
 			</div>
 		{/if}
 	{/snippet}
 	{#snippet summary(a: Assessment)}
 		{#if kind === 'keyword' && overrideCol && neutralCol}
-			<ImpactSummary preview={overrideCol} neutralize={neutralCol} />
+			<ImpactSummary preview={overrideCol} neutralize={neutralCol} chosen={strength} />
 		{:else}
 			<ImpactSummary preview={a.preview} />
 		{/if}

@@ -470,6 +470,22 @@ test.describe('part 2: CSX-5, Block this, reveal', () => {
 					await expect(page.getByTestId('block-matches')).toContainText('≈');
 					await settled(page);
 					await expectNoA11yViolations(page);
+					await page.keyboard.press('Escape');
+					await expect(page.getByRole('dialog')).toHaveCount(0);
+					mock.on('applyFilterChange', {
+						applied: true,
+						assessment: weakening(),
+						version: 3,
+						name: 'Some.Sealed.Name'
+					});
+					await page.getByTestId('open-reveal').click();
+					await expect(page.getByLabel('Password')).toBeFocused();
+					await settled(page);
+					await expectNoA11yViolations(page);
+					await page.getByLabel('Password').fill(PW);
+					await page.getByLabel('Password').press('Enter');
+					await expect(page.getByTestId('reveal-name')).toBeVisible();
+					await expectNoA11yViolations(page);
 				});
 			}
 		});
