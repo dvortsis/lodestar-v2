@@ -86,6 +86,23 @@ impl LogName {
         matches!(self, LogName::Rotated { gz: true, .. })
     }
 
+    /// The same file once compressed (a rotated `.jsonl` becomes
+    /// `.jsonl.gz`).
+    pub fn compressed(&self) -> Option<LogName> {
+        match self {
+            LogName::Rotated {
+                stamp,
+                n,
+                gz: false,
+            } => Some(LogName::Rotated {
+                stamp: stamp.clone(),
+                n: *n,
+                gz: true,
+            }),
+            _ => None,
+        }
+    }
+
     /// Its path in `dir`, built from the typed value.
     pub fn path(&self, dir: &Path) -> PathBuf {
         dir.join(self.file_name())
@@ -151,7 +168,9 @@ pub fn open_regular(path: &Path) -> io::Result<File> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        o.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+        // Non-blocking, so a FIFO put in a log's place can't hang the open;
+        // it's refused just after as not a regular file.
+        o.custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32);
     }
     #[cfg(windows)]
     {

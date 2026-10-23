@@ -149,6 +149,21 @@ impl LogSource for Fake {
             p.iter().skip(generation as usize).cloned().collect(),
         )
     }
+    fn purges_covering(&self, seq: u64) -> Vec<LogPurge> {
+        self.purges
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|p| {
+                p.through
+                    .rsplit('-')
+                    .next()
+                    .and_then(|n| n.parse::<u64>().ok())
+                    .is_some_and(|n| n >= seq)
+            })
+            .cloned()
+            .collect()
+    }
     fn history(&self, _: &HistoryQuery) -> Result<LogHistory, LogsError> {
         self.reads.fetch_add(1, Ordering::SeqCst);
         std::thread::sleep(self.history_delay);
@@ -724,4 +739,77 @@ async fn a_last_event_id_that_isnt_text_is_malformed_and_wins() {
     };
     s.until("event: resync", SOON).await;
     assert_eq!(s.data("resync")[0]["reason"], "malformed");
+}
+
+#[tokio::test]
+async fn a_client_that_stopped_reading_doesnt_pin_its_slot() {
+    let fake = Fake::new(config(), 5000);
+    let f = fixture(Some(fake.clone()));
+    let c = session(&f.auth);
+    let addr = serve(f.app.clone()).await;
+    let mut s = Conn::open(addr, "/api/v1/logs/stream", &[("cookie", &c)]).await;
+    s.until("retry:", SOON).await;
+    // Lines keep coming, enough to fill the queue and the socket's
+    // buffers; the client never reads.
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let pusher = {
+        let (fake, stop) = (fake.clone(), stop.clone());
+        tokio::spawn(async move {
+            let pad = "x".repeat(4000);
+            let mut i = 0u64;
+            while !stop.load(Ordering::Relaxed) {
+                for _ in 0..50 {
+                    fake.push(Level::Info, &format!("{i} {pad}"));
+                    i += 1;
+                }
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        })
+    };
+    let start = Instant::now();
+    while fake.transport().streams() > 0 {
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "a stalled stream let its slot go within a few heartbeats"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    stop.store(true, Ordering::Relaxed);
+    pusher.await.unwrap();
+    drop(s);
+}
+
+#[tokio::test]
+async fn a_resumed_stream_gets_the_purges_it_missed() {
+    let fake = Fake::new(config(), 100);
+    let f = fixture(Some(fake.clone()));
+    let c = session(&f.auth);
+    let addr = serve(f.app.clone()).await;
+    let a = fake.push(Level::Info, "a");
+    let b = fake.push(Level::Info, "b");
+    // A purge while it was away, reaching lines it already had.
+    fake.purge(b);
+    let mut s = Conn::open(
+        addr,
+        "/api/v1/logs/stream",
+        &[("cookie", &c), ("last-event-id", &format!("{EPOCH}-{a}"))],
+    )
+    .await;
+    s.until("\"msg\":\"b\"", SOON).await;
+    let purge_at = s.text.find("event: purge").expect("the missed purge");
+    assert!(
+        purge_at < s.text.find("\"msg\":\"b\"").unwrap(),
+        "before any line"
+    );
+    drop(s);
+    // From the newest: nothing to replay.
+    let mut s = Conn::open(
+        addr,
+        &format!("/api/v1/logs/stream?after={EPOCH}-{b}"),
+        &[("cookie", &c)],
+    )
+    .await;
+    s.until("retry:", SOON).await;
+    // `through` is b, which it has: the purge reaches it, so it comes.
+    s.until("event: purge", SOON).await;
 }

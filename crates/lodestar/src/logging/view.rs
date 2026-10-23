@@ -23,7 +23,10 @@ use lodestar_log::url::scrub_text;
 use lodestar_log::{Component, Kind, Level, Mask};
 use serde_json::Value as Json;
 
-use super::entry::{Entry, FieldType, HIDDEN, REDACTED, Shown, Source, redact_setup_token};
+use super::entry::{
+    self, ENTRY_OVERHEAD, Entry, FIELD_OVERHEAD, FieldType, HIDDEN, MAX_ENTRY, REDACTED, Shown,
+    Source, redact_setup_token,
+};
 use super::format::Stamp;
 
 pub fn level(l: Level) -> LogLevel {
@@ -155,6 +158,45 @@ pub fn ring_line(e: &Entry, mask: Mask, epoch: &str) -> Option<LogLine> {
     })
 }
 
+/// Cuts a line read from a file as the ring cuts its entries: at most
+/// [`MAX_ENTRY`] accounted (messages to 4 KiB, then values, then whole
+/// fields), marked `truncated`.
+pub fn cut(l: &mut LogLine) {
+    let text = |v: &LogValue| match v {
+        LogValue::Text(t) => t.len(),
+        _ => 0,
+    };
+    let accounted = |l: &LogLine| {
+        ENTRY_OVERHEAD
+            + l.msg.len()
+            + l.target.as_ref().map_or(0, String::len)
+            + l.fields
+                .iter()
+                .map(|f| FIELD_OVERHEAD + f.name.len() + text(&f.value))
+                .sum::<usize>()
+    };
+    if accounted(l) <= MAX_ENTRY {
+        return;
+    }
+    entry::cut(&mut l.msg, 4096);
+    if let Some(t) = &mut l.target {
+        entry::cut(t, 256);
+    }
+    for f in &mut l.fields {
+        entry::cut(&mut f.name, 256);
+    }
+    let fixed = accounted(l) - l.fields.iter().map(|f| text(&f.value)).sum::<usize>();
+    let mut budget = MAX_ENTRY.saturating_sub(fixed);
+    for f in &mut l.fields {
+        if let LogValue::Text(t) = &mut f.value {
+            entry::cut(t, budget);
+            budget = budget.saturating_sub(t.len());
+        }
+    }
+    while accounted(l) > MAX_ENTRY && l.fields.pop().is_some() {}
+    l.truncated = true;
+}
+
 /// Whether `l` passes `f`, matched as shown.
 pub fn matches(l: &LogLine, f: &LineFilter) -> bool {
     if !f.level_ok(level_of(l.level)) || !f.component_ok(component_of(l.component)) {
@@ -261,7 +303,7 @@ pub fn file_line(bytes: &[u8], mask: Option<Mask>) -> Result<Option<LogLine>, ()
             let lkind = match (data, kind.as_str()) {
                 (Some(k), _) => field_kind(FieldType::Data(k)),
                 (None, "error") => LogFieldKind::Error,
-                (None, "label") => LogFieldKind::Label,
+                (None, "label" | "setup_token") => LogFieldKind::Label,
                 (None, "untyped") => LogFieldKind::Untyped,
                 // Unknown: fail closed.
                 (None, _) => LogFieldKind::Untyped,
@@ -270,8 +312,13 @@ pub fn file_line(bytes: &[u8], mask: Option<Mask>) -> Result<Option<LogLine>, ()
                 !matches!(v, LogValue::Text(t) if t == HIDDEN || t.starts_with("ref:"))
             };
             let value = match (mask, data, kind.as_str()) {
-                _ if setup_token && name == "token" => LogValue::Text(REDACTED.into()),
                 (None, _, _) => value,
+                // The setup token, by its kind (or, in lines written before
+                // it had one, by its event and name).
+                (Some(_), _, "setup_token") => LogValue::Text(REDACTED.into()),
+                (Some(_), _, _) if setup_token && name == "token" => {
+                    LogValue::Text(REDACTED.into())
+                }
                 (Some(mask), Some(k), _) => {
                     let effective = match k {
                         Kind::Peer if pairs => Kind::PeerActivity,
@@ -444,6 +491,13 @@ mod tests {
         );
         let l = file_line(&typed, Some(Mask(u32::MAX))).unwrap().unwrap();
         assert!(!serde_json::to_string(&l).unwrap().contains("ABCD"));
+        // By its kind, whatever the event or the field's name.
+        let kinded = line(
+            r#""code":{"kind":"setup_token","value":"WXYZ-1234"}"#,
+            r#""event":"some.future_event""#,
+        );
+        let l = file_line(&kinded, Some(Mask(u32::MAX))).unwrap().unwrap();
+        assert!(!serde_json::to_string(&l).unwrap().contains("WXYZ"));
         let mut plain = String::from_utf8(line("", r#""target":"lodestar::services""#)).unwrap();
         plain = plain.replace(
             r#""msg":"m""#,

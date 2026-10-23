@@ -86,12 +86,6 @@ fn logs(rt: &'static Runtime) -> Logs {
     Logs::new(Some(rt), LogStreamConfig::default())
 }
 
-fn settle(rt: &Runtime) {
-    if let FileState::Open(sink) = &*lock(&rt.file) {
-        sink.settle();
-    }
-}
-
 fn file_text(dir: &std::path::Path) -> String {
     std::fs::read_to_string(dir.join("logs").join(file::CURRENT)).unwrap_or_default()
 }
@@ -426,7 +420,7 @@ fn history_joins_the_ring_and_the_files_without_gap_or_duplicate() {
             if let FileState::Open(sink) = &mut *lock(&rt.file) {
                 sink.rotate().unwrap();
             }
-            settle(rt);
+            // No settle: compression races the paging, as in life.
         }
         match page.next_cursor {
             Some(c) => cursor = Some(c),
@@ -580,4 +574,23 @@ fn the_seam_holds_while_the_ring_evicts_during_a_walk() {
     }
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
     noise.join().unwrap();
+}
+
+#[test]
+fn file_lines_are_cut_as_the_ring_cuts_its_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rt, _) = runtime(&section(dir.path(), |_| {}), Some(1), true);
+    let big = "w".repeat(200_000);
+    std::fs::write(
+        dir.path().join("logs").join("lodestar-20200101T000000.000Z.jsonl"),
+        format!(
+            "{{\"ts\":\"2020-01-01T00:00:00.000Z\",\"level\":\"info\",\"component\":\"fetch\",\"target\":\"t\",\"msg\":\"hist-line {big}\",\"fields\":{{\"v\":{{\"kind\":\"untyped\",\"value\":\"{big}\"}}}}}}\n"
+        ),
+    )
+    .unwrap();
+    let page = logs(rt).history(&query("hist-line", 10, None)).unwrap();
+    assert_eq!(page.lines.len(), 1);
+    let l = &page.lines[0];
+    assert!(l.truncated);
+    assert!(serde_json::to_string(l).unwrap().len() < 17_000);
 }
