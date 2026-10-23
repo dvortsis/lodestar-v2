@@ -45,7 +45,7 @@ The dialog has no filter or AST input: Search's current query text is the whole 
 
 - `api.ts`: the endpoints, the types, and the only places a link is built from data (`/alerts/<id>`, `/t/<40 hex>`, `/search?q=…`, `/api/v1/feeds/<id>`).
 - `list.svelte.ts`, `detail.svelte.ts`: the pages' state (loading, paging, the read mark, the banner), tested without a DOM.
-- `divider.ts`: where the "New since …" divider goes (a pure function of the server's `read` flags).
+- `since.ts`: where the "New since …" divider goes (a pure function of the server's `read` flags).
 - `throttle.ts`: the 10 s window for the polite live region.
 - `errors.ts`: save failures → field or form message.
 - `AlertsListPage.svelte`, `AlertDetailPage.svelte`: the pages. `AlertHitRow.svelte`: an interim result row (`TODO(S-search-2)`).

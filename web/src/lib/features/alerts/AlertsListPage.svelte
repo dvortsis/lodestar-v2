@@ -4,6 +4,7 @@
 	// event refetches the list, and the rows change in place (no reordering, no animation).
 	import { onMount, tick } from 'svelte';
 	import IconTrash from '~icons/ph/trash';
+	import IconPause from '~icons/ph/pause';
 	import StateScene from '$lib/shell/StateScene.svelte';
 	import { events } from '$lib/state/events.svelte';
 	import { keys } from '$lib/keys';
@@ -187,7 +188,9 @@
 		{#snippet status(s: SavedSearch)}
 			{#if s.paused}
 				<Badge variant="warning"
-					><span data-testid="alerts-paused-{s.id}">{m.alerts_paused()}</span></Badge
+					><IconPause class="size-4 shrink-0" aria-hidden="true" /><span
+						data-testid="alerts-paused-{s.id}">{m.alerts_paused()}</span
+					></Badge
 				>
 			{/if}
 		{/snippet}
@@ -316,10 +319,17 @@
 		color: var(--color-muted-text);
 	}
 	.al-name {
+		display: inline-flex;
+		align-items: center;
 		font-weight: var(--font-weight-medium);
 		overflow-wrap: anywhere;
 		text-decoration: underline;
 		text-underline-offset: calc(var(--spacing) * 1);
+	}
+	@media (pointer: coarse) {
+		.al-name {
+			min-block-size: var(--target-min);
+		}
 	}
 	.al-num {
 		font-variant-numeric: tabular-nums;

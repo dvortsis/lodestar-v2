@@ -50,9 +50,11 @@
 		data-testid="alerts-pause-{search.id}"
 	/>
 	<!-- The rule, stated once after a resume. -->
-	<span class="al-help" role="status" data-testid="alerts-resume-help-{search.id}">
-		{#if resumed && !shown}{m.alerts_resume_help()}{/if}
-	</span>
+	{#if resumed && !shown}
+		<span class="al-help" role="status" data-testid="alerts-resume-help-{search.id}"
+			>{m.alerts_resume_help()}</span
+		>
+	{/if}
 </span>
 
 <style>

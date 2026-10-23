@@ -145,6 +145,33 @@ describe('the detail controller', () => {
 		expect(api.markAlertsRead).toHaveBeenLastCalledWith(1, 6);
 		expect(d.fresh).toBe(0);
 	});
+	it('Show is not aborted by a page-load that starts meanwhile', async () => {
+		const d = await open([row(5, true)], 'c1');
+		let finish!: (v: unknown) => void;
+		api.getSavedSearch.mockResolvedValue(saved({ unread: 1 }));
+		api.listAlerts.mockReturnValueOnce(new Promise((r) => (finish = r)));
+		const shown = d.show();
+		await d.loadMore(); // ignored while Show loads
+		finish({ items: [row(6, false), row(5, true)], next_cursor: null });
+		await shown;
+		expect(d.loading).toBe(false);
+		expect(d.rows.map((r) => r.id)).toEqual([6, 5]);
+		expect(api.markAlertsRead).toHaveBeenLastCalledWith(1, 6);
+	});
+	it('Retry repeats whatever failed last, and a deleted search shows as not found', async () => {
+		const d = await open();
+		api.listAlerts.mockRejectedValueOnce(new ApiError(500, 'internal', 'x'));
+		await d.show();
+		expect(d.error?.status).toBe(500);
+		api.listAlerts.mockResolvedValue({ items: [row(7, false)], next_cursor: null });
+		await d.retry();
+		expect(d.error).toBeUndefined();
+		expect(d.rows.map((r) => r.id)).toEqual([7]);
+		api.getSavedSearch.mockRejectedValueOnce(new ApiError(404, 'saved_search_not_found', 'x'));
+		await d.refreshSearch();
+		expect(d.error?.code).toBe('saved_search_not_found');
+		expect(d.search).toBeUndefined();
+	});
 	it('reports not found, with nothing to show', async () => {
 		api.getSavedSearch.mockRejectedValue(new ApiError(404, 'saved_search_not_found', 'x'));
 		api.listAlerts.mockRejectedValue(new ApiError(404, 'saved_search_not_found', 'x'));

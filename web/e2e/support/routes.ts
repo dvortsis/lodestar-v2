@@ -1,4 +1,3 @@
-import type { components } from '../../src/lib/api/schema';
 import type { OpenApiMock } from '../mock/openapi-mock';
 
 // Every route the app has today, with sample params for the dynamic ones. A new route slice adds
@@ -28,14 +27,45 @@ export const ROUTES: RouteCase[] = [
 		name: 'alerts',
 		path: '/alerts',
 		heading: 'Alerts',
-		mock: (m) => m.on('listSavedSearches', [SAVED_SEARCH])
+		mock: (m) =>
+			m.on('listSavedSearches', [
+				{
+					alert: true,
+					alerts: 0,
+					ast: { op: 'all' as const },
+					created_at: 1_700_000_000,
+					id: 1,
+					last_alert_at: null,
+					name: 'Lantern Keeper releases',
+					paused: false,
+					q: '',
+					rss: false,
+					sort: null,
+					unread: 0,
+					updated_at: 1_700_000_000
+				}
+			])
 	},
 	{
 		name: 'alert-detail',
 		path: '/alerts/1',
 		heading: 'Lantern Keeper releases',
 		mock: (m) => {
-			m.on('getSavedSearch', SAVED_SEARCH);
+			m.on('getSavedSearch', {
+				alert: true,
+				alerts: 0,
+				ast: { op: 'all' as const },
+				created_at: 1_700_000_000,
+				id: 1,
+				last_alert_at: null,
+				name: 'Lantern Keeper releases',
+				paused: false,
+				q: '',
+				rss: false,
+				sort: null,
+				unread: 0,
+				updated_at: 1_700_000_000
+			});
 			m.on('listAlerts', { items: [], next_cursor: null });
 			m.on('markAlertsRead', { ok: true });
 		}
@@ -59,20 +89,3 @@ export const ROUTES: RouteCase[] = [
 	{ name: 'settings', path: '/settings/general', key: true },
 	{ name: 'torrent', path: `/t/${'0123456789abcdef'.repeat(2).padEnd(40, '0')}`, key: true }
 ];
-
-// What the Alerts routes' smoke runs load: one saved search with nothing unread.
-const SAVED_SEARCH: components['schemas']['SavedSearchView'] = {
-	alert: true,
-	alerts: 0,
-	ast: { op: 'all' },
-	created_at: 1_700_000_000,
-	id: 1,
-	last_alert_at: null,
-	name: 'Lantern Keeper releases',
-	paused: false,
-	q: '',
-	rss: false,
-	sort: null,
-	unread: 0,
-	updated_at: 1_700_000_000
-};
