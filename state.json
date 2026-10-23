@@ -1530,7 +1530,8 @@
       "what": "flag for saved value hiding config.toml; running value for restart-pending fields; egress/VPN/retention/hot-cold/backup-schedule fields; palette Settings entries; status pill Restart needed; Keyboard screen onto engine; user-guide Settings chapter",
       "to": "follow-up slices"
     },
-    "E-M6-windows-updates": "E-M6 owns Windows update check+notify+install (update-helper); reuse list in B-update brief item 10 + decisions file"
+    "E-M6-windows-updates": "E-M6 owns Windows update check+notify+install (update-helper); reuse list in B-update brief item 10 + decisions file",
+    "search-live-windows-os5": "2026-10-23T22:15Z seen on #149 94ac8c1 test(windows): search live::tests::each_commit_reports_once_with_its_count_and_watermark \u2014 indexer error 'Access is denied (os error 5)' during commit (Windows file-sharing on segment files). Likely real Windows runtime issue (tantivy delete while mmapped/AV); owner: E-M6 Windows runtime (mmap delete-retry) unless it recurs before \u2014 then runner opens an Opus fix slice. Count: 1"
   },
   "blocked_on_owner": [],
   "launches_today": 32,
