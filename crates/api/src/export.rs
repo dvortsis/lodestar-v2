@@ -49,7 +49,7 @@ use axum::routing::get;
 use axum::{Extension, Router};
 use lodestar_metainfo::InfoHash;
 use lodestar_search::{CancelToken, Lease, Start};
-use lodestar_store::{Enriched, Store, TorrentRow, flags};
+use lodestar_store::{Enriched, HotColumns, Store, TorrentRow, flags};
 use serde_json::{Map, Value};
 use tokio::sync::mpsc;
 use utoipa::OpenApi;
@@ -61,6 +61,7 @@ use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{Json, Query, same_origin_json};
 use crate::jobs::{Finisher, Job, Jobs, Stop};
 use crate::search::{self, Visibility};
+use crate::swarm::{self, Summary};
 use crate::{AdultVisibility, ApiState, discover, torrents};
 
 /// This module's half of `/openapi.json`.
@@ -360,6 +361,7 @@ async fn start(
         job,
         jobs: jobs.clone(),
         reader: s.reader.clone(),
+        hot: s.hot.clone(),
         adult: export_adult,
         started_adult: adult,
         hidden,
@@ -568,6 +570,8 @@ struct Worker {
     job: Arc<Job>,
     jobs: Arc<Jobs>,
     reader: Arc<Mutex<Store>>,
+    /// Swarm health's last-seen column, as search reads it (M4).
+    hot: Option<Arc<HotColumns>>,
     adult: AdultVisibility,
     started_adult: bool,
     hidden: bool,
@@ -641,10 +645,19 @@ impl Worker {
                 adult: self.started_adult && self.adult.shown(),
             };
             let reader = self.reader.clone();
+            let hot = self.hot.clone();
             let shape = self.shape.clone();
             let cancel = cancel.clone();
             let (back, chunk) = tokio::task::spawn_blocking(move || {
-                let chunk = read_chunk(&mut source, &reader, want, rule, &shape, &cancel);
+                let chunk = read_chunk(
+                    &mut source,
+                    &reader,
+                    hot.as_deref(),
+                    want,
+                    rule,
+                    &shape,
+                    &cancel,
+                );
                 (source, chunk)
             })
             .await
@@ -717,6 +730,7 @@ fn excluded(row: &TorrentRow, e: Option<&Enriched>, rule: Rule) -> bool {
 fn read_chunk(
     source: &mut Source,
     reader: &Mutex<Store>,
+    hot: Option<&HotColumns>,
     want: usize,
     rule: Rule,
     shape: &Shape,
@@ -739,7 +753,7 @@ fn read_chunk(
         }
         _ => None,
     };
-    let mut kept: Vec<(TorrentRow, Option<Enriched>)> = Vec::with_capacity(want);
+    let mut kept: Vec<(TorrentRow, Option<Enriched>, Summary)> = Vec::with_capacity(want);
     let mut skipped = 0u64;
     {
         let store = reader.lock().expect("reader lock");
@@ -782,7 +796,8 @@ fn read_chunk(
             if excluded(&row, e.as_ref(), rule) {
                 skipped += 1;
             } else {
-                kept.push((row, e));
+                let swarm = swarm::summary(&store, hot, &row).map_err(internal)?;
+                kept.push((row, e, swarm));
             }
         }
         // Read only: ending it is all there is to do.
@@ -790,8 +805,8 @@ fn read_chunk(
     }
     let mut bytes = Vec::with_capacity(kept.len() * 256);
     let rows = kept.len() as u64;
-    for (row, e) in kept {
-        write_row(&mut bytes, &row, e, shape)?;
+    for (row, e, swarm) in kept {
+        write_row(&mut bytes, &row, e, swarm, shape)?;
     }
     Ok(Chunk {
         bytes,
@@ -811,8 +826,8 @@ fn magnet(row: &TorrentRow) -> String {
 
 /// A row as the summary fields (`docs/metrics.md` §7.1), from the same
 /// code search hits come from, so the null rules match.
-fn record(row: &TorrentRow, e: Option<Enriched>) -> ApiResult<Map<String, Value>> {
-    let mut hit = torrents::hit(row, 0.0, None);
+fn record(row: &TorrentRow, e: Option<Enriched>, swarm: Summary) -> ApiResult<Map<String, Value>> {
+    let mut hit = torrents::hit(row, 0.0, None, swarm);
     search::enrich(&mut hit, e);
     let Value::Object(mut m) = serde_json::to_value(&hit).map_err(internal)? else {
         return Err(internal("a hit isn't an object"));
@@ -825,6 +840,7 @@ fn write_row(
     out: &mut Vec<u8>,
     row: &TorrentRow,
     e: Option<Enriched>,
+    swarm: Summary,
     shape: &Shape,
 ) -> ApiResult<()> {
     match shape.format {
@@ -833,7 +849,7 @@ fn write_row(
             out.push(b'\n');
         }
         ExportFormat::Json => {
-            let mut all = record(row, e)?;
+            let mut all = record(row, e, swarm)?;
             let picked: Map<String, Value> = shape
                 .fields
                 .iter()
@@ -846,7 +862,7 @@ fn write_row(
             out.push(b'\n');
         }
         ExportFormat::Csv => {
-            let all = record(row, e)?;
+            let all = record(row, e, swarm)?;
             for (i, f) in shape.fields.iter().enumerate() {
                 if i > 0 {
                     out.push(b',');

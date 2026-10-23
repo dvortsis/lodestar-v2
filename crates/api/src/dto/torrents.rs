@@ -6,8 +6,7 @@ use utoipa::{IntoParams, ToSchema};
 /// `GET /torrents/{hash}`: the torrent summary (`docs/metrics.md` §7.1),
 /// its swarm section (§7.2) and the first 500 files.
 ///
-/// The swarm fields are `null` until swarm health is served (M4): null is
-/// "never scraped", never 0.
+/// A null swarm field is "never scraped" (or no estimate), never 0.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct TorrentDetail {
     /// Null = never scraped.
@@ -35,6 +34,8 @@ pub struct TorrentDetail {
     /// Null = never scraped.
     #[schema(required = true)]
     pub last_scrape_at: Option<i64>,
+    /// The latest DHT sighting.
+    pub last_seen_at: i64,
     /// Null = never scraped.
     #[schema(required = true)]
     pub leechers: Option<u32>,
@@ -45,7 +46,11 @@ pub struct TorrentDetail {
     /// Null = never scraped.
     #[schema(required = true)]
     pub seeders: Option<u32>,
+    /// No tracker reported: the counts are the DHT's estimate (show ≈).
+    pub seeders_approx: bool,
     pub size: u64,
+    /// One tracker reports a swarm nothing else sees (§8): fake seeding.
+    pub swarm_suspect: bool,
     /// 14 daily and 26 weekly samples, newest first; null = no history
     /// kept.
     #[schema(required = true)]
@@ -54,6 +59,8 @@ pub struct TorrentDetail {
     /// samples.
     #[schema(required = true)]
     pub swarm_trend: Option<f64>,
+    /// The trackers that reported this swarm in the last answered round.
+    pub swarm_trackers: Vec<SwarmTracker>,
     /// Trackers that answered in the last answered round; null = never
     /// scraped.
     #[schema(required = true)]
@@ -61,6 +68,17 @@ pub struct TorrentDetail {
     /// Of those, trackers that reported anyone; null = never scraped.
     #[schema(required = true)]
     pub trackers_reporting: Option<u32>,
+}
+
+/// One tracker's report (`docs/metrics.md` §7.2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct SwarmTracker {
+    /// When it answered.
+    pub at: i64,
+    pub completed: u32,
+    pub leechers: u32,
+    pub seeders: u32,
+    pub url: String,
 }
 
 /// A torrent's swarm history (`docs/metrics.md` §7.2).

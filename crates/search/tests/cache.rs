@@ -93,6 +93,7 @@ fn spec<'a>(node: &'a Node, scope: &'a str) -> SearchSpec<'a> {
         sort: Sort::Relevance,
         limit: 20,
         now: NOW,
+        utc_offset: 0,
     }
 }
 
@@ -334,6 +335,7 @@ fn facets_are_cached_per_generation_and_shared_with_a_searchs_lease() {
         scope: "",
         sort: Sort::Relevance,
         now: NOW,
+        utc_offset: 0,
     };
     let c = CancelToken::new();
     let (a, o) = cache.facets(&index, &fs, &c).unwrap();
@@ -384,6 +386,7 @@ fn cached_hits_are_within_two_milliseconds() {
         scope: "",
         sort: Sort::Relevance,
         now: NOW,
+        utc_offset: 0,
     };
     let c = CancelToken::new();
     let s = SearchSpec {

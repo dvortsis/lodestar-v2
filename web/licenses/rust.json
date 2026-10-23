@@ -21,6 +21,7 @@
 			"lodestar-sources",
 			"lodestar-sources-importers",
 			"lodestar-store",
+			"lodestar-tracker-scrape",
 			"lodestar-update",
 			"lodestar-utp"
 		],

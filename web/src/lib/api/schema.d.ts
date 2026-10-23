@@ -2061,7 +2061,7 @@ export interface components {
             weakening: boolean;
         };
         /** @enum {string} */
-        AstDateField: "discovered";
+        AstDateField: "discovered" | "seen";
         /** @description A parsed query (§8), tagged by `op`. */
         AstNode: {
             /** @enum {string} */
@@ -2152,9 +2152,16 @@ export interface components {
             lo: number;
             /** @enum {string} */
             op: "share";
+        } | {
+            /** Format: int32 */
+            from: number;
+            /** @enum {string} */
+            op: "time_of_day";
+            /** Format: int32 */
+            to: number;
         };
         /** @enum {string} */
-        AstNumField: "size" | "files" | "largest" | "piece" | "year" | "season" | "episode" | "junk";
+        AstNumField: "size" | "files" | "largest" | "piece" | "year" | "season" | "episode" | "junk" | "seeders" | "leechers" | "trackers" | "dht";
         /** @enum {string} */
         AstShareBy: "count" | "bytes";
         /** @enum {string} */
@@ -3352,8 +3359,9 @@ export interface components {
             title: number;
         };
         /**
-         * @description The quality priors (§8), multiplied onto relevance once ranking has
-         *     them (with swarm health, M4); until then each is null.
+         * @description The quality priors (§8), multipliers on relevance from swarm health
+         *     (M4): null when the ranking doesn't apply them (no swarm data served,
+         *     or a field sort).
          */
         ExplainPriors: {
             /** Format: double */
@@ -3538,6 +3546,13 @@ export interface components {
              * @default null
              */
             sort: string | null;
+            /**
+             * Format: int32
+             * @description The user's zone for `time:`, in minutes east of UTC (−840 to
+             *     840), as `/search`; 0 by default.
+             * @default null
+             */
+            tz: number | null;
         };
         /**
          * @description `GET`/`POST /facets`. Counts are disjunctive: a facet's counts ignore
@@ -5432,21 +5447,23 @@ export interface components {
         };
         /**
          * @description How a first page was ranked (`?explain=1`, architecture §8). Field
-         *     names are stable. Relevance is `phase1 + phase2.name + phase2.title`
-         *     (to float rounding); the other features and the priors aren't part of
-         *     ranking yet and are null.
+         *     names are stable. Relevance is `(phase1 + phase2.name + phase2.title)`
+         *     times each of `priors` (to float rounding); a prior the ranking
+         *     doesn't apply is null, and counts as 1. The other phase-2 features
+         *     aren't part of ranking yet and are null.
          */
         SearchExplain: {
             /** @description One per hit, in the hits' order. */
             hits: components["schemas"]["ExplainHit"][];
             /**
              * @description `relevance`, or the field the hits are sorted by (`discovered`,
-             *     `size`, `files`), when no hit has relevance parts.
+             *     `size`, `files`, `seeders`, `leechers`, `trackers`, `seen`), when
+             *     no hit has relevance parts.
              */
             ranked_by: string;
             /**
              * @description Whether phase 2 re-ranked the phase-1 candidates: the query has
-             *     unfielded words.
+             *     unfielded words, or the server ranks with the swarm priors.
              */
             two_phase: boolean;
             weights: components["schemas"]["ExplainWeights"];
@@ -5513,6 +5530,11 @@ export interface components {
              */
             last_scrape_at: number | null;
             /**
+             * Format: int64
+             * @description The latest DHT sighting.
+             */
+            last_seen_at: number;
+            /**
              * Format: int32
              * @description Null = never scraped.
              */
@@ -5543,8 +5565,12 @@ export interface components {
              * @description Null = never scraped.
              */
             seeders: number | null;
+            /** @description No tracker reported: the counts are the DHT's estimate (show ≈). */
+            seeders_approx: boolean;
             /** Format: int64 */
             size: number;
+            /** @description One tracker reports a swarm nothing else sees (§8): fake seeding. */
+            swarm_suspect: boolean;
             /** @description The resolved title; null = not resolved. */
             title: string | null;
             /**
@@ -5605,12 +5631,21 @@ export interface components {
              */
             q: string | null;
             /**
-             * @description `relevance` (the default), or `discovered`, `size` or `files` with
-             *     an optional `+` (ascending) or `-` (descending, the default).
+             * @description `relevance` (the default), or `discovered`, `size`, `files`,
+             *     `seeders`, `leechers`, `trackers` or `seen` with an optional `+`
+             *     (ascending) or `-` (descending, the default). Never-scraped
+             *     torrents sort last either way.
              * @default null
              * @example -discovered
              */
             sort: string | null;
+            /**
+             * Format: int32
+             * @description The user's zone for `time:`, in minutes east of UTC (−840 to 840);
+             *     0 by default.
+             * @default null
+             */
+            tz: number | null;
         };
         /** @description `GET`/`POST /search`. */
         SearchResponse: {
@@ -6549,6 +6584,21 @@ export interface components {
             /** Format: int32 */
             seeders: number | null;
         };
+        /** @description One tracker's report (`docs/metrics.md` §7.2). */
+        SwarmTracker: {
+            /**
+             * Format: int64
+             * @description When it answered.
+             */
+            at: number;
+            /** Format: int32 */
+            completed: number;
+            /** Format: int32 */
+            leechers: number;
+            /** Format: int32 */
+            seeders: number;
+            url: string;
+        };
         /**
          * @description `GET /system`.
          * @example {
@@ -6744,8 +6794,7 @@ export interface components {
          * @description `GET /torrents/{hash}`: the torrent summary (`docs/metrics.md` §7.1),
          *     its swarm section (§7.2) and the first 500 files.
          *
-         *     The swarm fields are `null` until swarm health is served (M4): null is
-         *     "never scraped", never 0.
+         *     A null swarm field is "never scraped" (or no estimate), never 0.
          */
         TorrentDetail: {
             /**
@@ -6784,6 +6833,11 @@ export interface components {
              */
             last_scrape_at: number | null;
             /**
+             * Format: int64
+             * @description The latest DHT sighting.
+             */
+            last_seen_at: number;
+            /**
              * Format: int32
              * @description Null = never scraped.
              */
@@ -6799,9 +6853,15 @@ export interface components {
              * @description Null = never scraped.
              */
             seeders: number | null;
+            /** @description No tracker reported: the counts are the DHT's estimate (show ≈). */
+            seeders_approx: boolean;
             /** Format: int64 */
             size: number;
             swarm_history: null | components["schemas"]["SwarmHistory"];
+            /** @description One tracker reports a swarm nothing else sees (§8): fake seeding. */
+            swarm_suspect: boolean;
+            /** @description The trackers that reported this swarm in the last answered round. */
+            swarm_trackers: components["schemas"]["SwarmTracker"][];
             /**
              * Format: double
              * @description Seeders per day over the last week; null = fewer than 3 daily
@@ -8068,6 +8128,8 @@ export interface operations {
                 sort?: string;
                 /** @description Include torrents a filter rule hid (§20.3). */
                 hidden?: boolean;
+                /** @description The user's zone for `time:`, in minutes east of UTC (−840 to 840), as `/search`. */
+                tz?: number;
                 /** @description A search's `next_cursor`: count its index snapshot. Send the same `q`, `sort` and `hidden`. */
                 lease?: string;
                 /** @description Values listed for one facet (`limit.ext=20`): 1–100, 8 by default. */
@@ -9869,7 +9931,7 @@ export interface operations {
             query?: {
                 /** @description The query text; empty browses everything. */
                 q?: string;
-                /** @description `relevance` (the default), or `discovered`, `size` or `files` with an optional `+` (ascending) or `-` (descending, the default). */
+                /** @description `relevance` (the default), or `discovered`, `size`, `files`, `seeders`, `leechers`, `trackers` or `seen` with an optional `+` (ascending) or `-` (descending, the default). Never-scraped torrents sort last either way. */
                 sort?: string;
                 /** @description Results per page: 1–200, 50 by default. */
                 limit?: number;
@@ -9877,6 +9939,8 @@ export interface operations {
                 offset?: number;
                 /** @description Include torrents a filter rule hid (§20.3). */
                 hidden?: boolean;
+                /** @description The user's zone for `time:`, in minutes east of UTC (−840 to 840); 0 by default. */
+                tz?: number;
                 /** @description The previous page's `next_cursor`; send the same `q`, `sort` and `hidden` with it. An expired one is a 410 `cursor_expired`, a tampered one a 400 `bad_cursor`. */
                 cursor?: string;
                 /** @description `1` or `true`: count every match exactly, within a time budget. */

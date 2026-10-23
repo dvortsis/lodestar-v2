@@ -1,10 +1,13 @@
 //! The query language end to end: text → AST → Tantivy over a small
 //! corpus.
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::Info;
-use lodestar_search::{SearchIndex, parse};
-use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig};
+use lodestar_search::{SearchIndex, Sort, parse};
+use lodestar_store::{HotColumns, NewTorrent, SourceId, Store, StoreConfig, SwarmHot};
 
 const NOW: i64 = 1_767_225_600 + 40 * 86_400; // 2026-02-10
 const DAY: i64 = 86_400;
@@ -267,4 +270,331 @@ fn reranked_pages_follow_the_full_order() {
         assert!(full.total > 0, "{q}");
         assert_eq!(paged, full.hits, "{q}");
     }
+}
+
+// ---- hot columns (§7): swarm stats and last seen ---------------------------
+
+const HOUR: i64 = 3600;
+
+/// Hot columns for the corpus (ids 1–5 in insertion order):
+/// The Dark is a big fresh swarm, Batman a dead one, Joker small, Knight
+/// Rider never scraped and long unseen, Computer scraped but never seen.
+fn hot(epoch_every: Duration) -> Arc<HotColumns> {
+    let hot = Arc::new(HotColumns::with_epoch_every(epoch_every));
+    let swarm = |id: u64, seeders, leechers, trackers, dht| {
+        hot.set_swarm(
+            id,
+            SwarmHot {
+                seeders,
+                leechers,
+                trackers,
+                dht,
+            },
+        )
+    };
+    swarm(1, 120, 30, 5, 300);
+    swarm(2, 0, 0, 0, 0);
+    swarm(3, 7, 2, 1, 10);
+    swarm(5, 3, 0, 2, 4);
+    for (id, ago) in [(1, HOUR), (2, 20 * DAY), (3, 2 * DAY), (4, 100 * DAY)] {
+        hot.touch(id, (NOW - ago) as u32);
+    }
+    hot
+}
+
+fn hot_corpus() -> SearchIndex {
+    corpus().0.with_hot(hot(Duration::ZERO))
+}
+
+fn first_words(ix: &SearchIndex, hits: &[lodestar_search::Hit]) -> Vec<String> {
+    ix.names(hits)
+        .unwrap()
+        .into_iter()
+        .map(|n| n.split(&[' ', '.'][..]).next().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn swarm_filters() {
+    let ix = hot_corpus();
+    assert_eq!(find(&ix, "seeders:>=5"), ["Joker 2019", "The Dark"]);
+    assert_eq!(find(&ix, "seeders:0"), ["Batman Begins"]);
+    // Never scraped isn't zero: it matches no range.
+    assert_eq!(
+        find(&ix, "seeders:<5"),
+        ["Batman Begins", "Computer Science"]
+    );
+    // …but a negated range keeps it.
+    assert_eq!(find(&ix, "-seeders:0").len(), 4);
+    assert_eq!(find(&ix, "trackers:>=2"), ["Computer Science", "The Dark"]);
+    assert_eq!(find(&ix, "dht:>100"), ["The Dark"]);
+    assert_eq!(find(&ix, "leechers:>0"), ["Joker 2019", "The Dark"]);
+    assert_eq!(find(&ix, "seen:<24h"), ["The Dark"]);
+    assert_eq!(find(&ix, "seen:>30d"), ["Knight Rider"]);
+    assert_eq!(find(&ix, "knight seeders:>=1"), ["The Dark"]);
+    assert_eq!(
+        find(&ix, "batman | seeders:>100"),
+        ["Batman Begins", "The Dark"]
+    );
+
+    // Without hot columns, swarm clauses match nothing.
+    let (plain, _) = corpus();
+    assert!(find(&plain, "seeders:>=0").is_empty());
+    assert!(find(&plain, "seen:<10y").is_empty());
+    assert_eq!(find(&plain, "-seeders:>=0").len(), 5);
+}
+
+#[test]
+fn time_of_day() {
+    // Every torrent was discovered at 00:00 UTC.
+    let ix = hot_corpus();
+    assert_eq!(find(&ix, "time:00:00..00:59").len(), 5);
+    assert_eq!(find(&ix, "time:23:00..00:30").len(), 5, "wraps midnight");
+    assert!(find(&ix, "time:12..13").is_empty());
+    assert_eq!(find(&ix, "time:0 knight").len(), 2);
+    // In UTC+1 that's 01:00.
+    let at = |q: &str, offset| {
+        let c = ix.query_at(&parse(q).unwrap(), NOW, offset);
+        ix.search(&c, 50).unwrap().total
+    };
+    assert_eq!(at("time:01:00", 3600), 5);
+    assert_eq!(at("time:00:00", 3600), 0);
+    assert_eq!(at("time:19:00..19:59", -5 * 3600), 5);
+}
+
+#[test]
+fn lifted_swarm_clauses_match_clauses_in_the_query() {
+    // At the top level they're collector checks; inside `|` they're a
+    // query of their own. Both must select the same torrents.
+    let ix = hot_corpus();
+    for q in [
+        "seeders:>=5",
+        "knight seeders:>=1",
+        "-joker seeders:<10",
+        "trackers:1..3 private:no",
+        "seen:<3d",
+        "dht:0",
+        "time:00:00..00:10 size:<1GB",
+        "-time:12..13 -seeders:0",
+        // Combinations are one check of their own.
+        "knight (seeders:>=5 | trackers:>=3)",
+        "(seeders:0 | -seen:<3d) private:no",
+        "-(dht:0 | time:12..13)",
+        "(seeders:>=1 trackers:>=2) | dht:>0",
+    ] {
+        let wrapped = format!("({q}) | zzznomatch");
+        assert_eq!(find(&ix, q), find(&ix, &wrapped), "{q}");
+    }
+}
+
+#[test]
+fn sorted_searches_in_pieces_agree() {
+    // A cold top-k splits segments into doc ranges searched in parallel;
+    // two-document pieces must give the same pages as whole segments.
+    let ix = hot_corpus();
+    let pieces = hot_corpus().with_sort_pieces(2);
+    for q in ["", "knight", "seeders:>=1", "-joker"] {
+        for sort in [
+            Sort::Seeders { desc: true },
+            Sort::Trackers { desc: false },
+            Sort::Discovered { desc: true },
+            Sort::Size { desc: false },
+        ] {
+            for (limit, offset) in [(10, 0), (2, 0), (2, 3)] {
+                let page = |ix: &SearchIndex| {
+                    let r = ix
+                        .search_page(&ix.query(&parse(q).unwrap(), NOW), sort, limit, offset)
+                        .unwrap();
+                    (r.total, r.hits.iter().map(|h| h.id).collect::<Vec<_>>())
+                };
+                assert_eq!(page(&ix), page(&pieces), "{q:?} {sort:?} {limit} {offset}");
+            }
+        }
+    }
+}
+
+#[test]
+fn swarm_sorts_put_never_scraped_last() {
+    let ix = hot_corpus();
+    let all = ix.query(&parse("").unwrap(), NOW);
+    let order = |sort| first_words(&ix, &ix.search_page(&all, sort, 10, 0).unwrap().hits);
+    assert_eq!(
+        order(Sort::Seeders { desc: true }),
+        ["The", "Joker", "Computer", "Batman", "Knight"]
+    );
+    assert_eq!(
+        order(Sort::Seeders { desc: false }),
+        ["Batman", "Computer", "Joker", "The", "Knight"]
+    );
+    assert_eq!(
+        order(Sort::Trackers { desc: true })[..2],
+        ["The", "Computer"]
+    );
+    assert_eq!(order(Sort::Leechers { desc: true })[0], "The");
+    assert_eq!(
+        order(Sort::Seen { desc: true }),
+        ["The", "Joker", "Batman", "Knight", "Computer"]
+    );
+    let filtered = ix.query(&parse("seeders:>0").unwrap(), NOW);
+    let page = ix
+        .search_page(&filtered, Sort::Seeders { desc: false }, 10, 0)
+        .unwrap();
+    assert_eq!(page.total, 3);
+    assert_eq!(first_words(&ix, &page.hits), ["Computer", "Joker", "The"]);
+}
+
+#[test]
+fn hot_epoch_expires_cached_browse() {
+    for (every, fresh) in [(Duration::ZERO, true), (Duration::from_secs(3600), false)] {
+        let cols = hot(every);
+        cols.epoch(); // settle the loading writes
+        let ix = corpus().0.with_hot(cols.clone());
+        let all = ix.query(&parse("seeders:>=0").unwrap(), NOW);
+        let top = |ix: &SearchIndex| {
+            let hits = ix
+                .search_page(&all, Sort::Seeders { desc: true }, 1, 0)
+                .unwrap()
+                .hits;
+            first_words(ix, &hits)
+        };
+        assert_eq!(top(&ix), ["The"]);
+        cols.set_swarm(
+            4,
+            SwarmHot {
+                seeders: 1000,
+                leechers: 0,
+                trackers: 1,
+                dht: 0,
+            },
+        );
+        // A new epoch drops the cached tops; within one they stand.
+        let expect = if fresh { "Knight" } else { "The" };
+        assert_eq!(top(&ix), [expect], "epoch every {every:?}");
+    }
+}
+
+#[test]
+fn ranking_uses_swarm_priors() {
+    // "knight" matches The Dark (big, fresh swarm) and Knight Rider
+    // (never scraped, unseen for 100 days).
+    let ix = hot_corpus();
+    let q = ix.query(&parse("knight").unwrap(), NOW);
+    let page = ix
+        .search_page_explained(&q, Sort::Relevance, 10, 0)
+        .unwrap();
+    assert_eq!(first_words(&ix, &page.hits), ["The", "Knight"]);
+    assert_eq!(page.explain.len(), page.hits.len());
+    for (hit, p) in page.hits.iter().zip(&page.explain) {
+        assert_eq!(hit.score, p.score);
+        let product = p.text * p.seeders * p.freshness * p.trackers * p.junk * p.penalty;
+        assert!((product - p.score).abs() <= p.score * 1e-5, "{p:?}");
+    }
+    let (dark, rider) = (page.explain[0], page.explain[1]);
+    assert!(dark.seeders > rider.seeders && dark.freshness > rider.freshness);
+    assert!(rider.seeders > 1.0, "never scraped is neutral, not dead");
+
+    // A penalty (say, fake seeding) can sink it.
+    let ix = hot_corpus().with_penalty(Arc::new(|id| if id == 1 { 0.01 } else { 1.0 }));
+    let q = ix.query(&parse("knight").unwrap(), NOW);
+    let hits = ix.search(&q, 10).unwrap().hits;
+    assert_eq!(first_words(&ix, &hits), ["Knight", "The"]);
+
+    // Plain searches report no explanation; sorted pages have none.
+    assert!(ix.search(&q, 10).unwrap().explain.is_empty());
+    let sorted = ix
+        .search_page_explained(&q, Sort::Seeders { desc: true }, 10, 0)
+        .unwrap();
+    assert!(sorted.explain.is_empty());
+}
+
+#[test]
+fn ranking_without_hot_columns_is_text_only() {
+    let (plain, _) = corpus();
+    let q = plain.query(&parse("knight").unwrap(), NOW);
+    let page = plain
+        .search_page_explained(&q, Sort::Relevance, 10, 0)
+        .unwrap();
+    assert_eq!(
+        page.hits,
+        plain.search_page(&q, Sort::Relevance, 10, 0).unwrap().hits
+    );
+    for p in &page.explain {
+        assert_eq!(
+            (p.seeders, p.freshness, p.trackers, p.junk, p.penalty),
+            (1.0, 1.0, 1.0, 1.0, 1.0)
+        );
+        assert_eq!(p.score, p.text);
+    }
+}
+
+/// Relevance pages past the re-rank window: the priors reorder only the
+/// first window, so paging never repeats or loses a hit.
+#[test]
+fn relevance_pages_past_the_window_stay_consistent() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let n = 260usize;
+    let names: Vec<String> = (0..n)
+        .map(|i| {
+            // Varying lengths give varying phase-1 scores.
+            format!("common {}", "filler ".repeat(i % 7) + &format!("t{i}"))
+        })
+        .collect();
+    let raws: Vec<Vec<u8>> = names
+        .iter()
+        .map(|name| {
+            to_vec(&d(vec![
+                ("length", OwnedValue::Int(MB)),
+                ("name", b(name)),
+                ("piece length", OwnedValue::Int(1 << 20)),
+                ("pieces", OwnedValue::Bytes(vec![0; 20])),
+            ]))
+        })
+        .collect();
+    let infos: Vec<Info> = raws.iter().map(|r| Info::parse(r).unwrap()).collect();
+    let batch: Vec<NewTorrent<'_>> = infos
+        .iter()
+        .zip(&raws)
+        .map(|(info, raw)| NewTorrent {
+            info,
+            raw_info: Some(raw),
+            discovered_at: NOW - DAY,
+            metadata_at: NOW,
+            extra_flags: 0,
+            source: SourceId::new(0).unwrap(),
+        })
+        .collect();
+    let ids: Vec<i64> = store
+        .insert(&batch)
+        .unwrap()
+        .iter()
+        .map(|i| i.id())
+        .collect();
+    let cols = hot(Duration::ZERO);
+    // Big swarms on the weakest text matches: the priors pull deep
+    // candidates up as far as they can.
+    for (i, id) in ids.iter().enumerate() {
+        cols.set_swarm(
+            *id as u64,
+            SwarmHot {
+                seeders: if i % 7 == 6 { 100_000 } else { 0 },
+                leechers: 0,
+                trackers: 1,
+                dht: 0,
+            },
+        );
+    }
+    let ix = SearchIndex::in_memory().unwrap().with_hot(cols);
+    let mut w = ix.writer(15 << 20).unwrap();
+    w.catch_up(&mut store, 1000).unwrap();
+    w.commit().unwrap();
+    let q = ix.query(&parse("common").unwrap(), NOW);
+    let mut seen = std::collections::HashSet::new();
+    for page in 0..6 {
+        let r = ix.search_page(&q, Sort::Relevance, 50, page * 50).unwrap();
+        assert_eq!(r.total, n);
+        for h in r.hits {
+            assert!(seen.insert(h.id), "{} shown twice (page {page})", h.id);
+        }
+    }
+    assert_eq!(seen.len(), n, "every hit on some page");
 }
