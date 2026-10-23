@@ -978,6 +978,28 @@ async fn concurrent_exports_share_one_rate() {
     assert!(took >= Duration::from_millis(540), "{took:?}");
 }
 
+/// Waits (up to 5 s) until no job is running or paused.
+async fn none_running(f: &Fixture, c: &str, request: usize) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let (_, list) = json_of(&f.app, get("/api/v1/jobs", Some(c))).await;
+        let running: Vec<&Value> = list["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|j| j["finished_at"].is_null())
+            .collect();
+        if running.is_empty() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "request {request}: a dropped setup left {running:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 #[tokio::test]
 async fn a_request_dropped_during_setup_frees_its_slot() {
     let ts: Vec<T> = (0..50).map(|i| t(&format!("Filler.{i:04}.mkv"))).collect();
@@ -1008,11 +1030,10 @@ async fn a_request_dropped_during_setup_frees_its_slot() {
         // Pending: dropped mid-setup. A leaked slot shows up as a 429.
         assert_ne!(status, Some(StatusCode::TOO_MANY_REQUESTS), "request {i}");
         drop(fut);
-    }
-    // No job is left running.
-    let (_, list) = json_of(&f.app, get("/api/v1/jobs", Some(&c))).await;
-    for j in list["jobs"].as_array().unwrap() {
-        assert!(!j["finished_at"].is_null(), "a dropped setup left {j}");
+        // A setup that finished within the poll handed its job to a worker,
+        // which ends it as cancelled when it next sends to the dropped body:
+        // soon, but not at once. A slot leaked mid-setup never frees.
+        none_running(&f, &c, i).await;
     }
     // And a new export still gets a slot.
     let (_, body) = export(&f, &c, "/api/v1/export?format=magnets", None).await;
