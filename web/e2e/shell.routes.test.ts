@@ -193,6 +193,24 @@ test.describe('status pill', () => {
 	});
 });
 
+test.describe('the chrome loads on the first interaction', () => {
+	test('one key loads it and starts the stream: no second interaction needed', async ({
+		page,
+		go,
+		mock
+	}) => {
+		await go('/search');
+		await expect(page.locator('#boot')).toHaveCount(0); // the app has mounted
+		await page.waitForTimeout(500);
+		// Nothing yet: the static bar stays and no stream is open (the bare page's budget, §10.1).
+		await expect(page.getByTestId('palette-button')).toHaveCount(0);
+		expect(mock.calls('getEvents')).toHaveLength(0);
+		await page.keyboard.press('Escape');
+		await expect(page.getByTestId('palette-button')).toBeAttached();
+		await expect.poll(() => mock.calls('getEvents').length).toBe(1);
+	});
+});
+
 test.describe('command palette', () => {
 	test('opens from the button, filters, runs a command and closes', async ({ page, go }) => {
 		await go('/search');
