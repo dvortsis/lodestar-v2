@@ -162,6 +162,19 @@ impl<S: Send + Sync> FromRequestParts<S> for ClientIp {
     }
 }
 
+/// The TCP peer itself, as the session guard sees it (for checks that
+/// repeat the guard's later, such as an event stream's heartbeats).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Peer(pub IpAddr);
+
+impl<S: Send + Sync> FromRequestParts<S> for Peer {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+        Ok(Peer(peer_ip(&parts.extensions)))
+    }
+}
+
 /// The TCP peer's address (`0.0.0.0` without `ConnectInfo`).
 pub(crate) fn peer_ip(extensions: &Extensions) -> IpAddr {
     extensions
