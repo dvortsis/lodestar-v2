@@ -35,6 +35,11 @@ pub const MEMBER_MAX: u64 = MEMBER + MAX_LINE as u64;
 /// The most a log file may hold, uncompressed: the rotation size's
 /// maximum (1 GiB) and some slack for the line that crossed it.
 pub const MAX_PLAIN: u64 = (1 << 30) + (64 << 20);
+/// Fewer bytes than any line Lodestar writes (its JSON shape alone is
+/// longer). A member or window holding more lines than its length allows
+/// at this size is unreadable, so one load never holds more than its
+/// length's worth of lines (2 MiB of tiny lines would be a million).
+const MIN_LINE: u64 = 32;
 /// Bytes read per step backwards through a plain file.
 const BLOCK: u64 = 64 << 10;
 /// An older gzip file's read window.
@@ -246,6 +251,22 @@ pub fn forward(
     Ok(pos)
 }
 
+/// The most lines `len` bytes may hold.
+fn most_lines(len: u64) -> usize {
+    usize::try_from(len / MIN_LINE + 1).unwrap_or(usize::MAX)
+}
+
+/// `forward`'s "go on", or unreadable past `most` lines.
+fn too_many(n: usize, most: usize) -> io::Result<bool> {
+    match n > most {
+        true => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "more lines than a log file holds",
+        )),
+        false => Ok(false),
+    }
+}
+
 /// Counts bytes passing through.
 struct Counted<R> {
     inner: R,
@@ -283,13 +304,14 @@ impl GzBack {
         };
         let mut r = BufReader::with_capacity(64 << 10, &mut d);
         let end = self.end;
+        let most = most_lines(m.len);
         let mut found = Vec::new();
         let read = forward(&mut r, m.from, |l| {
             if l.start >= end {
                 return Ok(true);
             }
             found.push(l);
-            Ok(false)
+            too_many(found.len(), most)
         });
         drop(r);
         self.cost += d.n;
@@ -359,6 +381,7 @@ impl Backward for GzWindows {
             };
             let mut r = BufReader::with_capacity(64 << 10, &mut d);
             let end = self.end;
+            let most = most_lines(WINDOW);
             let mut found = Vec::new();
             // The last line that starts before the window: when none
             // starts inside it (one line spans it), that line is the
@@ -372,7 +395,7 @@ impl Backward for GzWindows {
                     true => found.push(l),
                     false => before = Some(l),
                 }
-                Ok(false)
+                too_many(found.len(), most)
             });
             drop(r);
             self.cost += d.n;
@@ -761,11 +784,35 @@ mod tests {
     }
 
     #[test]
+    fn a_member_of_tiny_lines_is_unreadable_not_held() {
+        let dir = tempfile::tempdir().unwrap();
+        for (indexed, name) in [(true, "ix"), (false, "plain")] {
+            let p = dir.path().join(name);
+            let text = "a\n".repeat(500_000);
+            let mut out = Vec::new();
+            match indexed {
+                true => {
+                    write_gz(&mut BufReader::new(text.as_bytes()), &mut out).unwrap();
+                }
+                false => {
+                    let mut e = GzEncoder::new(&mut out, flate2::Compression::fast());
+                    e.write_all(text.as_bytes()).unwrap();
+                    e.finish().unwrap();
+                }
+            }
+            std::fs::write(&p, &out).unwrap();
+            let mut b = backward(File::open(&p).unwrap(), true, text.len() as u64).unwrap();
+            let e = b.prev().unwrap_err();
+            assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{name}");
+        }
+    }
+
+    #[test]
     fn a_hostile_index_is_refused_and_a_bomb_never_inflates_whole() {
         let dir = tempfile::tempdir().unwrap();
         // A member that holds far more than its index says: only `len`
         // bytes are ever inflated, and then it doesn't hold together.
-        let bomb = "a\n".repeat(4 << 20);
+        let bomb = format!("{}\n", "a".repeat(63)).repeat(1 << 16);
         let p = crafted(
             dir.path(),
             bomb.as_bytes(),
@@ -780,7 +827,7 @@ mod tests {
         while b.prev().unwrap().is_some() {
             n += 1;
         }
-        assert_eq!(n, (1 << 20) / 2, "only the stated length");
+        assert_eq!(n, (1 << 20) / 64, "only the stated length");
         assert!(b.cost() <= 1 << 20, "{}", b.cost());
         // Lengths beyond any member, and offsets that overflow: no index.
         for members in [
