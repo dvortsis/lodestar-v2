@@ -49,9 +49,13 @@ for (const [label, viewport] of [
 			await expect(page.locator('#boot')).toBeVisible();
 			await expect(page.getByRole('link', { name: 'Skip to main content' })).toBeAttached();
 			await expect(page.getByRole('link', { name: 'Lodestar, home' })).toBeVisible();
+			// Landmarks for a screen-reader user who never presses a key and before any script has run.
+			await expect(page.getByRole('banner')).toBeVisible();
+			await expect(page.getByRole('main')).toBeVisible();
 			await expect(page.locator('#boot-h1')).toHaveText('Search');
 			await expect(page.locator('#boot-h1')).toBeVisible();
 			if (label === 'desktop') {
+				await expect(page.getByRole('navigation', { name: 'Main' })).toBeVisible();
 				const links = page.locator('#boot-header nav a');
 				await expect(links).toHaveText(['Search', 'Discover', 'Alerts', 'Insights', 'Settings']);
 				await expect(page.locator('#boot-header nav a[aria-current="page"]')).toHaveText('Search');
@@ -123,7 +127,7 @@ test.describe('where the static shell must not show', () => {
 		}
 	});
 
-	test.describe('another language', () => {
+	test.describe('another language, no app JS', () => {
 		test.use({ locale: 'zh-CN' });
 		test('is dropped, so English text never flashes', async ({ page, go }) => {
 			await blockApp(page);
@@ -133,7 +137,10 @@ test.describe('where the static shell must not show', () => {
 	});
 });
 
-test('adds no layout shift: CLS stays 0 across the swap', async ({ page, go }) => {
+async function cumulativeShift(page: Page) {
+	return page.evaluate(() => (window as unknown as { __cls: number }).__cls);
+}
+async function watchShift(page: Page) {
 	await page.addInitScript(() => {
 		(window as unknown as { __cls: number }).__cls = 0;
 		new PerformanceObserver((list) => {
@@ -145,10 +152,41 @@ test('adds no layout shift: CLS stays 0 across the swap', async ({ page, go }) =
 			}
 		}).observe({ type: 'layout-shift', buffered: true });
 	});
+}
+
+test('adds no layout shift: CLS stays 0 across the swap', async ({ page, go }) => {
+	await watchShift(page);
 	await liveEvents(page);
 	await go('/search');
 	await expect(page.getByTestId('status-pill')).toHaveAttribute('data-state', 'crawling');
-	expect(await page.evaluate(() => (window as unknown as { __cls: number }).__cls)).toBeLessThan(
-		0.001
-	);
+	expect(await cumulativeShift(page)).toBeLessThan(0.001);
+});
+
+test('no layout shift on the sign-in and setup screens, where the shell is dropped', async ({
+	page,
+	go
+}) => {
+	await watchShift(page);
+	for (const path of ['/login', '/setup', '/welcome']) {
+		await go(path);
+		await expect(page.getByRole('main')).toBeVisible();
+		await page.waitForLoadState('networkidle');
+	}
+	expect(await cumulativeShift(page)).toBeLessThan(0.001);
+});
+
+test.describe('another language', () => {
+	test.use({ locale: 'zh-CN' });
+	test('no English flash and no layout shift: the bar slot is reserved, then filled', async ({
+		page,
+		go
+	}) => {
+		await watchShift(page);
+		await liveEvents(page);
+		await go('/search');
+		// Never any English static text in the document at any point after parse.
+		await expect(page.locator('#boot')).toHaveCount(0);
+		await expect(page.getByTestId('status-pill')).toHaveAttribute('data-state', 'crawling');
+		expect(await cumulativeShift(page)).toBeLessThan(0.001);
+	});
 });
