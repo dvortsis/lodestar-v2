@@ -56,8 +56,8 @@ pub struct BackgroundJob {
     pub finished_at: Option<i64>,
     pub id: u64,
     pub kind: BackgroundJobKind,
-    /// Items per second while running (paused time left out); null
-    /// before the first items.
+    /// Items read per second (`done` and `skipped`), paused time left
+    /// out; null before the first items.
     #[schema(required = true)]
     pub rate: Option<f64>,
     /// Items left out: for an export, torrents it may not include

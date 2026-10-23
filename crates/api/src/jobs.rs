@@ -295,15 +295,18 @@ impl Job {
         };
         drop(finished);
         let done = self.done.load(Ordering::Relaxed);
+        let skipped = self.skipped.load(Ordering::Relaxed);
+        // Skipped items are read too, and `total` counts them.
+        let processed = done + skipped;
         let total = match self.total.load(Ordering::Relaxed) {
             u64::MAX => None,
             t => Some(t),
         };
         let secs = self.active().as_secs_f64();
-        let rate = (done > 0 && secs > 0.0).then(|| done as f64 / secs);
+        let rate = (processed > 0 && secs > 0.0).then(|| processed as f64 / secs);
         let eta_s = match (state, rate, total) {
             (BackgroundJobState::Running, Some(r), Some(t)) => {
-                Some((t.saturating_sub(done) as f64 / r).ceil() as u64)
+                Some((t.saturating_sub(processed) as f64 / r).ceil() as u64)
             }
             _ => None,
         };
@@ -316,7 +319,7 @@ impl Job {
             id: self.id,
             kind: self.kind,
             rate,
-            skipped: self.skipped.load(Ordering::Relaxed),
+            skipped,
             started_at: self.started_at,
             state,
             total,
@@ -401,6 +404,13 @@ impl Jobs {
         let job = Arc::new(Job::new(id, kind, crate::unix_now()));
         jobs.insert(id, job.clone());
         Ok(job)
+    }
+
+    /// Forgets a job that never got going (its setup failed), freeing its
+    /// slot without leaving it in the list.
+    pub(crate) fn discard(&self, id: u64) {
+        let gone = self.jobs().remove(&id);
+        drop(gone);
     }
 
     pub(crate) fn get(&self, id: u64) -> ApiResult<Arc<Job>> {
@@ -708,11 +718,12 @@ mod tests {
             c.since = None;
             c.active = Duration::from_secs(2);
         }
-        job.add(100, 3);
+        job.add(97, 3);
         let st = job.status();
+        // Skipped items count as read: 100 in 2 s, 900 left.
         assert_eq!(st.rate, Some(50.0));
         assert_eq!(st.eta_s, Some(18));
-        assert_eq!((st.done, st.skipped, st.total), (100, 3, Some(1000)));
+        assert_eq!((st.done, st.skipped, st.total), (97, 3, Some(1000)));
         job.control(Control::Pause).unwrap();
         assert_eq!(job.status().eta_s, None, "no ETA while paused");
         assert_eq!(job.status().rate, Some(50.0), "paused time doesn't count");

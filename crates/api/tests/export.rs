@@ -15,7 +15,7 @@ use axum::body::{Body, BodyDataStream, Bytes};
 use axum::http::{Request, StatusCode, header};
 use axum::{Extension, Router};
 use futures_core::Stream;
-use lodestar_api::export::ExportConfig;
+use lodestar_api::export::{ExportAdult, ExportConfig};
 use lodestar_api::jobs::Jobs;
 use lodestar_api::{AdultVisibility, ApiState, Auth, router};
 use lodestar_bencode::{OwnedValue, to_vec};
@@ -91,8 +91,10 @@ struct Fixture {
     db: PathBuf,
     hashes: Vec<String>,
     ids: Vec<i64>,
-    /// "Show adult content", live.
+    /// "Show adult content" (search's), live.
     adult: Arc<AtomicBool>,
+    /// Export's own adult setting (`export_adult`), live.
+    export_adult: Arc<AtomicBool>,
     _dir: tempfile::TempDir,
 }
 
@@ -123,6 +125,8 @@ fn fixture(ts: &[T], o: Opts) -> Fixture {
     let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
     let adult = Arc::new(AtomicBool::new(o.adult));
     let shown = adult.clone();
+    let export_adult = Arc::new(AtomicBool::new(o.adult));
+    let exported = export_adult.clone();
     let handle: SearchHandle = match o.leases {
         Some(c) => SearchHandle::fixed(index.clone(), Leases::new(c)),
         None => index.clone().into(),
@@ -140,7 +144,10 @@ fn fixture(ts: &[T], o: Opts) -> Fixture {
                 adult: AdultVisibility::follow(move || shown.load(Ordering::SeqCst)),
             }),
         )
-        .layer(Extension(o.config));
+        .layer(Extension(o.config))
+        .layer(Extension(ExportAdult(AdultVisibility::follow(move || {
+            exported.load(Ordering::SeqCst)
+        }))));
     let app = match o.jobs {
         Some(jobs) => app.layer(Extension(jobs)),
         None => app,
@@ -154,6 +161,7 @@ fn fixture(ts: &[T], o: Opts) -> Fixture {
         hashes,
         ids,
         adult,
+        export_adult,
         _dir: dir,
     }
 }
@@ -653,8 +661,21 @@ async fn what_search_hides_and_private_sources_are_never_exported() {
     assert_eq!(names, ["Gotham.Soundtrack.FLAC", "Hidden.By.A.Rule.mkv"]);
     assert_eq!(skipped, 2);
 
-    // With Adult shown, it's there; the private one never is.
+    // "Show adult content" is search's: exports keep Adult out until
+    // their own setting includes it (§20.9).
     f.adult.store(true, Ordering::SeqCst);
+    let (names, ..) = names_and_skipped(
+        &f,
+        &c,
+        "/api/v1/export?format=json&hidden=true&sort=%2Bdiscovered",
+        None,
+    )
+    .await;
+    assert_eq!(names, ["Gotham.Soundtrack.FLAC", "Hidden.By.A.Rule.mkv"]);
+    f.adult.store(false, Ordering::SeqCst);
+
+    // With export's on, it's there; the private one never is.
+    f.export_adult.store(true, Ordering::SeqCst);
     for (uri, body) in [
         (
             "/api/v1/export?format=json&hidden=true&sort=%2Bdiscovered".to_string(),
@@ -724,7 +745,7 @@ async fn adult_turned_off_mid_export_is_withheld_from_then_on() {
         10,
         "both kinds in the first chunk"
     );
-    f.adult.store(false, Ordering::SeqCst);
+    f.export_adult.store(false, Ordering::SeqCst);
     let id = d.job;
     let rest = d.rest().await.unwrap();
     let j = finished(&f, &c, id).await;
@@ -1066,6 +1087,24 @@ async fn pause_resume_and_cancel() {
     let id = d.job;
     drop(d);
     assert_eq!(finished(&f, &c, id).await["state"], "cancelled");
+
+    // So does one that goes away while its export is paused: at once,
+    // not when the pause runs out.
+    let mut d = open(&f, &c, "/api/v1/export?format=json", None).await;
+    d.next().await.unwrap().unwrap();
+    control(&f, &c, d.job, "pause").await;
+    let id = d.job;
+    drop(d);
+    assert_eq!(finished(&f, &c, id).await["state"], "cancelled");
+    // Its slot is free.
+    let (_, list) = json_of(&f.app, get("/api/v1/jobs", Some(&c))).await;
+    assert!(
+        list["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|j| !j["finished_at"].is_null())
+    );
 }
 
 #[tokio::test]
@@ -1431,7 +1470,12 @@ async fn bad_requests_get_the_envelope() {
 #[tokio::test]
 #[ignore = "a measurement; run in release"]
 async fn overhead() {
-    let ts: Vec<T> = (0..50_000)
+    // `LODESTAR_EXPORT_TORRENTS` sets the corpus (50,000 by default).
+    let n: usize = std::env::var("LODESTAR_EXPORT_TORRENTS")
+        .ok()
+        .and_then(|r| r.parse().ok())
+        .unwrap_or(50_000);
+    let ts: Vec<T> = (0..n)
         .map(|i| {
             t(&format!(
                 "Filler.Movie.{i:05}.2019.1080p.WEB-DL.x264-GRP{}",
