@@ -826,7 +826,7 @@
    "pr": 89,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 20:29 after #86 merged. | 23:25 review: no blocking; asked I1 (test endpoint echoes body: partial-read SSRF), I2 semaphore, I3 event on drop, I4 secret sealing/refuse, I5 merged check + polish; files outside owns accepted. | 23:48 e28de2f fixes pushed; runner verified I1 (Rejected -> status only; other variants static text). Approved; merge on green. Then launch B2c + B-log1. | 00:44 openapi conflict after B13; told to wait for B14 + B4b-r2 merges, then one main merge + regen (runner must ping it). | 02:40 pinged to merge main + regen after B14 merge."
+   "notes": "Launched 20:29 after #86 merged. | 23:25 review: no blocking; asked I1 (test endpoint echoes body: partial-read SSRF), I2 semaphore, I3 event on drop, I4 secret sealing/refuse, I5 merged check + polish; files outside owns accepted. | 23:48 e28de2f fixes pushed; runner verified I1 (Rejected -> status only; other variants static text). Approved; merge on green. Then launch B2c + B-log1. | 00:44 openapi conflict after B13; told to wait for B14 + B4b-r2 merges, then one main merge + regen (runner must ping it). | 02:40 pinged to merge main + regen after B14 merge. | 02:42 47b64e9 main merged (B14/B4b-r2), regen; runner checked merge commit. Approved; merge on green, then launch B2c + B-log1."
   },
   "B2c": {
    "status": "pending",
@@ -1254,7 +1254,8 @@
   "adult_hash_names": "Adult detection for opaque/hash torrent names (folder signals): corpus-backed slice; positive-only folder signals; numbered/year prefixes before xxx (#105 review).",
   "backup_unused_mut_windows": "crates/lodestar/src/cli/backup.rs:132 unused mut shows only on Windows clippy (M6-win note).",
   "slices_yaml_B12_owns": "runner/slices.yaml B12 owns should add crates/api/src/auth/**, ClientIp in extract.rs, services.rs wiring (brief grants them). Fix in next runner PR.",
-  "apistate_user_data": "B12 and B10a both add identical ApiState.user_data field + None in test literals; second to merge drops duplicates."
+  "apistate_user_data": "B12 and B10a both add identical ApiState.user_data field + None in test literals; second to merge drops duplicates.",
+  "crawler_settings_sse": "ops.rs /crawler pause/resume/intensity save straight to the registry, no settings SSE event; route through settings::save_and_announce (B2c or later)."
  },
  "blocked_on_owner": [],
  "launches_today": 13,
