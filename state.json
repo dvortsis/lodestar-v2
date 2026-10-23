@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T06:26:11Z",
+ "updated_at": "2026-10-23T06:32:39Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -399,7 +399,7 @@
    "pr": 115,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 04:15 PR #115 f8e5d23; told to make the 2 services.rs edits itself; review after that push. \u00a72.19: exports follow export_adult (not Show adult). | 05:05 review FIX: dropped request leaks job slot (drop-guard) ; important: global throttle across 4 jobs (+6% p95 at 5k/s), #48 swarm note. | 05:31 0a8032c drop-guard + shared pacer (4 concurrent: p95 mean +1.2%) + notes. Runner delta-checked; approved; merge on green. | 05:56 CI green 0a8032c; conflicts after B10a/B16 (api route registration) -> asked main merge. | 2026-10-23T06:08:13Z ed7fed0 contains main incl B16; merge on green | 2026-10-23T06:26:11Z main moved (B12): conflicts in dto/mod.rs, lib.rs, openapi.json; asked to merge main",
+   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 04:15 PR #115 f8e5d23; told to make the 2 services.rs edits itself; review after that push. \u00a72.19: exports follow export_adult (not Show adult). | 05:05 review FIX: dropped request leaks job slot (drop-guard) ; important: global throttle across 4 jobs (+6% p95 at 5k/s), #48 swarm note. | 05:31 0a8032c drop-guard + shared pacer (4 concurrent: p95 mean +1.2%) + notes. Runner delta-checked; approved; merge on green. | 05:56 CI green 0a8032c; conflicts after B10a/B16 (api route registration) -> asked main merge. | 2026-10-23T06:08:13Z ed7fed0 contains main incl B16; merge on green | 2026-10-23T06:26:11Z main moved (B12): conflicts in dto/mod.rs, lib.rs, openapi.json; asked to merge main | 2026-10-23T06:32:39Z 35af964 merged main 87a5cf7 (checked: export/jobs under auth::protected, openapi regenerated); merge on green",
    "self_review": {
     "raised": 4,
     "fixed": 4,
@@ -1359,6 +1359,6 @@
   "106-adoption": "03:20 check: every in-flight slice branch contains d243361 except #48 (M4). M4 session is blocked in plan mode waiting on owner ExitPlanMode approval (owner notified). No PR merged by any session since 02:55; filter session merged nothing.",
   "metrics": "Since 02:55: review_rounds incremented on every FIX verdict (backfilled 02:58 by counting FIX verdicts in notes, approximate). New PRs record self_review {raised,fixed,left} from the PR description.",
   "113": "03:35 PR #113 opened from owner-session commit 005065f (CI commit-back of E2E baselines; owner decision \"best practice\"). Fresh + security review running. After merge: W9 merges main, pushes with marker; CI commits baselines; W9 removes marker. | 03:40 review MERGE; asked owner session for hardening (symlink refusal, head.sha checkout, [[=~]], dirname --, caps, env input, heading). | 03:48 9ae4c0a hardening verified by runner. APPROVED; merge on green, then tell W9. | 04:16 MERGED 6d14f0e. W9 told.",
-  "fix-check-ids": "2026-10-23T06:16:19Z #118 9013901 delta review APPROVE; merge on green smoke"
+  "fix-check-ids": "2026-10-23T06:32:39Z #118 merged (smoke green on the fixed script)"
  }
 }
