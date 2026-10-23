@@ -44,10 +44,12 @@ pub(crate) enum Need {
 
 /// A second condition a rule can't match without, checked while its
 /// rules are marked, so the commonest shapes on common words (`"mkv
-/// 1080p"`, `1080p size:>3TB`, `x264 type:software`) are turned away
-/// without reading the rule. Each is one of the cheap check's own
-/// answers ([`crate::matcher`]) on a clause every match needs, so it
-/// says *no* only where the cheap check, and so the full match, must.
+/// 1080p"`, `1080p size:>3TB`, `x264 type:software`, `x264 -1080p`,
+/// `webd*`, `~matrx`) are turned away without reading the rule. Each
+/// answers a clause every match needs, from what the torrent has: some
+/// as the cheap check would ([`crate::matcher`]), some exactly from its
+/// distinct token texts, compared byte for byte. So a gate says *no*
+/// only where the full match must.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Gate {
     None,
@@ -57,10 +59,22 @@ pub(crate) enum Gate {
     FileSize(u64, u64),
     /// This tag.
     Tag(u64),
-    /// A token text that could start with this ([`start_key`]).
-    Start(u64),
     /// These two token texts in a row (a phrase's first two words).
     Pair(u64, u64),
+    /// Not the word, clause `i` of the rule set's gate clauses: a word
+    /// anywhere, so a negated word the torrent has turns the rule away
+    /// (unless it's a neutralized word, which never counts).
+    Lacks(u32),
+    /// Some token text starts with the prefix of clause `i`.
+    Prefix(u32),
+    /// Some token text could be within the fuzzy word of clause `i`'s
+    /// distance, by its length and characters.
+    Fuzzy(u32),
+    /// The NEAR of clause `i` could be here: each word, and close enough
+    /// by the nearness the scan recorded.
+    Near(u32),
+    /// The titles have the word of clause `i`.
+    Title(u32),
 }
 
 impl Gate {
@@ -70,9 +84,21 @@ impl Gate {
         match self {
             Gate::None => 0,
             Gate::Pair(..) => 1,
-            Gate::Start(_) => 2,
-            Gate::Tag(_) => 3,
-            Gate::Size(..) | Gate::FileSize(..) => 4,
+            Gate::Prefix(_) | Gate::Fuzzy(_) | Gate::Near(_) => 2,
+            Gate::Lacks(_) | Gate::Title(_) => 3,
+            Gate::Tag(_) => 4,
+            Gate::Size(..) | Gate::FileSize(..) => 5,
+        }
+    }
+
+    /// The gate clause it reads, if any: its answer is the same for
+    /// every rule that shares the clause.
+    fn clause(self) -> Option<u32> {
+        match self {
+            Gate::Lacks(i) | Gate::Prefix(i) | Gate::Fuzzy(i) | Gate::Near(i) | Gate::Title(i) => {
+                Some(i)
+            }
+            _ => None,
         }
     }
 
@@ -272,6 +298,9 @@ pub(crate) struct DocKeys {
     /// How close a rule set's NEAR terms came, when the scan was given
     /// them.
     near: Option<Nearness>,
+    /// The characters ([`char_set`]) of the texts of each length, made on
+    /// first use.
+    by_length: OnceCell<Vec<u64>>,
 }
 
 impl DocKeys {
@@ -308,6 +337,7 @@ impl DocKeys {
             near: near.map(|terms| Nearness {
                 terms: terms.clone(),
                 closest: IdMap::default(),
+                overflow: false,
             }),
             recent: Recent::default(),
             near_words: Vec::new(),
@@ -323,12 +353,12 @@ impl DocKeys {
             let Some((file, dirs)) = f.path.split_last() else {
                 continue;
             };
-            let (known, at, recent) = folders.longest(dirs);
+            let (known, at) = folders.longest(dirs, &mut scan.recent);
             scan.at = at;
-            scan.recent = recent;
             for k in known..dirs.len() {
                 scan.text(&dirs[k]);
-                folders.add(&dirs[..=k], scan.at, &scan.recent);
+                let recent = scan.near.is_some().then_some(&scan.recent);
+                folders.add(&dirs[..=k], scan.at, recent);
             }
             scan.text(file);
         }
@@ -339,10 +369,12 @@ impl DocKeys {
             vocabulary: scan.vocabulary,
             by_start: Default::default(),
             near: scan.near,
+            by_length: OnceCell::new(),
         }
     }
 
     /// Each distinct token text of the name and the paths.
+    #[cfg(test)]
     pub(crate) fn vocabulary(&self) -> impl Iterator<Item = &str> {
         let v = &self.vocabulary;
         v.words.iter().map(|w| v.text(w))
@@ -351,36 +383,76 @@ impl DocKeys {
     /// The distinct token texts that could start with `prefix`, whose
     /// [`start_key`] is `key`: those whose first characters' key is the
     /// same (every text for a prefix of fewer than two characters).
-    pub(crate) fn vocabulary_starting<'a>(
-        &'a self,
+    pub(crate) fn vocabulary_starting(
+        &self,
         prefix: &str,
         key: Option<u64>,
-    ) -> Box<dyn Iterator<Item = &'a str> + 'a> {
+    ) -> impl Iterator<Item = &str> + '_ {
         let v = &self.vocabulary;
-        let Some(key) = key else {
-            return Box::new(self.vocabulary());
+        let run: &[(u64, u32)] = match key {
+            None => &[],
+            Some(key) => {
+                let n = prefix.chars().count().clamp(2, 4) - 2;
+                let sorted = self.by_start[n].get_or_init(|| sorted_starts(v, n));
+                let from = sorted.partition_point(|e| e.0 < key);
+                let to = sorted.partition_point(|e| e.0 <= key);
+                &sorted[from..to]
+            }
         };
-        let n = prefix.chars().count().min(4) - 2;
-        let sorted = self.by_start[n].get_or_init(|| {
+        let every = key.is_none();
+        v.words
+            .iter()
+            .filter(move |_| every)
+            .chain(run.iter().map(|&(_, i)| &v.words[i as usize]))
+            .map(|w| v.text(w))
+    }
+
+    /// Whether some token text could be within `distance` edits of a word
+    /// `chars` long with characters `has`. An edit drops at most one of
+    /// the word's characters (or folded character bits), so such a text
+    /// lacks at most `distance` of them, and so do all the texts of its
+    /// length together.
+    pub(crate) fn could_be_near(&self, chars: usize, has: u64, distance: usize) -> bool {
+        let by_length = self.by_length.get_or_init(|| {
+            let v = &self.vocabulary;
             crate::work::tick(v.words.len());
-            let mut s: Vec<(u64, u32)> = v
-                .words
-                .iter()
-                .enumerate()
-                .filter(|(_, w)| w.starts[n] != 0)
-                .map(|(i, w)| (w.starts[n], i as u32))
-                .collect();
-            s.sort_unstable();
-            s
+            let lengths = v.words.iter().map(|w| w.chars as usize + 1).max();
+            let mut out = vec![0u64; lengths.unwrap_or(0)];
+            for w in &v.words {
+                out[w.chars as usize] |= w.has;
+            }
+            out
         });
-        let from = sorted.partition_point(|e| e.0 < key);
-        let run = sorted[from..].iter().take_while(move |e| e.0 == key);
-        Box::new(run.map(move |&(_, i)| v.text(&v.words[i as usize])))
+        let lo = chars.saturating_sub(distance);
+        let hi = chars + distance;
+        (lo..=hi).any(|n| {
+            by_length
+                .get(n)
+                .is_some_and(|&u| (has & !u).count_ones() as usize <= distance)
+        })
     }
 
     /// How close the rule set's NEAR terms came, if recorded.
     pub(crate) fn nearness(&self) -> Option<&Nearness> {
         self.near.as_ref()
+    }
+
+    /// Whether some token text starts with `prefix`, whose [`start_key`]
+    /// is `key`: [`DocKeys::vocabulary_starting`] for one answer.
+    pub(crate) fn has_prefix(&self, prefix: &str, key: u64) -> bool {
+        let v = &self.vocabulary;
+        let n = if prefix.is_ascii() {
+            prefix.len()
+        } else {
+            prefix.chars().count()
+        };
+        let n = n.clamp(2, 4) - 2;
+        let sorted = self.by_start[n].get_or_init(|| sorted_starts(v, n));
+        let from = sorted.partition_point(|e| e.0 < key);
+        sorted[from..]
+            .iter()
+            .take_while(|e| e.0 == key)
+            .any(|&(_, i)| v.text(&v.words[i as usize]).starts_with(prefix))
     }
 
     /// Whether `text`, whose hash is `hash`, is one of the token texts,
@@ -459,6 +531,9 @@ pub(crate) const MAX_WINDOW: u32 = 8;
 #[derive(Debug, Default)]
 pub(crate) struct NearTerms {
     terms: IdSet,
+    /// The pairs of terms some NEAR asks about ([`both`]): its first
+    /// word's against each other word's. Only these are recorded.
+    pairs: IdSet,
     window: u32,
 }
 
@@ -468,9 +543,17 @@ impl NearTerms {
     pub(crate) fn of<'q>(queries: impl Iterator<Item = &'q Compiled>) -> Option<NearTerms> {
         let mut near = NearTerms::default();
         for q in queries {
-            crate::matcher::near_words(q, &mut |hashes, span| {
+            crate::matcher::near_words(q, &mut |words, span| {
                 if span >= 1 && span - 1 <= MAX_WINDOW {
-                    near.terms.extend(hashes);
+                    let Some((first, rest)) = words.split_first() else {
+                        return;
+                    };
+                    for w in rest {
+                        for &x in first {
+                            near.pairs.extend(w.iter().map(|&y| both(x, y)));
+                        }
+                    }
+                    near.terms.extend(words.iter().flatten());
                     near.window = near.window.max(span - 1);
                 }
             });
@@ -479,19 +562,54 @@ impl NearTerms {
     }
 }
 
-/// Positions an occurrence may come behind the furthest seen. Each word's
-/// are noted in position order, and a join's compound, which sits at the
-/// previous word's first position, comes next to it: the words a join
-/// takes are all letters or all digits, so one position each. Nothing
-/// lags, then; four positions more are kept to spare.
-const LAG: u32 = 4;
+/// Positions an occurrence may come behind the furthest seen: none. Each
+/// word's are noted in position order, and a join's compound, which sits
+/// at the previous word's first position, comes next to it, since the
+/// words a join takes are all letters or all digits, one position each.
+/// `nearness_reaches_back_for_compounds` and the nearness property test
+/// hold it.
+const LAG: u32 = 0;
 
-/// What a scan records for [`NearTerms`]: recent occurrences of the
-/// terms in the text being scanned, and the closest two of them came.
-#[derive(Debug, Default, Clone)]
+/// Occurrences [`Recent`] keeps: the window's positions and one more,
+/// at most four tokens each (a word or part, its whole form, a plus and a
+/// join), with room to spare.
+const RECENT: usize = 4 * (MAX_WINDOW as usize + 1) + 4;
+
+/// Recent occurrences of the NEAR terms in the text being scanned, kept
+/// in place so copying it for a folder allocates nothing.
+#[derive(Debug, Clone, Copy)]
 struct Recent {
-    ring: Vec<(u64, u32)>,
+    ring: [(u64, u32); RECENT],
+    len: usize,
     furthest: u32,
+}
+
+impl Default for Recent {
+    fn default() -> Recent {
+        Recent {
+            ring: [(0, 0); RECENT],
+            len: 0,
+            furthest: 0,
+        }
+    }
+}
+
+impl Recent {
+    fn get(&self) -> &[(u64, u32)] {
+        &self.ring[..self.len]
+    }
+
+    fn clear(&mut self) {
+        self.len = 0;
+        self.furthest = 0;
+    }
+
+    /// Copies `other`'s occurrences, not its spare room.
+    fn copy(&mut self, other: &Recent) {
+        self.ring[..other.len].copy_from_slice(other.get());
+        self.len = other.len;
+        self.furthest = other.furthest;
+    }
 }
 
 /// The order-free key of two terms.
@@ -504,6 +622,10 @@ fn both(a: u64, b: u64) -> u64 {
 pub(crate) struct Nearness {
     terms: std::sync::Arc<NearTerms>,
     closest: IdMap<u8>,
+    /// More occurrences in a window than [`RECENT`] can hold (a text the
+    /// tokenizer gives more tokens a position): nothing is told from the
+    /// nearness then.
+    overflow: bool,
 }
 
 impl Nearness {
@@ -519,37 +641,53 @@ impl Nearness {
 
     /// Whether terms `a` and `b` came within `d` positions of each other
     /// in one text, for terms it [`covers`](Nearness::covers) and `d` up
-    /// to its window. A term is within 0 of itself wherever it is.
+    /// to its window. A term is within 0 of itself wherever it is, and a
+    /// pair no NEAR of the rule set asks about isn't recorded, so it may
+    /// be anywhere.
     pub(crate) fn within(&self, a: u64, b: u64, d: u32) -> bool {
+        let key = both(a, b);
         a == b
-            || self
-                .closest
-                .get(&both(a, b))
-                .is_some_and(|&c| u32::from(c) <= d)
+            || self.overflow
+            || !self.terms.pairs.contains(&key)
+            || self.closest.get(&key).is_some_and(|&c| u32::from(c) <= d)
     }
 
-    /// Notes an occurrence of `h` at `pos` in the text `recent` follows.
-    fn occur(&mut self, recent: &mut Recent, h: u64, pos: u32) {
-        if !self.terms.terms.contains(&h) {
+    /// Notes an occurrence of `h` at `pos` in the text `recent` follows;
+    /// `known` when `h` is one of the terms.
+    fn occur(&mut self, recent: &mut Recent, h: u64, pos: u32, known: bool) {
+        if !known && !self.terms.terms.contains(&h) {
             return;
         }
         let w = self.terms.window;
-        crate::work::tick(recent.ring.len() + 1);
-        for &(x, q) in &recent.ring {
+        crate::work::tick(recent.len + 1);
+        for &(x, q) in recent.get() {
             let d = pos.abs_diff(q);
-            if d <= w {
-                let c = self.closest.entry(both(x, h)).or_insert(u8::MAX);
+            let key = both(x, h);
+            if d <= w && self.terms.pairs.contains(&key) {
+                let c = self.closest.entry(key).or_insert(u8::MAX);
                 *c = (*c).min(d as u8);
             }
         }
-        recent.ring.push((h, pos));
         recent.furthest = recent.furthest.max(pos);
         // An occurrence still to come lies at most LAG before the
         // furthest, so anything further back than the window is done.
         let keep = recent.furthest.saturating_sub(w + LAG);
-        if recent.ring.first().is_some_and(|e| e.1 < keep) {
-            recent.ring.retain(|e| e.1 >= keep);
+        if recent.get().first().is_some_and(|e| e.1 < keep) {
+            let mut n = 0;
+            for i in 0..recent.len {
+                if recent.ring[i].1 >= keep {
+                    recent.ring[n] = recent.ring[i];
+                    n += 1;
+                }
+            }
+            recent.len = n;
         }
+        if recent.len == RECENT {
+            self.overflow = true;
+            return;
+        }
+        recent.ring[recent.len] = (h, pos);
+        recent.len += 1;
     }
 }
 
@@ -559,28 +697,42 @@ impl Nearness {
 const FOLDERS: usize = 8;
 const FOLDER_DEPTH: usize = 4;
 
-/// Folders already scanned, with where the scan stood after each.
+/// Folders already scanned, with where the scan stood after each, and
+/// its recent NEAR terms when it records them.
 #[derive(Default)]
 struct Folders<'a> {
-    seen: [(&'a [String], At, Recent); FOLDERS],
+    seen: [(&'a [String], At); FOLDERS],
+    recent: Vec<Recent>,
     next: usize,
 }
 
 impl<'a> Folders<'a> {
     /// How many of `dirs`' first segments were scanned as a folder, and
-    /// where the scan stood after them (the start of a path for none).
-    fn longest(&self, dirs: &[String]) -> (usize, At, Recent) {
+    /// where the scan stood after them, into `recent` too (the start of
+    /// a path for none).
+    fn longest(&self, dirs: &[String], recent: &mut Recent) -> (usize, At) {
         for k in (1..=dirs.len().min(FOLDER_DEPTH)).rev() {
-            if let Some((_, at, recent)) = self.seen.iter().find(|(f, ..)| *f == &dirs[..k]) {
-                return (k, *at, recent.clone());
+            if let Some(i) = self.seen.iter().position(|(f, _)| *f == &dirs[..k]) {
+                if let Some(r) = self.recent.get(i) {
+                    recent.copy(r);
+                }
+                return (k, self.seen[i].1);
             }
         }
-        (0, At::default(), Recent::default())
+        recent.clear();
+        (0, At::default())
     }
 
-    fn add(&mut self, folder: &'a [String], at: At, recent: &Recent) {
+    /// Remembers a folder; `recent` only when the scan records nearness.
+    fn add(&mut self, folder: &'a [String], at: At, recent: Option<&Recent>) {
         if folder.len() <= FOLDER_DEPTH {
-            self.seen[self.next] = (folder, at, recent.clone());
+            self.seen[self.next] = (folder, at);
+            if let Some(r) = recent {
+                if self.recent.is_empty() {
+                    self.recent = vec![Recent::default(); FOLDERS];
+                }
+                self.recent[self.next].copy(r);
+            }
             self.next = (self.next + 1) % FOLDERS;
         }
     }
@@ -800,6 +952,20 @@ fn add_starts_str(out: &mut Bloom, text: &str) -> Starts {
     keys
 }
 
+/// The vocabulary's texts by the key of their first `n + 2` characters.
+fn sorted_starts(v: &Vocabulary, n: usize) -> Vec<(u64, u32)> {
+    crate::work::tick(v.words.len());
+    let mut s: Vec<(u64, u32)> = v
+        .words
+        .iter()
+        .enumerate()
+        .filter(|(_, w)| w.starts[n] != 0)
+        .map(|(i, w)| (w.starts[n], i as u32))
+        .collect();
+    s.sort_unstable();
+    s
+}
+
 /// A text's [`start_key`]s of its first two, three and four characters,
 /// 0 where it has fewer.
 type Starts = [u64; 3];
@@ -901,10 +1067,11 @@ impl<'a> Scan<'a> {
         }
     }
 
-    /// Notes an occurrence of `h` at `pos` for the NEAR terms.
-    fn occur(&mut self, h: u64, pos: u32) {
+    /// Notes an occurrence of `h` at `pos` for the NEAR terms; `known`
+    /// when `h` is one of them.
+    fn occur(&mut self, h: u64, pos: u32, known: bool) {
         if let Some(n) = &mut self.near {
-            n.occur(&mut self.recent, h, pos);
+            n.occur(&mut self.recent, h, pos, known);
         }
     }
 
@@ -1045,7 +1212,7 @@ impl<'a> Scan<'a> {
                     let joined = fmix64(hash(hash(fnv_start(), &b[ps..pe]), word));
                     if fits(pe - ps + word.len()) {
                         self.token(joined, &[&b[ps..pe], word]);
-                        self.occur(joined, pp);
+                        self.occur(joined, pp, false);
                     }
                     pairs(&mut self.pairs, self.at.before.get(), &[joined]);
                     match self.at.second {
@@ -1069,13 +1236,13 @@ impl<'a> Scan<'a> {
                     let (h, off) = self.near_words[k as usize];
                     if off > 0 {
                         if let Some(plus) = plus_at.take() {
-                            self.occur(plus, p);
+                            self.occur(plus, p, false);
                         }
                     }
-                    self.occur(h, p + off);
+                    self.occur(h, p + off, true);
                 }
                 if let Some(plus) = plus_at {
-                    self.occur(plus, p);
+                    self.occur(plus, p, false);
                 }
             }
             prev = Some((s, e, p));
@@ -1119,7 +1286,7 @@ impl<'a> Scan<'a> {
         let base = self.at.pos;
         if self.near.is_some() {
             for &(pos, h) in &by_pos {
-                self.occur(h, base + pos as u32);
+                self.occur(h, base + pos as u32, false);
             }
         }
         pairs(&mut self.pairs, self.at.last.get(), &hashes(first));
@@ -1251,6 +1418,25 @@ impl KeyFilter {
     }
 }
 
+/// The clauses gates read, each kept once.
+#[derive(Debug, Default)]
+pub(crate) struct Clauses {
+    pub(crate) list: Vec<Compiled>,
+    /// Each clause's index, by its whole form.
+    seen: std::collections::HashMap<String, u32>,
+}
+
+impl Clauses {
+    /// The index of `c`, added if it's new.
+    pub(crate) fn add(&mut self, c: &Compiled) -> u32 {
+        let key = format!("{c:?}");
+        *self.seen.entry(key).or_insert_with(|| {
+            self.list.push(c.clone());
+            self.list.len() as u32 - 1
+        })
+    }
+}
+
 /// Your rules, indexed by what they need. Rebuilt whenever the list is
 /// changed (any mutable access), so it never goes stale.
 #[derive(Debug, Clone, Default)]
@@ -1270,6 +1456,8 @@ struct RuleIndex {
     filter: KeyFilter,
     /// Each rule's query and `unless`, compiled.
     compiled: Vec<(Compiled, Option<Compiled>)>,
+    /// The clauses gates read ([`Gate::Lacks`] and the like), each once.
+    clauses: Clauses,
     /// The rules' NEAR terms, whose nearness a torrent's scan records.
     near: Option<std::sync::Arc<NearTerms>>,
 }
@@ -1280,7 +1468,7 @@ impl RuleList {
             let mut ix = RuleIndex::default();
             for (i, r) in self.rules.iter().enumerate() {
                 let query = compile(&r.query);
-                let g = gate(&query);
+                let g = gate(&query, &mut ix.clauses);
                 ix.compiled.push((query, r.unless.as_ref().map(compile)));
                 let i = i as u32;
                 // A switch changes the list, which builds the index again,
@@ -1324,13 +1512,26 @@ impl RuleList {
         &self,
         keys: &DocKeys,
         tags: Tags<'_, '_>,
-        gates: impl Fn(Gate) -> bool,
+        gates: impl Fn(Gate, &[Compiled]) -> bool,
     ) -> Vec<u32> {
         let ix = self.index();
         // Marked by position, then read in order.
         let mut marks = vec![0u64; self.rules.len().div_ceil(64)];
+        // Each gate clause's answer: unknown, no or yes.
+        let memo = vec![std::cell::Cell::new(0u8); ix.clauses.list.len()];
         let mut mark = |&(i, g): &(u32, Gate)| {
-            if g == Gate::None || gates(g) {
+            let pass = match g.clause() {
+                None => g == Gate::None || gates(g, &ix.clauses.list),
+                // Rules often share a clause (`-sample`): answered once.
+                Some(c) => {
+                    let m = &memo[c as usize];
+                    if m.get() == 0 {
+                        m.set(1 + u8::from(gates(g, &ix.clauses.list)));
+                    }
+                    m.get() == 2
+                }
+            };
+            if pass {
                 marks[i as usize / 64] |= 1 << (i % 64);
             }
         };
@@ -1593,7 +1794,8 @@ mod tests {
 
     #[test]
     fn gates() {
-        let g = |q: &str| crate::matcher::gate(&compile(&parse(q).unwrap()));
+        let g =
+            |q: &str| crate::matcher::gate(&compile(&parse(q).unwrap()), &mut Clauses::default());
         let k = |t: &str| term_hash(t);
         const GB: u64 = 1 << 30;
         assert_eq!(g("x264 size:>3GB"), Gate::Size(3 * GB + 1, u64::MAX));
@@ -1606,16 +1808,19 @@ mod tests {
             g("mkv \"1080p x264\" size:>1GB"),
             Gate::Size(GB + 1, u64::MAX)
         );
-        assert_eq!(
-            g("webdz*"),
-            Gate::Start(starts_hash(b"webd".iter().copied()))
-        );
+        assert_eq!(g("webdz*"), Gate::Prefix(0));
         // Nothing every match needs, or nothing the gate can read.
         assert_eq!(g("x264 | size:>3GB"), Gate::None);
         assert_eq!(g("-(size:>3GB)"), Gate::None);
         assert_eq!(g("title:\"mkv 1080p\""), Gate::None);
         assert_eq!(g("x264 (type:software | type:movie)"), Gate::None);
         assert_eq!(g("x264"), Gate::None);
+        // A negated word anywhere, and fuzzy words outside titles.
+        assert_eq!(g("x264 -1080p"), Gate::Lacks(0));
+        assert_eq!(g("x264 -path:1080p"), Gate::None);
+        assert_eq!(g("~matrx"), Gate::Fuzzy(0));
+        assert_eq!(g("title:~matrx"), Gate::None);
+        assert_eq!(g("x264 size:>3GB -1080p"), Gate::Size(3 * GB + 1, u64::MAX));
     }
 
     /// Rules are turned away by their gates as the cheap check would.
@@ -1647,7 +1852,7 @@ mod tests {
                 content_type: lodestar_classify::ContentType::Video,
             };
             let doc = crate::matcher::Doc::new(&item, None);
-            doc.candidates(&list)
+            doc.candidates(&list, &[])
                 .iter()
                 .map(|&i| list[i as usize].id)
                 .collect::<Vec<_>>()
@@ -1676,7 +1881,7 @@ mod tests {
         ]);
         let keys = DocKeys::new("Alpha.Gamma", &[]);
         let ids = |l: &RuleList| {
-            l.candidates(&keys, &|| &NO_TAGS, |_| true)
+            l.candidates(&keys, &|| &NO_TAGS, |_, _| true)
                 .iter()
                 .map(|&i| l[i as usize].id)
                 .collect::<Vec<_>>()

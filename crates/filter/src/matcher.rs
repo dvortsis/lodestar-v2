@@ -297,17 +297,16 @@ pub(crate) fn compile(node: &Node) -> Compiled {
     }
 }
 
-/// Each NEAR in `q`, as the hashes of its words' tokens and its span
+/// Each NEAR in `q`, as the hashes of each word's tokens and its span
 /// (words plus slop), whatever field it reads.
-pub(crate) fn near_words(q: &Compiled, f: &mut dyn FnMut(Vec<u64>, u32)) {
+pub(crate) fn near_words(q: &Compiled, f: &mut dyn FnMut(Vec<Vec<u64>>, u32)) {
     match q {
         Compiled::And(of) | Compiled::Or(of) => of.iter().for_each(|c| near_words(c, f)),
         Compiled::Not(of) | Compiled::File(of) => near_words(of, f),
         Compiled::Near { words, slop, .. } => {
             let hashes = words
                 .iter()
-                .flat_map(|w| w.parts.iter().chain(&w.whole))
-                .map(|t| t.hash)
+                .map(|w| w.parts.iter().chain(&w.whole).map(|t| t.hash).collect())
                 .collect();
             f(hashes, words.len() as u32 + slop);
         }
@@ -319,19 +318,20 @@ pub(crate) fn near_words(q: &Compiled, f: &mut dyn FnMut(Vec<u64>, u32)) {
 /// cheap check answers *no* for when the gate isn't passed
 /// ([`Doc::passes`]). Inside `file:(…)` (`in_file`) every text field is
 /// keyed, and a size is a file's.
-pub(crate) fn gate(q: &Compiled) -> Gate {
-    gate_in(q, false)
+pub(crate) fn gate(q: &Compiled, clauses: &mut prefilter::Clauses) -> Gate {
+    gate_in(q, false, clauses)
 }
 
-fn gate_in(q: &Compiled, in_file: bool) -> Gate {
+fn gate_in(q: &Compiled, in_file: bool, clauses: &mut prefilter::Clauses) -> Gate {
     let keyed = |field: &TextField| in_file || *field != TextField::Title;
     let bounds = |lo: &Option<u64>, hi: &Option<u64>| (lo.unwrap_or(0), hi.unwrap_or(u64::MAX));
+    let mut clause = |c: &Compiled| clauses.add(c);
     match q {
         // Every clause of an AND is needed.
         Compiled::And(of) => of
             .iter()
-            .fold(Gate::None, |g, c| g.better(gate_in(c, in_file))),
-        Compiled::File(of) => gate_in(of, true),
+            .fold(Gate::None, |g, c| g.better(gate_in(c, in_file, clauses))),
+        Compiled::File(of) => gate_in(of, true, clauses),
         Compiled::Range {
             field: NumField::Size,
             lo,
@@ -345,14 +345,35 @@ fn gate_in(q: &Compiled, in_file: bool) -> Gate {
             }
         }
         Compiled::Tag { keys, .. } if keys.len() == 1 => Gate::Tag(keys[0]),
-        Compiled::Prefix {
-            field,
-            start: Some(k),
-            ..
-        } if keyed(field) => Gate::Start(*k),
         Compiled::Phrase { field, parts, .. } if keyed(field) && parts.len() >= 2 => {
             Gate::Pair(parts[0].hash, parts[1].hash)
         }
+        // A negated word anywhere, read as [`Doc::word_anywhere`] reads it.
+        Compiled::Not(of)
+            if !in_file
+                && matches!(
+                    **of,
+                    Compiled::Word {
+                        field: TextField::Any,
+                        ..
+                    }
+                ) =>
+        {
+            Gate::Lacks(clause(of))
+        }
+        Compiled::Prefix {
+            field,
+            start: Some(_),
+            ..
+        } if keyed(field) => Gate::Prefix(clause(q)),
+        Compiled::Fuzzy { field, word, .. } if keyed(field) && !word.chars.is_empty() => {
+            Gate::Fuzzy(clause(q))
+        }
+        Compiled::Near { field, .. } if keyed(field) => Gate::Near(clause(q)),
+        Compiled::Word {
+            field: TextField::Title,
+            ..
+        } if !in_file => Gate::Title(clause(q)),
         _ => Gate::None,
     }
 }
@@ -481,13 +502,16 @@ impl<'a> Doc<'a> {
     }
 
     /// The positions of your rules that could match, in order.
-    pub(crate) fn candidates(&self, rules: &RuleList) -> Vec<u32> {
-        rules.candidates(self.keys(), &|| self.tag_keys(), |g| self.passes(g))
+    /// `neutral` words never count (CSX-5 *Neutralize term*).
+    pub(crate) fn candidates(&self, rules: &RuleList, neutral: &[String]) -> Vec<u32> {
+        rules.candidates(self.keys(), &|| self.tag_keys(), |g, clauses| {
+            self.passes(g, clauses, neutral)
+        })
     }
 
     /// Whether the cheap check would let a clause with this [`gate`]
     /// through.
-    pub(crate) fn passes(&self, g: Gate) -> bool {
+    pub(crate) fn passes(&self, g: Gate, clauses: &[Compiled], neutral: &[String]) -> bool {
         match g {
             Gate::None => true,
             Gate::Size(lo, hi) => (lo..=hi).contains(&self.total_size()),
@@ -498,8 +522,52 @@ impl<'a> Doc<'a> {
                 lo <= max && hi >= min
             }
             Gate::Tag(k) => self.tag_keys().contains(&k),
-            Gate::Start(k) => self.keys().could_start(k),
             Gate::Pair(a, b) => self.keys().could_follow(a, b),
+            Gate::Lacks(i) => match &clauses[i as usize] {
+                Compiled::Word {
+                    whole, parts, fold, ..
+                } => {
+                    neutral.iter().any(|n| **n == **fold)
+                        || self.word_anywhere(whole, parts) != Some(true)
+                }
+                _ => true,
+            },
+            // Every text a prefix or fuzzy word reads is among the
+            // distinct token texts, except titles, which aren't gated.
+            Gate::Prefix(i) => match &clauses[i as usize] {
+                Compiled::Prefix {
+                    prefix,
+                    start: Some(k),
+                    ..
+                } => {
+                    let keys = self.keys();
+                    !prefix.is_empty() && keys.could_start(*k) && keys.has_prefix(prefix, *k)
+                }
+                _ => true,
+            },
+            Gate::Near(i) => match &clauses[i as usize] {
+                Compiled::Near { words, slop, .. } => {
+                    words.iter().all(|w| self.could_have(&w.whole, &w.parts))
+                        && !self.never_near(words, words.len() as u32 + slop)
+                }
+                _ => true,
+            },
+            Gate::Title(i) => match &clauses[i as usize] {
+                Compiled::Word {
+                    whole, parts, fold, ..
+                } => {
+                    !neutral.iter().any(|n| **n == **fold)
+                        && self.titles().iter().any(|t| has_word(t, whole, parts))
+                }
+                _ => true,
+            },
+            Gate::Fuzzy(i) => match &clauses[i as usize] {
+                Compiled::Fuzzy { word, distance, .. } => {
+                    self.keys()
+                        .could_be_near(word.chars.len(), word.has, usize::from(*distance))
+                }
+                _ => true,
+            },
         }
     }
 
@@ -1472,6 +1540,41 @@ mod tests {
         }
     }
 
+    /// A negated word gates a rule away only where the torrent has it and
+    /// it counts: a neutralized word never does (CSX-5 *Neutralize term*).
+    #[test]
+    fn lacks_gates_follow_neutralized_words() {
+        let item = Item {
+            hashes: &[[1; 20]],
+            name: "Show.S01.WEB.x264-GRP",
+            files: &[],
+            content_type: ContentType::Video,
+        };
+        let doc = Doc::new(&item, None);
+        for (q, neutral, matches) in [
+            ("x264 -web", &[][..], false),
+            ("x264 -web", &["web".to_owned()][..], true),
+            ("x264 -webrip", &[][..], true),
+            ("x264 -web-dl", &[][..], true),
+            ("x264 -grp", &[][..], false),
+        ] {
+            let compiled = compile(&parse(q).unwrap());
+            let mut clauses = prefilter::Clauses::default();
+            let g = gate(&compiled, &mut clauses);
+            assert!(matches!(g, Gate::Lacks(_)), "{q}: {g:?}");
+            assert_eq!(
+                doc.eval(&compiled, None, neutral),
+                matches,
+                "{q} {neutral:?}"
+            );
+            assert_eq!(
+                doc.passes(g, &clauses.list, neutral),
+                matches,
+                "{q} {neutral:?}"
+            );
+        }
+    }
+
     /// A join's compound is found after the word it sits at (`webdl`, at
     /// `web`, comes with `dl`): the nearness kept for it reaches back far
     /// enough, so the NEAR isn't turned away.
@@ -1496,6 +1599,28 @@ mod tests {
             assert!(doc.eval(&compiled, None, &[]), "{q} on {name}");
             assert_ne!(doc.check(&compiled, false), Tri::No, "{q} on {name}");
         }
+    }
+
+    /// A NEAR outside the rule set (an *Always allow* query, say) whose
+    /// words are among the rule set's NEAR terms, in a pair no rule asks
+    /// about, isn't turned away by the nearness.
+    #[test]
+    fn nearness_tells_only_of_pairs_asked() {
+        let rules = compile(&parse("a NEAR/1 b").unwrap());
+        let other = compile(&parse("b NEAR/1 c").unwrap());
+        let terms =
+            prefilter::NearTerms::of([&rules, &compile(&parse("c NEAR/1 d").unwrap())].into_iter())
+                .map(std::sync::Arc::new);
+        let item = Item {
+            hashes: &[[1; 20]],
+            name: "a x x x b c",
+            files: &[],
+            content_type: ContentType::Video,
+        };
+        let doc = Doc::new(&item, None).with_near(terms.as_ref());
+        assert_eq!(doc.check(&rules, false), Tri::No);
+        assert!(doc.eval(&other, None, &[]));
+        assert_ne!(doc.check(&other, false), Tri::No);
     }
 
     /// Recording nearness stays in proportion to the name (§6): a name
@@ -1728,9 +1853,11 @@ mod tests {
                 Tri::Maybe => {}
             }
             prop_assert_eq!(doc.matches_compiled(&compiled, &neutral), full);
-            // A gate turns a rule away only where the cheap check would.
-            if !doc.passes(gate(&compiled)) {
-                prop_assert_eq!(doc.check(&compiled, false), Tri::No, "gate: {} on {:?} {:?}", q, name, paths);
+            // A gate turns a rule away only where the full match must.
+            let mut clauses = prefilter::Clauses::default();
+            let g = gate(&compiled, &mut clauses);
+            if !doc.passes(g, &clauses.list, &neutral) {
+                prop_assert!(!full, "gate {:?}: {} on {:?} {:?}", g, q, name, paths);
             }
         }
     }
