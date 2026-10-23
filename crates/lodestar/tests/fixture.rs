@@ -256,23 +256,7 @@ fn serves_what_the_manifest_says() {
 
     check_details(port, &cookie, &m, false);
 
-    // Discover's Newest, every tab, with Adult hidden.
-    for d in m["discover"].as_array().unwrap() {
-        let path = match d["type"].as_str() {
-            Some(t) => format!("/api/v1/discover?type={t}&limit=5"),
-            None => "/api/v1/discover?limit=5".to_owned(),
-        };
-        let got = json(port, &path, &cookie);
-        assert_eq!(got["newest"]["total"], d["total"], "{path}");
-        let hashes: Vec<&Value> = got["newest"]["hits"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|h| &h["hash"])
-            .collect();
-        let want: Vec<&Value> = d["newest"].as_array().unwrap().iter().collect();
-        assert_eq!(hashes, want, "{path}");
-    }
+    check_discover(port, &cookie, &m, false);
 
     // Nothing reaches out: no DHT source, nothing fetched or looked up.
     let metrics = request(port, "GET /metrics HTTP/1.0", "").unwrap();
@@ -304,6 +288,7 @@ fn serves_what_the_manifest_says() {
     let cookie = server.login();
     check_queries(server.port, &cookie, &m, true);
     check_details(server.port, &cookie, &m, true);
+    check_discover(server.port, &cookie, &m, true);
     let adult = json(
         server.port,
         "/api/v1/search?q=type%3Aadult&limit=1",
@@ -318,6 +303,32 @@ fn serves_what_the_manifest_says() {
         before
     );
     check_store(&dir, &m);
+}
+
+/// Discover's Newest, every tab, with Adult `adult`.
+fn check_discover(port: u16, cookie: &str, m: &Value, adult: bool) {
+    let mut tabs = 0;
+    for d in m["discover"].as_array().unwrap() {
+        if d["adult"].as_bool() != Some(adult) {
+            continue;
+        }
+        tabs += 1;
+        let path = match d["type"].as_str() {
+            Some(t) => format!("/api/v1/discover?type={t}&limit=5"),
+            None => "/api/v1/discover?limit=5".to_owned(),
+        };
+        let got = json(port, &path, cookie);
+        assert_eq!(got["newest"]["total"], d["total"], "{path} adult={adult}");
+        let hashes: Vec<&Value> = got["newest"]["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| &h["hash"])
+            .collect();
+        let want: Vec<&Value> = d["newest"].as_array().unwrap().iter().collect();
+        assert_eq!(hashes, want, "{path} adult={adult}");
+    }
+    assert!(tabs > 1);
 }
 
 /// Detail: every hand-specified torrent as specified (Adult ones only
@@ -369,11 +380,28 @@ fn check_details(port: u16, cookie: &str, m: &Value, adult: bool) {
     );
 }
 
-/// What only the store shows yet: the saved searches' ASTs parse back to
-/// their queries.
+/// What only the store shows yet: swarm rows as built, and the saved
+/// searches' ASTs parse back to their queries.
 fn check_store(dir: &Path, m: &Value) {
     use lodestar_store::{Store, StoreConfig};
     let store = Store::open_reader(dir.join(data::DB), StoreConfig::default()).unwrap();
+    // Serving changed no swarm value: nothing was scraped.
+    let answered: i64 = store
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM swarm WHERE trackers_checked > 0 OR dht_seeds IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(answered as u64, u(&m["swarm"]["populated"]));
+    for t in m["torrents"].as_array().unwrap() {
+        if let Some(s) = t["swarm"].as_object() {
+            let row = store.swarm(t["id"].as_i64().unwrap()).unwrap().unwrap();
+            assert_eq!(i64::from(row.seeders), s["seeders"].as_i64().unwrap());
+            assert_eq!(row.last_scrape_at, s["last_scrape_at"].as_i64().unwrap());
+        }
+    }
     let saved = store.saved_searches().unwrap();
     assert_eq!(saved.len(), m["saved_searches"].as_array().unwrap().len());
     for (s, want) in saved.iter().zip(m["saved_searches"].as_array().unwrap()) {

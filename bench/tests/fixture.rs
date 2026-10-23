@@ -301,7 +301,14 @@ fn manifest_counts_match_independent_counts() {
     assert_eq!(sum(metric::REDISCOVERED), r.rediscovered);
     assert_eq!(sum(metric::DROPPED), r.dropped);
     assert_eq!(sum(metric::STORED), r.stored);
-    assert_eq!(r.stored as u64, c.total, "every torrent was stored once");
+    assert_eq!(
+        r.stored as u64, c.stored,
+        "every crawled torrent stored once; imports aren't counted"
+    );
+    // Intake counts every key received: first harvests (the cohorts),
+    // rediscoveries and drops.
+    let first: i64 = b.manifest.cohorts.iter().map(|c| c.harvested).sum();
+    assert_eq!(r.harvested, first + r.rediscovered + r.dropped);
     assert_eq!(
         count(&conn, "SELECT count(DISTINCT hour) FROM rollup_hour"),
         r.hours

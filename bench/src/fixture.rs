@@ -194,6 +194,8 @@ pub struct QueryExpect {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoverExpect {
+    /// "Show adult content" on.
+    pub adult: bool,
     /// The tab; `None` is every type.
     pub tab: Option<String>,
     pub total: u64,
@@ -306,6 +308,9 @@ pub struct TorrentExpect {
     /// Files, padding excluded.
     pub files: u64,
     pub content_type: String,
+    /// The bits the fixture specifies (`private`, `v2`, `hybrid`,
+    /// `padding`, `imported`, `backfill`, private source, filter-hidden);
+    /// the server shows others too (`single_file`).
     pub flags: i64,
     pub discovered_at: i64,
     /// `None`: never scraped.
@@ -1753,6 +1758,17 @@ fn extension(name: &str) -> Option<String> {
     .then(|| ext.to_ascii_lowercase())
 }
 
+/// The `torrents.flags` bits the fixture specifies (and the manifest
+/// counts).
+const SPECIFIED_FLAGS: i64 = flags::PRIVATE
+    | flags::V2
+    | flags::HYBRID
+    | flags::PADDING
+    | flags::IMPORTED
+    | flags::BACKFILL
+    | flags::PRIVATE_SOURCE
+    | flags::HIDDEN;
+
 fn facts(
     store: &mut Store,
     specs: &[Spec],
@@ -1797,14 +1813,54 @@ fn facts(
         let files = file_infos(&tree.files, tree.encoding);
         let (_, class) = enrich_corrected(&row.name, &files, c);
         let ctype = class.content_type.as_str().to_owned();
+        // Everything else from the specification and the info dict it
+        // wrote; the store must agree.
+        let mut bits = s.extra_flags;
+        if info.private {
+            bits |= flags::PRIVATE;
+        }
+        if info.v2.is_some() {
+            bits |= flags::V2;
+            if info.v1.is_some() {
+                bits |= flags::HYBRID;
+            }
+        }
+        if info.files.iter().any(|f| f.is_padding()) {
+            bits |= flags::PADDING;
+        }
+        let hash = match (info.v1, info.v2) {
+            (Some(v1), _) => hex(v1.as_bytes()),
+            (None, Some(v2)) => hex(v2.truncated().as_bytes()),
+            (None, None) => return Err(format!("{}: no info hash", s.key).into()),
+        };
+        let file_count = info.files.iter().filter(|f| !f.is_padding()).count() as u64;
+        let name = info.name.decode().into_owned();
+        let stored = (
+            hex(row.info_hash.as_bytes()),
+            row.name.as_str(),
+            row.size,
+            row.file_count,
+            row.flags & SPECIFIED_FLAGS,
+        );
+        if stored
+            != (
+                hash.clone(),
+                name.as_str(),
+                info.total_size,
+                file_count,
+                bits,
+            )
+        {
+            return Err(format!("{}: the store holds {stored:?}", s.key).into());
+        }
         out.push(Fact {
             spec: i,
             id: ids[i],
-            hash: hex(row.info_hash.as_bytes()),
-            name: row.name.clone(),
-            size: row.size,
-            files: row.file_count,
-            flags: row.flags,
+            hash,
+            name,
+            size: info.total_size,
+            files: file_count,
+            flags: bits,
             tokens: toks,
             exts,
             adult: ctype == "adult",
@@ -1977,10 +2033,11 @@ impl Insights {
                 *stored
                     .entry((s.discovered_at.div_euclid(HOUR), s.src))
                     .or_default() += 1;
+                // Imports are stored outside the pipeline: no counter.
+                *stored_at
+                    .entry((s.metadata_at.div_euclid(HOUR), s.src))
+                    .or_default() += 1;
             }
-            *stored_at
-                .entry((s.metadata_at.div_euclid(HOUR), s.src))
-                .or_default() += 1;
         }
         let mut counter = |hour: i64, metric: u32, src: Src, key: i64, value: i64| {
             if value != 0 {
@@ -2060,9 +2117,19 @@ impl Insights {
                     losses,
                     in_progress,
                 });
-                // Event time: first harvests, by strategy, in the cohort's
-                // hour; rediscoveries and the odd full-pipeline drop.
-                let sample = harvested / 2;
+                // Event time: every key received (first harvests, the
+                // rediscovered and the dropped), by strategy, as intake
+                // counts them.
+                let (rediscovered, dropped) = if src == Src::Dht {
+                    (
+                        5 + (r >> 40) as i64 % 20,
+                        12 * i64::from(hour.rem_euclid(97) == 0),
+                    )
+                } else {
+                    (0, 0)
+                };
+                let received = harvested + rediscovered + dropped;
+                let sample = received / 2;
                 counter(
                     hour,
                     metric::HARVESTED,
@@ -2075,24 +2142,16 @@ impl Insights {
                     metric::HARVESTED,
                     src,
                     i64::from(strategy::GET_PEERS),
-                    harvested - sample,
+                    received - sample,
                 );
-                if src == Src::Dht {
-                    counter(
-                        hour,
-                        metric::REDISCOVERED,
-                        src,
-                        i64::from(strategy::SAMPLE),
-                        5 + (r >> 40) as i64 % 20,
-                    );
-                    counter(
-                        hour,
-                        metric::DROPPED,
-                        src,
-                        0,
-                        12 * i64::from(hour.rem_euclid(97) == 0),
-                    );
-                }
+                counter(
+                    hour,
+                    metric::REDISCOVERED,
+                    src,
+                    i64::from(strategy::SAMPLE),
+                    rediscovered,
+                );
+                counter(hour, metric::DROPPED, src, 0, dropped);
             }
         }
         for (&(hour, src), &n) in &stored_at {
@@ -2500,22 +2559,26 @@ fn manifest(
         queries.push(query_expect(facts, "", true, adult));
     }
 
-    // Discover's Newest, Adult hidden: every type, then each type's tab.
-    let mut newest: Vec<&Fact> = facts.iter().filter(|f| visible(f, false, false)).collect();
-    newest.sort_by_key(|f| std::cmp::Reverse(spec(f).discovered_at));
-    let mut discover = vec![DiscoverExpect {
-        tab: None,
-        total: newest.len() as u64,
-        newest: newest.iter().take(5).map(|f| f.hash.clone()).collect(),
-    }];
-    let types: BTreeSet<&str> = newest.iter().map(|f| f.ctype.as_str()).collect();
-    for t in types {
-        let tab: Vec<&&Fact> = newest.iter().filter(|f| f.ctype == t).collect();
-        discover.push(DiscoverExpect {
-            tab: Some(t.to_owned()),
-            total: tab.len() as u64,
-            newest: tab.iter().take(5).map(|f| f.hash.clone()).collect(),
-        });
+    // Discover's Newest, with Adult hidden and shown: every type, then
+    // each type's tab.
+    let mut discover = Vec::new();
+    for adult in [false, true] {
+        let mut newest: Vec<&Fact> = facts.iter().filter(|f| visible(f, false, adult)).collect();
+        newest.sort_by_key(|f| std::cmp::Reverse(spec(f).discovered_at));
+        let types: BTreeSet<&str> = newest.iter().map(|f| f.ctype.as_str()).collect();
+        let tabs = std::iter::once(None).chain(types.into_iter().map(Some));
+        for t in tabs {
+            let tab: Vec<&&Fact> = newest
+                .iter()
+                .filter(|f| t.is_none_or(|t| f.ctype == t))
+                .collect();
+            discover.push(DiscoverExpect {
+                adult,
+                tab: t.map(str::to_owned),
+                total: tab.len() as u64,
+                newest: tab.iter().take(5).map(|f| f.hash.clone()).collect(),
+            });
+        }
     }
 
     // Swarm, from each torrent's last scrape.
@@ -2833,6 +2896,7 @@ impl Manifest {
                 .iter()
                 .map(|d| {
                     J::obj(vec![
+                        ("adult", J::Bool(d.adult)),
                         ("type", J::opt(d.tab.as_deref(), J::s)),
                         ("total", J::u(d.total)),
                         ("newest", J::Arr(d.newest.iter().map(|h| J::s(h)).collect())),
