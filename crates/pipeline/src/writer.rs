@@ -226,6 +226,15 @@ impl Writer {
         let mut store = self.store.take().expect("store");
         let (store, result) = tokio::task::spawn_blocking(move || {
             let r = store.purge_filter(now, hits_before);
+            let snaps = store.purge_snapshots(now, hits_before);
+            for s in &snaps.expired {
+                let days = lodestar_store::snapshots::RETAIN_DAYS;
+                let what = s.kind.describe();
+                tracing::info!("deleted {what} {}: over {days} days old", s.path.display());
+            }
+            for w in &snaps.warnings {
+                tracing::warn!("{w}");
+            }
             (store, r)
         })
         .await
