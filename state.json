@@ -1118,7 +1118,7 @@
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": "2026-10-23T07:34:04Z added by #120; needs brief from B-log1 review follow-ups | 2026-10-23T10:12:55Z deps merged; waits for B-log2 (logging/** overlap) and B11b (pipeline/**). Brief must include B-log1 review follow-ups (carry_forward) | 2026-10-23T17:15:19Z unblocked by B-log2; waits for M4 #48 (pipeline/** overlap); brief drafting"
+      "notes": "2026-10-23T07:34:04Z added by #120; needs brief from B-log1 review follow-ups | 2026-10-23T10:12:55Z deps merged; waits for B-log2 (logging/** overlap) and B11b (pipeline/**). Brief must include B-log1 review follow-ups (carry_forward) | 2026-10-23T17:15:19Z unblocked by B-log2; waits for M4 #48 (pipeline/** overlap); brief drafting | 2026-10-23T17:28:33Z brief committed (Opus helper + runner decisions: owns, main.rs after #128, bench gates, api.request template-only); held: launch freeze + after M4"
     },
     "M4": {
       "status": "review",
@@ -1431,6 +1431,16 @@
       "from": "S-keys review",
       "what": "status.svelte/shell start() should subscribe crawler+rebuild+settings together and hand settings events to shortcuts boot (one stream open, no reconnect)",
       "to": "next lib/shell slice"
+    },
+    "tracker-scrape-debug-passkey": {
+      "from": "B-log1b brief",
+      "what": "tracker_scrape::{TrackerUrl,HttpTracker} derive Debug over URLs with passkeys; redact Debug",
+      "to": "tracker_scrape owner follow-up"
+    },
+    "slices-yaml-B-log1b-owns": {
+      "from": "B-log1b brief",
+      "what": "add crates/log/**, system/**, search index/live.rs, filter lists.rs, api request_log.rs etc. to B-log1b owns",
+      "to": "next runner slices.yaml PR"
     }
   },
   "blocked_on_owner": [],
@@ -1465,7 +1475,8 @@
     "2026-10-23T13:45:09Z B-update PR2 \u00a72.19 refinements: control-channel exit codes 80\u201382, 6 h migration cap, a failed version is never reinstalled, `lodestar rollback --update`",
     "2026-10-23T14:19:17Z B-update supervisor runs as the same dropped UID as the server (D-puid 'drop first'): a compromised server process can tamper with update state (pin an older genuine release, block updates, halt). PR2 closes the cheap parts (versions only go up, sealed exec, newer image clears skipped). Fully separating needs the supervisor to keep a separate UID - owner call; default: keep current design",
     "2026-10-23T16:26:19Z \u00a72.19 refinements (web): Block this\u2026 defaults to hide; revealed sealed names have no Copy; per-route budgets 15 KB own JS+CSS (runner); global CSS treated as zero headroom (20 KB limit unchanged). S-search-1 may come back needing a first-load budget decision (Lighthouse 102,400 B, ~0.5 KB left).",
-    "2026-10-23T17:19:17Z B-update (\u00a72.19, runner): a damaged update 'pending' file now starts a fresh probation of the active version instead of running it unprobated."
+    "2026-10-23T17:19:17Z B-update (\u00a72.19, runner): a damaged update 'pending' file now starts a fresh probation of the active version instead of running it unprobated.",
+    "2026-10-23T17:28:33Z B-log1b (\u00a72.19, runner): logging bench gates (off event \u22645 ns; default_on only if \u22641% core and \u2264~18 MiB/day) and 10 s bounded shutdown."
   ],
   "decisions_log": [
     "2026-10-23 00:40 owner: 'Go with whatever makes for the best user experience' re filter budget reference -> staged: #97 fastest-runner ref now; F-perf moves ref to EPYC 7763 (typical) when engine meets it.",
