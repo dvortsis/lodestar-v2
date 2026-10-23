@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T13:01:59Z",
+ "updated_at": "2026-10-23T13:10:14Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -917,8 +917,8 @@
    "session": "session_015dmwui9D3HewnFepxVMSL2",
    "pr": 127,
    "attempt": 1,
-   "review_rounds": 0,
-   "notes": "from #86 | 2026-10-23T10:12:55Z unblocked by B-log1; brief drafting (Opus helper). Runs before B-log1b (both own logging/**; B-log1b also blocked by B11b on pipeline/**) | 2026-10-23T10:28:52Z launched (brief by Opus helper + runner decisions: redacted downloads hide client IPs; /events proxy gap reported as follow-up) | 2026-10-23T12:32:25Z PR #127 part 1/2 head 7b020eb (~7.7k vs main, ~half tests); fresh + security reviewers launched"
+   "review_rounds": 1,
+   "notes": "from #86 | 2026-10-23T10:12:55Z unblocked by B-log1; brief drafting (Opus helper). Runs before B-log1b (both own logging/**; B-log1b also blocked by B11b on pipeline/**) | 2026-10-23T10:28:52Z launched (brief by Opus helper + runner decisions: redacted downloads hide client IPs; /events proxy gap reported as follow-up) | 2026-10-23T12:32:25Z PR #127 part 1/2 head 7b020eb (~7.7k vs main, ~half tests); fresh + security reviewers launched | 2026-10-23T13:10:14Z round 1 FIX (both reviews): gzip index bomb (take/len bounds/cost), history skips file compressed mid-read (retry .gz); stalled stream session re-check, resume purges, file-line truncation, unindexed gz O(n^2), fold cap scan + template cut; polish"
   },
   "S-logs": {
    "status": "pending",
