@@ -116,6 +116,11 @@ fn scrub_with(url: &str, form: Form, drop_query: bool) -> String {
         }
         f => f,
     };
+    // A network-path reference (`//u:p@host/x`) has an authority too.
+    if form == Form::Request && url.starts_with("//") {
+        let scrubbed = scrub_with(&format!("x:{url}"), Form::Absolute, drop_query);
+        return scrubbed["x:".len()..].to_string();
+    }
     // A magnet link is all torrent: never shown.
     if url
         .get(..7)
@@ -167,6 +172,15 @@ fn scrub_with(url: &str, form: Form, drop_query: bool) -> String {
     finish(out, rest, drop_query)
 }
 
+/// A query value holding a URL, raw or form-encoded (`https://…`,
+/// `https%3A%2F%2F…`, `https%3A//…`), whose userinfo would otherwise stay.
+fn holds_url(value: &str) -> bool {
+    value.contains("://")
+        || [b"%3a%2f%2f".as_slice(), b"%3a//"]
+            .iter()
+            .any(|n| find_ci_bytes(value.as_bytes(), n).is_some())
+}
+
 /// `rest` (a path, query and fragment) appended to `out`, scrubbed.
 fn finish(mut out: String, rest: &str, drop_query: bool) -> String {
     let rest = rest.split('#').next().unwrap_or(rest);
@@ -193,7 +207,7 @@ fn finish(mut out: String, rest: &str, drop_query: bool) -> String {
             match pair.split_once('=') {
                 // A credential's value, or a URL in a value (`?u=https://
                 // u:p@h/`), whose userinfo would otherwise stay.
-                Some((name, value)) if credential(name) || value.contains("://") => {
+                Some((name, value)) if credential(name) || holds_url(value) => {
                     out.push_str(name);
                     out.push('=');
                     out.push_str(REDACTED);
@@ -326,10 +340,24 @@ pub fn scrub_text(text: &str) -> String {
                 from = i + 3 + at + 1;
             }
         }
-        let end = rest[from..]
+        // An IPv6 literal host (`http://[::1]:6969/…`): its `]` doesn't end
+        // the URL.
+        let mut scan = from;
+        let host = if from == i { i + 3 } else { from };
+        if rest[i..].starts_with("://") && rest[host..].starts_with('[') {
+            // Hex digits, `:`, `.` and a zone's `%`, up to the `]`.
+            let literal = &rest[host + 1..rest.len().min(host + 64)];
+            if let Some(close) = literal
+                .find(|c: char| !(c.is_ascii_hexdigit() || matches!(c, ':' | '.' | '%')))
+                .filter(|&k| literal[k..].starts_with(']'))
+            {
+                scan = host + 1 + close + 1;
+            }
+        }
+        let end = rest[scan..]
             .char_indices()
             .find(|(_, c)| !url_char(*c))
-            .map_or(rest.len(), |(j, _)| from + j);
+            .map_or(rest.len(), |(j, _)| scan + j);
         out.push_str(&hide_runs(&redact_secrets(&rest[..start])));
         out.push_str(&scrub_with(&rest[start..end], Form::Absolute, true));
         pos += end;
@@ -866,6 +894,24 @@ mod tests {
                 assert!(shown.contains("[redacted]@host/x"), "{c:?}: {shown}");
             }
         }
+        // A form-encoded URL in a query value, and a network-path reference.
+        for encoded in [
+            "https%3A%2F%2Fu%3AS3CRET%40h",
+            "https%3a%2f%2fu%3aS3CRET%40h",
+            "https%3A//u:S3CRET@h",
+        ] {
+            let s = scrub(&format!("/x?u={encoded}&n=1"), Form::Request);
+            assert!(
+                !s.contains("S3CRET") && s.ends_with("u=[redacted]&n=1"),
+                "{s}"
+            );
+        }
+        assert_eq!(scrub("//u:S3CRET@h/x", Form::Request), "//[redacted]@h/x");
+        // An IPv6 literal host doesn't end the URL at its `]`.
+        let s = scrub_text("x http://[::1]:6969/ann/0123456789abcdef0123?passkey=K y");
+        assert_eq!(s, "x http://[::1]:6969/ann/[redacted] y");
+        let s = scrub_text("x https://u:p@[2001:db8::1]/a?passkey=K y");
+        assert_eq!(s, "x https://[redacted]@[2001:db8::1]/a y");
         // Over-redaction of an ambiguous line is accepted.
         assert_eq!(
             scrub_text("see https://a.example and me@x.org"),
