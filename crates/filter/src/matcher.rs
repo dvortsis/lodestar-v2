@@ -455,7 +455,7 @@ impl<'a> Doc<'a> {
 
     /// The positions of your rules that could match, in order.
     pub(crate) fn candidates(&self, rules: &RuleList) -> Vec<u32> {
-        rules.candidates(self.keys(), &|| self.tag_keys(), &|g| self.passes(g))
+        rules.candidates(self.keys(), &|| self.tag_keys(), |g| self.passes(g))
     }
 
     /// Whether the cheap check would let a clause with this [`gate`]
@@ -463,11 +463,12 @@ impl<'a> Doc<'a> {
     pub(crate) fn passes(&self, g: Gate) -> bool {
         match g {
             Gate::None => true,
-            Gate::Size(lo, hi) => {
-                self.check_range(NumField::Size, Some(lo), Some(hi), false) != Tri::No
-            }
+            Gate::Size(lo, hi) => (lo..=hi).contains(&self.total_size()),
+            // The sizes `file:(…)` reads lie between these: the cheap
+            // check's first test.
             Gate::FileSize(lo, hi) => {
-                self.check_range(NumField::Size, Some(lo), Some(hi), true) != Tri::No
+                let (min, max) = self.content().file_sizes;
+                lo <= max && hi >= min
             }
             Gate::Tag(k) => self.tag_keys().contains(&k),
             Gate::Start(k) => self.keys().could_start(k),
@@ -841,7 +842,7 @@ impl<'a> Doc<'a> {
                 .is_some_and(|e| pick(e).iter().any(|v| f(*v)))
         };
         match field {
-            NumField::Size => f(self.facts.map_or(content.bytes, |x| x.size)),
+            NumField::Size => f(self.total_size()),
             NumField::Files => f(content.count),
             NumField::Largest => content.largest.is_some_and(&f),
             NumField::Piece => self.facts.is_some_and(|x| f(x.piece_len)),
@@ -850,6 +851,11 @@ impl<'a> Doc<'a> {
             NumField::Episode => list(|e| &e.episodes),
             NumField::Junk => self.enrichment().is_some_and(|e| f(e.junk)),
         }
+    }
+
+    /// The torrent's size, as `size:` reads it.
+    fn total_size(&self) -> u64 {
+        self.facts.map_or_else(|| self.content().bytes, |x| x.size)
     }
 
     fn content(&self) -> &Content {
