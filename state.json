@@ -950,7 +950,7 @@
    "pr": 98,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 01:35 review FIX sent: stale vs M6-cli cli::parse (won't compile), ProgramData ACL inherited (Users RW: auth.json/setup token/config plant) -> icacls lockdown + test; important: StopPending during start, SCM dispatcher only for service argv, PowerShell trade-off doc, SO_LINGER widens \u00a711 doc. P-release told MSI reqs. | 01:58 1384865 fixes (acl.rs icacls lockdown, try_parse_from hook, StopPending). Delta reviewer started (ACL TOCTOU/junction). P-release asked to switch MSI to NT SERVICE\\Lodestar. | 02:00 19b0278 switched to LocalService (crossed msgs); runner decided NT SERVICE\\Lodestar (matches #92 8d4f971), DACL check must refuse LocalService. Hold pushes until delta review findings."
+   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 01:35 review FIX sent: stale vs M6-cli cli::parse (won't compile), ProgramData ACL inherited (Users RW: auth.json/setup token/config plant) -> icacls lockdown + test; important: StopPending during start, SCM dispatcher only for service argv, PowerShell trade-off doc, SO_LINGER widens \u00a711 doc. P-release told MSI reqs. | 01:58 1384865 fixes (acl.rs icacls lockdown, try_parse_from hook, StopPending). Delta reviewer started (ACL TOCTOU/junction). P-release asked to switch MSI to NT SERVICE\\Lodestar. | 02:00 19b0278 switched to LocalService (crossed msgs); runner decided NT SERVICE\\Lodestar (matches #92 8d4f971), DACL check must refuse LocalService. Hold pushes until delta review findings. | 02:05 NT SERVICE\\Lodestar via sc showsid, DACL check only SYSTEM/Admins/own SID; held locally pending delta review."
   },
   "R-relevance": {
    "status": "merged",
@@ -1026,7 +1026,7 @@
   "V6-cluster2": {
    "status": "review",
    "model": "opus",
-   "notes": "pull-forward after V6-cluster1 merge (owner: run as many as possible); brief includes #96 carry-forwards | 01:50 PR #108 1ff314c, CI queued; review after current reviews (disk). | 02:10 container restart; reviewers relaunched: M-auth, B5c, M6-win delta; V6-cluster2 review started.",
+   "notes": "pull-forward after V6-cluster1 merge (owner: run as many as possible); brief includes #96 carry-forwards | 01:50 PR #108 1ff314c, CI queued; review after current reviews (disk). | 02:10 container restart; reviewers relaunched: M-auth, B5c, M6-win delta; V6-cluster2 review started. | 02:06 review FIX: flaky caps test (permit release race), revoke of disconnected worker keeps leases, revoked worker can be granted mid-claim, reconnect cancels drain; polish.",
    "session": "session_01LvbsfQSKGCGby7T8r4xoNw",
    "pr": 108
   },
