@@ -160,4 +160,11 @@ describe('buildNodes', () => {
 		expect(performance.now() - t).toBeLessThan(1000);
 		expect(nodes.filter((n) => !n.dir)).toHaveLength(50_000);
 	});
+
+	it('shows bidirectional controls in names as visible markers', () => {
+		const { nodes } = buildNodes([file('inv\u202Efdp.exe/x\u2066y.txt')], options());
+		expect(nodes.map((n) => n.name)).toEqual(['inv<U+202E>fdp.exe', 'x<U+2066>y.txt']);
+		// the id keeps the real path
+		expect(nodes[1]!.id).toContain('\u202E');
+	});
 });

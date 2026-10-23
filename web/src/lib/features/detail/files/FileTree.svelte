@@ -26,9 +26,14 @@
 	let { detail, matched = [] }: Props = $props();
 
 	const locale = $derived(currentLocale());
-	const useWorker = $derived(detail.file_list_total > WORKER_THRESHOLD);
+	const hash = $derived(detail.hash);
+	let workerFailed = $state(false);
+	const useWorker = $derived(detail.file_list_total > WORKER_THRESHOLD && !workerFailed);
 
-	let files = $state.raw<FileInput[]>([]);
+	// Every file held so far, kept here too so a failed worker can fall back to a main-thread build.
+	let allFiles: FileInput[] = [];
+	let building = false;
+	let dirty = false;
 	let loading = $state(false);
 	let failed = $state(false);
 	let showPadding = $state(false);
@@ -74,25 +79,50 @@
 	}
 
 	function startWorker() {
-		worker = new Worker(new URL('./tree.worker.ts', import.meta.url), { type: 'module' });
-		worker.onmessage = (event: MessageEvent<WorkerResult>) => {
+		const w = new Worker(new URL('./tree.worker.ts', import.meta.url), { type: 'module' });
+		worker = w;
+		w.onmessage = (event: MessageEvent<WorkerResult>) => {
+			if (worker !== w) return;
+			building = false;
 			// Replies for an older query are dropped.
 			if (event.data.seq === seq) apply(event.data);
+			if (dirty) {
+				dirty = false;
+				rebuild();
+			}
 		};
+		// A worker that can't start or can't answer must never read as "no files": build here instead.
+		const fail = () => {
+			if (worker !== w) return;
+			w.terminate();
+			worker = undefined;
+			building = false;
+			dirty = false;
+			workerFailed = true;
+			rebuild();
+		};
+		w.onerror = fail;
+		w.onmessageerror = fail;
 	}
 
+	// One build in flight: files that arrive meanwhile are folded into the next build, so a 50,000
+	// file torrent isn't rebuilt (and its tree cloned back) once per page.
 	function rebuild() {
 		if (worker) {
+			if (building) {
+				dirty = true;
+				return;
+			}
+			building = true;
 			post({ type: 'build', seq: ++seq, options: options() });
 		} else {
-			const result = buildNodes(files, options());
-			apply({ ...result, index: undefined });
+			apply({ ...buildNodes(allFiles, options()), index: undefined });
 		}
 	}
 
 	function addFiles(page: FileInput[]) {
-		if (worker) post({ type: 'append', files: page });
-		else files = [...files, ...page];
+		for (const f of page) allFiles.push(f);
+		post({ type: 'append', files: page });
 		loaded += page.length;
 		rebuild();
 	}
@@ -127,12 +157,9 @@
 		}
 	}
 
-	// (Re)start for a torrent: the first page is detail's own, then the visible-triggered rest.
-	let lastHash = '';
+	// (Re)start for a torrent: the first page is detail's own, then the rest is paged in.
 	$effect(() => {
-		const hash = detail.hash;
-		if (hash === lastHash) return;
-		lastHash = hash;
+		void hash;
 		untrack(() => {
 			ctl?.abort();
 			worker?.terminate();
@@ -141,11 +168,14 @@
 			expanded = new Set();
 			nodes = [];
 			index = undefined;
-			files = [];
+			allFiles = [];
 			loaded = 0;
 			failed = false;
 			loading = false;
-			if (useWorker) {
+			building = false;
+			dirty = false;
+			workerFailed = false;
+			if (detail.file_list_total > WORKER_THRESHOLD) {
 				startWorker();
 				post({ type: 'reset' });
 			}

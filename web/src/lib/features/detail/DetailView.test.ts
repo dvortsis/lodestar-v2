@@ -22,7 +22,10 @@ const model = (state: Partial<InstanceType<typeof DetailModel>>) => {
 	Object.assign(m, state);
 	return m;
 };
-const flush = () => new Promise((r) => setTimeout(r, 0));
+// Let queued promise callbacks run (microtasks only; no timers).
+const flush = async () => {
+	for (let i = 0; i < 20; i++) await Promise.resolve();
+};
 
 beforeEach(() => {
 	get.mockReset();

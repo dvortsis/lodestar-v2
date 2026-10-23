@@ -12,8 +12,9 @@
 	interface Props {
 		detail: TorrentDetail;
 		hit: SearchHit | null;
+		heading?: 'h2' | 'h3';
 	}
-	let { detail, hit }: Props = $props();
+	let { detail, hit, heading = 'h3' }: Props = $props();
 
 	const locale = $derived(currentLocale());
 	const flags = $derived(
@@ -37,7 +38,7 @@
 </script>
 
 <section class="ls-detail-section" aria-labelledby="detail-h-summary" data-section="summary">
-	<h3 id="detail-h-summary">{m.detail_section_summary()}</h3>
+	<svelte:element this={heading} id="detail-h-summary">{m.detail_section_summary()}</svelte:element>
 	<dl class="ls-detail-facts">
 		<dt>{m.detail_size()}</dt>
 		<dd class="tabular-nums" data-testid="detail-size">{formatBytes(detail.size, locale)}</dd>
@@ -77,7 +78,7 @@
 			{#if detail.leechers === null}
 				<span aria-hidden="true">{DASH}</span><span class="sr-only">{m.never_scraped()}</span>
 			{:else}
-				{formatCount(detail.leechers, locale)}
+				{formatCount({ value: detail.leechers, approx: detail.seeders_approx }, locale)}
 			{/if}
 		</dd>
 
@@ -113,7 +114,7 @@
 		{#if flags.length}
 			<dt>{m.detail_flags()}</dt>
 			<dd class="ls-detail-row" data-testid="detail-flags">
-				{#each flags as [flag, label] (flag)}<Badge>{label()}</Badge>{/each}
+				{#each flags as [flag, label] (flag)}<Badge variant="info">{label()}</Badge>{/each}
 			</dd>
 		{/if}
 

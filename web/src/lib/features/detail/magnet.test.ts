@@ -39,6 +39,16 @@ describe('copyMagnet', () => {
 		copyText.mockResolvedValue('manual');
 		expect(await copyMagnet({ magnet: MAGNET })).toBe('manual');
 		expect(manual.magnet).toBe(MAGNET);
+		// mounted on demand, with no drawer or page around it
+		const field = await vi.waitFor(
+			() => {
+				const el = document.querySelector<HTMLInputElement>('[data-testid="detail-magnet-field"]');
+				if (!el) throw new Error('not mounted yet');
+				return el;
+			},
+			{ timeout: 10_000 }
+		);
+		expect(field.value).toBe(MAGNET);
 		expect(toasts.items).toEqual([]);
 	});
 

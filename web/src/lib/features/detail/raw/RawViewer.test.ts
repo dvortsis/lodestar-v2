@@ -78,4 +78,19 @@ describe('RawViewer', () => {
 		render(RawViewer, { value: 42 });
 		expect(screen.getByTestId('detail-raw').textContent).toContain('42');
 	});
+
+	it('shows bidirectional controls in keys and strings as markers', () => {
+		render(RawViewer, { value: { 'a\u202Eb': 'x\u202Ey' } });
+		const root = screen.getByTestId('detail-raw');
+		expect(root.textContent).toContain('a<U+202E>b: "x<U+202E>y"');
+		expect(root.textContent).not.toContain('\u202E');
+	});
+
+	it('does not confuse a key with a dot with a nested key', async () => {
+		render(RawViewer, { value: { 'a.b': { x: 1 }, a: { b: { x: 2 } } } });
+		await fireEvent.click(screen.getByRole('button', { name: /^a\.b \{1\}$/ }));
+		const root = screen.getByTestId('detail-raw');
+		expect(root.textContent).toContain('x: 1');
+		expect(root.textContent).not.toContain('x: 2');
+	});
 });

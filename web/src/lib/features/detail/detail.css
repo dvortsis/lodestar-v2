@@ -14,7 +14,7 @@
 	content-visibility: auto;
 	contain-intrinsic-size: auto calc(var(--spacing) * 40);
 }
-.ls-detail-section > h3 {
+.ls-detail-section > :is(h2, h3) {
 	font-size: var(--text-body-lg);
 	line-height: var(--text-body-lg--line-height);
 	font-weight: var(--font-weight-semibold);

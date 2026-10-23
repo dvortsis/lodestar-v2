@@ -45,20 +45,26 @@ describe('detail commands', () => {
 		expect(copyMagnet).not.toHaveBeenCalled();
 	});
 
-	it('acts on the focused row when no drawer is open', () => {
+	it('acts on the focused row when no drawer is open', async () => {
 		commands.setCommandTarget(ROW);
 		expect(keys.list().find((c) => c.id === 'detail.open_magnet')!.active).toBe(true);
 		expect(press('c')).toBe(true);
-		expect(copyMagnet).toHaveBeenCalledWith({ hash: ROW });
+		await vi.waitFor(() => expect(copyMagnet).toHaveBeenCalledWith({ hash: ROW }), {
+			timeout: 10_000
+		});
 		expect(press('o')).toBe(true);
-		expect(openMagnet).toHaveBeenCalledWith({ hash: ROW });
+		await vi.waitFor(() => expect(openMagnet).toHaveBeenCalledWith({ hash: ROW }), {
+			timeout: 10_000
+		});
 	});
 
-	it('prefers the open drawer over the row', () => {
+	it('prefers the open drawer over the row', async () => {
 		commands.setCommandTarget(ROW);
 		commands.setDrawerTarget(DRAWER);
 		press('c');
-		expect(copyMagnet).toHaveBeenCalledWith({ hash: DRAWER });
+		await vi.waitFor(() => expect(copyMagnet).toHaveBeenCalledWith({ hash: DRAWER }), {
+			timeout: 10_000
+		});
 		expect(commands.commandTarget()).toBe(DRAWER);
 		commands.setDrawerTarget(null);
 		expect(commands.commandTarget()).toBe(ROW);

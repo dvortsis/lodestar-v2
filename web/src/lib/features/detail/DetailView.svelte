@@ -7,6 +7,7 @@
 	import { m } from '$lib/paraglide/messages.js';
 	import Skeleton from '$lib/ui/feedback/Skeleton.svelte';
 	import Mono from '$lib/ui/labels/Mono.svelte';
+	import { showBidi } from '$lib/util/bidi';
 	import { isMagnet } from '$lib/util/magnet';
 	import { whenVisible } from './visible';
 	import Summary from './summary/Summary.svelte';
@@ -22,6 +23,8 @@
 	}
 	let { model, mode, onBack }: Props = $props();
 
+	// The page's title is its h1, so its sections are h2; the drawer's title is an h2.
+	const heading = $derived(mode === 'page' ? 'h2' : 'h3');
 	const detail = $derived(model.detail);
 	const hit = $derived(model.hit);
 	const error = $derived(model.error);
@@ -54,7 +57,7 @@
 	{#if hit?.title && rawName && hit.title !== rawName}
 		<div class="ls-detail-stack">
 			<span class="text-small text-muted-text">{m.raw_name()}</span>
-			<Mono wrap><span data-testid="detail-raw-name">{rawName}</span></Mono>
+			<Mono wrap><span data-testid="detail-raw-name">{showBidi(rawName)}</span></Mono>
 			{#if hit.resolved_via}
 				<span class="text-small text-muted-text" data-testid="detail-resolved-via"
 					>{m.detail_resolved_via({ method: resolvedVia(hit.resolved_via) })}</span
@@ -64,7 +67,7 @@
 	{/if}
 
 	{#if error && ErrorState}
-		<ErrorState {error} {onBack} onRetry={() => model.retry()} />
+		<ErrorState {error} {onBack} {heading} onRetry={() => model.retry()} />
 	{/if}
 
 	{#if detail}
@@ -83,14 +86,16 @@
 				>
 			{/if}
 		</div>
-		<Summary {detail} {hit} />
+		<Summary {detail} {hit} {heading} />
 		<section
 			class="ls-detail-section"
 			aria-labelledby="detail-h-contents"
 			data-section="contents"
 			use:whenVisible={loadContents}
 		>
-			<h3 id="detail-h-contents">{m.detail_section_contents()}</h3>
+			<svelte:element this={heading} id="detail-h-contents"
+				>{m.detail_section_contents()}</svelte:element
+			>
 			{#if Contents}
 				<Contents {detail} {hit} />
 			{:else}
@@ -103,7 +108,9 @@
 			data-section="parsed"
 			use:whenVisible={loadParsed}
 		>
-			<h3 id="detail-h-parsed">{m.detail_section_parsed()}</h3>
+			<svelte:element this={heading} id="detail-h-parsed"
+				>{m.detail_section_parsed()}</svelte:element
+			>
 			{#if Parsed}
 				<Parsed hash={detail.hash} {hit} />
 			{:else}

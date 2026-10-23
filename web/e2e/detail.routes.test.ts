@@ -241,6 +241,25 @@ test.describe('the drawer on /dev/detail', () => {
 		await expect(page.getByTestId('drawer')).toHaveCount(0);
 	});
 
+	test('opening a second torrent keeps one history entry: Esc closes, and it opens again', async ({
+		page,
+		go
+	}) => {
+		await page.setViewportSize({ width: 1440, height: 900 });
+		await go('/dev/detail');
+		await open(page);
+		await page.getByTestId('push-b').focus();
+		await page.keyboard.press('Enter');
+		const drawer = page.getByTestId('drawer');
+		await expect(drawer.getByRole('heading', { level: 2 })).toHaveText('Beta show');
+		await drawer.getByRole('heading', { level: 2 }).focus();
+		await page.keyboard.press('Escape');
+		await expect(drawer).toHaveCount(0);
+		await expect(page).toHaveURL(/\/dev\/detail/);
+		await open(page);
+		await expect(drawer.getByRole('heading', { level: 2 })).toHaveText('Alpha show');
+	});
+
 	test('swapping torrents keeps focus and announces the new title', async ({ page, go }) => {
 		await page.setViewportSize({ width: 1440, height: 900 });
 		await go('/dev/detail');

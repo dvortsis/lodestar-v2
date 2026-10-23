@@ -1,25 +1,12 @@
 // `c` copies and `o` opens the magnet of the open drawer's torrent, else of whatever the search
 // page's focused row set with `setCommandTarget`. S-search-2 must not register these ids again.
 import { m } from '$lib/paraglide/messages.js';
-import { copyMagnet, openMagnet } from './magnet';
 
-let drawerHash: string | null = null;
-let rowHash: string | null = null;
+import { commandTarget as target } from './target';
+
+export { commandTarget, setCommandTarget, setDrawerTarget } from './target';
+
 let registered: Promise<void> | undefined;
-
-const target = () => drawerHash ?? rowHash;
-
-/** The torrent of the open drawer (DetailHost sets and clears it). */
-export function setDrawerTarget(hash: string | null) {
-	drawerHash = hash;
-}
-
-/** The torrent of the focused result row, or null. Ignored while a drawer is open. */
-export function setCommandTarget(hash: string | null) {
-	rowHash = hash;
-}
-
-export const commandTarget = target;
 
 /** Idempotent: a second call returns the first registration. */
 export function registerDetailCommands(): Promise<void> {
@@ -33,7 +20,7 @@ export function registerDetailCommands(): Promise<void> {
 			when,
 			run: () => {
 				const hash = target();
-				if (hash) void copyMagnet({ hash });
+				if (hash) void import('./magnet').then((mod) => mod.copyMagnet({ hash }));
 			}
 		});
 		keys.register({
@@ -44,7 +31,7 @@ export function registerDetailCommands(): Promise<void> {
 			when,
 			run: () => {
 				const hash = target();
-				if (hash) void openMagnet({ hash });
+				if (hash) void import('./magnet').then((mod) => mod.openMagnet({ hash }));
 			}
 		});
 	});
