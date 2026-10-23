@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T12:15:18Z",
+ "updated_at": "2026-10-23T12:22:03Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -939,13 +939,13 @@
    "notes": "from #86"
   },
   "B-update": {
-   "status": "review",
+   "status": "running",
    "model": "opus",
    "session": "session_01S3vvLdWsMTnhxizee1srHu",
    "pr": 125,
    "attempt": 1,
    "review_rounds": 2,
-   "notes": "from #86 | 2026-10-23T08:45:08Z unblocked by B2c; brief drafting (Opus helper); main.rs overlap with B-log1 #119 noted | 2026-10-23T09:08:06Z launched (brief by Opus helper, runner-reviewed): 3 PRs (trust core crate / supervisor+rollback / check+policy+API) | 2026-10-23T09:30:45Z PR1 ~3.8k lines (1.75k code, ~40% tests): runner agreed one PR with stated reason | 2026-10-23T10:19:35Z PR #125 (1/3 trust core) head ee5ae29 (~4k incl vectors); self-review 0 blocking; fresh + security reviewers launched | 2026-10-23T10:28:52Z PR1 round 1 FIX: trust_damaged across builds (revoked equality), merge lets marks drop on seq rise, merge main; polish (skip, 64-cap, normalised storage, mark bound, fuzz modes, drift, ctutils, README) | 2026-10-23T11:46:48Z af3874e round-1 fixes (revoked additive, merge resets only rotated roles, main merged, all polish), CI green; delta review (security reviewer resumed) | 2026-10-23T11:50:08Z delta FIX (round 2): un-normalised trust.json freezes merges (normalise on load, compare bodies); clock-behind reads trust_damaged (-> Ahead, drop part-3 rebuild note); polish: tie keeps digest, same-seq per-mark max"
+   "notes": "from #86 | 2026-10-23T08:45:08Z unblocked by B2c; brief drafting (Opus helper); main.rs overlap with B-log1 #119 noted | 2026-10-23T09:08:06Z launched (brief by Opus helper, runner-reviewed): 3 PRs (trust core crate / supervisor+rollback / check+policy+API) | 2026-10-23T09:30:45Z PR1 ~3.8k lines (1.75k code, ~40% tests): runner agreed one PR with stated reason | 2026-10-23T10:19:35Z PR #125 (1/3 trust core) head ee5ae29 (~4k incl vectors); self-review 0 blocking; fresh + security reviewers launched | 2026-10-23T10:28:52Z PR1 round 1 FIX: trust_damaged across builds (revoked equality), merge lets marks drop on seq rise, merge main; polish (skip, 64-cap, normalised storage, mark bound, fuzz modes, drift, ctutils, README) | 2026-10-23T11:46:48Z af3874e round-1 fixes (revoked additive, merge resets only rotated roles, main merged, all polish), CI green; delta review (security reviewer resumed) | 2026-10-23T11:50:08Z delta FIX (round 2): un-normalised trust.json freezes merges (normalise on load, compare bodies); clock-behind reads trust_damaged (-> Ahead, drop part-3 rebuild note); polish: tie keeps digest, same-seq per-mark max | 2026-10-23T12:22:03Z PR1 #125 merged (security delta MERGE); PR2 started with merge-seq polish + MSI downgrade note"
   },
   "S-updates": {
    "status": "pending",
@@ -1335,8 +1335,7 @@
   "percolate-cancel-scan": "Percolator: in-scan cancel only stops collecting, not the scorer (tantivy default_collect_segment has no early exit); use a scorer loop with fill_buffer like lease.rs and count raw docs; fix the B9 decisions-file claim (from B9 delta review)",
   "slices-yaml-B-log1b-system": "Runner PR: add crates/lodestar/src/system/** to B-log1b owns (B2c's system/{address,restart}.rs are in NOT_YET_SWEPT)",
   "B-log1b-extra": "B-log1b also: raw \" < > ` space in URL passwords, url::Url Debug password, planted index.json restricted:true (check owner/ACL), scrub_text quadratic on long lines, lint inline target-table log dep, restart.rs:173 exe path as Path field",
-  "B-log1b-folding": "B-log1b: flood folding only folds identical lines, so distinct-line floods (new hash per DHT harvest) aren't reduced; high-volume events stay default_on: false until its bench decides",
-  "B-update-msi-downgrade": "B-update part 2/3: MSI downgrade over a newer store schema installs fine then the service stops with SchemaTooNew (service reports Running before opening store); rollback journal must restore the store before relying on the old MSI (from P-release review)"
+  "B-log1b-folding": "B-log1b: flood folding only folds identical lines, so distinct-line floods (new hash per DHT harvest) aren't reduced; high-volume events stay default_on: false until its bench decides"
  },
  "blocked_on_owner": [],
  "launches_today": 19,
