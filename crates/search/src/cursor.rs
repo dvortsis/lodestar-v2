@@ -68,6 +68,10 @@ fn sort_code(sort: Sort) -> u8 {
         Sort::Discovered { desc } => 2 | u8::from(desc),
         Sort::Size { desc } => 4 | u8::from(desc),
         Sort::Files { desc } => 6 | u8::from(desc),
+        Sort::Seeders { desc } => 8 | u8::from(desc),
+        Sort::Leechers { desc } => 10 | u8::from(desc),
+        Sort::Trackers { desc } => 12 | u8::from(desc),
+        Sort::Seen { desc } => 14 | u8::from(desc),
     }
 }
 
@@ -78,6 +82,10 @@ fn sort_of(code: u8) -> Option<Sort> {
         2 => Sort::Discovered { desc },
         4 => Sort::Size { desc },
         6 => Sort::Files { desc },
+        8 => Sort::Seeders { desc },
+        10 => Sort::Leechers { desc },
+        12 => Sort::Trackers { desc },
+        14 => Sort::Seen { desc },
         _ => return None,
     })
 }
@@ -206,7 +214,13 @@ impl Cursor {
                 Sort::Relevance,
                 Position::Score { .. } | Position::Window { .. }
             ) | (
-                Sort::Discovered { .. } | Sort::Size { .. } | Sort::Files { .. },
+                Sort::Discovered { .. }
+                    | Sort::Size { .. }
+                    | Sort::Files { .. }
+                    | Sort::Seeders { .. }
+                    | Sort::Leechers { .. }
+                    | Sort::Trackers { .. }
+                    | Sort::Seen { .. },
                 Position::Field { .. }
             )
         );
@@ -238,6 +252,10 @@ mod tests {
             any::<bool>().prop_map(|desc| Sort::Discovered { desc }),
             any::<bool>().prop_map(|desc| Sort::Size { desc }),
             any::<bool>().prop_map(|desc| Sort::Files { desc }),
+            any::<bool>().prop_map(|desc| Sort::Seeders { desc }),
+            any::<bool>().prop_map(|desc| Sort::Leechers { desc }),
+            any::<bool>().prop_map(|desc| Sort::Trackers { desc }),
+            any::<bool>().prop_map(|desc| Sort::Seen { desc }),
         ]
     }
 

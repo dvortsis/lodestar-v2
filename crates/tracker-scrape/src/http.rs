@@ -9,6 +9,7 @@
 //! back off. Bodies are capped before they're read, and the bencode is
 //! decoded with tight limits.
 
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
 use ::url::Url;
@@ -38,6 +39,9 @@ pub struct HttpConfig {
     pub max_hashes: usize,
     /// Whole request, connect to last byte.
     pub timeout: Duration,
+    /// Blocklisted addresses: give the same one to [`client`], which
+    /// checks names and redirects; the tracker checks a literal IP host.
+    pub deny: Option<crate::Deny>,
 }
 
 impl Default for HttpConfig {
@@ -45,6 +49,7 @@ impl Default for HttpConfig {
         HttpConfig {
             max_hashes: 32,
             timeout: Duration::from_secs(15),
+            deny: None,
         }
     }
 }
@@ -55,18 +60,69 @@ impl Default for HttpConfig {
 /// interface or VPN like the DHT does (§5), not through whatever proxy
 /// the environment names. Redirects are limited, since a tracker has no
 /// business sending us far away. `local` sets the source address.
-pub fn client(local: Option<std::net::IpAddr>) -> Result<reqwest::Client> {
+///
+/// With `deny`, host names resolve to their allowed addresses only, and a
+/// redirect to a blocklisted literal IP is refused.
+pub fn client(local: Option<IpAddr>, deny: Option<&crate::Deny>) -> Result<reqwest::Client> {
     // Several clients may be built; only the first install wins, and any
     // provider installed by the host process is fine too.
     let _ = rustls::crypto::ring::default_provider().install_default();
-    reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         .no_proxy()
         .local_address(local)
-        .redirect(reqwest::redirect::Policy::limited(2))
         .user_agent(concat!("Lodestar/", env!("CARGO_PKG_VERSION")))
-        .connect_timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| Error::Http(e.to_string()))
+        .connect_timeout(Duration::from_secs(10));
+    builder = match deny {
+        None => builder.redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS)),
+        Some(deny) => {
+            let d = deny.clone();
+            builder.dns_resolver(DenyResolver(deny.clone())).redirect(
+                reqwest::redirect::Policy::custom(move |attempt| {
+                    if attempt.previous().len() > MAX_REDIRECTS {
+                        attempt.error("too many redirects")
+                    } else if literal_ip(attempt.url()).is_some_and(|ip| d.denies(ip)) {
+                        attempt.error("redirect to a blocklisted address")
+                    } else {
+                        attempt.follow()
+                    }
+                }),
+            )
+        }
+    };
+    builder.build().map_err(|e| Error::Http(e.to_string()))
+}
+
+const MAX_REDIRECTS: usize = 2;
+
+/// The host of `url` when it's an IP address rather than a name: the
+/// resolver never sees those.
+fn literal_ip(url: &Url) -> Option<IpAddr> {
+    match url.host()? {
+        ::url::Host::Ipv4(ip) => Some(IpAddr::V4(ip)),
+        ::url::Host::Ipv6(ip) => Some(IpAddr::V6(ip)),
+        ::url::Host::Domain(_) => None,
+    }
+}
+
+/// The system resolver, minus blocklisted addresses.
+struct DenyResolver(crate::Deny);
+
+impl reqwest::dns::Resolve for DenyResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let (deny, host) = (self.0.clone(), name.as_str().to_owned());
+        Box::pin(async move {
+            let all: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 0)).await?.collect();
+            let allowed: Vec<SocketAddr> = all
+                .iter()
+                .copied()
+                .filter(|a| !deny.denies(a.ip()))
+                .collect();
+            if allowed.is_empty() && !all.is_empty() {
+                return Err(Error::Denied.into());
+            }
+            Ok(Box::new(allowed.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
 }
 
 /// `url` with one `info_hash` parameter per hash, every byte
@@ -171,6 +227,10 @@ impl HttpTracker {
 
     pub async fn scrape(&self, hashes: &[InfoHash]) -> Result<Reply> {
         check_batch(hashes, self.max_hashes())?;
+        if literal_ip(&self.scrape_url).is_some_and(|ip| crate::denied(self.cfg.deny.as_ref(), ip))
+        {
+            return Err(Error::Denied);
+        }
         let url = request_url(&self.scrape_url, hashes);
         let fetch = async {
             let mut resp = self.client.get(url).send().await.map_err(http_error)?;
@@ -197,6 +257,14 @@ impl HttpTracker {
 }
 
 fn http_error(e: reqwest::Error) -> Error {
+    // The resolver's refusal comes back wrapped in connect errors.
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&e);
+    while let Some(err) = source {
+        if matches!(err.downcast_ref::<Error>(), Some(Error::Denied)) {
+            return Error::Denied;
+        }
+        source = err.source();
+    }
     if e.is_timeout() {
         Error::Timeout
     } else {

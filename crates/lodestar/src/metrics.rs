@@ -7,7 +7,9 @@ use std::sync::atomic::Ordering;
 use lodestar_dht::node::StatsSnapshot;
 use lodestar_peer_wire::{FailureKind, FetchStats};
 use lodestar_pipeline::Monitor;
+use lodestar_pipeline::health::{HealthHandle, trackers::Health};
 use lodestar_sources::Loss;
+use lodestar_store::HotColumns;
 
 pub const FAILURE_KINDS: [(FailureKind, &str); 6] = [
     (FailureKind::Unreachable, "unreachable"),
@@ -390,6 +392,30 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
             d.lookups_completed,
         );
         o.one(
+            "dht_scrapes_requested_total",
+            "counter",
+            "BEP 33 scrapes asked of the DHT node.",
+            d.scrapes_requested,
+        );
+        o.one(
+            "dht_scrapes_completed_total",
+            "counter",
+            "BEP 33 scrape lookups finished.",
+            d.scrapes_completed,
+        );
+        o.one(
+            "dht_scrapes_with_responders_total",
+            "counter",
+            "BEP 33 scrapes where at least one node sent filters.",
+            d.scrapes_with_responders,
+        );
+        o.one(
+            "dht_scrapes_dropped_total",
+            "counter",
+            "BEP 33 scrapes refused because the queue was full.",
+            d.scrapes_dropped,
+        );
+        o.one(
             "dht_harvest_dropped_total",
             "counter",
             "Harvests dropped because the pipeline was full.",
@@ -460,4 +486,162 @@ pub fn render_search(out: &mut String, docs: u64, stats: &lodestar_search::Index
         get(&stats.last_commit),
     );
     *out = o.0;
+}
+
+/// Scrape outcome labels, by [`lodestar_pipeline::health::Outcome`] code.
+pub const SCRAPE_OUTCOMES: [&str; 6] = ["ok", "timeout", "banned", "error", "skipped", "late"];
+
+pub fn health_name(h: Health) -> &'static str {
+    match h {
+        Health::Ok => "ok",
+        Health::Backoff => "backoff",
+        Health::Down => "down",
+        Health::Banned => "banned",
+    }
+}
+
+/// The scrape scheduler's counters and the hot columns (§15, §7).
+/// Trackers are labelled by id: an HTTP tracker URL can carry a passkey,
+/// and `/metrics` is open.
+pub fn render_scrape(out: &mut String, health: &HealthHandle, swarm_updates: u64) {
+    let mut o = Out(std::mem::take(out));
+    let get = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
+    let st = health.stats();
+    o.one(
+        "scrape_rounds_total",
+        "counter",
+        "Scrape rounds started.",
+        get(&st.rounds),
+    );
+    o.family(
+        "scrape_torrents_total",
+        "counter",
+        "Torrents scraped, by what the round found.",
+    );
+    for (label, v) in [
+        ("alive", &st.alive),
+        ("dead", &st.dead),
+        ("unreached", &st.unreached),
+    ] {
+        o.value(
+            "scrape_torrents_total",
+            &format!("result=\"{label}\""),
+            get(v),
+        );
+    }
+    o.one(
+        "scrape_suspect_total",
+        "counter",
+        "Scrapes the swarm-consistency check flagged as fake seeding.",
+        get(&st.suspect),
+    );
+    o.one(
+        "scrape_private_skipped_total",
+        "counter",
+        "Private torrents taken from a lane and never scraped.",
+        get(&st.private_skipped),
+    );
+    o.one(
+        "scrape_fresh_skipped_total",
+        "counter",
+        "Torrents dropped from a lane as already fresh: hints for recent scrapes, and new or due torrents scraped since they were queued.",
+        get(&st.fresh_skipped),
+    );
+    o.one(
+        "scrape_dht_busy_total",
+        "counter",
+        "DHT scrapes not asked because the node was busy with others.",
+        get(&st.dht_busy),
+    );
+    o.one(
+        "scrape_hints_dropped_total",
+        "counter",
+        "Interest and rediscovery hints dropped because a lane was full.",
+        get(&st.hints_dropped),
+    );
+    o.one(
+        "scrape_dht_requested_total",
+        "counter",
+        "DHT (BEP 33) scrapes the scheduler asked for.",
+        get(&st.dht_requested),
+    );
+    o.one(
+        "scrape_dht_estimates_total",
+        "counter",
+        "DHT scrapes that returned an estimate.",
+        get(&st.dht_estimates),
+    );
+    o.one(
+        "scrape_stored_total",
+        "counter",
+        "Scrape results committed to the store.",
+        swarm_updates,
+    );
+    let trackers = health.trackers();
+    o.family(
+        "tracker_rounds_total",
+        "counter",
+        "Scrape rounds per tracker, by outcome.",
+    );
+    for t in &trackers {
+        for (code, label) in SCRAPE_OUTCOMES.iter().enumerate() {
+            o.value(
+                "tracker_rounds_total",
+                &format!("tracker=\"{}\",outcome=\"{label}\"", t.id),
+                t.rounds[code],
+            );
+        }
+    }
+    o.family(
+        "tracker_health",
+        "gauge",
+        "Tracker health: 0 ok, 1 backoff, 2 down, 3 banned.",
+    );
+    for t in &trackers {
+        o.value(
+            "tracker_health",
+            &format!("tracker=\"{}\"", t.id),
+            t.health as u8,
+        );
+    }
+    *out = o.0;
+}
+
+/// The hot columns' size: they're always held (last seen, search), with
+/// scraping on or off.
+pub fn render_hot(out: &mut String, hot: &HotColumns) {
+    let mut o = Out(std::mem::take(out));
+    o.one(
+        "hot_columns_ids",
+        "gauge",
+        "One past the highest torrent id in the hot columns.",
+        hot.len(),
+    );
+    o.one(
+        "hot_columns_bytes",
+        "gauge",
+        "Memory held by the hot columns.",
+        hot.memory_bytes(),
+    );
+    *out = o.0;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hot_column_gauges_render_on_their_own() {
+        // With scraping off there's no health handle, but the columns
+        // (last seen, search) are still held, so their size still shows.
+        let hot = HotColumns::new();
+        hot.touch(3, 10);
+        let mut out = String::new();
+        render_hot(&mut out, &hot);
+        assert!(
+            out.contains(&format!("lodestar_hot_columns_ids {}\n", hot.len())),
+            "{out}"
+        );
+        assert!(out.contains("lodestar_hot_columns_bytes "), "{out}");
+    }
 }

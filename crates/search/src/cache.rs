@@ -7,7 +7,9 @@
 //! caller names (the API's visibility bits, so two requests that may see
 //! different torrents never share an entry even if their queries print
 //! alike), the sort and page size or the facet parameters, `now` when the
-//! query has relative dates, and the **generation**: the exact segments
+//! query has relative dates, the UTC offset when it has `time:`, the hot
+//! columns' epoch when the result reads them (below), and the
+//! **generation**: the exact segments
 //! (and each one's deletes) of the torrent index snapshot, plus the file
 //! index's for a query with `file:(…)`. Segment ids are random and
 //! segments immutable, so equal generations see the same documents, and
@@ -15,6 +17,14 @@
 //! a filter rule hid or released, a deletion, an index swap) is a new
 //! generation, a miss by construction. A reload that changed nothing
 //! keeps the generation, and the entries with it.
+//!
+//! **Swarm health changes without a commit.** Seeders, leechers, trackers
+//! and last seen live in the hot columns (M4), which the scraper updates
+//! under an unchanged generation. A result that reads them (a swarm
+//! filter, a hot sort, or relevance, whose priors read them on an index
+//! that has them) also carries the columns' epoch, which moves at most
+//! once a minute while they change: such an entry lasts until the next
+//! epoch, as the browse cache's tops do (`sorted.rs`).
 //!
 //! **Invalidation is the simple rule: any commit retires every entry.**
 //! A finer rule would have to test each entry against each commit's new
@@ -45,6 +55,7 @@ use tantivy::Searcher;
 use tantivy::index::SegmentId;
 
 use crate::cancel::CancelToken;
+use crate::compile;
 use crate::count::Total;
 use crate::facets::{self, FacetParams, Facets};
 use crate::index::{self, Hit, Result, SearchIndex, Sort};
@@ -160,6 +171,10 @@ struct Key {
     at: Snapshot,
     /// For a query with relative dates, the second they resolved at.
     now: Option<i64>,
+    /// For a query with `time:`, the UTC offset (seconds) it resolved in.
+    utc_offset: Option<i32>,
+    /// For a result that reads the hot columns, their epoch.
+    hot: Option<u64>,
 }
 
 /// A first page and the lease it was read from.
@@ -203,6 +218,8 @@ pub struct SearchSpec<'a> {
     pub limit: usize,
     /// Unix seconds, for relative dates.
     pub now: i64,
+    /// Seconds east of UTC, for `time:` ([`Lease::new_at`]).
+    pub utc_offset: i32,
 }
 
 /// A facet request, as [`ResultCache::facets`] looks it up: the
@@ -220,6 +237,8 @@ pub struct FacetSpec<'a> {
     /// The search's sort, for a lease taken here.
     pub sort: Sort,
     pub now: i64,
+    /// Seconds east of UTC, for `time:`.
+    pub utc_offset: i32,
 }
 
 /// Counters of one kind of entry, for `/metrics`.
@@ -281,16 +300,23 @@ impl ResultCache {
         );
         let now = index::relative(spec.node).then_some(spec.now);
         let (at, seen) = Snapshot::current(index, files);
-        let key = Key { what, at, now };
+        let key = Key {
+            what,
+            at,
+            now,
+            utc_offset: zone(spec.node, spec.utc_offset),
+            hot: hot_epoch(index, spec.node, Some(spec.sort)),
+        };
         // A lease with `file:(…)` holds the clauses' id sets (a sorted id
         // list per set, and a bitset of up to the highest id / 8 bytes),
         // far beyond the per-entry estimate: those searches aren't kept.
         let cache = !files;
         self.search.get_or_compute(key, seen, cache, cancel, |key| {
-            let lease = Arc::new(Lease::new(
+            let lease = Arc::new(Lease::new_at(
                 index.clone(),
                 spec.node,
                 spec.now,
+                spec.utc_offset,
                 spec.sort,
                 cancel,
             )?);
@@ -318,9 +344,16 @@ impl ResultCache {
         cancel: &CancelToken,
     ) -> Result<(Arc<CachedFacets>, Outcome)> {
         let (at, seen) = Snapshot::current(index, spec.query.has_file_clause());
-        let key = facet_key(spec, at, spec.now);
+        let key = facet_key(index, spec, at, spec.now, spec.utc_offset);
         self.facets.get_or_compute(key, seen, true, cancel, |key| {
-            let lease = Lease::new(index.clone(), spec.query, spec.now, spec.sort, cancel)?;
+            let lease = Lease::new_at(
+                index.clone(),
+                spec.query,
+                spec.now,
+                spec.utc_offset,
+                spec.sort,
+                cancel,
+            )?;
             let got = facets::facets(&lease, spec.node, spec.filters, spec.params, cancel)?;
             let kept = settled(index, key, lease.searcher(), spec.query.has_file_clause());
             Ok(facets_entry(got, lease.total(), kept))
@@ -348,7 +381,7 @@ impl ResultCache {
         let seen = Seen::of(index, lease.searcher());
         let now = Seen::of(serving, &serving.searcher());
         let cache = seen == now;
-        let key = facet_key(spec, at, lease.now());
+        let key = facet_key(index, spec, at, lease.now(), lease.utc_offset());
         let (got, outcome) = self
             .facets
             .get_or_compute(key, seen, cache, cancel, |key| {
@@ -393,7 +426,13 @@ impl ResultCache {
     }
 }
 
-fn facet_key(spec: &FacetSpec<'_>, at: Snapshot, now: i64) -> Key {
+fn facet_key(
+    index: &SearchIndex,
+    spec: &FacetSpec<'_>,
+    at: Snapshot,
+    now: i64,
+    utc_offset: i32,
+) -> Key {
     Key {
         what: format!(
             "{:?}|{:?}|{:?}|{}",
@@ -401,7 +440,33 @@ fn facet_key(spec: &FacetSpec<'_>, at: Snapshot, now: i64) -> Key {
         ),
         at,
         now: index::relative(spec.query).then_some(now),
+        utc_offset: zone(spec.query, utc_offset),
+        // Counts don't depend on the order, only on the clauses.
+        hot: hot_epoch(index, spec.query, None),
     }
+}
+
+/// The offset a query's `time:` clauses resolved in, if it has any.
+fn zone(node: &Node, utc_offset: i32) -> Option<i32> {
+    compile::has_time_of_day(node).then_some(utc_offset)
+}
+
+/// The hot columns' epoch, when a result reads them: through a swarm
+/// clause, a hot sort, or relevance, which `index` ranks with the swarm
+/// priors (`sort` is `None` for counts, which no order affects).
+fn hot_epoch(index: &SearchIndex, node: &Node, sort: Option<Sort>) -> Option<u64> {
+    let hot = index.hot()?;
+    let by_hot = matches!(
+        sort,
+        Some(
+            Sort::Relevance
+                | Sort::Seeders { .. }
+                | Sort::Leechers { .. }
+                | Sort::Trackers { .. }
+                | Sort::Seen { .. }
+        )
+    );
+    (by_hot || compile::reads_hot(node)).then(|| hot.epoch())
 }
 
 fn facets_entry(got: Facets, total: Total, key: Option<Key>) -> Computed<Arc<CachedFacets>> {
@@ -449,6 +514,8 @@ fn settled(index: &SearchIndex, looked_up: &Key, searcher: &Searcher, files: boo
             files,
         },
         now: looked_up.now,
+        utc_offset: looked_up.utc_offset,
+        hot: looked_up.hot,
     })
 }
 

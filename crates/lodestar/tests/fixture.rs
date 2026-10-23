@@ -361,8 +361,8 @@ fn check_discover(port: u16, cookie: &str, m: &Value, adult: bool) {
 }
 
 /// Detail: every hand-specified torrent as specified (Adult ones only
-/// while shown); never-scraped swarm fields are null. Scraped ones show
-/// their values once the API reads the swarm (M4, #48), null until then.
+/// while shown); never-scraped swarm fields are null, and every swarm
+/// somebody answered (a tracker or the DHT) shows its values.
 fn check_details(port: u16, cookie: &str, m: &Value, adult: bool) {
     let (mut scraped, mut scraped_shown) = (0, 0);
     for t in m["torrents"].as_array().unwrap() {
@@ -392,6 +392,13 @@ fn check_details(port: u16, cookie: &str, m: &Value, adult: bool) {
                 }
             }
             Some(s) => {
+                // A row nobody answered reads as never scraped.
+                let answered =
+                    s["trackers_checked"].as_i64().unwrap_or(0) > 0 || !s["dht_seeds"].is_null();
+                if !answered {
+                    assert!(d["seeders"].is_null(), "{key}: unanswered = never scraped");
+                    continue;
+                }
                 scraped += 1;
                 if !d["seeders"].is_null() {
                     for f in SWARM {
@@ -403,10 +410,7 @@ fn check_details(port: u16, cookie: &str, m: &Value, adult: bool) {
         }
     }
     assert!(scraped > 0);
-    assert!(
-        scraped_shown == 0 || scraped_shown == scraped,
-        "all or none (before #48)"
-    );
+    assert_eq!(scraped_shown, scraped, "every answered swarm is shown");
 }
 
 /// What only the store shows yet: swarm rows as built, and the saved
