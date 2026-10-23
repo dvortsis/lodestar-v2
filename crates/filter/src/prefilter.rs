@@ -452,13 +452,24 @@ impl DocKeys {
         self.char_pairs.get_or_init(|| {
             let v = &self.vocabulary;
             crate::work::tick(v.buf.len());
-            let mut have = [0u64; 64];
+            let mut have: CharPairs = Box::new([0; NO_PAIR as usize + 1]);
             for w in &v.words {
-                let mut chars = v.text(w).chars();
+                let text = v.text(w);
+                if text.is_ascii() {
+                    // Most texts: classes read from a table.
+                    for p in text.as_bytes().windows(2) {
+                        let (a, b) = (
+                            ASCII_CLASS[usize::from(p[0])],
+                            ASCII_CLASS[usize::from(p[1])],
+                        );
+                        have[usize::from(a) * 64 + usize::from(b)] = 1;
+                    }
+                    continue;
+                }
+                let mut chars = text.chars();
                 let Some(mut a) = chars.next() else { continue };
                 for b in chars {
-                    let p = char_class(a) * 64 + char_class(b);
-                    have[p as usize / 64] |= 1 << (p % 64);
+                    have[(char_class(a) * 64 + char_class(b)) as usize] = 1;
                     a = b;
                 }
             }
@@ -542,13 +553,21 @@ impl DocKeys {
         let (order, starts) = self.by_chars.get_or_init(|| {
             let v = &self.vocabulary;
             crate::work::tick(v.words.len());
-            let mut order: Vec<u32> = (0..v.words.len() as u32).collect();
-            order.sort_unstable_by_key(|&i| v.words[i as usize].chars);
+            // A counting sort: lengths are few and small.
             let longest = v.words.iter().map(|w| w.chars as usize).max().unwrap_or(0);
             let mut starts = vec![0u32; longest + 2];
-            for (k, start) in starts.iter_mut().enumerate() {
-                *start =
-                    order.partition_point(|&i| (v.words[i as usize].chars as usize) < k) as u32;
+            for w in &v.words {
+                starts[w.chars as usize + 1] += 1;
+            }
+            for k in 1..starts.len() {
+                starts[k] += starts[k - 1];
+            }
+            let mut next = starts.clone();
+            let mut order = vec![0u32; v.words.len()];
+            for (i, w) in v.words.iter().enumerate() {
+                let at = &mut next[w.chars as usize];
+                order[*at as usize] = i as u32;
+                *at += 1;
             }
             (order, starts)
         });
@@ -952,6 +971,21 @@ fn char_class(c: char) -> u32 {
     }
 }
 
+/// [`char_class`] of each ASCII character.
+const ASCII_CLASS: [u8; 128] = {
+    let mut t = [0u8; 128];
+    let mut c = 0;
+    while c < 128 {
+        t[c] = match c as u8 {
+            b'a'..=b'z' => c as u8 - b'a',
+            b'0'..=b'9' => 26 + c as u8 - b'0',
+            _ => 36 + (c % 28) as u8,
+        };
+        c += 1;
+    }
+    t
+};
+
 /// The two-character pairs ([`char_class`] each) of a word, as indexes
 /// into a [`CharPairs`] set.
 pub(crate) fn char_pairs(word: &[char]) -> impl Iterator<Item = u16> + '_ {
@@ -959,8 +993,14 @@ pub(crate) fn char_pairs(word: &[char]) -> impl Iterator<Item = u16> + '_ {
         .map(|p| (char_class(p[0]) * 64 + char_class(p[1])) as u16)
 }
 
-/// Which two-character pairs some token text has.
-type CharPairs = [u64; 64];
+/// Which two-character pairs some token text has, one byte each (1 if
+/// so), so a gate adds them up with one read apiece. The last slot,
+/// [`NO_PAIR`], is never set.
+type CharPairs = Box<[u8; NO_PAIR as usize + 1]>;
+
+/// A pair slot that's never had, for a word with fewer pairs than a
+/// [`FuzzyGate`] holds.
+const NO_PAIR: u16 = 64 * 64;
 
 /// Whether a text within `distance` edits of a word `len` characters long
 /// whose pairs are `pairs` could be among texts with these pairs. An edit
@@ -978,7 +1018,7 @@ fn pairs_could(
     };
     let mut kept = 0;
     for p in pairs {
-        if have[p as usize / 64] & (1 << (p % 64)) != 0 {
+        if have[usize::from(p)] != 0 {
             kept += 1;
             if kept >= need {
                 return true;
@@ -1657,7 +1697,7 @@ struct FuzzyGate {
 
 impl FuzzyGate {
     fn new(rule: u32, word: &[char], has: u64, distance: u8) -> FuzzyGate {
-        let mut pairs = [0u16; 8];
+        let mut pairs = [NO_PAIR; 8];
         let mut npairs = 0;
         for (slot, p) in pairs.iter_mut().zip(char_pairs(word)) {
             *slot = p;
@@ -1685,12 +1725,11 @@ impl FuzzyGate {
         let one = missing & missing.wrapping_sub(1);
         let two = one & one.wrapping_sub(1);
         let near = if d == 1 { one == 0 } else { two == 0 };
-        let mut kept = 0;
-        for k in 0..8 {
-            let p = self.pairs[k];
-            let bit = (have[usize::from(p) / 64] >> (p % 64)) as usize & 1;
-            kept += bit & usize::from(k < usize::from(self.npairs));
-        }
+        let kept: usize = self
+            .pairs
+            .iter()
+            .map(|&p| usize::from(have[usize::from(p)]))
+            .sum();
         near & (kept + 2 * d >= usize::from(self.npairs))
     }
 }
@@ -2201,6 +2240,16 @@ mod tests {
 
     /// Texts whose hashes collide are chained, each kept and found by
     /// its bytes, in any case.
+    #[test]
+    fn ascii_classes_are_the_characters_classes() {
+        for c in 0u8..128 {
+            assert_eq!(
+                u32::from(ASCII_CLASS[usize::from(c)]),
+                char_class(char::from(c))
+            );
+        }
+    }
+
     #[test]
     fn colliding_texts_are_chained() {
         let mut v = Vocabulary::default();

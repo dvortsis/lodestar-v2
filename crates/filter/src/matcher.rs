@@ -179,7 +179,7 @@ impl Spelled {
         let d = usize::from(distance);
         chars.abs_diff(self.chars.len()) <= d
             && (has ^ self.has).count_ones() as usize <= 2 * d
-            && edit_distance(text, &self.chars) <= d
+            && within_edits(text, &self.chars, d)
     }
 }
 
@@ -903,7 +903,7 @@ impl<'a> Doc<'a> {
                     (TextField::Any, None) => self
                         .keys()
                         .vocabulary_near(word.chars.len(), word.has, usize::from(*distance))
-                        .any(|t| edit_distance(t, &word.chars) <= usize::from(*distance)),
+                        .any(|t| within_edits(t, &word.chars, usize::from(*distance))),
                     _ => texts(*field, &|t| t.toks.iter().any(|x| near(t.text(x)))),
                 }
             }
@@ -1202,6 +1202,7 @@ pub(crate) fn edit_distance_of(a: &str, b: &[char]) -> usize {
     edit_distance(a, b)
 }
 
+#[cfg(test)]
 fn edit_distance(a: &str, b: &[char]) -> usize {
     // Token texts are at most 64 bytes, so a row fits on the stack.
     let mut stack = [0usize; 66];
@@ -1229,6 +1230,44 @@ fn edit_distance(a: &str, b: &[char]) -> usize {
         }
     }
     row[b.len()]
+}
+
+/// Whether `a` is within `d` edits of `b`: [`edit_distance`], stopping
+/// at the first row whose every cell is over `d`. A row's least cell is
+/// never below the previous row's, so no later row could come back
+/// within the distance. Most texts a fuzzy word is held to differ in
+/// their first few characters, so this reads a few rows, not all.
+fn within_edits(a: &str, b: &[char], d: usize) -> bool {
+    let mut stack = [0usize; 66];
+    let mut heap = Vec::new();
+    let row: &mut [usize] = if b.len() < stack.len() {
+        &mut stack[..=b.len()]
+    } else {
+        heap.resize(b.len() + 1, 0);
+        &mut heap
+    };
+    for (j, r) in row.iter_mut().enumerate() {
+        *r = j;
+    }
+    for (i, ca) in a.chars().enumerate() {
+        let mut prev = row[0];
+        row[0] = i + 1;
+        let mut least = row[0];
+        for (j, cb) in b.iter().enumerate() {
+            let cur = row[j + 1];
+            row[j + 1] = if ca == *cb {
+                prev
+            } else {
+                1 + prev.min(row[j]).min(cur)
+            };
+            least = least.min(row[j + 1]);
+            prev = cur;
+        }
+        if least > d {
+            return false;
+        }
+    }
+    row[b.len()] <= d
 }
 
 #[cfg(test)]
@@ -1731,6 +1770,19 @@ mod tests {
             2,
             "longer than the stack row"
         );
+    }
+
+    proptest! {
+        /// Stopping early answers as the whole distance does.
+        #[test]
+        fn early_stop_agrees_with_the_distance(
+            a in "[abc]{0,10}",
+            b in "[abc]{0,10}",
+            d in 0usize..4,
+        ) {
+            let b: Vec<char> = b.chars().collect();
+            prop_assert_eq!(within_edits(&a, &b, d), edit_distance(&a, &b) <= d);
+        }
     }
 
     proptest! {
