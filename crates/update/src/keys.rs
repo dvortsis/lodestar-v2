@@ -81,7 +81,10 @@ mod tests {
             (Role::Freshness, "lodestar-freshness.pub"),
         ] {
             let Some(text) = read(file) else {
-                assert!(role != Role::Release, "{file} is missing");
+                assert!(
+                    chain.current(role).is_none(),
+                    "this build has a {role:?} key but packaging/keys/{file} is missing"
+                );
                 continue;
             };
             if role == Role::Release && chain.keys(role).len() == 1 {

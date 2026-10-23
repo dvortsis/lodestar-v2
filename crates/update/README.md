@@ -107,8 +107,10 @@ It extends the manifest's expiry only, and can't carry new content.
 - **Generation 0** is what the build embeds (`keys/`): the recovery key, and the release key (Stable and Beta). Nightly and freshness have no key until the owner creates them; then their `.pub` is copied into `keys/` (a one-line change in `src/keys.rs`, the default) or a recovery-signed statement introduces the role. Until then Nightly verifies nothing (`no_nightly_key`) and freshness statements are refused (`no_freshness_key`); both are reported, never silent.
 - **A statement is accepted** only with a valid recovery signature, a `timestamp` at most a day ahead of the local clock, and a `seq` exactly one above the current sequence (one sequence for all roles). Accepting it revokes the previous key of that role only. A role with no key is introduced by its first statement. A key that has been used before, by any role (or the recovery key), or that shares a key number with one, is refused.
 - **Contiguity and equivocation:** a document that carries statements carries **the whole chain, from `seq` 1, in ascending order**, because a publisher can't know any verifier's sequence (an old supervisor starts from its embedded statements alone). A list that doesn't start at 1, or skips, is refused (`statement_gap`). Statements at or below the current sequence must equal the accepted ones byte for byte; a different statement with an accepted `seq` refuses the document (`equivocation`, with a notice).
-- **Every manifest published after a rotation carries the statements** that chain its key to the recovery key, and so does every freshness statement after a freshness rotation.
-- **The floor** is the newest valid chain among the embedded statements (`keys/statements.json`, empty now), `trust.json`'s, and those inside any verified overlay. Revoked keys are derived from it.
+- **Every manifest published after a rotation carries the statements** that chain its key to the recovery key, and so does every freshness statement after a freshness rotation. **A manifest that carries a rotation is dated at or after the statement:** the rotation resets the mark to the statement's timestamp, so an earlier manifest is refused as older.
+- **A chain holds at most 64 statements over its life** (one per rotation of any role), the same as a document's cap, so `trust.json` always fits its 256 KiB.
+- **Accepted statements are stored normalised:** the body re-encoded, the recovery signature with a fixed untrusted comment, and no cosig, so whoever carried a statement can't pad what an installation saves.
+- **The floor** is the newest valid chain among the embedded statements (`keys/statements.json`, empty now), `trust.json`'s, and those inside any verified overlay. Revoked keys are derived from it, together with those `trust.json` records.
 
 ## Trust state (`<data>/bin/trust.json`)
 
@@ -124,14 +126,17 @@ At most **256 KiB**, strict, written by the updater (temporary file, fsync, rena
 }
 ```
 
-On load every statement is verified again in sequence, and `seq` and `revoked` must agree with them; anything else is `trust_damaged`, which blocks installs.
+On load every statement is verified again in sequence and `seq` must agree with them; anything else is `trust_damaged`, which blocks installs.
+
+- **`revoked` is additive.** Each build derives the revocations its own generation 0 implies and keeps the stored ones too (the union), so an older image or a rolled-back version with other generation-0 keys still loads the file and honours every revocation a newer build recorded. An extra entry can only refuse more.
+- **Marks more than a day ahead of the clock are damage.** Every mark is a verified timestamp accepted at most a day ahead, so a mark beyond that means the file or the clock is wrong; the check reports `trust_damaged` instead of freezing updates until that date.
 
 - **High-water mark per channel,** on the manifest's own signed timestamp. An older manifest is refused. The same timestamp is accepted only with the same body SHA-256 (a refetch); a different body at the mark is refused.
 - **Freshness mark per channel,** with the freshness body's SHA-256, under the same rule: a freshness statement is accepted only if newer than the channel's mark, or the same one again.
 - **Time limits:** a manifest, freshness statement or key statement dated more than **1 day** ahead of the local clock is refused. `expires` must be after `timestamp` and at most **30 days** after it. A manifest is **current** while it, or its accepted freshness statement, hasn't expired. One that isn't current blocks installs only.
 - **Freshness acceptance:** the current, non-revoked freshness key signed it; its channel and `manifest_sha256` match the manifest; the manifest verified under the current key of its channel's role; it passes the freshness mark; and the manifest passed the high-water mark. A refused freshness statement leaves the manifest itself accepted.
 - **Rotations:** a release or nightly rotation sets the high-water mark of the channels that key signs to the statement's timestamp (with no digest, so a manifest at exactly that time passes); a freshness rotation resets only the freshness marks, the same way.
-- **Forward only:** `TrustState::merge` replaces the old state only if the new sequence is higher, or equal with the same statements and no channel's marks lower. Nothing else writes a state.
+- **Forward only:** `TrustState::merge(old, new)` needs `new`'s statements to extend `old`'s. With a higher sequence, `old`'s marks take only the resets of the statements `new` adds (so only the rotated role's marks can drop), then each mark is the later of the two; with the same sequence, `old` stays unless no mark is lower. Revocations are the union. Nothing else writes a state.
 - **A missing `trust.json`** is rebuilt from the floor (`TrustState::rebuild`), each channel's high-water mark at its newest verified overlay manifest.
 
 ## Entry points

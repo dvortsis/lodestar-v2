@@ -8,8 +8,8 @@ use proptest::prelude::*;
 use super::*;
 use crate::testing::envelope;
 use crate::{
-    Envelope, FreshnessBody, ManifestBody, Marks, PublicKey, Signature, StatementBody, TrustState,
-    check,
+    Envelope, FreshnessBody, ManifestBody, Marks, PublicKey, Role, Signature, StatementBody,
+    TrustState, check,
 };
 
 fn embedded() -> crate::Embedded {
@@ -85,21 +85,55 @@ proptest! {
     #[test]
     fn merges_are_monotonic(a in states(), b in states()) {
         let m = TrustState::merge(&a, b.clone());
-        prop_assert!(m == a || m == b);
         prop_assert!(m.seq >= a.seq);
-        if m.seq == a.seq {
-            for (c, old) in &a.channels {
-                let new = m.marks(*c);
-                prop_assert!(new.hwm_ts >= old.hwm_ts && new.fresh_ts >= old.fresh_ts);
+        prop_assert!(m.statements.starts_with(&a.statements));
+        let extends = b.statements.starts_with(&a.statements) && b.seq >= a.seq;
+        // The roles rotated by what b adds govern the only marks that may drop.
+        let added: Vec<Role> = if extends && b.seq > a.seq {
+            CHAIN_ROLES[a.seq as usize..b.seq as usize].to_vec()
+        } else {
+            vec![]
+        };
+        for c in Channel::ALL {
+            let (old, new, got) = (a.marks(c), b.marks(c), m.marks(c));
+            let hwm_reset = added.iter().any(|r| r.channels().contains(&c));
+            let fresh_reset = added.contains(&Role::Freshness);
+            if !hwm_reset {
+                prop_assert!(got.hwm_ts >= old.hwm_ts);
+            }
+            if !fresh_reset {
+                prop_assert!(got.fresh_ts >= old.fresh_ts);
+            }
+            if extends && b.seq > a.seq {
+                prop_assert!(got.hwm_ts >= new.hwm_ts && got.fresh_ts >= new.fresh_ts);
             }
         }
     }
 }
 
+/// The roles of the test chain's statements, in order.
+const CHAIN_ROLES: [Role; 3] = [Role::Release, Role::Freshness, Role::Nightly];
+
+fn chain_statements() -> &'static [crate::SignedStatement] {
+    static CHAIN: std::sync::OnceLock<Vec<crate::SignedStatement>> = std::sync::OnceLock::new();
+    CHAIN.get_or_init(|| {
+        let t = trust();
+        CHAIN_ROLES
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let key = TestKey::new(20 + i as u8).public();
+                crate::testing::statement(&t.recovery, i as u64 + 1, *r, &key, 3 + i as u64)
+            })
+            .collect()
+    })
+}
+
 fn states() -> impl Strategy<Value = TrustState> {
-    (0u64..3, proptest::collection::vec((0u64..5, 0u64..5), 3)).prop_map(|(seq, marks)| {
+    (0u64..4, proptest::collection::vec((0u64..8, 0u64..8), 3)).prop_map(|(seq, marks)| {
         let mut s = TrustState {
             seq,
+            statements: chain_statements()[..seq as usize].to_vec(),
             ..TrustState::default()
         };
         for (c, (h, f)) in Channel::ALL.into_iter().zip(marks) {

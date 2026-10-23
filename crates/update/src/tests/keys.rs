@@ -272,7 +272,7 @@ fn trust_survives_and_rejects_tampering() {
     let mut v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     for edit in [
         |v: &mut serde_json::Value| v["statements"] = serde_json::json!([]),
-        |v: &mut serde_json::Value| v["revoked"] = serde_json::json!([]),
+        |v: &mut serde_json::Value| v["revoked"] = serde_json::json!(["not a key"]),
         |v: &mut serde_json::Value| v["seq"] = serde_json::json!(2),
         |v: &mut serde_json::Value| v["extra"] = serde_json::json!(1),
         |v: &mut serde_json::Value| v["format"] = serde_json::json!(2),
@@ -295,46 +295,238 @@ fn trust_survives_and_rejects_tampering() {
 
 #[test]
 fn merge_is_forward_only() {
+    let mark = |h, f| Marks {
+        hwm_ts: h,
+        fresh_ts: f,
+        ..Marks::default()
+    };
     let mut old = TrustState::default();
-    old.channels.insert(
-        Channel::Stable,
-        Marks {
-            hwm_ts: 10,
-            ..Marks::default()
-        },
-    );
+    old.channels.insert(Channel::Stable, mark(10, 0));
     let mut lower = old.clone();
-    lower.channels.insert(
-        Channel::Stable,
-        Marks {
-            hwm_ts: 9,
-            ..Marks::default()
-        },
-    );
+    lower.channels.insert(Channel::Stable, mark(9, 0));
     assert_eq!(TrustState::merge(&old, lower), old);
     let mut missing = old.clone();
     missing.channels.clear();
     assert_eq!(TrustState::merge(&old, missing), old);
     let mut higher = old.clone();
-    higher.channels.insert(
+    higher.channels.insert(Channel::Beta, mark(0, 3));
+    assert_eq!(TrustState::merge(&old, higher.clone()), higher);
+    // A lower sequence never wins.
+    let t = trust();
+    let s1 = statement(
+        &t.recovery,
+        1,
+        Role::Freshness,
+        &TestKey::new(5).public(),
+        4,
+    );
+    let ahead = TrustState {
+        seq: 1,
+        statements: vec![s1.clone()],
+        ..TrustState::default()
+    };
+    assert_eq!(TrustState::merge(&ahead, old.clone()), ahead);
+}
+
+/// The runner's case: Beta's mark is T + 5000 on disk; a check built
+/// from a stale state (Beta at T) accepts a manifest carrying a freshness
+/// rotation. The rotation resets only freshness marks, so Beta stays.
+#[test]
+fn a_stale_check_with_a_rotation_cannot_lower_other_marks() {
+    let t = trust();
+    let emb = t.embedded(vec![]);
+    let mark = |h, f| Marks {
+        hwm_ts: h,
+        fresh_ts: f,
+        ..Marks::default()
+    };
+    let mut disk = TrustState::default();
+    disk.channels
+        .insert(Channel::Beta, mark(T + 5000, T + 5000));
+    disk.channels.insert(Channel::Stable, mark(T, T + 5000));
+    let mut stale = TrustState::default();
+    stale.channels.insert(Channel::Beta, mark(T, 0));
+    let frot = statement(
+        &t.recovery,
+        1,
+        Role::Freshness,
+        &TestKey::new(6).public(),
+        T + 40,
+    );
+    let (_, m) = manifest_with(&t.release, Channel::Stable, T + 50, |m| {
+        with_statements(m, std::slice::from_ref(&frot))
+    });
+    let next = check(&envelope(&m, None), Channel::Stable, T + 60, &emb, &stale)
+        .unwrap()
+        .next;
+    let merged = TrustState::merge(&disk, next);
+    assert_eq!(merged.seq, 1);
+    assert_eq!(merged.marks(Channel::Beta).hwm_ts, T + 5000);
+    assert_eq!(merged.marks(Channel::Stable).hwm_ts, T + 50);
+    // The freshness rotation's reset applies to every channel.
+    for c in Channel::ALL {
+        assert_eq!(merged.marks(c).fresh_ts, T + 40, "{c:?}");
+    }
+    // A release rotation from a stale check resets Stable and Beta only.
+    let mut disk = TrustState::default();
+    disk.channels.insert(Channel::Nightly, mark(T + 9000, 0));
+    disk.channels.insert(Channel::Beta, mark(T + 9000, 0));
+    let k7 = TestKey::new(7);
+    let rot = statement(&t.recovery, 1, Role::Release, &k7.public(), T + 10);
+    let (_, m) = manifest_with(&k7, Channel::Stable, T + 50, |m| {
+        with_statements(m, std::slice::from_ref(&rot))
+    });
+    let next = check(
+        &envelope(&m, None),
+        Channel::Stable,
+        T + 60,
+        &emb,
+        &TrustState::default(),
+    )
+    .unwrap()
+    .next;
+    let merged = TrustState::merge(&disk, next);
+    assert_eq!(merged.marks(Channel::Nightly).hwm_ts, T + 9000);
+    assert_eq!(merged.marks(Channel::Beta).hwm_ts, T + 10);
+    assert_eq!(merged.marks(Channel::Stable).hwm_ts, T + 50);
+}
+
+/// Two builds whose generation 0 differs only in the nightly key: each
+/// loads the other's `trust.json`, and the revocation the build with the
+/// key recorded survives in the one without it.
+#[test]
+fn trust_json_loads_across_different_generation_zero_keys() {
+    let t = trust();
+    let with = t.embedded(vec![]);
+    let without = crate::Embedded {
+        nightly: None,
+        ..t.embedded(vec![])
+    };
+    let n2 = TestKey::new(9);
+    let rot = statement(&t.recovery, 1, Role::Nightly, &n2.public(), T);
+    let (_, m) = manifest_with(&n2, Channel::Nightly, T + 10, |m| {
+        with_statements(m, std::slice::from_ref(&rot))
+    });
+    let env = envelope(&m, None);
+    let a = check(
+        &env,
+        Channel::Nightly,
+        T + 20,
+        &with,
+        &TrustState::default(),
+    )
+    .unwrap()
+    .next;
+    let b = check(
+        &env,
+        Channel::Nightly,
+        T + 20,
+        &without,
+        &TrustState::default(),
+    )
+    .unwrap()
+    .next;
+    assert!(a.revokes(&t.nightly.public()));
+    assert!(!b.revokes(&t.nightly.public()));
+    let a_in_b = TrustState::load(&a.to_bytes().unwrap(), &without).unwrap();
+    let b_in_a = TrustState::load(&b.to_bytes().unwrap(), &with).unwrap();
+    assert!(a_in_b.revokes(&t.nightly.public()));
+    // The older build checks again and keeps the newer one's revocation.
+    let again = check(&env, Channel::Nightly, T + 30, &without, &a_in_b)
+        .unwrap()
+        .next;
+    assert!(TrustState::merge(&a_in_b, again).revokes(&t.nightly.public()));
+    // The newer build reading the older file derives its own revocation.
+    let again = check(&env, Channel::Nightly, T + 30, &with, &b_in_a)
+        .unwrap()
+        .next;
+    assert!(again.revokes(&t.nightly.public()));
+    // The old nightly key stays refused in the build that knew it.
+    let old = signed_manifest(&t.nightly, Channel::Nightly, T + 100, "0.5.4");
+    assert_eq!(
+        check(
+            &envelope(&old, None),
+            Channel::Nightly,
+            T + 200,
+            &with,
+            &b_in_a
+        ),
+        Err(Error::RevokedKey)
+    );
+}
+
+#[test]
+fn marks_far_ahead_of_the_clock_are_damage() {
+    let t = trust();
+    let emb = t.embedded(vec![]);
+    let mut s = TrustState::default();
+    s.channels.insert(
         Channel::Beta,
         Marks {
-            fresh_ts: 3,
+            hwm_ts: T + 3 * DAY,
             ..Marks::default()
         },
     );
-    assert_eq!(TrustState::merge(&old, higher.clone()), higher);
-    // A higher sequence wins even with lower marks (a rotation's reset).
-    let mut rotated = lower_marks(&old);
-    rotated.seq = 1;
-    assert_eq!(TrustState::merge(&old, rotated.clone()), rotated);
-    assert_eq!(TrustState::merge(&rotated, old.clone()), rotated);
+    let m = signed_manifest(&t.release, Channel::Stable, T, "0.5.3");
+    assert_eq!(
+        check(&envelope(&m, None), Channel::Stable, T + 100, &emb, &s),
+        Err(Error::TrustDamaged)
+    );
+    assert!(
+        check(
+            &envelope(&m, None),
+            Channel::Stable,
+            T + 2 * DAY + 1,
+            &emb,
+            &s
+        )
+        .is_ok()
+    );
 }
 
-fn lower_marks(s: &TrustState) -> TrustState {
-    let mut s = s.clone();
-    s.channels.insert(Channel::Stable, Marks::default());
-    s
+#[test]
+fn stored_statements_are_normalised_and_the_chain_is_capped() {
+    let t = trust();
+    let k5 = TestKey::new(5);
+    let mut padded = statement(&t.recovery, 1, Role::Release, &k5.public(), T);
+    padded.minisig = padded
+        .minisig
+        .replace("signature from a TEST ONLY key", &"x".repeat(400));
+    padded.cosig = Some(t.release.sign(b"padding"));
+    let mut chain = Chain::genesis(&t.embedded(vec![]));
+    chain.extend(std::slice::from_ref(&padded), None).unwrap();
+    let stored = &chain.signed()[0];
+    assert_eq!(stored.cosig, None);
+    assert!(!stored.minisig.contains("xxxx"));
+    // A known statement followed by a skip is a gap.
+    let s3 = statement(&t.recovery, 3, Role::Release, &TestKey::new(6).public(), T);
+    assert_eq!(
+        chain.clone().extend(&[padded.clone(), s3], None),
+        Err(Error::Gap)
+    );
+
+    // The chain holds at most MAX_CHAIN statements over its life.
+    let max = crate::chain::MAX_CHAIN as u64;
+    let all: Vec<SignedStatement> = (1..=max + 1)
+        .map(|i| {
+            statement(
+                &t.recovery,
+                i,
+                Role::Nightly,
+                &TestKey::new(100 + i as u8).public(),
+                T,
+            )
+        })
+        .collect();
+    let mut chain = Chain::genesis(&t.embedded(vec![]));
+    assert_eq!(chain.extend(&all[..max as usize], None), Ok(max as usize));
+    let state = TrustState::default().advance(&chain);
+    assert!(state.to_bytes().unwrap().len() <= crate::trust::MAX_TRUST);
+    assert!(TrustState::load(&state.to_bytes().unwrap(), &t.embedded(vec![])).is_ok());
+    let mut chain = Chain::genesis(&t.embedded(vec![]));
+    let mut long = all[..max as usize].to_vec();
+    long.push(all[max as usize].clone());
+    assert_eq!(chain.extend(&long, None), Err(Error::BadDocument));
 }
 
 #[test]
@@ -538,7 +730,8 @@ fn merge_and_load_refuse_what_does_not_extend() {
         statements: vec![s(1, 5), s(2, 7)],
         ..TrustState::default()
     };
-    assert_eq!(TrustState::merge(&old, longer.clone()), longer);
+    let merged = TrustState::merge(&old, longer.clone());
+    assert_eq!((merged.seq, &merged.statements), (2, &longer.statements));
     // A channel named twice is damage.
     let dup = br#"{"format":1,"seq":0,"statements":[],"revoked":[],"channels":{"stable":{"hwm_ts":5,"hwm_sha256":null,"fresh_ts":0,"fresh_sha256":null},"stable":{"hwm_ts":1,"hwm_sha256":null,"fresh_ts":0,"fresh_sha256":null}}}"#;
     assert_eq!(TrustState::load(dup, &emb), Err(Error::TrustDamaged));
