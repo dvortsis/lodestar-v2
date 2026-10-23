@@ -865,17 +865,25 @@ fn topics_param(query: Option<&str>) -> ApiResult<Option<String>> {
 }
 
 /// The session, for the per-session cap. The guard has already checked
-/// it, so a request here always has one: a cookie, or else a trusted
-/// proxy's user, who is counted per client address.
+/// it, so a request here always has one: the session cookie, when it's
+/// valid (exactly what the guard accepts), or else the trusted proxy's
+/// user, counted per user and client address. An invalid cookie beside
+/// a proxy header is ignored, so it can't open a fresh bucket.
 fn session_of(auth: &Auth, headers: &HeaderMap, peer: IpAddr) -> u64 {
-    let cookie = headers
-        .get_all(header::COOKIE)
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .find_map(|c| auth::cookie_value(c, auth::COOKIE));
-    let session = match cookie {
+    let first = headers.get(header::COOKIE).and_then(|v| v.to_str().ok());
+    let session = match first
+        .filter(|c| auth.verify(c))
+        .and_then(|c| auth::cookie_value(c, auth::COOKIE))
+    {
         Some(c) => format!("cookie:{c}"),
-        None => format!("proxy:{}", auth.client_ip(peer, headers)),
+        None => {
+            let name = auth.proxy().header;
+            let user = headers
+                .get(name.as_str())
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            format!("proxy:{user}@{}", auth.client_ip(peer, headers))
+        }
     };
     let d = Sha256::digest(session.as_bytes());
     u64::from_le_bytes(d[..8].try_into().expect("8 bytes"))
