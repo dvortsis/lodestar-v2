@@ -343,11 +343,8 @@ describe('the active-filter strip', () => {
 		const before = navCalls.length;
 		await fireEvent.click(screen.getByRole('button', { name: 'Clear all' }));
 		await wait(() => expect(navCalls.at(-1)?.url).toBe('/search?q=lantern'));
-		// Two history entries (the AST, then `hidden`): W5 has no single write for both yet.
-		expect(navCalls.slice(before)).toEqual([
-			{ url: '/search?q=lantern&hidden=1', push: true },
-			{ url: '/search?q=lantern', push: true }
-		]);
+		// One history entry for the filters and `hidden` together.
+		expect(navCalls.slice(before)).toEqual([{ url: '/search?q=lantern', push: true }]);
 		expect(searchBodies.at(-1)).toMatchObject({ ast: word('lantern') });
 		await wait(() => expect(screen.queryByRole('button', { name: 'Clear all' })).toBeNull());
 		await wait(() => expect(document.activeElement).toBe(editor));

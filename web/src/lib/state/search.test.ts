@@ -166,6 +166,14 @@ describe('search state', () => {
 		expect(f.calls).toEqual([{ url: '/search?q=new&sort=-size', push: true }]);
 	});
 
+	it('setAst can clear hidden in the same history entry', async () => {
+		const f = fakeNav('http://x/search?q=old+res%3A1080p&hidden=1');
+		fetchMock.mockImplementationOnce(async () => json({ canonical: 'old', hits: [] }));
+		const s = createSearchState(f.nav);
+		await s.setAst(word('old'), { hidden: false });
+		expect(f.calls).toEqual([{ url: '/search?q=old', push: true }]);
+	});
+
 	it('setAst clears parsing on success and on error', async () => {
 		const f = fakeNav();
 		const s = createSearchState(f.nav);

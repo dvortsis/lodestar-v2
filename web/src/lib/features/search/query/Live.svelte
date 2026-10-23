@@ -161,17 +161,18 @@
 		ensureSearchPath();
 		const base = pending?.ast ?? shown;
 		if (base && clauses.length) {
+			// One history entry for both: the filters and `hidden`.
 			const sent = withoutFilters(base);
 			pending = { ast: sent, labels: [] };
 			try {
-				await s.setAst(sent);
+				await s.setAst(sent, s.hidden ? { hidden: false } : {});
 			} finally {
 				if (pending?.ast === sent) pending = null;
 			}
 			if (s.ast !== sent) return; // superseded
+		} else if (s.hidden) {
+			await s.setHidden(false);
 		}
-		// W5 has no single write for both, so this is a second history entry (decisions file).
-		if (s.hidden) await s.setHidden(false);
 		announce(m.search_filters_cleared());
 	}
 
