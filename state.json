@@ -321,7 +321,7 @@
    "pr": 102,
    "attempt": 1,
    "review_rounds": 3,
-   "notes": "Launched 21:41 after B6 merged. | 01:50 PR #102 41231f7 conflicts live.rs; asked main merge + relevance gate; review on new head. | 01:52 c764a4f main merged (relevance PASS); reviewer started. | 02:45 review FIX: natural phrasing inverts negations/field syntax (-cam -> includes CAM) -> strict-lex first + meaning-preserving prop test; important: did-you-mean cost, FST peak RSS/10M plan, swap-path test. | 03:20 c80199b fixes (strict-lex natural phrasing + prop test, did-you-mean capped, FST memory, swap test). Delta reviewer started. OK given for query.rs pub(crate) + ROUTES line. | 03:33 delta c80199b FIX: chip_nodes swallows tokens with ./,/nbsp (release names -> res:1080p); important: cross-run merge/contradictions, structural prop test. Grouping preservation verified. | 03:47 7548049 chip/merge/structural-prop fixes; narrow delta reviewer (round 3) started. | 03:58 round-3 delta FIX (two-value tokens, bare-number ext, AND merge regression, nested field guard, prop test). Past escalation limit (2): not parked because each round narrows a hard parser problem; next blocking -> split natural phrasing into follow-up and merge /suggest. Flagged to owner. | 04:14 b0a76dc verified by runner (38-input probe). APPROVED; merge on green."
+   "notes": "Launched 21:41 after B6 merged. | 01:50 PR #102 41231f7 conflicts live.rs; asked main merge + relevance gate; review on new head. | 01:52 c764a4f main merged (relevance PASS); reviewer started. | 02:45 review FIX: natural phrasing inverts negations/field syntax (-cam -> includes CAM) -> strict-lex first + meaning-preserving prop test; important: did-you-mean cost, FST peak RSS/10M plan, swap-path test. | 03:20 c80199b fixes (strict-lex natural phrasing + prop test, did-you-mean capped, FST memory, swap test). Delta reviewer started. OK given for query.rs pub(crate) + ROUTES line. | 03:33 delta c80199b FIX: chip_nodes swallows tokens with ./,/nbsp (release names -> res:1080p); important: cross-run merge/contradictions, structural prop test. Grouping preservation verified. | 03:47 7548049 chip/merge/structural-prop fixes; narrow delta reviewer (round 3) started. | 03:58 round-3 delta FIX (two-value tokens, bare-number ext, AND merge regression, nested field guard, prop test). Past escalation limit (2): not parked because each round narrows a hard parser problem; next blocking -> split natural phrasing into follow-up and merge /suggest. Flagged to owner. | 04:14 b0a76dc verified by runner (38-input probe). APPROVED; merge on green. | 04:35 conflicts after X-flakes+B5c (search-bench, api/search.rs, live.rs) -> asked main merge."
   },
   "B12": {
    "status": "review",
@@ -330,7 +330,7 @@
    "pr": 112,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 03:30 PR #112 b0834b4 ready; reviewer + security review started. 5,703 lines. \u00a72.19 flags: regenerate not reveal; bad XFF ends walk; revoke/delete no password; max 500 keys; login limiter bounded. | 03:45 review+security MERGE (no blocking). Asked: proxy-trust docs (gateway lets anyone in), polish, logging redaction note. Merge after B10a: B12 merges main keeping B10a user_data open. | 03:43 4b442d6 review items 1-3 done. Waiting: B10a merge, then ping B12 to merge main (keep B10a user_data open), then merge on green.",
+   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 03:30 PR #112 b0834b4 ready; reviewer + security review started. 5,703 lines. \u00a72.19 flags: regenerate not reveal; bad XFF ends walk; revoke/delete no password; max 500 keys; login limiter bounded. | 03:45 review+security MERGE (no blocking). Asked: proxy-trust docs (gateway lets anyone in), polish, logging redaction note. Merge after B10a: B12 merges main keeping B10a user_data open. | 03:43 4b442d6 review items 1-3 done. Waiting: B10a merge, then ping B12 to merge main (keep B10a user_data open), then merge on green. | 04:33 CI green 4b442d6; waiting B10a merge.",
    "self_review": {
     "raised": 7,
     "fixed": 7,
@@ -348,13 +348,14 @@
    "notes": ""
   },
   "B5c": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "session": "session_016s5MgUbh76LeFpk3cmTmFT",
    "pr": 100,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:41 after B6 merged. | 01:50 PR #100 544a76f; reviewer started (cache key incl. visibility/epoch; overlap with #48 explain/cache_key). | 02:15 review MERGE (no blocking); asked main merge + important (facet lease thrash, lease heap bytes, explain cost) + polish in one push; runner verifies delta then merges. Merges before #48; M4 told: tz in key, hot-column epoch, single explain shape. | 02:50 67f6649 delta verified by runner (Seen ordering, facets_on serving check, file-clause searches uncached, explain per-segment, polish). APPROVED; merge on green. | 02:50 0d4a833 (+#106). Approved; merge on green."
+   "notes": "Launched 21:41 after B6 merged. | 01:50 PR #100 544a76f; reviewer started (cache key incl. visibility/epoch; overlap with #48 explain/cache_key). | 02:15 review MERGE (no blocking); asked main merge + important (facet lease thrash, lease heap bytes, explain cost) + polish in one push; runner verifies delta then merges. Merges before #48; M4 told: tz in key, hot-column epoch, single explain shape. | 02:50 67f6649 delta verified by runner (Seen ordering, facets_on serving check, file-clause searches uncached, explain per-segment, polish). APPROVED; merge on green. | 02:50 0d4a833 (+#106). Approved; merge on green. | 04:35 MERGED 4579917 (CI green; merged tree with X-flakes verified locally: clippy + search/api tests).",
+   "merge": "4579917"
   },
   "B13": {
    "status": "merged",
@@ -416,7 +417,7 @@
    "pr": 111,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 03:13 PR #111 7ae814b ready (first steward-flow PR). Diff 7,553 lines (check size). Reviewer started. \u00a72.19 flags: alert counts shown-only; collection positions among shown; reorder keeps withheld slots. | 03:25 review FIX (description size reason only); code + content safety OK. Asks: size line, stale decisions bullet, reorder early stale, B9 unread_total note, polish. | 03:27 803948c fixes (size reason, decisions bullet, reorder early stale, B9 note, polish). Approved pending runner delta check + green CI.",
+   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 03:13 PR #111 7ae814b ready (first steward-flow PR). Diff 7,553 lines (check size). Reviewer started. \u00a72.19 flags: alert counts shown-only; collection positions among shown; reorder keeps withheld slots. | 03:25 review FIX (description size reason only); code + content safety OK. Asks: size line, stale decisions bullet, reorder early stale, B9 unread_total note, polish. | 03:27 803948c fixes (size reason, decisions bullet, reorder early stale, B9 note, polish). Approved pending runner delta check + green CI. | 04:35 CI green 803948c; openapi conflict after B5c -> asked main merge + regen.",
    "self_review": {
     "raised": 12,
     "fixed": 7,
