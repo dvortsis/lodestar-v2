@@ -195,7 +195,8 @@ test.describe('the list', () => {
 		mock.error('patchSavedSearch', 500, 'internal', 'boom');
 		await go('/alerts');
 		const toggle = page.getByRole('switch', { name: 'Paused: Lantern Keeper releases' });
-		await toggle.check();
+		// click, not check(): the toggle may already be back by the time check() looks.
+		await toggle.click();
 		await expect(toggle).not.toBeChecked();
 		await expect(
 			page.getByText("Couldn't change “Lantern Keeper releases”", { exact: false })
