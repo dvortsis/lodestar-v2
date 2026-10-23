@@ -1473,31 +1473,36 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
 - **Verification. Nothing runs that isn't signed:**
   - The **manifest** is signed with the current release key (Ed25519, minisign format).
     - It names its **channel** inside the signed body, and a manifest for a different channel than the one chosen is refused.
-    - **Every manifest published after a key rotation carries the key statements** that chain its key back to the recovery key, the weekly re-signs included. A client that was offline across the rotation can still verify.
+    - **Every manifest published after a key rotation carries the key statements** that chain its key back to the recovery key, and every freshness statement after a freshness-key rotation carries them too. A client that was offline across the rotation can still verify.
   - Each **artifact** (binary, MSI) is pinned in the manifest by SHA-256 and size, and checked after download. Windows artifacts are also Authenticode-signed (M6), and that signature is checked too.
-  - **Two built-in keys** (`packaging/keys/`, embedded at build):
-    - the **release key** (`02910813433E81E0`), the first key generation, signs manifests;
+  - **Built-in keys** (`packaging/keys/`, embedded at build; roles per `owner-decisions.md` §2.21):
+    - the **release key** (`02910813433E81E0`), the first key generation, signs stable and beta manifests (both built from `v*` tags);
+    - the **nightly key** signs nightly manifests and is trusted only on the Nightly channel;
+    - the **freshness key** signs only freshness statements (channel, manifest hash, timestamp, expiry) for manifests already signed by the release or nightly key, never new content;
+    - the release, nightly and freshness keys are all changed the same way, by a recovery-signed key statement;
     - the **recovery key** (`67922DDF005FD310`) is kept offline by the owner and signs nothing but key changes.
   - **Key changes need the recovery key:**
-    - A key-change statement names the new release key and carries a **sequence number** one higher than the last one published.
-    - It's accepted only with a valid **recovery-key signature**. The current release key may co-sign, but its signature alone is never enough.
-    - Accepting a statement **revokes the previous release key** for new installs.
+    - A key-change statement names the **role** (release, nightly or freshness) and the new key, and carries a **sequence number** one higher than the last one published (one sequence for all roles).
+    - It's accepted only with a valid **recovery-key signature**. The current key of that role may co-sign, but its signature alone is never enough.
+    - Accepting a statement **revokes the previous key of that role only**, for new installs.
     - A statement whose sequence number isn't higher than the last one accepted is refused.
-    - So a leaked release key can sign manifests until the owner rotates it, but it can never rotate to an attacker's key, and the rotation shuts it out.
+    - So a leaked key can do its role's job until the owner rotates it, but it can never rotate to an attacker's key, and the rotation shuts it out.
   - **The recovery key itself is an accepted risk.** It's offline and password-protected, and there's no protocol to rotate it.
     - If it's ever lost or compromised, the remedy is a new build with a new embedded key, which users install **by hand** once.
-    - Whether to add a recovery-key rotation statement is the owner's call. It isn't designed here.
-  - **Time limits on manifests:**
+    - No rotation statement is designed (`owner-decisions.md` §2.21).
+  - **Time limits on manifests and freshness statements:**
     - Versions only go up.
-    - A manifest whose timestamp is more than **1 day ahead** of the local clock is refused.
-    - A manifest's expiry may be at most **30 days** after its timestamp. Expired manifests are refused for new installs.
-    - The **high-water mark** (the newest manifest timestamp accepted) belongs to the current key generation, and older manifests are refused. Accepting a key statement resets the mark to the statement's date. A leaked key that signs a manifest dated 2099 is therefore refused as being in the future; and anything it got accepted before the rotation stops counting once the rotation lands.
+    - A manifest and a freshness statement each get the same checks: refused if dated more than **1 day ahead** of the local clock, and an expiry at most **30 days** after its own timestamp.
+    - A manifest is **current** while it, or its newest accepted freshness statement, hasn't expired. A manifest that isn't current is refused for new installs.
+    - A **freshness statement** is accepted only if the current freshness key signed it, its channel and manifest hash match the manifest, and the manifest itself verifies under a non-revoked key allowed on that channel. It extends expiry only. The **freshness mark** is the newest freshness timestamp accepted; an older statement is refused.
+    - The **high-water mark** stays on the manifest's own signed timestamp (per channel), and older manifests are refused. A freshness statement for a manifest older than the mark is refused, so the freshness key can freeze updates but never roll them back.
+    - A release or nightly key rotation resets the high-water mark of the channels that key signs to the statement's date; a freshness-key rotation resets only the freshness mark. A leaked key that signs a manifest dated 2099 is therefore refused as being in the future; and anything it got accepted before the rotation stops counting once the rotation lands.
     - **If the local clock looks wrong in either direction,** the Updates screen says so instead of failing silently. That's when genuine manifests keep arriving from more than a day in the future, or when the clock is past the newest manifest's expiry while checks still succeed.
   - **Trust state lives outside the store.** `<data>/bin/trust.json` holds:
     - the accepted key statements (in full, with their signatures);
     - the current sequence number;
     - the revoked keys;
-    - the high-water mark.
+    - the per-channel high-water marks and the freshness mark.
 
     It's written by temporary file, fsync, rename, and an fsync of the directory. It's in no store snapshot or backup, so **no rollback can undo a revocation.**
     - **"Forward only"** means the pair (sequence number, high-water mark) never decreases. A new state replaces the old only if its sequence number is higher, or equal with a later high-water mark.
@@ -1509,8 +1514,8 @@ Logs exist to diagnose Lodestar, not to record what it found. **You decide what 
     - **A missing `trust.json`** is rebuilt from that floor. Its high-water mark is the timestamp of the newest verified overlay manifest.
     - **A corrupt `trust.json`** blocks new installs. The running version keeps running, and a notice says so.
   - **Key statements get the same time check:** a statement dated more than 1 day ahead of the local clock is refused.
-  - **Re-signing:** the release workflow re-signs every channel's current manifest weekly, with a fresh timestamp and an expiry within 30 days. An installation that checks always finds a valid one without a new release. A lapsed manifest only blocks new installs; it never stops an installed version from starting (below).
-  - **Release engineering** (M6 `release.yml`) signs with `RELEASE_SIGNING_KEY`. That's a secret of the GitHub Actions environment `release`, which only `v*` tags and `main` may use, so a workflow edited on a feature branch can't read it. The private keys never enter the repository. The owner created both key pairs on 2026-10-22. Further hardening is recommended to the owner in `packaging/keys/README.md`: a required reviewer on the environment, and a separate nightly key.
+  - **Re-signing:** a scheduled workflow issues a fresh freshness statement for every channel's current manifest weekly, signed by the freshness key, with a fresh timestamp and an expiry within 30 days; the manifest itself isn't re-signed. An installation that checks always finds a valid one without a new release. A lapsed manifest only blocks new installs; it never stops an installed version from starting (below).
+  - **Release engineering** (M6 `release.yml`) keeps each key in its own GitHub Actions environment (`owner-decisions.md` §2.21): `RELEASE_SIGNING_KEY` in `release`, which only `v*` tags may use, with the owner as required reviewer; the nightly key in `nightly` (main only); the freshness key in `freshness` (the scheduled re-sign on main only). A workflow edited on a feature branch can't read any of them, and the private keys never enter the repository. The owner created the release and recovery key pairs on 2026-10-22, and creates the nightly and freshness pairs.
 - **Before installing:**
   - **Where the installation can update itself:** `noexec` data volumes, a read-only binary location with no data-directory fallback, and package-managed installs fall back to Check and notify, with the reason.
   - **Free space:** enough for the store snapshot, the new binary, and the manifest's reindex estimate.
@@ -1716,6 +1721,8 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Scope/maintainability:** a large Rust codebase for one maintainer. Mitigate with strict crate boundaries, the MVP cut line, and reusing mature crates (tantivy, axum, rusqlite, tokio, encoding_rs, mimalloc, utoipa) wherever they aren't on the critical path.
 
 ## 16. Self-review log (issues found in draft 1, now folded in above)
+
+> **New decisions go in [`docs/decisions/`](decisions/README.md), one file per PR** (from 2026-10-22). This section keeps everything recorded before then; read both together.
 
 | Sev | Area | Issue in draft 1 | Resolution |
 |---|---|---|---|
@@ -2483,7 +2490,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - **The first gate wasn't honest.** It judged one torrent, over and over, against rules none of whose words it had, so the narrowing skipped 99% of them. The review made 10% of the rules candidates that matched nothing and measured 16.8–17.0 ms per torrent.
   - **The gate now** judges a varied set of 512 torrents with 1%, 10% and 25% of the rules built on words they have, and about 40 rules per torrent that get the full match (§20.8). It holds the core, 1% and 10%; 25% is reported.
   - **What made it:** compiled queries with a three-valued cheap check (token texts, a Bloom filter of neighbouring tokens, token starts, extensions, sizes, tags); an index keyed on each rule's rarest-looking word; an exact ASCII fast path of the search tokenizer for the full match; a per-torrent vocabulary for prefixes and fuzzy words; and word plans and a flag table in the core's tokenizer and signals. On this set the engine went from 30 ms per torrent at 10% to 40.8 µs on the runner (core 8.9, 1% 32.9, 25% 48.1 reported). The build VM runs about 1.4× slower.
-  - **Scope:** the gate covers rule shapes the cheap check can reject. Shapes it can't decide (negations, NEAR, prefixes, fuzzy words, `title:`) get the full match on every torrent that has their words, and cost more (§20.8). Whether to hold those is the owner's call.
+  - **Scope:** the gate covers rule shapes the cheap check can reject. Shapes it can't decide (negations, NEAR, prefixes, fuzzy words, `title:`) get the full match on every torrent that has their words, and cost more (§20.8). All shapes are held (`owner-decisions.md` §2.21).
   - **Correctness:** a differential property test checks the compiled match against the previous matcher on random queries and torrents, and the cheap check against the full match. Its *no* answers rest on property tests that the scan's keys, pairs, starts and vocabulary cover the tokenizer's tokens exactly or as supersets. Injected bugs were caught.
 - **The floor from config files only adds (§2.7).** `blocklist.files` add through the store. A floor-marked list's upstream removals stay blocked. Both kinds of drop wait in *pending floor removals*, reported once per start with a counter metric, and leave the floor only through `resolve_floor_removal` with the effect warning and the password.
 - **Floor removals, as reviewed:** a confirmed removal settles the entries its warning counted (`floor_entries`), never more. An entry two config files list stays while either lists it. Accepting a held version of a floor-marked list is no longer weakening, since what it drops stays blocked in the list's pending removals (§20.7).
@@ -2825,7 +2832,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Manifest hygiene:**
   - the manifest signs its channel;
   - the highest accepted timestamp is stored, so an older signed manifest is refused;
-  - manifests are re-signed weekly before their 30-day expiry;
+  - a freshness statement is issued weekly for each channel's current manifest, before its 30-day expiry;
   - the check sends a fixed User-Agent with no version.
 - **One update check.** About uses the signed manifest; B2c no longer calls GitHub's releases API.
 - **Rollback is run by a supervisor:**
@@ -2845,7 +2852,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **A leaked key can't freeze updates:**
   - manifests more than a day ahead of the local clock are refused;
   - expiry is capped at 30 days;
-  - the high-water mark belongs to the key generation and resets with a key statement.
+  - the high-water marks are per channel, on the manifest's own timestamp, and reset only for the channels a rotated key signs; the freshness mark resets with a freshness-key rotation.
 - **Rollback is journaled and crash-safe:**
   - the child is stopped first;
   - the store is restored before `active` is repointed, with the WAL removed before the rename;
@@ -2858,7 +2865,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
   - forwarded stops don't count as attempts;
   - the timer starts after migrations;
   - Windows probation survives reboots.
-- **The recovery key is an accepted risk.** Its rotation is the owner's call.
+- **The recovery key is an accepted risk.** It isn't rotated (`owner-decisions.md` §2.21).
 - **Post-rotation manifests carry the key statements.**
 - **`LODESTAR_UPDATES=image`** locks Container image updates.
 - **Show adult content** is B17's server-wide `content.show_adult`, not a preference.
@@ -2887,6 +2894,29 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 - **Schema v5 (bump #1 of M5):** one new fast field, `release_year` (the release's first year, single-valued), for the year histogram; `year` stays multi-valued in the inverted index. Every other facet reads existing columns. Measured on 100k synthetic torrents: index 408 → 412 B per torrent (budget 512): `release_year` about 1 B, the `cat:` terms about 3 B. **The file categories present are `cat:<category>` terms in the `tag` keyword column** (not a query key; `cat:` in the language stays the share range), so the category facet rides the tag pass: reading ten optional share columns per document had doubled the cost of a pass (56 → 26 ms over 200k matches). An index older than v5 has neither, so `category` is `unavailable` there too. B5b's `Serving` rebuilds a v4 index in the background; a test serves facets from v4 (`category` and `year` `unavailable`) and from v5 after the swap.
   - **B7** (suggest) reads the term dictionaries and a title FST kept beside the index (§8), so it shouldn't need a schema field; if it does, it's a second rebuild.
 - **Pure function** of (lease snapshot, AST, parameters), so B5c can cache it. **Bench** (`search-bench`): a `/facets` table gated at §3's 100 ms p95. At 200k (`--gate`, one segment), p95: broad word 8.0 ms, word + selections 12.9 ms, every facet over the whole corpus (200k matches, exact) 34.3 ms, browsing with selections 33.4 ms; about 130 ns per match per pass on one thread. **At 1M** (`--queries 100`), p95: with 5 segments of 200k (all exact below the threshold), every facet over all 1M matches 58 ms, browsing with selections 50 ms, broad word 10 ms, word + selections 17 ms. With **one merged segment** (`--commit-every 1000000`, then merged: a live index's `LogMergePolicy` makes one of about 640k at a million), a segment is counted on one thread, so the exact passes took 171 ms and 133 ms; hence `BIG_SEGMENT`: with it, 13.7 ms (sampled), 39.7 ms, 16.5 ms and 39.9 ms. An exact pass is then at most about 300k matches on one thread (about 40 ms) or 1M spread over segments of at most 300k. Every earlier class at 200k still passes with its old margins. (The existing "word + file clause" search class misses its 30 ms target at 1M: 45 ms over 5 segments, 108 ms in one. It is gated at 200k and isn't facets; noted for its owner.)
+
+**D-puid decisions (PUID/PGID in the binary):**
+- **The image starts as root (`USER 0:0`) and the binary drops it** (`crates/lodestar/src/privdrop.rs`), first thing in `main`: before `config.toml` is read, any socket is bound or any thread is spawned. `serve` and `import-bitmagnet` hand the data directory over first; `healthcheck` only drops. This replaces the D-docker stopgap (the image as `nonroot`, Unraid's `--user 99:100`); `--user` still works and skips the drop.
+- **`PUID`/`PGID`:** ASCII digits only, default 65532 (`nonroot`), `4294967295` refused, `0` refused unless `LODESTAR_ALLOW_ROOT=1` (which then keeps root, with a warning). Not root: ignored, with one log line if they differ from the current ids.
+- **The data directory** is `LODESTAR_DATA_DIR` (or `data`), since the config file can't be read as root; a config file that moves it gets a warning. A symlinked directory, or `/`, is refused, and so is one that belongs to someone else unless it is empty or holds a Lodestar marker (`lodestar.db`, `config.toml`, `index`), so a mistyped `/srv` is never handed over. After the drop the new account must be able to open it; if a parent blocks it, start-up stops with a hint about the parent's permissions. If its own owner is already `PUID:PGID` nothing is walked; otherwise the tree is chowned with `O_PATH|O_NOFOLLOW` descriptors and `AT_EMPTY_PATH`, so symlinks are changed themselves and never followed, and a swapped entry can't redirect the change. Hard-linked regular files and device/fifo/socket entries are left alone, and the walk stops 32 levels down. The log says what changed.
+- **`rustix` 1.1.5 (`fs`, `process`, `thread`), not `libc`:** the workspace forbids `unsafe`, and `rustix` was already in the lock. Its set*id calls are the per-thread syscalls, so the drop first checks that `/proc/self/task` holds one thread, checks `CapEff` holds CAP_SETUID and CAP_SETGID (root under `cap_drop: ALL` lacks them; refused before anything changes, pointing at `--user`), then calls `setgroups([])`, `setresgid` and `setresuid`, and verifies: all ids match, no groups, `setuid(0)`/`seteuid(0)`/`setgid(0)` fail, and `CapPrm`/`CapEff`/`CapAmb` are zero. Then `no_new_privs` is set. Any failure aborts start-up.
+- **Other Unix (macOS, BSD):** no safe per-thread calls, so root is refused unless `LODESTAR_ALLOW_ROOT=1`. **Windows:** a no-op.
+- **Checks:** the root-only integration test (`tests/privdrop.rs`, run under `sudo` by CI's Linux test job) reads every thread's `/proc/<pid>/task/*/status`; the Docker smoke job does the same from the host (`packaging/docker/check-ids.sh`) for a default container, a `--user` one and one with `PUID=99 PGID=100` on a root-owned bind mount.
+
+**Runner-recorded decisions (2026-10-22):**
+- **X-notify:**
+  - Discord sends without following redirects, so a webhook URL can't be bounced to another host.
+  - ntfy needs a JSON body with an `id` on a 2xx answer. Anything else (a captive portal or a proxy's HTML page) is a failed delivery.
+  - ntfy credentials travel over plain `http` only when the channel's `allow_private` is on **and** the host is local: a private IP literal or a local name (single-label, `.lan`, `.local`, `.home.arpa`). A public DNS name that resolves to a private address is refused, and every other host needs `https`.
+- **D-docker:**
+  - **Build overrides:** the image builds with `CARGO_PROFILE_RELEASE_STRIP=symbols` and `CARGO_PROFILE_RELEASE_DEBUG=false`. The release profile in `Cargo.toml` keeps line tables, and the image drops them (about 100 MB).
+  - **§4 data layout as built:** the text of §4 (line 105) stays as planned. What the code writes under `/data` today is `lodestar.db`, `index/`, `dht-state.bin`, `auth.json`, `seal.key`, an optional `config.toml` and `import-bitmagnet.cursor` (`crates/lodestar/src/config.rs` for the paths; `auth.json` and `seal.key` from `crates/lodestar/src/services.rs`; `import-bitmagnet.cursor` from `crates/lodestar/src/main.rs`; `packaging/docker/README.md`). There is no `data/hot/` or `data/cold/` yet, no `index/torrents/` and `index/files/` split (the index lives in one `index/` directory), and no separate hot-path or cold-path mounts. The Unraid template's hot and cold paths are marked "planned, not used yet".
+  - **`/data` is the image's only volume,** and it ships empty and owned by `nonroot` (65532), the default `PUID`/`PGID`. The image starts as root and the binary drops to `PUID`/`PGID` (D-puid, above).
+- **W6 snapshot policy:**
+  - Snapshots cover key screens only.
+  - The theme set is the shared 46-theme set (23 families, two modes), at breakpoint 1366.
+  - Compact density is snapshotted only on routes that are density-aware.
+  - Baselines are generated in the pinned Playwright container, never on a developer machine. They're updated through the `.update-snapshots` marker file or a `workflow_dispatch` run, and the owner imports them by hand when the artifact host is blocked.
 
 ## 17. Verification (once built)
 
@@ -3666,7 +3696,7 @@ Packs are signed, versioned and opt-in, and **all five are pre-checked in the fi
       | `title:` | 83–85 |
       | mix | 171–178 |
 
-      Most of that is the full match's first tokenization of every path (about 35 µs a torrent) and then a scan per rule. Whether to hold such shapes to the budget is the owner's call.
+      Most of that is the full match's first tokenization of every path (about 35 µs a torrent) and then a scan per rule. They're held to the budget too (`owner-decisions.md` §2.21).
     - **History:** the first version of this gate judged one torrent with rules none of whose words it had. The review measured 17 ms per torrent once 10% of the rules were candidates; this set measured 30 ms at 10% before the work below.
   - **How the rules stay cheap:**
     - **Narrowing:** each rule is indexed by a token text or tag it can't match without. Where several are each needed (an AND, a phrase's words), it's keyed on the rarest-looking, so `1080p cam` is looked at only for torrents that have `cam`. Rules are marked in a bit set by position and read in order.

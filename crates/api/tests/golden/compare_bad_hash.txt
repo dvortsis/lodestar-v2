@@ -1,0 +1,2 @@
+400
+{"error":{"code":"bad_hash","field":"hashes","message":"Expected a 40-character hex info hash."}}

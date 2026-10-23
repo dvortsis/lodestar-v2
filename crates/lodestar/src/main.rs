@@ -1,11 +1,15 @@
 //! The `lodestar` binary (architecture §11): `serve` (the default) runs the
 //! crawler with its status page and metrics; `healthcheck` probes a
-//! running instance for Docker's `HEALTHCHECK`.
+//! running instance for Docker's `HEALTHCHECK`. Arguments are parsed in
+//! `cli`, which also runs the maintenance commands.
 
+mod cli;
 mod config;
 mod floor;
+mod fsdetect;
 mod http;
 mod metrics;
+mod privdrop;
 mod services;
 mod settings;
 mod subscriptions;
@@ -21,6 +25,7 @@ use std::time::Duration;
 
 use lodestar_store::Store;
 
+use crate::cli::Command;
 use crate::config::Config;
 use crate::services::{BoxError, Services};
 
@@ -28,102 +33,36 @@ use crate::services::{BoxError, Services};
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-const USAGE: &str = "\
-Usage: lodestar [serve|healthcheck] [--config <path>]
-       lodestar import-bitmagnet <postgres-url> [--limit N] [--config <path>]
-       lodestar lists
-
-Commands:
-  serve             Run the crawler, search, UI, status page and metrics
-                    (default)
-  healthcheck       Exit 0 if the local instance answers /healthz, 1 otherwise
-  import-bitmagnet  Import a bitmagnet database (read-only, resumable); run
-                    it while the server is stopped
-  lists             Show the blocklist catalog ([subscriptions] catalog keys)
-
-Options:
-  --config <path>  config.toml (default: $LODESTAR_DATA_DIR/config.toml or
-                   data/config.toml, if present)
-  -V, --version    Print the version
-  -h, --help       Print this help
-
-Environment: LODESTAR_DATA_DIR, LODESTAR_HTTP_BIND, LODESTAR_DHT_PORT,
-LODESTAR_DHT_ENABLED, LODESTAR_INTENSITY, LODESTAR_LOG,
-LODESTAR_SECURE_COOKIES";
-
-#[derive(Debug, PartialEq, Eq)]
-enum Command {
-    Serve(Option<PathBuf>),
-    Healthcheck(Option<PathBuf>),
-    ImportBitmagnet {
-        config: Option<PathBuf>,
-        url: String,
-        limit: Option<u64>,
-    },
-    Lists,
-    Version,
-    Help,
-}
-
-fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String> {
-    let mut command = None;
-    let mut config = None;
-    let mut positional = Vec::new();
-    let mut limit = None;
-    let mut args = args.into_iter();
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "-h" | "--help" => return Ok(Command::Help),
-            "-V" | "--version" => return Ok(Command::Version),
-            "--config" => {
-                config = Some(PathBuf::from(args.next().ok_or("--config needs a path")?));
-            }
-            "--limit" => {
-                let n = args.next().ok_or("--limit needs a number")?;
-                limit = Some(n.parse().map_err(|_| format!("bad --limit {n:?}"))?);
-            }
-            "serve" | "healthcheck" | "import-bitmagnet" | "lists" if command.is_none() => {
-                command = Some(arg)
-            }
-            other if command.as_deref() == Some("import-bitmagnet") && !other.starts_with('-') => {
-                positional.push(other.to_string());
-            }
-            other => return Err(format!("unexpected argument {other:?}")),
-        }
-    }
-    Ok(match command.as_deref() {
-        Some("healthcheck") => Command::Healthcheck(config),
-        Some("lists") => Command::Lists,
-        Some("import-bitmagnet") => match positional.as_slice() {
-            [url] => Command::ImportBitmagnet {
-                config,
-                url: url.clone(),
-                limit,
-            },
-            _ => return Err("import-bitmagnet needs one postgres URL".into()),
-        },
-        _ => Command::Serve(config),
-    })
-}
-
 fn main() -> ExitCode {
-    let command = match parse_args(std::env::args().skip(1)) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("{e}\n\n{USAGE}");
-            return ExitCode::from(2);
+    let cli = cli::parse();
+    let config_path = cli.config;
+    let command = cli.command.unwrap_or(Command::Serve);
+    // Root is dropped first: before the config file (in the data directory)
+    // is read, any socket is bound or any thread is spawned. Every command
+    // that touches the data directory runs as the target account, so a
+    // backup, rollback or vacuum never leaves root-owned files there; none
+    // needs root. `stats` and `healthcheck` only read. `lists` prints a
+    // built-in table and touches nothing, so it runs as started.
+    let scope = match command {
+        Command::Serve
+        | Command::ImportBitmagnet { .. }
+        | Command::Backup(_)
+        | Command::Rollback(_)
+        | Command::Vacuum
+        | Command::Reindex => Some(privdrop::Scope::DataDir),
+        Command::Healthcheck | Command::Stats(_) => Some(privdrop::Scope::ProcessOnly),
+        Command::Lists => None,
+    };
+    let dropped = match scope.map(|s| privdrop::run(s, |k| std::env::var(k).ok())) {
+        Some(Ok(report)) => report,
+        Some(Err(e)) => {
+            eprintln!("PUID/PGID: {e}");
+            return ExitCode::FAILURE;
         }
+        None => privdrop::Report::default(),
     };
     let load = |path: Option<PathBuf>| Config::load(path.as_deref(), |k| std::env::var(k).ok());
     match command {
-        Command::Help => {
-            println!("{USAGE}");
-            ExitCode::SUCCESS
-        }
-        Command::Version => {
-            println!("lodestar {}", env!("CARGO_PKG_VERSION"));
-            ExitCode::SUCCESS
-        }
         Command::Lists => {
             for e in subscriptions::CATALOG {
                 println!(
@@ -137,7 +76,7 @@ fn main() -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        Command::Healthcheck(path) => match load(path) {
+        Command::Healthcheck => match load(config_path) {
             Ok(config) => match healthcheck(settings::network::effective_bind(&config)) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {
@@ -150,8 +89,8 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Command::ImportBitmagnet { config, url, limit } => {
-            let config = match load(config) {
+        Command::ImportBitmagnet { url, limit } => {
+            let config = match load(config_path) {
                 Ok(c) => c,
                 Err(e) => {
                     eprintln!("config: {e}");
@@ -159,6 +98,7 @@ fn main() -> ExitCode {
                 }
             };
             init_logging(&config.log);
+            dropped.log(&config.data_dir);
             let runtime = match tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
@@ -177,8 +117,8 @@ fn main() -> ExitCode {
                 }
             }
         }
-        Command::Serve(path) => {
-            let config = match load(path) {
+        Command::Serve => {
+            let config = match load(config_path) {
                 Ok(c) => c,
                 Err(e) => {
                     eprintln!("config: {e}");
@@ -186,6 +126,8 @@ fn main() -> ExitCode {
                 }
             };
             init_logging(&config.log);
+            dropped.log(&config.data_dir);
+            fsdetect::warn_at_start(&config.data_dir);
             let runtime = match tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
@@ -204,6 +146,7 @@ fn main() -> ExitCode {
                 }
             }
         }
+        other => cli::run(other, config_path.as_deref(), &dropped),
     }
 }
 
@@ -315,39 +258,6 @@ fn healthcheck(bind: SocketAddr) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn args(s: &str) -> Result<Command, String> {
-        parse_args(s.split_whitespace().map(String::from))
-    }
-
-    #[test]
-    fn parses_the_command_line() {
-        assert_eq!(args(""), Ok(Command::Serve(None)));
-        assert_eq!(args("lists"), Ok(Command::Lists));
-        assert_eq!(
-            args("serve --config /x.toml"),
-            Ok(Command::Serve(Some("/x.toml".into())))
-        );
-        assert_eq!(
-            args("--config c.toml healthcheck"),
-            Ok(Command::Healthcheck(Some("c.toml".into())))
-        );
-        assert_eq!(args("--version"), Ok(Command::Version));
-        assert_eq!(args("serve -h"), Ok(Command::Help));
-        assert!(args("serve serve").is_err());
-        assert!(args("--config").is_err());
-        assert!(args("reindex").is_err());
-        assert_eq!(
-            args("import-bitmagnet postgres://x/bm --limit 10"),
-            Ok(Command::ImportBitmagnet {
-                config: None,
-                url: "postgres://x/bm".into(),
-                limit: Some(10)
-            })
-        );
-        assert!(args("import-bitmagnet").is_err());
-        assert!(args("serve extra").is_err());
-    }
 
     #[test]
     fn healthcheck_needs_a_200() {

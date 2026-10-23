@@ -182,7 +182,7 @@ fn get(uri: &str, headers: &[(&str, &str)]) -> Request<Body> {
 fn torrents(added: u64) -> Event {
     Event::Torrents(TorrentsEvent {
         added,
-        max_id: added as i64,
+        max_id: Some(added as i64),
     })
 }
 
@@ -497,4 +497,228 @@ async fn without_a_hub_it_is_unavailable() {
     let (status, _, body) = call(&app, get("/api/v1/events", &[("cookie", &cookie)])).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["error"]["code"], "events_unavailable");
+}
+
+/// Stores `names` and classifies them, as the pipeline would, before any
+/// indexer sees them.
+fn add_classified(store: &mut Store, names: &[&str]) {
+    use lodestar_bencode::{OwnedValue, to_vec};
+    let b = |s: &str| OwnedValue::Bytes(s.as_bytes().to_vec());
+    let raws: Vec<Vec<u8>> = names
+        .iter()
+        .map(|n| {
+            to_vec(&OwnedValue::Dict(
+                [
+                    ("length", OwnedValue::Int(1 << 30)),
+                    ("name", b(n)),
+                    ("piece length", OwnedValue::Int(1 << 16)),
+                    ("pieces", OwnedValue::Bytes(vec![0; 20])),
+                ]
+                .into_iter()
+                .map(|(k, v)| (k.as_bytes().to_vec(), v))
+                .collect(),
+            ))
+        })
+        .collect();
+    let infos: Vec<lodestar_metainfo::Info> = raws
+        .iter()
+        .map(|r| lodestar_metainfo::Info::parse(r).unwrap())
+        .collect();
+    let batch: Vec<lodestar_store::NewTorrent<'_>> = infos
+        .iter()
+        .zip(&raws)
+        .map(|(info, raw)| lodestar_store::NewTorrent {
+            info,
+            raw_info: Some(raw),
+            discovered_at: 1_700_000_000,
+            metadata_at: 1_700_000_100,
+            extra_flags: 0,
+            source: lodestar_store::SourceId::new(0).unwrap(),
+        })
+        .collect();
+    for t in store.insert(&batch).unwrap() {
+        let id = t.id();
+        let row = store.torrent(id).unwrap().unwrap();
+        let tree = store.files(id).unwrap().unwrap();
+        let files = lodestar_classify::file_infos(&tree.files, tree.encoding);
+        let (e, _) = lodestar_filter::reclassify::enrich_corrected(
+            &row.name,
+            &files,
+            lodestar_classify::Correction::default(),
+        );
+        store.set_enrichments(&[(id, e)]).unwrap();
+    }
+}
+
+/// B4b end to end: the live indexer's commits reach the stream with
+/// Adult left out while "Show adult content" is off, read live through
+/// the same `AdultVisibility` the API state holds (as `lodestar serve`
+/// wires it), and a commit of only hidden Adult sends nothing.
+#[tokio::test]
+async fn the_torrents_count_leaves_out_adult_while_it_is_hidden() {
+    use lodestar_search::{CommitHook, LiveConfig, LiveIndexer, SearchIndex};
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+    let index = SearchIndex::in_memory().unwrap();
+    let (show, rx) = tokio::sync::watch::channel(false);
+    let adult = lodestar_api::AdultVisibility::follow(move || *rx.borrow());
+    let hook = Arc::new(CommitHook::default());
+    let hub = EventHub::start(
+        // Three streams from one session: the live one and two
+        // reconnects.
+        EventsConfig {
+            max_per_session: 4,
+            ..config()
+        },
+        EventSources {
+            commits: Some(hook.clone()),
+            adult: adult.clone(),
+            ..EventSources::default()
+        },
+    );
+    let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
+    let app = Router::new()
+        .nest(
+            "/api/v1",
+            router(ApiState {
+                auth: auth.clone(),
+                index: Some(index.clone().into()),
+                reader: Arc::new(Mutex::new(
+                    Store::open_reader(&db, StoreConfig::default()).unwrap(),
+                )),
+                filters: None,
+                settings: None,
+                adult,
+            }),
+        )
+        .layer(Extension(hub.clone()));
+    let cookie = session(&auth);
+    let addr = serve(app).await;
+    let mut c = Conn::open(
+        addr,
+        "/api/v1/events?topics=torrents",
+        &[("Cookie", &cookie)],
+    )
+    .await;
+    c.until("retry: 5000\n\n", SOON).await;
+    // One indexer run per step, so each step is one commit of torrents
+    // classified before it saw them.
+    let run = |names: &[&str], store: &mut Store| {
+        add_classified(store, names);
+        let live = LiveIndexer::spawn_with_stats(
+            index.clone(),
+            Store::open_reader(&db, StoreConfig::default()).unwrap(),
+            LiveConfig {
+                heap_bytes: 15 << 20,
+                poll: Duration::from_millis(10),
+                commit_every: Duration::from_secs(3600),
+                commit_docs: names.len(),
+                ..LiveConfig::default()
+            },
+            Arc::default(),
+            hook.clone(),
+        )
+        .unwrap();
+        let start = Instant::now();
+        let want = store.ids_after(0, 1000).unwrap().len() as i64;
+        while index.watermark().unwrap() < want {
+            assert!(start.elapsed() < SOON, "not indexed");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        live.stop().unwrap();
+    };
+    let mixed = [
+        "Big.Movie.2019.1080p.mkv",
+        "Studio.Scene.XXX.1080p.mp4",
+        "Other.Movie.2018.720p.mkv",
+        "Another.Clip.XXX.720p.mp4",
+        "Third.Movie.2017.2160p.mkv",
+    ];
+    // Hidden (the default): 3 of 5, and no id (B4b-r2).
+    run(&mixed, &mut store);
+    c.until("data: {\"added\":3,\"max_id\":null}\n\n", SOON)
+        .await;
+    // Shown: the same mix counts 5, with the newest id.
+    show.send_replace(true);
+    let again: Vec<String> = mixed.iter().map(|n| n.replacen('.', ".Two.", 1)).collect();
+    let again: Vec<&str> = again.iter().map(String::as_str).collect();
+    run(&again, &mut store);
+    c.until("data: {\"added\":5,\"max_id\":10}\n\n", SOON).await;
+    // Hidden again: an all-Adult commit sends nothing, and later events
+    // carry no id.
+    show.send_replace(false);
+    run(
+        &["Third.Clip.XXX.1080p.mp4", "Fourth.Clip.XXX.720p.mp4"],
+        &mut store,
+    );
+    run(&["Fourth.Movie.2016.1080p.mkv"], &mut store);
+    // Each its own event: three complete `data:` frames so far.
+    c.until_more("}\n\n", 2).await;
+    run(
+        &["Fifth.Movie.2015.1080p.mkv", "Fifth.Clip.XXX.1080p.mp4"],
+        &mut store,
+    );
+    // Four complete `data:` frames.
+    c.until_more("}\n\n", 3).await;
+    let frames = |text: &str| -> Vec<String> {
+        text.lines()
+            .filter_map(|l| l.strip_prefix("data: "))
+            .map(str::to_string)
+            .collect()
+    };
+    let hidden_then = r#"{"added":1,"max_id":null}"#;
+    let sent = [
+        r#"{"added":3,"max_id":null}"#,
+        r#"{"added":5,"max_id":10}"#,
+        hidden_then,
+        hidden_then,
+    ];
+    assert_eq!(frames(&c.text), sent, "{}", c.text);
+
+    // A tab that reconnects from before the first event after Adult was
+    // turned off: the hidden events as they were, a `resync` in place of
+    // the one made while Adult was shown, and no frame with an id.
+    let ids = c.ids();
+    assert_eq!(ids.len(), 4, "{}", c.text);
+    let epoch = ids[0].split('-').next().unwrap();
+    let from_start = format!("{epoch}-0");
+    let mut back = Conn::open(
+        addr,
+        "/api/v1/events?topics=torrents",
+        &[("Cookie", &cookie), ("Last-Event-ID", &from_start)],
+    )
+    .await;
+    back.until_more("}\n\n", 3).await;
+    // The frames after `retry:`, without the chunked encoding's sizes.
+    let replayed: String = back
+        .text
+        .split("retry: 5000\n\n")
+        .nth(1)
+        .unwrap()
+        .split("\r\n")
+        .filter(|part| !part.bytes().all(|b| b.is_ascii_hexdigit()))
+        .collect();
+    assert_eq!(
+        replayed,
+        format!(
+            "id: {}\nevent: torrents\ndata: {}\n\n\
+             event: resync\ndata: {{\"reason\":\"visibility\"}}\n\n\
+             id: {}\nevent: torrents\ndata: {hidden_then}\n\n\
+             id: {}\nevent: torrents\ndata: {hidden_then}\n\n",
+            ids[0], sent[0], ids[2], ids[3]
+        )
+    );
+    // Shown again, the same reconnect replays them as they were.
+    show.send_replace(true);
+    let mut shown = Conn::open(
+        addr,
+        "/api/v1/events?topics=torrents",
+        &[("Cookie", &cookie), ("Last-Event-ID", &from_start)],
+    )
+    .await;
+    shown.until_more("}\n\n", 3).await;
+    assert_eq!(frames(&shown.text), sent, "{}", shown.text);
+    assert!(!shown.text.contains("resync"), "{}", shown.text);
+    hub.close();
 }
