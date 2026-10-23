@@ -1030,7 +1030,7 @@
   "V6-cluster2": {
    "status": "review",
    "model": "opus",
-   "notes": "pull-forward after V6-cluster1 merge (owner: run as many as possible); brief includes #96 carry-forwards | 01:50 PR #108 1ff314c, CI queued; review after current reviews (disk). | 02:10 container restart; reviewers relaunched: M-auth, B5c, M6-win delta; V6-cluster2 review started. | 02:06 review FIX: flaky caps test (permit release race), revoke of disconnected worker keeps leases, revoked worker can be granted mid-claim, reconnect cancels drain; polish. | 02:42 delta d00eb8c FIX: late claim reply dropped (closed sender not pruned) -> verified fix + test; important: outcome is_current strands leases, retried claim double-grant dedupe; polish.",
+   "notes": "pull-forward after V6-cluster1 merge (owner: run as many as possible); brief includes #96 carry-forwards | 01:50 PR #108 1ff314c, CI queued; review after current reviews (disk). | 02:10 container restart; reviewers relaunched: M-auth, B5c, M6-win delta; V6-cluster2 review started. | 02:06 review FIX: flaky caps test (permit release race), revoke of disconnected worker keeps leases, revoked worker can be granted mid-claim, reconnect cancels drain; polish. | 02:42 delta d00eb8c FIX: late claim reply dropped (closed sender not pruned) -> verified fix + test; important: outcome is_current strands leases, retried claim double-grant dedupe; polish. | 02:47 ccb4957 runner-verified; one fix: prune closed claims before dedupe (two timed-out claims strand K). Then approved.",
    "session": "session_01LvbsfQSKGCGby7T8r4xoNw",
    "pr": 108
   },
