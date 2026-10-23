@@ -950,7 +950,7 @@
    "pr": 98,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 01:35 review FIX sent: stale vs M6-cli cli::parse (won't compile), ProgramData ACL inherited (Users RW: auth.json/setup token/config plant) -> icacls lockdown + test; important: StopPending during start, SCM dispatcher only for service argv, PowerShell trade-off doc, SO_LINGER widens \u00a711 doc. P-release told MSI reqs. | 01:58 1384865 fixes (acl.rs icacls lockdown, try_parse_from hook, StopPending). Delta reviewer started (ACL TOCTOU/junction). P-release asked to switch MSI to NT SERVICE\\Lodestar."
+   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 01:35 review FIX sent: stale vs M6-cli cli::parse (won't compile), ProgramData ACL inherited (Users RW: auth.json/setup token/config plant) -> icacls lockdown + test; important: StopPending during start, SCM dispatcher only for service argv, PowerShell trade-off doc, SO_LINGER widens \u00a711 doc. P-release told MSI reqs. | 01:58 1384865 fixes (acl.rs icacls lockdown, try_parse_from hook, StopPending). Delta reviewer started (ACL TOCTOU/junction). P-release asked to switch MSI to NT SERVICE\\Lodestar. | 02:00 19b0278 switched to LocalService (crossed msgs); runner decided NT SERVICE\\Lodestar (matches #92 8d4f971), DACL check must refuse LocalService. Hold pushes until delta review findings."
   },
   "R-relevance": {
    "status": "merged",
@@ -1267,7 +1267,8 @@
  ],
  "owner_flags": [
   "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
-  "\u00a72.19 (C-adult-other #105): Other->Scene, Ebook->Comics at threshold 60, consistent with TV/Comic/Movie. Known edges: light novel with \"hentai\" in title, \"Porn Studies\" journal become Adult."
+  "\u00a72.19 (C-adult-other #105): Other->Scene, Ebook->Comics at threshold 60, consistent with TV/Comic/Movie. Known edges: light novel with \"hentai\" in title, \"Porn Studies\" journal become Adult.",
+  "\u00a72.19 (M6-win/P-release): Windows service runs as virtual account NT SERVICE\\Lodestar (per-service SID), not LocalSystem/LocalService; data folder ACL SYSTEM+Administrators+service SID only, inheritance removed."
  ],
  "decisions_log": [
   "2026-10-23 00:40 owner: 'Go with whatever makes for the best user experience' re filter budget reference -> staged: #97 fastest-runner ref now; F-perf moves ref to EPYC 7763 (typical) when engine meets it.",
