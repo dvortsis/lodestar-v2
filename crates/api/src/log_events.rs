@@ -19,9 +19,10 @@ lodestar_log::catalogue! {
         fields: { error: Error },
     }
     /// One API request (`request_log`): the method, the matched route
-    /// template (never the raw path or query), the status, how long it
-    /// took and the client's TCP peer. Never a header. Off by default:
-    /// it joins at Detailed.
+    /// template (never the raw path or query), the status, the time to the
+    /// response's start (`took_ms`; a stream or download goes on after it)
+    /// and the client's TCP peer. Never a header. Off by default: it joins
+    /// at Detailed.
     API_REQUEST {
         id: "api.request",
         component: Api,

@@ -172,6 +172,7 @@ async fn guard(scope: u32, mut req: Request, next: Next) -> Response {
     }
     let (secret, forms) = match presented(&req, scope == scope::FEEDS) {
         Presented::Nothing => return login_required(&auth).into_response(),
+        // Not a key, or two different ones in one request.
         Presented::Bad => return failed(&auth, client(&auth, &req, peer), "unknown", "malformed"),
         Presented::One(s, f) => (s, f),
     };
@@ -186,7 +187,8 @@ async fn guard(scope: u32, mut req: Request, next: Next) -> Response {
     }
     let ip = client(&auth, &req, peer);
     if let Err(wait) = auth.key_failures.check(ip) {
-        return limited(ip, "key_checks", wait);
+        // Already limited: logged when it became so, not again per request.
+        return limited_response(wait);
     }
     let Some(p) = keys::parse(&secret) else {
         return failed(&auth, ip, "unknown", "malformed");
@@ -285,10 +287,23 @@ fn refused(ip: IpAddr, kind: &'static str, reason: &'static str) {
 }
 
 /// A failed check: one answer, whatever failed, and one attempt spent.
+/// An address already out of attempts isn't logged again; the attempt
+/// that empties its bucket logs `auth.rate_limited` once.
 fn failed(auth: &Auth, ip: IpAddr, kind: &'static str, reason: &'static str) -> Response {
+    if let Err(wait) = auth.key_failures.check(ip) {
+        return limited_response(wait);
+    }
     refused(ip, kind, reason);
     if let Err(wait) = auth.key_failures.take(ip) {
         return limited(ip, "key_checks", wait);
+    }
+    // This attempt used the address's last one: logged once, now.
+    if auth.key_failures.check(ip).is_err() {
+        lodestar_log::log_event!(
+            super::log_events::AUTH_RATE_LIMITED,
+            client = lodestar_log::Client(ip),
+            limit = "key_checks"
+        );
     }
     ApiError::new(
         StatusCode::UNAUTHORIZED,
@@ -304,6 +319,10 @@ fn limited(ip: IpAddr, limit: &'static str, wait: std::time::Duration) -> Respon
         client = lodestar_log::Client(ip),
         limit = limit
     );
+    limited_response(wait)
+}
+
+fn limited_response(wait: std::time::Duration) -> Response {
     let mut resp = ApiError::new(
         StatusCode::TOO_MANY_REQUESTS,
         "rate_limited",
@@ -421,5 +440,235 @@ mod tests {
         ));
         let long = format!("/?apikey={}", "a".repeat(300));
         assert!(matches!(presented(&req(&long, &[]), false), Presented::Bad));
+    }
+
+    /// A key route on a temp store, with keys minted into it. Each test
+    /// uses its own client address, which is how it finds its lines.
+    struct Bench {
+        _dir: tempfile::TempDir,
+        app: Router,
+        store: std::sync::Arc<std::sync::Mutex<lodestar_store::Store>>,
+    }
+
+    impl Bench {
+        fn new() -> Bench {
+            use std::sync::{Arc, Mutex};
+
+            use axum::Extension;
+            use axum::routing::get;
+            use lodestar_store::{Store, StoreConfig};
+
+            super::super::log_events::capture::install();
+            let dir = tempfile::tempdir().unwrap();
+            let db = dir.path().join("t.db");
+            let store = Arc::new(Mutex::new(
+                Store::open(&db, StoreConfig::default()).unwrap(),
+            ));
+            let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
+            let state = ApiState {
+                auth: auth.clone(),
+                index: None,
+                reader: Arc::new(Mutex::new(
+                    Store::open_reader(&db, StoreConfig::default()).unwrap(),
+                )),
+                filters: None,
+                settings: None,
+                ops: None,
+                user_data: Some(store.clone()),
+                adult: Default::default(),
+                insights: None,
+                hot: None,
+                events: None,
+            };
+            let ok = || async { "ok" };
+            let app = key_or_session(
+                Router::new().route("/search", get(ok).post(ok)),
+                scope::SEARCH,
+            )
+            .merge(feed_token(Router::new().route("/feed", get(ok))))
+            .layer(Extension(SessionAuth {
+                auth,
+                user_data: Some(store.clone()),
+            }))
+            .with_state(state);
+            Bench {
+                _dir: dir,
+                app,
+                store,
+            }
+        }
+
+        /// A key of `kind` with `scopes`, expiring at `expires_at`.
+        fn key(&self, kind: KeyKind, scopes: u32, expires_at: Option<i64>) -> (String, i64) {
+            let m = keys::mint(kind).unwrap();
+            let k = self
+                .store
+                .lock()
+                .unwrap()
+                .create_api_key(
+                    &lodestar_store::NewApiKey {
+                        kind,
+                        name: "test",
+                        prefix: &m.prefix,
+                        hash: m.hash,
+                        scopes,
+                        saved_search_id: None,
+                        expires_at,
+                    },
+                    crate::unix_now() - 100,
+                )
+                .unwrap();
+            (m.secret.expose().to_string(), k.id)
+        }
+
+        async fn send(
+            &self,
+            method: Method,
+            uri: &str,
+            headers: &[(&str, &str)],
+            ip: &str,
+        ) -> StatusCode {
+            use tower::ServiceExt;
+            let mut r = req(uri, headers);
+            *r.method_mut() = method;
+            let peer: std::net::SocketAddr = format!("{ip}:1000").parse().unwrap();
+            r.extensions_mut().insert(axum::extract::ConnectInfo(peer));
+            self.app.clone().oneshot(r).await.unwrap().status()
+        }
+    }
+
+    /// The `auth.key_refused` reasons this test's client logged, in order.
+    fn reasons(ip: &str) -> Vec<String> {
+        super::super::log_events::capture::lines(&format!("client={ip} "))
+            .into_iter()
+            .filter(|l| l.starts_with("auth.key_refused"))
+            .map(|l| {
+                l.split_once("client=")
+                    .unwrap()
+                    .1
+                    .split_once(' ')
+                    .unwrap()
+                    .1
+                    .to_string()
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn every_refusal_logs_its_kind_and_reason_and_never_the_secret() {
+        let b = Bench::new();
+        let (search, _) = b.key(KeyKind::ApiKey, scope::SEARCH, None);
+        let (torznab, _) = b.key(KeyKind::ApiKey, scope::TORZNAB, None);
+        let (revoked, id) = b.key(KeyKind::ApiKey, scope::SEARCH, None);
+        b.store
+            .lock()
+            .unwrap()
+            .revoke_api_key(id, crate::unix_now())
+            .unwrap();
+        let (expired, _) = b.key(KeyKind::ApiKey, scope::SEARCH, Some(crate::unix_now() - 10));
+        let (feed, _) = b.key(KeyKind::FeedToken, scope::FEEDS, None);
+        let unknown = format!("{}x", &search[..search.len() - 1]);
+        let ip = "198.51.100.61";
+        let bearer = |k: &str| format!("Bearer {k}");
+        let get = Method::GET;
+        for (method, uri, headers, status) in [
+            (
+                get.clone(),
+                "/search?apikey=nope",
+                vec![],
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                get.clone(),
+                "/search",
+                vec![("authorization", bearer(&unknown))],
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                get.clone(),
+                "/search",
+                vec![("x-api-key", revoked.clone())],
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                get.clone(),
+                &format!("/search?apikey={expired}"),
+                vec![],
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                get.clone(),
+                "/search",
+                vec![("x-api-key", torznab.clone())],
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                Method::POST,
+                "/search",
+                vec![("x-api-key", search.clone())],
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                get.clone(),
+                &format!("/feed?token={search}"),
+                vec![],
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                get.clone(),
+                &format!("/feed?token={feed}x"),
+                vec![],
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                get.clone(),
+                "/search",
+                vec![("x-api-key", search.clone())],
+                StatusCode::OK,
+            ),
+        ] {
+            let headers: Vec<(&str, &str)> =
+                headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
+            assert_eq!(b.send(method, uri, &headers, ip).await, status, "{uri}");
+        }
+        assert_eq!(
+            reasons(ip),
+            [
+                "kind=unknown reason=malformed",
+                "kind=api_key reason=unknown",
+                "kind=api_key reason=revoked",
+                "kind=api_key reason=expired",
+                "kind=api_key reason=scope",
+                "kind=unknown reason=read_only",
+                "kind=api_key reason=wrong_form",
+                "kind=unknown reason=malformed",
+            ]
+        );
+        let all = super::super::log_events::capture::lines(ip).join("\n");
+        for secret in [&search, &torznab, &revoked, &expired, &feed, &unknown] {
+            assert!(
+                !all.contains(&secret[..12]) && !all.contains(&secret[13..]),
+                "{all}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_address_out_of_attempts_is_logged_once() {
+        let b = Bench::new();
+        let ip = "198.51.100.62";
+        // Ten failed checks empty the bucket; the tenth logs the limit,
+        // and nothing after it logs again.
+        for _ in 0..15 {
+            b.send(Method::GET, "/search?apikey=nope", &[], ip).await;
+        }
+        let lines = super::super::log_events::capture::lines(&format!("client={ip} "));
+        let limited: Vec<_> = lines
+            .iter()
+            .filter(|l| l.starts_with("auth.rate_limited"))
+            .collect();
+        assert_eq!(limited.len(), 1, "{lines:#?}");
+        assert!(limited[0].ends_with("limit=key_checks"), "{lines:#?}");
+        assert_eq!(reasons(ip).len(), 10, "{lines:#?}");
     }
 }

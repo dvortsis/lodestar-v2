@@ -190,9 +190,84 @@ pub(crate) fn count(n: usize) -> Count {
     Count(n as u64)
 }
 
+/// A sink for this crate's unit tests: every event, rendered with every
+/// kind shown, so a test can find its own lines by its client address.
+#[cfg(test)]
+pub(crate) mod capture {
+    use std::sync::{Mutex, Once};
+
+    use lodestar_log::{Mask, Record, Sink};
+
+    static LINES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    struct Capture;
+
+    impl Sink for Capture {
+        fn record(&self, r: &Record<'_>) {
+            let line = format!("{} {}", r.event.id, r.text(Mask(u32::MAX), None));
+            LINES.lock().unwrap_or_else(|e| e.into_inner()).push(line);
+        }
+    }
+
+    static CAPTURE: Capture = Capture;
+
+    /// Installs the capture as the process's sink, once.
+    pub(crate) fn install() {
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| {
+            let _ = lodestar_log::set_sink(&CAPTURE);
+        });
+    }
+
+    /// The captured lines holding `needle` (a test's own client address).
+    pub(crate) fn lines(needle: &str) -> Vec<String> {
+        LINES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .filter(|l| l.contains(needle))
+            .cloned()
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each check and outcome logs the event, action and reason it should.
+    #[test]
+    fn checks_log_their_outcome() {
+        capture::install();
+        let ip: IpAddr = "198.51.100.41".parse().unwrap();
+        let ok: Result<(), AuthError> = Ok(());
+        checked(ip, Check::SignIn, &ok);
+        checked(ip, Check::PasswordChange, &ok);
+        checked(ip, Check::Confirm, &ok);
+        for (check, e) in [
+            (Check::SignIn, AuthError::BadPassword),
+            (Check::Setup, AuthError::BadToken),
+            (Check::Setup, AuthError::SetupDone),
+            (Check::PasswordChange, AuthError::WeakPassword),
+            (Check::Confirm, AuthError::NotSetUp),
+            (Check::Confirm, AuthError::RateLimited),
+            (Check::SignIn, AuthError::Storage("disk".into())),
+        ] {
+            checked(ip, check, &Err::<(), _>(e));
+        }
+        let lines = capture::lines("198.51.100.41");
+        let want = [
+            "auth.sign_in Signed in client=198.51.100.41",
+            "auth.password_changed The admin password was changed; other sessions ended client=198.51.100.41",
+            "auth.sign_in_failed A password check failed client=198.51.100.41 action=sign_in reason=bad_password",
+            "auth.sign_in_failed A password check failed client=198.51.100.41 action=setup reason=bad_token",
+            "auth.sign_in_failed A password check failed client=198.51.100.41 action=setup reason=setup_done",
+            "auth.sign_in_failed A password check failed client=198.51.100.41 action=password_change reason=weak_password",
+            "auth.sign_in_failed A password check failed client=198.51.100.41 action=confirm reason=not_set_up",
+            "auth.rate_limited Too many attempts from one address; it has to wait client=198.51.100.41 limit=password",
+        ];
+        assert_eq!(lines, want, "a confirmation and a failed save log nothing");
+    }
 
     #[test]
     fn every_error_has_a_fixed_reason() {
