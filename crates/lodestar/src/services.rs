@@ -162,6 +162,14 @@ impl Services {
             )
             .map_err(|e| format!("loading auth: {e}"))?,
         );
+        // The way back in after a proxy change locks you out (§12).
+        let proxy_env = std::env::var(lodestar_api::auth::PROXY_AUTH_ENV).ok();
+        if auth.apply_proxy_override(proxy_env.as_deref()) {
+            tracing::warn!(
+                "{} is set: trusted-proxy sign-in is off for this run",
+                lodestar_api::auth::PROXY_AUTH_ENV
+            );
+        }
         if let Some(token) = auth.setup_token() {
             // §12: whoever can read the logs claims the instance.
             tracing::warn!(
@@ -200,6 +208,7 @@ impl Services {
             quarantine_secs,
         });
         let (stop_subscriptions, subscriptions_stopped) = watch::channel(false);
+        let subscriptions_stopped = crate::fixture::unless_offline(subscriptions_stopped);
         let refresher = tokio::spawn(subscriptions::run(
             control.clone(),
             subscriptions::Limits::from_config(&config.subscriptions),

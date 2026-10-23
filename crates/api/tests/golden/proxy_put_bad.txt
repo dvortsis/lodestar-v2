@@ -1,0 +1,2 @@
+400
+{"error":{"code":"bad_proxy_settings","field":"trusted","message":"A /0 range trusts every address, so anyone could sign in by sending the header."}}

@@ -226,7 +226,9 @@ fn fixture() -> Fixture {
             filters: Some(api.clone()),
             settings: None,
             ops: None,
-            user_data: None,
+            user_data: Some(Arc::new(Mutex::new(
+                Store::open(&db, StoreConfig::default()).unwrap(),
+            ))),
             adult: Default::default(),
             insights: None,
         }),
@@ -282,7 +284,14 @@ fn normalize(body: &str) -> String {
 /// Sends `req` and checks the status and body against `tests/golden/{name}.txt`.
 /// Each request comes from its own address unless it says otherwise, so
 /// the per-IP login limit only bites where a case means it to.
-async fn golden(f: &Fixture, name: &str, mut req: Request<Body>) -> Value {
+async fn golden(f: &Fixture, name: &str, req: Request<Body>) -> Value {
+    golden_blanking(f, name, req, &[]).await
+}
+
+/// [`golden`], with the string values of `blank` (random secrets and
+/// prefixes) as `"…"` and these numbers zeroed: `created_at`,
+/// `last_used_at`, `revoked_at`.
+async fn golden_blanking(f: &Fixture, name: &str, mut req: Request<Body>, blank: &[&str]) -> Value {
     if req.extensions().get::<ConnectInfo<SocketAddr>>().is_none() {
         let n = NEXT_IP.fetch_add(1, Ordering::Relaxed);
         req.extensions_mut().insert(ConnectInfo(SocketAddr::from((
@@ -296,7 +305,11 @@ async fn golden(f: &Fixture, name: &str, mut req: Request<Body>) -> Value {
         .await
         .unwrap();
     let body = String::from_utf8(bytes.to_vec()).unwrap();
-    let got = format!("{status}\n{}\n", normalize(&strip_swarm(&body)));
+    let mut shown = normalize(&strip_swarm(&body));
+    if !blank.is_empty() {
+        shown = blank_keys(&shown, blank);
+    }
+    let got = format!("{status}\n{shown}\n");
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/golden")
         .join(format!("{name}.txt"));
@@ -311,6 +324,35 @@ async fn golden(f: &Fixture, name: &str, mut req: Request<Body>) -> Value {
         assert_eq!(got, want, "{name}: the response bytes changed");
     }
     serde_json::from_str(&body).unwrap_or(Value::Null)
+}
+
+/// The keys/tokens cases' volatile values: `blank`'s strings and the
+/// creation and use times.
+fn blank_keys(body: &str, blank: &[&str]) -> String {
+    let Ok(mut v) = serde_json::from_str::<Value>(body) else {
+        return body.to_string();
+    };
+    fn walk(v: &mut Value, blank: &[&str]) {
+        match v {
+            Value::Object(m) => {
+                for (k, x) in m.iter_mut() {
+                    if blank.contains(&k.as_str()) && x.is_string() {
+                        *x = json!("…");
+                    } else if matches!(k.as_str(), "created_at" | "last_used_at" | "revoked_at")
+                        && x.is_number()
+                    {
+                        *x = json!(0);
+                    } else {
+                        walk(x, blank);
+                    }
+                }
+            }
+            Value::Array(a) => a.iter_mut().for_each(|x| walk(x, blank)),
+            _ => {}
+        }
+    }
+    walk(&mut v, blank);
+    v.to_string()
 }
 
 fn get(uri: &str, cookie: Option<&str>) -> Request<Body> {
@@ -1207,4 +1249,139 @@ async fn filters_without_an_index_or_filters() {
         _dir: dir,
     };
     golden(&f, "filters_unavailable", get("/api/v1/filters", c)).await;
+}
+
+/// B12: the keys and tokens, proxy and sessions endpoints.
+#[tokio::test]
+async fn keys_proxy_and_sessions_endpoints() {
+    let f = fixture();
+    let c = session(&f).await;
+    let c = Some(c.as_str());
+    let blank = ["secret", "prefix"];
+    golden(&f, "keys_empty", get("/api/v1/keys", c)).await;
+    golden(
+        &f,
+        "keys_create_confirm_required",
+        post(
+            "/api/v1/keys",
+            c,
+            json!({ "name": "Prowlarr", "kind": "api_key", "scopes": ["torznab"] }),
+        ),
+    )
+    .await;
+    golden(
+        &f,
+        "keys_create_bad_scopes",
+        post(
+            "/api/v1/keys",
+            c,
+            json!({ "name": "Prowlarr", "kind": "api_key", "scopes": [] }),
+        ),
+    )
+    .await;
+    golden(
+        &f,
+        "keys_create_wrong_password",
+        post(
+            "/api/v1/keys",
+            c,
+            json!({ "name": "Prowlarr", "kind": "api_key", "scopes": ["torznab"], "password": "nope nope nope" }),
+        ),
+    )
+    .await;
+    let made = golden_blanking(
+        &f,
+        "keys_create",
+        post(
+            "/api/v1/keys",
+            c,
+            json!({ "name": "Prowlarr", "kind": "api_key", "scopes": ["torznab", "search"], "password": PASSWORD }),
+        ),
+        &blank,
+    )
+    .await;
+    let id = made["key"]["id"].as_i64().unwrap();
+    golden_blanking(
+        &f,
+        "keys_create_feed_token",
+        post(
+            "/api/v1/keys",
+            c,
+            json!({ "name": "All feeds", "kind": "feed_token", "expires_at": 4_102_444_800_i64, "password": PASSWORD }),
+        ),
+        &blank,
+    )
+    .await;
+    golden_blanking(&f, "keys_list", get("/api/v1/keys", c), &blank).await;
+    golden_blanking(
+        &f,
+        "keys_regenerate",
+        post(
+            &format!("/api/v1/keys/{id}/regenerate"),
+            c,
+            json!({ "password": PASSWORD }),
+        ),
+        &blank,
+    )
+    .await;
+    golden(
+        &f,
+        "keys_regenerate_missing",
+        post(
+            &format!("/api/v1/keys/{id}/regenerate"),
+            c,
+            json!({ "password": PASSWORD }),
+        ),
+    )
+    .await;
+    golden_blanking(
+        &f,
+        "keys_revoke",
+        post(&format!("/api/v1/keys/{}/revoke", id + 1), c, json!({})),
+        &blank,
+    )
+    .await;
+    let mut del = post(&format!("/api/v1/keys/{}", id + 1), c, json!({}));
+    *del.method_mut() = axum::http::Method::DELETE;
+    golden(&f, "keys_delete", del).await;
+
+    golden(&f, "proxy_get", get("/api/v1/auth/proxy", c)).await;
+    let mut put = post(
+        "/api/v1/auth/proxy",
+        c,
+        json!({ "enabled": true, "trusted": ["172.17.0.0/16"] }),
+    );
+    *put.method_mut() = axum::http::Method::PUT;
+    golden(&f, "proxy_put_confirm_required", put).await;
+    let mut put = post(
+        "/api/v1/auth/proxy",
+        c,
+        json!({ "enabled": true, "trusted": ["0.0.0.0/0"] }),
+    );
+    *put.method_mut() = axum::http::Method::PUT;
+    golden(&f, "proxy_put_bad", put).await;
+    let mut put = post(
+        "/api/v1/auth/proxy",
+        c,
+        json!({ "enabled": true, "trusted": ["172.17.0.9/16", "10.0.0.2"], "allowed_users": ["ann"], "password": PASSWORD }),
+    );
+    *put.method_mut() = axum::http::Method::PUT;
+    golden(&f, "proxy_put", put).await;
+
+    golden(
+        &f,
+        "sessions_revoke_others_confirm_required",
+        post("/api/v1/sessions/revoke-others", c, json!({})),
+    )
+    .await;
+    golden(
+        &f,
+        "sessions_revoke_others",
+        post(
+            "/api/v1/sessions/revoke-others",
+            c,
+            json!({ "password": PASSWORD }),
+        ),
+    )
+    .await;
 }
