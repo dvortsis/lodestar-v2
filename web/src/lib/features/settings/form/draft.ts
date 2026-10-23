@@ -9,7 +9,7 @@
 import { merge } from './merge';
 import { devWarn } from './schema';
 import type { FieldSpec } from './types';
-import { validate } from './validate';
+import { JsonDraft, validate } from './validate';
 import {
 	dirtyNames,
 	isLocked,
@@ -56,6 +56,7 @@ export function draftOf(
 			const f = s.fields[name]!;
 			const spec = specOf(section, name);
 			if (!spec || spec.writeOnly || spec.readOnly || isLocked(f.saved)) continue;
+			if (f.mine instanceof JsonDraft) continue; // half-typed JSON: nothing to restore
 			const d = (out[section] ??= { revision: s.revision, base: {}, mine: {}, reset: [] });
 			d.base[name] = f.base;
 			if (f.mine === RESET) d.reset.push(name);

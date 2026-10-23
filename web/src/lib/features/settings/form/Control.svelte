@@ -47,13 +47,21 @@
 		onblur={blur}
 	/>
 {:else if widget === 'segmented'}
-	<SegmentedControl
-		{label}
-		{dense}
-		{options}
-		value={typeof f.value === 'string' ? f.value : ''}
-		onchange={set}
-	/>
+	<!-- SegmentedControl takes no aria-describedby (a ui/ follow-up): the group carries help and
+	     error for it. -->
+	<div
+		role="group"
+		aria-labelledby={controlProps['aria-labelledby']}
+		aria-describedby={controlProps['aria-describedby']}
+	>
+		<SegmentedControl
+			{label}
+			{dense}
+			{options}
+			value={typeof f.value === 'string' ? f.value : ''}
+			onchange={set}
+		/>
+	</div>
 {:else if widget === 'radio'}
 	<div
 		role="radiogroup"

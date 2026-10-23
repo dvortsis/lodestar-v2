@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
+import { tick } from 'svelte';
 import { keys } from '$lib/keys';
 import { dismissAll } from './dialogs';
 import { createSettingsForm, type SettingsForm } from './form.svelte';
@@ -12,15 +13,24 @@ const nav = vi.hoisted(() => ({
 	guards: [] as ((n: unknown) => void)[],
 	goto: vi.fn(async () => {})
 }));
+const hard = vi.hoisted(() => vi.fn());
+vi.mock('./leave', async (actual) => ({
+	...(await actual<typeof import('./leave')>()),
+	hardNavigate: hard
+}));
 vi.mock('$app/navigation', () => ({
 	beforeNavigate: (f: (n: unknown) => void) => nav.guards.push(f),
 	goto: nav.goto
 }));
 
+const DRAFT_KEY = 'lodestar.settings.draft.v1.harness';
+
 const SPECS: FieldSpec[] = [
 	spec('crawler.timeout_secs', { kind: 'integer', minimum: 1, maximum: 120, unit: 'seconds' }),
 	spec('crawler.intensity', { kind: 'enum', enum: ['low', 'balanced', 'aggressive'] }),
-	spec('network.http_bind', { format: 'socket-addr', danger: 'disruptive' })
+	spec('network.http_bind', { format: 'socket-addr', danger: 'disruptive' }),
+	spec('crawler.encryption', { kind: 'enum', enum: ['prefer', 'require'], widget: 'radio' }),
+	spec('crawler.paused', { kind: 'boolean' })
 ];
 
 let server: ReturnType<typeof fakeServer>;
@@ -36,8 +46,14 @@ beforeEach(async () => {
 	sessionStorage.clear();
 	nav.guards.length = 0;
 	nav.goto.mockClear();
+	hard.mockClear();
 	server = fakeServer([
-		values('crawler', 3, { timeout_secs: sv(12, 'db'), intensity: sv('balanced') }),
+		values('crawler', 3, {
+			timeout_secs: sv(12, 'db'),
+			intensity: sv('balanced'),
+			encryption: sv('prefer'),
+			paused: sv(false)
+		}),
 		values('network', 2, { http_bind: sv('0.0.0.0:8090', 'file') })
 	]);
 	vi.stubGlobal('fetch', server.fetch);
@@ -192,8 +208,8 @@ describe('SettingsForm', () => {
 			const cancel = vi.fn();
 			guard({
 				type,
-				from: { url: new URL('http://x/settings/crawler') },
-				to: { url: new URL(to, 'http://x') },
+				from: { url: new URL('/settings/crawler', location.href) },
+				to: { url: new URL(to, location.href) },
 				cancel
 			});
 			return cancel;
@@ -201,7 +217,7 @@ describe('SettingsForm', () => {
 		expect(go('/search')).not.toHaveBeenCalled(); // nothing unsaved
 		form.set('crawler.intensity', 'low');
 		expect(go('/settings/crawler#crawler.intensity')).not.toHaveBeenCalled();
-		expect(go('http://x/', 'leave')).toHaveBeenCalled(); // the browser asks
+		expect(go('/', 'leave')).toHaveBeenCalled(); // the browser asks
 
 		expect(go('/search')).toHaveBeenCalled();
 		let dialog = await screen.findByRole('dialog');
@@ -212,7 +228,9 @@ describe('SettingsForm', () => {
 		expect(go('/search', 'popstate')).toHaveBeenCalled();
 		dialog = await screen.findByRole('dialog');
 		await fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
-		await waitFor(() => expect(nav.goto).toHaveBeenCalledWith('http://x/search'));
+		await waitFor(() =>
+			expect(nav.goto).toHaveBeenCalledWith(new URL('/search', location.href).href)
+		);
 		expect(patches()).toHaveLength(1);
 	});
 
@@ -226,7 +244,9 @@ describe('SettingsForm', () => {
 
 	it('offers a draft from earlier', async () => {
 		form.set('crawler.intensity', 'low');
-		await new Promise((r) => setTimeout(r, 350));
+		await waitFor(() => expect(sessionStorage.getItem(DRAFT_KEY)).toContain('"low"'), {
+			timeout: 10_000
+		});
 		form.destroy();
 		const again = createSettingsForm({ id: 'harness', fields: SPECS });
 		await waitFor(() => expect(again.draft).not.toBeNull());
@@ -248,7 +268,108 @@ describe('SettingsForm', () => {
 	it('hides the bar for the wizard', async () => {
 		render(FormHarness, { form, saveBar: false });
 		form.set('crawler.intensity', 'low');
-		await new Promise((r) => setTimeout(r, 10));
+		await tick();
+		expect(form.dirtyCount).toBe(1);
 		expect(bar()).toBeNull();
+	});
+
+	it.each([
+		['a radio group', 'crawler.encryption', 'radio', 'prefer'],
+		['a segmented control', 'crawler.intensity', 'radio', 'balanced'],
+		['a toggle', 'crawler.paused', 'switch', 'paused']
+	] as const)(
+		'moves focus from the summary to %s, never to its menu',
+		async (_, key, role, name) => {
+			render(FormHarness, { form });
+			const [section, field] = key.split('.') as [string, string];
+			server.next('PATCH /settings', {
+				status: 422,
+				body: { error: { code: 'invalid_setting', section, field, message: 'No.' } }
+			});
+			form.set('crawler.timeout_secs', 30);
+			await fireEvent.click(await screen.findByRole('button', { name: 'Save changes' }));
+			const summary = await screen.findByTestId('error-summary');
+			await fireEvent.click(within(summary).getByRole('link'));
+			const root = document.getElementById(key)!;
+			await waitFor(() =>
+				expect(document.activeElement).toBe(within(root).getByRole(role, { name }))
+			);
+		}
+	);
+
+	it('prevents the browser’s Save page dialog on a held Ctrl+S, saving once', async () => {
+		render(FormHarness, { form });
+		form.set('crawler.intensity', 'low');
+		const input = screen.getByLabelText('timeout_secs');
+		const saves = vi.spyOn(form, 'save');
+		const press = (repeat: boolean) => {
+			const e = new KeyboardEvent('keydown', {
+				key: 's',
+				ctrlKey: true,
+				repeat,
+				bubbles: true,
+				cancelable: true
+			});
+			input.dispatchEvent(e);
+			return e.defaultPrevented;
+		};
+		expect(press(false)).toBe(true);
+		expect(press(true)).toBe(true);
+		expect(press(true)).toBe(true);
+		expect(saves).toHaveBeenCalledTimes(1);
+	});
+
+	it('lets a screen’s own disruptive handler win over the default dialog', async () => {
+		const own = vi.fn(async () => true);
+		form.gate('disruptive', own);
+		render(FormHarness, { form });
+		form.set('network.http_bind', '0.0.0.0:9000');
+		await fireEvent.click(await screen.findByRole('button', { name: 'Save changes' }));
+		await waitFor(() => expect(patches()).toHaveLength(1));
+		expect(own).toHaveBeenCalledTimes(1);
+		expect(screen.queryByRole('dialog')).toBeNull();
+	});
+
+	it('continues to another site, or a reload link, with a full-page navigation', async () => {
+		render(FormHarness, { form });
+		const guard = nav.guards.at(-1)!;
+		form.set('crawler.intensity', 'low');
+		const leave = (to: string, willUnload: boolean) =>
+			guard({
+				type: 'link',
+				willUnload,
+				from: { url: new URL('/settings/crawler', location.href) },
+				to: { url: new URL(to, location.href) },
+				cancel: vi.fn()
+			});
+		leave('https://example.com/', true);
+		let dialog = await screen.findByRole('dialog');
+		await fireEvent.click(within(dialog).getByRole('button', { name: 'Discard' }));
+		await waitFor(() => expect(hard).toHaveBeenCalledWith('https://example.com/'));
+		expect(nav.goto).not.toHaveBeenCalled();
+
+		dismissAll();
+		form.set('crawler.intensity', 'low');
+		leave('/search', true); // data-sveltekit-reload
+		dialog = await screen.findByRole('dialog');
+		await fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+		await waitFor(() => expect(hard).toHaveBeenCalledWith(new URL('/search', location.href).href));
+	});
+
+	it('continues after Save when nothing is left to save', async () => {
+		render(FormHarness, { form });
+		const guard = nav.guards.at(-1)!;
+		form.set('crawler.intensity', 'low');
+		guard({
+			type: 'link',
+			willUnload: false,
+			from: { url: new URL('/settings/crawler', location.href) },
+			to: { url: new URL('/search', location.href) },
+			cancel: vi.fn()
+		});
+		const dialog = await screen.findByRole('dialog');
+		form.set('crawler.intensity', 'balanced'); // settled meanwhile
+		await fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+		await waitFor(() => expect(nav.goto).toHaveBeenCalled());
 	});
 });

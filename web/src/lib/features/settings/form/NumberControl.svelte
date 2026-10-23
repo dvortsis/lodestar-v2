@@ -23,6 +23,13 @@
 		typeof v === 'number' ? String(v) : typeof v === 'string' ? v : '';
 
 	let text = $state('');
+	// The input keeps room for the unit inside it: its measured width plus the ramp's gap.
+	let unitWidth = $state(0);
+	let unitEl = $state<HTMLElement>();
+	$effect(() => {
+		void unit;
+		unitWidth = unitEl?.offsetWidth ?? 0;
+	});
 	// Follow the form when it changes the value (discard, merge, Use theirs), not while typing.
 	$effect(() => {
 		const v = f.value;
@@ -37,7 +44,7 @@
 	}
 </script>
 
-<div class="ls-number relative">
+<div class="ls-number relative w-full max-w-xs" style:--ls-unit-width="{unitWidth}px">
 	<Input
 		{...controlProps}
 		{dense}
@@ -56,16 +63,13 @@
 		onblur={() => form.blur(key)}
 	/>
 	{#if unit}
-		<span id={unitId} class="ls-unit text-small text-muted-text">{unit}</span>
+		<span id={unitId} class="ls-unit text-small text-muted-text" bind:this={unitEl}>{unit}</span>
 	{/if}
 </div>
 
 <style>
-	.ls-number {
-		max-width: calc(var(--spacing) * 64);
-	}
 	.ls-number :global(input) {
-		padding-inline-end: calc(var(--spacing) * 24);
+		padding-inline-end: calc(var(--ls-unit-width) + var(--spacing) * 5);
 	}
 	.ls-unit {
 		position: absolute;

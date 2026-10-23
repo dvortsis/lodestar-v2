@@ -10,10 +10,12 @@
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
-	import { onDestroy, tick, type Snippet } from 'svelte';
+	import { tick, type Snippet } from 'svelte';
+	import IconRestart from '~icons/ph/arrows-clockwise';
+	import IconCheck from '~icons/ph/check-circle';
 	import { ask } from './dialogs';
 	import type { SettingsForm } from './form.svelte';
-	import { leaveDecision } from './leave';
+	import { hardNavigate, leaveDecision } from './leave';
 	import { fieldLabel } from './messages';
 	import type { FieldKey, GateContext } from './types';
 
@@ -87,14 +89,24 @@
 		summaryShown = false;
 	}
 
+	const CONTROL_SELECTORS = [
+		'input:checked',
+		'[role="radio"][aria-checked="true"]',
+		'input, select, textarea, [role="radio"], button'
+	];
+
 	async function reveal(key: FieldKey) {
 		await onReveal?.(key);
 		await tick();
+		// The field's control, never its header (the ⋯ menu): the label's target, else the checked
+		// option, else the first control inside the field's control area.
 		const root = document.getElementById(key);
+		const area = root?.querySelector<HTMLElement>('[data-control]');
 		const label = root?.querySelector<HTMLLabelElement>('label[for]');
 		const control =
 			(label?.htmlFor ? document.getElementById(label.htmlFor) : null) ??
-			root?.querySelector<HTMLElement>('input, select, textarea, [role="radio"], button');
+			// In order of preference (a selector list would match in document order instead).
+			CONTROL_SELECTORS.map((q) => area?.querySelector<HTMLElement>(q)).find(Boolean);
 		root?.scrollIntoView?.({ block: 'center' });
 		control?.focus();
 	}
@@ -116,8 +128,9 @@
 		return [...new Set(lines)];
 	}
 
+	// A fallback: a screen's own disruptive handler (Network's lockout dialog, §10.10.6) wins.
 	$effect(() =>
-		form.gate('disruptive', async (c) => {
+		form.defaultGate('disruptive', async (c) => {
 			const labels = c.fields
 				.map((k) => form.specs.find((s) => s.key === k))
 				.filter((s) => s !== undefined)
@@ -155,9 +168,23 @@
 	 * a press never fires twice; the registry covers the rest of the page once it has loaded.
 	 */
 	function onkeydown(e: KeyboardEvent) {
-		if (!shortcut || e.defaultPrevented || e.repeat || !isSave(e)) return;
+		if (!shortcut || e.defaultPrevented || !isSave(e)) return;
+		// A held key repeats: the browser's own "Save page" must not open on the repeats either.
 		e.preventDefault();
-		void save();
+		if (!e.repeat) void save();
+	}
+
+	// --- the bar never covers the focused field (§10.10.5) -----------------------------------
+
+	let bar = $state<HTMLElement>();
+	function onfocusin(e: FocusEvent) {
+		if (!bar || !(e.target instanceof HTMLElement) || bar.contains(e.target)) return;
+		const target = e.target.getBoundingClientRect();
+		const top = bar.getBoundingClientRect().top;
+		// The ramp's 4 (16 px at the default root size) of air between the control and the bar.
+		const air = parseFloat(getComputedStyle(document.documentElement).fontSize);
+		const hidden = target.bottom + air - top;
+		if (hidden > 0) window.scrollBy({ top: hidden });
 	}
 
 	$effect(() => {
@@ -206,10 +233,11 @@
 		});
 		if (decision === 'allow') return;
 		nav.cancel(); // for 'leave', this raises the browser's own prompt
-		if (decision === 'prompt' && nav.to) void confirmLeave(nav.to.url);
+		if (decision === 'prompt' && nav.to) void confirmLeave(nav.to.url, nav.willUnload);
 	});
 
-	async function confirmLeave(to: URL) {
+	/** Asks Save / Discard / Keep editing, then continues to `to` the way the user was going. */
+	async function confirmLeave(to: URL, unload: boolean) {
 		const answer = await ask({
 			title: m.settings_form_leave_title(),
 			body: [m.settings_form_leave_body({ count })],
@@ -221,10 +249,17 @@
 			initial: 'save'
 		});
 		if (answer === 'save') {
+			// Nothing to save any more (a merge or ⌘S settled it meanwhile) is as good as saved.
 			const r = await save();
-			if (!r.ok) return;
+			if (!r.ok && r.reason !== 'nothing') return;
 		} else if (answer === 'discard') form.discard();
 		else return;
+		// Another site, or a link that reloads the page: the router can't take it there. Nothing is
+		// unsaved by now, so the unload passes the guard without a bypass.
+		if (unload || to.origin !== location.origin) {
+			hardNavigate(to.href);
+			return;
+		}
 		bypass = true;
 		try {
 			// eslint-disable-next-line svelte/no-navigation-without-resolve -- the router's own target, already resolved
@@ -233,8 +268,6 @@
 			bypass = false;
 		}
 	}
-
-	onDestroy(() => form.destroy());
 </script>
 
 <div
@@ -242,10 +275,11 @@
 	class:ls-form-bar={barShown}
 	role="presentation"
 	{onkeydown}
+	{onfocusin}
 >
 	{#if summaryShown && form.errors.length}
 		<div class="rounded-box border border-error p-4" data-testid="error-summary">
-			<h2 bind:this={summary} tabindex="-1" class="text-title font-semibold outline-none">
+			<h2 bind:this={summary} tabindex="-1" class="text-title font-semibold">
 				{m.settings_form_summary_title()}
 			</h2>
 			<ul class="mt-2 flex flex-col gap-1">
@@ -255,7 +289,7 @@
 							{@const key = e.key}
 							{@const spec = form.specs.find((s) => s.key === key)}
 							<a
-								class="link text-error"
+								class="link inline-flex items-center text-error pointer-coarse:min-h-(--target-min)"
 								href="#{key}"
 								onclick={(ev) => {
 									ev.preventDefault();
@@ -273,9 +307,13 @@
 
 	{#if form.draft}
 		<Banner kind="info" title={m.settings_form_draft_title()}>
-			{form.draft.dropped
-				? m.settings_form_draft_dropped({ count: formatCount(form.draft.dropped, currentLocale()) })
-				: m.settings_form_draft_body()}
+			<span data-testid="draft-text"
+				>{form.draft.dropped
+					? m.settings_form_draft_dropped({
+							count: formatCount(form.draft.dropped, currentLocale())
+						})
+					: m.settings_form_draft_body()}</span
+			>
 			{#snippet action()}
 				<div class="flex gap-2">
 					<Button dense onclick={() => form.dropDraft()}>{m.settings_form_discard()}</Button>
@@ -289,9 +327,11 @@
 
 	{#if form.status === 'offline'}
 		<Banner kind="warning">
-			{retrySeconds
-				? m.settings_form_busy({ seconds: formatCount(retrySeconds, currentLocale()) })
-				: m.settings_form_offline()}
+			<span data-testid="offline-text"
+				>{retrySeconds
+					? m.settings_form_busy({ seconds: formatCount(retrySeconds, currentLocale()) })
+					: m.settings_form_offline()}</span
+			>
 			{#snippet action()}
 				<Button dense onclick={() => void form.retry()}>{m.settings_form_retry()}</Button>
 			{/snippet}
@@ -327,8 +367,9 @@
 		<div
 			class="ls-bar sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-3 border-t border-base-300 bg-base-100 py-2"
 			data-testid="save-bar"
+			bind:this={bar}
 		>
-			<p class="text-body" data-testid="save-bar-status">
+			<p class="flex flex-wrap items-center gap-2 text-body" data-testid="save-bar-status">
 				{#if form.status === 'saving'}
 					{m.settings_form_saving()}
 				{:else if unsaved}
@@ -336,7 +377,14 @@
 						? m.settings_form_unsaved_one()
 						: m.settings_form_unsaved({ count })}
 				{:else if form.status === 'saved' || form.undoUntil !== null}
-					{form.restartPending.length ? m.settings_form_saved_restart() : m.settings_form_saved()}
+					<span class="inline-flex items-center gap-1">
+						{#if form.restartPending.length}
+							<IconRestart class="size-(--icon-size-row) shrink-0" aria-hidden="true" />
+						{:else}
+							<IconCheck class="size-(--icon-size-row) shrink-0 text-success" aria-hidden="true" />
+						{/if}
+						{form.restartPending.length ? m.settings_form_saved_restart() : m.settings_form_saved()}
+					</span>
 					{#if form.undoSkipsSecrets}
 						<span class="text-small text-muted-text">{m.settings_form_undo_secrets()}</span>
 					{/if}

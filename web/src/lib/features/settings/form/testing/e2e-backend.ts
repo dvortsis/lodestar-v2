@@ -39,6 +39,7 @@ export const FIXTURE_INDEX: Index = {
 			fields: [
 				field('crawler', 'intensity'),
 				field('crawler', 'paused'),
+				field('crawler', 'encryption', { restart_required: true }),
 				field('crawler', 'max_sockets', { restart_required: true }),
 				field('crawler', 'timeout_secs', { restart_required: true })
 			],
@@ -56,6 +57,12 @@ export const FIXTURE_INDEX: Index = {
 						'x-env': 'LODESTAR_INTENSITY'
 					},
 					paused: { type: 'boolean', 'x-group': 'intensity', 'x-order': 1 },
+					encryption: {
+						type: 'string',
+						enum: ['prefer', 'require', 'disable'],
+						'x-group': 'fetching',
+						'x-order': 1
+					},
 					max_sockets: {
 						type: 'integer',
 						minimum: 0,
@@ -142,6 +149,7 @@ export const fixtureValues = (): Values[] => [
 		fields: {
 			intensity: v('balanced'),
 			paused: v(false),
+			encryption: v('prefer', 'default', { restart_required: true }),
 			max_sockets: v(0),
 			timeout_secs: v(12, 'db', { restart_required: true })
 		}
@@ -166,6 +174,7 @@ export const fixtureValues = (): Values[] => [
 const DEFAULTS: Record<string, unknown> = {
 	'crawler.intensity': 'balanced',
 	'crawler.paused': false,
+	'crawler.encryption': 'prefer',
 	'crawler.max_sockets': 0,
 	'crawler.timeout_secs': 10,
 	'network.http_bind': '0.0.0.0:8090',

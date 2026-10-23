@@ -8,7 +8,7 @@
 	import Toggle from '$lib/ui/fields/Toggle.svelte';
 	import Mono from '$lib/ui/labels/Mono.svelte';
 	import type { MenuItem } from '$lib/ui/overlays/Menu.svelte';
-	import type { Component } from 'svelte';
+	import { untrack, type Component } from 'svelte';
 	import { toast } from '$lib/ui/feedback/toasts.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import IconRestart from '~icons/ph/arrows-clockwise';
@@ -51,6 +51,21 @@
 	let manual = $state(false);
 	const automatic = $derived(hasAuto && !manual && f.value === spec.auto);
 	const effective = $derived(automaticValue(f));
+	// A `<label for>` only where one control takes the id: radio groups, segmented controls, a
+	// secret and registered widgets are labelled by the label's id instead.
+	const singleControl = $derived(
+		automatic ||
+			('builtin' in choice &&
+				['number', 'slider', 'text', 'select', 'json', 'chips'].includes(choice.builtin))
+	);
+	// Discard, Undo or Use theirs bringing the sentinel back turns Automatic on again.
+	$effect(() => {
+		const v = f.value;
+		const clean = !f.dirty;
+		untrack(() => {
+			if (manual && clean && v === spec.auto) manual = false;
+		});
+	});
 
 	function setAutomatic(on: boolean) {
 		manual = !on;
@@ -118,20 +133,20 @@
 	<Field {help} error={f.error}>
 		{#snippet children(cp)}
 			<div class="flex items-center justify-between gap-2">
-				{#if ownLabel}
-					<span>
-						{#if f.changed}
-							<span class="ls-marker" role="img" aria-label={m.setting_changed()}></span>
-						{/if}
-					</span>
-				{:else}
-					<label id={labelId} for={cp.id} class="text-small font-medium text-base-content">
-						{label}
-						{#if f.changed}
-							<span class="ls-marker" role="img" aria-label={m.setting_changed()}></span>
-						{/if}
-					</label>
-				{/if}
+				<span class="flex items-center gap-1">
+					{#if ownLabel}
+						<!-- The Toggle below carries the label. -->
+					{:else if singleControl}
+						<label id={labelId} for={cp.id} class="text-small font-medium text-base-content"
+							>{label}</label
+						>
+					{:else}
+						<span id={labelId} class="text-small font-medium text-base-content">{label}</span>
+					{/if}
+					{#if f.changed}
+						<span class="ls-marker" role="img" aria-label={m.setting_changed()}></span>
+					{/if}
+				</span>
 				{#if FieldMenu}
 					<FieldMenu
 						items={menu}
@@ -151,39 +166,43 @@
 				{/if}
 			</div>
 			{@const controlProps = { ...cp, 'aria-labelledby': ownLabel ? undefined : labelId }}
-			{#if hasAuto}
-				<div class="flex flex-wrap items-center gap-3">
-					<Toggle
-						label={m.setting_automatic()}
-						checked={automatic}
-						disabled={f.locked}
-						onchange={(e) => setAutomatic(e.currentTarget.checked)}
-					/>
-					{#if automatic && effective}
-						<span class="text-small text-muted-text" data-testid="automatic-value">
-							{m.settings_form_automatic_value({ value: effective })}
-						</span>
-					{/if}
-				</div>
-			{/if}
-			{#if !automatic}
-				{#if 'component' in choice}
-					{@const Widget = choice.component}
-					<Widget {form} {key} {controlProps} {dense} />
-				{:else if choice.builtin === 'secret'}
-					<SecretControl {form} {key} {controlProps} {label} {dense} />
-				{:else}
-					<Control
-						{form}
-						{key}
-						{controlProps}
-						{label}
-						{dense}
-						widget={choice.builtin}
-						mono={choice.mono}
-					/>
+			<div class="flex flex-col gap-2" data-control>
+				{#if hasAuto}
+					<div class="flex flex-wrap items-center gap-3">
+						<!-- While on, the switch is the field's control: help and errors are tied to it. -->
+						<Toggle
+							{...automatic ? cp : {}}
+							label={m.setting_automatic()}
+							checked={automatic}
+							disabled={f.locked}
+							onchange={(e) => setAutomatic(e.currentTarget.checked)}
+						/>
+						{#if automatic && effective}
+							<span class="text-small text-muted-text" data-testid="automatic-value">
+								{m.settings_form_automatic_value({ value: effective })}
+							</span>
+						{/if}
+					</div>
 				{/if}
-			{/if}
+				{#if !automatic}
+					{#if 'component' in choice}
+						{@const Widget = choice.component}
+						<Widget {form} {key} {controlProps} {dense} />
+					{:else if choice.builtin === 'secret'}
+						<SecretControl {form} {key} {controlProps} {label} {dense} />
+					{:else}
+						<Control
+							{form}
+							{key}
+							{controlProps}
+							{label}
+							{dense}
+							widget={choice.builtin}
+							mono={choice.mono}
+						/>
+					{/if}
+				{/if}
+			</div>
 		{/snippet}
 	</Field>
 
@@ -207,7 +226,9 @@
 	{#if f.conflict}
 		<div class="flex flex-wrap items-center gap-2 text-small" data-testid="conflict">
 			<IconWarning class="size-(--icon-size-row) shrink-0 text-warning" aria-hidden="true" />
-			<span>{m.settings_form_conflict({ value: displayValue(spec, f.conflict.theirs) })}</span>
+			<span data-testid="conflict-text"
+				>{m.settings_form_conflict({ value: displayValue(spec, f.conflict.theirs) })}</span
+			>
 			<Button dense onclick={() => form.resolve(key, 'mine')}>{m.settings_form_keep_mine()}</Button>
 			<Button dense onclick={() => form.resolve(key, 'theirs')}
 				>{m.settings_form_use_theirs()}</Button
@@ -305,8 +326,6 @@
 
 <style>
 	.ls-field {
-		/* A focused field scrolls clear of the save bar (§10.10.5). */
-		scroll-margin-bottom: calc(var(--spacing) * 24);
 		scroll-margin-top: calc(var(--spacing) * 4);
 	}
 	.ls-marker {

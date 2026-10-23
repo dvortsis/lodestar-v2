@@ -3,6 +3,7 @@
 	// shows up: its value as JSON, staged once it parses.
 	import Textarea from '$lib/ui/fields/Textarea.svelte';
 	import { m } from '$lib/paraglide/messages.js';
+	import { JsonDraft } from './validate';
 	import type { SettingsForm } from './form.svelte';
 	import type { FieldKey } from './types';
 	import type { FieldControlProps } from './widgets';
@@ -20,11 +21,13 @@
 	const pretty = (v: unknown) => (v === undefined ? '' : JSON.stringify(v, null, 2));
 
 	let text = $state('');
-	let invalid = $state(false);
-	// Follow the form's value unless what's typed is the same value or isn't JSON yet.
+	// Text that doesn't parse is staged as a `JsonDraft`: dirty and invalid until it parses.
+	const invalid = $derived(f.value instanceof JsonDraft);
+	// Follow the form's value unless what's typed already says the same.
 	$effect(() => {
 		const v = f.value;
-		if (!invalid && !same(text, v)) text = pretty(v);
+		if (v instanceof JsonDraft) text = v.text;
+		else if (!same(text, v)) text = pretty(v);
 	});
 
 	function same(s: string, v: unknown): boolean {
@@ -37,12 +40,14 @@
 
 	function input(s: string) {
 		text = s;
+		let parsed: unknown;
 		try {
-			form.set(key, JSON.parse(s));
-			invalid = false;
+			parsed = JSON.parse(s);
 		} catch {
-			invalid = true;
+			form.set(key, new JsonDraft(s));
+			return;
 		}
+		form.set(key, parsed);
 	}
 </script>
 
@@ -54,12 +59,12 @@
 	disabled={f.locked}
 	spellcheck={false}
 	aria-invalid={invalid || controlProps['aria-invalid']}
-	aria-describedby={[controlProps['aria-describedby'], invalid ? errorId : '']
+	aria-describedby={[controlProps['aria-describedby'], invalid && !f.error ? errorId : '']
 		.filter(Boolean)
 		.join(' ') || undefined}
 	oninput={(e) => input(e.currentTarget.value)}
 	onblur={() => form.blur(key)}
 />
-{#if invalid}
+{#if invalid && !f.error}
 	<p id={errorId} class="text-small text-error">{m.settings_form_json_invalid()}</p>
 {/if}
