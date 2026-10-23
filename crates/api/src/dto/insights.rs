@@ -22,7 +22,8 @@ pub struct OverviewQuery {
     /// Unix seconds, exclusive; `custom` only. Rounded up to its UTC hour
     /// (day), and to the current one at most.
     pub to: Option<i64>,
-    /// `1` adds `previous`, the period of equal length before.
+    /// `1` adds `previous`, the period of equal length before, and
+    /// `kpi.searchable_delta`.
     pub compare: Option<u8>,
 }
 
@@ -40,7 +41,8 @@ pub struct EventsQuery {
 /// exceptions and Serve, for one range.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct OverviewResponse {
-    /// Trend annotations in the range, oldest first. Event time.
+    /// Trend annotations in the range, oldest first, at most 1,000
+    /// (`/insights/events` says when there were more). Event time.
     pub annotations: Vec<Annotation>,
     /// What needs attention now, whatever the range (§10.9.2 level 5).
     pub exceptions: Vec<InsightsException>,
@@ -131,9 +133,9 @@ pub struct Kpi {
     /// Documents in the search index now; null when search is off.
     #[schema(required = true)]
     pub searchable: Option<u64>,
-    /// The change since the previous period's end. Always null for now:
-    /// it needs removals, which nothing counts until B11b's lifecycle
-    /// counters.
+    /// The change since the previous period's end: now's count less
+    /// `previous.kpi.searchable`. Null without `compare=1`, for `all`,
+    /// with search off, or with no snapshot from then.
     #[schema(required = true)]
     pub searchable_delta: Option<i64>,
     /// First harvest → searchable, p50 and p95 seconds over the final
@@ -374,8 +376,9 @@ pub struct PreviousStages {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct PreviousKpi {
     pub new_searchable: u64,
-    /// Searchable at the period's end. Null until removals are counted
-    /// (B11b), as `kpi.searchable_delta`.
+    /// Searchable at the period's end: the last hourly snapshot in the
+    /// day before it ends. Null when there's none (search off, or not
+    /// running then).
     #[schema(required = true)]
     pub searchable: Option<u64>,
     #[schema(required = true)]

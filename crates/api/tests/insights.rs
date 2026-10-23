@@ -900,9 +900,22 @@ async fn compare_covers_the_period_before() {
     assert_eq!(p["trend"].as_array().unwrap().len(), 24);
     assert_eq!(v["kpi"]["new_searchable"], 3);
     assert_eq!(p["kpi"]["new_searchable"], 2);
-    // Removals aren't counted yet, so the change since then isn't known.
+    // No snapshot from the previous period's end: the change is unknown.
     assert_eq!(v["kpi"]["searchable_delta"], Value::Null);
     assert_eq!(p["kpi"]["searchable"], Value::Null);
+    // The recorder's hourly snapshots: the last one before the range
+    // starts is the count then, removals included.
+    let start_h = NOW_H - 23;
+    s.set_gauges(&[
+        counter(start_h - 5, 13, 0, 0, 900),
+        counter(start_h - 1, 13, 0, 0, 1_004),
+        counter(start_h, 13, 0, 0, 2_000),
+    ])
+    .unwrap();
+    f.touched();
+    let v = json_get(&f, &cookie, "/api/v1/insights/overview?range=24h&compare=1").await;
+    assert_eq!(v["previous"]["kpi"]["searchable"], 1_004);
+    assert_eq!(v["kpi"]["searchable_delta"], -4, "1,000 now: 4 removed net");
     // Without compare, or for `all`, there's no previous period.
     let v = json_get(&f, &cookie, "/api/v1/insights/overview?range=24h&compare=0").await;
     assert!(v.get("previous").is_none());
@@ -1152,6 +1165,10 @@ async fn a_year_of_rollups_answers_within_budget() {
             let took = start.elapsed();
             eprintln!("{query}: {took:?}");
             assert!(v["kpi"]["yield"].as_f64().is_some(), "{query}");
+            assert!(
+                v["annotations"].as_array().unwrap().len() <= 1000,
+                "{query}"
+            );
             // The budget holds in release builds; others only report.
             if !cfg!(debug_assertions) {
                 assert!(took.as_millis() <= 50, "{query}: {took:?}");

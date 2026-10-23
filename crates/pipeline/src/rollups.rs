@@ -33,6 +33,10 @@ pub mod metric {
     /// unmeasured one (paused, not running) a gap (key = 0; dim =
     /// [`coverage::INDEX`] or [`coverage::CRAWL`]).
     pub const COVERAGE: u32 = 12;
+    /// Searchable torrents (the index's document count), a gauge: the
+    /// last snapshot in each hour, every 30 s (dim = 0, key = 0). Insights'
+    /// Compare reads it as the count at a period's end.
+    pub const SEARCHABLE: u32 = 13;
 
     /// [`COVERAGE`] dims.
     pub mod coverage {

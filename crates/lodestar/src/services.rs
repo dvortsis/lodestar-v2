@@ -226,6 +226,11 @@ impl Services {
                         .as_ref()
                         .map(|s| (s.commit_hook().clone(), s.stats())),
                     paused: Box::new(move || crawl.status().paused),
+                    // As `/stats` counts them.
+                    searchable: {
+                        let index = search.clone();
+                        Box::new(move || index.as_ref().map(|i| i.index().num_docs()))
+                    },
                     tick: insights::TICK,
                 },
                 insights_stopped,

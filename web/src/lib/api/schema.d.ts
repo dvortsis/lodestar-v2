@@ -495,7 +495,7 @@ export interface paths {
         /**
          * The Insights overview (§10.9.2): stage strip, KPIs, trend with
          *     annotations, the cohort funnel, segments, exceptions and Serve, from
-         *     the rollups. `compare=1` adds `previous`.
+         *     the rollups. `compare=1` adds `previous` and `kpi.searchable_delta`.
          *     Event time for the trend, new searchable, stages and Serve; discovery
          *     cohort for the funnel, yield and time to searchable.
          */
@@ -2430,9 +2430,9 @@ export interface components {
             searchable: number | null;
             /**
              * Format: int64
-             * @description The change since the previous period's end. Always null for now:
-             *     it needs removals, which nothing counts until B11b's lifecycle
-             *     counters.
+             * @description The change since the previous period's end: now's count less
+             *     `previous.kpi.searchable`. Null without `compare=1`, for `all`,
+             *     with search off, or with no snapshot from then.
              */
             searchable_delta: number | null;
             /**
@@ -2627,7 +2627,10 @@ export interface components {
          *     exceptions and Serve, for one range.
          */
         OverviewResponse: {
-            /** @description Trend annotations in the range, oldest first. Event time. */
+            /**
+             * @description Trend annotations in the range, oldest first, at most 1,000
+             *     (`/insights/events` says when there were more). Event time.
+             */
             annotations: components["schemas"]["Annotation"][];
             /** @description What needs attention now, whatever the range (§10.9.2 level 5). */
             exceptions: components["schemas"]["InsightsException"][];
@@ -2789,8 +2792,9 @@ export interface components {
             new_searchable: number;
             /**
              * Format: int64
-             * @description Searchable at the period's end. Null until removals are counted
-             *     (B11b), as `kpi.searchable_delta`.
+             * @description Searchable at the period's end: the last hourly snapshot in the
+             *     day before it ends. Null when there's none (search off, or not
+             *     running then).
              */
             searchable: number | null;
             /** Format: int64 */
@@ -4839,7 +4843,10 @@ export interface operations {
                  *     (day), and to the current one at most.
                  */
                 to?: number;
-                /** @description `1` adds `previous`, the period of equal length before. */
+                /**
+                 * @description `1` adds `previous`, the period of equal length before, and
+                 *     `kpi.searchable_delta`.
+                 */
                 compare?: number;
             };
             header?: never;

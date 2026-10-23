@@ -71,6 +71,7 @@ pub mod codes {
         pub const NEWLY_SEARCHABLE: u32 = 10;
         pub const TIME_TO_SEARCHABLE: u32 = 11;
         pub const COVERAGE: u32 = 12;
+        pub const SEARCHABLE: u32 = 13;
         /// `COVERAGE` dims.
         pub const COVERAGE_INDEX: u32 = 0;
         pub const COVERAGE_CRAWL: u32 = 1;
@@ -310,7 +311,7 @@ pub fn warm(
         if from >= to {
             return Ok(0);
         }
-        let to = to.min(from + MAX_SPAN_HOURS);
+        let from = from.max(to - MAX_SPAN_HOURS);
         sealed_days(store, cache, generation, from, to)?;
         Ok(cache.days())
     })
@@ -490,7 +491,11 @@ fn window(q: &OverviewQuery, now: i64, first_hour: Option<i64>) -> ApiResult<Win
         "7d" => 7 * 24,
         "30d" => 30 * 24,
         "all" => {
-            let from_h = first_hour.unwrap_or(end_h - 24).min(end_h - 1);
+            // At most 20 years back: one stray hour from a clock that was
+            // unset doesn't make the range absurd.
+            let from_h = first_hour
+                .unwrap_or(end_h - 24)
+                .clamp(end_h - MAX_SPAN_HOURS, end_h - 1);
             return Ok(Window::new(from_h, end_h));
         }
         "custom" => {
@@ -1123,12 +1128,26 @@ fn build(
                     })
                     .then_some(0)
             });
+        // Searchable at the previous period's end: the last hourly
+        // snapshot in the day before the range starts.
+        let searchable_then = match prev {
+            Some(_) => store
+                .rollup_sums(
+                    codes::metric::SEARCHABLE,
+                    w.from_h - 24,
+                    w.from_h,
+                    RollupBy::Hour,
+                )?
+                .last()
+                .map(|c| c.value.max(0) as u64),
+            None => None,
+        };
         let previous = prev.zip(prev_rows).map(|(pw, pr)| {
             let q = period(&pw, now_h, &pr);
             PreviousPeriod {
                 kpi: PreviousKpi {
                     new_searchable: q.new_searchable,
-                    searchable: None,
+                    searchable: searchable_then,
                     time_to_searchable_p50_s: q.p50,
                     time_to_searchable_p95_s: q.p95,
                     yield_: q.yield_,
@@ -1145,7 +1164,11 @@ fn build(
             }
         });
         Ok(OverviewResponse {
-            annotations: annotations(&events),
+            annotations: {
+                let mut a = annotations(&events);
+                a.truncate(MAX_ANNOTATIONS);
+                a
+            },
             exceptions: stalled(&now_rows, now_h).into_iter().collect(),
             funnel,
             funnel_total,
@@ -1242,14 +1265,20 @@ fn apply_snapshot(r: &mut OverviewResponse, s: Snapshot) {
     r.kpi.imported = s.imported;
     r.stages.index = s.searchable;
     r.updated_at = s.now;
-    // `kpi.searchable_delta` and `previous.kpi.searchable` stay null:
-    // the change since the previous period's end needs removals, which
-    // nothing counts until B11b's lifecycle counters.
+    // The change since the previous period's end, removals included:
+    // now's count less the snapshot then.
+    r.kpi.searchable_delta = match (
+        s.searchable,
+        r.previous.as_ref().and_then(|p| p.kpi.searchable),
+    ) {
+        (Some(now), Some(then)) => Some(now as i64 - then as i64),
+        _ => None,
+    };
 }
 
 /// The Insights overview (§10.9.2): stage strip, KPIs, trend with
 /// annotations, the cohort funnel, segments, exceptions and Serve, from
-/// the rollups. `compare=1` adds `previous`.
+/// the rollups. `compare=1` adds `previous` and `kpi.searchable_delta`.
 /// Event time for the trend, new searchable, stages and Serve; discovery
 /// cohort for the funnel, yield and time to searchable.
 #[utoipa::path(
@@ -1431,6 +1460,9 @@ mod tests {
         assert_eq!((w.grain, w.from_h % 24), (24, 0));
         let w = window(&q("all"), NOW, None).unwrap();
         assert_eq!(w.span(), 24);
+        // A stray hour from an unset clock: at most 20 years back.
+        let w = window(&q("all"), NOW, Some(1)).unwrap();
+        assert!(w.span() <= MAX_SPAN_HOURS + 48, "{}", w.span());
         let custom = |from, to| OverviewQuery {
             range: Some("custom".into()),
             from,
