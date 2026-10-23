@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T09:05:30Z",
+ "updated_at": "2026-10-23T09:08:06Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -939,13 +939,13 @@
    "notes": "from #86"
   },
   "B-update": {
-   "status": "pending",
+   "status": "running",
    "model": "opus",
-   "session": null,
+   "session": "session_01S3vvLdWsMTnhxizee1srHu",
    "pr": null,
-   "attempt": 0,
+   "attempt": 1,
    "review_rounds": 0,
-   "notes": "from #86 | 2026-10-23T08:45:08Z unblocked by B2c; brief drafting (Opus helper); main.rs overlap with B-log1 #119 noted"
+   "notes": "from #86 | 2026-10-23T08:45:08Z unblocked by B2c; brief drafting (Opus helper); main.rs overlap with B-log1 #119 noted | 2026-10-23T09:08:06Z launched (brief by Opus helper, runner-reviewed): 3 PRs (trust core crate / supervisor+rollback / check+policy+API)"
   },
   "S-updates": {
    "status": "pending",
@@ -1329,13 +1329,12 @@
   "release-features-licences": "P-release/Dockerfile must build --no-default-features --features web (no fixture) so licences inventory matches what ships (rand_chacha unlisted today) - from B2c review | P-release #92 now covers release matrix + Dockerfile",
   "docs-LODESTAR_LOG": "Docs follow-up: docs/operations.md:26 and packaging/docker/README.md:72 must say setting LODESTAR_LOG makes the logging section read-only (from B-log1 review)",
   "win-hardening-followup": "Windows service hardening follow-up (from M6-win delta 4, admin-only/low): same_dir should canonicalize the parent and compare final name (8.3, \\\\?\\, UNC, trailing dot); compute config 'elsewhere' via same_dir for --config and LODESTAR_DATA_DIR; refusal log open with FILE_FLAG_OPEN_REPARSE_POINT + regular-file check, doc says untrusted (or event log); acl.rs:10-11 comment names SYSTEM/Administrators",
-  "slices-yaml-B-log1b-windows": "Runner PR: add crates/lodestar/src/windows/** to B-log1b owns (M6-win's windows/{ports,priority,service}.rs are in NOT_YET_SWEPT)",
   "bench-percolation": "Next bench/ brief: percolation at ~10M torrents incl file:() and regex queries (from B9 review)",
   "win-temp-log-helper": "B-log1b: shared helper opening %SystemRoot%\\Temp logs with FILE_FLAG_OPEN_REPARSE_POINT (refuse reparse points) for logging service_log and M6-win log_refusal",
   "export-pacer-closed": "Later export brief: export worker's pacer wait should select on tx.closed() so a dropped live download frees its slot promptly (from #122)"
  },
  "blocked_on_owner": [],
- "launches_today": 17,
+ "launches_today": 18,
  "last_heartbeat": "2026-10-23T08:39:04Z",
  "owner_questions": [],
  "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
@@ -1359,7 +1358,10 @@
   "\u00a72.19 (B10b #115): exports include Adult only per content.export_adult (\u00a720.9/B17), not the \"Show adult content\" view setting; until wired, no Adult is exported.",
   "Licences (B2c): \u00a72.12 allowlist silent on Unicode-DFS-2016, Unlicense alone, CDLA-Permissive-2.0, LLVM exception, and whether LGPL-3.0 counts in the GPL/AGPL family. B2c may add permissive ones as flagged \u00a72.19 entries; stops on copyleft/unlicensed.",
   "\u00a72.19 (B11a #116) docs/metrics.md \u00a77.5 contract made nullable \"until source exists\": stages.fetch (B11b), stages.index & kpi.searchable (null with search off), stages.serve and serve.* (until #48 / B9 / integrations), kpi.imported, ingest_per_hour (unmeasured hour), previous = reduced shape. Additions: range.bucket, funnel[].conversion, funnel_total, /insights/events, segments.by_source.",
-  "2026-10-23T08:28:33Z B9: RSS feed's Adult rule follows content.show_adult (no separate feed adult setting; \u00a72.19 refinement) - veto if outside readers should never get Adult"
+  "2026-10-23T08:28:33Z B9: RSS feed's Adult rule follows content.show_adult (no separate feed adult setting; \u00a72.19 refinement) - veto if outside readers should never get Adult",
+  "2026-10-23T09:08:06Z B-update: nightly + freshness signing keys don't exist yet (owner action \u00a72.21) - until then Nightly can't install and Stable/Beta manifests lapse 30 days after signing without a new release",
+  "2026-10-23T09:08:06Z B-update: security fixes still wait for the install window (reading of \u00a72.13; \u00a712.2 exempts only the wait) - veto if they should skip the window",
+  "2026-10-23T09:08:06Z B-update: new 6-hour cap on a migration during update (runner-set number, \u00a72.19)"
  ],
  "decisions_log": [
   "2026-10-23 00:40 owner: 'Go with whatever makes for the best user experience' re filter budget reference -> staged: #97 fastest-runner ref now; F-perf moves ref to EPYC 7763 (typical) when engine meets it.",
@@ -1381,6 +1383,7 @@
   "slices-yaml-120": "2026-10-23T07:34:04Z #120 merged (069533a): B-log1b added (owns widened per review), B11c deps B11b",
   "heartbeat-0739": "no new slices ready (S-search-4 waits S-search-3/W9; B11c waits B11b); open: #119 delta review, #117 merging main, #98 round 4, #92 CI, #91 waits #92, #103 owner, #48 owner",
   "heartbeat-0838": "open: #121 B9 round 1, #119 B-log1 delta 2, #117 B2c windows (export test race; fix PR requested from B10b session), #92 P-release CI, #91 waits #92, #103/#48 owner",
-  "fix-export-race": "2026-10-23T08:59:12Z #122 merged (reviewed APPROVE, CI green). Follow-up: export worker pacer wait doesn't select on tx.closed()"
+  "fix-export-race": "2026-10-23T08:59:12Z #122 merged (reviewed APPROVE, CI green). Follow-up: export worker pacer wait doesn't select on tx.closed()",
+  "slices-yaml-124": "2026-10-23T09:08:06Z PR #124: B-update owns + crates/update/**, fuzz target; B-log1b owns + windows/**; reviewer running"
  }
 }
