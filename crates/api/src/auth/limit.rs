@@ -54,8 +54,20 @@ impl<K: Eq + Hash + Copy> Buckets<K> {
         self.with(key, true)
     }
 
-    /// Whether a token is there, without taking it.
+    /// Whether a token is there, without taking it. A key with no bucket
+    /// yet passes without getting one, so only keys that have spent
+    /// tokens can be refused: a flood of new addresses filling the map
+    /// can't make a stranger share the overflow bucket on a check.
     pub(crate) fn check(&self, key: K) -> Result<(), Duration> {
+        if !self
+            .inner
+            .lock()
+            .expect("limiter lock")
+            .map
+            .contains_key(&key)
+        {
+            return Ok(());
+        }
         self.with(key, false)
     }
 
@@ -150,6 +162,10 @@ mod tests {
         // Known keys keep their own.
         assert!(b.take(0).is_ok());
         assert!(b.take(0).is_err());
+        // A check from a newcomer passes and adds nothing, though the
+        // overflow bucket is empty.
+        assert!(b.check(103).is_ok());
+        assert_eq!(b.len(), 4);
     }
 
     #[test]

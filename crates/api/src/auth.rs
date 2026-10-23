@@ -65,7 +65,6 @@ pub const KEY_FAIL_REFILL_PER_SEC: f64 = 1.0 / 6.0;
 /// well above what *arr polling and searches send.
 pub const KEY_BURST: f64 = 300.0;
 pub const KEY_REFILL_PER_SEC: f64 = 5.0;
-const LIMITER_MAX_KEYS: usize = 10_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthError {
@@ -181,7 +180,7 @@ impl Auth {
             setup_token: Mutex::new(token),
             login: Buckets::new(BURST, REFILL_PER_SEC, LIMITER_MAX_IPS),
             key_failures: Buckets::new(KEY_FAIL_BURST, KEY_FAIL_REFILL_PER_SEC, LIMITER_MAX_IPS),
-            key_requests: Buckets::new(KEY_BURST, KEY_REFILL_PER_SEC, LIMITER_MAX_KEYS),
+            key_requests: Buckets::new(KEY_BURST, KEY_REFILL_PER_SEC, crate::keys::MAX_KEYS),
             proxy_forced_off: AtomicBool::new(false),
             secure_cookies,
         })
@@ -191,9 +190,16 @@ impl Auth {
     /// auth off for this run without touching the saved settings. Called
     /// where [`Auth::load`] runs. Returns whether it applied.
     pub fn apply_proxy_override(&self, value: Option<&str>) -> bool {
-        let off = value.is_some_and(|v| v.trim().eq_ignore_ascii_case("off"));
+        let Some(v) = value.map(str::trim).filter(|v| !v.is_empty()) else {
+            return false;
+        };
+        let off = v.eq_ignore_ascii_case("off");
         if off {
             self.proxy_forced_off.store(true, Ordering::Relaxed);
+        } else {
+            // Someone locked out typed `false` or `0`: say why nothing
+            // changed rather than leave them guessing.
+            tracing::warn!("{PROXY_AUTH_ENV} is set but not to `off`, so it changes nothing");
         }
         off
     }

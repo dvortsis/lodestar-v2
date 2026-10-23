@@ -17,6 +17,10 @@
 //! - **Key requests only read** (GET and HEAD), and never set a cookie:
 //!   any `Set-Cookie` a handler adds is dropped.
 //! - The handler finds an [`Access`] in the request's extensions.
+//! - **Behind an SSO proxy** that forwards its own `Authorization: Bearer`
+//!   token, a key route without a session answers that token as a bad
+//!   key (and spends a failed check). Routes that must work through such
+//!   a proxy rely on its user header for the session instead.
 //!
 //! Secrets, their hashes and the headers or parameters they came in are
 //! never logged or echoed.
