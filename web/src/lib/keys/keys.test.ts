@@ -169,6 +169,51 @@ describe('registry', () => {
 		expect(keys.handle(ev('Enter', {}, el('a')))).toBe(true);
 	});
 
+	it('leaves Enter and Space to non-text inputs, radios, sliders and tree items too', () => {
+		const { keys } = make();
+		const open = vi.fn();
+		keys.register({ id: 'detail.open', title: 'Open', run: open });
+		keys.register({ id: 'mine', title: 'Mine', keys: ['space'], run: open });
+		const controls = [
+			...['checkbox', 'radio', 'submit', 'button', 'reset', 'file', 'range', 'color'].map((type) =>
+				el('input', { type })
+			),
+			el('select'),
+			...['radio', 'menuitemcheckbox', 'slider', 'spinbutton', 'treeitem', 'gridcell'].map((role) =>
+				el('div', { role })
+			)
+		];
+		for (const c of controls) {
+			expect(keys.handle(ev('Enter', {}, c))).toBe(false);
+			expect(keys.handle(ev(' ', {}, c))).toBe(false);
+		}
+		expect(open).not.toHaveBeenCalled();
+	});
+
+	it('treats Shift+letter as a single-character shortcut (WCAG 2.1.4)', () => {
+		const { keys } = make();
+		const run = vi.fn();
+		keys.register({ id: 'cap', title: 'Cap', keys: ['shift+j'], run });
+		expect(keys.handle(ev('J', { shiftKey: true }))).toBe(true);
+		keys.setSingleKeys(false);
+		expect(keys.handle(ev('J', { shiftKey: true }))).toBe(false);
+		expect(run).toHaveBeenCalledOnce();
+		// Inside a dialog it stays quiet as well.
+		keys.setSingleKeys(true);
+		const inside = el('div', { role: 'dialog' }).appendChild(document.createElement('button'));
+		expect(keys.handle(ev('J', { shiftKey: true }, inside))).toBe(false);
+	});
+
+	it('ignores a keydown with no key, and auto-repeat of a modifier combo', () => {
+		const { keys } = make();
+		const run = vi.fn();
+		keys.register({ id: 'palette.open', title: 'Palette', run });
+		expect(keys.handle(new KeyboardEvent('keydown', { cancelable: true }))).toBe(false);
+		expect(keys.handle(ev('k', { ctrlKey: true, repeat: true }))).toBe(false);
+		expect(keys.handle(ev('k', { ctrlKey: true }))).toBe(true);
+		expect(run).toHaveBeenCalledOnce();
+	});
+
 	it('reports a conflict created by remap', () => {
 		const { keys, conflicts } = make();
 		keys.register({ id: 'a', title: 'A', keys: ['x'], run: () => {} });

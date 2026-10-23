@@ -16,4 +16,6 @@ export const statusRef = $state<{
 	current: ReturnType<typeof createShellStatus> | null;
 	/** The pill component, loaded with the status module (it carries the icons and formatters). */
 	Pill: Component<{ state: PillState }> | null;
-}>({ current: null, Pill: null });
+	/** The connection states, fetched with the stream. */
+	Connection: Component<{ kind: 'unreachable' | 'reconnecting' }> | null;
+}>({ current: null, Pill: null, Connection: null });

@@ -1,5 +1,5 @@
 <script lang="ts">
-	// The app chrome: skip link, top bar, toasts and the command palette. It owns the one keydown
+	// The app chrome: top bar, toasts and the command palette. It owns the one keydown
 	// listener, the event-stream subscription for the status pill, and where a 401 goes. The sign-in
 	// and first-run screens are `bare` (skip link only, no stream). `Shell.svelte` loads this after
 	// the page has painted, so none of it is on the critical path (§10.1: LCP).
@@ -7,7 +7,6 @@
 	import { afterNavigate } from '$app/navigation';
 	import { keys } from '$lib/keys';
 	import { toasts } from '$lib/ui/feedback/toasts.svelte';
-	import { m } from '$lib/paraglide/messages.js';
 	import { shell } from './shell.svelte';
 	import { statusRef } from './status-ref.svelte';
 	import TopBar from './TopBar.svelte';
@@ -19,15 +18,23 @@
 	let Toaster = $state<typeof import('$lib/ui/feedback/Toaster.svelte').default>();
 	let Palette = $state<typeof import('./CommandPalette.svelte').default>();
 
-	const idle = (cb: () => void) =>
-		typeof requestIdleCallback === 'function'
-			? requestIdleCallback(cb, { timeout: 1000 })
-			: setTimeout(cb, 200);
+	function idleCancelable(cb: () => void): () => void {
+		if (typeof requestIdleCallback === 'function') {
+			const id = requestIdleCallback(cb, { timeout: 1000 });
+			return () => cancelIdleCallback(id);
+		}
+		const id = setTimeout(cb, 200);
+		return () => clearTimeout(id);
+	}
 
-	// The toaster (and its icons) load with the first toast, not with the page.
-	$effect(() => {
-		if (toasts.items.length && !Toaster)
+	function loadToaster() {
+		if (!Toaster)
 			void import('$lib/ui/feedback/Toaster.svelte').then((mod) => (Toaster = mod.default));
+	}
+
+	// The toaster (and its icons) load with the first toast or the first interaction, not with the page.
+	$effect(() => {
+		if (toasts.items.length) loadToaster();
 	});
 
 	const ENGAGED = ['pointerdown', 'keydown', 'touchstart', 'focusin'] as const;
@@ -50,14 +57,20 @@
 
 	let offCommands: (() => void) | undefined;
 	let uninstallAuth: (() => void) | undefined;
+	let disposed = false;
 
 	onMount(() => {
 		const detach = keys.attach(window);
 		// Not needed to paint the page. The client and the stream arrive together; from then on a
 		// 401 on any request goes to `handleLoginRequired` (the stream's own 401 covers the gap).
-		idle(() => {
+		const cancelIdle = idleCancelable(() => {
 			void import('./commands').then((commands) => {
-				offCommands = commands.registerShellCommands();
+				if (!disposed) offCommands = commands.registerShellCommands();
+			});
+			// A 401 on any request goes to /login or /setup from the start: this is small and does not
+			// wait for the stream. M-auth's hook owns W5's single `onLoginRequired` slot.
+			void import('$lib/features/auth/session.svelte').then((auth) => {
+				if (!disposed) uninstallAuth = auth.installAuthHandlers();
 			});
 		});
 		// The stream, the API client and the pill are the heaviest part and are not needed to read the
@@ -66,15 +79,19 @@
 			void Promise.all([
 				import('./status.svelte'),
 				import('./StatusPill.svelte'),
-				import('$lib/features/auth/session.svelte')
-			]).then(([status, pill, auth]) => {
-				// M-auth's hook owns W5's single `onLoginRequired` slot: a 401 goes to /login or /setup.
-				uninstallAuth = auth.installAuthHandlers();
+				import('./ConnectionView.svelte')
+			]).then(([status, pill, connection]) => {
+				if (disposed) return;
 				statusRef.Pill = pill.default;
+				statusRef.Connection = connection.default;
 				statusRef.current = status.shellStatus;
 			});
+			// Fetched now, while the server is up: an error toast has to work when it is down.
+			loadToaster();
 		});
 		return () => {
+			disposed = true;
+			cancelIdle();
 			stopWaiting();
 			detach();
 			offCommands?.();
@@ -101,19 +118,8 @@
 		if (nav.type === 'enter' || !nav.from || nav.from.url.pathname === nav.to?.url.pathname) return;
 		main()?.focus({ preventScroll: true });
 	});
-
-	function skip(e: MouseEvent) {
-		e.preventDefault();
-		main()?.focus();
-	}
 </script>
 
-<a
-	href="#main"
-	onclick={skip}
-	class="sr-only rounded-field bg-primary px-4 py-2 text-primary-content focus:not-sr-only focus:fixed focus:start-2 focus:top-2 focus:z-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary focus-visible:outline-solid"
-	>{m.shell_skip_to_content()}</a
->
 {#if !bare}<TopBar />{/if}
 {#if Toaster}<Toaster />{/if}
 {#if !bare && Palette}<Palette bind:open={shell.paletteOpen} />{/if}

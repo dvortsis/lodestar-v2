@@ -3,8 +3,9 @@
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<!-- The UI font is preloaded by the shell after the first frame (lib/shell/Shell.svelte): a
-		     preload here competes with the scripts and CSS that paint the page (LCP, §10.1). -->
+		<!-- No font preload: it competes with the scripts and CSS that paint the page, and took the mobile
+		     LCP from 2.4 s to 2.7 s (§10.1). The font is fetched at the first layout of text and swaps in
+		     (font-display: swap); see docs/decisions/2026-10-22-W9.md. -->
 		<title>Lodestar</title>
 		<link rel="icon" href="/brand/favicons/favicon.svg" type="image/svg+xml" />
 		<link rel="icon" href="/brand/favicons/favicon.ico" sizes="48x48" />

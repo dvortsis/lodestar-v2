@@ -73,7 +73,8 @@ export function comboFromEvent(
 
 /** True when the combo is a bare printable character: the keys WCAG 2.1.4 lets people turn off. */
 export function isSingleKey(combo: string): boolean {
-	return combo.length === 1;
+	// A capital letter (shift+j) is a single-character shortcut too (WCAG 2.1.4).
+	return combo.length === 1 || /^shift\+[^+]$/.test(combo);
 }
 
 /** Whether the combo carries Ctrl, Alt or Meta. */
