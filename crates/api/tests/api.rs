@@ -6,11 +6,13 @@ use std::sync::{Arc, Mutex};
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use lodestar_api::{ApiState, Auth, router};
+use lodestar_api::{ApiEvents, ApiState, Auth, router};
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::Info;
 use lodestar_search::SearchIndex;
-use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig};
+use lodestar_store::{
+    HotColumns, NewTorrent, SourceId, Store, StoreConfig, SwarmUpdate, TrackerCounts, WriteBatch,
+};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -44,7 +46,25 @@ struct Fixture {
     app: Router,
     auth: Arc<Auth>,
     hashes: Vec<String>,
+    events: Arc<Recorder>,
     _dir: tempfile::TempDir,
+}
+
+/// Records what the API reports.
+#[derive(Debug, Default)]
+struct Recorder {
+    interest: Mutex<Vec<i64>>,
+    searches: Mutex<Vec<Option<usize>>>,
+}
+
+impl ApiEvents for Recorder {
+    fn interest(&self, id: i64) {
+        self.interest.lock().unwrap().push(id);
+    }
+
+    fn searched(&self, _took: std::time::Duration, total: Option<usize>) {
+        self.searches.lock().unwrap().push(total);
+    }
 }
 
 fn fixture() -> Fixture {
@@ -71,19 +91,55 @@ fn fixture() -> Fixture {
             source: SourceId::new(0).unwrap(),
         })
         .collect();
-    store.insert(&batch).unwrap();
-    let index = SearchIndex::in_memory().unwrap();
+    let ids: Vec<i64> = store
+        .insert(&batch)
+        .unwrap()
+        .iter()
+        .map(|i| i.id())
+        .collect();
+    // The first torrent has been scraped; the second never has.
+    let tracker = store.upsert_tracker("udp://t.example:1337", 1).unwrap();
+    store
+        .write(&WriteBatch {
+            swarm: &[SwarmUpdate {
+                torrent_id: ids[0],
+                at: 1_700_000_100,
+                seeders: 12,
+                leechers: 3,
+                completed: 90,
+                trackers_reporting: 1,
+                trackers_checked: 2,
+                dht: Some((10, 4)),
+                per_tracker: vec![TrackerCounts {
+                    tracker,
+                    seeders: 12,
+                    leechers: 3,
+                    completed: 90,
+                }],
+                next_scrape_at: 1_700_021_700,
+                flags: 0,
+                interest: false,
+            }],
+            ..WriteBatch::default()
+        })
+        .unwrap();
+    let hot = Arc::new(HotColumns::new());
+    store.load_hot(&hot).unwrap();
+    let index = SearchIndex::in_memory().unwrap().with_hot(hot.clone());
     let mut w = index.writer(15 << 20).unwrap();
     w.catch_up(&mut store, 10).unwrap();
     w.commit().unwrap();
     let auth = Arc::new(Auth::load(&dir.path().join("auth.json"), false).unwrap());
     let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
+    let events = Arc::new(Recorder::default());
     let app = Router::new().nest(
         "/api/v1",
         router(ApiState {
             auth: auth.clone(),
             index: Some(index.into()),
             reader: Arc::new(Mutex::new(reader)),
+            hot: Some(hot),
+            events: Some(events.clone()),
             filters: None,
             settings: None,
             ops: None,
@@ -106,6 +162,7 @@ fn fixture() -> Fixture {
         app,
         auth,
         hashes,
+        events,
         _dir: dir,
     }
 }
@@ -274,7 +331,7 @@ async fn search_parse_and_detail() {
         (body["error"]["start"].clone(), body["error"]["end"].clone()),
         (json!(0), json!(5))
     );
-    let (status, _, _) = call(&f.app, get("/api/v1/search?q=x&sort=seeders", c)).await;
+    let (status, _, _) = call(&f.app, get("/api/v1/search?q=x&sort=popularity", c)).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     let (status, _, _) = call(&f.app, get("/api/v1/search?q=x&offset=9990&limit=50", c)).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -323,6 +380,122 @@ async fn search_parse_and_detail() {
 }
 
 #[tokio::test]
+async fn swarm_health_in_search_and_detail() {
+    let f = fixture();
+    let cookie = logged_in(&f).await;
+    let c = Some(cookie.as_str());
+
+    let (status, _, body) = call(&f.app, get("/api/v1/search?q=&sort=seeders", c)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let hits = body["hits"].as_array().unwrap();
+    assert_eq!(hits.len(), 2);
+    let h = &hits[0];
+    assert_eq!(h["seeders"], 12, "scraped first: {body}");
+    assert_eq!(
+        (&h["trackers_reporting"], &h["trackers_checked"]),
+        (&json!(1), &json!(2))
+    );
+    assert_eq!(h["last_scrape_at"], 1_700_000_100);
+    assert_eq!(
+        (&h["seeders_approx"], &h["swarm_suspect"]),
+        (&json!(false), &json!(false))
+    );
+    assert!(h.get("dht_seeds").is_none(), "detail only");
+    // Never scraped: unknown, not zero, all six together.
+    for k in [
+        "seeders",
+        "leechers",
+        "completed",
+        "trackers_reporting",
+        "trackers_checked",
+        "last_scrape_at",
+    ] {
+        assert_eq!(hits[1][k], Value::Null, "{k}");
+    }
+    assert_eq!(hits[1]["seeders_approx"], false);
+    assert!(hits[1]["last_seen_at"].is_i64());
+    assert_eq!(*f.events.searches.lock().unwrap(), [Some(2)]);
+    assert_eq!(f.events.interest.lock().unwrap().len(), 2, "top hits");
+
+    let (status, _, body) = call(&f.app, get("/api/v1/search?q=seeders:%3E%3D10", c)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["total"], 1);
+    // Explain (B5c's block) carries the swarm priors relevance ranked by.
+    let (_, _, body) = call(&f.app, get("/api/v1/search?q=knight&explain=true", c)).await;
+    let explain = &body["explain"];
+    assert_eq!(explain["two_phase"], true, "{body}");
+    let first = &explain["hits"][0];
+    assert_eq!(first["id"], body["hits"][0]["id"]);
+    let priors = &first["priors"];
+    assert!(priors["seeders"].as_f64().unwrap() > 1.0, "{body}");
+    let product: f64 = [
+        "seeders",
+        "freshness",
+        "trackers",
+        "junk",
+        "swarm_consistency",
+    ]
+    .iter()
+    .map(|k| priors[k].as_f64().unwrap())
+    .product();
+    let text = first["phase1"].as_f64().unwrap()
+        + first["phase2"]["name"].as_f64().unwrap()
+        + first["phase2"]["title"].as_f64().unwrap();
+    let score = first["score"].as_f64().unwrap();
+    assert!(
+        (text * product - score).abs() <= 1e-3 * score.abs().max(1.0),
+        "{body}"
+    );
+    assert!(
+        body["hits"][0].get("explain").is_none(),
+        "one explain shape only"
+    );
+    for bad in ["sort=sideways", "tz=900"] {
+        let (status, _, _) = call(&f.app, get(&format!("/api/v1/search?q=x&{bad}"), c)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    let (status, _, _) = call(&f.app, get("/api/v1/search?q=time:22:00..02:00&tz=-300", c)).await;
+    assert_eq!(status, StatusCode::OK);
+
+    f.events.interest.lock().unwrap().clear();
+    let (status, _, body) =
+        call(&f.app, get(&format!("/api/v1/torrents/{}", f.hashes[0]), c)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["seeders"], 12);
+    assert_eq!(body["trackers_reporting"], 1);
+    assert_eq!(body["trackers_checked"], 2);
+    assert_eq!(
+        (&body["dht_seeds"], &body["dht_peers"]),
+        (&json!(10), &json!(4))
+    );
+    assert_eq!(body["last_scrape_at"], 1_700_000_100);
+    assert_eq!(body["swarm_trackers"][0]["url"], "udp://t.example:1337");
+    let day = &body["swarm_history"]["daily"][0];
+    assert_eq!(day["seeders"], 12);
+    assert_eq!(
+        day["at"],
+        1_700_000_100 / 86_400 * 86_400,
+        "start of the UTC day"
+    );
+    let week = &body["swarm_history"]["weekly"][0];
+    assert_eq!(week["at"].as_i64().unwrap() % (7 * 86_400), 0);
+    assert_eq!(body["swarm_suspect"], false);
+    assert_eq!(
+        f.events.interest.lock().unwrap().len(),
+        1,
+        "a detail view is interest"
+    );
+
+    let (_, _, body) = call(&f.app, get(&format!("/api/v1/torrents/{}", f.hashes[1]), c)).await;
+    assert_eq!(body["seeders"], Value::Null, "never scraped");
+    assert_eq!(body["last_scrape_at"], Value::Null);
+    assert_eq!(body["dht_seeds"], Value::Null);
+    assert_eq!(body["swarm_history"], Value::Null);
+    assert_eq!(body["swarm_trend"], Value::Null);
+    assert_eq!(body["swarm_trackers"], json!([]));
+}
+
+#[tokio::test]
 async fn errors_share_one_envelope() {
     let f = fixture();
     // Without a session, a protected path's wrong method is still a 401.
@@ -346,6 +519,7 @@ async fn errors_share_one_envelope() {
         get("/api/v1/insights/index", None),
         get("/api/v1/insights/serve", None),
         get("/api/v1/insights/export.csv?panel=trend", None),
+        get("/api/v1/digest/preview", None),
         get("/api/v1/user-items", None),
         get("/api/v1/user-items/labels", None),
         get(
@@ -372,6 +546,13 @@ async fn errors_share_one_envelope() {
         get("/api/v1/logs/catalog", None),
         get("/api/v1/logs", None),
         get("/api/v1/logs/stream", None),
+        get("/api/v1/logs/files", None),
+        get("/api/v1/logs/files/lodestar.jsonl", None),
+        get("/api/v1/logs/archive.zip", None),
+        Request::delete("/api/v1/logs/files")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"which":"all"}"#))
+            .unwrap(),
         Request::patch("/api/v1/settings/crawler")
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(r#"{"intensity":"low"}"#))
@@ -430,7 +611,7 @@ async fn errors_share_one_envelope() {
         (&json!("query_syntax"), &json!("q"), &json!(0), &json!(5))
     );
     assert!(e["message"].as_str().is_some_and(|m| !m.is_empty()));
-    let (_, _, body) = call(&f.app, get("/api/v1/search?q=x&sort=seeders", c)).await;
+    let (_, _, body) = call(&f.app, get("/api/v1/search?q=x&sort=popularity", c)).await;
     assert_eq!(
         body,
         json!({ "error": {
@@ -554,6 +735,8 @@ async fn protected_routes_fail_closed_outside_the_router() {
         index: None,
         reader: Arc::new(Mutex::new(reader)),
         filters: None,
+        hot: None,
+        events: None,
         settings: None,
         ops: None,
         user_data: None,

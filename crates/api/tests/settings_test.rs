@@ -44,6 +44,8 @@ fn fixture() -> Fixture {
             user_data: None,
             adult: Default::default(),
             insights: None,
+            hot: None,
+            events: None,
         }),
     );
     Fixture {
