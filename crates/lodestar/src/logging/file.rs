@@ -72,7 +72,9 @@ impl Index {
 
     fn save(&self) -> io::Result<()> {
         let tmp = self.path.with_extension("json.part");
-        fs::write(&tmp, serde_json::to_vec(self).expect("an index serializes"))?;
+        private(OpenOptions::new().write(true).create(true).truncate(true))
+            .open(&tmp)?
+            .write_all(&serde_json::to_vec(self).expect("an index serializes"))?;
         fs::rename(&tmp, &self.path)
     }
 
@@ -196,8 +198,16 @@ pub struct FileSink {
     pub fail_rotation: bool,
 }
 
+/// Log files are the owner's only (0600 on Unix): with an identifying
+/// kind or an opt-in on, they hold torrent details.
+fn private(o: &mut OpenOptions) -> &mut OpenOptions {
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(o, 0o600);
+    o
+}
+
 fn open_append(path: &Path) -> io::Result<File> {
-    OpenOptions::new().create(true).append(true).open(path)
+    private(OpenOptions::new().create(true).append(true)).open(path)
 }
 
 impl FileSink {
@@ -362,7 +372,10 @@ fn compress(dir: &Path, name: &str, index: &Mutex<Index>) -> io::Result<()> {
     let gz = format!("{name}.gz");
     let part = dir.join(format!("{gz}.part"));
     let mut input = File::open(&from)?;
-    let mut out = GzEncoder::new(File::create(&part)?, Compression::default());
+    let mut out = GzEncoder::new(
+        private(OpenOptions::new().write(true).create(true).truncate(true)).open(&part)?,
+        Compression::default(),
+    );
     let mut buf = vec![0u8; 64 * 1024];
     loop {
         let n = input.read(&mut buf)?;
@@ -649,6 +662,32 @@ mod tests {
         sink.settle();
         assert_eq!(lines(dir.path()).len(), 4);
         assert_eq!(rotated(dir.path()).unwrap().len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn log_files_are_the_owners_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let mut sink = FileSink::open(cfg(dir.path(), 30)).unwrap();
+        sink.write(
+            "details line, long enough",
+            Flags {
+                details: true,
+                opt_in: false,
+            },
+        )
+        .unwrap();
+        sink.write("and another to rotate it", Flags::default())
+            .unwrap();
+        sink.settle();
+        for name in names(dir.path()) {
+            let mode = fs::metadata(dir.path().join(&name))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o077, 0, "{name}: {mode:o}");
+        }
     }
 
     #[cfg(target_os = "linux")]

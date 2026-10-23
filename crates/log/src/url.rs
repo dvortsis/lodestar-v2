@@ -122,10 +122,11 @@ fn scrub_with(url: &str, form: Form, drop_query: bool) -> String {
             return out;
         }
         out.push('?');
-        for (i, pair) in query.split('&').enumerate() {
-            if i > 0 {
-                out.push('&');
-            }
+        // `&` and the older `;` both separate pairs; each keeps its own.
+        let mut rest = query;
+        while !rest.is_empty() {
+            let end = rest.find(['&', ';']).unwrap_or(rest.len());
+            let pair = &rest[..end];
             match pair.split_once('=') {
                 Some((name, _)) if credential(name) => {
                     out.push_str(name);
@@ -140,6 +141,8 @@ fn scrub_with(url: &str, form: Form, drop_query: bool) -> String {
                 _ if passkey_like(pair) => out.push_str(REDACTED),
                 _ => out.push_str(pair),
             }
+            out.push_str(&rest[end..(end + 1).min(rest.len())]);
+            rest = &rest[(end + 1).min(rest.len())..];
         }
     }
     out
