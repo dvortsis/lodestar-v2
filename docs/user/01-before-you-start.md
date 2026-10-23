@@ -73,7 +73,7 @@ You don't need an account, a licence key or an open port on your router.
 > [!TIP]
 > **Key takeaways**
 > - Lodestar stores torrent descriptions only and never downloads content.
-> - It sends no telemetry and makes no connection to GitHub until you turn on update checks. The DHT crawl is its only regular traffic.
+> - It sends no telemetry. The DHT crawl is its only regular traffic.
 > - Put the data folder on fast local storage.
 
 <!-- nav:start -->
