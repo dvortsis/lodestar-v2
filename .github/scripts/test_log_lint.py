@@ -213,6 +213,9 @@ class Paths(unittest.TestCase):
             '[dependencies]\nlogs = { package = "log", version = "0.4" }\n',
             '[dependencies.log]\nversion = "0.4"\n',
             '[target.\'cfg(windows)\'.dependencies]\nlog = "0.4"\n',
+            '[dependencies]\nlog.workspace = true\n',
+            '[dependencies]\nlog.version = "0.4"\n',
+            '[dependencies]\n"log" = "0.4"\n',
         ]:
             with self.subTest(manifest=manifest):
                 root = self.tree({"crates/a/Cargo.toml": manifest, "crates/a/src/lib.rs": "fn f() {}\n"})

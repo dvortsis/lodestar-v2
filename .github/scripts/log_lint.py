@@ -267,7 +267,12 @@ def check_source(rel: str, code: str, swept: bool = True) -> list[str]:
     return findings
 
 
-LOG_DEP = re.compile(r"""^\s*(?:log\s*=|\[\s*[\w.-]*dependencies\s*\.\s*log\s*\])|\bpackage\s*=\s*["']log["']""")
+# `log = …`, `"log" = …`, `log.workspace = true`, `log.version = …`,
+# `[dependencies.log]`, or another name with `package = "log"`.
+LOG_DEP = re.compile(
+    r"""^\s*(?:(?:log|"log"|'log')\s*[=.]|\[\s*[\w.'"()-]*dependencies\s*\.\s*["']?log["']?\s*\])"""
+    r"""|\bpackage\s*=\s*["']log["']"""
+)
 SECTION = re.compile(r"^\s*\[\s*([^\]]+?)\s*\]")
 
 

@@ -57,6 +57,9 @@ pub const CREDENTIAL_PARTS: &[&str] = &[
     "sess",
     "sig",
     "credential",
+    "jwt",
+    "pw",
+    "cookie",
 ];
 
 fn credential(name: &str) -> bool {
@@ -116,19 +119,17 @@ fn scrub_with(url: &str, form: Form, drop_query: bool) -> String {
             Some((scheme, rest)) => {
                 out.push_str(scheme);
                 out.push_str("://");
-                // The userinfo runs to the last `@` before the first `/`
-                // after an `@`, so a raw password holding `/`
-                // (`https://u:pa/ss@host/x`) goes too. An `@` in a path
-                // hides the host with it: never too little.
-                let (at, end) = match rest.find('@') {
-                    Some(first) => {
-                        let end = rest[first..].find('/').map_or(rest.len(), |j| first + j);
-                        (rest[..end].rfind('@'), end)
-                    }
-                    None => (None, rest.find('/').unwrap_or(rest.len())),
-                };
+                let (at, end) = userinfo(rest);
                 let (authority, rest) = rest.split_at(end);
                 let authority = match at {
+                    // With a `/`, `?` or `#` before that `@`, what follows
+                    // may not be the host (`https://u:pa/ss@host/x`, or
+                    // `https://registry.example/@scope/pkg`): nothing more
+                    // is shown rather than something misleading.
+                    Some(at) if authority[..at].contains(['/', '?', '#']) => {
+                        out.push_str(REDACTED);
+                        return out;
+                    }
                     Some(at) => {
                         out.push_str(REDACTED);
                         out.push('@');
@@ -197,6 +198,25 @@ fn finish(mut out: String, rest: &str, drop_query: bool) -> String {
     out
 }
 
+/// Where an authority's userinfo ends and the authority itself ends, in
+/// what follows `scheme://`. The userinfo runs to the last `@` before the
+/// first `/` after an `@`, so a raw password holding `/` goes too; an `@`
+/// in a path hides the host with it: never too little.
+fn userinfo(rest: &str) -> (Option<usize>, usize) {
+    match rest.find('@') {
+        Some(first) => {
+            let end = rest[first..].find('/').map_or(rest.len(), |j| first + j);
+            (rest[..end].rfind('@'), end)
+        }
+        None => (None, rest.find('/').unwrap_or(rest.len())),
+    }
+}
+
+/// Where a URL in free text can't go on, whatever comes before.
+fn hard_stop(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '"' | '<' | '>' | '`')
+}
+
 fn url_char(c: char) -> bool {
     !c.is_whitespace() && !matches!(c, '"' | '\'' | '<' | '>' | '`' | ')' | ']' | '}' | ',')
 }
@@ -224,10 +244,23 @@ pub fn scrub_text(text: &str) -> String {
         } else {
             i
         };
-        let end = rest[i..]
+        // A raw userinfo may hold `,`, `'` or `)`, so the userinfo comes
+        // off the run up to a hard stop first; `url_char` trims only what
+        // follows it.
+        let mut from = i;
+        if rest[i..].starts_with("://") {
+            let wide = rest[i + 3..]
+                .char_indices()
+                .find(|(_, c)| hard_stop(*c))
+                .map_or(rest.len(), |(j, _)| i + 3 + j);
+            if let (Some(at), _) = userinfo(&rest[i + 3..wide]) {
+                from = i + 3 + at + 1;
+            }
+        }
+        let end = rest[from..]
             .char_indices()
             .find(|(_, c)| !url_char(*c))
-            .map_or(rest.len(), |(j, _)| i + j);
+            .map_or(rest.len(), |(j, _)| from + j);
         out.push_str(&hide_runs(&redact_secrets(&rest[..start])));
         out.push_str(&scrub_with(&rest[start..end], Form::Absolute, true));
         rest = &rest[end..];
@@ -302,24 +335,50 @@ fn redact_secrets(text: &str) -> String {
             sep += 1;
         }
         sep = skip_space(b, sep);
-        if matches!(b.get(sep), Some(b'=' | b':')) && credential(&text[i..name_end]) {
-            let j = skip_space(b, sep + 1);
+        // `=`, `:`, or a URL-encoded `%3D` / `%3A`.
+        let sep_len = match b.get(sep) {
+            Some(b'=' | b':') => 1,
+            Some(b'%')
+                if b.get(sep + 1) == Some(&b'3')
+                    && matches!(b.get(sep + 2), Some(b'D' | b'd' | b'A' | b'a')) =>
+            {
+                3
+            }
+            _ => 0,
+        };
+        if sep_len > 0 && credential(&text[i..name_end]) {
+            let j = skip_space(b, sep + sep_len);
             let (j, end) = match b.get(j) {
-                // A quoted value runs to its closing quote.
+                // A quoted value runs to its closing quote, past escaped
+                // ones (`"a\"b"`).
                 Some(&q @ (b'"' | b'\'')) => {
                     let from = j + 1;
-                    let to = (from..b.len()).find(|&k| b[k] == q).unwrap_or(b.len());
-                    (from, to)
+                    let mut to = from;
+                    while to < b.len() && b[to] != q {
+                        to += if b[to] == b'\\' { 2 } else { 1 };
+                    }
+                    (from, to.min(b.len()))
                 }
                 _ => {
                     let mut end = stop(j);
-                    // `Authorization: Bearer <token>`: the scheme and the token.
+                    // `Authorization: <scheme> <credentials>`, whatever
+                    // the scheme (`Bearer`, `Basic`, `token`): both go.
                     let scheme = &b[j..end];
-                    if (scheme.eq_ignore_ascii_case(b"bearer")
+                    let authorization = word.len() >= 13
+                        && word[word.len() - 13..].eq_ignore_ascii_case(b"authorization");
+                    if (authorization
+                        || scheme.eq_ignore_ascii_case(b"bearer")
                         || scheme.eq_ignore_ascii_case(b"basic"))
+                        && !scheme.is_empty()
+                        && scheme
+                            .iter()
+                            .all(|c| c.is_ascii_alphanumeric() || *c == b'-')
                         && b.get(end).is_some_and(|c| c.is_ascii_whitespace())
                     {
-                        end = stop(skip_space(b, end));
+                        let next = skip_space(b, end);
+                        if next < b.len() {
+                            end = stop(next);
+                        }
                     }
                     (j, end)
                 }
@@ -327,7 +386,7 @@ fn redact_secrets(text: &str) -> String {
             if end > j {
                 cuts.push((j, end));
             }
-            i = end.max(sep + 1);
+            i = end.max(sep + sep_len);
             continue;
         }
         i = name_end;
@@ -443,10 +502,23 @@ mod tests {
             scrub("https://h/announcements/latest", Form::Absolute),
             "https://h/announcements/latest"
         );
-        // A raw password holding `/` (or `@`) goes whole.
+        // A raw password holding `@` goes whole; one holding `/`, `?` or
+        // `#` takes the rest with it, since what follows may not be the host.
         assert_eq!(
             scrub("https://u:pa/ss@host/x", Form::Absolute),
-            "https://[redacted]@host/x"
+            "https://[redacted]"
+        );
+        assert_eq!(
+            scrub("http://u:p#w@host/", Form::Absolute),
+            "http://[redacted]"
+        );
+        assert_eq!(
+            scrub("https://registry.npmjs.org/@scope/pkg", Form::Absolute),
+            "https://[redacted]"
+        );
+        assert_eq!(
+            scrub("https://h.example/s?q=a@b", Form::Absolute),
+            "https://[redacted]"
         );
         assert_eq!(
             scrub("https://u:p@a@s@host:81/x?y=1", Form::Absolute),
@@ -454,7 +526,7 @@ mod tests {
         );
         assert_eq!(
             scrub("https://u:pa/ss@host", Form::Absolute),
-            "https://[redacted]@host"
+            "https://[redacted]"
         );
         // No `@`: the host stays.
         assert_eq!(
@@ -503,6 +575,14 @@ mod tests {
             ("Authorization:   Bearer    abc.def", "abc.def"),
             ("credentials: c3d", "c3d"),
             ("aws_credential=c3d", "c3d"),
+            ("Authorization: token ghp_s3cr3t rejected", "ghp_s3cr3t"),
+            ("authorization: Digest d1g3st", "d1g3st"),
+            (r#"password: "a\"b s3cr3t" next"#, "s3cr3t"),
+            ("jwt=eyJ0", "eyJ0"),
+            ("pw: hunter2", "hunter2"),
+            ("cookie: sid=abc123", "abc123"),
+            ("set token%3Ds3cr3t%26x", "s3cr3t"),
+            ("api_key%3as3cr3t", "s3cr3t"),
         ] {
             let s = scrub_text(text);
             assert!(!s.contains(secret), "{secret} in {s}");
@@ -512,6 +592,31 @@ mod tests {
             r#"{"x-api-key": "[redacted]", "n": 1}"#
         );
         assert_eq!(scrub_text("token = t0k then"), "token = [redacted] then");
+        assert_eq!(
+            scrub_text("Authorization: token ghp_x rejected"),
+            "Authorization: [redacted] rejected"
+        );
+        // A raw userinfo holding `,`, `'` or `)` isn't cut short.
+        for (text, secret) in [
+            ("err for url (https://u:p,w@host/x)", "p,w"),
+            ("proxy socks5://user:pa'ss@h:1080 failed", "pa'ss"),
+            ("got https://u:p)w@h/ back", "p)w"),
+        ] {
+            let s = scrub_text(text);
+            assert!(
+                !s.contains(secret) && s.contains("[redacted]@h"),
+                "{secret} in {s}"
+            );
+        }
+        assert_eq!(
+            scrub_text("err for url (https://u:p,w@host/x)"),
+            "err for url (https://[redacted]@host/x)"
+        );
+        // Without userinfo, `url_char` still ends a URL.
+        assert_eq!(
+            scrub_text("see (https://h.example/x), then"),
+            "see (https://h.example/x), then"
+        );
         assert_eq!(scrub_text("limit=5 and size: 7"), "limit=5 and size: 7");
         let base32 = "ZHQVOY7XELZD5GFCTXW6X2RUDOMNKMCW";
         assert_eq!(scrub_text(&format!("x {base32} y")), "x [hidden] y");
