@@ -6,10 +6,12 @@
 //! every match (B8). Every way out of here shows only alerts on torrents
 //! search would show: none a filter rule hid ([`flags::HIDDEN`]), and no
 //! Adult while "Show adult content" is off (§20.9: left out entirely).
-//! The list, the event and the feed check each row with
-//! [`shown_row`]; the badge is the same rule in SQL
-//! ([`Store::unread_shown`]), and a test holds the two together. No
-//! response carries a count of what was left out.
+//! The list, the feed and the badge apply it in SQL
+//! ([`Store::shown_alerts`], [`Store::unread_shown`]), so a search whose
+//! matches are mostly withheld costs one index scan, not a lookup per
+//! row under the shared reader lock; the event checks each new alert
+//! with [`shown_row`], and a test holds the SQL and the per-row rule
+//! together. No response carries a count of what was left out.
 //!
 //! **Feeds** (`GET /feeds/{id}`) are the one route here a feed token or
 //! an API key with the `feeds` scope reaches ([`auth::feed_token`]). A
@@ -21,7 +23,7 @@
 //! appear in a link, a body, a header, an error or a log.
 
 use axum::extract::{Extension, State};
-use axum::http::{Extensions, HeaderMap, HeaderValue, StatusCode, header};
+use axum::http::{Extensions, HeaderMap, HeaderValue, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -51,8 +53,6 @@ pub(crate) struct ApiDoc;
 /// Rows per page, at most.
 const MAX_LIMIT: usize = 200;
 const DEFAULT_LIMIT: usize = 50;
-/// Alerts read from the store at a time while skipping withheld ones.
-const BATCH: usize = 200;
 /// Items in a feed: the newest shown alerts.
 pub const FEED_ITEMS: usize = 50;
 /// Where a feed's links point when the request's `Host` isn't usable.
@@ -188,7 +188,7 @@ pub(crate) async fn list(
     Query(p): Query<AlertsQuery>,
 ) -> ApiResult<Json<AlertsPage>> {
     let limit = p.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
-    let mut before = match p.cursor.as_deref() {
+    let before = match p.cursor.as_deref() {
         None => None,
         Some(c) => Some(
             c.parse::<i64>()
@@ -204,33 +204,27 @@ pub(crate) async fn list(
             .saved_search(id)
             .map_err(internal)?
             .ok_or_else(search_not_found)?;
-        let mut items = Vec::new();
-        let mut more = false;
+        // One more than a page, to know whether another follows. The
+        // store applies the rule in SQL; `shown_row` reads each row's
+        // details, and agrees with it (the parity test below).
+        let page = store
+            .shown_alerts(id, before, limit + 1, hidden_type(adult), false)
+            .map_err(internal)?;
+        let more = page.len() > limit;
+        let mut items = Vec::with_capacity(limit);
         // The last row returned: a cursor never names a withheld one.
         let mut last = None;
-        'pages: loop {
-            let page = store.alerts(id, before, BATCH).map_err(internal)?;
-            let end = page.len() < BATCH;
-            for a in page {
-                before = Some(a.torrent_id);
-                let Some((row, e)) = shown_row(&store, a.torrent_id, false, adult)? else {
-                    continue;
-                };
-                if items.len() == limit {
-                    more = true;
-                    break 'pages;
-                }
-                items.push(AlertRow {
-                    created_at: a.created_at,
-                    id: a.id,
-                    read: a.read_at.is_some(),
-                    torrent: hit_row(&row, e),
-                });
-                last = Some(a.torrent_id);
-            }
-            if end {
-                break;
-            }
+        for a in page.into_iter().take(limit) {
+            let Some((row, e)) = shown_row(&store, a.torrent_id, false, adult)? else {
+                continue;
+            };
+            items.push(AlertRow {
+                created_at: a.created_at,
+                id: a.id,
+                read: a.read_at.is_some(),
+                torrent: hit_row(&row, e),
+            });
+            last = Some(a.torrent_id);
         }
         Ok(Json(AlertsPage {
             items,
@@ -299,10 +293,16 @@ pub(crate) async fn unread(State(s): State<ApiState>) -> ApiResult<Json<UnreadAl
     .map_err(internal)?
 }
 
-/// The links' origin: the request's `Host` (a host and port only), over
+/// The links' origin: the request's `Host` (a host and port only; the
+/// request target's authority when there's no `Host`, as over HTTP/2), over
 /// `https` only when a trusted proxy (proxy-header auth on, the TCP peer
 /// trusted, B12) says `X-Forwarded-Proto: https`.
-fn origin(headers: &HeaderMap, auth: Option<&SessionAuth>, peer: std::net::IpAddr) -> String {
+fn origin(
+    headers: &HeaderMap,
+    authority: Option<&str>,
+    auth: Option<&SessionAuth>,
+    peer: std::net::IpAddr,
+) -> String {
     let https = auth.is_some_and(|a| {
         let proxy = a.auth.proxy();
         if !proxy.enabled || a.auth.proxy_forced_off() {
@@ -321,6 +321,7 @@ fn origin(headers: &HeaderMap, auth: Option<&SessionAuth>, peer: std::net::IpAdd
     let mut hosts = headers.get_all(header::HOST).iter();
     let host = match (hosts.next(), hosts.next()) {
         (Some(h), None) => h.to_str().ok(),
+        (None, _) => authority,
         _ => None,
     };
     host.and_then(|h| rss::feed_origin(https, h))
@@ -337,43 +338,35 @@ fn feed_xml(store: &Store, id: i64, adult: bool, origin: &str) -> ApiResult<Opti
     if !search.rss {
         return Ok(None);
     }
-    let mut items = Vec::new();
+    // Shown and public, in SQL (§18.7: private results stay local).
+    let alerts = store
+        .shown_alerts(id, None, FEED_ITEMS, hidden_type(adult), true)
+        .map_err(internal)?;
+    let mut items = Vec::with_capacity(alerts.len());
     let mut newest = None;
-    let mut before = None;
-    'pages: loop {
-        let page = store.alerts(id, before, BATCH).map_err(internal)?;
-        let end = page.len() < BATCH;
-        for a in page {
-            before = Some(a.torrent_id);
-            let Some((row, _)) = shown_row(store, a.torrent_id, false, adult)? else {
-                continue;
-            };
-            let private = row.flags & flags::PRIVATE_SOURCE != 0;
-            if private {
-                continue;
-            }
-            let hash = torrents::hex(&row.info_hash.0);
-            newest = newest.max(Some(a.created_at));
-            items.push(RssItem {
-                title: row.name.clone(),
-                link: Some(format!("{origin}/t/{hash}")),
-                guid: hash.clone(),
-                published: u64::try_from(a.created_at).unwrap_or(0),
-                description: format!("New for the saved search \u{201c}{}\u{201d}.", search.name),
-                private_source: private,
-                magnet: Some(RssMagnet {
-                    info_hash: hash,
-                    name: row.name,
-                    size: row.size,
-                }),
-            });
-            if items.len() == FEED_ITEMS {
-                break 'pages;
-            }
+    for a in alerts {
+        let Some((row, _)) = shown_row(store, a.torrent_id, false, adult)? else {
+            continue;
+        };
+        let private = row.flags & flags::PRIVATE_SOURCE != 0;
+        if private {
+            continue;
         }
-        if end {
-            break;
-        }
+        let hash = torrents::hex(&row.info_hash.0);
+        newest = newest.max(Some(a.created_at));
+        items.push(RssItem {
+            title: row.name.clone(),
+            link: Some(format!("{origin}/t/{hash}")),
+            guid: hash.clone(),
+            published: u64::try_from(a.created_at).unwrap_or(0),
+            description: format!("New for the saved search \u{201c}{}\u{201d}.", search.name),
+            private_source: private,
+            magnet: Some(RssMagnet {
+                info_hash: hash,
+                name: row.name,
+                size: row.size,
+            }),
+        });
     }
     let channel = RssChannel {
         title: format!("Lodestar: {}", search.name),
@@ -432,6 +425,7 @@ pub(crate) async fn feed(
     State(s): State<ApiState>,
     Extension(access): Extension<Access>,
     extensions: Extensions,
+    uri: Uri,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> ApiResult<Response> {
@@ -445,6 +439,7 @@ pub(crate) async fn feed(
     let adult = s.adult.shown();
     let origin = origin(
         &headers,
+        uri.authority().map(|a| a.as_str()),
         extensions.get::<SessionAuth>(),
         peer_ip(&extensions),
     );
@@ -477,6 +472,16 @@ pub(crate) async fn feed(
     h.insert(
         header::REFERRER_POLICY,
         HeaderValue::from_static("no-referrer"),
+    );
+    // Opened in a browser, it's inert XML: never sniffed as HTML, and
+    // nothing in it loads or runs.
+    h.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    h.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("default-src 'none'; sandbox"),
     );
     Ok(resp)
 }

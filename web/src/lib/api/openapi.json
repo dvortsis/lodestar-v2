@@ -3090,6 +3090,16 @@
               }
             }
           },
+          "409": {
+            "description": "`too_many_saved_searches`: 1,000 are kept at most.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "422": {
             "description": "`invalid_value`: the name or query isn't allowed.",
             "content": {

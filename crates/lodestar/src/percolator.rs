@@ -23,7 +23,7 @@
 //! - **Fixture mode** never starts it (`fixture::unless_offline`), so the
 //!   fixture's alert counts hold.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -105,6 +105,14 @@ pub struct Run {
     pub created: Vec<Alert>,
 }
 
+/// What the task remembers between runs.
+#[derive(Debug, Default)]
+pub struct Seen {
+    /// Saved searches already logged as unreadable, so each is logged
+    /// once per process rather than every run.
+    unreadable: HashSet<i64>,
+}
+
 /// One run up to `through` (see the module docs). `hub` gets the
 /// `alerts` events when given.
 pub fn run_once(
@@ -114,6 +122,7 @@ pub fn run_once(
     through: i64,
     config: &PercolatorConfig,
     now: i64,
+    seen: &mut Seen,
 ) -> Result<Run, BoxError> {
     let mut due = store.percolation_due(through)?;
     due.sort_by_key(|s| (s.watermark, s.id));
@@ -121,18 +130,26 @@ pub fn run_once(
     let mut parsed = Vec::with_capacity(due.len());
     for s in &due {
         match serde_json::from_str::<Node>(&s.ast) {
-            Ok(node) => parsed.push((s.id, s.watermark, node)),
+            Ok(node) => {
+                seen.unreadable.remove(&s.id);
+                parsed.push((s.id, s.watermark, node));
+            }
             Err(_) => {
                 // Skipped, not moved past: once its query is saved again
                 // it catches up from where it was.
                 run.unreadable += 1;
-                tracing::warn!(
-                    "percolator: saved search {} has a query this build can't read; skipped",
-                    s.id
-                );
+                if seen.unreadable.insert(s.id) {
+                    tracing::warn!(
+                        "percolator: saved search {} has a query this build can't read; skipped",
+                        s.id
+                    );
+                }
             }
         }
     }
+    // The AST each search ran with: one paused or edited meanwhile is
+    // left alone when the run is recorded.
+    let asts: HashMap<i64, &str> = due.iter().map(|s| (s.id, s.ast.as_str())).collect();
     let due: Vec<Due<'_>> = parsed
         .iter()
         .map(|(id, watermark, node)| Due {
@@ -151,16 +168,20 @@ pub fn run_once(
     run.more = p.more();
     // One transaction per range end: a search capped short of `through`
     // moves only as far as it ran.
-    let mut by_end: BTreeMap<i64, Vec<SearchHits<'_>>> = BTreeMap::new();
+    let mut by_end: BTreeMap<i64, Vec<(SearchHits<'_>, &str)>> = BTreeMap::new();
     for m in &p.matched {
-        by_end.entry(m.through).or_default().push(SearchHits {
-            saved_search_id: m.id,
-            torrent_ids: &m.torrent_ids,
-        });
+        let ast = asts.get(&m.id).copied().unwrap_or_default();
+        by_end.entry(m.through).or_default().push((
+            SearchHits {
+                saved_search_id: m.id,
+                torrent_ids: &m.torrent_ids,
+            },
+            ast,
+        ));
     }
     let mut failed = None;
     for (end, hits) in &by_end {
-        match store.record_percolation(*end, hits, now) {
+        match store.record_percolation_unchanged(*end, hits, now) {
             Ok(created) => run.created.extend(created),
             Err(e) => {
                 failed = Some(e);
@@ -176,7 +197,9 @@ pub fn run_once(
     {
         match lodestar_api::alerts::announce(hub, store, &run.created, adult) {
             Ok(n) => run.events = n,
-            // `announce` logged it; the alerts are recorded either way.
+            // `internal` logged the store error behind it. The alerts
+            // are recorded and show in the list and the badge; only the
+            // live event is lost.
             Err(_) => tracing::warn!("percolator: announcing new alerts failed"),
         }
     }
@@ -247,6 +270,7 @@ pub fn spawn(
             .await;
         }
         let mut next_prune = tokio::time::Instant::now() + config.prune_every;
+        let seen = Arc::new(Mutex::new(Seen::default()));
         // Catch up at start: searches may be behind the index.
         let mut more = true;
         loop {
@@ -265,8 +289,13 @@ pub fn spawn(
                 next_prune = tokio::time::Instant::now() + config.prune_every;
             }
             let through = wake.through.load(Ordering::Relaxed);
-            let (search, store, hub, adult) =
-                (search.clone(), store.clone(), hub.clone(), adult.clone());
+            let (search, store, hub, adult, seen) = (
+                search.clone(),
+                store.clone(),
+                hub.clone(),
+                adult.clone(),
+                seen.clone(),
+            );
             let ran = tokio::task::spawn_blocking(move || {
                 let mut store = lock(&store);
                 if prune_now {
@@ -280,6 +309,7 @@ pub fn spawn(
                     through,
                     &config,
                     crate::unix_now(),
+                    &mut seen.lock().unwrap_or_else(PoisonError::into_inner),
                 );
                 (run, started.elapsed())
             })
@@ -480,13 +510,31 @@ mod tests {
                 0,
             )
             .unwrap();
-        let run = run_once(&s.index, &mut s.store, None, 30, &quick(), NOW).unwrap();
+        let run = run_once(
+            &s.index,
+            &mut s.store,
+            None,
+            30,
+            &quick(),
+            NOW,
+            &mut Seen::default(),
+        )
+        .unwrap();
         assert_eq!((run.searches, run.more), (1, false));
         assert_eq!(alert_ids(&s.store, even), evens(21, 30));
         assert!(alert_ids(&s.store, paused).is_empty());
         assert_eq!(s.store.saved_search(paused).unwrap().unwrap().watermark, 20);
         // Up to the end.
-        run_once(&s.index, &mut s.store, None, 40, &quick(), NOW).unwrap();
+        run_once(
+            &s.index,
+            &mut s.store,
+            None,
+            40,
+            &quick(),
+            NOW,
+            &mut Seen::default(),
+        )
+        .unwrap();
         assert_eq!(alert_ids(&s.store, even), evens(21, 40));
     }
 
@@ -494,9 +542,27 @@ mod tests {
     fn rerunning_or_a_fresh_task_adds_nothing() {
         let mut s = setup(30);
         let id = save(&mut s.store, "even", "Even", 0);
-        let first = run_once(&s.index, &mut s.store, None, 30, &quick(), NOW).unwrap();
+        let first = run_once(
+            &s.index,
+            &mut s.store,
+            None,
+            30,
+            &quick(),
+            NOW,
+            &mut Seen::default(),
+        )
+        .unwrap();
         assert_eq!(first.alerts, 15);
-        let again = run_once(&s.index, &mut s.store, None, 30, &quick(), NOW).unwrap();
+        let again = run_once(
+            &s.index,
+            &mut s.store,
+            None,
+            30,
+            &quick(),
+            NOW,
+            &mut Seen::default(),
+        )
+        .unwrap();
         assert_eq!((again.searches, again.alerts), (0, 0));
         // A crash after the run but before the watermark was seen: the
         // same range recorded again adds nothing (B8's unique key).
@@ -516,7 +582,16 @@ mod tests {
         );
         // A fresh connection, as after a restart.
         let mut fresh = Store::open(&s.db, StoreConfig::default()).unwrap();
-        let run = run_once(&s.index, &mut fresh, None, 30, &quick(), NOW).unwrap();
+        let run = run_once(
+            &s.index,
+            &mut fresh,
+            None,
+            30,
+            &quick(),
+            NOW,
+            &mut Seen::default(),
+        )
+        .unwrap();
         assert_eq!(run.alerts, 0);
         assert_eq!(alert_ids(&fresh, id), evens(1, 30));
     }
@@ -532,7 +607,16 @@ mod tests {
         };
         let mut runs = 0;
         loop {
-            let run = run_once(&s.index, &mut s.store, None, 250, &config, NOW).unwrap();
+            let run = run_once(
+                &s.index,
+                &mut s.store,
+                None,
+                250,
+                &config,
+                NOW,
+                &mut Seen::default(),
+            )
+            .unwrap();
             runs += 1;
             if !run.more {
                 break;
@@ -555,9 +639,27 @@ mod tests {
             keep: 10,
             ..quick()
         };
-        run_once(&s.index, &mut s.store, None, 30, &config, NOW).unwrap();
+        run_once(
+            &s.index,
+            &mut s.store,
+            None,
+            30,
+            &config,
+            NOW,
+            &mut Seen::default(),
+        )
+        .unwrap();
         assert_eq!(alert_ids(&s.store, id), (21..=30).collect::<Vec<_>>());
-        run_once(&s.index, &mut s.store, None, 60, &config, NOW).unwrap();
+        run_once(
+            &s.index,
+            &mut s.store,
+            None,
+            60,
+            &config,
+            NOW,
+            &mut Seen::default(),
+        )
+        .unwrap();
         assert_eq!(alert_ids(&s.store, id).len(), 20);
         prune(&mut s.store, 10);
         assert_eq!(alert_ids(&s.store, id), (51..=60).collect::<Vec<_>>());
@@ -573,12 +675,30 @@ mod tests {
             budget: Duration::ZERO,
             ..quick()
         };
-        let run = run_once(&s.index, &mut s.store, None, 20, &spent, NOW).unwrap();
+        let run = run_once(
+            &s.index,
+            &mut s.store,
+            None,
+            20,
+            &spent,
+            NOW,
+            &mut Seen::default(),
+        )
+        .unwrap();
         assert_eq!((run.searches, run.alerts, run.more), (0, 0, true));
         for id in &ids {
             assert_eq!(s.store.saved_search(*id).unwrap().unwrap().watermark, 0);
         }
-        let run = run_once(&s.index, &mut s.store, None, 20, &quick(), NOW).unwrap();
+        let run = run_once(
+            &s.index,
+            &mut s.store,
+            None,
+            20,
+            &quick(),
+            NOW,
+            &mut Seen::default(),
+        )
+        .unwrap();
         assert_eq!((run.searches, run.alerts, run.more), (5, 50, false));
     }
 
@@ -603,7 +723,16 @@ mod tests {
                 0,
             )
             .unwrap();
-        let run = run_once(&s.index, &mut s.store, None, 10, &quick(), NOW).unwrap();
+        let run = run_once(
+            &s.index,
+            &mut s.store,
+            None,
+            10,
+            &quick(),
+            NOW,
+            &mut Seen::default(),
+        )
+        .unwrap();
         assert_eq!((run.searches, run.unreadable, run.more), (1, 1, false));
         assert_eq!(alert_ids(&s.store, good).len(), 5);
         assert_eq!(s.store.saved_search(bad).unwrap().unwrap().watermark, 0);
@@ -653,8 +782,26 @@ mod tests {
             ..quick()
         };
         let before = handle.index();
-        run_once(&handle.index(), &mut store, None, 300, &config, NOW).unwrap();
-        run_once(&handle.index(), &mut store, None, 300, &config, NOW).unwrap();
+        run_once(
+            &handle.index(),
+            &mut store,
+            None,
+            300,
+            &config,
+            NOW,
+            &mut Seen::default(),
+        )
+        .unwrap();
+        run_once(
+            &handle.index(),
+            &mut store,
+            None,
+            300,
+            &config,
+            NOW,
+            &mut Seen::default(),
+        )
+        .unwrap();
         assert_eq!(store.saved_search(id).unwrap().unwrap().watermark, 140);
         // Let the rebuild finish and swap.
         hold.store(false, Ordering::Relaxed);
@@ -663,9 +810,17 @@ mod tests {
             assert!(start.elapsed() < Duration::from_secs(60), "the swap");
             std::thread::sleep(Duration::from_millis(10));
         }
-        while run_once(&handle.index(), &mut store, None, 300, &config, NOW)
-            .unwrap()
-            .more
+        while run_once(
+            &handle.index(),
+            &mut store,
+            None,
+            300,
+            &config,
+            NOW,
+            &mut Seen::default(),
+        )
+        .unwrap()
+        .more
         {}
         assert_eq!(alert_ids(&store, id), evens(1, 300));
         drop((before, handle));
@@ -757,6 +912,12 @@ mod tests {
         add(&mut s.store, &["Zq7SecretTorrent.1080p".to_string()]);
         index_all(&s.index, &mut s.store);
         save(&mut s.store, "Zq7MineSearch", "Zq7SecretTorrent", 0);
+        // Ids are never reused: this gives the broken search an id no
+        // other test's search has, so its lines here are its own.
+        for _ in 0..500 {
+            let id = save(&mut s.store, "filler", "x", 0);
+            s.store.delete_saved_search(id).unwrap();
+        }
         let broken = s
             .store
             .create_saved_search(
@@ -774,14 +935,16 @@ mod tests {
                 0,
             )
             .unwrap();
-        let run = run_once(&s.index, &mut s.store, None, 1, &quick(), NOW).unwrap();
+        let mut seen = Seen::default();
+        let run = run_once(&s.index, &mut s.store, None, 1, &quick(), NOW, &mut seen).unwrap();
         assert_eq!((run.alerts, run.unreadable), (1, 1));
+        // Still unreadable next run: counted, not logged again.
+        let run = run_once(&s.index, &mut s.store, None, 1, &quick(), NOW, &mut seen).unwrap();
+        assert_eq!(run.unreadable, 1);
         prune(&mut s.store, 0);
         let log = String::from_utf8(LOG.lock().unwrap().clone()).unwrap();
-        assert!(
-            log.contains(&format!("saved search {broken} has a query")),
-            "{log}"
-        );
+        let line = format!("saved search {broken} has a query");
+        assert_eq!(log.matches(&line).count(), 1, "{log}");
         assert!(log.contains("pruned 1 old alerts"), "{log}");
         // No name, query or torrent name: each holds `Zq7`.
         assert!(!log.contains("Zq7"), "{log}");

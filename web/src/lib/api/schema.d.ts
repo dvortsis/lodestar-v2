@@ -7494,6 +7494,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description `too_many_saved_searches`: 1,000 are kept at most. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description `invalid_value`: the name or query isn't allowed. */
             422: {
                 headers: {
