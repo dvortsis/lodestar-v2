@@ -503,12 +503,7 @@ pub fn health_name(h: Health) -> &'static str {
 /// The scrape scheduler's counters and the hot columns (§15, §7).
 /// Trackers are labelled by id: an HTTP tracker URL can carry a passkey,
 /// and `/metrics` is open.
-pub fn render_scrape(
-    out: &mut String,
-    health: &HealthHandle,
-    hot: &HotColumns,
-    swarm_updates: u64,
-) {
+pub fn render_scrape(out: &mut String, health: &HealthHandle, swarm_updates: u64) {
     let mut o = Out(std::mem::take(out));
     let get = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
     let st = health.stats();
@@ -549,7 +544,7 @@ pub fn render_scrape(
     o.one(
         "scrape_fresh_skipped_total",
         "counter",
-        "Interest and rediscovery hints for torrents scraped recently.",
+        "Torrents dropped from a lane as already fresh: hints for recent scrapes, and new or due torrents scraped since they were queued.",
         get(&st.fresh_skipped),
     );
     o.one(
@@ -609,6 +604,13 @@ pub fn render_scrape(
             t.health as u8,
         );
     }
+    *out = o.0;
+}
+
+/// The hot columns' size: they're always held (last seen, search), with
+/// scraping on or off.
+pub fn render_hot(out: &mut String, hot: &HotColumns) {
+    let mut o = Out(std::mem::take(out));
     o.one(
         "hot_columns_ids",
         "gauge",
@@ -622,4 +624,24 @@ pub fn render_scrape(
         hot.memory_bytes(),
     );
     *out = o.0;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hot_column_gauges_render_on_their_own() {
+        // With scraping off there's no health handle, but the columns
+        // (last seen, search) are still held, so their size still shows.
+        let hot = HotColumns::new();
+        hot.touch(3, 10);
+        let mut out = String::new();
+        render_hot(&mut out, &hot);
+        assert!(
+            out.contains(&format!("lodestar_hot_columns_ids {}\n", hot.len())),
+            "{out}"
+        );
+        assert!(out.contains("lodestar_hot_columns_bytes "), "{out}");
+    }
 }

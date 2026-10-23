@@ -12,11 +12,13 @@
 //! Where such a clause has to select by itself (under `|` or `-`),
 //! [`CheckQuery`] runs the same check over a whole segment.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use lodestar_store::{Col, HotColumns, NEVER};
 use tantivy::collector::{Collector, SegmentCollector};
 use tantivy::columnar::Column;
+use tantivy::index::SegmentId;
 use tantivy::query::{
     BitSetDocSet, ConstScorer, EnableScoring, Explanation, Query, Scorer, Weight,
 };
@@ -213,8 +215,51 @@ pub(crate) struct CheckQuery {
 
 impl Query for CheckQuery {
     fn weight(&self, _: EnableScoring<'_>) -> tantivy::Result<Box<dyn Weight>> {
-        Ok(Box::new(self.clone()))
+        Ok(Box::new(CheckWeight {
+            query: self.clone(),
+            sets: SegmentSets::default(),
+        }))
     }
+}
+
+/// A clause's matches per segment, computed once per search: a sorted
+/// search asks a weight for a scorer per piece of a segment (`sorted.rs`),
+/// and a whole-segment scan per piece would repeat for every piece. The
+/// weight lives as long as the search, so does this.
+#[derive(Default)]
+pub(crate) struct SegmentSets(Mutex<HashMap<SegmentId, Arc<Slot>>>);
+
+/// One segment's set, once computed.
+type Slot = Mutex<Option<Arc<BitSet>>>;
+
+impl SegmentSets {
+    /// `reader`'s set, from `compute` the first time. Pieces of the same
+    /// segment wait for the first; other segments don't.
+    pub(crate) fn get(
+        &self,
+        reader: &SegmentReader,
+        compute: impl FnOnce(&SegmentReader) -> tantivy::Result<BitSet>,
+    ) -> tantivy::Result<Arc<BitSet>> {
+        let slot = self
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(reader.segment_id())
+            .or_default()
+            .clone();
+        let mut set = slot.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(s) = set.as_ref() {
+            return Ok(s.clone());
+        }
+        let s = Arc::new(compute(reader)?);
+        *set = Some(s.clone());
+        Ok(s)
+    }
+}
+
+struct CheckWeight {
+    query: CheckQuery,
+    sets: SegmentSets,
 }
 
 impl CheckQuery {
@@ -232,14 +277,23 @@ impl CheckQuery {
     }
 }
 
-impl Weight for CheckQuery {
+impl Weight for CheckWeight {
     fn scorer(&self, reader: &SegmentReader, boost: Score) -> tantivy::Result<Box<dyn Scorer>> {
-        let set = self.matches(reader)?;
-        Ok(Box::new(ConstScorer::new(BitSetDocSet::from(set), boost)))
+        let set = self.sets.get(reader, |r| self.query.matches(r))?;
+        // A copy (max_doc / 8 bytes) is far cheaper than another scan.
+        Ok(Box::new(ConstScorer::new(
+            BitSetDocSet::from(BitSet::clone(&set)),
+            boost,
+        )))
     }
 
     fn explain(&self, reader: &SegmentReader, doc: DocId) -> tantivy::Result<Explanation> {
-        if doc < reader.max_doc() && self.matches(reader)?.contains(doc) {
+        if doc < reader.max_doc()
+            && self
+                .sets
+                .get(reader, |r| self.query.matches(r))?
+                .contains(doc)
+        {
             Ok(Explanation::new("column check", 1.0))
         } else {
             Err(tantivy::TantivyError::InvalidArgument(format!(

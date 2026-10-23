@@ -128,7 +128,7 @@ struct Committing {
 /// What a transaction did, for the async side to account.
 struct Outcome {
     /// Per stored or already-stored result: (index, new?, swarm hashes).
-    stored: Vec<(usize, bool, Vec<InfoHash>)>,
+    stored: Vec<(usize, i64, bool, Vec<InfoHash>)>,
     /// Results the authoritative blocklist rejected.
     blocked: Vec<usize>,
     /// Per touch: the torrent's id, if the store had it.
@@ -360,13 +360,20 @@ impl Writer {
             .store(unix_now() as u64, Ordering::Relaxed);
         // The have-filter learns the keys before their leases end, so a
         // rediscovery in between is held, never claimed and fetched again.
-        for (_, _, hashes) in &outcome.stored {
+        for (_, _, _, hashes) in &outcome.stored {
             for h in hashes {
                 self.have.insert(h);
             }
         }
-        for (i, new, _) in outcome.stored {
+        for (i, id, new, _) in outcome.stored {
             let c = &committing[i];
+            // A new torrent was last seen when it was discovered, as
+            // `torrents.last_seen_at` says: `seen:`, the seen sort and the
+            // freshness prior read the hot column, not the row.
+            if let (true, Some(hot)) = (new, &self.hot) {
+                let at = c.lease.discovered_at.clamp(0, i64::from(u32::MAX - 1));
+                hot.touch(id as u64, at as u32);
+            }
             let Some(lease) = self.coordinator.complete(&c.results.key, c.results.token) else {
                 continue;
             };
@@ -688,6 +695,7 @@ fn transaction(
         .map(|(&i, ins)| {
             (
                 i,
+                ins.id(),
                 matches!(ins, Inserted::New(_)),
                 committing[i].results.torrent.swarm_hashes().collect(),
             )

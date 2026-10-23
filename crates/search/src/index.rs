@@ -696,16 +696,6 @@ impl SearchIndex {
         self.hot.as_ref()
     }
 
-    pub fn with_rank_weights(mut self, weights: RankWeights) -> SearchIndex {
-        self.weights = weights;
-        self
-    }
-
-    pub fn rank_weights(&self) -> &RankWeights {
-        &self.weights
-    }
-
-    /// Ranks every torrent by this multiplier as well (see [`Penalty`]).
     /// Ranking priors other than the defaults (config, §8: "all weights
     /// live in config").
     pub fn with_weights(mut self, weights: RankWeights) -> SearchIndex {
@@ -713,6 +703,7 @@ impl SearchIndex {
         self
     }
 
+    /// Ranks every torrent by this multiplier as well (see [`Penalty`]).
     pub fn with_penalty(mut self, penalty: Penalty) -> SearchIndex {
         self.penalty = Some(penalty);
         self
@@ -1080,12 +1071,7 @@ impl SearchIndex {
         let mut parts = Vec::new();
         let (scored, total): (Vec<(f32, DocAddress)>, usize) = match sort {
             Sort::Relevance => {
-                let priors = self.hot.as_deref().map(|hot| Priors {
-                    hot,
-                    weights: &self.weights,
-                    now: compiled.now,
-                    penalty: self.penalty.as_ref(),
-                });
+                let priors = self.priors(compiled.now);
                 if compiled.boosts.is_none() && priors.is_none() && !explain {
                     let inner = (top.order_by_score(), Count);
                     searcher.search(query, &PostFilter { ranges, hot, inner })?

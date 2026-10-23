@@ -95,7 +95,9 @@ pub struct HealthStats {
     pub suspect: std::sync::atomic::AtomicU64,
     /// Private torrents taken from a lane and dropped unscraped.
     pub private_skipped: std::sync::atomic::AtomicU64,
-    /// Interest and rediscovery hints for torrents scraped recently.
+    /// Torrents taken from a lane and dropped as already fresh: hints for
+    /// torrents scraped recently, and new or due torrents scraped since
+    /// they were queued.
     pub fresh_skipped: std::sync::atomic::AtomicU64,
     /// DHT scrapes not asked because the node was busy with others.
     pub dht_busy: std::sync::atomic::AtomicU64,
@@ -650,6 +652,10 @@ impl Scheduler {
             if slot.ready(now_ms, deadline_ms) && slot.jobs.try_send(job).is_ok() {
                 r.waiting_trackers += 1;
             } else {
+                // On the status page too, so a tracker sitting rounds out
+                // doesn't look idle.
+                slot.status.lock().expect("tracker status lock").rounds
+                    [Outcome::Skipped as usize] += 1;
                 self.rollups.add_dim(
                     now,
                     metric::SCRAPE_REQUESTS,
