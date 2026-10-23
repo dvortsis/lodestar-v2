@@ -20,10 +20,10 @@
 
 <section class="cmp-panel" aria-labelledby="compare-error-title" data-testid={testid}>
 	<h2 id="compare-error-title" class="cmp-title">{title}</h2>
-	<p class="cmp-text">{text}</p>
+	<p class="cmp-text" role="alert">{text}</p>
 	{#if hashes.length > 0}
 		<ul class="cmp-hashes">
-			{#each hashes as hash (hash)}
+			{#each hashes as hash, i (i)}
 				<li data-hash={hash}>
 					<Mono wrap>{hash}</Mono>
 					<Button

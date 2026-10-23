@@ -184,7 +184,7 @@ export function buildRows(data: CompareResponse, locale: string): Row[] {
 			'trackers',
 			m.trackers_reporting(),
 			(t) =>
-				t.trackers_reporting === null
+				t.trackers_reporting === null || t.trackers_checked === null
 					? null
 					: `${formatCount(t.trackers_reporting, locale)} / ${formatCount(t.trackers_checked, locale)}`,
 			m.never_scraped()

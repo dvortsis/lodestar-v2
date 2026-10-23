@@ -30,12 +30,18 @@
 
 	// The populated view (layouts, labels, formatters, the file lists) loads beside the request.
 	let Body = $state.raw<Component<LayoutProps & { columns: boolean }>>();
-	const loadBody = () => import('./Body.svelte').then((mod) => (Body = mod.default));
+	const loadBody = () =>
+		import('./Body.svelte')
+			.then((mod) => (Body = mod.default))
+			.catch(() => {
+				// The chunk is gone (a newer deploy, or the connection dropped): same as a network error.
+				error = new ApiError(0, 'network', 'chunk');
+			});
 
 	const slot = latest();
 	let data = $state.raw<CompareResponse>();
 	let error = $state.raw<ApiError>();
-	let loading = $state(false);
+	let busy = $state(false);
 	let showSkeleton = $state(false);
 	let skeletonTimer: ReturnType<typeof setTimeout> | undefined;
 	let seq = 0;
@@ -47,12 +53,12 @@
 			slot.cancel();
 			data = undefined;
 			error = undefined;
-			loading = false;
+			busy = false;
 			return;
 		}
 		// The last good comparison stays until the next one arrives, or fails (the stale state).
 		const mine = ++seq;
-		loading = true;
+		busy = true;
 		void loadBody();
 		if (!data) skeletonTimer = setTimeout(() => (showSkeleton = true), SKELETON_DELAY_MS);
 		slot
@@ -69,7 +75,7 @@
 				if (mine !== seq) return;
 				clearTimeout(skeletonTimer);
 				showSkeleton = false;
-				loading = false;
+				busy = false;
 			});
 	}
 	$effect(() => {
@@ -102,6 +108,7 @@
 	let atXLarge = $state(matches(X_LARGE));
 	let atXxLarge = $state(matches(XX_LARGE));
 	$effect(() => {
+		if (typeof matchMedia !== 'function') return;
 		const lists = [matchMedia(X_LARGE), matchMedia(XX_LARGE)];
 		const sync = () => {
 			atXLarge = lists[0]!.matches;
@@ -118,14 +125,16 @@
 	let focusAfter: { key: string; hash: string | undefined } | undefined;
 	function remove(hash: string) {
 		const at = hashes.indexOf(hash);
-		const next = hashes.filter((h) => h !== hash);
+		// Not in the URL (a stale column): nothing to remove. One copy only, if it is listed twice.
+		if (at === -1) return;
+		const next = hashes.filter((_, i) => i !== at);
 		focusAfter = { key: next.join(','), hash: hashes[at + 1] ?? hashes[at - 1] };
 		// eslint-disable-next-line svelte/no-navigation-without-resolve
 		void goto(compareHref(next, page.url.searchParams), { keepFocus: true, noScroll: true });
 	}
 	$effect(() => {
 		// Read both first: an early return would leave the effect with no dependencies.
-		const settled = !loading && focusAfter?.key === key;
+		const settled = !busy && focusAfter?.key === key;
 		if (!focusAfter || !settled) return;
 		const { hash } = focusAfter;
 		focusAfter = undefined;
@@ -195,7 +204,7 @@
 		</div>
 	{/if}
 
-	<div aria-busy={loading} data-testid="compare-region">
+	<div aria-busy={busy || (data !== undefined && !Body)} data-testid="compare-region">
 		{#if hashes.length < 2}
 			<!-- EmptyState's <svelte:element> would add ~0.4 KB to the runtime every page loads (§10.1
 				headroom), so this is its markup, written out. TODO(runner): switch back once it is cheap. -->
@@ -227,7 +236,7 @@
 				{hashes}
 				onRemove={remove}
 			/>
-		{:else if failure === 'transient' && !stale}
+		{:else if failure === 'transient' && (!stale || !Body)}
 			<Banner kind="error" title={m.compare_error_title()}>
 				{error?.code === 'network' ? m.compare_error_network() : m.compare_error_server()}
 				{#snippet action()}
@@ -246,7 +255,7 @@
 				</div>
 			{/if}
 			<Body {data} {columns} onCopy={copy} onPrefetch={prefetch} onRemove={remove} />
-		{:else if showSkeleton}
+		{:else if showSkeleton || data}
 			<div class="cmp-skeleton" data-testid="compare-skeleton">
 				{#each Array.from({ length: 9 }, (_, n) => n) as n (n)}<Skeleton />{/each}
 			</div>
@@ -256,6 +265,7 @@
 
 <style>
 	.cmp-page {
+		padding: calc(var(--spacing) * 4);
 		display: flex;
 		flex-direction: column;
 		gap: calc(var(--spacing) * 4);

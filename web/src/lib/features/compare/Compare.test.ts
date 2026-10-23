@@ -141,6 +141,12 @@ describe('columns layout', () => {
 		expect(screen.getByTestId('compare-column-1').querySelector('code')).toBeTruthy();
 	});
 
+	it('gives a missing attribute value an accessible name', async () => {
+		render(Compare);
+		await screen.findByTestId('compare-table');
+		expect(screen.getByTestId('compare-attr-group-1').textContent).toBe('—Not set');
+	});
+
 	it('says so when there are no parsed attributes', async () => {
 		mocks.post.mockResolvedValue(response(2, { differs: {} }));
 		open(2);
@@ -182,7 +188,7 @@ describe('attribute-first list', () => {
 	});
 });
 
-describe('file diff', () => {
+describe('file lists', () => {
 	it('is collapsed, headed with the server count, and shortened wording uses count only', async () => {
 		const data = response(2);
 		data.file_diff.only[1] = fileList(12345, 3, true);
@@ -210,7 +216,7 @@ describe('file diff', () => {
 		open(3);
 		render(Compare);
 		await screen.findByTestId('compare-table');
-		expect(screen.getByText(/some, but not all, share aren't/)).toBeTruthy();
+		expect(screen.getByText(/some but not all have aren't/)).toBeTruthy();
 		expect(screen.getByTestId('compare-diff-common').textContent).toContain('In all');
 	});
 });
@@ -232,6 +238,17 @@ describe('errors', () => {
 			expect(within(panel).getByRole('link', { name: 'Back to Search' })).toBeTruthy();
 		});
 	}
+
+	it('duplicate_hash with a real repeat lists every entry and Remove drops one copy', async () => {
+		mocks.post.mockRejectedValue(err(400, 'duplicate_hash'));
+		setUrl(`/compare?h=${HASHES[0]},${HASHES[0]},${HASHES[1]}`);
+		render(Compare);
+		const panel = await screen.findByTestId('compare-error-duplicate_hash');
+		const buttons = within(panel).getAllByRole('button', { name: /^Remove / });
+		expect(buttons).toHaveLength(3);
+		await fireEvent.click(buttons[0]!);
+		expect(mocks.goto.mock.calls[0]![0]).toBe(`/compare?h=${HASHES[0]},${HASHES[1]}`);
+	});
 
 	it('torrent_not_found: names nothing, offers Remove and Back to Search', async () => {
 		mocks.post.mockRejectedValue(new ApiError(404, 'torrent_not_found', 'x'));

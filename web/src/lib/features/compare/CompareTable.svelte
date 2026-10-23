@@ -96,8 +96,10 @@
 	.cmp-grid th {
 		font-weight: var(--font-weight-medium);
 	}
-	.cmp-grid tbody th {
+	.cmp-grid thead th:first-child {
 		width: 16%;
+	}
+	.cmp-grid tbody th {
 		color: var(--color-muted-text);
 	}
 	.cmp-letter {

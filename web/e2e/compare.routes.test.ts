@@ -1,6 +1,6 @@
 // S-compare: the Compare page (§10.6) against the OpenAPI mock. Columns at 1366, the
 // attribute-first list at 390 and 768, Remove with history, every error state, a 2,000-row
-// diff list, and axe in Riverstone light and dark for the populated, error and narrow views.
+// file list, and axe in Riverstone light and dark for the populated, error and narrow views.
 // No snapshot baselines (the route is not a key screen).
 import type { components } from '../src/lib/api/schema';
 import { fileList, HASHES, response } from '../src/lib/features/compare/testing';
@@ -59,11 +59,20 @@ for (const mode of ['light', 'dark'] as const) {
 			await expectNoA11yViolations(page);
 		});
 
-		for (const width of [390, 768]) {
-			test(`at ${width} the table becomes an attribute-first list`, async ({ page, go, mock }) => {
+		for (const [width, n] of [
+			[390, 2],
+			[390, 5],
+			[768, 3],
+			[768, 5]
+		] as const) {
+			test(`at ${width} with ${n} torrents the table becomes an attribute-first list`, async ({
+				page,
+				go,
+				mock
+			}) => {
 				serve(mock);
 				await page.setViewportSize({ width, height: 900 });
-				await go(url(3));
+				await go(url(n));
 				await expect(page.getByTestId('compare-list')).toBeVisible();
 				await expect(page.getByTestId('compare-table')).toHaveCount(0);
 				await expect(
@@ -145,6 +154,29 @@ test.describe('error codes', () => {
 			'href',
 			'/search'
 		);
+	});
+
+	test('a network failure is a banner with Retry', async ({ page, go }) => {
+		// Registered after the mock's own route, so it answers first.
+		await page.route('**/api/v1/compare', (route) => route.abort());
+		await go(url(2));
+		await expect(page.getByRole('alert')).toBeVisible();
+	});
+
+	test('a real duplicate in the URL is listed and Remove drops one copy', async ({
+		page,
+		go,
+		mock
+	}) => {
+		mock.error('compareTorrents', 400, 'duplicate_hash', 'x', { field: 'hashes' });
+		await go(`/compare?h=${HASHES[0]},${HASHES[0]},${HASHES[1]}`);
+		const panel = page.getByTestId('compare-error-duplicate_hash');
+		await expect(panel.getByRole('button', { name: /^Remove / })).toHaveCount(3);
+		await panel
+			.getByRole('button', { name: /^Remove / })
+			.first()
+			.click();
+		await expect(page).toHaveURL(new RegExp(`h=${HASHES[0]},${HASHES[1]}(&|$)`));
 	});
 
 	test('a server error is a banner with Retry', async ({ page, go, mock }) => {
