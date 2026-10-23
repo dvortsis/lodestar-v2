@@ -886,7 +886,7 @@
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": "from #86 | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus); brief committed 576d67a with runner addendum"
+      "notes": "from #86 | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus); brief committed 576d67a with runner addendum | 2026-10-23T18:40:51Z OWNER decision: Settings route budget = \u00a710.1 45 KB per route (replaces \u00a710.10.11 20 KB); engine target <=22 KB (measured ~21.1); instant-mode lazy split as follow-up. Part 1 pushed (70c1c07, no PR), part 2 local; push after #48"
     },
     "S-settings-2": {
       "status": "pending",
@@ -1467,6 +1467,11 @@
       "from": "S-alerts fixture run",
       "what": "crates/lodestar/src/subscriptions.rs:135 .expect() on reqwest Client build panics the subscription task at start-up (app.crash seen in fixture mode, likely proxy-from-env/cert setup); return an error, log a catalogue event and mark subscriptions unavailable instead of panicking",
       "to": "next subscriptions/filters touch (or B-log1b sweep)"
+    },
+    "settings-instant-lazy": {
+      "from": "M-settings-form",
+      "what": "lazy-load instant mode out of the settings engine",
+      "to": "settings follow-up"
     }
   },
   "blocked_on_owner": [],
@@ -1541,6 +1546,7 @@
     "owner_decision_insights_budget": "2026-10-23T17:34:45Z owner: Insights budget = first view <=45 KB (uPlot and below-fold lazy); runner total cap 65 KB. Needs a docs/decisions entry (S-insights-1 records it).",
     "route_budget_rule": "2026-10-23T17:45:34Z runner: per-route hard limit = \u00a710.1 45 KB route JS (beyond shell, gz); 15 KB own JS+CSS is a target needing a one-line reason if exceeded",
     "merge_freeze": "2026-10-23T17:56:15Z merge freeze until #48 (M4 2/2) merges: relayed from owner's session_01DDEhacHac1WPa8byNBPXKY ('M4 completion strategy'), adopted by runner. No merges to main (slices, polish, runner PRs incl #141, fixture fix). Slices keep working, hold pushes. After #48: delta review since da63255 (already reviewed ac3bb9f) + post verdict on PR, merge, lift freeze, mark ext:m4-* satisfied, create follow-up slices for #48's list.",
-    "merge_order_after_m4": "#48 -> #132 (S-search-1 chunk fix) -> #136 -> #135 -> fixture fix -> S-compare/S-alerts/S-detail/S-discover re-measure -> #128 B-update"
+    "merge_order_after_m4": "#48 -> #132 (S-search-1 chunk fix) -> #136 -> #135 -> fixture fix -> S-compare/S-alerts/S-detail/S-discover re-measure -> #128 B-update",
+    "owner_decision_settings_budget": "2026-10-23T18:40:51Z owner: Settings route budget 45 KB like other routes (\u00a710.10.11's 20 KB replaced); engine <=22 KB"
   }
 }
