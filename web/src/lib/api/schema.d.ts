@@ -236,6 +236,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Downloads a query's results as a file. To export an AST or a
+         *     selection of hashes, POST.
+         */
+        get: operations["exportGet"];
+        put?: never;
+        /**
+         * Downloads a query's results (text or AST), a selection of up to
+         *     10,000 hashes, or a collection as a file.
+         */
+        post: operations["exportPost"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/facets": {
         parameters: {
             query?: never;
@@ -458,6 +482,103 @@ export interface paths {
         get: operations["getFilterTombstones"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every job kept: running and paused ones, and those finished in the
+         *     last 10 minutes, newest first.
+         */
+        get: operations["listJobs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One job. */
+        get: operations["getJob"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancels a job: it stops at its next step (a paused one at once). A
+         *     cancelled export's download ends with an error, so it's never taken
+         *     for a complete file.
+         */
+        post: operations["cancelJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pauses a job: it stops at its next step and holds nothing while it
+         *     waits (an export's download waits too). Unless it's resumed within
+         *     10 minutes it fails with `pause_expired`. Pausing a paused job does
+         *     nothing.
+         */
+        post: operations["pauseJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resumes a paused job. Resuming a running job does nothing. */
+        post: operations["resumeJob"];
         delete?: never;
         options?: never;
         head?: never;
@@ -986,6 +1107,74 @@ export interface components {
              *     logs.
              */
             setup_required: boolean;
+        };
+        /** @description One job (`GET /jobs/{id}`, and each entry of `GET /jobs`). */
+        BackgroundJob: {
+            /**
+             * Format: int64
+             * @description Items done: rows written, for an export.
+             */
+            done: number;
+            /** @description Once `failed`: what went wrong. */
+            error?: components["schemas"]["ErrorBody"];
+            /**
+             * Format: int64
+             * @description Seconds left at the current rate; null while it isn't running,
+             *     before the first items, or when `total` is unknown.
+             */
+            eta_s: number | null;
+            /** @description An export's own details. */
+            export?: components["schemas"]["ExportJob"];
+            /**
+             * Format: int64
+             * @description Unix seconds; null while it runs.
+             */
+            finished_at: number | null;
+            /** Format: int64 */
+            id: number;
+            kind: components["schemas"]["BackgroundJobKind"];
+            /**
+             * Format: double
+             * @description Items per second while running (paused time left out); null
+             *     before the first items.
+             */
+            rate: number | null;
+            /**
+             * Format: int64
+             * @description Items left out: for an export, torrents it may not include
+             *     (withheld, private-source, deleted or unknown), counted without
+             *     saying which or why.
+             */
+            skipped: number;
+            /**
+             * Format: int64
+             * @description Unix seconds.
+             */
+            started_at: number;
+            state: components["schemas"]["BackgroundJobState"];
+            /**
+             * Format: int64
+             * @description Items expected; null when unknown.
+             */
+            total: number | null;
+            /** @description `total` is an estimate (a query with more than 100,000 matches). */
+            total_approx: boolean;
+        };
+        /**
+         * @description What a job does. `import` is reserved for the importer framework
+         *     (§18.8): nothing starts one yet, but the Jobs view can render both.
+         * @enum {string}
+         */
+        BackgroundJobKind: "export" | "import";
+        /**
+         * @description Where a job is. `running` and `paused` hold one of the running
+         *     slots; the rest are finished and kept for 10 minutes.
+         * @enum {string}
+         */
+        BackgroundJobState: "running" | "paused" | "done" | "cancelled" | "failed";
+        /** @description `GET /jobs`: every job kept, newest first. */
+        BackgroundJobs: {
+            jobs: components["schemas"]["BackgroundJob"][];
         };
         /** @description One change to filtering (§20.7), tagged by `op`. */
         Change: {
@@ -1560,6 +1749,75 @@ export interface components {
             query?: string;
             /** @description The rule it releases from. */
             rule: string;
+        };
+        /**
+         * @description An export's format.
+         * @enum {string}
+         */
+        ExportFormat: "csv" | "json" | "magnets";
+        /** @description What an export job reports besides its progress. */
+        ExportJob: {
+            /**
+             * Format: int64
+             * @description Rows one export writes at most.
+             */
+            cap: number;
+            format: components["schemas"]["ExportFormat"];
+            /**
+             * @description The export stopped at `cap` with more rows left: the file holds
+             *     the first `cap`.
+             */
+            truncated: boolean;
+        };
+        /**
+         * @description `GET /export`'s parameters and `POST /export`'s body. Name one
+         *     source: a query (`q` or `ast`, with `sort` and `hidden` as `/search`
+         *     takes them; neither exports everything), `hashes` or `collection`.
+         *     `ast` and `hashes` need POST.
+         */
+        ExportRequest: {
+            /** @default null */
+            ast: null | components["schemas"]["AstNode"];
+            /**
+             * Format: int64
+             * @description A collection's id: its torrents in the collection's order.
+             * @default null
+             */
+            collection: number | null;
+            /**
+             * @description A comma-separated subset of [`ExportField`] names, written in
+             *     that type's order whatever the order given. Every field but
+             *     `magnet` by default; `magnets` takes none.
+             * @default null
+             * @example hash,name,size,seeders
+             */
+            fields: string | null;
+            /** @default null */
+            format: null | components["schemas"]["ExportFormat"];
+            /**
+             * @description Up to 10,000 info hashes (40 hex digits), such as the bulk bar's
+             *     selection (POST only). Repeats are exported once, in the order
+             *     first given.
+             * @default null
+             */
+            hashes: string[] | null;
+            /**
+             * @description Include torrents a filter rule hid (§20.3).
+             * @default null
+             */
+            hidden: boolean | null;
+            /**
+             * @description The query text, as `/search` takes it.
+             * @default null
+             */
+            q: string | null;
+            /**
+             * @description As `/search`'s; only with a query. Selections and collections
+             *     keep their own order.
+             * @default null
+             * @example -discovered
+             */
+            sort: string | null;
         };
         /**
          * @description Our address as other DHT nodes see it: the BEP 42 `ip` key of their
@@ -3466,6 +3724,162 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    exportGet: {
+        parameters: {
+            query?: {
+                /** @description The query text, as `/search` takes it; empty (or no source at all) exports everything. */
+                q?: string;
+                /** @description As `/search`'s. */
+                sort?: string;
+                /** @description Include torrents a filter rule hid (§20.3). */
+                hidden?: boolean;
+                /** @description Export a collection instead, in its order. */
+                collection?: number;
+                /** @description `csv` (the default), `json` (NDJSON) or `magnets`. */
+                format?: components["schemas"]["ExportFormat"];
+                /** @description A comma-separated subset of `ExportField`; every field but `magnet` by default. */
+                fields?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file, streamed. Its job's id is in `X-Export-Job`; poll `/jobs/{id}` for progress, `skipped` and `truncated`. */
+            200: {
+                headers: {
+                    /** @description `no-store`. */
+                    "Cache-Control"?: string;
+                    /** @description `attachment` with a generated name, `lodestar-export-<UTC time>.<csv|ndjson|txt>`. */
+                    "Content-Disposition"?: string;
+                    /** @description The export's job id. */
+                    "X-Export-Job"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                    "application/x-ndjson": string;
+                    "text/plain": string;
+                };
+            };
+            /** @description A bad parameter, as `/search`'s, or `one_source`, `unknown_field`, `fields_unused`, `sort_unused`, `ast_needs_post`, `hashes_need_post`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `collection_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `too_many_jobs`: four jobs are running or paused. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `search_disabled` (a query while search is off), or `shutting_down`. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    exportPost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExportRequest"];
+            };
+        };
+        responses: {
+            /** @description The file, streamed, as `GET /export`'s. */
+            200: {
+                headers: {
+                    /** @description `no-store`. */
+                    "Cache-Control"?: string;
+                    /** @description `attachment` with a generated name. */
+                    "Content-Disposition"?: string;
+                    /** @description The export's job id. */
+                    "X-Export-Job"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                    "application/x-ndjson": string;
+                    "text/plain": string;
+                };
+            };
+            /** @description As `GET /export`'s, or `too_many_hashes`, `bad_hash`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `cross_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `collection_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `too_many_jobs`. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `search_disabled`, or `shutting_down`. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     facetsGet: {
         parameters: {
             query?: {
@@ -3782,6 +4196,196 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Tombstones"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listJobs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackgroundJobs"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The job's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackgroundJob"];
+                };
+            };
+            /** @description `job_not_found`: unknown, or finished more than 10 minutes ago. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    cancelJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The job's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        /** @description Any JSON, such as `{}`. */
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackgroundJob"];
+                };
+            };
+            /** @description `job_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `job_finished`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    pauseJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The job's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        /** @description Any JSON, such as `{}`. */
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackgroundJob"];
+                };
+            };
+            /** @description `job_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `job_finished`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    resumeJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The job's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        /** @description Any JSON, such as `{}`. */
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackgroundJob"];
+                };
+            };
+            /** @description `job_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `job_finished`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
