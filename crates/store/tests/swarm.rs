@@ -378,7 +378,9 @@ fn migrates_a_v4_database_with_data() {
         store
             .connection()
             .execute_batch(
-                "DROP TABLE api_keys; DROP TABLE alerts; DROP TABLE saved_searches;
+                "DROP TRIGGER torrents_removed; DROP TABLE rollup_day; DROP TABLE cohort_day;
+                 DROP TABLE insights_state;
+                 DROP TABLE api_keys; DROP TABLE alerts; DROP TABLE saved_searches;
                  DROP TABLE user_items; DROP TABLE collection_items; DROP TABLE collections;
                  DROP TABLE index_watermark_hour; DROP TABLE query_log;
                  DROP INDEX torrent_parsed_resolved; DROP INDEX quarantine_rule;

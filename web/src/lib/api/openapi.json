@@ -9835,7 +9835,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "Searchable torrents that were imported (bitmagnet import), part of\n`searchable`; null until the count taken at start is in.",
+            "description": "Searchable torrents that were imported (bitmagnet import), part of\n`searchable`; null until Insights' state is read at start.",
             "minimum": 0
           },
           "new_searchable": {
@@ -13144,7 +13144,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "Metadata retrieved in the range, by event time. Null until the\npipeline counts fetches by event time (B11b).",
+            "description": "Metadata retrieved in the range, by event time (the writer's\nflush). Null when the range starts before fetches were counted by\nevent time (the first whole hour after the upgrade that added it):\nunknown, not 0.",
             "minimum": 0
           },
           "index": {
