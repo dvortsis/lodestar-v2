@@ -85,6 +85,8 @@ fn runtime(dir: &std::path::Path, l: &Logging) -> (Runtime, Buf) {
     let mut l = l.clone();
     l.file_folder = dir.join("logs").display().to_string();
     let rt = Runtime::new(Box::new(console.clone()), Applied::compute(&l, unix_now()));
+    // These tests count identical lines.
+    rt.set_folding(false);
     rt.open_file();
     (rt, console)
 }
@@ -205,6 +207,7 @@ fn start_up_lines_are_buffered_into_the_file() {
     let console = Buf::default();
     let l = section(|l| l.file_folder = dir.path().join("logs").display().to_string());
     let rt = Runtime::new(Box::new(console.clone()), Applied::compute(&l, unix_now()));
+    rt.set_folding(false);
     record_all(&rt);
     assert!(
         !dir.path().join("logs").join(file::CURRENT).exists(),
@@ -227,6 +230,7 @@ fn the_buffer_is_bounded() {
     let dir = tempfile::tempdir().unwrap();
     let l = section(|l| l.file_folder = dir.path().join("logs").display().to_string());
     let rt = Runtime::new(Box::new(Buf::default()), Applied::compute(&l, unix_now()));
+    rt.set_folding(false);
     for _ in 0..STARTUP_LINES + 10 {
         record_all(&rt);
     }
