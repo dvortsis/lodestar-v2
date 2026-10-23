@@ -340,7 +340,7 @@
    "pr": 100,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:41 after B6 merged. | 01:50 PR #100 544a76f; reviewer started (cache key incl. visibility/epoch; overlap with #48 explain/cache_key)."
+   "notes": "Launched 21:41 after B6 merged. | 01:50 PR #100 544a76f; reviewer started (cache key incl. visibility/epoch; overlap with #48 explain/cache_key). | 02:15 review MERGE (no blocking); asked main merge + important (facet lease thrash, lease heap bytes, explain cost) + polish in one push; runner verifies delta then merges. Merges before #48; M4 told: tz in key, hot-column epoch, single explain shape."
   },
   "B13": {
    "status": "merged",
