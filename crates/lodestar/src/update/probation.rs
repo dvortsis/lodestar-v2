@@ -16,7 +16,7 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use lodestar_log::{Count, log_event};
@@ -27,7 +27,6 @@ use super::log_events::{UPDATE_MIGRATING, UPDATE_PROBATION_FAILED, UPDATE_PROBAT
 use super::pending::{Migration, Pending, Phase, Probation};
 use crate::cli::util;
 
-const BEAT: Duration = Duration::from_secs(10);
 const COUNT_EVERY: Duration = Duration::from_secs(60);
 
 /// What the child knows of its supervisor, for the updater (part 3).
@@ -40,8 +39,11 @@ pub struct Child {
     pub version: String,
     db: PathBuf,
     in_probation: bool,
-    beating: Arc<AtomicBool>,
+    beat: Arc<Mutex<Option<Beat>>>,
 }
+
+/// The heartbeat thread and its stop flag.
+type Beat = (Arc<AtomicBool>, std::thread::JoinHandle<()>);
 
 static CHILD: OnceLock<Child> = OnceLock::new();
 static FAILED: AtomicBool = AtomicBool::new(false);
@@ -82,11 +84,16 @@ pub fn before_start(data_dir: &Path, db: &Path) -> Result<&'static Child, String
         Some(h) if cfg!(debug_assertions) => h.version.clone(),
         _ => super::build_version().to_string(),
     };
-    match super::testing::child_fault(&version) {
+    let fault = super::testing::child_fault(&version);
+    match fault {
         Some("crash") => std::process::exit(1),
-        Some("hang") => loop {
-            std::thread::sleep(Duration::from_secs(3600));
-        },
+        Some("hang") => hang(),
+        Some("orphan") => {
+            // A grandchild left behind for the supervisor to reap.
+            let _ = std::process::Command::new("sh")
+                .args(["-c", "sleep 2 &"])
+                .spawn();
+        }
         _ => {}
     }
     let pending: Option<Pending> = bin.read("pending").ok().flatten();
@@ -98,12 +105,27 @@ pub fn before_start(data_dir: &Path, db: &Path) -> Result<&'static Child, String
         version,
         db: db.to_path_buf(),
         in_probation,
-        beating: Arc::new(AtomicBool::new(false)),
+        beat: Arc::new(Mutex::new(None)),
     };
     if child.in_probation {
-        child.mark_migrating();
+        child.mark_migrating(fault);
     }
     Ok(CHILD.get_or_init(|| child))
+}
+
+fn hang() -> ! {
+    loop {
+        std::thread::sleep(Duration::from_secs(3600));
+    }
+}
+
+/// `probation.json` has two writers in this process (the heartbeat
+/// thread and the rest); each read-modify-write holds this.
+static PROBATION: Mutex<()> = Mutex::new(());
+
+fn with_probation<T>(f: impl FnOnce() -> T) -> T {
+    let _held = PROBATION.lock().unwrap_or_else(|e| e.into_inner());
+    f()
 }
 
 impl Child {
@@ -111,24 +133,34 @@ impl Child {
         self.hint.as_ref().map_or("", |h| h.run_id.as_str())
     }
 
-    /// The schema is older than this build's: record the migration and
-    /// beat while it runs.
-    fn mark_migrating(&self) {
+    /// The schema is older than this build's: record the migration (with
+    /// the snapshots that exist before it) and beat while it runs.
+    fn mark_migrating(&self, fault: Option<&str>) {
         let from = util::open_read_only(&self.db)
             .ok()
             .and_then(|c| util::schema_version(&c).ok());
         let to = lodestar_store::latest_schema_version();
-        let Some(from) = from.filter(|f| *f > 0 && *f < to) else {
+        let forced = fault.is_some_and(|f| f == "stall" || f.starts_with("migrate="));
+        let Some(from) = from.filter(|f| (*f > 0 && *f < to) || forced) else {
             return;
         };
         let now = crate::unix_now().max(0) as u64;
         if let Some(v) = layout::parse_version(&self.version) {
             let dir = self.bin.overlay(&v);
             if dir.is_dir() && !dir.join("migration.json").exists() {
+                let before = lodestar_store::snapshots::list(&self.db)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|s| {
+                        matches!(s.kind, lodestar_store::snapshots::Kind::PreMigration { .. })
+                    })
+                    .map(|s| s.name)
+                    .collect();
                 let m = Migration {
                     from,
                     to,
                     started_at: now,
+                    before,
                 };
                 let bytes = serde_json::to_vec_pretty(&m).unwrap_or_default();
                 if let Err(e) = layout::write_atomic(&dir, "migration.json", &bytes) {
@@ -143,6 +175,7 @@ impl Child {
         );
         let p = Probation {
             run_id: self.run_id().to_string(),
+            version: self.version.clone(),
             phase: Phase::Migrating,
             at: now,
             since: now,
@@ -151,59 +184,104 @@ impl Child {
             baseline_max_id: None,
             stored_since: None,
         };
-        let _ = self.bin.write("probation.json", &p);
-        self.beating.store(true, Ordering::SeqCst);
-        let (bin, beating) = (self.bin.clone(), self.beating.clone());
-        std::thread::spawn(move || {
-            while beating.load(Ordering::SeqCst) {
-                std::thread::sleep(BEAT);
-                if !beating.load(Ordering::SeqCst) {
-                    break;
+        with_probation(|| self.bin.write("probation.json", &p).ok());
+        if fault == Some("stall") {
+            hang();
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let (bin, flag, beat) = (self.bin.clone(), stop.clone(), super::testing::beat());
+        let handle = std::thread::spawn(move || {
+            let mut last = Instant::now();
+            while !flag.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(100));
+                if last.elapsed() < beat {
+                    continue;
                 }
-                if let Ok(Some(mut p)) = bin.read::<Probation>("probation.json") {
-                    if p.phase == Phase::Migrating {
-                        p.at = crate::unix_now().max(0) as u64;
-                        let _ = bin.write("probation.json", &p);
+                last = Instant::now();
+                with_probation(|| {
+                    if let Ok(Some(mut p)) = bin.read::<Probation>("probation.json") {
+                        if p.phase == Phase::Migrating {
+                            p.at = crate::unix_now().max(0) as u64;
+                            let _ = bin.write("probation.json", &p);
+                        }
                     }
-                }
+                });
             }
         });
+        *self.beat.lock().unwrap_or_else(|e| e.into_inner()) = Some((stop, handle));
+        if let Some(secs) = fault.and_then(|f| f.strip_prefix("migrate=")?.parse().ok()) {
+            std::thread::sleep(Duration::from_secs(secs));
+        }
+    }
+
+    /// Stops the heartbeat and waits for it, so no beat lands after.
+    fn stop_beating(&self) {
+        let taken = self.beat.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some((stop, handle)) = taken {
+            stop.store(true, Ordering::SeqCst);
+            let _ = handle.join();
+        }
     }
 
     /// After `Services::start`: the self-test, in the background while
     /// the server serves. A failure asks for the graceful shutdown, and
     /// `serve` then exits 1.
     pub fn after_start(&'static self, probe: Probe, deadline: Duration) {
-        self.beating.store(false, Ordering::SeqCst);
+        self.stop_beating();
+        let fault = super::testing::child_fault(&self.version);
+        if fault == Some("restart") {
+            tokio::spawn(async {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                crate::system::Restart::global().request();
+            });
+        }
         if !self.in_probation {
+            if let Some(v) = fault.and_then(|f| f.strip_prefix("switch=")) {
+                control::set_intent(control::Action::Switch, Some(v.to_string()), None);
+                crate::system::Restart::global().request();
+            }
             return;
         }
-        let baseline = max_id(&self.db);
-        let to = lodestar_store::latest_schema_version();
-        let p = Probation {
-            run_id: self.run_id().to_string(),
-            phase: Phase::Starting,
-            at: crate::unix_now().max(0) as u64,
-            since: 0,
-            from: to,
-            to,
-            baseline_max_id: baseline,
-            stored_since: baseline.map(|_| 0),
-        };
-        let _ = self.bin.write("probation.json", &p);
+        // The first attempt's baseline counts: a later attempt's would
+        // miss what earlier ones stored.
+        with_probation(|| {
+            let earlier: Option<Probation> = self.bin.read("probation.json").ok().flatten();
+            let baseline = earlier
+                .filter(|p| p.version == self.version)
+                .and_then(|p| p.baseline_max_id)
+                .or_else(|| max_id(&self.db));
+            let to = lodestar_store::latest_schema_version();
+            let p = Probation {
+                run_id: self.run_id().to_string(),
+                version: self.version.clone(),
+                phase: Phase::Starting,
+                at: crate::unix_now().max(0) as u64,
+                since: 0,
+                from: to,
+                to,
+                baseline_max_id: baseline,
+                stored_since: None,
+            };
+            let _ = self.bin.write("probation.json", &p);
+        });
+        self.record_stored();
+        if fault == Some("restart") {
+            // Restarts until stopped, never confirming: the test counts
+            // the attempts it uses (none).
+            return;
+        }
         tokio::spawn(async move {
-            let started = Instant::now();
-            let result = match super::testing::child_fault(&self.version) {
+            let result = match fault {
                 Some("selftest") => Err("test fault"),
                 _ => self_test(&probe, deadline).await,
             };
             match result {
                 Ok(()) => {
-                    let _ = self.bin.remove("pending");
-                    let _ = self.bin.remove("probation.json");
+                    with_probation(|| {
+                        let _ = self.bin.remove("pending");
+                        let _ = self.bin.remove("probation.json");
+                    });
                     log_event!(UPDATE_PROBATION_PASSED);
-                    // Keep counting for a rollback the user asks for later.
-                    let _ = started;
                 }
                 Err(check) => {
                     log_event!(UPDATE_PROBATION_FAILED, check = check);
@@ -226,17 +304,19 @@ impl Child {
 
     /// Updates `stored_since` while probation lasts; `false` once it's over.
     pub fn record_stored(&self) -> bool {
-        let Ok(Some(mut p)) = self.bin.read::<Probation>("probation.json") else {
-            return false;
-        };
-        if p.run_id != self.run_id() {
-            return false;
-        }
-        if let (Some(base), Some(now)) = (p.baseline_max_id, max_id(&self.db)) {
-            p.stored_since = Some(now.saturating_sub(base).max(0) as u64);
-            let _ = self.bin.write("probation.json", &p);
-        }
-        true
+        with_probation(|| {
+            let Ok(Some(mut p)) = self.bin.read::<Probation>("probation.json") else {
+                return false;
+            };
+            if p.run_id != self.run_id() {
+                return false;
+            }
+            if let (Some(base), Some(now)) = (p.baseline_max_id, max_id(&self.db)) {
+                p.stored_since = Some(now.saturating_sub(base).max(0) as u64);
+                let _ = self.bin.write("probation.json", &p);
+            }
+            true
+        })
     }
 
     /// What a rollback requested now would lose: torrents stored since

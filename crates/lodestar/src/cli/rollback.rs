@@ -106,7 +106,19 @@ pub fn run(config: &Config, options: Options<'_>) -> Outcome {
         // The supervisor's own journal, offline: it finishes one in
         // progress rather than refusing.
         #[cfg(unix)]
-        return crate::update::supervisor::rollback_offline(config);
+        return crate::update::supervisor::rollback_offline(config, |summary| {
+            println!("{summary}");
+            if options.yes {
+                return Ok(true);
+            }
+            let stdin = std::io::stdin();
+            if !stdin.is_terminal() {
+                return Err(Failure::Refused(
+                    "no terminal to confirm on; add --yes to roll back without asking".into(),
+                ));
+            }
+            Ok(confirm_from(&mut stdin.lock(), &mut std::io::stdout()))
+        });
         #[cfg(not(unix))]
         return Err(Failure::Failed(
             "rolling an update back this way isn't available on Windows yet".into(),

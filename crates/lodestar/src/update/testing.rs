@@ -9,10 +9,13 @@
 //! - `probation_ms`, `stall_ms`, `migration_cap_ms`, `grace_ms`: short
 //!   probation clocks;
 //! - `fault`, a comma-separated list: `journal:<k>` exits right after
-//!   journal step k (a crash),
-//!   `child:crash@<v>`, `child:hang@<v>` or `child:selftest@<v>` makes the
-//!   child running version v crash on start, hang without confirming, or
-//!   fail its self-test.
+//!   journal step k (a crash), `journal:slow` makes each step take 2 s,
+//!   and `child:<what>@<v>` for the child running version v: `crash` on
+//!   start, `hang` without confirming, fail its `selftest`, `stall` (start
+//!   migrating, then stop beating), `migrate=<s>` (migrate for s seconds
+//!   while beating), `restart` (ask for a supervised restart),
+//!   `switch=<version>` (ask to switch), `orphan` (leave a grandchild);
+//! - `beat_ms`: the migration heartbeat's period.
 
 use std::time::Duration;
 
@@ -30,6 +33,7 @@ pub struct Overrides {
     pub stall_ms: Option<u64>,
     pub migration_cap_ms: Option<u64>,
     pub grace_ms: Option<u64>,
+    pub beat_ms: Option<u64>,
     pub fault: Option<String>,
 }
 
@@ -40,6 +44,9 @@ pub struct TrustRoot {
     pub release: Option<String>,
     pub nightly: Option<String>,
     pub freshness: Option<String>,
+    /// Key statements this "build" embeds.
+    #[serde(default)]
+    pub statements: Vec<lodestar_update::SignedStatement>,
 }
 
 pub const ENV: &str = "LODESTAR_UPDATE_TEST";
@@ -90,6 +97,11 @@ pub fn limits() -> Limits {
     l
 }
 
+/// The migration heartbeat's period (10 s).
+pub fn beat() -> Duration {
+    Duration::from_millis(get().and_then(|o| o.beat_ms).unwrap_or(10_000))
+}
+
 /// The faults asked for (`fault` is a comma-separated list).
 fn faults() -> impl Iterator<Item = &'static str> {
     get()
@@ -105,6 +117,14 @@ pub fn fault(kind: &str, step: u8) {
     if faults().any(|f| f == want) {
         eprintln!("supervisor: test fault {kind}:{step}");
         std::process::exit(86);
+    }
+}
+
+/// `journal:slow`: each journal step takes 2 s (for a stop mid-rollback).
+pub fn slow(kind: &str) {
+    let want = format!("{kind}:slow");
+    if faults().any(|f| f == want) {
+        std::thread::sleep(Duration::from_secs(2));
     }
 }
 
