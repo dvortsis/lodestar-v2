@@ -190,3 +190,62 @@ test.describe('another language', () => {
 		expect(await cumulativeShift(page)).toBeLessThan(0.001);
 	});
 });
+
+test('keyboard focus survives the swap: Tab before the app loads, same stop after', async ({
+	page
+}) => {
+	let release: () => void = () => {};
+	const gate = new Promise<void>((resolve) => (release = resolve));
+	await page.route('**/_app/immutable/**/*.js', async (route) => {
+		await gate;
+		await route.continue();
+	});
+	await page.goto('/alerts', { waitUntil: 'commit' });
+	await expect(page.locator('#boot')).toBeAttached();
+	await page.keyboard.press('Tab');
+	await expect(page.locator('#boot a').first()).toBeFocused();
+	release();
+	await expect(page.locator('#boot')).toHaveCount(0);
+	await expect(page.getByRole('link', { name: 'Skip to main content' })).toBeFocused();
+	// And in the bar: the next Tab lands on the brand, then the destinations, as before.
+	await page.keyboard.press('Tab');
+	await expect(page.getByRole('link', { name: 'Lodestar, home' })).toBeFocused();
+});
+
+test('the fallback font is never smaller than Atkinson, so the font swap cannot become a later LCP', async ({
+	page,
+	go
+}) => {
+	await go('/search');
+	await page.evaluate(() => document.fonts.load("16px 'Atkinson Hyperlegible Next'"));
+	const worst = await page.evaluate(() => {
+		const rect = (family: string, weight: number, px: number, text: string) => {
+			const el = document.createElement('span');
+			el.textContent = text;
+			el.style.cssText = `position:absolute;white-space:nowrap;font:${weight} ${px}px ${family}`;
+			document.body.append(el);
+			const range = document.createRange();
+			range.selectNodeContents(el);
+			const box = range.getBoundingClientRect();
+			el.remove();
+			return box.width * box.height;
+		};
+		let min = Infinity;
+		for (const [weight, px] of [
+			[400, 14],
+			[400, 16],
+			[600, 14],
+			[600, 24]
+		] as const)
+			for (const text of ['Search', 'Discover', 'Alerts', 'Insights', 'Settings']) {
+				const ratio =
+					rect("'Atkinson Fallback'", weight, px, text) /
+					rect("'Atkinson Hyperlegible Next'", weight, px, text);
+				min = Math.min(min, ratio);
+			}
+		return min;
+	});
+	// A smaller fallback paints a smaller heading first; the swap would then be a larger, later
+	// LCP candidate (CI measured 2.67 s against a 1.5 s first paint).
+	expect(worst).toBeGreaterThan(1);
+});
