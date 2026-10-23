@@ -160,10 +160,13 @@ test.describe('change flows', () => {
 		await expect(page.getByTestId('change-apply')).toHaveAttribute('aria-disabled', 'true');
 		await page.getByLabel('Password').fill(PW);
 		await page.getByLabel('Password').press('Enter');
-		// Give a request that shouldn't exist time to arrive.
-		await page.waitForTimeout(500);
+		// Nothing is sent for the whole wait: by the time it lifts, still only the first request.
+		await expect(page.getByText('You can try again now.')).toBeVisible({ timeout: 10_000 });
 		expect(mock.calls('applyFilterChange')).toHaveLength(1);
-		await expect(page.getByText('You can try again now.')).toBeVisible({ timeout: 5000 });
+		// Once it has, a confirm goes out again.
+		await page.getByLabel('Password').fill(PW);
+		await page.getByLabel('Password').press('Enter');
+		await expect.poll(() => mock.calls('applyFilterChange').length, { timeout: 10_000 }).toBe(2);
 	});
 
 	test('changed_since_preview previews again; a changed 428 says so', async ({
