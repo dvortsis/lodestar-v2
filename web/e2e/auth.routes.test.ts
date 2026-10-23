@@ -138,7 +138,8 @@ for (const evil of [
 	'//evil.example/',
 	'https://evil.example/',
 	'/\\evil.example',
-	'/\t/evil.example'
+	'/\t/evil.example',
+	'/.//evil.example/'
 ]) {
 	test(`the open-redirect attempt ${JSON.stringify(evil)} is refused`, async ({
 		page,
@@ -160,6 +161,17 @@ test('a signed-in visitor of /login goes straight to next', async ({ page, go, m
 	mock.on('getAuthStatus', { logged_in: true, setup_required: false });
 	await go(`/login?next=${encodeURIComponent('/settings/general')}`);
 	await expect(page).toHaveURL(/\/settings\/general/);
+});
+
+test('a signed-in visitor with a dot-segment next lands home, not stuck', async ({
+	page,
+	go,
+	mock
+}) => {
+	mock.on('getAuthStatus', { logged_in: true, setup_required: false });
+	await go(`/login?next=${encodeURIComponent('/.//evil.example/')}`);
+	await expect(page).toHaveURL(/\/search/);
+	expect(new URL(page.url()).hostname).toBe('localhost');
 });
 
 test('a 429 counts down from Retry-After and unlocks', async ({ page, go, mock }) => {
