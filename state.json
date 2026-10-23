@@ -1121,7 +1121,8 @@
       "status": "review",
       "session": "session_015F9H2aHowz7TJLffFYxUvf",
       "pr": 48,
-      "notes": " | 2026-10-23T12:30:06Z owner asked runner to answer M4's plan-approval question: approved, with updated main facts (B5c adaptation now, V11 taken by B11b, log_lint, fixture OFFLINE gate, export swarm fields, ApiState literals) | 2026-10-23T13:39:57Z plan approved by owner; #48 head da63255 (merging main) | 2026-10-23T14:35:59Z da63255 code-complete; only red is openapi drift job's licences.py --check (rust.json stale after pipeline+lodestar-log). M4 session blocked on owner ExitPlanMode for the licence regen; fresh review launched on da63255 in parallel"
+      "notes": " | 2026-10-23T12:30:06Z owner asked runner to answer M4's plan-approval question: approved, with updated main facts (B5c adaptation now, V11 taken by B11b, log_lint, fixture OFFLINE gate, export swarm fields, ApiState literals) | 2026-10-23T13:39:57Z plan approved by owner; #48 head da63255 (merging main) | 2026-10-23T14:35:59Z da63255 code-complete; only red is openapi drift job's licences.py --check (rust.json stale after pipeline+lodestar-log). M4 session blocked on owner ExitPlanMode for the licence regen; fresh review launched on da63255 in parallel | 2026-10-23T14:55:59Z fresh review FIX at da63255: B1 main merge breaks api tests (logs.rs ApiState literal lacks hot/events); B2 late-answer test; I1 dup explain param; fixture all-or-none; operations.md \u00a79 vs metrics \u00a77; NaN in [ranking]; open_hot I/O fallback. Runner decisions: tracker-hash rollup deferred; 10M cold sorts 60ms accepted (cached+keyword \u00a73 met); percolation time: UTC",
+      "review_rounds": 1
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -1342,7 +1343,27 @@
     "slices-yaml-B-log1b-system": "Runner PR: add crates/lodestar/src/system/** to B-log1b owns (B2c's system/{address,restart}.rs are in NOT_YET_SWEPT)",
     "B-log1b-extra": "B-log1b also: raw \" < > ` space in URL passwords, url::Url Debug password, planted index.json restricted:true (check owner/ACL), scrub_text quadratic on long lines, lint inline target-table log dep, restart.rs:173 exe path as Path field",
     "B-log1b-folding": "B-log1b: flood folding only folds identical lines, so distinct-line floods (new hash per DHT harvest) aren't reduced; high-volume events stay default_on: false until its bench decides",
-    "search-keep-index-probation": "crates/search: B5b index cleanup deletes the previous complete index once the new one completes; keep it during B-update probation so a rollback needn't rebuild (from B-update PR2)"
+    "search-keep-index-probation": "crates/search: B5b index cleanup deletes the previous complete index once the new one completes; keep it during B-update probation so a rollback needn't rebuild (from B-update PR2)",
+    "tracker-hash-rollup": {
+      "from": "M4",
+      "what": "rollup hashes by tracker split reporting/zero (architecture.md:2277, metrics.md:234 per-tracker table); next free rollup code",
+      "to": "S-insights-2 backend prerequisite / B11b follow-up"
+    },
+    "cold-hot-sort-10m": {
+      "from": "M4",
+      "what": "cold seeders/trackers sort at 10M ~60ms vs 50ms review gate; faster cold path (per-generation sorted order)",
+      "to": "F-perf / M8"
+    },
+    "docs-swarm": {
+      "from": "M4",
+      "what": "docs/user coverage of swarm counts, [scrape] and [ranking]",
+      "to": "docs slice"
+    },
+    "tracker-url-passkey": {
+      "from": "M4",
+      "what": "swarm_trackers in detail and /api/status show full tracker URLs (passkeys); redact for diagnostics and multi-user",
+      "to": "security settings / multi-user"
+    }
   },
   "blocked_on_owner": [],
   "launches_today": 19,
