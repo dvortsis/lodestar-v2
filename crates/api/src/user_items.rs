@@ -152,11 +152,6 @@ pub(crate) fn invalid(e: StoreError, field: &'static str) -> ApiError {
     }
 }
 
-/// A store error that is not the caller's: a 500.
-fn failed(e: StoreError) -> ApiError {
-    internal(e)
-}
-
 fn marks_of(hash: &InfoHash, item: Option<&UserItem>) -> UserMarks {
     UserMarks {
         created_at: item.map(|i| i.created_at),
@@ -222,6 +217,9 @@ pub(crate) async fn list(
         let store = s.reader.lock().expect("reader lock");
         let mut items = Vec::new();
         let mut more = false;
+        // The last row returned: a cursor never names a row that was
+        // withheld, so it can't tell that one exists.
+        let mut last = None;
         'pages: loop {
             let page = store
                 .list_user_items(favourite, hidden_mark, label.as_deref(), before, BATCH)
@@ -231,7 +229,7 @@ pub(crate) async fn list(
                         "A query parameter has the wrong type or value.",
                     )
                     .field("label"),
-                    e => failed(e),
+                    e => internal(e),
                 })?;
             let end = page.len() < BATCH;
             for item in page {
@@ -254,15 +252,14 @@ pub(crate) async fn list(
                     torrent: hit_row(&row, e),
                     updated_at: item.updated_at,
                 });
+                last = Some(key);
                 before = Some(key);
             }
             if end {
                 break;
             }
         }
-        // The last row read before the one that would not fit, so the
-        // rows skipped on the way aren't read again.
-        let cursor = before.filter(|_| more).map(|(at, id)| format!("{at}.{id}"));
+        let cursor = last.filter(|_| more).map(|(at, id)| format!("{at}.{id}"));
         Ok(Json(UserItemsResponse {
             items,
             limit,
@@ -295,7 +292,7 @@ pub(crate) async fn labels(
         loop {
             let page = store
                 .list_user_items(false, false, None, before, BATCH)
-                .map_err(failed)?;
+                .map_err(internal)?;
             let end = page.len() < BATCH;
             for item in &page {
                 before = Some((item.updated_at, item.torrent_id));
@@ -346,8 +343,8 @@ pub(crate) async fn get_one(
     tokio::task::spawn_blocking(move || {
         let store = s.reader.lock().expect("reader lock");
         let (row, _) = visible(&store, &hash, true, adult)?;
-        let item = store.user_item(row.id).map_err(failed)?;
-        let collections = store.collections_of(row.id).map_err(failed)?;
+        let item = store.user_item(row.id).map_err(internal)?;
+        let collections = store.collections_of(row.id).map_err(internal)?;
         let m = marks_of(&hash, item.as_ref());
         Ok(Json(UserItemDetail {
             collections,
@@ -437,8 +434,10 @@ pub(crate) async fn patch(
 )]
 pub(crate) async fn clear(
     State(s): State<ApiState>,
+    headers: HeaderMap,
     Path(hash): Path<String>,
 ) -> ApiResult<Json<OkResponse>> {
+    same_origin_json(&headers)?;
     let hash = hash_of(&hash)?;
     let adult = s.adult.shown();
     let writer = user_data(&s)?;
@@ -451,7 +450,7 @@ pub(crate) async fn clear(
             .lock()
             .expect("user data lock")
             .delete_user_item(id)
-            .map_err(failed)?;
+            .map_err(internal)?;
         Ok(Json(OkResponse::OK))
     })
     .await

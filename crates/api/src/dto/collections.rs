@@ -61,7 +61,8 @@ pub struct CollectionsQuery {
 #[serde(default)]
 #[into_params(parameter_in = Query)]
 pub struct CollectionQuery {
-    /// The previous response's `next_after`.
+    /// The previous response's `next_after`: how many shown entries to
+    /// skip.
     pub after: Option<i64>,
     /// Include torrents a filter rule hid (§20.3).
     pub hidden: Option<bool>,
@@ -78,7 +79,8 @@ pub struct CollectionQuery {
 }))]
 pub struct CollectionEntry {
     pub added_at: i64,
-    /// Ascending; gaps are possible where entries are not shown.
+    /// 1-based place among the entries shown, so it never reveals how
+    /// many were left out.
     pub position: i64,
     pub torrent: SearchHit,
 }

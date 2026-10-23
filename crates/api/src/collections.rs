@@ -62,19 +62,30 @@ fn collection_not_found() -> ApiError {
     )
 }
 
-fn failed(e: StoreError) -> ApiError {
-    internal(e)
-}
-
 /// Every entry's torrent id in order, past the visibility check or not.
 fn all_entries(store: &Store, id: i64) -> ApiResult<Vec<(i64, i64)>> {
     let mut out = Vec::new();
     let mut after = None;
     loop {
-        let page = store.collection_items(id, after, BATCH).map_err(failed)?;
+        let page = store.collection_items(id, after, BATCH).map_err(internal)?;
         let end = page.len() < BATCH;
         after = page.last().map(|i| i.position);
         out.extend(page.iter().map(|i| (i.torrent_id, i.position)));
+        if end {
+            return Ok(out);
+        }
+    }
+}
+
+/// Every entry in order.
+fn all_entries_full(store: &Store, id: i64) -> ApiResult<Vec<lodestar_store::CollectionItem>> {
+    let mut out = Vec::new();
+    let mut after = None;
+    loop {
+        let page = store.collection_items(id, after, BATCH).map_err(internal)?;
+        let end = page.len() < BATCH;
+        after = page.last().map(|i| i.position);
+        out.extend(page);
         if end {
             return Ok(out);
         }
@@ -112,7 +123,7 @@ fn summary(
 fn summary_of(store: &Store, id: i64, hidden: bool, adult: bool) -> ApiResult<CollectionSummary> {
     let c = store
         .collection(id)
-        .map_err(failed)?
+        .map_err(internal)?
         .ok_or_else(collection_not_found)?;
     summary(store, c, hidden, adult)
 }
@@ -120,13 +131,21 @@ fn summary_of(store: &Store, id: i64, hidden: bool, adult: bool) -> ApiResult<Co
 /// 1–500 hashes, each parsed; the error names `hashes`.
 fn hashes(list: &HashList) -> ApiResult<Vec<lodestar_metainfo::InfoHash>> {
     if list.hashes.is_empty() || list.hashes.len() > MAX_HASHES {
-        return Err(ApiError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "invalid_value",
-            "Send 1 to 500 info hashes.",
-        )
-        .field("hashes"));
+        return Err(bad_count());
     }
+    parse_all(list)
+}
+
+fn bad_count() -> ApiError {
+    ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "invalid_value",
+        "Send 1 to 500 info hashes.",
+    )
+    .field("hashes")
+}
+
+fn parse_all(list: &HashList) -> ApiResult<Vec<lodestar_metainfo::InfoHash>> {
     list.hashes
         .iter()
         .map(|h| hash_of(h).map_err(|e| e.field("hashes")))
@@ -161,7 +180,7 @@ pub(crate) async fn list(
         let store = s.reader.lock().expect("reader lock");
         store
             .collections()
-            .map_err(failed)?
+            .map_err(internal)?
             .into_iter()
             .map(|c| summary(&store, c, hidden, adult))
             .collect::<ApiResult<Vec<_>>>()
@@ -230,43 +249,37 @@ pub(crate) async fn get_one(
         let store = s.reader.lock().expect("reader lock");
         let c = store
             .collection(id)
-            .map_err(failed)?
+            .map_err(internal)?
             .ok_or_else(collection_not_found)?;
+        // Positions are the page's own: the 1-based place among the
+        // entries shown, so neither a position nor `next_after` reveals
+        // how many were left out.
+        let skip = usize::try_from(p.after.unwrap_or(0).max(0)).unwrap_or(usize::MAX);
         let mut entries = Vec::new();
-        let mut after = p.after;
-        let mut more = false;
-        'pages: loop {
-            let page = store.collection_items(id, after, BATCH).map_err(failed)?;
-            let end = page.len() < BATCH;
-            for item in page {
-                let Some((row, e)) = shown_row(&store, item.torrent_id, hidden, adult)? else {
-                    after = Some(item.position);
-                    continue;
-                };
-                if entries.len() == limit {
-                    more = true;
-                    break 'pages;
-                }
+        let mut items = 0u64;
+        for item in all_entries_full(&store, id)? {
+            let Some((row, e)) = shown_row(&store, item.torrent_id, hidden, adult)? else {
+                continue;
+            };
+            items += 1;
+            let ordinal = items as usize;
+            if ordinal > skip && entries.len() < limit {
                 entries.push(CollectionEntry {
                     added_at: item.added_at,
-                    position: item.position,
+                    position: ordinal as i64,
                     torrent: hit_row(&row, e),
                 });
-                after = Some(item.position);
-            }
-            if end {
-                break;
             }
         }
-        let items = visible_count(&store, id, hidden, adult)?;
+        let next_after = (items as usize > skip + entries.len() && !entries.is_empty())
+            .then(|| (skip + entries.len()) as i64);
         Ok(Json(CollectionPage {
             created_at: c.created_at,
             entries,
             id: c.id,
             items,
             name: c.name,
-            // The last position read before the one that would not fit.
-            next_after: after.filter(|_| more),
+            next_after,
             note: c.note,
             updated_at: c.updated_at,
         }))
@@ -303,7 +316,7 @@ pub(crate) async fn patch(
         let mut store = writer.lock().expect("user data lock");
         let current = store
             .collection(id)
-            .map_err(failed)?
+            .map_err(internal)?
             .ok_or_else(collection_not_found)?;
         if body.name.is_some() || body.note.is_some() {
             let name = body
@@ -341,15 +354,17 @@ pub(crate) async fn patch(
 )]
 pub(crate) async fn remove(
     State(s): State<ApiState>,
+    headers: HeaderMap,
     Path(id): Path<i64>,
 ) -> ApiResult<Json<OkResponse>> {
+    same_origin_json(&headers)?;
     let writer = user_data(&s)?;
     tokio::task::spawn_blocking(move || {
         let deleted = writer
             .lock()
             .expect("user data lock")
             .delete_collection(id)
-            .map_err(failed)?;
+            .map_err(internal)?;
         if deleted {
             Ok(Json(OkResponse::OK))
         } else {
@@ -391,7 +406,7 @@ pub(crate) async fn add_items(
         let mut ids = Vec::new();
         {
             let store = s.reader.lock().expect("reader lock");
-            if store.collection(id).map_err(failed)?.is_none() {
+            if store.collection(id).map_err(internal)?.is_none() {
                 return Err(collection_not_found());
             }
             for h in &parsed {
@@ -441,12 +456,12 @@ pub(crate) async fn remove_items(
     let writer = user_data(&s)?;
     tokio::task::spawn_blocking(move || {
         let mut store = writer.lock().expect("user data lock");
-        if store.collection(id).map_err(failed)?.is_none() {
+        if store.collection(id).map_err(internal)?.is_none() {
             return Err(collection_not_found());
         }
         let mut ids = Vec::new();
         for h in &parsed {
-            if let Some(torrent) = store.find(h).map_err(failed)?
+            if let Some(torrent) = store.find(h).map_err(internal)?
                 && shown_row(&store, torrent, true, adult)?.is_some()
             {
                 ids.push(torrent);
@@ -463,7 +478,8 @@ pub(crate) async fn remove_items(
 
 /// Puts a collection's entries in the order given. The list must name
 /// every entry shown by default once (it may also name ones a filter rule
-/// hid); `409 stale_order` otherwise, so a reorder from an old page can't
+/// hid), with no cap, and may be empty only when none is shown;
+/// `409 stale_order` otherwise, so a reorder from an old page can't
 /// drop or duplicate entries. Entries not shown to the client (Adult while
 /// hidden, and filter-hidden ones it did not name) keep their slots.
 #[utoipa::path(
@@ -487,12 +503,12 @@ pub(crate) async fn reorder(
     JsonBody(body): JsonBody<HashList>,
 ) -> ApiResult<Json<CollectionSummary>> {
     same_origin_json(&headers)?;
-    let parsed = hashes(&body)?;
+    let parsed = parse_all(&body)?;
     let adult = s.adult.shown();
     let writer = user_data(&s)?;
     tokio::task::spawn_blocking(move || {
         let mut store = writer.lock().expect("user data lock");
-        if store.collection(id).map_err(failed)?.is_none() {
+        if store.collection(id).map_err(internal)?.is_none() {
             return Err(collection_not_found());
         }
         let current: Vec<i64> = all_entries(&store, id)?
@@ -519,7 +535,7 @@ pub(crate) async fn reorder(
         };
         let mut given = Vec::new();
         for h in &parsed {
-            let t = store.find(h).map_err(failed)?.ok_or_else(stale)?;
+            let t = store.find(h).map_err(internal)?.ok_or_else(stale)?;
             given.push(t);
         }
         let named: HashSet<i64> = given.iter().copied().collect();

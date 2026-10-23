@@ -19,7 +19,7 @@ use crate::dto::error::ErrorEnvelope;
 use crate::dto::saved::{SavedSearchCreate, SavedSearchPatch, SavedSearchView};
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{Json as JsonBody, Path, same_origin_json};
-use crate::user_items::{invalid, user_data};
+use crate::user_items::{invalid, shown_row, user_data};
 use crate::{ApiState, auth, search, unix_now};
 
 /// This module's half of `/openapi.json`.
@@ -56,33 +56,63 @@ fn watermark(s: &ApiState, store: &Store) -> ApiResult<i64> {
     }
 }
 
-fn view(s: SavedSearchSummary) -> ApiResult<SavedSearchView> {
+/// A search's alerts on torrents search would show: `(all, unread, when
+/// the newest was recorded)`. The store counts every alert, Adult ones
+/// included, so these are counted again (§20.9: the preference applies to
+/// Alerts).
+fn visible_alerts(store: &Store, id: i64, adult: bool) -> ApiResult<(u64, u64, Option<i64>)> {
+    let (mut all, mut unread, mut newest) = (0, 0, None);
+    let mut before = None;
+    loop {
+        let page = store.alerts(id, before, 200).map_err(internal)?;
+        let end = page.len() < 200;
+        before = page.last().map(|a| a.torrent_id);
+        for a in page {
+            if shown_row(store, a.torrent_id, false, adult)?.is_none() {
+                continue;
+            }
+            all += 1;
+            unread += u64::from(a.read_at.is_none());
+            newest = newest.or(Some(a.created_at));
+        }
+        if end {
+            return Ok((all, unread, newest));
+        }
+    }
+}
+
+fn view(store: &Store, adult: bool, s: SavedSearchSummary) -> ApiResult<SavedSearchView> {
+    let (alerts, unread, last_alert_at) = if s.alerts == 0 {
+        (0, 0, None)
+    } else {
+        visible_alerts(store, s.search.id, adult)?
+    };
     let ast: Node = serde_json::from_str(&s.search.ast).map_err(internal)?;
     Ok(SavedSearchView {
         alert: s.search.alert,
-        alerts: s.alerts,
+        alerts,
         ast,
         created_at: s.search.created_at,
         id: s.search.id,
-        last_alert_at: s.last_alert_at,
+        last_alert_at,
         name: s.search.name,
         paused: s.search.paused,
         q: s.search.query,
         rss: s.search.rss,
         sort: s.search.sort,
-        unread: s.unread,
+        unread,
         updated_at: s.search.updated_at,
     })
 }
 
-fn summary_of(store: &Store, id: i64) -> ApiResult<SavedSearchView> {
+fn summary_of(store: &Store, adult: bool, id: i64) -> ApiResult<SavedSearchView> {
     store
         .saved_searches()
         .map_err(internal)?
         .into_iter()
         .find(|s| s.search.id == id)
         .ok_or_else(not_found)
-        .and_then(view)
+        .and_then(|s| view(store, adult, s))
 }
 
 /// The query as stored: the text sent (or the AST's canonical text) and
@@ -112,13 +142,14 @@ fn sort_of(sort: Option<String>) -> ApiResult<Option<String>> {
     responses((status = 200, body = Vec<SavedSearchView>))
 )]
 pub(crate) async fn list(State(s): State<ApiState>) -> ApiResult<Json<Vec<SavedSearchView>>> {
+    let adult = s.adult.shown();
     tokio::task::spawn_blocking(move || {
         let store = s.reader.lock().expect("reader lock");
         store
             .saved_searches()
             .map_err(internal)?
             .into_iter()
-            .map(view)
+            .map(|s| view(&store, adult, s))
             .collect::<ApiResult<Vec<_>>>()
             .map(Json)
     })
@@ -149,6 +180,7 @@ pub(crate) async fn create(
     let sort = sort_of(body.sort)?;
     let name = body.name.trim().to_string();
     let writer = user_data(&s)?;
+    let adult = s.adult.shown();
     tokio::task::spawn_blocking(move || {
         let mut store = writer.lock().expect("user data lock");
         let mark = watermark(&s, &store)?;
@@ -165,7 +197,7 @@ pub(crate) async fn create(
         let id = store
             .create_saved_search(&input, mark, unix_now())
             .map_err(|e| invalid(e, "name"))?;
-        Ok((StatusCode::CREATED, Json(summary_of(&store, id)?)))
+        Ok((StatusCode::CREATED, Json(summary_of(&store, adult, id)?)))
     })
     .await
     .map_err(internal)?
@@ -187,9 +219,10 @@ pub(crate) async fn get_one(
     State(s): State<ApiState>,
     Path(id): Path<i64>,
 ) -> ApiResult<Json<SavedSearchView>> {
+    let adult = s.adult.shown();
     tokio::task::spawn_blocking(move || {
         let store = s.reader.lock().expect("reader lock");
-        summary_of(&store, id).map(Json)
+        summary_of(&store, adult, id).map(Json)
     })
     .await
     .map_err(internal)?
@@ -226,6 +259,7 @@ pub(crate) async fn patch(
         .transpose()?;
     let new_sort = body.sort.map(sort_of).transpose()?;
     let writer = user_data(&s)?;
+    let adult = s.adult.shown();
     tokio::task::spawn_blocking(move || {
         let mut store = writer.lock().expect("user data lock");
         let current = store
@@ -254,7 +288,7 @@ pub(crate) async fn patch(
         {
             return Err(not_found());
         }
-        summary_of(&store, id).map(Json)
+        summary_of(&store, adult, id).map(Json)
     })
     .await
     .map_err(internal)?
@@ -274,8 +308,10 @@ pub(crate) async fn patch(
 )]
 pub(crate) async fn remove(
     State(s): State<ApiState>,
+    headers: HeaderMap,
     Path(id): Path<i64>,
 ) -> ApiResult<Json<OkResponse>> {
+    same_origin_json(&headers)?;
     let writer = user_data(&s)?;
     tokio::task::spawn_blocking(move || {
         let deleted = writer

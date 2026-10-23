@@ -293,7 +293,7 @@
           {
             "name": "after",
             "in": "query",
-            "description": "The previous response's `next_after`.",
+            "description": "The previous response's `next_after`: how many shown entries to\nskip.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -617,7 +617,7 @@
         "tags": [
           "library"
         ],
-        "summary": "Puts a collection's entries in the order given. The list must name\nevery entry shown by default once (it may also name ones a filter rule\nhid); `409 stale_order` otherwise, so a reorder from an old page can't\ndrop or duplicate entries. Entries not shown to the client (Adult while\nhidden, and filter-hidden ones it did not name) keep their slots.",
+        "summary": "Puts a collection's entries in the order given. The list must name\nevery entry shown by default once (it may also name ones a filter rule\nhid), with no cap, and may be empty only when none is shown;\n`409 stale_order` otherwise, so a reorder from an old page can't\ndrop or duplicate entries. Entries not shown to the client (Adult while\nhidden, and filter-hidden ones it did not name) keep their slots.",
         "operationId": "reorderCollection",
         "parameters": [
           {
@@ -4458,7 +4458,7 @@
           "position": {
             "type": "integer",
             "format": "int64",
-            "description": "Ascending; gaps are possible where entries are not shown."
+            "description": "1-based place among the entries shown, so it never reveals how\nmany were left out."
           },
           "torrent": {
             "$ref": "#/components/schemas/SearchHit"

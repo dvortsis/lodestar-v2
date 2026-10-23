@@ -302,7 +302,6 @@ fn catalogue() -> Vec<T<'static>> {
     ]
 }
 
-const NORMAL: [usize; 5] = [0, 1, 2, 3, 4];
 const HIDDEN: usize = 5;
 const ADULT: usize = 6;
 
@@ -311,10 +310,10 @@ fn send(method: &str, uri: &str, cookie: Option<&str>, body: Option<Value>) -> R
     if let Some(c) = cookie {
         b = b.header(header::COOKIE, c);
     }
+    // Every write says it is JSON, bodiless ones too.
+    let b = b.header(header::CONTENT_TYPE, "application/json");
     match body {
-        Some(v) => b
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(v.to_string())),
+        Some(v) => b.body(Body::from(v.to_string())),
         None => b.body(Body::empty()),
     }
     .unwrap()
@@ -1011,8 +1010,8 @@ async fn marked(f: &Fixture, c: &str) -> i64 {
 #[tokio::test]
 async fn adult_and_filter_hidden_torrents_stay_out_of_every_list_and_count() {
     let (f, c) = ready().await;
+    let col = marked(&f, &c).await;
     let c = Some(c.as_str());
-    let col = marked(&f, c.unwrap()).await;
     let base = format!("/api/v1/collections/{col}");
     let body = |b: &Value| b.to_string();
     let adult_name = catalogue()[ADULT].name.to_string();
@@ -1140,8 +1139,8 @@ async fn adult_and_filter_hidden_torrents_stay_out_of_every_list_and_count() {
 #[tokio::test]
 async fn reorder_and_remove_leave_withheld_entries_alone() {
     let (f, c) = ready().await;
+    let col = marked(&f, &c).await;
     let c = Some(c.as_str());
-    let col = marked(&f, c.unwrap()).await;
     let base = format!("/api/v1/collections/{col}");
     // Entries in order: 0, ADULT, 1, HIDDEN, 2, 3, 4. The client sees
     // 0, 1, 2, 3, 4 and reverses them.
@@ -1192,8 +1191,8 @@ async fn reorder_and_remove_leave_withheld_entries_alone() {
 #[tokio::test]
 async fn paging_past_withheld_rows_gives_full_pages_without_repeats() {
     let (f, c) = ready().await;
+    let col = marked(&f, &c).await;
     let c = Some(c.as_str());
-    let col = marked(&f, c.unwrap()).await;
     for (path, key, cursor) in [
         ("/api/v1/user-items?limit=2".to_string(), "items", "cursor="),
         (
@@ -1288,7 +1287,7 @@ async fn guards_session_origin_and_content_type() {
             (StatusCode::UNAUTHORIZED, "login_required"),
             "{m} {uri}"
         );
-        if body.is_none() {
+        if m == "GET" {
             continue;
         }
         // A cross-origin write.
@@ -1347,5 +1346,202 @@ async fn without_a_write_connection_writes_are_503() {
     assert_eq!(
         json_of(&f.app, get("/api/v1/user-items", c)).await.0,
         StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn positions_are_the_places_among_shown_entries() {
+    let (f, c) = ready().await;
+    let col = marked(&f, &c).await;
+    let c = Some(c.as_str());
+    let base = format!("/api/v1/collections/{col}");
+    // Entries: 0, ADULT, 1, HIDDEN, 2, 3, 4; shown by default: 5.
+    let (_, page) = json_of(&f.app, get(&base, c)).await;
+    let positions: Vec<i64> = page["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["position"].as_i64().unwrap())
+        .collect();
+    assert_eq!(positions, [1, 2, 3, 4, 5]);
+    let (_, p1) = json_of(&f.app, get(&format!("{base}?limit=2"), c)).await;
+    assert_eq!(p1["next_after"], 2);
+    let (_, p3) = json_of(&f.app, get(&format!("{base}?limit=2&after=4"), c)).await;
+    assert_eq!(
+        (
+            p3["entries"][0]["position"].clone(),
+            p3["next_after"].clone()
+        ),
+        (json!(5), Value::Null)
+    );
+    // Reordering keeps that true.
+    json_of(
+        &f.app,
+        put(&format!("{base}/order"), c, hashes_of(&f, &[4, 3, 2, 1, 0])),
+    )
+    .await;
+    let (_, page) = json_of(&f.app, get(&base, c)).await;
+    let positions: Vec<i64> = page["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["position"].as_i64().unwrap())
+        .collect();
+    assert_eq!(positions, [1, 2, 3, 4, 5]);
+}
+
+#[tokio::test]
+async fn saved_search_alert_counts_leave_out_withheld_torrents() {
+    let (f, c) = ready().await;
+    let c = Some(c.as_str());
+    // The notifier (B9) records hits: one ordinary, one Adult. The search
+    // starts at watermark 0 so both count as new.
+    let mut store = Store::open(&f.db, StoreConfig::default()).unwrap();
+    let input = lodestar_store::SavedSearchInput {
+        name: "S",
+        query: "",
+        ast: "{\"op\":\"all\"}",
+        sort: None,
+        alert: true,
+        rss: false,
+        channels: 0,
+        paused: false,
+    };
+    let id = store.create_saved_search(&input, 0, 5).unwrap();
+    store
+        .record_percolation(
+            7,
+            &[lodestar_store::SearchHits {
+                saved_search_id: id,
+                torrent_ids: &[1, 7],
+            }],
+            100,
+        )
+        .unwrap();
+    let one = format!("/api/v1/saved-searches/{id}");
+    // The store counts both; Adult is hidden, so the API counts one.
+    let b = json_of(&f.app, get(&one, c)).await.1;
+    assert_eq!(
+        (
+            b["alerts"].clone(),
+            b["unread"].clone(),
+            b["last_alert_at"].clone()
+        ),
+        (json!(1), json!(1), json!(100))
+    );
+    f.adult.store(true, Ordering::Relaxed);
+    let b = json_of(&f.app, get(&one, c)).await.1;
+    assert_eq!(
+        (b["alerts"].clone(), b["unread"].clone()),
+        (json!(2), json!(2))
+    );
+}
+
+#[tokio::test]
+async fn lists_and_counts_cross_the_store_batch_boundary() {
+    // 230 ordinary torrents and 30 Adult ones, the Adult ones first
+    // discovered so a store page of 200 is mostly withheld.
+    let mut all: Vec<T<'static>> = Vec::new();
+    let names: Vec<String> = (0..260)
+        .map(|i| format!("Item.{i:03}.2020.1080p.WEB.x264-GRP"))
+        .collect();
+    let names: &'static [String] = Box::leak(names.into_boxed_slice());
+    for (i, n) in names.iter().enumerate() {
+        let mut x = t(n, &[("a.mkv", GB)]);
+        x.adult = i >= 230;
+        all.push(x);
+    }
+    let f = fixture(&all, true);
+    let c = session(&f).await;
+    let c = Some(c.as_str());
+    f.adult.store(true, Ordering::Relaxed);
+    for i in (0..260).rev() {
+        patch_ok(&f, c, i, json!({ "favourite": true, "labels": ["x"] })).await;
+    }
+    let col = json_of(
+        &f.app,
+        send(
+            "POST",
+            "/api/v1/collections",
+            c,
+            Some(json!({ "name": "Big" })),
+        ),
+    )
+    .await
+    .1["id"]
+        .as_i64()
+        .unwrap();
+    for chunk in (0..260).collect::<Vec<usize>>().chunks(100) {
+        let (st, _) = json_of(
+            &f.app,
+            send(
+                "POST",
+                &format!("/api/v1/collections/{col}/items"),
+                c,
+                Some(hashes_of(&f, chunk)),
+            ),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+    }
+    f.adult.store(false, Ordering::Relaxed);
+    // Most-recent-first marks put the 30 Adult ones last in the list.
+    let mut seen = Vec::new();
+    let mut next = "/api/v1/user-items?limit=100".to_string();
+    loop {
+        let b = json_of(&f.app, get(&next, c)).await.1;
+        seen.extend(
+            b["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r["hash"].as_str().unwrap().to_string()),
+        );
+        let Some(cur) = b["next_cursor"].as_str() else {
+            break;
+        };
+        next = format!("/api/v1/user-items?limit=100&cursor={cur}");
+    }
+    seen.sort();
+    seen.dedup();
+    assert_eq!(seen.len(), 230);
+    assert_eq!(
+        json_of(&f.app, get("/api/v1/user-items/labels", c)).await.1,
+        json!([{ "count": 230, "label": "x" }])
+    );
+    assert_eq!(
+        json_of(&f.app, get(&format!("/api/v1/collections/{col}"), c))
+            .await
+            .1["items"],
+        230
+    );
+    let b = json_of(
+        &f.app,
+        get(&format!("/api/v1/collections/{col}?limit=200&after=100"), c),
+    )
+    .await
+    .1;
+    assert_eq!(
+        (
+            b["entries"].as_array().unwrap().len(),
+            b["next_after"].clone()
+        ),
+        (130, Value::Null)
+    );
+    // Reordering more than 500 shown entries is not capped; here, 230.
+    let order = (0..230).rev().collect::<Vec<usize>>();
+    let (st, b) = json_of(
+        &f.app,
+        put(
+            &format!("/api/v1/collections/{col}/order"),
+            c,
+            hashes_of(&f, &order),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (st, b["items"].clone()),
+        (StatusCode::OK, json!(230)),
+        "{b}"
     );
 }
