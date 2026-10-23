@@ -17,28 +17,45 @@
 //!   file (disk full, a failed rotation) is written after its locks are
 //!   released, and never to the file it's about.
 
+mod entry;
 pub mod events;
 mod file;
+mod files;
+mod fold;
 mod format;
+mod history;
 mod layer;
+mod names;
 mod preview;
+mod read;
 mod refs;
+mod ring;
+mod source;
 pub mod state;
+mod view;
 
 use std::cell::Cell;
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock, RwLock};
+use std::time::{Duration, Instant};
 
-use lodestar_log::{Catalogue, Component, Event, Kind, Level, Output, Record, Sink};
+use lodestar_log::{Catalogue, Component, Event, Kind, Level, Mask, Output, Record, Sink};
 
+use entry::Entry;
 #[cfg(test)]
 pub use file::CURRENT;
 pub use file::Flags;
 use file::{FileSink, WriteError};
+use fold::{Table, Verdict};
 use format::{Stamp, Untyped};
 pub use layer::Forward;
 pub use preview::preview;
 use refs::Refs;
+use ring::Ring;
+#[cfg(test)]
+pub use source::Logs;
+pub use source::source;
 use state::Applied;
 
 /// Every crate's catalogue (§12.1: gathered here, no registry dependency).
@@ -185,6 +202,14 @@ pub struct Runtime {
     /// The process's runtime: its state is the events' switches and the
     /// catalogue's status. A test's own runtime leaves both alone.
     installed: std::sync::atomic::AtomicBool,
+    /// The first half of every line's id: 16 hex digits from the OS RNG.
+    epoch: String,
+    /// The live log's records.
+    ring: Ring,
+    /// Flood folding: the console's table, and the file's and the ring's.
+    folds: [Mutex<Table>; 2],
+    /// Off only in tests that count identical lines.
+    folding: AtomicBool,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -210,6 +235,7 @@ pub fn install(console: Box<dyn Write + Send>, applied: Applied) -> &'static Run
             .store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = lodestar_log::set_sink(rt);
         rt.publish();
+        rt.start_timer();
         rt
     })
 }
@@ -231,9 +257,41 @@ pub struct Switched {
     pub until: i64,
 }
 
+/// A fresh epoch: 16 hex digits from the OS RNG (the clock's nanoseconds
+/// without one, which only has to differ from the last run's).
+fn new_epoch() -> String {
+    let mut b = [0u8; 8];
+    let n = match getrandom::fill(&mut b) {
+        Ok(()) => u64::from_le_bytes(b),
+        Err(_) => std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as u64),
+    };
+    format!("{n:016x}")
+}
+
+/// How often the timer flushes fold summaries whose window ended.
+const FOLD_TICK: Duration = Duration::from_millis(250);
+
 impl Runtime {
     pub fn new(console: Box<dyn Write + Send>, applied: Applied) -> Runtime {
+        Runtime::with_window(console, applied, fold::WINDOW)
+    }
+
+    /// With another fold window: tests of the timer only.
+    pub fn with_window(
+        console: Box<dyn Write + Send>,
+        applied: Applied,
+        window: Duration,
+    ) -> Runtime {
         Runtime {
+            epoch: new_epoch(),
+            ring: Ring::new(applied.file_mask),
+            folds: [
+                Mutex::new(Table::new(window)),
+                Mutex::new(Table::new(window)),
+            ],
+            folding: AtomicBool::new(true),
             refs: Refs::new(),
             console: Mutex::new(console),
             file: Mutex::new(FileState::Buffering {
@@ -287,7 +345,20 @@ impl Runtime {
         if was_off && applied.file_enabled {
             self.open_file();
         }
-        switched(&before, &applied)
+        let switched = switched(&before, &applied);
+        // The ring follows at once: what may show from now on, and the
+        // kinds that turned off (a save, or a deadline through `follow`)
+        // purged from what it holds.
+        let off = switched
+            .iter()
+            .filter(|s| !s.on)
+            .fold(Mask::NONE, |m, s| m.with(s.kind));
+        let reference = self.reference();
+        let refs = reference
+            .as_ref()
+            .map(|f| f as &dyn Fn(&[u8; 20]) -> String);
+        self.ring.purge(applied.file_mask, off, refs);
+        switched
     }
 
     /// Opens the file in the applied folder (once; the folder applies at a
@@ -460,25 +531,189 @@ impl Runtime {
     pub fn record_untyped(&self, u: &Untyped) {
         let _inside = Inside::enter();
         let a = read(&self.applied);
-        let stamp = Stamp::now();
-        let console = (u.level <= a.console_level).then(|| match a.console_json {
-            true => format::untyped_json(stamp, u),
-            false => format::untyped_text(stamp, u),
-        });
-        let file = (a.file_enabled && u.level <= a.file_level && !NOTING.with(Cell::get))
-            .then(|| (format::untyped_json(stamp, u), flags_of(&a)));
+        let line = Entry::untyped(Stamp::now(), u);
+        let console = (u.level <= a.console_level).then(|| line.clone());
+        let noting = NOTING.with(Cell::get);
+        let file = a.file_enabled && u.level <= a.file_level && !noting;
+        let (json, flags) = (a.console_json, flags_of(&a));
         drop(a);
-        self.write(console, file);
+        self.emit(console, json, line, file, flags, !noting);
     }
 
-    fn write(&self, console: Option<String>, file: Option<(String, Flags)>) {
-        if let Some(line) = console {
-            self.write_console(&line);
+    /// Writes one record to every output: the console's line (if it
+    /// passed the console's level) and the ring's and the file's, each
+    /// folded by its own table when `foldable`.
+    fn emit(
+        &self,
+        console: Option<Entry>,
+        console_json: bool,
+        line: Entry,
+        file_on: bool,
+        flags: Flags,
+        foldable: bool,
+    ) {
+        let now = Instant::now();
+        let folding = foldable && self.folding.load(Ordering::Relaxed);
+        if let Some(c) = console {
+            let mut due = Vec::new();
+            let write = !folding
+                || matches!(
+                    lock(&self.folds[0]).check(&c, now, &mut due),
+                    Verdict::Write(_)
+                );
+            for s in due {
+                self.write_console_entry(&s, console_json);
+            }
+            if write {
+                self.write_console_entry(&c, console_json);
+            }
         }
-        if let Some((line, flags)) = file {
+        let mut due = Vec::new();
+        let verdict = match folding {
+            true => lock(&self.folds[1]).check(&line, now, &mut due),
+            false => Verdict::Write(None),
+        };
+        if !due.is_empty() {
+            self.keep_summaries(due);
+        }
+        if let Verdict::Write(key) = verdict {
+            let seq = self.keep(line, file_on, flags);
+            if let Some(key) = key {
+                lock(&self.folds[1]).first(key, seq);
+            }
+        }
+    }
+
+    /// Writes summaries to the ring and, by their level, the file.
+    fn keep_summaries(&self, due: Vec<Entry>) {
+        let a = read(&self.applied);
+        let (enabled, level, flags) = (a.file_enabled, a.file_level, flags_of(&a));
+        drop(a);
+        let noting = NOTING.with(Cell::get);
+        for s in due {
+            let file = enabled && s.level <= level && !noting;
+            self.keep(s, file, flags);
+        }
+    }
+
+    fn write_console_entry(&self, e: &Entry, json: bool) {
+        let line = match json {
+            true => e.json(None, None),
+            false => e.text(),
+        };
+        self.write_console(&line);
+    }
+
+    /// Puts `e` in the ring (its own copy, when that differs) and writes
+    /// its file line with its id. Returns its sequence.
+    fn keep(&self, e: Entry, file_on: bool, flags: Flags) -> u64 {
+        let reference = self.reference();
+        let refs = reference
+            .as_ref()
+            .map(|f| f as &dyn Fn(&[u8; 20]) -> String);
+        let (seq, file_line) = match e.ring_copy() {
+            Some(copy) => {
+                lodestar_log::note_written(Output::Live, copy.accounted());
+                let (seq, _, off) = self.ring.push(copy, refs);
+                // Purged as the ring purged its copy, if a kind turned off.
+                let line = match off == Mask::NONE {
+                    true => Some(e),
+                    false => ring::purged(&e, off, refs),
+                };
+                let line = line
+                    .filter(|_| file_on)
+                    .map(|l| l.json(Some(&self.id(seq)), Some(&self.epoch)));
+                (seq, line)
+            }
+            None => {
+                lodestar_log::note_written(Output::Live, e.accounted());
+                let (seq, kept, _) = self.ring.push(e, refs);
+                // A line the ring purged as it came in (rendered under the
+                // mask before a kind turned off) goes to the file as purged.
+                let line = kept
+                    .filter(|_| file_on)
+                    .map(|k| k.json(Some(&self.id(seq)), Some(&self.epoch)));
+                (seq, line)
+            }
+        };
+        if let Some(line) = file_line {
             let notes = self.write_file(line, flags);
             self.note(notes);
         }
+        seq
+    }
+
+    /// `<epoch>-<seq>`.
+    pub fn id(&self, seq: u64) -> String {
+        format!("{}-{seq}", self.epoch)
+    }
+
+    pub fn epoch(&self) -> &str {
+        &self.epoch
+    }
+
+    /// Writes the summaries of fold windows that have ended (all of them
+    /// with `all`, before `app.stop`'s line).
+    pub fn flush_folds(&self, all: bool) {
+        let _inside = Inside::enter();
+        let now = Instant::now();
+        let mut console = Vec::new();
+        lock(&self.folds[0]).flush(now, all, &mut console);
+        let mut file = Vec::new();
+        lock(&self.folds[1]).flush(now, all, &mut file);
+        if !console.is_empty() {
+            let json = read(&self.applied).console_json;
+            for s in &console {
+                self.write_console_entry(s, json);
+            }
+        }
+        if !file.is_empty() {
+            self.keep_summaries(file);
+        }
+    }
+
+    /// Folding on or off (tests that count identical lines).
+    #[cfg(test)]
+    pub fn set_folding(&self, on: bool) {
+        self.folding.store(on, Ordering::Relaxed);
+    }
+
+    /// The timer that flushes fold summaries within a second of their
+    /// window's end.
+    fn start_timer(&'static self) {
+        let _ = std::thread::Builder::new()
+            .name("log-fold".into())
+            .spawn(move || {
+                loop {
+                    std::thread::sleep(FOLD_TICK);
+                    self.flush_folds(false);
+                }
+            });
+    }
+
+    /// The live mask now: the file's, less any kind whose deadline has
+    /// passed though `follow` hasn't re-applied yet.
+    pub fn mask_now(&self) -> Mask {
+        let a = read(&self.applied);
+        let now = unix_now();
+        a.kinds
+            .iter()
+            .filter(|k| k.until > 0 && k.until <= now)
+            .fold(a.file_mask, |m, k| m.without(k.kind))
+    }
+
+    pub(crate) fn ring(&self) -> &Ring {
+        &self.ring
+    }
+
+    /// The folder the file opened in this run.
+    pub fn opened_folder(&self) -> Option<std::path::PathBuf> {
+        self.folder.get().cloned()
+    }
+
+    /// The configured folder (it applies at a restart).
+    pub fn configured_folder(&self) -> std::path::PathBuf {
+        read(&self.applied).file.dir.clone()
     }
 }
 
@@ -501,32 +736,29 @@ fn write_note(e: WriteError) -> Option<Note> {
 impl Sink for Runtime {
     fn record(&self, r: &Record<'_>) {
         let _inside = Inside::enter();
+        let e = r.event;
+        // Pending summaries go out before the stop line.
+        if e.id == events::APP_STOP::EVENT.id {
+            self.flush_folds(true);
+        }
         let a = read(&self.applied);
         let stamp = Stamp::now();
         let reference = self.reference();
         let refs = reference
             .as_ref()
             .map(|f| f as &dyn Fn(&[u8; 20]) -> String);
-        let e = r.event;
         // The opt-in events never reach the console (Lodestar can't delete
         // what `docker logs` keeps), and required events pass every level.
-        let console =
-            (e.opt_in.is_none() && (e.required || e.level <= a.console_level)).then(|| {
-                match a.console_json {
-                    true => format::event_json(stamp, r, a.console_mask, refs),
-                    false => format::event_text(stamp, r, a.console_mask, refs),
-                }
-            });
-        let file =
-            (a.file_enabled && (e.required || e.level <= a.file_level) && !NOTING.with(Cell::get))
-                .then(|| {
-                    (
-                        format::event_json(stamp, r, a.file_mask, refs),
-                        flags_of(&a),
-                    )
-                });
+        let console = (e.opt_in.is_none() && (e.required || e.level <= a.console_level))
+            .then(|| Entry::typed(stamp, r, a.console_mask, refs));
+        // Rendered once under the live mask (the file's): the ring keeps
+        // it and the file line is written from it.
+        let line = Entry::typed(stamp, r, a.file_mask, refs);
+        let noting = NOTING.with(Cell::get);
+        let file = a.file_enabled && (e.required || e.level <= a.file_level) && !noting;
+        let (json, flags) = (a.console_json, flags_of(&a));
         drop(a);
-        self.write(console, file);
+        self.emit(console, json, line, file, flags, !e.required && !noting);
     }
 }
 
@@ -561,5 +793,7 @@ pub fn level_of(l: &tracing::Level) -> Level {
     }
 }
 
+#[cfg(test)]
+mod source_tests;
 #[cfg(test)]
 pub(crate) mod tests;
