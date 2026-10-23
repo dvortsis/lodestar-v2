@@ -2,7 +2,7 @@
 // status pill, the command palette, the full-page states and the 401 hand-off. Keyboard-only flows
 // are in shell.keyboard.test.ts. Name ends in `routes.test.ts` so the `core` project runs it.
 import { expectNoA11yViolations } from './a11y';
-import { crawlerEvent, liveEvents } from './support/events-server';
+import { crawlerEvent, engage, liveEvents } from './support/events-server';
 import { expect, test } from './support/test';
 
 const nav = (page: import('@playwright/test').Page) =>
@@ -141,6 +141,7 @@ test.describe('status pill', () => {
 	test('reads "Connecting" until the stream answers', async ({ page, go }) => {
 		await page.route('**/api/v1/events*', () => new Promise(() => {}));
 		await go('/search');
+		await engage(page);
 		await expect(page.getByTestId('status-pill')).toHaveAttribute('data-state', 'connecting');
 		await expect(page.getByTestId('status-pill-text')).toHaveText('Connecting');
 	});
@@ -255,6 +256,7 @@ test.describe('full-page states', () => {
 		await page.route('**/api/v1/events*', (route) => route.abort('connectionrefused'));
 		await page.route('**/api/v1/auth', (route) => route.abort('connectionrefused'));
 		await go('/search');
+		await engage(page);
 		await expect(
 			page.getByRole('heading', { level: 1, name: 'Can’t reach Lodestar' })
 		).toBeVisible();
@@ -276,6 +278,7 @@ test.describe('full-page states', () => {
 		mock.on('getAuthStatus', { logged_in: true, setup_required: false });
 		await page.route('**/api/v1/events*', (route) => route.abort('connectionrefused'));
 		await go('/search');
+		await engage(page);
 		await expect(page.getByTestId('status-pill')).toHaveAttribute('data-state', 'reconnecting');
 		await expect(page.getByRole('heading', { name: 'Search' })).toBeVisible();
 		await expect(page.getByRole('heading', { name: 'Can’t reach Lodestar' })).toHaveCount(0);
@@ -303,12 +306,14 @@ test.describe('401 hand-off', () => {
 	test('a first run goes to /setup', async ({ page }) => {
 		await page.route('**/api/v1/events*', (route) => route.fulfill(unauthorized(true)));
 		await page.goto('/search');
+		await engage(page);
 		await expect(page).toHaveURL(/\/setup$/);
 	});
 
 	test('a signed-out visit goes to /login and remembers where it was going', async ({ page }) => {
 		await page.route('**/api/v1/events*', (route) => route.fulfill(unauthorized(false)));
 		await page.goto('/alerts?x=1');
+		await engage(page);
 		await expect(page).toHaveURL(/\/login\?next=%2Falerts%3Fx%3D1$/);
 	});
 
@@ -334,6 +339,7 @@ test.describe('skip link', () => {
 	test('is the first stop, hidden until focused, and moves focus to main', async ({ page, go }) => {
 		await go('/alerts');
 		const skip = page.getByRole('link', { name: 'Skip to main content' });
+		await skip.waitFor();
 		await page.keyboard.press('Tab');
 		await expect(skip).toBeFocused();
 		await expect(skip).toBeInViewport();
@@ -392,6 +398,7 @@ for (const [name, themeId, colorMode] of [
 			await page.route('**/api/v1/events*', (route) => route.abort('connectionrefused'));
 			await page.route('**/api/v1/auth', (route) => route.abort('connectionrefused'));
 			await go('/search');
+			await engage(page);
 			await expect(page.getByRole('heading', { name: 'Can’t reach Lodestar' })).toBeVisible();
 			await expectNoA11yViolations(page);
 		});
