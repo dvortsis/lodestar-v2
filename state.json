@@ -952,13 +952,14 @@
    "notes": "Launched 21:38 (\"run as many feature sessions as possible\")."
   },
   "R-relevance": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01HedMy8BMpmR1uFHZkW2HsR",
    "pr": 94,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 23:06 review FIX: gate relevance job on bench, tol 0.001, ratchet warn, forbidden marks, shown()->with_filters. | 23:26 160ff67 all review items done (verified gating); merge on green."
+   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 23:06 review FIX: gate relevance job on bench, tol 0.001, ratchet warn, forbidden marks, shown()->with_filters. | 23:26 160ff67 all review items done (verified gating); merge on green.",
+   "merge": "4fc30fe"
   },
   "V6-cluster1": {
    "status": "merged",
@@ -1006,11 +1007,12 @@
    "session": "session_01KNC8PugVKjddvhH6vT8qXN"
   },
   "B4b-r2": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01SK5Ci2FahQUSGQuDVozi28",
    "notes": "follow-up of #87 review: max_id visible-only, replay toggle, swap adult test | 23:32 PR #104 (branch slice/B4b). Runner decision (\u00a72.19, content-safety strengthening): max_id null while Adult hidden. Reviewer started. | 23:43 review FIX at ce2fd15: null max_id not landed yet; sent full plan + I1 (keep lastId on visibility resync) + I2 note. | 23:43 5ee6501 null max_id landed; I1 lastId pending. | 23:49 5f56396: B1 per plan, I1/I2/B1.8/polish done; runner verified fold. Approved; merge on green.",
-   "pr": 104
+   "pr": 104,
+   "merge": "501353f"
   },
   "runner-secure-delete": {
    "status": "merged",
