@@ -36,9 +36,9 @@
              InstallScope="perMachine"
              Platform="x64" />
 
-    <!-- Downgrades and same-version upgrades are allowed: nightlies and a release share an MSI
+    <!-- Downgrades and same-version upgrades are allowed (AllowDowngrades covers both): nightlies and a release share an MSI
          version, and a failed update is rolled back by reinstalling the previous MSI (§12.2). -->
-    <MajorUpgrade AllowDowngrades="yes" AllowSameVersionUpgrades="yes" />
+    <MajorUpgrade AllowDowngrades="yes" />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
     <Icon Id="LodestarIcon" SourceFile="$(env.LODESTAR_PACKAGING)\icons\lodestar.ico" />
