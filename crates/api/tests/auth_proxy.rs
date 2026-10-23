@@ -201,7 +201,7 @@ async fn it_is_off_by_default_and_changing_it_needs_the_password() {
     wrong["password"] = json!("nope nope nope");
     let r = send(&f.app, put(wrong), at([127, 0, 0, 1])).await;
     assert_eq!(r.status, StatusCode::UNAUTHORIZED);
-    assert_eq!(f.auth.proxy().enabled, false, "nothing changed");
+    assert!(!f.auth.proxy().enabled, "nothing changed");
 
     let r = enable(&f, &cookie, json!([])).await;
     assert_eq!(r.status, StatusCode::OK);
