@@ -264,11 +264,23 @@ impl Server {
 
     /// `PATCH /settings/logging`, which must succeed.
     fn logging(&self, body: &str) {
+        // `follow` applies it on its own task, then logs the required
+        // `logging.kind_switched` / `logging.applied` event: wait for a new one.
+        let events = |file: &str| {
+            file.matches("\"event\":\"logging.kind_switched\"").count()
+                + file.matches("\"event\":\"logging.applied\"").count()
+        };
+        let before = events(&self.file());
         let r = self.send("PATCH", "/api/v1/settings/logging", body);
         assert!(r.starts_with("HTTP/1.0 200"), "{body}: {r}");
-        // `follow` applies it on its own task. Kept: nothing a test can see
-        // says it has, short of a production hook.
-        std::thread::sleep(Duration::from_millis(300));
+        let start = Instant::now();
+        while events(&self.file()) == before {
+            assert!(
+                start.elapsed() < Duration::from_secs(15),
+                "{body}: the change was never logged as applied"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     /// Every event on: each one turned on against the preset.
@@ -455,6 +467,19 @@ impl Stream {
 
     fn text(&self) -> String {
         self.text.lock().unwrap().clone()
+    }
+
+    /// Waits up to 15 s for `needle` to appear in the text from byte `from`.
+    fn wait_for(&self, from: usize, needle: &str) {
+        let start = Instant::now();
+        while !self.text().get(from..).is_some_and(|t| t.contains(needle)) {
+            assert!(
+                start.elapsed() < Duration::from_secs(15),
+                "no {needle:?} in the stream: {}",
+                self.text().get(from..).unwrap_or_default()
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     /// Waits until the text has not grown for three reads 100 ms apart.
@@ -710,12 +735,9 @@ fn run_1_private_shows_no_fixture_identifier() {
     drop(stream);
     s.exercise(2, false);
     let again = Stream::open(&s, "", Some(&last));
+    again.wait_for(0, "filters.rule_set_updated");
     again.settle();
     assert!(!again.text().contains("event: resync"), "{}", again.text());
-    assert!(
-        again.text().contains("filters.rule_set_updated"),
-        "it caught up"
-    );
     let replay = Stream::open(&s, &format!("?after={first}"), None);
     replay.settle();
     let api = s.api(&replay);
@@ -796,6 +818,8 @@ fn run_2_one_kind_at_a_time_shows_only_that_kind() {
         // The API shows at most this kind while it's on, and redacted
         // downloads none at all.
         let replay = Stream::open(&s, "", None);
+        replay.settle();
+        open.settle();
         let api = s.api(&replay);
         let stream_now = open.text()[stream_mark..].to_string();
         // (The unredacted downloads hold what earlier kinds wrote.)
@@ -845,6 +869,7 @@ fn run_3_opt_ins_appear_only_while_on_and_only_in_the_file() {
     let mark = s.mark();
     s.exercise(20, true);
     s.settle();
+    open.settle();
     let (console, file) = s.since(mark);
     absent(
         &[
@@ -861,12 +886,12 @@ fn run_3_opt_ins_appear_only_while_on_and_only_in_the_file() {
     let mark = s.mark();
     s.exercise(21, false);
     s.settle();
+    open.wait_for(0, "canaryterm21");
     let (console, file) = s.since(mark);
     assert!(
         file.contains("\"event\":\"filters.change_detail\"") && file.contains("canaryterm21"),
         "{file}"
     );
-    assert!(open.text().contains("canaryterm21"), "the live log has it");
     assert!(s.history().contains("canaryterm21"), "history has it");
     absent(
         &[("console", &console)],
@@ -898,12 +923,8 @@ fn run_3_opt_ins_appear_only_while_on_and_only_in_the_file() {
         "expired",
     );
     // Gone from history and from a new stream; the open one was told.
-    assert!(
-        open.text()[before_off..].contains("event: purge")
-            && open.text()[before_off..].contains("filter_changes"),
-        "{}",
-        &open.text()[before_off..]
-    );
+    open.wait_for(before_off, "event: purge");
+    open.wait_for(before_off, "filter_changes");
     let replay = Stream::open(&s, &format!("?after={first}"), None);
     replay.settle();
     let api = s.api(&replay);
