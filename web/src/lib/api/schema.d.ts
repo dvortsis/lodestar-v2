@@ -203,7 +203,8 @@ export interface paths {
         /**
          * Puts a collection's entries in the order given. The list must name
          *     every entry shown by default once (it may also name ones a filter rule
-         *     hid); `409 stale_order` otherwise, so a reorder from an old page can't
+         *     hid), with no cap, and may be empty only when none is shown;
+         *     `409 stale_order` otherwise, so a reorder from an old page can't
          *     drop or duplicate entries. Entries not shown to the client (Adult while
          *     hidden, and filter-hidden ones it did not name) keep their slots.
          */
@@ -1447,7 +1448,8 @@ export interface components {
             added_at: number;
             /**
              * Format: int64
-             * @description Ascending; gaps are possible where entries are not shown.
+             * @description 1-based place among the entries shown, so it never reveals how
+             *     many were left out.
              */
             position: number;
             torrent: components["schemas"]["SearchHit"];
@@ -3933,7 +3935,10 @@ export interface operations {
     getCollection: {
         parameters: {
             query?: {
-                /** @description The previous response's `next_after`. */
+                /**
+                 * @description The previous response's `next_after`: how many shown entries to
+                 *     skip.
+                 */
                 after?: number;
                 /** @description Include torrents a filter rule hid (§20.3). */
                 hidden?: boolean;
