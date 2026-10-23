@@ -59,7 +59,12 @@ fn main() {
 /// git's files are watched only if they exist, since a missing path would
 /// rerun it on every build.
 fn build_info(bundle: &web_build::Bundle) {
-    for var in ["LODESTAR_COMMIT", "LODESTAR_CHANNEL", "SOURCE_DATE_EPOCH"] {
+    for var in [
+        "LODESTAR_COMMIT",
+        "LODESTAR_CHANNEL",
+        "SOURCE_DATE_EPOCH",
+        "LODESTAR_VERSION",
+    ] {
         println!("cargo:rerun-if-env-changed={var}");
     }
     let root = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("../..");
@@ -115,7 +120,9 @@ fn build_info(bundle: &web_build::Bundle) {
         .find(|f| f.path == "_app/version.json")
         .and_then(|f| ui_version(&f.raw));
     let date = date.filter(|d| d.trim().parse::<u64>().is_ok());
+    let version = build_version(var("LODESTAR_VERSION"));
     for (name, value) in [
+        ("VERSION", Some(version)),
         ("COMMIT", commit),
         ("DATE", date),
         ("CHANNEL", Some(channel)),
@@ -125,6 +132,35 @@ fn build_info(bundle: &web_build::Bundle) {
     ] {
         let value = value.unwrap_or_default().replace(['\n', '\r'], " ");
         println!("cargo:rustc-env=LODESTAR_BUILD_{name}={}", value.trim());
+    }
+}
+
+/// This build's version for the updater (§12.2, B-update): `$LODESTAR_VERSION`
+/// when it's strict semver (a pre-release such as `-nightly.20261023`
+/// allowed, no build metadata) whose `major.minor.patch` is the crate's,
+/// else the crate's own `CARGO_PKG_VERSION`, with a warning.
+fn build_version(given: Option<String>) -> String {
+    let own = env!("CARGO_PKG_VERSION").to_string();
+    let Some(v) = given.map(|v| v.trim().to_string()) else {
+        return own;
+    };
+    let (core, pre) = match v.split_once('-') {
+        Some((c, p)) => (c, Some(p)),
+        None => (v.as_str(), None),
+    };
+    let ident = |s: &str| {
+        !s.is_empty()
+            && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            && !(s.len() > 1 && s.starts_with('0') && s.bytes().all(|b| b.is_ascii_digit()))
+    };
+    let ok = core == own && pre.is_none_or(|p| p.split('.').all(ident)) && v.len() <= 64;
+    if ok {
+        v
+    } else {
+        println!(
+            "cargo::warning=LODESTAR_VERSION={v:?} isn't strict semver on {own}: building as {own}"
+        );
+        own
     }
 }
 

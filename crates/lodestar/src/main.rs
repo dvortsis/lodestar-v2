@@ -19,6 +19,7 @@ mod services;
 mod settings;
 mod subscriptions;
 mod system;
+mod update;
 mod web;
 #[cfg(test)]
 mod web_build;
@@ -46,7 +47,10 @@ fn main() -> ExitCode {
     }
     let cli = cli::parse();
     let config_path = cli.config;
-    let command = cli.command.unwrap_or(Command::Serve { fixture: None });
+    let command = cli.command.unwrap_or(Command::Serve {
+        fixture: None,
+        child: false,
+    });
     // Root is dropped first: before the config file (in the data directory)
     // is read, any socket is bound or any thread is spawned. Every command
     // that touches the data directory runs as the target account, so a
@@ -56,8 +60,10 @@ fn main() -> ExitCode {
     let scope = match command {
         // `fixture::serve` drops it for the fixture's own folder, once it
         // has checked that folder; the data directory is never touched.
-        Command::Serve { fixture: Some(_) } => None,
-        Command::Serve { fixture: None }
+        Command::Serve {
+            fixture: Some(_), ..
+        } => None,
+        Command::Serve { fixture: None, .. }
         | Command::ImportBitmagnet { .. }
         | Command::Backup(_)
         | Command::Rollback(_)
@@ -111,6 +117,10 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
+            if let Err(e) = cli::util::refuse_during_update_rollback(&config.data_dir) {
+                eprintln!("lodestar import-bitmagnet: {e}");
+                return ExitCode::from(3);
+            }
             init_logging(&config.log);
             dropped.log(&config.data_dir);
             let runtime = match tokio::runtime::Builder::new_multi_thread()
@@ -131,17 +141,61 @@ fn main() -> ExitCode {
                 }
             }
         }
-        Command::Serve { fixture: Some(dir) } => fixture::serve(dir, config_path.as_deref()),
-        Command::Serve { fixture: None } => {
-            let config = match load(config_path) {
+        Command::Serve {
+            fixture: Some(dir), ..
+        } => fixture::serve(dir, config_path.as_deref()),
+        Command::Serve {
+            fixture: None,
+            child,
+        } => {
+            let config = match load(config_path.clone()) {
                 Ok(c) => c,
                 Err(e) => {
                     eprintln!("config: {e}");
                     return ExitCode::FAILURE;
                 }
             };
+            // On Unix, `serve` is the supervisor (§12.2), still
+            // single-threaded here; the work runs in its `--child`.
+            #[cfg(unix)]
+            if !child {
+                return update::supervisor::run(
+                    &config.data_dir,
+                    config.db_path(),
+                    config.data_dir.join("index"),
+                    config_path.as_deref(),
+                    &dropped,
+                );
+            }
+            #[cfg(not(unix))]
+            if child {
+                eprintln!("lodestar serve: --child is the Unix supervisor's own");
+                return ExitCode::from(2);
+            }
+            // Every store opener refuses while a rollback journal exists.
+            if let Err(e) = cli::util::refuse_during_update_rollback(&config.data_dir) {
+                eprintln!("lodestar serve: {e}");
+                return ExitCode::from(3);
+            }
+            // Logging first, so the child's update events are kept.
             init_logging(&config.log);
             dropped.log(&config.data_dir);
+            #[cfg(unix)]
+            let supervised =
+                match update::probation::before_start(&config.data_dir, &config.db_path()) {
+                    Ok(c) => {
+                        if c.supervised {
+                            system::Restart::global().set_supervised();
+                        }
+                        Some(c)
+                    }
+                    Err(e) => {
+                        eprintln!("lodestar serve: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                };
+            #[cfg(not(unix))]
+            let supervised = None;
             fsdetect::warn_at_start(&config.data_dir);
             let runtime = match tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -153,8 +207,9 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            match runtime.block_on(serve(config)) {
-                Ok(()) => ExitCode::SUCCESS,
+            match runtime.block_on(serve_as(config, supervised)) {
+                Ok(Some(code)) => ExitCode::from(code),
+                Ok(None) => ExitCode::SUCCESS,
                 Err(e) => {
                     tracing::error!("{e}");
                     ExitCode::FAILURE
@@ -170,7 +225,18 @@ fn init_logging(filter: &str) {
     settings::log::init(filter);
 }
 
+#[cfg(unix)]
+type Supervised = Option<&'static update::probation::Child>;
+#[cfg(not(unix))]
+type Supervised = Option<std::convert::Infallible>;
+
+/// An unsupervised run (`serve --fixture`, Windows).
 async fn serve(config: Config) -> Result<(), BoxError> {
+    serve_as(config, None).await.map(|_| ())
+}
+
+/// `Some(code)` to exit with a reserved code for the supervisor.
+async fn serve_as(config: Config, child: Supervised) -> Result<Option<u8>, BoxError> {
     // Stop on a signal, or restart when asked (`POST /system/restart`):
     // both take the same graceful shutdown. A signal wins, even during a
     // restart's shutdown.
@@ -187,13 +253,35 @@ async fn serve(config: Config) -> Result<(), BoxError> {
             () = restart.requested() => {}
         }
     };
-    Services::start(&config).await?.run(stop).await?;
+    let services = Services::start(&config).await?;
+    #[cfg(unix)]
+    if let Some(c) = child {
+        c.after_start(services.probe(), update::testing::limits().deadline);
+    }
+    services.run(stop).await?;
+    #[cfg(unix)]
+    if let Some(c) = child {
+        c.record_stored();
+        if update::probation::failed() {
+            return Err("the self-test failed".into());
+        }
+    }
     if restart.was_requested() && !*stopped.borrow_and_update() {
+        // Under the supervisor: the request, then its reserved code.
+        #[cfg(unix)]
+        if let Some(c) = child.filter(|c| c.supervised) {
+            let (action, version, lost) =
+                update::control::intent().unwrap_or((update::control::Action::Restart, None, None));
+            let run_id = c.hint.as_ref().map_or("", |h| h.run_id.as_str());
+            let code = update::control::request(&c.bin, run_id, action, version, lost)?;
+            return Ok(Some(code as u8));
+        }
+        let _ = child;
         // Returns only if the exec failed: exit non-zero, so a restart
         // policy takes over.
         return Err(format!("restarting: {}", system::restart::reexec()).into());
     }
-    Ok(())
+    Ok(None)
 }
 
 /// `lodestar import-bitmagnet`: everything from a bitmagnet database into

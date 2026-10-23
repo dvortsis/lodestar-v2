@@ -325,6 +325,29 @@ fn manifest_counts_match_independent_counts() {
         count(&conn, "SELECT max(last_id) FROM index_watermark_hour"),
         count(&conn, "SELECT max(id) FROM torrents")
     );
+    // The overview's "new searchable" and searchable time read the
+    // rollups `record_searchable` writes, not the watermark table: every
+    // hour of them, not only the 72 h a repair at start would recount.
+    let newly_since = |t: i64| -> u64 {
+        count(
+            &conn,
+            &format!(
+                "SELECT coalesce(sum(value), 0) FROM rollup_hour WHERE metric = {} AND hour * 3600 >= {t}",
+                metric::NEWLY_SEARCHABLE
+            ),
+        )
+    };
+    assert_eq!(newly_since(a - 86_400), r.new_searchable_24h);
+    assert_eq!(newly_since(a - 7 * 86_400), r.new_searchable_7d);
+    assert_eq!(newly_since(0), c.searchable);
+    assert_eq!(sum(metric::TIME_TO_SEARCHABLE) as u64, c.stored);
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT value FROM insights_state WHERE key = 'imported'"
+        ),
+        c.imported
+    );
     assert_eq!(
         count(&conn, "SELECT count(*) FROM events"),
         b.manifest.events.len() as u64

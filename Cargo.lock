@@ -1389,6 +1389,7 @@ dependencies = [
  "lodestar-sources-importers",
  "lodestar-store",
  "lodestar-tracker-scrape",
+ "lodestar-update",
  "mimalloc",
  "proptest",
  "reqwest",

@@ -83,7 +83,10 @@ where
     // `serve --fixture` serves test data offline: never a service start.
     matches!(
         cli.command,
-        None | Some(crate::cli::Command::Serve { fixture: None })
+        None | Some(crate::cli::Command::Serve {
+            fixture: None,
+            child: false
+        })
     )
     .then_some(cli.config)
 }

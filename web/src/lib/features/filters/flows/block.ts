@@ -3,7 +3,7 @@
 
 export type BlockTier = 'torrent' | 'payload' | 'group' | 'phrase';
 /** Why a tier can't be offered yet: a stable code the dialog words. */
-export type BlockUnavailable = 'no_payload_signature' | 'no_group';
+export type BlockUnavailable = 'bad_hash' | 'no_payload_signature' | 'no_group';
 
 export interface BlockSuggestion {
 	tier: BlockTier;
@@ -64,7 +64,7 @@ export function suggestBlocks(t: BlockTarget): BlockSuggestion[] {
 	return [
 		torrent
 			? { tier: 'torrent', available: true, query: torrent }
-			: { tier: 'torrent', available: false },
+			: { tier: 'torrent', available: false, reason: 'bad_hash' },
 		{ tier: 'payload', available: false, reason: 'no_payload_signature' },
 		{ tier: 'group', available: false, reason: 'no_group' },
 		{ tier: 'phrase', available: nameWords(t.name).length > 0 }

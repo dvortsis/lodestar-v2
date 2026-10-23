@@ -18,7 +18,7 @@ describe('suggestBlocks', () => {
 
 	it('a nameless torrent offers no phrase; a bad hash offers no torrent tier', () => {
 		const s = suggestBlocks({ hash: 'nope', hash_v2: null, name: ' ..-- ' });
-		expect(s[0]).toEqual({ tier: 'torrent', available: false });
+		expect(s[0]).toEqual({ tier: 'torrent', available: false, reason: 'bad_hash' });
 		expect(s[3]!.available).toBe(false);
 	});
 });
