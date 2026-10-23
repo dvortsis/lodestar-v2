@@ -37,7 +37,7 @@ pub use structure::Structure;
 
 /// Bumped whenever a change alters any classification, so stored
 /// results can be re-derived (§6 "Re-derivation without the raw dict").
-pub const CLASSIFY_VERSION: u32 = 2;
+pub const CLASSIFY_VERSION: u32 = 3;
 
 /// One file of a torrent, with its path decoded to text. A single-file
 /// torrent is one entry whose path is the torrent name.
