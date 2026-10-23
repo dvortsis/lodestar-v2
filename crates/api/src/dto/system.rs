@@ -178,6 +178,9 @@ pub enum RestartMethod {
     /// same arguments and process id (Linux, macOS, Docker, Unraid,
     /// systemd).
     Reexec,
+    /// A graceful shutdown, then the supervisor starts the same version
+    /// again; its process id (a container's PID 1) is kept (§12.2).
+    Supervised,
     /// It can't: restart it the way it was started.
     Manual,
 }

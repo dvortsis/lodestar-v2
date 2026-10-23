@@ -160,7 +160,10 @@
 	const dialogs = () =>
 		Promise.all([
 			import('$lib/features/filters/flows/ChangeDialog.svelte'),
-			import('$lib/features/filters/flows/AdultConfirmDialog.svelte')
+			import('$lib/features/filters/flows/AdultConfirmDialog.svelte'),
+			import('$lib/features/filters/flows/OverrideDialog.svelte'),
+			import('$lib/features/filters/flows/BlockThisDialog.svelte'),
+			import('$lib/features/filters/flows/RevealNameDialog.svelte')
 		]);
 	let loaded = $state<Awaited<ReturnType<typeof dialogs>> | null>(null);
 	async function ensure() {
@@ -171,6 +174,22 @@
 		await ensure();
 		current = c;
 		flow.start(c.change);
+	}
+
+	// Part 2: each dialog owns its flow; the showcase only opens it.
+	let overrideOpen = $state(false);
+	let blockOpen = $state(false);
+	let revealOpen = $state(false);
+	const torrent = {
+		hash: HASH,
+		hash_v2: 'fedcba9876543210'.repeat(4),
+		name: '[Grp] Some.Show.S01E02.1080p.WEB'
+	};
+	async function openDialog(which: 'override' | 'block' | 'reveal') {
+		await ensure();
+		if (which === 'override') overrideOpen = true;
+		else if (which === 'block') blockOpen = true;
+		else revealOpen = true;
 	}
 
 	const adult = createAdultConfirm();
@@ -203,6 +222,20 @@
 		<p role="status" data-testid="last-applied">Last applied: {last}</p>
 	</section>
 
+	<section class="flex flex-col gap-3" aria-labelledby="h-dialogs">
+		<h2 id="h-dialogs" class="text-title font-semibold">Dialogs</h2>
+		<div class="flex flex-wrap gap-2">
+			<Button dense onclick={() => openDialog('override')} data-testid="open-override"
+				>Add to the override list</Button
+			>
+			<Button dense onclick={() => openDialog('block')} data-testid="open-block">Block this…</Button
+			>
+			<Button dense onclick={() => openDialog('reveal')} data-testid="open-reveal"
+				>Reveal the sealed name</Button
+			>
+		</div>
+	</section>
+
 	<section class="flex flex-col gap-3" aria-labelledby="h-adult">
 		<h2 id="h-adult" class="text-title font-semibold">Show adult content</h2>
 		<div class="flex flex-wrap gap-2">
@@ -214,7 +247,13 @@
 </div>
 
 {#if loaded}
-	{@const [{ default: ChangeDialog }, { default: AdultConfirmDialog }] = loaded}
+	{@const [
+		{ default: ChangeDialog },
+		{ default: AdultConfirmDialog },
+		{ default: OverrideDialog },
+		{ default: BlockThisDialog },
+		{ default: RevealNameDialog }
+	] = loaded}
 	<ChangeDialog
 		{flow}
 		title={current?.title ?? ''}
@@ -223,4 +262,15 @@
 		onapplied={(r) => (last = `${current?.id} v${r.version}`)}
 	/>
 	<AdultConfirmDialog confirm={adult} />
+	<OverrideDialog
+		bind:open={overrideOpen}
+		shadowDays={7}
+		onapplied={(r) => (last = `override v${r.version}`)}
+	/>
+	<BlockThisDialog
+		{torrent}
+		bind:open={blockOpen}
+		onapplied={(r) => (last = `block v${r.version}`)}
+	/>
+	<RevealNameDialog hash={HASH} bind:open={revealOpen} />
 {/if}

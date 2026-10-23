@@ -1,6 +1,6 @@
 # features/filters/flows
 
-The filters change flows (M-filters-dialogs): every filtering change previewed, warned about and confirmed exactly as the server says (architecture §20.10, §20.11, §20.7 "As built"), and the 18+ confirmation for "Show adult content" (§20.9, B17). Decisions: `docs/decisions/2026-10-23-M-filters-dialogs.md`.
+The filters change flows (M-filters-dialogs): every filtering change previewed, warned about and confirmed exactly as the server says (architecture §20.10, §20.11, §20.7 "As built"), and the 18+ confirmation for "Show adult content" (§20.9, B17). Decisions: `docs/decisions/2026-10-23-M-filters-dialogs.md` and `-r2.md`.
 
 **The server decides.** Whether a change weakens filtering, needs the password, is allowed at all and what it does all come from the preview job and `POST /filters/apply`. Nothing here judges a change, builds a warning or caches a password.
 
@@ -18,6 +18,9 @@ Import from `$lib/features/filters/flows`; components by path, and lazily (`awai
 | `ImpactSummary.svelte`                                                                                                                                                                                                                                                               | `{ preview, neutralize? }`: the exposure summary; with `neutralize`, both CSX-5 strengths side by side.                                                                                                                                                                       |
 | `EffectWarning.svelte`                                                                                                                                                                                                                                                               | `{ text, id?, password? }`: the server's warning, as text.                                                                                                                                                                                                                    |
 | `AdultConfirmDialog.svelte`                                                                                                                                                                                                                                                          | `{ confirm }`: render once with the `createAdultConfirm()` it answers.                                                                                                                                                                                                        |
+| `OverrideDialog.svelte`                                                                                                                                                                                                                                                              | `{ open, shadowDays?, onapplied?, onclose? }`: a CSX-5 entry, the mandatory preview, both strengths side by side.                                                                                                                                                             |
+| `BlockThisDialog.svelte`                                                                                                                                                                                                                                                             | `{ torrent, open, onapplied?, onclose? }`: "Block this…", narrowest first, `hide` by default.                                                                                                                                                                                 |
+| `RevealNameDialog.svelte`                                                                                                                                                                                                                                                            | `{ hash, open, onclose? }`: one sealed name, after the warning and password; no Copy.                                                                                                                                                                                         |
 
 ### States
 
@@ -47,7 +50,8 @@ Import from `$lib/features/filters/flows`; components by path, and lazily (`awai
   );
   ```
 
-- **S-search, S-detail** ("Block this…", reveal): part 2 adds `BlockThisDialog` and `RevealNameDialog` here.
+- **S-search, S-detail** ("Block this…" in the result menu and the drawer): `<BlockThisDialog torrent={{ hash, hash_v2, name }} bind:open onclose onapplied />`. It suggests the narrowest rule, shows what it matches now, and runs the normal flow with `addRule({ query, action })`, `hide` by default.
+- **S-filters** (review queue, CSX-5): `<RevealNameDialog hash bind:open onclose />` reveals one sealed name. It previews as soon as it opens, then the server's warning and password, and the name is gone when it closes. `<OverrideDialog bind:open shadowDays? onapplied onclose />` is the CSX-5 entry editor; for a keyword, it shows both strengths side by side.
 
 ## Security properties
 

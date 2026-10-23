@@ -258,6 +258,23 @@ fn serves_what_the_manifest_says() {
 
     check_discover(port, &cookie, &m, false);
 
+    // Insights: new searchable over 24 h and 7 d (Adult and imports
+    // counted, as totals are), the imported total, and searchable time
+    // once the range holds final cohorts.
+    let rollups = &m["rollups"];
+    for (range, key) in [("24h", "new_searchable_24h"), ("7d", "new_searchable_7d")] {
+        let o = json(
+            port,
+            &format!("/api/v1/insights/overview?range={range}"),
+            &cookie,
+        );
+        assert_eq!(u(&o["kpi"]["new_searchable"]), u(&rollups[key]), "{range}");
+        assert_eq!(u(&o["kpi"]["imported"]), u(&counts["imported"]), "{range}");
+        if range == "7d" {
+            assert!(o["kpi"]["time_to_searchable_p50_s"].is_u64(), "{o}");
+        }
+    }
+
     // Nothing reaches out: no DHT source, nothing fetched or looked up.
     let metrics = request(port, "GET /metrics HTTP/1.0", "").unwrap();
     assert!(!metrics.contains("source=\"dht\""), "{metrics}");

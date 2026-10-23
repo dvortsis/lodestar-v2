@@ -14022,6 +14022,7 @@
             "description": "How this process restarts itself.",
             "enum": [
               "reexec",
+              "supervised",
               "manual"
             ]
           }
