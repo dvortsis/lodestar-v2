@@ -74,6 +74,7 @@ pub fn document() -> Doc {
     doc.merge(crate::user_items::ApiDoc::openapi());
     doc.merge(crate::collections::ApiDoc::openapi());
     doc.merge(crate::saved::ApiDoc::openapi());
+    doc.merge(crate::alerts::ApiDoc::openapi());
     finish(&mut doc);
     doc
 }
