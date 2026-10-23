@@ -31,6 +31,8 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET", "/torrents/{hash}/siblings"),
     ("POST", "/compare"),
     ("GET", "/discover"),
+    ("GET", "/insights/overview"),
+    ("GET", "/insights/events"),
     ("GET", "/filters"),
     ("GET", "/filters/queue"),
     ("GET", "/filters/tombstones"),
@@ -204,6 +206,7 @@ fn app() -> (tempfile::TempDir, Router) {
             settings: None,
             ops: None,
             adult: Default::default(),
+            insights: None,
         }),
     );
     (dir, app)

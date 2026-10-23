@@ -227,6 +227,7 @@ fn fixture() -> Fixture {
             settings: None,
             ops: None,
             adult: Default::default(),
+            insights: None,
         }),
     );
     let hashes = infos
@@ -1163,6 +1164,7 @@ async fn filters_without_an_index_or_filters() {
                 settings: None,
                 ops: None,
                 adult: Default::default(),
+                insights: None,
             }),
         )
     };
