@@ -313,7 +313,7 @@
    "pr": 102,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:41 after B6 merged. | 01:50 PR #102 41231f7 conflicts live.rs; asked main merge + relevance gate; review on new head."
+   "notes": "Launched 21:41 after B6 merged. | 01:50 PR #102 41231f7 conflicts live.rs; asked main merge + relevance gate; review on new head. | 01:52 c764a4f main merged (relevance PASS); reviewer started."
   },
   "B12": {
    "status": "pending",
@@ -931,7 +931,7 @@
    "pr": 92,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 01:05 PR #92; told: env release/nightly on jobs, signing reqs in PR desc for B-update. | 01:27 d9b3ef0 MSI: ProgramData ACL inheritance removed, LocalService, firewall Private-only, Defender opt-in; PRESHUTDOWN left to M6-win. MSI smoke iterating."
+   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 01:05 PR #92; told: env release/nightly on jobs, signing reqs in PR desc for B-update. | 01:27 d9b3ef0 MSI: ProgramData ACL inheritance removed, LocalService, firewall Private-only, Defender opt-in; PRESHUTDOWN left to M6-win. MSI smoke iterating. | 01:48 8d4f971 MSI: NT SERVICE\\Lodestar, empty folder + icacls matching acl.rs, PreShutdownDelay 60s, foreign-owner stop. Review when MSI smoke green."
   },
   "M6-cli": {
    "status": "merged",
