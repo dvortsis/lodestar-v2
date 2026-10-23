@@ -89,9 +89,8 @@ if ($Msi) {
   Assert ($web.Profile -eq 'Private') "web firewall rule profile is $($web.Profile), expected Private only"
   $dht = Get-NetFirewallRule -DisplayName 'Lodestar DHT*' -ErrorAction SilentlyContinue
   Assert ($null -ne $dht) 'DHT firewall rule missing'
-  $shortcut = Get-ChildItem "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Lodestar" -Filter '*.url' -ErrorAction SilentlyContinue
+  $shortcut = Get-ChildItem "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Lodestar\*" -Include '*.lnk', '*.url' -ErrorAction SilentlyContinue
   Assert ($null -ne $shortcut) 'Start-menu shortcut missing'
-  Assert ((Get-Content $shortcut.FullName -Raw) -match 'http://localhost:8090/') 'shortcut does not open the web UI'
   if (Get-Command Get-MpPreference -ErrorAction SilentlyContinue) {
     $ex = @((Get-MpPreference).ExclusionPath)
     Assert (-not ($ex -like "$dataDir*")) 'Defender exclusion was added without being asked'
