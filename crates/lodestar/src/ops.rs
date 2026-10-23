@@ -129,7 +129,7 @@ fn index_lag(now: u64, max_id: i64, watermark: i64, index_commit: u64) -> Option
 
 /// Bytes in the files under `dir`, not following links; `None` if it
 /// can't be read.
-fn dir_size(dir: &Path) -> Option<u64> {
+pub(crate) fn dir_size(dir: &Path) -> Option<u64> {
     let mut total = 0u64;
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {

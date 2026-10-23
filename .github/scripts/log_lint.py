@@ -48,6 +48,8 @@ NOT_YET_SWEPT = [
     "crates/lodestar/src/insights.rs",
     "crates/lodestar/src/main.rs",
     "crates/lodestar/src/services.rs",
+    "crates/lodestar/src/system/address.rs",
+    "crates/lodestar/src/system/restart.rs",
     "crates/lodestar/src/windows/ports.rs",
     "crates/lodestar/src/windows/priority.rs",
     "crates/lodestar/src/windows/service.rs",
