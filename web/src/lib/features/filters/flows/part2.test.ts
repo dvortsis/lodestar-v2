@@ -167,7 +167,9 @@ describe('RevealNameDialog', () => {
 		await fireEvent.input(document.querySelector('input[name="password"]')!, {
 			target: { value: PW }
 		});
-		await fireEvent.submit(document.querySelector('input[name="password"]')!.form!);
+		await fireEvent.submit(
+			document.querySelector<HTMLInputElement>('input[name="password"]')!.form!
+		);
 		const name = await screen.findByTestId('reveal-name');
 		expect(name.textContent).toBe(HOSTILE);
 		expect(document.querySelector('img, script')).toBeNull();

@@ -229,13 +229,18 @@
 		flow.cancel();
 		onclose?.();
 		// Back to the invoker (§10.13), unless something outside the dialog took focus meanwhile.
+		// Wait for the dialog (and its exit motion) to leave the page, then check once.
 		const back = openedFrom;
-		setTimeout(() => {
+		const panel = bodyEl;
+		let tries = 0;
+		const restore = () => {
+			if (panel?.isConnected && tries++ < 60) return void requestAnimationFrame(restore);
 			const now = document.activeElement;
 			const lost =
 				!now || now === document.body || !now.isConnected || !!now.closest('[role="dialog"]');
 			if (lost && back instanceof HTMLElement && back.isConnected) back.focus();
-		});
+		};
+		requestAnimationFrame(restore);
 	}
 
 	function onOpenChange(next: boolean) {
