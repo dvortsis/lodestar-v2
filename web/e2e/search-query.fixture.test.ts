@@ -20,18 +20,16 @@ test.beforeEach(async ({ page }) => {
 const bar = (page: import('@playwright/test').Page) =>
 	page.getByRole('combobox', { name: 'Search torrents' });
 
-test('lantern type:movie shows a Type chip; removing it leaves ?q=lantern', async ({ page }) => {
+test('lantern type:movie is highlighted, parses and becomes the URL query', async ({ page }) => {
 	await page.goto('/search');
 	await bar(page).click();
 	await page.keyboard.type('lantern type:movie');
-	await page.keyboard.press('Enter');
-	const chip = page.getByRole('button', { name: 'Remove filter: Type: Movie' });
-	await expect(chip).toBeVisible();
 	await expect(bar(page).locator('.qt-field')).toHaveText('type:');
-	await chip.click();
-	await expect.poll(() => new URL(page.url()).searchParams.get('q')).toBe('lantern');
-	await expect(bar(page)).toHaveText('lantern');
-	await expect(chip).toHaveCount(0);
+	await expect(bar(page).locator('.qt-value')).toHaveText('movie');
+	await page.keyboard.press('Enter');
+	await expect.poll(() => new URL(page.url()).searchParams.get('q')).toBe('lantern type:movie');
+	await expect(bar(page)).not.toHaveAttribute('aria-invalid');
+	await expect(page.getByRole('alert')).toHaveCount(0);
 });
 
 test('seeders:>=1 shows the server’s "not available yet" message', async ({ page }) => {
