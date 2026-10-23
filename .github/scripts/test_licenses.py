@@ -149,6 +149,11 @@ class Spdx(unittest.TestCase):
         self.fails("GPL-2.0-only WITH Classpath-exception-2.0", "refused")
         self.fails("MIT WITH", "exception")
 
+    def test_a_refused_exception_fails(self):
+        self.fails("Apache-2.0 WITH Commons-Clause", "Commons-Clause (refused exception)")
+        self.fails("MIT AND (Apache-2.0 WITH commons-clause)", "refused exception")
+        self.ok("Apache-2.0 WITH Commons-Clause OR MIT")
+
     def test_slash_form_reads_as_or(self):
         self.ok("MIT/Apache-2.0")
         self.ok("Apache-2.0 / MIT / MPL-2.0")
@@ -269,8 +274,71 @@ class Generate(unittest.TestCase):
         _, problems = self.run_generate(overrides={"texts": [entry]})
         self.assertTrue(any("now ships its own licence text" in p for p in problems), problems)
 
+    def test_overrides_must_name_a_version(self):
+        ms = metas()
+        for m in ms.values():
+            package(m, "cfg-if")["license"] = None
+        unpinned = {"ecosystem": "cargo", "name": "cfg-if", "license": "MIT"}
+        _, problems = self.run_generate(ms, {"missing": [unpinned]})
+        self.assertEqual(
+            problems, ["cfg-if 1.0.5: overrides.json `missing` entry has no `version`"]
+        )
+
+        ms = metas()
+        for m in ms.values():
+            package(m, "cfg-if")["manifest_path"] = "/nonexistent/cfg-if/Cargo.toml"
+        donor = {"ecosystem": "cargo", "name": "cfg-if", "from": "memchr"}
+        _, problems = self.run_generate(ms, {"texts": [donor]})
+        self.assertEqual(problems, ["cfg-if 1.0.5: overrides.json `texts` entry has no `version`"])
+        doc, problems = self.run_generate(ms, {"texts": [{**donor, "version": "1.0.5"}]})
+        self.assertEqual(problems, [])
+        self.assertTrue(self.crates(doc)["cfg-if"]["texts_from"].startswith("memchr "))
+
+    def test_licence_files_stay_inside_the_package_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            secret = Path(tmp) / "credentials.toml"
+            secret.write_text("token = 'secret'\n")
+            folder = Path(tmp) / "registry" / "evil-1.0.0"
+            folder.mkdir(parents=True)
+            (folder / "LICENSE-MIT").write_text("MIT text\n")
+            (folder / "LICENSE-LINK").symlink_to(secret)
+            (folder / "sub").symlink_to(Path(tmp))
+            pkg = {"name": "evil", "version": "1.0.0", "manifest_path": str(folder / "Cargo.toml")}
+            for name, why in (
+                ("../../credentials.toml", "outside the package folder"),
+                (str(secret), "outside the package folder"),
+                ("LICENSE-LINK", "is a symlink"),
+                ("sub/credentials.toml", "is a symlink"),
+            ):
+                problems: list[str] = []
+                files = licenses.text_files({**pkg, "license_file": name}, problems)
+                self.assertEqual(files, {"LICENSE-MIT": "MIT text\n"}, name)
+                self.assertTrue(any(why in p and repr(name) in p for p in problems), problems)
+                self.assertNotIn("secret", json.dumps(files))
+            # A plain license-file inside the folder is still read.
+            (folder / "COPYING.txt").write_text("own\n")
+            problems = []
+            files = licenses.text_files({**pkg, "license_file": "COPYING.txt"}, problems)
+            self.assertEqual(files["COPYING.txt"], "own\n")
+            self.assertEqual(
+                problems, ["evil 1.0.0: licence file 'LICENSE-LINK' is a symlink; not read"]
+            )
+
+    def test_repository_urls_are_http_only(self):
+        ms = metas()
+        urls = {"cfg-if": "javascript:alert(1)", "memchr": "HTTPS://github.com/x/memchr"}
+        for m in ms.values():
+            for name, url in urls.items():
+                package(m, name)["repository"] = url
+        doc, _ = self.run_generate(ms)
+        crates = self.crates(doc)
+        self.assertEqual(crates["cfg-if"]["repository"], "")
+        self.assertEqual(crates["memchr"]["repository"], "HTTPS://github.com/x/memchr")
+        self.assertEqual(licenses.http_url("git@github.com:x/y.git"), "")
+        self.assertEqual(licenses.http_url("http://a.example/b"), "http://a.example/b")
+
     def test_override_never_replaces_a_licence_field(self):
-        override = {"ecosystem": "cargo", "name": "cfg-if", "license": "MIT"}
+        override = {"ecosystem": "cargo", "name": "cfg-if", "version": "1.0.5", "license": "MIT"}
         _, problems = self.run_generate(overrides={"missing": [override]})
         self.assertTrue(any("no longer needed" in p for p in problems), problems)
 

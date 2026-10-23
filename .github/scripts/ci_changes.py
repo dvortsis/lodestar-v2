@@ -34,6 +34,8 @@ FUZZ = sorted(p.stem for p in (ROOT / "fuzz/fuzz_targets").glob("*.rs"))
 RUST_ALSO = re.compile(
     r"^web/src/lib/api/openapi\.json$|^web/licenses/"
     r"|^\.github/scripts/(test_)?licenses\.py$|^\.github/scripts/fixtures/licenses/"
+    # rust.json embeds these notices; licenses.py --check runs with the Rust job.
+    r"|^LICENSE$|^brand/LICENSE\.md$"
 )
 
 EVERYTHING = re.compile(

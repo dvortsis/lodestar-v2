@@ -14,48 +14,56 @@
 		{
 			"ecosystem": "cargo",
 			"name": "ownedbytes",
+			"version": "0.9.0",
 			"from": "tantivy",
 			"note": "Published from the tantivy repository without its own LICENSE; tantivy's MIT LICENSE covers the whole repository."
 		},
 		{
 			"ecosystem": "cargo",
 			"name": "tantivy-bitpacker",
+			"version": "0.27.0",
 			"from": "tantivy",
 			"note": "Published from the tantivy repository without its own LICENSE; tantivy's MIT LICENSE covers the whole repository."
 		},
 		{
 			"ecosystem": "cargo",
 			"name": "tantivy-columnar",
+			"version": "0.27.0",
 			"from": "tantivy",
 			"note": "Published from the tantivy repository without its own LICENSE; tantivy's MIT LICENSE covers the whole repository."
 		},
 		{
 			"ecosystem": "cargo",
 			"name": "tantivy-common",
+			"version": "0.27.0",
 			"from": "tantivy",
 			"note": "Published from the tantivy repository without its own LICENSE; tantivy's MIT LICENSE covers the whole repository."
 		},
 		{
 			"ecosystem": "cargo",
 			"name": "tantivy-query-grammar",
+			"version": "0.27.0",
 			"from": "tantivy",
 			"note": "Published from the tantivy repository without its own LICENSE; tantivy's MIT LICENSE covers the whole repository."
 		},
 		{
 			"ecosystem": "cargo",
 			"name": "tantivy-sstable",
+			"version": "0.27.0",
 			"from": "tantivy",
 			"note": "Published from the tantivy repository without its own LICENSE; tantivy's MIT LICENSE covers the whole repository."
 		},
 		{
 			"ecosystem": "cargo",
 			"name": "tantivy-stacker",
+			"version": "0.27.0",
 			"from": "tantivy",
 			"note": "Published from the tantivy repository without its own LICENSE; tantivy's MIT LICENSE covers the whole repository."
 		},
 		{
 			"ecosystem": "cargo",
 			"name": "tantivy-tokenizer-api",
+			"version": "0.7.0",
 			"from": "tantivy",
 			"note": "Published from the tantivy repository without its own LICENSE; tantivy's MIT LICENSE covers the whole repository."
 		},
