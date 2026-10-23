@@ -563,7 +563,7 @@
       "pr": 144,
       "attempt": 0,
       "review_rounds": 1,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus); brief committed 576d67a with runner addendum | 2026-10-23T17:23:23Z part 1/2 PR #136 head ef29faa; one combined fresh+security reviewer (usage saving) | 2026-10-23T17:37:32Z review MERGE (no security findings); short round: onclose fires twice + tests; polish. Runner checks delta directly | 2026-10-23T17:56:15Z 6e05ddd fixes (onclose once + tests, polish), green; held by merge freeze | 2026-10-23T18:42:25Z part 1 #136 merged as 2a24c6d; part 2 may push | 2026-10-23T18:54:31Z part 2 PR #144 head 9d99deb (+1,420, 684 tests); part-1 reviewer resumed",
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (opus); brief committed 576d67a with runner addendum | 2026-10-23T17:23:23Z part 1/2 PR #136 head ef29faa; one combined fresh+security reviewer (usage saving) | 2026-10-23T17:37:32Z review MERGE (no security findings); short round: onclose fires twice + tests; polish. Runner checks delta directly | 2026-10-23T17:56:15Z 6e05ddd fixes (onclose once + tests, polish), green; held by merge freeze | 2026-10-23T18:42:25Z part 1 #136 merged as 2a24c6d; part 2 may push | 2026-10-23T18:54:31Z part 2 PR #144 head 9d99deb (+1,420, 684 tests); part-1 reviewer resumed | 2026-10-23T19:01:52Z #144 review MERGE; short round: commit strength-switch-during-preview test + polish",
       "catch_ups": 1
     },
     "S-filters": {
@@ -1592,7 +1592,8 @@
     "route_budget_rule": "2026-10-23T17:45:34Z runner: per-route hard limit = \u00a710.1 45 KB route JS (beyond shell, gz); 15 KB own JS+CSS is a target needing a one-line reason if exceeded",
     "merge_freeze": "LIFTED 2026-10-23T18:42:25Z after #48 merged (035ca7f). Merge in order: #136 done -> #132 -> others re-measure; release pushes one or two at a time to keep CI free.",
     "merge_order_after_m4": "#48 -> #132 (S-search-1 chunk fix) -> #136 -> #135 -> fixture fix -> S-compare/S-alerts/S-detail/S-discover re-measure -> #128 B-update",
-    "owner_decision_settings_budget": "2026-10-23T18:40:51Z owner: Settings route budget 45 KB like other routes (\u00a710.10.11's 20 KB replaced); engine <=22 KB"
+    "owner_decision_settings_budget": "2026-10-23T18:40:51Z owner: Settings route budget 45 KB like other routes (\u00a710.10.11's 20 KB replaced); engine <=22 KB",
+    "multi_session_rules": "2026-10-23T19:01:52Z #145 merged 8ad1971; rules summary sent to 8 live slices; owner test push sent; heartbeat 3h"
   },
   "ext": {
     "m4-swarm-fields": "satisfied 035ca7f",
