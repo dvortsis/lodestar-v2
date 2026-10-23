@@ -30,6 +30,24 @@
 			void import('$lib/ui/feedback/Toaster.svelte').then((mod) => (Toaster = mod.default));
 	});
 
+	const ENGAGED = ['pointerdown', 'keydown', 'touchstart', 'focusin'] as const;
+	const START_AFTER_MS = 30_000;
+
+	/** Runs `cb` once: on the first interaction, or after START_AFTER_MS. Returns the cancel. */
+	function whenEngaged(cb: () => void): () => void {
+		const stop = () => {
+			clearTimeout(timer);
+			for (const e of ENGAGED) window.removeEventListener(e, go, true);
+		};
+		const go = () => {
+			stop();
+			cb();
+		};
+		const timer = setTimeout(go, START_AFTER_MS);
+		for (const e of ENGAGED) window.addEventListener(e, go, { capture: true, passive: true });
+		return stop;
+	}
+
 	let offCommands: (() => void) | undefined;
 
 	onMount(() => {
@@ -37,20 +55,26 @@
 		// Not needed to paint the page. The client and the stream arrive together; from then on a
 		// 401 on any request goes to `handleLoginRequired` (the stream's own 401 covers the gap).
 		idle(() => {
+			void import('./commands').then((commands) => {
+				offCommands = commands.registerShellCommands();
+			});
+		});
+		// The stream, the API client and the pill are the heaviest part and are not needed to read the
+		// page: they start with the first interaction, or a few seconds after load, whichever is first.
+		const stopWaiting = whenEngaged(() => {
 			void Promise.all([
 				import('./status.svelte'),
 				import('./StatusPill.svelte'),
 				import('$lib/api/client'),
-				import('./handoff'),
-				import('./commands')
-			]).then(([status, pill, client, handoff, commands]) => {
+				import('./handoff')
+			]).then(([status, pill, client, handoff]) => {
 				client.onLoginRequired(handoff.handleLoginRequired);
-				offCommands = commands.registerShellCommands();
 				statusRef.Pill = pill.default;
 				statusRef.current = status.shellStatus;
 			});
 		});
 		return () => {
+			stopWaiting();
 			detach();
 			offCommands?.();
 			void import('$lib/api/client').then((client) => client.onLoginRequired(undefined));
