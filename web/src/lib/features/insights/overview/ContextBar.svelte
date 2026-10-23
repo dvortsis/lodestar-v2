@@ -8,7 +8,6 @@
 	import Button from '$lib/ui/controls/Button.svelte';
 	import SegmentedControl from '$lib/ui/controls/SegmentedControl.svelte';
 	import Lazy from './Lazy.svelte';
-	import { FOCUS_RING } from '$lib/ui/classes';
 	import Chip from '$lib/ui/labels/Chip.svelte';
 	import RelativeTime from '$lib/ui/labels/RelativeTime.svelte';
 	import { formatDate } from '$lib/format';
@@ -137,21 +136,17 @@
 			label={m.insights_overview_range_label()}
 			onchange={pick}
 		/>
-		<label
-			class="inline-flex cursor-pointer items-center gap-2 text-body pointer-coarse:min-h-(--target-min)"
+		<Button
+			variant={query.compare ? 'primary' : 'secondary'}
+			dense
+			aria-pressed={query.compare}
+			disabled={!canCompare}
+			aria-describedby={canCompare ? undefined : 'ins-compare-why'}
+			onclick={() => oncompare(!query.compare)}
+			data-testid="insights-compare"
 		>
-			<input
-				type="checkbox"
-				role="switch"
-				class="toggle border-field-border {FOCUS_RING}"
-				checked={query.compare}
-				disabled={!canCompare}
-				aria-describedby={canCompare ? undefined : 'ins-compare-why'}
-				onchange={(e) => oncompare(e.currentTarget.checked)}
-				data-testid="insights-compare"
-			/>
-			<span>{m.insights_overview_compare()}</span>
-		</label>
+			{m.insights_overview_compare()}
+		</Button>
 		{#if !canCompare}
 			<span id="ins-compare-why" class="ins-muted" data-testid="insights-compare-why"
 				>{m.insights_overview_compare_unavailable()}</span
