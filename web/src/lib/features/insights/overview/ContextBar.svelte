@@ -7,21 +7,14 @@
 	import IconError from '~icons/ph/x-circle';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import SegmentedControl from '$lib/ui/controls/SegmentedControl.svelte';
-	import Input from '$lib/ui/fields/Input.svelte';
-	import Toggle from '$lib/ui/fields/Toggle.svelte';
+	import Lazy from './Lazy.svelte';
+	import { FOCUS_RING } from '$lib/ui/classes';
 	import Chip from '$lib/ui/labels/Chip.svelte';
 	import RelativeTime from '$lib/ui/labels/RelativeTime.svelte';
 	import { formatDate } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
-	import {
-		compareAllowed,
-		customFromDays,
-		dayOf,
-		lastDay,
-		type InsightsQuery,
-		type RangeId
-	} from './query';
+	import { compareAllowed, dayOf, lastDay, type InsightsQuery, type RangeId } from './query';
 	import type { CrawlerAction, CrawlerStatus, Intensity } from './state.svelte';
 
 	interface Props {
@@ -62,8 +55,6 @@
 	let editing = $state(false);
 	let fromDay = $state('');
 	let toDay = $state('');
-	let localError = $state<'from' | 'to' | undefined>();
-	let compare = $state(false);
 
 	// The URL is the state: follow it (Back and Forward included).
 	const queryKey = $derived(JSON.stringify(query));
@@ -71,7 +62,6 @@
 		const q = JSON.parse(queryKey) as InsightsQuery;
 		shown = q.range;
 		editing = q.range === 'custom';
-		compare = q.compare;
 		if (q.range === 'custom' && q.from !== undefined && q.to !== undefined) {
 			fromDay = dayOf(q.from);
 			toDay = lastDay(q.to);
@@ -113,21 +103,9 @@
 		onrange(value as Exclude<RangeId, 'custom'>);
 	}
 
-	function apply(event: SubmitEvent) {
-		event.preventDefault();
-		const r = customFromDays(fromDay, toDay);
-		if (!r) {
-			localError = fromDay ? 'to' : 'from';
-			return;
-		}
-		localError = undefined;
-		oncustom(r.from, r.to);
-	}
-
 	function cancel() {
 		shown = query.range;
 		editing = query.range === 'custom';
-		localError = undefined;
 	}
 
 	const chip = $derived(
@@ -149,12 +127,6 @@
 		resume: () => m.insights_overview_action_resume(),
 		intensity: () => m.insights_overview_action_intensity()
 	};
-	const errorFor = (field: 'from' | 'to') =>
-		fieldError?.field === field
-			? fieldError.message
-			: localError === field
-				? m.insights_overview_custom_invalid()
-				: undefined;
 </script>
 
 <div class="ins-bar" data-testid="insights-bar">
@@ -165,14 +137,21 @@
 			label={m.insights_overview_range_label()}
 			onchange={pick}
 		/>
-		<Toggle
-			label={m.insights_overview_compare()}
-			bind:checked={compare}
-			disabled={!canCompare}
-			aria-describedby={canCompare ? undefined : 'ins-compare-why'}
-			onchange={() => oncompare(compare)}
-			data-testid="insights-compare"
-		/>
+		<label
+			class="inline-flex cursor-pointer items-center gap-2 text-body pointer-coarse:min-h-(--target-min)"
+		>
+			<input
+				type="checkbox"
+				role="switch"
+				class="toggle border-field-border {FOCUS_RING}"
+				checked={query.compare}
+				disabled={!canCompare}
+				aria-describedby={canCompare ? undefined : 'ins-compare-why'}
+				onchange={(e) => oncompare(e.currentTarget.checked)}
+				data-testid="insights-compare"
+			/>
+			<span>{m.insights_overview_compare()}</span>
+		</label>
 		{#if !canCompare}
 			<span id="ins-compare-why" class="ins-muted" data-testid="insights-compare-why"
 				>{m.insights_overview_compare_unavailable()}</span
@@ -194,47 +173,11 @@
 	</div>
 
 	{#if editing}
-		<form class="ins-custom" onsubmit={apply} data-testid="insights-custom">
-			{#each [['from', m.insights_overview_custom_from()], ['to', m.insights_overview_custom_to()]] as [field, text] (field)}
-				{@const err = errorFor(field as 'from' | 'to')}
-				<div class="ins-field">
-					<label for="ins-custom-{field}">{text}</label>
-					<Input
-						id="ins-custom-{field}"
-						type="date"
-						dense
-						value={field === 'from' ? fromDay : toDay}
-						oninput={(e) => {
-							const v = (e.currentTarget as HTMLInputElement).value;
-							if (field === 'from') fromDay = v;
-							else toDay = v;
-						}}
-						aria-invalid={err ? true : undefined}
-						aria-describedby={err ? `ins-custom-${field}-error` : undefined}
-						data-testid="insights-custom-{field}"
-					/>
-					{#if err}
-						<span
-							id="ins-custom-{field}-error"
-							class="ins-error"
-							role="alert"
-							data-testid="insights-custom-{field}-error"
-							><IconError class="ins-icon-s" aria-hidden="true" />{err}</span
-						>
-					{/if}
-				</div>
-			{/each}
-			<div class="ins-field">
-				<span aria-hidden="true">&nbsp;</span>
-				<div class="ins-row">
-					<Button type="submit" variant="primary" dense>{m.insights_overview_custom_apply()}</Button
-					>
-					<Button variant="quiet" dense onclick={cancel}
-						>{m.insights_overview_custom_cancel()}</Button
-					>
-				</div>
-			</div>
-		</form>
+		<Lazy
+			load={() => import('./CustomRange.svelte')}
+			props={{ from: fromDay, to: toDay, fieldError, onapply: oncustom, oncancel: cancel }}
+			height="ins-sk-custom"
+		/>
 	{/if}
 
 	<div class="ins-row" data-testid="insights-crawler">

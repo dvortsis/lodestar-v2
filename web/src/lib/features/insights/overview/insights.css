@@ -318,23 +318,21 @@
 .ins-sk-chart {
 	height: calc(var(--spacing) * 72);
 }
+.ins-sk-movement {
+	height: calc(var(--spacing) * 14 * 12);
+}
+.ins-sk-funnel {
+	height: calc(var(--spacing) * 14 * 8);
+}
+.ins-sk-custom {
+	height: calc(var(--spacing) * 16);
+}
 .ins-sk-panel {
 	height: calc(var(--spacing) * 56);
 }
 
-/* Layout: 12 columns from x-large (KPIs 12; trend 8 + exceptions 4; funnel 12; segments 6 + 6;
-   Serve 12). Below it a single column, with exceptions moved up (§10.9.6). */
-.ins-grid {
-	display: flex;
-	flex-direction: column;
-	gap: calc(var(--spacing) * 6);
-}
-.ins-grid > .ins-exceptions {
-	order: -1;
-}
-.ins-grid > .ins-funnel {
-	order: -1;
-}
+/* Layout: one column in reading order (exceptions, funnel, movement, segments, Serve). Within a level,
+   panels sit side by side from x-large. DOM order is the narrow order, so tab order matches. */
 .ins-pair {
 	display: flex;
 	flex-direction: column;
@@ -370,22 +368,6 @@
 	}
 	.ins-kpis {
 		grid-template-columns: repeat(5, minmax(0, 1fr));
-	}
-	.ins-grid {
-		display: grid;
-		grid-template-columns: repeat(12, minmax(0, 1fr));
-		gap: calc(var(--spacing) * 6);
-	}
-	.ins-grid > .ins-movement {
-		grid-column: span 8;
-	}
-	.ins-grid > .ins-exceptions {
-		order: 0;
-		grid-column: span 4;
-	}
-	.ins-grid > .ins-funnel {
-		order: 0;
-		grid-column: 1 / -1;
 	}
 	.ins-pair {
 		display: grid;

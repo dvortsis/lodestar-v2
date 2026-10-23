@@ -4,7 +4,7 @@
 	import { untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { formatCount, formatDate } from '$lib/format';
+	import { formatDate } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
@@ -13,16 +13,13 @@
 	import ContextBar from './ContextBar.svelte';
 	import DetailLinks from './DetailLinks.svelte';
 	import Exceptions from './Exceptions.svelte';
-	import Funnel from './Funnel.svelte';
 	import Hatch from './Hatch.svelte';
 	import { resolve } from '$app/paths';
 	import type { Route } from './href';
 	import KpiRow from './KpiRow.svelte';
-	import Movement from './Movement.svelte';
+	import Lazy from './Lazy.svelte';
 	import { csvHref } from './links';
 	import { needsCanonical, parseQuery, searchFor, type InsightsQuery } from './query';
-	import Segments from './Segments.svelte';
-	import ServePanel from './ServePanel.svelte';
 	import Skeleton from './Skeleton.svelte';
 	import StageStrip from './StageStrip.svelte';
 	import { createInsights } from './state.svelte';
@@ -142,13 +139,6 @@
 					m.insights_overview_stale_other({ reason: overview.stale.reason }))
 			: ''
 	);
-
-	// The scenes are art: they load on demand and never join the first-load chunk.
-	let Scene = $state<typeof import('$lib/shell/StateScene.svelte').default>();
-	$effect(() => {
-		if (paused || insights.startup === 'yes')
-			void import('$lib/shell/StateScene.svelte').then((mod) => (Scene = mod.default));
-	});
 </script>
 
 <Hatch />
@@ -201,62 +191,17 @@
 			</Banner>
 		{/if}
 
-		{#if paused}
-			<section
-				class="ins-card ins-scene"
-				aria-label={m.insights_overview_paused_title()}
-				data-testid="insights-paused"
-			>
-				<div>
-					<h2 class="ins-heading">{m.insights_overview_paused_title()}</h2>
-					<p class="ins-sentence">{m.insights_overview_paused_body()}</p>
-				</div>
-				<Button
-					variant="primary"
-					loading={insights.busy === 'resume'}
-					onclick={() => void insights.resume()}
-					data-testid="insights-paused-resume"
-				>
-					{m.insights_overview_resume()}
-				</Button>
-				<div class="ins-scene-art">
-					{#if Scene}<Scene id="offline_idle" />{/if}
-				</div>
-			</section>
-		{:else if insights.startup === 'yes'}
-			<section
-				class="ins-card ins-scene"
-				aria-label={m.insights_overview_starting_title()}
-				data-testid="insights-starting"
-			>
-				<div>
-					<h2 class="ins-heading">{m.insights_overview_starting_title()}</h2>
-					<p class="ins-sentence">{m.insights_overview_starting_body()}</p>
-				</div>
-				<dl class="ins-counters">
-					<div>
-						<dt>{m.harvested()}</dt>
-						<dd data-testid="insights-starting-harvested">
-							{formatCount(insights.live?.harvested, locale)}
-						</dd>
-					</div>
-					<div>
-						<dt>{m.insights_overview_funnel_fetched()}</dt>
-						<dd data-testid="insights-starting-fetched">
-							{formatCount(insights.live?.fetched, locale)}
-						</dd>
-					</div>
-					<div>
-						<dt>{m.insights_overview_funnel_stored()}</dt>
-						<dd data-testid="insights-starting-stored">
-							{formatCount(insights.live?.stored, locale)}
-						</dd>
-					</div>
-				</dl>
-				<div class="ins-scene-art">
-					{#if Scene}<Scene id="searching_crawling" />{/if}
-				</div>
-			</section>
+		{#if paused || insights.startup === 'yes'}
+			<Lazy
+				load={() => import('./States.svelte')}
+				props={{
+					kind: paused ? ('paused' as const) : ('starting' as const),
+					busy: insights.busy === 'resume',
+					onresume: () => void insights.resume(),
+					live: insights.live
+				}}
+				height="ins-sk-panel"
+			/>
 		{/if}
 
 		<section id="insights-status" class="ins-section" aria-labelledby="insights-status-heading">
@@ -267,58 +212,60 @@
 			<KpiRow kpi={overview.kpi} />
 		</section>
 
-		<div class="ins-grid">
-			<section
-				id="insights-movement"
-				class="ins-section ins-movement"
-				aria-labelledby="insights-movement-heading"
-			>
-				<h2 id="insights-movement-heading" class="ins-heading" tabindex="-1">
-					{m.insights_overview_movement_title()}
-				</h2>
-				<p class="ins-sub">{m.insights_overview_movement_time({ tz: overview.range.tz })}</p>
-				<Movement {overview} {query} {rangeText} />
-			</section>
+		<section
+			id="insights-exceptions"
+			class="ins-section"
+			aria-labelledby="insights-exceptions-heading"
+		>
+			<h2 id="insights-exceptions-heading" class="ins-heading" tabindex="-1">
+				{m.insights_overview_exceptions_title()}
+			</h2>
+			<p class="ins-sub">{m.insights_overview_exceptions_time()}</p>
+			<div class="ins-card">
+				<Exceptions exceptions={overview.exceptions} />
+				<a
+					class="ins-link"
+					href={resolve(csvHref('exceptions', query) as Route)}
+					download
+					data-testid="insights-exceptions-csv">{m.insights_overview_csv()}</a
+				>
+			</div>
+		</section>
 
-			<section
-				id="insights-exceptions"
-				class="ins-section ins-exceptions"
-				aria-labelledby="insights-exceptions-heading"
-			>
-				<h2 id="insights-exceptions-heading" class="ins-heading" tabindex="-1">
-					{m.insights_overview_exceptions_title()}
-				</h2>
-				<p class="ins-sub">{m.insights_overview_exceptions_time()}</p>
-				<div class="ins-card">
-					<Exceptions exceptions={overview.exceptions} />
-					<a
-						class="ins-link"
-						href={resolve(csvHref('exceptions', query) as Route)}
-						download
-						data-testid="insights-exceptions-csv">{m.insights_overview_csv()}</a
-					>
-				</div>
-			</section>
+		<section id="insights-funnel" class="ins-section" aria-labelledby="insights-funnel-heading">
+			<h2 id="insights-funnel-heading" class="ins-heading" tabindex="-1">
+				{m.insights_overview_funnel_heading()}
+			</h2>
+			<p class="ins-sub">{m.insights_overview_funnel_time()}</p>
+			<Lazy
+				load={() => import('./Funnel.svelte')}
+				props={{ overview, query, rangeText }}
+				height="ins-sk-funnel"
+			/>
+		</section>
 
-			<section
-				id="insights-funnel"
-				class="ins-section ins-funnel"
-				aria-labelledby="insights-funnel-heading"
-			>
-				<h2 id="insights-funnel-heading" class="ins-heading" tabindex="-1">
-					{m.insights_overview_funnel_heading()}
-				</h2>
-				<p class="ins-sub">{m.insights_overview_funnel_time()}</p>
-				<Funnel {overview} {query} {rangeText} />
-			</section>
-		</div>
+		<section id="insights-movement" class="ins-section" aria-labelledby="insights-movement-heading">
+			<h2 id="insights-movement-heading" class="ins-heading" tabindex="-1">
+				{m.insights_overview_movement_title()}
+			</h2>
+			<p class="ins-sub">{m.insights_overview_movement_time({ tz: overview.range.tz })}</p>
+			<Lazy
+				load={() => import('./Movement.svelte')}
+				props={{ overview, query, rangeText }}
+				height="ins-sk-movement"
+			/>
+		</section>
 
 		<section id="insights-segments" class="ins-section" aria-labelledby="insights-segments-heading">
 			<h2 id="insights-segments-heading" class="ins-heading" tabindex="-1">
 				{m.insights_overview_segments_title()}
 			</h2>
 			<p class="ins-sub">{m.insights_overview_segments_time()}</p>
-			<Segments segments={overview.segments} {query} {rangeText} />
+			<Lazy
+				load={() => import('./Segments.svelte')}
+				props={{ segments: overview.segments, query, rangeText }}
+				height="ins-sk-funnel"
+			/>
 		</section>
 
 		<section id="insights-serve" class="ins-section" aria-labelledby="insights-serve-heading">
@@ -326,7 +273,11 @@
 				{m.insights_overview_serve_title()}
 			</h2>
 			<p class="ins-sub">{m.insights_overview_serve_time()}</p>
-			<ServePanel serve={overview.serve} {query} />
+			<Lazy
+				load={() => import('./ServePanel.svelte')}
+				props={{ serve: overview.serve, query }}
+				height="ins-sk-kpi"
+			/>
 		</section>
 
 		<section id="insights-detail" class="ins-section" aria-labelledby="insights-detail-heading">

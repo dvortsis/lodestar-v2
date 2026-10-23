@@ -2,6 +2,7 @@
 // button, the palette and the overflow menu are all reachable and operable from the keyboard.
 import { liveEvents, openPaletteWithKey } from './support/events-server';
 import { expect, test } from './support/test';
+import { crawlerFixture, overviewFixture } from '../src/lib/features/insights/overview/fixtures';
 
 // The shell registers its shortcuts and opens its stream when the browser is idle (≤ 1 s after load).
 const ready = (page: import('@playwright/test').Page) =>
@@ -133,8 +134,11 @@ test.describe('narrow screens', () => {
 	test('the menu button opens the destinations, Escape closes them and returns focus', async ({
 		page,
 		go,
-		kbd
+		kbd,
+		mock
 	}) => {
+		mock.on('getInsightsOverview', overviewFixture());
+		mock.on('getCrawler', crawlerFixture());
 		await go('/search');
 		const button = page.getByTestId('menu-button');
 		await kbd.tabTo(button);

@@ -29,9 +29,9 @@ test.describe('the story', () => {
 		const h2 = await page.locator('main h2').allTextContents();
 		expect(h2).toEqual([
 			'Status',
-			'Movement',
 			'Needs attention',
 			'Where torrents are lost',
+			'Movement',
 			'What is arriving',
 			'Serve',
 			'Detail'
