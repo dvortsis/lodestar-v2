@@ -264,13 +264,27 @@ pub enum Folder {
 /// refuses one anyone can write to without the sticky bit, where another
 /// account could replace the files.
 fn folder(dir: &Path) -> io::Result<Folder> {
+    // Whether Lodestar made the folder just now, from the creation itself
+    // (a check before it could miss one planted in between).
     #[cfg(windows)]
-    let existed = fs::symlink_metadata(dir).is_ok();
-    let mut dirs = fs::DirBuilder::new();
-    dirs.recursive(true);
-    #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut dirs, 0o700);
-    dirs.create(dir)?;
+    let existed = {
+        if let Some(parent) = dir.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        match fs::create_dir(dir) {
+            Ok(()) => false,
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => true,
+            Err(e) => return Err(e),
+        }
+    };
+    #[cfg(not(windows))]
+    {
+        let mut dirs = fs::DirBuilder::new();
+        dirs.recursive(true);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut dirs, 0o700);
+        dirs.create(dir)?;
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
