@@ -2,11 +2,14 @@
 
 This chapter installs Lodestar from the Unraid template or with Docker Compose, then takes you through first run.
 
+> [!IMPORTANT]
+> The Lodestar image is published from the first release. No release exists yet, so `latest` isn't available and **Apply** or `docker compose up` fails with "manifest unknown". The only tag today is `nightly`, which is built daily from `main` and untested. Use it only to try Lodestar, and check this guide again after the first release.
+
 > [!NOTE]
 > **What you will learn**
 > - Install Lodestar from the Unraid template with the data folder on a pool.
 > - Set the template fields to their recommended values.
-> - Run Lodestar as the right user so it can write its data.
+> - Keep the [PUID and PGID](glossary.md#puid-and-pgid) that let Lodestar own its data folder.
 > - Install with Docker Compose.
 > - Create the admin password with the [setup token](glossary.md#setup-token).
 
@@ -32,7 +35,7 @@ To install from the template:
 6. Select **Apply**.
    **Result:** Unraid pulls the image and starts the [container](glossary.md#container). A **Lodestar** icon appears on the Docker tab.
 
-Then set the file owner in [section 2.3](#23-set-the-user-the-container-runs-as) and finish with [section 2.5](#25-create-the-admin-password).
+Then check the user in [section 2.3](#23-check-the-user-the-container-runs-as) and finish with [section 2.5](#25-create-the-admin-password).
 
 > [!WARNING]
 > Don't choose the **Lodestar-gluetun** template unless a gluetun [VPN](glossary.md#vpn) container already runs. It has no network of its own. [Chapter 3](03-keep-lodestar-safe.md#33-decide-about-the-dht-port-and-a-vpn) explains it.
@@ -56,7 +59,7 @@ The port your browser uses to open Lodestar. The template maps host port `8090` 
 
 The port Lodestar uses to talk to the [DHT](glossary.md#dht). It is [UDP](glossary.md#udp), not TCP.
 
-**Recommended:** `6881`. You don't need to forward it on your router. Forwarding is optional and has a trade-off ([section 3.3](03-keep-lodestar-safe.md#33-decide-about-the-dht-port-and-a-vpn)).
+**Recommended:** `6881` on the Unraid side. The template says to forward this port on your router for the best reach. This guide recommends against forwarding by default, because it shows your IP address to DHT peers. Forwarding is optional ([section 3.3](03-keep-lodestar-safe.md#33-decide-about-the-dht-port-and-a-vpn)).
 
 **Safe to change later:** Yes.
 
@@ -70,9 +73,9 @@ Reserved for incoming peer connections **(planned)**. Lodestar only makes outbou
 
 The folder where Lodestar keeps its index, database and settings. It is the one folder that survives an update, because a container is rebuilt on every update.
 
-**Recommended:** `/mnt/cache/appdata/lodestar`. Use a pool path (`/mnt/cache/...` or `/mnt/<pool>/...`), not `/mnt/user/...`. The `/mnt/user` path goes through Unraid's FUSE layer, which is slow for this workload and risky for SQLite.
+**Recommended:** `/mnt/cache/appdata/lodestar`. Use a pool path (`/mnt/cache/...` or `/mnt/<pool>/...`), not `/mnt/user/...`. The `/mnt/user` path goes through Unraid's [FUSE](glossary.md#fuse) layer, which is slow for this workload and risky for [SQLite](glossary.md#sqlite).
 
-**Unsafe:** A path on the array or under `/mnt/user`. Use your cache pool instead.
+**Unsafe:** A path on the array or under `/mnt/user`. Use your [cache pool](glossary.md#cache-pool) instead.
 
 **Safe to change later:** Only by moving the folder. Stop the container, copy the folder, change the field and start it.
 
@@ -84,9 +87,11 @@ Planned, not used yet. They will split the index and the file-tree blobs across 
 
 ### PUID and PGID (advanced)
 
-The template shows them, but the image doesn't read them yet. See [section 2.3](#23-set-the-user-the-container-runs-as).
+The user ID and group ID Lodestar runs as. The [PUID and PGID](glossary.md#puid-and-pgid) decide who owns the files in **Data**. On start, Lodestar makes **Data** belong to this user and then gives up root for good.
 
-**Recommended:** leave `99` and `100`, and add the extra parameter in section 2.3.
+**Recommended:** leave `99` and `100`, Unraid's `nobody` and `users`.
+
+**Unsafe:** `0`. That is root, and Lodestar refuses to start with it. Use `99` and `100` instead.
 
 ### TZ (advanced)
 
@@ -110,36 +115,35 @@ How much Lodestar writes to the log: `error`, `warn`, `info` or `debug`.
 
 **Recommended:** `info`. Logs hold no torrent details by default.
 
-## 2.3 Set the user the container runs as
+## 2.3 Check the user the container runs as
 <!-- index: PUID; PGID; file owner; permissions -->
 
-The container runs as a user ID. If that user can't write to the data folder, Lodestar exits with a permission error. The image defaults to user `65532`, and the template's **PUID** and **PGID** fields aren't read yet. Unraid's appdata folders belong to user `99` (nobody) and group `100` (users).
+Lodestar starts as root for a moment only to switch to the user in **PUID** and **PGID**. It makes the **Data** folder that user's own, then drops root. You don't change owners yourself.
 
-To run Lodestar as nobody:users:
+To check the user:
 
 1. On the Docker tab, select the **Lodestar** icon, then **Edit**.
 2. Turn on **Advanced View** at the top right.
-3. In **Extra Parameters**, enter `--user 99:100`.
-4. Select **Apply**.
-   **Result:** The container restarts and can write to `/mnt/cache/appdata/lodestar`.
+3. Check that **PUID** is `99` and **PGID** is `100`.
+   **Result:** Both fields show the Unraid defaults. Leave them.
 
-If the log still shows a permission error creating files in `/data`, the folder belongs to another user. Open the Unraid terminal and paste:
+> [!CAUTION]
+> Never set **PUID** or **PGID** to `0`. That is root, so a bug in Lodestar could change anything on your server.
 
-```bash
-chown -R 99:100 /mnt/cache/appdata/lodestar
-```
+Two log messages point at this step:
 
-This changes the owner of the Lodestar data folder only. Change the path if you chose another pool.
+- **"started as root without the SETUID/SETGID capabilities"**: the container was started with those permissions removed. Unraid's template doesn't do this. In Compose, remove `cap_drop: ALL`, or add `cap_add: [SETUID, SETGID, CHOWN]` after it.
+- **The data folder "doesn't look like Lodestar's"**: **Data** already holds other files and belongs to someone else, so Lodestar won't take it over. Point **Data** at an empty folder.
 
 ## 2.4 Install with Docker Compose
-<!-- index: Docker Compose; named volume; docker-compose.yml -->
+<!-- index: Docker Compose; named volume; bind mount; docker-compose.yml -->
 
-Docker Compose runs Lodestar from one file, `docker-compose.yml`. The file maps the web UI, the DHT port and a **named volume** for `/data`.
+Docker Compose runs Lodestar from one file, `docker-compose.yml`. The file maps the web UI, the DHT port and a data volume for `/data`.
 
 | Option | When to use it |
 |---|---|
-| **Named volume (recommended)** | The default in the file. Docker creates it with the right owner and keeps it across updates. |
-| Bind mount | You want the data in a folder you pick. You must make that folder writable by the container's user. |
+| **[Named volume](glossary.md#named-volume-and-bind-mount) (recommended)** | The default in the file. Docker manages the volume and keeps it across updates. |
+| Bind mount | You want the data in a folder you pick, such as `./data`. |
 
 To install with the named volume:
 
@@ -161,7 +165,7 @@ To install with the named volume:
     docker compose up -d
     ```
 
-   **Result:** Docker pulls `ghcr.io/dvortsis/lodestar-v2:latest` and starts the container `lodestar`.
+   **Result:** Docker pulls the image and starts the container `lodestar`. Until the first release, this fails with "manifest unknown" unless you change the tag to `nightly`.
 4. Check that it is healthy:
 
     ```bash
@@ -171,13 +175,30 @@ To install with the named volume:
    **Result:** The command prints `healthy` after about 30 seconds.
 
 > [!WARNING]
-> Keep the data on local SSD or NVMe storage. Don't put the volume on a network share or a FUSE filesystem. The database is SQLite and misbehaves there.
+> Keep the data on local SSD or NVMe storage. Don't put the volume on a network share or a [FUSE](glossary.md#fuse) filesystem. The database is [SQLite](glossary.md#sqlite) and misbehaves there.
 
-To use a bind mount owned by user `1000`, run `mkdir data && sudo chown 1000:1000 data`. Then change `user:` to `"1000:1000"` and the volume line to `- ./data:/data`.
+To keep the data in a folder you own instead:
+
+1. Find your user and group IDs:
+
+    ```bash
+    id
+    ```
+
+   **Result:** The output shows `uid=` and `gid=` numbers, for example `1000`.
+2. In `docker-compose.yml`, remove the `#` before `PUID` and `PGID` and replace the values with your numbers. Never use `0`.
+3. Replace `- lodestar-data:/data` with `- ./data:/data`.
+4. Make the folder and start Lodestar:
+
+    ```bash
+    mkdir data && docker compose up -d
+    ```
+
+   **Result:** Lodestar makes `data` belong to your user on start.
 
 Do not use `network_mode: host` unless you need it. It skips Docker's network translation for better DHT reach, but it exposes port `8090` on every host interface.
 
-Pin an exact version such as `x.y.z` instead of `latest` if you want updates only when you decide. `nightly` is untested between releases.
+Pin an exact version such as `x.y.z` instead of `latest` once releases exist, if you want updates only when you decide.
 
 ## 2.5 Create the admin password
 <!-- index: setup token; admin password; first run -->
@@ -192,7 +213,7 @@ To create the admin password:
     docker compose logs lodestar
     ```
 
-2. Find the line that starts `first run: open` and copy the token at its end.
+2. Find the line that contains `enter setup token` and copy the word right after it. The line also has a time and a level at its start.
 3. Open `http://<server-ip>:8090` in your browser. Replace `<server-ip>` with your server's address, or use `localhost` on the same machine.
 4. Enter the token and choose a password from your password manager.
    **Result:** Lodestar signs you in. It prints no token again.
@@ -206,13 +227,13 @@ The crawler starts at once. The library fills slowly at first while the DHT rout
 ## 2.6 Check your understanding
 
 1. Which Unraid path do you use for **Data**, and why not `/mnt/user/appdata/lodestar`?
-2. The log shows a permission error creating files in `/data`. What do you change?
+2. Which values do you leave in **PUID** and **PGID** on Unraid, and which value never?
 3. When does the setup token stop being needed?
 
 > [!TIP]
 > **Key takeaways**
 > - Map **Data** to a pool path such as `/mnt/cache/appdata/lodestar`.
-> - Add `--user 99:100` on Unraid; the PUID and PGID fields aren't read yet.
+> - Leave **PUID** `99` and **PGID** `100`, and never use `0`.
 > - Create the admin password straight after the first start.
 
 <!-- nav:start -->

@@ -38,7 +38,7 @@ Read chapters 1 to 3 in order the first time. Come back to a chapter by task. An
 - [Chapter 2: Install Lodestar on Unraid and Docker](02-install-lodestar-on-unraid-and-docker.md)
   - [2.1 Install with the Unraid template](02-install-lodestar-on-unraid-and-docker.md#21-install-with-the-unraid-template)
   - [2.2 Settings in the Unraid template](02-install-lodestar-on-unraid-and-docker.md#22-settings-in-the-unraid-template)
-  - [2.3 Set the user the container runs as](02-install-lodestar-on-unraid-and-docker.md#23-set-the-user-the-container-runs-as)
+  - [2.3 Check the user the container runs as](02-install-lodestar-on-unraid-and-docker.md#23-check-the-user-the-container-runs-as)
   - [2.4 Install with Docker Compose](02-install-lodestar-on-unraid-and-docker.md#24-install-with-docker-compose)
   - [2.5 Create the admin password](02-install-lodestar-on-unraid-and-docker.md#25-create-the-admin-password)
   - [2.6 Check your understanding](02-install-lodestar-on-unraid-and-docker.md#26-check-your-understanding)
