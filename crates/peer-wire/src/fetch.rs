@@ -212,7 +212,7 @@ async fn attempt(
                 .await
                 .map_err(|_| timed_out())?
                 .map_err(Error::Connect)?;
-            let _ = tcp.set_nodelay(true);
+            prepare_outbound(&tcp);
             connected.store(true, Ordering::Relaxed);
             fetch_on_stream(BufReader::new(tcp), info_hash, opts, encrypted).await
         }
@@ -237,6 +237,20 @@ async fn attempt(
             fetch_on_stream(BufReader::new(stream), info_hash, opts, encrypted).await
         }
     }
+}
+
+/// Readies an outbound peer connection: no Nagle delay, and on Windows
+/// an abortive close (`SO_LINGER(0)`). A fetch is a few round trips, so
+/// thousands of them a minute would otherwise leave their ports in
+/// TIME_WAIT for two minutes each, and Windows' default 16k dynamic
+/// ports run out (architecture §11). Nothing is in flight when a fetch
+/// ends, so the reset loses nothing. Other systems keep the graceful
+/// close: Linux's default range is larger, macOS holds TIME_WAIT for
+/// 30 s rather than 120 s, and nothing measured there calls for it.
+fn prepare_outbound(tcp: &TcpStream) {
+    let _ = tcp.set_nodelay(true);
+    #[cfg(windows)]
+    let _ = tcp.set_zero_linger();
 }
 
 /// The BEP 3/10/9 exchange (and MSE when `encrypted`) over an already
@@ -455,6 +469,22 @@ impl Assembly {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn outbound_sockets_abort_on_windows_only() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let tcp = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        prepare_outbound(&tcp);
+        assert!(tcp.nodelay().unwrap());
+        let linger = tcp.linger().unwrap();
+        if cfg!(windows) {
+            assert_eq!(linger, Some(Duration::ZERO));
+        } else {
+            assert_eq!(linger, None);
+        }
+    }
 
     #[test]
     fn assembly_windows_and_validates() {
