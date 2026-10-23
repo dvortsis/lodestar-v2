@@ -3,12 +3,16 @@
 //! - **Written** forward-only (`TrustState::merge`: the sequence and the
 //!   marks never go down), by temporary file, fsync, rename and a folder
 //!   fsync. An unchanged state isn't rewritten.
-//! - **Missing:** rebuilt from the floor (the embedded statements), with
-//!   high-water marks from the newest verified overlay of each channel, so
-//!   deleting it never brings back a revoked key or an older manifest.
+//! - **Missing:** rebuilt from the floor (the embedded statements and
+//!   those of every verified overlay), with high-water marks from the
+//!   newest verified overlay of each channel, so deleting it never brings
+//!   back a revoked key or an older manifest.
+//! - **Found:** raised to that floor too (statements and marks), so a file
+//!   restored from a backup can't either.
 //! - **Damaged** (unreadable, or not verifying against the embedded keys):
 //!   it blocks installs (`trust_damaged`) and is never overwritten; the
-//!   check still runs from the floor so notices and releases show.
+//!   check still runs from the rebuilt floor so notices and releases show
+//!   and an overlay's revocations hold.
 
 use std::io::{self, Read};
 use std::path::Path;
@@ -50,36 +54,55 @@ impl Loaded {
 /// no trust in the overlay. `overlays` also gives a missing file its
 /// high-water marks.
 pub fn load(dir: &Path, embedded: &Embedded, overlays: &[OverlayMark]) -> Loaded {
-    let floor = || TrustState::rebuild(embedded, &[]).unwrap_or_default();
+    // A damaged file still takes the overlays' statements and marks, so a
+    // revocation or a newer manifest an overlay carries isn't lost; only
+    // when they disagree with the chain is it the embedded floor alone.
+    let damaged = || {
+        Loaded::Damaged(
+            TrustState::rebuild(embedded, overlays)
+                .or_else(|_| TrustState::rebuild(embedded, &[]))
+                .unwrap_or_default(),
+        )
+    };
     match read_capped(&dir.join(FILE)) {
         // A rebuild that fails (an overlay's statements disagree with
         // the chain) is damage: nothing is written that could lower a
         // mark.
         Ok(None) => match TrustState::rebuild(embedded, overlays) {
             Ok(state) => Loaded::Rebuilt(state),
-            Err(_) => Loaded::Damaged(floor()),
+            Err(_) => damaged(),
         },
         Ok(Some(bytes)) => match TrustState::load(&bytes, embedded) {
             Ok(state) => match raised(state, embedded, overlays) {
                 Some(state) => Loaded::Found(state),
-                None => Loaded::Damaged(floor()),
+                None => damaged(),
             },
-            Err(_) => Loaded::Damaged(floor()),
+            Err(_) => damaged(),
         },
         // Unreadable now is damaged for now: nothing is written over it.
-        Err(_) => Loaded::Damaged(floor()),
+        Err(_) => damaged(),
     }
 }
 
-/// `state` with the embedded and overlay statements it doesn't have yet;
-/// `None` when they disagree with it.
+/// `state` with the embedded and overlay statements it doesn't have yet,
+/// and each channel's high-water mark at least its newest overlay's (as
+/// a rebuild has), so a file restored from a backup can't re-accept an
+/// older manifest; `None` when the statements disagree with it.
 fn raised(state: TrustState, embedded: &Embedded, overlays: &[OverlayMark]) -> Option<TrustState> {
     let mut chain = state.chain(embedded).ok()?;
     chain.extend(&embedded.statements, None).ok()?;
     for o in overlays {
         chain.extend(&o.statements, None).ok()?;
     }
-    Some(state.advance(&chain))
+    let mut next = state.advance(&chain);
+    for o in overlays {
+        let m = next.channels.entry(o.channel).or_default();
+        if o.timestamp > m.hwm_ts {
+            m.hwm_ts = o.timestamp;
+            m.hwm_sha256 = Some(o.sha256);
+        }
+    }
+    Some(next)
 }
 
 /// Writes `next` merged over `loaded` (never over a damaged file).
@@ -121,8 +144,8 @@ fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use lodestar_update::testing::{TestKey, TestTrust, statement};
-    use lodestar_update::{Channel, Role};
+    use lodestar_update::testing::{TestKey, TestTrust, bytes, envelope, manifest, statement};
+    use lodestar_update::{Channel, Error, Role, Sha256, check};
 
     use super::*;
 
@@ -235,5 +258,72 @@ mod tests {
         let rebuilt = load(dir.path(), &e, std::slice::from_ref(&overlay));
         assert_eq!(rebuilt.state().seq, 1);
         assert!(rebuilt.state().channels[&Channel::Stable].hwm_ts >= 1_000);
+    }
+
+    const T: u64 = 1_800_000_000;
+
+    /// An envelope with a stable manifest at `ts`, signed by `key`.
+    fn signed_at(key: &TestKey, ts: u64) -> Vec<u8> {
+        let body = bytes(&manifest(Channel::Stable, ts, "0.5.4", b"binary"));
+        envelope(&key.signed(&body), None)
+    }
+
+    /// A damaged `trust.json` still honours a revocation an installed
+    /// overlay carries: the old release key's manifest is refused.
+    #[test]
+    fn a_damaged_file_keeps_the_overlays_revocations() {
+        let dir = tempfile::tempdir().unwrap();
+        let (t, e) = trust();
+        let rotation = statement(&t.recovery, 1, Role::Release, &TestKey::new(9).public(), T);
+        let overlay = OverlayMark {
+            channel: Channel::Stable,
+            timestamp: T + 10,
+            sha256: Sha256::of(b"body"),
+            statements: vec![rotation],
+        };
+        std::fs::write(dir.path().join(FILE), b"{ not trust").unwrap();
+        let damaged = load(dir.path(), &e, std::slice::from_ref(&overlay));
+        assert!(damaged.damaged());
+        assert_eq!(damaged.state().seq, 1);
+        assert_eq!(
+            check(
+                &signed_at(&t.release, T + 100),
+                Channel::Stable,
+                T + 200,
+                &e,
+                damaged.state()
+            )
+            .unwrap_err(),
+            Error::RevokedKey
+        );
+    }
+
+    /// A `trust.json` restored from a backup, with marks older than an
+    /// installed overlay's, refuses a manifest older than the overlay's.
+    #[test]
+    fn a_stale_file_is_raised_to_the_overlays_marks() {
+        let dir = tempfile::tempdir().unwrap();
+        let (t, e) = trust();
+        let first = load(dir.path(), &e, &[]);
+        let mut stale = first.state().clone();
+        stale.channels.entry(Channel::Stable).or_default().hwm_ts = T;
+        std::fs::write(dir.path().join(FILE), stale.to_bytes().unwrap()).unwrap();
+        let overlay = OverlayMark {
+            channel: Channel::Stable,
+            timestamp: T + 500,
+            sha256: Sha256::of(b"body"),
+            statements: vec![],
+        };
+        let found = load(dir.path(), &e, std::slice::from_ref(&overlay));
+        assert!(matches!(found, Loaded::Found(_)));
+        assert_eq!(found.state().channels[&Channel::Stable].hwm_ts, T + 500);
+        let older = signed_at(&t.release, T + 100);
+        assert_eq!(
+            check(&older, Channel::Stable, T + 600, &e, found.state()).unwrap_err(),
+            Error::Older
+        );
+        // Without the overlay, the stale mark alone lets it through.
+        let alone = load(dir.path(), &e, &[]);
+        assert!(check(&older, Channel::Stable, T + 600, &e, alone.state()).is_ok());
     }
 }
