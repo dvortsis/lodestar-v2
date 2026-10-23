@@ -94,7 +94,7 @@
                         ErrorControl="normal"
                         Account="NT SERVICE\Lodestar"
                         Arguments="serve"
-                        Vital="no" />
+                        Vital="yes" />
         <ServiceControl Id="LodestarServiceControl" Name="Lodestar" Stop="both" Remove="uninstall" Wait="yes" />
       </Component>
     </DirectoryRef>
