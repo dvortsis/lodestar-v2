@@ -22,20 +22,23 @@ test.describe('navigation', () => {
 		);
 	});
 
-	test('has the landmarks and a heading in main', async ({ page, go }) => {
+	test('has the landmarks and a heading in main', async ({ page, go, mock }) => {
+		mock.on('listSavedSearches', []);
 		await go('/alerts');
 		await expect(page.getByRole('banner')).toBeVisible();
 		await expect(page.getByRole('main')).toBeVisible();
 		await expect(page.getByRole('main').getByRole('heading', { level: 1 })).toBeVisible();
 	});
 
-	test('keeps the density in the URL when moving between destinations', async ({ page }) => {
+	test('keeps the density in the URL when moving between destinations', async ({ page, mock }) => {
+		mock.on('listSavedSearches', []);
 		await page.goto('/search?density=compact');
 		await nav(page).getByRole('link', { name: 'Alerts' }).click();
 		await expect(page).toHaveURL(/\/alerts\?density=compact$/);
 	});
 
-	test('the logo goes home', async ({ page, go }) => {
+	test('the logo goes home', async ({ page, go, mock }) => {
+		mock.on('listSavedSearches', []);
 		await go('/alerts');
 		await page.getByRole('link', { name: 'Lodestar, home' }).click();
 		await expect(page).toHaveURL(/\/search/);
@@ -316,7 +319,11 @@ test.describe('401 hand-off', () => {
 		await expect(page).toHaveURL(/\/setup$/);
 	});
 
-	test('a signed-out visit goes to /login and remembers where it was going', async ({ page }) => {
+	test('a signed-out visit goes to /login and remembers where it was going', async ({
+		page,
+		mock
+	}) => {
+		mock.error('listSavedSearches', 401, 'login_required');
 		await page.route('**/api/v1/events*', (route) => route.fulfill(unauthorized(false)));
 		await page.goto('/alerts?x=1');
 		await engage(page);
@@ -343,7 +350,12 @@ test.describe('401 hand-off', () => {
 });
 
 test.describe('skip link', () => {
-	test('is the first stop, hidden until focused, and moves focus to main', async ({ page, go }) => {
+	test('is the first stop, hidden until focused, and moves focus to main', async ({
+		page,
+		go,
+		mock
+	}) => {
+		mock.on('listSavedSearches', []);
 		await go('/alerts');
 		const skip = page.getByRole('link', { name: 'Skip to main content' });
 		// It is in the first paint, before the chrome (top bar) has loaded.

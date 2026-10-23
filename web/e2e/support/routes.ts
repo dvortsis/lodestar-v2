@@ -23,8 +23,22 @@ export interface RouteCase {
 export const ROUTES: RouteCase[] = [
 	{ name: 'search', path: '/search', heading: 'Search', key: true, densityAware: true },
 	{ name: 'discover', path: '/discover' },
-	{ name: 'alerts', path: '/alerts' },
-	{ name: 'alert-detail', path: '/alerts/1' },
+	{
+		name: 'alerts',
+		path: '/alerts',
+		heading: 'Alerts',
+		mock: (m) => m.on('listSavedSearches', [SAVED_SEARCH])
+	},
+	{
+		name: 'alert-detail',
+		path: '/alerts/1',
+		heading: 'Lantern Keeper releases',
+		mock: (m) => {
+			m.on('getSavedSearch', SAVED_SEARCH);
+			m.on('listAlerts', { items: [], next_cursor: null });
+			m.on('markAlertsRead', { ok: true });
+		}
+	},
 	{ name: 'insights', path: '/insights' },
 	{ name: 'insights-stage', path: '/insights/harvest' },
 	{ name: 'compare', path: '/compare?h=aaaa,bbbb' },
@@ -44,3 +58,20 @@ export const ROUTES: RouteCase[] = [
 	{ name: 'settings', path: '/settings/general', key: true },
 	{ name: 'torrent', path: `/t/${'0123456789abcdef'.repeat(2).padEnd(40, '0')}`, key: true }
 ];
+
+// What the Alerts routes' smoke runs load: one saved search with nothing unread.
+const SAVED_SEARCH = {
+	alert: true,
+	alerts: 0,
+	ast: { op: 'all' },
+	created_at: 1_700_000_000,
+	id: 1,
+	last_alert_at: null,
+	name: 'Lantern Keeper releases',
+	paused: false,
+	q: '',
+	rss: false,
+	sort: null,
+	unread: 0,
+	updated_at: 1_700_000_000
+};
