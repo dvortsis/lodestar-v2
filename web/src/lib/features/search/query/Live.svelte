@@ -23,8 +23,10 @@
 		onempty: (empty: boolean) => void;
 		/** True once if Enter was pressed before this part loaded. */
 		takeSubmit: () => boolean;
+		/** An IME composition is open right now (the static bar tracks it from first paint). */
+		composing: () => boolean;
 	}
-	let { el, searchState, message, onescape, onempty, takeSubmit }: Props = $props();
+	let { el, searchState, message, onescape, onempty, takeSubmit, composing }: Props = $props();
 	const s = $derived(searchState ?? search);
 
 	let editor: Editor | undefined;
@@ -58,16 +60,20 @@
 
 	onMount(() => {
 		void import('./bar.css');
+		const midComposition = composing();
 		editor = attach(el, {
 			onchange: setText,
 			onsubmit: submit,
 			onescape,
-			onrender: (text) => onempty(!text)
+			onrender: (text) => onempty(!text),
+			composing: midComposition
 		});
 		// Whatever was typed before this loaded. After the URL sync above (effects run in order), so
-		// the URL's empty query does not wipe it.
-		if (editor.text && editor.text !== s.text) setText(editor.text);
-		else if (s.text) editor.set(s.text, true); // the URL's query, adopted before the editor existed
+		// the URL's empty query does not wipe it. Mid-composition, compositionend reports it instead.
+		if (!midComposition) {
+			if (editor.text && editor.text !== s.text) setText(editor.text);
+			else if (s.text) editor.set(s.text, true); // the URL's query, adopted before the editor existed
+		}
 		if (takeSubmit()) submit();
 	});
 	onDestroy(() => editor?.destroy());
@@ -101,7 +107,7 @@
 
 <!-- One text-small line, always (nothing shifts on the bare page); an error's text wraps rather than
      being cut, so its "what to do" part stays readable at 320 px (WCAG 1.4.10). -->
-<p id={message} data-live class="text-small" class:text-error={!!syntax}>
+<p id={message} data-live role="status" class="text-small" class:text-error={!!syntax}>
 	{#if syntax}
 		<IconError class="qt-icon inline size-4" aria-hidden="true" />
 		{m.search_query_error_lead()}

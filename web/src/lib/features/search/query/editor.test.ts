@@ -106,6 +106,25 @@ describe('the editor', () => {
 		expect(caretAt()).toBe(7);
 	});
 
+	it('a parse answer or outside text during a composition leaves the composition alone', () => {
+		type('name:');
+		el.dispatchEvent(new CompositionEvent('compositionstart'));
+		const composed = document.createTextNode('电');
+		el.append(composed); // the IME's own node, mid-composition
+		el.dispatchEvent(
+			new InputEvent('input', { inputType: 'insertCompositionText', isComposing: true })
+		);
+		editor.setError({ from: 0, to: 5 }); // /parse answered for "name:"
+		editor.set('name:'); // the state's text, from that parse
+		expect(composed.isConnected).toBe(true);
+		expect(el.textContent).toBe('name:电');
+		expect(el.querySelector('.qt-error')).toBeNull();
+		el.dispatchEvent(new CompositionEvent('compositionend', { data: '电' }));
+		expect(onchange).toHaveBeenLastCalledWith('name:电');
+		// The error that arrived meanwhile is drawn now, over the current text.
+		expect(el.querySelector('.qt-error')?.textContent).toBe('name:');
+	});
+
 	it('pastes plain text only, on one line', () => {
 		type('a  b', 2);
 		const paste = new Event('paste', { bubbles: true, cancelable: true });
@@ -191,12 +210,20 @@ describe('the editor', () => {
 		el.dispatchEvent(e);
 		expect(e.defaultPrevented).toBe(true);
 		expect(onsubmit).toHaveBeenCalledOnce();
+		// A hardware Enter (no insertParagraph follows), then the soft keyboard's search key.
+		key('Enter');
+		expect(onsubmit).toHaveBeenCalledTimes(2);
+		key('Enter', { keyCode: 229 });
+		el.dispatchEvent(
+			new InputEvent('beforeinput', { inputType: 'insertParagraph', cancelable: true })
+		);
+		expect(onsubmit).toHaveBeenCalledTimes(3);
 		// Not while composing.
 		el.dispatchEvent(new CompositionEvent('compositionstart'));
 		el.dispatchEvent(
 			new InputEvent('beforeinput', { inputType: 'insertParagraph', cancelable: true })
 		);
-		expect(onsubmit).toHaveBeenCalledOnce();
+		expect(onsubmit).toHaveBeenCalledTimes(3);
 	});
 
 	it('Esc closes a popover first, then clears, and undo brings the text back', () => {
@@ -246,6 +273,20 @@ describe('the editor', () => {
 		expect(el.textContent).toBe('size:big x');
 		editor.setError(null);
 		expect(el.querySelector('.qt-error, .qt-error-end')).toBeNull();
+	});
+
+	it('attaching mid-composition leaves the composition alone until it ends', () => {
+		const pre = document.createElement('div');
+		const composed = document.createTextNode('name:にほん');
+		pre.append(composed);
+		const changes = vi.fn();
+		const ed = attach(pre, { onchange: changes, onsubmit, composing: true });
+		expect(pre.firstChild).toBe(composed); // not re-rendered
+		pre.textContent = 'name:日本';
+		pre.dispatchEvent(new CompositionEvent('compositionend', { data: '日本' }));
+		expect(changes).toHaveBeenLastCalledWith('name:日本');
+		expect(pre.querySelector('.qt-field')?.textContent).toBe('name:');
+		ed.destroy();
 	});
 
 	it('picks up what was typed before it attached', () => {

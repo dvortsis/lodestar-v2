@@ -4,7 +4,8 @@
 // and stay out of the way where it would be wrong (sign-in screens, other languages).
 // Name ends in `routes.test.ts` so the `core` project runs it.
 import type { Locator, Page } from '@playwright/test';
-import { engage, liveEvents } from './support/events-server';
+import { liveEvents } from './support/events-server';
+import { interact } from './support/interact';
 import { expect, test } from './support/test';
 
 // Only the scripts: the stylesheet is what paints the static shell.
@@ -324,7 +325,7 @@ test.describe('the error screen when its chunk cannot load', () => {
 	});
 	test('a failed navigation shows the error, the code and both actions', async ({ page, go }) => {
 		await go('/search');
-		await engage(page); // the full bar loads on the first interaction
+		await interact(page); // the full bar loads on the first interaction
 		await expect(page.getByTestId('more-button')).toBeAttached();
 		await abortErrorView(page);
 		// The destination's own chunk fails too, as it does when the server has gone.

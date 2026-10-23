@@ -203,12 +203,14 @@ describe('tokenize', () => {
 		}
 	});
 
-	it('is linear: 10 KB of hostile input tokenizes fast', () => {
+	// 100 KB: linear work takes milliseconds, quadratic work (10^10 steps) takes minutes, so a 1 s
+	// limit tells them apart on the slowest CI runner without timing anything finely.
+	it('is linear: 100 KB of hostile input tokenizes within a second', () => {
 		for (const unit of ['"a ', 'size:>1 ', '-(~a* | ', 'x'.repeat(50) + ' ']) {
-			const text = unit.repeat(Math.ceil(10_240 / unit.length));
+			const text = unit.repeat(Math.ceil(102_400 / unit.length));
 			const start = performance.now();
 			const toks = tokenize(text);
-			expect(performance.now() - start).toBeLessThan(50);
+			expect(performance.now() - start).toBeLessThan(1_000);
 			expect(toks.map((t) => text.slice(t.from, t.to)).join('')).toBe(text);
 		}
 	});

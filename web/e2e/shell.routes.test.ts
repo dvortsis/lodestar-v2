@@ -3,6 +3,7 @@
 // are in shell.keyboard.test.ts. Name ends in `routes.test.ts` so the `core` project runs it.
 import { expectNoA11yViolations } from './a11y';
 import { crawlerEvent, engage, liveEvents, openPaletteWithKey } from './support/events-server';
+import { interact } from './support/interact';
 import { expect, test } from './support/test';
 import { crawlerFixture, overviewFixture } from '../src/lib/features/insights/overview/fixtures';
 
@@ -44,7 +45,7 @@ test.describe('navigation', () => {
 
 	test('the overflow menu lists its five items and opens a destination', async ({ page, go }) => {
 		await go('/search');
-		await engage(page); // the full bar loads on the first interaction
+		await interact(page); // the full bar loads on the first interaction
 		await page.getByTestId('more-button').click();
 		const menu = page.getByRole('menu', { name: 'More' });
 		await expect(menu.getByRole('menuitem')).toHaveText([
@@ -72,7 +73,7 @@ test.describe('responsive navigation', () => {
 			await page.setViewportSize({ width, height: 800 });
 			await go('/search');
 			await expect(nav(page)).toHaveCount(0);
-			await engage(page);
+			await interact(page, page.getByTestId('menu-button'));
 			const button = page.getByTestId('menu-button');
 			await expect(button).toHaveAttribute('aria-expanded', 'false');
 			await button.click();
@@ -229,7 +230,7 @@ test.describe('command palette', () => {
 		mock.on('getInsightsOverview', overviewFixture());
 		mock.on('getCrawler', crawlerFixture());
 		await go('/search');
-		await engage(page);
+		await interact(page, page.getByTestId('palette-button'));
 		await page.getByTestId('palette-button').click();
 		const dialog = page.getByRole('dialog', { name: 'Command palette' });
 		const input = dialog.getByRole('combobox', { name: 'Type a command' });
@@ -263,7 +264,7 @@ test.describe('command palette', () => {
 
 	test('says so when nothing matches', async ({ page, go }) => {
 		await go('/search');
-		await engage(page);
+		await interact(page, page.getByTestId('palette-button'));
 		await page.getByTestId('palette-button').click();
 		await page.getByRole('combobox', { name: 'Type a command' }).fill('zzzz');
 		await expect(page.getByText('No command matches “zzzz”')).toBeVisible();
@@ -427,7 +428,7 @@ for (const [name, themeId, colorMode] of [
 		test('the open mobile menu', async ({ page, go }) => {
 			await page.setViewportSize({ width: 390, height: 800 });
 			await go('/search');
-			await engage(page);
+			await interact(page, page.getByTestId('menu-button'));
 			await page.getByTestId('menu-button').click();
 			await expect(nav(page)).toBeVisible();
 			await expectNoA11yViolations(page);
@@ -435,7 +436,7 @@ for (const [name, themeId, colorMode] of [
 
 		test('the open palette', async ({ page, go }) => {
 			await go('/search');
-			await engage(page);
+			await interact(page, page.getByTestId('palette-button'));
 			await page.getByTestId('palette-button').click();
 			await expect(page.getByRole('option', { name: /Go to Alerts/ })).toBeVisible();
 			await expectNoA11yViolations(page);
@@ -443,7 +444,7 @@ for (const [name, themeId, colorMode] of [
 
 		test('the open overflow menu', async ({ page, go }) => {
 			await go('/search');
-			await engage(page);
+			await interact(page);
 			await page.getByTestId('more-button').click();
 			await expect(page.getByRole('menuitem', { name: 'About' })).toBeVisible();
 			await expectNoA11yViolations(page);

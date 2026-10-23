@@ -19,6 +19,11 @@ export interface EditorOptions {
 	onescape?: () => boolean;
 	/** After every render, with the text shown (the bar shows its placeholder when empty). */
 	onrender?: (text: string) => void;
+	/**
+	 * An IME composition already open when the editor attaches (typing started before it loaded):
+	 * the first render then waits for its compositionend, so the composition survives.
+	 */
+	composing?: boolean;
 }
 
 export interface Editor {
@@ -81,7 +86,7 @@ function editKind(inputType: string | undefined): EditKind {
 export function attach(el: HTMLElement, opts: EditorOptions): Editor {
 	let text = oneLine(el.textContent ?? '');
 	let error: Range16 | null = null;
-	let composing = false;
+	let composing = opts.composing ?? false;
 	/** Enter already submitted from keydown: the beforeinput that may follow must not again. */
 	let submitted = false;
 
@@ -274,6 +279,9 @@ export function attach(el: HTMLElement, opts: EditorOptions): Editor {
 
 	function onkeydown(event: Event) {
 		const e = event as KeyboardEvent;
+		// A new key: an Enter submitted from an earlier keydown no longer silences insertParagraph
+		// (a hardware Enter sends none when its keydown is prevented).
+		submitted = false;
 		if (e.isComposing || composing || e.keyCode === 229) return; // the IME owns these keys
 		const mod = (e.ctrlKey || e.metaKey) && !e.altKey;
 		const key = e.key.toLowerCase();
@@ -334,7 +342,7 @@ export function attach(el: HTMLElement, opts: EditorOptions): Editor {
 	};
 	for (const [type, fn] of Object.entries(listeners)) el.addEventListener(type, fn);
 
-	render(caret());
+	if (!composing) render(caret());
 
 	return {
 		get text() {
@@ -342,7 +350,9 @@ export function attach(el: HTMLElement, opts: EditorOptions): Editor {
 		},
 		set(next: string, base = false) {
 			next = oneLine(next);
-			if (next === text) return;
+			// Never under an IME composition: rebuilding the DOM would destroy it. The composed
+			// text reaches the state at compositionend and comes back here as itself.
+			if (next === text || composing) return;
 			if (base)
 				history.splice(0, Infinity, { text: next, anchor: next.length, focus: next.length });
 			else record(next, { anchor: next.length, focus: next.length }, null);
@@ -358,7 +368,8 @@ export function attach(el: HTMLElement, opts: EditorOptions): Editor {
 		setError(range: Range16 | null) {
 			if (range?.from === error?.from && range?.to === error?.to) return;
 			error = range;
-			render(caret());
+			// Kept for compositionend's render while an IME is composing (a parse can answer then).
+			if (!composing) render(caret());
 		},
 		undo,
 		redo,
