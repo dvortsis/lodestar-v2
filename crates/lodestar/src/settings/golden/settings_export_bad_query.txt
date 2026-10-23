@@ -1,0 +1,2 @@
+400
+{"error":{"code":"bad_parameter","field":"preferences","message":"A query parameter has the wrong type or value."}}

@@ -48,6 +48,7 @@ const OPEN: [&str; 5] = ["/auth", "/setup", "/login", "/logout", "/openapi.json"
         (name = "settings", description = "The runtime settings registry (§10.10, §11)."),
         (name = "crawler", description = "Stats, the crawler's controls, sources and the network check (§9, §10.9, §18.8)."),
         (name = "events", description = "The live server-sent event stream (§9)."),
+        (name = "library", description = "Your marks, collections and saved searches (§7, §10.5, §10.8)."),
         (name = "meta", description = "This document."),
     ),
     modifiers(&Envelope)
@@ -69,6 +70,10 @@ pub fn document() -> Doc {
     doc.merge(crate::compare::ApiDoc::openapi());
     doc.merge(crate::discover::ApiDoc::openapi());
     doc.merge(crate::events::ApiDoc::openapi());
+    doc.merge(crate::keys::ApiDoc::openapi());
+    doc.merge(crate::user_items::ApiDoc::openapi());
+    doc.merge(crate::collections::ApiDoc::openapi());
+    doc.merge(crate::saved::ApiDoc::openapi());
     finish(&mut doc);
     doc
 }

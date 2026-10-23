@@ -57,7 +57,13 @@ pub struct Cli {
 #[derive(Debug, Subcommand, PartialEq, Eq)]
 pub enum Command {
     /// Run the crawler, search, UI, status page and metrics (the default)
-    Serve,
+    Serve {
+        /// Serve test data instead, offline: built in DIR if it's empty or
+        /// new, reused if it holds a fixture (a temporary folder without
+        /// DIR); any other folder is refused
+        #[arg(long, value_name = "DIR", num_args = 0..=1)]
+        fixture: Option<Option<PathBuf>>,
+    },
     /// Exit 0 if the local instance answers /healthz, 1 otherwise
     Healthcheck,
     /// Import a bitmagnet database (read-only, resumable); run it while
@@ -155,7 +161,7 @@ pub fn run(command: Command, config_path: Option<&Path>, dropped: &privdrop::Rep
         Command::Vacuum => ("vacuum", vacuum::run(&config)),
         Command::Reindex => ("reindex", reindex::run(&config)),
         Command::Stats(a) => ("stats", stats::run(&config, a.json)),
-        Command::Serve
+        Command::Serve { .. }
         | Command::Healthcheck
         | Command::ImportBitmagnet { .. }
         | Command::Lists => unreachable!("main.rs runs these"),
@@ -196,6 +202,8 @@ mod tests {
             .map_err(|e| e.kind())
     }
 
+    const SERVE: Command = Command::Serve { fixture: None };
+
     fn cmd(s: &str) -> (Option<PathBuf>, Option<Command>) {
         let c = args(s).unwrap();
         (c.config, c.command)
@@ -204,11 +212,23 @@ mod tests {
     #[test]
     fn serve_stays_the_default() {
         assert_eq!(cmd(""), (None, None));
-        assert_eq!(cmd("serve"), (None, Some(Command::Serve)));
+        assert_eq!(cmd("serve"), (None, Some(SERVE)));
+        assert_eq!(
+            cmd("serve --fixture").1,
+            Some(Command::Serve {
+                fixture: Some(None)
+            })
+        );
+        assert_eq!(
+            cmd("serve --fixture /tmp/fx --config c.toml").1,
+            Some(Command::Serve {
+                fixture: Some(Some("/tmp/fx".into()))
+            })
+        );
         assert_eq!(cmd("--config /x.toml"), (Some("/x.toml".into()), None));
         assert_eq!(
             cmd("serve --config /x.toml"),
-            (Some("/x.toml".into()), Some(Command::Serve))
+            (Some("/x.toml".into()), Some(SERVE))
         );
         assert_eq!(
             cmd("--config c.toml healthcheck"),
