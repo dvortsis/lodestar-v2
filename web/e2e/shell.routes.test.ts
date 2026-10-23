@@ -194,6 +194,17 @@ test.describe('status pill', () => {
 });
 
 test.describe('the chrome loads on the first interaction', () => {
+	test('a visitor who never interacts gets the full bar after 30 s', async ({ page, go, mock }) => {
+		await page.clock.install();
+		await go('/search');
+		await expect(page.locator('#boot')).toHaveCount(0);
+		await page.clock.runFor(29_000);
+		await expect(page.getByTestId('palette-button')).toHaveCount(0);
+		await page.clock.runFor(1_500);
+		await expect(page.getByTestId('palette-button')).toBeAttached();
+		await expect.poll(() => mock.calls('getEvents').length).toBe(1);
+	});
+
 	test('one key loads it and starts the stream: no second interaction needed', async ({
 		page,
 		go,

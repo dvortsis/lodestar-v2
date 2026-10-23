@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FIELDS, tokenize, type TokenKind } from './tokenize';
 
@@ -118,7 +120,17 @@ describe('tokenize', () => {
 		]);
 	});
 
-	it('knows the M4 swarm fields (the server answers "not available yet")', () => {
+	it("knows exactly the server's field names (crates/search/src/query.rs FIELDS)", () => {
+		const rust = readFileSync(resolve(process.cwd(), '../crates/search/src/query.rs'), 'utf8');
+		const table = rust.slice(rust.indexOf('pub(crate) const FIELDS'));
+		const names = [
+			...table.slice(0, table.indexOf('];')).matchAll(/^\s+\("([a-z0-9_]+)",\s*FieldKind/gm)
+		].map((m) => m[1]);
+		expect(names.length).toBeGreaterThan(40);
+		expect([...FIELDS].sort()).toEqual([...new Set(names)].sort());
+	});
+
+	it('knows the swarm fields (the server answers "not available yet" where they are)', () => {
 		for (const f of ['seeders', 'trackers', 'dht', 'seen', 'time', 'sig'])
 			expect(FIELDS.has(f)).toBe(true);
 		expect(kinds('seeders:>=1', 'field')).toEqual(['seeders:']);

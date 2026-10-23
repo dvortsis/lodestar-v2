@@ -126,6 +126,10 @@ describe('the editor', () => {
 		type('a\nb');
 		expect(onchange).toHaveBeenLastCalledWith('a b');
 		expect(el.textContent).toBe('a b');
+		// A CRLF is one space, and the caret after it stays after it.
+		type('x\r\ny\r\nz', 6);
+		expect(onchange).toHaveBeenLastCalledWith('x y z');
+		expect(caretAt()).toBe(4);
 	});
 
 	it('undoes and redoes, with a typing burst as one step', () => {
@@ -172,6 +176,27 @@ describe('the editor', () => {
 		type('bunny');
 		expect(key('Enter').defaultPrevented).toBe(true);
 		expect(onsubmit).toHaveBeenCalledOnce();
+		// The insertParagraph some browsers still send for that Enter does not submit again.
+		el.dispatchEvent(
+			new InputEvent('beforeinput', { inputType: 'insertParagraph', cancelable: true })
+		);
+		expect(onsubmit).toHaveBeenCalledOnce();
+	});
+
+	it("a soft keyboard's search key (keyCode 229, then insertParagraph) submits", () => {
+		type('bunny');
+		key('Enter', { keyCode: 229 });
+		expect(onsubmit).not.toHaveBeenCalled();
+		const e = new InputEvent('beforeinput', { inputType: 'insertParagraph', cancelable: true });
+		el.dispatchEvent(e);
+		expect(e.defaultPrevented).toBe(true);
+		expect(onsubmit).toHaveBeenCalledOnce();
+		// Not while composing.
+		el.dispatchEvent(new CompositionEvent('compositionstart'));
+		el.dispatchEvent(
+			new InputEvent('beforeinput', { inputType: 'insertParagraph', cancelable: true })
+		);
+		expect(onsubmit).toHaveBeenCalledOnce();
 	});
 
 	it('Esc closes a popover first, then clears, and undo brings the text back', () => {
@@ -188,6 +213,13 @@ describe('the editor', () => {
 		// Esc on an empty bar is left to others.
 		editor.set('');
 		expect(key('Escape').defaultPrevented).toBe(false);
+	});
+
+	it("starts its history at the URL's query, so undo never empties a pasted link", () => {
+		editor.set('res:1080p', true);
+		key('z', { ctrlKey: true });
+		expect(editor.text).toBe('res:1080p');
+		expect(onchange).not.toHaveBeenCalled();
 	});
 
 	it('takes text from outside as one undo step, without reporting it back', () => {

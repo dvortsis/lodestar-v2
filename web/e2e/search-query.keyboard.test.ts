@@ -44,6 +44,20 @@ test('/ focuses the bar, Enter searches, Esc clears', async ({ page, go, mock, k
 	await expect(bar).toHaveText('lantern res:1080p ext:mkv');
 });
 
+test('/ works as the first key after the 30 s fallback loaded the shortcuts', async ({
+	page,
+	go,
+	kbd
+}) => {
+	await page.clock.install();
+	await go('/search');
+	await expect(page.locator('#boot')).toHaveCount(0);
+	await page.clock.runFor(31_000); // no interaction: the shell's fallback attaches the keys
+	await expect(page.getByTestId('palette-button')).toBeAttached();
+	await kbd.press('/');
+	await expect(page.getByRole('combobox', { name: 'Search torrents' })).toBeFocused();
+});
+
 test('/ focuses the bar again from elsewhere on the page, with the caret at the end', async ({
 	page,
 	go,

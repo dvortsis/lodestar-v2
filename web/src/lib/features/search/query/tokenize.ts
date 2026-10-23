@@ -59,6 +59,7 @@ export const FIELDS = new Set([
 	'file',
 	'sig',
 	'seeders',
+	'leechers',
 	'trackers',
 	'dht',
 	'seen',
