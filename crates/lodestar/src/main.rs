@@ -9,6 +9,7 @@ mod fixture;
 mod floor;
 mod fsdetect;
 mod http;
+mod insights;
 mod logging;
 mod metrics;
 mod ops;
