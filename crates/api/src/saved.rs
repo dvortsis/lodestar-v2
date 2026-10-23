@@ -73,7 +73,7 @@ fn visible_alerts(store: &Store, id: i64, adult: bool) -> ApiResult<(u64, u64, O
             }
             all += 1;
             unread += u64::from(a.read_at.is_none());
-            newest = newest.or(Some(a.created_at));
+            newest = newest.max(Some(a.created_at));
         }
         if end {
             return Ok((all, unread, newest));
