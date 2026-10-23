@@ -18,6 +18,9 @@ use tokio::task::JoinHandle;
 
 use crate::Counts;
 
+/// Counts for a hash the fake wasn't told about.
+pub type Answer = fn(&InfoHash) -> Counts;
+
 /// What a fake tracker knows and how it misbehaves. Shared with the test.
 #[derive(Debug, Default)]
 pub struct FakeState {
@@ -44,6 +47,10 @@ pub struct FakeState {
     pub hashes: AtomicU64,
     /// The last HTTP request path, without the query.
     pub last_path: Mutex<String>,
+    /// Counts for hashes not [`FakeState::set`]; zeros without it.
+    pub answer: Mutex<Option<Answer>>,
+    /// Wait this long before each HTTP reply (a slow tracker).
+    pub delay: Mutex<Option<std::time::Duration>>,
 }
 
 impl FakeState {
@@ -56,9 +63,13 @@ impl FakeState {
         self.hashes
             .fetch_add(hashes.len() as u64, Ordering::Relaxed);
         let swarms = self.swarms.lock().expect("fake lock");
+        let answer = *self.answer.lock().expect("fake lock");
         let mut out: Vec<_> = hashes
             .iter()
-            .map(|h| (*h, swarms.get(h).copied().unwrap_or_default()))
+            .map(|h| {
+                let c = swarms.get(h).copied();
+                (*h, c.or_else(|| answer.map(|f| f(h))).unwrap_or_default())
+            })
             .collect();
         if let Some(n) = *self.truncate_to.lock().expect("fake lock") {
             out.truncate(n);
@@ -208,6 +219,10 @@ pub async fn http_tracker() -> Fake {
                 }
                 if s.take_drop() {
                     return;
+                }
+                let delay = *s.delay.lock().expect("fake lock");
+                if let Some(d) = delay {
+                    tokio::time::sleep(d).await;
                 }
                 let line = String::from_utf8_lossy(&req);
                 let target = line.split_whitespace().nth(1).unwrap_or("/");
