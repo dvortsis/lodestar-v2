@@ -233,13 +233,14 @@
       "merge": "8c1159e"
     },
     "W9": {
-      "status": "review",
+      "status": "merged",
       "model": "sonnet",
       "session": "session_01HpQ4gCiiJq5eRwciaE8Lus",
       "pr": 103,
       "attempt": 0,
       "review_rounds": 3,
-      "notes": "launched 22:38; deps W7ab,W7cd,W5,W3 merged | 23:40 review FIX: .update-snapshots marker must not merge (commit CI baselines), size reason; SSE-only reachability lockout, Enter hijack, metrics.md cite, safeNext control chars; polish. | 00:47 code findings fixed; lhci mobile fails (109KB/2.66s vs 102400B/2500ms; main 83KB/2.41s). Runner: keep budgets (owner best-UX), do (c) defer stream + (b) vite.config/app.html/font fixes allowed; report if still over. Baselines import pending. | 00:59 c5d0549: lhci passes locally (97.7KB, LCP 2.4s, CLS 0) via deferred stream/chrome/toaster + font preload moved after first frame; awaiting baselines import + marker removal. Then runner verifies delta (shared-file edits) and merges on green. Carry: recheck FOUT/CLS when Search lands. | 01:33 E2E run 39881347868 green, artifact 12470864759 (snapshot-baselines). BLOCKED: proxy denies productionresultssa9.blob.core.windows.net for all sessions. Asked owner: allow host or import artifact (as b2b46df). W9 waits with marker. | 02:30 main+M-auth merged, installAuthHandlers adopted, handoff.ts removed; marker kept; new E2E run will upload fresh baselines (artifact id changes: owner should import the newest). | 03:00 owner decision (via owner session): CI commit-back job for baselines (best practice; no host allowlist). W9 may edit e2e.yml + web/e2e/README.md. Needs fresh review + /security-review of workflow delta. No longer waiting on owner. | 03:30 f92f4fd self-review fixes. LHCI mobile LCP 2.67s vs 2.5 (bytes ok): told (c) TopBar-lite + cut ~4.7KB floor added by main merge; no budget relax. commit-baselines workflow edit DENIED by W9 classifier -> asked owner session to do it as own PR (no routing around). | 03:37 (c)+floor cut fail (LCP 2.73/2.67; floor growth is global Svelte runtime chunk 17->20.4KB). Asked: static first-paint shell in app.html (LCP independent of JS) before owner escalation. | 04:17 c1d6e6d (+#113, marker). app.html static-shell edit DENIED by W9 classifier -> owner asked (allow edit, or decide LCP budget). LHCI LCP red blocks merge. | 2026-10-23T12:47:07Z unblocked: owner allowed app.html edit (per W9 session); 2c085d3 static first-paint shell, lhci passes (mobile LCP ~1.5s), 101.6KB/102.4KB; baseline regen via marker in progress; asked for deferral a11y/auth checks + headroom note before review | 2026-10-23T14:25:41Z 09b77d1 ready: LCP fixed via metric-matched fallback font, focus restore, first-key double-dispatch fix, baselines unchanged, 101,884/102,400 B; fresh reviewer launched | 2026-10-23T14:33:53Z review FIX: focus lost on static->full bar swap (restore by data-testid identity; 24238a0 hid it); zh detection via navigator.languages + coverage gate; contract docs (design-tokens \u00a78, arch \u00a710.2); mod+k preventDefault; polish | 2026-10-23T15:10:10Z 4105532 fixes in, CI green; +error stub to fit bytes (100,861 B); delta review launched | 2026-10-23T15:23:03Z delta FIX: +error stub blank when ErrorView chunk fails (regression vs 24238a0); inline fallback + spec; optional Mac Meta-only first key. Focus fix verified (specs fail when reverted)"
+      "notes": "launched 22:38; deps W7ab,W7cd,W5,W3 merged | 23:40 review FIX: .update-snapshots marker must not merge (commit CI baselines), size reason; SSE-only reachability lockout, Enter hijack, metrics.md cite, safeNext control chars; polish. | 00:47 code findings fixed; lhci mobile fails (109KB/2.66s vs 102400B/2500ms; main 83KB/2.41s). Runner: keep budgets (owner best-UX), do (c) defer stream + (b) vite.config/app.html/font fixes allowed; report if still over. Baselines import pending. | 00:59 c5d0549: lhci passes locally (97.7KB, LCP 2.4s, CLS 0) via deferred stream/chrome/toaster + font preload moved after first frame; awaiting baselines import + marker removal. Then runner verifies delta (shared-file edits) and merges on green. Carry: recheck FOUT/CLS when Search lands. | 01:33 E2E run 39881347868 green, artifact 12470864759 (snapshot-baselines). BLOCKED: proxy denies productionresultssa9.blob.core.windows.net for all sessions. Asked owner: allow host or import artifact (as b2b46df). W9 waits with marker. | 02:30 main+M-auth merged, installAuthHandlers adopted, handoff.ts removed; marker kept; new E2E run will upload fresh baselines (artifact id changes: owner should import the newest). | 03:00 owner decision (via owner session): CI commit-back job for baselines (best practice; no host allowlist). W9 may edit e2e.yml + web/e2e/README.md. Needs fresh review + /security-review of workflow delta. No longer waiting on owner. | 03:30 f92f4fd self-review fixes. LHCI mobile LCP 2.67s vs 2.5 (bytes ok): told (c) TopBar-lite + cut ~4.7KB floor added by main merge; no budget relax. commit-baselines workflow edit DENIED by W9 classifier -> asked owner session to do it as own PR (no routing around). | 03:37 (c)+floor cut fail (LCP 2.73/2.67; floor growth is global Svelte runtime chunk 17->20.4KB). Asked: static first-paint shell in app.html (LCP independent of JS) before owner escalation. | 04:17 c1d6e6d (+#113, marker). app.html static-shell edit DENIED by W9 classifier -> owner asked (allow edit, or decide LCP budget). LHCI LCP red blocks merge. | 2026-10-23T12:47:07Z unblocked: owner allowed app.html edit (per W9 session); 2c085d3 static first-paint shell, lhci passes (mobile LCP ~1.5s), 101.6KB/102.4KB; baseline regen via marker in progress; asked for deferral a11y/auth checks + headroom note before review | 2026-10-23T14:25:41Z 09b77d1 ready: LCP fixed via metric-matched fallback font, focus restore, first-key double-dispatch fix, baselines unchanged, 101,884/102,400 B; fresh reviewer launched | 2026-10-23T14:33:53Z review FIX: focus lost on static->full bar swap (restore by data-testid identity; 24238a0 hid it); zh detection via navigator.languages + coverage gate; contract docs (design-tokens \u00a78, arch \u00a710.2); mod+k preventDefault; polish | 2026-10-23T15:10:10Z 4105532 fixes in, CI green; +error stub to fit bytes (100,861 B); delta review launched | 2026-10-23T15:23:03Z delta FIX: +error stub blank when ErrorView chunk fails (regression vs 24238a0); inline fallback + spec; optional Mac Meta-only first key. Focus fix verified (specs fail when reverted) | 2026-10-23T15:51:38Z 56b5e5a error-stub fallback + 2 specs, Mac Cmd+K; runner checked delta, CI green, main ancestor; merged #103 as b8c884d. Tag web-foundations-v1 push refused by proxy (403): briefs pin main b8c884d instead",
+      "merged_sha": "b8c884d"
     },
     "M-auth": {
       "status": "merged",
@@ -258,7 +259,7 @@
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": ""
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper)"
     },
     "S-search-2": {
       "status": "pending",
@@ -285,7 +286,7 @@
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": ""
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper)"
     },
     "D-docker": {
       "status": "merged",
@@ -474,7 +475,7 @@
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": ""
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper)"
     },
     "S-discover": {
       "status": "pending",
@@ -483,7 +484,7 @@
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": ""
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper)"
     },
     "S-alerts": {
       "status": "pending",
@@ -492,7 +493,7 @@
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": ""
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper)"
     },
     "S-insights-1": {
       "status": "pending",
@@ -501,7 +502,7 @@
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": ""
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper)"
     },
     "S-insights-2": {
       "status": "pending",
@@ -555,7 +556,7 @@
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": ""
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper)"
     },
     "S-filters": {
       "status": "pending",
@@ -573,7 +574,7 @@
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": ""
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper)"
     },
     "S-e2e": {
       "status": "pending",
@@ -882,7 +883,7 @@
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": "from #86"
+      "notes": "from #86 | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper)"
     },
     "S-settings-2": {
       "status": "pending",
