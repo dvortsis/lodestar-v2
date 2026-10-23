@@ -232,7 +232,7 @@
    "pr": 103,
    "attempt": 0,
    "review_rounds": 0,
-   "notes": "launched 22:38; deps W7ab,W7cd,W5,W3 merged | 23:40 review FIX: .update-snapshots marker must not merge (commit CI baselines), size reason; SSE-only reachability lockout, Enter hijack, metrics.md cite, safeNext control chars; polish. | 00:47 code findings fixed; lhci mobile fails (109KB/2.66s vs 102400B/2500ms; main 83KB/2.41s). Runner: keep budgets (owner best-UX), do (c) defer stream + (b) vite.config/app.html/font fixes allowed; report if still over. Baselines import pending."
+   "notes": "launched 22:38; deps W7ab,W7cd,W5,W3 merged | 23:40 review FIX: .update-snapshots marker must not merge (commit CI baselines), size reason; SSE-only reachability lockout, Enter hijack, metrics.md cite, safeNext control chars; polish. | 00:47 code findings fixed; lhci mobile fails (109KB/2.66s vs 102400B/2500ms; main 83KB/2.41s). Runner: keep budgets (owner best-UX), do (c) defer stream + (b) vite.config/app.html/font fixes allowed; report if still over. Baselines import pending. | 00:59 c5d0549: lhci passes locally (97.7KB, LCP 2.4s, CLS 0) via deferred stream/chrome/toaster + font preload moved after first frame; awaiting baselines import + marker removal. Then runner verifies delta (shared-file edits) and merges on green. Carry: recheck FOUT/CLS when Search lands."
   },
   "M-auth": {
    "status": "running",
@@ -1212,7 +1212,8 @@
   "n_new_reset": "Future 'N new' consumer (search) must reset its count when the Adult setting changes (hidden tab queued frames not re-screened) \u2014 from #104 review",
   "pruning_owners": "B9 runs prune_alerts; B11a/b runs 30-day prune_query_log (from #101 review)",
   "privdrop_flake": "privdrop.rs drops_to_puid_and_pgid_before_anything_runs failed once under full workspace run ('expected the runtime's threads'); from #84; reported by F-budget session",
-  "pin_toolchain": "rust-toolchain.toml is unpinned stable; 1.99 deprecations broke clippy on #88. Consider pinning (affects CALIB_REF_NS too)."
+  "pin_toolchain": "rust-toolchain.toml is unpinned stable; 1.99 deprecations broke clippy on #88. Consider pinning (affects CALIB_REF_NS too).",
+  "font_fout": "W9 moved Atkinson font preload after first frame (FOUT swap); recheck CLS/LCP when Search screens land"
  },
  "blocked_on_owner": [
   "Modern DHT crawler architecture: waiting on an AskUserQuestion",
