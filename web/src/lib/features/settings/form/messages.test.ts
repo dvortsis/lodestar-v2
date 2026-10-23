@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EN_FILE, MAP_FILE, messageKeys, renderMap } from './message-map.gen';
+import { MESSAGES } from './message-map';
 import { fieldHelp, fieldLabel, messageId, settingText, unitText } from './messages';
 import { spec } from './testing/values';
 
@@ -15,9 +16,17 @@ describe('settingText', () => {
 		);
 	});
 
-	it('resolves a settings message, and returns undefined for a missing one', () => {
-		expect(settingText('settings.form.unit.seconds')).toBe('seconds');
+	it('resolves a settings message through the map, and returns undefined for a missing one', () => {
+		// S-settings-1 adds the real keys; stand one in.
+		MESSAGES.settings_crawler_intensity_label = () => 'Intensity';
+		try {
+			expect(settingText('settings.crawler.intensity.label')).toBe('Intensity');
+		} finally {
+			delete MESSAGES.settings_crawler_intensity_label;
+		}
 		expect(settingText('settings.crawler.no_such_field.label')).toBeUndefined();
+		// The engine's own strings aren't server keys.
+		expect(settingText('settings.form.unit.seconds')).toBeUndefined();
 	});
 
 	it('never resolves a message outside settings_*', () => {
@@ -74,9 +83,11 @@ describe('the message map', () => {
 	});
 
 	it('leaves out messages with placeholders', () => {
-		expect(messageKeys('{"settings_a": "A", "settings_b": "{n} b", "other": "x"}')).toEqual([
-			'settings_a'
-		]);
+		expect(
+			messageKeys(
+				'{"settings_a": "A", "settings_b": "{n} b", "settings_form_c": "C", "other": "x"}'
+			)
+		).toEqual(['settings_a']);
 		expect(renderMap([])).toContain('= {};');
 	});
 });

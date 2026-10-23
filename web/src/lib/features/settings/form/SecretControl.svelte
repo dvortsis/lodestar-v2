@@ -5,6 +5,8 @@
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Input from '$lib/ui/fields/Input.svelte';
 	import { m } from '$lib/paraglide/messages.js';
+	import IconSet from '~icons/ph/check-circle';
+	import IconUnset from '~icons/ph/circle-dashed';
 	import { ask } from './dialogs';
 	import type { SettingsForm } from './form.svelte';
 	import type { FieldKey } from './types';
@@ -41,7 +43,12 @@
 
 <div class="flex flex-col gap-2">
 	<div class="flex flex-wrap items-center gap-2">
-		<span class="text-body" data-testid="secret-status">
+		<span class="inline-flex items-center gap-1 text-body" data-testid="secret-status">
+			{#if f.secretSet}
+				<IconSet class="size-(--icon-size-row) shrink-0 text-success" aria-hidden="true" />
+			{:else}
+				<IconUnset class="size-(--icon-size-row) shrink-0 text-muted-text" aria-hidden="true" />
+			{/if}
 			{f.secretSet ? m.settings_form_secret_set() : m.settings_form_secret_not_set()}
 		</span>
 		{#if !f.locked}
@@ -56,8 +63,10 @@
 		{/if}
 	</div>
 	{#if replacing && !f.locked}
+		<!-- Named for what it is ("New value for …"), not by the field's label. -->
 		<Input
 			{...controlProps}
+			aria-labelledby={undefined}
 			{dense}
 			type="password"
 			autocomplete="new-password"

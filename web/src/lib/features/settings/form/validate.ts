@@ -8,6 +8,14 @@ import { unitText } from './messages';
 import type { FieldSpec } from './types';
 import { RESET, type Staged } from './values';
 
+/**
+ * What the JSON fallback stages while its text doesn't parse: dirty (so leaving asks, and Save
+ * can't send the last value that did parse), and always invalid. Never sent or stored.
+ */
+export class JsonDraft {
+	constructor(readonly text: string) {}
+}
+
 const IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
 const HOST_LABEL = /^(?!-)[A-Za-z0-9-]{1,63}(?<!-)$/;
 
@@ -87,6 +95,7 @@ function boundsMessage(spec: FieldSpec): string {
 /** The error for a staged value, or undefined when the client finds nothing wrong. */
 export function validate(spec: FieldSpec, value: Staged): string | undefined {
 	if (value === RESET || spec.writeOnly) return undefined;
+	if (value instanceof JsonDraft) return m.settings_form_json_invalid();
 	switch (spec.kind) {
 		case 'boolean':
 			return typeof value === 'boolean' ? undefined : m.settings_form_error_type();

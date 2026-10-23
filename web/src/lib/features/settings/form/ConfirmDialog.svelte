@@ -12,7 +12,6 @@
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Dialog from '$lib/ui/overlays/Dialog.svelte';
 	import { m } from '$lib/paraglide/messages.js';
-	import { tick } from 'svelte';
 
 	interface Props {
 		title: string;
@@ -39,28 +38,22 @@
 		onclose(id);
 	}
 
-	$effect(() => {
-		// The dialog focuses its first control (✕); move to the chosen one once it's open.
-		const id = initial ?? actions.at(-1)?.id;
-		void tick().then(() =>
-			requestAnimationFrame(() =>
-				document.querySelector<HTMLElement>(`[data-confirm="${uid}:${id}"]`)?.focus()
-			)
-		);
-	});
+	const first = () =>
+		document.querySelector<HTMLElement>(`[data-confirm="${uid}:${initial ?? actions.at(-1)?.id}"]`);
 </script>
 
 <Dialog
 	bind:open
 	{title}
 	closeLabel={m.settings_form_dialog_close()}
+	initialFocus={first}
 	onOpenChange={(o) => {
 		if (!o) answer(null);
 	}}
 >
 	<div class="flex flex-col gap-2">
 		{#each body as p, i (i)}
-			<p>{p}</p>
+			<p data-testid="confirm-body-{i}">{p}</p>
 		{/each}
 	</div>
 	{#snippet footer()}

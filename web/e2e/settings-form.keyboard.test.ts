@@ -11,7 +11,9 @@ test.describe('keyboard: settings form', () => {
 	test.beforeEach(async ({ page, go, mock }) => {
 		backend = new SettingsBackend().attach(mock);
 		await go(PAGE);
-		await expect(page.getByRole('radiogroup')).toBeVisible();
+		await expect(
+			page.locator('[data-field="crawler.intensity"]').getByRole('radiogroup')
+		).toBeVisible();
 	});
 
 	test('edits a field and saves with Ctrl+S', async ({ page, kbd }) => {

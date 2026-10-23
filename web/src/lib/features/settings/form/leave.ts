@@ -23,3 +23,8 @@ export function leaveDecision({ dirty, type, from, to, bypass }: LeaveInput): Le
 	if (from && to && from.origin === to.origin && from.pathname === to.pathname) return 'allow';
 	return 'prompt';
 }
+
+/** A full-page navigation, for a destination the router can't take (another site, a reload). */
+export function hardNavigate(href: string): void {
+	location.assign(href);
+}

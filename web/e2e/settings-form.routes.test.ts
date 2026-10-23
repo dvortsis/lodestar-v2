@@ -15,9 +15,12 @@ test.describe('settings form', () => {
 		backend = new SettingsBackend().attach(mock);
 	});
 
-	const ready = async (page: import('@playwright/test').Page) =>
-		expect(page.getByRole('heading', { level: 1, name: 'Settings form' })).toBeVisible() &&
-		expect(page.getByRole('radiogroup')).toBeVisible();
+	const ready = async (page: import('@playwright/test').Page) => {
+		await expect(page.getByRole('heading', { level: 1, name: 'Settings form' })).toBeVisible();
+		await expect(
+			page.locator('[data-field="crawler.intensity"] [role="radiogroup"]')
+		).toBeVisible();
+	};
 
 	test('edits, saves and undoes', async ({ page, go }) => {
 		await go(PAGE);
@@ -83,7 +86,7 @@ test.describe('settings form', () => {
 		await expect(page).toHaveURL(new RegExp(PAGE));
 		await expect(dialog).toHaveCount(0);
 
-		await page.goForward(); // history navigation (popstate), as Back is
+		await page.goForward(); // history navigation: the same popstate path Back takes
 		await expect(dialog).toBeVisible();
 		await dialog.getByRole('button', { name: 'Discard' }).click();
 		await expect(page).toHaveURL(/\/dev\/ui\/controls/);
@@ -94,7 +97,15 @@ test.describe('settings form', () => {
 		await go(PAGE);
 		await ready(page);
 		await page.getByRole('radio', { name: 'aggressive' }).check();
-		await page.waitForTimeout(400); // the draft is written 300 ms after the last edit
+		// The draft is written 300 ms after the last edit.
+		await expect
+			.poll(
+				() => page.evaluate(() => sessionStorage.getItem('lodestar.settings.draft.v1.showcase')),
+				{
+					timeout: 10_000
+				}
+			)
+			.toContain('aggressive');
 		page.on('dialog', (d) => void d.accept()); // the browser's own leave prompt
 		await page.reload();
 		await ready(page);
@@ -102,6 +113,27 @@ test.describe('settings form', () => {
 		await page.getByRole('button', { name: 'Restore' }).click();
 		await expect(page.getByRole('radio', { name: 'aggressive' })).toBeChecked();
 		await expect(page.getByTestId('save-bar')).toContainText('1 unsaved change');
+	});
+
+	test('keeps the focused field clear of the save bar on a phone', async ({ page, go }) => {
+		await page.setViewportSize({ width: 390, height: 500 });
+		await go(PAGE);
+		await ready(page);
+		await page.getByRole('radio', { name: 'low' }).check();
+		const bar = page.getByTestId('save-bar');
+		await expect(bar).toBeVisible();
+		// Tab through every control; none may end under the bar.
+		for (let i = 0; i < 25; i++) {
+			await page.keyboard.press('Tab');
+			const covered = await page.evaluate(() => {
+				const el = document.activeElement as HTMLElement | null;
+				const barEl = document.querySelector('[data-testid="save-bar"]');
+				if (!el || !barEl || barEl.contains(el) || el === document.body) return null;
+				const r = el.getBoundingClientRect();
+				return r.bottom > barEl.getBoundingClientRect().top + 1 ? el.outerHTML.slice(0, 120) : null;
+			});
+			expect(covered, `focus ${i}`).toBeNull();
+		}
 	});
 
 	test('shows an env-locked field as set by its variable', async ({ page, go }) => {
@@ -183,7 +215,9 @@ for (const mode of ['light', 'dark'] as const) {
 			test('is axe-clean with every state shown', async ({ page, go, mock }) => {
 				const backend = new SettingsBackend().attach(mock);
 				await go(PAGE);
-				await expect(page.getByRole('radiogroup')).toBeVisible();
+				await expect(
+					page.locator('[data-field="crawler.intensity"]').getByRole('radiogroup')
+				).toBeVisible();
 				const bar = page.getByTestId('save-bar');
 				// The error summary and an inline error.
 				await page.getByText('Advanced (1)').click();

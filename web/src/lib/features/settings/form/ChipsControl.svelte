@@ -35,7 +35,7 @@
 <div class="flex flex-col gap-2">
 	{#if items.length}
 		<ul class="flex flex-wrap gap-2" data-chip-group>
-			{#each items as item, i (item)}
+			{#each items as item, i (`${i}:${item}`)}
 				<li>
 					<Chip
 						onremove={f.locked ? undefined : () => form.set(key, items.toSpliced(i, 1))}

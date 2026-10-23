@@ -25,6 +25,8 @@
 
 	onMount(() => {
 		const params = page.url.searchParams;
+		// The screen that creates a form destroys it (SettingsForm.svelte only borrows it).
+		const off = () => form?.destroy();
 		loadSettingsIndex().then(
 			(index) => {
 				const wanted = params.get('sections')?.split(',').filter(Boolean);
@@ -37,6 +39,7 @@
 			},
 			() => (failed = true)
 		);
+		return off;
 	});
 
 	const groups = $derived(form ? groupFields(form.specs) : []);

@@ -40,7 +40,9 @@ const SPECS: FieldSpec[] = [
 	spec('secrets.token', { writeOnly: true }),
 	spec('logging.events', { kind: 'map', widget: 'log-events' }),
 	spec('logging.mystery', { kind: 'unknown' }),
-	spec('logging.tags', { kind: 'string-list' })
+	spec('logging.tags', { kind: 'string-list' }),
+	spec('logging.level', { kind: 'enum', enum: ['error', 'warn', 'info', 'debug', 'trace'] }),
+	spec('logging.rate', { kind: 'integer', minimum: 0, maximum: 10, widget: 'slider' })
 ];
 
 const initial = () => [
@@ -57,7 +59,13 @@ const initial = () => [
 	}),
 	values('general', 1, { data_dir: sv('/data', 'default', { read_only: true }) }),
 	values('secrets', 1, { token: sv(null, 'db') }),
-	values('logging', 1, { events: sv({ a: true }), mystery: sv([1, 2]), tags: sv(['x']) })
+	values('logging', 1, {
+		events: sv({ a: true }),
+		mystery: sv([1, 2]),
+		tags: sv(['x', 'x']), // a duplicate, as a hand-edited config.toml can have
+		level: sv('info'),
+		rate: sv(5)
+	})
 ];
 
 let server: ReturnType<typeof fakeServer>;
@@ -196,14 +204,16 @@ describe('SettingField', () => {
 			}
 		}));
 		show('crawler.max_sockets');
-		const auto = screen.getByRole('switch', { name: 'Automatic' }) as HTMLInputElement;
+		const auto = screen.getByRole('switch', { name: /Automatic/ }) as HTMLInputElement;
 		expect(auto.checked).toBe(true);
-		expect(screen.queryByLabelText('max_sockets')).toBeNull();
+		expect(within(root('crawler.max_sockets')).queryByRole('textbox')).toBeNull(); // the switch is the control
 		await waitFor(() =>
 			expect(screen.getByTestId('automatic-value').textContent).toContain('Automatic · 400')
 		);
 		await fireEvent.click(auto);
-		const input = (await screen.findByLabelText('max_sockets')) as HTMLInputElement;
+		const input = (await within(root('crawler.max_sockets')).findByRole(
+			'textbox'
+		)) as HTMLInputElement;
 		expect(input.value).toBe('400');
 		expect(form.field('crawler.max_sockets').value).toBe(400);
 		await fireEvent.click(auto);
@@ -212,8 +222,10 @@ describe('SettingField', () => {
 
 	it('turns Automatic off with an empty, invalid input when there’s no estimate', async () => {
 		show('crawler.max_sockets');
-		await fireEvent.click(screen.getByRole('switch', { name: 'Automatic' }));
-		const input = (await screen.findByLabelText('max_sockets')) as HTMLInputElement;
+		await fireEvent.click(screen.getByRole('switch', { name: /Automatic/ }));
+		const input = (await within(root('crawler.max_sockets')).findByRole(
+			'textbox'
+		)) as HTMLInputElement;
 		expect(input.value).toBe('');
 		form.blur('crawler.max_sockets');
 		await waitFor(() => expect(input.getAttribute('aria-invalid')).toBe('true'));
@@ -292,9 +304,9 @@ describe('SettingField', () => {
 		const add = within(tags).getByRole('textbox');
 		await fireEvent.input(add, { target: { value: 'y' } });
 		await fireEvent.click(within(tags).getByRole('button', { name: 'Add' }));
+		expect(form.field('logging.tags').value).toEqual(['x', 'x', 'y']);
+		await fireEvent.click(within(tags).getAllByRole('button', { name: 'Remove x' })[0]!);
 		expect(form.field('logging.tags').value).toEqual(['x', 'y']);
-		await fireEvent.click(within(tags).getByRole('button', { name: 'Remove x' }));
-		expect(form.field('logging.tags').value).toEqual(['y']);
 
 		show('logging.mystery');
 		const json = within(root('logging.mystery')).getByRole('textbox') as HTMLTextAreaElement;
@@ -345,5 +357,127 @@ describe('SettingField', () => {
 			).toBeTruthy()
 		);
 		expect(within(root('crawler.intensity')).getByText('Saved')).toBeTruthy();
+	});
+
+	const described = (el: Element) =>
+		(el.getAttribute('aria-describedby') ?? '')
+			.split(' ')
+			.map((id) => document.getElementById(id)?.textContent ?? '')
+			.join(' ');
+
+	it('ties help and errors to every kind of control, and never labels nothing', async () => {
+		for (const k of [
+			'crawler.intensity',
+			'crawler.encryption',
+			'crawler.paused',
+			'crawler.max_sockets',
+			'logging.level'
+		] as FieldKey[]) {
+			show(k);
+			const r = root(k);
+			// No <label for> without its target.
+			for (const l of r.querySelectorAll('label[for]')) {
+				expect(
+					document.getElementById((l as HTMLLabelElement).htmlFor),
+					`${k} label`
+				).not.toBeNull();
+			}
+		}
+		// Segmented: the group carries the errors.
+		server.next('PATCH /settings', {
+			status: 422,
+			body: {
+				error: { code: 'invalid_setting', section: 'crawler', field: 'intensity', message: 'No.' }
+			}
+		});
+		form.set('crawler.intensity', 'low');
+		await form.save();
+		const group = await waitFor(() => within(root('crawler.intensity')).getByRole('group'));
+		expect(described(group)).toContain('No.');
+		// Radio group, and the Automatic switch while on.
+		form.blur('crawler.max_sockets');
+		const radios = within(root('crawler.encryption')).getByRole('radiogroup');
+		expect(radios.getAttribute('aria-labelledby')).toBeTruthy();
+		const auto = within(root('crawler.max_sockets')).getByRole('switch');
+		expect(auto.id).toBeTruthy();
+		expect(auto.getAttribute('aria-describedby') ?? '').not.toBe('undefined');
+	});
+
+	it('renders a Select for many values and a Slider with its number', async () => {
+		show('logging.level');
+		const select = screen.getByLabelText('level') as HTMLSelectElement;
+		await fireEvent.change(select, { target: { value: 'debug' } });
+		expect(form.field('logging.level').value).toBe('debug');
+		show('logging.rate');
+		const slider = within(root('logging.rate')).getByRole('slider');
+		await fireEvent.input(slider, { target: { value: '8' } });
+		expect(form.field('logging.rate').value).toBe(8);
+		expect(
+			(within(root('logging.rate')).getByRole('textbox', { name: 'rate' }) as HTMLInputElement)
+				.value
+		).toBe('8');
+	});
+
+	it('lists duplicate chips without breaking', () => {
+		show('logging.tags');
+		expect(within(root('logging.tags')).getAllByRole('button', { name: 'Remove x' })).toHaveLength(
+			2
+		);
+	});
+
+	it('keeps JSON that doesn’t parse dirty and invalid, so Save can’t send the last good value', async () => {
+		show('logging.mystery');
+		const json = within(root('logging.mystery')).getByRole('textbox');
+		await fireEvent.input(json, { target: { value: '[3]' } });
+		await fireEvent.input(json, { target: { value: '[3, ' } });
+		expect(form.field('logging.mystery').dirty).toBe(true);
+		expect(await form.save()).toEqual({ ok: false, reason: 'invalid' });
+		expect(server.requests('PATCH', '/settings')).toHaveLength(0);
+		expect(form.errors).toEqual([
+			{ key: 'logging.mystery', message: expect.stringMatching(/valid JSON/) }
+		]);
+		expect(sessionStorage.getItem('lodestar.settings.draft.v1.field-test') ?? '').not.toContain(
+			'[3, '
+		);
+	});
+
+	it('turns Automatic back on when Discard brings the automatic value back', async () => {
+		show('crawler.max_sockets');
+		const auto = () => within(root('crawler.max_sockets')).getByRole('switch') as HTMLInputElement;
+		await fireEvent.click(auto());
+		await within(root('crawler.max_sockets')).findByRole('textbox');
+		await fireEvent.input(within(root('crawler.max_sockets')).getByRole('textbox'), {
+			target: { value: '50' }
+		});
+		form.discard();
+		await waitFor(() => expect(auto().checked).toBe(true));
+		expect(within(root('crawler.max_sockets')).queryByRole('textbox')).toBeNull();
+	});
+
+	it('clears the secret input after a save attempt', async () => {
+		show('secrets.token');
+		const r = root('secrets.token');
+		await fireEvent.click(within(r).getByRole('button', { name: 'Replace' }));
+		const input = r.querySelector('input')!;
+		expect(input.getAttribute('aria-label')).toBe('New value for token');
+		await fireEvent.input(input, { target: { value: 'hunter2' } });
+		server.next('PATCH /settings', {
+			status: 500,
+			body: { error: { code: 'internal', message: 'x' } }
+		});
+		await form.save();
+		await waitFor(() => expect(r.querySelector('input')!.value).toBe(''));
+	});
+
+	it('offers instant mode’s inline Changed · Undo', async () => {
+		const inst = createSettingsForm({ id: 'inst', fields: SPECS, mode: 'instant' });
+		await waitFor(() => expect(inst.status).toBe('ready'));
+		render(SettingField, { form: inst, key: 'crawler.paused' });
+		await fireEvent.click(screen.getAllByRole('switch', { name: 'paused' }).at(-1)!);
+		const undo = await screen.findByRole('button', { name: 'Undo' });
+		expect(undo.closest('span')!.textContent).toContain('Changed.');
+		await fireEvent.click(undo);
+		await waitFor(() => expect(server.requests('PATCH', '/settings')).toHaveLength(2));
+		inst.destroy();
 	});
 });
