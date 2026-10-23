@@ -23,22 +23,47 @@ A [checksum](glossary.md#checksum) is a short fingerprint of a file. If the file
 > [!WARNING]
 > Don't run an installer from a mirror, forum post or re-upload. Get it from the official release page instead.
 
-To check the file:
+Each release has one file called `SHA256SUMS` beside the installer and archives. Its lines look like `<hash>  <file name>`. Each file also has its own `<file name>.sha256`. Use releases only. Nightly builds are workflow artifacts with a `.sha256` file each and no signature.
 
-1. On the release page, download the installer and the signed checksum file listed with it **(planned)**. The exact file name is not decided yet.
+To check the download on Windows:
+
+1. On the release page, download the installer and `SHA256SUMS`. Put both in your **Downloads** folder.
 2. Open **PowerShell** from the Start menu.
-3. Paste this command. Replace `<path-to-installer>` with the full path of the file you downloaded:
+3. Paste this command. Replace `<file>` with the installer's file name:
 
     ```powershell
-    Get-FileHash -Algorithm SHA256 "<path-to-installer>"
+    (Get-FileHash "$HOME\Downloads\<file>" -Algorithm SHA256).Hash.ToLower()
     ```
 
-   **Result:** PowerShell prints a `Hash` value of 64 letters and digits, in capitals.
-4. Open the checksum file and find the line for your installer.
-5. Compare the two values character by character. Capitals and lowercase letters count as the same.
+   **Result:** PowerShell prints 64 letters and digits.
+4. Open `SHA256SUMS` in Notepad and find the line for your installer.
+5. Compare the two values character by character.
    **Result:** They are identical.
 
-The checksum file is signed so you can tell it came from the project. How to verify that signature is **(planned)** and will be added with the first Windows release.
+To check a download on Linux:
+
+1. Open a terminal in the folder that holds the file and `SHA256SUMS`.
+2. Run:
+
+    ```bash
+    sha256sum --check --ignore-missing SHA256SUMS
+    ```
+
+   **Result:** The line for your file ends in `OK`.
+
+The checksum file proves the file arrived intact. A signature proves it came from the project. `SHA256SUMS.minisig` is made with the project's release key and is attached once the release key is set up **(planned)**. The public key is `packaging/keys/lodestar-release.pub` in the repository (key ID `02910813433E81E0`). With [minisign](https://jedisct1.github.io/minisign/) installed, check it:
+
+1. Open a terminal in the folder that holds `SHA256SUMS`, `SHA256SUMS.minisig` and the key.
+2. Run:
+
+    ```bash
+    minisign -V -p lodestar-release.pub -m SHA256SUMS
+    ```
+
+   Add `-x <path>/SHA256SUMS.minisig` if the signature is in another folder.
+   **Result:** minisign prints `Signature and comment signature verified`.
+
+ Treat the signature check as **(planned)** until a release carries the `.minisig` file.
 
 ## 4.3 Run it or stop
 <!-- index: Run anyway; More info -->
