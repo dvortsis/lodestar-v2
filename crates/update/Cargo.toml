@@ -1,0 +1,29 @@
+[package]
+name = "lodestar-update"
+description = "Update trust core: minisign verification, signed manifests, key statements and trust state (no I/O)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[features]
+# Test-only signing with fixed seeds, for this crate's tests, the fuzz target
+# and later crates' dev-dependencies. Never enabled by a shipped build.
+testing = []
+
+[dependencies]
+base64 = "=0.22.1"
+blake2 = "=0.11.0"
+ring = "=0.17.14"
+semver = "=1.0.28"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "=0.11.0"
+
+[dev-dependencies]
+proptest = "=1.11.0"
+
+[lints]
+workspace = true
