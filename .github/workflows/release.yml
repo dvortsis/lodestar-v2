@@ -581,8 +581,10 @@ jobs:
             "::group::$($_.Name) (tail)"; Get-Content $_.FullName -Tail 120; "::endgroup::"
             "::group::$($_.Name) (service lines)"; Select-String -Path $_.FullName -Pattern 'ervice' | Select-Object -First 60 | ForEach-Object { $_.Line }; "::endgroup::"
           }
-          $sd = Join-Path $env:SystemRoot 'Temp\lodestar-secure-datadir.log'
-          if (Test-Path $sd) { "::group::secure-datadir.log"; Get-Content $sd; "::endgroup::" }
+          # The data-folder script keeps its log in a random SYSTEM/Administrators-only folder.
+          Get-ChildItem (Join-Path $env:SystemRoot 'Temp\lodestar-secure-*') -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            "::group::secure-datadir.log ($($_.Name))"; Get-Content (Join-Path $_.FullName 'secure-datadir.log') -ErrorAction SilentlyContinue; "::endgroup::"
+          }
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
