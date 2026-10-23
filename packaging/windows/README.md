@@ -19,12 +19,12 @@ Check the download against `SHA256SUMS` on the release page first
 - Installs `lodestar.exe` to `C:\Program Files\Lodestar`.
 - Keeps your data in `C:\ProgramData\Lodestar`. **Uninstalling keeps it** unless
   you ask otherwise (below).
-- Registers a Windows service named **Lodestar**, running as the unprivileged
-  `LocalService` account, set to start by hand. *Until the service entrypoint
+- Registers a Windows service named **Lodestar**, running as its own
+  unprivileged account, `NT SERVICE\Lodestar`, set to start by hand. *Until the service entrypoint
   ships (slice M6-win), starting it from Services will fail. To run Lodestar now,
   use the portable zip, or run `lodestar.exe serve` from a terminal.*
 - Locks `C:\ProgramData\Lodestar` so only SYSTEM, Administrators and the
-  service account can use it. Other users on the PC can't read your data.
+  Lodestar service account can use it. Other users on the PC can't read your data.
 - Opens two firewall ports for `lodestar.exe`, on **private networks only**:
   `8090/tcp` (the web page) and `6881/udp` (the DHT).
 - Adds a Start-menu shortcut that opens `http://localhost:8090/`.

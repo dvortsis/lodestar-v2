@@ -78,8 +78,9 @@
       <!-- The service. Started by hand (Start="demand") until the service
            entrypoint (slice M6-win) lands: `lodestar serve` is a console
            program and does not yet speak the service protocol, so Windows
-           would stop it as unresponsive. LocalService is an unprivileged
-           account. Its data folder is set in the service's own environment. -->
+           would stop it as unresponsive. It runs as its own virtual account,
+           NT SERVICE\Lodestar (no password; not LocalSystem, and not the shared
+           LocalService). The service picks its default data folder itself. -->
       <Component Id="ServiceComponent" Guid="2D5B2E5C-6B34-4F0F-9D54-3D1A3F8E9A02" Win64="yes">
         <RegistryValue Root="HKLM" Key="Software\Lodestar" Name="ServiceInstalled" Type="integer" Value="1" KeyPath="yes" />
         <ServiceInstall Id="LodestarService"
@@ -89,9 +90,17 @@
                         Type="ownProcess"
                         Start="demand"
                         ErrorControl="normal"
-                        Account="NT AUTHORITY\LocalService"
+                        Account="NT SERVICE\Lodestar"
                         Arguments="serve"
-                        Vital="no" />
+                        Vital="no">
+          <!-- Pre-shutdown: give the final commit up to 60 s before Windows
+               stops the service at shutdown (needs the entrypoint to accept
+               the pre-shutdown control; M6-win). -->
+          <util:ServiceConfig PreShutdownDelay="60000"
+                              FirstFailureActionType="none"
+                              SecondFailureActionType="none"
+                              ThirdFailureActionType="none" />
+        </ServiceInstall>
         <ServiceControl Id="LodestarServiceControl" Name="Lodestar" Stop="both" Remove="uninstall" Wait="yes" />
       </Component>
     </DirectoryRef>
@@ -131,12 +140,20 @@
     </DirectoryRef>
 
     <!-- ===== Custom actions ===== -->
-    <!-- Lock the data folder down: no inherited rights (ProgramData gives Users
-         read/write), full control for SYSTEM (S-1-5-18) and Administrators
-         (S-1-5-32-544), modify for the service account (LocalService, S-1-5-19,
-         until M6-win names the final account). -->
+    <!-- Lock the data folder down, matching windows/acl.rs in the service (M6-win):
+         no inherited rights (ProgramData gives Users read/write), full control for
+         SYSTEM (S-1-5-18), Administrators (S-1-5-32-544) and the service's own
+         virtual account NT SERVICE\Lodestar, which exists once the service is
+         registered. The folder is created empty; the service takes over the tree
+         itself on first start and refuses a non-empty folder it did not secure. -->
     <CustomAction Id="GrantDataAccess" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="check"
-                  ExeCommand="&quot;[System64Folder]icacls.exe&quot; &quot;[DATAFOLDER].&quot; /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F *S-1-5-19:(OI)(CI)M" />
+                  ExeCommand="&quot;[System64Folder]icacls.exe&quot; &quot;[DATAFOLDER].&quot; /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F &quot;NT SERVICE\Lodestar:(OI)(CI)F&quot;" />
+
+    <!-- Stop, rather than adopt, a data folder that already exists but is owned by
+         someone else (a user could have planted files in it). Immediate, so the
+         message shows in the install log: owner must be SYSTEM or Administrators. -->
+    <CustomAction Id="CheckDataFolderOwner" Directory="TARGETDIR" Execute="immediate" Return="check"
+                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;if (Test-Path -LiteralPath '[DATAFOLDER].') { $sid = New-Object System.Security.Principal.SecurityIdentifier 'S-1-5-18'; $o = (New-Object System.Security.Principal.NTAccount (Get-Acl -LiteralPath '[DATAFOLDER].').Owner).Translate($sid.GetType()).Value; if ($o -notin 'S-1-5-18','S-1-5-32-544') { Write-Host ('LODESTAR INSTALL STOPPED: [DATAFOLDER] already exists and is owned by ' + $o + ', not SYSTEM or Administrators. Check it, move it away, then install again.'); exit 1 } }&quot;" />
 
     <!-- Opt-in only: runs when the box is ticked. Failure (Defender off or managed by
          another product) does not stop the install. -->
@@ -149,14 +166,10 @@
     <CustomAction Id="RemoveDataFolder" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="ignore"
                   ExeCommand="&quot;[System64Folder]cmd.exe&quot; /c rmdir /s /q &quot;[DATAFOLDER].&quot;" />
 
-    <!-- The service reads these on start: where its data lives. -->
-    <CustomAction Id="SetServiceEnvironment" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="ignore"
-                  ExeCommand="&quot;[System64Folder]reg.exe&quot; add HKLM\SYSTEM\CurrentControlSet\Services\Lodestar /v Environment /t REG_MULTI_SZ /d &quot;LODESTAR_DATA_DIR=[DATAFOLDER].&quot; /f" />
-
     <InstallExecuteSequence>
-      <Custom Action="GrantDataAccess" After="InstallFiles">NOT Installed</Custom>
-      <Custom Action="SetServiceEnvironment" After="InstallServices">NOT Installed</Custom>
-      <Custom Action="AddDefenderExclusion" After="InstallFiles">NOT Installed AND DEFENDER_EXCLUSION="1"</Custom>
+      <Custom Action="CheckDataFolderOwner" After="CostFinalize">NOT Installed</Custom>
+      <Custom Action="GrantDataAccess" After="InstallServices">NOT Installed</Custom>
+            <Custom Action="AddDefenderExclusion" After="InstallFiles">NOT Installed AND DEFENDER_EXCLUSION="1"</Custom>
       <Custom Action="RemoveDefenderExclusion" Before="RemoveFiles">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
       <Custom Action="RemoveDataFolder" Before="RemoveFiles">REMOVE="ALL" AND REMOVE_DATA="1" AND NOT UPGRADINGPRODUCTCODE</Custom>
     </InstallExecuteSequence>
