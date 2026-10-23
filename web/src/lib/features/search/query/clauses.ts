@@ -108,7 +108,9 @@ const mono = (text: string): Part => ({ mono: text });
 /** Values joined as a short list ("Movie, TV"), in the current locale. */
 function list(items: Part[][], type: 'unit' | 'disjunction' | 'conjunction' = 'unit'): Part[] {
 	if (items.length === 1) return items[0] ?? [];
-	const fmt = new Intl.ListFormat(currentLocale(), { type, style: 'short' });
+	// "Movie, TV" for values; "a and b" / "a or b" for clauses (short would print "&").
+	const style = type === 'unit' ? 'short' : 'long';
+	const fmt = new Intl.ListFormat(currentLocale(), { type, style });
 	const out: Part[] = [];
 	let next = 0;
 	// Elements come back in order; literals are the locale's separators ("," "or").

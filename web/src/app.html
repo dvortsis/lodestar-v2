@@ -113,7 +113,32 @@
 					</nav>
 				</div>
 			</header>
-			<main id="boot-main" class="flex flex-1 flex-col"><h1 id="boot-h1" hidden>Search</h1></main>
+			<main id="boot-main" class="flex flex-1 flex-col">
+				<!-- /search only (the script below unhides it): the page heading and the query bar, box for
+				     box as routes/search and features/search/query/QueryBar.svelte draw them, so the
+				     bar is the first paint, not a late LCP. Inert: the app's own bar takes typing. -->
+				<div id="boot-h1" class="flex flex-col gap-2 pb-4" hidden>
+					<h1 class="mt-4 px-4 text-display font-semibold">Search</h1>
+					<div class="flex flex-col gap-1 px-4 py-2" aria-hidden="true">
+						<div class="flex items-center gap-2">
+							<div class="relative min-w-0 flex-1">
+								<div
+									data-testid="query-editor"
+									class="block w-full rounded-field border border-field-border bg-base-100 px-4 text-body-lg"
+									style="height: var(--query-bar-height)"
+								></div>
+								<span
+									class="pointer-events-none absolute inset-0 truncate px-4 text-body-lg text-muted-text"
+									style="padding-block: calc(var(--spacing) * 3)"
+									>Search by name, or add a filter such as res:1080p</span
+								>
+							</div>
+							<span class="btn btn-ghost">Syntax</span>
+						</div>
+						<p class="text-small">&nbsp;</p>
+					</div>
+				</div>
+			</main>
 		</div>
 		<!-- prettier-ignore -->
 		<script>(function(){var b=document.getElementById('boot');if(!b)return;var p=location.pathname,L=/*boot-locales*/{"en":1}/*end*/,g=navigator.languages||[navigator.language],r='en',j,t,k;for(j=0;j<g.length;j++){t=String(g[j]||'').toLowerCase();k=t.split('-')[0];if(L[t]){r=t;break}if(L[k]){r=k;break}}if(/^\/(login|setup|welcome)(\/|$)/.test(p)||r!='en'){b.remove();return}var a=b.querySelectorAll('[data-boot-nav]'),i,h,d=new URLSearchParams(location.search).get('density');if(d)b.querySelector('[data-boot-brand]').setAttribute('href','/search?density='+encodeURIComponent(d));for(i=0;i<a.length;i++){h='/'+a[i].getAttribute('href').split('/')[1];if(d)a[i].setAttribute('href',h+'?density='+encodeURIComponent(d));if(p==h||p.indexOf(h+'/')==0){a[i].setAttribute('aria-current','page');a[i].className+=' font-semibold';a[i].insertAdjacentHTML('beforeend','<span class="absolute inset-x-3 -bottom-1 h-0.5 rounded-selector bg-primary" aria-hidden="true"></span>')}}if(p=='/search'||p=='/search/')document.getElementById('boot-h1').hidden=false})()</script>

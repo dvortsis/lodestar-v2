@@ -121,8 +121,9 @@ export function attach(el: HTMLElement, opts: EditorOptions): Editor {
 
 	/** Keeps the caret in view in a long, horizontally scrolling query. */
 	function reveal(sel: Selection) {
-		if (!sel.rangeCount) return;
-		const r = sel.getRangeAt(0).getBoundingClientRect();
+		const range = sel.rangeCount ? sel.getRangeAt(0) : null;
+		if (!range?.getBoundingClientRect) return; // no layout (jsdom)
+		const r = range.getBoundingClientRect();
 		const box = el.getBoundingClientRect();
 		if (!r.width && !r.height && !r.left) return; // nothing laid out (tests, hidden)
 		if (r.right > box.right - CARET_MARGIN) el.scrollLeft += r.right - box.right + CARET_MARGIN;
