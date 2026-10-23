@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { spec } from './testing';
+import { spec } from './testing/values';
 import { isHost, isHttpUrl, isIPv6, isSocketAddr, validate } from './validate';
 import { RESET } from './values';
 

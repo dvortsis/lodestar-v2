@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { spec, sv, values } from './testing';
+import { spec, sv, values } from './testing/values';
 import {
 	applySaved,
 	buildBatch,

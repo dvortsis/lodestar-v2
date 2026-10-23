@@ -1,7 +1,7 @@
 // Tests only: an in-memory `/settings` API behind a stubbed `fetch`, close enough to B2b's to
 // drive the form store (revisions, `if_revision`, env locks, `null` resets, the batch).
 import { vi } from 'vitest';
-import type { SectionValues, SettingValue } from './types';
+import type { SectionValues, SettingValue } from '../types';
 
 type Reply = { status: number; body: unknown; headers?: Record<string, string> };
 type Call = { method: string; path: string; body: unknown };
