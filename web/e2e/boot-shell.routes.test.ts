@@ -249,3 +249,14 @@ test('the fallback font is never smaller than Atkinson, so the font swap cannot 
 	// LCP candidate (CI measured 2.67 s against a 1.5 s first paint).
 	expect(worst).toBeGreaterThan(1);
 });
+
+test('the static links keep the density, so a click before the app loads does not lose it', async ({
+	page
+}) => {
+	await blockApp(page);
+	await page.goto('/search?density=compact');
+	await expect(page.locator('#boot a[data-boot-nav]').first()).toHaveAttribute(
+		'href',
+		/\?density=compact$/
+	);
+});
