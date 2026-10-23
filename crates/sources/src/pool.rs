@@ -79,6 +79,8 @@ pub struct PoolConfig {
     /// Recently fetched keys remembered, so a rediscovery racing the writer
     /// isn't fetched twice.
     pub recent: usize,
+    /// Start paused (the crawler's pause): see [`PoolHandle::set_paused`].
+    pub paused: bool,
 }
 
 impl Default for PoolConfig {
@@ -93,6 +95,7 @@ impl Default for PoolConfig {
             retry_backoff: Duration::from_secs(120),
             max_attempts: 4,
             recent: 50_000,
+            paused: false,
         }
     }
 }
@@ -157,6 +160,7 @@ enum Cmd {
     Interest(InfoHash, oneshot::Sender<bool>),
     Snapshot(oneshot::Sender<Vec<QueuedKey>>),
     Queued(oneshot::Sender<Vec<(SourceId, usize)>>),
+    SetPaused(bool),
 }
 
 /// Talks to a running pool.
@@ -187,6 +191,14 @@ impl PoolHandle {
         let (tx, rx) = oneshot::channel();
         let _ = self.cmds.send(Cmd::Snapshot(tx)).await;
         rx.await.unwrap_or_default()
+    }
+
+    /// Pauses or resumes the pool (the crawler's pause). Paused, it starts
+    /// no fetches and asks for no peers: keys keep queueing, and a key due
+    /// a lookup waits for one without using up an attempt. Fetches and
+    /// lookups already out finish or time out as usual.
+    pub async fn set_paused(&self, paused: bool) {
+        let _ = self.cmds.send(Cmd::SetPaused(paused)).await;
     }
 
     /// Keys ready to fetch, per source.
@@ -412,6 +424,7 @@ impl Pool {
             Cmd::Snapshot(reply) => {
                 let _ = reply.send(self.snapshot());
             }
+            Cmd::SetPaused(paused) => self.cfg.paused = paused,
             Cmd::Queued(reply) => {
                 let mut q: Vec<(SourceId, usize)> = self
                     .sources
@@ -592,7 +605,7 @@ impl Pool {
             return;
         }
         e.generation = e.generation.wrapping_add(1);
-        if self.lookups >= self.cfg.max_lookups {
+        if self.cfg.paused || self.lookups >= self.cfg.max_lookups {
             e.state = State::LookupQueued;
             if e.interest {
                 self.lookup_backlog.push_front(key);
@@ -667,6 +680,9 @@ impl Pool {
 
     /// Starts fetches while sockets are free.
     fn dispatch(&mut self) {
+        if self.cfg.paused {
+            return;
+        }
         self.drain_lookup_backlog();
         let mut deferred = Vec::new();
         while self.tasks.len() < self.cfg.max_sockets {

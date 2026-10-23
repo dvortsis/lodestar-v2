@@ -86,6 +86,7 @@ fn fixture() -> Fixture {
             reader: Arc::new(Mutex::new(reader)),
             filters: None,
             settings: None,
+            ops: None,
             adult: Default::default(),
         }),
     );
@@ -490,6 +491,7 @@ async fn protected_routes_fail_closed_outside_the_router() {
         reader: Arc::new(Mutex::new(reader)),
         filters: None,
         settings: None,
+        ops: None,
         adult: Default::default(),
     });
     let (status, _, body) = call(&stray, get("/x", Some(&cookie))).await;
