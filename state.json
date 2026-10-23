@@ -1003,7 +1003,7 @@
   "C-adult-other": {
    "status": "review",
    "model": "opus",
-   "notes": "from #94 review: detect returns None for Other/Ebook at full score (content safety false negative) | 01:22 PR #105 ad0d24a ready; reviewer started (content safety). filter budget red = runner speed (\u00a72.18 candidate). \u00a72.19 refinement: Other->Scene, Ebook->Comics at threshold; flag to owner.",
+   "notes": "from #94 review: detect returns None for Other/Ebook at full score (content safety false negative) | 01:22 PR #105 ad0d24a ready; reviewer started (content safety). filter budget red = runner speed (\u00a72.18 candidate). \u00a72.19 refinement: Other->Scene, Ebook->Comics at threshold; flag to owner. | 01:40 review FIX: unrequested folder scan loosens Adult (counter-words in folders) + xxx-per-segment false positives -> remove, regression fixtures. Ebook threshold 60 kept (flag owner \u00a72.19 with edge cases).",
    "session": "session_01KNC8PugVKjddvhH6vT8qXN",
    "pr": 105
   },
@@ -1243,7 +1243,8 @@
   "font_fout": "W9 moved Atkinson font preload after first frame (FOUT swap); recheck CLS/LCP when Search screens land",
   "B-update_signing": "Owner-delegated 2026-10-23 (\u00a72.21): separate stable/nightly signing keys; installs trust nightly key only on Nightly channel; RELEASE_SIGNING_KEY (tags, release env w/ owner reviewer) + NIGHTLY_SIGNING_KEY (nightly env); public keys in packaging/keys/; channel-scoped trust in verifier (\u00a712.2). P-release adds environments to jobs. | Code signing deferred (owner 2026-10-23): Authenticode checked only on artifacts that carry a signature; SHA-256 pins + signed manifest are the trust.",
   "windows_acl": "auth.json (crates/api/src/auth.rs:424) and services.rs:326 0600 modes are cfg(unix) only: Windows needs an ACL on data files (M6-win locks the default folder; custom data dirs on Windows still inherit). Next auth/security slice.",
-  "b4b_swap_test_waits": "crates/search/src/live.rs the_swap_reports_its_adult_torrents (#104) uses two fixed 30 s waits (pattern X-flakes removed elsewhere); convert to condition waits in the next slice touching live.rs."
+  "b4b_swap_test_waits": "crates/search/src/live.rs the_swap_reports_its_adult_torrents (#104) uses two fixed 30 s waits (pattern X-flakes removed elsewhere); convert to condition waits in the next slice touching live.rs.",
+  "adult_hash_names": "Adult detection for opaque/hash torrent names (folder signals): corpus-backed slice; positive-only folder signals; numbered/year prefixes before xxx (#105 review)."
  },
  "blocked_on_owner": [],
  "launches_today": 8,
@@ -1261,7 +1262,8 @@
   "22:07 next sweep trig_01DUR7GNqzGb2kyFrBFJMsQh at 22:32"
  ],
  "owner_flags": [
-  "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf."
+  "2026-10-23 00:33 \u00a72.19 flag: filter budget #97 holds 50us in fastest-runner units (Xeon 6973P-C/EPYC 9V45); same code reads ~52us raw at 10% on common EPYC 7763 runner. Owner may veto/choose a different reference. | RESOLVED 00:40: owner 'best user experience' -> staged move to EPYC 7763 ref via F-perf.",
+  "\u00a72.19 (C-adult-other #105): Other->Scene, Ebook->Comics at threshold 60, consistent with TV/Comic/Movie. Known edges: light novel with \"hentai\" in title, \"Porn Studies\" journal become Adult."
  ],
  "decisions_log": [
   "2026-10-23 00:40 owner: 'Go with whatever makes for the best user experience' re filter budget reference -> staged: #97 fastest-runner ref now; F-perf moves ref to EPYC 7763 (typical) when engine meets it.",
