@@ -23,8 +23,10 @@ Check the download against `SHA256SUMS` on the release page first
   `LocalService` account, set to start by hand. *Until the service entrypoint
   ships (slice M6-win), starting it from Services will fail. To run Lodestar now,
   use the portable zip, or run `lodestar.exe serve` from a terminal.*
-- Opens two firewall ports: `8090/tcp` (the web page) on **private networks
-  only**, and `6881/udp` (the DHT).
+- Locks `C:\ProgramData\Lodestar` so only SYSTEM, Administrators and the
+  service account can use it. Other users on the PC can't read your data.
+- Opens two firewall ports for `lodestar.exe`, on **private networks only**:
+  `8090/tcp` (the web page) and `6881/udp` (the DHT).
 - Adds a Start-menu shortcut that opens `http://localhost:8090/`.
 - Offers one optional box on the Options page: **exclude the data folder from
   Windows Defender scans**. It is **off** by default.
