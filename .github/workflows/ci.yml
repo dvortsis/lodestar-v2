@@ -99,6 +99,12 @@ jobs:
       # `cargo run -p lodestar --bin openapi` and commit the result.
       - run: cargo run -p lodestar --bin openapi
       - run: git diff --exit-code web/src/lib/api/openapi.json
+      # Shipped Rust licences (owner's decision §2.12): web/licenses/rust.json must be what
+      # `python3 .github/scripts/licenses.py` generates, and every crate must pass allow.json.
+      - name: licences (rust.json drift and allowlist)
+        run: |
+          python3 .github/scripts/test_licenses.py
+          python3 .github/scripts/licenses.py --check
 
   test:
     name: test (${{ matrix.os }})
