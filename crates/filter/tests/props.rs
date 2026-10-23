@@ -277,14 +277,12 @@ fn calibrate(name: &str, files: &[FileInfo], common: &[u64]) -> usize {
 }
 
 /// [`calibrate`]'s fastest pass per torrent on the reference runner, in
-/// nanoseconds: the fastest hosted runners seen, a Xeon 6973P-C (7.2 µs,
-/// job 120136592071) and an EPYC 9V45 (7.3 µs, job 120123205000). On
-/// those the gate reads what it did before calibration.
-///
-/// This is a stopgap (owner, 2026-10-22: "whatever makes for the best user
-/// experience"): the budget should hold on typical hardware, so F-perf
-/// moves the reference to the EPYC 7763, the most common hosted runner,
-/// once the engine meets 50 µs there.
+/// nanoseconds: an AMD EPYC 7763, the most common hosted runner (10.7 µs,
+/// the lowest of jobs 120136591749, 120136592052, 120136592177 and
+/// 120136592216). The budget holds on hardware like users run, not only
+/// on the fastest runners (owner, 2026-10-23: "Go with whatever makes for
+/// the best user experience"); a runner as fast as the Xeon 6973P-C
+/// (7.2 µs) reads its times about 1.5× higher.
 ///
 /// To derive it for a runner type, run the budget test on a runner of
 /// that type (the log's CPU line names it) and take the `calibration:`
@@ -293,7 +291,7 @@ fn calibrate(name: &str, files: &[FileInfo], common: &[u64]) -> usize {
 /// toolchain isn't pinned, and the calibration is all std: SipHash, the
 /// hash set, `sort_unstable`), or a change to [`calibrate`], [`torrents`]
 /// or [`COMMON`]. The test prints `rustc --version` to tell.
-const CALIB_REF_NS: f64 = 7_200.0;
+const CALIB_REF_NS: f64 = 10_700.0;
 
 /// §20.8 and the owner's budget (§1.6.6): under 50 µs per torrent at
 /// 10,000 rules. Ignored in debug test runs; CI runs it in release (the
@@ -323,7 +321,8 @@ const CALIB_REF_NS: f64 = 7_200.0;
 fn budget() {
     const BUDGET_US: f64 = 50.0;
     // Outside this, the measurement is wrong rather than the runner slow:
-    // the slowest runner seen took 1.5× the reference's time.
+    // the runners seen took 0.67× (Xeon 6973P-C) to 1.1× (an Intel build
+    // VM) the reference's time.
     const SPEED: std::ops::RangeInclusive<f64> = 0.4..=2.0;
     // The fastest calibration passes before and after must agree this
     // closely, or the runner's speed changed under the test.
