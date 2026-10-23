@@ -768,13 +768,14 @@
    "merge": "24b6108"
   },
   "F-near": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01Gn7rDcpkcoFRJjXXADJHQQ",
    "pr": 85,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "R1 FIX 19:30: hostile-name NEAR DoS (places*tokens^2); safety claim wrong (CSX-5 overrides/exceptions/allow/unless match more). Owner Q on re-preview of stored CSX-5 entries. 19:58 DoS fix e6f6e72; R2 review in flight. 20:25 R2 MERGE; asked main merge + threshold test; runner verifies then merges. 20:36 4c6de89 (main + threshold test ba5cdcb) verified by runner -> APPROVED, merge on green. Pre-release: CSX-5 re-preview question stays with owner (follow-up only if owner wants it). | 22:35 filter budget red on F-near (touches filter): core 11.8, 1% 41.0, 10% 51.3, 25% 64.0 = slow runner class (#48: 11.9/42.1/52.8/64.0); ratios match main -> no regression. Re-ran once (run 39859583901). | 23:03 runner merged main d3f39e2 (\u00a716); filter budget red twice (slow runner, ratios ok); waits on #97 normalized gate."
+   "notes": "R1 FIX 19:30: hostile-name NEAR DoS (places*tokens^2); safety claim wrong (CSX-5 overrides/exceptions/allow/unless match more). Owner Q on re-preview of stored CSX-5 entries. 19:58 DoS fix e6f6e72; R2 review in flight. 20:25 R2 MERGE; asked main merge + threshold test; runner verifies then merges. 20:36 4c6de89 (main + threshold test ba5cdcb) verified by runner -> APPROVED, merge on green. Pre-release: CSX-5 re-preview question stays with owner (follow-up only if owner wants it). | 22:35 filter budget red on F-near (touches filter): core 11.8, 1% 41.0, 10% 51.3, 25% 64.0 = slow runner class (#48: 11.9/42.1/52.8/64.0); ratios match main -> no regression. Re-ran once (run 39859583901). | 23:03 runner merged main d3f39e2 (\u00a716); filter budget red twice (slow runner, ratios ok); waits on #97 normalized gate. | 01:45 MERGED f37cac5. Filter budget green on 8a283c4; no pub API change; main since base touched only store/Cargo.lock.",
+   "merge": "f37cac5"
   },
   "D-puid": {
    "status": "merged",
@@ -1272,7 +1273,8 @@
   "2026-10-23 01:07 owner (verified): approved runner process change (#106) and deferred code-signing cert ('not selling this commercially'). Told P-release, M6-win, DOC-install."
  ],
  "runner_notes": {
-  "106": "01:20 review FIX; runner pushed fe21767 (hook matcher, ci-ok vs 2.18, takeover, steward runner_session, renumber 2.22/2.23, CLAUDE.md). After #107: merge main, replace No-branch-protection bullet with pointer to 2.22, arch.md:1477 unsigned, B-update spec note (Authenticode only when present, 2.23), state carry B-update_signing repoint; re-review delta; echo marker; merge.",
-  "106-broadcast": "After #106 merges: message every in-flight session (running/in-review slices + M4 #48, \"Modern DHT crawler architecture\", settings session): \"#106 is merged. Run `git fetch origin main && git merge origin/main` on your branch now and push. This brings in the merge-guard hook and .claude/skills/steward/SKILL.md. Read the steward skill and follow it from now on. Only the runner merges: don't merge, enable auto-merge or push to main. When your PR is ready, message the runner session (session_01EYhgh4JX3AmHzKXPjYCoUg).\" Next heartbeat: verify each branch contains #106 merge commit; chase; tell owner if filter session merges anything after."
+  "106": "01:44 main merged (00943df): renumbered 2.22/2.23, #107 bullet points to 2.22, arch 1477/2776 Authenticode-if-present, B-update spec 2.23, relevance in ci-ok. Delta reviewer running. Marker created. Then broadcast (runner_notes 106-broadcast).",
+  "106-broadcast": "After #106 merges: message every in-flight session (running/in-review slices + M4 #48, \"Modern DHT crawler architecture\", settings session): \"#106 is merged. Run `git fetch origin main && git merge origin/main` on your branch now and push. This brings in the merge-guard hook and .claude/skills/steward/SKILL.md. Read the steward skill and follow it from now on. Only the runner merges: don't merge, enable auto-merge or push to main. When your PR is ready, message the runner session (session_01EYhgh4JX3AmHzKXPjYCoUg).\" Next heartbeat: verify each branch contains #106 merge commit; chase; tell owner if filter session merges anything after.",
+  "107": "01:41 MERGED 16b6a83."
  }
 }
