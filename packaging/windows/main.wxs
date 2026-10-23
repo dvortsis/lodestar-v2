@@ -185,10 +185,13 @@
 
     <!-- SYSTEM runs scripts from, and the service runs the program from, the install folder, and a
          folder outside Program Files can be writable by other users. Only the default is allowed. -->
+    <CustomAction Id="SetDefaultInstallDir" Property="DEFAULTINSTALLDIR" Value="[ProgramFiles64Folder]Lodestar\" />
     <CustomAction Id="WrongInstallFolder" Error="Lodestar installs to C:\Program Files\Lodestar only. Choose the default folder." />
 
     <InstallExecuteSequence>
-      <Custom Action="WrongInstallFolder" After="CostFinalize">NOT Installed AND NOT (INSTALLFOLDER = "[ProgramFiles64Folder]Lodestar\")</Custom>
+      <Custom Action="SetDefaultInstallDir" After="CostFinalize" />
+      <!-- A condition does not expand [Property] inside a quoted string, hence the property above. -->
+      <Custom Action="WrongInstallFolder" After="SetDefaultInstallDir">NOT Installed AND NOT (INSTALLFOLDER = DEFAULTINSTALLDIR)</Custom>
       <Custom Action="ServicePrivileges" After="InstallServices">NOT Installed</Custom>
       <!-- Also on Repair, which is how an administrator fixes a refused data folder. -->
       <Custom Action="SecureDataFolder" After="ServicePrivileges">NOT (REMOVE="ALL")</Custom>

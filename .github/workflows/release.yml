@@ -611,7 +611,7 @@ jobs:
         run: |
           Get-ChildItem $env:RUNNER_TEMP -Filter 'msi-*.log' | ForEach-Object {
             "::group::$($_.Name) (tail)"; Get-Content $_.FullName -Tail 120; "::endgroup::"
-            "::group::$($_.Name) (service lines)"; Select-String -Path $_.FullName -Pattern 'ervice' | Select-Object -First 60 | ForEach-Object { $_.Line }; "::endgroup::"
+            "::group::$($_.Name) (service lines)"; Select-String -Path $_.FullName -Pattern 'ervice|Return value 3|installs to|Error [0-9]{4}|CustomAction' | Select-Object -First 80 | ForEach-Object { $_.Line }; "::endgroup::"
           }
           # The data-folder script keeps its log in a random SYSTEM/Administrators-only folder.
           Get-ChildItem (Join-Path $env:SystemRoot 'Temp\lodestar-secure-*') -Directory -ErrorAction SilentlyContinue | ForEach-Object {
