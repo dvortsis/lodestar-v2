@@ -16,8 +16,8 @@
 //! - `hot_contended`: (b) the same with 1, 4 and 8 threads, on adjacent
 //!   events and on one event, with `Event`'s padded, striped counter and
 //!   with the unpadded layout it replaced. Gate: padded, 8 threads on
-//!   adjacent events, at most twice (a) per event, (a) as this harness
-//!   measures it with one thread.
+//!   adjacent events, at most twice the same 8 threads on events of their
+//!   own allocated apart (the off event's cost with nothing shared).
 //! - `hot_on`: (c) an event that's on, carrying a `Torrent`, a `Peer` and
 //!   a `Label` as the DHT and fetch events will, through a `Runtime` under
 //!   Private: the console (to a sink), the file in a temp folder, the ring
@@ -236,32 +236,54 @@ fn hot_off() {
 fn hot_contended() {
     const N: u64 = 20_000_000;
     println!("hot_contended: (a) {:.2} ns through log_event!", off_ns());
-    // (b) is held against (a) as this harness measures it (one thread,
-    // the same loop and indexing), so the ratio is the contention alone.
-    let (mut a, mut eight_adjacent) = (f64::NAN, f64::NAN);
+    // (b) is held against the same number of threads each hitting an
+    // event of its own, allocated apart from every other: the cost of an
+    // off event when nothing is shared. Against one thread, the ratio
+    // would also count hyperthreads sharing a core and a runner with
+    // fewer cores than threads, which no layout can change.
+    let isolated: Vec<Box<Event>> = (0..8)
+        .map(|_| {
+            Box::new(Event::declare(
+                "bench.isolated",
+                lodestar_log::Component::Dht,
+                lodestar_log::Level::Debug,
+                "isolated",
+                false,
+                false,
+                None,
+                &[],
+            ))
+        })
+        .collect();
+    let (mut alone, mut eight_adjacent) = (f64::NAN, f64::NAN);
     for threads in [1usize, 4, 8] {
+        let own = best(3, || contended(threads, N, |i| hit_off(&isolated[i % 8])));
         let padded_adjacent = best(3, || contended(threads, N, |i| hit_off(&ADJACENT[i % 8])));
         let padded_one = best(3, || contended(threads, N, |_| hit_off(&ADJACENT[0])));
         let unpadded_adjacent = best(3, || contended(threads, N, |i| UNPADDED[i % 8].hit()));
         let unpadded_one = best(3, || contended(threads, N, |_| UNPADDED[0].hit()));
         println!(
-            "hot_contended: {threads} thread(s), ns per event: padded adjacent {padded_adjacent:.2}, \
+            "hot_contended: {threads} thread(s), ns per event: own event {own:.2}, padded adjacent {padded_adjacent:.2}, \
              padded one {padded_one:.2}, unpadded adjacent {unpadded_adjacent:.2}, unpadded one {unpadded_one:.2}"
         );
-        match threads {
-            1 => a = padded_adjacent,
-            8 => eight_adjacent = padded_adjacent,
-            _ => {}
+        if threads == 8 {
+            (alone, eight_adjacent) = (own, padded_adjacent);
         }
     }
-    let ratio = eight_adjacent / a;
+    let ratio = eight_adjacent / alone;
     println!(
-        "hot_contended: (b) padded, 8 threads, adjacent: {ratio:.2}x (a) (gate {CONTENDED_GATE}x)"
+        "hot_contended: (b) padded, 8 threads, adjacent: {ratio:.2}x an event of each thread's own (gate {CONTENDED_GATE}x)"
     );
     if gating() {
         assert!(
             ratio <= CONTENDED_GATE,
-            "(b) {eight_adjacent:.2} ns is {ratio:.2}x (a) {a:.2} ns"
+            "(b) {eight_adjacent:.2} ns is {ratio:.2}x {alone:.2} ns, each thread on its own event"
+        );
+        // The runner's wording too: at most twice (a)'s 5 ns gate.
+        assert!(
+            eight_adjacent <= CONTENDED_GATE * OFF_GATE_NS,
+            "(b) {eight_adjacent:.2} ns > {} ns",
+            CONTENDED_GATE * OFF_GATE_NS
         );
     }
 }
