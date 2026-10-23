@@ -1,0 +1,66 @@
+subject: Lodestar daily digest: Oct 22, 2026
+generated_at: 1792677900
+
+=== text (645 bytes) ===
+Lodestar daily digest: Oct 22, 2026
+
+Period: Oct 21, 2026, 15:00 – Oct 22, 2026, 15:00 UTC; generated Oct 22, 2026, 14:05 UTC
+
+Key numbers (changes vs previous 24 hours)
+- Searchable torrents: 84,210
+- New searchable: 0; change 0
+- Yield: — (No completed cohorts yet)
+- Time to searchable: — (No completed cohorts yet)
+- Health: Running
+
+Funnel (1 cohort, 0 final)
+- Harvested: ≈ 9
+- Peer found: 3 (33.3% of harvested)
+- Metadata fetched: 2 (66.7% of peer found)
+- Stored: 2 (100.0% of metadata fetched)
+- Searchable: 0 (0.0% of stored)
+No losses.
+
+Needs attention
+Nothing needs attention.
+
+Open Insights: /insights?range=24h&compare=1
+
+=== html (1419 bytes) ===
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lodestar daily digest: Oct 22, 2026</title>
+</head>
+<body>
+<h1>Lodestar daily digest: Oct 22, 2026</h1>
+<p>Period: Oct 21, 2026, 15:00 – Oct 22, 2026, 15:00 UTC; generated Oct 22, 2026, 14:05 UTC</p>
+<h2>Key numbers</h2>
+<table>
+<thead>
+<tr><th scope="col">Metric</th><th scope="col">Value</th><th scope="col">Change vs previous 24 hours</th></tr>
+</thead>
+<tbody>
+<tr><th scope="row">Searchable torrents</th><td style="text-align:right">84,210</td><td></td></tr>
+<tr><th scope="row">New searchable</th><td style="text-align:right">0</td><td>0</td></tr>
+<tr><th scope="row">Yield</th><td style="text-align:right">— (No completed cohorts yet)</td><td></td></tr>
+<tr><th scope="row">Time to searchable</th><td style="text-align:right">— (No completed cohorts yet)</td><td></td></tr>
+<tr><th scope="row">Health</th><td style="text-align:right">Running</td><td></td></tr>
+</tbody>
+</table>
+<h2>Funnel</h2>
+<p>1 cohort, 0 final</p>
+<ul>
+<li>Harvested: ≈ 9</li>
+<li>Peer found: 3 (33.3% of harvested)</li>
+<li>Metadata fetched: 2 (66.7% of peer found)</li>
+<li>Stored: 2 (100.0% of metadata fetched)</li>
+<li>Searchable: 0 (0.0% of stored)</li>
+</ul>
+<p>No losses.</p>
+<h2>Needs attention</h2>
+<p>Nothing needs attention.</p>
+<p>Open Insights: <a href="/insights?range=24h&amp;compare=1">/insights?range=24h&amp;compare=1</a></p>
+</body>
+</html>

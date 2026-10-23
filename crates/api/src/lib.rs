@@ -26,6 +26,7 @@ pub mod alerts;
 pub mod auth;
 mod collections;
 mod compare;
+mod digest;
 mod discover;
 pub mod dto;
 pub mod error;
@@ -101,6 +102,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(compare::routes())
         .merge(discover::routes())
         .merge(insights::routes())
+        .merge(digest::routes())
         .merge(events::routes())
         .merge(keys::routes())
         .merge(user_items::routes())
