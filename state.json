@@ -1585,7 +1585,7 @@
     "last_heartbeat": "2026-10-23T16:38:56Z",
     "heartbeat_summary": "W9 is the bottleneck (most web slices wait on it); B-log1b ready but held until B-log2 finishes (shared logging/**, pipeline/** with M4)",
     "m4_managed": "2026-10-23T15:06:25Z owner: 'Automatically manage M4 and review/accept plans automatically'. Runner reviews M4 plans; if ExitPlanMode blocks and can't be answered remotely, interrupt M4 and hand the approved plan to a replacement auto-mode Opus session on claude/relaxed-knuth-vexgae.",
-    "launch_freeze": "2026-10-23T17:22:16Z owner: <30% Max plan usage left; don't spin up more sessions. No new slice sessions until the owner lifts it. Reviews: delta checks by resuming existing reviewers or by the runner directly; no new review agents for small deltas.",
+    "launch_freeze": "LIFTED 2026-10-23T19:04:49Z by owner (confirmed in runner session): resume, a few at a time (~3 new launches at once): B-log1b, X-sleeps, then M4 follow-ups",
     "heartbeat_cadence": "2026-10-23T19:00:53Z every 3 h (38 */3) so runner-state commits stay under the watchdog's 4 h 'gone' threshold (owner allowed 3-4 h)",
     "review_policy": "2026-10-23T17:27:56Z owner: tighter review rule. New PRs: one fresh reviewer (combined fresh+security where security is required). Small deltas/fix rounds: resume the existing reviewer or runner checks the diff directly; no new reviewer agents.",
     "owner_decision_insights_budget": "2026-10-23T17:34:45Z owner: Insights budget = first view <=45 KB (uPlot and below-fold lazy); runner total cap 65 KB. Needs a docs/decisions entry (S-insights-1 records it).",
