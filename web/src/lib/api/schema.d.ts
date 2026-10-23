@@ -125,6 +125,69 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/crawler": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The crawler: running or paused (and since when), its intensity, the
+         *     DHT node and the fetch pool.
+         */
+        get: operations["getCrawler"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Sets the crawler's intensity at once: the same setting as
+         *     `crawler.intensity` in `/settings/crawler`, refused the same way when
+         *     an environment variable sets it.
+         */
+        patch: operations["patchCrawler"];
+        trace?: never;
+    };
+    "/crawler/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pauses harvesting and metadata fetching. The DHT node keeps answering
+         *     other nodes, fetches in flight finish, and indexing goes on. The
+         *     pause survives a restart. Pausing a paused crawler changes nothing.
+         */
+        post: operations["pauseCrawler"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/crawler/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resumes harvesting and fetching where they stopped. */
+        post: operations["resumeCrawler"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/discover": {
         parameters: {
             query?: never;
@@ -435,6 +498,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/network/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The network check: our address as other DHT nodes see it, and
+         *     whether unsolicited inbound queries reach the DHT port.
+         */
+        get: operations["getNetworkCheck"];
+        put?: never;
+        /**
+         * Starts the reachability measurement again (after changing a port
+         *     forward, say). At most once every 30 s (`429 rate_limited`).
+         */
+        post: operations["restartNetworkCheck"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/openapi.json": {
         parameters: {
             query?: never;
@@ -461,9 +548,7 @@ export interface paths {
         };
         /**
          * Parses a query: the AST and its canonical text, or a `query_syntax`
-         *     error whose `start`/`end` span the UI highlights. With
-         *     `natural=true`, also the query `q` means as natural phrasing
-         *     (`natural_too_long` past 512 bytes or 32 words).
+         *     error whose `start`/`end` span the UI highlights.
          */
         get: operations["parseQuery"];
         put?: never;
@@ -575,7 +660,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/suggest": {
+    "/sources": {
         parameters: {
             query?: never;
             header?: never;
@@ -583,11 +668,54 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Suggestions for the token at the caret: field names, values with
-         *     counts, titles, smart chips and "did you mean". `replace` ranges are
-         *     in characters, so the client never tokenises the query again.
+         * Every source plugin of this build: kind, consent class, stored state,
+         *     priority and health.
          */
-        get: operations["suggest"];
+        get: operations["listSources"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sources/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Enables or disables a source, or sets its priority. A priority
+         *     applies at once; enabling or disabling at the next start. Enabling a
+         *     `restricted` or `overlay` source needs `"consent"` naming its class
+         *     (`409 consent_required` otherwise). Agents, egress, purge and the
+         *     schedule arrive in v0.6 (`409 not_editable`).
+         */
+        patch: operations["patchSource"];
+        trace?: never;
+    };
+    "/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The global bar's summary: searchable and stored torrents, harvest
+         *     and fetch rates, queue depth, index lag, disk, uptime. Unmeasurable
+         *     values are null, never 0.
+         */
+        get: operations["getStats"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1008,14 +1136,6 @@ export interface components {
              */
             password?: string | null;
         };
-        /**
-         * @description A range of characters (Unicode scalar values) in the query, end
-         *     exclusive.
-         */
-        CharRange: {
-            end: number;
-            start: number;
-        };
         ClassRule: {
             adult: boolean;
             /** Format: int64 */
@@ -1203,6 +1323,7 @@ export interface components {
          *       "fetch_pending": 1200,
          *       "fetched": 3400,
          *       "harvested": 91000,
+         *       "paused": false,
          *       "stored": 3100,
          *       "torrents": 48211
          *     }
@@ -1240,6 +1361,12 @@ export interface components {
              */
             harvested: number;
             /**
+             * @description The crawler is paused (`POST /crawler/pause`): the counters stand
+             *     still because nothing is harvested or fetched, not because
+             *     something broke.
+             */
+            paused: boolean;
+            /**
              * Format: int64
              * @description Torrents stored since start.
              */
@@ -1249,6 +1376,63 @@ export interface components {
              * @description Torrents in the store.
              */
             torrents: number;
+        };
+        /**
+         * @description `PATCH /crawler`: the global bar's intensity control. The same
+         *     setting as `crawler.intensity` in `/settings/crawler`.
+         * @example {
+         *       "intensity": "low"
+         *     }
+         */
+        CrawlerPatch: {
+            /**
+             * @description How hard the crawler works (§5), as `/settings/crawler` has it.
+             * @enum {string}
+             */
+            intensity: "low" | "balanced" | "aggressive";
+        };
+        /**
+         * @description `GET /crawler`, and the answer to every crawler control.
+         * @example {
+         *       "dht": {
+         *         "bootstrapped": true,
+         *         "outstanding": 212,
+         *         "routing_nodes": 3104
+         *       },
+         *       "fetch": {
+         *         "in_flight": 388,
+         *         "lookups": 120,
+         *         "queued": 15022
+         *       },
+         *       "intensity": "balanced",
+         *       "intensity_env": null,
+         *       "paused": false,
+         *       "since": 1792677600,
+         *       "state": "running"
+         *     }
+         */
+        CrawlerStatus: {
+            dht: null | components["schemas"]["DhtStatus"];
+            fetch: components["schemas"]["FetchStatus"];
+            /**
+             * @description How hard the crawler works (§5), as `/settings/crawler` has it.
+             * @enum {string}
+             */
+            intensity: "low" | "balanced" | "aggressive";
+            /**
+             * @description The environment variable that sets the intensity, which then
+             *     can't be changed here; null when it can.
+             */
+            intensity_env: string | null;
+            paused: boolean;
+            /**
+             * Format: int64
+             * @description Unix seconds of the last pause or resume; the start when running
+             *     since then.
+             */
+            since: number;
+            /** @enum {string} */
+            state: "running" | "paused";
         };
         Decision: {
             action: string;
@@ -1274,6 +1458,21 @@ export interface components {
             /** @description What your correction says. */
             adult: boolean;
             hash: string;
+        };
+        /** @description The DHT node's state. */
+        DhtStatus: {
+            /** @description It has a routing table to crawl from. */
+            bootstrapped: boolean;
+            /**
+             * Format: int64
+             * @description Queries awaiting an answer.
+             */
+            outstanding: number;
+            /**
+             * Format: int64
+             * @description Nodes across its routing tables.
+             */
+            routing_nodes: number;
         };
         DiffFile: {
             /** @description `/`-separated, decoded. */
@@ -1361,6 +1560,31 @@ export interface components {
             query?: string;
             /** @description The rule it releases from. */
             rule: string;
+        };
+        /**
+         * @description Our address as other DHT nodes see it: the BEP 42 `ip` key of their
+         *     replies, one vote per network (/24 or /64), the last 32 networks,
+         *     IPv4 and IPv6 tallied apart (the IPv4 consensus wins when both have
+         *     one).
+         */
+        ExternalAddress: {
+            /**
+             * Format: int32
+             * @description Voting networks naming the leading address.
+             */
+            agreeing: number;
+            /**
+             * @description The consensus address: at least 5 voters, and more than half of
+             *     them, agree; null until they do.
+             */
+            ip: string | null;
+            /**
+             * Format: int32
+             * @description The port most of those voters saw; null without a consensus.
+             */
+            port: number | null;
+            /** Format: int32 */
+            voters: number;
         };
         FacetValue: {
             /** Format: int64 */
@@ -1465,6 +1689,24 @@ export interface components {
              *     it's rebuilt, and the swarm buckets until M4.
              */
             unavailable: string[];
+        };
+        /** @description The metadata-fetch pool's state. */
+        FetchStatus: {
+            /**
+             * Format: int64
+             * @description Fetches running now.
+             */
+            in_flight: number;
+            /**
+             * Format: int64
+             * @description Peer lookups out.
+             */
+            lookups: number;
+            /**
+             * Format: int64
+             * @description Keys waiting for a fetch slot or for peers.
+             */
+            queued: number;
         };
         /**
          * @description The file lists compared: files match when their path (inside the
@@ -1663,49 +1905,87 @@ export interface components {
             payload?: string | null;
             query?: string | null;
         };
-        /** @description One recognised clause and the words it came from. */
-        NaturalChip: {
-            /** @description Characters of `q`, end exclusive. */
-            from: components["schemas"]["CharRange"];
-            /** @description The clause as query text (`res:2160p`). */
-            text: string;
-        };
         /**
-         * @description What natural phrasing proposes (§10.4): recognised words become
-         *     clauses, and every other word stays as text.
+         * @description `GET /network/check` and `POST /network/check`: the first-run
+         *     wizard's network check and the dashboard's "reachable" flag. Every
+         *     probe is ordinary DHT traffic; no outside service is asked (§18.7).
          * @example {
-         *       "ast": {
-         *         "of": [],
-         *         "op": "and"
+         *       "checked_at": 1792681200,
+         *       "external": {
+         *         "agreeing": 14,
+         *         "ip": "203.0.113.9",
+         *         "port": 6881,
+         *         "voters": 16
          *       },
-         *       "canonical": "res:2160p type:movie year:2020 size:>=10GB",
-         *       "chips": [
-         *         {
-         *           "from": {
-         *             "end": 2,
-         *             "start": 0
-         *           },
-         *           "text": "res:2160p"
-         *         },
-         *         {
-         *           "from": {
-         *             "end": 9,
-         *             "start": 3
-         *           },
-         *           "text": "type:movie"
-         *         }
-         *       ],
-         *       "text": []
+         *       "inbound_queries": 412,
+         *       "mapping": "unavailable",
+         *       "measured_s": 590,
+         *       "min_window_s": 120,
+         *       "reachable": true,
+         *       "reason": "unsolicited_queries",
+         *       "unsolicited_queries": 37,
+         *       "unsolicited_sources": 21,
+         *       "window_s": 600,
+         *       "window_started_at": 1792677610
          *     }
          */
-        NaturalProposal: {
-            ast: components["schemas"]["AstNode"];
-            /** @description The proposed query; it always parses back to `ast`. */
-            canonical: string;
-            /** @description The recognised clauses, in the order they appear. */
-            chips: components["schemas"]["NaturalChip"][];
-            /** @description The words kept as text. */
-            text: string[];
+        NetworkCheck: {
+            /** Format: int64 */
+            checked_at: number;
+            external: components["schemas"]["ExternalAddress"];
+            /**
+             * Format: int64
+             * @description DHT queries received in the window; null until measuring.
+             */
+            inbound_queries: number | null;
+            /**
+             * @description UPnP / NAT-PMP port mapping (§5). This build has neither.
+             * @enum {string}
+             */
+            mapping: "unavailable";
+            /**
+             * Format: int64
+             * @description Seconds the evidence covers.
+             */
+            measured_s: number;
+            /**
+             * Format: int64
+             * @description `reachable` stays null until the window has run this long.
+             */
+            min_window_s: number;
+            /**
+             * @description Whether unsolicited inbound DHT queries arrive on the DHT port;
+             *     null is unknown.
+             */
+            reachable: boolean | null;
+            /**
+             * @description Why `reachable` reads as it does.
+             * @enum {string}
+             */
+            reason: "dht_off" | "bootstrapping" | "measuring" | "unsolicited_queries" | "few_unsolicited_sources" | "no_unsolicited_queries";
+            /**
+             * Format: int64
+             * @description Of `inbound_queries`, the ones from nodes we hadn't sent anything to lately.
+             */
+            unsolicited_queries: number | null;
+            /**
+             * Format: int64
+             * @description The distinct networks (/24 or /64) those came from, counting at
+             *     most the 64 most recent; null until measuring. `reachable` needs
+             *     at least 3.
+             */
+            unsolicited_sources: number | null;
+            /**
+             * Format: int64
+             * @description The longest stretch of evidence looked at.
+             */
+            window_s: number;
+            /**
+             * Format: int64
+             * @description Unix seconds the window started (bootstrap or a restart); null
+             *     before bootstrap.
+             */
+            window_started_at: number | null;
         };
         /**
          * @description Discover's Newest: a page of result rows by `discovered_at`, newest
@@ -1793,11 +2073,6 @@ export interface components {
         ParseResponse: {
             ast: components["schemas"]["AstNode"];
             canonical: string;
-            /**
-             * @description With `natural=true`: the query `q` means as natural phrasing, for
-             *     the UI to preview as chips. Nothing applies it.
-             */
-            natural?: components["schemas"]["NaturalProposal"];
         };
         /**
          * @description `POST /password`: ends every other session.
@@ -2320,6 +2595,216 @@ export interface components {
             /** @description Other torrents containing one of this torrent's files. */
             same_file: components["schemas"]["HitGroup"];
         };
+        /** @description One source plugin of this build. */
+        Source: {
+            /**
+             * @description What enabling a source requires (§18.7).
+             * @enum {string}
+             */
+            consent: "none" | "external" | "account" | "restricted" | "overlay";
+            /** @description Enabling it needs `"consent"` naming its class. */
+            consent_required: boolean;
+            /** @description Fields `PATCH /sources/{id}` changes now. */
+            editable: string[];
+            /** @description Its stored state is `enabled`. */
+            enabled: boolean;
+            health: components["schemas"]["SourceHealth"];
+            /** Format: int32 */
+            id: number;
+            kinds: components["schemas"]["SourceKind"][];
+            name: string;
+            /**
+             * @description Fields planned for the v0.6 sources epic (agents, egress, purge,
+             *     schedule): listed so the UI can show them, refused by `PATCH`.
+             */
+            not_yet_editable: string[];
+            /** @description The manifest id. */
+            plugin: string;
+            /**
+             * @description A source's share of the fetch pool (§18.4: weights 1 / 3 / 6 / 10).
+             * @enum {string}
+             */
+            priority: "low" | "normal" | "high" | "max";
+            /**
+             * @description Its stored state differs from what's running: it starts or stops
+             *     at the next restart.
+             */
+            restart_required: boolean;
+            /** @enum {string} */
+            risk: "low" | "medium" | "high";
+            /**
+             * @description A source's stored lifecycle state (§18.1).
+             * @enum {string}
+             */
+            state: "enabled" | "paused" | "disabled" | "purged";
+            version: string;
+        };
+        /** @description How a source is doing. */
+        SourceHealth: {
+            /**
+             * Format: int64
+             * @description Keys it was first to report in the last 24 hours.
+             */
+            harvested_24h: number;
+            /** @description Why it last stopped with an error; null when it didn't. */
+            last_error: string | null;
+            /**
+             * Format: int64
+             * @description Unix seconds it last started; null when it hasn't run since the
+             *     process started.
+             */
+            last_run: number | null;
+            running: boolean;
+            /**
+             * Format: int64
+             * @description Of `harvested_24h`, the ones stored.
+             */
+            stored_24h: number;
+        };
+        /** @enum {string} */
+        SourceKind: "discovery" | "importer" | "peer_finder" | "enrichment" | "network" | "output";
+        /**
+         * @description `GET /sources`.
+         * @example {
+         *       "sources": [
+         *         {
+         *           "consent": "none",
+         *           "consent_required": false,
+         *           "editable": [
+         *             "enabled",
+         *             "priority"
+         *           ],
+         *           "enabled": true,
+         *           "health": {
+         *             "harvested_24h": 1840221,
+         *             "last_error": null,
+         *             "last_run": 1792677600,
+         *             "running": true,
+         *             "stored_24h": 30115
+         *           },
+         *           "id": 0,
+         *           "kinds": [
+         *             "discovery",
+         *             "peer_finder"
+         *           ],
+         *           "name": "Mainline DHT",
+         *           "not_yet_editable": [
+         *             "agents",
+         *             "egress",
+         *             "purge",
+         *             "schedule"
+         *           ],
+         *           "plugin": "dht",
+         *           "priority": "normal",
+         *           "restart_required": false,
+         *           "risk": "low",
+         *           "state": "enabled",
+         *           "version": "0.0.0"
+         *         }
+         *       ]
+         *     }
+         */
+        SourceList: {
+            sources: components["schemas"]["Source"][];
+        };
+        /**
+         * @description `PATCH /sources/{id}`. Fields left out keep their values. A new
+         *     priority applies at once; enabling or disabling takes effect at the
+         *     next start (`restart_required`).
+         * @example {
+         *       "enabled": true,
+         *       "priority": "high"
+         *     }
+         */
+        SourcePatch: {
+            /** @description Not editable before v0.6: refused with `409 not_editable`. */
+            agents?: unknown;
+            /**
+             * @description The consent class you agree to; needed to enable a source whose
+             *     class is `restricted` or `overlay`, and must be that class.
+             */
+            consent?: "none" | "external" | "account" | "restricted" | "overlay";
+            /** @description Not editable before v0.6: refused with `409 not_editable`. */
+            egress?: unknown;
+            enabled?: boolean;
+            /**
+             * @description A source's share of the fetch pool (§18.4: weights 1 / 3 / 6 / 10).
+             * @enum {string}
+             */
+            priority?: "low" | "normal" | "high" | "max";
+            /** @description Not editable before v0.6: refused with `409 not_editable`. */
+            purge?: unknown;
+            /** @description Not editable before v0.6: refused with `409 not_editable`. */
+            schedule?: unknown;
+        };
+        /**
+         * @description `GET /stats`: what the global bar and status pill show
+         *     (`docs/metrics.md` §7.6).
+         * @example {
+         *       "data_bytes": 9126805504,
+         *       "disk_free_bytes": null,
+         *       "fetched_per_hour": 1260,
+         *       "harvested_per_hour": 184320,
+         *       "index_lag_s": 2,
+         *       "paused": false,
+         *       "queue_depth": 15410,
+         *       "searchable_torrents": 2410388,
+         *       "stored_torrents": 2410391,
+         *       "updated_at": 1792681200,
+         *       "uptime_s": 86400
+         *     }
+         */
+        StatsResponse: {
+            /**
+             * Format: int64
+             * @description Bytes the data directory holds (database, index, state).
+             */
+            data_bytes: number | null;
+            /**
+             * Format: int64
+             * @description Bytes free on the data directory's volume; null where this build
+             *     can't measure it.
+             */
+            disk_free_bytes: number | null;
+            /**
+             * Format: double
+             * @description Info dicts fetched per hour, over the last 5 minutes; null in the
+             *     first minute.
+             */
+            fetched_per_hour: number | null;
+            /**
+             * Format: double
+             * @description Keys the sources reported per hour, over the last 5 minutes; null
+             *     in the first minute.
+             */
+            harvested_per_hour: number | null;
+            /**
+             * Format: int64
+             * @description Seconds the index trails the store's last commit; null when search
+             *     is off or either hasn't committed since the start.
+             */
+            index_lag_s: number | null;
+            paused: boolean;
+            /**
+             * Format: int64
+             * @description Keys queued or in flight in the fetch pool.
+             */
+            queue_depth: number;
+            /**
+             * Format: int64
+             * @description Documents in the search index; null when search is off.
+             */
+            searchable_torrents: number | null;
+            /** Format: int64 */
+            stored_torrents: number;
+            /**
+             * Format: int64
+             * @description Unix seconds these numbers were read.
+             */
+            updated_at: number;
+            /** Format: int64 */
+            uptime_s: number;
+        };
         /**
          * @description `POST /filters/strictness`: what the lists would block, and a warning
          *     matched to it (§2.9, §20.13).
@@ -2413,64 +2898,6 @@ export interface components {
             /** Format: int64 */
             updated_at: number | null;
             url: string;
-        };
-        /**
-         * @description One suggestion: replace the query's characters `replace.start` to
-         *     `replace.end` (end exclusive) with `insert`. A leading `-` or `!`
-         *     stays outside the range.
-         */
-        SuggestItem: {
-            /**
-             * Format: int64
-             * @description Torrents it would find, of those this search may show; absent for
-             *     field names, categories and "did you mean".
-             */
-            count?: number;
-            /** @description The query text to put in. */
-            insert: string;
-            kind: components["schemas"]["SuggestKind"];
-            replace: components["schemas"]["CharRange"];
-            /**
-             * @description What to show: the value, title or field, or for `did_you_mean`
-             *     the whole corrected query.
-             */
-            text: string;
-        };
-        /**
-         * @description What an item offers.
-         * @enum {string}
-         */
-        SuggestKind: "field" | "value" | "title" | "chip" | "did_you_mean";
-        /**
-         * @description `GET /suggest`.
-         * @example {
-         *       "items": [
-         *         {
-         *           "count": 1284,
-         *           "insert": "res:2160p",
-         *           "kind": "chip",
-         *           "replace": {
-         *             "end": 5,
-         *             "start": 0
-         *           },
-         *           "text": "res:2160p"
-         *         },
-         *         {
-         *           "count": 12,
-         *           "insert": "title:\"The Dark Knight\"",
-         *           "kind": "title",
-         *           "replace": {
-         *             "end": 5,
-         *             "start": 0
-         *           },
-         *           "text": "The Dark Knight"
-         *         }
-         *       ]
-         *     }
-         */
-        SuggestResponse: {
-            /** @description "Did you mean" first, then chips, field names, values and titles. */
-            items: components["schemas"]["SuggestItem"][];
         };
         /**
          * @description Seeders and trackers reporting, as `≥1`, `≥5`, `≥50` and
@@ -2844,6 +3271,90 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CompareResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getCrawler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CrawlerStatus"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    patchCrawler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CrawlerPatch"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CrawlerStatus"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    pauseCrawler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CrawlerStatus"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    resumeCrawler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CrawlerStatus"];
                 };
             };
             default: components["responses"]["Error"];
@@ -3330,6 +3841,46 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    getNetworkCheck: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetworkCheck"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    restartNetworkCheck: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetworkCheck"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getOpenApi: {
         parameters: {
             query?: never;
@@ -3356,11 +3907,6 @@ export interface operations {
             query?: {
                 /** @description The query text; empty matches everything. */
                 q?: string;
-                /**
-                 * @description Also read `q` as natural phrasing ("4k movies from 2020 over
-                 *     10gb") and propose the query it means, in `natural`.
-                 */
-                natural?: boolean;
             };
             header?: never;
             path?: never;
@@ -3571,18 +4117,9 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    suggest: {
+    listSources: {
         parameters: {
-            query?: {
-                /** @description The query text as typed so far. */
-                q?: string;
-                /** @description The caret, in characters from the start; the end by default. */
-                pos?: number;
-                /** @description Items at most: 8 by default, 1–20. */
-                limit?: number;
-                /** @description Include torrents a filter rule hid (§20.3), as `/search`. */
-                hidden?: boolean;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -3594,7 +4131,54 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SuggestResponse"];
+                    "application/json": components["schemas"]["SourceList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    patchSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The source's id, as `GET /sources` lists it. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourcePatch"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Source"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getStats: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StatsResponse"];
                 };
             };
             default: components["responses"]["Error"];

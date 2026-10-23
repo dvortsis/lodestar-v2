@@ -1,0 +1,2 @@
+200
+{"consent":"none","consent_required":false,"editable":["enabled","priority"],"enabled":true,"health":{"harvested_24h":1200,"last_error":null,"last_run":1700000000,"running":true,"stored_24h":31},"id":0,"kinds":["discovery","peer_finder"],"name":"Mainline DHT","not_yet_editable":["agents","egress","purge","schedule"],"plugin":"dht","priority":"high","restart_required":false,"risk":"low","state":"enabled","version":"0.0.0"}

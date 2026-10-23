@@ -168,6 +168,7 @@ fn fixture(n: usize) -> Fixture {
             filters: None,
             settings: None,
             adult: Default::default(),
+            ops: None,
         }),
     );
     let mut f = Fixture {
@@ -658,6 +659,7 @@ async fn search_disabled() {
             filters: None,
             settings: None,
             adult: Default::default(),
+            ops: None,
         }),
     );
     let token = auth.setup_token().unwrap();
