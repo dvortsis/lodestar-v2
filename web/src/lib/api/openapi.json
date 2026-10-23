@@ -5085,7 +5085,8 @@
           "restarted",
           "expired",
           "malformed",
-          "lagged"
+          "lagged",
+          "visibility"
         ]
       },
       "RuleEntry": {
@@ -6650,9 +6651,12 @@
             "minimum": 0
           },
           "max_id": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64",
-            "description": "The highest torrent id searchable now, of any class: searches\nstill apply the Adult visibility."
+            "description": "The highest torrent id searchable now, while Adult is shown.\n**Null while Adult is hidden:** ids are sequential, so any real id\nsent beside an exact `added` would show, in its gap from the last\none, how many hidden torrents arrived. To find what's new, use the\nnewest id among your own results (or a cursor), not this."
           }
         },
         "example": {
