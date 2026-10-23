@@ -12,6 +12,7 @@ default-run = "lodestar"
 
 [dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json"] }
+clap = { version = "4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
 lodestar-api.workspace = true
 lodestar-dht.workspace = true
 lodestar-filter.workspace = true
