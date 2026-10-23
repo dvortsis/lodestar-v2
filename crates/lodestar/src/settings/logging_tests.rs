@@ -426,6 +426,12 @@ fn the_aliases_map_onto_the_section() {
         ["lodestar_nope"]
     );
     assert!(alias("info,=[").is_none());
+    let a = alias("lodestar_search,hyper").unwrap();
+    assert_eq!(
+        a.components["search"], "trace",
+        "a bare target is all its levels"
+    );
+    assert_eq!(a.libraries, "hyper");
 }
 
 #[test]
@@ -581,6 +587,8 @@ fn deadlines_are_checked_against_the_clock() {
         (json!({ "components": { "libraries": "debug" } }), false),
         (json!({ "components": { "dht": "loud" } }), false),
         (json!({ "file_folder": " " }), false),
+        (json!({ "libraries": "warn,lodestar_api::filters" }), false),
+        (json!({ "libraries": "warn,hyper,h2=info" }), true),
         (json!({ "file_total_mib": 16, "file_size_mib": 32 }), false),
     ] {
         assert_eq!(

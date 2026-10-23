@@ -55,15 +55,25 @@ EXEMPT = {
 }
 
 LOG_MACROS = re.compile(
-    r"(?:(?<![\w:.])tracing::|(?<![\w:.]))"
+    r"(?:(?<![\w:.])(?:::)?tracing::|(?<![\w:.]))"
     r"(trace|debug|info|warn|error|event|span|trace_span|debug_span|info_span|warn_span|error_span)"
     r"!\s*[(\[{]"
+)
+# `use tracing::{warn, …}`, `use tracing::warn`, `use tracing as t`,
+# `use ::tracing::…`, `extern crate tracing as t`: ways around LOG_MACROS.
+TRACING_IMPORT = re.compile(
+    r"\buse\s+(?:::)?tracing\s*(?:\bas\b|::\s*\{[^}]*\b(?:trace|debug|info|warn|error|event|span|\w+_span)\b"
+    r"|::\s*(?:trace|debug|info|warn|error|event|span|\w+_span)\b|::\s*\*)"
+    r"|\bextern\s+crate\s+tracing\s+as\b"
 )
 INSTRUMENT = re.compile(r"#\[\s*(?:tracing::)?instrument\b")
 ERROR_FIELD = re.compile(
     r"(?:"
     # `error = %x`, `err = ?x`, `cause = %e`
     r"\b(?:error|err|cause|source)\s*=\s*[%?]"
+    r"|"
+    # `reason = %e`, `detail = ?err`: any name, an error's value
+    r"\b\w+\s*=\s*[%?]\s*&?(?:e|err|error|\w+_err|\w+_error|err_\w+|error_\w+)\b"
     r"|"
     # `%e`, `?err`, `%error`, `?io_err`, `%e.kind()` as a bare field
     r"(?:^|[(,{])\s*[%?]\s*&?(?:e|err|error|\w+_err|\w+_error|err_\w+|error_\w+)\b"
@@ -159,6 +169,8 @@ def check_source(rel: str, code: str) -> list[str]:
             # `log_event!` and other `*_event!` / `*_span!` names aren't
             # tracing's: the lookbehind keeps word characters out.
             findings.append(f"{rel}:{line_of(m.start())}: plain `{m.group(1)}!`: use `log_event!` with a catalogued event")
+        for m in TRACING_IMPORT.finditer(clean):
+            findings.append(f"{rel}:{line_of(m.start())}: a `tracing` macro import: use `log_event!`")
     for m in INSTRUMENT.finditer(clean):
         end = clean.find("]", m.end())
         depth, j = 0, m.end()

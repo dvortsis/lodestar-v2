@@ -26,9 +26,25 @@ class Macros(unittest.TestCase):
             "tracing::event!(Level::INFO, \"x\");",
             "let _s = tracing::info_span!(\"fetch\").entered();",
             "tracing::trace!(target: \"t\", \"x\");",
+            "::tracing::warn!(\"x\");",
         ]:
             with self.subTest(line=line):
                 self.assertEqual(len([f for f in findings(f"fn f() {{ {line} }}") if "plain" in f]), 1, line)
+
+    def test_imports_that_get_around_the_rule_are_refused(self):
+        for line in [
+            "use tracing::{info, warn};",
+            "use tracing::warn;",
+            "use tracing as t;",
+            "use ::tracing::error;",
+            "use tracing::*;",
+            "extern crate tracing as t;",
+        ]:
+            with self.subTest(line=line):
+                self.assertEqual(len(findings(line)), 1, line)
+        for line in ["use tracing::Level;", "use tracing::field::{Field, Visit};", "use tracing_subscriber::layer::Layer;"]:
+            with self.subTest(line=line):
+                self.assertEqual(findings(line), [], line)
 
     def test_log_event_and_lookalikes_pass(self):
         for line in [
@@ -101,7 +117,7 @@ class Instrument(unittest.TestCase):
 
 class ErrorFields(unittest.TestCase):
     def test_untyped_error_fields_are_refused(self):
-        for args in ["error = %e", "err = ?err", "%e", "?err", "% e", "%error", "?io_err", "cause = %x", "error = ?self.last"]:
+        for args in ["error = %e", "err = ?err", "%e", "?err", "% e", "%error", "?io_err", "cause = %x", "error = ?self.last", "reason = %e", "detail = ?err"]:
             with self.subTest(args=args):
                 code = f"#[instrument(skip_all, fields({args}))]\nfn f() {{}}"
                 self.assertTrue(any("error field" in f for f in findings(code)), args)

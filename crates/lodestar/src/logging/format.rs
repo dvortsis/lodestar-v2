@@ -135,6 +135,21 @@ fn json_of(shown: &Rendered) -> Json {
     }
 }
 
+/// `s` on one line: control characters escaped, so a message can't start
+/// a line of its own.
+fn one_line(s: &str) -> String {
+    match s.chars().any(char::is_control) {
+        true => s
+            .chars()
+            .map(|c| match c.is_control() {
+                true => c.escape_default().to_string(),
+                false => c.to_string(),
+            })
+            .collect(),
+        false => s.to_string(),
+    }
+}
+
 /// A value with spaces quoted, so `k=v` pairs stay readable.
 fn quote(s: &str) -> String {
     if s.is_empty() || s.contains(char::is_whitespace) || s.contains('"') {
@@ -161,7 +176,7 @@ pub fn untyped_text(stamp: Stamp, u: &Untyped) -> String {
         stamp.rfc3339(),
         upper(u.level),
         u.target,
-        u.message
+        one_line(&u.message)
     );
     for (k, v) in &u.fields {
         let _ = write!(line, " {k}={}", quote(v));
@@ -190,6 +205,20 @@ pub fn untyped_json(stamp: Stamp, u: &Untyped) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_untyped_message_stays_on_one_line() {
+        let u = Untyped {
+            level: Level::Warn,
+            target: "hyper".into(),
+            component: "libraries",
+            message: "bad\n2026-01-01T00:00:00.000Z ERROR forged: line".into(),
+            fields: vec![("k".into(), "a\nb".into())],
+        };
+        let line = untyped_text(Stamp { millis: 0 }, &u);
+        assert!(!line.contains('\n'), "{line}");
+        assert!(line.contains("bad\\n2026"), "{line}");
+    }
 
     #[test]
     fn times_are_rfc3339_utc() {

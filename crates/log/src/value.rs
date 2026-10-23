@@ -158,8 +158,12 @@ impl Value<'_> {
             Value::Query(s) => text(Kind::Query, s.into()),
             Value::Client(ip) => text(Kind::Client, ip.to_string().into()),
             Value::Peer(addr) => {
-                let shown =
-                    mask.has(Kind::Peer) && (!pairs_torrent || mask.has(Kind::PeerActivity));
+                // Beside a torrent it's peer activity, the opt-in's alone;
+                // otherwise a connection-level address, the peer kind's.
+                let shown = match pairs_torrent {
+                    true => mask.has(Kind::PeerActivity),
+                    false => mask.has(Kind::Peer),
+                };
                 match shown {
                     true => Rendered::Text(addr.to_string()),
                     false => Rendered::Hidden,
@@ -308,7 +312,7 @@ impl<'a> IntoValue<'a, kind::Client> for Client {
 }
 
 /// A peer's address. Next to a torrent in the same line, it shows only
-/// with the peer activity opt-in on.
+/// with the peer activity opt-in on; on its own, with peer addresses on.
 #[derive(Debug, Clone, Copy)]
 pub struct Peer(pub SocketAddr);
 
@@ -600,9 +604,14 @@ mod tests {
             peer.render(peers.with(Kind::PeerActivity), true, None),
             Rendered::Text(_)
         ));
-        // Peer activity alone isn't peer addresses.
-        assert_eq!(
+        // The opt-in alone is enough beside a torrent (its warning says
+        // the file will record it), and isn't peer addresses on their own.
+        assert!(matches!(
             peer.render(Mask::NONE.with(Kind::PeerActivity), true, None),
+            Rendered::Text(_)
+        ));
+        assert_eq!(
+            peer.render(Mask::NONE.with(Kind::PeerActivity), false, None),
             Rendered::Hidden
         );
         let fields = [("torrent", Value::Name("x")), ("peer", peer)];

@@ -246,6 +246,10 @@ pub fn alias(log: &str) -> Option<Alias> {
     for directive in log.split(',').map(str::trim).filter(|d| !d.is_empty()) {
         let (target, level) = match directive.rsplit_once('=') {
             Some((t, l)) => (Some(t.trim()), l.trim()),
+            // A bare first-party target means all its levels.
+            None if logging::first_party(directive) && Level::parse(directive).is_none() => {
+                (Some(directive), "trace")
+            }
             None => (None, directive),
         };
         match (target, Level::parse(level)) {
@@ -486,12 +490,15 @@ impl Section for Logging {
                 }
                 super::log::parse(&self.libraries)?;
                 for d in self.libraries.split(',') {
-                    if let Some((target, _)) = d.rsplit_once('=')
-                        && logging::first_party(target.trim())
+                    // `target=level`, or a bare `target` (all its levels).
+                    let target = d.rsplit_once('=').map_or(d, |(t, _)| t).trim();
+                    let target = target.split('[').next().unwrap_or(target).trim();
+                    if !target.is_empty()
+                        && Level::parse(target).is_none()
+                        && logging::first_party(target)
                     {
                         return Err(format!(
-                            "{} is Lodestar's own; set its component's level instead.",
-                            target.trim()
+                            "{target} is Lodestar's own; set its component's level instead."
                         ));
                     }
                 }
