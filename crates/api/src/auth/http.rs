@@ -228,7 +228,6 @@ pub(crate) async fn setup(
         .await
         .map_err(internal)?
         .map_err(|e| auth_error(e, "password"))?;
-    tracing::info!("setup complete; the setup token is spent");
     Ok(with_cookie(cookie))
 }
 
@@ -373,13 +372,20 @@ pub(crate) async fn put_proxy(
     confirm_fresh_password(&s.auth, ip, password).await?;
     // Saving writes auth.json under the auth lock: off the async workers.
     let auth = s.auth.clone();
-    tokio::task::spawn_blocking(move || auth.set_proxy(config))
+    let saved = tokio::task::spawn_blocking(move || auth.set_proxy(config))
         .await
         .map_err(internal)?
         .map_err(|e| match e {
             SetProxyError::Invalid(e) => bad_proxy(e),
             SetProxyError::Storage(e) => internal(e),
         })?;
+    // How many ranges are trusted, never who may sign in.
+    lodestar_log::log_event!(
+        super::log_events::AUTH_PROXY_CHANGED,
+        client = lodestar_log::Client(ip),
+        enabled = saved.enabled,
+        trusted = super::log_events::count(saved.trusted.len())
+    );
     Ok(axum::Json(proxy_settings(&s.auth)))
 }
 
@@ -416,5 +422,9 @@ pub(crate) async fn revoke_other_sessions(
         .await
         .map_err(internal)?
         .map_err(|e| auth_error(e, "password"))?;
+    lodestar_log::log_event!(
+        super::log_events::AUTH_SESSIONS_REVOKED,
+        client = lodestar_log::Client(ip)
+    );
     Ok(with_cookie(cookie))
 }

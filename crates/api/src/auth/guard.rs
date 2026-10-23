@@ -172,10 +172,11 @@ async fn guard(scope: u32, mut req: Request, next: Next) -> Response {
     }
     let (secret, forms) = match presented(&req, scope == scope::FEEDS) {
         Presented::Nothing => return login_required(&auth).into_response(),
-        Presented::Bad => return failed(&auth, client(&auth, &req, peer)),
+        Presented::Bad => return failed(&auth, client(&auth, &req, peer), "unknown", "malformed"),
         Presented::One(s, f) => (s, f),
     };
     if req.method() != Method::GET && req.method() != Method::HEAD {
+        refused(client(&auth, &req, peer), "unknown", "read_only");
         return ApiError::new(
             StatusCode::FORBIDDEN,
             "key_read_only",
@@ -185,10 +186,10 @@ async fn guard(scope: u32, mut req: Request, next: Next) -> Response {
     }
     let ip = client(&auth, &req, peer);
     if let Err(wait) = auth.key_failures.check(ip) {
-        return limited(wait);
+        return limited(ip, "key_checks", wait);
     }
     let Some(p) = keys::parse(&secret) else {
-        return failed(&auth, ip);
+        return failed(&auth, ip, "unknown", "malformed");
     };
     let (kind, prefix, hash) = (p.kind, p.prefix.to_string(), p.hash);
     drop(secret);
@@ -196,8 +197,12 @@ async fn guard(scope: u32, mut req: Request, next: Next) -> Response {
         KeyKind::ApiKey => Form::Key,
         KeyKind::FeedToken => Form::Token,
     };
+    let kind_label = match kind {
+        KeyKind::ApiKey => "api_key",
+        KeyKind::FeedToken => "feed_token",
+    };
     if forms.iter().any(|f| *f != want) {
-        return failed(&auth, ip);
+        return failed(&auth, ip, kind_label, "wrong_form");
     }
     let Some(store) = user_data else {
         return ApiError::new(
@@ -216,13 +221,17 @@ async fn guard(scope: u32, mut req: Request, next: Next) -> Response {
     .await;
     let key = match checked {
         Ok(Ok(KeyCheck::Valid(k))) if k.kind == kind => k,
-        Ok(Ok(_)) => return failed(&auth, ip),
+        Ok(Ok(KeyCheck::Valid(_))) => return failed(&auth, ip, kind_label, "wrong_kind"),
+        Ok(Ok(KeyCheck::Unknown)) => return failed(&auth, ip, kind_label, "unknown"),
+        Ok(Ok(KeyCheck::Revoked)) => return failed(&auth, ip, kind_label, "revoked"),
+        Ok(Ok(KeyCheck::Expired)) => return failed(&auth, ip, kind_label, "expired"),
         Ok(Err(e)) => return e.into_response(),
         Err(e) => return internal(e).into_response(),
     };
     let access = match key.kind {
         KeyKind::ApiKey => {
             if key.scopes & scope != scope {
+                refused(ip, kind_label, "scope");
                 return ApiError::new(
                     StatusCode::FORBIDDEN,
                     "key_scope",
@@ -241,7 +250,7 @@ async fn guard(scope: u32, mut req: Request, next: Next) -> Response {
         },
     };
     if let Err(wait) = auth.key_requests.take(key.id) {
-        return limited(wait);
+        return limited(ip, "key_requests", wait);
     }
     // Recorded only once the key is let through.
     let touched = tokio::task::spawn_blocking(move || {
@@ -252,7 +261,7 @@ async fn guard(scope: u32, mut req: Request, next: Next) -> Response {
     .await;
     if !matches!(touched, Ok(Ok(_))) {
         // Bookkeeping only: the request goes ahead.
-        tracing::warn!("api keys: couldn't record a key's last use");
+        lodestar_log::log_event!(super::log_events::AUTH_KEY_USE_UNRECORDED);
     }
     req.extensions_mut().insert(access);
     let mut resp = next.run(req).await;
@@ -264,10 +273,22 @@ fn client(auth: &Auth, req: &Request, peer: IpAddr) -> IpAddr {
     auth.client_ip(peer, req.headers())
 }
 
+/// A refused key, logged by what it claimed to be and why: never the
+/// secret, its prefix or its hash.
+fn refused(ip: IpAddr, kind: &'static str, reason: &'static str) {
+    lodestar_log::log_event!(
+        super::log_events::AUTH_KEY_REFUSED,
+        client = lodestar_log::Client(ip),
+        kind = kind,
+        reason = reason
+    );
+}
+
 /// A failed check: one answer, whatever failed, and one attempt spent.
-fn failed(auth: &Auth, ip: IpAddr) -> Response {
+fn failed(auth: &Auth, ip: IpAddr, kind: &'static str, reason: &'static str) -> Response {
+    refused(ip, kind, reason);
     if let Err(wait) = auth.key_failures.take(ip) {
-        return limited(wait);
+        return limited(ip, "key_checks", wait);
     }
     ApiError::new(
         StatusCode::UNAUTHORIZED,
@@ -277,7 +298,12 @@ fn failed(auth: &Auth, ip: IpAddr) -> Response {
     .into_response()
 }
 
-fn limited(wait: std::time::Duration) -> Response {
+fn limited(ip: IpAddr, limit: &'static str, wait: std::time::Duration) -> Response {
+    lodestar_log::log_event!(
+        super::log_events::AUTH_RATE_LIMITED,
+        client = lodestar_log::Client(ip),
+        limit = limit
+    );
     let mut resp = ApiError::new(
         StatusCode::TOO_MANY_REQUESTS,
         "rate_limited",
