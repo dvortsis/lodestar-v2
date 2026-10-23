@@ -73,7 +73,9 @@ impl Env {
             "version": IMAGE,
             "probation_ms": 8000,
             "stall_ms": 4000,
-            "grace_ms": 500,
+            // Long enough for a graceful shutdown: a forwarded stop the
+            // child outlasts by this much becomes SIGKILL.
+            "grace_ms": 10_000,
         });
         if let (Some(o), Some(extra)) = (o.as_object_mut(), extra.as_object()) {
             o.extend(extra.clone());
