@@ -813,7 +813,7 @@
    "pr": 88,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 19:40: rebuild rename (macOS), interrupted rebuild resume, NRT budget (Windows), uTP WSAENOBUFS. | 23:08 review FIX: live.rs HANG=300s widens timeout; real cause likely LiveIndexer thread exits on commit error (production bug). Asked root-cause fix. | 23:58 re-review FIX at 88c8871: report lost when reload fails post-commit (publish gap), backoff reset only after commit, indexed_total recount; plus fuzz res:<64 digits> 65-byte stored form (found on B14 CI). Sent. | 00:49 delta review a51c7ca: live indexer OK; FIX bare_res empty -> \"p\" regression (one line). Runner verifies next delta itself. Note #97 ported old res hunk -> trivial conflict."
+   "notes": "Launched 19:40: rebuild rename (macOS), interrupted rebuild resume, NRT budget (Windows), uTP WSAENOBUFS. | 23:08 review FIX: live.rs HANG=300s widens timeout; real cause likely LiveIndexer thread exits on commit error (production bug). Asked root-cause fix. | 23:58 re-review FIX at 88c8871: report lost when reload fails post-commit (publish gap), backoff reset only after commit, indexed_total recount; plus fuzz res:<64 digits> 65-byte stored form (found on B14 CI). Sent. | 00:49 delta review a51c7ca: live indexer OK; FIX bare_res empty -> \"p\" regression (one line). Runner verifies next delta itself. Note #97 ported old res hunk -> trivial conflict. | 00:56 13b753d (fetch_update deprecation on rust 1.99 fixed); bare_res empty fix still pending."
   },
   "B2b": {
    "status": "review",
@@ -933,13 +933,14 @@
    "notes": "Launched 21:38 (\"run as many feature sessions as possible\")."
   },
   "M6-cli": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
    "session": "session_01FathNdcyDX2ZjCqYnfipQs",
    "pr": 95,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 22:53 head bd40bcb (main+D-puid merged, drop scopes per subcommand) | 23:30 review FIX: Windows sync_file needs write access; -journal delete sharing violation; restore docs (reindex, auth.json); run maintenance_runs_as_puid under sudo in CI (allowed ci.yml edit); polish. | 23:36 head 467c3db: all review items done; merge on green (Windows CI must pass: proves sync_file/journal fixes)."
+   "notes": "Launched 21:38 (\"run as many feature sessions as possible\"). | 22:53 head bd40bcb (main+D-puid merged, drop scopes per subcommand) | 23:30 review FIX: Windows sync_file needs write access; -journal delete sharing violation; restore docs (reindex, auth.json); run maintenance_runs_as_puid under sudo in CI (allowed ci.yml edit); polish. | 23:36 head 467c3db: all review items done; merge on green (Windows CI must pass: proves sync_file/journal fixes).",
+   "merge": "953ff83"
   },
   "M6-win": {
    "status": "running",
@@ -1210,7 +1211,8 @@
   "skip_link": "Search slice: skip link label 'Skip to results' (\u00a710.13)",
   "n_new_reset": "Future 'N new' consumer (search) must reset its count when the Adult setting changes (hidden tab queued frames not re-screened) \u2014 from #104 review",
   "pruning_owners": "B9 runs prune_alerts; B11a/b runs 30-day prune_query_log (from #101 review)",
-  "privdrop_flake": "privdrop.rs drops_to_puid_and_pgid_before_anything_runs failed once under full workspace run ('expected the runtime's threads'); from #84; reported by F-budget session"
+  "privdrop_flake": "privdrop.rs drops_to_puid_and_pgid_before_anything_runs failed once under full workspace run ('expected the runtime's threads'); from #84; reported by F-budget session",
+  "pin_toolchain": "rust-toolchain.toml is unpinned stable; 1.99 deprecations broke clippy on #88. Consider pinning (affects CALIB_REF_NS too)."
  },
  "blocked_on_owner": [
   "Modern DHT crawler architecture: waiting on an AskUserQuestion",
