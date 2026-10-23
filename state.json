@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T06:14:33Z",
+ "updated_at": "2026-10-23T06:15:43Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -312,7 +312,7 @@
    "pr": 116,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 05:15 PR #116 0d95d4c ready; reviewer started. | 05:35 review MERGE; asked: searchable_delta via hourly snapshot (code 13), clamp all, cap annotations, plan test on year data, decisions notes + named follow-ups. | 2026-10-23T06:04:00Z e2eab71 fmt+clippy red: deprecated fetch_update at insights.rs:307; asked for CAS loop as hot.rs:194",
+   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 05:15 PR #116 0d95d4c ready; reviewer started. | 05:35 review MERGE; asked: searchable_delta via hourly snapshot (code 13), clamp all, cap annotations, plan test on year data, decisions notes + named follow-ups. | 2026-10-23T06:04:00Z e2eab71 fmt+clippy red: deprecated fetch_update at insights.rs:307; asked for CAS loop as hot.rs:194 | 2026-10-23T06:15:43Z a24093e: delta f8f1125 checked (gauge 13, clamp, annotations cap, plan test, docs) + fetch_update -> load/fetch_add (single-writer task, verified). Approved; merge on green",
    "self_review": {
     "raised": 13,
     "fixed": 7,
@@ -336,7 +336,7 @@
    "pr": 112,
    "attempt": 1,
    "review_rounds": 0,
-   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 03:30 PR #112 b0834b4 ready; reviewer + security review started. 5,703 lines. \u00a72.19 flags: regenerate not reveal; bad XFF ends walk; revoke/delete no password; max 500 keys; login limiter bounded. | 03:45 review+security MERGE (no blocking). Asked: proxy-trust docs (gateway lets anyone in), polish, logging redaction note. Merge after B10a: B12 merges main keeping B10a user_data open. | 03:43 4b442d6 review items 1-3 done. Waiting: B10a merge, then ping B12 to merge main (keep B10a user_data open), then merge on green. | 04:33 CI green 4b442d6; waiting B10a merge. | 05:45 pinged to merge main after B10a (keep B10a user_data open). | 2026-10-23T06:04:00Z ab76de7 merge resolution checked (one user_data open; unless_offline kept by 3-way merge); merged-tree verify running | 2026-10-23T06:08:13Z release smoke red = check-ids.sh race (\u00a72.18 comment on #112); fix PR #118",
+   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 03:30 PR #112 b0834b4 ready; reviewer + security review started. 5,703 lines. \u00a72.19 flags: regenerate not reveal; bad XFF ends walk; revoke/delete no password; max 500 keys; login limiter bounded. | 03:45 review+security MERGE (no blocking). Asked: proxy-trust docs (gateway lets anyone in), polish, logging redaction note. Merge after B10a: B12 merges main keeping B10a user_data open. | 03:43 4b442d6 review items 1-3 done. Waiting: B10a merge, then ping B12 to merge main (keep B10a user_data open), then merge on green. | 04:33 CI green 4b442d6; waiting B10a merge. | 05:45 pinged to merge main after B10a (keep B10a user_data open). | 2026-10-23T06:04:00Z ab76de7 merge resolution checked (one user_data open; unless_offline kept by 3-way merge); merged-tree verify running | 2026-10-23T06:08:13Z release smoke red = check-ids.sh race (\u00a72.18 comment on #112); fix PR #118 | 2026-10-23T06:15:43Z merged-tree verify (main da6c420) clean: fmt, clippy, openapi no drift, api+lodestar tests",
    "self_review": {
     "raised": 7,
     "fixed": 7,
@@ -1314,7 +1314,8 @@
   "blog1b": "B-log1b follow-up: sweep remaining call sites (pipeline, search, filter/lists.rs, api/auth/http.rs, lodestar main/services) listed in B-log1 brief; pipeline worker logs fetch key.",
   "m4_export_swarm": "#48 (M4) must fill swarm fields via torrents::hit + search::enrich so /export includes them (B10b).",
   "filter_polish": "Next filter brief: IdHasher seeding; prefilter/Nearness/always_fuzzy doc fixes; widen early_stop proptest to 66+ chars and multibyte; mixed-set headroom only ~13% on 7763.",
-  "b11a_followups": "B11a follow-ups: \u00a71.6.4 dashboard-open bench gate in CI; insights SSE topic; persisted import counter (no full scan per start); \u00a76.3 annotation kinds (upgrade/import/reindex/network change)."
+  "b11a_followups": "B11a follow-ups: \u00a71.6.4 dashboard-open bench gate in CI; insights SSE topic; persisted import counter (no full scan per start); \u00a76.3 annotation kinds (upgrade/import/reindex/network change).",
+  "B11b-gauge-13": "B11b daily compaction/rollup --repair must treat metric 13 (SEARCHABLE) as a gauge (keep last per day, never sum) - from B11a #116"
  },
  "blocked_on_owner": [],
  "launches_today": 15,
