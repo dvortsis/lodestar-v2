@@ -13,6 +13,7 @@
 //! the golden tests (`tests/golden.rs`) hold the typed responses to those
 //! bytes. Keep new fields in order too; the tests catch a slip.
 
+pub mod alerts;
 pub mod auth;
 pub mod collections;
 pub mod compare;
