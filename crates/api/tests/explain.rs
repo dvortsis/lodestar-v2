@@ -125,6 +125,7 @@ fn fixture(n: usize) -> Fixture {
             reader: Arc::new(Mutex::new(reader)),
             filters: None,
             settings: None,
+            ops: None,
             adult: AdultVisibility::follow(move || shown.load(Ordering::Relaxed)),
         }),
     );
