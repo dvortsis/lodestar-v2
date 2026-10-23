@@ -117,7 +117,13 @@ describe('the schema reader on the golden index', () => {
 		const set = (f: (s: FieldSpec) => string | undefined) =>
 			[...new Set(all.map(f).filter((x): x is string => x !== undefined))].sort();
 		expect(set((s) => s.unit)).toEqual(['connections', 'days', 'files', 'mebibytes', 'seconds']);
-		expect(set((s) => s.format)).toEqual(['int32', 'int64', 'log-filter', 'socket-addr']);
+		expect(set((s) => s.format)).toEqual([
+			'int32',
+			'int64',
+			'log-filter',
+			'socket-addr',
+			'time-range'
+		]);
 		expect(set((s) => s.widget)).toEqual(
 			[
 				'duration',
