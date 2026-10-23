@@ -80,7 +80,9 @@ A new key screen, or a new theme, needs its baselines generated (below).
 After an intended visual change, a new key route or a new theme:
 
 1. Add an empty marker file `web/e2e/.update-snapshots` and push. The **E2E** run then executes `playwright test --update-snapshots` (with `all-themes`, so the whole 46-theme set), passes, and uploads every baseline as the `snapshot-baselines` artifact.
-2. Download the artifact, unzip it into `web/e2e/` (paths inside match the repo), delete the marker file, review the PNG diffs and push. The next run compares against them.
+2. On a PR from a branch in this repository, the **commit regenerated baselines** job commits the new baselines to the PR branch for you. Pull them (`git pull --no-rebase`), review the PNG diffs, delete the marker file and push. That push runs CI again, because commits made by the workflow itself start no new runs, and the run compares against the new baselines.
+
+   On a PR from a fork, the job doesn't run. Download the artifact instead, unzip it into `web/e2e/` (paths inside match the repo), delete the marker file, review the PNG diffs and push.
 
 The same regeneration is available by hand from the Actions tab (E2E → Run workflow → `update_snapshots`) once `e2e.yml` is on `main`; the marker file works on any PR branch, which is why it exists.
 

@@ -44,16 +44,20 @@ jobs:
       image: mcr.microsoft.com/playwright:v1.56.1-noble@sha256:f1e7e01021efd65dd1a2c56064be399f3e4de00fd021ac561325f2bfbb2b837a
     env:
       HOME: /root
+    outputs:
+      updated: ${{ steps.pw.outputs.updated }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: npm ci
       - run: npm run e2e:typecheck
       - name: Playwright
+        id: pw
         # The web server (build + preview, cold `npm run assets` ~73 s) is started by the config.
         # `web/e2e/.update-snapshots` (a marker file) or the dispatch input regenerates the baselines.
         run: |
           if [ -f e2e/.update-snapshots ] || [ "${{ inputs.update_snapshots }}" = "true" ]; then
             echo "UPDATE=1" >> "$GITHUB_ENV"
+            echo "updated=true" >> "$GITHUB_OUTPUT"
             # all-themes too: it owns the 46-theme baseline set, of which a PR run checks only 6.
             E2E_ALL_THEMES=1 npx playwright test --update-snapshots
           else
@@ -77,6 +81,78 @@ jobs:
             web/playwright-report
             web/test-results
           retention-days: 14
+
+  # Commits regenerated baselines back to the PR branch, so no session has to
+  # download the artifact (the session proxy blocks GitHub's artifact storage).
+  # The write token lives only in this job, which never installs or runs the
+  # PR's code: it checks out the branch, unpacks the artifact into a scratch
+  # folder, copies in only *-linux.png files under web/e2e/**/*-snapshots/, and
+  # pushes to the PR's own branch. Same-repo PRs only; forks get a read-only
+  # token anyway. Pushes made with GITHUB_TOKEN start no new runs, so the
+  # session's next push (removing web/e2e/.update-snapshots) re-runs CI.
+  commit-baselines:
+    name: commit regenerated baselines
+    needs: e2e
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      needs.e2e.outputs.updated == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: commit-baselines-${{ github.head_ref }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.head_ref }}
+      # v7 reads artifacts written by upload-artifact v7.
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: snapshot-baselines
+          path: ${{ runner.temp }}/baselines
+      - name: Copy only snapshot PNGs into the tree
+        env:
+          SRC: ${{ runner.temp }}/baselines
+        run: |
+          set -euo pipefail
+          # upload-artifact keeps the hierarchy after the first wildcard, so
+          # the artifact's root is web/e2e/. Map each file back under it and
+          # refuse anything that isn't a snapshot PNG.
+          cd "$SRC"
+          find . -type f -print0 | while IFS= read -r -d '' f; do
+            rel="${f#./}"
+            case "$rel" in
+              *..*) echo "refusing path: $rel"; exit 1 ;;
+            esac
+            if ! printf '%s\n' "$rel" | grep -Eq '^([A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+-snapshots/[A-Za-z0-9_.-]+-linux\.png$'; then
+              echo "refusing path: $rel"; exit 1
+            fi
+            if [ "$(head -c 8 "$f" | od -An -tx1 | tr -d ' \n')" != "89504e470d0a1a0a" ]; then
+              echo "not a PNG: $rel"; exit 1
+            fi
+            mkdir -p "$GITHUB_WORKSPACE/web/e2e/$(dirname "$rel")"
+            cp "$f" "$GITHUB_WORKSPACE/web/e2e/$rel"
+          done
+      - name: Commit and push to the PR branch
+        env:
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          case "$BRANCH" in main|refs/heads/main|"") echo "refusing to push to '$BRANCH'"; exit 1 ;; esac
+          # :(glob) makes **/ match zero or more folders, so top-level
+          # web/e2e/<spec>-snapshots/ folders are included.
+          git add -- ':(glob)web/e2e/**/*-snapshots/*-linux.png'
+          if git diff --cached --quiet; then echo "Baselines unchanged."; exit 0; fi
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit -m "Update E2E snapshot baselines from CI run ${GITHUB_RUN_ID}"
+          git push origin "HEAD:refs/heads/$BRANCH"
 
   lighthouse:
     name: lighthouse (mobile + desktop)
