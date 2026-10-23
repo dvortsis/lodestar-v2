@@ -1001,6 +1001,46 @@
         ]
       }
     },
+    "/digest/preview": {
+      "get": {
+        "tags": [
+          "insights"
+        ],
+        "summary": "The digest as it would be sent now (§10.9.7). JSON only: the HTML is\nshown by the client in `<iframe sandbox srcdoc>`, the text in a `<pre>`.",
+        "operationId": "getDigestPreview",
+        "parameters": [
+          {
+            "name": "period",
+            "in": "query",
+            "description": "`daily` (the last 24 hours) or `weekly` (the last 7 days, the\ndefault).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DigestPreview"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/discover": {
       "get": {
         "tags": [
@@ -8698,6 +8738,65 @@
             "format": "int64",
             "minimum": 0
           }
+        }
+      },
+      "DigestPeriod": {
+        "type": "string",
+        "description": "How much a digest covers.",
+        "enum": [
+          "daily",
+          "weekly"
+        ]
+      },
+      "DigestPreview": {
+        "type": "object",
+        "description": "A digest as it would be sent now.",
+        "required": [
+          "generated_at",
+          "html",
+          "period",
+          "range",
+          "subject",
+          "text"
+        ],
+        "properties": {
+          "generated_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the numbers were read (unix seconds): the overview's\n`updated_at`."
+          },
+          "html": {
+            "type": "string",
+            "description": "A complete HTML document: no script, style, images or external\nlinks. Show it only in `<iframe sandbox srcdoc>` (no\n`allow-scripts`, no `allow-same-origin`)."
+          },
+          "period": {
+            "$ref": "#/components/schemas/DigestPeriod"
+          },
+          "range": {
+            "$ref": "#/components/schemas/InsightsRange",
+            "description": "The overview range the digest read, as the server normalized it."
+          },
+          "subject": {
+            "type": "string",
+            "description": "At most 120 characters."
+          },
+          "text": {
+            "type": "string",
+            "description": "Plain UTF-8, at most 4,000 bytes. Show it in a `<pre>`."
+          }
+        },
+        "example": {
+          "generated_at": 1800000000,
+          "html": "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Lodestar weekly digest: Jan 8, 2027 – Jan 15, 2027</title></head><body><h1>Lodestar weekly digest: Jan 8, 2027 – Jan 15, 2027</h1></body></html>",
+          "period": "weekly",
+          "range": {
+            "bucket": "hour",
+            "from": 1799395200,
+            "to": 1800000000,
+            "tz": "UTC"
+          },
+          "subject": "Lodestar weekly digest: Jan 8, 2027 – Jan 15, 2027",
+          "text": "Lodestar weekly digest: Jan 8, 2027 – Jan 15, 2027\n"
         }
       },
       "DiscoverKpi": {
