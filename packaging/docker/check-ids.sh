@@ -25,10 +25,19 @@ if [ -z "$pid" ] || [ "$pid" = 0 ]; then
   exit 1
 fi
 
-fail=0
+fail=0 checked=0 main_checked=0
 for status in /proc/"$pid"/task/*/status; do
-  field() { sudo awk -v k="$1:" '$1 == k { $1 = ""; sub(/^[ \t]+/, ""); print; exit }' "$status"; }
+  # Read each thread's status once. A thread can exit between the glob and
+  # the read; one that's gone runs nothing, so it's skipped, but the main
+  # thread (task id = pid) must always be read.
+  snap=$(sudo cat "$status" 2>/dev/null) || {
+    echo "$name ${status%/status}: exited before it was read, skipped"
+    continue
+  }
+  field() { awk -v k="$1:" '$1 == k { $1 = ""; sub(/^[ \t]+/, ""); print; exit }' <<<"$snap"; }
   got_uid=$(field Uid) got_gid=$(field Gid) groups=$(field Groups)
+  checked=$((checked + 1))
+  if [ "$status" = /proc/"$pid"/task/"$pid"/status ]; then main_checked=1; fi
   echo "$name ${status%/status}: Uid=[$got_uid] Gid=[$got_gid] Groups=[$groups]"
   [ "$got_uid" = "$uid $uid $uid $uid" ] || { echo "::error::$name runs as uid $got_uid, not $uid"; fail=1; }
   [ "$got_gid" = "$gid $gid $gid $gid" ] || { echo "::error::$name runs as gid $got_gid, not $gid"; fail=1; }
@@ -44,6 +53,10 @@ for status in /proc/"$pid"/task/*/status; do
     esac
   done
 done
+if [ "$main_checked" != 1 ]; then
+  echo "::error::$name: the main thread's status couldn't be read ($checked threads checked)"
+  fail=1
+fi
 
 if [ -n "$data" ]; then
   owner=$(sudo stat --format '%u:%g' "$data")
