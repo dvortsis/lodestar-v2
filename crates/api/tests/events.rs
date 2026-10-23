@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
+use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode, header};
 use axum::{Extension, Router};
 use lodestar_api::auth::ProxyConfig;
@@ -466,6 +467,63 @@ async fn a_proxy_signed_stream_lives_past_heartbeats_and_ends_with_the_proxy() {
     // Turning proxy sign-in off ends it at the next heartbeat.
     f.auth.set_proxy(ProxyConfig::default()).unwrap();
     c.until_closed(SOON).await;
+}
+
+#[tokio::test]
+async fn a_proxy_user_loses_the_stream_when_no_longer_allowed() {
+    let f = fixture(config());
+    let _ = session(&f.auth);
+    let proxy = |users: Vec<String>| ProxyConfig {
+        enabled: true,
+        trusted: vec!["127.0.0.1/32".into()],
+        allowed_users: users,
+        ..ProxyConfig::default()
+    };
+    f.auth.set_proxy(proxy(vec!["alice".into()])).unwrap();
+    let addr = serve(f.app.clone()).await;
+    let mut c = Conn::open(addr, "/api/v1/events", &[("Remote-User", "alice")]).await;
+    c.until(": keep-alive", SOON).await;
+    f.auth.set_proxy(proxy(vec!["bob".into()])).unwrap();
+    c.until_closed(SOON).await;
+}
+
+#[tokio::test]
+async fn made_up_cookies_beside_a_proxy_user_share_one_cap() {
+    // Two streams per session here.
+    let f = fixture(config());
+    let _ = session(&f.auth);
+    f.auth
+        .set_proxy(ProxyConfig {
+            enabled: true,
+            trusted: vec!["127.0.0.1/32".into()],
+            ..ProxyConfig::default()
+        })
+        .unwrap();
+    let addr = serve(f.app.clone()).await;
+    let mut open = Vec::new();
+    for i in 0..2 {
+        let cookie = format!("lodestar=made-up-{i}");
+        let mut c = Conn::open(
+            addr,
+            "/api/v1/events",
+            &[("Remote-User", "alice"), ("Cookie", &cookie)],
+        )
+        .await;
+        c.until("retry:", SOON).await;
+        open.push(c);
+    }
+    // A third invented cookie is still alice's session: refused.
+    let mut req = get(
+        "/api/v1/events",
+        &[("remote-user", "alice"), ("cookie", "lodestar=made-up-2")],
+    );
+    req.extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
+    let (status, _, body) = call(&f.app, req).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    // Another user from the same address has a bucket of their own.
+    let mut bob = Conn::open(addr, "/api/v1/events", &[("Remote-User", "bob")]).await;
+    bob.until("retry:", SOON).await;
 }
 
 #[tokio::test]
