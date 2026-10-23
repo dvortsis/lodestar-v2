@@ -95,7 +95,7 @@ tests, the v0.5 exit and the user-doc screenshots use it instead of the
 W6 mock. `lodestar_bench::fixture` builds it; the server only adds
 `auth.json` and `seal.key`, as on any first start. It's in the
 binary through the default-on `fixture` feature of `lodestar` (about
-3 MB); `--no-default-features` builds leave it out.
+690 KB stripped); `--no-default-features` builds leave it out.
 
 ```sh
 # A temporary fixture, removed when the server stops cleanly:

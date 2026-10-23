@@ -63,6 +63,9 @@ pub const FORMAT: u32 = 1;
 pub const MANIFEST: &str = "fixture.json";
 /// The database's file name (the server's `Config::db_path`).
 pub const DB: &str = "lodestar.db";
+/// The setting that marks a fixture's database, holding [`FORMAT`]: a
+/// stray `fixture.json` can't make a real store a fixture.
+pub const FORMAT_SETTING: &str = "fixture_format";
 /// Generated torrents, after the hand-specified ones.
 pub const GENERATED: usize = 2000;
 /// The generator's seed.
@@ -439,6 +442,7 @@ pub fn build(dir: &Path, anchor: i64) -> Result<Manifest, Error> {
         store.register_source(plugin, env!("CARGO_PKG_VERSION"), clock.first_run)?;
     }
     store.set_setting_i64(FIRST_RUN_SETTING, clock.first_run)?;
+    store.set_setting_i64(FORMAT_SETTING, i64::from(FORMAT))?;
 
     let infos: Vec<Info> = specs
         .iter()

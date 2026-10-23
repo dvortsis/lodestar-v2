@@ -45,7 +45,7 @@ rustix = { version = "1.1.5", features = ["fs", "process", "thread"] }
 default = ["web", "fixture"]
 # Embed web/build (the Svelte UI) when it exists; without it, a stub page.
 web = []
-# `serve --fixture`: test data built in (about 3 MB of binary).
+# `serve --fixture`: test data built in (about 690 KB of a stripped binary).
 fixture = ["dep:lodestar-bench"]
 
 [build-dependencies]
