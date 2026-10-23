@@ -10,7 +10,7 @@ import {
 } from '$lib/format';
 import Exceptions from './Exceptions.svelte';
 import Funnel from './Funnel.svelte';
-import { overviewFixture } from './fixtures';
+import { COMPARE_KPI, overviewFixture } from './fixtures';
 import KpiRow from './KpiRow.svelte';
 import Segments from './Segments.svelte';
 import ServePanel from './ServePanel.svelte';
@@ -19,6 +19,7 @@ import type { InsightsQuery } from './query';
 
 const q: InsightsQuery = { range: '7d', compare: false };
 const o = overviewFixture();
+const withDeltas = { ...o.kpi, ...COMPARE_KPI };
 const text = (id: string) => screen.getByTestId(id).textContent?.trim();
 const approx = (s: string) => `≈\u00a0${s}`;
 
@@ -40,8 +41,8 @@ describe('every number is a response field through a formatter', () => {
 	});
 
 	it('KPI row', () => {
-		render(KpiRow, { kpi: o.kpi });
-		const k = o.kpi;
+		render(KpiRow, { kpi: withDeltas });
+		const k = withDeltas;
 		expect(text('insights-kpi-searchable-value')).toBe(formatCompact(k.searchable));
 		expect(text('insights-kpi-searchable-delta')).toContain(
 			formatDelta(k.searchable_delta, 'en', 'compact')

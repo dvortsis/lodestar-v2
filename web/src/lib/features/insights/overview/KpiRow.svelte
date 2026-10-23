@@ -53,7 +53,9 @@
 		/>
 		<span class="ins-kpi-note"
 			>{m.insights_overview_kpi_imported()}
-			<span data-testid="insights-kpi-imported">{formatCount(kpi.imported, locale)}</span></span
+			<span data-testid="insights-kpi-imported">{formatCount(kpi.imported, locale)}</span
+			>{#if kpi.imported === null}<span class="sr-only">{m.insights_overview_not_measured()}</span
+				>{/if}</span
 		>
 		{#if kpi.searchable === null}
 			<span class="ins-kpi-note">{m.insights_overview_search_off()}</span>

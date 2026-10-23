@@ -19,6 +19,7 @@
 	import type { Route } from './href';
 	import KpiRow from './KpiRow.svelte';
 	import Movement from './Movement.svelte';
+	import { csvHref } from './links';
 	import { needsCanonical, parseQuery, searchFor, type InsightsQuery } from './query';
 	import Segments from './Segments.svelte';
 	import ServePanel from './ServePanel.svelte';
@@ -44,8 +45,9 @@
 		}
 	});
 	// One request per state change; Back and Forward land here too.
+	const queryKey = $derived(JSON.stringify(query));
 	$effect(() => {
-		const q = JSON.stringify(query);
+		const q = queryKey;
 		untrack(() => void insights.load(JSON.parse(q) as InsightsQuery));
 	});
 	$effect(() => insights.start());
@@ -126,8 +128,7 @@
 	);
 	const notices = {
 		paused: () => m.insights_overview_notice_paused(),
-		resumed: () => m.insights_overview_notice_resumed(),
-		load_failed: () => m.insights_overview_notice_failed()
+		resumed: () => m.insights_overview_notice_resumed()
 	};
 	const announcement = $derived(insights.notice ? notices[insights.notice]() : '');
 	const paused = $derived(overview?.kpi.health.state === 'paused');
@@ -174,7 +175,11 @@
 		{announcement}
 	</div>
 
-	{#if insights.phase === 'error'}
+	{#if insights.phase === 'error' && fieldError}
+		<p class="ins-sentence" data-testid="insights-range-invalid">
+			{m.insights_overview_range_invalid()}
+		</p>
+	{:else if insights.phase === 'error'}
 		<Banner kind="error" title={m.insights_overview_error_title()}>
 			{m.insights_overview_error_body()}
 			{#snippet action()}
@@ -284,7 +289,15 @@
 					{m.insights_overview_exceptions_title()}
 				</h2>
 				<p class="ins-sub">{m.insights_overview_exceptions_time()}</p>
-				<div class="ins-card"><Exceptions exceptions={overview.exceptions} /></div>
+				<div class="ins-card">
+					<Exceptions exceptions={overview.exceptions} />
+					<a
+						class="ins-link"
+						href={resolve(csvHref('exceptions', query) as Route)}
+						download
+						data-testid="insights-exceptions-csv">{m.insights_overview_csv()}</a
+					>
+				</div>
 			</section>
 
 			<section

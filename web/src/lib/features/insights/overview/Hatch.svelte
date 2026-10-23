@@ -6,7 +6,12 @@
 <svg width="0" height="0" aria-hidden="true" focusable="false" class="absolute">
 	<defs>
 		<pattern id="ins-hatch" patternUnits="userSpaceOnUse" width="6" height="6">
-			<path d="M-1 7 7 -1M-1 1 1 -1M5 7 7 5" stroke="currentColor" stroke-width="1.5" fill="none" />
+			<path
+				d="M-1 7 7 -1M-1 1 1 -1M5 7 7 5"
+				style="stroke: var(--data-1)"
+				stroke-width="1.5"
+				fill="none"
+			/>
 		</pattern>
 	</defs>
 </svg>

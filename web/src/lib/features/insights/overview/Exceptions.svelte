@@ -59,9 +59,7 @@
 					{/if}
 					<div>
 						<p>
-							<span class="sr-only"
-								>{e.severity === 'error' ? m.common_error() : m.common_warning()}:</span
-							>
+							<strong>{e.severity === 'error' ? m.common_error() : m.common_warning()}:</strong>
 							{message(e)}
 						</p>
 						<p class="ins-muted">

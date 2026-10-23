@@ -66,13 +66,15 @@
 	let compare = $state(false);
 
 	// The URL is the state: follow it (Back and Forward included).
+	const queryKey = $derived(JSON.stringify(query));
 	$effect(() => {
-		shown = query.range;
-		editing = query.range === 'custom';
-		compare = query.compare;
-		if (query.range === 'custom' && query.from !== undefined && query.to !== undefined) {
-			fromDay = dayOf(query.from);
-			toDay = lastDay(query.to);
+		const q = JSON.parse(queryKey) as InsightsQuery;
+		shown = q.range;
+		editing = q.range === 'custom';
+		compare = q.compare;
+		if (q.range === 'custom' && q.from !== undefined && q.to !== undefined) {
+			fromDay = dayOf(q.from);
+			toDay = lastDay(q.to);
 		}
 	});
 
@@ -260,19 +262,21 @@
 			{/if}
 			{#if crawler.intensity_env}
 				<span data-testid="insights-intensity-locked">
-					{m.insights_overview_intensity_label()}: {levelName}.
-					<span class="ins-muted"
-						>{m.insights_overview_intensity_env({ variable: crawler.intensity_env })}</span
-					>
+					{m.insights_overview_intensity_locked({
+						level: levelName,
+						variable: crawler.intensity_env
+					})}
 				</span>
 			{:else}
-				<SegmentedControl
-					options={levels}
-					value={crawler.intensity}
-					label={m.insights_overview_intensity_label()}
-					dense
-					onchange={(v) => onintensity(v as Intensity)}
-				/>
+				{#key crawler}
+					<SegmentedControl
+						options={levels}
+						value={crawler.intensity}
+						label={m.insights_overview_intensity_label()}
+						dense
+						onchange={(v) => onintensity(v as Intensity)}
+					/>
+				{/key}
 			{/if}
 			<span class="ins-muted ins-sentence" data-testid="insights-intensity-effect"
 				>{intensityEffect}</span
