@@ -32,7 +32,7 @@ use lodestar_search::{Node, flag_names};
 use crate::core::Item;
 use crate::fasttok::{self, Text};
 use crate::hash::{IdSet, term_hash};
-use crate::prefilter::{self, DocKeys, RuleList};
+use crate::prefilter::{self, DocKeys, Gate, RuleList};
 
 /// What the rules can read beyond the core's [`Item`].
 #[derive(Debug, Clone, Copy)]
@@ -298,6 +298,48 @@ pub(crate) fn compile(node: &Node) -> Compiled {
     }
 }
 
+/// A [`Gate`] of a compiled query: a clause every match needs, which the
+/// cheap check answers *no* for when the gate isn't passed
+/// ([`Doc::passes`]). Inside `file:(…)` (`in_file`) every text field is
+/// keyed, and a size is a file's.
+pub(crate) fn gate(q: &Compiled) -> Gate {
+    gate_in(q, false)
+}
+
+fn gate_in(q: &Compiled, in_file: bool) -> Gate {
+    let keyed = |field: &TextField| in_file || *field != TextField::Title;
+    let bounds = |lo: &Option<u64>, hi: &Option<u64>| (lo.unwrap_or(0), hi.unwrap_or(u64::MAX));
+    match q {
+        // Every clause of an AND is needed.
+        Compiled::And(of) => of
+            .iter()
+            .fold(Gate::None, |g, c| g.better(gate_in(c, in_file))),
+        Compiled::File(of) => gate_in(of, true),
+        Compiled::Range {
+            field: NumField::Size,
+            lo,
+            hi,
+        } => {
+            let (lo, hi) = bounds(lo, hi);
+            if in_file {
+                Gate::FileSize(lo, hi)
+            } else {
+                Gate::Size(lo, hi)
+            }
+        }
+        Compiled::Tag { keys, .. } if keys.len() == 1 => Gate::Tag(keys[0]),
+        Compiled::Prefix {
+            field,
+            start: Some(k),
+            ..
+        } if keyed(field) => Gate::Start(*k),
+        Compiled::Phrase { field, parts, .. } if keyed(field) && parts.len() >= 2 => {
+            Gate::Pair(parts[0].hash, parts[1].hash)
+        }
+        _ => Gate::None,
+    }
+}
+
 /// [`compile`], remembered: *Always allow*, CSX-5 scopes and exceptions
 /// are evaluated for every torrent, and compiling tokenizes. Remembered
 /// by the query's address, and used only while the query there is still
@@ -413,7 +455,24 @@ impl<'a> Doc<'a> {
 
     /// The positions of your rules that could match, in order.
     pub(crate) fn candidates(&self, rules: &RuleList) -> Vec<u32> {
-        rules.candidates(self.keys(), &|| self.tag_keys())
+        rules.candidates(self.keys(), &|| self.tag_keys(), &|g| self.passes(g))
+    }
+
+    /// Whether the cheap check would let a clause with this [`gate`]
+    /// through.
+    pub(crate) fn passes(&self, g: Gate) -> bool {
+        match g {
+            Gate::None => true,
+            Gate::Size(lo, hi) => {
+                self.check_range(NumField::Size, Some(lo), Some(hi), false) != Tri::No
+            }
+            Gate::FileSize(lo, hi) => {
+                self.check_range(NumField::Size, Some(lo), Some(hi), true) != Tri::No
+            }
+            Gate::Tag(k) => self.tag_keys().contains(&k),
+            Gate::Start(k) => self.keys().could_start(k),
+            Gate::Pair(a, b) => self.keys().could_follow(a, b),
+        }
     }
 
     fn name(&self) -> &Text {
@@ -1365,8 +1424,9 @@ mod tests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(4000))]
         /// The compiled match, with its cheap check, agrees with the
-        /// previous matcher on any query and torrent, and the cheap check
-        /// alone never contradicts the full match.
+        /// previous matcher on any query and torrent, the cheap check
+        /// alone never contradicts the full match, and the query's gate
+        /// turns it away only where the cheap check says no.
         #[test]
         fn agrees_with_the_reference(q in query(), (name, paths) in torrent(), neutral in any::<bool>()) {
             let Ok(node) = parse(&q) else { return Ok(()) };
@@ -1395,6 +1455,10 @@ mod tests {
                 Tri::Maybe => {}
             }
             prop_assert_eq!(doc.matches_compiled(&compiled, &neutral), full);
+            // A gate turns a rule away only where the cheap check would.
+            if !doc.passes(gate(&compiled)) {
+                prop_assert_eq!(doc.check(&compiled, false), Tri::No, "gate: {} on {:?} {:?}", q, name, paths);
+            }
         }
     }
 }
