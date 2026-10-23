@@ -1122,13 +1122,13 @@
       "notes": "3 review rounds -> MERGE; nits applied; merge on green | 2026-10-23T14:39:41Z reconciled: merged"
     },
     "B-log1b": {
-      "status": "pending",
+      "status": "running",
       "model": "opus",
-      "session": null,
+      "session": "session_01LnDgjtdt2wG4eww26izy2i",
       "pr": null,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": "2026-10-23T07:34:04Z added by #120; needs brief from B-log1 review follow-ups | 2026-10-23T10:12:55Z deps merged; waits for B-log2 (logging/** overlap) and B11b (pipeline/**). Brief must include B-log1 review follow-ups (carry_forward) | 2026-10-23T17:15:19Z unblocked by B-log2; waits for M4 #48 (pipeline/** overlap); brief drafting | 2026-10-23T17:28:33Z brief committed (Opus helper + runner decisions: owns, main.rs after #128, bench gates, api.request template-only); held: launch freeze + after M4"
+      "notes": "2026-10-23T07:34:04Z added by #120; needs brief from B-log1 review follow-ups | 2026-10-23T10:12:55Z deps merged; waits for B-log2 (logging/** overlap) and B11b (pipeline/**). Brief must include B-log1 review follow-ups (carry_forward) | 2026-10-23T17:15:19Z unblocked by B-log2; waits for M4 #48 (pipeline/** overlap); brief drafting | 2026-10-23T17:28:33Z brief committed (Opus helper + runner decisions: owns, main.rs after #128, bench gates, api.request template-only); held: launch freeze + after M4 | 2026-10-23T19:05:20Z launched (opus, auto mode)"
     },
     "M4": {
       "status": "merged",
@@ -1160,10 +1160,11 @@
       "notes": "2026-10-23T18:56:17Z owner-requested docs+settings PR; runner reviewed MERGE; waiting CI | 2026-10-23T19:00:53Z merged #145 as 8ad1971; runner re-read rules; landing_lane/catch_ups added"
     },
     "X-sleeps": {
-      "status": "pending",
+      "status": "running",
       "model": "sonnet",
       "deps": [],
-      "notes": "2026-10-23T19:00:53Z queued (owner via #145 follow-ups): replace fixed sleeps that assume work finished with condition polls (deadline >=10 s, failure says what it saw) in 92 Rust sleeps across 32 test files (crates/**/tests*, tests.rs) and 5 web e2e waitForTimeout; leave writer-pacing sleeps; owns only touched test files; split by crate past ~1,500 lines. Launch when owner lifts launch freeze."
+      "notes": "2026-10-23T19:00:53Z queued (owner via #145 follow-ups): replace fixed sleeps that assume work finished with condition polls (deadline >=10 s, failure says what it saw) in 92 Rust sleeps across 32 test files (crates/**/tests*, tests.rs) and 5 web e2e waitForTimeout; leave writer-pacing sleeps; owns only touched test files; split by crate past ~1,500 lines. Launch when owner lifts launch freeze. | 2026-10-23T19:05:20Z launched (sonnet, auto mode)",
+      "session": "session_01EFQKtWTWkBGHK299HzziBZ"
     }
   },
   "heartbeat_trigger": "trig_01U8KNWyDovQ9omwvZi8cuLW",
@@ -1519,7 +1520,7 @@
     }
   },
   "blocked_on_owner": [],
-  "launches_today": 29,
+  "launches_today": 31,
   "last_heartbeat": "2026-10-23T13:39:57Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
