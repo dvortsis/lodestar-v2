@@ -109,6 +109,18 @@ impl LogName {
         }
     }
 
+    /// A rotated file's other self: its `.gz` or its `.jsonl`.
+    pub fn sibling(&self) -> Option<LogName> {
+        match self {
+            LogName::Current => None,
+            LogName::Rotated { stamp, n, gz } => Some(LogName::Rotated {
+                stamp: stamp.clone(),
+                n: *n,
+                gz: !gz,
+            }),
+        }
+    }
+
     /// Its path in `dir`, built from the typed value.
     pub fn path(&self, dir: &Path) -> PathBuf {
         dir.join(self.file_name())

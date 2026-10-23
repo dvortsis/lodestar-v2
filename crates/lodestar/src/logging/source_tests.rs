@@ -799,12 +799,74 @@ fn delete_details_only() {
     settle(rt);
     let src = logs(rt);
     assert_eq!(src.files().files.len(), 3);
+    let deleted_before = events::LOGGING_FILES_DELETED::EVENT.count();
     let done = src.delete(LogFilesWhich::Details).unwrap();
     assert_eq!(done.deleted, 1, "{done:?}");
     let left = src.files();
     assert!(left.files.iter().all(|f| !f.details), "{left:?}");
     let all = serde_json::to_string(&all_pages(&src, "hist-line", 100)).unwrap();
     assert!(!all.contains(NAME));
+    // The deletion is logged (tests have no global sink: its counter).
+    assert!(events::LOGGING_FILES_DELETED::EVENT.count() > deleted_before);
+}
+
+/// The moment a badge's file has its new name and the index on disk still
+/// has the old one (a compression between a listing and the index read):
+/// the file still counts as having details.
+#[test]
+fn a_badge_holds_while_its_file_changes_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let now = unix_now();
+    let (rt, _) = runtime(
+        &section(dir.path(), |l| {
+            l.kinds.insert("name".into(), now + 600);
+        }),
+        None,
+        false,
+    );
+    line(rt, 1, NAME);
+    if let FileState::Open(sink) = &mut *lock(&rt.file) {
+        sink.rotate().unwrap();
+    }
+    settle(rt);
+    rt.apply(Applied::compute(&section(dir.path(), |_| {}), now));
+    line(rt, 2, "plain");
+    let gz = std::fs::read_dir(dir.path().join("logs"))
+        .unwrap()
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .find(|n| n.ends_with(".jsonl.gz"))
+        .expect("the compressed file");
+    let plain = gz.trim_end_matches(".gz").to_string();
+    // The index names it by its `.jsonl` only.
+    let index = lock(&rt.jobs).clone().unwrap().index;
+    {
+        let mut ix = file::lock(&index);
+        let f = ix.files.remove(&gz).expect("its badge");
+        ix.files.insert(plain.clone(), f);
+        ix.remove("nothing-to-remove").unwrap();
+    }
+    let raw = std::fs::read_to_string(dir.path().join("logs").join(file::INDEX)).unwrap();
+    std::fs::write(
+        dir.path().join("logs").join(file::INDEX),
+        raw.replace(&format!("\"{gz}\""), &format!("\"{plain}\"")),
+    )
+    .unwrap();
+    let src = logs(rt);
+    let listed = src.files();
+    let f = listed.files.iter().find(|f| f.name == gz).unwrap();
+    assert!(f.details, "{listed:?}");
+    let d = src.download(&gz, LogFormat::Jsonl, None).unwrap();
+    assert!(d.file_name.ends_with("-redacted.jsonl"));
+    assert!(
+        src.archive(LogFormat::Jsonl, None)
+            .unwrap()
+            .file_name
+            .ends_with("-redacted.zip")
+    );
+    // "Details" picks it in the job, by the writer's index.
+    let done = src.delete(LogFilesWhich::Details).unwrap();
+    assert_eq!(done.deleted, 1, "{done:?}");
+    assert!(!dir.path().join("logs").join(&gz).exists());
 }
 
 #[cfg(windows)]

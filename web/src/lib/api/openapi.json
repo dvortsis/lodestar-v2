@@ -3283,7 +3283,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The file, as an attachment.",
+            "description": "The file, as an attachment: JSON lines, or text with `format=text`.",
             "headers": {
               "Cache-Control": {
                 "schema": {
@@ -3300,6 +3300,11 @@
             },
             "content": {
               "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "text/plain; charset=utf-8": {
                 "schema": {
                   "type": "string"
                 }

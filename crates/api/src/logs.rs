@@ -743,9 +743,11 @@ async fn download_with(
     responses(
         (
             status = 200,
-            description = "The file, as an attachment.",
-            content_type = "application/x-ndjson",
-            body = String,
+            description = "The file, as an attachment: JSON lines, or text with `format=text`.",
+            content(
+                (String = "application/x-ndjson"),
+                (String = "text/plain; charset=utf-8"),
+            ),
             headers(
                 ("Content-Disposition" = String, description = "`attachment; filename=\"<stem>[-redacted].<jsonl|txt>\"`."),
                 ("Cache-Control" = String, description = "`no-store`."),

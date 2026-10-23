@@ -8486,7 +8486,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The file, as an attachment. */
+            /** @description The file, as an attachment: JSON lines, or text with `format=text`. */
             200: {
                 headers: {
                     /** @description `no-store`. */
@@ -8497,6 +8497,7 @@ export interface operations {
                 };
                 content: {
                     "application/x-ndjson": string;
+                    "text/plain; charset=utf-8": string;
                 };
             };
             /** @description A bad parameter (`bad_parameter`). */

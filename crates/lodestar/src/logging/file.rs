@@ -69,14 +69,57 @@ pub struct Index {
 }
 
 impl Index {
+    /// The folder's index. One that exists but can't be read is rebuilt
+    /// failing closed: every log file in the folder has details and an
+    /// opt-in, so the next save never drops a badge it can't vouch for.
     pub(super) fn load(dir: &Path) -> Index {
         let path = dir.join(INDEX);
-        let mut index: Index = fs::read(&path)
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
+        let read = match fs::read(&path) {
+            Ok(b) => serde_json::from_slice::<Index>(&b).ok(),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Some(Index::default()),
+            Err(_) => None,
+        };
+        let mut index = match read {
+            Some(i) => i,
+            None => {
+                let mut i = Index::default();
+                let all = Flags {
+                    details: true,
+                    opt_in: true,
+                };
+                for e in fs::read_dir(dir)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Result::ok)
+                {
+                    if let Some(name) = e.file_name().to_str().and_then(LogName::parse) {
+                        i.files.insert(name.file_name(), all);
+                    }
+                }
+                i
+            }
+        };
         index.path = path;
         index
+    }
+
+    /// A file's flags, with those of its `.jsonl`/`.gz` other self.
+    pub(super) fn flags(&self, name: &LogName) -> Flags {
+        let get = |n: &LogName| self.files.get(&n.file_name()).copied().unwrap_or_default();
+        match name.sibling() {
+            Some(other) => get(name).union(get(&other)),
+            None => get(name),
+        }
+    }
+
+    /// Gives `to` the flags of `from` too, before a file moves from one
+    /// name to the other: no reader ever sees the file under a name
+    /// without them.
+    fn copy(&mut self, from: &str, to: &str) -> io::Result<()> {
+        match self.files.get(from).copied() {
+            Some(f) => self.set(to, f),
+            None => Ok(()),
+        }
     }
 
     fn save(&self) -> io::Result<()> {
@@ -95,16 +138,6 @@ impl Index {
         }
         self.files.insert(name.to_string(), new);
         self.save()
-    }
-
-    fn rename(&mut self, from: &str, to: &str) -> io::Result<()> {
-        match self.files.remove(from) {
-            Some(f) => {
-                self.files.insert(to.to_string(), f);
-                self.save()
-            }
-            None => Ok(()),
-        }
     }
 
     pub(super) fn remove(&mut self, name: &str) -> io::Result<()> {
@@ -151,7 +184,7 @@ pub(super) enum Job {
     Delete {
         dir: PathBuf,
         names: Vec<LogName>,
-        sweep: Option<Sweep>,
+        take: Take,
         reply: mpsc::Sender<Deleted>,
     },
     #[cfg(test)]
@@ -183,10 +216,10 @@ impl Worker {
                         Job::Delete {
                             dir,
                             names,
-                            sweep,
+                            take,
                             reply,
                         } => {
-                            let _ = reply.send(delete(&dir, &names, sweep.as_ref(), &index));
+                            let _ = reply.send(delete(&dir, &names, &take, &index));
                             Ok(())
                         }
                         #[cfg(test)]
@@ -226,38 +259,43 @@ pub struct Deleted {
     pub skipped: Vec<(String, &'static str)>,
 }
 
-/// "Delete all": also every rotated file found when the job runs that
-/// isn't newer than `upto` (every one, without), so a rotation between
-/// the listing and the job leaves nothing older behind.
+/// What a deletion takes beyond the names it's given, chosen when the
+/// job runs, from the folder and the index as they are then.
 #[derive(Debug, Clone)]
-pub(super) struct Sweep {
-    pub upto: Option<LogName>,
+pub(super) enum Take {
+    /// "All": every rotated file not newer than `upto` (every one,
+    /// without), so a rotation between the listing and the job leaves
+    /// nothing older behind.
+    All { upto: Option<LogName> },
+    /// "Details": every rotated file whose flags (with its other self's)
+    /// say details or an opt-in, so a file whose badge moved with it
+    /// since the listing is still taken.
+    Details,
 }
 
-/// Deletes `names` in `dir` (each one's `.gz` too), and what `sweep`
+/// Deletes `names` in `dir` (each one's `.gz` too), and what `take`
 /// takes, never following a link: one is skipped and reported. Then the
 /// `.part` leftovers, and the names' index entries.
-pub(super) fn delete(
-    dir: &Path,
-    names: &[LogName],
-    sweep: Option<&Sweep>,
-    index: &Mutex<Index>,
-) -> Deleted {
+pub(super) fn delete(dir: &Path, names: &[LogName], take: &Take, index: &Mutex<Index>) -> Deleted {
     let mut out = Deleted::default();
     let mut names = names.to_vec();
-    if let Some(sweep) = sweep
-        && let Ok(entries) = fs::read_dir(dir)
-    {
+    if let Ok(entries) = fs::read_dir(dir) {
         for e in entries.filter_map(Result::ok) {
             let Some(name) = e.file_name().to_str().and_then(LogName::parse) else {
                 continue;
             };
-            let old_enough = match (&name, &sweep.upto) {
+            let taken = match (&name, take) {
                 (LogName::Current, _) => false,
-                (_, None) => true,
-                (n, Some(upto)) => LogName::newest_first(n, upto) != std::cmp::Ordering::Less,
+                (_, Take::All { upto: None }) => true,
+                (n, Take::All { upto: Some(upto) }) => {
+                    LogName::newest_first(n, upto) != std::cmp::Ordering::Less
+                }
+                (n, Take::Details) => {
+                    let f = lock(index).flags(n);
+                    f.details || f.opt_in
+                }
             };
-            if old_enough && !names.contains(&name) {
+            if taken && !names.contains(&name) {
                 names.push(name);
             }
         }
@@ -303,6 +341,9 @@ pub(super) fn delete(
 pub(super) struct Jobs {
     tx: mpsc::Sender<Job>,
     pub dir: PathBuf,
+    /// The writer's own index, so a change from outside it isn't undone
+    /// by its next save.
+    pub index: Arc<Mutex<Index>>,
 }
 
 impl Jobs {
@@ -310,17 +351,13 @@ impl Jobs {
     /// compressions queued before it take: it never runs beside them.
     /// `Err(None)`: there's no worker, so the deletion may run elsewhere.
     /// `Err(Some(_))`: the worker took the job and ended without an answer.
-    pub fn delete(
-        &self,
-        names: Vec<LogName>,
-        sweep: Option<Sweep>,
-    ) -> Result<Deleted, Option<io::Error>> {
+    pub fn delete(&self, names: Vec<LogName>, take: Take) -> Result<Deleted, Option<io::Error>> {
         let (reply, rx) = mpsc::channel();
         self.tx
             .send(Job::Delete {
                 dir: self.dir.clone(),
                 names,
-                sweep,
+                take,
                 reply,
             })
             .map_err(|_| None)?;
@@ -563,6 +600,7 @@ impl FileSink {
         Jobs {
             tx: self.worker.tx.clone(),
             dir: self.cfg.dir.clone(),
+            index: self.index.clone(),
         }
     }
 
@@ -666,20 +704,26 @@ impl FileSink {
         }
         let name = rotated_name(&self.cfg.dir);
         let to = self.cfg.dir.join(&name);
-        fs::rename(&self.path, &to)?;
+        // Its badge goes first, so it's never under a name without one.
+        let _ = lock(&self.index).copy(CURRENT, &name);
+        if let Err(e) = fs::rename(&self.path, &to) {
+            let _ = lock(&self.index).remove(&name);
+            return Err(e);
+        }
         match open_append(&self.path) {
             Ok(f) => self.file = f,
             Err(e) => {
                 // Put it back, so lines go on in the current file and a
                 // prune never takes them.
                 let _ = fs::rename(&to, &self.path);
+                let _ = lock(&self.index).remove(&name);
                 return Err(e);
             }
         }
         self.size = 0;
         self.opened = SystemTime::now();
         self.flags = Flags::default();
-        let _ = lock(&self.index).rename(CURRENT, &name);
+        let _ = lock(&self.index).remove(CURRENT);
         self.retry_at = None;
         if compress {
             self.worker
@@ -718,7 +762,7 @@ fn rotated_name(dir: &Path) -> String {
 /// name for a deletion, so a writer opening after this starts a new one
 /// rather than writing to a file about to go. `Ok(None)`: there's none.
 /// A link with its name is never moved.
-pub(super) fn set_aside(dir: &Path) -> Result<Option<String>, &'static str> {
+pub(super) fn set_aside(dir: &Path, index: &Mutex<Index>) -> Result<Option<String>, &'static str> {
     let path = dir.join(CURRENT);
     match fs::symlink_metadata(&path) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -727,10 +771,20 @@ pub(super) fn set_aside(dir: &Path) -> Result<Option<String>, &'static str> {
         Ok(_) => {}
     }
     let name = rotated_name(dir);
+    // Its badge moves with it, first.
+    let _ = lock(index).copy(CURRENT, &name);
     match fs::rename(&path, dir.join(&name)) {
-        Ok(()) => Ok(Some(name)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(_) => Err("failed"),
+        Ok(()) => {
+            let _ = lock(index).remove(CURRENT);
+            Ok(Some(name))
+        }
+        Err(e) => {
+            let _ = lock(index).remove(&name);
+            match e.kind() {
+                io::ErrorKind::NotFound => Ok(None),
+                _ => Err("failed"),
+            }
+        }
     }
 }
 
@@ -762,9 +816,11 @@ fn compress(dir: &Path, name: &str, index: &Mutex<Index>) -> io::Result<()> {
     // member it needs (`read::write_gz`).
     super::read::write_gz(&mut io::BufReader::with_capacity(64 << 10, input), &mut out)?;
     out.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+    // The badge before the name: no reader sees the `.gz` without it.
+    let _ = lock(index).copy(name, &gz);
     fs::rename(&part, dir.join(&gz))?;
     fs::remove_file(&from)?;
-    let _ = lock(index).rename(name, &gz);
+    let _ = lock(index).remove(name);
     Ok(())
 }
 
@@ -821,13 +877,56 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_unreadable_index_is_rebuilt_failing_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        for name in [
+            CURRENT,
+            "lodestar-20261023T101500.123Z.jsonl.gz",
+            "notes.txt",
+        ] {
+            fs::write(d.join(name), "x\n").unwrap();
+        }
+        fs::write(d.join(INDEX), "{not json").unwrap();
+        let mut index = Index::load(d);
+        let all = Flags {
+            details: true,
+            opt_in: true,
+        };
+        assert_eq!(index.files.len(), 2, "{:?}", index.files);
+        assert!(index.files.values().all(|f| *f == all));
+        // The next save keeps the badges: never an empty index.
+        index.alive_at = 1;
+        index.save().unwrap();
+        let back = Index::load(d);
+        assert_eq!(back.files.get(CURRENT), Some(&all));
+        assert_eq!(
+            back.files.get("lodestar-20261023T101500.123Z.jsonl.gz"),
+            Some(&all)
+        );
+        // A missing one is an empty one.
+        fs::remove_file(d.join(INDEX)).unwrap();
+        assert!(Index::load(d).files.is_empty());
+    }
+
+    #[test]
     fn the_current_file_is_set_aside_never_through_a_link() {
         let dir = tempfile::tempdir().unwrap();
         let d = dir.path();
-        assert_eq!(set_aside(d), Ok(None), "none there");
+        let index = Mutex::new(Index::load(d));
+        assert_eq!(set_aside(d, &index), Ok(None), "none there");
         fs::write(d.join(CURRENT), "line\n").unwrap();
-        let name = set_aside(d).unwrap().unwrap();
+        let details = Flags {
+            details: true,
+            opt_in: false,
+        };
+        lock(&index).set(CURRENT, details).unwrap();
+        let name = set_aside(d, &index).unwrap().unwrap();
         assert!(LogName::parse(&name).is_some_and(|n| n != LogName::Current));
+        // Its badge went with it, on disk too.
+        let on_disk = Index::load(d).files;
+        assert_eq!(on_disk.get(&name), Some(&details));
+        assert!(!on_disk.contains_key(CURRENT));
         assert!(!d.join(CURRENT).exists());
         assert_eq!(fs::read_to_string(d.join(&name)).unwrap(), "line\n");
         #[cfg(unix)]
@@ -835,7 +934,7 @@ mod tests {
             let elsewhere = d.join("elsewhere");
             fs::write(&elsewhere, "x").unwrap();
             std::os::unix::fs::symlink(&elsewhere, d.join(CURRENT)).unwrap();
-            assert_eq!(set_aside(d), Err("not_a_regular_file"));
+            assert_eq!(set_aside(d, &index), Err("not_a_regular_file"));
             assert!(d.join(CURRENT).is_symlink());
         }
     }
