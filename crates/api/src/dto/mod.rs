@@ -20,6 +20,7 @@ pub mod error;
 pub mod events;
 pub mod facets;
 pub mod filters;
+pub mod ops;
 pub mod search;
 pub mod settings;
 pub mod torrents;
