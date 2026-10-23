@@ -421,8 +421,35 @@ mod tests {
             return;
         }
         let tmp = tempfile::tempdir().unwrap();
+        let root = std::env::var_os("SystemRoot").unwrap();
+        let icacls = |dir: &Path, args: &[&str]| {
+            let out =
+                std::process::Command::new(Path::new(&root).join("System32").join("icacls.exe"))
+                    .arg(dir)
+                    .args(args)
+                    .output()
+                    .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stdout)
+            );
+        };
+        // A runner's temp folder may let Users read: made private first.
         let mine = tmp.path().join("mine");
         std::fs::create_dir(&mine).unwrap();
+        let own = crate::windows::acl::process_sid().expect("whoami");
+        let grant = format!("*{own}:(OI)(CI)F");
+        icacls(
+            &mine,
+            &[
+                "/inheritance:r",
+                "/grant:r",
+                "*S-1-5-18:(OI)(CI)F",
+                "*S-1-5-32-544:(OI)(CI)F",
+                &grant,
+            ],
+        );
         assert_eq!(crate::windows::acl::log_folder(&mine), Ok(()));
         assert!(folder(None, &mine).is_ok());
         let theirs = tmp.path().join("theirs");
@@ -432,17 +459,7 @@ mod tests {
             r#"{"files":{},"restricted":true}"#,
         )
         .unwrap();
-        let root = std::env::var_os("SystemRoot").unwrap();
-        let out = std::process::Command::new(Path::new(&root).join("System32").join("icacls.exe"))
-            .arg(&theirs)
-            .args(["/setowner", "*S-1-5-32-545"])
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stdout)
-        );
+        icacls(&theirs, &["/setowner", "*S-1-5-32-545"]);
         assert_eq!(folder(None, &theirs), Err("not_private"));
         // Checked once a run: the answer is cached.
         assert_eq!(folder(None, &theirs), Err("not_private"));
