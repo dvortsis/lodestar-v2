@@ -97,7 +97,9 @@ fn stable(f: &Fixture, body: &str) -> String {
     }
     walk(&mut v);
     let dir = f.dir.path().display().to_string();
-    v.to_string().replace(&dir, "<data>")
+    // One path separator on every platform (`data\\logs` on Windows is
+    // JSON's escaped backslash).
+    v.to_string().replace(&dir, "<data>").replace("\\\\", "/")
 }
 
 async fn golden(f: &Fixture, name: &str, req: Request<Body>) -> Value {
