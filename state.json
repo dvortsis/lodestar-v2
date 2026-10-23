@@ -1006,11 +1006,12 @@
    "merge": "55d90af"
   },
   "C-adult-other": {
-   "status": "review",
+   "status": "merged",
    "model": "opus",
-   "notes": "from #94 review: detect returns None for Other/Ebook at full score (content safety false negative) | 01:22 PR #105 ad0d24a ready; reviewer started (content safety). filter budget red = runner speed (\u00a72.18 candidate). \u00a72.19 refinement: Other->Scene, Ebook->Comics at threshold; flag to owner. | 01:40 review FIX: unrequested folder scan loosens Adult (counter-words in folders) + xxx-per-segment false positives -> remove, regression fixtures. Ebook threshold 60 kept (flag owner \u00a72.19 with edge cases). | 02:08 0cb0393 delta verified by runner (folder scan removed, regression fixtures, hentai-free pre-split). APPROVED; merge on green (\u00a72.18 for filter budget).",
+   "notes": "from #94 review: detect returns None for Other/Ebook at full score (content safety false negative) | 01:22 PR #105 ad0d24a ready; reviewer started (content safety). filter budget red = runner speed (\u00a72.18 candidate). \u00a72.19 refinement: Other->Scene, Ebook->Comics at threshold; flag to owner. | 01:40 review FIX: unrequested folder scan loosens Adult (counter-words in folders) + xxx-per-segment false positives -> remove, regression fixtures. Ebook threshold 60 kept (flag owner \u00a72.19 with edge cases). | 02:08 0cb0393 delta verified by runner (folder scan removed, regression fixtures, hentai-free pre-split). APPROVED; merge on green (\u00a72.18 for filter budget). | 02:55 MERGED edcf944 (\u00a72.18 filter budget, old gate).",
    "session": "session_01KNC8PugVKjddvhH6vT8qXN",
-   "pr": 105
+   "pr": 105,
+   "merge": "edcf944"
   },
   "B4b-r2": {
    "status": "merged",
