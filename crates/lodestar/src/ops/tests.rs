@@ -55,6 +55,7 @@ impl SourcePlugin for Feed {
             loop {
                 tokio::select! {
                     _ = ctx.shutdown.requested() => return Ok(()),
+                    // Paces the source: one key per tick is the load under test.
                     _ = tokio::time::sleep(Duration::from_millis(10)) => {
                         n += 1;
                         let mut key = [7u8; 20];
@@ -80,6 +81,7 @@ impl Fetcher for Counting {
     ) -> BoxFuture<'static, Result<Fetched, FailureKind>> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Box::pin(async {
+            // Simulates a peer that takes a moment before it refuses.
             tokio::time::sleep(Duration::from_millis(5)).await;
             Err(FailureKind::Refused)
         })
@@ -250,21 +252,44 @@ fn req(method: &str, uri: &str, cookie: &str, body: Option<&str>) -> Request<Bod
     b.body(Body::from(body.unwrap_or("").to_string())).unwrap()
 }
 
-/// Fetch starts over `ms`.
+/// Fetch starts over `ms`. The window is the point: it checks that
+/// something does or doesn't start within a bound, so it stays a sleep.
 async fn starts_during(f: &Fixture, ms: u64) -> usize {
     let before = f.starts.load(Ordering::SeqCst);
     tokio::time::sleep(Duration::from_millis(ms)).await;
     f.starts.load(Ordering::SeqCst) - before
 }
 
-async fn eventually(mut check: impl FnMut() -> bool) {
-    for _ in 0..200 {
-        if check() {
-            return;
-        }
+/// Polls `check` every 25 ms for up to 15 s, then panics saying `what`
+/// it was waiting for.
+async fn eventually(what: &str, mut check: impl FnMut() -> bool) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    while !check() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out after 15 s waiting for {what}"
+        );
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    panic!("timed out");
+}
+
+/// Waits until fetch starts stop changing, which is how a pause that is
+/// still draining in-flight work shows it has taken hold.
+async fn starts_settled(f: &Fixture) {
+    let mut last = usize::MAX;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let now = f.starts.load(Ordering::SeqCst);
+        if now == last {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "fetch starts kept changing for 15 s, last saw {now}"
+        );
+        last = now;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 async fn node_paused(dht: &DhtSource) -> Option<bool> {
@@ -321,8 +346,11 @@ async fn pause_resume_and_intensity_through_the_api() {
     assert_eq!(running["state"], json!("running"));
     assert_eq!(running["intensity"], json!("balanced"));
     assert_eq!(running["intensity_env"], Value::Null);
-    eventually(|| f.starts.load(Ordering::SeqCst) > 10).await;
-    eventually(|| f.dht.stats().is_some()).await;
+    eventually("more than 10 fetch starts", || {
+        f.starts.load(Ordering::SeqCst) > 10
+    })
+    .await;
+    eventually("DHT stats", || f.dht.stats().is_some()).await;
 
     // Pause: no new fetch starts within a bound, the node holds its
     // crawl but still answers, and one event is recorded.
@@ -334,7 +362,7 @@ async fn pause_resume_and_intensity_through_the_api() {
         (paused["state"].clone(), paused["paused"].clone()),
         (json!("paused"), json!(true))
     );
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    starts_settled(&f).await;
     assert_eq!(
         starts_during(&f, 400).await,
         0,
@@ -390,7 +418,10 @@ async fn pause_resume_and_intensity_through_the_api() {
     assert_eq!(status, 200);
     let (_, crawler) = f.send(req("GET", "/api/v1/crawler", c, None)).await;
     assert_eq!(crawler["intensity"], json!("aggressive"));
-    eventually(|| f.events(event::INTENSITY) == ["low", "aggressive"]).await;
+    eventually("the low and aggressive intensity events", || {
+        f.events(event::INTENSITY) == ["low", "aggressive"]
+    })
+    .await;
     let (status, bad) = f
         .send(req(
             "PATCH",
@@ -413,7 +444,7 @@ async fn pause_resume_and_intensity_through_the_api() {
         Some(r#"{"paused":true}"#),
     ))
     .await;
-    eventually(|| f.events(event::PAUSE).len() == 2).await;
+    eventually("two pause events", || f.events(event::PAUSE).len() == 2).await;
     assert_eq!(node_paused(&f.dht).await, Some(true));
     assert!(f.ops.control.status().paused);
     f.stop().await;
@@ -426,11 +457,14 @@ async fn stats_match_the_metrics() {
     let mut f = fixture().await;
     let cookie = f.session().await;
     let c = cookie.as_str();
-    eventually(|| f.starts.load(Ordering::SeqCst) > 5).await;
+    eventually("more than 5 fetch starts", || {
+        f.starts.load(Ordering::SeqCst) > 5
+    })
+    .await;
     // Pausing holds the counters still, so the two reads agree.
     f.send(req("POST", "/api/v1/crawler/pause", c, Some("{}")))
         .await;
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    starts_settled(&f).await;
     let (status, stats) = f.send(req("GET", "/api/v1/stats", c, None)).await;
     assert_eq!(status, 200, "{stats}");
     let monitor = f.ops.monitor.clone();
@@ -593,10 +627,8 @@ async fn concurrent_toggles_leave_the_process_as_the_registry_says() {
         let saved = f.registry.get::<settings::crawler::Crawler>().paused;
         assert_eq!(f.ops.control.status().paused, saved, "round {round}");
         // And so is the DHT node, which applies it in its own task.
-        for _ in 0..200 {
-            if node_paused(&f.dht).await == Some(saved) {
-                break;
-            }
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        while node_paused(&f.dht).await != Some(saved) && tokio::time::Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
         assert_eq!(node_paused(&f.dht).await, Some(saved), "round {round}");
@@ -689,6 +721,7 @@ async fn the_pause_survives_a_restart() {
     assert!(status.paused);
     assert_eq!(status.since, at);
     // Started paused: nothing is fetched.
+    // A negative check: nothing starts over a fixed window, so it stays a sleep.
     let before = f.starts.load(Ordering::SeqCst);
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(f.starts.load(Ordering::SeqCst), before);

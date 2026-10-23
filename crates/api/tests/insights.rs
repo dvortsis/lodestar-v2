@@ -1678,6 +1678,7 @@ async fn insights_events_go_out_only_while_someone_listens() {
         },
     );
     // Several ticks with nobody listening: nothing is built or sent.
+    // Time passing for the code under test: ticks must elapse unheard.
     tokio::time::sleep(every * 4).await;
     let app = Router::new()
         .nest("/api/v1", router(f.state.clone()))

@@ -965,6 +965,8 @@ async fn a_client_that_stops_reading_holds_no_lock() {
     assert!(d.next().await.unwrap().is_ok());
     // Not reading: the export waits on the socket, and everything else
     // (which needs the reader lock) still answers at once.
+    // Kept: the export is meant to stall on the socket, so there is no
+    // event to wait for; this gives it time to fill its buffers.
     tokio::time::sleep(Duration::from_millis(100)).await;
     let before = job(&f, &c, d.job).await;
     assert_eq!(before["state"], "running");
@@ -980,6 +982,7 @@ async fn a_client_that_stops_reading_holds_no_lock() {
         assert_eq!(status, StatusCode::OK);
         assert!(started.elapsed() < Duration::from_secs(1));
     }
+    // Negative check: the count must not move over a fixed window.
     tokio::time::sleep(Duration::from_millis(100)).await;
     let after = job(&f, &c, d.job).await;
     assert_eq!(before["done"], after["done"], "it stopped reading");
@@ -1191,6 +1194,7 @@ async fn pause_resume_and_cancel() {
         assert!(drained <= 3, "a paused export kept reading");
     }
     let done = job(&f, &c, d.job).await["done"].clone();
+    // Negative check: a paused export must not advance over a fixed window.
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(job(&f, &c, d.job).await["done"], done);
     // Other requests run while it's paused.
@@ -1346,6 +1350,7 @@ async fn the_exports_lease_outlives_the_registrys_expiry_and_new_commits() {
         w.catch_up(&mut s, 1000).unwrap();
         w.commit().unwrap();
     }
+    // Kept: lets the paused export sit while the index moves on.
     tokio::time::sleep(Duration::from_millis(50)).await;
     control(&f, &c, d.job, "resume").await;
     got.extend(d.rest().await.unwrap());
@@ -1753,6 +1758,7 @@ async fn overhead() {
                         let mut body = resp.into_body().into_data_stream();
                         loop {
                             while !active.load(Ordering::SeqCst) && !stop.load(Ordering::SeqCst) {
+                                // Idles the reader between busy windows.
                                 tokio::time::sleep(Duration::from_millis(5)).await;
                             }
                             if stop.load(Ordering::SeqCst) {
@@ -1782,6 +1788,7 @@ async fn overhead() {
     for w in 0..windows {
         let on = w % 2 == 1;
         active.store(on, Ordering::SeqCst);
+        // Measurement window: time must pass for the load under test.
         tokio::time::sleep(Duration::from_millis(200)).await;
         let (r0, t0) = (rows.load(Ordering::Relaxed), Instant::now());
         let took = searches(&f, &c, &queries, 300).await;

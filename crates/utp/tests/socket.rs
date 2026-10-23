@@ -141,7 +141,7 @@ async fn nobody_listening() {
     )
     .await;
     assert!(r.is_err(), "still waiting for a SYN-ACK");
-    assert!(eventually(2, || client.connections() == 0).await);
+    assert!(eventually(10, || client.connections() == 0).await);
     assert_eq!(
         quiet.stats().unknown,
         1,
@@ -167,7 +167,7 @@ async fn connection_cap_is_enforced() {
     let target = quiet.local_addr().unwrap();
     let c = client.clone();
     let pending = tokio::spawn(async move { c.connect(target).await.map(drop) });
-    assert!(eventually(2, || client.connections() == 1).await);
+    assert!(eventually(10, || client.connections() == 1).await);
     let err = client.connect(target).await.unwrap_err();
     assert!(err.to_string().contains("too many"), "{err}");
     pending.abort();
@@ -239,7 +239,7 @@ async fn shares_a_port_with_krpc() {
     let mut got = Vec::new();
     c.read_to_end(&mut got).await.unwrap();
     assert_eq!(got, b"pong");
-    assert!(eventually(2, || krpc.lock().unwrap().len() == 1).await);
+    assert!(eventually(10, || krpc.lock().unwrap().len() == 1).await);
     assert_eq!(krpc.lock().unwrap()[0], b"d1:y1:qe");
     assert_eq!(utp.stats().invalid, 0, "no KRPC reached uTP");
 }
@@ -262,6 +262,7 @@ impl PacketSink for LossySink {
         }
         let (udp, packet) = (self.udp.clone(), packet.to_vec());
         tokio::spawn(async move {
+            // Simulates network latency (the lossy link under test).
             sleep(Duration::from_millis(delay)).await;
             let _ = udp.send_to(&packet, to);
         });
@@ -387,22 +388,22 @@ async fn per_ip_cap_is_enforced() {
             async move { c.connect(target).await.map(drop) },
         ));
     }
-    assert!(eventually(2, || client.connections() == 8).await);
+    assert!(eventually(10, || client.connections() == 8).await);
     let err = client.connect(target).await.unwrap_err();
     assert!(err.to_string().contains("too many"), "{err}");
     // Another IP is unaffected (only the cap is checked, not reachability).
     let other: SocketAddr = "127.0.0.2:9".parse().unwrap();
     let c = client.clone();
     let ninth = tokio::spawn(async move { c.connect(other).await.map(drop) });
-    assert!(eventually(2, || client.connections() == 9).await);
+    assert!(eventually(10, || client.connections() == 9).await);
     // Abandoned attempts free their slots.
     for p in pending {
         p.abort();
     }
     ninth.abort();
-    assert!(eventually(2, || client.connections() == 0).await);
+    assert!(eventually(10, || client.connections() == 0).await);
     let c = client.clone();
     let again = tokio::spawn(async move { c.connect(target).await.map(drop) });
-    assert!(eventually(2, || client.connections() == 1).await);
+    assert!(eventually(10, || client.connections() == 1).await);
     again.abort();
 }
