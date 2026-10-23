@@ -138,8 +138,18 @@ if ($Msi) {
   Assert ($p.ExitCode -ne 0) 'install went ahead with a file owned by Users'
   & $icacls "$dataDir\keep-me.txt" /setowner '*S-1-5-32-544' | Out-Null
 
+  # --- an empty folder that inherits ProgramData's permissions is replaced, not trusted ---
+  Get-ChildItem -LiteralPath $dataDir -Force | Remove-Item -Recurse -Force
+  & $icacls $dataDir /inheritance:e | Out-Null
+  Assert ($LASTEXITCODE -eq 0) 'could not re-enable inheritance for the test'
+  Assert (-not (Get-Acl $dataDir).AreAccessRulesProtected) 'test setup: the folder should inherit permissions now'
+
   # --- reinstall with the Defender box ticked, uninstall with REMOVE_DATA=1 ---
   Invoke-Msiexec @('/i', "`"$Msi`"", '/qn', '/norestart', 'DEFENDER_EXCLUSION=1', '/l*v', "`"$logs\msi-install2.log`"") 'reinstall'
+  $acl = Get-Acl $dataDir
+  Assert $acl.AreAccessRulesProtected 'the empty inherited folder was not replaced by a private one'
+  $broad = @($acl.Access | Where-Object { $_.IdentityReference.Value -match '(Users|Everyone|Authenticated Users)$' })
+  Assert ($broad.Count -eq 0) "the replaced folder grants access to $($broad.IdentityReference -join ', ')"
   if (Get-Command Get-MpPreference -ErrorAction SilentlyContinue) {
     try {
       $ex = @((Get-MpPreference).ExclusionPath)
