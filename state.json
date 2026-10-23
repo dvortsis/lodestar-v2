@@ -470,13 +470,13 @@
       "notes": ""
     },
     "S-compare": {
-      "status": "running",
+      "status": "review",
       "model": "sonnet",
       "session": "session_019pb4Nm949Ek47p7KFYxL5X",
-      "pr": null,
+      "pr": 137,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum"
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:25:00Z PR #137 head 343c6fb; fresh reviewer launched"
     },
     "S-discover": {
       "status": "running",
