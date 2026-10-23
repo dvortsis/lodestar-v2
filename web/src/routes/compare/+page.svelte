@@ -1,1 +1,6 @@
-<h1>Compare</h1>
+<script lang="ts">
+	let { data } = $props();
+	const Compare = $derived(data.Compare);
+</script>
+
+<Compare />
