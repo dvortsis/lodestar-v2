@@ -127,6 +127,11 @@ describe('AlertHitRow', () => {
 		expect(screen.getByTestId('alert-comp-7-dominant').textContent).toBe('82% video');
 		expect(screen.getByRole('img', { name: /82% video, 11% audio/ })).toBeTruthy();
 	});
+	it('marks estimated seeders with ≈ and a suspect swarm in words', () => {
+		render(AlertHitRow, { row: row(9, true, { seeders_approx: true, swarm_suspect: true }) });
+		expect(screen.getByTestId('alert-swarm-9').textContent).toContain('≈');
+		expect(screen.getByTestId('alert-suspect-9').textContent).toContain('Suspect seeders');
+	});
 	it('says so for null values: no title, never scraped, not classified', () => {
 		render(AlertHitRow, {
 			row: row(8, true, {
@@ -585,10 +590,11 @@ describe('the detail page', () => {
 		load();
 		const { unmount } = render(AlertDetailPage, { id: 1 });
 		await screen.findByTestId('alert-row-5');
-		const ids = () => keys.list().filter((c) => c.scope === 'alerts' && c.id.startsWith('list.'));
+		const ids = () =>
+			keys.list().filter((c) => c.scope === 'alerts' && c.id.startsWith('results.'));
 		expect(ids().map((c) => [c.id, c.keys])).toEqual([
-			['list.next', ['j']],
-			['list.previous', ['k']]
+			['results.next', ['j']],
+			['results.previous', ['k']]
 		]);
 		unmount();
 		expect(ids()).toEqual([]);
