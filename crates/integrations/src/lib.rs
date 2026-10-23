@@ -85,6 +85,10 @@ pub(crate) mod test_support {
                 .with_writer(move || Writer(Arc::clone(&sink)))
                 .finish();
             tracing::subscriber::set_global_default(subscriber).unwrap();
+            // Every event on, at every level, so a secret in any of them fails.
+            for e in crate::log_events::CATALOGUE.events {
+                e.set_on(true);
+            }
             buf
         });
         Logs(Arc::clone(buf))

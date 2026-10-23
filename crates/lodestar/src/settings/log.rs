@@ -258,11 +258,13 @@ mod tests {
     #[test]
     fn deadlines_that_passed_while_stopped_are_found() {
         let now = 1_800_000_000;
-        let mut l = Logging::default();
-        l.peer_activity_until = now - 60;
-        l.change_details_until = now + 60;
-        l.data = super::super::logging::DataPreset::Hashes;
-        l.data_until = now - 1;
+        let mut l = Logging {
+            peer_activity_until: now - 60,
+            change_details_until: now + 60,
+            data: super::super::logging::DataPreset::Hashes,
+            data_until: now - 1,
+            ..Logging::default()
+        };
         l.kinds.insert("url".into(), now - 5);
         l.kinds.insert("query".into(), UNTIL_OFF);
         let mut kinds: Vec<Kind> = expired_while_down(&l, now)
@@ -276,8 +278,10 @@ mod tests {
     /// A runtime of the test's own: never the process's sink, so other
     /// tests' log captures are untouched.
     fn private_runtime(dir: &std::path::Path) -> &'static Runtime {
-        let mut l = Logging::default();
-        l.file_folder = dir.display().to_string();
+        let l = Logging {
+            file_folder: dir.display().to_string(),
+            ..Logging::default()
+        };
         Box::leak(Box::new(Runtime::new(
             Box::new(Buf::default()),
             Applied::compute(&l, unix_now()),
@@ -288,8 +292,10 @@ mod tests {
     async fn deadlines_expire_without_a_save() {
         let dir = tempfile::tempdir().unwrap();
         let rt = private_runtime(dir.path());
-        let mut l = Logging::default();
-        l.file_folder = dir.path().display().to_string();
+        let mut l = Logging {
+            file_folder: dir.path().display().to_string(),
+            ..Logging::default()
+        };
         l.kinds.insert("name".into(), unix_now() + 1);
         let (_tx, rx) = watch::channel(l);
         let task = follow_with(rx, Some(rt), |_| Ok(()));
@@ -308,8 +314,10 @@ mod tests {
     async fn a_save_applies_at_once() {
         let dir = tempfile::tempdir().unwrap();
         let rt = private_runtime(dir.path());
-        let mut l = Logging::default();
-        l.file_folder = dir.path().display().to_string();
+        let mut l = Logging {
+            file_folder: dir.path().display().to_string(),
+            ..Logging::default()
+        };
         let (tx, rx) = watch::channel(l.clone());
         let task = follow_with(rx, Some(rt), |_| Ok(()));
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;

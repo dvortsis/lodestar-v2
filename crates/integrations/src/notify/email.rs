@@ -1651,7 +1651,7 @@ mod tests {
 
         let logged = logs.contents();
         assert!(
-            logged.contains("email attempt"),
+            logged.contains("Notification attempt channel=email"),
             "the capture works: {logged}"
         );
         for s in [USER, PASS, PLAIN, USER_B64, PASS_B64] {

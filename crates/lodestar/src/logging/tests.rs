@@ -253,9 +253,11 @@ fn a_full_disk_stops_the_file_not_lodestar() {
 fn turning_the_file_off_and_on() {
     let dir = tempfile::tempdir().unwrap();
     let (rt, _) = runtime(dir.path(), &Logging::default());
-    let mut l = Logging::default();
-    l.file_folder = dir.path().display().to_string();
-    l.file_enabled = false;
+    let mut l = Logging {
+        file_folder: dir.path().display().to_string(),
+        file_enabled: false,
+        ..Logging::default()
+    };
     rt.apply(Applied::compute(&l, unix_now()));
     record_all(&rt);
     assert!(file_text(dir.path()).is_empty());

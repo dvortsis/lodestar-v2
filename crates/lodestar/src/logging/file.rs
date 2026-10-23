@@ -302,12 +302,9 @@ impl FileSink {
         let name = self.rotated_name();
         let to = self.cfg.dir.join(&name);
         fs::rename(&self.path, &to)?;
-        match open_append(&self.path) {
-            Ok(f) => self.file = f,
-            // The renamed file stays open: lines go on there, and the next
-            // rotation tries again.
-            Err(e) => return Err(e),
-        }
+        // On a failure the renamed file stays open: lines go on there, and
+        // the next rotation tries again.
+        self.file = open_append(&self.path)?;
         self.size = 0;
         self.opened = SystemTime::now();
         self.flags = Flags::default();
