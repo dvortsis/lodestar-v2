@@ -200,5 +200,7 @@
 	"insights_type_adult": "Adult",
 	"insights_overview_range_invalid": "That range can't be shown. Change the dates above and apply them again.",
 	"insights_overview_funnel_conversion_none": "No conversion yet",
-	"insights_overview_intensity_locked": "Crawler intensity: {level}. Set by {variable}."
+	"insights_overview_intensity_locked": "Crawler intensity: {level}. Set by {variable}.",
+	"insights_overview_chunk_failed": "This part of the page could not be loaded. Check your connection, then try again.",
+	"insights_overview_palette_section": "Insights"
 }

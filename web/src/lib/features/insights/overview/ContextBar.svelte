@@ -52,6 +52,11 @@
 	const locale = $derived(currentLocale());
 	let shown = $state<RangeId>('7d');
 	let editing = $state(false);
+	// What the server has: reset whenever the status is refetched, so a failed change snaps back.
+	let level = $state<Intensity>('balanced');
+	$effect(() => {
+		if (crawler) level = crawler.intensity;
+	});
 	let fromDay = $state('');
 	let toDay = $state('');
 
@@ -137,9 +142,9 @@
 			onchange={pick}
 		/>
 		<Button
-			variant={query.compare ? 'primary' : 'secondary'}
+			variant={query.compare && canCompare ? 'primary' : 'secondary'}
 			dense
-			aria-pressed={query.compare}
+			aria-pressed={query.compare && canCompare}
 			disabled={!canCompare}
 			aria-describedby={canCompare ? undefined : 'ins-compare-why'}
 			onclick={() => oncompare(!query.compare)}
@@ -160,7 +165,7 @@
 				<span data-testid="insights-range-chip">{chip}</span>
 			</Chip>
 		{/if}
-		<span class="ins-grow ins-muted" data-testid="insights-updated">
+		<span class="ins-grow ins-muted ins-updated" data-testid="insights-updated">
 			{m.insights_overview_updated()}
 			<RelativeTime seconds={updatedAt} timeZone={tz} />
 		</span>
@@ -175,7 +180,7 @@
 		/>
 	{/if}
 
-	<div class="ins-row" data-testid="insights-crawler">
+	<div class="ins-row ins-crawler" data-testid="insights-crawler">
 		{#if crawler}
 			{#if crawler.paused}
 				<Button
@@ -206,15 +211,13 @@
 					})}
 				</span>
 			{:else}
-				{#key crawler}
-					<SegmentedControl
-						options={levels}
-						value={crawler.intensity}
-						label={m.insights_overview_intensity_label()}
-						dense
-						onchange={(v) => onintensity(v as Intensity)}
-					/>
-				{/key}
+				<SegmentedControl
+					options={levels}
+					bind:value={level}
+					label={m.insights_overview_intensity_label()}
+					dense
+					onchange={(v) => onintensity(v as Intensity)}
+				/>
 			{/if}
 			<span class="ins-muted ins-sentence" data-testid="insights-intensity-effect"
 				>{intensityEffect}</span

@@ -68,7 +68,7 @@
 		let gone = false;
 		void import('$lib/keys').then(({ keys }) => {
 			if (gone) return;
-			const section = () => m.shell_nav_insights();
+			const section = () => m.insights_overview_palette_section();
 			off = [
 				keys.register({
 					id: 'insights.pause',

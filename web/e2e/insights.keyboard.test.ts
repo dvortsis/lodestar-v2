@@ -43,3 +43,23 @@ test('keyboard-only: bar, range, compare, strip, table and drill-through', async
 	await expect(page).toHaveURL(/\/insights\/understand\?range=30d$/);
 	expect(await kbd.pointerEvents()).toEqual([]);
 });
+
+test('keyboard-only: an arrow on intensity keeps focus in the group', async ({
+	page,
+	mock,
+	go,
+	kbd
+}) => {
+	mock.on('getInsightsOverview', overviewFixture());
+	mock.on('getCrawler', crawlerFixture());
+	mock.on('patchCrawler', crawlerFixture({ intensity: 'aggressive' }));
+	await go('/insights');
+	await expect(page.getByTestId('insights-kpis')).toBeVisible();
+	await kbd.tabTo(page.getByRole('radio', { name: 'Balanced' }));
+	mock.on('getCrawler', crawlerFixture({ intensity: 'aggressive' }));
+	await kbd.press('ArrowRight');
+	await expect.poll(() => mock.calls('patchCrawler').length).toBe(1);
+	await expect.poll(() => mock.calls('getCrawler').length).toBeGreaterThan(1);
+	await expect(page.getByRole('radio', { name: 'Aggressive' })).toBeFocused();
+	await expect(page.getByRole('radio', { name: 'Aggressive' })).toBeChecked();
+});

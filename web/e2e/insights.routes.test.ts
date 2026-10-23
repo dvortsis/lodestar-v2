@@ -221,6 +221,36 @@ test.describe('states', () => {
 		await expect(page.getByTestId('insights-kpi-searchable-value')).toHaveText('—');
 	});
 
+	test('a resync refetches the overview and the crawler status', async ({ page, mock, go }) => {
+		serve(mock);
+		const events = await liveEvents(page);
+		await go('/insights');
+		await expect(page.getByTestId('insights-kpis')).toBeVisible();
+		const overview = mock.calls('getInsightsOverview').length;
+		const crawler = mock.calls('getCrawler').length;
+		await events.send('resync', {});
+		await expect.poll(() => mock.calls('getInsightsOverview').length).toBe(overview + 1);
+		await expect.poll(() => mock.calls('getCrawler').length).toBe(crawler + 1);
+	});
+
+	test('a lower level that cannot load shows an error with Retry', async ({ page, mock, go }) => {
+		serve(mock);
+		let block = true;
+		await page.route('**/_app/immutable/**/*.js', async (route) => {
+			const response = await route.fetch();
+			const body = await response.text();
+			if (block && body.includes('Funnel by discovery cohort')) return route.abort();
+			return route.fulfill({ response, body });
+		});
+		await go('/insights');
+		const error = page.getByTestId('insights-chunk-error');
+		await expect(error).toBeVisible();
+		await expect(page.getByTestId('insights-kpis')).toBeVisible();
+		block = false;
+		await error.getByRole('button', { name: 'Try again' }).click();
+		await expect(page.getByTestId('insights-funnel')).toBeVisible();
+	});
+
 	test('a live insights event refetches in place', async ({ page, mock, go }) => {
 		serve(mock);
 		const events = await liveEvents(page);
