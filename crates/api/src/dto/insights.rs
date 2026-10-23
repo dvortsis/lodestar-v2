@@ -492,8 +492,9 @@ pub struct DiscoverResponse {
     /// Keys reported, rediscovered and dropped, by the source that
     /// reported them. Event time.
     pub by_source: Vec<DiscoverSource>,
-    /// Keys reported, by harvest strategy (BEP 51 sample, get_peers,
-    /// announce, lookup, refetch). Event time: volume, not yield.
+    /// Keys reported, by harvest strategy: the DHT's (BEP 51 sample,
+    /// get_peers, announce, lookup), refetch, and each other source's own
+    /// codes. Event time: volume, not yield.
     pub by_strategy: Vec<StrategyCount>,
     pub kpi: DiscoverKpi,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -560,8 +561,9 @@ pub struct DiscoverSource {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct StrategyCount {
-    /// `sample`, `get_peers`, `announce`, `lookup`, `refetch`, or
-    /// `strategy_<n>`.
+    /// The DHT's strategies by name (`sample`, `get_peers`, `announce`,
+    /// `lookup`, or `strategy_<n>`), `refetch` from any source, and other
+    /// sources' own codes as `<plugin>:<n>`.
     pub key: String,
     pub reported: u64,
 }
@@ -911,4 +913,7 @@ pub struct ExportQuery {
     /// `1` adds the previous period's rows (`period` = `previous`) where
     /// the panel has them.
     pub compare: Option<u8>,
+    /// As the stage pages' `reason`: checked for every panel, and Fetch's
+    /// panels keep only that loss, as the page does.
+    pub reason: Option<String>,
 }

@@ -5982,8 +5982,9 @@ export interface components {
         };
         StrategyCount: {
             /**
-             * @description `sample`, `get_peers`, `announce`, `lookup`, `refetch`, or
-             *     `strategy_<n>`.
+             * @description The DHT's strategies by name (`sample`, `get_peers`, `announce`,
+             *     `lookup`, or `strategy_<n>`), `refetch` from any source, and other
+             *     sources' own codes as `<plugin>:<n>`.
              */
             key: string;
             /** Format: int64 */
@@ -8118,6 +8119,11 @@ export interface operations {
                  *     the panel has them.
                  */
                 compare?: number;
+                /**
+                 * @description As the stage pages' `reason`: checked for every panel, and Fetch's
+                 *     panels keep only that loss, as the page does.
+                 */
+                reason?: string;
             };
             header?: never;
             path?: never;
