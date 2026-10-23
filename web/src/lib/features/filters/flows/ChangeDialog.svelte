@@ -131,10 +131,13 @@
 		tombstones: m.filters_flows_phase_tombstones,
 		done: m.filters_flows_phase_done
 	};
+	/** A phase this build doesn't know (a newer server) reads as plain progress. */
+	const phaseText = (p: string) =>
+		(phases as Record<string, (() => string) | undefined>)[p]?.() ?? m.filters_flows_previewing();
 	const progressText = $derived(
 		s.kind === 'previewing' && s.progress
 			? m.filters_flows_progress_announce({
-					phase: phases[s.progress.phase](),
+					phase: phaseText(s.progress.phase),
 					done: formatCount(s.progress.done, currentLocale()),
 					total: formatCount(s.progress.total, currentLocale())
 				})
@@ -218,6 +221,8 @@
 	});
 
 	function close() {
+		// Our own cancel() below must not read as the flow closing on its own (a second close).
+		wasActive = false;
 		password = '';
 		reported = null;
 		open = false;
@@ -329,7 +334,7 @@
 					<p>{m.filters_flows_previewing()}</p>
 					{#if s.progress}
 						<p class="text-small text-muted-text">
-							{phases[s.progress.phase]()} ·
+							{phaseText(s.progress.phase)} ·
 							<span data-testid="change-progress"
 								>{m.filters_flows_progress({
 									done: formatCount(s.progress.done, currentLocale()),

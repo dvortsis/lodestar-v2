@@ -7,6 +7,7 @@ import ImpactSummary from './ImpactSummary.svelte';
 import EffectWarning from './EffectWarning.svelte';
 import { createAdultConfirm, setShowAdult } from './adult.svelte';
 import { createChangeFlow } from './flow.svelte';
+import type { Assessment } from './types';
 import { mockFetch } from './testing/fetch';
 import { HOSTILE, applied, finished, preview, strengthening, weakening } from './testing/fixtures';
 
@@ -262,6 +263,45 @@ describe('the typed password never outlives the confirm it was typed for', () =>
 		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 		expect(onclose).toHaveBeenCalledTimes(1);
 		gone(flow);
+	});
+});
+
+describe('onclose', () => {
+	async function opened(assessment: Assessment) {
+		net.on('GET /filters/preview/jobs/7', { body: finished(assessment) });
+		net.on('POST /filters/apply', { body: applied(assessment) });
+		const flow = createChangeFlow();
+		const onclose = vi.fn();
+		render(ChangeDialog, { props: { flow, title: 'Change', onclose } });
+		flow.start(off);
+		await waitFor(() =>
+			expect(screen.getByTestId('change-dialog').dataset.state).toMatch(/^(review|confirm)$/)
+		);
+		return onclose;
+	}
+	const closed = () => waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+	it('fires once for Cancel in review', async () => {
+		const onclose = await opened(strengthening());
+		await fireEvent.click(screen.getByTestId('change-cancel'));
+		await closed();
+		expect(onclose).toHaveBeenCalledTimes(1);
+	});
+
+	it('fires once for Cancel in confirm', async () => {
+		const onclose = await opened(weakening());
+		await fireEvent.click(screen.getByTestId('change-cancel'));
+		await closed();
+		expect(onclose).toHaveBeenCalledTimes(1);
+	});
+
+	it('fires once for Close in done', async () => {
+		const onclose = await opened(strengthening());
+		await fireEvent.click(screen.getByTestId('change-apply'));
+		await screen.findByText('What changed');
+		await fireEvent.click(screen.getByTestId('change-cancel'));
+		await closed();
+		expect(onclose).toHaveBeenCalledTimes(1);
 	});
 });
 
