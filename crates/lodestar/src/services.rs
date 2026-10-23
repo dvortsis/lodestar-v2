@@ -408,8 +408,10 @@ impl Services {
         // Exports and other background jobs (§9): one registry, closed at
         // shutdown so open downloads end rather than hold it.
         let jobs = Arc::new(lodestar_api::jobs::Jobs::default());
+        let logs = crate::logging::source();
         let app = http::router(http, api)
             .layer(Extension(events.clone()))
+            .layer(Extension(logs.clone()))
             .layer(Extension(jobs.clone()))
             .layer(Extension(export_adult))
             .layer(Extension(system))
@@ -422,6 +424,7 @@ impl Services {
             signal.await;
             hub.close();
             jobs.close();
+            logs.close();
         };
         axum::serve(listener, app)
             .with_graceful_shutdown(signal)
