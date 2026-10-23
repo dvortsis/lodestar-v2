@@ -38,6 +38,7 @@ pub mod preferences;
 pub mod search;
 pub mod storage;
 pub mod transport;
+pub mod updates;
 
 use std::any::Any;
 use std::collections::BTreeMap;
@@ -128,7 +129,8 @@ pub struct Field {
     /// A widget other than the schema's default (`radio`, `slider`,
     /// `theme`, `shortcuts`, `language`, `time-zone`).
     pub widget: Option<&'static str>,
-    /// A string format the form checks (`socket-addr`, `log-filter`).
+    /// A string format the form checks (`socket-addr`, `log-filter`,
+    /// `time-range`).
     pub format: Option<&'static str>,
     /// The value that means "automatic".
     pub auto: Option<Auto>,
@@ -927,6 +929,7 @@ impl Registry {
         registry.register::<storage::Storage>(config)?;
         registry.register::<search::Search>(config)?;
         registry.register::<content::Content>(config)?;
+        registry.register::<updates::Updates>(config)?;
         registry.register::<preferences::Preferences>(config)?;
         registry.register::<logging::Logging>(config)?;
         Ok(registry)
