@@ -714,8 +714,10 @@ fn delete_while_writers_run_and_a_compression_is_in_flight() {
     let dir = tempfile::tempdir().unwrap();
     let (rt, _) = runtime(&section(dir.path(), |_| {}), None, false);
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let rotations = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let writer = {
         let stop = stop.clone();
+        let rotations = rotations.clone();
         std::thread::spawn(move || {
             let mut n = 0;
             while !stop.load(std::sync::atomic::Ordering::Relaxed) {
@@ -724,13 +726,21 @@ fn delete_while_writers_run_and_a_compression_is_in_flight() {
                     if let FileState::Open(sink) = &mut *lock(&rt.file) {
                         let _ = sink.rotate();
                     }
+                    rotations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
                 n += 1;
             }
             n
         })
     };
-    std::thread::sleep(Duration::from_millis(200));
+    // Wait for the writer to have rotated at least once, however slow the machine, rather than
+    // for a fixed time: a slow runner may not have written 300 lines in 200 ms.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while rotations.load(std::sync::atomic::Ordering::Relaxed) < 2
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(10));
+    }
     let src = logs(rt);
     let done = src.delete(LogFilesWhich::All).unwrap();
     assert!(done.deleted >= 1, "{done:?}");
