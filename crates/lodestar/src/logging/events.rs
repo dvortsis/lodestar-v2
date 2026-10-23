@@ -156,6 +156,15 @@ lodestar_log::catalogue! {
         message: "Couldn't compress or delete an old log file",
         fields: { error: Error },
     }
+    /// Log files were deleted from the Logging screen: how many and how
+    /// much, never which.
+    LOGGING_FILES_DELETED {
+        id: "logging.files_deleted",
+        component: System,
+        level: Info,
+        message: "Log files deleted",
+        fields: { count: Size, bytes: Size },
+    }
     /// The Libraries filter couldn't be applied.
     LOGGING_FILTER_NOT_APPLIED {
         id: "logging.filter_not_applied",
