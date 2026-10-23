@@ -187,11 +187,17 @@ pub(crate) fn at(q: &str, toks: &[Raw], caret: usize) -> At {
                 return none(t.in_file);
             }
             let mut start = t.start;
-            // `title:"…`: the field word right before it.
+            // A word touching the quote is part of it: `title:"…` (or
+            // `-title:"…`, the negation left out) is a title phrase; any
+            // other (`name:"…`, `-"…`, `ab"…`) isn't one to replace.
             if let Some(prev) = i.checked_sub(1).map(|p| toks[p]) {
-                let word = &q[prev.start..prev.end];
-                if prev.kind == RawKind::Word && prev.end == t.start && word == "title:" {
-                    start = prev.start;
+                if prev.end == t.start {
+                    let word = &q[prev.start..prev.end];
+                    let neg = negation(word);
+                    if prev.kind != RawKind::Word || &word[neg..] != "title:" {
+                        return none(t.in_file);
+                    }
+                    start = prev.start + neg;
                 }
             }
             Context::Phrase {
@@ -379,6 +385,21 @@ mod tests {
         };
         assert_eq!(replaced(&q, replace), "title:\"dark knight\"");
         assert_eq!(partial, "dark");
+        // A negated title phrase keeps its negation; another field or
+        // word touching the quote isn't a title.
+        let (q, a) = ctx("-title:\"dark kn|");
+        let Context::Phrase { replace, .. } = a.context else {
+            panic!()
+        };
+        assert_eq!(replaced(&q, replace), "title:\"dark kn");
+        for marked in [
+            "name:\"dark kn|",
+            "file:\"dark kn|",
+            "ab\"dark kn|",
+            "-\"dark kn|",
+        ] {
+            assert_eq!(ctx(marked).1.context, Context::None, "{marked}");
+        }
         // After a closed quote: done.
         assert_eq!(ctx("\"dark knight\"|").1.context, Context::None);
         // A quote inside a word ends it, as the lexer reads it.
@@ -423,6 +444,9 @@ mod tests {
         let (q, a) = ctx("a\\\"b|");
         let toks = split(&q);
         assert_eq!(toks.len(), 2);
+        // `a\` touches the quote, so it isn't a title phrase to replace.
+        assert_eq!(a.context, Context::None);
+        let (_, a) = ctx("a\\ \"b|");
         assert!(matches!(a.context, Context::Phrase { ref partial, .. } if partial == "b"));
         let (_, a) = ctx("c:\\x|");
         assert!(matches!(a.context, Context::Word { ref word, .. } if word == "c:\\x"));

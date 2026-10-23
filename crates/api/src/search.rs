@@ -212,7 +212,7 @@ pub(crate) async fn parse_query(
             NaturalError::Syntax => Ok(None),
             e => Err(ApiError::bad_request(
                 "natural_too_long",
-                format!("Natural phrasing reads at most 512 bytes and 32 words; this is {e}."),
+                format!("Natural phrasing reads at most 512 bytes and 32 words and operators; this is {e}."),
             )
             .field("q")),
         })?
