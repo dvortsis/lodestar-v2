@@ -384,8 +384,9 @@ fn absent(outputs: &[(&str, &str)], needles: &[String], why: &str) {
     for (output, text) in outputs {
         for n in needles {
             if let Some(i) = text.find(n.as_str()) {
-                let line = text[..i].rsplit('\n').next().unwrap_or("").to_string()
-                    + &text[i..].split('\n').next().unwrap_or("");
+                let before = text[..i].rsplit('\n').next().unwrap_or("");
+                let after = text[i..].split('\n').next().unwrap_or("");
+                let line = format!("{before}{after}");
                 panic!("{why}: {n:?} in the {output}: {line}");
             }
         }
