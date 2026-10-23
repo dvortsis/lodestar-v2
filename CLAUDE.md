@@ -21,6 +21,17 @@ Read the relevant sections before starting any task. If work changes a decision,
 - **Commits:** imperative subject ≤ 72 chars, a body that explains why, and the Co-Authored-By / Claude-Session trailers the harness supplies. Never put model identifiers in commits, PRs or code.
 - **Tests:** every crate ships unit tests. Parsers (bencode, KRPC, metainfo, query language, release-name parser) also get property tests or `cargo fuzz` targets, plus golden-corpus tests where the plan calls for them. Benchmarks gate budgets once `bench/` exists.
 
+## Multi-session work (owner, 2026-10-23, `docs/owner-decisions.md` §2.24)
+Many sessions build this repo at once, and `main` takes dozens of merges a day. These rules keep work landing instead of chasing `main`:
+- **Keep PRs small enough to land between merges.** The runner splits a slice estimated over ~3k changed lines before launch. A PR that has needed two catch-up merges goes into the runner's landing lane (`runner/README.md`).
+- **One session per branch.** To change another session's PR, message that session, never push to its branch. Before writing a fix, check open PRs and the runner for one already under way.
+- **Bring `main` in only when it's needed:** a conflict, the runner asks, or you're about to request review on a stale head. Never bring it in while your own CI is running.
+- **Push once per round of fixes,** not per commit. Each push starts about 37 CI jobs that every other PR queues behind. While the runner has a merge pause on, keep working locally and hold pushes.
+- **No fixed sleeps in tests.** Wait for a condition with a deadline of at least 10 s, so tests pass on the slowest CI runner (Windows). A fixed sleep is a blocking review finding.
+- **A flake in someone else's test gets fixed once:** port the existing fix or write one, and tell the runner. A re-run only hands it to the next PR.
+- **Long-running sessions run in Auto mode, never Plan.** Plan mode stops for approvals that nobody may be watching. The coordination tools are pre-approved in `.claude/settings.json`.
+- **Messages between sessions** say who decided (the owner, the runner), give numbered steps, and ask for a reply when one is needed.
+
 ## Model and delegation policy (approved by the owner)
 - **Main session (Opus 5.5, high effort):** core and correctness-critical work, which means bencode/KRPC/metainfo, storage format and schema, the DHT crawler, the peer protocol (BEP 3/9/10, MSE), search (tokenizer, query language, ranking, counts, pagination), concurrency and anything that parses untrusted input. Also all reviews.
 - **Sonnet 5.5 helper agents:** well-specified, pattern-following work. Svelte components and screens per §10, theme JSON and the theme compiler, packaging (Docker, Unraid, WiX), CI workflows, docs, and test scaffolding that follows an existing pattern.

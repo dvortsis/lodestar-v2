@@ -1,0 +1,12 @@
+# Multi-session rules: thresholds (owner decision §2.24)
+
+The owner made multi-session best practices standing rules (`docs/owner-decisions.md` §2.24) but didn't set numbers. These thresholds refine that decision under §2.19, so the owner can veto any of them.
+
+- **The landing lane starts after two catch-up merges, or at ~1,500 changed lines.** One catch-up is normal. A second means the PR is losing the race with `main`. 1,500 is CLAUDE.md's size guideline, and PRs past it take a full CI cycle to catch up, long enough for more merges to land (#48 needed three in one afternoon).
+- **One PR in the lane at a time; docs-only PRs still merge.** A docs-only merge never makes a code PR stale under the freshness rule (`runner/README.md` step 4), so it costs the lane nothing.
+- **A lane held for 2 hours goes to the owner.** That's about four CI cycles. Past that, something other than freshness is wrong, and a silent freeze would stall everything else.
+- **A failure that's the lane PR's own takes it out of the lane.** The others resume while it's fixed, so one broken PR can't hold `main`.
+- **Slices are split before launch above ~3,000 estimated changed lines,** about twice the guideline. Slices between 1,500 and 3,000 lines stay whole when splitting would cut through a fixed interface. A slice that grows past 3,000 while being built stops and tells the runner.
+- **Tests that wait use a deadline of at least 10 s.** The B-log2 test that broke #48's Windows job slept 200 ms. CI's slowest runner ran the filter-budget job ~1.9× slower than a fast one (#48's comments). A 10 s deadline is generous enough for that and still fails fast when something is really broken.
+- **Pre-approved tools are coordination and read-only tools only:** messaging and reading sessions, scheduling check-ins, subscribing to PRs, and reading PRs, checks and job logs. Merging, auto-merge and writes to `main` aren't on the list, and `.claude/hooks/merge-guard.sh` is unchanged.
+- **A permission prompt is reported once per prompt, with a push notification.** The runner already checks session status on every wake, so it adds no cost. Before, prompts waited for the heartbeat or the daily summary.
