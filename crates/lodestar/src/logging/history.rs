@@ -221,9 +221,9 @@ pub fn page_capped(
                         unreadable,
                     });
                 }
-                // The lowest sequence the ring still covered when it was
-                // last looked at: lines evicted during the walk are read
-                // from the files.
+                // The lowest sequence the walk looked at: lines below it
+                // were evicted (even during the walk) and are read from the
+                // files; lines from it up came from the ring.
                 Err(covered) => (covered, None),
             }
         }

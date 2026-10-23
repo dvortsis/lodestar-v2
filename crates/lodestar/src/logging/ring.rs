@@ -301,10 +301,11 @@ impl Ring {
     }
 
     /// Entries with sequence below `before`, newest first, that `keep`
-    /// accepts: at most `max`. Returns them and, when there were `max`, the
-    /// lowest sequence looked at (the next page's `before`); else `None`
-    /// and the lowest sequence the ring still covered at its last look
-    /// (anything below it was evicted, so it's in the files).
+    /// accepts: at most `max`. Returns them and the lowest sequence looked
+    /// at: `Ok` when there were `max` (the next page's `before`), else
+    /// `Err` (the ring held nothing below it at its last look, so anything
+    /// lower was evicted and is in the files, and anything from it up was
+    /// looked at here, even if it's been evicted since).
     pub fn before(
         &self,
         before: u64,
@@ -314,15 +315,14 @@ impl Ring {
         let mut out = Vec::new();
         let mut pos = before;
         loop {
-            let (batch, low): (Vec<Arc<Entry>>, u64) = {
+            let batch: Vec<Arc<Entry>> = {
                 let inner = lock(&self.inner);
                 let end = inner.entries.partition_point(|e| e.seq < pos);
                 let start = end.saturating_sub(BATCH);
-                let batch = inner.entries.range(start..end).rev().cloned().collect();
-                (batch, inner.evicted + 1)
+                inner.entries.range(start..end).rev().cloned().collect()
             };
             if batch.is_empty() {
-                return (out, Err(low.min(before)));
+                return (out, Err(pos));
             }
             for e in batch {
                 pos = e.seq;
