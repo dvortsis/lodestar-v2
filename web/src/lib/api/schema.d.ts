@@ -367,6 +367,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/digest/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The digest as it would be sent now (§10.9.7). JSON only: the HTML is
+         *     shown by the client in `<iframe sandbox srcdoc>`, the text in a `<pre>`.
+         */
+        get: operations["getDigestPreview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/discover": {
         parameters: {
             query?: never;
@@ -1070,6 +1090,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/logs/archive.zip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every listed log file in one zip, each converted as a single download
+         *     is. `redact` defaults to true when any file contains details.
+         */
+        get: operations["getLogArchive"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/logs/catalog": {
         parameters: {
             query?: never;
@@ -1084,6 +1124,54 @@ export interface paths {
          *     session only.
          */
         get: operations["getLogCatalog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/logs/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The log files, newest first, with whether each contains torrent
+         *     details. An unreadable details index marks every file as having them.
+         */
+        get: operations["getLogFiles"];
+        put?: never;
+        post?: never;
+        /**
+         * Deletes log files: all of them, or only those containing torrent
+         *     details (or written under an opt-in). The file being written is
+         *     rotated first, so no new line is lost. A file that isn't a regular file
+         *     is skipped and reported. Needs no password (Destructive, §10.10.7).
+         */
+        delete: operations["deleteLogFiles"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/logs/files/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One log file, always decompressed. `redact` defaults to true when the
+         *     file contains details: fields of the kinds that identify torrents or
+         *     people, client addresses and the opt-ins read `[hidden]`, and lines of
+         *     an opt-in event are left out. `redact=false` serves the file as it is.
+         */
+        get: operations["getLogFile"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1973,7 +2061,7 @@ export interface components {
             weakening: boolean;
         };
         /** @enum {string} */
-        AstDateField: "discovered";
+        AstDateField: "discovered" | "seen";
         /** @description A parsed query (§8), tagged by `op`. */
         AstNode: {
             /** @enum {string} */
@@ -2064,9 +2152,16 @@ export interface components {
             lo: number;
             /** @enum {string} */
             op: "share";
+        } | {
+            /** Format: int32 */
+            from: number;
+            /** @enum {string} */
+            op: "time_of_day";
+            /** Format: int32 */
+            to: number;
         };
         /** @enum {string} */
-        AstNumField: "size" | "files" | "largest" | "piece" | "year" | "season" | "episode" | "junk";
+        AstNumField: "size" | "files" | "largest" | "piece" | "year" | "season" | "episode" | "junk" | "seeders" | "leechers" | "trackers" | "dht";
         /** @enum {string} */
         AstShareBy: "count" | "bytes";
         /** @enum {string} */
@@ -2912,6 +3007,10 @@ export interface components {
             /** @description Decided in shadow mode: recorded, not acted on. */
             shadow: boolean;
         };
+        /** @description `DELETE /logs/files`. */
+        DeleteLogFiles: {
+            which: components["schemas"]["LogFilesWhich"];
+        };
         Deployment: {
             /** @description The image's digest, when the image sets it. */
             image_digest: string | null;
@@ -2968,6 +3067,48 @@ export interface components {
             path: string;
             /** Format: int64 */
             size: number;
+        };
+        /**
+         * @description How much a digest covers.
+         * @enum {string}
+         */
+        DigestPeriod: "daily" | "weekly";
+        /**
+         * @description A digest as it would be sent now.
+         * @example {
+         *       "generated_at": 1800000000,
+         *       "html": "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Lodestar weekly digest: Jan 8, 2027 – Jan 15, 2027</title></head><body><h1>Lodestar weekly digest: Jan 8, 2027 – Jan 15, 2027</h1></body></html>",
+         *       "period": "weekly",
+         *       "range": {
+         *         "bucket": "hour",
+         *         "from": 1799395200,
+         *         "to": 1800000000,
+         *         "tz": "UTC"
+         *       },
+         *       "subject": "Lodestar weekly digest: Jan 8, 2027 – Jan 15, 2027",
+         *       "text": "Lodestar weekly digest: Jan 8, 2027 – Jan 15, 2027\n"
+         *     }
+         */
+        DigestPreview: {
+            /**
+             * Format: int64
+             * @description When the numbers were read (unix seconds): the overview's
+             *     `updated_at`.
+             */
+            generated_at: number;
+            /**
+             * @description A complete HTML document: no script, style, images or external
+             *     links. Show it only in `<iframe sandbox srcdoc>` (no
+             *     `allow-scripts`, no `allow-same-origin`).
+             */
+            html: string;
+            period: components["schemas"]["DigestPeriod"];
+            /** @description The overview range the digest read, as the server normalized it. */
+            range: components["schemas"]["InsightsRange"];
+            /** @description At most 120 characters. */
+            subject: string;
+            /** @description Plain UTF-8, at most 4,000 bytes. Show it in a `<pre>`. */
+            text: string;
         };
         DiscoverKpi: {
             /**
@@ -3218,8 +3359,9 @@ export interface components {
             title: number;
         };
         /**
-         * @description The quality priors (§8), multiplied onto relevance once ranking has
-         *     them (with swarm health, M4); until then each is null.
+         * @description The quality priors (§8), multipliers on relevance from swarm health
+         *     (M4): null when the ranking doesn't apply them (no swarm data served,
+         *     or a field sort).
          */
         ExplainPriors: {
             /** Format: double */
@@ -3404,6 +3546,13 @@ export interface components {
              * @default null
              */
             sort: string | null;
+            /**
+             * Format: int32
+             * @description The user's zone for `time:`, in minutes east of UTC (−840 to
+             *     840), as `/search`; 0 by default.
+             * @default null
+             */
+            tz: number | null;
         };
         /**
          * @description `GET`/`POST /facets`. Counts are disjunctive: a facet's counts ignore
@@ -4316,6 +4465,75 @@ export interface components {
          * @enum {string}
          */
         LogFieldKind: "hash" | "name" | "path" | "url" | "query" | "client" | "peer" | "size" | "peer_activity" | "filter_changes" | "error" | "label" | "untyped";
+        /** @description One log file. */
+        LogFileInfo: {
+            compressed: boolean;
+            /** @description The file being written now. */
+            current: boolean;
+            /**
+             * @description Written while a data kind that identifies torrents or people, or
+             *     an opt-in, was on: "Contains torrent details".
+             */
+            details: boolean;
+            /** @description The first readable line's time. */
+            from: string | null;
+            name: string;
+            /** @description Written while an opt-in was on. */
+            opt_in: boolean;
+            /**
+             * Format: int64
+             * @description Bytes on disk.
+             */
+            size: number;
+            /** @description Its rotation time, or for the current file its last line. */
+            to: string | null;
+        };
+        /** @description A file `DELETE /logs/files` left. */
+        LogFileSkipped: {
+            name: string;
+            /** @description `not_a_regular_file` or `failed`. */
+            reason: string;
+        };
+        /**
+         * @description Whether file logging is writing now.
+         * @enum {string}
+         */
+        LogFileState: "on" | "off" | "stopped" | "unavailable";
+        /** @description `GET /logs/files`. */
+        LogFiles: {
+            files: components["schemas"]["LogFileInfo"][];
+            /** @description The logs folder; null when there's none to read. */
+            folder: string | null;
+            /**
+             * @description `false`: the folder's details index couldn't be read, so every file
+             *     counts as having details.
+             */
+            index_readable: boolean;
+            /**
+             * @description Why nothing is listed (`unavailable`): `not_opened`, `not_a_folder`,
+             *     `not_private` or `unreadable`.
+             */
+            reason: string | null;
+            state: components["schemas"]["LogFileState"];
+        };
+        /** @description What `DELETE /logs/files` did. */
+        LogFilesDeleted: {
+            /** Format: int64 */
+            bytes: number;
+            /** Format: int64 */
+            deleted: number;
+            skipped: components["schemas"]["LogFileSkipped"][];
+        };
+        /**
+         * @description Which files `DELETE /logs/files` deletes.
+         * @enum {string}
+         */
+        LogFilesWhich: "all" | "details";
+        /**
+         * @description A download's format.
+         * @enum {string}
+         */
+        LogFormat: "jsonl" | "text";
         /**
          * @description One frame of `GET /logs/stream`: `event:` names the variant, `data:`
          *     holds its payload.
@@ -5229,21 +5447,23 @@ export interface components {
         };
         /**
          * @description How a first page was ranked (`?explain=1`, architecture §8). Field
-         *     names are stable. Relevance is `phase1 + phase2.name + phase2.title`
-         *     (to float rounding); the other features and the priors aren't part of
-         *     ranking yet and are null.
+         *     names are stable. Relevance is `(phase1 + phase2.name + phase2.title)`
+         *     times each of `priors` (to float rounding); a prior the ranking
+         *     doesn't apply is null, and counts as 1. The other phase-2 features
+         *     aren't part of ranking yet and are null.
          */
         SearchExplain: {
             /** @description One per hit, in the hits' order. */
             hits: components["schemas"]["ExplainHit"][];
             /**
              * @description `relevance`, or the field the hits are sorted by (`discovered`,
-             *     `size`, `files`), when no hit has relevance parts.
+             *     `size`, `files`, `seeders`, `leechers`, `trackers`, `seen`), when
+             *     no hit has relevance parts.
              */
             ranked_by: string;
             /**
              * @description Whether phase 2 re-ranked the phase-1 candidates: the query has
-             *     unfielded words.
+             *     unfielded words, or the server ranks with the swarm priors.
              */
             two_phase: boolean;
             weights: components["schemas"]["ExplainWeights"];
@@ -5310,6 +5530,11 @@ export interface components {
              */
             last_scrape_at: number | null;
             /**
+             * Format: int64
+             * @description The latest DHT sighting.
+             */
+            last_seen_at: number;
+            /**
              * Format: int32
              * @description Null = never scraped.
              */
@@ -5340,8 +5565,12 @@ export interface components {
              * @description Null = never scraped.
              */
             seeders: number | null;
+            /** @description No tracker reported: the counts are the DHT's estimate (show ≈). */
+            seeders_approx: boolean;
             /** Format: int64 */
             size: number;
+            /** @description One tracker reports a swarm nothing else sees (§8): fake seeding. */
+            swarm_suspect: boolean;
             /** @description The resolved title; null = not resolved. */
             title: string | null;
             /**
@@ -5402,12 +5631,21 @@ export interface components {
              */
             q: string | null;
             /**
-             * @description `relevance` (the default), or `discovered`, `size` or `files` with
-             *     an optional `+` (ascending) or `-` (descending, the default).
+             * @description `relevance` (the default), or `discovered`, `size`, `files`,
+             *     `seeders`, `leechers`, `trackers` or `seen` with an optional `+`
+             *     (ascending) or `-` (descending, the default). Never-scraped
+             *     torrents sort last either way.
              * @default null
              * @example -discovered
              */
             sort: string | null;
+            /**
+             * Format: int32
+             * @description The user's zone for `time:`, in minutes east of UTC (−840 to 840);
+             *     0 by default.
+             * @default null
+             */
+            tz: number | null;
         };
         /** @description `GET`/`POST /search`. */
         SearchResponse: {
@@ -6346,6 +6584,21 @@ export interface components {
             /** Format: int32 */
             seeders: number | null;
         };
+        /** @description One tracker's report (`docs/metrics.md` §7.2). */
+        SwarmTracker: {
+            /**
+             * Format: int64
+             * @description When it answered.
+             */
+            at: number;
+            /** Format: int32 */
+            completed: number;
+            /** Format: int32 */
+            leechers: number;
+            /** Format: int32 */
+            seeders: number;
+            url: string;
+        };
         /**
          * @description `GET /system`.
          * @example {
@@ -6541,8 +6794,7 @@ export interface components {
          * @description `GET /torrents/{hash}`: the torrent summary (`docs/metrics.md` §7.1),
          *     its swarm section (§7.2) and the first 500 files.
          *
-         *     The swarm fields are `null` until swarm health is served (M4): null is
-         *     "never scraped", never 0.
+         *     A null swarm field is "never scraped" (or no estimate), never 0.
          */
         TorrentDetail: {
             /**
@@ -6581,6 +6833,11 @@ export interface components {
              */
             last_scrape_at: number | null;
             /**
+             * Format: int64
+             * @description The latest DHT sighting.
+             */
+            last_seen_at: number;
+            /**
              * Format: int32
              * @description Null = never scraped.
              */
@@ -6596,9 +6853,15 @@ export interface components {
              * @description Null = never scraped.
              */
             seeders: number | null;
+            /** @description No tracker reported: the counts are the DHT's estimate (show ≈). */
+            seeders_approx: boolean;
             /** Format: int64 */
             size: number;
             swarm_history: null | components["schemas"]["SwarmHistory"];
+            /** @description One tracker reports a swarm nothing else sees (§8): fake seeding. */
+            swarm_suspect: boolean;
+            /** @description The trackers that reported this swarm in the last answered round. */
+            swarm_trackers: components["schemas"]["SwarmTracker"][];
             /**
              * Format: double
              * @description Seeders per day over the last week; null = fewer than 3 daily
@@ -7568,6 +7831,32 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    getDigestPreview: {
+        parameters: {
+            query?: {
+                /**
+                 * @description `daily` (the last 24 hours) or `weekly` (the last 7 days, the
+                 *     default).
+                 */
+                period?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DigestPreview"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getDiscover: {
         parameters: {
             query?: {
@@ -7839,6 +8128,8 @@ export interface operations {
                 sort?: string;
                 /** @description Include torrents a filter rule hid (§20.3). */
                 hidden?: boolean;
+                /** @description The user's zone for `time:`, in minutes east of UTC (−840 to 840), as `/search`. */
+                tz?: number;
                 /** @description A search's `next_cursor`: count its index snapshot. Send the same `q`, `sort` and `hidden`. */
                 lease?: string;
                 /** @description Values listed for one facet (`limit.ext=20`): 1–100, 8 by default. */
@@ -8941,6 +9232,68 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    getLogArchive: {
+        parameters: {
+            query?: {
+                /** @description `jsonl` (default) or `text`. */
+                format?: components["schemas"]["LogFormat"];
+                /** @description Remove torrent details; the default is true when any file has them. */
+                redact?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A zip of the log files. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
+                };
+            };
+            /** @description A bad parameter (`bad_parameter`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description No session (`login_required`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Log files are being read already (`logs_busy`). */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not served here (`logs_unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getLogCatalog: {
         parameters: {
             query?: never;
@@ -8956,6 +9309,192 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LogCatalog"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getLogFiles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogFiles"];
+                };
+            };
+            /** @description No session (`login_required`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not served here (`logs_unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteLogFiles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeleteLogFiles"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogFilesDeleted"];
+                };
+            };
+            /** @description No session (`login_required`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A cross-site request (`cross_origin`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not JSON (`unsupported_media_type`). */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description A bad body (`bad_body`). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not served here (`logs_unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getLogFile: {
+        parameters: {
+            query?: {
+                /** @description `jsonl` (default) or `text`. */
+                format?: components["schemas"]["LogFormat"];
+                /** @description Remove torrent details; the default is true when the file has them. */
+                redact?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description `lodestar.jsonl` or a rotated file's name, as `GET /logs/files` lists it. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file, as an attachment: JSON lines, or text with `format=text`. */
+            200: {
+                headers: {
+                    /** @description `no-store`. */
+                    "Cache-Control"?: string;
+                    /** @description `attachment; filename="<stem>[-redacted].<jsonl|txt>"`. */
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/x-ndjson": string;
+                    "text/plain; charset=utf-8": string;
+                };
+            };
+            /** @description A bad parameter (`bad_parameter`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description No session (`login_required`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description No such file (`log_file_not_found`, `field: "name"`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Log files are being read already (`logs_busy`). */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not served here (`logs_unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
@@ -9392,7 +9931,7 @@ export interface operations {
             query?: {
                 /** @description The query text; empty browses everything. */
                 q?: string;
-                /** @description `relevance` (the default), or `discovered`, `size` or `files` with an optional `+` (ascending) or `-` (descending, the default). */
+                /** @description `relevance` (the default), or `discovered`, `size`, `files`, `seeders`, `leechers`, `trackers` or `seen` with an optional `+` (ascending) or `-` (descending, the default). Never-scraped torrents sort last either way. */
                 sort?: string;
                 /** @description Results per page: 1–200, 50 by default. */
                 limit?: number;
@@ -9400,6 +9939,8 @@ export interface operations {
                 offset?: number;
                 /** @description Include torrents a filter rule hid (§20.3). */
                 hidden?: boolean;
+                /** @description The user's zone for `time:`, in minutes east of UTC (−840 to 840); 0 by default. */
+                tz?: number;
                 /** @description The previous page's `next_cursor`; send the same `q`, `sort` and `hidden` with it. An expired one is a 410 `cursor_expired`, a tampered one a 400 `bad_cursor`. */
                 cursor?: string;
                 /** @description `1` or `true`: count every match exactly, within a time budget. */

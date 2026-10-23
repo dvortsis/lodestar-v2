@@ -19,6 +19,8 @@
 		placement: 'center' | 'left' | 'right' | 'bottom';
 		/** Pass `false` to render the title for assistive tech only. */
 		showTitle?: boolean;
+		/** Where focus starts on open; when it returns nothing, the first focusable element. */
+		initialFocus?: () => HTMLElement | null | undefined;
 	}
 	let {
 		title,
@@ -30,7 +32,8 @@
 		open = $bindable(false),
 		onOpenChange,
 		placement,
-		showTitle = true
+		showTitle = true,
+		initialFocus
 	}: Props = $props();
 
 	// Bits restores focus to the trigger; with no trigger (opened from code) restore to whatever
@@ -43,6 +46,13 @@
 		if (trigger) return;
 		event.preventDefault();
 		if (invoker instanceof HTMLElement && invoker.isConnected) invoker.focus();
+	}
+
+	function focusInitial(event: Event) {
+		const el = initialFocus?.();
+		if (!el) return;
+		event.preventDefault();
+		el.focus();
 	}
 
 	const panel: Record<Props['placement'], string> = {
@@ -65,6 +75,7 @@
 	<Dialog.Portal>
 		<Dialog.Overlay class="ls-overlay fixed inset-0 z-40 bg-base-content/40" />
 		<Dialog.Content
+			onOpenAutoFocus={focusInitial}
 			onCloseAutoFocus={restoreFocus}
 			data-side={placement === 'center' ? undefined : placement}
 			class="{panel[

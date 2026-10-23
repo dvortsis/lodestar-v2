@@ -15,7 +15,8 @@ use crate::dto::search::SearchHit;
 use crate::dto::torrents::{FileEntry, FilesPage, FilesQuery, TorrentDetail};
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{Path, Query};
-use crate::{ApiState, auth};
+use crate::swarm::{Detail, Summary};
+use crate::{ApiState, auth, swarm};
 
 /// This module's half of `/openapi.json`.
 #[derive(OpenApi)]
@@ -56,13 +57,17 @@ fn flags(row: &TorrentRow) -> Vec<String> {
     flag_names(row.flags).map(str::to_string).collect()
 }
 
-/// A search result row. The swarm fields stay null (never scraped) until
-/// swarm health is served (M4); the classification fields are filled from
-/// the stored enrichment by `search::enrich`.
-pub(crate) fn hit(row: &TorrentRow, score: f32, matched_files: Option<Vec<u64>>) -> SearchHit {
+/// A search result row. The classification fields are filled from the
+/// stored enrichment by `search::enrich`.
+pub(crate) fn hit(
+    row: &TorrentRow,
+    score: f32,
+    matched_files: Option<Vec<u64>>,
+    swarm: Summary,
+) -> SearchHit {
     SearchHit {
         adult_kind: None,
-        completed: None,
+        completed: swarm.completed,
         composition: Vec::new(),
         content_type: None,
         discovered_at: row.discovered_at,
@@ -73,8 +78,9 @@ pub(crate) fn hit(row: &TorrentRow, score: f32, matched_files: Option<Vec<u64>>)
         id: row.id,
         junk_reasons: Vec::new(),
         junk_score: None,
-        last_scrape_at: None,
-        leechers: None,
+        last_scrape_at: swarm.last_scrape_at,
+        last_seen_at: swarm.last_seen_at,
+        leechers: swarm.leechers,
         matched_files,
         metadata_at: row.metadata_at,
         name: row.name.clone(),
@@ -82,11 +88,13 @@ pub(crate) fn hit(row: &TorrentRow, score: f32, matched_files: Option<Vec<u64>>)
         resolved_via: None,
         // As `json!` widened it.
         score: f64::from(score),
-        seeders: None,
+        seeders: swarm.seeders,
+        seeders_approx: swarm.seeders_approx,
         size: row.size,
+        swarm_suspect: swarm.swarm_suspect,
         title: None,
-        trackers_checked: None,
-        trackers_reporting: None,
+        trackers_checked: swarm.trackers_checked,
+        trackers_reporting: swarm.trackers_reporting,
     }
 }
 
@@ -152,13 +160,12 @@ fn load(s: &ApiState, hash: &str) -> ApiResult<(TorrentRow, FileTree)> {
     Ok((row, tree))
 }
 
-/// The detail view: the summary, the swarm section (null until swarm
-/// health is served) and the first files.
-fn detail_of(row: &TorrentRow, tree: &FileTree) -> TorrentDetail {
+/// The detail view: the summary, the swarm section and the first files.
+fn detail_of(row: &TorrentRow, tree: &FileTree, swarm: Summary, more: Detail) -> TorrentDetail {
     TorrentDetail {
-        completed: None,
-        dht_peers: None,
-        dht_seeds: None,
+        completed: swarm.completed,
+        dht_peers: more.dht_peers,
+        dht_seeds: more.dht_seeds,
         discovered_at: row.discovered_at,
         file_list: tree
             .files
@@ -172,8 +179,9 @@ fn detail_of(row: &TorrentRow, tree: &FileTree) -> TorrentDetail {
         hash: hex(&row.info_hash.0),
         hash_v2: row.info_hash_v2.map(|h| hex(&h.0)),
         id: row.id,
-        last_scrape_at: None,
-        leechers: None,
+        last_scrape_at: swarm.last_scrape_at,
+        last_seen_at: swarm.last_seen_at,
+        leechers: swarm.leechers,
         magnet: format!(
             "magnet:?xt=urn:btih:{}&dn={}",
             hex(&row.info_hash.0),
@@ -182,12 +190,15 @@ fn detail_of(row: &TorrentRow, tree: &FileTree) -> TorrentDetail {
         metadata_at: row.metadata_at,
         name: row.name.clone(),
         piece_len: row.piece_len,
-        seeders: None,
+        seeders: swarm.seeders,
+        seeders_approx: swarm.seeders_approx,
         size: row.size,
-        swarm_history: None,
-        swarm_trend: None,
-        trackers_checked: None,
-        trackers_reporting: None,
+        swarm_history: more.swarm_history,
+        swarm_suspect: swarm.swarm_suspect,
+        swarm_trackers: more.swarm_trackers,
+        swarm_trend: more.swarm_trend,
+        trackers_checked: swarm.trackers_checked,
+        trackers_reporting: swarm.trackers_reporting,
     }
 }
 
@@ -209,7 +220,17 @@ pub(crate) async fn detail(
 ) -> ApiResult<Json<TorrentDetail>> {
     tokio::task::spawn_blocking(move || {
         let (row, tree) = load(&s, &hash)?;
-        Ok(Json(detail_of(&row, &tree)))
+        // Opening a torrent is interest: scrape it soon (§15).
+        if let Some(e) = &s.events {
+            e.interest(row.id);
+        }
+        let (summary, more) = {
+            let store = s.reader.lock().expect("reader lock");
+            let summary = swarm::summary(&store, s.hot.as_deref(), &row).map_err(internal)?;
+            let more = swarm::detail(&store, &summary, row.id).map_err(internal)?;
+            (summary, more)
+        };
+        Ok(Json(detail_of(&row, &tree, summary, more)))
     })
     .await
     .map_err(internal)?

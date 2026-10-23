@@ -1388,6 +1388,7 @@ dependencies = [
  "lodestar-sources",
  "lodestar-sources-importers",
  "lodestar-store",
+ "lodestar-tracker-scrape",
  "mimalloc",
  "proptest",
  "reqwest",
@@ -1448,9 +1449,11 @@ dependencies = [
  "lodestar-pipeline",
  "lodestar-search",
  "lodestar-store",
+ "lodestar-tracker-scrape",
  "rand 0.10.3",
  "rand_chacha 0.10.0",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -1586,10 +1589,13 @@ dependencies = [
  "lodestar-cluster",
  "lodestar-dht",
  "lodestar-filter",
+ "lodestar-log",
  "lodestar-metainfo",
  "lodestar-peer-wire",
  "lodestar-sources",
  "lodestar-store",
+ "lodestar-tracker-scrape",
+ "proptest",
  "tempfile",
  "tokio",
  "tracing",

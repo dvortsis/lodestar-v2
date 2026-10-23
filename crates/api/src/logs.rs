@@ -4,16 +4,16 @@
 //! - **`GET /logs/catalog`:** the events and data kinds, from
 //!   `lodestar_log` (the events the binary registered and the state its
 //!   runtime last applied). It needs no [`LogSource`].
-//! - **`GET /logs` and `GET /logs/stream`** read through [`LogSource`],
-//!   which the binary implements over its ring buffer and log folder and
-//!   layers as an `Extension`. Without one, they're `503 logs_unavailable`.
-//!   The file list, downloads, the archive and deletion are B-log2's
-//!   second part.
+//! - **`GET /logs`, `GET /logs/stream`, the files and the archive** read
+//!   through [`LogSource`], which the binary implements over its ring
+//!   buffer and log folder and layers as an `Extension`. Without one,
+//!   they're `503 logs_unavailable`.
 //! - **What a browser can read back** is decided by the source: the live
-//!   mask now in force, for the ring, the stream and history.
+//!   mask now in force for the ring, the stream and history; at most the
+//!   Private kinds (less client addresses) for a redacted download.
 //! - **Bounded work:** the stream's own caps (2 per session, 8 in all) and
 //!   queue (256 matching records, then one `resync`); at most 2 file reads
-//!   at once.
+//!   at once across history, downloads and the archive.
 
 mod params;
 mod stream;
@@ -23,8 +23,10 @@ use std::io;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use axum::extract::{Extension, RawQuery};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::body::{Body, Bytes};
+use axum::extract::rejection::PathRejection;
+use axum::extract::{Extension, Path, RawQuery};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
@@ -36,16 +38,29 @@ use crate::ApiState;
 use crate::auth;
 use crate::dto::error::ErrorEnvelope;
 pub use crate::dto::logs::{
-    LogCatalog, LogComponent, LogDataKind, LogEvent, LogField, LogFieldKind, LogFrame, LogHistory,
-    LogKind, LogKindOutputs, LogLevel, LogLine, LogOutput, LogOutputName, LogPresets, LogPurge,
-    LogRepeated, LogResync, LogResyncReason, LogTemporary, LogValue,
+    DeleteLogFiles, LogCatalog, LogComponent, LogDataKind, LogEvent, LogField, LogFieldKind,
+    LogFileInfo, LogFileSkipped, LogFileState, LogFiles, LogFilesDeleted, LogFilesWhich, LogFormat,
+    LogFrame, LogHistory, LogKind, LogKindOutputs, LogLevel, LogLine, LogOutput, LogOutputName,
+    LogPresets, LogPurge, LogRepeated, LogResync, LogResyncReason, LogTemporary, LogValue,
 };
 use crate::error::{ApiError, ApiResult, internal};
+use crate::extract::same_origin_json;
 pub use params::{LineFilter, parse_rfc3339};
 
 /// This module's half of `/openapi.json`.
 #[derive(OpenApi)]
-#[openapi(paths(catalog, history, stream::stream), components(schemas(LogFrame)))]
+#[openapi(
+    paths(
+        catalog,
+        history,
+        stream::stream,
+        files,
+        download,
+        archive,
+        delete_files
+    ),
+    components(schemas(LogFrame, LogFormat))
+)]
 pub(crate) struct ApiDoc;
 
 pub fn routes() -> Router<ApiState> {
@@ -53,7 +68,10 @@ pub fn routes() -> Router<ApiState> {
         Router::new()
             .route("/logs", get(history))
             .route("/logs/stream", get(stream::stream))
-            .route("/logs/catalog", get(catalog)),
+            .route("/logs/catalog", get(catalog))
+            .route("/logs/files", get(files).delete(delete_files))
+            .route("/logs/files/{name}", get(download))
+            .route("/logs/archive.zip", get(archive)),
     )
 }
 
@@ -83,10 +101,28 @@ pub struct HistoryQuery {
     pub cursor: Option<String>,
 }
 
+/// A file served: its headers and its bytes, read on the blocking pool.
+pub struct Download {
+    /// ASCII only, built from the typed name.
+    pub file_name: String,
+    pub content_type: &'static str,
+    pub chunks: Box<dyn Iterator<Item = io::Result<Vec<u8>>> + Send>,
+}
+
+impl fmt::Debug for Download {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Download")
+            .field("file_name", &self.file_name)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Why a source refused.
 #[derive(Debug)]
 pub enum LogsError {
     BadCursor,
+    /// No such file, or one refused: never echoes the name.
+    NotFound,
     /// Shut down, or nothing to read.
     Unavailable,
     /// Logged by its type only.
@@ -101,6 +137,12 @@ impl From<LogsError> for ApiError {
                 "That cursor isn't valid for these filters; load the newest lines again.",
             )
             .field("cursor"),
+            LogsError::NotFound => ApiError::new(
+                StatusCode::NOT_FOUND,
+                "log_file_not_found",
+                "There's no such log file.",
+            )
+            .field("name"),
             LogsError::Unavailable => unavailable(),
             LogsError::Internal(e) => internal(e),
         }
@@ -222,6 +264,11 @@ impl Transport {
         lock(&self.slots).total
     }
 
+    /// File reads held now (history pages and downloads).
+    pub fn reads_held(&self) -> usize {
+        self.config.reads.max(1) - self.reads.available_permits()
+    }
+
     fn acquire(&self, session: u64) -> Result<Slot, Refused> {
         if self.is_closed() {
             return Err(Refused::Closed);
@@ -278,7 +325,20 @@ pub trait LogSource: Send + Sync + fmt::Debug {
     fn purges_covering(&self, seq: u64) -> Vec<LogPurge>;
     /// A page of history, newest first: the ring, then the files.
     fn history(&self, query: &HistoryQuery) -> Result<LogHistory, LogsError>;
-    /// Ends every stream and refuses new ones.
+    /// The log files.
+    fn files(&self) -> LogFiles;
+    /// One file; `redact` `None` takes the file's default.
+    fn download(
+        &self,
+        name: &str,
+        format: LogFormat,
+        redact: Option<bool>,
+    ) -> Result<Download, LogsError>;
+    /// Every listed file, as a zip.
+    fn archive(&self, format: LogFormat, redact: Option<bool>) -> Result<Download, LogsError>;
+    /// Deletes files, all of them or those with details.
+    fn delete(&self, which: LogFilesWhich) -> Result<LogFilesDeleted, LogsError>;
+    /// Ends every stream and in-flight download and refuses new ones.
     fn close(&self) {
         self.transport().close();
     }
@@ -546,4 +606,236 @@ pub(crate) async fn history(handle: Handle, RawQuery(query): RawQuery) -> ApiRes
         Ok(page) => Ok(([(header::CACHE_CONTROL, "no-store")], Json(page)).into_response()),
         Err(res) => Ok(*res),
     }
+}
+
+/// The log files, newest first, with whether each contains torrent
+/// details. An unreadable details index marks every file as having them.
+#[utoipa::path(
+    operation_id = "getLogFiles",
+    get,
+    path = "/logs/files",
+    tag = "logs",
+    responses(
+        (status = 200, body = LogFiles),
+        (status = 401, description = "No session (`login_required`).", body = ErrorEnvelope),
+        (status = 503, description = "Not served here (`logs_unavailable`).", body = ErrorEnvelope),
+    )
+)]
+pub(crate) async fn files(handle: Handle) -> ApiResult<Response> {
+    let s = source(handle)?;
+    let listed = tokio::task::spawn_blocking(move || s.files())
+        .await
+        .map_err(internal)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(listed)).into_response())
+}
+
+/// The response for a download: its headers, and its bytes read on the
+/// blocking pool until it ends, fails or the source closes.
+fn served(s: &Arc<dyn LogSource>, d: Download, permit: OwnedSemaphorePermit) -> Response {
+    let (tx, rx) = tokio::sync::mpsc::channel::<io::Result<Bytes>>(4);
+    let mut closed = s.transport().closed();
+    let mut ended = closed.clone();
+    let mut chunks = d.chunks;
+    let rt = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        for chunk in chunks.by_ref() {
+            let failed = chunk.is_err();
+            // A client that stopped reading never holds the read past
+            // `close()`: the wait for room ends with it.
+            let sent = rt.block_on(async {
+                tokio::select! {
+                    biased;
+                    _ = closed.wait_for(|c| *c) => false,
+                    r = tx.send(chunk.map(Bytes::from)) => r.is_ok(),
+                }
+            });
+            if !sent || failed {
+                return;
+            }
+        }
+    });
+    // Once the source closes the body ends with an error, never as if
+    // the file ended there.
+    let shut = Box::pin(async move {
+        let _ = ended.wait_for(|c| *c).await;
+    });
+    let mut res = Response::new(Body::from_stream(Chunks {
+        rx,
+        shut,
+        done: false,
+    }));
+    let h = res.headers_mut();
+    h.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(d.content_type),
+    );
+    // The name is built from a validated, typed name: ASCII only.
+    if let Ok(v) = HeaderValue::from_str(&format!("attachment; filename=\"{}\"", d.file_name)) {
+        h.insert(header::CONTENT_DISPOSITION, v);
+    }
+    h.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    res
+}
+
+struct Chunks {
+    rx: tokio::sync::mpsc::Receiver<io::Result<Bytes>>,
+    shut: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
+    done: bool,
+}
+
+impl futures_core::Stream for Chunks {
+    type Item = io::Result<Bytes>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::task::Poll;
+        if self.done {
+            return Poll::Ready(None);
+        }
+        if self.shut.as_mut().poll(cx).is_ready() {
+            self.done = true;
+            self.rx.close();
+            return Poll::Ready(Some(Err(io::Error::other("shutting down"))));
+        }
+        self.rx.poll_recv(cx)
+    }
+}
+
+/// Opens a download on the blocking pool with a read held for its whole
+/// length.
+async fn download_with(
+    s: Arc<dyn LogSource>,
+    open: impl FnOnce(&dyn LogSource) -> Result<Download, LogsError> + Send + 'static,
+) -> ApiResult<Response> {
+    let permit = match s.transport().read() {
+        Ok(p) => p,
+        Err(Refused::Busy) => return Ok(busy()),
+        Err(Refused::Closed) => return Err(unavailable()),
+    };
+    let src = s.clone();
+    let opened = tokio::task::spawn_blocking(move || open(&*src))
+        .await
+        .map_err(internal)??;
+    Ok(served(&s, opened, permit))
+}
+
+/// One log file, always decompressed. `redact` defaults to true when the
+/// file contains details: fields of the kinds that identify torrents or
+/// people, client addresses and the opt-ins read `[hidden]`, and lines of
+/// an opt-in event are left out. `redact=false` serves the file as it is.
+#[utoipa::path(
+    operation_id = "getLogFile",
+    get,
+    path = "/logs/files/{name}",
+    tag = "logs",
+    params(
+        ("name" = String, Path, description = "`lodestar.jsonl` or a rotated file's name, as `GET /logs/files` lists it."),
+        ("format" = Option<LogFormat>, Query, description = "`jsonl` (default) or `text`."),
+        ("redact" = Option<bool>, Query, description = "Remove torrent details; the default is true when the file has them."),
+    ),
+    responses(
+        (
+            status = 200,
+            description = "The file, as an attachment: JSON lines, or text with `format=text`.",
+            content(
+                (String = "application/x-ndjson"),
+                (String = "text/plain; charset=utf-8"),
+            ),
+            headers(
+                ("Content-Disposition" = String, description = "`attachment; filename=\"<stem>[-redacted].<jsonl|txt>\"`."),
+                ("Cache-Control" = String, description = "`no-store`."),
+            )
+        ),
+        (status = 400, description = "A bad parameter (`bad_parameter`).", body = ErrorEnvelope),
+        (status = 401, description = "No session (`login_required`).", body = ErrorEnvelope),
+        (status = 404, description = "No such file (`log_file_not_found`, `field: \"name\"`).", body = ErrorEnvelope),
+        (status = 429, description = "Log files are being read already (`logs_busy`).", body = ErrorEnvelope),
+        (status = 503, description = "Not served here (`logs_unavailable`).", body = ErrorEnvelope),
+    )
+)]
+pub(crate) async fn download(
+    handle: Handle,
+    name: Result<Path<String>, PathRejection>,
+    RawQuery(query): RawQuery,
+) -> ApiResult<Response> {
+    let p = params::parse(query.as_deref())?;
+    let format = params::format(&p)?;
+    let redact = params::flag(&p, "redact")?;
+    let s = source(handle)?;
+    let Ok(Path(name)) = name else {
+        return Err(LogsError::NotFound.into());
+    };
+    download_with(s, move |s| s.download(&name, format, redact)).await
+}
+
+/// Every listed log file in one zip, each converted as a single download
+/// is. `redact` defaults to true when any file contains details.
+#[utoipa::path(
+    operation_id = "getLogArchive",
+    get,
+    path = "/logs/archive.zip",
+    tag = "logs",
+    params(
+        ("format" = Option<LogFormat>, Query, description = "`jsonl` (default) or `text`."),
+        ("redact" = Option<bool>, Query, description = "Remove torrent details; the default is true when any file has them."),
+    ),
+    responses(
+        (
+            status = 200,
+            description = "A zip of the log files.",
+            content_type = "application/zip",
+            body = String,
+        ),
+        (status = 400, description = "A bad parameter (`bad_parameter`).", body = ErrorEnvelope),
+        (status = 401, description = "No session (`login_required`).", body = ErrorEnvelope),
+        (status = 429, description = "Log files are being read already (`logs_busy`).", body = ErrorEnvelope),
+        (status = 503, description = "Not served here (`logs_unavailable`).", body = ErrorEnvelope),
+    )
+)]
+pub(crate) async fn archive(handle: Handle, RawQuery(query): RawQuery) -> ApiResult<Response> {
+    let p = params::parse(query.as_deref())?;
+    let format = params::format(&p)?;
+    let redact = params::flag(&p, "redact")?;
+    let s = source(handle)?;
+    download_with(s, move |s| s.archive(format, redact)).await
+}
+
+/// Deletes log files: all of them, or only those containing torrent
+/// details (or written under an opt-in). The file being written is
+/// rotated first, so no new line is lost. A file that isn't a regular file
+/// is skipped and reported. Needs no password (Destructive, §10.10.7).
+#[utoipa::path(
+    operation_id = "deleteLogFiles",
+    delete,
+    path = "/logs/files",
+    tag = "logs",
+    request_body = DeleteLogFiles,
+    responses(
+        (status = 200, body = LogFilesDeleted),
+        (status = 401, description = "No session (`login_required`).", body = ErrorEnvelope),
+        (status = 403, description = "A cross-site request (`cross_origin`).", body = ErrorEnvelope),
+        (status = 415, description = "Not JSON (`unsupported_media_type`).", body = ErrorEnvelope),
+        (status = 422, description = "A bad body (`bad_body`).", body = ErrorEnvelope),
+        (status = 503, description = "Not served here (`logs_unavailable`).", body = ErrorEnvelope),
+    )
+)]
+pub(crate) async fn delete_files(
+    handle: Handle,
+    headers: HeaderMap,
+    crate::extract::Json(body): crate::extract::Json<DeleteLogFiles>,
+) -> ApiResult<Json<LogFilesDeleted>> {
+    same_origin_json(&headers)?;
+    let s = source(handle)?;
+    let which = body.which;
+    let done = tokio::task::spawn_blocking(move || s.delete(which))
+        .await
+        .map_err(internal)??;
+    Ok(Json(done))
 }

@@ -222,7 +222,7 @@ pub(crate) async fn list(
                 created_at: a.created_at,
                 id: a.id,
                 read: a.read_at.is_some(),
-                torrent: hit_row(&row, e),
+                torrent: hit_row(&store, s.hot.as_deref(), &row, e)?,
             });
             last = Some(a.torrent_id);
         }

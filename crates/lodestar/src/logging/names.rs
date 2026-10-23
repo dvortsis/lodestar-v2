@@ -82,6 +82,12 @@ impl LogName {
         }
     }
 
+    /// The name without `.jsonl[.gz]`, for a download's file name.
+    pub fn stem(&self) -> String {
+        let name = self.file_name();
+        name.split(".jsonl").next().unwrap_or(&name).to_string()
+    }
+
     pub fn gz(&self) -> bool {
         matches!(self, LogName::Rotated { gz: true, .. })
     }
@@ -100,6 +106,18 @@ impl LogName {
                 gz: true,
             }),
             _ => None,
+        }
+    }
+
+    /// A rotated file's other self: its `.gz` or its `.jsonl`.
+    pub fn sibling(&self) -> Option<LogName> {
+        match self {
+            LogName::Current => None,
+            LogName::Rotated { stamp, n, gz } => Some(LogName::Rotated {
+                stamp: stamp.clone(),
+                n: *n,
+                gz: !gz,
+            }),
         }
     }
 
@@ -244,7 +262,9 @@ mod tests {
             assert_eq!(LogName::parse(bad), None, "{bad:?}");
         }
         let r = LogName::parse("lodestar-20261023T101500.123Z-2.jsonl.gz").unwrap();
+        assert_eq!(r.stem(), "lodestar-20261023T101500.123Z-2");
         assert_eq!(r.rotated_at().unwrap(), "2026-10-23T10:15:00.123Z");
+        assert_eq!(LogName::Current.stem(), "lodestar");
     }
 
     #[test]

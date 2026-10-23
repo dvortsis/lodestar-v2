@@ -1001,6 +1001,46 @@
         ]
       }
     },
+    "/digest/preview": {
+      "get": {
+        "tags": [
+          "insights"
+        ],
+        "summary": "The digest as it would be sent now (§10.9.7). JSON only: the HTML is\nshown by the client in `<iframe sandbox srcdoc>`, the text in a `<pre>`.",
+        "operationId": "getDigestPreview",
+        "parameters": [
+          {
+            "name": "period",
+            "in": "query",
+            "description": "`daily` (the last 24 hours) or `weekly` (the last 7 days, the\ndefault).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DigestPreview"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/discover": {
       "get": {
         "tags": [
@@ -1492,6 +1532,16 @@
             "required": false,
             "schema": {
               "type": "boolean"
+            }
+          },
+          {
+            "name": "tz",
+            "in": "query",
+            "description": "The user's zone for `time:`, in minutes east of UTC (−840 to 840), as `/search`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
             }
           },
           {
@@ -3467,6 +3517,95 @@
         ]
       }
     },
+    "/logs/archive.zip": {
+      "get": {
+        "tags": [
+          "logs"
+        ],
+        "summary": "Every listed log file in one zip, each converted as a single download\nis. `redact` defaults to true when any file contains details.",
+        "operationId": "getLogArchive",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "description": "`jsonl` (default) or `text`.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/LogFormat"
+            }
+          },
+          {
+            "name": "redact",
+            "in": "query",
+            "description": "Remove torrent details; the default is true when any file has them.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A zip of the log files.",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A bad parameter (`bad_parameter`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session (`login_required`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Log files are being read already (`logs_busy`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not served here (`logs_unavailable`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/logs/catalog": {
       "get": {
         "tags": [
@@ -3481,6 +3620,269 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/LogCatalog"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/logs/files": {
+      "get": {
+        "tags": [
+          "logs"
+        ],
+        "summary": "The log files, newest first, with whether each contains torrent\ndetails. An unreadable details index marks every file as having them.",
+        "operationId": "getLogFiles",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogFiles"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session (`login_required`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not served here (`logs_unavailable`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "logs"
+        ],
+        "summary": "Deletes log files: all of them, or only those containing torrent\ndetails (or written under an opt-in). The file being written is\nrotated first, so no new line is lost. A file that isn't a regular file\nis skipped and reported. Needs no password (Destructive, §10.10.7).",
+        "operationId": "deleteLogFiles",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteLogFiles"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogFilesDeleted"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session (`login_required`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A cross-site request (`cross_origin`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Not JSON (`unsupported_media_type`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A bad body (`bad_body`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not served here (`logs_unavailable`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/logs/files/{name}": {
+      "get": {
+        "tags": [
+          "logs"
+        ],
+        "summary": "One log file, always decompressed. `redact` defaults to true when the\nfile contains details: fields of the kinds that identify torrents or\npeople, client addresses and the opt-ins read `[hidden]`, and lines of\nan opt-in event are left out. `redact=false` serves the file as it is.",
+        "operationId": "getLogFile",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "`lodestar.jsonl` or a rotated file's name, as `GET /logs/files` lists it.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "`jsonl` (default) or `text`.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/LogFormat"
+            }
+          },
+          {
+            "name": "redact",
+            "in": "query",
+            "description": "Remove torrent details; the default is true when the file has them.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file, as an attachment: JSON lines, or text with `format=text`.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`no-store`."
+              },
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`attachment; filename=\"<stem>[-redacted].<jsonl|txt>\"`."
+              }
+            },
+            "content": {
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "text/plain; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A bad parameter (`bad_parameter`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session (`login_required`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such file (`log_file_not_found`, `field: \"name\"`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Log files are being read already (`logs_busy`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not served here (`logs_unavailable`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -4195,7 +4597,7 @@
           {
             "name": "sort",
             "in": "query",
-            "description": "`relevance` (the default), or `discovered`, `size` or `files` with an optional `+` (ascending) or `-` (descending, the default).",
+            "description": "`relevance` (the default), or `discovered`, `size`, `files`, `seeders`, `leechers`, `trackers` or `seen` with an optional `+` (ascending) or `-` (descending, the default). Never-scraped torrents sort last either way.",
             "required": false,
             "schema": {
               "type": "string"
@@ -4228,6 +4630,16 @@
             "required": false,
             "schema": {
               "type": "boolean"
+            }
+          },
+          {
+            "name": "tz",
+            "in": "query",
+            "description": "The user's zone for `time:`, in minutes east of UTC (−840 to 840); 0 by default.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
             }
           },
           {
@@ -6071,7 +6483,8 @@
       "AstDateField": {
         "type": "string",
         "enum": [
-          "discovered"
+          "discovered",
+          "seen"
         ]
       },
       "AstNode": {
@@ -6497,6 +6910,33 @@
                 ]
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "The time of day a torrent was discovered, in minutes after\nmidnight, inclusive; `from > to` wraps past midnight. The search's\n`tz` applies.",
+            "required": [
+              "from",
+              "to",
+              "op"
+            ],
+            "properties": {
+              "from": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "time_of_day"
+                ]
+              },
+              "to": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              }
+            }
           }
         ],
         "description": "A parsed query (§8), tagged by `op`."
@@ -6511,7 +6951,11 @@
           "year",
           "season",
           "episode",
-          "junk"
+          "junk",
+          "seeders",
+          "leechers",
+          "trackers",
+          "dht"
         ]
       },
       "AstShareBy": {
@@ -8541,6 +8985,19 @@
           }
         }
       },
+      "DeleteLogFiles": {
+        "type": "object",
+        "description": "`DELETE /logs/files`.",
+        "required": [
+          "which"
+        ],
+        "properties": {
+          "which": {
+            "$ref": "#/components/schemas/LogFilesWhich"
+          }
+        },
+        "additionalProperties": false
+      },
       "Deployment": {
         "type": "object",
         "required": [
@@ -8698,6 +9155,65 @@
             "format": "int64",
             "minimum": 0
           }
+        }
+      },
+      "DigestPeriod": {
+        "type": "string",
+        "description": "How much a digest covers.",
+        "enum": [
+          "daily",
+          "weekly"
+        ]
+      },
+      "DigestPreview": {
+        "type": "object",
+        "description": "A digest as it would be sent now.",
+        "required": [
+          "generated_at",
+          "html",
+          "period",
+          "range",
+          "subject",
+          "text"
+        ],
+        "properties": {
+          "generated_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the numbers were read (unix seconds): the overview's\n`updated_at`."
+          },
+          "html": {
+            "type": "string",
+            "description": "A complete HTML document: no script, style, images or external\nlinks. Show it only in `<iframe sandbox srcdoc>` (no\n`allow-scripts`, no `allow-same-origin`)."
+          },
+          "period": {
+            "$ref": "#/components/schemas/DigestPeriod"
+          },
+          "range": {
+            "$ref": "#/components/schemas/InsightsRange",
+            "description": "The overview range the digest read, as the server normalized it."
+          },
+          "subject": {
+            "type": "string",
+            "description": "At most 120 characters."
+          },
+          "text": {
+            "type": "string",
+            "description": "Plain UTF-8, at most 4,000 bytes. Show it in a `<pre>`."
+          }
+        },
+        "example": {
+          "generated_at": 1800000000,
+          "html": "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Lodestar weekly digest: Jan 8, 2027 – Jan 15, 2027</title></head><body><h1>Lodestar weekly digest: Jan 8, 2027 – Jan 15, 2027</h1></body></html>",
+          "period": "weekly",
+          "range": {
+            "bucket": "hour",
+            "from": 1799395200,
+            "to": 1800000000,
+            "tz": "UTC"
+          },
+          "subject": "Lodestar weekly digest: Jan 8, 2027 – Jan 15, 2027",
+          "text": "Lodestar weekly digest: Jan 8, 2027 – Jan 15, 2027\n"
         }
       },
       "DiscoverKpi": {
@@ -9283,7 +9799,7 @@
       },
       "ExplainPriors": {
         "type": "object",
-        "description": "The quality priors (§8), multiplied onto relevance once ranking has\nthem (with swarm health, M4); until then each is null.",
+        "description": "The quality priors (§8), multipliers on relevance from swarm health\n(M4): null when the ranking doesn't apply them (no swarm data served,\nor a field sort).",
         "required": [
           "freshness",
           "junk",
@@ -9611,6 +10127,15 @@
               "null"
             ],
             "description": "The search's sort; it doesn't change the counts, but a `lease`\nis checked against it.",
+            "default": null
+          },
+          "tz": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The user's zone for `time:`, in minutes east of UTC (−840 to\n840), as `/search`; 0 by default.",
             "default": null
           }
         },
@@ -11618,6 +12143,170 @@
           "error",
           "label",
           "untyped"
+        ]
+      },
+      "LogFileInfo": {
+        "type": "object",
+        "description": "One log file.",
+        "required": [
+          "compressed",
+          "current",
+          "details",
+          "from",
+          "name",
+          "opt_in",
+          "size",
+          "to"
+        ],
+        "properties": {
+          "compressed": {
+            "type": "boolean"
+          },
+          "current": {
+            "type": "boolean",
+            "description": "The file being written now."
+          },
+          "details": {
+            "type": "boolean",
+            "description": "Written while a data kind that identifies torrents or people, or\nan opt-in, was on: \"Contains torrent details\"."
+          },
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The first readable line's time."
+          },
+          "name": {
+            "type": "string"
+          },
+          "opt_in": {
+            "type": "boolean",
+            "description": "Written while an opt-in was on."
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes on disk.",
+            "minimum": 0
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its rotation time, or for the current file its last line."
+          }
+        }
+      },
+      "LogFileSkipped": {
+        "type": "object",
+        "description": "A file `DELETE /logs/files` left.",
+        "required": [
+          "name",
+          "reason"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "description": "`not_a_regular_file` or `failed`."
+          }
+        }
+      },
+      "LogFileState": {
+        "type": "string",
+        "description": "Whether file logging is writing now.",
+        "enum": [
+          "on",
+          "off",
+          "stopped",
+          "unavailable"
+        ]
+      },
+      "LogFiles": {
+        "type": "object",
+        "description": "`GET /logs/files`.",
+        "required": [
+          "files",
+          "folder",
+          "index_readable",
+          "reason",
+          "state"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogFileInfo"
+            }
+          },
+          "folder": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The logs folder; null when there's none to read."
+          },
+          "index_readable": {
+            "type": "boolean",
+            "description": "`false`: the folder's details index couldn't be read, so every file\ncounts as having details."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why nothing is listed (`unavailable`): `not_opened`, `not_a_folder`,\n`not_private` or `unreadable`."
+          },
+          "state": {
+            "$ref": "#/components/schemas/LogFileState"
+          }
+        }
+      },
+      "LogFilesDeleted": {
+        "type": "object",
+        "description": "What `DELETE /logs/files` did.",
+        "required": [
+          "bytes",
+          "deleted",
+          "skipped"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "deleted": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogFileSkipped"
+            }
+          }
+        }
+      },
+      "LogFilesWhich": {
+        "type": "string",
+        "description": "Which files `DELETE /logs/files` deletes.",
+        "enum": [
+          "all",
+          "details"
+        ]
+      },
+      "LogFormat": {
+        "type": "string",
+        "description": "A download's format.",
+        "enum": [
+          "jsonl",
+          "text"
         ]
       },
       "LogFrame": {
@@ -13676,7 +14365,7 @@
       },
       "SearchExplain": {
         "type": "object",
-        "description": "How a first page was ranked (`?explain=1`, architecture §8). Field\nnames are stable. Relevance is `phase1 + phase2.name + phase2.title`\n(to float rounding); the other features and the priors aren't part of\nranking yet and are null.",
+        "description": "How a first page was ranked (`?explain=1`, architecture §8). Field\nnames are stable. Relevance is `(phase1 + phase2.name + phase2.title)`\ntimes each of `priors` (to float rounding); a prior the ranking\ndoesn't apply is null, and counts as 1. The other phase-2 features\naren't part of ranking yet and are null.",
         "required": [
           "hits",
           "ranked_by",
@@ -13693,11 +14382,11 @@
           },
           "ranked_by": {
             "type": "string",
-            "description": "`relevance`, or the field the hits are sorted by (`discovered`,\n`size`, `files`), when no hit has relevance parts."
+            "description": "`relevance`, or the field the hits are sorted by (`discovered`,\n`size`, `files`, `seeders`, `leechers`, `trackers`, `seen`), when\nno hit has relevance parts."
           },
           "two_phase": {
             "type": "boolean",
-            "description": "Whether phase 2 re-ranked the phase-1 candidates: the query has\nunfielded words."
+            "description": "Whether phase 2 re-ranked the phase-1 candidates: the query has\nunfielded words, or the server ranks with the swarm priors."
           },
           "weights": {
             "$ref": "#/components/schemas/ExplainWeights"
@@ -13721,6 +14410,7 @@
           "junk_reasons",
           "junk_score",
           "last_scrape_at",
+          "last_seen_at",
           "leechers",
           "metadata_at",
           "name",
@@ -13728,7 +14418,9 @@
           "resolved_via",
           "score",
           "seeders",
+          "seeders_approx",
           "size",
+          "swarm_suspect",
           "title",
           "trackers_checked",
           "trackers_reporting"
@@ -13824,6 +14516,11 @@
             "format": "int64",
             "description": "Null = never scraped."
           },
+          "last_seen_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The latest DHT sighting."
+          },
           "leechers": {
             "type": [
               "integer",
@@ -13875,10 +14572,18 @@
             "description": "Null = never scraped.",
             "minimum": 0
           },
+          "seeders_approx": {
+            "type": "boolean",
+            "description": "No tracker reported: the counts are the DHT's estimate (show ≈)."
+          },
           "size": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          },
+          "swarm_suspect": {
+            "type": "boolean",
+            "description": "One tracker reports a swarm nothing else sees (§8): fake seeding."
           },
           "title": {
             "type": [
@@ -13985,9 +14690,18 @@
               "string",
               "null"
             ],
-            "description": "`relevance` (the default), or `discovered`, `size` or `files` with\nan optional `+` (ascending) or `-` (descending, the default).",
+            "description": "`relevance` (the default), or `discovered`, `size`, `files`,\n`seeders`, `leechers`, `trackers` or `seen` with an optional `+`\n(ascending) or `-` (descending, the default). Never-scraped\ntorrents sort last either way.",
             "default": null,
             "example": "-discovered"
+          },
+          "tz": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The user's zone for `time:`, in minutes east of UTC (−840 to 840);\n0 by default.",
+            "default": null
           }
         }
       },
@@ -15869,6 +16583,42 @@
           }
         }
       },
+      "SwarmTracker": {
+        "type": "object",
+        "description": "One tracker's report (`docs/metrics.md` §7.2).",
+        "required": [
+          "at",
+          "completed",
+          "leechers",
+          "seeders",
+          "url"
+        ],
+        "properties": {
+          "at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it answered."
+          },
+          "completed": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "leechers": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "seeders": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
       "SystemInfo": {
         "type": "object",
         "description": "`GET /system`.",
@@ -16264,7 +17014,7 @@
       },
       "TorrentDetail": {
         "type": "object",
-        "description": "`GET /torrents/{hash}`: the torrent summary (`docs/metrics.md` §7.1),\nits swarm section (§7.2) and the first 500 files.\n\nThe swarm fields are `null` until swarm health is served (M4): null is\n\"never scraped\", never 0.",
+        "description": "`GET /torrents/{hash}`: the torrent summary (`docs/metrics.md` §7.1),\nits swarm section (§7.2) and the first 500 files.\n\nA null swarm field is \"never scraped\" (or no estimate), never 0.",
         "required": [
           "completed",
           "dht_peers",
@@ -16278,15 +17028,19 @@
           "hash_v2",
           "id",
           "last_scrape_at",
+          "last_seen_at",
           "leechers",
           "magnet",
           "metadata_at",
           "name",
           "piece_len",
           "seeders",
+          "seeders_approx",
           "size",
+          "swarm_suspect",
           "swarm_history",
           "swarm_trend",
+          "swarm_trackers",
           "trackers_checked",
           "trackers_reporting"
         ],
@@ -16368,6 +17122,11 @@
             "format": "int64",
             "description": "Null = never scraped."
           },
+          "last_seen_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The latest DHT sighting."
+          },
           "leechers": {
             "type": [
               "integer",
@@ -16401,6 +17160,10 @@
             "description": "Null = never scraped.",
             "minimum": 0
           },
+          "seeders_approx": {
+            "type": "boolean",
+            "description": "No tracker reported: the counts are the DHT's estimate (show ≈)."
+          },
           "size": {
             "type": "integer",
             "format": "int64",
@@ -16416,6 +17179,17 @@
                 "description": "14 daily and 26 weekly samples, newest first; null = no history\nkept."
               }
             ]
+          },
+          "swarm_suspect": {
+            "type": "boolean",
+            "description": "One tracker reports a swarm nothing else sees (§8): fake seeding."
+          },
+          "swarm_trackers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SwarmTracker"
+            },
+            "description": "The trackers that reported this swarm in the last answered round."
           },
           "swarm_trend": {
             "type": [
