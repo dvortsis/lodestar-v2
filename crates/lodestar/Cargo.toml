@@ -14,6 +14,8 @@ default-run = "lodestar"
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json"] }
 clap = { version = "4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
 lodestar-api.workspace = true
+# `serve --fixture`'s data set (src/fixture.rs), behind `fixture`.
+lodestar-bench = { path = "../../bench", optional = true }
 lodestar-dht.workspace = true
 lodestar-filter.workspace = true
 lodestar-peer-wire.workspace = true
@@ -40,9 +42,11 @@ utoipa = { version = "5.5.0", default-features = false, features = ["macros"] }
 rustix = { version = "1.1.5", features = ["fs", "process", "thread"] }
 
 [features]
-default = ["web"]
+default = ["web", "fixture"]
 # Embed web/build (the Svelte UI) when it exists; without it, a stub page.
 web = []
+# `serve --fixture`: test data built in (about 690 KB of a stripped binary).
+fixture = ["dep:lodestar-bench"]
 
 [build-dependencies]
 base64 = "0.22.1"

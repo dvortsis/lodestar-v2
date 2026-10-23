@@ -14,6 +14,7 @@
 //! bytes. Keep new fields in order too; the tests catch a slip.
 
 pub mod auth;
+pub mod collections;
 pub mod compare;
 pub mod discover;
 pub mod error;
@@ -21,9 +22,11 @@ pub mod events;
 pub mod facets;
 pub mod filters;
 pub mod ops;
+pub mod saved;
 pub mod search;
 pub mod settings;
 pub mod torrents;
+pub mod user_items;
 
 /// What a secret (a password, the setup token) shows as in `Debug`
 /// output, so one never reaches a log.
