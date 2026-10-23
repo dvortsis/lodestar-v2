@@ -23,7 +23,7 @@ A [checksum](glossary.md#checksum) is a short fingerprint of a file. If the file
 > [!WARNING]
 > Don't run an installer from a mirror, forum post or re-upload. Get it from the official release page instead.
 
-Each release has one file called `SHA256SUMS` beside the installer and archives. Its lines look like `<hash>  <file name>`. Each file also has its own `<file name>.sha256`. Use releases only. Nightly builds are workflow artifacts with a `.sha256` file each and no signature.
+Each release has one file called `SHA256SUMS` beside the installer and archives. Its lines look like `<hash>  <file name>`. Use releases only. Nightly builds are workflow artifacts with a `.sha256` file each and no signature.
 
 To check the download on Windows:
 
@@ -51,10 +51,16 @@ To check a download on Linux:
 
    **Result:** The line for your file ends in `OK`.
 
-The checksum file proves the file arrived intact. A signature proves it came from the project. `SHA256SUMS.minisig` is made with the project's release key and is attached once the release key is set up **(planned)**. The public key is `packaging/keys/lodestar-release.pub` in the repository (key ID `02910813433E81E0`). With [minisign](https://jedisct1.github.io/minisign/) installed, check it:
+The checksum file proves the file arrived intact. A signature proves it came from the project. `SHA256SUMS.minisig` is made with the project's release key and is attached once the release key is set up. This signature check is **(planned)** until a release carries the file. The public key (key ID `02910813433E81E0`) is in the repository. With [minisign](https://jedisct1.github.io/minisign/) installed, check the signature:
 
-1. Open a terminal in the folder that holds `SHA256SUMS`, `SHA256SUMS.minisig` and the key.
-2. Run:
+1. Open a terminal in a folder that holds `SHA256SUMS` and `SHA256SUMS.minisig`.
+2. Download the public key:
+
+    ```bash
+    curl -fsSLO https://raw.githubusercontent.com/dvortsis/lodestar-v2/main/packaging/keys/lodestar-release.pub
+    ```
+
+3. Run:
 
     ```bash
     minisign -V -p lodestar-release.pub -m SHA256SUMS
@@ -62,8 +68,6 @@ The checksum file proves the file arrived intact. A signature proves it came fro
 
    Add `-x <path>/SHA256SUMS.minisig` if the signature is in another folder.
    **Result:** minisign prints `Signature and comment signature verified`.
-
- Treat the signature check as **(planned)** until a release carries the `.minisig` file.
 
 ## 4.3 Run it or stop
 <!-- index: Run anyway; More info -->

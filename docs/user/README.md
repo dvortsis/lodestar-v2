@@ -48,7 +48,7 @@ Read chapters 1 to 3 in order the first time. Come back to a chapter by task. An
   - [3.3 Decide about the DHT port and a VPN](03-keep-lodestar-safe.md#33-decide-about-the-dht-port-and-a-vpn)
   - [3.4 Keep logs private](03-keep-lodestar-safe.md#34-keep-logs-private)
   - [3.5 Choose how updates work](03-keep-lodestar-safe.md#35-choose-how-updates-work)
-  - [3.6 Handle API keys and content filters](03-keep-lodestar-safe.md#36-handle-api-keys-and-content-filters)
+  - [3.6 Know what protects the content filters and API keys](03-keep-lodestar-safe.md#36-know-what-protects-the-content-filters-and-api-keys)
   - [3.7 Back up and restore](03-keep-lodestar-safe.md#37-back-up-and-restore)
   - [3.8 Check your understanding](03-keep-lodestar-safe.md#38-check-your-understanding)
 - [Chapter 4: Install on Windows and Linux](04-install-on-windows-and-linux.md)
