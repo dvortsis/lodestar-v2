@@ -1,20 +1,7 @@
 //! What the M5 user-data modules share: input checks and the call made
 //! after a delete.
 
-use rusqlite::{Connection, Transaction, TransactionBehavior};
-
 use crate::{Error, Result, Store};
-
-/// Opens a write transaction with `BEGIN IMMEDIATE`. A deferred one that
-/// reads first fails at once with SQLITE_BUSY when another connection
-/// holds the write lock, because SQLite doesn't run the busy handler for a
-/// read-to-write upgrade; IMMEDIATE takes the lock up front, waiting out
-/// the busy timeout.
-///
-/// TODO(#81): becomes `crate::begin_write` once #81 is on main.
-pub(crate) fn write_tx(conn: &mut Connection) -> Result<Transaction<'_>> {
-    Ok(conn.transaction_with_behavior(TransactionBehavior::Immediate)?)
-}
 
 /// A `usize` count as an SQL `LIMIT`/`OFFSET`, saturating: a plain cast
 /// turns `usize::MAX` into -1, which SQLite reads as "no limit" for LIMIT
@@ -68,12 +55,14 @@ impl Store {
     /// note or labels), whose old rows `secure_delete` zeroes in the main
     /// file.
     ///
-    /// TODO(#81): the WAL still holds the frames those rows were written
-    /// in until a checkpoint truncates it. When #81 merges, call its WAL
-    /// scrub here (best effort, as its other delete paths do).
-    pub(crate) fn after_user_delete(&self) {
+    /// The WAL still holds the frames those rows were written in, so this
+    /// runs #81's scrub ([`Store::scrub_wal`]): best effort, never failing
+    /// the change that already committed, and retried by the next delete
+    /// or the hourly purge when it can't finish (`scrub_pending`).
+    pub(crate) fn after_user_delete(&mut self) {
         #[cfg(test)]
         SCRUBS.with(|n| n.set(n.get() + 1));
+        self.scrub_wal();
     }
 }
 
@@ -121,6 +110,7 @@ pub(crate) fn delete_torrent(store: &Store, id: i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::Connection;
 
     /// A read-first write waits for another connection's write lock
     /// instead of failing with SQLITE_BUSY (the read-to-write upgrade a
@@ -141,6 +131,82 @@ mod tests {
         assert_eq!(store.add_to_collection(id, &[], 1).unwrap(), 0);
         store.reorder_collection(id, &[], 2).unwrap();
         holder.join().unwrap();
+    }
+
+    /// Deleted rows and replaced text leave nothing in the database file
+    /// or the WAL (owner decision §2.17): `secure_delete` zeroes the main
+    /// file, and the scrub truncates the WAL.
+    #[test]
+    fn deleted_and_replaced_text_leave_no_trace_on_disk() {
+        use crate::{SavedSearchInput, UserItemUpdate};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.db");
+        let mut s = Store::open(&path, crate::StoreConfig::default()).unwrap();
+        s.conn
+            .execute(
+                "INSERT INTO torrents (id, info_hash, name, size, piece_len, piece_count,
+                     file_count, info_size, flags, discovered_at, metadata_at, last_seen_at)
+                 VALUES (1, zeroblob(20), 'x', 0, 0, 0, 0, 0, 0, 0, 0, 0)",
+                [],
+            )
+            .unwrap();
+        let on_disk = || {
+            let mut all = std::fs::read(&path).unwrap();
+            all.extend(std::fs::read(dir.path().join("t.db-wal")).unwrap_or_default());
+            all
+        };
+        let has = |m: &str| on_disk().windows(m.len()).any(|w| w == m.as_bytes());
+
+        let c = s
+            .create_collection("coll-marker-5e1", Some("note-marker-8a2"), 0)
+            .unwrap();
+        let note = UserItemUpdate {
+            note: Some(Some("item-marker-3f7")),
+            favourite: Some(true),
+            ..Default::default()
+        };
+        s.set_user_item(1, &note, 0).unwrap();
+        let mut q = SavedSearchInput {
+            name: "a",
+            query: "query-marker-c44",
+            ast: "{}",
+            sort: None,
+            alert: true,
+            rss: false,
+            channels: 0,
+            paused: false,
+        };
+        let id = s.create_saved_search(&q, 0, 0).unwrap();
+        for m in [
+            "coll-marker-5e1",
+            "note-marker-8a2",
+            "item-marker-3f7",
+            "query-marker-c44",
+        ] {
+            assert!(has(m), "{m} was written");
+        }
+
+        s.delete_collection(c).unwrap();
+        s.set_user_item(
+            1,
+            &UserItemUpdate {
+                note: Some(None),
+                ..Default::default()
+            },
+            1,
+        )
+        .unwrap();
+        q.query = "other";
+        s.update_saved_search(id, &q, 0, 1).unwrap();
+        for m in [
+            "coll-marker-5e1",
+            "note-marker-8a2",
+            "item-marker-3f7",
+            "query-marker-c44",
+        ] {
+            assert!(!has(m), "{m} is gone from the file and the WAL");
+        }
+        assert!(!s.scrub_pending);
     }
 
     /// Deletes and text that's replaced or cleared reach the scrub hook;

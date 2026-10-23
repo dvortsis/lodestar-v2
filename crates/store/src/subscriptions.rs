@@ -168,7 +168,7 @@ impl Store {
     /// returns how many entries the new version dropped that now wait in
     /// its pending floor removals (still blocked, §2.7).
     pub fn record_refresh(&mut self, id: i64, now: i64, refresh: &Refresh<'_>) -> Result<usize> {
-        let tx = self.conn.transaction()?;
+        let tx = crate::begin_write(&mut self.conn)?;
         let mut kept = 0;
         match *refresh {
             Refresh::Updated {
@@ -234,7 +234,7 @@ impl Store {
     /// Applies (`accept`) or discards a held-back version. Returns whether
     /// there was one.
     pub fn resolve_held(&mut self, id: i64, accept: bool, now: i64) -> Result<bool> {
-        let tx = self.conn.transaction()?;
+        let tx = crate::begin_write(&mut self.conn)?;
         let held: Option<i64> = tx
             .query_row(
                 "SELECT entries FROM subscription_data WHERE sub_id = ?1 AND pending = 1",
