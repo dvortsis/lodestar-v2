@@ -96,6 +96,8 @@
 	"settings_form_busy": "Lodestar is busy. Your changes are kept; try again in {seconds} seconds.",
 	"settings_form_retry": "Retry",
 	"settings_form_loading": "Loading settings…",
+	"settings_form_chunk_failed": "Part of this page couldn't load. Check your connection, then reload the page.",
+	"settings_form_reload": "Reload",
 	"settings_form_load_error": "Couldn't load these settings. Check that Lodestar is running, then retry.",
 	"settings_form_saving": "Saving…",
 	"settings_form_unsaved_one": "1 unsaved change",

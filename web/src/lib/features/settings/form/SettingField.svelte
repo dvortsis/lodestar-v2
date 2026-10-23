@@ -116,7 +116,10 @@
 			done = Promise.reject(e); // no clipboard (an insecure origin)
 		}
 		done.catch(() => {}); // reported by the toast
-		void import('./copy').then((c) => c.toastCopy(done, what));
+		void import('./copy').then(
+			(c) => c.toastCopy(done, what),
+			() => {}
+		); // no toast offline
 	}
 
 	function onMenu(id: string) {

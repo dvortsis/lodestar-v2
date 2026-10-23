@@ -25,11 +25,12 @@ const LOADERS: Record<string, () => Promise<{ default: Component<LazyControlProp
 export type LazyWidget = 'secret' | 'chips' | 'json';
 
 const loaded = $state<Partial<Record<LazyWidget, Component<LazyControlProps>>>>({});
+const failed = $state<Partial<Record<LazyWidget, true>>>({});
 const loading = new Map<LazyWidget, Promise<void>>();
 
 export const isLazy = (w: BuiltinWidget): w is LazyWidget => Object.hasOwn(LOADERS, w);
 
-/** Starts loading a control (once; a failed load is tried again next time). */
+/** Starts loading a control, once. */
 export function loadControl(w: LazyWidget): Promise<void> {
 	let p = loading.get(w);
 	if (!p) {
@@ -38,7 +39,8 @@ export function loadControl(w: LazyWidget): Promise<void> {
 				loaded[w] = mod.default;
 			},
 			() => {
-				loading.delete(w);
+				// Browsers keep a failed module: only a reload loads it now.
+				failed[w] = true;
 			}
 		);
 		loading.set(w, p);
@@ -48,6 +50,9 @@ export function loadControl(w: LazyWidget): Promise<void> {
 
 /** The control, once loaded (reactive). */
 export const controlOf = (w: LazyWidget) => loaded[w];
+
+/** Its code didn't load (reactive). */
+export const controlFailed = (w: LazyWidget) => failed[w] === true;
 
 /** Starts loading the controls these widget choices need. */
 export function loadControls(choices: Iterable<WidgetChoice>): Promise<void> {

@@ -7,7 +7,7 @@ import { ApiError, isAbort } from '$lib/api/client';
 import { formatCount } from '$lib/format';
 import { currentLocale } from '$lib/i18n/locale.svelte';
 import { m } from '$lib/paraglide/messages.js';
-import { draftOf, planRestore, readDraft, writeDraft as storeDraft } from './draft';
+import { planRestore, readDraft } from './draft';
 import { clearDraft } from './draft-store';
 import { UNDO_MS, type Engine, type Sections } from './form.svelte';
 import { merge, resolve as resolveField, sectionValues } from './merge';
@@ -61,11 +61,6 @@ export function offerDraft(e: Engine) {
 	}
 	e.draftData = d;
 	e.draftOffer = { fields: plan.fields, dropped: plan.dropped };
-}
-
-/** Stores what's staged now (`Engine.writeNow` decides when). */
-export function writeDraft(e: Engine) {
-	storeDraft(e.id, draftOf(e.sections, e.specOf, Date.now()));
 }
 
 export function restoreDraft(e: Engine) {
