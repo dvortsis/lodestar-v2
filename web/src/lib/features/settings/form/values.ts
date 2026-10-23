@@ -27,6 +27,14 @@ export interface SectionState {
 	fields: Record<string, FieldModel>;
 }
 
+/**
+ * What the JSON fallback stages while its text doesn't parse: dirty (so leaving asks, and Save
+ * can't send the last value that did parse), and always invalid. Never sent or stored.
+ */
+export class JsonDraft {
+	constructor(readonly text: string) {}
+}
+
 /** Deep JSON equality: key-order-insensitive objects, `-0` equals `0`, never by reference. */
 export function equal(a: unknown, b: unknown): boolean {
 	if (a === b) return true; // includes 0 === -0
@@ -50,6 +58,7 @@ export const isLocked = (v: SettingValue): boolean => v.read_only || v.source ==
 /** Does a staged value differ from what's saved? `RESET` does only while a value is saved. */
 export function differs(mine: Staged, saved: SettingValue): boolean {
 	if (mine === RESET) return saved.source === 'db';
+	if (mine instanceof JsonDraft) return true; // text that doesn't parse is never a saved value
 	return !equal(mine, saved.value);
 }
 

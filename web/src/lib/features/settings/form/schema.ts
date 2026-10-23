@@ -73,9 +73,10 @@ export function readSection(section: SettingsSection): FieldSpec[] {
 		const p = props[f.name];
 		const key = `${section.section}.${f.name}` as FieldKey;
 		const prop: Obj = isObj(p) ? p : {};
-		if (!isObj(p)) devWarn(`${key} has no schema property`);
+		if (import.meta.env.DEV && !isObj(p)) devWarn(`${key} has no schema property`);
 		const { kind, enum: values } = kindOf(prop);
-		if (kind === 'unknown') devWarn(`${key} has a schema shape the form can't read`);
+		if (import.meta.env.DEV && kind === 'unknown')
+			devWarn(`${key} has a schema shape the form can't read`);
 		const danger = str(prop['x-danger']);
 		const spec: FieldSpec = {
 			key,
@@ -110,7 +111,7 @@ export function readSection(section: SettingsSection): FieldSpec[] {
 			if (DANGERS.includes(danger)) spec.danger = danger as Danger;
 			// An unknown danger class must not pass as safe: treat it as the strictest.
 			else {
-				devWarn(`${key} has an unknown x-danger "${danger}"`);
+				if (import.meta.env.DEV) devWarn(`${key} has an unknown x-danger "${danger}"`);
 				spec.danger = 'security';
 			}
 		}

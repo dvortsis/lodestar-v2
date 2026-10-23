@@ -96,9 +96,14 @@ export function widgetFor(spec: FieldSpec): WidgetChoice {
 		) {
 			return { builtin: 'slider', mono };
 		}
-		warnOnce(`${spec.key}:${w}`, `${spec.key}: no widget "${w}" is registered; using the default`);
+		if (import.meta.env.DEV)
+			warnOnce(
+				`${spec.key}:${w}`,
+				`${spec.key}: no widget "${w}" is registered; using the default`
+			);
 	}
 	const builtin = shapeDefault(spec);
-	if (builtin === 'json') warnOnce(spec.key, `${spec.key} falls back to the JSON input`);
+	if (import.meta.env.DEV && builtin === 'json')
+		warnOnce(spec.key, `${spec.key} falls back to the JSON input`);
 	return { builtin, mono };
 }

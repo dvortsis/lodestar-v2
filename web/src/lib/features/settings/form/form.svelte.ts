@@ -31,7 +31,7 @@ import {
 	type SettingsPreview,
 	type SettingValue
 } from './types';
-import { validate } from './validate';
+import { JsonDraft, validate } from './validate';
 import {
 	applySaved,
 	buildBatch,
@@ -87,6 +87,8 @@ export interface SettingsForm {
 	readonly draft: null | { fields: number; dropped: number };
 	/** The latest polite announcement; `id` changes with each one. */
 	readonly announcement: { id: number; text: string } | null;
+	/** The latest save's result, from any caller (the bar, ⌘/Ctrl+S, the wizard's Next). */
+	readonly lastSave: { id: number; result: SaveResult } | null;
 	href(key: FieldKey): string;
 	field(key: FieldKey): FieldState;
 	set(key: FieldKey, value: unknown): void;
@@ -106,6 +108,8 @@ export interface SettingsForm {
 	removeSecret(key: FieldKey): Promise<SaveResult>;
 	onConfirm(code: string, handler: ConfirmHandler): () => void;
 	gate(danger: Danger, handler: GateHandler): () => void;
+	/** A fallback for `danger`, used only while no `gate` handler is registered for it. */
+	defaultGate(danger: Danger, handler: GateHandler): () => void;
 	/** A `settings` event (`SettingsForm.svelte` subscribes). */
 	received(e: SettingsEvent): void;
 	/** The events stream resynced: refetch every section. */
@@ -141,6 +145,8 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 	let instantUndo = $state.raw<Record<string, { until: number; prev: SettingValue }>>({});
 	let draftOffer = $state.raw<null | { fields: number; dropped: number }>(null);
 	let announcement = $state.raw<{ id: number; text: string } | null>(null);
+	let lastSave = $state.raw<{ id: number; result: SaveResult } | null>(null);
+	let saveSeq = 0;
 
 	// Not rendered: plain variables.
 	let undoBatch: Batch | null = null;
@@ -159,6 +165,8 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 	const instantUndoTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	const confirms = new Map<string, ConfirmHandler>();
 	const gates = new Map<Danger, GateHandler>();
+	const fallbackGates = new Map<Danger, GateHandler>();
+	const gateFor = (d: Danger) => gates.get(d) ?? fallbackGates.get(d);
 	const fetchSlots = new Map<string, ReturnType<typeof latest>>();
 	const previewSlot = latest();
 
@@ -223,7 +231,7 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 				for (const key of opts.fields as FieldKey[]) {
 					const spec = index.spec(key);
 					if (spec) list.push(spec);
-					else devWarn(`${opts.id}: no setting ${key}`);
+					else if (import.meta.env.DEV) devWarn(`${opts.id}: no setting ${key}`);
 				}
 			} else list = opts.fields as FieldSpec[];
 			byKey = new Map(list.map((s) => [s.key, s]));
@@ -428,7 +436,13 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 
 	/** The dirty batch, plus fields at their automatic value so their effective value shows. */
 	function previewBody(): Batch {
-		const batch = buildBatch(sections, (s, n) => inForm(s, n) && !specOf(s, n)!.writeOnly);
+		const batch = buildBatch(
+			sections,
+			(s, n) =>
+				inForm(s, n) &&
+				!specOf(s, n)!.writeOnly &&
+				!(sections[s]?.fields[n]?.mine instanceof JsonDraft)
+		);
 		for (const spec of specs) {
 			if (!spec.preview || spec.auto === undefined || spec.writeOnly) continue;
 			const s = sections[spec.section];
@@ -542,7 +556,8 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 			return { ok: false, reason: 'refused' };
 		}
 		if (e.code === 'unknown_field' || e.code === 'unknown_section') {
-			devError(`the server refused ${e.code} (${e.section ?? ''}.${e.field ?? ''})`);
+			if (import.meta.env.DEV)
+				devError(`the server refused ${e.code} (${e.section ?? ''}.${e.field ?? ''})`);
 			formErrors = [...formErrors, m.settings_form_error_schema()];
 			return { ok: false, reason: 'refused' };
 		}
@@ -664,6 +679,12 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 	}
 
 	async function save(): Promise<SaveResult> {
+		const result = await saveNow();
+		lastSave = { id: ++saveSeq, result };
+		return result;
+	}
+
+	async function saveNow(): Promise<SaveResult> {
 		if (inFlight) return { ok: false, reason: 'busy' };
 		if (mode === 'instant') return saveInstantSecrets();
 		formErrors = [];
@@ -698,10 +719,11 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 		inFlight = sent;
 		sending = new Set(keys);
 		failedOp = 'save';
-		status = 'saving';
 		try {
 			const gated = await runGates(batch, keys);
 			if (gated) return gated;
+			// Only now: while a confirmation is open, nothing is being saved yet.
+			status = 'saving';
 			const prev = sections;
 			const r = await send(batch);
 			if (destroyed) return { ok: false, reason: 'cancelled' };
@@ -734,10 +756,11 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 	async function runGates(batch: Batch, keys: FieldKey[]): Promise<SaveResult | undefined> {
 		const kinds = GATE_ORDER.filter((d) => keys.some((k) => byKey.get(k)?.danger === d));
 		if (kinds.length === 0) return undefined;
-		const missing = kinds.filter((d) => !gates.has(d));
+		const missing = kinds.filter((d) => !gateFor(d));
 		if (missing.length) {
 			const fields = keys.filter((k) => missing.includes(byKey.get(k)!.danger!));
-			devError(`no confirmation is registered for ${fields.join(', ')} (${missing.join(', ')})`);
+			if (import.meta.env.DEV)
+				devError(`no confirmation is registered for ${fields.join(', ')} (${missing.join(', ')})`);
 			formErrors = [...formErrors, m.settings_form_error_needs_confirmation()];
 			status = 'ready';
 			return { ok: false, reason: 'refused' };
@@ -753,7 +776,7 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 			const fields = keys.filter((k) => byKey.get(k)!.danger === d);
 			let ok = false;
 			try {
-				ok = await gates.get(d)!({ fields, preview: p });
+				ok = await gateFor(d)!({ fields, preview: p });
 			} catch {
 				ok = false;
 			}
@@ -1102,6 +1125,9 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 		get announcement() {
 			return announcement;
 		},
+		get lastSave() {
+			return lastSave;
+		},
 		href,
 		field,
 		set,
@@ -1125,6 +1151,12 @@ export function createSettingsForm(opts: SettingsFormOptions): SettingsForm {
 			gates.set(danger, handler);
 			return () => {
 				if (gates.get(danger) === handler) gates.delete(danger);
+			};
+		},
+		defaultGate(danger, handler) {
+			fallbackGates.set(danger, handler);
+			return () => {
+				if (fallbackGates.get(danger) === handler) fallbackGates.delete(danger);
 			};
 		},
 		received,
