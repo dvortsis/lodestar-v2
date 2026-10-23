@@ -3,6 +3,8 @@
 	// "you can try again" once the lock lifts. The countdown's digits are hidden from screen
 	// readers (they'd be read every second); the wait is announced once, when it starts.
 	import Banner from '$lib/ui/feedback/Banner.svelte';
+	import { formatCount } from '$lib/format';
+	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import type { AuthForm } from './form.svelte';
 	import { failureMessage } from './errors';
@@ -31,18 +33,21 @@
 	);
 </script>
 
-<div aria-live="polite" class="contents">
-	{#if unlocked}
-		<Banner kind="info">{m.auth_error_unlocked()}</Banner>
-	{/if}
-</div>
+{#if unlocked}
+	<!-- Banner's own role=status is the one live region here. -->
+	<Banner kind="info">{m.auth_error_unlocked()}</Banner>
+{/if}
 {#if form.state.name === 'locked'}
 	<Banner kind="error" title={m.auth_error_rate_limited()}>
 		<span aria-hidden="true" data-testid="auth-countdown"
-			>{m.auth_error_rate_limited_countdown({ seconds: String(form.secondsLeft) })}</span
+			>{m.auth_error_rate_limited_countdown({
+				seconds: formatCount(form.secondsLeft, currentLocale())
+			})}</span
 		>
 		<span class="sr-only"
-			>{m.auth_error_rate_limited_countdown({ seconds: String(lockedFor) })}</span
+			>{m.auth_error_rate_limited_countdown({
+				seconds: formatCount(lockedFor, currentLocale())
+			})}</span
 		>
 	</Banner>
 {:else if failure}

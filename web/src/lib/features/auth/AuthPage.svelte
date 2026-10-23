@@ -1,7 +1,7 @@
 <script lang="ts">
 	// The full-page frame of the sign-in and setup screens: the horizontal lockup (§10.19), the
 	// page heading and one form. One column, usable from 320 px.
-	import type { Snippet } from 'svelte';
+	import { onMount, type Snippet } from 'svelte';
 	import { logos } from '$lib/brand/scenes.generated';
 	import { m } from '$lib/paraglide/messages.js';
 
@@ -13,13 +13,21 @@
 
 	let { title, lead, children }: Props = $props();
 
-	// The lockup follows the active theme's mode (set by the pre-paint script), not the OS.
-	const mode =
-		typeof document !== 'undefined' && document.documentElement.style.colorScheme === 'dark'
-			? 'dark'
-			: 'light';
-	const logo = logos.find((l) => l.id === 'horizontal' && l.mode === mode)!;
-	const fallback = logo.src.webp.split(' ')[0];
+	// The lockup follows the active theme's mode, not the OS: the pre-paint script and the theme
+	// switcher set `color-scheme` on <html>, so watch that.
+	const root = typeof document === 'undefined' ? null : document.documentElement;
+	const modeOf = () => (root?.style.colorScheme === 'dark' ? 'dark' : 'light');
+	let mode = $state(modeOf());
+
+	onMount(() => {
+		if (!root) return;
+		const observer = new MutationObserver(() => (mode = modeOf()));
+		observer.observe(root, { attributes: true, attributeFilter: ['style', 'data-theme'] });
+		return () => observer.disconnect();
+	});
+
+	const logo = $derived(logos.find((l) => l.id === 'horizontal' && l.mode === mode)!);
+	const fallback = $derived(logo.src.webp.split(' ')[0]);
 </script>
 
 <div class="flex min-h-dvh flex-col items-center justify-center px-4 py-8">

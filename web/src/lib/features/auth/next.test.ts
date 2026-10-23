@@ -34,9 +34,26 @@ describe('safeNext', () => {
 		'/setup',
 		'/setup/',
 		'/api/v1/logout',
+		'/.//evil.example',
+		'/..//evil.example',
+		'/a/..//evil.example',
+		'/%2e//evil.example',
+		'/%2e%2e//evil.example',
+		'/%2E%2E//evil.example/search?q=a',
 		'/' + 'a'.repeat(3000)
 	])('refuses %j', (raw) => {
 		expect(safeNext(raw, O)).toBe('/');
+	});
+
+	it('never returns a path that browsers read as another host', () => {
+		const tricks = ['/', '.', '..', '%2e', '%2E%2e', 'a', '\\', '%2f', '%5c'];
+		for (const a of tricks)
+			for (const b of tricks)
+				for (const c of tricks) {
+					const out = safeNext(`/${a}/${b}/${c}/evil.example`, O);
+					expect(out, `/${a}/${b}/${c}/evil.example`).not.toMatch(/^\/[/\\]/);
+					expect(new URL(out, O).origin).toBe(O);
+				}
 	});
 
 	it('keeps an encoded double slash as a path on this origin', () => {

@@ -23,6 +23,9 @@ export function safeNext(raw: string | null | undefined, origin: string): string
 	}
 	if (url.origin !== new URL(origin).origin) return DEFAULT_NEXT;
 	const path = url.pathname;
+	// Dot segments are resolved after the checks above: `/.//host`, `/a/..//host` and
+	// `/%2e%2e//host` all become `//host`, a scheme-relative URL to another site.
+	if (path.startsWith('//') || path.startsWith('/\\')) return DEFAULT_NEXT;
 	if (AUTH_PAGES.some((p) => path === p || path.startsWith(p + '/'))) return DEFAULT_NEXT;
 	if (path === '/api' || path.startsWith('/api/')) return DEFAULT_NEXT;
 	return path + url.search + url.hash;
