@@ -5,6 +5,7 @@
 
 mod cli;
 mod config;
+mod fixture;
 mod floor;
 mod fsdetect;
 mod http;
@@ -41,7 +42,7 @@ fn main() -> ExitCode {
     }
     let cli = cli::parse();
     let config_path = cli.config;
-    let command = cli.command.unwrap_or(Command::Serve);
+    let command = cli.command.unwrap_or(Command::Serve { fixture: None });
     // Root is dropped first: before the config file (in the data directory)
     // is read, any socket is bound or any thread is spawned. Every command
     // that touches the data directory runs as the target account, so a
@@ -49,7 +50,10 @@ fn main() -> ExitCode {
     // needs root. `stats` and `healthcheck` only read. `lists` prints a
     // built-in table and touches nothing, so it runs as started.
     let scope = match command {
-        Command::Serve
+        // `fixture::serve` drops it for the fixture's own folder, once it
+        // has checked that folder; the data directory is never touched.
+        Command::Serve { fixture: Some(_) } => None,
+        Command::Serve { fixture: None }
         | Command::ImportBitmagnet { .. }
         | Command::Backup(_)
         | Command::Rollback(_)
@@ -122,7 +126,8 @@ fn main() -> ExitCode {
                 }
             }
         }
-        Command::Serve => {
+        Command::Serve { fixture: Some(dir) } => fixture::serve(dir, config_path.as_deref()),
+        Command::Serve { fixture: None } => {
             let config = match load(config_path) {
                 Ok(c) => c,
                 Err(e) => {

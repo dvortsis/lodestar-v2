@@ -182,6 +182,517 @@
         ]
       }
     },
+    "/collections": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Every collection, most recently changed first, with the number of\nentries search would show.",
+        "operationId": "listCollections",
+        "parameters": [
+          {
+            "name": "hidden",
+            "in": "query",
+            "description": "Count torrents a filter rule hid too (§20.3).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CollectionSummary"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Makes a collection.",
+        "operationId": "createCollection",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollectionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionSummary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_value`: the name or note isn't allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/collections/{id}": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "A collection and a page of its entries in order. Entries search\nwouldn't show are skipped (a page is full unless the collection ends)\nand `items` counts the ones it would.",
+        "operationId": "getCollection",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The collection's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "The previous response's `next_after`: how many shown entries to\nskip.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "hidden",
+            "in": "query",
+            "description": "Include torrents a filter rule hid (§20.3).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Entries per page: 1–200, 50 by default.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionPage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`collection_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Deletes a collection (not the torrents in it).",
+        "operationId": "deleteCollection",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The collection's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`collection_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Renames a collection or changes its note; absent leaves a field as it\nis, and `note: null` removes the note.",
+        "operationId": "patchCollection",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The collection's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollectionPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionSummary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`collection_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_value`: the name or note isn't allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/collections/{id}/items": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Adds torrents to the end of a collection; ones already in it stay\nwhere they are. All or nothing: a hash that is unknown, or that search\nwouldn't show, is the one `404 torrent_not_found` (`field: \"hashes\"`)\nand nothing is added.",
+        "operationId": "addToCollection",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The collection's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HashList"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionSummary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`collection_not_found`, or `torrent_not_found` with `field: \"hashes\"`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_value`: not 1–500 hashes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/collections/{id}/items/remove": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Takes torrents out of a collection. A hash that isn't in it, is\nunknown or isn't shown is skipped, so nothing about a withheld\ntorrent is revealed.",
+        "operationId": "removeFromCollection",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The collection's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HashList"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionSummary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`collection_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_value`: not 1–500 hashes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/collections/{id}/order": {
+      "put": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Puts a collection's entries in the order given. The list must name\nevery entry shown by default once (it may also name ones a filter rule\nhid), with no cap, and may be empty only when none is shown;\n`409 stale_order` otherwise, so a reorder from an old page can't\ndrop or duplicate entries. Entries not shown to the client (Adult while\nhidden, and filter-hidden ones it did not name) keep their slots.",
+        "operationId": "reorderCollection",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The collection's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HashList"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionSummary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`collection_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`stale_order`: the list isn't exactly the entries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_value`: not 1–500 hashes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/compare": {
       "post": {
         "tags": [
@@ -1355,6 +1866,274 @@
         ]
       }
     },
+    "/saved-searches": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Every saved search, oldest first, with its alert counts.",
+        "operationId": "listSavedSearches",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SavedSearchView"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Saves a search. It alerts only on torrents indexed from now on.",
+        "operationId": "createSavedSearch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedSearchCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedSearchView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`query_syntax` (with `start` and `end`), `q_and_ast`, `invalid_ast` or `unknown_sort`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_value`: the name or query isn't allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/saved-searches/{id}": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "One saved search.",
+        "operationId": "getSavedSearch",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The saved search's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedSearchView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`saved_search_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Deletes a saved search with its alerts and feed tokens.",
+        "operationId": "deleteSavedSearch",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The saved search's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`saved_search_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Changes a saved search. Any subset: a field not sent keeps its value,\nthe notifier's channels included. Resuming a paused search skips what\nwas indexed while it was paused; editing the query does not move\nwhere it left off.",
+        "operationId": "patchSavedSearch",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The saved search's id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedSearchPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedSearchView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`query_syntax` (with `start` and `end`), `q_and_ast`, `invalid_ast` or `unknown_sort`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`saved_search_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_value`: the name or query isn't allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/search": {
       "get": {
         "tags": [
@@ -2318,6 +3097,311 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SiblingsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/user-items": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Your marked torrents, newest change first. Only torrents search would\nshow: those a filter rule hid appear with `hidden=true`, and Adult\nonly while \"Show adult content\" is on. A page is full unless the list\nends: withheld rows are skipped, never counted.",
+        "operationId": "listUserItems",
+        "parameters": [
+          {
+            "name": "favourite",
+            "in": "query",
+            "description": "Only torrents you marked as a favourite.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "hidden_mark",
+            "in": "query",
+            "description": "Only torrents you marked Hide (your own mark, not a filter\nrule's).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "label",
+            "in": "query",
+            "description": "Only torrents carrying this label.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "hidden",
+            "in": "query",
+            "description": "Include torrents a filter rule hid (§20.3), as in search.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Rows per page: 1–200, 50 by default.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The previous response's `next_cursor`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserItemsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`bad_cursor`: a cursor this server didn't give out.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/user-items/labels": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Every label in use with the number of visible torrents carrying it.",
+        "operationId": "listLabels",
+        "parameters": [
+          {
+            "name": "hidden",
+            "in": "query",
+            "description": "Count torrents a filter rule hid too (§20.3).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LabelCount"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/user-items/{hash}": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "A torrent's marks, and the collections it is in. A torrent without\nmarks answers with all-false, empty marks; an unknown torrent, or one\nwithheld (Adult while hidden), is `404 torrent_not_found`.",
+        "operationId": "getUserItem",
+        "parameters": [
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "A 40-character hex info hash.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserItemDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`torrent_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Clears every mark on a torrent.",
+        "operationId": "clearUserItem",
+        "parameters": [
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "A 40-character hex info hash.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`torrent_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Changes some marks: absent leaves one as it is, `note: null` removes\nthe note. Labels and the note are trimmed first (and CRLF becomes LF).\nReturns the marks after, all-false when none are left.",
+        "operationId": "patchUserItem",
+        "parameters": [
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "A 40-character hex info hash.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserItemPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserMarks"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`torrent_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_value`: a label or the note isn't allowed (`field` names which).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -3741,6 +4825,217 @@
               "$ref": "#/components/schemas/ClassRule"
             }
           }
+        }
+      },
+      "CollectionCreate": {
+        "type": "object",
+        "description": "`POST /collections`.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "1–200 characters."
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "1–4,000 characters."
+          }
+        }
+      },
+      "CollectionEntry": {
+        "type": "object",
+        "description": "One torrent in a collection.",
+        "required": [
+          "added_at",
+          "position",
+          "torrent"
+        ],
+        "properties": {
+          "added_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "position": {
+            "type": "integer",
+            "format": "int64",
+            "description": "1-based place among the entries shown, so it never reveals how\nmany were left out."
+          },
+          "torrent": {
+            "$ref": "#/components/schemas/SearchHit"
+          }
+        },
+        "example": {
+          "added_at": 1700000150,
+          "position": 1,
+          "torrent": {
+            "adult_kind": null,
+            "completed": null,
+            "composition": [],
+            "content_type": "movie",
+            "discovered_at": 1700000000,
+            "files": 1,
+            "flags": [
+              "single_file"
+            ],
+            "hash": "0123456789abcdef0123456789abcdef01234567",
+            "hash_v2": null,
+            "id": 1,
+            "junk_reasons": [],
+            "junk_score": 0,
+            "last_scrape_at": null,
+            "leechers": null,
+            "metadata_at": 1700000001,
+            "name": "The.Dark.Knight.2008.1080p.BluRay.x264-GRP",
+            "piece_len": 65536,
+            "resolved_via": null,
+            "score": 0.0,
+            "seeders": null,
+            "size": 8589934592,
+            "title": "The Dark Knight",
+            "trackers_checked": null,
+            "trackers_reporting": null
+          }
+        }
+      },
+      "CollectionPage": {
+        "type": "object",
+        "description": "`GET /collections/{id}`: the collection and a page of its entries.",
+        "required": [
+          "created_at",
+          "entries",
+          "id",
+          "items",
+          "name",
+          "next_after",
+          "note",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CollectionEntry"
+            },
+            "description": "In order, only torrents search would show."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "items": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "next_after": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Send as `after` for the next page; null on the last."
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "example": {
+          "created_at": 1700000100,
+          "entries": [],
+          "id": 1,
+          "items": 0,
+          "name": "Weekend watchlist",
+          "next_after": null,
+          "note": null,
+          "updated_at": 1700000200
+        }
+      },
+      "CollectionPatch": {
+        "type": "object",
+        "description": "`PATCH /collections/{id}`: absent leaves a field as it is.",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`null` removes the note.",
+            "default": null
+          }
+        }
+      },
+      "CollectionSummary": {
+        "type": "object",
+        "description": "A collection. `items` counts the torrents search would show.",
+        "required": [
+          "created_at",
+          "id",
+          "items",
+          "name",
+          "note",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "items": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "example": {
+          "created_at": 1700000100,
+          "id": 1,
+          "items": 2,
+          "name": "Weekend watchlist",
+          "note": null,
+          "updated_at": 1700000200
         }
       },
       "CompareRequest": {
@@ -5228,6 +6523,22 @@
           "unavailable"
         ]
       },
+      "HashList": {
+        "type": "object",
+        "description": "A list of torrents by info hash: `POST /collections/{id}/items`,\n`…/items/remove` and `PUT …/order`.",
+        "required": [
+          "hashes"
+        ],
+        "properties": {
+          "hashes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "1–500 40-character hex info hashes."
+          }
+        }
+      },
       "Histogram": {
         "type": "object",
         "description": "A histogram with explicit bins; empty bins are present with count 0.",
@@ -5613,6 +6924,29 @@
             "description": "Once `failed`: the HTTP status of `error`.",
             "minimum": 0
           }
+        }
+      },
+      "LabelCount": {
+        "type": "object",
+        "description": "One label in use.",
+        "required": [
+          "count",
+          "label"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Visible torrents carrying it.",
+            "minimum": 0
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "example": {
+          "count": 3,
+          "label": "4K"
         }
       },
       "LoginRequest": {
@@ -6463,6 +7797,221 @@
           }
         ],
         "description": "A sample's file: a path, or a path and its size."
+      },
+      "SavedSearchCreate": {
+        "type": "object",
+        "description": "`POST /saved-searches`.",
+        "required": [
+          "name",
+          "alert",
+          "rss"
+        ],
+        "properties": {
+          "alert": {
+            "type": "boolean",
+            "description": "Alert in the app about new hits."
+          },
+          "ast": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AstNode",
+                "description": "A query AST, as `/parse` returns it."
+              }
+            ]
+          },
+          "name": {
+            "type": "string",
+            "description": "1–200 characters."
+          },
+          "paused": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Start paused; false by default."
+          },
+          "q": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The query text. Send `q` or `ast`, not both; with neither it\nmatches everything."
+          },
+          "rss": {
+            "type": "boolean",
+            "description": "Serve the hits as an RSS feed."
+          },
+          "sort": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "As search's `sort`."
+          }
+        }
+      },
+      "SavedSearchPatch": {
+        "type": "object",
+        "description": "`PATCH /saved-searches/{id}`: any subset; absent leaves a field as it\nis (the notifier's channels too).",
+        "properties": {
+          "alert": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "default": null
+          },
+          "ast": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AstNode"
+              }
+            ],
+            "default": null
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "paused": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Pausing and resuming is a toggle; resuming skips what was\nindexed meanwhile.",
+            "default": null
+          },
+          "q": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Send `q` or `ast`, not both.",
+            "default": null
+          },
+          "rss": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "default": null
+          },
+          "sort": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`null` opens with relevance.",
+            "default": null
+          }
+        }
+      },
+      "SavedSearchView": {
+        "type": "object",
+        "description": "A saved search with what the list view shows beside it. The\nnotifier's channels and the watermark are not part of it.",
+        "required": [
+          "alert",
+          "alerts",
+          "ast",
+          "created_at",
+          "id",
+          "last_alert_at",
+          "name",
+          "paused",
+          "q",
+          "rss",
+          "sort",
+          "unread",
+          "updated_at"
+        ],
+        "properties": {
+          "alert": {
+            "type": "boolean",
+            "description": "Alert in the app about new hits."
+          },
+          "alerts": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Alerts recorded in all.",
+            "minimum": 0
+          },
+          "ast": {
+            "$ref": "#/components/schemas/AstNode"
+          },
+          "created_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "last_alert_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When the newest alert was recorded; null before the first."
+          },
+          "name": {
+            "type": "string"
+          },
+          "paused": {
+            "type": "boolean",
+            "description": "Skipped by the notifier; its channels are kept."
+          },
+          "q": {
+            "type": "string",
+            "description": "The query text."
+          },
+          "rss": {
+            "type": "boolean",
+            "description": "Serve the hits as an RSS feed."
+          },
+          "sort": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The sort the results open with; null = relevance."
+          },
+          "unread": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "example": {
+          "alert": true,
+          "alerts": 4,
+          "ast": {
+            "op": "all"
+          },
+          "created_at": 1700000100,
+          "id": 1,
+          "last_alert_at": 1700000300,
+          "name": "New 4K releases",
+          "paused": false,
+          "q": "",
+          "rss": false,
+          "sort": "-discovered",
+          "unread": 2,
+          "updated_at": 1700000200
+        }
       },
       "SearchExplain": {
         "type": "object",
@@ -8581,6 +10130,307 @@
           "needs_payload_signature",
           "needs_piece_roots"
         ]
+      },
+      "UserItemDetail": {
+        "type": "object",
+        "description": "`GET /user-items/{hash}`: the marks and the collections it is in.",
+        "required": [
+          "collections",
+          "created_at",
+          "favourite",
+          "hash",
+          "hidden",
+          "labels",
+          "note",
+          "updated_at"
+        ],
+        "properties": {
+          "collections": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "Ids of the collections the torrent is in (\"In collections\")."
+          },
+          "created_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "favourite": {
+            "type": "boolean"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "hidden": {
+            "type": "boolean"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        },
+        "example": {
+          "collections": [
+            1
+          ],
+          "created_at": 1700000100,
+          "favourite": true,
+          "hash": "0123456789abcdef0123456789abcdef01234567",
+          "hidden": false,
+          "labels": [
+            "4K"
+          ],
+          "note": null,
+          "updated_at": 1700000200
+        }
+      },
+      "UserItemPatch": {
+        "type": "object",
+        "description": "`PATCH /user-items/{hash}`: what to change. Absent leaves a mark as\nit is.",
+        "properties": {
+          "favourite": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "default": null
+          },
+          "hidden": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Your own Hide mark.",
+            "default": null
+          },
+          "labels": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Replaces the labels (at most 32, 1–64 characters each); an empty\nlist removes them.",
+            "default": null
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "1–4,000 characters; `null` removes the note.",
+            "default": null
+          }
+        }
+      },
+      "UserItemRow": {
+        "type": "object",
+        "description": "One marked torrent: your marks and the torrent beside them.",
+        "required": [
+          "created_at",
+          "favourite",
+          "hash",
+          "hidden",
+          "labels",
+          "note",
+          "torrent",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "favourite": {
+            "type": "boolean"
+          },
+          "hash": {
+            "type": "string",
+            "description": "40 hex digits."
+          },
+          "hidden": {
+            "type": "boolean",
+            "description": "Your own Hide mark."
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Sorted, unique, case-sensitive."
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "torrent": {
+            "$ref": "#/components/schemas/SearchHit"
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "example": {
+          "created_at": 1700000100,
+          "favourite": true,
+          "hash": "0123456789abcdef0123456789abcdef01234567",
+          "hidden": false,
+          "labels": [
+            "4K"
+          ],
+          "note": "Watch with subs",
+          "torrent": {
+            "adult_kind": null,
+            "completed": null,
+            "composition": [],
+            "content_type": "movie",
+            "discovered_at": 1700000000,
+            "files": 1,
+            "flags": [
+              "single_file"
+            ],
+            "hash": "0123456789abcdef0123456789abcdef01234567",
+            "hash_v2": null,
+            "id": 1,
+            "junk_reasons": [],
+            "junk_score": 0,
+            "last_scrape_at": null,
+            "leechers": null,
+            "metadata_at": 1700000001,
+            "name": "The.Dark.Knight.2008.1080p.BluRay.x264-GRP",
+            "piece_len": 65536,
+            "resolved_via": null,
+            "score": 0.0,
+            "seeders": null,
+            "size": 8589934592,
+            "title": "The Dark Knight",
+            "trackers_checked": null,
+            "trackers_reporting": null
+          },
+          "updated_at": 1700000200
+        }
+      },
+      "UserItemsResponse": {
+        "type": "object",
+        "description": "`GET /user-items`: marked torrents, newest change first.",
+        "required": [
+          "items",
+          "limit",
+          "next_cursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserItemRow"
+            },
+            "description": "Only torrents search would show (§20.3, §20.9)."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Null on the last page."
+          }
+        },
+        "example": {
+          "items": [],
+          "limit": 50,
+          "next_cursor": null
+        }
+      },
+      "UserMarks": {
+        "type": "object",
+        "description": "A torrent's marks. Without any, `favourite` and `hidden` are false,\n`labels` is empty and the rest is null.",
+        "required": [
+          "created_at",
+          "favourite",
+          "hash",
+          "hidden",
+          "labels",
+          "note",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Null when there are no marks."
+          },
+          "favourite": {
+            "type": "boolean"
+          },
+          "hash": {
+            "type": "string",
+            "description": "40 hex digits."
+          },
+          "hidden": {
+            "type": "boolean"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Null when there are no marks."
+          }
+        },
+        "example": {
+          "created_at": 1700000100,
+          "favourite": true,
+          "hash": "0123456789abcdef0123456789abcdef01234567",
+          "hidden": false,
+          "labels": [
+            "4K"
+          ],
+          "note": null,
+          "updated_at": 1700000200
+        }
       }
     },
     "responses": {
@@ -8640,6 +10490,10 @@
     {
       "name": "events",
       "description": "The live server-sent event stream (§9)."
+    },
+    {
+      "name": "library",
+      "description": "Your marks, collections and saved searches (§7, §10.5, §10.8)."
     },
     {
       "name": "meta",
