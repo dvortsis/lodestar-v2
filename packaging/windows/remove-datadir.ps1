@@ -35,16 +35,16 @@ Log "start: $Path"
 $dir = [IO.Path]::GetFullPath($Path).TrimEnd('\')
 $expected = Join-Path $env:ProgramData 'Lodestar'
 if ($dir -ne $expected) {
-  Log "not deleting $dir: it is not $expected"
-  Write-Host "LODESTAR: not deleting $dir: it is not $expected"
+  Log "not deleting ${dir}: it is not $expected"
+  Write-Host "LODESTAR: not deleting ${dir}: it is not $expected"
   exit 1
 }
 if (-not (Test-Path -LiteralPath $dir)) { Log 'nothing to delete'; exit 0 }
 
 $item = Get-Item -LiteralPath $dir -Force
 if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
-  Log "not deleting $dir: it is a link or junction"
-  Write-Host "LODESTAR: not deleting $dir: it is a link or junction"
+  Log "not deleting ${dir}: it is a link or junction"
+  Write-Host "LODESTAR: not deleting ${dir}: it is a link or junction"
   exit 1
 }
 $link = Get-ChildItem -LiteralPath $dir -Force -Recurse -Attributes ReparsePoint -ErrorAction Stop | Select-Object -First 1
