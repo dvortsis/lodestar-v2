@@ -856,7 +856,8 @@ fn tag_value(key: TagKey, v: &str) -> Option<String> {
     // `res:360` is read as `360p`, so both spellings land on the same
     // stored form (the parser files 360p under 480p), and the limit
     // applies to that form, which is what renders.
-    let bare_res = key == TagKey::Res && lower.bytes().all(|b| b.is_ascii_digit());
+    let bare_res =
+        key == TagKey::Res && !lower.is_empty() && lower.bytes().all(|b| b.is_ascii_digit());
     if bare_res {
         lower.push('p');
     }
@@ -1630,6 +1631,11 @@ mod tests {
         // Also found by fuzz (query): 64 digits passed the 64-byte limit,
         // then rendered as 65 bytes with their `p`, which didn't parse
         // back. The limit applies to the stored form, either spelling.
+        // An empty part of a list is no resolution: refused, as for
+        // every other key (`codec:x265,`), not read as "p".
+        for empty in ["res:720,", "res:,720", "res:,", "res:"] {
+            assert!(parse(empty).is_err(), "{empty}");
+        }
         let digits = "4".repeat(63) + "5";
         assert!(parse(&format!("res:{digits}")).is_err());
         assert!(parse(&format!("res:{digits}p")).is_err());

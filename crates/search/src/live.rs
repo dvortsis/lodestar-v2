@@ -247,8 +247,8 @@ impl LiveIndexer {
 
 /// Follows the store into `indexer` until stopped, committing what's
 /// pending at the end. Returns the first error, from the store or the
-/// index, leaving the retry to the caller. A commit resets `backoff` and
-/// moves `reported` on.
+/// index, leaving the retry to the caller. A commit, or catching up with
+/// nothing pending, resets `backoff`; a commit moves `reported` on.
 fn follow(
     indexer: &mut crate::Indexer,
     store: &mut Store,
@@ -273,6 +273,11 @@ fn follow(
             since = Instant::now();
         }
         if added + replayed == 0 {
+            // Caught up with nothing pending: an error hours from now
+            // starts its backoff afresh.
+            if indexer.pending() == 0 {
+                *backoff = config.poll;
+            }
             std::thread::sleep(config.poll);
         }
     }
