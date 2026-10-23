@@ -18,6 +18,30 @@
 	const connection = $derived(bare ? 'ok' : (statusRef.current?.connection ?? 'ok'));
 	const unreachable = $derived(connection === 'unreachable');
 
+	// The top bar's slot. app.html paints a static bar before any script runs (#boot-header); it is
+	// moved in here when the app mounts, and the rest of #boot goes, in the same task: one frame,
+	// no shift. The chrome replaces it with the full bar a moment later.
+	let slot = $state<HTMLElement>();
+	// The first key press, kept for the chrome to replay once its shortcuts exist (typing is not).
+	let replay = $state<{ event: KeyboardEvent; target: HTMLElement }>();
+	const typing = (el: HTMLElement) =>
+		el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName);
+	onMount(() => {
+		const first = (e: KeyboardEvent) => {
+			removeEventListener('keydown', first, true);
+			if (e.target instanceof HTMLElement && !typing(e.target))
+				replay = { event: e, target: e.target };
+		};
+		addEventListener('keydown', first, { capture: true, passive: true });
+		return () => removeEventListener('keydown', first, true);
+	});
+	onMount(() => {
+		const header = document.getElementById('boot-header');
+		// eslint-disable-next-line svelte/no-dom-manipulating -- adopts the static bar app.html painted
+		if (header && slot) slot.replaceChildren(header);
+		document.getElementById('boot')?.remove();
+	});
+
 	onMount(() => {
 		// After the first frame, so the request never competes with the page's first paint.
 		let timer: ReturnType<typeof setTimeout>;
@@ -46,10 +70,12 @@
 		>{m.shell_skip_to_content()}</a
 	>
 	{#if Chrome}
-		<Chrome {bare} />
+		<Chrome {bare} {replay} />
 	{:else if !bare}
 		<!-- Holds the top bar's place (1 px border + 56 px) until it arrives. -->
-		<div class="border-b border-base-300 bg-base-100"><div class="min-h-14"></div></div>
+		<div bind:this={slot}>
+			<div class="border-b border-base-300 bg-base-100"><div class="min-h-14"></div></div>
+		</div>
 	{/if}
 	<main id="main" tabindex="-1" class="flex flex-1 flex-col outline-none">
 		{#if connection !== 'ok' && statusRef.Connection}

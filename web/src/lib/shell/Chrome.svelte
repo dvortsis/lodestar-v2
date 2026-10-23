@@ -5,13 +5,13 @@
 	// the page has painted, so none of it is on the critical path (§10.1: LCP).
 	import { onMount } from 'svelte';
 	import { afterNavigate } from '$app/navigation';
-	import { keys } from '$lib/keys';
 	import { toasts } from '$lib/ui/feedback/toasts.svelte';
 	import { shell } from './shell.svelte';
 	import { statusRef } from './status-ref.svelte';
 	import TopBar from './TopBar.svelte';
 
-	let { bare }: { bare: boolean } = $props();
+	let { bare, replay }: { bare: boolean; replay?: { event: KeyboardEvent; target: HTMLElement } } =
+		$props();
 
 	const main = () => document.getElementById('main');
 
@@ -47,31 +47,48 @@
 	}
 
 	let offCommands: (() => void) | undefined;
+	let detachKeys: (() => void) | undefined;
 	let uninstallAuth: (() => void) | undefined;
 	let disposed = false;
 
 	onMount(() => {
-		const detach = keys.attach(window);
-		// The shortcuts and the 401 redirect start as soon as the chrome mounts: both are small and
-		// neither waits for the stream. M-auth's hook owns W5's single `onLoginRequired` slot.
-		void import('./commands').then((commands) => {
-			if (!disposed) offCommands = commands.registerShellCommands();
-		});
+		// The 401 redirect starts as soon as the chrome mounts, so a page's own requests are covered.
+		// M-auth's hook owns W5's single `onLoginRequired` slot.
 		void import('$lib/features/auth/session.svelte').then((auth) => {
 			if (!disposed) uninstallAuth = auth.installAuthHandlers();
 		});
-		// The stream, the API client and the pill are the heaviest part and are not needed to read the
-		// page: they start with the first interaction, or a few seconds after load, whichever is first.
+		// The rest is not needed to read the page and counts against the load (§10.1): the key
+		// shortcuts, the stream and the pill start with the first interaction, or 30 s after load.
 		const stopWaiting = whenEngaged(() => {
 			void Promise.all([
+				import('$lib/keys'),
+				import('./commands'),
 				import('./status.svelte'),
 				import('./StatusPill.svelte'),
 				import('./ConnectionView.svelte')
-			]).then(([status, pill, connection]) => {
+			]).then(([keysModule, commands, status, pill, connection]) => {
 				if (disposed) return;
+				detachKeys = keysModule.keys.attach(window);
+				offCommands = commands.registerShellCommands();
 				statusRef.Pill = pill.default;
 				statusRef.Connection = connection.default;
 				statusRef.current = status.shellStatus;
+				// The key press that woke us now finds its shortcut.
+				if (replay?.target.isConnected) {
+					const { event, target } = replay;
+					target.dispatchEvent(
+						new KeyboardEvent('keydown', {
+							key: event.key,
+							code: event.code,
+							ctrlKey: event.ctrlKey,
+							metaKey: event.metaKey,
+							altKey: event.altKey,
+							shiftKey: event.shiftKey,
+							bubbles: true,
+							cancelable: true
+						})
+					);
+				}
 			});
 			// Fetched now, while the server is up: an error toast has to work when it is down.
 			loadToaster();
@@ -79,7 +96,7 @@
 		return () => {
 			disposed = true;
 			stopWaiting();
-			detach();
+			detachKeys?.();
 			offCommands?.();
 			uninstallAuth?.();
 		};

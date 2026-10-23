@@ -18,6 +18,103 @@
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">
+		<!-- First-paint shell. With ssr off, nothing would paint until the Svelte runtime, kit and app
+		     chunks have run, so LCP would grow with them (§10.1). This markup paints from HTML and CSS
+		     alone: the skip link, the top bar's brand and links (real anchors, which kit's router takes
+		     over once it starts) and, on /search, the page heading. When the app mounts,
+		     lib/shell/Shell.svelte moves #boot-header into its own header slot and removes #boot in the
+		     same task, so nothing moves. It mirrors Shell.svelte and TopBarLite markup; the guard test
+		     e2e/boot-shell.test.ts fails if the two drift. English only: the script below drops it for
+		     other languages and for the sign-in screens. -->
+		<div id="boot" class="flex min-h-dvh flex-col bg-base-200 text-base-content">
+			<a
+				href="#boot-main"
+				class="sr-only rounded-field bg-primary px-4 py-2 text-primary-content focus:not-sr-only focus:fixed focus:start-2 focus:top-2 focus:z-50"
+				>Skip to main content</a
+			>
+			<header id="boot-header" class="border-b border-base-300 bg-base-100">
+				<div class="flex min-h-14 items-center gap-2 px-4">
+					<div class="x-large:hidden">
+						<span class="btn btn-ghost btn-square" aria-hidden="true">
+							<svg
+								viewBox="0 0 256 256"
+								fill="currentColor"
+								class="size-(--icon-size-nav)"
+								aria-hidden="true"
+							>
+								<path
+									d="M224 128a8 8 0 0 1-8 8H40a8 8 0 0 1 0-16h176a8 8 0 0 1 8 8M40 72h176a8 8 0 0 0 0-16H40a8 8 0 0 0 0 16m176 112H40a8 8 0 0 0 0 16h176a8 8 0 0 0 0-16"
+								/>
+							</svg>
+						</span>
+					</div>
+					<a
+						href="/search"
+						aria-label="Lodestar, home"
+						class="inline-flex items-center gap-2 rounded-field pe-2"
+					>
+						<svg viewBox="0 0 512 512" class="size-8 shrink-0" aria-hidden="true">
+							<circle cx="256" cy="256" r="182" fill="var(--brand-surface)" />
+							<path
+								d="M99 257 A157 157 0 0 1 362 142 M413 258 A157 157 0 0 1 152 371"
+								stroke="var(--brand-primary)"
+								stroke-width="22"
+								stroke-linecap="round"
+								fill="none"
+							/>
+							<circle cx="115" cy="192" r="21" fill="var(--brand-accent)" />
+							<circle cx="384" cy="340" r="23" fill="var(--brand-accent)" />
+							<path
+								d="M256 118 L290 218 L390 256 L290 290 L256 390 L221 290 L121 256 L221 218 Z"
+								fill="var(--brand-star)"
+							/>
+							<circle cx="256" cy="256" r="28" fill="var(--brand-surface)" />
+						</svg>
+						<span class="hidden text-body-lg font-semibold large:inline">Lodestar</span>
+					</a>
+					<nav aria-label="Main" class="ms-2 hidden items-center gap-1 x-large:flex">
+						<a
+							href="/search"
+							data-boot-nav
+							data-testid="nav-search"
+							class="relative inline-flex min-h-(--control-height) items-center gap-2 rounded-field px-3 text-body hover:bg-hover"
+							>Search</a
+						>
+						<a
+							href="/discover"
+							data-boot-nav
+							data-testid="nav-discover"
+							class="relative inline-flex min-h-(--control-height) items-center gap-2 rounded-field px-3 text-body hover:bg-hover"
+							>Discover</a
+						>
+						<a
+							href="/alerts"
+							data-boot-nav
+							data-testid="nav-alerts"
+							class="relative inline-flex min-h-(--control-height) items-center gap-2 rounded-field px-3 text-body hover:bg-hover"
+							>Alerts</a
+						>
+						<a
+							href="/insights"
+							data-boot-nav
+							data-testid="nav-insights"
+							class="relative inline-flex min-h-(--control-height) items-center gap-2 rounded-field px-3 text-body hover:bg-hover"
+							>Insights</a
+						>
+						<a
+							href="/settings/general"
+							data-boot-nav
+							data-testid="nav-settings"
+							class="relative inline-flex min-h-(--control-height) items-center gap-2 rounded-field px-3 text-body hover:bg-hover"
+							>Settings</a
+						>
+					</nav>
+				</div>
+			</header>
+			<main id="boot-main" class="flex flex-1 flex-col"><h1 id="boot-h1" hidden>Search</h1></main>
+		</div>
+		<!-- prettier-ignore -->
+		<script>(function(){var b=document.getElementById('boot');if(!b)return;var p=location.pathname;if(/^\/(login|setup|welcome)(\/|$)/.test(p)||/^zh/i.test(navigator.language)){b.remove();return}var a=b.querySelectorAll('[data-boot-nav]'),i,h;for(i=0;i<a.length;i++){h='/'+a[i].getAttribute('href').split('/')[1];if(p==h||p.indexOf(h+'/')==0){a[i].setAttribute('aria-current','page');a[i].className+=' font-semibold';a[i].insertAdjacentHTML('beforeend','<span class="absolute inset-x-3 -bottom-1 h-0.5 rounded-selector bg-primary" aria-hidden="true"></span>')}}if(p=='/search'||p=='/search/')document.getElementById('boot-h1').hidden=false})()</script>
 		<div style="display: contents">%sveltekit.body%</div>
 	</body>
 </html>
