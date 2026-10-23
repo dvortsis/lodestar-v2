@@ -398,7 +398,7 @@
    "pr": 111,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 03:13 PR #111 7ae814b ready (first steward-flow PR). Diff 7,553 lines (check size). Reviewer started. \u00a72.19 flags: alert counts shown-only; collection positions among shown; reorder keeps withheld slots. | 03:25 review FIX (description size reason only); code + content safety OK. Asks: size line, stale decisions bullet, reorder early stale, B9 unread_total note, polish.",
+   "notes": " | 02:37 launched after B8 merge (brief drafted by Opus helper, runner-reviewed). | 03:13 PR #111 7ae814b ready (first steward-flow PR). Diff 7,553 lines (check size). Reviewer started. \u00a72.19 flags: alert counts shown-only; collection positions among shown; reorder keeps withheld slots. | 03:25 review FIX (description size reason only); code + content safety OK. Asks: size line, stale decisions bullet, reorder early stale, B9 unread_total note, polish. | 03:27 803948c fixes (size reason, decisions bullet, reorder early stale, B9 note, polish). Approved pending runner delta check + green CI.",
    "self_review": {
     "raised": 12,
     "fixed": 7,
