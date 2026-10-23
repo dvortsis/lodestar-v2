@@ -75,9 +75,10 @@ test('remap j to n by keyboard, save; n fires the command and j no longer does',
 
 	// The shell attaches its listener on the first interaction: press until n lands.
 	await expect.poll(async () => (await kbd.press('n'), count(page)), { timeout: 10_000 }).toBe(1);
+	// n already landed above, so the remap is applied; a key handler runs synchronously on keydown,
+	// so j has either fired by the time press() returns or it never will.
 	await kbd.press('j');
-	await page.waitForTimeout(200);
-	expect(await count(page)).toBe(1);
+	await expect(fired(page)).toHaveText('1');
 
 	// Single-key shortcuts off: n stops, Ctrl+K still opens the palette.
 	const toggle = page.getByRole('switch', { name: 'Single-key shortcuts' });
@@ -89,8 +90,11 @@ test('remap j to n by keyboard, save; n fires the command and j no longer does',
 	await expect.poll(() => patches.length).toBe(2);
 	expect(patches[1]).toEqual({ shortcuts: false, if_revision: 2 });
 	await page.locator('body').press('Escape');
+	// The preference is applied once the palette offers to turn the shortcuts back on.
+	await openPaletteWithKey(page, () => kbd.press('Control+k'));
+	await expect(page.getByText('Turn on single-key shortcuts')).toBeVisible();
+	await kbd.press('Escape');
 	await kbd.press('n');
-	await page.waitForTimeout(200);
-	expect(await count(page)).toBe(1);
+	await expect(fired(page)).toHaveText('1');
 	await openPaletteWithKey(page, () => kbd.press('Control+k'));
 });

@@ -338,7 +338,8 @@ test.describe('401 hand-off', () => {
 			await expect(page.getByRole('main')).toBeVisible();
 			await expect(page.getByRole('banner')).toHaveCount(0);
 			await expect(page.getByRole('navigation')).toHaveCount(0);
-			await page.waitForTimeout(1500); // the shell's idle work would have started by now
+			// engage() has just interacted for four seconds; a stream the shell was going to start on an
+			// interaction would be in requests() by now. Its 30 s idle fallback is out of reach of any wait.
 			expect(await events.requests()).toHaveLength(0);
 		}
 		expect(mock.calls('getEvents')).toHaveLength(0);
