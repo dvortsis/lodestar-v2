@@ -181,3 +181,44 @@ test('reveal from the keyboard, then Esc', async ({ page, go, mock, kbd }) => {
 	await expect(page.getByRole('dialog')).toHaveCount(0);
 	await expect(invoker).toBeFocused();
 });
+
+test('the override editor completed: arrow keys pick the strength, Enter applies', async ({
+	page,
+	go,
+	mock,
+	kbd
+}) => {
+	const neutral = { ...preview, quarantine: 1 };
+	let n = 0;
+	const sent: Record<string, unknown>[] = [];
+	mock.on('startFilterPreviewJob', (req) => {
+		sent.push(JSON.parse(req.postData() ?? '{}').change);
+		return { status: 202, body: { job: ++n } };
+	});
+	mock.on('getFilterPreviewJob', () => ({
+		state: 'done' as const,
+		progress: { phase: 'done' as const, done: 1, total: 1 },
+		assessment: sent.at(-1)?.neutralize
+			? { ...weakening, preview: neutral }
+			: { ...weakening, neutralize: neutral }
+	}));
+	mock.on('cancelFilterPreviewJob', { ok: true });
+	mock.on('applyFilterChange', { applied: true, assessment: weakening, version: 4, id: 1 });
+	await go(PATH);
+	await kbd.tabTo(page.getByTestId('open-override'));
+	await kbd.press('Enter');
+	await expect(page.getByTestId('override-form')).toBeVisible();
+	await kbd.tabTo(page.getByTestId('override-value'), 15);
+	await page.keyboard.type('jailbait');
+	await kbd.press('Enter');
+	await expect(page.getByLabel('Password')).toBeFocused();
+	await kbd.tabTo(page.getByRole('radio', { name: 'Override' }), 20);
+	await kbd.press('ArrowRight');
+	await expect(page.getByRole('radio', { name: 'Neutralize term' })).toBeChecked();
+	await expect(page.getByLabel('Password')).toBeFocused();
+	expect(sent.at(-1)).toEqual({ op: 'add_override', keyword: 'jailbait', neutralize: true });
+	await page.keyboard.type('keyboard-password');
+	await kbd.press('Enter');
+	await expect(page.getByText('What changed')).toBeVisible();
+	expect(JSON.parse(mock.calls('applyFilterChange')[0]!.postData()!).change.neutralize).toBe(true);
+});

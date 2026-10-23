@@ -63,7 +63,7 @@
 	"filters_flows_kind_query": "Pattern or query",
 	"filters_flows_kind_payload": "Payload signature",
 	"filters_flows_hashes_label": "Info hashes",
-	"filters_flows_hashes_help": "One or more, 40 hex digits each, separated by spaces or new lines. Only these torrents match, never renamed reposts.",
+	"filters_flows_hashes_help": "One or more, 40 hex digits each, separated by spaces, commas or new lines. Only these torrents match, never renamed reposts.",
 	"filters_flows_keyword_label": "Keyword or phrase",
 	"filters_flows_query_label": "Pattern or query",
 	"filters_flows_query_help": "Any search query, such as a title, an uploader or a release group.",
@@ -81,7 +81,7 @@
 	"filters_flows_invalid_empty": "Enter a value.",
 	"filters_flows_invalid_hashes": "Each info hash is 40 hex digits.",
 	"filters_flows_invalid_payload": "A payload signature is 16 hex digits.",
-	"filters_flows_invalid_days": "Enter a whole number of days, from 1 to 3,650.",
+	"filters_flows_invalid_days": "Enter a whole number of days, from 1 to {max}.",
 	"filters_flows_block_title": "Block this torrent",
 	"filters_flows_block_lead": "Start with the narrowest rule. A word from the name can catch far more than this torrent.",
 	"filters_flows_block_what": "What to block",
@@ -107,5 +107,8 @@
 	"filters_flows_reveal_title": "Reveal the sealed name",
 	"filters_flows_reveal_lead": "The name is shown here only, until you close this dialog. It isn't copied, saved or logged.",
 	"filters_flows_reveal_apply": "Reveal",
-	"filters_flows_reveal_name": "Sealed name"
+	"filters_flows_reveal_name": "Sealed name",
+	"filters_flows_back": "Back",
+	"filters_flows_reason_bad_hash": "Not available: this torrent's info hash isn't valid.",
+	"filters_flows_chosen": "{label} (chosen)"
 }
