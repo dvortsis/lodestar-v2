@@ -1,5 +1,7 @@
 import type { OpenApiMock } from '../mock/openapi-mock';
 import { crawlerFixture, overviewFixture } from '../../src/lib/features/insights/overview/fixtures';
+import { SettingsBackend } from '../../src/lib/features/settings/form/testing/e2e-backend';
+import { goldenIndex, goldenValues } from '../../src/lib/features/settings/shell/golden';
 
 // Every route the app has today, with sample params for the dynamic ones. A new route slice adds
 // its entry here (smoke tests then cover it in every project); `coverage.test.ts` flags gaps.
@@ -50,6 +52,18 @@ export const ROUTES: RouteCase[] = [
 		mock: (m) => m.on('getAuthStatus', { logged_in: false, setup_required: true })
 	},
 	{ name: 'welcome', path: '/welcome', key: true },
-	{ name: 'settings', path: '/settings/general', key: true },
+	{
+		name: 'settings',
+		path: '/settings/crawler',
+		heading: 'Crawler',
+		key: true,
+		mock: (m) => void new SettingsBackend(goldenIndex(), goldenValues()).attach(m)
+	},
+	{
+		name: 'settings-overview',
+		path: '/settings',
+		heading: 'Settings',
+		mock: (m) => void new SettingsBackend(goldenIndex(), goldenValues()).attach(m)
+	},
 	{ name: 'torrent', path: `/t/${'0123456789abcdef'.repeat(2).padEnd(40, '0')}`, key: true }
 ];

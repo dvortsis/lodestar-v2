@@ -29,6 +29,15 @@ if (leaks.length) {
 
 const entry = (name, path, limit) => ({ name, path, limit, gzip: true, running: false });
 
+// A route's own first load: the files it loads beyond what the search route already loads.
+const own = (route) => {
+	const files = routeFiles(route);
+	return {
+		js: files.js.filter((f) => !search.js.includes(f)),
+		css: files.css.filter((f) => !search.css.includes(f))
+	};
+};
+
 export default [
 	entry('Search route JS (initial)', search.js, '45 KB'),
 	entry('CSS', search.css, '20 KB'),
@@ -41,7 +50,19 @@ export default [
 	// Latin subset of Atkinson Hyperlegible Next, fetched at first layout; a preload costs LCP (§10.1).
 	entry('Fonts on first paint', firstPaintFonts, '35 KB'),
 	// Mono loads lazily and is never preloaded (§10.1).
-	entry('Mono font (lazy)', monoFonts, '25 KB')
+	entry('Mono font (lazy)', monoFonts, '25 KB'),
+	// Settings: a screen's route and the Overview, each at the owner's 45 KB route limit (§10.1,
+	// 2026-10-23). The form engine is in the screen route; the Overview must not import it.
+	entry(
+		'Settings screen route (own JS + CSS)',
+		[...own('/settings/[section]').js, ...own('/settings/[section]').css],
+		'45 KB'
+	),
+	entry(
+		'Settings Overview route (own JS + CSS)',
+		[...own('/settings').js, ...own('/settings').css],
+		'45 KB'
+	)
 	// Placeholders for later slices. Fill `path` from the manifest when the chunk exists:
 	//   Detail-drawer chunk    <= 15 KB
 	//   Insights chunk (uPlot) <= 45 KB

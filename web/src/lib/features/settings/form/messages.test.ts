@@ -1,9 +1,24 @@
-import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { EN_FILE, MAP_FILE, messageKeys, renderMap } from './message-map.gen';
-import { MESSAGES } from './message-map';
-import { fieldHelp, fieldLabel, messageId, settingText, unitText } from './messages';
+import {
+	EN_FILE,
+	MAP_DIR,
+	messageKeys,
+	renderAll,
+	renderIndex,
+	splitUnits,
+	unitOf
+} from './message-map.gen';
+import {
+	fieldHelp,
+	fieldLabel,
+	LOADED,
+	loadSettingMessages,
+	messageId,
+	settingText,
+	unitText
+} from './messages';
 import { spec } from './testing/values';
 
 afterEach(() => vi.restoreAllMocks());
@@ -16,13 +31,12 @@ describe('settingText', () => {
 		);
 	});
 
-	it('resolves a settings message through the map, and returns undefined for a missing one', () => {
-		// S-settings-1 adds the real keys; stand one in.
-		MESSAGES.settings_crawler_intensity_label = () => 'Intensity';
+	it('resolves a loaded settings message, and returns undefined for a missing one', () => {
+		LOADED.set('settings_crawler_intensity_label', () => 'Intensity');
 		try {
 			expect(settingText('settings.crawler.intensity.label')).toBe('Intensity');
 		} finally {
-			delete MESSAGES.settings_crawler_intensity_label;
+			LOADED.delete('settings_crawler_intensity_label');
 		}
 		expect(settingText('settings.crawler.no_such_field.label')).toBeUndefined();
 		// The engine's own strings aren't server keys.
@@ -40,6 +54,29 @@ describe('settingText', () => {
 		expect(fieldLabel(s)).toBe('brand_new');
 		expect(fieldHelp(s)).toBeUndefined();
 		expect(warn).toHaveBeenCalledWith(expect.stringContaining('settings.crawler.brand_new.label'));
+	});
+});
+
+describe('loadSettingMessages', () => {
+	afterEach(() => LOADED.clear());
+
+	it('loads a section’s messages and the shared group headings, and no other section', async () => {
+		expect(settingText('settings.crawler.intensity.label')).toBeUndefined();
+		await loadSettingMessages(['crawler']);
+		expect(settingText('settings.crawler.intensity.label')).toBe('Intensity');
+		expect(settingText('settings.crawler.intensity.option.balanced')).toBe('Balanced');
+		expect(settingText('settings.group.fetching')).toBe('Fetching torrent details');
+		expect(settingText('settings.network.http_bind.label')).toBeUndefined();
+	});
+
+	it('reads as missing for a section the build does not know, without failing', async () => {
+		await expect(loadSettingMessages(['no_such_section'])).resolves.toBeUndefined();
+		expect(settingText('settings.no_such_section.label')).toBeUndefined();
+	});
+
+	it('loads each section once', async () => {
+		await Promise.all([loadSettingMessages(['network']), loadSettingMessages(['network'])]);
+		expect(settingText('settings.network.http_bind.label')).toBe('Web address');
 	});
 });
 
@@ -75,19 +112,37 @@ describe('the bundle', () => {
 
 describe('the message map', () => {
 	it('is up to date with messages/en.json', () => {
-		const want = renderMap(messageKeys(readFileSync(EN_FILE, 'utf8')));
-		expect(
-			readFileSync(MAP_FILE, 'utf8'),
-			'run: node --experimental-strip-types src/lib/features/settings/form/message-map.gen.ts'
-		).toBe(want);
+		const want = renderAll(readFileSync(EN_FILE, 'utf8'));
+		const hint =
+			'run: node --experimental-strip-types src/lib/features/settings/form/message-map.gen.ts';
+		for (const [file, text] of want) expect(readFileSync(file, 'utf8'), hint).toBe(text);
+		// No unit left over from a section that no longer exists.
+		const units = [...want.keys()].filter((f) => dirname(f) === MAP_DIR).map((f) => basename(f));
+		expect(existsSync(MAP_DIR) ? readdirSync(MAP_DIR).sort() : [], hint).toEqual(units.sort());
 	});
 
-	it('leaves out messages with placeholders', () => {
+	it('leaves out messages with placeholders, the engine’s own and the screens’ strings', () => {
 		expect(
 			messageKeys(
-				'{"settings_a": "A", "settings_b": "{n} b", "settings_form_c": "C", "other": "x"}'
+				'{"settings_a": "A", "settings_b": "{n} b", "settings_form_c": "C", "settings_ui_d": "D", "other": "x"}'
 			)
 		).toEqual(['settings_a']);
-		expect(renderMap([])).toContain('= {};');
+		expect(renderIndex([])).toContain('= {};');
+	});
+
+	it('splits messages by section, with the group headings in common', () => {
+		expect(unitOf('settings_group_dht')).toBe('common');
+		expect(unitOf('settings_network_label')).toBe('common');
+		expect(unitOf('settings_network_help')).toBe('common');
+		expect(unitOf('settings_network_http_bind_label')).toBe('network');
+		// A field named like a section's label is still a field.
+		expect(unitOf('settings_network_label_help')).toBe('network');
+		expect([
+			...splitUnits(['settings_b_x', 'settings_a_x', 'settings_group_g', 'settings_a_y'])
+		]).toEqual([
+			['a', ['settings_a_x', 'settings_a_y']],
+			['b', ['settings_b_x']],
+			['common', ['settings_group_g']]
+		]);
 	});
 });

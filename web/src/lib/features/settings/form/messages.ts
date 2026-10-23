@@ -1,8 +1,9 @@
-// Server message keys → Paraglide messages. Only `settings_*` messages are bundled: the
-// generated `message-map.ts` reads each one statically, so the chunk never pulls in the rest
-// of the app's strings (and nothing here indexes `m` dynamically).
+// Server message keys → Paraglide messages. Only `settings_*` messages are bundled, and a screen
+// loads just its own sections' (`loadSettingMessages`, which resolves before its form mounts):
+// the generated `message-map/` reads each one statically, so a chunk never pulls in the rest of
+// the app's strings (and nothing here indexes `m` dynamically).
 import { m } from '$lib/paraglide/messages.js';
-import { MESSAGES } from './message-map';
+import { COMMON_UNIT, LOADERS } from './message-map';
 import { devWarn } from './schema';
 import type { FieldSpec } from './types';
 
@@ -11,10 +12,38 @@ export function messageId(key: string): string {
 	return key.replace(/[.-]/g, '_');
 }
 
+/** The messages loaded so far, by message id. Tests seed it. */
+export const LOADED = new Map<string, () => string>();
+const loading = new Map<string, Promise<void>>();
+
+/**
+ * Loads the messages of these sections (and the group headings every section shares). Resolves
+ * once they are readable; an unknown section, or one that fails to load, reads as missing.
+ */
+export async function loadSettingMessages(sections: Iterable<string>): Promise<void> {
+	await Promise.all(
+		[COMMON_UNIT, ...sections].map((unit) => {
+			if (!Object.hasOwn(LOADERS, unit)) return undefined;
+			let p = loading.get(unit);
+			if (!p) {
+				p = LOADERS[unit]!().then(
+					(mod) => {
+						for (const [id, f] of Object.entries(mod.MESSAGES)) LOADED.set(id, f);
+					},
+					() => {
+						loading.delete(unit);
+					}
+				);
+				loading.set(unit, p);
+			}
+			return p;
+		})
+	);
+}
+
 /** `settings.crawler.intensity.label` → that message's text, or undefined when it's missing. */
 export function settingText(key: string): string | undefined {
-	const id = messageId(key);
-	return Object.hasOwn(MESSAGES, id) ? MESSAGES[id]!() : undefined;
+	return LOADED.get(messageId(key))?.();
 }
 
 const warned = new Set<string>();

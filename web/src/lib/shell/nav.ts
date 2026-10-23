@@ -19,7 +19,7 @@ export const DESTINATIONS: readonly Destination[] = [
 	{ id: 'discover', href: '/discover', label: () => m.shell_nav_discover() },
 	{ id: 'alerts', href: '/alerts', label: () => m.shell_nav_alerts() },
 	{ id: 'insights', href: '/insights', label: () => m.shell_nav_insights() },
-	{ id: 'settings', href: '/settings/general', label: () => m.shell_nav_settings() }
+	{ id: 'settings', href: '/settings', label: () => m.shell_nav_settings() }
 ];
 
 export interface MoreItem {

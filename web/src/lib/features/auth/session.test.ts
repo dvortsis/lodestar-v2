@@ -8,6 +8,7 @@ const nav = vi.hoisted(() => ({
 vi.mock('./nav', () => nav);
 
 import { api } from '$lib/api/client';
+import { DRAFT_PREFIX } from '$lib/features/settings/form/draft';
 import { currentSession, installAuthHandlers, logout, setSession } from './session.svelte';
 
 const json = (status: number, body: unknown) =>
@@ -84,6 +85,68 @@ describe('logout', () => {
 		expect(init.body).toBe('{}');
 		expect(currentSession()).toBe('signed_out');
 		expect(nav.toLogin).toHaveBeenCalledOnce();
+	});
+
+	describe('Settings drafts', () => {
+		const draft = (id: string) => `lodestar.settings.draft.v1.${id}`;
+		beforeEach(() => sessionStorage.clear());
+
+		it('uses the prefix the form engine stores drafts under', () => {
+			expect(draft('')).toBe(DRAFT_PREFIX);
+		});
+
+		it('removes every draft on logout and nothing else', async () => {
+			sessionStorage.setItem(draft('crawler'), '{}');
+			sessionStorage.setItem(draft('network'), '{}');
+			sessionStorage.setItem('lodestar.other', 'keep');
+			vi.stubGlobal(
+				'fetch',
+				vi.fn(async () => json(200, { ok: true }))
+			);
+			await logout();
+			expect(Object.keys(sessionStorage)).toEqual(['lodestar.other']);
+		});
+
+		it('keeps them when the sign-in is only expired, so a redirect can bring them back', async () => {
+			sessionStorage.setItem(draft('crawler'), '{}');
+			vi.stubGlobal(
+				'fetch',
+				vi.fn(async () => expired(false))
+			);
+			await expect(api.get('/filters')).rejects.toThrow();
+			expect(sessionStorage.getItem(draft('crawler'))).toBe('{}');
+		});
+
+		it('keeps them when the server cannot be reached', async () => {
+			sessionStorage.setItem(draft('crawler'), '{}');
+			vi.stubGlobal(
+				'fetch',
+				vi.fn(async () => Promise.reject(new TypeError('offline')))
+			);
+			await expect(logout()).rejects.toMatchObject({ code: 'network' });
+			expect(sessionStorage.getItem(draft('crawler'))).toBe('{}');
+		});
+
+		it('still signs out when storage is blocked', async () => {
+			vi.stubGlobal(
+				'sessionStorage',
+				new Proxy(
+					{},
+					{
+						ownKeys() {
+							throw new DOMException('blocked', 'SecurityError');
+						}
+					}
+				)
+			);
+			vi.stubGlobal(
+				'fetch',
+				vi.fn(async () => json(200, { ok: true }))
+			);
+			await logout();
+			expect(currentSession()).toBe('signed_out');
+			expect(nav.toLogin).toHaveBeenCalledOnce();
+		});
 	});
 
 	it('stays put when the server is unreachable', async () => {

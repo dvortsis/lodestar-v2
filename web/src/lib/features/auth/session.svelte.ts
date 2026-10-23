@@ -33,9 +33,26 @@ export function installAuthHandlers(): () => void {
 	};
 }
 
+// Staged Settings edits wait in sessionStorage for a sign-in redirect to bring them back. Only a
+// deliberate logout clears them (the 401 handler must not). The prefix is DRAFT_PREFIX in
+// features/settings/form/draft.ts, a literal here because this file is in the first load and must
+// not import from features/settings; a test keeps the two equal.
+const SETTINGS_DRAFT_PREFIX = 'lodestar.settings.draft.v1.';
+
+function clearSettingsDrafts(): void {
+	try {
+		for (const key of Object.keys(sessionStorage)) {
+			if (key.startsWith(SETTINGS_DRAFT_PREFIX)) sessionStorage.removeItem(key);
+		}
+	} catch {
+		// Storage may be blocked; logging out must not depend on it.
+	}
+}
+
 /** Ends the session and goes to the sign-in page. Rejects (staying put) if the server can't be reached. */
 export async function logout(): Promise<void> {
 	await api.post('/logout', { body: {} });
+	clearSettingsDrafts();
 	setSession('signed_out');
 	await toLogin();
 }
