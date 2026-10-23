@@ -291,9 +291,11 @@ pub(crate) fn compile(node: &Node) -> Compiled {
             }
         }
         Node::File { of } => Compiled::File(Box::new(compile(of))),
-        Node::Date { .. } | Node::Flag { .. } | Node::Hash { .. } | Node::Share { .. } => {
-            Compiled::Leaf(Box::new(node.clone()))
-        }
+        Node::Date { .. }
+        | Node::Flag { .. }
+        | Node::Hash { .. }
+        | Node::Share { .. }
+        | Node::TimeOfDay { .. } => Compiled::Leaf(Box::new(node.clone())),
     }
 }
 
@@ -958,6 +960,9 @@ impl<'a> Doc<'a> {
                 let Some(f) = self.facts else { return false };
                 let at = match field {
                     DateField::Discovered => f.discovered_at,
+                    // Swarm health comes after ingest: a rule sees a
+                    // torrent as never seen, like search before a scrape.
+                    DateField::Seen => return false,
                 };
                 let resolve = |w: &When| match *w {
                     When::Ago(secs) => f.now - secs,
@@ -968,6 +973,14 @@ impl<'a> Doc<'a> {
             }
             Node::Flag { name, value } => self.flag(name) == *value,
             Node::Hash { hash } => self.item.hashes.iter().any(|h| hex(h) == *hash),
+            // Rules have no time zone: UTC.
+            Node::TimeOfDay { from, to } => self.facts.is_some_and(|f| {
+                lodestar_search::in_time(
+                    lodestar_search::minute_of_day(f.discovered_at, 0),
+                    *from,
+                    *to,
+                )
+            }),
             Node::Share { by, cat, lo, hi } => {
                 let Some(f) = self.facts else { return false };
                 let Some(c) = Category::ALL.iter().find(|c| c.as_str() == cat) else {
@@ -1003,6 +1016,8 @@ impl<'a> Doc<'a> {
             NumField::Season => list(|e| &e.seasons),
             NumField::Episode => list(|e| &e.episodes),
             NumField::Junk => self.enrichment().is_some_and(|e| f(e.junk)),
+            // Never scraped at ingest: unknown matches no range (§10.12).
+            NumField::Seeders | NumField::Leechers | NumField::Trackers | NumField::Dht => false,
         }
     }
 

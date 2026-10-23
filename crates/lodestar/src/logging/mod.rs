@@ -65,7 +65,9 @@ pub static CATALOGUES: &[&Catalogue] = &[
     &events::CATALOGUE,
     &lodestar_api::log_events::CATALOGUE,
     &lodestar_api::log_events::INTEGRATIONS,
+    &lodestar_pipeline::log_events::CATALOGUE,
     &lodestar_search::log_events::CATALOGUE,
+    &crate::update::log_events::CATALOGUE,
 ];
 
 /// A registered event by id.

@@ -503,11 +503,16 @@ pub(crate) struct IdsQuery {
 
 impl Query for IdsQuery {
     fn weight(&self, _: EnableScoring<'_>) -> tantivy::Result<Box<dyn Weight>> {
-        Ok(Box::new(IdsWeight(self.ids.clone())))
+        Ok(Box::new(IdsWeight(
+            self.ids.clone(),
+            crate::filter::SegmentSets::default(),
+        )))
     }
 }
 
-struct IdsWeight(Arc<IdSet>);
+/// The set, and its matches per segment (computed once per search; see
+/// [`crate::filter::SegmentSets`]).
+struct IdsWeight(Arc<IdSet>, crate::filter::SegmentSets);
 
 impl IdsWeight {
     fn matches(&self, reader: &SegmentReader) -> tantivy::Result<BitSet> {
@@ -541,12 +546,15 @@ impl IdsWeight {
 
 impl Weight for IdsWeight {
     fn scorer(&self, reader: &SegmentReader, boost: Score) -> tantivy::Result<Box<dyn Scorer>> {
-        let set = self.matches(reader)?;
-        Ok(Box::new(ConstScorer::new(BitSetDocSet::from(set), boost)))
+        let set = self.1.get(reader, |r| self.matches(r))?;
+        Ok(Box::new(ConstScorer::new(
+            BitSetDocSet::from(BitSet::clone(&set)),
+            boost,
+        )))
     }
 
     fn explain(&self, reader: &SegmentReader, doc: DocId) -> tantivy::Result<Explanation> {
-        if doc < reader.max_doc() && self.matches(reader)?.contains(doc) {
+        if doc < reader.max_doc() && self.1.get(reader, |r| self.matches(r))?.contains(doc) {
             Ok(Explanation::new("file clause", 1.0))
         } else {
             Err(tantivy::TantivyError::InvalidArgument(format!(

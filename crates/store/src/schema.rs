@@ -704,8 +704,7 @@ fn migrate_with(
     }
     if current > 0 {
         if let Some(path) = path {
-            let backup = snapshot_path(path, current + 1);
-            conn.execute("VACUUM INTO ?1", [backup.to_string_lossy()])?;
+            take_snapshot(conn, path, current + 1)?;
         }
     }
     for (version, sql) in migrations.iter().filter(|(v, _)| *v > current) {
@@ -718,6 +717,94 @@ fn migrate_with(
         tx.commit()?;
     }
     Ok(())
+}
+
+/// The newest schema version this build reads and writes.
+pub fn latest_schema_version() -> i64 {
+    MIGRATIONS.last().map_or(0, |(v, _)| *v)
+}
+
+/// The pre-migration snapshot, crash-safe (architecture §12.2): `VACUUM
+/// INTO <snapshot>.tmp`, fsync it, rename it to its `pre-v<N>[.<k>].db`
+/// name, fsync the directory. A crash leaves only a `.tmp`, which the next
+/// migration removes, never a partial snapshot under a snapshot's name:
+/// B-update's rollback restores whatever a `pre-v` name holds.
+fn take_snapshot(conn: &Connection, db: &Path, version: i64) -> Result<()> {
+    remove_stale_tmp(db);
+    let backup = snapshot_path(db, version);
+    let mut name = backup.clone().into_os_string();
+    name.push(".tmp");
+    let tmp = std::path::PathBuf::from(name);
+    let io = |what: &str, e: std::io::Error| {
+        Error::Sqlite(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_IOERR),
+            Some(format!("{what} {}: {e}", tmp.display())),
+        ))
+    };
+    let _ = std::fs::remove_file(&tmp);
+    let written = conn
+        .execute("VACUUM INTO ?1", [tmp.to_string_lossy()])
+        .map_err(Error::from)
+        .and_then(|_| {
+            // Windows' FlushFileBuffers needs write access.
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&tmp)
+                .and_then(|f| f.sync_all())
+                .map_err(|e| io("syncing", e))
+        })
+        .and_then(|()| std::fs::rename(&tmp, &backup).map_err(|e| io("renaming", e)));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return written;
+    }
+    sync_dir(&backup);
+    Ok(())
+}
+
+/// Removes `<stem>.pre-v….db.tmp` files a crash mid-snapshot left.
+fn remove_stale_tmp(db: &Path) {
+    let (Some(dir), Some(stem)) = (db.parent(), db.file_stem().and_then(|s| s.to_str())) else {
+        return;
+    };
+    let dir = if dir.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        dir
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let prefix = format!("{stem}.pre-v");
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if name.starts_with(&prefix)
+            && name.ends_with(".db.tmp")
+            && entry.file_type().is_ok_and(|t| t.is_file())
+        {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Makes a rename in `file`'s directory durable. Windows can't open a
+/// directory for this; NTFS journals the rename itself.
+fn sync_dir(file: &Path) {
+    #[cfg(unix)]
+    if let Some(dir) = file.parent() {
+        let dir = if dir.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            dir
+        };
+        if let Ok(f) = std::fs::File::open(dir) {
+            let _ = f.sync_all();
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = file;
 }
 
 /// `<db>.pre-v<N>.db`, or `<db>.pre-v<N>.<k>.db` if that exists already:
@@ -1060,6 +1147,40 @@ mod tests {
                 .unwrap();
             assert_eq!(strict, 1, "{table} is STRICT");
         }
+    }
+
+    /// A crash mid-`VACUUM INTO` leaves only a `.tmp`, never a file under
+    /// a snapshot's name; the next migration removes it and takes a whole
+    /// snapshot. A snapshot that can't be written stops the migration.
+    #[test]
+    fn the_snapshot_is_written_aside_then_renamed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.db");
+        let mut conn = Connection::open(&path).unwrap();
+        migrate_with(&mut conn, Some(&path), &FAKE[..1]).unwrap();
+        let stale = dir.path().join("t.pre-v2.db.tmp");
+        std::fs::write(&stale, b"half a snapshot").unwrap();
+        migrate_with(&mut conn, Some(&path), FAKE).unwrap();
+        assert!(!stale.exists());
+        let snap = Connection::open(dir.path().join("t.pre-v2.db")).unwrap();
+        assert_eq!(version(&snap), 1);
+        let names: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.iter().all(|n| !n.ends_with(".tmp")), "{names:?}");
+        assert_eq!(latest_schema_version(), MIGRATIONS.len() as i64);
+
+        // The .tmp can't be written (a folder stands in its way): no
+        // snapshot appears and nothing migrates.
+        let path = dir.path().join("u.db");
+        let mut conn = Connection::open(&path).unwrap();
+        migrate_with(&mut conn, Some(&path), &FAKE[..1]).unwrap();
+        std::fs::create_dir(dir.path().join("u.pre-v2.db.tmp")).unwrap();
+        std::fs::write(dir.path().join("u.pre-v2.db.tmp").join("x"), b"x").unwrap();
+        assert!(migrate_with(&mut conn, Some(&path), FAKE).is_err());
+        assert!(!dir.path().join("u.pre-v2.db").exists());
+        assert_eq!(version(&conn), 1);
     }
 
     #[test]

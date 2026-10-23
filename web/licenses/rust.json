@@ -21,6 +21,8 @@
 			"lodestar-sources",
 			"lodestar-sources-importers",
 			"lodestar-store",
+			"lodestar-tracker-scrape",
+			"lodestar-update",
 			"lodestar-utp"
 		],
 		"texts": {
@@ -2965,6 +2967,21 @@
 			"texts": {
 				"LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
 				"LICENSE-MIT": "fb77f0a9c53e473abe5103c8632ef9f0f2874d4fb3f17cb2d8c661aab9cee9d7"
+			}
+		},
+		{
+			"name": "semver",
+			"version": "1.0.28",
+			"license": "MIT OR Apache-2.0",
+			"repository": "https://github.com/dtolnay/semver",
+			"targets": [
+				"x86_64-unknown-linux-musl",
+				"aarch64-unknown-linux-musl",
+				"x86_64-pc-windows-msvc"
+			],
+			"texts": {
+				"LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+				"LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
 			}
 		},
 		{

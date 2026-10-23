@@ -1,8 +1,9 @@
 <script lang="ts">
 	// The app chrome: top bar, toasts and the command palette. It owns the one keydown
-	// listener, the event-stream subscription for the status pill, and where a 401 goes. The sign-in
-	// and first-run screens are `bare` (skip link only, no stream). `Shell.svelte` loads this after
-	// the page has painted, so none of it is on the critical path (§10.1: LCP).
+	// listener and the event-stream subscription for the status pill (where a 401 goes is
+	// Shell.svelte's, since it must not wait for this). The sign-in and first-run screens are `bare`
+	// (skip link only, no stream). `Shell.svelte` loads this on the first interaction (or after
+	// 30 s), so none of it is on the critical path (§10.1: LCP and the first-load budget).
 	import { onMount } from 'svelte';
 	import { afterNavigate } from '$app/navigation';
 	import { toasts } from '$lib/ui/feedback/toasts.svelte';
@@ -10,8 +11,16 @@
 	import { statusRef } from './status-ref.svelte';
 	import TopBar from './TopBar.svelte';
 
-	let { bare, replay }: { bare: boolean; replay?: { event: KeyboardEvent; target: HTMLElement } } =
-		$props();
+	let {
+		bare,
+		replay,
+		engaged = false
+	}: {
+		bare: boolean;
+		replay?: { event: KeyboardEvent; target: HTMLElement };
+		/** Mounted because of an interaction (or the shell's timeout): start the deferred parts now. */
+		engaged?: boolean;
+	} = $props();
 
 	const main = () => document.getElementById('main');
 
@@ -33,6 +42,10 @@
 
 	/** Runs `cb` once: on the first interaction, or after START_AFTER_MS. Returns the cancel. */
 	function whenEngaged(cb: () => void): () => void {
+		if (engaged) {
+			cb();
+			return () => {};
+		}
 		const stop = () => {
 			clearTimeout(timer);
 			for (const e of ENGAGED) window.removeEventListener(e, go, true);
@@ -47,29 +60,27 @@
 	}
 
 	let offCommands: (() => void) | undefined;
+	let offShortcuts: (() => void) | undefined;
 	let detachKeys: (() => void) | undefined;
-	let uninstallAuth: (() => void) | undefined;
 	let disposed = false;
 
 	onMount(() => {
-		// The 401 redirect starts as soon as the chrome mounts, so a page's own requests are covered.
-		// M-auth's hook owns W5's single `onLoginRequired` slot.
-		void import('$lib/features/auth/session.svelte').then((auth) => {
-			if (!disposed) uninstallAuth = auth.installAuthHandlers();
-		});
+		// The 401 redirect is installed by Shell.svelte, before the chrome loads.
 		// The rest is not needed to read the page and counts against the load (§10.1): the key
 		// shortcuts, the stream and the pill start with the first interaction, or 30 s after load.
 		const stopWaiting = whenEngaged(() => {
 			void Promise.all([
 				import('$lib/keys'),
 				import('./commands'),
+				import('$lib/features/shortcuts/boot'),
 				import('./status.svelte'),
 				import('./StatusPill.svelte'),
 				import('./ConnectionView.svelte')
-			]).then(([keysModule, commands, status, pill, connection]) => {
+			]).then(([keysModule, commands, shortcutsBoot, status, pill, connection]) => {
 				if (disposed) return;
 				detachKeys = keysModule.keys.attach(window);
 				offCommands = commands.registerShellCommands();
+				offShortcuts = shortcutsBoot.startShortcuts();
 				statusRef.Pill = pill.default;
 				statusRef.Connection = connection.default;
 				statusRef.current = status.shellStatus;
@@ -88,7 +99,7 @@
 			stopWaiting();
 			detachKeys?.();
 			offCommands?.();
-			uninstallAuth?.();
+			offShortcuts?.();
 		};
 	});
 

@@ -26,7 +26,12 @@ The sources of truth, in order:
 - `npx size-limit`
 - `npx playwright test` for any route or component with an e2e spec. Chromium is at `/opt/pw-browsers`; never run `playwright install`.
 
-**Always:** `git fetch origin main` and merge it (never rebase a shared branch) before opening or updating a PR. Never push red.
+**Always:** `git fetch origin main` and merge it (never rebase a shared branch) before opening a PR, or before requesting review on a head that isn't fresh enough (`runner/README.md` step 4). Never push red.
+
+**Pushes and `main` (multi-session rules, `docs/owner-decisions.md` §2.24):**
+- **One push per round of fixes.** Every push starts the full CI matrix, and every other PR queues behind it. Don't push work in progress to an open PR.
+- **Bring `main` in only when it's needed:** a conflict, the runner asks, or you're requesting review on a head that isn't fresh enough. Not on every merge to `main`, and never while your own CI is running, because the new push cancels that run and starts over.
+- **When the runner asks you to hold pushes** (a landing lane, `runner/README.md` step 4), keep working locally and push nothing until it says to resume.
 
 ## 2. Code rules
 - **Delegation (CLAUDE.md):** untrusted-input parsers, on-disk formats, concurrency-heavy code and security code are Opus slices only. A helper that finds itself needing one of these stops and says so in the PR.
@@ -36,7 +41,10 @@ The sources of truth, in order:
   - every module ships unit tests;
   - parsers also get property or fuzz tests;
   - UI primitives get keyboard and state tests;
-  - formatters are tested byte-exact against `docs/metrics.md`.
+  - formatters are tested byte-exact against `docs/metrics.md`;
+  - **no fixed sleeps:** a test that waits for a thread, timer, file or network event polls for the condition with a deadline of at least 10 s, and fails with what it saw. It must pass on the slowest CI runner (Windows) and under load. A sleep that only paces a writer is fine; a sleep that assumes work has finished is not.
+- **PR size:** ≲ 1,500 changed lines where practical (CLAUDE.md). A slice that grows past ~3,000 lines stops and tells the runner, which splits it rather than letting one PR chase `main`.
+- **One session per branch.** Never push to another session's branch; message that session instead. Before writing a fix, check open PRs and the runner for one already under way.
 - **Decisions:** any choice that changes or clarifies the architecture gets a short entry in a new file under `docs/decisions/` (`<date>-<slice-id>.md`, see its README), in the same PR. §16 is closed to new entries.
 - **Commits and PRs:** an imperative subject of 72 characters or fewer, and a body that says why. No model identifiers anywhere.
 
@@ -102,7 +110,7 @@ Every UI slice reads the skills listed in its brief, so it fills gaps consistent
    - **Important:** a missing screenshot or diagram the skill calls for.
 
 **Severity:**
-- **Blocking:** a spec violation, a broken or failing check the PR causes, a wrong value, a missing test for new behaviour, a file outside ownership, an unapproved dependency, a security issue.
+- **Blocking:** a spec violation, a broken or failing check the PR causes, a wrong value, a missing test for new behaviour, a test that waits with a fixed sleep (§2), a file outside ownership, an unapproved dependency, a security issue.
 - **Important:** a defect or gap that later slices would inherit. These get fixed in the same PR when cheap; otherwise they go into the next brief that touches the area.
 - **Polish:** optional.
 

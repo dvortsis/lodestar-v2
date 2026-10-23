@@ -50,15 +50,15 @@ use lodestar_pipeline::{event, metric, strategy};
 use lodestar_search::{SearchIndex, index_dir};
 use lodestar_store::{
     ClassCorrection, CohortCount, Counter, Event, NewTorrent, Resolved, SavedSearchInput,
-    SearchHits, SourceId, Store, StoreConfig, SwarmUpdate, TrackerCounts, UserItemUpdate,
-    WriteBatch, flags, swarm_flags,
+    SearchHits, SearchableCodes, SourceId, Store, StoreConfig, SwarmUpdate, TrackerCounts,
+    UserItemUpdate, WriteBatch, flags, swarm_flags,
 };
 
 use crate::synth::{EPOCH, Generator};
 
 /// The manifest's format. Bump it whenever the data set or the manifest
 /// changes, so `serve --fixture DIR` rebuilds rather than reuses.
-pub const FORMAT: u32 = 1;
+pub const FORMAT: u32 = 2;
 /// The manifest's file name, beside the database.
 pub const MANIFEST: &str = "fixture.json";
 /// The database's file name (the server's `Config::db_path`).
@@ -109,6 +109,13 @@ pub const LOSSES: [(u8, &str); 10] = [
     (9, "gave_up"),
     (10, "unreachable"),
 ];
+/// What `record_searchable` writes under (the server's
+/// `insights::CODES`).
+const SEARCHABLE: SearchableCodes = SearchableCodes {
+    stage: stage::SEARCHABLE,
+    newly: metric::NEWLY_SEARCHABLE,
+    delay: metric::TIME_TO_SEARCHABLE,
+};
 /// Losses before a peer was found; the rest happen after.
 const LOST_BEFORE_PEERS: [u8; 3] = [1, 8, 9];
 /// Lost after the fetch (a blocklist drops it before storage).
@@ -531,8 +538,13 @@ pub fn build(dir: &Path, anchor: i64) -> Result<Manifest, Error> {
     while indexer.catch_up(&mut store, 5000)? > 0 {}
     indexer.commit()?;
     indexer.finish()?;
+    // As the server's recorder does on each index commit: the watermark,
+    // newly searchable by type, cohort Searchable, the delay histogram and
+    // the imported total. The watermark alone left the overview's "new
+    // searchable" and searchable time empty outside the 72 h the repair
+    // at start recounts.
     for &(hour, last_id) in &insights.watermarks {
-        store.record_index_watermark(hour, last_id)?;
+        store.record_searchable(last_id, (hour + 1) * HOUR - 1, SEARCHABLE)?;
     }
 
     let user = write_user_data(&mut store, &clock, &specs, &ids, &facts)?;
@@ -2180,7 +2192,7 @@ impl Insights {
             row(stage::PEER_FOUND, 0, c.peer_found);
             row(stage::FETCHED, 0, c.fetched);
             row(stage::STORED, 0, c.stored);
-            row(stage::SEARCHABLE, 0, c.searchable);
+            // Searchable comes from `record_searchable` (`build`).
             for (code, name) in LOSSES {
                 row(stage::LOST, code, c.losses.get(name).copied().unwrap_or(0));
             }

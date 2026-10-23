@@ -716,6 +716,60 @@ impl Iterator for Generator {
     }
 }
 
+/// SplitMix64: a stateless hash from `(seed, id, stream)` to 64 bits, so
+/// swarm values don't draw from (and shift) the generator's stream.
+fn mix(seed: u64, id: u64, stream: u64) -> u64 {
+    let mut z = seed
+        .wrapping_add(id.wrapping_mul(0x9e37_79b9_7f4a_7c15))
+        .wrapping_add(stream.wrapping_mul(0xd1b5_4a32_d192_ed03));
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
+}
+
+/// A uniform draw in `[0, 1)`.
+fn unit(seed: u64, id: u64, stream: u64) -> f64 {
+    (mix(seed, id, stream) >> 11) as f64 / (1u64 << 53) as f64
+}
+
+/// Torrent `id`'s swarm as a scrape would leave it, deterministic in
+/// `(seed, id)`: about 30% never scraped (`None`), 40% dead (all zero),
+/// and the rest a heavy-tailed (power-law) live swarm reported by 1–20
+/// trackers, with a DHT estimate near its size.
+pub fn swarm(seed: u64, id: u64) -> Option<lodestar_store::SwarmHot> {
+    let kind = unit(seed, id, 0);
+    if kind < 0.30 {
+        return None;
+    }
+    if kind < 0.70 {
+        return Some(lodestar_store::SwarmHot {
+            seeders: 0,
+            leechers: 0,
+            trackers: 0,
+            dht: 0,
+        });
+    }
+    // Pareto, α = 1.1: most live swarms are a handful of peers, a few are
+    // tens of thousands.
+    let seeders = ((1.0 - unit(seed, id, 1)).powf(-1.0 / 1.1)).min(100_000.0) as u32;
+    let leechers = (f64::from(seeders) * unit(seed, id, 2) * 0.8) as u32;
+    let trackers = 1 + (19.0 * unit(seed, id, 3).powi(2)) as u32;
+    // BEP 33 filters saturate near 7,700.
+    let dht = ((f64::from(seeders + leechers) * (0.3 + 1.2 * unit(seed, id, 4))) as u32).min(7_700);
+    Some(lodestar_store::SwarmHot {
+        seeders,
+        leechers,
+        trackers,
+        dht,
+    })
+}
+
+/// When torrent `id` was last seen in the DHT, unix seconds: spread over
+/// the year before [`EPOCH`], deterministic in `(seed, id)`.
+pub fn last_seen(seed: u64, id: u64) -> u32 {
+    (EPOCH - (unit(seed, id, 5) * 365.0 * 86_400.0) as i64) as u32
+}
+
 /// Picks from weighted options.
 fn pick<'o, T>(rng: &mut ChaCha8Rng, options: &'o [(T, u32)]) -> &'o T {
     let total: u32 = options.iter().map(|(_, w)| w).sum();
@@ -1130,6 +1184,35 @@ const WORDS: &[&str] = &[
 mod tests {
     use super::*;
     use lodestar_metainfo::Info;
+
+    #[test]
+    fn swarms_are_deterministic_and_heavy_tailed() {
+        let n = 100_000u64;
+        let all: Vec<_> = (1..=n).map(|id| swarm(9, id)).collect();
+        assert_eq!(all, (1..=n).map(|id| swarm(9, id)).collect::<Vec<_>>());
+        assert_ne!(all, (1..=n).map(|id| swarm(10, id)).collect::<Vec<_>>());
+        let share = |f: &dyn Fn(&Option<lodestar_store::SwarmHot>) -> bool| {
+            all.iter().filter(|s| f(s)).count() as f64 / n as f64
+        };
+        let never = share(&|s| s.is_none());
+        let dead = share(&|s| s.is_some_and(|s| s.seeders == 0));
+        assert!((0.28..0.32).contains(&never), "{never}");
+        assert!((0.38..0.42).contains(&dead), "{dead}");
+        let live: Vec<_> = all.iter().flatten().filter(|s| s.seeders > 0).collect();
+        assert!(live.iter().all(|s| (1..=20).contains(&s.trackers)));
+        assert!(live.iter().all(|s| s.dht <= 7_700));
+        let max = live.iter().map(|s| s.seeders).max().unwrap();
+        let median = {
+            let mut v: Vec<_> = live.iter().map(|s| s.seeders).collect();
+            v.sort_unstable();
+            v[v.len() / 2]
+        };
+        assert!(median <= 3 && max >= 10_000, "median {median}, max {max}");
+        for id in 1..1000 {
+            let t = i64::from(last_seen(9, id));
+            assert!((EPOCH - 365 * 86_400..=EPOCH).contains(&t));
+        }
+    }
 
     #[test]
     fn deterministic() {
