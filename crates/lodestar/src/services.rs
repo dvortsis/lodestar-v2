@@ -52,6 +52,8 @@ pub struct Handles {
     pipeline: Pipeline,
     /// The index, its live indexer and any rebuild (§8).
     search: Option<Arc<Serving>>,
+    /// Saved searches → alerts (B9), while search is on.
+    percolator: Option<(watch::Sender<bool>, JoinHandle<()>)>,
 }
 
 impl Services {
@@ -104,41 +106,46 @@ impl Services {
         let subs_config = config.subscriptions.clone();
         let blocklist = config.blocklist_files()?;
         let subs_ips = ips.clone();
-        let (store, control, user_data, reader, serving) = tokio::task::spawn_blocking(move || {
-            let store = Store::open(&db, store_config.clone())?;
-            // Settings and lists change through a second connection, so
-            // they never wait behind the ingest writer for long.
-            let mut control = Store::open(&db, store_config.clone())?;
-            subscriptions::sync_config(&mut control, &subs_config)?;
-            // Before the pipeline loads the floor from the store.
-            floor::sync_files(&mut control, &blocklist, crate::unix_now())?;
-            floor::report(&control)?;
-            subscriptions::apply(&control, &filter, &subs_ips)?;
-            let user_data = Store::open(&db, store_config.clone())?;
-            let reader = Store::open_reader(&db, store_config.clone())?;
-            // The index this build serves (rebuilt in the background from
-            // an older one if need be); its indexer follows the store
-            // through its own connection.
-            let serving = if search {
-                let config = ServingConfig {
-                    live: LiveConfig {
-                        heap_bytes: heap,
-                        ..LiveConfig::default()
-                    },
-                    store: store_config,
-                    ..ServingConfig::default()
+        let (store, control, user_data, reader, serving, percolation) =
+            tokio::task::spawn_blocking(move || {
+                let store = Store::open(&db, store_config.clone())?;
+                // Settings and lists change through a second connection, so
+                // they never wait behind the ingest writer for long.
+                let mut control = Store::open(&db, store_config.clone())?;
+                subscriptions::sync_config(&mut control, &subs_config)?;
+                // Before the pipeline loads the floor from the store.
+                floor::sync_files(&mut control, &blocklist, crate::unix_now())?;
+                floor::report(&control)?;
+                subscriptions::apply(&control, &filter, &subs_ips)?;
+                let user_data = Store::open(&db, store_config.clone())?;
+                let reader = Store::open_reader(&db, store_config.clone())?;
+                // The percolator records alerts through its own connection.
+                let percolation = search
+                    .then(|| Store::open(&db, store_config.clone()))
+                    .transpose()?;
+                // The index this build serves (rebuilt in the background from
+                // an older one if need be); its indexer follows the store
+                // through its own connection.
+                let serving = if search {
+                    let config = ServingConfig {
+                        live: LiveConfig {
+                            heap_bytes: heap,
+                            ..LiveConfig::default()
+                        },
+                        store: store_config,
+                        ..ServingConfig::default()
+                    };
+                    Some(Arc::new(Serving::open_or_rebuild(
+                        &index_root,
+                        &db,
+                        config,
+                    )?))
+                } else {
+                    None
                 };
-                Some(Arc::new(Serving::open_or_rebuild(
-                    &index_root,
-                    &db,
-                    config,
-                )?))
-            } else {
-                None
-            };
-            Ok::<_, BoxError>((store, control, user_data, reader, serving))
-        })
-        .await??;
+                Ok::<_, BoxError>((store, control, user_data, reader, serving, percolation))
+            })
+            .await??;
 
         let mut plugins: Vec<Arc<dyn SourcePlugin>> = Vec::new();
         let mut dht_stats = None;
@@ -279,6 +286,21 @@ impl Services {
                 adult: api.adult.clone(),
             },
         );
+        // Saved searches → alerts (B9): it follows the serving index's
+        // commits and publishes on the hub. Never in fixture mode.
+        let percolator = serving.as_ref().zip(percolation).map(|(s, store)| {
+            let (stop, stopped) = watch::channel(false);
+            let task = crate::percolator::spawn(
+                SearchHandle::serving(s.clone()),
+                s.commit_hook(),
+                store,
+                events.clone(),
+                api.adult.clone(),
+                crate::fixture::unless_offline(stopped),
+                crate::percolator::PercolatorConfig::default(),
+            );
+            (stop, task)
+        });
         let listener = TcpListener::bind(config.http.bind)
             .await
             .map_err(|e| format!("binding {}: {e}", config.http.bind))?;
@@ -295,6 +317,7 @@ impl Services {
                 subscriptions: (stop_subscriptions, refresher),
                 pipeline,
                 search: serving,
+                percolator,
             },
             listener,
         })
@@ -333,7 +356,7 @@ impl Services {
 impl Handles {
     /// Stops every service in order: the blocklist refresher, the
     /// pipeline (which saves the queue and DHT state and commits the last
-    /// batch), then the indexer.
+    /// batch), then the indexer, then the percolator.
     pub async fn shutdown(self) -> Result<(), BoxError> {
         tracing::info!("shutting down: saving the queue and DHT state");
         let (stop, refresher) = self.subscriptions;
@@ -345,6 +368,11 @@ impl Handles {
             // handles (requests still finishing) may hold it: stopping
             // works through a shared one.
             tokio::task::spawn_blocking(move || search.stop()).await??;
+        }
+        if let Some((stop, task)) = self.percolator {
+            // After the indexer, whose last commit it may still record.
+            let _ = stop.send(true);
+            let _ = task.await;
         }
         tracing::info!("stopped cleanly");
         Ok(())

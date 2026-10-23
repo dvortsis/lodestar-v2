@@ -4,6 +4,47 @@
  */
 
 export interface paths {
+    "/alerts/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Marks alerts read up to `through` (the highest alert id you saw), for
+         *     one saved search or all of them. Alerts that arrived since stay unread.
+         *     It returns no count: one would reveal alerts that are withheld.
+         */
+        post: operations["markAlertsRead"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/alerts/unread": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Unread alerts across every saved search, on torrents search would show:
+         *     the nav badge, equal to the sum of the saved searches' `unread`.
+         */
+        get: operations["getUnreadAlerts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth": {
         parameters: {
             query?: never;
@@ -386,6 +427,30 @@ export interface paths {
         put?: never;
         /** Facets for query text or a query AST. */
         post: operations["facetsPost"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/feeds/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A saved search's alerts as RSS 2.0: the 50 newest on torrents search
+         *     would show, each with a magnet enclosure. Feed readers that can't sign
+         *     in pass a feed token as `?token=`; an API key with the `feeds` scope
+         *     works too. Private-source torrents never appear. Anything the caller
+         *     can't have (another search's token, a search without RSS, an unknown
+         *     id) is the same `404 feed_not_found`.
+         */
+        get: operations["getFeed"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -835,6 +900,28 @@ export interface paths {
         patch: operations["patchSavedSearch"];
         trace?: never;
     };
+    "/saved-searches/{id}/alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A saved search's alerts, newest first. Only alerts on torrents search
+         *     would show: none a filter rule hid, and Adult only while "Show adult
+         *     content" is on. A page is full unless the list ends: withheld rows are
+         *     skipped, never counted.
+         */
+        get: operations["listAlerts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/search": {
         parameters: {
             query?: never;
@@ -1244,31 +1331,88 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description One alert: a torrent a saved search matched once it became searchable. */
+        AlertRow: {
+            /**
+             * Format: int64
+             * @description When it was recorded, Unix seconds.
+             */
+            created_at: number;
+            /**
+             * Format: int64
+             * @description The alert's id, never reused. `POST /alerts/read` takes the
+             *     highest one you saw.
+             */
+            id: number;
+            /** @description Marked read. */
+            read: boolean;
+            torrent: components["schemas"]["SearchHit"];
+        };
         /**
-         * @description `event: alerts` (reserved: B9 publishes it): a saved search matched
-         *     new torrents. The matches themselves come from the API.
+         * @description `event: alerts`: a saved search matched torrents that just became
+         *     searchable. One event per saved search per percolation run; the
+         *     matches themselves come from `GET /saved-searches/{id}/alerts`. Only
+         *     torrents search would show count: none a filter rule hid, and no
+         *     Adult while "Show adult content" is off (§20.9). A run whose new
+         *     matches are all hidden sends no event.
+         * @example {
+         *       "alert": 913,
+         *       "matched": 2,
+         *       "max_id": 48211,
+         *       "notify": true,
+         *       "saved_search": 4
+         *     }
          */
         AlertsEvent: {
             /**
              * Format: int64
-             * @description The alert's id.
+             * @description The highest new alert's id (shown ones only).
              */
             alert: number;
             /**
              * Format: int64
-             * @description New matches.
+             * @description New alerts on torrents you can see; at least 1.
              */
             matched: number;
             /**
              * Format: int64
-             * @description The highest matching torrent id.
+             * @description The highest of their torrent ids.
              */
             max_id: number;
+            /**
+             * @description The saved search alerts in the app (its `alert` flag): notify only
+             *     when true. Otherwise the event only refreshes counts.
+             */
+            notify: boolean;
             /**
              * Format: int64
              * @description The saved search's id.
              */
             saved_search: number;
+        };
+        /** @description `GET /saved-searches/{id}/alerts`. */
+        AlertsPage: {
+            /** @description Newest first: only alerts on torrents search would show. */
+            items: components["schemas"]["AlertRow"][];
+            /** @description Pass as `cursor` for the next page; null on the last. */
+            next_cursor: string | null;
+        };
+        /**
+         * @description `POST /alerts/read`: marks alerts read up to the highest one you saw,
+         *     so alerts that arrived while the page was open stay unread (§10.8's
+         *     "New since …" divider).
+         */
+        AlertsRead: {
+            /**
+             * Format: int64
+             * @description One saved search's alerts; every saved search's when absent.
+             */
+            saved_search?: number | null;
+            /**
+             * Format: int64
+             * @description The highest alert id you saw.
+             */
+            through: number;
         };
         AllowEntry: {
             /** Format: int64 */
@@ -4398,6 +4542,20 @@ export interface components {
          */
         Unavailable: "search_disabled" | "no_title" | "needs_swarm_history" | "needs_resolution_history" | "needs_payload_signature" | "needs_piece_roots";
         /**
+         * @description `GET /alerts/unread`: the nav badge.
+         * @example {
+         *       "unread": 3
+         *     }
+         */
+        UnreadAlerts: {
+            /**
+             * Format: int64
+             * @description Unread alerts across every saved search, on torrents search would
+             *     show: the sum of the saved searches' `unread`.
+             */
+            unread: number;
+        };
+        /**
          * @description `GET /user-items/{hash}`: the marks and the collections it is in.
          * @example {
          *       "collections": [
@@ -4575,6 +4733,59 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    markAlertsRead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertsRead"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            /** @description `saved_search_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getUnreadAlerts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnreadAlerts"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getAuthStatus: {
         parameters: {
             query?: never;
@@ -5319,6 +5530,70 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    getFeed: {
+        parameters: {
+            query?: {
+                /**
+                 * @description A feed token (`lsf_…`), for feed readers that can't sign in. A
+                 *     session or an API key with the `feeds` scope also works.
+                 */
+                token?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The saved search's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The feed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/rss+xml": string;
+                };
+            };
+            /** @description Unchanged since the `ETag` sent in `If-None-Match`. */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `login_required` or `bad_api_key`. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `key_scope`: an API key without the `feeds` scope. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `feed_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getFilters: {
         parameters: {
             query?: never;
@@ -6049,6 +6324,52 @@ export interface operations {
             };
             /** @description `invalid_value`: the name or query isn't allowed. */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listAlerts: {
+        parameters: {
+            query?: {
+                /** @description The previous page's `next_cursor`. */
+                cursor?: string;
+                /** @description 1–200; 50 by default. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The saved search's id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertsPage"];
+                };
+            };
+            /** @description `bad_cursor`: a cursor this server didn't give out. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `saved_search_not_found`. */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

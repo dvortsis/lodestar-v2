@@ -11,7 +11,7 @@
 use rusqlite::{OptionalExtension, Transaction, params};
 
 use crate::user_data::{check_name, check_text, sql_limit};
-use crate::{Error, Result, Store};
+use crate::{Error, Result, Store, flags};
 
 /// What a caller sets on a saved search.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -326,15 +326,6 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Unread alerts across every saved search (the nav badge).
-    pub fn unread_total(&self) -> Result<u64> {
-        Ok(self.conn.query_row(
-            "SELECT count(*) FROM alerts WHERE read_at IS NULL",
-            [],
-            |r| crate::get_u64(r, 0),
-        )?)
-    }
-
     /// Marks unread alerts with ids up to `through_id` read, for one saved
     /// search or (`None`) all of them. Alerts that arrived after the page
     /// the user saw (higher ids) stay unread. Returns how many changed.
@@ -384,6 +375,30 @@ impl Store {
             self.after_user_delete();
         }
         Ok(deleted)
+    }
+}
+
+/// The nav badge (B9), counted only over torrents that may be shown.
+impl Store {
+    /// Unread alerts across every saved search on torrents search would
+    /// show: never one a filter rule hid ([`flags::HIDDEN`]), and, when
+    /// `hidden_type` is a content type code (Adult's, while "Show adult
+    /// content" is off), never one classified as it. A torrent counts as
+    /// classified only with a `torrent_parsed` row, so this is exactly the
+    /// API's per-row `withheld` rule, in SQL: the badge then equals the sum
+    /// of the per-search `unread` the list view shows (§20.9).
+    pub fn unread_shown(&self, hidden_type: Option<u8>) -> Result<u64> {
+        Ok(self
+            .conn
+            .prepare_cached(
+                "SELECT count(*) FROM alerts a JOIN torrents t ON t.id = a.torrent_id
+             WHERE a.read_at IS NULL AND (t.flags & ?1) = 0
+               AND NOT (?2 IS NOT NULL AND coalesce(t.content_type, 0) = ?2
+                        AND EXISTS (SELECT 1 FROM torrent_parsed p WHERE p.torrent_id = t.id))",
+            )?
+            .query_row(params![flags::HIDDEN, hidden_type], |r| {
+                crate::get_u64(r, 0)
+            })?)
     }
 }
 
@@ -633,7 +648,7 @@ mod tests {
             .record_percolation(10, &[hits(a, &[1, 2, 3]), hits(b, &[4])], 50)
             .unwrap();
         assert_eq!(s.unread_counts().unwrap(), [(a, 3), (b, 1)]);
-        assert_eq!(s.unread_total().unwrap(), 4);
+        assert_eq!(s.unread_shown(None).unwrap(), 4);
 
         // The user saw a's page up to its newest alert; one arrives after.
         let seen = first
@@ -656,8 +671,36 @@ mod tests {
         assert_eq!(list[1].last_alert_at, Some(50));
 
         assert_eq!(s.mark_alerts_read(None, i64::MAX, 80).unwrap(), 2);
-        assert_eq!(s.unread_total().unwrap(), 0);
+        assert_eq!(s.unread_shown(None).unwrap(), 0);
         assert!(s.unread_counts().unwrap().is_empty());
+    }
+
+    /// The badge leaves out filter-hidden torrents, and the hidden type
+    /// only where a torrent is classified (has a `torrent_parsed` row).
+    #[test]
+    fn the_shown_count_leaves_out_what_is_withheld() {
+        let mut s = test_store(6);
+        let a = s.create_saved_search(&input("a"), 0, 0).unwrap();
+        s.record_percolation(6, &[hits(a, &[1, 2, 3, 4, 5, 6])], 0)
+            .unwrap();
+        let exec = |sql: &str| s.conn.execute_batch(sql).unwrap();
+        // 2: hidden by a filter rule. 3: Adult and classified. 4: Adult's
+        // code but no parsed row (unclassified). 5: classified, other type.
+        exec(&format!(
+            "UPDATE torrents SET flags = {} WHERE id = 2;
+             UPDATE torrents SET content_type = 11 WHERE id IN (3, 4);
+             UPDATE torrents SET content_type = 0 WHERE id = 5;
+             INSERT INTO torrent_parsed (torrent_id, parser_ver, data)
+                 VALUES (3, 1, x'00'), (5, 1, x'00'), (6, 1, x'00');",
+            flags::HIDDEN
+        ));
+        assert_eq!(s.unread_shown(None).unwrap(), 5);
+        assert_eq!(s.unread_shown(Some(11)).unwrap(), 4);
+        // 6 has a parsed row and a NULL type: it counts as type 0 there,
+        // as `Store::enrichment` reads it.
+        assert_eq!(s.unread_shown(Some(0)).unwrap(), 3);
+        s.mark_alerts_read(Some(a), i64::MAX, 1).unwrap();
+        assert_eq!(s.unread_shown(Some(11)).unwrap(), 0);
     }
 
     #[test]
