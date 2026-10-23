@@ -29,7 +29,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::config::Config;
-use crate::{floor, http, ops, settings, subscriptions};
+use crate::{floor, http, ops, settings, subscriptions, system};
 
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -43,6 +43,8 @@ pub struct Services {
     pub events: Arc<EventHub>,
     pub handles: Handles,
     listener: TcpListener,
+    /// `/system` (B2c), layered beside the hub.
+    system: Arc<dyn lodestar_api::system::SystemApi>,
 }
 
 /// What has to be stopped on the way out.
@@ -60,6 +62,8 @@ impl Services {
     pub async fn start(config: &Config) -> Result<Services, BoxError> {
         std::fs::create_dir_all(&config.data_dir)
             .map_err(|e| format!("creating {}: {e}", config.data_dir.display()))?;
+        // A pending HTTP-address change, before the registry loads (B2c).
+        let address = system::address::prepare(config, &system::address::SystemClock).await;
         // The settings registry (§11) over its own connection: saved
         // values join the file and environment before anything starts.
         let settings = {
@@ -268,9 +272,9 @@ impl Services {
                 adult: api.adult.clone(),
             },
         );
-        let listener = TcpListener::bind(config.http.bind)
-            .await
-            .map_err(|e| format!("binding {}: {e}", config.http.bind))?;
+        let (listener, bound) =
+            system::address::bind(address, config, &control, &system::address::SystemClock).await?;
+        let system = system::System::start(config, bound, &api, &settings, control, &events);
         tracing::info!(
             "UI on {}, status page on /status (data in {})",
             ops::ui_address(config.http.bind),
@@ -286,6 +290,7 @@ impl Services {
                 search: serving,
             },
             listener,
+            system,
         })
     }
 
@@ -300,9 +305,11 @@ impl Services {
             events,
             handles,
             listener,
+            system,
         } = self;
         let app = http::router(http, api)
             .layer(Extension(events.clone()))
+            .layer(Extension(system))
             .into_make_service_with_connect_info::<SocketAddr>();
         // Open streams never end on their own: closing the hub ends them,
         // so the graceful shutdown doesn't wait on them.

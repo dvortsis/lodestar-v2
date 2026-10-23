@@ -1,0 +1,102 @@
+{
+	"$comment": "Reviewed licence overrides for the shipped build (architecture §10.10.13). Read by .github/scripts/licenses.py (cargo) and web/scripts/licenses.ts (npm). Each entry was checked by hand against the files the package ships; a version bump fails the build until the entry is checked again.",
+	"missing": [
+		{
+			"ecosystem": "npm",
+			"name": "svelte-toolbelt",
+			"version": "0.10.6",
+			"license": "MIT",
+			"file": "LICENSE",
+			"note": "No licence field in package.json; ships an MIT LICENSE (Hunter Johnston, Thomas G. Lopes). Reached through bits-ui, so it ships once a route uses the overlays."
+		}
+	],
+	"texts": [
+		{
+			"ecosystem": "cargo",
+			"name": "ownedbytes",
+			"from": "tantivy",
+			"note": "Published from the tantivy repository without its own LICENSE; tantivy's MIT LICENSE covers the whole repository."
+		},
+		{
+			"ecosystem": "cargo",
+			"name": "tantivy-bitpacker",
+			"from": "tantivy",
+			"note": "Published from the tantivy repository without its own LICENSE; tantivy's MIT LICENSE covers the whole repository."
+		},
+		{
+			"ecosystem": "cargo",
+			"name": "tantivy-columnar",
+			"from": "tantivy",
+			"note": "Published from the tantivy repository without its own LICENSE; tantivy's MIT LICENSE covers the whole repository."
+		},
+		{
+			"ecosystem": "cargo",
+			"name": "tantivy-common",
+			"from": "tantivy",
+			"note": "Published from the tantivy repository without its own LICENSE; tantivy's MIT LICENSE covers the whole repository."
+		},
+		{
+			"ecosystem": "cargo",
+			"name": "tantivy-query-grammar",
+			"from": "tantivy",
+			"note": "Published from the tantivy repository without its own LICENSE; tantivy's MIT LICENSE covers the whole repository."
+		},
+		{
+			"ecosystem": "cargo",
+			"name": "tantivy-sstable",
+			"from": "tantivy",
+			"note": "Published from the tantivy repository without its own LICENSE; tantivy's MIT LICENSE covers the whole repository."
+		},
+		{
+			"ecosystem": "cargo",
+			"name": "tantivy-stacker",
+			"from": "tantivy",
+			"note": "Published from the tantivy repository without its own LICENSE; tantivy's MIT LICENSE covers the whole repository."
+		},
+		{
+			"ecosystem": "cargo",
+			"name": "tantivy-tokenizer-api",
+			"from": "tantivy",
+			"note": "Published from the tantivy repository without its own LICENSE; tantivy's MIT LICENSE covers the whole repository."
+		}
+	],
+	"extra": [
+		{
+			"name": "Atkinson Hyperlegible Next",
+			"package": "@fontsource-variable/atkinson-hyperlegible-next",
+			"license": "OFL-1.1",
+			"note": "Font (© Braille Institute). scripts/fonts.mjs subsets this package's files into static/fonts; the licence travels with the font files, as the OFL requires."
+		},
+		{
+			"name": "Atkinson Hyperlegible Mono",
+			"package": "@fontsource-variable/atkinson-hyperlegible-mono",
+			"license": "OFL-1.1",
+			"note": "Font (© Braille Institute). scripts/fonts.mjs subsets this package's files into static/fonts; the licence travels with the font files, as the OFL requires."
+		},
+		{
+			"name": "daisyUI",
+			"package": "daisyui",
+			"license": "MIT",
+			"note": "Component CSS generated into the stylesheet by the Tailwind plugin (src/app.css), not a module in the graph."
+		},
+		{
+			"name": "Tailwind CSS",
+			"package": "tailwindcss",
+			"license": "MIT",
+			"note": "Preflight and utility CSS generated into the stylesheet (src/app.css), not a module in the graph."
+		},
+		{
+			"name": "Paraglide runtime",
+			"package": "@inlang/paraglide-js",
+			"license": "MIT",
+			"note": "The i18n runtime and message functions it generates into src/lib/paraglide."
+		}
+	],
+	"notices": [
+		{
+			"name": "Lodestar brand artwork",
+			"file": "brand/LICENSE.md",
+			"note": "The name, logos, mascot, scenes and icons are outside the AGPL: all rights reserved, usable unmodified to refer to Lodestar (owner's decision §2.12)."
+		}
+	]
+}
