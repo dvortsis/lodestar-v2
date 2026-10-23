@@ -41,6 +41,8 @@ struct Fake {
     purges: Mutex<Vec<LogPurge>>,
     history_delay: Duration,
     reads: AtomicUsize,
+    /// Chunks the endless download has produced, across its readers.
+    endless_chunks: Arc<AtomicUsize>,
 }
 
 impl Fake {
@@ -54,6 +56,7 @@ impl Fake {
             purges: Mutex::default(),
             history_delay: Duration::from_millis(400),
             reads: AtomicUsize::new(0),
+            endless_chunks: Arc::default(),
         })
     }
 
@@ -193,10 +196,14 @@ impl LogSource for Fake {
     ) -> Result<Download, LogsError> {
         // A download that never ends, for a client that stops reading.
         if name == "lodestar-20261023T101500.123Z.jsonl" {
+            let produced = self.endless_chunks.clone();
             return Ok(Download {
                 file_name: "endless.jsonl".into(),
                 content_type: "application/x-ndjson",
-                chunks: Box::new(std::iter::repeat_with(|| Ok(vec![b'x'; 64 << 10]))),
+                chunks: Box::new(std::iter::repeat_with(move || {
+                    produced.fetch_add(1, Ordering::SeqCst);
+                    Ok(vec![b'x'; 64 << 10])
+                })),
             });
         }
         if name != "lodestar.jsonl" {
@@ -798,15 +805,24 @@ async fn a_download_holds_a_read_and_close_ends_it_unread() {
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "a download too");
     // Their producers are stuck on full buffers; closing ends both and
     // lets their reads go, with neither client reading.
+    // Wait until the producers have stalled: the chunk count has not moved
+    // across two reads 100 ms apart. (The reads are held from the start.)
     let start = Instant::now();
-    while fake.transport().reads_held() != 2 {
+    let mut last = usize::MAX;
+    loop {
+        let now = fake.endless_chunks.load(Ordering::SeqCst);
+        if now > 0 && now == last {
+            break;
+        }
         assert!(
             start.elapsed() < SOON,
-            "reads held: {}",
+            "the downloads never stalled; {now} chunks, {} reads held",
             fake.transport().reads_held()
         );
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        last = now;
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    assert_eq!(fake.transport().reads_held(), 2);
     fake.transport().close();
     let start = Instant::now();
     while fake.transport().reads_held() > 0 {

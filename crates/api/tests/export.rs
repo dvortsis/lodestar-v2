@@ -968,17 +968,23 @@ async fn a_client_that_stops_reading_holds_no_lock() {
     // Wait until its progress stops moving: it has filled the buffers.
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut before = job(&f, &c, d.job).await;
+    let mut unchanged = 0;
     loop {
         tokio::time::sleep(Duration::from_millis(100)).await;
         let now = job(&f, &c, d.job).await;
-        if now["done"] == before["done"] {
+        unchanged = if now["done"] == before["done"] {
+            unchanged + 1
+        } else {
+            0
+        };
+        before = now;
+        if unchanged == 2 {
             break;
         }
         assert!(
             Instant::now() < deadline,
-            "progress kept moving: {before} then {now}"
+            "progress kept moving; last saw {before}"
         );
-        before = now;
     }
     assert_eq!(before["state"], "running");
     for _ in 0..3 {
