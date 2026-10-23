@@ -11,7 +11,7 @@ import { keys } from '$lib/keys';
 
 $effect(() =>
 	keys.register({
-		id: 'magnet.copy', // ids in DEFAULT_KEYS get their key from §10.16
+		id: 'detail.copy_magnet', // ids in DEFAULT_KEYS get their key from §10.16
 		title: () => m.search_copy_magnet(),
 		section: () => m.search_section(),
 		scope: 'search', // omit for global
@@ -35,11 +35,11 @@ $effect(() =>
 
 - **Conflicts:** two commands on one combo in one scope are listed by `keys.conflicts()` (and logged); neither fires. Different scopes never conflict. The most recently pushed scope wins; `pushScope(name, { exclusive: true })` mutes everything below it (a modal surface).
 - **Typing is never hijacked:** text inputs, selects, contenteditable and `textbox`/`searchbox`/`combobox` roles only receive `allowInInput` commands with a modifier or Escape. Bare characters are also ignored inside `dialog` and `menu` roles, and while composing (IME).
-- **Settings (WCAG 2.1.4):** `keys.setSingleKeys(false)` turns off every bare-character shortcut; `keys.remap(id, ['y'])` rebinds, `remap(id, null)` restores. Persisting and replaying them at startup belongs to the Settings slice.
+- **Settings (WCAG 2.1.4):** `keys.setSingleKeys(false)` turns off every bare-character shortcut; `keys.remap(id, ['y'])` rebinds, `remap(id, null)` restores. `features/shortcuts/boot.ts` reads the saved mapping at startup and applies it.
 
 ## For the shortcut sheet (S-keys)
 
-`keys.list()` returns `{ id, title, section, scope, keys, keywords, palette, active }[]` (reactive), and `formatCombo('mod+k')` from `$lib/keys/display` gives `⌘K` or `Ctrl+K`. `keys.singleKeys` says whether bare characters are on. The shell registers no `?` command: S-keys registers `shortcuts.open`.
+`keys.list()` returns `{ id, title, section, scope, keys, keywords, palette, active }[]` (reactive), and `formatCombo('mod+k')` from `$lib/keys/display` gives `⌘K` or `Ctrl+K`. `keys.singleKeys` says whether bare characters are on. The shell registers no `?` command: S-keys registers `help.shortcuts`.
 
 ## Files
 
