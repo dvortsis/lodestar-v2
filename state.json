@@ -569,13 +569,13 @@
       "notes": ""
     },
     "S-keys": {
-      "status": "running",
+      "status": "review",
       "model": "sonnet",
       "session": "session_016cp8XLoMXn6BdcZs7uwRnr",
-      "pr": null,
+      "pr": 134,
       "attempt": 0,
       "review_rounds": 0,
-      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum"
+      "notes": " | 2026-10-23T15:51:38Z unblocked by W9; brief drafting (Opus helper) | 2026-10-23T16:26:19Z launched (sonnet); brief committed 576d67a with runner addendum | 2026-10-23T17:11:13Z PR #134 head 913bcdb (~2.1k, half tests; boot 1.79 KB vs 1.5 target; CSS unchanged); fresh reviewer launched (incl. interplay with S-search-1's deferred Chrome)"
     },
     "S-e2e": {
       "status": "pending",
