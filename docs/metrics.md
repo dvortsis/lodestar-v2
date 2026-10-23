@@ -353,6 +353,9 @@ keeps; none from `torrents` or the index.
 | `kpi.imported` | integer | yes: null until the recorder's first read at start | Imported total: searchable torrents that were imported (`insights_state.imported`, kept exact by the store since B11b) | Snapshot |
 | `kpi.new_searchable` | integer | no | New searchable in range, imports included; 0 is real | Event time |
 | `kpi.yield` | number 0–1 | yes: null = no final cohort | End-to-end yield over final cohort hours; imports excluded | Discovery cohort |
+| `kpi.new_searchable_delta` | integer | yes: null without Compare (and for `all`) | Δ: `kpi.new_searchable` less `previous.kpi.new_searchable` (B11b) | Event time |
+| `kpi.yield_delta` | number −1–1 | yes: null without Compare or when either yield is null | Δ in ratio points: `kpi.yield` less `previous.kpi.yield` (B11b) | Discovery cohort |
+| `kpi.time_to_searchable_p50_delta_s`, `kpi.time_to_searchable_p95_delta_s` | integer (seconds) | yes: as `yield_delta` | Δ of each percentile (B11b). Always ≈ | Discovery cohort |
 | `kpi.time_to_searchable_p50_s`, `kpi.time_to_searchable_p95_s` | integer (seconds) | yes (as yield) | Time to searchable over final cohort hours: the midpoint of the log bucket (edges ×1.1, within 5%) holding the rank. Always ≈ | Discovery cohort |
 | `kpi.health` | `{state: "running"\|"paused"\|"degraded", reason: "paused"\|"writer_stalled"\|"index_lag"\|null}` | no | Health: paused first, then stale, then index lag > 30 s | Snapshot |
 | `trend[]` | `{at: integer, searchable: integer\|null, harvested: integer\|null}` | no | Movement, one point per bucket from `range.from`. A count is **null where nothing was measured** (no coverage row: the crawler paused, or the server not running) and 0 where it was measured and was 0 | Event time |
@@ -363,8 +366,8 @@ keeps; none from `torrents` or the index.
 | `ingest_per_hour` | integer | **yes: null when the last full hour wasn't measured and stored nothing** | Ingest rate: newly stored in the last full UTC hour | Event time |
 | `stale` | `{since: integer, reason: "paused"\|"writer_stalled"}` | yes: null = fresh | Stale banner: > 120 s since the writer's last flush (`since`; the pipeline's start when there was none) | — |
 | `segments` | object, below | no | Level 4 | — |
-| `exceptions[]` | `{kind: string, severity: "warning"\|"error", value: number\|null, unit: string\|null, since: integer, fix: {kind: "settings"\|"stage", target: string}}` | no (may be empty) | Level 5, whatever the range. `kind` ∈ `index_lag` (> 30 s; an error past 600 s; `unit` `s`; fix: stage `index`) and `cohort_stalled` (hashes in progress, the crawler running ≥ 3,000 s in each of the last 2 full hours, and nothing stored in them; `unit` `torrents`; fix: stage `fetch`). The other kinds (`yield_below_baseline`, `nat_saturation`, `ephemeral_ports`, `port_unreachable`, `scrape_bans`, `parser_confidence`, `disk_projection`, `network_path`) are B11b's | Snapshot |
-| `previous` | `{range, stages: {discover, fetch, serve, understand}, kpi: {searchable, new_searchable, yield, time_to_searchable_p50_s, time_to_searchable_p95_s}, trend[], serve}` | **absent** without `compare=1` and for `all` | The period of equal length just before, for Compare. `previous.kpi.searchable` is the last hourly snapshot of the searchable count (`metric::SEARCHABLE`) in the day before the range starts (a compacted day's is its last hour's), null when there's none. `previous.stages.fetch` is null as `stages.fetch` | As the current fields |
+| `exceptions[]` | `{kind: string, severity: "warning"\|"error", value: number\|null, unit: string\|null, since: integer, fix: {kind: "settings"\|"stage", target: string}}` | no (may be empty) | Level 5, whatever the range. `kind` ∈ `index_lag` (> 30 s; an error past 600 s; `unit` `s`; fix: stage `index`) and `cohort_stalled` (hashes in progress, the crawler running ≥ 3,000 s in each of the last 2 full hours, and nothing stored in them; `unit` `torrents`; fix: stage `fetch`). `yield_below_baseline` (B11b): end-to-end yield of the newest 24 cohort hours final by age (72–96 h ago) below 75% of the 7 days of cohort hours before them (an error below 50%), when the recent hours harvested ≥ 500 keys and the baseline ≥ 3,500; `value` the recent yield, `unit` `ratio`, `since` the recent hours' start; fix: stage `fetch`. Still waiting for a counter: `nat_saturation` (a DHT reply-ratio history), `ephemeral_ports` and `port_unreachable` (socket counters), `scrape_bans` (#48's `SCRAPE_REQUESTS`), `parser_confidence` (a confidence rollup), `disk_projection` (free space), `network_path` (a FUSE/network-path probe) | Snapshot |
+| `previous` | `{range, stages: {discover, fetch, serve, understand}, kpi: {searchable, new_searchable, yield, time_to_searchable_p50_s, time_to_searchable_p95_s}, trend[], serve, segments}` | **absent** without `compare=1` and for `all` | The period of equal length just before, for Compare. `previous.kpi.searchable` is the last hourly snapshot of the searchable count (`metric::SEARCHABLE`) in the day before the range starts (a compacted day's is its last hour's), null when there's none. `previous.stages.fetch` is null as `stages.fetch`. `previous.segments` is the previous period's `segments`, same shape and Adult rule (B11b) | As the current fields |
 
 **Finality:** a cohort hour is final once it has ended with nothing in
 progress (harvested = stored + lost) and everything stored searchable, or
@@ -384,8 +387,9 @@ segments: {
 }
 ```
 
-Still B11b's: `by_strategy` and `by_ip_family` (the cohort table has no
-strategy or address-family dimension yet) and `resolved_by` (needs a
+Still waiting: `by_strategy` and `by_ip_family` here (the cohort table
+has no strategy or address-family dimension yet; Discover's
+`by_strategy` is volume by event time) and `resolved_by` (needs a
 resolution counter).
 
 **`GET /insights/events`:** `{annotations: Annotation[], paused: {from:
@@ -437,9 +441,8 @@ samples of those counters every 10 s. All **main** (B14).
 
 ### 7.7 Insights at daily grain, removals and repair (B11b)
 
-All **main** (B11b part 1). The stage pages, `export.csv`, the overview's
-Compare Δs and the `insights` SSE topic are B11b part 2 and will be added
-here.
+All **main** (B11b, two PRs): daily grain, removals and repair (part 1);
+the stage pages, `export.csv` and the `insights` event (part 2, below).
 
 **Grains.** Hourly rows (`rollup_hour`, `cohort_hour`) are kept for 30
 days. A daily job folds whole UTC days that ended more than 30 days ago
@@ -508,3 +511,67 @@ losses, keys reported, rediscovered, dropped, `FUNNEL_EVENTS`), coverage,
 gauges (`SEARCHABLE`) and torrents indexed before searchable time was
 tracked (hour 0). After compaction, hourly detail older than 30 days is
 gone: hour buckets, hourly finality and hourly repair.
+
+#### Stage pages (§10.9.5)
+
+`GET /insights/{discover|fetch|understand|index|serve}?range=&from=&to=&compare=&reason=`.
+The overview's range rules and `400`s; `reason` is a §6.4 loss name
+(else `400` with `field: "reason"`), accepted on every page and read by
+Fetch only (the others ignore it, and share a cache entry). Each answers `{range, updated_at, stale, kpi, trend[],
+<sections>}`, plus `previous: {kpi, range, trend}` with `compare=1` (its
+snapshot fields null). Rollups and snapshots only; cached per (query,
+stage, reason, last flush). A trend count is **null where nothing was
+measured** (no coverage row), and fetch, loss and block counts are also
+null before `funnel_events_since_hour`. Adult is left out of every
+per-type list while hidden (totals count it, as on the overview).
+
+| Page | Field | Source | Time base |
+|---|---|---|---|
+| Discover | `kpi.reported`, `.rediscovered`, `.dropped`; `trend[].reported`…; `by_source[]` | metrics 1, 2, 3 (dim = source) | Event time |
+| Discover | `kpi.harvested`, `trend[].harvested` | cohort harvested (first harvests, ≈) | Discovery cohort |
+| Discover | `by_strategy[]`: the DHT's `sample`, `get_peers`, `announce`, `lookup`, `refetch` from any source, otherwise `<plugin>:<n>` (that plugin's own code) | metric 1's key: volume, not yield | Event time |
+| Discover | `kpi.dht_nodes`, `kpi.reply_ratio` | the DHT now (`/crawler`'s routing nodes; `/metrics`' `dht_reply_ratio`, since start, null before the first query) | Snapshot |
+| Discover | `kpi.bep51_sample_yield`, `.keyspace_coverage`, `.seen_filter_load`; `by_ip_family` | **null** until the DHT counts samples / reports coverage and the filter's load; until leases carry the address family | — |
+| Fetch | `kpi.fetched`, `.lost`; `trend[]`; `losses[]` (count and share of all losses, by reason) | metric 14 (dims `Fetched`, `Lost`; `reason` filters `lost` and `losses`) | Event time |
+| Fetch | `funnel[]`, `funnel_total` | the overview's cohort funnel (`reason` keeps only that loss) | Discovery cohort |
+| Fetch | `kpi.queue_depth`, `.in_flight` | `/stats`' `queue_depth`, `/crawler`'s `fetch.in_flight` | Snapshot |
+| Fetch | `kpi.queue_age_s`, `.utp_share`, `.mse_share`, `.fetch_latency_p50_ms`/`_p95_ms`, `.limiter_rejections`, `.ephemeral_port_pressure` | **null** until the pool reports queue age, transport and encryption outcomes, a latency histogram, limiter and port counters | — |
+| Understand | `kpi.stored`, `trend[].stored` | metric 4 | Event time |
+| Understand | `kpi.blocked`, `trend[].blocked` | metric 14, `Lost` × `Blocked` (counts only) | Event time |
+| Understand | `kpi.newly_searchable`, `by_content_type[]`, `by_group[]` | metric 10 | Event time |
+| Understand | `kpi.parser_confidence`, `.junk_distribution`, `.resolution_rate`, `.recent_corrections` | **null** until confidence and junk rollups, a resolution counter and a corrections counter | — |
+| Index | `kpi.searchable`, `.index_lag_s`, `.data_bytes`, `.disk_free_bytes` (always null), `.rebuild` (`building`/`finishing`/`swapping`/`failed`, null with none) | `/stats`; the serving handle | Snapshot |
+| Index | `kpi.new_searchable`, `kpi.removed`, `removed_by_type[]`; `trend[].new_searchable`, `.removed` | metrics 10, 15 | Event time |
+| Index | `trend[].searchable` | metric 13, the bucket's last snapshot (null with none) | Snapshot per bucket |
+| Index | `kpi.sizes`, `.projection_days`, `.segments`, `.merges`, `.file_index_coverage`, `.scrape_coverage`, `.scrape_freshness_s`; `trackers` | **null** until per-part sizes, free space, index segment and merge counts, file-index coverage and swarm rollups are measured | — |
+| Serve | every `kpi` field, `trend[]`, `top_queries`, `top_zero_result_queries` | **null** until #48's search counters (searches, zero results, latency), cancel and facet-sampling counters, B9's alert counts, notification and send counters, and a query-logging setting (logging is off by default and nothing writes the log yet) | — |
+
+#### `GET /insights/export.csv?panel=&range=&from=&to=&compare=&reason=`
+
+`panel` ∈ `trend`, `funnel`, `losses`, `segments.by_group`,
+`segments.by_content_type`, `segments.by_source`, `exceptions`,
+`annotations` (the overview's) and `discover.trend`, `discover.by_source`,
+`discover.by_strategy`, `fetch.trend`, `fetch.losses`, `fetch.funnel`,
+`understand.trend`, `understand.by_content_type`, `understand.by_group`,
+`index.trend`, `index.removed_by_type`, `serve.trend`; anything else is a
+`400` with `field: "panel"`. The rows are the panel endpoint's own JSON
+(the same builder and cache entry). RFC 4180, `\r\n`, a header of field
+names: `period` (`current`, or `previous` with `compare=1` where the panel
+has one), then the fields sorted, nested objects as `parent.child`, and
+each time (`at`, `cohort`, `since`) followed by an ISO-8601 `…_utc`. A
+panel's header is the same whether or not it has rows. Numbers raw (ratios
+0–1, times in Unix seconds), **null empty, never 0**; text through
+`export::csv_cell` (`'` before a leading `=`, `+`, `-`, `@`, tab or CR;
+controls and bidi formatting as `\u{…}`; quoted with a comma or a quote).
+Headers: `text/csv; charset=utf-8; header=present`, `attachment;
+filename="lodestar-insights-<panel>-<from>-<to>.csv"`, `no-store`,
+`nosniff`. `reason` is checked as on the stage pages and filters the
+`fetch.*` panels as Fetch does.
+
+#### `event: insights`
+
+Every 30 s while anyone subscribes: `{stages, updated_at}`, the default
+`7d` overview's stage strip; `stages.fetch`, `.index` and `.serve` are
+nullable as in §7.5. A client showing another range refetches its own on
+each event. The overview is built only while a stream with the topic (or
+with no `topics`, which means all) is open.
