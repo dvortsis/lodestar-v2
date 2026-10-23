@@ -1614,7 +1614,7 @@
   "ext": {
     "m4-swarm-fields": "satisfied 035ca7f",
     "m4-done": "satisfied 035ca7f",
-    "main_red": "2026-10-23T21:01Z main d91b27c test(macos) red: #128 layout.rs rustix::fs::mknodat absent on apple; runner fix #150 (mkfifo(1)), CI running"
+    "main_red": "2026-10-23T21:28Z resolved: #150 merged 2bef5df (macOS FIFO test)"
   },
   "registered_sessions": {},
   "landing_lane": null
