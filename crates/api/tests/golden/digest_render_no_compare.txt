@@ -1,7 +1,7 @@
 subject: Lodestar weekly digest: Oct 15, 2026 – Oct 22, 2026
 generated_at: 1792677900
 
-=== text (693 bytes) ===
+=== text (678 bytes) ===
 Lodestar weekly digest: Oct 15, 2026 – Oct 22, 2026
 
 Period: Oct 15, 2026, 15:00 – Oct 22, 2026, 15:00 UTC; generated Oct 22, 2026, 14:05 UTC
@@ -13,7 +13,7 @@ Key numbers
 - Time to searchable: ≈ 12 min (p50), ≈ 5.2 hr (p95)
 - Health: Running
 
-Funnel (168 cohorts, 96 final, 72 incomplete)
+Funnel (168 cohorts, 96 final)
 - Harvested: ≈ 10,234
 - Peer found: 7,982 (78.0% of harvested)
 - Metadata fetched: 4,989 (62.5% of peer found)
@@ -26,7 +26,7 @@ Nothing needs attention.
 
 Open Insights: /insights?range=7d&compare=1
 
-=== html (1506 bytes) ===
+=== html (1491 bytes) ===
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -50,7 +50,7 @@ Open Insights: /insights?range=7d&compare=1
 </tbody>
 </table>
 <h2>Funnel</h2>
-<p>168 cohorts, 96 final, 72 incomplete</p>
+<p>168 cohorts, 96 final</p>
 <ul>
 <li>Harvested: ≈ 10,234</li>
 <li>Peer found: 7,982 (78.0% of harvested)</li>

@@ -1,7 +1,7 @@
 subject: Lodestar weekly digest: Oct 15, 2026 – Oct 22, 2026
 generated_at: 1792677900
 
-=== text (924 bytes) ===
+=== text (900 bytes) ===
 Lodestar weekly digest: Oct 15, 2026 – Oct 22, 2026
 
 Period: Oct 15, 2026, 15:00 – Oct 22, 2026, 15:00 UTC; generated Oct 22, 2026, 14:05 UTC
@@ -11,9 +11,9 @@ Key numbers (changes vs previous 7 days)
 - New searchable: 1,240; change ▼ −3
 - Yield: 37.4%; change ▼ −3.2%
 - Time to searchable: ≈ 12 min (p50), ≈ 5.2 hr (p95); change p50 ▼ −45 sec, p95 ▲ +5.2 hr
-- Health: Paused (paused)
+- Health: Paused
 
-Funnel (168 cohorts, 96 final, 72 incomplete)
+Funnel (168 cohorts, 96 final)
 - Harvested: ≈ 10,234
 - Peer found: 7,982 (78.0% of harvested)
 - Metadata fetched: 4,989 (62.5% of peer found)
@@ -31,7 +31,7 @@ Nothing needs attention.
 
 Open Insights: /insights?range=7d&compare=1
 
-=== html (1943 bytes) ===
+=== html (1919 bytes) ===
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -51,11 +51,11 @@ Open Insights: /insights?range=7d&compare=1
 <tr><th scope="row">New searchable</th><td style="text-align:right">1,240</td><td><span aria-hidden="true">▼</span> −3</td></tr>
 <tr><th scope="row">Yield</th><td style="text-align:right">37.4%</td><td><span aria-hidden="true">▼</span> −3.2%</td></tr>
 <tr><th scope="row">Time to searchable</th><td style="text-align:right">≈ 12 min (p50), ≈ 5.2 hr (p95)</td><td>p50 <span aria-hidden="true">▼</span> −45 sec, p95 <span aria-hidden="true">▲</span> +5.2 hr</td></tr>
-<tr><th scope="row">Health</th><td style="text-align:right">Paused (paused)</td><td></td></tr>
+<tr><th scope="row">Health</th><td style="text-align:right">Paused</td><td></td></tr>
 </tbody>
 </table>
 <h2>Funnel</h2>
-<p>168 cohorts, 96 final, 72 incomplete</p>
+<p>168 cohorts, 96 final</p>
 <ul>
 <li>Harvested: ≈ 10,234</li>
 <li>Peer found: 7,982 (78.0% of harvested)</li>
