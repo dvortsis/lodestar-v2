@@ -49,6 +49,7 @@
 	}
 
 	let offCommands: (() => void) | undefined;
+	let uninstallAuth: (() => void) | undefined;
 
 	onMount(() => {
 		const detach = keys.attach(window);
@@ -65,10 +66,10 @@
 			void Promise.all([
 				import('./status.svelte'),
 				import('./StatusPill.svelte'),
-				import('$lib/api/client'),
-				import('./handoff')
-			]).then(([status, pill, client, handoff]) => {
-				client.onLoginRequired(handoff.handleLoginRequired);
+				import('$lib/features/auth/session.svelte')
+			]).then(([status, pill, auth]) => {
+				// M-auth's hook owns W5's single `onLoginRequired` slot: a 401 goes to /login or /setup.
+				uninstallAuth = auth.installAuthHandlers();
 				statusRef.Pill = pill.default;
 				statusRef.current = status.shellStatus;
 			});
@@ -77,7 +78,7 @@
 			stopWaiting();
 			detach();
 			offCommands?.();
-			void import('$lib/api/client').then((client) => client.onLoginRequired(undefined));
+			uninstallAuth?.();
 		};
 	});
 
