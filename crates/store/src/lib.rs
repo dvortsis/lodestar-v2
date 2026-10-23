@@ -6,10 +6,14 @@
 //! blob codec with zstd dictionaries, batched writes and reads, source
 //! provenance and the shared id sequence (§18.5), Insights counters (§7),
 //! the persisted fetch queue (§5), and swarm health: scrape results,
-//! per-tracker detail, history and the tracker list (§7, M4). A single
-//! [`Store`] owns the one writer connection; the pipeline's writer task
-//! drives it.
+//! per-tracker detail, history and the tracker list (§7, M4), and M5's
+//! user data, API keys and reporting tables (saved searches and alerts,
+//! user items, collections, searchable time per hour, the opt-in query
+//! log). A single [`Store`] owns the one writer connection; the
+//! pipeline's writer task drives it.
 
+mod api_keys;
+mod collections;
 mod compress;
 pub mod filetree;
 mod filter;
@@ -17,12 +21,16 @@ mod floor;
 pub mod history;
 pub mod hot;
 mod insights;
+mod reporting;
 mod rules;
+mod saved;
 mod schema;
 mod settings;
 mod sources;
 mod subscriptions;
 mod swarm;
+mod user_data;
+mod user_items;
 
 use std::fmt;
 use std::io;
@@ -33,6 +41,8 @@ use lodestar_metainfo::{
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
+pub use api_keys::{ApiKey, KeyCheck, KeyKind, NewApiKey};
+pub use collections::{Collection, CollectionItem};
 pub use compress::{BlobCodec, Codec, Compressed};
 pub use filetree::{CodecError, FileTree};
 pub use filter::{
@@ -42,13 +52,16 @@ pub use floor::{FloorSource, PendingFloor, Settled};
 pub use history::{History, trend};
 pub use hot::{Col, HotColumns, NEVER, SwarmHot};
 pub use insights::{CohortCount, Counter, Event};
+pub use reporting::{QueryCount, QueryLogEntry, QueryLogging, Resolved};
 pub use rules::{ClassCorrection, ExceptionRow, MARK_CHUNK, OverrideRow, RuleRow, RuleSet};
 pub use rusqlite;
+pub use saved::{Alert, SavedSearch, SavedSearchInput, SavedSearchSummary, SearchHits};
 pub use sources::{MAX_SOURCES, QueuedKey, SourceId, SourceRow, SourceState};
 pub use subscriptions::{NewSubscription, Refresh, Subscription};
 pub use swarm::{
     SwarmRow, SwarmUpdate, TrackerCounts, TrackerRow, TrackerSample, swarm_flags, tracker_state,
 };
+pub use user_items::{MAX_LABEL_CHARS, MAX_LABELS, UserItem, UserItemUpdate};
 
 /// Bits of the `torrents.flags` column. Values are persisted: append only.
 pub mod flags {
@@ -93,6 +106,12 @@ pub enum Error {
     Corrupt(&'static str),
     /// All 64 source ids are taken.
     TooManySources,
+    /// A value the store refuses (empty name, malformed label, out-of-range
+    /// hit); says which rule.
+    Invalid(&'static str),
+    /// A row the call names doesn't exist (say, adding an unknown torrent
+    /// to a collection).
+    NotFound(&'static str),
 }
 
 impl fmt::Display for Error {
@@ -107,6 +126,8 @@ impl fmt::Display for Error {
             ),
             Error::Corrupt(what) => write!(f, "corrupt store: {what}"),
             Error::TooManySources => write!(f, "all {MAX_SOURCES} source ids are in use"),
+            Error::Invalid(what) => write!(f, "invalid: {what}"),
+            Error::NotFound(what) => write!(f, "not found: {what}"),
         }
     }
 }
@@ -366,6 +387,12 @@ pub struct Store {
     conn: Connection,
     codec: BlobCodec,
     config: StoreConfig,
+    /// A WAL scrub after a delete couldn't finish (a reader held an old
+    /// snapshot): the next delete or purge tries again. When another
+    /// connection's purge finishes the scrub (they share the WAL), this
+    /// stays true until this store's next delete. That's harmless: it
+    /// costs one extra checkpoint.
+    scrub_pending: bool,
 }
 
 impl Store {
@@ -389,7 +416,7 @@ impl Store {
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
         conn.pragma_update(None, "mmap_size", config.mmap_size as i64)?;
-        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        conn.busy_timeout(schema::BUSY_TIMEOUT)?;
         schema::check_current(&conn)?;
         Store::load(conn, config)
     }
@@ -426,6 +453,7 @@ impl Store {
             conn,
             codec,
             config,
+            scrub_pending: false,
         })
     }
 
@@ -465,13 +493,14 @@ impl Store {
             conn,
             codec,
             config,
+            scrub_pending: _,
         } = self;
         let own: Vec<Prepared> = batch
             .torrents
             .iter()
             .map(|t| prepare(codec, config.archive_raw, t.info, t.raw_info))
             .collect::<Result<_>>()?;
-        let tx = conn.transaction()?;
+        let tx = begin_write(conn)?;
         let mut out = Vec::with_capacity(batch.torrents.len());
         for (t, p) in batch.torrents.iter().zip(&own) {
             let pt = PreparedTorrent {
@@ -580,7 +609,7 @@ impl Store {
     /// Sets the enrichment of stored torrents in one transaction and
     /// queues them for re-indexing. Ids no longer stored are skipped.
     pub fn set_enrichments(&mut self, batch: &[(i64, Enriched)]) -> Result<usize> {
-        let tx = self.conn.transaction()?;
+        let tx = begin_write(&mut self.conn)?;
         let done = enrich_rows(&tx, batch)?;
         tx.commit()?;
         Ok(done)
@@ -604,15 +633,16 @@ impl Store {
         batch: &[(i64, Enriched)],
         refiled: &[Refiled<'_>],
     ) -> Result<Option<usize>> {
-        let tx = self.conn.transaction()?;
+        let tx = begin_write(&mut self.conn)?;
         if rules::class_gen(&tx)? != generation {
             return Ok(None);
         }
         let done = enrich_rows(&tx, batch)?;
         let mut filtered: Vec<Filtered<'_>> = Vec::with_capacity(refiled.len());
+        let mut deleted = false;
         for r in refiled {
             if r.filtered.held.is_some() {
-                tx.execute("DELETE FROM torrents WHERE id = ?1", [r.id])?;
+                deleted |= tx.execute("DELETE FROM torrents WHERE id = ?1", [r.id])? > 0;
                 tx.execute("INSERT INTO reindex_log (torrent_id) VALUES (?1)", [r.id])?;
             } else if r.flags != 0 {
                 let marked = tx.execute(
@@ -628,6 +658,9 @@ impl Store {
         }
         filter::write(&tx, &filtered)?;
         tx.commit()?;
+        if deleted {
+            self.scrub_wal();
+        }
         Ok(Some(done))
     }
 
@@ -1176,6 +1209,17 @@ const FIND_BY_HASH: &str = "SELECT id FROM torrents WHERE info_hash = ?1
      SELECT id FROM torrents
      WHERE info_hash_v2 IS NOT NULL AND substr(info_hash_v2, 1, 20) = ?1
      LIMIT 1";
+
+/// Begins a write transaction, taking the write lock up front (`BEGIN
+/// IMMEDIATE`) and waiting for it up to the busy timeout. A deferred one
+/// that reads first would get SQLITE_BUSY at once when its first write
+/// finds another connection holding the lock (a WAL scrub's checkpoint,
+/// say): SQLite doesn't wait to upgrade a read to a write. New write
+/// transactions should use this whether or not they read first; it costs
+/// nothing measurable and removes the trap.
+pub(crate) fn begin_write(conn: &mut Connection) -> rusqlite::Result<rusqlite::Transaction<'_>> {
+    conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+}
 
 pub(crate) fn find_any(
     conn: &Connection,

@@ -1,0 +1,2 @@
+200
+{"dht":{"bootstrapped":true,"outstanding":12,"routing_nodes":640},"fetch":{"in_flight":3,"lookups":7,"queued":90},"intensity":"balanced","intensity_env":null,"paused":false,"since":1700000000,"state":"running"}

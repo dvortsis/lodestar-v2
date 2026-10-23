@@ -23,6 +23,8 @@
 //! `Origin` must match `Host`.
 
 pub mod auth;
+mod compare;
+mod discover;
 pub mod dto;
 pub mod error;
 pub mod events;
@@ -30,6 +32,7 @@ pub mod extract;
 mod facets;
 pub mod filters;
 pub mod openapi;
+pub mod ops;
 mod search;
 pub mod settings;
 mod torrents;
@@ -58,6 +61,8 @@ pub struct ApiState {
     pub filters: Option<Arc<filters::FiltersApi>>,
     /// `None` when the settings registry isn't served (tests, tools).
     pub settings: Option<Arc<dyn settings::SettingsApi>>,
+    /// `None` when no pipeline runs (tests, tools).
+    pub ops: Option<Arc<dyn ops::OpsApi>>,
     /// "Show adult content" (§20.9), followed live; hidden by default.
     pub adult: AdultVisibility,
 }
@@ -73,6 +78,9 @@ pub fn router(state: ApiState) -> Router {
         .merge(torrents::routes())
         .merge(filters::routes())
         .merge(settings::routes())
+        .merge(ops::routes())
+        .merge(compare::routes())
+        .merge(discover::routes())
         .merge(events::routes())
         .merge(openapi::routes())
         // What `auth::protected` checks sessions against.

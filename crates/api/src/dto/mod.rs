@@ -14,10 +14,13 @@
 //! bytes. Keep new fields in order too; the tests catch a slip.
 
 pub mod auth;
+pub mod compare;
+pub mod discover;
 pub mod error;
 pub mod events;
 pub mod facets;
 pub mod filters;
+pub mod ops;
 pub mod search;
 pub mod settings;
 pub mod torrents;

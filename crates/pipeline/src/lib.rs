@@ -18,6 +18,7 @@
 //! do; the pool waits on prepare and prepare on the writer, which is the
 //! backpressure that keeps memory flat.
 
+pub mod control;
 mod coordinator;
 mod dht;
 pub mod enrich;
@@ -27,8 +28,8 @@ mod worker;
 mod writer;
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use lodestar_cluster::{Claim, Claimed, RestoredLease, WorkerId};
@@ -38,16 +39,19 @@ use lodestar_filter::{
 use lodestar_peer_wire::FetchOptions;
 use lodestar_sources::pool::{self, PeerWireFetcher};
 use lodestar_sources::{
-    Discovery, Emitter, Fetcher, FunnelCounts, Kind, Loss, PluginError, PoolConfig, PoolHandle,
-    PoolIo, PoolStats, Priority, Shutdown, SourceCtx, SourcePlugin,
+    Discovery, Emitter, Fetcher, FunnelCounts, Kind, Loss, Manifest, PluginError, PoolConfig,
+    PoolHandle, PoolIo, PoolStats, Priority, Shutdown, SourceCtx, SourcePlugin,
 };
-use lodestar_store::{Event, FilterState, QueuedKey, RuleSet, SourceId, Store, WriteBatch};
+use lodestar_store::{
+    Event, FilterState, QueuedKey, RuleSet, SourceId, SourceState, Store, WriteBatch,
+};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 use crate::coordinator::Coordinator;
 use crate::worker::{PrepareStage, WorkerFunnel, WorkerLeases};
 
+pub use control::Control;
 pub use coordinator::LeaseStats;
 pub use dht::{DhtSource, strategy};
 pub use have::Have;
@@ -58,6 +62,11 @@ pub use writer::WriterStats;
 pub mod event {
     pub const START: u32 = 1;
     pub const STOP: u32 = 2;
+    /// The crawler was paused (B14); Insights draws the gap.
+    pub const PAUSE: u32 = 3;
+    pub const RESUME: u32 = 4;
+    /// The crawler's intensity changed; `detail` is the new one.
+    pub const INTENSITY: u32 = 5;
 }
 
 const FIRST_RUN_SETTING: &str = "first_run_at";
@@ -73,7 +82,8 @@ const PARTIAL_REFETCH: usize = 50_000;
 pub struct PipelineConfig {
     pub pool: PoolConfig,
     pub fetch: FetchOptions,
-    /// Per-plugin priority overrides, by manifest id.
+    /// Per-plugin priority overrides, by manifest id (`config.toml`).
+    /// One saved in the app (`PATCH /sources/{id}`) wins over these.
     pub priorities: HashMap<String, Priority>,
     /// The content filter (§20), shared with the API so rule changes
     /// apply live. The store's CS-1 entries and switches are added at
@@ -193,15 +203,23 @@ pub struct IntakeStats {
     pub refused: AtomicU64,
 }
 
-/// One running plugin.
-#[derive(Debug)]
+/// One plugin of this build, running or not.
+#[derive(Debug, Clone, PartialEq)]
 pub struct SourceStatus {
     pub id: SourceId,
     pub plugin: &'static str,
     pub name: &'static str,
     pub running: bool,
+    /// Its stored state allowed it to run at this start (§18.1): a
+    /// disabled, paused or purged source isn't started at all.
+    pub enabled: bool,
     /// Keys the plugin dropped because the pipeline was full.
     pub dropped: u64,
+    pub manifest: Manifest,
+    /// The priority it started with.
+    pub priority: Priority,
+    /// Why it stopped, if it stopped with an error.
+    pub last_error: Option<String>,
 }
 
 struct SourceEntry {
@@ -209,6 +227,9 @@ struct SourceEntry {
     plugin: Arc<dyn SourcePlugin>,
     emitter: Emitter,
     running: Arc<AtomicBool>,
+    enabled: bool,
+    priority: Priority,
+    error: Arc<Mutex<Option<String>>>,
 }
 
 /// A cheap, cloneable view of a running pipeline's counters, for metrics
@@ -278,7 +299,11 @@ impl Monitor {
                 plugin: s.plugin.manifest().id,
                 name: s.plugin.manifest().name,
                 running: s.running.load(Ordering::Relaxed),
+                enabled: s.enabled,
                 dropped: s.emitter.dropped(),
+                manifest: s.plugin.manifest().clone(),
+                priority: s.priority,
+                last_error: s.error.lock().expect("source error lock").clone(),
             })
             .collect()
     }
@@ -325,18 +350,31 @@ impl Pipeline {
         plugins: Vec<Arc<dyn SourcePlugin>>,
         fetcher: Arc<dyn Fetcher>,
     ) -> Result<Pipeline, Error> {
-        let manifests: Vec<(&'static str, &'static str, bool)> = plugins
+        let manifests: Vec<Registering> = plugins
             .iter()
             .map(|p| {
                 let m = p.manifest();
-                (m.id, m.version, m.is(Kind::PeerFinder))
+                Registering {
+                    id: m.id,
+                    version: m.version,
+                    peer_finder: m.is(Kind::PeerFinder),
+                    enabled_by_default: m.enabled_by_default,
+                }
             })
             .collect();
         let backfill = config.backfill.as_secs() as i64;
-        let (store, ids, queue, have, backfill_until, stored_at_start, filter_state, rule_set) =
-            tokio::task::spawn_blocking(move || prepare(store, &manifests, backfill))
-                .await
-                .map_err(Error::Join)??;
+        let (
+            store,
+            registered,
+            queue,
+            have,
+            backfill_until,
+            stored_at_start,
+            filter_state,
+            rule_set,
+        ) = tokio::task::spawn_blocking(move || prepare(store, &manifests, backfill))
+            .await
+            .map_err(Error::Join)??;
         tracing::info!(
             stored = have.len(),
             queued = queue.len(),
@@ -404,14 +442,35 @@ impl Pipeline {
         let mut weights = HashMap::new();
         let mut sources = Vec::new();
         let mut tasks = Vec::new();
-        for (plugin, id) in plugins.into_iter().zip(ids) {
+        for (plugin, (id, state, saved)) in plugins.into_iter().zip(registered) {
             let m = plugin.manifest();
-            let priority = config
-                .priorities
-                .get(m.id)
-                .copied()
+            let priority = saved
+                .or_else(|| config.priorities.get(m.id).copied())
                 .unwrap_or(m.default_priority);
             weights.insert(id, priority.weight());
+            // Only an enabled source runs (§18.1); the rest are listed,
+            // stopped, and a disabled peer finder isn't asked for peers.
+            let enabled = state == SourceState::Enabled;
+            let emitter = Emitter::new(id, emit_tx.clone());
+            let error = Arc::default();
+            if !enabled {
+                tracing::info!(
+                    plugin = m.id,
+                    ?state,
+                    "source not started: it isn't enabled"
+                );
+                tasks.push(tokio::spawn(async { Ok(()) }));
+                sources.push(SourceEntry {
+                    id,
+                    plugin,
+                    emitter,
+                    running: Arc::new(AtomicBool::new(false)),
+                    enabled,
+                    priority,
+                    error,
+                });
+                continue;
+            }
             let peer_requests = m.is(Kind::PeerFinder).then(|| {
                 let (tx, rx) = mpsc::channel(1024);
                 finders.push(tx);
@@ -420,7 +479,6 @@ impl Pipeline {
             let peer_replies = m
                 .is(Kind::PeerFinder)
                 .then(|| Emitter::replies(id, pool_tx.clone()));
-            let emitter = Emitter::new(id, emit_tx.clone());
             let ctx = SourceCtx {
                 source: id,
                 emitter: emitter.clone(),
@@ -431,11 +489,13 @@ impl Pipeline {
             let p = plugin.clone();
             let running = Arc::new(AtomicBool::new(true));
             let flag = running.clone();
+            let last_error = Arc::clone(&error);
             tasks.push(tokio::spawn(async move {
                 let result = p.run(ctx).await;
                 flag.store(false, Ordering::Relaxed);
                 if let Err(e) = &result {
                     tracing::error!(plugin = p.manifest().id, "source stopped: {e}");
+                    *last_error.lock().expect("source error lock") = Some(e.to_string());
                 }
                 result
             }));
@@ -444,6 +504,9 @@ impl Pipeline {
                 plugin,
                 emitter,
                 running,
+                enabled,
+                priority,
+                error,
             });
         }
         drop(emit_tx);
@@ -645,17 +708,25 @@ impl Pipeline {
     }
 }
 
+/// What [`prepare`] needs of a plugin's manifest.
+struct Registering {
+    id: &'static str,
+    version: &'static str,
+    peer_finder: bool,
+    enabled_by_default: bool,
+}
+
 /// Registers the plugins, loads the queue, builds the have-filter and
 /// records the start (blocking).
 #[allow(clippy::type_complexity)]
 fn prepare(
     mut store: Store,
-    manifests: &[(&'static str, &'static str, bool)],
+    manifests: &[Registering],
     backfill: i64,
 ) -> Result<
     (
         Store,
-        Vec<SourceId>,
+        Vec<(SourceId, SourceState, Option<Priority>)>,
         Vec<QueuedKey>,
         Have,
         i64,
@@ -666,10 +737,26 @@ fn prepare(
     Error,
 > {
     let now = unix_now();
+    let known: std::collections::HashSet<String> =
+        store.sources()?.into_iter().map(|r| r.plugin).collect();
     let ids = manifests
         .iter()
-        .map(|(id, version, _)| store.register_source(id, version, now))
+        .map(|m| store.register_source(m.id, m.version, now))
         .collect::<Result<Vec<_>, _>>()?;
+    // A plugin seen for the first time starts as its manifest says: only
+    // the Mainline DHT is on out of the box (§18.1), and the others wait
+    // for the user (and their consent, §18.7).
+    for (m, id) in manifests.iter().zip(&ids) {
+        if !known.contains(m.id) && !m.enabled_by_default {
+            store.set_source_state(*id, SourceState::Disabled)?;
+        }
+    }
+    let states: HashMap<SourceId, SourceState> = store
+        .sources()?
+        .into_iter()
+        .map(|r| (r.id, r.state))
+        .collect();
+    let state = |id: &SourceId| states.get(id).copied().unwrap_or(SourceState::Enabled);
     let first_run = match store.setting_i64(FIRST_RUN_SETTING)? {
         Some(t) => t,
         None => {
@@ -683,7 +770,7 @@ fn prepare(
     if let Some(finder) = manifests
         .iter()
         .zip(&ids)
-        .find(|((_, _, pf), _)| *pf)
+        .find(|(m, id)| m.peer_finder && state(id) == SourceState::Enabled)
         .map(|(_, id)| *id)
     {
         let queued: std::collections::HashSet<_> = queue.iter().map(|q| q.info_hash).collect();
@@ -714,9 +801,13 @@ fn prepare(
     })?;
     let filter = store.filter_state()?;
     let rules = (store.rule_set()?, store.class_rules()?);
+    let mut sources = Vec::with_capacity(ids.len());
+    for (m, id) in manifests.iter().zip(&ids) {
+        sources.push((*id, state(id), control::saved_priority(&store, m.id)?));
+    }
     Ok((
         store,
-        ids,
+        sources,
         queue,
         have,
         first_run + backfill,

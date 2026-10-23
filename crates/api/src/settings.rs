@@ -234,6 +234,23 @@ impl SettingsError {
     }
 }
 
+/// For other routes that save through the registry (`/crawler`): the
+/// API's envelope, without the settings envelope's `section` or
+/// `current`.
+impl From<SettingsError> for ApiError {
+    fn from(e: SettingsError) -> ApiError {
+        if let SettingsError::Store(e) = &e {
+            return internal(format!("settings: {e}"));
+        }
+        let (status, code, message, field) = e.parts();
+        let err = ApiError::new(status, code, message);
+        match field {
+            Some(field) => err.field(field),
+            None => err,
+        }
+    }
+}
+
 impl From<SettingsError> for SettingsFailure {
     fn from(error: SettingsError) -> SettingsFailure {
         SettingsFailure {
@@ -833,6 +850,22 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert!(!v.to_string().contains("secret"));
+    }
+
+    #[test]
+    fn other_routes_get_the_plain_envelope() {
+        let e = ApiError::from(SettingsError::SetByEnv {
+            field: "intensity".into(),
+            var: "LODESTAR_INTENSITY".into(),
+        });
+        assert_eq!(
+            (e.status(), e.code()),
+            (StatusCode::CONFLICT, "set_by_environment")
+        );
+        assert_eq!(e.body()["error"]["field"], serde_json::json!("intensity"));
+        let e = ApiError::from(SettingsError::Store("disk /secret".into()));
+        assert_eq!(e.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(!e.body().to_string().contains("secret"));
     }
 
     #[tokio::test]

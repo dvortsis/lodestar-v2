@@ -51,6 +51,7 @@ async fn tests_past_the_cap_are_refused_at_once() {
             reader: Arc::new(Mutex::new(reader)),
             filters: None,
             settings: None,
+            ops: None,
             adult: Default::default(),
         }),
     );
