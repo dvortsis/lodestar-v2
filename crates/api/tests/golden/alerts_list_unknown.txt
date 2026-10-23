@@ -1,0 +1,2 @@
+404
+{"error":{"code":"saved_search_not_found","message":"There's no saved search with that id."}}

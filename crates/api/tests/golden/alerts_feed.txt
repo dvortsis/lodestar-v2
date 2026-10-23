@@ -1,0 +1,35 @@
+200
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+  <title>Lodestar: nature</title>
+  <link>http://lodestar.lan:8090/alerts/1</link>
+  <description>New torrents for the saved search “nature”.</description>
+  <lastBuildDate>Tue, 14 Nov 2023 22:21:40 GMT</lastBuildDate>
+  <item>
+    <title>Tom &amp; Jerry &lt;script&gt;alert(&apos;x&apos;)&lt;/script&gt; &quot;q&quot; gnp.exe ]]&gt;</title>
+    <link>http://lodestar.lan:8090/t/aa4ee59a2261399a32271d44f4224b1c7007ba43</link>
+    <guid isPermaLink="false">aa4ee59a2261399a32271d44f4224b1c7007ba43</guid>
+    <pubDate>Tue, 14 Nov 2023 22:21:40 GMT</pubDate>
+    <description>New for the saved search “nature”.</description>
+    <enclosure url="magnet:?xt=urn:btih:aa4ee59a2261399a32271d44f4224b1c7007ba43&amp;dn=Tom%20%26%20Jerry%20%3Cscript%3Ealert%28%27x%27%29%3C%2Fscript%3E%20%22q%22%20gnp.exe%20%5D%5D%3E" type="application/x-bittorrent" length="1073741824"/>
+  </item>
+  <item>
+    <title>Ocean.Docs.1080p.BluRay</title>
+    <link>http://lodestar.lan:8090/t/7676b94c9d52f146ca2f49c2c7afc6cff93402ea</link>
+    <guid isPermaLink="false">7676b94c9d52f146ca2f49c2c7afc6cff93402ea</guid>
+    <pubDate>Tue, 14 Nov 2023 22:21:40 GMT</pubDate>
+    <description>New for the saved search “nature”.</description>
+    <enclosure url="magnet:?xt=urn:btih:7676b94c9d52f146ca2f49c2c7afc6cff93402ea&amp;dn=Ocean.Docs.1080p.BluRay" type="application/x-bittorrent" length="1073741824"/>
+  </item>
+  <item>
+    <title>Planet.Earth.III.2160p.WEB</title>
+    <link>http://lodestar.lan:8090/t/70c40f97eff71adf1ad9e87cc59f132e33bbb02d</link>
+    <guid isPermaLink="false">70c40f97eff71adf1ad9e87cc59f132e33bbb02d</guid>
+    <pubDate>Tue, 14 Nov 2023 22:21:40 GMT</pubDate>
+    <description>New for the saved search “nature”.</description>
+    <enclosure url="magnet:?xt=urn:btih:70c40f97eff71adf1ad9e87cc59f132e33bbb02d&amp;dn=Planet.Earth.III.2160p.WEB" type="application/x-bittorrent" length="1073741824"/>
+  </item>
+</channel>
+</rss>
+

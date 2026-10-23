@@ -80,6 +80,7 @@ pub fn document() -> Doc {
     doc.merge(crate::export::ApiDoc::openapi());
     doc.merge(crate::jobs::ApiDoc::openapi());
     doc.merge(crate::system::ApiDoc::openapi());
+    doc.merge(crate::alerts::ApiDoc::openapi());
     doc.merge(crate::logs::ApiDoc::openapi());
     finish(&mut doc);
     doc
