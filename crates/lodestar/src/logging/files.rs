@@ -55,7 +55,31 @@ pub struct Listed {
 }
 
 /// Every entry named like a log, newest first.
+///
+/// The folder is scanned twice and the two joined: a scan can miss a file
+/// whose compression finishes during it (its new `.gz` lands behind the
+/// scan, and its `.jsonl` goes before the scan reaches it), and
+/// compressions are one at a time and far slower than a scan, so a file
+/// one scan missed the other has.
 pub fn list(dir: &Path) -> io::Result<Vec<Listed>> {
+    let mut out = scan(dir)?;
+    out.extend(scan(dir)?);
+    out.sort_by(|a, b| LogName::newest_first(&a.name, &b.name));
+    // While a rotated file is compressed, its `.jsonl` and `.jsonl.gz`
+    // are both there for a moment: one file, read once (the `.gz`, which
+    // sorts first and holds the same lines at the same offsets). And each
+    // scan lists most files once more.
+    out.dedup_by(|later, kept| match (&later.name, &kept.name) {
+        (LogName::Rotated { stamp: a, n: x, .. }, LogName::Rotated { stamp: b, n: y, .. }) => {
+            a == b && x == y
+        }
+        (LogName::Current, LogName::Current) => true,
+        _ => false,
+    });
+    Ok(out)
+}
+
+fn scan(dir: &Path) -> io::Result<Vec<Listed>> {
     let mut out = Vec::new();
     for e in std::fs::read_dir(dir)? {
         let Ok(e) = e else { continue };
@@ -69,16 +93,6 @@ pub fn list(dir: &Path) -> io::Result<Vec<Listed>> {
             regular: meta.file_type().is_file(),
         });
     }
-    out.sort_by(|a, b| LogName::newest_first(&a.name, &b.name));
-    // While a rotated file is compressed, its `.jsonl` and `.jsonl.gz`
-    // are both there for a moment: one file, read once (the `.gz`, which
-    // sorts first and holds the same lines at the same offsets).
-    out.dedup_by(|later, kept| match (&later.name, &kept.name) {
-        (LogName::Rotated { stamp: a, n: x, .. }, LogName::Rotated { stamp: b, n: y, .. }) => {
-            a == b && x == y
-        }
-        _ => false,
-    });
     Ok(out)
 }
 

@@ -9,6 +9,12 @@
 //! paging back through a file costs each member once. A file without the
 //! list (an older build's, or one that fails the checks) is read in 4 MiB
 //! windows from its start.
+//!
+//! **The files are untrusted input** (anything in the folder could have
+//! written them): a member is never inflated past the length its index
+//! gives, a length is never over [`MEMBER_MAX`], offsets never overflow,
+//! and a file never inflates past [`MAX_PLAIN`]. One that breaks a bound
+//! is unreadable, never a reason to hold more.
 
 use std::collections::VecDeque;
 use std::fs::File;
@@ -23,6 +29,12 @@ use flate2::write::GzEncoder;
 pub const MAX_LINE: usize = 1 << 20;
 /// A member's target size, uncompressed.
 pub const MEMBER: u64 = 1 << 20;
+/// The most a member may hold, uncompressed: the writer ends one at a
+/// line's end past [`MEMBER`], or mid-line past this.
+pub const MEMBER_MAX: u64 = MEMBER + MAX_LINE as u64;
+/// The most a log file may hold, uncompressed: the rotation size's
+/// maximum (1 GiB) and some slack for the line that crossed it.
+pub const MAX_PLAIN: u64 = (1 << 30) + (64 << 20);
 /// Bytes read per step backwards through a plain file.
 const BLOCK: u64 = 64 << 10;
 /// An older gzip file's read window.
@@ -44,6 +56,9 @@ pub trait Backward {
     fn prev(&mut self) -> io::Result<Option<RawLine>>;
     /// Bytes read or inflated so far.
     fn cost(&self) -> u64;
+    /// Lines already read and not yet returned: they cost nothing more,
+    /// so a read cap waits until they're out.
+    fn buffered(&self) -> bool;
 }
 
 /// One member: compressed offset, uncompressed offset and length.
@@ -112,6 +127,10 @@ impl PlainBack {
 }
 
 impl Backward for PlainBack {
+    fn buffered(&self) -> bool {
+        !self.found.is_empty()
+    }
+
     fn prev(&mut self) -> io::Result<Option<RawLine>> {
         loop {
             if let Some(l) = self.found.pop_back() {
@@ -253,31 +272,44 @@ pub struct GzBack {
 }
 
 impl GzBack {
+    /// Member `i`'s lines before `end`, never inflating more than its
+    /// length (a member that holds less or more is unreadable).
     fn load(&mut self, i: usize) -> io::Result<()> {
         let m = self.members[i];
         self.file.seek(SeekFrom::Start(m.at))?;
         let mut d = Counted {
-            inner: GzDecoder::new(BufReader::new(&mut self.file)),
+            inner: GzDecoder::new(BufReader::new(&mut self.file)).take(m.len),
             n: 0,
         };
         let mut r = BufReader::with_capacity(64 << 10, &mut d);
         let end = self.end;
         let mut found = Vec::new();
-        forward(&mut r, m.from, |l| {
+        let read = forward(&mut r, m.from, |l| {
             if l.start >= end {
                 return Ok(true);
             }
             found.push(l);
             Ok(false)
-        })?;
+        });
         drop(r);
         self.cost += d.n;
+        let pos = read?;
+        if pos < m.from + m.len && pos < end {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "a member shorter than its index says",
+            ));
+        }
         self.found = found;
         Ok(())
     }
 }
 
 impl Backward for GzBack {
+    fn buffered(&self) -> bool {
+        !self.found.is_empty()
+    }
+
     fn prev(&mut self) -> io::Result<Option<RawLine>> {
         loop {
             if let Some(l) = self.found.pop() {
@@ -307,6 +339,10 @@ pub struct GzWindows {
 }
 
 impl Backward for GzWindows {
+    fn buffered(&self) -> bool {
+        !self.found.is_empty()
+    }
+
     fn prev(&mut self) -> io::Result<Option<RawLine>> {
         loop {
             if let Some(l) = self.found.pop() {
@@ -318,35 +354,39 @@ impl Backward for GzWindows {
             let from = self.end.saturating_sub(WINDOW);
             self.file.seek(SeekFrom::Start(0))?;
             let mut d = Counted {
-                inner: MultiGzDecoder::new(BufReader::new(&mut self.file)),
+                inner: MultiGzDecoder::new(BufReader::new(&mut self.file)).take(MAX_PLAIN),
                 n: 0,
             };
             let mut r = BufReader::with_capacity(64 << 10, &mut d);
             let end = self.end;
             let mut found = Vec::new();
-            let mut first_start = end;
-            forward(&mut r, 0, |l| {
+            // The last line that starts before the window: when none
+            // starts inside it (one line spans it), that line is the
+            // window, so every pass yields a line.
+            let mut before: Option<RawLine> = None;
+            let read = forward(&mut r, 0, |l| {
                 if l.start >= end {
                     return Ok(true);
                 }
-                if l.start >= from {
-                    first_start = first_start.min(l.start);
-                    found.push(l);
+                match l.start >= from {
+                    true => found.push(l),
+                    false => before = Some(l),
                 }
                 Ok(false)
-            })?;
+            });
             drop(r);
             self.cost += d.n;
+            read?;
             if found.is_empty() {
-                // No line starts in [from, end): one line spans the window.
-                // Read from the start instead, once, to the end.
-                self.end = from;
-                if from == 0 {
-                    return Ok(None);
+                match before {
+                    Some(l) => found.push(l),
+                    None => {
+                        self.end = 0;
+                        return Ok(None);
+                    }
                 }
-                continue;
             }
-            self.end = first_start;
+            self.end = found[0].start;
             self.found = found;
         }
     }
@@ -391,10 +431,17 @@ pub fn plain_len(file: &mut File, gz: bool) -> io::Result<u64> {
         return Ok(m.last().map_or(0, |m| m.from + m.len));
     }
     file.seek(SeekFrom::Start(0))?;
-    io::copy(
-        &mut MultiGzDecoder::new(BufReader::new(&mut *file)),
+    let n = io::copy(
+        &mut MultiGzDecoder::new(BufReader::new(&mut *file)).take(MAX_PLAIN + 1),
         &mut io::sink(),
-    )
+    )?;
+    match n > MAX_PLAIN {
+        true => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "larger than a log file can be",
+        )),
+        false => Ok(n),
+    }
 }
 
 /// The member index at the end of a gzip file, checked: `None` when
@@ -443,18 +490,25 @@ pub fn members(f: &mut File) -> io::Result<Option<Vec<Member>>> {
         let from = u64::from_le_bytes(e[8..16].try_into().expect("8"));
         let len = u64::from_le_bytes(e[16..24].try_into().expect("8"));
         let ok = if i == 0 { at == 0 } else { at > at_next };
-        if !ok || from != from_next || at >= start {
+        let Some(next) = from.checked_add(len) else {
+            return Ok(None);
+        };
+        if !ok || from != from_next || at >= start || len == 0 || len > MEMBER_MAX {
+            return Ok(None);
+        }
+        if next > MAX_PLAIN {
             return Ok(None);
         }
         at_next = at;
-        from_next = from.saturating_add(len);
+        from_next = next;
         out.push(Member { at, from, len });
     }
     Ok(Some(out))
 }
 
 /// Writes `input` as gzip members of about [`MEMBER`] bytes of whole
-/// lines each, then the index member. Returns the bytes written.
+/// lines each (a line over [`MAX_LINE`] is split across members, never
+/// held whole), then the index member. Returns the bytes written.
 pub fn write_gz(input: &mut impl BufRead, out: &mut impl Write) -> io::Result<u64> {
     struct Count<'a, W> {
         w: &'a mut W,
@@ -473,19 +527,28 @@ pub fn write_gz(input: &mut impl BufRead, out: &mut impl Write) -> io::Result<u6
     let mut out = Count { w: out, n: 0 };
     let mut members = Vec::new();
     let mut from = 0u64;
-    let mut buf = Vec::new();
-    loop {
+    let mut done = false;
+    while !done {
         let at = out.n;
         let mut enc = GzEncoder::new(&mut out, Compression::default());
         let mut len = 0u64;
-        while len < MEMBER {
-            buf.clear();
-            let n = input.read_until(b'\n', &mut buf)?;
-            if n == 0 {
+        // At a line's end once past MEMBER; mid-line at MEMBER_MAX.
+        let mut at_line_end = true;
+        while !(len >= MEMBER && at_line_end) && len < MEMBER_MAX {
+            let buf = input.fill_buf()?;
+            if buf.is_empty() {
+                done = true;
                 break;
             }
-            enc.write_all(&buf)?;
-            len += n as u64;
+            let room = (MEMBER_MAX - len) as usize;
+            let (take, ends) = match buf.iter().position(|b| *b == b'\n') {
+                Some(i) if i < room => (i + 1, true),
+                _ => (buf.len().min(room), false),
+            };
+            enc.write_all(&buf[..take])?;
+            input.consume(take);
+            len += take as u64;
+            at_line_end = ends;
         }
         if len == 0 {
             // Nothing: no member (an empty file has only the index).
@@ -496,32 +559,34 @@ pub fn write_gz(input: &mut impl BufRead, out: &mut impl Write) -> io::Result<u6
         enc.finish()?;
         members.push(Member { at, from, len });
         from += len;
-        if len < MEMBER {
-            break;
-        }
     }
     // The index can list 2,700 members (about 2.7 GiB); a larger file
     // keeps its members and goes without one.
     if members.len() <= 2_700 {
-        let mut data = vec![1u8];
-        data.extend_from_slice(&(members.len() as u32).to_le_bytes());
-        for m in &members {
-            data.extend_from_slice(&m.at.to_le_bytes());
-            data.extend_from_slice(&m.from.to_le_bytes());
-            data.extend_from_slice(&m.len.to_le_bytes());
-        }
-        let total = (data.len() + 4 + 26) as u32;
-        data.extend_from_slice(&total.to_le_bytes());
-        let mut m = vec![0x1f, 0x8b, 0x08, 0x04, 0, 0, 0, 0, 0, 0xff];
-        m.extend_from_slice(&((data.len() + 4) as u16).to_le_bytes());
-        m.extend_from_slice(&SI);
-        m.extend_from_slice(&(data.len() as u16).to_le_bytes());
-        m.extend_from_slice(&data);
-        // An empty final deflate block, then CRC-32 and length, both 0.
-        m.extend_from_slice(&[0x03, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]);
-        out.write_all(&m)?;
+        out.write_all(&index_member(&members))?;
     }
     Ok(out.n)
+}
+
+/// The empty last member that lists `members`.
+fn index_member(members: &[Member]) -> Vec<u8> {
+    let mut data = vec![1u8];
+    data.extend_from_slice(&(members.len() as u32).to_le_bytes());
+    for m in members {
+        data.extend_from_slice(&m.at.to_le_bytes());
+        data.extend_from_slice(&m.from.to_le_bytes());
+        data.extend_from_slice(&m.len.to_le_bytes());
+    }
+    let total = (data.len() + 4 + 26) as u32;
+    data.extend_from_slice(&total.to_le_bytes());
+    let mut m = vec![0x1f, 0x8b, 0x08, 0x04, 0, 0, 0, 0, 0, 0xff];
+    m.extend_from_slice(&((data.len() + 4) as u16).to_le_bytes());
+    m.extend_from_slice(&SI);
+    m.extend_from_slice(&(data.len() as u16).to_le_bytes());
+    m.extend_from_slice(&data);
+    // An empty final deflate block, then CRC-32 and length, both 0.
+    m.extend_from_slice(&[0x03, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]);
+    m
 }
 
 /// The first line of a file (at most 64 KiB read, decompressed): for its
@@ -682,6 +747,143 @@ mod tests {
         assert!(members(&mut File::open(&p).unwrap()).unwrap().is_none());
         let got = all_back(backward(File::open(&p).unwrap(), true, text.len() as u64).unwrap());
         assert_eq!(got.len(), 30_000);
+    }
+
+    /// One gzip member of `body`, then an index that says `members`.
+    fn crafted(dir: &std::path::Path, body: &[u8], members: &[Member]) -> std::path::PathBuf {
+        let p = dir.join("crafted.gz");
+        let mut e = GzEncoder::new(Vec::new(), Compression::fast());
+        e.write_all(body).unwrap();
+        let mut bytes = e.finish().unwrap();
+        bytes.extend(index_member(members));
+        std::fs::write(&p, bytes).unwrap();
+        p
+    }
+
+    #[test]
+    fn a_hostile_index_is_refused_and_a_bomb_never_inflates_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        // A member that holds far more than its index says: only `len`
+        // bytes are ever inflated, and then it doesn't hold together.
+        let bomb = "a\n".repeat(4 << 20);
+        let p = crafted(
+            dir.path(),
+            bomb.as_bytes(),
+            &[Member {
+                at: 0,
+                from: 0,
+                len: 1 << 20,
+            }],
+        );
+        let mut b = backward(File::open(&p).unwrap(), true, 1 << 20).unwrap();
+        let mut n = 0;
+        while b.prev().unwrap().is_some() {
+            n += 1;
+        }
+        assert_eq!(n, (1 << 20) / 2, "only the stated length");
+        assert!(b.cost() <= 1 << 20, "{}", b.cost());
+        // Lengths beyond any member, and offsets that overflow: no index.
+        for members in [
+            vec![Member {
+                at: 0,
+                from: 0,
+                len: 1 << 40,
+            }],
+            vec![Member {
+                at: 0,
+                from: 0,
+                len: 0,
+            }],
+            vec![
+                Member {
+                    at: 0,
+                    from: 0,
+                    len: 1 << 20,
+                },
+                Member {
+                    at: 1,
+                    from: 1 << 20,
+                    len: u64::MAX - 5,
+                },
+            ],
+            vec![
+                Member {
+                    at: 0,
+                    from: 0,
+                    len: 10,
+                },
+                Member {
+                    at: 1,
+                    from: 5,
+                    len: 10,
+                },
+            ],
+        ] {
+            let p = crafted(dir.path(), b"x\n", &members);
+            assert!(members_of(&p).is_none(), "{members:?}");
+        }
+        // A member shorter than its index says is unreadable, not a loop.
+        let p = crafted(
+            dir.path(),
+            b"x\ny\n",
+            &[Member {
+                at: 0,
+                from: 0,
+                len: 1000,
+            }],
+        );
+        assert!(
+            backward(File::open(&p).unwrap(), true, 1000)
+                .unwrap()
+                .prev()
+                .is_err()
+        );
+    }
+
+    fn members_of(p: &std::path::Path) -> Option<Vec<Member>> {
+        members(&mut File::open(p).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn a_long_line_is_split_across_members_never_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("long.gz");
+        let text = format!("short\n{}\nafter\n", "q".repeat(3 * MAX_LINE));
+        let mut out = File::create(&p).unwrap();
+        write_gz(&mut BufReader::new(text.as_bytes()), &mut out).unwrap();
+        drop(out);
+        let m = members_of(&p).expect("an index");
+        assert!(m.iter().all(|m| m.len <= MEMBER_MAX), "{m:?}");
+        assert_eq!(
+            plain_len(&mut File::open(&p).unwrap(), true).unwrap(),
+            text.len() as u64
+        );
+        let mut s = String::new();
+        MultiGzDecoder::new(BufReader::new(File::open(&p).unwrap()))
+            .read_to_string(&mut s)
+            .unwrap();
+        assert_eq!(s, text);
+        let got = all_back(backward(File::open(&p).unwrap(), true, text.len() as u64).unwrap());
+        assert_eq!(texts(&got[..1]), ["after"]);
+        assert_eq!(texts(&got[got.len() - 1..]), ["short"]);
+    }
+
+    #[test]
+    fn an_older_file_with_one_long_line_still_yields_a_line_a_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("f.gz");
+        let text = format!("first\n{}\nlast\n", "z".repeat(9 << 20));
+        let mut e = GzEncoder::new(File::create(&p).unwrap(), Compression::fast());
+        e.write_all(text.as_bytes()).unwrap();
+        e.finish().unwrap();
+        let mut b = backward(File::open(&p).unwrap(), true, text.len() as u64).unwrap();
+        let mut got = Vec::new();
+        while let Some(l) = b.prev().unwrap() {
+            got.push(l);
+        }
+        assert_eq!(texts(&got), ["last", "<over>", "first"]);
+        // Three passes at most, never one per window across the long line.
+        assert!(b.cost() <= 3 * text.len() as u64, "{}", b.cost());
     }
 
     #[test]

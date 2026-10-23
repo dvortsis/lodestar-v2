@@ -18,11 +18,12 @@
 //! - **Never folded** (the caller's rule): required events, the runtime's
 //!   notes about itself, and summaries.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::hash::{BuildHasher, RandomState};
 use std::time::{Duration, Instant};
 
-use super::entry::{Entry, Repeated};
+use super::entry::{Entry, Repeated, cut};
 
 /// Keys per table.
 pub const MAX_KEYS: usize = 1_024;
@@ -54,6 +55,9 @@ pub struct Table {
     hasher: RandomState,
     keys: HashMap<u64, Slot>,
     window: Duration,
+    /// The earliest window's start (or earlier): until a window can have
+    /// ended, nothing is scanned.
+    earliest: Option<Instant>,
 }
 
 impl Table {
@@ -62,6 +66,7 @@ impl Table {
             hasher: RandomState::new(),
             keys: HashMap::new(),
             window,
+            earliest: None,
         }
     }
 
@@ -91,20 +96,26 @@ impl Table {
                 return Verdict::Write(None);
             }
         }
+        let mut template = e.summary(
+            e.millis,
+            Repeated {
+                count: 0,
+                seconds: 0,
+                first: None,
+            },
+        );
+        // A table of long untyped messages mustn't hold megabytes.
+        if let Cow::Owned(m) = &mut template.msg {
+            cut(m, 4096);
+        }
+        self.earliest = Some(self.earliest.map_or(now, |t| t.min(now)));
         self.keys.insert(
             key,
             Slot {
                 started: now,
                 count: 0,
                 first: None,
-                template: e.summary(
-                    e.millis,
-                    Repeated {
-                        count: 0,
-                        seconds: 0,
-                        first: None,
-                    },
-                ),
+                template,
             },
         );
         Verdict::Write(Some(key))
@@ -121,6 +132,11 @@ impl Table {
     /// adding a summary for each that counted lines.
     pub fn flush(&mut self, now: Instant, all: bool, due: &mut Vec<Entry>) {
         let window = self.window;
+        // No window can have ended yet: a full table of open windows costs
+        // a comparison, not a scan, per new line.
+        if !all && self.earliest.is_none_or(|t| now.duration_since(t) < window) {
+            return;
+        }
         let ended: Vec<u64> = self
             .keys
             .iter()
@@ -134,6 +150,7 @@ impl Table {
             .collect();
         out.sort_by_key(|e| e.millis);
         due.extend(out);
+        self.earliest = self.keys.values().map(|s| s.started).min();
     }
 
     #[cfg(test)]

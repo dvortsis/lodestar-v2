@@ -273,6 +273,9 @@ pub trait LogSource: Send + Sync + fmt::Debug {
     fn generation(&self) -> u64;
     /// The purges after `generation`, and the newest generation.
     fn purges_since(&self, generation: u64) -> (u64, Vec<LogPurge>);
+    /// The purges that reach lines up to `seq` or later (`through >=
+    /// seq`): what a stream resuming after `seq` may have missed.
+    fn purges_covering(&self, seq: u64) -> Vec<LogPurge>;
     /// A page of history, newest first: the ring, then the files.
     fn history(&self, query: &HistoryQuery) -> Result<LogHistory, LogsError>;
     /// Ends every stream and refuses new ones.

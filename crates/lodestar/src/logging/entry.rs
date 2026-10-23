@@ -37,7 +37,8 @@ pub enum FieldType {
     Data(Kind),
     Error,
     Label,
-    /// The setup token: a label in the file, written bare on the console.
+    /// The setup token: `setup_token` in the file, written bare on the
+    /// console.
     Secret,
     /// A field of a line the code didn't type.
     Untyped,
@@ -48,7 +49,9 @@ impl FieldType {
         match self {
             FieldType::Data(k) => k.name(),
             FieldType::Error => "error",
-            FieldType::Label | FieldType::Secret => "label",
+            FieldType::Label => "label",
+            // Its own kind, so a reader redacts it by kind, not by name.
+            FieldType::Secret => "setup_token",
             FieldType::Untyped => "untyped",
         }
     }
@@ -464,7 +467,7 @@ pub fn thousands(n: u64) -> String {
 }
 
 /// Cuts `s` to at most `max` bytes at a character boundary, ending in `…`.
-fn cut(s: &mut String, max: usize) {
+pub(super) fn cut(s: &mut String, max: usize) {
     if s.len() <= max {
         return;
     }

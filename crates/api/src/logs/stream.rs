@@ -116,10 +116,11 @@ fn resync(reason: LogResyncReason, skipped: Option<u64>, evicted: Option<u64>) -
     frame(None, "resync", &data)
 }
 
-/// The response body: frames from the client's task, holding its slot.
+/// The response body: frames from the client's task. The task holds the
+/// slot, so it's released when the task ends, even while a client that
+/// stopped reading keeps the connection (and this body) open.
 struct Frames {
     rx: mpsc::Receiver<Bytes>,
-    _slot: Slot,
 }
 
 impl futures_core::Stream for Frames {
@@ -130,13 +131,47 @@ impl futures_core::Stream for Frames {
     }
 }
 
-/// Sends `frame`, giving up when the source closes or the client went.
-async fn send(out: &mpsc::Sender<Bytes>, closed: &watch::Receiver<bool>, frame: Bytes) -> bool {
-    let mut closed = closed.clone();
-    tokio::select! {
-        biased;
-        _ = closed.wait_for(|c| *c) => false,
-        sent = out.send(frame) => sent.is_ok(),
+/// The way to the client: a bounded queue, and the session's clock.
+struct Out<'a, F> {
+    tx: &'a mpsc::Sender<Bytes>,
+    closed: watch::Receiver<bool>,
+    next_beat: tokio::time::Instant,
+    heartbeat: std::time::Duration,
+    signed_in: &'a F,
+}
+
+impl<F: Fn() -> bool> Out<'_, F> {
+    /// Sends `frame`. `false` ends the stream: the source closed, the
+    /// client went, its session ended, or it took nothing for two
+    /// heartbeats (a client that stopped reading can't pin a slot, or
+    /// outlive its session, by never draining its queue).
+    async fn send(&mut self, frame: Bytes) -> bool {
+        let mut closed = self.closed.clone();
+        let mut stalled = 0;
+        loop {
+            tokio::select! {
+                biased;
+                _ = closed.wait_for(|c| *c) => return false,
+                permit = self.tx.reserve() => return match permit {
+                    Ok(p) => {
+                        p.send(frame);
+                        true
+                    }
+                    Err(_) => false,
+                },
+                () = tokio::time::sleep_until(self.next_beat) => {
+                    stalled += 1;
+                    if stalled >= 2 || !(self.signed_in)() {
+                        return false;
+                    }
+                    self.next_beat = tokio::time::Instant::now() + self.heartbeat;
+                }
+            }
+        }
+    }
+
+    fn due(&self) -> bool {
+        tokio::time::Instant::now() >= self.next_beat
     }
 }
 
@@ -146,14 +181,24 @@ async fn run(
     source: Arc<dyn LogSource>,
     filter: LineFilter,
     start: Option<String>,
-    out: mpsc::Sender<Bytes>,
+    tx: mpsc::Sender<Bytes>,
     signed_in: impl Fn() -> bool + Send + 'static,
+    _slot: Slot,
 ) {
     let t = source.transport();
     let config = t.config().clone();
-    let closed = t.closed();
+    // The session is checked again on this clock, whatever else is
+    // happening: a steady flow of lines, or a client that stopped
+    // reading, must never put it off.
+    let mut out = Out {
+        tx: &tx,
+        closed: t.closed(),
+        next_beat: tokio::time::Instant::now() + config.heartbeat,
+        heartbeat: config.heartbeat,
+        signed_in: &signed_in,
+    };
     let retry = Bytes::from(format!("retry: {}\n\n", config.retry.as_millis()));
-    if !send(&out, &closed, retry).await {
+    if !out.send(retry).await {
         return;
     }
     let (_guard, mut wake) = source.listen();
@@ -173,32 +218,40 @@ async fn run(
         Some(Cursor::Malformed) => Some(LogResyncReason::Malformed),
     };
     if let Some(reason) = first
-        && !send(&out, &closed, resync(reason, None, None)).await
+        && !out.send(resync(reason, None, None)).await
     {
         return;
     }
-    // The session is checked again on this clock, whatever else is
-    // happening: a steady flow of lines must never put it off.
-    let mut next_beat = tokio::time::Instant::now() + config.heartbeat;
-    let mut closed_wait = closed.clone();
+    // Resuming: the purges since the lines it already has (through its
+    // cursor or later), which it may have missed while away, or between
+    // `GET /logs` and this stream.
+    if first.is_none() && start.is_some() {
+        for p in source.purges_covering(cursor) {
+            let data = serde_json::to_string(&p).expect("serializes");
+            if !out.send(frame(None, "purge", &data)).await {
+                return;
+            }
+        }
+    }
+    let mut closed_wait = t.closed();
     'outer: loop {
-        if tokio::time::Instant::now() >= next_beat {
+        if out.due() {
             // Expired, or the password changed (which ends every other
             // session): the stream ends with the session.
             if !signed_in() {
                 return;
             }
-            if !send(&out, &closed, Bytes::from_static(b": keep-alive\n\n")).await {
+            out.next_beat = tokio::time::Instant::now() + config.heartbeat;
+            if !out.send(Bytes::from_static(b": keep-alive\n\n")).await {
                 return;
             }
-            next_beat = tokio::time::Instant::now() + config.heartbeat;
         }
         wake.borrow_and_update();
         let (g, purges) = source.purges_since(generation);
         generation = g;
         for p in purges {
             let data = serde_json::to_string(&p).expect("serializes");
-            if !send(&out, &closed, frame(None, "purge", &data)).await {
+            if !out.send(frame(None, "purge", &data)).await {
                 return;
             }
         }
@@ -209,7 +262,7 @@ async fn run(
                 Some(read.matching),
                 Some(read.evicted),
             );
-            if !send(&out, &closed, r).await {
+            if !out.send(r).await {
                 return;
             }
             cursor = read.head;
@@ -218,12 +271,12 @@ async fn run(
         for (seq, line) in read.lines {
             // A purge since the read: its frame first, and these lines
             // again as the ring has them now.
-            if source.generation() != generation || tokio::time::Instant::now() >= next_beat {
+            if source.generation() != generation || out.due() {
                 continue 'outer;
             }
             let id = format!("{epoch}-{seq}");
             let data = serde_json::to_string(&line).expect("serializes");
-            if !send(&out, &closed, frame(Some(&id), "line", &data)).await {
+            if !out.send(frame(Some(&id), "line", &data)).await {
                 return;
             }
             cursor = seq;
@@ -232,8 +285,8 @@ async fn run(
         tokio::select! {
             biased;
             _ = closed_wait.wait_for(|c| *c) => return,
-            () = out.closed() => return,
-            () = tokio::time::sleep_until(next_beat) => {}
+            () = tx.closed() => return,
+            () = tokio::time::sleep_until(out.next_beat) => {}
             changed = wake.changed() => if changed.is_err() { return },
         }
     }
@@ -319,14 +372,14 @@ pub(crate) async fn stream(
     // The guard's check, repeated at each heartbeat on what it let in:
     // the cookie, or a trusted proxy's user header from the same peer.
     let signed_in = move || auth::logged_in(&auth, &headers, peer);
-    tokio::spawn(run(source, filter, start, out, signed_in));
+    tokio::spawn(run(source, filter, start, out, signed_in, slot));
     Ok((
         [
             (header::CONTENT_TYPE, "text/event-stream"),
             (header::CACHE_CONTROL, "no-store"),
             (header::HeaderName::from_static("x-accel-buffering"), "no"),
         ],
-        Body::from_stream(Frames { rx, _slot: slot }),
+        Body::from_stream(Frames { rx }),
     )
         .into_response())
 }

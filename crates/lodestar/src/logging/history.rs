@@ -150,18 +150,36 @@ fn unbase64url(s: &str) -> Option<Vec<u8>> {
 /// The longest cursor (`/logs` refuses longer ones first).
 const MAX_CURSOR: usize = 512;
 
+/// Opens a listed file: a rotated `.jsonl` compressed since the listing
+/// is its `.gz`, with the same lines at the same offsets.
+fn open_listed(dir: &std::path::Path, name: &LogName) -> std::io::Result<(LogName, std::fs::File)> {
+    match open_regular(&name.path(dir)) {
+        Ok(f) => Ok((name.clone(), f)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => match name.compressed() {
+            Some(gz) => {
+                let f = open_regular(&gz.path(dir))?;
+                Ok((gz, f))
+            }
+            None => Err(e),
+        },
+        Err(e) => Err(e),
+    }
+}
+
 /// A file's first-line fingerprint, to know the current file again.
 fn head_of(dir: &std::path::Path, name: &LogName) -> u64 {
     let Ok(mut f) = open_regular(&name.path(dir)) else {
         return 0;
     };
     match read::first_line(&mut f, name.gz()) {
-        Ok(Some(line)) => {
-            let d = Sha256::digest(&line);
-            u64::from_be_bytes(d[..8].try_into().expect("8"))
-        }
+        Ok(Some(line)) => fingerprint_of(&line),
         _ => 0,
     }
+}
+
+fn fingerprint_of(line: &[u8]) -> u64 {
+    let d = Sha256::digest(line);
+    u64::from_be_bytes(d[..8].try_into().expect("8"))
 }
 
 /// This run's sequence in an id, if it's ours.
@@ -244,34 +262,65 @@ pub fn page_capped(
     };
     // A folder that can't be listed (gone, unmounted) has no files: the
     // ring's lines still come back.
-    let listed: Vec<Listed> = files::list(dir)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|l| l.regular)
-        .collect();
+    let list = || -> Vec<Listed> {
+        files::list(dir)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|l| l.regular)
+            .collect()
+    };
+    let mut listed = list();
+    // The current file as listed, to know it again if it rotates before
+    // it's opened.
+    let listed_head = head_of(dir, &LogName::Current);
+    let mut relisted = false;
     // Where to start: the newest file, or where the cursor left off.
     let (mut idx, mut end) = match resume {
         None => (0, None),
-        Some((name, offset, head)) => locate(dir, &listed, &name, offset, head),
+        Some((name, offset, head)) => locate(dir, &mut listed, &name, offset, head),
     };
     let mut cost = 0u64;
     while idx < listed.len() {
-        let l = &listed[idx];
+        let mut name = listed[idx].name.clone();
         // A rotated file from before `since` holds nothing newer than it,
         // and neither does any older one.
-        if let (Some(since), Some(at)) = (q.since, l.name.rotated_at()) {
+        if let (Some(since), Some(at)) = (q.since, name.rotated_at()) {
             if parse_rfc3339(&at).is_some_and(|t| t < since) {
                 break;
             }
         }
-        let Ok(mut f) = open_regular(&l.name.path(dir)) else {
+        let opened = open_listed(dir, &name);
+        let Ok((opened_as, mut f)) = opened else {
+            unreadable += 1;
             idx += 1;
             end = None;
             continue;
         };
+        name = opened_as;
+        let head_fp = match name {
+            LogName::Current => read::first_line(&mut f, false)
+                .ok()
+                .flatten()
+                .map_or(0, |line| fingerprint_of(&line)),
+            _ => 0,
+        };
+        // The current file rotated between the listing and here: list
+        // again and read the file it became, from where we were.
+        if name == LogName::Current && head_fp != listed_head && !relisted {
+            relisted = true;
+            listed = list();
+            (idx, end) = locate(
+                dir,
+                &mut listed,
+                &LogName::Current,
+                end.unwrap_or(u64::MAX),
+                listed_head,
+            );
+            continue;
+        }
         // A file that can't be read is counted and passed over, never an
         // error: one damaged file mustn't block every page that reaches it.
-        let len = match &l.name {
+        let len = match &name {
             LogName::Current => {
                 let n = f.metadata().map(|m| m.len()).unwrap_or(0);
                 read::whole_lines(&mut f, n)
@@ -285,11 +334,7 @@ pub fn page_capped(
             continue;
         };
         let start = end.map_or(len, |e: u64| e.min(len));
-        let head_fp = match l.name {
-            LogName::Current => head_of(dir, &l.name),
-            _ => 0,
-        };
-        let Ok(mut r) = read::backward(f, l.name.gz(), start) else {
+        let Ok(mut r) = read::backward(f, name.gz(), start) else {
             unreadable += 1;
             idx += 1;
             end = None;
@@ -297,10 +342,11 @@ pub fn page_capped(
         };
         let mut at = start;
         loop {
-            if cost + r.cost() >= cap {
+            // Lines already inflated cost nothing more: out first.
+            if !r.buffered() && cost + r.cost() >= cap {
                 let pos = Pos::File {
                     below,
-                    name: l.name.clone(),
+                    name: name.clone(),
                     offset: at,
                     head: head_fp,
                 };
@@ -324,7 +370,7 @@ pub fn page_capped(
                 unreadable += 1;
                 continue;
             };
-            let line = match view::file_line(&bytes, Some(mask)) {
+            let mut line = match view::file_line(&bytes, Some(mask)) {
                 Err(()) => {
                     unreadable += 1;
                     continue;
@@ -332,6 +378,8 @@ pub fn page_capped(
                 Ok(None) => continue,
                 Ok(Some(line)) => line,
             };
+            // As the ring cuts its lines: 16 KiB at most each.
+            view::cut(&mut line);
             if line
                 .id
                 .as_deref()
@@ -347,7 +395,7 @@ pub fn page_capped(
             if lines.len() == q.limit {
                 let pos = Pos::File {
                     below,
-                    name: l.name.clone(),
+                    name: name.clone(),
                     offset: at,
                     head: head_fp,
                 };
@@ -376,7 +424,7 @@ pub fn page_capped(
 /// rotated file it became; else the next older file from its start.
 fn locate(
     dir: &std::path::Path,
-    listed: &[Listed],
+    listed: &mut Vec<Listed>,
     name: &LogName,
     offset: u64,
     head: u64,
@@ -403,17 +451,25 @@ fn locate(
                 LogName::Rotated { stamp: s, n: m, .. } => s == stamp && m == n,
                 LogName::Current => false,
             });
+            let older = listed
+                .iter()
+                .position(|l| LogName::newest_first(&l.name, name) == std::cmp::Ordering::Greater)
+                .unwrap_or(listed.len());
             match same {
                 Some(i) => (i, Some(offset)),
-                None => (
-                    listed
-                        .iter()
-                        .position(|l| {
-                            LogName::newest_first(&l.name, name) == std::cmp::Ordering::Greater
-                        })
-                        .unwrap_or(listed.len()),
-                    None,
-                ),
+                // Not listed, but there (a scan can miss a file being
+                // compressed): read it, then go on to the older ones.
+                None if open_listed(dir, name).is_ok() => {
+                    listed.insert(
+                        older,
+                        Listed {
+                            name: name.clone(),
+                            regular: true,
+                        },
+                    );
+                    (older, Some(offset))
+                }
+                None => (older, None),
             }
         }
     }
@@ -464,6 +520,16 @@ mod tests {
         for junk in ["", "%%%", "AAAA", &"A".repeat(600)] {
             assert_eq!(decode(junk, epoch, fp), None, "{junk}");
         }
+    }
+
+    #[test]
+    fn a_file_compressed_since_the_listing_is_its_gz() {
+        let dir = tempfile::tempdir().unwrap();
+        let plain = LogName::parse("lodestar-20261023T101500.123Z.jsonl").unwrap();
+        std::fs::write(plain.compressed().unwrap().path(dir.path()), "x").unwrap();
+        let (name, _) = open_listed(dir.path(), &plain).unwrap();
+        assert_eq!(name, plain.compressed().unwrap());
+        assert!(open_listed(dir.path(), &LogName::Current).is_err());
     }
 
     #[test]

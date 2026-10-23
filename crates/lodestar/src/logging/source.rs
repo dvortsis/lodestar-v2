@@ -82,14 +82,10 @@ impl LogSource for Logs {
         let mask = rt.mask_now();
         let epoch = rt.epoch();
         let read = rt.ring().after(cursor, max, |e| {
-            ring_line(e, mask, epoch).is_some_and(|l| matches(&l, filter))
+            ring_line(e, mask, epoch).filter(|l| matches(l, filter))
         });
         RingRead {
-            lines: read
-                .lines
-                .iter()
-                .filter_map(|e| ring_line(e, mask, epoch).map(|l| (e.seq, l)))
-                .collect(),
+            lines: read.lines,
             matching: read.matching,
             evicted: read.evicted,
             head: read.head,
@@ -113,6 +109,20 @@ impl LogSource for Logs {
             })
             .collect();
         (g, out)
+    }
+
+    fn purges_covering(&self, seq: u64) -> Vec<LogPurge> {
+        let Some(rt) = self.rt else {
+            return Vec::new();
+        };
+        rt.ring()
+            .purges_covering(seq)
+            .into_iter()
+            .map(|p| LogPurge {
+                kinds: p.kinds.kinds().map(data_kind).collect(),
+                through: rt.id(p.through),
+            })
+            .collect()
     }
 
     fn history(&self, query: &HistoryQuery) -> Result<LogHistory, LogsError> {

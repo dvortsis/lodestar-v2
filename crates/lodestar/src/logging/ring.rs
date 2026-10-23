@@ -72,10 +72,11 @@ pub struct Ring {
 }
 
 /// What a read after a cursor found.
-#[derive(Debug, Default)]
-pub struct After {
-    /// The first matching entries, at most `max`.
-    pub lines: Vec<Arc<Entry>>,
+#[derive(Debug)]
+pub struct After<T> {
+    /// The first matching entries as `show` made them, at most `max`,
+    /// each with its sequence.
+    pub lines: Vec<(u64, T)>,
     /// Every matching entry after the cursor, `lines` included.
     pub matching: u64,
     /// Entries after the cursor that left the ring before they were read.
@@ -231,6 +232,31 @@ impl Ring {
         (inner.generation, out)
     }
 
+    /// The purges that reach lines at `seq` or later (`through >= seq`).
+    /// When older ones were forgotten and might too, one naming every
+    /// kind stands for all of them.
+    pub fn purges_covering(&self, seq: u64) -> Vec<Purge> {
+        let inner = lock(&self.inner);
+        let covering: Vec<Purge> = inner
+            .purges
+            .iter()
+            .filter(|p| p.through >= seq)
+            .copied()
+            .collect();
+        let forgotten = inner
+            .purges
+            .front()
+            .is_some_and(|p| p.generation > 1 && p.through >= seq);
+        match forgotten {
+            true => vec![Purge {
+                generation: inner.generation,
+                kinds: Mask(Kind::ALL.iter().fold(0, |m, k| m | k.bit())),
+                through: inner.purges.back().map_or(0, |p| p.through),
+            }],
+            false => covering,
+        }
+    }
+
     /// The newest purge's generation.
     pub fn generation(&self) -> u64 {
         lock(&self.inner).generation
@@ -261,12 +287,19 @@ impl Ring {
         self.listeners.load(Ordering::Relaxed)
     }
 
-    /// Every entry after `cursor` that `keep` accepts: the first `max` of
-    /// them, and how many in all.
-    pub fn after(&self, cursor: u64, max: usize, keep: impl Fn(&Entry) -> bool) -> After {
+    /// Every entry after `cursor` that `show` shows (`Some`): the first
+    /// `max` of them as it made them (each made once), and how many in all.
+    pub fn after<T>(
+        &self,
+        cursor: u64,
+        max: usize,
+        show: impl Fn(&Entry) -> Option<T>,
+    ) -> After<T> {
         let mut out = After {
+            lines: Vec::new(),
+            matching: 0,
+            evicted: 0,
             head: cursor,
-            ..After::default()
         };
         let mut pos = cursor;
         let mut first = true;
@@ -288,10 +321,10 @@ impl Ring {
             let Some(last) = batch.last() else { break };
             pos = last.seq;
             for e in batch {
-                if keep(&e) {
+                if let Some(t) = show(&e) {
                     out.matching += 1;
                     if out.lines.len() < max {
-                        out.lines.push(e);
+                        out.lines.push((e.seq, t));
                     }
                 }
             }
@@ -421,7 +454,7 @@ mod tests {
         ring2.push(entry(vec![], 0), None);
         ring2.purge(Mask::PRIVATE, Mask::NONE.with(Kind::FilterChange), None);
         assert_eq!(ring2.bounds(), (2, 1));
-        assert_eq!(ring2.after(0, 10, |_| true).evicted, 0);
+        assert_eq!(ring2.after(0, 10, |_| Some(())).evicted, 0);
         let ring = Ring::new(Mask(u32::MAX));
         for _ in 0..1000 {
             ring.push(entry(vec![], 10_000), None);
@@ -500,10 +533,14 @@ mod tests {
         drop(guard);
         assert_eq!(ring.listeners(), 0);
         rx.borrow_and_update();
-        let a = ring.after(25, 100, info);
-        assert_eq!(a.lines.iter().map(|e| e.seq).collect::<Vec<_>>(), [27, 29]);
+        let seq = |e: &Entry| info(e).then_some(e.seq);
+        let a = ring.after(25, 100, seq);
+        assert_eq!(
+            a.lines.iter().map(|(s, _)| *s).collect::<Vec<_>>(),
+            [27, 29]
+        );
         assert_eq!((a.matching, a.evicted, a.head), (2, 0, 30));
-        let a = ring.after(5, 2, info);
+        let a = ring.after(5, 2, seq);
         assert_eq!(a.evicted, 15, "6..=20 left unseen");
         assert_eq!(a.matching, 5);
         assert_eq!(a.lines.len(), 2);
