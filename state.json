@@ -1,6 +1,6 @@
 {
  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
- "updated_at": "2026-10-23T08:59:12Z",
+ "updated_at": "2026-10-23T09:03:17Z",
  "launches": {
   "date": "2026-10-22",
   "count": 31
@@ -351,7 +351,7 @@
    "pr": 121,
    "attempt": 1,
    "review_rounds": 1,
-   "notes": "2026-10-23T06:26:11Z unblocked by B12; brief being drafted by Opus helper | 2026-10-23T06:36:24Z launched after B12 merge (brief by Opus helper, runner-reviewed; steward from start) | 2026-10-23T08:15:57Z PR #121 head 2d9509d (~4.4k lines); self-review 1 blocking fixed; fresh + security reviewers launched | 2026-10-23T08:28:33Z security review MERGE w/ important: per-search percolation cost unbounded (segment skip by id max, cancel in collector, cap searches, bench); feed/list unbounded scan under reader lock (SQL predicate + LIMIT). Owner flag: feed follows content.show_adult (\u00a72.19). | 2026-10-23T08:39:04Z both reviews MERGE; round 1 perf/robustness: feed/list SQL LIMIT (reader lock), segment-skip + cancel in collector + cap 1000 searches, record_hits paused/updated re-check, polish; bench follow-up"
+   "notes": "2026-10-23T06:26:11Z unblocked by B12; brief being drafted by Opus helper | 2026-10-23T06:36:24Z launched after B12 merge (brief by Opus helper, runner-reviewed; steward from start) | 2026-10-23T08:15:57Z PR #121 head 2d9509d (~4.4k lines); self-review 1 blocking fixed; fresh + security reviewers launched | 2026-10-23T08:28:33Z security review MERGE w/ important: per-search percolation cost unbounded (segment skip by id max, cancel in collector, cap searches, bench); feed/list unbounded scan under reader lock (SQL predicate + LIMIT). Owner flag: feed follows content.show_adult (\u00a72.19). | 2026-10-23T08:39:04Z both reviews MERGE; round 1 perf/robustness: feed/list SQL LIMIT (reader lock), segment-skip + cancel in collector + cap 1000 searches, record_hits paused/updated re-check, polish; bench follow-up | 2026-10-23T09:03:17Z e54f69b round-1 fixes (SQL shown_alerts, segment-skip + in-scan cancel, cap 1000 w/ saved.rs edit, AST re-check, polish); delta review started"
   },
   "B5c": {
    "status": "merged",
