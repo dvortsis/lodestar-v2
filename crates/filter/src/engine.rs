@@ -176,7 +176,7 @@ impl Engine {
             };
             return (v, None);
         }
-        let doc = Doc::new(item, facts);
+        let doc = Doc::new(item, facts).with_near(self.rules.near_terms());
         let correction = self.class_rules.decide(&doc);
         let v = self.judge_doc(item, facts, &doc, now);
         if correction != Some(true) || item.content_type == ContentType::Adult {
@@ -205,7 +205,8 @@ impl Engine {
                 shadow: Vec::new(),
             };
         }
-        self.judge_doc(item, facts, &Doc::new(item, facts), now)
+        let doc = Doc::new(item, facts).with_near(self.rules.near_terms());
+        self.judge_doc(item, facts, &doc, now)
     }
 
     /// [`Engine::judge`] past the floor, on a prepared torrent.
@@ -319,7 +320,7 @@ impl Engine {
     /// match. For the §20.8 budget test's report.
     #[doc(hidden)]
     pub fn rule_counts(&self, item: &Item, facts: Option<&Facts>) -> (usize, usize) {
-        let doc = Doc::new(item, facts);
+        let doc = Doc::new(item, facts).with_near(self.rules.near_terms());
         let candidates = doc.candidates(&self.rules);
         let full = candidates
             .iter()
