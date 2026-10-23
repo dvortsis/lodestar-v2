@@ -14,14 +14,17 @@
 //!    feed token as `?token=`, the trusted-proxy user) and no sealed name
 //!    in any output. Keys and tokens can't read `/logs/catalog`.
 //!
-//! B-log2 adds the ring buffer, the live stream and the download to the
-//! outputs read here.
+//! B-log2 adds the API's outputs to every run: the ring buffer and the
+//! files through `GET /logs` (paged to the end), and the live stream
+//! (opened before exercising, read over a socket, with one reconnect by
+//! `Last-Event-ID`). Its second part adds the downloads and the archive.
 #![cfg(unix)]
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -357,6 +360,158 @@ impl Server {
     }
 }
 
+/// A live log over a socket (HTTP/1.0, so the body isn't chunked), read
+/// on its own thread.
+struct Stream {
+    text: Arc<Mutex<String>>,
+    stop: Arc<AtomicBool>,
+    socket: TcpStream,
+}
+
+impl Stream {
+    /// Opens one, waiting out a `429` while an earlier stream's slot is
+    /// still being released.
+    fn open(s: &Server, query: &str, last: Option<&str>) -> Stream {
+        let start = Instant::now();
+        loop {
+            let out = Stream::try_open(s, query, last);
+            loop {
+                let text = out.text();
+                if text.contains("retry: 5000") {
+                    return out;
+                }
+                if text.starts_with("HTTP/1.0 429") {
+                    break;
+                }
+                assert!(
+                    start.elapsed() < Duration::from_secs(20),
+                    "no stream: {text}"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            drop(out);
+            std::thread::sleep(Duration::from_millis(300));
+        }
+    }
+
+    fn try_open(s: &Server, query: &str, last: Option<&str>) -> Stream {
+        let mut c = TcpStream::connect(("127.0.0.1", s.port)).unwrap();
+        c.set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+        let last = last.map_or(String::new(), |l| format!("\r\nLast-Event-ID: {l}"));
+        write!(
+            c,
+            "GET /api/v1/logs/stream{query} HTTP/1.0\r\nHost: localhost\r\nCookie: {}{last}\r\n\r\n",
+            s.cookie
+        )
+        .unwrap();
+        let socket = c.try_clone().unwrap();
+        let text = Arc::new(Mutex::new(String::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (t, st) = (text.clone(), stop.clone());
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 8192];
+            while !st.load(Ordering::Relaxed) {
+                match c.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => t
+                        .lock()
+                        .unwrap()
+                        .push_str(&String::from_utf8_lossy(&buf[..n])),
+                    Err(_) => continue,
+                }
+            }
+        });
+        Stream { text, stop, socket }
+    }
+
+    fn text(&self) -> String {
+        self.text.lock().unwrap().clone()
+    }
+
+    fn last_id(&self) -> Option<String> {
+        self.text()
+            .lines()
+            .rev()
+            .find_map(|l| l.strip_prefix("id: "))
+            .map(str::to_string)
+    }
+
+    fn first_id(&self) -> Option<String> {
+        self.text()
+            .lines()
+            .find_map(|l| l.strip_prefix("id: "))
+            .map(str::to_string)
+    }
+}
+
+impl Drop for Stream {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        let _ = self.socket.shutdown(std::net::Shutdown::Both);
+    }
+}
+
+fn body(r: &str) -> &str {
+    r.split("\r\n\r\n").nth(1).unwrap_or("")
+}
+
+/// What the API shows, each output by name.
+struct Api {
+    outputs: Vec<(String, String)>,
+}
+
+impl Api {
+    fn get(&self, name: &str) -> &str {
+        &self
+            .outputs
+            .iter()
+            .find(|(n, _)| n == name)
+            .unwrap_or_else(|| panic!("no {name}"))
+            .1
+    }
+
+    fn all(&self) -> Vec<(&str, &str)> {
+        self.outputs
+            .iter()
+            .map(|(n, t)| (n.as_str(), t.as_str()))
+            .collect()
+    }
+}
+
+impl Server {
+    /// `GET /logs`, paged to the end.
+    fn history(&self) -> String {
+        let mut out = String::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..1000 {
+            let q = cursor
+                .as_ref()
+                .map_or(String::new(), |c| format!("&cursor={c}"));
+            let r = self.get(&format!("/api/v1/logs?limit=1000{q}")).unwrap();
+            assert!(r.starts_with("HTTP/1.0 200"), "{r}");
+            let v: serde_json::Value = serde_json::from_str(body(&r)).unwrap();
+            out.push_str(body(&r));
+            out.push('\n');
+            match v["next_cursor"].as_str() {
+                Some(c) => cursor = Some(c.to_string()),
+                None => return out,
+            }
+        }
+        panic!("history didn't end");
+    }
+
+    /// Every API output: history and `stream` (as read so far).
+    fn api(&self, stream: &Stream) -> Api {
+        Api {
+            outputs: vec![
+                ("history".to_string(), self.history()),
+                ("stream".to_string(), stream.text()),
+            ],
+        }
+    }
+}
+
 fn cookie(response: &str) -> String {
     response
         .lines()
@@ -398,12 +553,35 @@ fn absent(outputs: &[(&str, &str)], needles: &[String], why: &str) {
 fn run_1_private_shows_no_fixture_identifier() {
     let s = Server::start();
     s.every_event_on();
+    let stream = Stream::open(&s, "", None);
     let mark = s.mark();
     s.exercise(1, true);
     std::thread::sleep(Duration::from_millis(300));
     let (console, file) = s.since(mark);
     let mut needles: Vec<String> = identifiers(&s.hash).into_iter().map(|(_, v)| v).collect();
     needles.extend([PASSKEY.to_string(), SEALED_NAME.to_string()]);
+    // One reconnect by `Last-Event-ID`: no gap, so no resync.
+    let last = stream.last_id().expect("the stream got lines");
+    let first = stream.first_id().unwrap();
+    drop(stream);
+    s.exercise(2, false);
+    let again = Stream::open(&s, "", Some(&last));
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!again.text().contains("event: resync"), "{}", again.text());
+    assert!(
+        again.text().contains("filters.rule_set_updated"),
+        "it caught up"
+    );
+    let replay = Stream::open(&s, &format!("?after={first}"), None);
+    std::thread::sleep(Duration::from_millis(300));
+    let api = s.api(&replay);
+    absent(&api.all(), &needles, "Private, through the API");
+    absent(
+        &[("reconnected stream", &again.text())],
+        &needles,
+        "Private",
+    );
+    assert!(api.get("history").contains("filters.rule_set_updated"));
     let (all_console, all_file) = s.stop();
     // Every line, start-up included, and only Private kinds.
     absent(
@@ -431,12 +609,14 @@ fn run_2_one_kind_at_a_time_shows_only_that_kind() {
     let s = Server::start();
     s.every_event_on();
     let ids = identifiers(&s.hash);
+    let open = Stream::open(&s, "", None);
     for (n, kind) in ["hash", "name", "path", "url", "query", "peer"]
         .into_iter()
         .enumerate()
     {
         s.logging(&format!(r#"{{"kinds":{{"{kind}":{}}}}}"#, now() + 600));
         let mark = s.mark();
+        let stream_mark = open.text().len();
         s.exercise(10 + n as u32, n == 0);
         std::thread::sleep(Duration::from_millis(300));
         let (console, file) = s.since(mark);
@@ -457,7 +637,36 @@ fn run_2_one_kind_at_a_time_shows_only_that_kind() {
             .map(|(_, v)| v.clone())
             .collect();
         absent(&[("console", &console)], &mine, "the console stays Private");
+        // The API shows at most this kind while it's on.
+        let replay = Stream::open(&s, "", None);
+        let api = s.api(&replay);
+        let stream_now = open.text()[stream_mark..].to_string();
+        absent(&api.all(), &others, kind);
+        absent(&[("open stream", &stream_now)], &others, kind);
+        drop(replay);
+        let before_off = open.text().len();
+        let first = open.first_id();
         s.logging(r#"{"kinds":{}}"#);
+        // Off again: the open stream was told, and history and a new
+        // stream replaying the ring show none of it.
+        let start = Instant::now();
+        while !open.text()[before_off..].contains("event: purge") {
+            assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "{kind}: no purge frame"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let purge = open.text()[before_off..].to_string();
+        assert!(purge.contains(&format!("\"{kind}\"")), "{kind}: {purge}");
+        let replay = Stream::open(
+            &s,
+            &first.map_or(String::new(), |f| format!("?after={f}")),
+            None,
+        );
+        std::thread::sleep(Duration::from_millis(300));
+        let api = s.api(&replay);
+        absent(&api.all(), &mine, &format!("{kind} after it's off"));
     }
     s.stop();
 }
@@ -466,17 +675,23 @@ fn run_2_one_kind_at_a_time_shows_only_that_kind() {
 fn run_3_opt_ins_appear_only_while_on_and_only_in_the_file() {
     let s = Server::start();
     s.every_event_on();
+    let open = Stream::open(&s, "", None);
     // Off: no detail.
     let mark = s.mark();
     s.exercise(20, true);
     std::thread::sleep(Duration::from_millis(300));
     let (console, file) = s.since(mark);
     absent(
-        &[("console", &console), ("file", &file)],
+        &[
+            ("console", &console),
+            ("file", &file),
+            ("stream", &open.text()),
+        ],
         &["canaryterm20".to_string()],
         "opt-in off",
     );
-    // On for a few seconds: in the file, never the console.
+    // On for a few seconds: in the file and the live log, never the
+    // console.
     s.logging(&format!(r#"{{"change_details_until":{}}}"#, now() + 4));
     let mark = s.mark();
     s.exercise(21, false);
@@ -486,6 +701,8 @@ fn run_3_opt_ins_appear_only_while_on_and_only_in_the_file() {
         file.contains("\"event\":\"filters.change_detail\"") && file.contains("canaryterm21"),
         "{file}"
     );
+    assert!(open.text().contains("canaryterm21"), "the live log has it");
+    assert!(s.history().contains("canaryterm21"), "history has it");
     absent(
         &[("console", &console)],
         &[
@@ -502,6 +719,8 @@ fn run_3_opt_ins_appear_only_while_on_and_only_in_the_file() {
     );
     // Its time runs out with no save: the required event says so, and
     // later changes aren't recorded.
+    let before_off = open.text().len();
+    let first = open.first_id().unwrap();
     std::thread::sleep(Duration::from_secs(5));
     let mark = s.mark();
     s.exercise(22, false);
@@ -512,7 +731,24 @@ fn run_3_opt_ins_appear_only_while_on_and_only_in_the_file() {
         &["canaryterm22".to_string()],
         "expired",
     );
+    // Gone from history and from a new stream; the open one was told.
+    assert!(
+        open.text()[before_off..].contains("event: purge")
+            && open.text()[before_off..].contains("filter_changes"),
+        "{}",
+        &open.text()[before_off..]
+    );
+    let replay = Stream::open(&s, &format!("?after={first}"), None);
+    std::thread::sleep(Duration::from_millis(300));
+    let api = s.api(&replay);
+    absent(
+        &api.all(),
+        &["canaryterm21".to_string(), "canaryterm22".to_string()],
+        "after the opt-in's time",
+    );
     let (all_console, all_file) = s.stop();
+    // The positive control: the file written meanwhile keeps it.
+    assert!(all_file.contains("canaryterm21"));
     for out in [&all_console, &all_file] {
         assert!(
             out.contains("filter_changes") && out.contains("expired"),
@@ -548,13 +784,17 @@ fn run_4_full_and_both_opt_ins_never_show_a_secret_or_a_sealed_name() {
     let first_cookie = s.cookie.clone();
     s.cookie = cookie(&login);
     let cookie_2 = s.cookie.clone();
+    let open = Stream::open(&s, "", None);
     s.exercise(31, false);
     std::thread::sleep(Duration::from_millis(300));
     let token = s.token.clone();
+    let api = s.api(&open);
     let (console, file) = s.stop();
     let value = |c: &str| c.split_once('=').map(|(_, v)| v.to_string()).unwrap();
+    let mut outputs = vec![("console", console.as_str()), ("file", file.as_str())];
+    outputs.extend(api.all());
     absent(
-        &[("console", &console), ("file", &file)],
+        &outputs,
         &[
             PASSWORD.to_string(),
             PASSWORD_2.to_string(),
@@ -567,12 +807,13 @@ fn run_4_full_and_both_opt_ins_never_show_a_secret_or_a_sealed_name() {
         "Full plus both opt-ins",
     );
     // The setup token only in its start-up line, which stops working at
-    // setup.
+    // setup; never through the API.
     for out in [&console, &file] {
         for line in out.lines().filter(|l| l.contains(&token)) {
             assert!(line.contains("setup token"), "{line}");
         }
     }
+    absent(&api.all(), std::slice::from_ref(&token), "the setup token");
     // Full did reach the file (the opt-in detail is there), and the
     // console never gets an opt-in.
     assert!(file.contains("canaryterm30"), "{file}");
@@ -610,19 +851,24 @@ fn run_4_keys_tokens_and_the_proxy_user_never_show_either() {
     let token = secret(&format!(
         r#"{{"kind":"feed_token","name":"canary feed","password":"{PASSWORD}"}}"#
     ));
-    // Keys can't read logs (§12.1), however they're presented.
-    for head in [
-        format!("GET /api/v1/logs/catalog HTTP/1.0\r\nAuthorization: Bearer {key}"),
-        format!("GET /api/v1/logs/catalog HTTP/1.0\r\nX-Api-Key: {key}"),
-        format!("GET /api/v1/logs/catalog?apikey={key} HTTP/1.0"),
-        format!("GET /api/v1/logs/catalog?token={token} HTTP/1.0"),
+    // Keys can't read logs (§12.1), however they're presented, on any
+    // `/logs` route.
+    for (method, path) in [
+        ("GET", "/api/v1/logs/catalog"),
+        ("GET", "/api/v1/logs"),
+        ("GET", "/api/v1/logs/stream"),
     ] {
-        let r = s.request(&head, "").unwrap();
-        assert!(
-            r.starts_with("HTTP/1.0 401") || r.starts_with("HTTP/1.0 403"),
-            "{head}: {r}"
-        );
-        assert!(!r.contains("\"events\""), "{r}");
+        let json = "\r\nContent-Type: application/json";
+        for head in [
+            format!("{method} {path} HTTP/1.0\r\nAuthorization: Bearer {key}{json}"),
+            format!("{method} {path} HTTP/1.0\r\nX-Api-Key: {key}{json}"),
+            format!("{method} {path}?apikey={key} HTTP/1.0{json}"),
+            format!("{method} {path}?token={token} HTTP/1.0{json}"),
+        ] {
+            let r = s.request(&head, r#"{"which":"all"}"#).unwrap();
+            assert!(r.starts_with("HTTP/1.0 401"), "{head}: {r}");
+            assert!(r.contains("login_required"), "{r}");
+        }
     }
     for head in [
         format!("GET /api/v1/search?q=x HTTP/1.0\r\nAuthorization: Bearer {key}"),
@@ -650,11 +896,15 @@ fn run_4_keys_tokens_and_the_proxy_user_never_show_either() {
         "the proxy user signs in: {r}"
     );
     // No password left in the bucket for a reveal: the other run 4 covers it.
+    let open = Stream::open(&s, "", None);
     s.exercise(40, false);
     std::thread::sleep(Duration::from_millis(300));
+    let api = s.api(&open);
     let (console, file) = s.stop();
+    let mut outputs = vec![("console", console.as_str()), ("file", file.as_str())];
+    outputs.extend(api.all());
     absent(
-        &[("console", &console), ("file", &file)],
+        &outputs,
         &[
             key.clone(),
             key[key.len() - 43..].to_string(),
